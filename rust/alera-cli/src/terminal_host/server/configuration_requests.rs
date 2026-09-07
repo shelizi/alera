@@ -16,7 +16,9 @@ impl ServerActor {
         if !request.starts_with("configuration.cloud.") {
             return Ok(false);
         }
-        self.require_authenticated_local_request(client_id, request)?;
+        return Err(HostError::state(
+            "Alera Cloud configuration sync is disabled in this privacy portable build.",
+        ));
         let account = require_string_key(payload, "accountId")?;
         let action = request
             .trim_start_matches("configuration.cloud.")

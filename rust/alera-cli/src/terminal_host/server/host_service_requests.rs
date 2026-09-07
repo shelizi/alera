@@ -99,24 +99,15 @@ impl ServerActor {
             self.agent_quota_cache = None;
         }
         if let Some(value) = payload.get("mobilePushNotifications") {
-            let settings: RuntimeMobilePushSettings = serde_json::from_value(value.clone())
+            let mut settings: RuntimeMobilePushSettings = serde_json::from_value(value.clone())
                 .map_err(|_| HostError::format("mobilePushNotifications is invalid."))?;
+            // Privacy portable build: preserve the local setting shape but never
+            // allow cloud push to become active.
+            settings.enabled = false;
             runtime_value(self.runtime_store.set_mobile_push_settings(&settings).await)?;
-            self.account_push.push_enabled = settings.enabled;
-            self.account_push.active_subscriptions = if settings.enabled {
-                let account = self
-                    .account_push
-                    .service
-                    .local_account()
-                    .await
-                    .map_err(|error| HostError::state(error.to_string()))?;
-                refresh_push_subscriptions = account.is_some();
-                account
-                    .map(|account| account.push_subscription_count.max(0) as usize)
-                    .unwrap_or_default()
-            } else {
-                0
-            };
+            self.account_push.push_enabled = false;
+            self.account_push.active_subscriptions = 0;
+            refresh_push_subscriptions = false;
         }
         if let Some(value) = payload.get("automation") {
             let settings: RuntimeAutomationSettings = serde_json::from_value(value.clone())

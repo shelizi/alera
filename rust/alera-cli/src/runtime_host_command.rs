@@ -21,12 +21,10 @@ pub(crate) async fn run(args: TerminalHostArgs) -> i32 {
         return USAGE_EXIT_CODE;
     }
 
-    // Diagnostics come up before the server so a startup failure is recorded.
-    // The guard must outlive the server so Sentry flushes when it drops.
+    // Diagnostics remain local-only in the privacy portable build.
     diagnostics::init(
         diagnostics::DiagnosticsConfig::new(&runtime_dir).with_level(args.log_level.clone()),
     );
-    let _crash_reporting = diagnostics::sentry_reporting::init(args.crash_reporting);
     diagnostics::redaction::register_secret(&token);
 
     let config = TerminalHostConfig {

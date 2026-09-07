@@ -82,6 +82,13 @@ impl ServerActor {
         request_type: &str,
         payload: &Value,
     ) -> HostResult<bool> {
+        if (request_type.starts_with("account.") && request_type != "account.status")
+            || request_type.starts_with("mobile.cloud")
+        {
+            return Err(HostError::state(
+                "Alera Cloud is disabled in this privacy portable build.",
+            ));
+        }
         match request_type {
             "account.signIn.start" | "account.link.start" => {
                 self.require_auth(client_id)?;

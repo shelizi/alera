@@ -26,59 +26,13 @@ class AleraUpdateController extends _$AleraUpdateController {
   }
 
   Future<void> checkForUpdates() async {
-    if (state.isBusy) {
-      return;
-    }
+    // Privacy portable build: update discovery is intentionally offline.
     state = state.copyWith(
-      status: .checking,
+      status: .notAvailable,
       progress: 0,
-      message: 'Checking for updates.',
+      message: 'Update checks are disabled in this privacy portable build.',
       latest: null,
     );
-
-    try {
-      final result = await _service.checkForUpdates();
-      if (_disposed) {
-        return;
-      }
-      final latest = result.latest;
-      if (latest == null) {
-        state = state.copyWith(
-          status: .notAvailable,
-          message: result.message ?? 'Alera is up to date.',
-          latest: null,
-          progress: 0,
-          currentVersion: result.currentVersion,
-          currentBuildNumber: result.currentBuildNumber,
-        );
-        return;
-      }
-
-      state = state.copyWith(
-        status: result.autoInstallAllowed
-            ? AleraUpdateStatus.available
-            : AleraUpdateStatus.manualDownloadRequired,
-        latest: latest,
-        message:
-            result.message ??
-            (result.autoInstallAllowed
-                ? 'Update ${latest.version} is ready to install.'
-                : 'Update ${latest.version} is available for manual download.'),
-        progress: 0,
-        currentVersion: result.currentVersion,
-        currentBuildNumber: result.currentBuildNumber,
-      );
-    } catch (error, stackTrace) {
-      _log.warning('update check failed', error, stackTrace);
-      if (_disposed) {
-        return;
-      }
-      state = state.copyWith(
-        status: .error,
-        message: 'Update check failed: $error',
-        progress: 0,
-      );
-    }
   }
 
   Future<void> installLatest() async {

@@ -34,20 +34,10 @@ pub(super) struct AccountPushState {
 impl AccountPushState {
     pub(super) async fn new(runtime_dir: std::path::PathBuf, store: RuntimeStore) -> Result<Self> {
         let service = Arc::new(AleraAccountService::new(runtime_dir, store.clone()).await?);
-        let enabled = store
-            .mobile_push_settings()
-            .await
-            .map(|settings| settings.enabled)
-            .unwrap_or(false);
-        let active_subscriptions = if enabled {
-            service
-                .local_account()
-                .await?
-                .map(|account| account.push_subscription_count.max(0) as usize)
-                .unwrap_or_default()
-        } else {
-            0
-        };
+        // Privacy portable build: cloud push is hard-disabled even if an older
+        // runtime database previously opted in.
+        let enabled = false;
+        let active_subscriptions = 0;
         Ok(Self {
             service,
             sign_in_cancel: None,

@@ -87,36 +87,8 @@ impl ServerActor {
     }
 
     pub(super) async fn restart_remote_relay(&mut self) {
+        // Privacy portable build: never connect to the Alera Internet relay.
         self.stop_remote_relay().await;
-        let settings = match self.runtime_store.mobile_access_settings().await {
-            Ok(settings) => settings,
-            Err(error) => {
-                tracing::warn!("could not read remote mobile access settings: {error}");
-                return;
-            }
-        };
-        if !settings.remote_access_enabled {
-            return;
-        }
-        match self.account_push.service.local_account().await {
-            Ok(Some(_)) => {}
-            Ok(None) => return,
-            Err(error) => {
-                tracing::warn!("could not read the local account for remote relay: {error}");
-                return;
-            }
-        }
-        let (task, stop) = relay_runtime::spawn(
-            self.account_push.service.clone(),
-            self.account_push.service.runtime_id().to_owned(),
-            self.inbox.clone(),
-            self.next_client_id.clone(),
-            self.account_push.relay_generation,
-        );
-        self.account_push.relay_task = Some(task);
-        self.account_push.relay_stop = Some(stop);
-        self.cancel_shutdown_timer();
-        self.broadcast_authenticated(event("mobileRelayChanged", json!({ "enabled": true })));
     }
 
     pub(super) async fn stop_remote_relay(&mut self) {
