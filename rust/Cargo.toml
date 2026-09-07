@@ -15,6 +15,10 @@ crate-type = ["cdylib", "staticlib"]
 members = ["alera-cli", "alera-core", "alera-mobile-native"]
 resolver = "2"
 
+[features]
+default = []
+local-whisper = ["dep:whisper-rs"]
+
 [dependencies]
 alera-core = { path = "alera-core", default-features = false, features = ["async-process"] }
 flutter_rust_bridge = "=2.13.0"
@@ -43,13 +47,13 @@ tempfile = "3.27.0"
 hound = "3.5.1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-whisper-rs = { version = "0.16.0", features = ["coreml", "metal"] }
+whisper-rs = { version = "0.16.0", features = ["coreml", "metal"], optional = true }
 
 [target.'cfg(all(target_arch = "x86_64", any(target_os = "linux", target_os = "windows")))'.dependencies]
-whisper-rs = { version = "0.16.0", features = ["vulkan"] }
+whisper-rs = { version = "0.16.0", features = ["vulkan"], optional = true }
 
 [target.'cfg(not(any(target_os = "macos", all(target_arch = "x86_64", any(target_os = "linux", target_os = "windows")))))'.dependencies]
-whisper-rs = "0.16.0"
+whisper-rs = { version = "0.16.0", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.189"

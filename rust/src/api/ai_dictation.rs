@@ -1,16 +1,24 @@
+#[cfg(feature = "local-whisper")]
 use std::collections::HashMap;
+#[cfg(feature = "local-whisper")]
 use std::fs;
+#[cfg(feature = "local-whisper")]
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(feature = "local-whisper")]
 use std::sync::{Arc, Mutex, OnceLock};
 
+#[cfg(feature = "local-whisper")]
 use hound::{SampleFormat, WavReader};
+#[cfg(feature = "local-whisper")]
 use whisper_rs::{
     convert_integer_to_float_audio, convert_stereo_to_mono_audio, get_lang_str, FullParams,
     SamplingStrategy, WhisperContext, WhisperContextParameters,
 };
 
+#[cfg(feature = "local-whisper")]
 static ACTIVE_REQUESTS: OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>> = OnceLock::new();
 
+#[cfg(feature = "local-whisper")]
 fn active_requests() -> &'static Mutex<HashMap<String, Arc<AtomicBool>>> {
     ACTIVE_REQUESTS.get_or_init(|| Mutex::new(HashMap::new()))
 }
@@ -47,6 +55,7 @@ pub struct AiDictationError {
     pub message: String,
 }
 
+#[cfg(feature = "local-whisper")]
 pub fn cancel_whisper(request_id: String) {
     if let Ok(requests) = active_requests().lock() {
         if let Some(cancelled) = requests.get(request_id.trim()) {
@@ -55,6 +64,10 @@ pub fn cancel_whisper(request_id: String) {
     }
 }
 
+#[cfg(not(feature = "local-whisper"))]
+pub fn cancel_whisper(_request_id: String) {}
+
+#[cfg(feature = "local-whisper")]
 pub fn transcribe_whisper(
     request: AiDictationRequest,
 ) -> Result<AiDictationResult, AiDictationError> {
@@ -98,6 +111,17 @@ pub fn transcribe_whisper(
     result
 }
 
+#[cfg(not(feature = "local-whisper"))]
+pub fn transcribe_whisper(
+    _request: AiDictationRequest,
+) -> Result<AiDictationResult, AiDictationError> {
+    Err(error(
+        AiDictationErrorKind::Model,
+        "Local Whisper dictation is disabled in this build.",
+    ))
+}
+
+#[cfg(feature = "local-whisper")]
 fn transcribe_inner(
     request: &AiDictationRequest,
     cancelled: &Arc<AtomicBool>,
@@ -200,6 +224,7 @@ fn transcribe_inner(
     })
 }
 
+#[cfg(feature = "local-whisper")]
 fn desktop_whisper_context_parameters() -> WhisperContextParameters<'static> {
     WhisperContextParameters {
         use_gpu: cfg!(target_os = "macos")
@@ -211,6 +236,7 @@ fn desktop_whisper_context_parameters() -> WhisperContextParameters<'static> {
     }
 }
 
+#[cfg(feature = "local-whisper")]
 fn read_audio(path: &str) -> Result<(Vec<f32>, i64), AiDictationError> {
     let metadata = fs::metadata(path).map_err(|native_error| {
         error(
@@ -278,6 +304,7 @@ fn read_audio(path: &str) -> Result<(Vec<f32>, i64), AiDictationError> {
     Ok((audio, duration_millis))
 }
 
+#[cfg(feature = "local-whisper")]
 fn resample(samples: &[f32], source_rate: u32, target_rate: u32) -> Vec<f32> {
     if samples.is_empty() || source_rate == target_rate {
         return samples.to_vec();
@@ -303,11 +330,12 @@ fn error(kind: AiDictationErrorKind, message: impl Into<String>) -> AiDictationE
     }
 }
 
+#[cfg(feature = "local-whisper")]
 fn cancelled_error() -> AiDictationError {
     error(AiDictationErrorKind::Cancelled, "Dictation was cancelled.")
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "local-whisper"))]
 mod tests {
     use super::*;
 

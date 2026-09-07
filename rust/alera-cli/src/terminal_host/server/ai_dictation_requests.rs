@@ -1,12 +1,20 @@
+#[cfg(feature = "local-whisper")]
 use std::collections::HashMap;
+#[cfg(feature = "local-whisper")]
 use std::fs;
+#[cfg(feature = "local-whisper")]
 use std::path::PathBuf;
+#[cfg(feature = "local-whisper")]
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(feature = "local-whisper")]
 use std::sync::{Arc, Mutex, OnceLock};
 
+#[cfg(feature = "local-whisper")]
 use base64::Engine as _;
+#[cfg(feature = "local-whisper")]
 use hound::{SampleFormat, WavReader};
 use serde_json::{json, Value};
+#[cfg(feature = "local-whisper")]
 use whisper_rs::{
     convert_integer_to_float_audio, FullParams, SamplingStrategy, WhisperContext,
     WhisperContextParameters,
@@ -14,17 +22,21 @@ use whisper_rs::{
 
 use crate::terminal_host::host_error::{HostError, HostResult};
 
+#[cfg(feature = "local-whisper")]
 static ACTIVE_REQUESTS: OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>> = OnceLock::new();
 
+#[cfg(feature = "local-whisper")]
 fn active_requests() -> &'static Mutex<HashMap<String, Arc<AtomicBool>>> {
     ACTIVE_REQUESTS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+#[cfg(feature = "local-whisper")]
 struct DictationRequestGuard {
     request_id: String,
     temporary_audio: Option<PathBuf>,
 }
 
+#[cfg(feature = "local-whisper")]
 impl Drop for DictationRequestGuard {
     fn drop(&mut self) {
         if let Ok(mut requests) = active_requests().lock() {
@@ -36,6 +48,7 @@ impl Drop for DictationRequestGuard {
     }
 }
 
+#[cfg(feature = "local-whisper")]
 pub(super) async fn transcribe_mobile(
     payload: &Value,
     runtime_dir: &std::path::Path,
@@ -53,6 +66,17 @@ pub(super) async fn transcribe_mobile(
     transcribe_whisper(payload, false, runtime_dir).await
 }
 
+#[cfg(not(feature = "local-whisper"))]
+pub(super) async fn transcribe_mobile(
+    _payload: &Value,
+    _runtime_dir: &std::path::Path,
+) -> HostResult<Value> {
+    Err(HostError::state(
+        "local Whisper dictation is disabled in this build",
+    ))
+}
+
+#[cfg(feature = "local-whisper")]
 async fn transcribe_whisper(
     payload: &Value,
     allow_explicit_model_path: bool,
@@ -120,6 +144,7 @@ async fn transcribe_whisper(
     }))
 }
 
+#[cfg(feature = "local-whisper")]
 pub(super) fn capabilities(runtime_dir: &std::path::Path) -> HostResult<Value> {
     let models = [
         ("whisper-tiny", "Whisper Tiny"),
@@ -159,6 +184,24 @@ pub(super) fn capabilities(runtime_dir: &std::path::Path) -> HostResult<Value> {
     }))
 }
 
+#[cfg(not(feature = "local-whisper"))]
+pub(super) fn capabilities(_runtime_dir: &std::path::Path) -> HostResult<Value> {
+    let platform = if cfg!(target_os = "macos") {
+        "macos"
+    } else if cfg!(target_os = "windows") {
+        "windows"
+    } else if cfg!(target_os = "linux") {
+        "linux"
+    } else {
+        "unknown"
+    };
+    Ok(json!({
+        "platform": platform,
+        "backends": [],
+    }))
+}
+
+#[cfg(feature = "local-whisper")]
 fn resolve_model_path(
     payload: &Value,
     allow_explicit_model_path: bool,
@@ -209,6 +252,7 @@ fn resolve_model_path(
     )))
 }
 
+#[cfg(feature = "local-whisper")]
 fn transcribe_inner(
     path: &str,
     model: &str,
@@ -288,6 +332,7 @@ fn transcribe_inner(
     Ok((text, language.map(str::to_string), duration))
 }
 
+#[cfg(feature = "local-whisper")]
 fn desktop_whisper_context_parameters() -> WhisperContextParameters<'static> {
     WhisperContextParameters {
         use_gpu: cfg!(target_os = "macos")
@@ -299,6 +344,7 @@ fn desktop_whisper_context_parameters() -> WhisperContextParameters<'static> {
     }
 }
 
+#[cfg(feature = "local-whisper")]
 fn normalize_whisper_language(language: Option<&str>) -> Option<String> {
     language
         .map(str::trim)
@@ -315,13 +361,19 @@ fn normalize_whisper_language(language: Option<&str>) -> Option<String> {
 pub(super) fn cancel(payload: &Value) -> HostResult<Value> {
     let request_id = string(payload, "requestId")?;
     let remote_cancelled = super::ai_dictation_remote_requests::cancel(&request_id)?;
-    let mut local_cancelled = false;
-    if let Ok(requests) = active_requests().lock() {
-        if let Some(cancelled) = requests.get(&request_id) {
-            cancelled.store(true, Ordering::Relaxed);
-            local_cancelled = true;
+    #[cfg(feature = "local-whisper")]
+    let local_cancelled = {
+        let mut local_cancelled = false;
+        if let Ok(requests) = active_requests().lock() {
+            if let Some(cancelled) = requests.get(&request_id) {
+                cancelled.store(true, Ordering::Relaxed);
+                local_cancelled = true;
+            }
         }
-    }
+        local_cancelled
+    };
+    #[cfg(not(feature = "local-whisper"))]
+    let local_cancelled = false;
     Ok(json!({"canceled": remote_cancelled || local_cancelled}))
 }
 
@@ -334,7 +386,7 @@ fn string(payload: &Value, key: &str) -> HostResult<String> {
         .ok_or_else(|| HostError::format(format!("{key} is required")))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "local-whisper"))]
 mod tests {
     use super::*;
 
