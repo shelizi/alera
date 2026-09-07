@@ -5,7 +5,8 @@ param(
     [switch]$NoArchive,
     [switch]$Force,
     [string]$FlutterPath,
-    [string]$ZigPath
+    [string]$ZigPath,
+    [string]$TargetPlatformToolset = 'v143'
 )
 
 Set-StrictMode -Version Latest
@@ -172,12 +173,16 @@ try {
 
     $releaseDir = Join-Path $buildRepoRoot 'build\windows\x64\runner\Release'
     $runnerProjectPath = Join-Path $buildRepoRoot 'build\windows\x64\runner\Alera.vcxproj'
+    $wrapperProjectPath = Join-Path $buildRepoRoot 'build\windows\x64\flutter\flutter_wrapper_app.vcxproj'
     $ephemeralDir = Join-Path $buildRepoRoot 'windows\flutter\ephemeral'
     if (-not (Test-Path -LiteralPath (Join-Path $releaseDir 'Alera.exe'))) {
         throw "A complete Windows release was not found at $releaseDir. Run without -SkipBuild first."
     }
     if (-not (Test-Path -LiteralPath $runnerProjectPath)) {
         throw "Generated runner project was not found: $runnerProjectPath"
+    }
+    if (-not (Test-Path -LiteralPath $wrapperProjectPath)) {
+        throw "Generated Flutter wrapper project was not found: $wrapperProjectPath"
     }
 
     Write-Step 'Reading the successful generated MSBuild project'
@@ -244,6 +249,19 @@ try {
     $prebuiltLibraries = @($prebuiltLibraries | Select-Object -Unique)
     $systemLibraries = @($systemLibraries | Select-Object -Unique)
 
+    # flutter_wrapper_app.lib contains compiled MSVC/STL code and must not cross
+    # from a newer build-machine toolset into a VS2022/v143 final link. Rebuild
+    # the small wrapper locally from source instead. Plugin .lib files are tiny
+    # DLL import libraries and remain safe to carry in the kit.
+    $locallyCompiledLibraries = @('flutter_wrapper_app.lib')
+    foreach ($localLibrary in $locallyCompiledLibraries) {
+        if ($prebuiltLibraries -notcontains $localLibrary) {
+            throw "Expected local-compile dependency was not found: $localLibrary"
+        }
+        $prebuiltLibraries = @($prebuiltLibraries | Where-Object { $_ -ine $localLibrary })
+        [void]$resolvedPrebuilt.Remove($localLibrary)
+    }
+
     $sourceCompileNodes = $projectXml.SelectNodes('//m:ItemGroup/m:ClCompile', $ns)
     $runnerSources = @()
     foreach ($node in $sourceCompileNodes) {
@@ -257,6 +275,21 @@ try {
         throw 'No Windows runner C++ sources were discovered from Alera.vcxproj.'
     }
 
+    [xml]$wrapperXml = Get-Content -LiteralPath $wrapperProjectPath -Raw
+    $wrapperNs = New-Object System.Xml.XmlNamespaceManager($wrapperXml.NameTable)
+    $wrapperNs.AddNamespace('m', 'http://schemas.microsoft.com/developer/msbuild/2003')
+    $wrapperSources = @()
+    foreach ($node in $wrapperXml.SelectNodes('//m:ItemGroup/m:ClCompile', $wrapperNs)) {
+        $include = [string]$node.Include
+        if ($include -match '(?i)cpp_client_wrapper[\\/]([^\\/]+\.cc)$') {
+            $wrapperSources += $matches[1]
+        }
+    }
+    $wrapperSources = @($wrapperSources | Select-Object -Unique)
+    if ($wrapperSources.Count -eq 0) {
+        throw 'No Flutter wrapper C++ sources were discovered from flutter_wrapper_app.vcxproj.'
+    }
+
     if (Test-Path -LiteralPath $OutputDirectory) {
         if (-not $Force) {
             throw "Output directory already exists: $OutputDirectory. Re-run with -Force to replace it."
@@ -267,11 +300,12 @@ try {
 
     $srcRunner = Join-Path $OutputDirectory 'src\runner'
     $srcFlutter = Join-Path $OutputDirectory 'src\flutter'
+    $srcFlutterWrapper = Join-Path $OutputDirectory 'src\flutter_wrapper'
     $libDir = Join-Path $OutputDirectory 'lib'
     $payloadDir = Join-Path $OutputDirectory 'payload'
     $flutterEngineInclude = Join-Path $OutputDirectory 'include\flutter_engine'
     $flutterCppInclude = Join-Path $OutputDirectory 'include\flutter_cpp'
-    New-Item -ItemType Directory -Path $srcRunner, $srcFlutter, $libDir, $payloadDir, $flutterEngineInclude, $flutterCppInclude -Force | Out-Null
+    New-Item -ItemType Directory -Path $srcRunner, $srcFlutter, $srcFlutterWrapper, $libDir, $payloadDir, $flutterEngineInclude, $flutterCppInclude -Force | Out-Null
 
     Write-Step 'Collecting runner sources, Flutter headers, plugin headers, and prebuilt link libraries'
     Copy-DirectoryContents -Source (Join-Path $buildRepoRoot 'windows\runner') -Destination $srcRunner
@@ -282,6 +316,7 @@ try {
 
     Copy-Item -LiteralPath (Join-Path $buildRepoRoot 'windows\flutter\generated_plugin_registrant.cc') -Destination $srcFlutter -Force
     Copy-Item -LiteralPath (Join-Path $buildRepoRoot 'windows\flutter\generated_plugin_registrant.h') -Destination $srcFlutter -Force
+    Copy-DirectoryContents -Source (Join-Path $ephemeralDir 'cpp_client_wrapper') -Destination $srcFlutterWrapper
 
     Get-ChildItem -LiteralPath $ephemeralDir -File -Filter '*.h' | ForEach-Object {
         Copy-Item -LiteralPath $_.FullName -Destination $flutterEngineInclude -Force
@@ -321,7 +356,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Could not read the source Git commit.' }
     $sourceExeHash = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $releaseDir 'Alera.exe')).Hash
 
-    $includeDirectories = @('src', 'include\flutter_engine', 'include\flutter_cpp') + $pluginIncludeRoots
+    $includeDirectories = @('src', 'src\flutter_wrapper', 'src\flutter_wrapper\include', 'include\flutter_engine', 'include\flutter_cpp') + $pluginIncludeRoots
     $projectIncludes = ($includeDirectories | ForEach-Object { '$(ProjectDir)' + ($_ -replace '/', '\') }) -join ';'
     $projectIncludes += ';%(AdditionalIncludeDirectories)'
     $projectLibraries = ($prebuiltLibraries | ForEach-Object { '$(ProjectDir)lib\' + $_ }) + $systemLibraries
@@ -329,6 +364,7 @@ try {
     $projectDefinitions = ($definitions -join ';') + ';%(PreprocessorDefinitions)'
 
     $runnerCompileItems = ($runnerSources | ForEach-Object { '    <ClCompile Include="$(ProjectDir)src\runner\' + $_ + '" />' }) -join "`r`n"
+    $wrapperCompileItems = ($wrapperSources | ForEach-Object { '    <ClCompile Include="$(ProjectDir)src\flutter_wrapper\' + $_ + '" />' }) -join "`r`n"
     $projectTemplate = @'
 <?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" ToolsVersion="Current" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
@@ -348,7 +384,7 @@ try {
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <CharacterSet>Unicode</CharacterSet>
-    <PlatformToolset>@@TOOLSET@@</PlatformToolset>
+    <PlatformToolset>@@TARGET_TOOLSET@@</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
@@ -392,6 +428,7 @@ try {
   </ItemDefinitionGroup>
   <ItemGroup>
 @@RUNNER_SOURCES@@
+@@WRAPPER_SOURCES@@
     <ClCompile Include="$(ProjectDir)src\flutter\generated_plugin_registrant.cc" />
     <ResourceCompile Include="$(ProjectDir)src\runner\Runner.rc" />
   </ItemGroup>
@@ -400,35 +437,39 @@ try {
 '@
 
     $projectText = $projectTemplate.Replace('@@SDK@@', [System.Security.SecurityElement]::Escape($windowsSdkVersion))
-    $projectText = $projectText.Replace('@@TOOLSET@@', [System.Security.SecurityElement]::Escape($platformToolset))
+    $projectText = $projectText.Replace('@@TARGET_TOOLSET@@', [System.Security.SecurityElement]::Escape($TargetPlatformToolset))
     $projectText = $projectText.Replace('@@INCLUDES@@', [System.Security.SecurityElement]::Escape($projectIncludes))
     $projectText = $projectText.Replace('@@DEFINES@@', [System.Security.SecurityElement]::Escape($projectDefinitions))
     $projectText = $projectText.Replace('@@LIBRARIES@@', [System.Security.SecurityElement]::Escape($projectLibrariesText))
     $projectText = $projectText.Replace('@@RUNNER_SOURCES@@', $runnerCompileItems)
+    $projectText = $projectText.Replace('@@WRAPPER_SOURCES@@', $wrapperCompileItems)
     Set-Content -LiteralPath (Join-Path $OutputDirectory 'AleraFinal.vcxproj') -Value $projectText -Encoding UTF8
 
     Copy-Item -LiteralPath (Join-Path $scriptDir 'finalize_windows.ps1') -Destination (Join-Path $OutputDirectory 'finalize_windows.ps1') -Force
 
     $manifest = [ordered]@{
-        schemaVersion = 1
+        schemaVersion = 2
         product = 'Alera'
         architecture = 'x64'
         version = $version
         sourceCommit = $sourceCommit
         sourceRunnerSha256 = $sourceExeHash
         sourcePlatformToolset = $platformToolset
+        targetPlatformToolset = $TargetPlatformToolset
         sourceWindowsSdkVersion = $windowsSdkVersion
         prebuiltLibraries = $prebuiltLibraries
+        locallyCompiledLibraries = $locallyCompiledLibraries
         systemLibraries = $systemLibraries
         compilerDefinitions = $definitions
         includeDirectories = $includeDirectories
         runnerSources = $runnerSources
+        flutterWrapperSources = $wrapperSources
         payloadDirectory = 'payload'
         outputExecutable = 'Alera.exe'
         notes = @(
-            'All Flutter AOT, Rust, Ghostty, native assets, plugins, and runtime payload are prebuilt.',
-            'The target machine only recompiles and links the small Windows runner.',
-            'The target compiler should use the source platform toolset when available; override only when ABI compatibility has been validated.'
+            'Flutter AOT, Rust, Ghostty, native assets, plugin DLLs, and plugin import libraries are prebuilt.',
+            'The target machine recompiles the small Flutter C++ wrapper and Windows runner with the target MSVC toolset.',
+            'flutter_wrapper_app.lib is intentionally excluded so no newer-toolset C++ object code crosses into a VS2022/v143 final link.'
         )
     }
     $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $OutputDirectory 'kit-manifest.json') -Encoding UTF8

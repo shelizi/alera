@@ -15,8 +15,8 @@ The exporter performs a normal Windows Release build unless `-SkipBuild` is supp
 - Flutter AOT/runtime payload and `flutter_assets`
 - Rust `alera_native` and runtime-host sidecar
 - Ghostty/native assets and plugin DLLs
-- Flutter engine/wrapper headers
-- prebuilt plugin import/static libraries
+- Flutter engine headers plus the small Flutter C++ client-wrapper sources
+- prebuilt plugin **DLL import libraries** (not plugin C++ object code)
 - the small Windows runner C++ sources/resources
 - a standalone MSBuild project
 - `finalize_windows.ps1`
@@ -43,11 +43,13 @@ Useful options:
 
 Extract the kit locally. The target machine only needs:
 
-- Visual Studio/Build Tools with **Desktop development with C++**
+- **Visual Studio 2022 / Build Tools 2022** with **Desktop development with C++** (`v143`)
 - a Windows 10 or Windows 11 SDK
 - Windows PowerShell
 
 It does **not** need Flutter, Dart, Rust/Cargo, rustup, Zig, LLVM, Vulkan SDK, Git, CMake, Ninja, NSIS, 7-Zip, or a signing certificate.
+
+The target does compile a small amount of ordinary C++ locally: Flutter's four client-wrapper `.cc` files plus Alera's Windows runner. Flutter AOT, Rust, Ghostty, plugin DLLs, native assets, and application data remain prebuilt.
 
 First verify the transferred kit and linker environment:
 
@@ -63,8 +65,10 @@ powershell -ExecutionPolicy Bypass -File .\finalize_windows.ps1
 
 The result is `out\Alera\Alera.exe` plus the already-prebuilt runtime files beside it. Alera is a Flutter desktop application, so the support DLLs, `data`, and `resources` directories must remain next to the EXE.
 
-### MSVC compatibility
+### VS2022 / MSVC compatibility
 
-The kit records the platform toolset used to build the precompiled libraries and uses that toolset by default for the final runner link. A different toolset can be requested with `-PlatformToolset`, but mixing an older MSVC toolset with libraries produced by a newer one is not guaranteed to be ABI/runtime compatible. For a controlled deployment, export the kit using the same MSVC toolset that is available on the target machine.
+The exporter targets `v143` by default, even if the build/export machine itself uses a newer Visual Studio. The important distinction is that `flutter_wrapper_app.lib` is **not transferred**: it contains real MSVC/STL object code and is rebuilt from source on the target together with the runner. The plugin `.lib` files carried by the kit are DLL import libraries, while the actual plugin code stays in the prebuilt DLLs.
+
+This allows a VS2022/v143 target to perform the final local compile/link without mixing v145 C++ object code into its executable. To build a kit for another controlled target toolset, pass `-TargetPlatformToolset <toolset>` to the exporter. `finalize_windows.ps1 -PlatformToolset <toolset>` is also available as an explicit override for validation or alternate deployments.
 
 No signing step is performed by either script.

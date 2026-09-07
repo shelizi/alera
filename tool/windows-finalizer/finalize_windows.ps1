@@ -53,23 +53,48 @@ function Find-VsWhere {
 }
 
 function Find-MSBuild {
-    param([Parameter(Mandatory = $true)][string]$VsWhere)
+    param(
+        [Parameter(Mandatory = $true)][string]$VsWhere,
+        [string]$RequiredToolset
+    )
 
-    $installPath = (& $VsWhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>$null | Select-Object -First 1)
-    if (-not $installPath) {
+    $installPaths = @(
+        & $VsWhere -all -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>$null |
+            Where-Object { $_ } |
+            ForEach-Object { $_.Trim() }
+    )
+    if ($installPaths.Count -eq 0) {
         throw 'No Visual Studio/Build Tools installation with the x64 C++ toolchain was found.'
     }
-    $installPath = $installPath.Trim()
 
-    foreach ($candidate in @(
-        (Join-Path $installPath 'MSBuild\Current\Bin\MSBuild.exe'),
-        (Join-Path $installPath 'MSBuild\17.0\Bin\MSBuild.exe')
-    )) {
-        if (Test-Path -LiteralPath $candidate) {
-            return [pscustomobject]@{ MSBuild = $candidate; InstallPath = $installPath }
+    foreach ($installPath in $installPaths) {
+        if ($RequiredToolset) {
+            $vcMsBuildRoot = Join-Path $installPath 'MSBuild\Microsoft\VC'
+            $toolsetFound = $false
+            if (Test-Path -LiteralPath $vcMsBuildRoot) {
+                $toolsetFound = $null -ne (Get-ChildItem -LiteralPath $vcMsBuildRoot -Recurse -Directory -ErrorAction SilentlyContinue |
+                    Where-Object { $_.Parent.Name -eq 'PlatformToolsets' -and $_.Name -eq $RequiredToolset } |
+                    Select-Object -First 1)
+            }
+            if (-not $toolsetFound) {
+                continue
+            }
+        }
+
+        foreach ($candidate in @(
+            (Join-Path $installPath 'MSBuild\Current\Bin\MSBuild.exe'),
+            (Join-Path $installPath 'MSBuild\17.0\Bin\MSBuild.exe')
+        )) {
+            if (Test-Path -LiteralPath $candidate) {
+                return [pscustomobject]@{ MSBuild = $candidate; InstallPath = $installPath }
+            }
         }
     }
-    throw "MSBuild.exe was not found under $installPath"
+
+    if ($RequiredToolset) {
+        throw "No Visual Studio/Build Tools installation with platform toolset $RequiredToolset was found. For v143, install Visual Studio 2022 Build Tools with Desktop development with C++."
+    }
+    throw 'MSBuild.exe was not found in the installed Visual Studio C++ instances.'
 }
 
 function Resolve-WindowsSdkVersion {
@@ -107,7 +132,8 @@ if (-not (Test-Path -LiteralPath $projectPath)) { throw "Missing standalone MSBu
 if (-not (Test-Path -LiteralPath $payloadPath -PathType Container)) { throw "Missing runtime payload: $payloadPath" }
 
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-if ([int]$manifest.schemaVersion -ne 1) {
+$schemaVersion = [int]$manifest.schemaVersion
+if ($schemaVersion -lt 1 -or $schemaVersion -gt 2) {
     throw "Unsupported Final-Link Kit schema: $($manifest.schemaVersion)"
 }
 
@@ -116,11 +142,22 @@ if (-not $SkipHashVerification) {
     Verify-KitHashes -KitRoot $kitRoot
 }
 
+$manifestToolset = if (
+    $schemaVersion -ge 2 -and
+    ($manifest.PSObject.Properties.Name -contains 'targetPlatformToolset') -and
+    [string]$manifest.targetPlatformToolset
+) {
+    [string]$manifest.targetPlatformToolset
+}
+else {
+    [string]$manifest.sourcePlatformToolset
+}
+$effectiveToolset = if ($PlatformToolset) { $PlatformToolset } else { $manifestToolset }
+$effectiveSdk = Resolve-WindowsSdkVersion -Requested $(if ($WindowsSdkVersion) { $WindowsSdkVersion } else { [string]$manifest.sourceWindowsSdkVersion })
+
 Write-Step 'Locating the local Visual Studio C++ toolchain'
 $vswhere = Find-VsWhere
-$vs = Find-MSBuild -VsWhere $vswhere
-$effectiveToolset = if ($PlatformToolset) { $PlatformToolset } else { [string]$manifest.sourcePlatformToolset }
-$effectiveSdk = Resolve-WindowsSdkVersion -Requested $(if ($WindowsSdkVersion) { $WindowsSdkVersion } else { [string]$manifest.sourceWindowsSdkVersion })
+$vs = Find-MSBuild -VsWhere $vswhere -RequiredToolset $effectiveToolset
 
 Write-Host "Visual Studio: $($vs.InstallPath)"
 Write-Host "MSBuild:      $($vs.MSBuild)"
@@ -159,7 +196,7 @@ if (Test-Path -LiteralPath $buildRoot) {
 }
 New-Item -ItemType Directory -Path $buildRoot -Force | Out-Null
 
-Write-Step 'Compiling and linking only the local Windows runner'
+Write-Step 'Compiling the local Flutter C++ wrapper and Windows runner, then linking Alera'
 $msbuildArgs = @(
     $projectPath,
     '/nologo',
@@ -191,4 +228,4 @@ $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $exe).Hash
 Write-Host "`nLocal executable created successfully." -ForegroundColor Green
 Write-Host "EXE:    $exe"
 Write-Host "SHA256: $hash"
-Write-Host 'No Flutter, Dart, Cargo, Rust, Zig, CMake, Ninja, or signing step was invoked on this target machine.'
+Write-Host 'No Flutter CLI, Dart, Cargo, Rust, Zig, CMake, Ninja, or signing step was invoked on this target machine.'
