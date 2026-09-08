@@ -51,9 +51,15 @@ class const _CreateWorkspaceSelectionStep({
         ),
         const SizedBox(height: AleraTokens.space16),
         AleraSegmentedButton<bool>(
-          segments: const <ButtonSegment<bool>>[
-            ButtonSegment<bool>(value: false, label: Text('New Branch')),
-            ButtonSegment<bool>(value: true, label: Text('Existing Branch')),
+          segments: <ButtonSegment<bool>>[
+            ButtonSegment<bool>(
+              value: false,
+              label: Text(context.tr('New Branch')),
+            ),
+            ButtonSegment<bool>(
+              value: true,
+              label: Text(context.tr('Existing Branch')),
+            ),
           ],
           selected: reuseExistingBranch,
           onSelectionChanged: onReuseExistingBranchChanged,

@@ -27,7 +27,7 @@ class const _ProjectsHeader({
               minimumSize: const Size(0, 24),
               tapTargetSize: .shrinkWrap,
             ),
-            child: Text('Clear', style: theme.textTheme.labelSmall),
+            child: Text(context.tr('Clear'), style: theme.textTheme.labelSmall),
           ),
         ),
       ],
@@ -68,10 +68,16 @@ class const _GroupBySegmented({
       selected: value,
       onSelectionChanged: onChanged,
       segments: <ButtonSegment<WorkbenchGroupBy>>[
-        const ButtonSegment(value: .none, label: Text('None')),
-        const ButtonSegment(value: .project, label: Text('Project')),
+        ButtonSegment(value: .none, label: Text(context.tr('None'))),
+        ButtonSegment(
+          value: .project,
+          label: Text(context.tr('Project')),
+        ),
         if (supportsSections)
-          const ButtonSegment(value: .section, label: Text('Section')),
+          ButtonSegment(
+            value: .section,
+            label: Text(context.tr('Section')),
+          ),
       ],
     );
   }
@@ -93,10 +99,13 @@ class const _WorkspaceKindSegmented({
       textStyle: Theme.of(context).textTheme.labelSmall,
       selected: value,
       onSelectionChanged: onChanged,
-      segments: const <ButtonSegment<WorkspaceKindFilter>>[
-        ButtonSegment(value: .all, label: Text('All')),
-        ButtonSegment(value: .defaultOnly, label: Text('Default')),
-        ButtonSegment(value: .nonDefaultOnly, label: Text('Non-Default')),
+      segments: <ButtonSegment<WorkspaceKindFilter>>[
+        ButtonSegment(value: .all, label: Text(context.tr('All'))),
+        ButtonSegment(value: .defaultOnly, label: Text(context.tr('Default'))),
+        ButtonSegment(
+          value: .nonDefaultOnly,
+          label: Text(context.tr('Non-Default')),
+        ),
       ],
     );
   }

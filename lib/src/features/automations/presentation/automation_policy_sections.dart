@@ -92,9 +92,9 @@ class _AutomationProfilePolicySectionState
   @override
   Widget build(BuildContext context) {
     if (_loading) {
-      return const Padding(
-        padding: EdgeInsets.all(AleraTokens.space16),
-        child: Text('Loading automation policy...'),
+      return Padding(
+        padding: const EdgeInsets.all(AleraTokens.space16),
+        child: Text(context.tr('Loading automation policy...')),
       );
     }
     if (_error != null && !_saving) {
@@ -218,9 +218,9 @@ class _AutomationProjectPolicySectionState
   @override
   Widget build(BuildContext context) {
     if (_loading) {
-      return const Padding(
-        padding: EdgeInsets.all(AleraTokens.space16),
-        child: Text('Loading automation policy...'),
+      return Padding(
+        padding: const EdgeInsets.all(AleraTokens.space16),
+        child: Text(context.tr('Loading automation policy...')),
       );
     }
     if (_error != null && !_saving) {

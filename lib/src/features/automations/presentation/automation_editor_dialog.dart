@@ -448,7 +448,7 @@ class _AutomationEditorDialogState
                     ),
                     SwitchListTile.adaptive(
                       contentPadding: EdgeInsets.zero,
-                      title: const Text('Notify On Success'),
+                      title: Text(context.tr('Notify On Success')),
                       value: _notifyOnSuccess,
                       onChanged: (value) =>
                           setState(() => _notifyOnSuccess = value),

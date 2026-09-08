@@ -22,12 +22,12 @@ class _AutomationRunNowChoiceDialogState
         mainAxisSize: .min,
         children: <Widget>[
           SwitchListTile.adaptive(
-            title: const Text('Run Precheck'),
+            title: Text(context.tr('Run Precheck')),
             value: _precheck,
             onChanged: (value) => setState(() => _precheck = value),
           ),
           SwitchListTile.adaptive(
-            title: const Text('Audited Draft Test'),
+            title: Text(context.tr('Audited Draft Test')),
             value: _draftTest,
             onChanged: (value) => setState(() {
               _draftTest = value;
@@ -35,7 +35,7 @@ class _AutomationRunNowChoiceDialogState
             }),
           ),
           SwitchListTile.adaptive(
-            title: const Text('Approve Exact Revision'),
+            title: Text(context.tr('Approve Exact Revision')),
             value: _exactRevision,
             onChanged: (value) => setState(() {
               _exactRevision = value;
@@ -45,16 +45,19 @@ class _AutomationRunNowChoiceDialogState
           DropdownButtonFormField<String>(
             initialValue: _overlap,
             decoration: const InputDecoration(labelText: 'Overlap'),
-            items: const <DropdownMenuItem<String>>[
-              DropdownMenuItem(value: 'skip', child: Text('Skip')),
-              DropdownMenuItem(value: 'queue', child: Text('Queue')),
+            items: <DropdownMenuItem<String>>[
+              DropdownMenuItem(value: 'skip', child: Text(context.tr('Skip'))),
+              DropdownMenuItem(
+                value: 'queue',
+                child: Text(context.tr('Queue')),
+              ),
               DropdownMenuItem(
                 value: 'runLatestOnce',
-                child: Text('Run Latest Once'),
+                child: Text(context.tr('Run Latest Once')),
               ),
               DropdownMenuItem(
                 value: 'forceParallel',
-                child: Text('Force Parallel'),
+                child: Text(context.tr('Force Parallel')),
               ),
             ],
             onChanged: (value) => setState(() => _overlap = value!),
@@ -81,8 +84,8 @@ class const AutomationPauseChoiceDialog({super.key}) extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Pause Automation'),
-      content: const Text('Choose what to do with active runs.'),
+      title: Text(context.tr('Pause Automation')),
+      content: Text(context.tr('Choose what to do with active runs.')),
       actions: <Widget>[
         TextButton(
           onPressed: () => Navigator.of(context).pop('continue-active'),

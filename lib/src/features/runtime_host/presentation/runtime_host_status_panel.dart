@@ -100,7 +100,7 @@ class const RuntimeHostStatusPanel({
             child: Column(
               crossAxisAlignment: .stretch,
               children: <Widget>[
-                Text('Runtime', style: theme.textTheme.titleSmall),
+                Text(context.tr('Runtime'), style: theme.textTheme.titleSmall),
                 const SizedBox(height: AleraTokens.space8),
                 _StatusRow(
                   label: 'Status',

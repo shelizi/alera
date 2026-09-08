@@ -133,7 +133,7 @@ class const UpdateSettingsSection({super.key}) extends ConsumerWidget {
                     FilledButton.icon(
                       onPressed: controller.upgradeThroughPackageManager,
                       icon: const Icon(AleraIcons.download, size: 16),
-                      label: Text('Update With $managerLabel'),
+                      label: Text('${context.tr('Update With')} $managerLabel'),
                     ),
                   if (state.status == AleraUpdateStatus.available)
                     FilledButton.icon(

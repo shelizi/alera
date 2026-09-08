@@ -57,7 +57,7 @@ extension on _AutomationsDialogState {
       final imported = await showDialog<String>(
         context: context,
         builder: (context) => AlertDialog(
-          title: const Text('Import Automations'),
+          title: Text(context.tr('Import Automations')),
           content: TextField(
             controller: controller,
             minLines: 8,
@@ -268,7 +268,7 @@ extension on _AutomationsDialogState {
       return await showDialog<Map<String, String>>(
         context: context,
         builder: (dialogContext) => AlertDialog(
-          title: const Text('Map Imported Targets'),
+          title: Text(context.tr('Map Imported Targets')),
           content: TextField(
             controller: controller,
             minLines: 8,

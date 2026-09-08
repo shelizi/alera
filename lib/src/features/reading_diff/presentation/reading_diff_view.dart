@@ -1,3 +1,5 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
+
 import 'dart:convert';
 import 'dart:isolate';
 import 'dart:typed_data';
@@ -47,15 +49,15 @@ class _ReadingDiffViewState extends State<ReadingDiffView> {
                   alignment: Alignment.centerRight,
                   child: AleraSegmentedButton<ReadingDiffViewMode>(
                     dense: true,
-                    segments: const <ButtonSegment<ReadingDiffViewMode>>[
+                    segments: <ButtonSegment<ReadingDiffViewMode>>[
                       ButtonSegment<ReadingDiffViewMode>(
                         value: .overview,
-                        label: Text('Overview'),
+                        label: Text(context.tr('Overview')),
                         icon: Icon(AleraIcons.review),
                       ),
                       ButtonSegment<ReadingDiffViewMode>(
                         value: .condensedDiff,
-                        label: Text('Condensed Diff'),
+                        label: Text(context.tr('Condensed Diff')),
                         icon: Icon(AleraIcons.diff),
                       ),
                     ],
@@ -91,7 +93,7 @@ class const _ReadingDiffOverview({required final ReadingDiffResult result})
     return ListView(
       padding: const EdgeInsets.all(AleraTokens.space16),
       children: <Widget>[
-        Text('What Changed', style: theme.textTheme.titleMedium),
+        Text(context.tr('What Changed'), style: theme.textTheme.titleMedium),
         const SizedBox(height: AleraTokens.space8),
         SelectableText(result.summary, style: theme.textTheme.bodyMedium),
         const SizedBox(height: AleraTokens.space12),
@@ -123,7 +125,7 @@ class const _ReadingDiffOverview({required final ReadingDiffResult result})
         ),
         if (result.chunkSummaries.length > 1) ...<Widget>[
           const SizedBox(height: AleraTokens.space20),
-          Text('Chunk Analysis', style: theme.textTheme.titleSmall),
+          Text(context.tr('Chunk Analysis'), style: theme.textTheme.titleSmall),
           const SizedBox(height: AleraTokens.space8),
           for (final chunk in result.chunkSummaries)
             _ReadingDiffChunkSummaryCard(

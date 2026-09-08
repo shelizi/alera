@@ -40,7 +40,10 @@ class const _TagsFilterSection({
                   minimumSize: const Size(0, 24),
                   tapTargetSize: .shrinkWrap,
                 ),
-                child: Text('Clear', style: theme.textTheme.labelSmall),
+                child: Text(
+                  context.tr('Clear'),
+                  style: theme.textTheme.labelSmall,
+                ),
               ),
             ),
           ],

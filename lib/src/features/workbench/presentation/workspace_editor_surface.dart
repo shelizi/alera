@@ -1,3 +1,5 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
+
 import 'dart:async';
 
 import 'package:alera/src/app/providers.dart';
@@ -350,7 +352,7 @@ class _WorkspaceEditorSurfaceState
         const PopupMenuDivider(height: AleraTokens.space8),
         const PopupMenuItem<_DiffOpenChoice>(
           value: _DiffOpenChoice(allForFile: true),
-          child: Text('All changes for file'),
+          child: Text(context.tr('All changes for file')),
         ),
       ],
     );

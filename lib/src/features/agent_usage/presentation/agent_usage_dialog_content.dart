@@ -76,7 +76,10 @@ class _AgentUsageContentState extends State<_AgentUsageContent> {
             ],
           ),
           const SizedBox(height: AleraTokens.space20),
-          Text('Daily Activity', style: Theme.of(context).textTheme.titleSmall),
+          Text(
+            context.tr('Daily Activity'),
+            style: Theme.of(context).textTheme.titleSmall,
+          ),
           const SizedBox(height: AleraTokens.space4),
           Text(
             'Tokens read from Claude Code, Codex, and Grok Build transcripts on this host.',
@@ -97,18 +100,18 @@ class _AgentUsageContentState extends State<_AgentUsageContent> {
               AleraSegmentedButton<_UsageBreakdownMode>(
                 dense: true,
                 segments: <ButtonSegment<_UsageBreakdownMode>>[
-                  const ButtonSegment<_UsageBreakdownMode>(
+                  ButtonSegment<_UsageBreakdownMode>(
                     value: .profile,
-                    label: Text('Profiles'),
+                    label: Text(context.tr('Profiles')),
                   ),
                   if (widget.showGroupedBreakdown)
-                    const ButtonSegment<_UsageBreakdownMode>(
+                    ButtonSegment<_UsageBreakdownMode>(
                       value: .grouped,
-                      label: Text('Grouped'),
+                      label: Text(context.tr('Grouped')),
                     ),
-                  const ButtonSegment<_UsageBreakdownMode>(
+                  ButtonSegment<_UsageBreakdownMode>(
                     value: .model,
-                    label: Text('Models'),
+                    label: Text(context.tr('Models')),
                   ),
                 ],
                 selected: _mode,
@@ -149,25 +152,25 @@ class const _UsageBreakdownTable({
 class const _UsageTableHeader() extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
-    return const Padding(
-      padding: EdgeInsets.symmetric(
+    return Padding(
+      padding: const EdgeInsets.symmetric(
         horizontal: AleraTokens.space12,
         vertical: AleraTokens.space8,
       ),
       child: Row(
         children: <Widget>[
-          Expanded(child: Text('Name')),
+          Expanded(child: Text(context.tr('Name'))),
           SizedBox(
             width: AleraTokens.usageTokensColumnWidth,
-            child: Text('Tokens', textAlign: .end),
+            child: Text(context.tr('Tokens'), textAlign: .end),
           ),
           SizedBox(
             width: AleraTokens.usageCostColumnWidth,
-            child: Text('Cost', textAlign: .end),
+            child: Text(context.tr('Cost'), textAlign: .end),
           ),
           SizedBox(
             width: AleraTokens.usageSessionsColumnWidth,
-            child: Text('Responses', textAlign: .end),
+            child: Text(context.tr('Responses'), textAlign: .end),
           ),
         ],
       ),

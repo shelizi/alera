@@ -403,15 +403,15 @@ class _PromptWorkspaceDialogState extends State<PromptWorkspaceDialog> {
             const SizedBox(height: AleraTokens.space16),
             AleraSegmentedButton<NewWorkspaceMode>(
               dense: true,
-              segments: const <ButtonSegment<NewWorkspaceMode>>[
+              segments: <ButtonSegment<NewWorkspaceMode>>[
                 ButtonSegment<NewWorkspaceMode>(
                   value: .fromPrompt,
-                  label: Text('From Prompt'),
+                  label: Text(context.tr('From Prompt')),
                   icon: Icon(AleraIcons.agent, size: 16),
                 ),
                 ButtonSegment<NewWorkspaceMode>(
                   value: .manual,
-                  label: Text('Manual'),
+                  label: Text(context.tr('Manual')),
                   icon: Icon(AleraIcons.gitBranch, size: 16),
                 ),
               ],

@@ -377,7 +377,7 @@ class _TerminalSurfaceState extends ConsumerState<TerminalSurface> {
       context: context,
       builder: (dialogContext) {
         return AlertDialog(
-          title: const Text('Restart Terminal?'),
+          title: Text(context.tr('Restart Terminal?')),
           content: const Text(
             'This will stop the current process tree and start a new shell. Terminal history will be preserved.',
           ),

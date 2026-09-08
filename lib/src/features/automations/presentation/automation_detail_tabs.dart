@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:alera/src/design_system/surfaces/alera_panel.dart';
@@ -23,7 +24,10 @@ class const AutomationOverviewTab({
         children: <Widget>[
           AutomationInfoPanel(automation: detail.automation),
           const SizedBox(height: AleraTokens.space12),
-          Text('Prompt Preview', style: Theme.of(context).textTheme.titleSmall),
+          Text(
+            context.tr('Prompt Preview'),
+            style: Theme.of(context).textTheme.titleSmall,
+          ),
           const SizedBox(height: AleraTokens.space8),
           SelectableText(detail.automation.promptTemplate),
           const SizedBox(height: AleraTokens.space12),
@@ -45,7 +49,7 @@ class const AutomationOverviewTab({
           ),
           const SizedBox(height: AleraTokens.space8),
           if (active.isEmpty && next.isEmpty)
-            const Text('No active run or upcoming occurrence.')
+            Text(context.tr('No active run or upcoming occurrence.'))
           else ...<Widget>[
             for (final run in active)
               ListTile(
@@ -55,7 +59,7 @@ class const AutomationOverviewTab({
                   AleraIcons.loading,
                   color: AleraTokens.info,
                 ),
-                title: Text('Active Run #${run.number}'),
+                title: Text('${context.tr('Active Run')} #${run.number}'),
                 subtitle: Text(run.status),
               ),
             for (final occurrence in next)
@@ -66,7 +70,7 @@ class const AutomationOverviewTab({
                 title: Text(
                   '${occurrence['localTime'] ?? occurrence['scheduledAt'] ?? 'Upcoming'}',
                 ),
-                subtitle: const Text('Scheduled occurrence'),
+                subtitle: Text(context.tr('Scheduled occurrence')),
               ),
           ],
         ],
@@ -87,7 +91,7 @@ class const AutomationRunsTab({
     return ListView(
       padding: const EdgeInsets.only(top: AleraTokens.space12),
       children: runs.isEmpty
-          ? const <Widget>[Text('No runs yet.')]
+          ? <Widget>[Text(context.tr('No runs yet.'))]
           : <Widget>[
               for (final run in runs)
                 AutomationRunRow(
@@ -116,7 +120,7 @@ class const AutomationAuditTab({required final List<JsonMap> events, super.key})
     return ListView(
       padding: const EdgeInsets.only(top: AleraTokens.space12),
       children: events.isEmpty
-          ? const <Widget>[Text('No audit events yet.')]
+          ? <Widget>[Text(context.tr('No audit events yet.'))]
           : <Widget>[
               for (final event in events)
                 ListTile(

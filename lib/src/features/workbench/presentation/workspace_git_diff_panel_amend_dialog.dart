@@ -42,7 +42,10 @@ class _AmendCommitDialogState extends State<_AmendCommitDialog> {
           mainAxisSize: .min,
           crossAxisAlignment: .stretch,
           children: <Widget>[
-            Text('Amend Commit', style: theme.textTheme.titleMedium),
+            Text(
+              context.tr('Amend Commit'),
+              style: theme.textTheme.titleMedium,
+            ),
             const SizedBox(height: AleraTokens.space16),
             TextField(
               controller: _controller,

@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/providers.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/buttons/alera_icon_button.dart';
@@ -160,14 +161,14 @@ class _KeyboardSettingsPaneState extends ConsumerState<KeyboardSettingsPane> {
             onSelectionChanged: (policy) => ref
                 .read(settingsControllerProvider.notifier)
                 .setTerminalShortcutPolicy(policy),
-            segments: const <ButtonSegment<TerminalShortcutPolicy>>[
+            segments: <ButtonSegment<TerminalShortcutPolicy>>[
               ButtonSegment<TerminalShortcutPolicy>(
                 value: .appFirst,
-                label: Text('App First'),
+                label: Text(context.tr('App First')),
               ),
               ButtonSegment<TerminalShortcutPolicy>(
                 value: .terminalFirst,
-                label: Text('Terminal First'),
+                label: Text(context.tr('Terminal First')),
               ),
             ],
           ),

@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/badges/alera_badge.dart';
 import 'package:alera/src/design_system/buttons/alera_segmented_button.dart';
@@ -96,22 +97,22 @@ class const MobileGatewayGroup({
             child: AleraSegmentedButton<MobileEndpointMode>(
               dense: true,
               segments: <ButtonSegment<MobileEndpointMode>>[
-                const ButtonSegment<MobileEndpointMode>(
+                ButtonSegment<MobileEndpointMode>(
                   value: .loopback,
-                  label: Text('This Device'),
+                  label: Text(context.tr('This Device')),
                 ),
-                const ButtonSegment<MobileEndpointMode>(
+                ButtonSegment<MobileEndpointMode>(
                   value: .tailscale,
                   label: Text('Tailscale'),
                 ),
                 if (status.netbird != null)
-                  const ButtonSegment<MobileEndpointMode>(
+                  ButtonSegment<MobileEndpointMode>(
                     value: .netbird,
                     label: Text('NetBird'),
                   ),
-                const ButtonSegment<MobileEndpointMode>(
+                ButtonSegment<MobileEndpointMode>(
                   value: .manual,
-                  label: Text('Manual'),
+                  label: Text(context.tr('Manual')),
                 ),
               ],
               selected: mode,
@@ -132,7 +133,7 @@ class const MobileGatewayGroup({
         ],
         if (mode == MobileEndpointMode.netbird) ...<Widget>[
           _netbirdStatusRow(),
-          _netbirdEndpointRow(),
+          _netbirdEndpointRow(context),
           if (defaultTargetPlatform == TargetPlatform.windows)
             const AleraSettingRow(
               title: 'Windows Firewall',
@@ -284,18 +285,18 @@ class const MobileGatewayGroup({
     );
   }
 
-  Widget _netbirdEndpointRow() {
+  Widget _netbirdEndpointRow(BuildContext context) {
     final netbird = status.netbird;
     final segments = <ButtonSegment<MobileNetbirdEndpoint>>[
-      const ButtonSegment<MobileNetbirdEndpoint>(
+      ButtonSegment<MobileNetbirdEndpoint>(
         value: .ip,
-        label: Text('IP Address'),
+        label: Text(context.tr('IP Address')),
       ),
       if (netbird?.dnsHostname != null ||
           status.settings.netbirdEndpoint == MobileNetbirdEndpoint.dns)
         ButtonSegment<MobileNetbirdEndpoint>(
           value: .dns,
-          label: Text('DNS Hostname'),
+          label: Text(context.tr('DNS Hostname')),
         ),
       if (netbird?.interfaceName case final String interfaceName)
         ButtonSegment<MobileNetbirdEndpoint>(
@@ -304,9 +305,9 @@ class const MobileGatewayGroup({
         ),
       if (netbird?.interfaceName == null &&
           status.settings.netbirdEndpoint == MobileNetbirdEndpoint.interface)
-        const ButtonSegment<MobileNetbirdEndpoint>(
+        ButtonSegment<MobileNetbirdEndpoint>(
           value: .interface,
-          label: Text('Private Interface'),
+          label: Text(context.tr('Private Interface')),
         ),
     ];
     return AleraSettingRow(

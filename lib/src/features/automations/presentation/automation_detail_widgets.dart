@@ -21,7 +21,12 @@ class const AutomationDialogHeader({
       children: <Widget>[
         const Icon(AleraIcons.checks, color: AleraTokens.foregroundMuted),
         const SizedBox(width: AleraTokens.space8),
-        Expanded(child: Text('Automations', style: theme.textTheme.titleLarge)),
+        Expanded(
+          child: Text(
+            context.tr('Automations'),
+            style: theme.textTheme.titleLarge,
+          ),
+        ),
         if (onImport != null)
           AleraIconButton(
             tooltip: 'Import',

@@ -25,7 +25,7 @@ class const _ProjectPicker({
       crossAxisAlignment: .start,
       children: <Widget>[
         Text(
-          'Project',
+          context.tr('Project'),
           style: theme.textTheme.labelMedium?.copyWith(
             color: AleraTokens.foregroundMuted,
           ),

@@ -123,7 +123,10 @@ class const _TerminalErrorState({
             mainAxisSize: .min,
             crossAxisAlignment: .start,
             children: <Widget>[
-              Text('Terminal unavailable', style: theme.textTheme.titleMedium),
+              Text(
+                context.tr('Terminal unavailable'),
+                style: theme.textTheme.titleMedium,
+              ),
               const SizedBox(height: AleraTokens.space8),
               Text(
                 message,

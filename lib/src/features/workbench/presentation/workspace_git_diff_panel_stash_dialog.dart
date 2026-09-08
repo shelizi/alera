@@ -12,7 +12,10 @@ class const _StashPickerDialog({required final List<GitStashEntry> stashes})
           mainAxisSize: .min,
           crossAxisAlignment: .stretch,
           children: <Widget>[
-            Text('Stash pop', style: Theme.of(context).textTheme.titleMedium),
+            Text(
+              context.tr('Stash pop'),
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
             const SizedBox(height: AleraTokens.space12),
             Flexible(
               child: ListView.builder(

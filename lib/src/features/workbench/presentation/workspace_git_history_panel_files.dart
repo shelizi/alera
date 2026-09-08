@@ -50,9 +50,9 @@ class const _CommitFiles({
               ),
             ),
           if (state.loading)
-            const Padding(
-              padding: EdgeInsets.fromLTRB(40, 4, 8, 6),
-              child: Text('Loading files...'),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(40, 4, 8, 6),
+              child: Text(context.tr('Loading files...')),
             )
           else if (state.error != null)
             Padding(
@@ -64,9 +64,9 @@ class const _CommitFiles({
               ),
             )
           else if (state.entries.isEmpty)
-            const Padding(
-              padding: EdgeInsets.fromLTRB(40, 4, 8, 6),
-              child: Text('No file changes'),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(40, 4, 8, 6),
+              child: Text(context.tr('No file changes')),
             )
           else ...<Widget>[
             for (final entry in state.entries)
