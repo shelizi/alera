@@ -190,6 +190,51 @@ void main() {
       expect(runner.starts.single.workingDirectory, workspace);
     },
   );
+  test('bulk file launch validates all targets and starts Zed once', () async {
+    final runner = _FakeProcessRunner();
+    const first = '/repo/lib/one.dart';
+    const second = '/repo/lib/two.dart';
+    final launcher = _launcher(
+      runner,
+      existing: <String>{'/repo', first, second},
+    );
+
+    final result = await launcher.openFiles(
+      const ExternalEditorOpenFilesRequest(
+        workspacePath: '/repo',
+        filePaths: <String>[first, second, first],
+      ),
+    );
+
+    expect(result.ok, isTrue);
+    expect(runner.starts, hasLength(1));
+    expect(runner.starts.single.arguments, <String>[first, second]);
+  });
+
+  test('bulk file launch rejects one escaping target before spawn', () async {
+    final runner = _FakeProcessRunner();
+    const inside = '/repo/lib/one.dart';
+    const escaped = '/repo/link/secret.dart';
+    final launcher = _launcher(
+      runner,
+      existing: <String>{'/repo', inside, escaped},
+      canonicalPaths: const <String, String>{
+        '/repo': '/repo',
+        inside: inside,
+        escaped: '/outside/secret.dart',
+      },
+    );
+
+    final result = await launcher.openFiles(
+      const ExternalEditorOpenFilesRequest(
+        workspacePath: '/repo',
+        filePaths: <String>[inside, escaped],
+      ),
+    );
+
+    expect(result.failureKind, ExternalEditorLaunchFailureKind.invalidTarget);
+    expect(runner.starts, isEmpty);
+  });
   test('spawn failure returns an actionable Zed-specific result', () async {
     final runner = _FakeProcessRunner()
       ..startFailure = const ProcessException('zed', <String>[], 'missing');

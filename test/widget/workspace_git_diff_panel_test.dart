@@ -104,6 +104,70 @@ void main() {
     expect(find.text('-0'), findsNothing);
   });
 
+  testWidgets(
+    'Open Changes in Zed bulk-opens unique live files and excludes deleted and submodule roots',
+    (tester) async {
+      final backend = FakeGitBackend()
+        ..gitStatusResult = const GitStatusResult(
+          entries: <GitChangeEntry>[
+            GitChangeEntry(
+              path: 'lib/one.dart',
+              area: .unstaged,
+              status: .modified,
+            ),
+            GitChangeEntry(
+              path: 'lib/one.dart',
+              area: .staged,
+              status: .modified,
+            ),
+            GitChangeEntry(
+              path: 'lib/deleted.dart',
+              area: .unstaged,
+              status: .deleted,
+            ),
+            GitChangeEntry(
+              path: 'vendor/pkg',
+              area: .unstaged,
+              status: .modified,
+              submodule: GitSubmoduleStatus(
+                commitChanged: true,
+                trackedChanges: false,
+                untrackedChanges: false,
+                inspectable: true,
+              ),
+            ),
+            GitChangeEntry(
+              path: 'lib/two.dart',
+              area: .untracked,
+              status: .untracked,
+            ),
+          ],
+        );
+      final launcher = _RecordingExternalEditorLauncher();
+
+      await _pumpPanel(
+        tester,
+        backend: backend,
+        externalEditorLauncher: launcher,
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Source Control Actions'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Open Changes in Zed'));
+      await tester.pumpAndSettle();
+
+      expect(launcher.fileGroups, hasLength(1));
+      expect(launcher.fileGroups.single.filePaths, hasLength(2));
+      expect(
+        launcher.fileGroups.single.filePaths[0],
+        endsWith(r'lib\one.dart'),
+      );
+      expect(
+        launcher.fileGroups.single.filePaths[1],
+        endsWith(r'lib\two.dart'),
+      );
+    },
+  );
   testWidgets('git diff panel shows relative paths in flat rows', (
     tester,
   ) async {
@@ -1529,6 +1593,8 @@ class _PanelSettingsController(final AleraSettings _settings)
 class _RecordingExternalEditorLauncher implements ExternalEditorLauncher {
   final List<ExternalEditorOpenRequest> fileRequests =
       <ExternalEditorOpenRequest>[];
+  final List<ExternalEditorOpenFilesRequest> fileGroups =
+      <ExternalEditorOpenFilesRequest>[];
 
   @override
   Future<ExternalEditorAvailability> checkAvailability() async =>
@@ -1539,6 +1605,14 @@ class _RecordingExternalEditorLauncher implements ExternalEditorLauncher {
     ExternalEditorOpenRequest request,
   ) async {
     fileRequests.add(request);
+    return ExternalEditorLaunchResultFactories.opened;
+  }
+
+  @override
+  Future<ExternalEditorLaunchResult> openFiles(
+    ExternalEditorOpenFilesRequest request,
+  ) async {
+    fileGroups.add(request);
     return ExternalEditorLaunchResultFactories.opened;
   }
 

@@ -431,6 +431,11 @@ class _QuickOpenExternalEditorLauncher implements ExternalEditorLauncher {
   }
 
   @override
+  Future<ExternalEditorLaunchResult> openFiles(
+    ExternalEditorOpenFilesRequest request,
+  ) async => ExternalEditorLaunchResultFactories.opened;
+
+  @override
   Future<ExternalEditorLaunchResult> openWorkspace(
     String workspacePath,
   ) async => ExternalEditorLaunchResultFactories.opened;

@@ -220,6 +220,11 @@ class RecordingExternalEditorLauncher implements ExternalEditorLauncher {
   ) async => nextResult;
 
   @override
+  Future<ExternalEditorLaunchResult> openFiles(
+    ExternalEditorOpenFilesRequest request,
+  ) async => ExternalEditorLaunchResultFactories.opened;
+
+  @override
   Future<ExternalEditorLaunchResult> openWorkspace(String workspacePath) async {
     workspaces.add(workspacePath);
     return nextResult;

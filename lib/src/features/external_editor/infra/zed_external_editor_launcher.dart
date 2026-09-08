@@ -77,6 +77,32 @@ class ZedExternalEditorLauncher implements ExternalEditorLauncher {
   }
 
   @override
+  Future<ExternalEditorLaunchResult> openFiles(
+    ExternalEditorOpenFilesRequest request,
+  ) async {
+    final workspace = _validatedExistingAbsolutePath(request.workspacePath);
+    if (workspace == null || request.filePaths.isEmpty) {
+      return _invalidTarget('The requested Zed file targets are invalid.');
+    }
+    final context = _pathContextFor(workspace.canonical);
+    final targets = <String>[];
+    for (final filePath in request.filePaths) {
+      final file = _validatedExistingAbsolutePath(filePath);
+      if (file == null ||
+          (!context.equals(workspace.canonical, file.canonical) &&
+              !context.isWithin(workspace.canonical, file.canonical))) {
+        return _invalidTarget(
+          'A requested Zed file target is missing or outside the active Alera workspace.',
+        );
+      }
+      if (!targets.contains(file.normalized)) {
+        targets.add(file.normalized);
+      }
+    }
+    return _start(targets, workingDirectory: workspace.normalized);
+  }
+
+  @override
   Future<ExternalEditorAvailability> checkAvailability() async {
     try {
       final output = await _processRunner.run(

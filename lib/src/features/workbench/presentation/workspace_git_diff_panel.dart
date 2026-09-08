@@ -181,6 +181,8 @@ class _WorkspaceGitDiffPanelState extends ConsumerState<WorkspaceGitDiffPanel> {
               _toggleAllVisibleNodes(state.asData?.value),
           onViewModeChanged: widget.onViewModeChanged,
           onGroupModeChanged: widget.onGroupModeChanged,
+          canOpenChangesInZed: _openableChangedSourcePaths(state.asData?.value)
+              .isNotEmpty,
           onOpenAll: () => unawaited(
             widget.onOpenGitDiff(
               scope: .all,
@@ -316,6 +318,17 @@ class _WorkspaceGitDiffPanelState extends ConsumerState<WorkspaceGitDiffPanel> {
         await _run(
           () => _notifier.stashPop(stash.index),
           successMessage: 'Stash popped',
+        );
+      case _SourceControlMenuAction.openChangesInZed:
+        await _openChangesInZed(
+          ref
+              .read(
+                workspaceSourceControlControllerProvider(
+                  widget.sourceControlScope.path,
+                ),
+              )
+              .asData
+              ?.value,
         );
     }
   }

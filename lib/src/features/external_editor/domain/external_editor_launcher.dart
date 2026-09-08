@@ -22,11 +22,20 @@ class const ExternalEditorOpenRequest({
   final int? column,
 });
 
+class const ExternalEditorOpenFilesRequest({
+  required final String workspacePath,
+  required final List<String> filePaths,
+});
+
 abstract interface class ExternalEditorLauncher {
   Future<ExternalEditorLaunchResult> openWorkspace(String workspacePath);
 
   Future<ExternalEditorLaunchResult> openFile(
     ExternalEditorOpenRequest request,
+  );
+
+  Future<ExternalEditorLaunchResult> openFiles(
+    ExternalEditorOpenFilesRequest request,
   );
 
   Future<ExternalEditorAvailability> checkAvailability();

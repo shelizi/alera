@@ -20,6 +20,7 @@ class const _SourceControlToolbar({
   required final VoidCallback onRefresh,
   required final VoidCallback? onClearSourceControlRoot,
   required final VoidCallback onToggleCollapseAll,
+  required final bool canOpenChangesInZed,
   required final ValueChanged<GitDiffViewMode> onViewModeChanged,
   required final ValueChanged<GitDiffGroupMode> onGroupModeChanged,
   required final VoidCallback onOpenAll,
@@ -170,6 +171,7 @@ class const _SourceControlToolbar({
                   action: primaryAction,
                   state: data,
                   busy: busy,
+                  canOpenChangesInZed: canOpenChangesInZed,
                   onPressed: primaryAction == null
                       ? null
                       : () => onPrimaryAction(primaryAction),
@@ -296,6 +298,7 @@ enum _SourceControlMenuAction {
   publishBranch,
   stash,
   stashPop,
+  openChangesInZed,
 }
 
 class const _AiCommitMessageButton({
@@ -380,6 +383,7 @@ class const _PrimaryActionButton({
   required final _SourceControlMenuAction? action,
   required final bool busy,
   required final WorkspaceSourceControlState? state,
+  required final bool canOpenChangesInZed,
   required final VoidCallback? onPressed,
   required final ValueChanged<_SourceControlMenuAction> onSelected,
 }) extends StatelessWidget {
@@ -544,6 +548,13 @@ class const _PrimaryActionButton({
       ),
       const PopupMenuDivider(height: AleraTokens.space8),
       AleraDropdownEntry<_SourceControlMenuAction>(
+        value: .openChangesInZed,
+        label: 'Open Changes in Zed',
+        enabled: canOpenChangesInZed,
+        leading: const Icon(AleraIcons.external, size: 16),
+      ),
+      const PopupMenuDivider(height: AleraTokens.space8),
+      AleraDropdownEntry<_SourceControlMenuAction>(
         value: .fetch,
         label: 'Fetch',
         enabled: hasData,
@@ -606,6 +617,7 @@ class const _PrimaryActionButton({
       _SourceControlMenuAction.stash => 'Stash',
       _SourceControlMenuAction.stashPop => 'Stash Pop',
       _SourceControlMenuAction.refresh => 'Refresh',
+      _SourceControlMenuAction.openChangesInZed => 'Open Changes in Zed',
     };
   }
 
@@ -626,6 +638,7 @@ class const _PrimaryActionButton({
       _SourceControlMenuAction.stash => AleraIcons.gitStash,
       _SourceControlMenuAction.stashPop => AleraIcons.gitStashPop,
       _SourceControlMenuAction.refresh => AleraIcons.gitRefresh,
+      _SourceControlMenuAction.openChangesInZed => AleraIcons.external,
     };
   }
 }

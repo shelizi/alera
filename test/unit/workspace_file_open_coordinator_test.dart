@@ -230,6 +230,11 @@ class _FakeExternalEditorLauncher implements ExternalEditorLauncher {
   }
 
   @override
+  Future<ExternalEditorLaunchResult> openFiles(
+    ExternalEditorOpenFilesRequest request,
+  ) async => ExternalEditorLaunchResultFactories.opened;
+
+  @override
   Future<ExternalEditorLaunchResult> openWorkspace(
     String workspacePath,
   ) async => nextResult;
