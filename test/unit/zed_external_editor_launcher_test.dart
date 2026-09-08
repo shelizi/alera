@@ -135,6 +135,61 @@ void main() {
     },
   );
 
+  test(
+    'canonical paths reject a symlink escape outside the workspace',
+    () async {
+      final runner = _FakeProcessRunner();
+      const workspace = '/repo';
+      const file = '/repo/link/secret.dart';
+      final launcher = _launcher(
+        runner,
+        existing: <String>{workspace, file},
+        canonicalPaths: const <String, String>{
+          workspace: workspace,
+          file: '/outside/secret.dart',
+        },
+      );
+
+      final result = await launcher.openFile(
+        const ExternalEditorOpenRequest(
+          workspacePath: workspace,
+          filePath: file,
+        ),
+      );
+
+      expect(result.failureKind, ExternalEditorLaunchFailureKind.invalidTarget);
+      expect(result.message, contains('outside'));
+      expect(runner.starts, isEmpty);
+    },
+  );
+
+  test(
+    'canonical paths allow a workspace symlink to its real target',
+    () async {
+      final runner = _FakeProcessRunner();
+      const workspace = '/repo-link';
+      const file = '/repo-link/src/main.dart';
+      final launcher = _launcher(
+        runner,
+        existing: <String>{workspace, file},
+        canonicalPaths: const <String, String>{
+          workspace: '/real/repo',
+          file: '/real/repo/src/main.dart',
+        },
+      );
+
+      final result = await launcher.openFile(
+        const ExternalEditorOpenRequest(
+          workspacePath: workspace,
+          filePath: file,
+        ),
+      );
+
+      expect(result.ok, isTrue);
+      expect(runner.starts.single.arguments, <String>[file]);
+      expect(runner.starts.single.workingDirectory, workspace);
+    },
+  );
   test('spawn failure returns an actionable Zed-specific result', () async {
     final runner = _FakeProcessRunner()
       ..startFailure = const ProcessException('zed', <String>[], 'missing');
@@ -171,11 +226,13 @@ ZedExternalEditorLauncher _launcher(
   required Set<String> existing,
   String? command,
   ExternalEditorWorkspaceMode workspaceMode = .newWindow,
+  Map<String, String>? canonicalPaths,
 }) => ZedExternalEditorLauncher(
   processRunner: runner,
   commandReader: () => command,
   workspaceModeReader: () => workspaceMode,
   pathExists: existing.contains,
+  pathCanonicalizer: (path) => canonicalPaths?[path] ?? path,
 );
 
 class _FakeProcessRunner implements ProcessRunner {

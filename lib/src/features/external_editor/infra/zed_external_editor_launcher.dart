@@ -10,6 +10,7 @@ typedef ExternalEditorCommandReader = String? Function();
 typedef ExternalEditorWorkspaceModeReader =
     ExternalEditorWorkspaceMode Function();
 typedef ExternalEditorPathExists = bool Function(String path);
+typedef ExternalEditorPathCanonicalizer = String? Function(String path);
 
 class ZedExternalEditorLauncher implements ExternalEditorLauncher {
   ZedExternalEditorLauncher({
@@ -17,45 +18,46 @@ class ZedExternalEditorLauncher implements ExternalEditorLauncher {
     ExternalEditorCommandReader? commandReader,
     ExternalEditorWorkspaceModeReader? workspaceModeReader,
     ExternalEditorPathExists? pathExists,
+    ExternalEditorPathCanonicalizer? pathCanonicalizer,
   }) : _processRunner = processRunner,
        _commandReader = commandReader ?? _noConfiguredCommand,
        _workspaceModeReader = workspaceModeReader ?? _newWindowMode,
-       _pathExists = pathExists ?? _pathExistsOnDisk;
+       _pathExists = pathExists ?? _pathExistsOnDisk,
+       _pathCanonicalizer = pathCanonicalizer ?? _canonicalExistingPathOnDisk;
 
   final ProcessRunner _processRunner;
   final ExternalEditorCommandReader _commandReader;
   final ExternalEditorWorkspaceModeReader _workspaceModeReader;
   final ExternalEditorPathExists _pathExists;
+  final ExternalEditorPathCanonicalizer _pathCanonicalizer;
 
   @override
   Future<ExternalEditorLaunchResult> openWorkspace(String workspacePath) async {
-    final normalizedWorkspace = _validatedExistingAbsolutePath(workspacePath);
-    if (normalizedWorkspace == null) {
+    final workspace = _validatedExistingAbsolutePath(workspacePath);
+    if (workspace == null) {
       return _invalidTarget('The requested Alera workspace does not exist.');
     }
 
     final arguments = <String>[
       if (_workspaceModeReader() == .newWindow) '--new',
-      normalizedWorkspace,
+      workspace.normalized,
     ];
-    return _start(arguments, workingDirectory: normalizedWorkspace);
+    return _start(arguments, workingDirectory: workspace.normalized);
   }
 
   @override
   Future<ExternalEditorLaunchResult> openFile(
     ExternalEditorOpenRequest request,
   ) async {
-    final normalizedWorkspace = _validatedExistingAbsolutePath(
-      request.workspacePath,
-    );
-    final normalizedFile = _validatedExistingAbsolutePath(request.filePath);
-    if (normalizedWorkspace == null || normalizedFile == null) {
+    final workspace = _validatedExistingAbsolutePath(request.workspacePath);
+    final file = _validatedExistingAbsolutePath(request.filePath);
+    if (workspace == null || file == null) {
       return _invalidTarget('The requested Zed file target does not exist.');
     }
 
-    final context = _pathContextFor(normalizedWorkspace);
-    if (!context.equals(normalizedWorkspace, normalizedFile) &&
-        !context.isWithin(normalizedWorkspace, normalizedFile)) {
+    final context = _pathContextFor(workspace.canonical);
+    if (!context.equals(workspace.canonical, file.canonical) &&
+        !context.isWithin(workspace.canonical, file.canonical)) {
       return _invalidTarget(
         'The requested Zed file target is outside the active Alera workspace.',
       );
@@ -67,11 +69,11 @@ class ZedExternalEditorLauncher implements ExternalEditorLauncher {
     }
 
     final target = switch ((request.line, request.column)) {
-      (final int line, final int column) => '$normalizedFile:$line:$column',
-      (final int line, null) => '$normalizedFile:$line',
-      _ => normalizedFile,
+      (final int line, final int column) => '${file.normalized}:$line:$column',
+      (final int line, null) => '${file.normalized}:$line',
+      _ => file.normalized,
     };
-    return _start(<String>[target], workingDirectory: normalizedWorkspace);
+    return _start(<String>[target], workingDirectory: workspace.normalized);
   }
 
   @override
@@ -129,11 +131,21 @@ class ZedExternalEditorLauncher implements ExternalEditorLauncher {
 
   String _resolvedCommand() => _nonBlank(_commandReader()) ?? 'zed';
 
-  String? _validatedExistingAbsolutePath(String value) {
+  ({String normalized, String canonical})? _validatedExistingAbsolutePath(
+    String value,
+  ) {
     final context = _pathContextFor(value);
     if (!context.isAbsolute(value)) return null;
     final normalized = context.normalize(value);
-    return _pathExists(normalized) ? normalized : null;
+    if (!_pathExists(normalized)) return null;
+    final canonical = _pathCanonicalizer(normalized);
+    if (canonical == null) return null;
+    final canonicalContext = _pathContextFor(canonical);
+    if (!canonicalContext.isAbsolute(canonical)) return null;
+    return (
+      normalized: normalized,
+      canonical: canonicalContext.normalize(canonical),
+    );
   }
 
   ExternalEditorLaunchResult _invalidTarget(String message) =>
@@ -144,6 +156,23 @@ String? _noConfiguredCommand() => null;
 
 bool _pathExistsOnDisk(String path) =>
     FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound;
+
+String? _canonicalExistingPathOnDisk(String path) {
+  try {
+    if (Directory(path).existsSync()) {
+      return Directory(path).resolveSymbolicLinksSync();
+    }
+    if (File(path).existsSync()) {
+      return File(path).resolveSymbolicLinksSync();
+    }
+    if (Link(path).existsSync()) {
+      return Link(path).resolveSymbolicLinksSync();
+    }
+  } on FileSystemException {
+    return null;
+  }
+  return null;
+}
 
 ExternalEditorWorkspaceMode _newWindowMode() => .newWindow;
 
