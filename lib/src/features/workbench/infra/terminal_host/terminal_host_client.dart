@@ -251,6 +251,32 @@ final class SocketTerminalHostClient._(
   }
 
   @override
+  Future<List<String>> getTerminalRunningProcesses(String sessionId) async {
+    final payload = await _terminalRequestMap(
+      'terminal.runningProcesses',
+      <String, Object?>{'sessionId': sessionId},
+    );
+    final processes = payload['processes'];
+    if (processes is! List) {
+      return const <String>[];
+    }
+    return processes
+        .map((p) {
+          if (p is Map) {
+            final name = p['name'];
+            if (name is String && name.isNotEmpty) {
+              return name;
+            }
+          } else if (p is String && p.isNotEmpty) {
+            return p;
+          }
+          return null;
+        })
+        .whereType<String>()
+        .toList(growable: false);
+  }
+
+  @override
   Future<TerminalHostResume> setOutputPaused({
     required String sessionId,
     required bool paused,

@@ -263,6 +263,15 @@ class const TerminalSettingsPane({
                   (settings) => settings.copyWith(showComposerByDefault: value),
                 ),
               ),
+              SettingsSwitchRow(
+                title: 'Confirm Before Closing Busy Terminals',
+                description: 'Ask for confirmation before closing tabs with running processes or active agents.',
+                value: settings.confirmCloseRunningProcesses,
+                onChanged: (value) => onChanged(
+                  (settings) =>
+                      settings.copyWith(confirmCloseRunningProcesses: value),
+                ),
+              ),
             ],
           ),
         ),

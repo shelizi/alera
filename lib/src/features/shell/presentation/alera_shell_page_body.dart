@@ -323,33 +323,11 @@ class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody> {
         );
   }
 
-  Future<bool> _confirmCloseDirtyTabs(
+  Future<bool> _confirmCloseTabs(
     List<WorkspaceTabRecord> tabs,
     List<String> tabIds,
-  ) async {
-    final registry = ref.read(editorSessionRegistryProvider);
-    final dirty = <String>[
-      for (final tab in tabs)
-        if (tabIds.contains(tab.id) && registry.isDirty(tab.id)) tab.title,
-    ];
-    if (!mounted) return false;
-    if (dirty.isNotEmpty) {
-      final confirmed = await showDialog<bool>(
-        context: context,
-        builder: (context) => AleraConfirmDialog(
-          title: dirty.length == 1
-              ? 'Close Unsaved Editor?'
-              : 'Close Unsaved Editors?',
-          message: dirty.length == 1
-              ? '${dirty.first} has unsaved changes.'
-              : '${dirty.length} editor tabs have unsaved changes.',
-          confirmLabel: 'Close',
-          destructive: true,
-        ),
-      );
-      if (confirmed != true) return false;
-    }
-    return true;
+  ) {
+    return confirmCloseWorkspaceTabs(context, ref, tabs, tabIds);
   }
 
   void _showError(String message) {

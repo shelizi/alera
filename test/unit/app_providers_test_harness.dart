@@ -162,6 +162,10 @@ final class _FakeTerminalHostClient({TerminalHostAttachment? attachment})
       const <String, TerminalSessionDriver>{};
 
   @override
+  Future<List<String>> getTerminalRunningProcesses(String sessionId) async =>
+      const <String>[];
+
+  @override
   Future<void> write({
     required String sessionId,
     required List<int> bytes,

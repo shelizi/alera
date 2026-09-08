@@ -659,6 +659,15 @@ class TerminalSettingsMapper extends ClassMapperBase<TerminalSettings> {
     _$loginShell,
     opt: true,
   );
+  static bool _$confirmCloseRunningProcesses(TerminalSettings v) =>
+      v.confirmCloseRunningProcesses;
+  static const Field<TerminalSettings, bool> _f$confirmCloseRunningProcesses =
+      Field(
+        'confirmCloseRunningProcesses',
+        _$confirmCloseRunningProcesses,
+        opt: true,
+        def: true,
+      );
 
   @override
   final MappableFields<TerminalSettings> fields = const {
@@ -688,6 +697,7 @@ class TerminalSettingsMapper extends ClassMapperBase<TerminalSettings> {
     #bufferBudgetMegabytes: _f$bufferBudgetMegabytes,
     #keepRuntimeOpenOnAppQuit: _f$keepRuntimeOpenOnAppQuit,
     #loginShell: _f$loginShell,
+    #confirmCloseRunningProcesses: _f$confirmCloseRunningProcesses,
   };
 
   @override
@@ -721,6 +731,7 @@ class TerminalSettingsMapper extends ClassMapperBase<TerminalSettings> {
       bufferBudgetMegabytes: data.dec(_f$bufferBudgetMegabytes),
       keepRuntimeOpenOnAppQuit: data.dec(_f$keepRuntimeOpenOnAppQuit),
       loginShell: data.dec(_f$loginShell),
+      confirmCloseRunningProcesses: data.dec(_f$confirmCloseRunningProcesses),
     );
   }
 
@@ -818,6 +829,7 @@ abstract class TerminalSettingsCopyWith<$R, $In extends TerminalSettings, $Out>
     int? bufferBudgetMegabytes,
     bool? keepRuntimeOpenOnAppQuit,
     bool? loginShell,
+    bool? confirmCloseRunningProcesses,
   });
   TerminalSettingsCopyWith<$R2, $In, $Out2> $chain<$R2, $Out2>(
     Then<$Out2, $R2> t,
@@ -867,6 +879,7 @@ class _TerminalSettingsCopyWithImpl<$R, $Out>
     int? bufferBudgetMegabytes,
     bool? keepRuntimeOpenOnAppQuit,
     Object? loginShell = $none,
+    bool? confirmCloseRunningProcesses,
   }) => $apply(
     FieldCopyWithData({
       if (fontFamily != null) #fontFamily: fontFamily,
@@ -903,6 +916,8 @@ class _TerminalSettingsCopyWithImpl<$R, $Out>
       if (keepRuntimeOpenOnAppQuit != null)
         #keepRuntimeOpenOnAppQuit: keepRuntimeOpenOnAppQuit,
       if (loginShell != $none) #loginShell: loginShell,
+      if (confirmCloseRunningProcesses != null)
+        #confirmCloseRunningProcesses: confirmCloseRunningProcesses,
     }),
   );
   @override
@@ -962,6 +977,10 @@ class _TerminalSettingsCopyWithImpl<$R, $Out>
       or: $value.keepRuntimeOpenOnAppQuit,
     ),
     loginShell: data.get(#loginShell, or: $value.loginShell),
+    confirmCloseRunningProcesses: data.get(
+      #confirmCloseRunningProcesses,
+      or: $value.confirmCloseRunningProcesses,
+    ),
   );
 
   @override

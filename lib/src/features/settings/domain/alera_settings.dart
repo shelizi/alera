@@ -96,6 +96,7 @@ class const TerminalSettings({
   this.bufferBudgetMegabytes = 256,
   this.keepRuntimeOpenOnAppQuit = false,
   this.loginShell,
+  this.confirmCloseRunningProcesses = true,
 }) with TerminalSettingsMappable {
   final String fontFamily;
   final double fontSize;
@@ -127,6 +128,9 @@ class const TerminalSettings({
   /// Terminal buffer ceiling; 0 is unbounded. See `TerminalBufferBudget`.
   final int bufferBudgetMegabytes;
   final bool keepRuntimeOpenOnAppQuit;
+
+  /// Whether closing terminal tabs with active processes or agents requires confirmation.
+  final bool confirmCloseRunningProcesses;
 
   /// `null` keeps the platform default resolved by [resolvedLoginShell].
   final bool? loginShell;
@@ -167,6 +171,7 @@ class const TerminalSettings({
     hostDetachedSessionShutdownDelaySeconds: 60 * 60,
     hostScrollbackBytes: 10 * 1000 * 1000,
     keepRuntimeOpenOnAppQuit: false,
+    confirmCloseRunningProcesses: true,
   );
 
   factory fromJson(Map<String, Object?> json) =>

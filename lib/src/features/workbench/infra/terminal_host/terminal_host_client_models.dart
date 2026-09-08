@@ -73,6 +73,9 @@ abstract interface class TerminalHostClient {
   /// Current driver per session, for rebuilding overlay state on (re)connect.
   Future<Map<String, TerminalSessionDriver>> listTerminalDrivers();
 
+  /// Child processes running under this terminal session's shell.
+  Future<List<String>> getTerminalRunningProcesses(String sessionId);
+
   void dispose();
 }
 

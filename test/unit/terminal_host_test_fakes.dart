@@ -225,6 +225,13 @@ final class FakeTerminalHostClient({
     return drivers;
   }
 
+  Map<String, List<String>> runningProcesses = <String, List<String>>{};
+
+  @override
+  Future<List<String>> getTerminalRunningProcesses(String sessionId) async {
+    return runningProcesses[sessionId] ?? const <String>[];
+  }
+
   @override
   void dispose() {
     unawaited(_events.close());

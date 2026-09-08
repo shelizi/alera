@@ -103,3 +103,24 @@ async fn tab_removal_deletes_the_record() {
     assert_eq!(response["ok"], true);
     assert!(!tab_exists(&actor, "editor-tab").await);
 }
+
+#[tokio::test]
+async fn running_processes_reports_empty_for_unknown_or_idle_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let tab = workspace_tab("tab-1", "workspace", "terminal");
+    let (mut actor, mut receiver) = actor_with_tab(&dir, &tab).await;
+    let (inbox, mut inbox_receiver) = tokio::sync::mpsc::unbounded_channel();
+    actor.inbox = inbox;
+
+    let response = request(
+        &mut actor,
+        &mut receiver,
+        &mut inbox_receiver,
+        "terminal.runningProcesses",
+        json!({"sessionId": "nonexistent-session"}),
+    )
+    .await;
+
+    assert_eq!(response["ok"], true);
+    assert_eq!(response["payload"]["processes"], json!([]));
+}

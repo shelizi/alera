@@ -11,12 +11,10 @@ import 'package:alera/src/features/runtime_host/presentation/runtime_host_status
 import 'package:alera/src/features/resource_manager/presentation/resource_status_bar_control.dart';
 import 'package:alera/src/design_system/feedback/alera_toast.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
-import 'package:alera/src/design_system/layout/alera_confirm_dialog.dart';
 import 'package:alera/src/features/app_menu/presentation/alera_app_menu_scope.dart';
 import 'package:alera/src/features/external_editor/domain/external_editor_launcher.dart';
 import 'package:alera/src/features/keyboard/presentation/keyboard_shortcuts_scope.dart';
 import 'package:alera/src/features/projects/domain/project.dart';
-import 'package:alera/src/features/settings/application/settings_controller.dart';
 import 'package:alera/src/features/pull_requests/application/workspace_pull_request_monitor_providers.dart';
 import 'package:alera/src/features/pull_requests/application/workspace_pull_request_notification_providers.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_service.dart';
@@ -32,6 +30,7 @@ import 'package:alera/src/features/workbench/presentation/project_workbench_side
 import 'package:alera/src/features/workbench/presentation/welcome_dashboard.dart';
 import 'package:alera/src/features/workbench/application/terminal_driver_presence_controller.dart';
 import 'package:alera/src/features/workbench/presentation/mobile_driver_overlay.dart';
+import 'package:alera/src/features/workbench/presentation/workbench_dialog_launchers.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_workbench_view.dart';
 import 'package:alera/src/features/settings/presentation/github_star_prompt_watch.dart';
 import 'package:flutter/material.dart';

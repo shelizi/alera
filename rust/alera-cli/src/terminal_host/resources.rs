@@ -96,6 +96,68 @@ pub fn sweep_process_topology() -> ProcessIndex {
     }))
 }
 
+/// A running child process under a terminal shell.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunningProcessInfo {
+    pub pid: u32,
+    pub name: String,
+}
+
+/// Benign shell background/helper processes that should not prevent terminal closure.
+pub fn is_ignored_helper_process(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    let base = lower.trim_end_matches(".exe");
+    matches!(base, "conhost" | "openconsole" | "gitstatusd")
+}
+
+/// Collects live descendant processes of a shell, filtering out benign helpers.
+pub fn live_descendant_processes(shell: ShellProcess) -> Vec<RunningProcessInfo> {
+    let mut system = System::new();
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::All,
+        true,
+        ProcessRefreshKind::nothing().without_tasks(),
+    );
+    let index = ProcessIndex::build(system.processes().iter().map(|(pid, process)| {
+        ProcessRow::topology_only(
+            pid.as_u32(),
+            process.parent().map(|parent| parent.as_u32()),
+            process.start_time(),
+        )
+    }));
+    if !index.holds(shell) {
+        return Vec::new();
+    }
+    let descendants = index.descendants(shell.pid);
+    let mut result = Vec::new();
+    for pid in descendants {
+        let sysinfo_pid = Pid::from_u32(pid);
+        if let Some(process) = system.process(sysinfo_pid) {
+            let name = process.name().to_string_lossy().into_owned();
+            if !is_ignored_helper_process(&name) {
+                result.push(RunningProcessInfo { pid, name });
+            }
+        }
+    }
+    result
+}
+
+/// Asynchronously sweeps the session's shell tree on a blocking task.
+pub async fn sweep_session_running_processes(
+    shell: Option<ShellProcess>,
+) -> Vec<RunningProcessInfo> {
+    let Some(shell) = shell else {
+        return Vec::new();
+    };
+    let sweep = tokio::task::spawn_blocking(move || live_descendant_processes(shell));
+    tokio::time::timeout(std::time::Duration::from_secs(1), sweep)
+        .await
+        .ok()
+        .and_then(|res| res.ok())
+        .unwrap_or_default()
+}
+
 /// Owns the `sysinfo` handle across samples.
 ///
 /// The handle has to outlive a single sample: CPU is a delta between two
@@ -482,5 +544,29 @@ mod tests {
         sampler.reset_cpu_baseline();
 
         assert_eq!(sampler.sample(&[], self_pid, None)["warming"], json!(true));
+    }
+
+    #[test]
+    fn helper_processes_are_ignored() {
+        assert!(is_ignored_helper_process("conhost.exe"));
+        assert!(is_ignored_helper_process("Conhost"));
+        assert!(is_ignored_helper_process("openconsole.exe"));
+        assert!(is_ignored_helper_process("gitstatusd"));
+        assert!(!is_ignored_helper_process("cargo.exe"));
+        assert!(!is_ignored_helper_process("node"));
+        assert!(!is_ignored_helper_process("python"));
+    }
+
+    #[tokio::test]
+    async fn empty_shell_reports_no_running_processes() {
+        let none = sweep_session_running_processes(None).await;
+        assert!(none.is_empty());
+
+        let absent = ShellProcess {
+            pid: u32::MAX,
+            start_time: 1,
+        };
+        let none = sweep_session_running_processes(Some(absent)).await;
+        assert!(none.is_empty());
     }
 }

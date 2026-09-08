@@ -343,6 +343,14 @@ impl ServerActor {
                 self.require_auth(client_id)?;
                 Ok(self.terminal_driver_list_payload())
             }
+            "terminal.runningProcesses" => {
+                self.require_auth(client_id)?;
+                let session_id = self.require_session_id(payload)?;
+                let shell = self.sessions.get(&session_id).and_then(|s| s.shell());
+                let processes =
+                    crate::terminal_host::resources::sweep_session_running_processes(shell).await;
+                Ok(json!({ "processes": processes }))
+            }
             "terminal.pulse.status" => {
                 self.require_auth(client_id)?;
                 self.require_request_allowed(client_id, "terminal.pulse.status")?;

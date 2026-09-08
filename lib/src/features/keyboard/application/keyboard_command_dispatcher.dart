@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:alera/src/app/providers.dart';
-import 'package:alera/src/design_system/layout/alera_confirm_dialog.dart';
 import 'package:alera/src/design_system/feedback/alera_toast.dart';
 import 'package:alera/src/features/external_editor/application/external_editor_providers.dart';
 import 'package:alera/src/features/keyboard/domain/keyboard_action.dart';
@@ -182,23 +181,17 @@ class const KeyboardCommandDispatcher({
     if (workspace == null || tab == null) {
       return;
     }
+    final tabs = state.tabsFor(workspace.id);
     unawaited(() async {
-      final registry = ref.read(editorSessionRegistryProvider);
-      if (registry.isDirty(tab.id)) {
-        final confirmed = await showDialog<bool>(
-          context: context,
-          builder: (context) => AleraConfirmDialog(
-            title: 'Close unsaved editor?',
-            message: '${tab.title} has unsaved changes.',
-            confirmLabel: 'Close',
-            destructive: true,
-          ),
-        );
-        if (confirmed != true) {
-          return;
-        }
+      final confirmed = await confirmCloseWorkspaceTabs(
+        context,
+        ref,
+        tabs,
+        <String>[tab.id],
+      );
+      if (!confirmed || !context.mounted) {
+        return;
       }
-      if (!context.mounted) return;
       // The controller disposes the terminal handle and editor document.
       await ref
           .read(workbenchControllerProvider.notifier)

@@ -92,7 +92,7 @@ extension _AleraShellPageBodyContent on _AleraShellPageBodyState {
             );
           },
           onCloseTab: (tabId) async {
-            if (!await _confirmCloseDirtyTabs(tabs, <String>[tabId])) {
+            if (!await _confirmCloseTabs(tabs, <String>[tabId])) {
               return;
             }
             // The controller disposes the terminal handle and editor document.
@@ -102,7 +102,7 @@ extension _AleraShellPageBodyContent on _AleraShellPageBodyState {
             );
           },
           onCloseTabs: (tabIds) async {
-            if (!await _confirmCloseDirtyTabs(tabs, tabIds)) {
+            if (!await _confirmCloseTabs(tabs, tabIds)) {
               return;
             }
             // The controller disposes the terminal handles and editor

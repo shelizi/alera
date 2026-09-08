@@ -55,4 +55,4 @@ final class ExternalEditorLauncherProvider
 }
 
 String _$externalEditorLauncherHash() =>
-    r'4ca43e47de3605845b7ef6142eb8ae4dd7f547e9';
+    r'7567894970dd766a68cb32322b397a069f43515c';
