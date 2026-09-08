@@ -78,6 +78,15 @@ class const ExternalEditorSettingsGroup({
             ),
           ),
         ),
+        SettingsSwitchRow(
+          key: const ValueKey<String>('editor-zed-auto-open-workspace-row'),
+          title: 'Auto-open New Workspaces in Zed',
+          description: 'After Alera creates a linked workspace, open that workspace in Zed automatically.',
+          value: settings.autoOpenNewWorkspacesInZed,
+          onChanged: (value) => onChanged(
+            (settings) => settings.copyWith(autoOpenNewWorkspacesInZed: value),
+          ),
+        ),
         SettingsButtonRow(
           key: const ValueKey<String>('editor-zed-check-row'),
           title: 'Check Zed',

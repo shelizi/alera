@@ -88,6 +88,7 @@ void main() {
         editor.externalEditorWorkspaceMode,
         ExternalEditorWorkspaceMode.newWindow,
       );
+      expect(editor.autoOpenNewWorkspacesInZed, isFalse);
     });
 
     test('backward-compatible editor settings use autosave defaults', () {
@@ -108,6 +109,7 @@ void main() {
         editor.externalEditorWorkspaceMode,
         ExternalEditorWorkspaceMode.newWindow,
       );
+      expect(editor.autoOpenNewWorkspacesInZed, isFalse);
     });
 
     test('bounds persisted autosave delay before scheduling', () {

@@ -1279,6 +1279,15 @@ class EditorSettingsMapper extends ClassMapperBase<EditorSettings> {
     opt: true,
     def: ExternalEditorWorkspaceMode.newWindow,
   );
+  static bool _$autoOpenNewWorkspacesInZed(EditorSettings v) =>
+      v.autoOpenNewWorkspacesInZed;
+  static const Field<EditorSettings, bool> _f$autoOpenNewWorkspacesInZed =
+      Field(
+        'autoOpenNewWorkspacesInZed',
+        _$autoOpenNewWorkspacesInZed,
+        opt: true,
+        def: false,
+      );
 
   @override
   final MappableFields<EditorSettings> fields = const {
@@ -1291,6 +1300,7 @@ class EditorSettingsMapper extends ClassMapperBase<EditorSettings> {
     #zedExecutableMode: _f$zedExecutableMode,
     #zedExecutablePath: _f$zedExecutablePath,
     #externalEditorWorkspaceMode: _f$externalEditorWorkspaceMode,
+    #autoOpenNewWorkspacesInZed: _f$autoOpenNewWorkspacesInZed,
   };
 
   static EditorSettings _instantiate(DecodingData data) {
@@ -1304,6 +1314,7 @@ class EditorSettingsMapper extends ClassMapperBase<EditorSettings> {
       zedExecutableMode: data.dec(_f$zedExecutableMode),
       zedExecutablePath: data.dec(_f$zedExecutablePath),
       externalEditorWorkspaceMode: data.dec(_f$externalEditorWorkspaceMode),
+      autoOpenNewWorkspacesInZed: data.dec(_f$autoOpenNewWorkspacesInZed),
     );
   }
 
@@ -1379,6 +1390,7 @@ abstract class EditorSettingsCopyWith<$R, $In extends EditorSettings, $Out>
     ExternalEditorExecutableMode? zedExecutableMode,
     String? zedExecutablePath,
     ExternalEditorWorkspaceMode? externalEditorWorkspaceMode,
+    bool? autoOpenNewWorkspacesInZed,
   });
   EditorSettingsCopyWith<$R2, $In, $Out2> $chain<$R2, $Out2>(
     Then<$Out2, $R2> t,
@@ -1404,6 +1416,7 @@ class _EditorSettingsCopyWithImpl<$R, $Out>
     ExternalEditorExecutableMode? zedExecutableMode,
     Object? zedExecutablePath = $none,
     ExternalEditorWorkspaceMode? externalEditorWorkspaceMode,
+    bool? autoOpenNewWorkspacesInZed,
   }) => $apply(
     FieldCopyWithData({
       if (tabSize != null) #tabSize: tabSize,
@@ -1417,6 +1430,8 @@ class _EditorSettingsCopyWithImpl<$R, $Out>
       if (zedExecutablePath != $none) #zedExecutablePath: zedExecutablePath,
       if (externalEditorWorkspaceMode != null)
         #externalEditorWorkspaceMode: externalEditorWorkspaceMode,
+      if (autoOpenNewWorkspacesInZed != null)
+        #autoOpenNewWorkspacesInZed: autoOpenNewWorkspacesInZed,
     }),
   );
   @override
@@ -1441,6 +1456,10 @@ class _EditorSettingsCopyWithImpl<$R, $Out>
     externalEditorWorkspaceMode: data.get(
       #externalEditorWorkspaceMode,
       or: $value.externalEditorWorkspaceMode,
+    ),
+    autoOpenNewWorkspacesInZed: data.get(
+      #autoOpenNewWorkspacesInZed,
+      or: $value.autoOpenNewWorkspacesInZed,
     ),
   );
 

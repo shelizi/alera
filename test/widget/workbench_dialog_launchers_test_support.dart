@@ -5,6 +5,9 @@ import 'package:alera/src/app/providers.dart';
 import 'package:alera/src/design_system/feedback/alera_toast_host.dart';
 import 'package:alera/src/features/agent_profiles/application/agent_profile_providers.dart';
 import 'package:alera/src/features/agent_profiles/domain/agent_profile.dart';
+import 'package:alera/src/features/external_editor/application/external_editor_providers.dart';
+import 'package:alera/src/features/external_editor/domain/external_editor_launch_result.dart';
+import 'package:alera/src/features/external_editor/domain/external_editor_launcher.dart';
 import 'package:alera/src/features/projects/domain/project.dart';
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
 import 'package:alera/src/features/workbench/application/workbench_state.dart';
@@ -21,6 +24,8 @@ Future<void> pumpFlowHarness(
   WidgetTester tester, {
   required DialogLaunchersTestController controller,
   required Future<void> Function(BuildContext context, WidgetRef ref) onPressed,
+  AleraSettings settings = AleraSettings.defaults,
+  ExternalEditorLauncher? externalEditorLauncher,
 }) async {
   await tester.pumpWidget(
     ProviderScope(
@@ -31,8 +36,12 @@ Future<void> pumpFlowHarness(
         ),
         gitBackendProvider.overrideWithValue(FakeGitBackend()),
         settingsControllerProvider.overrideWith(
-          () => DialogLaunchersSettingsController(.defaults),
+          () => DialogLaunchersSettingsController(settings),
         ),
+        if (externalEditorLauncher != null)
+          externalEditorLauncherProvider.overrideWithValue(
+            externalEditorLauncher,
+          ),
       ],
       child: MaterialApp(
         home: Scaffold(
@@ -194,4 +203,25 @@ class DialogLaunchersSettingsController(final AleraSettings _seed)
     extends SettingsController {
   @override
   AleraSettings build() => _seed;
+}
+
+class RecordingExternalEditorLauncher implements ExternalEditorLauncher {
+  final List<String> workspaces = <String>[];
+  ExternalEditorLaunchResult nextResult =
+      ExternalEditorLaunchResultFactories.opened;
+
+  @override
+  Future<ExternalEditorAvailability> checkAvailability() async =>
+      const ExternalEditorAvailability(available: true);
+
+  @override
+  Future<ExternalEditorLaunchResult> openFile(
+    ExternalEditorOpenRequest request,
+  ) async => nextResult;
+
+  @override
+  Future<ExternalEditorLaunchResult> openWorkspace(String workspacePath) async {
+    workspaces.add(workspacePath);
+    return nextResult;
+  }
 }

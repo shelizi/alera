@@ -256,6 +256,7 @@ class const EditorSettings({
   this.zedExecutableMode = ExternalEditorExecutableMode.automatic,
   this.zedExecutablePath,
   this.externalEditorWorkspaceMode = ExternalEditorWorkspaceMode.newWindow,
+  this.autoOpenNewWorkspacesInZed = false,
 }) with EditorSettingsMappable {
   static const int minAutosaveDelaySeconds = 1;
   static const int maxAutosaveDelaySeconds = 60;
@@ -278,6 +279,7 @@ class const EditorSettings({
   final ExternalEditorExecutableMode zedExecutableMode;
   final String? zedExecutablePath;
   final ExternalEditorWorkspaceMode externalEditorWorkspaceMode;
+  final bool autoOpenNewWorkspacesInZed;
 
   /// Clamps persisted values before they are used to construct a timer.
   int get effectiveAutosaveDelaySeconds => autosaveDelaySeconds

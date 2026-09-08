@@ -8,6 +8,7 @@ import 'package:alera/src/design_system/layout/alera_dialog.dart';
 import 'package:alera/src/features/agent_profiles/application/agent_profile_providers.dart';
 import 'package:alera/src/features/automations/presentation/automations_dialog.dart';
 import 'package:alera/src/features/agent_profiles/domain/agent_profile.dart';
+import 'package:alera/src/features/external_editor/application/external_editor_providers.dart';
 import 'package:alera/src/features/projects/domain/project.dart';
 import 'package:alera/src/features/projects/presentation/add_project_dialog.dart';
 import 'package:alera/src/features/settings/presentation/settings_dialog.dart';
@@ -297,7 +298,10 @@ Future<void> showCreateWorkspaceFlow(
           agentTabId: agentTabId,
         );
         if (context.mounted) {
-          _showWorkspaceCreationToast(context, creation);
+          await _maybeAutoOpenCreatedWorkspaceInZed(context, ref, creation);
+          if (context.mounted) {
+            _showWorkspaceCreationToast(context, creation);
+          }
         }
       },
     ),
@@ -385,7 +389,31 @@ Future<void> showCreateWorkspaceFlow(
   }
 
   if (result != null && context.mounted) {
-    _showWorkspaceCreationToast(context, result);
+    await _maybeAutoOpenCreatedWorkspaceInZed(context, ref, result);
+    if (context.mounted) {
+      _showWorkspaceCreationToast(context, result);
+    }
+  }
+}
+
+Future<void> _maybeAutoOpenCreatedWorkspaceInZed(
+  BuildContext context,
+  WidgetRef ref,
+  WorkspaceCreationResult creation,
+) async {
+  if (!ref.read(settingsControllerProvider).editor.autoOpenNewWorkspacesInZed) {
+    return;
+  }
+  final launch = await ref
+      .read(externalEditorLauncherProvider)
+      .openWorkspace(creation.workspace.path);
+  if (!launch.ok && context.mounted) {
+    AleraToast.show(
+      context,
+      message:
+          launch.message ?? 'Workspace created, but Zed could not be opened.',
+      tone: .error,
+    );
   }
 }
 

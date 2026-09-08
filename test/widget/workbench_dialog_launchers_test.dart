@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:alera/src/features/projects/domain/project.dart';
+import 'package:alera/src/features/settings/domain/alera_settings.dart';
 import 'package:alera/src/features/workbench/application/workbench_state.dart';
 import 'package:alera/src/features/workbench/domain/workspace_creation_result.dart';
 import 'package:alera/src/features/workbench/presentation/workbench_dialog_launchers.dart';
@@ -270,6 +271,45 @@ void main() {
       },
     );
 
+    testWidgets(
+      'showCreateWorkspaceFlow auto-opens the created workspace in Zed once when enabled',
+      (tester) async {
+        final project = buildProject('project-1', 'Alera');
+        final controller = DialogLaunchersTestController(
+          WorkbenchState(projects: <Project>[project]),
+        )..sourceBranches = <String>['main'];
+        final launcher = RecordingExternalEditorLauncher();
+        final settings = AleraSettings.defaults.copyWith(
+          editor: const EditorSettings(autoOpenNewWorkspacesInZed: true),
+        );
+
+        await pumpFlowHarness(
+          tester,
+          controller: controller,
+          settings: settings,
+          externalEditorLauncher: launcher,
+          onPressed: (context, ref) => showCreateWorkspaceFlow(context, ref),
+        );
+
+        await tester.tap(find.text('Open'));
+        await tester.pumpAndSettle();
+        await openManualWorkspaceDialog(tester);
+        await tester.tap(find.text('Continue'));
+        await tester.pumpAndSettle();
+        await tester.enterText(
+          find.widgetWithText(TextField, 'New Branch Name *'),
+          'feature/zed-auto-open',
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Create Workspace'));
+        await tester.pumpAndSettle();
+
+        expect(launcher.workspaces, <String>[
+          '/repo/project-1/workspace-created',
+        ]);
+        expect(find.text('Workspace created'), findsOneWidget);
+      },
+    );
     testWidgets(
       'showCreateWorkspaceFlow toasts and resets when Create Another is on',
       (tester) async {

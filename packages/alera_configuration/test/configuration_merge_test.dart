@@ -145,6 +145,7 @@ void main() {
           'zedExecutableMode': 'custom',
           'zedExecutablePath': r'C:\private\Zed\zed.exe',
           'externalEditorWorkspaceMode': 'defaultWindow',
+          'autoOpenNewWorkspacesInZed': true,
         },
         'agents': {
           'agentStatusHooks': {'codex': true},
