@@ -19,6 +19,7 @@ import 'package:path/path.dart' as p;
 import 'fake_git_backend.dart';
 
 part 'workspace_service_core_test_cases.dart';
+part 'workspace_service_reconciliation_test_cases.dart';
 part 'workspace_service_removal_test_cases.dart';
 part 'workspace_service_test_harness.dart';
 
@@ -60,6 +61,7 @@ void main() {
     });
 
     _registerWorkspaceServiceCoreTests();
+    _reconciliationTests();
     _registerWorkspaceServiceRemovalTests();
   });
 }

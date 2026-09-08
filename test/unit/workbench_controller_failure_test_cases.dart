@@ -373,4 +373,24 @@ void _registerWorkbenchControllerFailureTests() {
     expect(_controller.state.tabsFor(workspace.id), contains(newTab));
     expect(_controller.state.layoutFor(workspace.id), isNotNull);
   });
+
+  test(
+    'reconcileProjectWorkspaces reconciles project workspaces and clears error',
+    () async {
+      await _controller.bootstrap();
+      final extPath = p.join(_harness.tempDir.path, 'ext-wt');
+      Directory(extPath).createSync(recursive: true);
+      _harness.gitBackend.liveBranchByPath = <String, String>{
+        _harness.project.repoPath: 'main',
+        extPath: 'feature/ext-wt',
+      };
+
+      await _controller.reconcileProjectWorkspaces(_harness.project.id);
+      await _flush();
+
+      final workspaces = _controller.state.workspacesFor(_harness.project.id);
+      expect(workspaces.map((w) => w.name), contains('feature/ext-wt'));
+      expect(_controller.state.error, isNull);
+    },
+  );
 }

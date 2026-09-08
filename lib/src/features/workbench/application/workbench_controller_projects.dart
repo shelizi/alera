@@ -8,6 +8,18 @@ mixin _WorkbenchControllerProjects
   Future<List<String>> listSourceBranches(Project project) =>
       _workspaceService.listSourceBranches(project);
 
+  Future<void> reconcileProjectWorkspaces(String projectId) async {
+    final project = _projectById(state.projects, projectId);
+    if (project == null) return;
+    try {
+      await _workspaceService.reconcile(project);
+      state = state.copyWith(error: null);
+    } catch (error) {
+      state = state.copyWith(error: error.toString());
+      rethrow;
+    }
+  }
+
   Future<Project> addLocalProject({required String path, String? name}) async {
     try {
       final project = await _projectsService.addLocalProject(

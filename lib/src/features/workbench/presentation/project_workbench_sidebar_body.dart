@@ -98,6 +98,9 @@ class const _SidebarBody({
           onCreateWorkspace: row.project.supportsLinkedWorkspaces
               ? () => onCreateWorkspace(row.project)
               : null,
+          onRefreshWorktrees: row.project.supportsLinkedWorkspaces
+              ? () => controller.reconcileProjectWorkspaces(row.project.id)
+              : null,
           onOpenProjectSettings: () =>
               unawaited(onOpenProjectSettings(row.project)),
           onRenameProject: () => onRenameProject(row.project),
@@ -310,6 +313,7 @@ class const _ProjectHeaderTile({
   required final int workspaceCount,
   required final VoidCallback onToggle,
   required final VoidCallback? onCreateWorkspace,
+  final VoidCallback? onRefreshWorktrees,
   required final VoidCallback onOpenProjectSettings,
   required final VoidCallback onRenameProject,
   required final VoidCallback onRemoveProject,
@@ -356,6 +360,12 @@ class _ProjectHeaderTileState extends State<_ProjectHeaderTile> {
           label: 'New Workspace',
           enabled: widget.onCreateWorkspace != null,
         ),
+        if (widget.onRefreshWorktrees != null)
+          const AleraDropdownEntry<String>(
+            value: 'refresh-worktrees',
+            leading: Icon(AleraIcons.refresh, size: 16),
+            label: 'Refresh Worktrees',
+          ),
         const PopupMenuDivider(height: AleraTokens.space8),
         const AleraDropdownEntry<String>(
           value: 'remove',
@@ -370,6 +380,8 @@ class _ProjectHeaderTileState extends State<_ProjectHeaderTile> {
       widget.onRenameProject();
     } else if (selected == 'new-workspace') {
       widget.onCreateWorkspace?.call();
+    } else if (selected == 'refresh-worktrees') {
+      widget.onRefreshWorktrees?.call();
     } else if (selected == 'remove') {
       widget.onRemoveProject();
     }
