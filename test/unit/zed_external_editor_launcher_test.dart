@@ -23,6 +23,18 @@ void main() {
     expect(runner.starts.single.workingDirectory, '/repo with spaces');
   });
 
+  test('Windows extended-length workspace path is converted before validation and launch', () async {
+    final runner = _FakeProcessRunner();
+    const externalPath = r'E:\Dropbox\work\hermes';
+    final launcher = _launcher(runner, existing: <String>{externalPath});
+
+    final result = await launcher.openWorkspace(r'\\?\E:\Dropbox\work\hermes');
+
+    expect(result.ok, isTrue);
+    expect(runner.starts.single.arguments, <String>['--new', externalPath]);
+    expect(runner.starts.single.workingDirectory, externalPath);
+  });
+
   test('default workspace mode omits --new', () async {
     final runner = _FakeProcessRunner();
     final launcher = _launcher(

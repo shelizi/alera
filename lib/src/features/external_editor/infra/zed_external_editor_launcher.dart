@@ -160,9 +160,11 @@ class ZedExternalEditorLauncher implements ExternalEditorLauncher {
   ({String normalized, String canonical})? _validatedExistingAbsolutePath(
     String value,
   ) {
-    final context = _pathContextFor(value);
-    if (!context.isAbsolute(value)) return null;
-    final normalized = context.normalize(value);
+    final externalPath = _externalProcessPath(value);
+    if (externalPath == null) return null;
+    final context = _pathContextFor(externalPath);
+    if (!context.isAbsolute(externalPath)) return null;
+    final normalized = context.normalize(externalPath);
     if (!_pathExists(normalized)) return null;
     final canonical = _pathCanonicalizer(normalized);
     if (canonical == null) return null;
@@ -207,7 +209,20 @@ String? _nonBlank(String? value) {
   return trimmed == null || trimmed.isEmpty ? null : trimmed;
 }
 
+String? _externalProcessPath(String value) {
+  const extendedUncPrefix = '\\\\?\\UNC\\';
+  const extendedPrefix = '\\\\?\\';
+  if (value.startsWith(extendedUncPrefix)) {
+    return '\\\\${value.substring(extendedUncPrefix.length)}';
+  }
+  if (value.startsWith(extendedPrefix)) {
+    final unprefixed = value.substring(extendedPrefix.length);
+    return RegExp(r'^[A-Za-z]:[\\/]').hasMatch(unprefixed) ? unprefixed : null;
+  }
+  return value;
+}
+
 p.Context _pathContextFor(String value) =>
-    RegExp(r'^[A-Za-z]:[\\/]').hasMatch(value)
+    RegExp(r'^[A-Za-z]:[\\/]').hasMatch(value) || value.startsWith(r'\\')
     ? p.Context(style: .windows)
     : p.Context(style: .posix);
