@@ -7,7 +7,8 @@ import 'package:alera/src/shared/infra/process/process_runner.dart';
 import 'package:path/path.dart' as p;
 
 typedef ExternalEditorCommandReader = String? Function();
-typedef ExternalEditorWorkspaceModeReader = ExternalEditorWorkspaceMode Function();
+typedef ExternalEditorWorkspaceModeReader =
+    ExternalEditorWorkspaceMode Function();
 typedef ExternalEditorPathExists = bool Function(String path);
 
 class ZedExternalEditorLauncher implements ExternalEditorLauncher {
@@ -19,7 +20,7 @@ class ZedExternalEditorLauncher implements ExternalEditorLauncher {
   }) : _processRunner = processRunner,
        _commandReader = commandReader ?? _noConfiguredCommand,
        _workspaceModeReader = workspaceModeReader ?? _newWindowMode,
-       _pathExists = pathExists ?? FileSystemEntity.existsSync;
+       _pathExists = pathExists ?? _pathExistsOnDisk;
 
   final ProcessRunner _processRunner;
   final ExternalEditorCommandReader _commandReader;
@@ -76,7 +77,10 @@ class ZedExternalEditorLauncher implements ExternalEditorLauncher {
   @override
   Future<ExternalEditorAvailability> checkAvailability() async {
     try {
-      final output = await _processRunner.run(_resolvedCommand(), const <String>['--version']);
+      final output = await _processRunner.run(
+        _resolvedCommand(),
+        const <String>['--version'],
+      );
       if (output.exitCode == 0) {
         final version = output.stdout.trim();
         return ExternalEditorAvailability(
@@ -137,6 +141,9 @@ class ZedExternalEditorLauncher implements ExternalEditorLauncher {
 }
 
 String? _noConfiguredCommand() => null;
+
+bool _pathExistsOnDisk(String path) =>
+    FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound;
 
 ExternalEditorWorkspaceMode _newWindowMode() => .newWindow;
 

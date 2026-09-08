@@ -830,7 +830,9 @@ Widget _withWorkspaceFiles(
       if (folderOpener != null)
         workspaceFolderOpenerProvider.overrideWithValue(folderOpener),
       if (externalEditorLauncher != null)
-        externalEditorLauncherProvider.overrideWithValue(externalEditorLauncher),
+        externalEditorLauncherProvider.overrideWithValue(
+          externalEditorLauncher,
+        ),
       if (registry != null)
         editorSessionRegistryProvider.overrideWithValue(registry),
     ],
@@ -1233,7 +1235,8 @@ class _FakeWorkspaceFolderOpener() extends WorkspaceFolderOpener {
 
 class _FakeExternalEditorLauncher implements ExternalEditorLauncher {
   final List<String> workspacePaths = <String>[];
-  final List<ExternalEditorOpenRequest> fileRequests = <ExternalEditorOpenRequest>[];
+  final List<ExternalEditorOpenRequest> fileRequests =
+      <ExternalEditorOpenRequest>[];
 
   @override
   Future<ExternalEditorAvailability> checkAvailability() async =>

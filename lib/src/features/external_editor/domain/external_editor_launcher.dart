@@ -13,16 +13,18 @@ enum ExternalEditorExecutableMode { automatic, custom }
 enum ExternalEditorWorkspaceMode { newWindow, defaultWindow }
 
 class const ExternalEditorOpenRequest({
-  required this.workspacePath,
-  required this.filePath,
-  this.line,
-  this.column,
+  required final String workspacePath,
+  required final String filePath,
+  final int? line,
+  final int? column,
 });
 
 abstract interface class ExternalEditorLauncher {
   Future<ExternalEditorLaunchResult> openWorkspace(String workspacePath);
 
-  Future<ExternalEditorLaunchResult> openFile(ExternalEditorOpenRequest request);
+  Future<ExternalEditorLaunchResult> openFile(
+    ExternalEditorOpenRequest request,
+  );
 
   Future<ExternalEditorAvailability> checkAvailability();
 }

@@ -8,6 +8,8 @@ class const _SidebarBody({
   onOpenWorkspace,
   required final Future<void> Function(Workspace workspace)
   onOpenWorkspaceFolder,
+  required final Future<void> Function(Workspace workspace)
+  onOpenWorkspaceInZed,
   required final Future<void> Function(Workspace workspace) onCopyWorkspacePath,
   required final Future<void> Function(Workspace workspace)
   onOpenWorkspaceInBrowser,

@@ -9,19 +9,20 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 class const ExternalEditorSettingsGroup({
   super.key,
   required final EditorSettings settings,
-  required final ValueChanged<EditorSettings Function(EditorSettings)> onChanged,
+  required final ValueChanged<EditorSettings Function(EditorSettings)>
+  onChanged,
 }) extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return AleraSettingsGroup(
       title: 'External Editor',
-      description:
-          'Open workspaces and files in Zed without changing Alera\'s built-in editor behavior.',
+      description: 'Open workspaces and files in Zed without changing Alera\'s built-in editor behavior.',
       children: <Widget>[
         SettingsSwitchRow(
           key: const ValueKey<String>('editor-zed-custom-executable-row'),
           title: 'Custom Zed Executable',
-          description: 'Off uses the zed command from the local command environment.',
+          description:
+              'Off uses the zed command from the local command environment.',
           value: settings.zedExecutableMode == .custom,
           onChanged: (value) => onChanged(
             (settings) => settings.copyWith(
@@ -45,8 +46,7 @@ class const ExternalEditorSettingsGroup({
         SettingsSwitchRow(
           key: const ValueKey<String>('editor-zed-new-window-row'),
           title: 'Open Workspaces in New Window',
-          description:
-              'Use zed --new so each Alera worktree opens as a separate Zed workspace window.',
+          description: 'Use zed --new so each Alera worktree opens as a separate Zed workspace window.',
           value: settings.externalEditorWorkspaceMode == .newWindow,
           onChanged: (value) => onChanged(
             (settings) => settings.copyWith(
@@ -57,8 +57,7 @@ class const ExternalEditorSettingsGroup({
         SettingsButtonRow(
           key: const ValueKey<String>('editor-zed-check-row'),
           title: 'Check Zed',
-          description:
-              'Run a non-destructive zed --version check with the current executable setting.',
+          description: 'Run a non-destructive zed --version check with the current executable setting.',
           buttonLabel: 'Check Zed',
           onPressed: () async {
             final availability = await ref

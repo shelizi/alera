@@ -8,12 +8,11 @@ part 'external_editor_providers.g.dart';
 
 @Riverpod(keepAlive: true)
 ExternalEditorLauncher externalEditorLauncher(Ref ref) {
-  final editor = ref.watch(
-    settingsControllerProvider.select((settings) => settings.editor),
-  );
+  final editor = ref.watch(settingsControllerProvider).editor;
   return ZedExternalEditorLauncher(
     processRunner: ref.watch(processRunnerProvider),
-    commandReader: () => editor.zedExecutableMode == .custom
+    commandReader: () =>
+        editor.zedExecutableMode == ExternalEditorExecutableMode.custom
         ? editor.zedExecutablePath
         : null,
     workspaceModeReader: () => editor.externalEditorWorkspaceMode,

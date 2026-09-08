@@ -1,9 +1,9 @@
 enum ExternalEditorLaunchFailureKind { invalidTarget, unavailable, failed }
 
 class const ExternalEditorLaunchResult({
-  required this.ok,
-  this.failureKind,
-  this.message,
+  required final bool ok,
+  final ExternalEditorLaunchFailureKind? failureKind,
+  final String? message,
 });
 
 extension ExternalEditorLaunchResultFactories on ExternalEditorLaunchResult {
@@ -13,14 +13,10 @@ extension ExternalEditorLaunchResultFactories on ExternalEditorLaunchResult {
 ExternalEditorLaunchResult externalEditorLaunchFailure(
   ExternalEditorLaunchFailureKind kind,
   String message,
-) => ExternalEditorLaunchResult(
-  ok: false,
-  failureKind: kind,
-  message: message,
-);
+) => ExternalEditorLaunchResult(ok: false, failureKind: kind, message: message);
 
 class const ExternalEditorAvailability({
-  required this.available,
-  this.version,
-  this.message,
+  required final bool available,
+  final String? version,
+  final String? message,
 });

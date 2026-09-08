@@ -16,7 +16,10 @@ void main() {
 
     expect(result.ok, isTrue);
     expect(runner.starts.single.executable, 'zed');
-    expect(runner.starts.single.arguments, <String>['--new', '/repo with spaces']);
+    expect(runner.starts.single.arguments, <String>[
+      '--new',
+      '/repo with spaces',
+    ]);
     expect(runner.starts.single.workingDirectory, '/repo with spaces');
   });
 
@@ -46,19 +49,25 @@ void main() {
     expect(runner.starts.single.executable, '/opt/Zed Preview/bin/zed');
   });
 
-  test('file launch preserves spaces unicode and a leading dash in one argument', () async {
-    final runner = _FakeProcessRunner();
-    const workspace = '/repo 專案';
-    const file = '/repo 專案/src/-測試 file.dart';
-    final launcher = _launcher(runner, existing: <String>{workspace, file});
+  test(
+    'file launch preserves spaces unicode and a leading dash in one argument',
+    () async {
+      final runner = _FakeProcessRunner();
+      const workspace = '/repo 專案';
+      const file = '/repo 專案/src/-測試 file.dart';
+      final launcher = _launcher(runner, existing: <String>{workspace, file});
 
-    final result = await launcher.openFile(
-      const ExternalEditorOpenRequest(workspacePath: workspace, filePath: file),
-    );
+      final result = await launcher.openFile(
+        const ExternalEditorOpenRequest(
+          workspacePath: workspace,
+          filePath: file,
+        ),
+      );
 
-    expect(result.ok, isTrue);
-    expect(runner.starts.single.arguments, <String>[file]);
-  });
+      expect(result.ok, isTrue);
+      expect(runner.starts.single.arguments, <String>[file]);
+    },
+  );
 
   test('line and column are appended to the single file argument', () async {
     final runner = _FakeProcessRunner();
@@ -92,28 +101,39 @@ void main() {
       ),
     );
 
-    expect(runner.starts.single.arguments, <String>[r'C:\Work Trees\Alera\src\main.rs:9:3']);
+    expect(runner.starts.single.arguments, <String>[
+      r'C:\Work Trees\Alera\src\main.rs:9:3',
+    ]);
   });
 
-  test('missing and outside-workspace targets fail before process spawn', () async {
-    final runner = _FakeProcessRunner();
-    final launcher = _launcher(
-      runner,
-      existing: <String>{'/repo', '/other/file.dart'},
-    );
+  test(
+    'missing and outside-workspace targets fail before process spawn',
+    () async {
+      final runner = _FakeProcessRunner();
+      final launcher = _launcher(
+        runner,
+        existing: <String>{'/repo', '/other/file.dart'},
+      );
 
-    final missing = await launcher.openWorkspace('/missing');
-    final outside = await launcher.openFile(
-      const ExternalEditorOpenRequest(
-        workspacePath: '/repo',
-        filePath: '/other/file.dart',
-      ),
-    );
+      final missing = await launcher.openWorkspace('/missing');
+      final outside = await launcher.openFile(
+        const ExternalEditorOpenRequest(
+          workspacePath: '/repo',
+          filePath: '/other/file.dart',
+        ),
+      );
 
-    expect(missing.failureKind, .invalidTarget);
-    expect(outside.failureKind, .invalidTarget);
-    expect(runner.starts, isEmpty);
-  });
+      expect(
+        missing.failureKind,
+        ExternalEditorLaunchFailureKind.invalidTarget,
+      );
+      expect(
+        outside.failureKind,
+        ExternalEditorLaunchFailureKind.invalidTarget,
+      );
+      expect(runner.starts, isEmpty);
+    },
+  );
 
   test('spawn failure returns an actionable Zed-specific result', () async {
     final runner = _FakeProcessRunner()
@@ -123,14 +143,18 @@ void main() {
     final result = await launcher.openWorkspace('/repo');
 
     expect(result.ok, isFalse);
-    expect(result.failureKind, .unavailable);
+    expect(result.failureKind, ExternalEditorLaunchFailureKind.unavailable);
     expect(result.message, contains('Zed'));
     expect(result.message, contains('Settings > Editor'));
   });
 
   test('availability check uses a non-destructive --version probe', () async {
     final runner = _FakeProcessRunner(
-      runOutput: const ProcessRunOutput(stdout: 'Zed 0.201.3\n', stderr: '', exitCode: 0),
+      runOutput: const ProcessRunOutput(
+        stdout: 'Zed 0.201.3\n',
+        stderr: '',
+        exitCode: 0,
+      ),
     );
     final launcher = _launcher(runner, existing: const <String>{});
 
@@ -156,7 +180,11 @@ ZedExternalEditorLauncher _launcher(
 
 class _FakeProcessRunner implements ProcessRunner {
   _FakeProcessRunner({
-    this.runOutput = const ProcessRunOutput(stdout: '', stderr: '', exitCode: 0),
+    this.runOutput = const ProcessRunOutput(
+      stdout: '',
+      stderr: '',
+      exitCode: 0,
+    ),
   });
 
   final ProcessRunOutput runOutput;
@@ -171,7 +199,9 @@ class _FakeProcessRunner implements ProcessRunner {
     String? workingDirectory,
     Map<String, String>? environment,
   }) async {
-    runs.add(_ProcessCall(executable, List<String>.of(arguments), workingDirectory));
+    runs.add(
+      _ProcessCall(executable, List<String>.of(arguments), workingDirectory),
+    );
     return runOutput;
   }
 
@@ -183,7 +213,9 @@ class _FakeProcessRunner implements ProcessRunner {
     Map<String, String>? environment,
     bool includeParentEnvironment = true,
   }) async {
-    starts.add(_ProcessCall(executable, List<String>.of(arguments), workingDirectory));
+    starts.add(
+      _ProcessCall(executable, List<String>.of(arguments), workingDirectory),
+    );
     final failure = startFailure;
     if (failure != null) throw failure;
     return StartedProcess(
@@ -197,4 +229,8 @@ class _FakeProcessRunner implements ProcessRunner {
   }
 }
 
-class const _ProcessCall(this.executable, this.arguments, this.workingDirectory);
+class const _ProcessCall(
+  final String executable,
+  final List<String> arguments,
+  final String? workingDirectory,
+);
