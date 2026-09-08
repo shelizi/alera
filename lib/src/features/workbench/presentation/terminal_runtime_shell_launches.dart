@@ -387,6 +387,9 @@ GhosttyTerminalShellLaunch _launchInWorkingDirectory(
     return launch;
   }
   if (_isWindowsCommandPromptLaunch(launch)) {
+    final shellWorkingDirectory = _windowsShellWorkingDirectory(
+      workingDirectory,
+    );
     return GhosttyTerminalShellLaunch(
       label: launch.label,
       shell: launch.shell,
@@ -395,13 +398,16 @@ GhosttyTerminalShellLaunch _launchInWorkingDirectory(
         '/d',
         '/s',
         '/k',
-        'cd /d ${_cmdQuote(workingDirectory)}',
+        'cd /d ${_cmdQuote(shellWorkingDirectory)}',
       ],
       environment: launch.environment,
       setupCommand: launch.setupCommand,
     );
   }
   if (_isWindowsPowerShellLaunch(launch)) {
+    final shellWorkingDirectory = _windowsShellWorkingDirectory(
+      workingDirectory,
+    );
     return GhosttyTerminalShellLaunch(
       label: launch.label,
       shell: launch.shell,
@@ -409,7 +415,7 @@ GhosttyTerminalShellLaunch _launchInWorkingDirectory(
       environment: launch.environment,
       setupCommand: _prependSetupCommand(
         launch.setupCommand,
-        "Set-Location -LiteralPath ${_powerShellQuote(workingDirectory)}\r\n",
+        "Set-Location -LiteralPath ${_powerShellQuote(shellWorkingDirectory)}\r\n",
       ),
     );
   }
@@ -428,6 +434,22 @@ GhosttyTerminalShellLaunch _launchInWorkingDirectory(
     environment: launch.environment,
     setupCommand: launch.setupCommand,
   );
+}
+
+String _windowsShellWorkingDirectory(String workingDirectory) {
+  const extendedUncPrefix = r'\\?\UNC\';
+  if (workingDirectory.startsWith(extendedUncPrefix)) {
+    return r'\\' + workingDirectory.substring(extendedUncPrefix.length);
+  }
+
+  const extendedPathPrefix = r'\\?\';
+  if (workingDirectory.startsWith(extendedPathPrefix)) {
+    final path = workingDirectory.substring(extendedPathPrefix.length);
+    if (RegExp(r'^[A-Za-z]:\\').hasMatch(path)) {
+      return path;
+    }
+  }
+  return workingDirectory;
 }
 
 @visibleForTesting

@@ -251,6 +251,32 @@ void _registerTerminalRuntimeHelperGroup() {
       );
     });
 
+    test('Windows shell working directories strip extended path prefixes', () {
+      final driveLaunch = launchInWorkingDirectoryForTesting(
+        _launch(
+          'Windows PowerShell',
+          shell: r'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe',
+        ),
+        r'\\?\C:\123',
+      );
+      expect(
+        driveLaunch.setupCommand,
+        "Set-Location -LiteralPath 'C:\\123'\r\n",
+      );
+
+      final uncLaunch = launchInWorkingDirectoryForTesting(
+        _launch(
+          'Windows PowerShell',
+          shell: r'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe',
+        ),
+        r'\\?\UNC\server\share\project',
+      );
+      expect(
+        uncLaunch.setupCommand,
+        "Set-Location -LiteralPath '\\\\server\\share\\project'\r\n",
+      );
+    });
+
     test(
       'agent hook launch env strips inherited metadata before injection',
       () {
