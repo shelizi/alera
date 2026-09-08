@@ -8,6 +8,56 @@
 
 part of 'alera_settings.dart';
 
+class AppLanguageMapper extends EnumMapper<AppLanguage> {
+  AppLanguageMapper._();
+
+  static AppLanguageMapper? _instance;
+  static AppLanguageMapper ensureInitialized() {
+    if (_instance == null) {
+      MapperContainer.globals.use(_instance = AppLanguageMapper._());
+    }
+    return _instance!;
+  }
+
+  static AppLanguage fromValue(dynamic value) {
+    ensureInitialized();
+    return MapperContainer.globals.fromValue(value);
+  }
+
+  @override
+  AppLanguage decode(dynamic value) {
+    switch (value) {
+      case r'system':
+        return AppLanguage.system;
+      case r'english':
+        return AppLanguage.english;
+      case r'traditionalChinese':
+        return AppLanguage.traditionalChinese;
+      default:
+        throw MapperException.unknownEnumValue(value);
+    }
+  }
+
+  @override
+  dynamic encode(AppLanguage self) {
+    switch (self) {
+      case AppLanguage.system:
+        return r'system';
+      case AppLanguage.english:
+        return r'english';
+      case AppLanguage.traditionalChinese:
+        return r'traditionalChinese';
+    }
+  }
+}
+
+extension AppLanguageMapperExtension on AppLanguage {
+  String toValue() {
+    AppLanguageMapper.ensureInitialized();
+    return MapperContainer.globals.toValue<AppLanguage>(this) as String;
+  }
+}
+
 class TerminalCursorShapeMapper extends EnumMapper<TerminalCursorShape> {
   TerminalCursorShapeMapper._();
 
@@ -1476,6 +1526,7 @@ class GeneralSettingsMapper extends ClassMapperBase<GeneralSettings> {
   static GeneralSettingsMapper ensureInitialized() {
     if (_instance == null) {
       MapperContainer.globals.use(_instance = GeneralSettingsMapper._());
+      AppLanguageMapper.ensureInitialized();
     }
     return _instance!;
   }
@@ -1483,6 +1534,13 @@ class GeneralSettingsMapper extends ClassMapperBase<GeneralSettings> {
   @override
   final String id = 'GeneralSettings';
 
+  static AppLanguage _$language(GeneralSettings v) => v.language;
+  static const Field<GeneralSettings, AppLanguage> _f$language = Field(
+    'language',
+    _$language,
+    opt: true,
+    def: AppLanguage.system,
+  );
   static String? _$workspaceDirectory(GeneralSettings v) =>
       v.workspaceDirectory;
   static const Field<GeneralSettings, String> _f$workspaceDirectory = Field(
@@ -1562,6 +1620,7 @@ class GeneralSettingsMapper extends ClassMapperBase<GeneralSettings> {
 
   @override
   final MappableFields<GeneralSettings> fields = const {
+    #language: _f$language,
     #workspaceDirectory: _f$workspaceDirectory,
     #starClicked: _f$starClicked,
     #confirmProjectRemoval: _f$confirmProjectRemoval,
@@ -1577,6 +1636,7 @@ class GeneralSettingsMapper extends ClassMapperBase<GeneralSettings> {
 
   static GeneralSettings _instantiate(DecodingData data) {
     return GeneralSettings(
+      language: data.dec(_f$language),
       workspaceDirectory: data.dec(_f$workspaceDirectory),
       starClicked: data.dec(_f$starClicked),
       confirmProjectRemoval: data.dec(_f$confirmProjectRemoval),
@@ -1657,6 +1717,7 @@ extension GeneralSettingsValueCopy<$R, $Out>
 abstract class GeneralSettingsCopyWith<$R, $In extends GeneralSettings, $Out>
     implements ClassCopyWith<$R, $In, $Out> {
   $R call({
+    AppLanguage? language,
     String? workspaceDirectory,
     bool? starClicked,
     bool? confirmProjectRemoval,
@@ -1683,6 +1744,7 @@ class _GeneralSettingsCopyWithImpl<$R, $Out>
       GeneralSettingsMapper.ensureInitialized();
   @override
   $R call({
+    AppLanguage? language,
     Object? workspaceDirectory = $none,
     bool? starClicked,
     bool? confirmProjectRemoval,
@@ -1695,6 +1757,7 @@ class _GeneralSettingsCopyWithImpl<$R, $Out>
     bool? pullRequestFailureNotificationsEnabled,
   }) => $apply(
     FieldCopyWithData({
+      if (language != null) #language: language,
       if (workspaceDirectory != $none) #workspaceDirectory: workspaceDirectory,
       if (starClicked != null) #starClicked: starClicked,
       if (confirmProjectRemoval != null)
@@ -1714,6 +1777,7 @@ class _GeneralSettingsCopyWithImpl<$R, $Out>
   );
   @override
   GeneralSettings $make(CopyWithData data) => GeneralSettings(
+    language: data.get(#language, or: $value.language),
     workspaceDirectory: data.get(
       #workspaceDirectory,
       or: $value.workspaceDirectory,

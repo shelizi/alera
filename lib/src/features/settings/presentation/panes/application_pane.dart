@@ -1,5 +1,7 @@
 import 'package:alera/src/app/providers.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
+import 'package:alera/src/design_system/forms/alera_dropdown_field.dart';
+import 'package:alera/src/design_system/forms/alera_setting_row.dart';
 import 'package:alera/src/design_system/layout/alera_settings_group.dart';
 import 'package:alera/src/design_system/surfaces/alera_panel.dart';
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
@@ -28,6 +30,39 @@ class const ApplicationSettingsPane({
     return Column(
       crossAxisAlignment: .stretch,
       children: <Widget>[
+        KeyedSubtree(
+          key: groupKeys['language'],
+          child: AleraSettingsGroup(
+            title: 'Language',
+            description: 'Language used by the Alera interface.',
+            children: <Widget>[
+              AleraSettingRow(
+                title: 'App Language',
+                description:
+                    'Follow the system language or choose a language for Alera.',
+                child: AleraDropdownField<AppLanguage>(
+                  value: general.language,
+                  entries: const <AleraDropdownFieldEntry<AppLanguage>>[
+                    AleraDropdownFieldEntry<AppLanguage>(
+                      value: AppLanguage.system,
+                      label: 'Follow System',
+                    ),
+                    AleraDropdownFieldEntry<AppLanguage>(
+                      value: AppLanguage.english,
+                      label: 'English',
+                    ),
+                    AleraDropdownFieldEntry<AppLanguage>(
+                      value: AppLanguage.traditionalChinese,
+                      label: '繁體中文',
+                    ),
+                  ],
+                  onChanged: controller.setAppLanguage,
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: AleraTokens.space16),
         KeyedSubtree(
           key: groupKeys['storage'],
           child: AleraPanel(

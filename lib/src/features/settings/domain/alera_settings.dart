@@ -13,6 +13,9 @@ part 'agent_quota_settings.dart';
 part 'alera_settings.mapper.dart';
 
 @MappableEnum()
+enum AppLanguage { system, english, traditionalChinese }
+
+@MappableEnum()
 enum TerminalCursorShape { block, bar, underline }
 
 @MappableEnum()
@@ -297,6 +300,7 @@ class const EditorSettings({
 
 @MappableClass()
 class const GeneralSettings({
+  this.language = AppLanguage.system,
   this.workspaceDirectory,
   this.starClicked = false,
   this.confirmProjectRemoval = true,
@@ -308,6 +312,10 @@ class const GeneralSettings({
   this.showPullRequestStatusInSidebar = true,
   this.pullRequestFailureNotificationsEnabled = false,
 }) with GeneralSettingsMappable {
+  /// Language used by the Alera interface. System resolves Chinese locales to
+  /// Traditional Chinese and falls back to English for unsupported locales.
+  final AppLanguage language;
+
   /// User-configured root directory where new linked workspaces are created.
   /// `null` falls back to the platform default (`~/.alera/workspaces`).
   final String? workspaceDirectory;

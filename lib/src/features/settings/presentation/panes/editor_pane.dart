@@ -58,6 +58,7 @@ class const EditorSettingsPane({
           description: 'Save dirty editor tabs after they have been idle.',
           children: <Widget>[
             SettingsSwitchRow(
+              key: const ValueKey<String>('editor-autosave-row'),
               title: 'Autosave',
               description: 'Automatically save editor changes after a pause.',
               value: settings.autosaveEnabled,

@@ -152,6 +152,7 @@ class _SettingsDialogState extends ConsumerState<SettingsDialog> {
     );
 
     const applicationGroups = <SettingsGroupSpec>[
+      SettingsGroupSpec(id: 'language', title: 'Language'),
       SettingsGroupSpec(id: 'storage', title: 'Storage'),
       SettingsGroupSpec(id: 'safety', title: 'Safety'),
       SettingsGroupSpec(id: 'desktop', title: 'Desktop'),

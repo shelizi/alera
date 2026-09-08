@@ -102,6 +102,13 @@ class SettingsController extends _$SettingsController
     await _save(state.copyWith(terminal: .defaults));
   });
 
+  Future<void> setAppLanguage(AppLanguage value) => _serialize(() async {
+    if (state.general.language == value) {
+      return;
+    }
+    await _save(state.copyWith(general: state.general.copyWith(language: value)));
+  });
+
   Future<void> updateWorkspaceDirectory(String? path) => _serialize(() async {
     await _save(
       state.copyWith(general: state.general.copyWith(workspaceDirectory: path)),

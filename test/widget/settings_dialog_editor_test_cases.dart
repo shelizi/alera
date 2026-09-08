@@ -25,7 +25,12 @@ void _registerSettingsDialogEditorTests() {
       EditorSettings.defaultAutosaveDelaySeconds,
     );
 
-    await tester.tap(find.byType(Switch));
+    await tester.tap(
+      find.descendant(
+        of: find.byKey(const ValueKey<String>('editor-autosave-row')),
+        matching: find.byType(Switch),
+      ),
+    );
     await tester.pump(const Duration(milliseconds: 50));
     expect(
       container.read(settingsControllerProvider).editor.autosaveEnabled,
