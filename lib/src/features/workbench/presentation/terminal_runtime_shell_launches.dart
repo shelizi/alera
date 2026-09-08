@@ -158,15 +158,16 @@ String? _resolveWindowsPowerShell7(
   Map<String, String> environment, {
   required bool Function(String path) fileExists,
 }) {
+  // On Windows the PTY first starts Alera's Job Object bootstrap and only then
+  // launches the requested shell. Returning a bare `pwsh.exe` when PowerShell 7
+  // is not installed makes the bootstrap itself appear to start successfully,
+  // so the caller never gets a chance to fall back to Windows PowerShell/cmd.
   return _resolveFirstExistingWindowsPath(<String>[
-        if (_windowsEnvironmentValue(environment, 'ProgramFiles')
-            case final dir?)
-          _joinWindowsPath(dir, 'PowerShell', '7', 'pwsh.exe'),
-        if (_windowsEnvironmentValue(environment, 'ProgramW6432')
-            case final dir?)
-          _joinWindowsPath(dir, 'PowerShell', '7', 'pwsh.exe'),
-      ], fileExists: fileExists) ??
-      'pwsh.exe';
+    if (_windowsEnvironmentValue(environment, 'ProgramFiles') case final dir?)
+      _joinWindowsPath(dir, 'PowerShell', '7', 'pwsh.exe'),
+    if (_windowsEnvironmentValue(environment, 'ProgramW6432') case final dir?)
+      _joinWindowsPath(dir, 'PowerShell', '7', 'pwsh.exe'),
+  ], fileExists: fileExists);
 }
 
 String? _resolveWindowsPowerShell(Map<String, String> environment) {

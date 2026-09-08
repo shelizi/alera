@@ -183,11 +183,13 @@ void _registerTerminalRuntimeHelperGroup() {
       );
 
       expect(fallbackLaunches.map((launch) => launch.label), <String>[
-        'PowerShell 7',
         'Windows PowerShell',
         'cmd.exe',
       ]);
-      expect(fallbackLaunches.first.shell, 'pwsh.exe');
+      expect(
+        fallbackLaunches.first.shell,
+        r'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe',
+      );
       expect(fallbackLaunches.last.shell, r'C:\Custom\cmd.exe');
     });
 
