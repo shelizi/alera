@@ -128,6 +128,7 @@ class const _SidebarBody({
               : null,
           onTap: () => onOpenWorkspace(row.project, row.workspace),
           onOpenFolder: () => unawaited(onOpenWorkspaceFolder(row.workspace)),
+          onOpenInZed: () => unawaited(onOpenWorkspaceInZed(row.workspace)),
           onCopyPath: () => unawaited(onCopyWorkspacePath(row.workspace)),
           onOpenInBrowser: () =>
               unawaited(onOpenWorkspaceInBrowser(row.workspace)),

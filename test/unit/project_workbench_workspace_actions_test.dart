@@ -67,6 +67,7 @@ void main() {
         'Set Parent Workspace',
         'Open in Browser',
         'Open in Files',
+        'Open in Zed',
         'Open in Project Settings',
         'Copy Path',
         'Sleep',

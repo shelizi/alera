@@ -14,6 +14,7 @@ class const _WorkspaceRow({
   required final bool isPinnedCopy,
   required final VoidCallback onTap,
   required final VoidCallback onOpenFolder,
+  required final VoidCallback onOpenInZed,
   required final VoidCallback onCopyPath,
   required final VoidCallback onOpenInBrowser,
   required final VoidCallback onOpenProjectSettings,

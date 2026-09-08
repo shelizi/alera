@@ -8,6 +8,7 @@ part of 'project_workbench_sidebar.dart';
 const String _renameAction = 'rename';
 const String _openProjectSettingsAction = 'open-project-settings';
 const String _openFolderAction = 'open-folder';
+const String _openInZedAction = 'open-in-zed';
 const String _copyPathAction = 'copy-path';
 const String _openInBrowserAction = 'open-in-browser';
 const String _sleepAction = 'sleep';
@@ -104,6 +105,11 @@ List<PopupMenuEntry<String>> workspaceContextMenuEntries({
       label: 'Open in $fileManagerLabel',
     ),
     const AleraDropdownEntry<String>(
+      value: _openInZedAction,
+      leading: Icon(AleraIcons.external, size: 16),
+      label: 'Open in Zed',
+    ),
+    const AleraDropdownEntry<String>(
       value: _openProjectSettingsAction,
       leading: Icon(AleraIcons.settings, size: 16),
       label: 'Open in Project Settings',
@@ -136,6 +142,19 @@ List<PopupMenuEntry<String>> workspaceContextMenuEntries({
 /// the sidebar state so they share its [ref], [context], and [mounted] guard
 /// without carrying a [BuildContext] across async gaps.
 mixin _WorkspaceSidebarActions on ConsumerState<ProjectWorkbenchSidebar> {
+  Future<void> openWorkspaceInZed(Workspace workspace) async {
+    final result = await ref
+        .read(externalEditorLauncherProvider)
+        .openWorkspace(workspace.path);
+    if (!result.ok && mounted) {
+      AleraToast.show(
+        context,
+        message: result.message ?? 'Could not open workspace in Zed.',
+        tone: .error,
+      );
+    }
+  }
+
   Future<void> openWorkspaceFolder(Workspace workspace) async {
     final result = await ref
         .read(workspaceFolderOpenerProvider)
