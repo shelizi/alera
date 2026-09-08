@@ -350,8 +350,8 @@ class _WorkspaceEditorSurfaceState
             child: Text('${entry.area.label} changes'),
           ),
         const PopupMenuDivider(height: AleraTokens.space8),
-        const PopupMenuItem<_DiffOpenChoice>(
-          value: _DiffOpenChoice(allForFile: true),
+        PopupMenuItem<_DiffOpenChoice>(
+          value: const _DiffOpenChoice(allForFile: true),
           child: Text(context.tr('All changes for file')),
         ),
       ],
