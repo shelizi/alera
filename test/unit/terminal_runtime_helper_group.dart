@@ -183,11 +183,13 @@ void _registerTerminalRuntimeHelperGroup() {
       );
 
       expect(fallbackLaunches.map((launch) => launch.label), <String>[
-        'PowerShell 7',
         'Windows PowerShell',
         'cmd.exe',
       ]);
-      expect(fallbackLaunches.first.shell, 'pwsh.exe');
+      expect(
+        fallbackLaunches.first.shell,
+        r'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe',
+      );
       expect(fallbackLaunches.last.shell, r'C:\Custom\cmd.exe');
     });
 
@@ -246,6 +248,32 @@ void _registerTerminalRuntimeHelperGroup() {
       expect(
         powerShellQuoteForTesting(r"C:\Users\O'Brien"),
         r"'C:\Users\O''Brien'",
+      );
+    });
+
+    test('Windows shell working directories strip extended path prefixes', () {
+      final driveLaunch = launchInWorkingDirectoryForTesting(
+        _launch(
+          'Windows PowerShell',
+          shell: r'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe',
+        ),
+        r'\\?\C:\123',
+      );
+      expect(
+        driveLaunch.setupCommand,
+        "Set-Location -LiteralPath 'C:\\123'\r\n",
+      );
+
+      final uncLaunch = launchInWorkingDirectoryForTesting(
+        _launch(
+          'Windows PowerShell',
+          shell: r'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe',
+        ),
+        r'\\?\UNC\server\share\project',
+      );
+      expect(
+        uncLaunch.setupCommand,
+        "Set-Location -LiteralPath '\\\\server\\share\\project'\r\n",
       );
     });
 

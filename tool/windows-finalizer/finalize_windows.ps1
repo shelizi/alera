@@ -2,6 +2,7 @@ param(
     [string]$OutputDirectory,
     [string]$PlatformToolset,
     [string]$WindowsSdkVersion,
+    [string]$WindowsSdkRoot,
     [switch]$VerifyOnly,
     [switch]$SkipHashVerification,
     [switch]$Force
@@ -97,30 +98,72 @@ function Find-MSBuild {
     throw 'MSBuild.exe was not found in the installed Visual Studio C++ instances.'
 }
 
-function Resolve-WindowsSdkVersion {
-    param([string]$Requested)
+function Resolve-WindowsSdk {
+    param(
+        [string]$Root,
+        [string]$Requested
+    )
 
-    $kitsRoot = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\Include'
-    if (-not (Test-Path -LiteralPath $kitsRoot)) {
-        throw 'Windows 10/11 SDK headers were not found. Install a Windows SDK through Visual Studio Build Tools.'
+    if ($Root) {
+        $sdkRoot = [System.IO.Path]::GetFullPath($Root).TrimEnd([char]'\')
+    }
+    else {
+        $sdkRoot = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10'
     }
 
-    if ($Requested -and (Test-Path -LiteralPath (Join-Path $kitsRoot $Requested))) {
-        return $Requested
+    $includeRoot = Join-Path $sdkRoot 'Include'
+    if (-not (Test-Path -LiteralPath $includeRoot -PathType Container)) {
+        if ($Root) {
+            throw "Portable Windows SDK Include directory was not found under: $sdkRoot"
+        }
+        throw 'Windows 10/11 SDK headers were not found. Supply -WindowsSdkRoot with a portable Windows Kits\10 directory.'
     }
 
     $available = @(
-        Get-ChildItem -LiteralPath $kitsRoot -Directory |
+        Get-ChildItem -LiteralPath $includeRoot -Directory |
             Where-Object { $_.Name -match '^10\.0\.\d+\.\d+$' } |
             Sort-Object { [version]$_.Name } -Descending
     )
     if ($available.Count -eq 0) {
-        throw 'No usable Windows 10/11 SDK version was found.'
+        throw "No usable Windows SDK version was found under: $includeRoot"
     }
+
+    $version = $null
     if ($Requested) {
-        Write-Warning "Requested Windows SDK $Requested is unavailable; using $($available[0].Name)."
+        $requestedNormalized = $Requested.Trim().TrimEnd([char]'\')
+        $requestedPath = Join-Path $includeRoot $requestedNormalized
+        if (Test-Path -LiteralPath $requestedPath -PathType Container) {
+            $version = $requestedNormalized
+        }
+        else {
+            Write-Warning "Requested Windows SDK $requestedNormalized is unavailable under $sdkRoot; using $($available[0].Name)."
+        }
     }
-    return $available[0].Name
+    if (-not $version) {
+        $version = $available[0].Name
+    }
+
+    $required = @(
+        "Include\$version\um\Windows.h",
+        "Include\$version\ucrt\stdio.h",
+        "Include\$version\shared\sdkddkver.h",
+        "Lib\$version\um\x64\kernel32.lib",
+        "Lib\$version\ucrt\x64\ucrt.lib",
+        "bin\$version\x64\rc.exe",
+        "bin\$version\x64\mt.exe"
+    )
+    foreach ($relative in $required) {
+        $candidate = Join-Path $sdkRoot $relative
+        if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+            throw "Windows SDK is incomplete; required file is missing: $candidate"
+        }
+    }
+
+    return [pscustomobject]@{
+        Root = $sdkRoot
+        Version = $version
+        IsPortable = [bool](-not [string]::IsNullOrWhiteSpace($Root))
+    }
 }
 
 $kitRoot = (Resolve-Path -LiteralPath $PSScriptRoot).Path
@@ -153,20 +196,24 @@ else {
     [string]$manifest.sourcePlatformToolset
 }
 $effectiveToolset = if ($PlatformToolset) { $PlatformToolset } else { $manifestToolset }
-$effectiveSdk = Resolve-WindowsSdkVersion -Requested $(if ($WindowsSdkVersion) { $WindowsSdkVersion } else { [string]$manifest.sourceWindowsSdkVersion })
+$requestedSdk = if ($WindowsSdkVersion) { $WindowsSdkVersion } else { [string]$manifest.sourceWindowsSdkVersion }
+$sdk = Resolve-WindowsSdk -Root $WindowsSdkRoot -Requested $requestedSdk
+$effectiveSdk = [string]$sdk.Version
 
-Write-Step 'Locating the local Visual Studio C++ toolchain'
+Write-Step 'Locating the installed Visual Studio C++ toolchain'
 $vswhere = Find-VsWhere
 $vs = Find-MSBuild -VsWhere $vswhere -RequiredToolset $effectiveToolset
 
 Write-Host "Visual Studio: $($vs.InstallPath)"
-Write-Host "MSBuild:      $($vs.MSBuild)"
-Write-Host "Toolset:      $effectiveToolset"
-Write-Host "Windows SDK:  $effectiveSdk"
-Write-Host "Source commit:$($manifest.sourceCommit)"
+Write-Host "MSBuild:       $($vs.MSBuild)"
+Write-Host "Toolset:       $effectiveToolset"
+Write-Host "Windows SDK:   $effectiveSdk"
+Write-Host "SDK root:      $($sdk.Root)"
+if ($sdk.IsPortable) { Write-Host 'SDK mode:      portable directory (no SDK installation required)' } else { Write-Host 'SDK mode:      installed Windows SDK' }
+Write-Host "Source commit: $($manifest.sourceCommit)"
 
 if ($VerifyOnly) {
-    Write-Host 'Final-Link Kit and local linker environment are ready.' -ForegroundColor Green
+    Write-Host 'Final-Link Kit, installed MSVC toolset, and selected Windows SDK root are ready.' -ForegroundColor Green
     exit 0
 }
 
@@ -197,6 +244,8 @@ if (Test-Path -LiteralPath $buildRoot) {
 New-Item -ItemType Directory -Path $buildRoot -Force | Out-Null
 
 Write-Step 'Compiling the local Flutter C++ wrapper and Windows runner, then linking Alera'
+$outDirForMsbuild = (([string]$OutputDirectory).TrimEnd([char]'\', [char]'/') -replace '\\', '/') + '/'
+$intDirForMsbuild = (((Join-Path $buildRoot 'obj').TrimEnd([char]'\', [char]'/')) -replace '\\', '/') + '/'
 $msbuildArgs = @(
     $projectPath,
     '/nologo',
@@ -204,8 +253,8 @@ $msbuildArgs = @(
     '/t:Rebuild',
     '/p:Configuration=Release',
     '/p:Platform=x64',
-    "/p:OutDir=$OutputDirectory\",
-    "/p:IntDir=$buildRoot\obj\",
+    "/p:OutDir=$outDirForMsbuild",
+    "/p:IntDir=$intDirForMsbuild",
     "/p:WindowsTargetPlatformVersion=$effectiveSdk",
     '/v:minimal'
 )
@@ -213,6 +262,19 @@ if ($effectiveToolset) {
     $msbuildArgs += "/p:PlatformToolset=$effectiveToolset"
 }
 
+$sdkRootForMsbuild = (([string]$sdk.Root).TrimEnd([char]'\') -replace '\\', '/') + '/'
+$msbuildArgs += @(
+    "/p:WindowsSdkDir=$sdkRootForMsbuild",
+    "/p:WindowsSdkDir_10=$sdkRootForMsbuild",
+    "/p:UniversalCRTSdkDir=$sdkRootForMsbuild",
+    "/p:UniversalCRTSdkDir_10=$sdkRootForMsbuild",
+    "/p:TargetPlatformVersion=$effectiveSdk",
+    "/p:TargetUniversalCRTVersion=$effectiveSdk",
+    "/p:UCRTVersion=$effectiveSdk",
+    "/p:WindowsSdkVerBinPath=$($sdkRootForMsbuild)bin/$effectiveSdk/"
+)
+
+Write-Host "SDK bin:       $($sdk.Root)\bin\$effectiveSdk\x64"
 & $vs.MSBuild @msbuildArgs
 if ($LASTEXITCODE -ne 0) {
     throw "Final local MSVC link failed with exit code $LASTEXITCODE."
@@ -228,4 +290,4 @@ $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $exe).Hash
 Write-Host "`nLocal executable created successfully." -ForegroundColor Green
 Write-Host "EXE:    $exe"
 Write-Host "SHA256: $hash"
-Write-Host 'No Flutter CLI, Dart, Cargo, Rust, Zig, CMake, Ninja, or signing step was invoked on this target machine.'
+Write-Host 'No Flutter CLI, Dart, Cargo, Rust, Zig, CMake, Ninja, Windows SDK installer, or signing step was invoked on this target machine.'

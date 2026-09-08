@@ -20,6 +20,7 @@ The exporter performs a normal Windows Release build unless `-SkipBuild` is supp
 - the small Windows runner C++ sources/resources
 - a standalone MSBuild project
 - `finalize_windows.ps1`
+- `finalize_with_portable_sdk.cmd` and `PORTABLE-SDK-README.txt`
 - SHA-256 hashes for transfer-integrity verification
 
 The original build-machine `Alera.exe` is deliberately **not** included in the payload.
@@ -44,7 +45,7 @@ Useful options:
 Extract the kit locally. The target machine only needs:
 
 - **Visual Studio 2022 / Build Tools 2022** with **Desktop development with C++** (`v143`)
-- a Windows 10 or Windows 11 SDK
+- either an installed Windows SDK, or a complete portable `Windows Kits\10` directory
 - Windows PowerShell
 
 It does **not** need Flutter, Dart, Rust/Cargo, rustup, Zig, LLVM, Vulkan SDK, Git, CMake, Ninja, NSIS, 7-Zip, or a signing certificate.
@@ -62,6 +63,17 @@ Then create the local executable:
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\finalize_windows.ps1
 ```
+
+### Portable Windows SDK (no SDK installation required)
+
+If VS2022/v143 is installed but the Windows SDK is only copied to disk, use the included launcher. It defaults to `D:\Windows Kits\10`, SDK `10.0.26100.0`, and toolset `v143`:
+
+```cmd
+finalize_with_portable_sdk.cmd verify
+finalize_with_portable_sdk.cmd
+```
+
+The portable SDK must contain matching `Include`, `Lib`, and `bin` trees. The finalizer validates representative headers, x64 libraries, `rc.exe`, and `mt.exe`, then injects the SDK root into MSBuild so Windows SDK registry installation is unnecessary.
 
 The result is `out\Alera\Alera.exe` plus the already-prebuilt runtime files beside it. Alera is a Flutter desktop application, so the support DLLs, `data`, and `resources` directories must remain next to the EXE.
 

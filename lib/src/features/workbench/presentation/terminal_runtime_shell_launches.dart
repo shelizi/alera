@@ -158,15 +158,16 @@ String? _resolveWindowsPowerShell7(
   Map<String, String> environment, {
   required bool Function(String path) fileExists,
 }) {
+  // On Windows the PTY first starts Alera's Job Object bootstrap and only then
+  // launches the requested shell. Returning a bare `pwsh.exe` when PowerShell 7
+  // is not installed makes the bootstrap itself appear to start successfully,
+  // so the caller never gets a chance to fall back to Windows PowerShell/cmd.
   return _resolveFirstExistingWindowsPath(<String>[
-        if (_windowsEnvironmentValue(environment, 'ProgramFiles')
-            case final dir?)
-          _joinWindowsPath(dir, 'PowerShell', '7', 'pwsh.exe'),
-        if (_windowsEnvironmentValue(environment, 'ProgramW6432')
-            case final dir?)
-          _joinWindowsPath(dir, 'PowerShell', '7', 'pwsh.exe'),
-      ], fileExists: fileExists) ??
-      'pwsh.exe';
+    if (_windowsEnvironmentValue(environment, 'ProgramFiles') case final dir?)
+      _joinWindowsPath(dir, 'PowerShell', '7', 'pwsh.exe'),
+    if (_windowsEnvironmentValue(environment, 'ProgramW6432') case final dir?)
+      _joinWindowsPath(dir, 'PowerShell', '7', 'pwsh.exe'),
+  ], fileExists: fileExists);
 }
 
 String? _resolveWindowsPowerShell(Map<String, String> environment) {
@@ -386,6 +387,9 @@ GhosttyTerminalShellLaunch _launchInWorkingDirectory(
     return launch;
   }
   if (_isWindowsCommandPromptLaunch(launch)) {
+    final shellWorkingDirectory = _windowsShellWorkingDirectory(
+      workingDirectory,
+    );
     return GhosttyTerminalShellLaunch(
       label: launch.label,
       shell: launch.shell,
@@ -394,13 +398,16 @@ GhosttyTerminalShellLaunch _launchInWorkingDirectory(
         '/d',
         '/s',
         '/k',
-        'cd /d ${_cmdQuote(workingDirectory)}',
+        'cd /d ${_cmdQuote(shellWorkingDirectory)}',
       ],
       environment: launch.environment,
       setupCommand: launch.setupCommand,
     );
   }
   if (_isWindowsPowerShellLaunch(launch)) {
+    final shellWorkingDirectory = _windowsShellWorkingDirectory(
+      workingDirectory,
+    );
     return GhosttyTerminalShellLaunch(
       label: launch.label,
       shell: launch.shell,
@@ -408,7 +415,7 @@ GhosttyTerminalShellLaunch _launchInWorkingDirectory(
       environment: launch.environment,
       setupCommand: _prependSetupCommand(
         launch.setupCommand,
-        "Set-Location -LiteralPath ${_powerShellQuote(workingDirectory)}\r\n",
+        "Set-Location -LiteralPath ${_powerShellQuote(shellWorkingDirectory)}\r\n",
       ),
     );
   }
@@ -427,6 +434,22 @@ GhosttyTerminalShellLaunch _launchInWorkingDirectory(
     environment: launch.environment,
     setupCommand: launch.setupCommand,
   );
+}
+
+String _windowsShellWorkingDirectory(String workingDirectory) {
+  const extendedUncPrefix = r'\\?\UNC\';
+  if (workingDirectory.startsWith(extendedUncPrefix)) {
+    return r'\\' + workingDirectory.substring(extendedUncPrefix.length);
+  }
+
+  const extendedPathPrefix = r'\\?\';
+  if (workingDirectory.startsWith(extendedPathPrefix)) {
+    final path = workingDirectory.substring(extendedPathPrefix.length);
+    if (RegExp(r'^[A-Za-z]:\\').hasMatch(path)) {
+      return path;
+    }
+  }
+  return workingDirectory;
 }
 
 @visibleForTesting
