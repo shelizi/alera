@@ -14,6 +14,7 @@ import 'package:alera/src/features/reading_diff/presentation/reading_diff_confir
 import 'package:alera/src/features/reading_diff/presentation/reading_diff_failure_view.dart';
 import 'package:alera/src/features/reading_diff/presentation/reading_diff_generation_progress_view.dart';
 import 'package:alera/src/features/reading_diff/presentation/reading_diff_view.dart';
+import 'package:alera/src/features/workbench/application/workspace_file_open_coordinator_provider.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_preview_kind.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_source_control_scope.dart';
@@ -381,12 +382,25 @@ class _WorkspaceGitDiffSurfaceState
     if (file == null) {
       return Future<void>.value();
     }
+    final relativePath = _sourceControlScope.toWorkspaceRelativePath(
+      file.path,
+    )!;
     return ref
-        .read(workbenchControllerProvider.notifier)
-        .openEditorTab(
+        .read(workspaceFileOpenCoordinatorProvider)
+        .open<WorkspaceTabRecord>(
           workspace: widget.workspace,
-          relativePath: _sourceControlScope.toWorkspaceRelativePath(file.path)!,
-        );
+          relativePath: relativePath,
+          openInAlera:
+              ({required workspace, required relativePath, required preview}) =>
+                  ref
+                      .read(workbenchControllerProvider.notifier)
+                      .openEditorTab(
+                        workspace: workspace,
+                        relativePath: relativePath,
+                        preview: preview,
+                      ),
+        )
+        .then((_) {});
   }
 
   Future<GitDiffResult> _loadCommitDiff({

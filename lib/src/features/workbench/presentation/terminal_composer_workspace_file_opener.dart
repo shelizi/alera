@@ -1,5 +1,7 @@
 import 'package:alera/src/app/providers.dart';
 import 'package:alera/src/features/workbench/application/terminal_composer_workspace_attachment.dart';
+import 'package:alera/src/features/workbench/application/workspace_file_open_coordinator_provider.dart';
+import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_composer.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_composer_drop_target.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_runtime.dart';
@@ -36,8 +38,25 @@ Future<bool> openTerminalComposerWorkspaceFile(
     workspacePath: workspace.path,
     filePath: filePath,
     workspaceFiles: ref.read(workspaceFileServiceProvider),
-    openFile: (relativePath) => ref
-        .read(workbenchControllerProvider.notifier)
-        .openFileTab(workspace: workspace, relativePath: relativePath),
+    openFile: (relativePath) async {
+      await ref
+          .read(workspaceFileOpenCoordinatorProvider)
+          .open<WorkspaceTabRecord>(
+            workspace: workspace,
+            relativePath: relativePath,
+            openInAlera:
+                ({
+                  required workspace,
+                  required relativePath,
+                  required preview,
+                }) => ref
+                    .read(workbenchControllerProvider.notifier)
+                    .openFileTab(
+                      workspace: workspace,
+                      relativePath: relativePath,
+                      preview: preview,
+                    ),
+          );
+    },
   );
 }
