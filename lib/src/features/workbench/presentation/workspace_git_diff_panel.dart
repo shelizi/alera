@@ -11,6 +11,8 @@ import 'package:alera/src/design_system/layout/alera_confirm_dialog.dart';
 import 'package:alera/src/design_system/layout/alera_dialog.dart';
 import 'package:alera/src/design_system/menus/alera_dropdown_entry.dart';
 import 'package:alera/src/design_system/surfaces/hover_container.dart';
+import 'package:alera/src/features/external_editor/application/external_editor_providers.dart';
+import 'package:alera/src/features/external_editor/domain/external_editor_launcher.dart';
 import 'package:alera/src/features/ai_dictation/presentation/ai_dictation_field_overlay.dart';
 import 'package:alera/src/features/ai_assist/application/ai_assist_providers.dart';
 import 'package:alera/src/features/ai_assist/application/ai_assist_service.dart';
@@ -223,6 +225,7 @@ class _WorkspaceGitDiffPanelState extends ConsumerState<WorkspaceGitDiffPanel> {
                       onOpenFile: widget.onOpenFile == null
                           ? null
                           : _openWorkspaceFile,
+                      onOpenInZed: _openWorkspaceFileInZed,
                       onRevealInExplorer: _revealInExplorer,
                       onStage: _stageEntry,
                       onUnstage: _unstageEntry,

@@ -2,6 +2,9 @@ import 'dart:async';
 
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
+import 'package:alera/src/features/external_editor/application/external_editor_providers.dart';
+import 'package:alera/src/features/external_editor/domain/external_editor_launch_result.dart';
+import 'package:alera/src/features/external_editor/domain/external_editor_launcher.dart';
 import 'package:alera/src/features/ai_assist/application/ai_assist_providers.dart';
 import 'package:alera/src/features/ai_assist/application/ai_assist_service.dart';
 import 'package:alera/src/features/ai_assist/domain/ai_assist_settings.dart';
@@ -14,6 +17,7 @@ import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_source_control_scope.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_git_diff_panel.dart';
+import 'package:alera/src/features/workbench/presentation/terminal_path_drop.dart';
 import 'package:alera/src/shared/infra/git/git_diff_models.dart';
 import 'package:alera/src/shared/infra/git/git_exception.dart';
 import 'package:alera/src/shared/infra/git/git_providers.dart';
@@ -1439,6 +1443,7 @@ Future<void> _pumpPanel(
   OpenGitDiffTabCallback? onOpenGitDiff,
   OpenGitCommitDiffTabCallback? onOpenGitCommitDiff,
   ValueChanged<String>? onOpenFile,
+  ExternalEditorLauncher? externalEditorLauncher,
   ValueChanged<String>? onRevealInExplorer,
   VoidCallback? onClearSourceControlRoot,
 }) {
@@ -1454,6 +1459,10 @@ Future<void> _pumpPanel(
           () => _PanelSettingsController(settings),
         ),
         if (service != null) aiAssistServiceProvider.overrideWithValue(service),
+        if (externalEditorLauncher != null)
+          externalEditorLauncherProvider.overrideWithValue(
+            externalEditorLauncher,
+          ),
       ],
       child: MaterialApp(
         home: Scaffold(
@@ -1515,6 +1524,28 @@ class _PanelSettingsController(final AleraSettings _settings)
     extends SettingsController {
   @override
   AleraSettings build() => _settings;
+}
+
+class _RecordingExternalEditorLauncher implements ExternalEditorLauncher {
+  final List<ExternalEditorOpenRequest> fileRequests =
+      <ExternalEditorOpenRequest>[];
+
+  @override
+  Future<ExternalEditorAvailability> checkAvailability() async =>
+      const ExternalEditorAvailability(available: true);
+
+  @override
+  Future<ExternalEditorLaunchResult> openFile(
+    ExternalEditorOpenRequest request,
+  ) async {
+    fileRequests.add(request);
+    return ExternalEditorLaunchResultFactories.opened;
+  }
+
+  @override
+  Future<ExternalEditorLaunchResult> openWorkspace(
+    String workspacePath,
+  ) async => ExternalEditorLaunchResultFactories.opened;
 }
 
 class _FakeAiAssistService implements AiAssistService {

@@ -15,18 +15,21 @@ void _registerWorkspaceGitDiffPanelContextMenuTests() {
         ],
       );
     final opened = <String>[];
+    final launcher = _RecordingExternalEditorLauncher();
 
     await _pumpPanel(
       tester,
       backend: backend,
       viewMode: .tree,
       onOpenFile: opened.add,
+      externalEditorLauncher: launcher,
     );
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('dirty.dart'), buttons: kSecondaryMouseButton);
     await tester.pumpAndSettle();
     expect(find.text('Open File'), findsOneWidget);
+    expect(find.text('Open in Zed'), findsOneWidget);
     expect(find.text('Reveal in Explorer'), findsOneWidget);
     expect(find.text('Stage'), findsWidgets);
     expect(find.text('Discard'), findsWidgets);
@@ -35,6 +38,51 @@ void _registerWorkspaceGitDiffPanelContextMenuTests() {
     await tester.pumpAndSettle();
 
     expect(opened, <String>['lib/src/dirty.dart']);
+
+    await tester.tap(find.text('dirty.dart'), buttons: kSecondaryMouseButton);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Open in Zed'));
+    await tester.pumpAndSettle();
+
+    expect(launcher.fileRequests, hasLength(1));
+    expect(launcher.fileRequests.single.workspacePath, '/tmp/project');
+    expect(
+      launcher.fileRequests.single.filePath,
+      terminalAbsolutePath(
+        rootPath: '/tmp/project',
+        relativePath: 'lib/src/dirty.dart',
+      ),
+    );
+  });
+
+  testWidgets('deleted file context menu does not offer Open in Zed', (
+    tester,
+  ) async {
+    final backend = FakeGitBackend()
+      ..gitStatusResult = const GitStatusResult(
+        entries: <GitChangeEntry>[
+          GitChangeEntry(
+            path: 'lib/src/deleted.dart',
+            area: .unstaged,
+            status: .deleted,
+          ),
+        ],
+      );
+
+    await _pumpPanel(
+      tester,
+      backend: backend,
+      viewMode: .tree,
+      onOpenFile: (_) {},
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('deleted.dart'), buttons: kSecondaryMouseButton);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Open File'), findsNothing);
+    expect(find.text('Open in Zed'), findsNothing);
+    expect(find.text('Reveal in Explorer'), findsOneWidget);
   });
 
   testWidgets('tree folder context menu stages the folder path', (
@@ -57,6 +105,7 @@ void _registerWorkspaceGitDiffPanelContextMenuTests() {
     await tester.tap(find.text('src'), buttons: kSecondaryMouseButton);
     await tester.pumpAndSettle();
     expect(find.text('Open File'), findsNothing);
+    expect(find.text('Open in Zed'), findsNothing);
     expect(find.text('Reveal in Explorer'), findsOneWidget);
 
     await tester.tap(find.text('Stage').last);
