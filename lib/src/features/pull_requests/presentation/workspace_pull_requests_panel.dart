@@ -10,6 +10,7 @@ import 'package:alera/src/features/pull_requests/application/workspace_pull_requ
 import 'package:alera/src/features/pull_requests/domain/create_review_input.dart';
 import 'package:alera/src/features/pull_requests/domain/forge_auth_status.dart';
 import 'package:alera/src/features/pull_requests/domain/hosted_review.dart';
+import 'package:alera/src/features/pull_requests/domain/review_comment.dart';
 import 'package:alera/src/features/pull_requests/domain/pull_request_ship_scope.dart';
 import 'package:alera/src/features/pull_requests/domain/review_stack_workspace_models.dart';
 import 'package:alera/src/features/pull_requests/domain/workspace_pull_request_scope.dart';
@@ -19,6 +20,8 @@ import 'package:alera/src/features/pull_requests/presentation/pull_request_stack
 import 'package:alera/src/features/pull_requests/presentation/workspace_pull_request_stack_candidates.dart';
 import 'package:alera/src/features/settings/application/settings_controller.dart';
 import 'package:alera/src/features/workbench/application/workbench_controller.dart';
+import 'package:alera/src/features/workbench/application/workspace_file_open_coordinator_provider.dart';
+import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/projects/domain/project.dart';
 import 'package:alera/src/features/workbench/domain/workbench_view_prefs.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
@@ -192,6 +195,7 @@ class _VisiblePullRequestsPanelState
           onOpenWorkspaceBranch: widget.onOpenWorkspaceBranch,
           onOpenUrl: (url) =>
               ref.read(externalUriLauncherProvider).open(Uri.parse(url)),
+          onOpenCommentLocation: _openCommentLocation,
           onOpenDiff: _openingDiff ? null : _openDiff,
           onCreateActionChanged: (action) => ref
               .read(workbenchControllerProvider.notifier)
@@ -199,6 +203,32 @@ class _VisiblePullRequestsPanelState
         );
       },
     );
+  }
+
+  Future<void> _openCommentLocation(ReviewComment comment) async {
+    final relativePath = comment.path?.trim();
+    if (relativePath == null || relativePath.isEmpty) return;
+    final line = switch (comment.line) {
+      final int value when value > 0 => value,
+      _ => null,
+    };
+    await ref
+        .read(workspaceFileOpenCoordinatorProvider)
+        .open<WorkspaceTabRecord>(
+          workspace: widget.workspace,
+          relativePath: relativePath,
+          preview: true,
+          line: line,
+          openInAlera:
+              ({required workspace, required relativePath, required preview}) =>
+                  ref
+                      .read(workbenchControllerProvider.notifier)
+                      .openFileTab(
+                        workspace: workspace,
+                        relativePath: relativePath,
+                        preview: preview,
+                      ),
+        );
   }
 
   Future<void> _openDiff(HostedReview review) async {

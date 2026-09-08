@@ -10,6 +10,8 @@ class const _PullRequestBody({
   required final List<ReviewStackWorkspaceCandidate> stackWorkspaceCandidates,
   required final Future<void> Function(String branch)? onOpenWorkspaceBranch,
   required final Future<void> Function(String url) onOpenUrl,
+  required final Future<void> Function(ReviewComment comment)
+  onOpenCommentLocation,
   required final ValueChanged<HostedReview>? onOpenDiff,
   required final ValueChanged<PullRequestCreateAction> onCreateActionChanged,
 }) extends StatelessWidget {
@@ -73,6 +75,7 @@ class const _PullRequestBody({
         savingCommentIds: state.savingCommentIds,
         action: state.action,
         onOpenUrl: onOpenUrl,
+        onOpenCommentLocation: onOpenCommentLocation,
         onOpenDiff: onOpenDiff == null ? null : () => onOpenDiff!(review),
         onOpenWorkspaceBranch: onOpenWorkspaceBranch,
         onUnlink: controller.unlink,

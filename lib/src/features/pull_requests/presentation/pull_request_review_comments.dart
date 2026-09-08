@@ -10,6 +10,8 @@ class const _PullRequestCommentsSection({
   required final Future<void> Function(String commentId, int itemIndex)
   onToggleTask,
   required final Future<void> Function(String url) onOpenUrl,
+  required final Future<void> Function(ReviewComment comment)?
+  onOpenCommentLocation,
 }) extends StatefulWidget {
   @override
   State<_PullRequestCommentsSection> createState() =>
@@ -136,6 +138,7 @@ class _PullRequestCommentsSectionState
             _ReviewCommentCard(
               comment: widget.comments[index],
               onOpenUrl: widget.onOpenUrl,
+              onOpenCommentLocation: widget.onOpenCommentLocation,
               taskListEditable:
                   widget.canEditComments &&
                   widget.comments[index].locator != null,
@@ -156,6 +159,8 @@ class _PullRequestCommentsSectionState
 class const _ReviewCommentCard({
   required final ReviewComment comment,
   required final Future<void> Function(String url) onOpenUrl,
+  required final Future<void> Function(ReviewComment comment)?
+  onOpenCommentLocation,
   required final bool taskListEditable,
   required final bool taskListSaving,
   required final Future<void> Function(int itemIndex) onTaskListItemToggle,
@@ -223,6 +228,14 @@ class const _ReviewCommentCard({
                       ),
                     ),
                   ),
+                  if (onOpenCommentLocation != null) ...<Widget>[
+                    const SizedBox(width: AleraTokens.space4),
+                    AleraIconButton(
+                      tooltip: 'Open Comment Location',
+                      icon: AleraIcons.external,
+                      onPressed: () => onOpenCommentLocation!(comment),
+                    ),
+                  ],
                   if (comment.resolved)
                     Text(
                       'Resolved',

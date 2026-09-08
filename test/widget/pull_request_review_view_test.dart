@@ -32,6 +32,7 @@ class _Callbacks {
   ReviewMergeMethod? mergeMethod;
   UpdateReviewInput? lastInput;
   UpdateReviewResult updateResult = const UpdateReviewSuccess(_review);
+  ReviewComment? openedCommentLocation;
 }
 
 Widget _wrap(
@@ -62,6 +63,9 @@ Widget _wrap(
         canComment: canComment,
         action: action,
         onOpenUrl: (_) async {},
+        onOpenCommentLocation: (comment) async {
+          callbacks.openedCommentLocation = comment;
+        },
         onUnlink: () async {
           callbacks.unlinkCalls++;
         },
@@ -379,6 +383,26 @@ void main() {
     expect(find.text('Resolved'), findsOneWidget);
   });
 
+  testWidgets('opens a structured inline comment location', (tester) async {
+    final callbacks = _Callbacks();
+    final comment = ReviewComment(
+      id: 'location',
+      author: 'bob',
+      body: 'Inspect this line',
+      createdAt: .utc(2026, 7, 16, 13),
+      kind: .review,
+      path: 'lib/src/example.dart',
+      line: 42,
+    );
+    await tester.pumpWidget(
+      _wrap(callbacks, comments: <ReviewComment>[comment]),
+    );
+
+    await tester.tap(find.byTooltip('Open Comment Location'));
+    await tester.pump();
+
+    expect(callbacks.openedCommentLocation, same(comment));
+  });
   testWidgets('posts a comment and closes the composer on success', (
     tester,
   ) async {
