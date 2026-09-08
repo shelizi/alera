@@ -244,6 +244,8 @@ if (Test-Path -LiteralPath $buildRoot) {
 New-Item -ItemType Directory -Path $buildRoot -Force | Out-Null
 
 Write-Step 'Compiling the local Flutter C++ wrapper and Windows runner, then linking Alera'
+$outDirForMsbuild = (([string]$OutputDirectory).TrimEnd([char]'\', [char]'/') -replace '\\', '/') + '/'
+$intDirForMsbuild = (((Join-Path $buildRoot 'obj').TrimEnd([char]'\', [char]'/')) -replace '\\', '/') + '/'
 $msbuildArgs = @(
     $projectPath,
     '/nologo',
@@ -251,8 +253,8 @@ $msbuildArgs = @(
     '/t:Rebuild',
     '/p:Configuration=Release',
     '/p:Platform=x64',
-    "/p:OutDir=$OutputDirectory\",
-    "/p:IntDir=$buildRoot\obj\",
+    "/p:OutDir=$outDirForMsbuild",
+    "/p:IntDir=$intDirForMsbuild",
     "/p:WindowsTargetPlatformVersion=$effectiveSdk",
     '/v:minimal'
 )
