@@ -1,6 +1,7 @@
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/features/ai_assist/domain/ai_assist_settings.dart';
 import 'package:alera/src/features/ai_dictation/domain/ai_dictation_settings.dart';
+import 'package:alera/src/features/external_editor/domain/external_editor_launcher.dart';
 import 'package:alera/src/features/keyboard/domain/keyboard_shortcut_settings.dart';
 import 'package:alera/src/features/settings/domain/editor_syntax_theme_catalog.dart';
 import 'package:alera/src/features/settings/domain/terminal_theme_catalog.dart';
@@ -250,6 +251,10 @@ class const EditorSettings({
   this.themeName = EditorSyntaxThemeNames.alera,
   this.autosaveEnabled = false,
   this.autosaveDelaySeconds = defaultAutosaveDelaySeconds,
+  this.externalEditor = ExternalEditorKind.zed,
+  this.zedExecutableMode = ExternalEditorExecutableMode.automatic,
+  this.zedExecutablePath,
+  this.externalEditorWorkspaceMode = ExternalEditorWorkspaceMode.newWindow,
 }) with EditorSettingsMappable {
   static const int minAutosaveDelaySeconds = 1;
   static const int maxAutosaveDelaySeconds = 60;
@@ -266,6 +271,11 @@ class const EditorSettings({
 
   /// Number of idle seconds before an automatic editor save.
   final int autosaveDelaySeconds;
+
+  final ExternalEditorKind externalEditor;
+  final ExternalEditorExecutableMode zedExecutableMode;
+  final String? zedExecutablePath;
+  final ExternalEditorWorkspaceMode externalEditorWorkspaceMode;
 
   /// Clamps persisted values before they are used to construct a timer.
   int get effectiveAutosaveDelaySeconds => autosaveDelaySeconds

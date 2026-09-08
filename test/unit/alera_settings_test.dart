@@ -1,4 +1,5 @@
 import 'package:alera/src/features/ai_assist/domain/ai_assist_settings.dart';
+import 'package:alera/src/features/external_editor/domain/external_editor_launcher.dart';
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
 import 'package:alera/src/features/settings/domain/editor_syntax_theme_catalog.dart';
 import 'package:alera/src/features/settings/domain/terminal_theme_catalog.dart';
@@ -79,6 +80,13 @@ void main() {
       expect(editor.autosaveDelaySeconds, 1);
       expect(editor.effectiveAutosaveDelaySeconds, 1);
       expect(editor.autosaveDebounce, const Duration(seconds: 1));
+      expect(editor.externalEditor, ExternalEditorKind.zed);
+      expect(editor.zedExecutableMode, ExternalEditorExecutableMode.automatic);
+      expect(editor.zedExecutablePath, isNull);
+      expect(
+        editor.externalEditorWorkspaceMode,
+        ExternalEditorWorkspaceMode.newWindow,
+      );
     });
 
     test('backward-compatible editor settings use autosave defaults', () {
@@ -91,6 +99,13 @@ void main() {
       expect(editor.themeName, EditorSyntaxThemeNames.monokai);
       expect(editor.autosaveEnabled, isFalse);
       expect(editor.autosaveDelaySeconds, 1);
+      expect(editor.externalEditor, ExternalEditorKind.zed);
+      expect(editor.zedExecutableMode, ExternalEditorExecutableMode.automatic);
+      expect(editor.zedExecutablePath, isNull);
+      expect(
+        editor.externalEditorWorkspaceMode,
+        ExternalEditorWorkspaceMode.newWindow,
+      );
     });
 
     test('bounds persisted autosave delay before scheduling', () {

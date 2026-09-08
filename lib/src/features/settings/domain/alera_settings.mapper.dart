@@ -1199,6 +1199,9 @@ class EditorSettingsMapper extends ClassMapperBase<EditorSettings> {
   static EditorSettingsMapper ensureInitialized() {
     if (_instance == null) {
       MapperContainer.globals.use(_instance = EditorSettingsMapper._());
+      ExternalEditorKindMapper.ensureInitialized();
+      ExternalEditorExecutableModeMapper.ensureInitialized();
+      ExternalEditorWorkspaceModeMapper.ensureInitialized();
     }
     return _instance!;
   }
@@ -1234,6 +1237,40 @@ class EditorSettingsMapper extends ClassMapperBase<EditorSettings> {
     opt: true,
     def: EditorSettings.defaultAutosaveDelaySeconds,
   );
+  static ExternalEditorKind _$externalEditor(EditorSettings v) =>
+      v.externalEditor;
+  static const Field<EditorSettings, ExternalEditorKind> _f$externalEditor =
+      Field(
+        'externalEditor',
+        _$externalEditor,
+        opt: true,
+        def: ExternalEditorKind.zed,
+      );
+  static ExternalEditorExecutableMode _$zedExecutableMode(EditorSettings v) =>
+      v.zedExecutableMode;
+  static const Field<EditorSettings, ExternalEditorExecutableMode>
+  _f$zedExecutableMode = Field(
+    'zedExecutableMode',
+    _$zedExecutableMode,
+    opt: true,
+    def: ExternalEditorExecutableMode.automatic,
+  );
+  static String? _$zedExecutablePath(EditorSettings v) => v.zedExecutablePath;
+  static const Field<EditorSettings, String> _f$zedExecutablePath = Field(
+    'zedExecutablePath',
+    _$zedExecutablePath,
+    opt: true,
+  );
+  static ExternalEditorWorkspaceMode _$externalEditorWorkspaceMode(
+    EditorSettings v,
+  ) => v.externalEditorWorkspaceMode;
+  static const Field<EditorSettings, ExternalEditorWorkspaceMode>
+  _f$externalEditorWorkspaceMode = Field(
+    'externalEditorWorkspaceMode',
+    _$externalEditorWorkspaceMode,
+    opt: true,
+    def: ExternalEditorWorkspaceMode.newWindow,
+  );
 
   @override
   final MappableFields<EditorSettings> fields = const {
@@ -1241,6 +1278,10 @@ class EditorSettingsMapper extends ClassMapperBase<EditorSettings> {
     #themeName: _f$themeName,
     #autosaveEnabled: _f$autosaveEnabled,
     #autosaveDelaySeconds: _f$autosaveDelaySeconds,
+    #externalEditor: _f$externalEditor,
+    #zedExecutableMode: _f$zedExecutableMode,
+    #zedExecutablePath: _f$zedExecutablePath,
+    #externalEditorWorkspaceMode: _f$externalEditorWorkspaceMode,
   };
 
   static EditorSettings _instantiate(DecodingData data) {
@@ -1249,6 +1290,10 @@ class EditorSettingsMapper extends ClassMapperBase<EditorSettings> {
       themeName: data.dec(_f$themeName),
       autosaveEnabled: data.dec(_f$autosaveEnabled),
       autosaveDelaySeconds: data.dec(_f$autosaveDelaySeconds),
+      externalEditor: data.dec(_f$externalEditor),
+      zedExecutableMode: data.dec(_f$zedExecutableMode),
+      zedExecutablePath: data.dec(_f$zedExecutablePath),
+      externalEditorWorkspaceMode: data.dec(_f$externalEditorWorkspaceMode),
     );
   }
 
@@ -1319,6 +1364,10 @@ abstract class EditorSettingsCopyWith<$R, $In extends EditorSettings, $Out>
     String? themeName,
     bool? autosaveEnabled,
     int? autosaveDelaySeconds,
+    ExternalEditorKind? externalEditor,
+    ExternalEditorExecutableMode? zedExecutableMode,
+    String? zedExecutablePath,
+    ExternalEditorWorkspaceMode? externalEditorWorkspaceMode,
   });
   EditorSettingsCopyWith<$R2, $In, $Out2> $chain<$R2, $Out2>(
     Then<$Out2, $R2> t,
@@ -1339,6 +1388,10 @@ class _EditorSettingsCopyWithImpl<$R, $Out>
     String? themeName,
     bool? autosaveEnabled,
     int? autosaveDelaySeconds,
+    ExternalEditorKind? externalEditor,
+    ExternalEditorExecutableMode? zedExecutableMode,
+    Object? zedExecutablePath = $none,
+    ExternalEditorWorkspaceMode? externalEditorWorkspaceMode,
   }) => $apply(
     FieldCopyWithData({
       if (tabSize != null) #tabSize: tabSize,
@@ -1346,6 +1399,11 @@ class _EditorSettingsCopyWithImpl<$R, $Out>
       if (autosaveEnabled != null) #autosaveEnabled: autosaveEnabled,
       if (autosaveDelaySeconds != null)
         #autosaveDelaySeconds: autosaveDelaySeconds,
+      if (externalEditor != null) #externalEditor: externalEditor,
+      if (zedExecutableMode != null) #zedExecutableMode: zedExecutableMode,
+      if (zedExecutablePath != $none) #zedExecutablePath: zedExecutablePath,
+      if (externalEditorWorkspaceMode != null)
+        #externalEditorWorkspaceMode: externalEditorWorkspaceMode,
     }),
   );
   @override
@@ -1356,6 +1414,19 @@ class _EditorSettingsCopyWithImpl<$R, $Out>
     autosaveDelaySeconds: data.get(
       #autosaveDelaySeconds,
       or: $value.autosaveDelaySeconds,
+    ),
+    externalEditor: data.get(#externalEditor, or: $value.externalEditor),
+    zedExecutableMode: data.get(
+      #zedExecutableMode,
+      or: $value.zedExecutableMode,
+    ),
+    zedExecutablePath: data.get(
+      #zedExecutablePath,
+      or: $value.zedExecutablePath,
+    ),
+    externalEditorWorkspaceMode: data.get(
+      #externalEditorWorkspaceMode,
+      or: $value.externalEditorWorkspaceMode,
     ),
   );
 

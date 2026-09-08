@@ -6,6 +6,7 @@ import 'package:alera/src/design_system/menus/alera_menu_item.dart';
 import 'package:alera/src/design_system/surfaces/alera_panel.dart';
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
 import 'package:alera/src/features/settings/domain/editor_syntax_theme_catalog.dart';
+import 'package:alera/src/features/settings/presentation/panes/external_editor_settings_group.dart';
 import 'package:alera/src/features/settings/presentation/panes/terminal_theme_picker.dart';
 import 'package:alera/src/features/settings/presentation/rows/settings_rows.dart';
 import 'package:flutter/material.dart';
@@ -79,6 +80,8 @@ class const EditorSettingsPane({
             ),
           ],
         ),
+        const SizedBox(height: AleraTokens.space16),
+        ExternalEditorSettingsGroup(settings: settings, onChanged: onChanged),
       ],
     );
   }

@@ -138,6 +138,13 @@ void main() {
     () {
       final result = portableDesktopSettings({
         'general': {'workspaceDirectory': '/secret', 'showTrayIcon': true},
+        'editor': {
+          'tabSize': 2,
+          'externalEditor': 'zed',
+          'zedExecutableMode': 'custom',
+          'zedExecutablePath': r'C:\private\Zed\zed.exe',
+          'externalEditorWorkspaceMode': 'defaultWindow',
+        },
         'agents': {
           'agentStatusHooks': {'codex': true},
           'quotas': {'token': 'secret'},
@@ -155,6 +162,7 @@ void main() {
         },
       });
       expect(result['general'], {'showTrayIcon': true});
+      expect(result['editor'], {'tabSize': 2});
       expect(result['agents'], {'showTabTitlesInSidebar': true});
       expect(result['aiDictation'], {'language': 'es'});
       expect(result['aiTextGeneration'], isEmpty);

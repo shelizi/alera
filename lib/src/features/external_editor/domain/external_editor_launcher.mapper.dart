@@ -1,0 +1,153 @@
+// coverage:ignore-file
+// GENERATED CODE - DO NOT MODIFY BY HAND
+// dart format off
+// ignore_for_file: type=lint
+// ignore_for_file: invalid_use_of_protected_member
+// ignore_for_file: unused_element, unnecessary_cast, override_on_non_overriding_member
+// ignore_for_file: strict_raw_type, inference_failure_on_untyped_parameter
+
+part of 'external_editor_launcher.dart';
+
+class ExternalEditorKindMapper extends EnumMapper<ExternalEditorKind> {
+  ExternalEditorKindMapper._();
+
+  static ExternalEditorKindMapper? _instance;
+  static ExternalEditorKindMapper ensureInitialized() {
+    if (_instance == null) {
+      MapperContainer.globals.use(_instance = ExternalEditorKindMapper._());
+    }
+    return _instance!;
+  }
+
+  static ExternalEditorKind fromValue(dynamic value) {
+    ensureInitialized();
+    return MapperContainer.globals.fromValue(value);
+  }
+
+  @override
+  ExternalEditorKind decode(dynamic value) {
+    switch (value) {
+      case r'zed':
+        return ExternalEditorKind.zed;
+      default:
+        throw MapperException.unknownEnumValue(value);
+    }
+  }
+
+  @override
+  dynamic encode(ExternalEditorKind self) {
+    switch (self) {
+      case ExternalEditorKind.zed:
+        return r'zed';
+    }
+  }
+}
+
+extension ExternalEditorKindMapperExtension on ExternalEditorKind {
+  String toValue() {
+    ExternalEditorKindMapper.ensureInitialized();
+    return MapperContainer.globals.toValue<ExternalEditorKind>(this) as String;
+  }
+}
+
+class ExternalEditorExecutableModeMapper
+    extends EnumMapper<ExternalEditorExecutableMode> {
+  ExternalEditorExecutableModeMapper._();
+
+  static ExternalEditorExecutableModeMapper? _instance;
+  static ExternalEditorExecutableModeMapper ensureInitialized() {
+    if (_instance == null) {
+      MapperContainer.globals.use(
+        _instance = ExternalEditorExecutableModeMapper._(),
+      );
+    }
+    return _instance!;
+  }
+
+  static ExternalEditorExecutableMode fromValue(dynamic value) {
+    ensureInitialized();
+    return MapperContainer.globals.fromValue(value);
+  }
+
+  @override
+  ExternalEditorExecutableMode decode(dynamic value) {
+    switch (value) {
+      case r'automatic':
+        return ExternalEditorExecutableMode.automatic;
+      case r'custom':
+        return ExternalEditorExecutableMode.custom;
+      default:
+        throw MapperException.unknownEnumValue(value);
+    }
+  }
+
+  @override
+  dynamic encode(ExternalEditorExecutableMode self) {
+    switch (self) {
+      case ExternalEditorExecutableMode.automatic:
+        return r'automatic';
+      case ExternalEditorExecutableMode.custom:
+        return r'custom';
+    }
+  }
+}
+
+extension ExternalEditorExecutableModeMapperExtension
+    on ExternalEditorExecutableMode {
+  String toValue() {
+    ExternalEditorExecutableModeMapper.ensureInitialized();
+    return MapperContainer.globals.toValue<ExternalEditorExecutableMode>(this)
+        as String;
+  }
+}
+
+class ExternalEditorWorkspaceModeMapper
+    extends EnumMapper<ExternalEditorWorkspaceMode> {
+  ExternalEditorWorkspaceModeMapper._();
+
+  static ExternalEditorWorkspaceModeMapper? _instance;
+  static ExternalEditorWorkspaceModeMapper ensureInitialized() {
+    if (_instance == null) {
+      MapperContainer.globals.use(
+        _instance = ExternalEditorWorkspaceModeMapper._(),
+      );
+    }
+    return _instance!;
+  }
+
+  static ExternalEditorWorkspaceMode fromValue(dynamic value) {
+    ensureInitialized();
+    return MapperContainer.globals.fromValue(value);
+  }
+
+  @override
+  ExternalEditorWorkspaceMode decode(dynamic value) {
+    switch (value) {
+      case r'newWindow':
+        return ExternalEditorWorkspaceMode.newWindow;
+      case r'defaultWindow':
+        return ExternalEditorWorkspaceMode.defaultWindow;
+      default:
+        throw MapperException.unknownEnumValue(value);
+    }
+  }
+
+  @override
+  dynamic encode(ExternalEditorWorkspaceMode self) {
+    switch (self) {
+      case ExternalEditorWorkspaceMode.newWindow:
+        return r'newWindow';
+      case ExternalEditorWorkspaceMode.defaultWindow:
+        return r'defaultWindow';
+    }
+  }
+}
+
+extension ExternalEditorWorkspaceModeMapperExtension
+    on ExternalEditorWorkspaceMode {
+  String toValue() {
+    ExternalEditorWorkspaceModeMapper.ensureInitialized();
+    return MapperContainer.globals.toValue<ExternalEditorWorkspaceMode>(this)
+        as String;
+  }
+}

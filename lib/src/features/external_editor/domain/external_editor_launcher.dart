@@ -1,7 +1,15 @@
 import 'package:alera/src/features/external_editor/domain/external_editor_launch_result.dart';
+import 'package:dart_mappable/dart_mappable.dart';
 
+part 'external_editor_launcher.mapper.dart';
+
+@MappableEnum()
 enum ExternalEditorKind { zed }
 
+@MappableEnum()
+enum ExternalEditorExecutableMode { automatic, custom }
+
+@MappableEnum()
 enum ExternalEditorWorkspaceMode { newWindow, defaultWindow }
 
 class const ExternalEditorOpenRequest({
