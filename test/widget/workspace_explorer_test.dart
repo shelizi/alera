@@ -1,6 +1,9 @@
 import 'dart:async';
 
 import 'package:alera/src/design_system/icons/alera_icons.dart';
+import 'package:alera/src/features/external_editor/application/external_editor_providers.dart';
+import 'package:alera/src/features/external_editor/domain/external_editor_launch_result.dart';
+import 'package:alera/src/features/external_editor/domain/external_editor_launcher.dart';
 import 'package:alera/src/features/projects/application/project_providers.dart';
 import 'package:alera/src/features/workbench/application/workbench_providers.dart';
 import 'package:alera/src/features/workbench/application/workspace_explorer_reveal.dart';
@@ -501,6 +504,37 @@ void main() {
     expect(opener.revealedPaths, <String>[p.join('/repo/alera', 'readme.md')]);
   });
 
+  testWidgets('context menu opens Explorer files and folders in Zed', (
+    tester,
+  ) async {
+    final service = _FakeWorkspaceFileService()
+      ..childrenByDirectory[''] = <native.WorkspaceFileEntry>[
+        _directory('src', hasChildrenHint: false),
+        _file('readme.md'),
+      ];
+    final launcher = _FakeExternalEditorLauncher();
+    await _pumpExplorer(tester, service, externalEditorLauncher: launcher);
+
+    await tester.tap(find.text('readme.md'), buttons: kSecondaryMouseButton);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Open in Zed'));
+    await tester.pumpAndSettle();
+
+    expect(launcher.fileRequests, hasLength(1));
+    expect(launcher.fileRequests.single.workspacePath, '/repo/alera');
+    expect(
+      launcher.fileRequests.single.filePath,
+      p.join('/repo/alera', 'readme.md'),
+    );
+
+    await tester.tap(find.text('src'), buttons: kSecondaryMouseButton);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Open in Zed'));
+    await tester.pumpAndSettle();
+
+    expect(launcher.workspacePaths, <String>[p.join('/repo/alera', 'src')]);
+  });
+
   testWidgets('context menu focuses and clears source control root', (
     tester,
   ) async {
@@ -722,6 +756,7 @@ Future<void> _pumpExplorer(
   ValueChanged<String>? onOpenFilePermanently,
   EditorSessionRegistry? registry,
   WorkspaceFolderOpener? folderOpener,
+  ExternalEditorLauncher? externalEditorLauncher,
   GitBackend? gitBackend,
   String? focusedSourceControlRoot,
   Future<bool> Function(String relativePath)? onFocusSourceControlFolder,
@@ -732,6 +767,7 @@ Future<void> _pumpExplorer(
       service,
       registry: registry,
       folderOpener: folderOpener,
+      externalEditorLauncher: externalEditorLauncher,
       gitBackend: gitBackend,
       child: MaterialApp(
         home: Scaffold(
@@ -784,6 +820,7 @@ Widget _withWorkspaceFiles(
   required Widget child,
   EditorSessionRegistry? registry,
   WorkspaceFolderOpener? folderOpener,
+  ExternalEditorLauncher? externalEditorLauncher,
   GitBackend? gitBackend,
 }) {
   return ProviderScope(
@@ -792,6 +829,8 @@ Widget _withWorkspaceFiles(
       gitBackendProvider.overrideWithValue(gitBackend ?? FakeGitBackend()),
       if (folderOpener != null)
         workspaceFolderOpenerProvider.overrideWithValue(folderOpener),
+      if (externalEditorLauncher != null)
+        externalEditorLauncherProvider.overrideWithValue(externalEditorLauncher),
       if (registry != null)
         editorSessionRegistryProvider.overrideWithValue(registry),
     ],
@@ -1189,6 +1228,29 @@ class _FakeWorkspaceFolderOpener() extends WorkspaceFolderOpener {
   Future<WorkspaceFolderOpenResult> reveal(String path) async {
     revealedPaths.add(path);
     return const WorkspaceFolderOpenResult.success();
+  }
+}
+
+class _FakeExternalEditorLauncher implements ExternalEditorLauncher {
+  final List<String> workspacePaths = <String>[];
+  final List<ExternalEditorOpenRequest> fileRequests = <ExternalEditorOpenRequest>[];
+
+  @override
+  Future<ExternalEditorAvailability> checkAvailability() async =>
+      const ExternalEditorAvailability(available: true);
+
+  @override
+  Future<ExternalEditorLaunchResult> openFile(
+    ExternalEditorOpenRequest request,
+  ) async {
+    fileRequests.add(request);
+    return ExternalEditorLaunchResultFactories.opened;
+  }
+
+  @override
+  Future<ExternalEditorLaunchResult> openWorkspace(String workspacePath) async {
+    workspacePaths.add(workspacePath);
+    return ExternalEditorLaunchResultFactories.opened;
   }
 }
 

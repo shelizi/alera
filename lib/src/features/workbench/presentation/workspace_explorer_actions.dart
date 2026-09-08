@@ -51,6 +51,10 @@ extension _WorkspaceExplorerActions on _WorkspaceExplorerState {
         if (entry != null) {
           await _reveal(entry);
         }
+      case _ExplorerAction.openInZed:
+        if (entry != null) {
+          await _openInZed(entry);
+        }
       case _ExplorerAction.delete:
         if (entry != null) {
           await _delete(entry);
@@ -256,6 +260,26 @@ extension _WorkspaceExplorerActions on _WorkspaceExplorerState {
     }
     if (!result.ok) {
       _showError(result.message ?? 'Could not reveal item');
+    }
+  }
+
+  Future<void> _openInZed(native.WorkspaceFileEntry entry) async {
+    final launcher = ref.read(externalEditorLauncherProvider);
+    final absolutePath = _absolutePath(entry.relativePath);
+    final result = _isDirectoryEntry(entry)
+        ? await launcher.openWorkspace(absolutePath)
+        : await launcher.openFile(
+            ExternalEditorOpenRequest(
+              workspacePath: widget.workspace.path,
+              filePath: absolutePath,
+            ),
+          );
+    if (!result.ok && mounted) {
+      AleraToast.show(
+        context,
+        message: result.message ?? 'Could not open item in Zed.',
+        tone: .error,
+      );
     }
   }
 

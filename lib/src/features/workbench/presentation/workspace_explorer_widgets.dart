@@ -294,6 +294,11 @@ class const _ExplorerMenuDelegate({
             label: 'Reveal in $fileManagerLabel',
             leading: const Icon(AleraIcons.external, size: 16),
           ),
+          const AleraDropdownEntry<_ExplorerAction>(
+            value: .openInZed,
+            label: 'Open in Zed',
+            leading: Icon(AleraIcons.external, size: 16),
+          ),
           const PopupMenuDivider(height: AleraTokens.space8),
           const AleraDropdownEntry<_ExplorerAction>(
             value: .rename,
@@ -427,6 +432,7 @@ enum _ExplorerAction {
   copyRelativePath,
   duplicate,
   reveal,
+  openInZed,
   delete,
   refresh,
   focusSourceControlRoot,
