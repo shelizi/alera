@@ -246,6 +246,69 @@ fn preserves_gpt_acronym_and_uses_normal_hyphens() {
 }
 
 #[test]
+fn parses_decorated_antigravity_groups_and_split_reset_descriptions() {
+    let output = [
+        "│ GEMINI MODELS │",
+        "│ Weekly Limit │",
+        "│ 95% remaining │",
+        "│ Refreshes in 6d 19h │",
+        "│ Five Hour Limit │",
+        "│ 62.5% remaining │",
+        "│ Refreshes in 7m │",
+        "│ CLAUDE AND GPT MODELS │",
+        "│ Weekly Limit │",
+        "│ 7% remaining │",
+        "│ Refreshes in 2d 20h │",
+        "│ Five Hour Limit │",
+        "│ 0% remaining │",
+        "│ Refreshes in 19m │",
+    ]
+    .join("\n");
+
+    let snapshot = parse_tui_snapshot("antigravity", "default", "Antigravity", &output);
+
+    assert!(antigravity_usage_complete(&output));
+    assert_eq!(snapshot.buckets.len(), 4);
+    assert_eq!(
+        snapshot
+            .buckets
+            .iter()
+            .find(|bucket| bucket.name == "Gemini Models - Weekly")
+            .expect("Gemini weekly quota")
+            .used_percent,
+        5.0
+    );
+    assert_eq!(
+        snapshot
+            .buckets
+            .iter()
+            .find(|bucket| bucket.name == "Gemini Models - 5 Hour")
+            .expect("Gemini five-hour quota")
+            .used_percent,
+        37.5
+    );
+    let claude_weekly = snapshot
+        .buckets
+        .iter()
+        .find(|bucket| bucket.name == "Claude And GPT Models - Weekly")
+        .expect("Claude and GPT weekly quota");
+    assert_eq!(claude_weekly.used_percent, 93.0);
+    assert!(claude_weekly
+        .reset_description
+        .as_deref()
+        .is_some_and(|description| description.contains("2d 20h")));
+    assert_eq!(
+        snapshot
+            .buckets
+            .iter()
+            .find(|bucket| bucket.name == "Claude And GPT Models - 5 Hour")
+            .expect("Claude and GPT five-hour quota")
+            .used_percent,
+        100.0
+    );
+}
+
+#[test]
 fn detects_complete_antigravity_usage_without_fixed_delay() {
     let complete = [
         "Gemini Models",

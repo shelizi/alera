@@ -233,9 +233,10 @@ fn parse_tui_snapshot(
     let clean = strip_terminal_sequences(output);
     let percent_re = Regex::new(r"(?i)(\d{1,3}(?:\.\d+)?)\s*%\s*(used|left|remaining)?").unwrap();
     let mut windows = Vec::new();
-    let mut buckets = Vec::new();
+    let mut buckets: Vec<QuotaBucket> = Vec::new();
     let mut current_label: Option<String> = None;
     let mut current_group: Option<String> = None;
+    let mut last_bucket_name: Option<String> = None;
     for raw_line in clean.lines() {
         let line = raw_line.split_whitespace().collect::<Vec<_>>().join(" ");
         if line.len() < 3 {
@@ -247,11 +248,24 @@ fn parse_tui_snapshot(
         } else if lower.contains("weekly limit") {
             current_label = Some("Weekly".to_string());
         }
-        if provider == "antigravity" && lower.ends_with("models") {
-            current_group = Some(title_case_words(&line));
-            continue;
+        if provider == "antigravity" {
+            if let Some(group) = antigravity_group_name(&line) {
+                current_group = Some(group);
+                last_bucket_name = None;
+                continue;
+            }
         }
         let Some(captures) = percent_re.captures(&line) else {
+            if provider == "antigravity" {
+                if let (Some(name), Some(description)) = (
+                    last_bucket_name.as_deref(),
+                    extract_reset_description(&line),
+                ) {
+                    if let Some(bucket) = buckets.iter_mut().find(|bucket| bucket.name == name) {
+                        bucket.reset_description = Some(description);
+                    }
+                }
+            }
             continue;
         };
         let raw_percent = captures
@@ -292,6 +306,7 @@ fn parse_tui_snapshot(
                 .map(|group| format!("{group} - {label}"))
                 .unwrap_or(label);
             buckets.retain(|bucket: &QuotaBucket| bucket.name != name);
+            last_bucket_name = Some(name.clone());
             buckets.push(QuotaBucket {
                 name,
                 used_percent,
@@ -336,6 +351,25 @@ fn parse_tui_snapshot(
         );
     }
     QuotaSnapshot::ok(provider, account_id, display_name, windows, buckets)
+}
+
+fn antigravity_group_name(line: &str) -> Option<String> {
+    let words = line
+        .split(|value: char| !value.is_ascii_alphanumeric())
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    if words.last().is_none_or(|word| !word.eq_ignore_ascii_case("models")) {
+        return None;
+    }
+    let normalized = words.join(" ");
+    let lower = normalized.to_lowercase();
+    if lower == "gemini models"
+        || lower == "claude and gpt models"
+        || lower == "claude gpt models"
+    {
+        return Some(title_case_words(&normalized));
+    }
+    None
 }
 
 fn deduplicate_windows(windows: &mut Vec<QuotaWindow>) {
