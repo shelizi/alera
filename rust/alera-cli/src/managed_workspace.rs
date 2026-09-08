@@ -157,11 +157,14 @@ pub async fn create_managed_workspace(
     }
 
     if !request.reuse_existing_branch {
-        core_git::refresh_source_branch(
-            &project.repo_path,
-            source_branch.as_deref().expect("checked above"),
-        )
-        .context("git source branch refresh failed")?;
+        let source = source_branch.as_deref().expect("checked above");
+        if let Err(error) = core_git::refresh_source_branch(&project.repo_path, source) {
+            tracing::warn!(
+                repo_path = %project.repo_path,
+                source_branch = %source,
+                "git source branch refresh failed, proceeding with local branch: {error:#}",
+            );
+        }
     }
 
     if let Some(parent) = Path::new(&workspace_path).parent() {
@@ -1170,6 +1173,61 @@ mod tests {
         assert!(command.contains(&script.display().to_string()), "{command}");
         let contents = std::fs::read_to_string(&script).unwrap();
         assert!(contents.contains("--copies-only"), "{contents}");
+    }
+
+    #[tokio::test]
+    async fn create_managed_workspace_succeeds_when_source_branch_refresh_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let remote_bare = dir.path().join("bare.git");
+        run_git(dir.path(), &["init", "--bare", "bare.git"]);
+
+        let repo = dir.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        init_git_repo(&repo);
+        run_git(&repo, &["remote", "add", "origin", remote_bare.to_str().unwrap()]);
+        run_git(&repo, &["push", "-u", "origin", "main"]);
+        run_git(&remote_bare, &["symbolic-ref", "HEAD", "refs/heads/main"]);
+
+        let other = dir.path().join("other");
+        run_git(
+            dir.path(),
+            &["clone", "-b", "main", remote_bare.to_str().unwrap(), "other"],
+        );
+        run_git(&other, &["config", "user.email", "other@example.com"]);
+        run_git(&other, &["config", "user.name", "Other"]);
+        std::fs::write(other.join("remote.txt"), "from remote\n").unwrap();
+        run_git(&other, &["add", "remote.txt"]);
+        run_git(&other, &["commit", "-m", "remote commit"]);
+        run_git(&other, &["push", "origin", "main"]);
+
+        std::fs::write(repo.join("local.txt"), "from local\n").unwrap();
+        run_git(&repo, &["add", "local.txt"]);
+        run_git(&repo, &["commit", "-m", "local commit"]);
+
+        let store = seed_project(dir.path(), &repo).await;
+        let worktree_path = dir.path().join("workspaces").join("feature-diverged");
+        let result = create_managed_workspace(
+            &store,
+            ManagedWorkspaceCreateRequest {
+                id: Some("workspace-diverged".to_string()),
+                project_id: "project-1".to_string(),
+                name: Some("feature/diverged".to_string()),
+                branch: "feature/diverged".to_string(),
+                source_branch: Some("main".to_string()),
+                reuse_existing_branch: false,
+                workspace_root: None,
+                path: Some(worktree_path.to_string_lossy().into_owned()),
+                parent_workspace_id: None,
+                defer_setup: true,
+                skip_setup: true,
+                setup_script_directory: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.workspace.branch.as_deref(), Some("feature/diverged"));
+        assert!(worktree_path.join("local.txt").exists());
     }
 
     async fn seed_project(root: &Path, repo: &Path) -> RuntimeStore {

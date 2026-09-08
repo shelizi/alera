@@ -232,11 +232,10 @@ class WorkspaceService._(
           repoPath: project.repoPath,
           sourceBranch: normalizedSource,
         );
-      } on GitException catch (error) {
-        throw WorkspaceException(
-          'git source branch refresh failed',
-          stderr: error.context,
-        );
+      } on GitException {
+        // Source branch refresh against upstream is best-effort.
+        // If the branch has diverged, the host is offline, or pull cannot
+        // fast-forward, continue creating the worktree from the local branch.
       }
     }
 

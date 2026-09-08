@@ -165,40 +165,25 @@ void _registerWorkspaceServiceCoreTests() {
   });
 
   test(
-    'createLinkedWorkspace surfaces source branch refresh failures',
+    'createLinkedWorkspace proceeds when source branch refresh fails',
     () async {
       gitBackend.sourceBranches = <String>['main'];
       gitBackend.refreshSourceBranchError = const GitCliException(
         'pull failed',
       );
 
-      await expectLater(
-        service.createLinkedWorkspace(
-          project: project,
-          sourceBranch: 'main',
-          newBranchName: 'feature/refresh-failure',
-        ),
-        throwsA(
-          isA<WorkspaceException>()
-              .having(
-                (error) => error.message,
-                'message',
-                'git source branch refresh failed',
-              )
-              .having((error) => error.stderr, 'stderr', 'pull failed'),
-        ),
-      );
+      final workspace = (await service.createLinkedWorkspace(
+        project: project,
+        sourceBranch: 'main',
+        newBranchName: 'feature/refresh-failure',
+      )).workspace;
 
+      expect(workspace.branch, 'feature/refresh-failure');
       expect(
         gitBackend.calls.map((call) => call.method),
-        isNot(contains('createWorktree')),
+        containsAllInOrder(<String>['refreshSourceBranch', 'createWorktree']),
       );
-      expect(repository.workspaces, isEmpty);
-      expect(
-        Directory(p.join(tempDir.path, 'workspaces', 'repo-project-1'))
-            .existsSync(),
-        isFalse,
-      );
+      expect(repository.workspaces, hasLength(1));
     },
   );
 
