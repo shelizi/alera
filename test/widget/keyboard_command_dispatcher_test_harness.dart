@@ -316,12 +316,17 @@ Future<_DispatcherPumpHarness> _pumpDispatcherHarness(
   WidgetTester tester, {
   required _DispatcherTestWorkbenchController controller,
   required _FakeTerminalRuntime runtime,
+  ExternalEditorLauncher? externalEditorLauncher,
 }) async {
   final container = ProviderContainer(
     overrides: [
       workbenchControllerProvider.overrideWith(() => controller),
       agentProfilesProvider.overrideWith(() => _DispatcherAgentProfiles()),
       terminalRuntimeProvider.overrideWith((ref) => runtime),
+      if (externalEditorLauncher != null)
+        externalEditorLauncherProvider.overrideWithValue(
+          externalEditorLauncher,
+        ),
       settingsControllerProvider.overrideWith(
         () => _DispatcherSettingsController(.defaults),
       ),
@@ -353,4 +358,28 @@ class _DispatcherSettingsController(final AleraSettings _seed)
     extends SettingsController {
   @override
   AleraSettings build() => _seed;
+}
+
+class _DispatcherExternalEditorLauncher implements ExternalEditorLauncher {
+  final List<String> workspaces = <String>[];
+
+  @override
+  Future<ExternalEditorAvailability> checkAvailability() async =>
+      const ExternalEditorAvailability(available: true);
+
+  @override
+  Future<ExternalEditorLaunchResult> openFile(
+    ExternalEditorOpenRequest request,
+  ) async => ExternalEditorLaunchResultFactories.opened;
+
+  @override
+  Future<ExternalEditorLaunchResult> openFiles(
+    ExternalEditorOpenFilesRequest request,
+  ) async => ExternalEditorLaunchResultFactories.opened;
+
+  @override
+  Future<ExternalEditorLaunchResult> openWorkspace(String workspacePath) async {
+    workspaces.add(workspacePath);
+    return ExternalEditorLaunchResultFactories.opened;
+  }
 }

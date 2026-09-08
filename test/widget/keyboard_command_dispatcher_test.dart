@@ -3,6 +3,9 @@ import 'dart:async';
 import 'package:alera/src/app/providers.dart';
 import 'package:alera/src/features/agent_profiles/application/agent_profile_providers.dart';
 import 'package:alera/src/features/agent_profiles/domain/agent_profile.dart';
+import 'package:alera/src/features/external_editor/application/external_editor_providers.dart';
+import 'package:alera/src/features/external_editor/domain/external_editor_launch_result.dart';
+import 'package:alera/src/features/external_editor/domain/external_editor_launcher.dart';
 import 'package:alera/src/features/keyboard/application/keyboard_command_dispatcher.dart';
 import 'package:alera/src/features/keyboard/presentation/keyboard_command_palette_dialog.dart';
 import 'package:alera/src/features/projects/domain/project.dart';
@@ -168,6 +171,35 @@ void main() {
     expect(controller.closedTabIds, <String>[newTab.id]);
   });
 
+  testWidgets(
+    'Open Workspace in Zed dispatches through the external editor launcher',
+    (tester) async {
+      final workspace = _workspace();
+      final controller = _DispatcherTestWorkbenchController(
+        WorkbenchState(
+          workspacesByProject: <String, List<Workspace>>{
+            workspace.projectId: <Workspace>[workspace],
+          },
+          activeWorkspaceId: workspace.id,
+        ),
+      );
+      final launcher = _DispatcherExternalEditorLauncher();
+      final harness = await _pumpDispatcherHarness(
+        tester,
+        controller: controller,
+        runtime: _FakeTerminalRuntime(),
+        externalEditorLauncher: launcher,
+      );
+
+      KeyboardCommandDispatcher(
+        ref: harness.ref,
+        context: harness.context,
+      ).dispatch(.openWorkspaceInZed);
+      await tester.pump();
+
+      expect(launcher.workspaces, <String>[workspace.path]);
+    },
+  );
   testWidgets('worktree navigation commands use the controller history', (
     tester,
   ) async {

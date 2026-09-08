@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:alera/src/app/providers.dart';
 import 'package:alera/src/design_system/layout/alera_confirm_dialog.dart';
+import 'package:alera/src/design_system/feedback/alera_toast.dart';
+import 'package:alera/src/features/external_editor/application/external_editor_providers.dart';
 import 'package:alera/src/features/keyboard/domain/keyboard_action.dart';
 import 'package:alera/src/features/keyboard/presentation/keyboard_command_palette_dialog.dart';
 import 'package:alera/src/features/workbench/domain/workbench_layout.dart';
@@ -44,6 +46,8 @@ class const KeyboardCommandDispatcher({
         unawaited(
           showCreateWorkspaceFlow(context, ref, initialProject: project),
         );
+      case KeyboardActionId.openWorkspaceInZed:
+        _openWorkspaceInZed();
       case KeyboardActionId.navigateBack:
         unawaited(ref.read(workbenchControllerProvider.notifier).goBack());
       case KeyboardActionId.navigateForward:
@@ -84,6 +88,23 @@ class const KeyboardCommandDispatcher({
       case KeyboardActionId.closeSplit:
         _closeSplit();
     }
+  }
+
+  void _openWorkspaceInZed() {
+    final workspace = ref.read(workbenchControllerProvider).activeWorkspace;
+    if (workspace == null) return;
+    unawaited(() async {
+      final result = await ref
+          .read(externalEditorLauncherProvider)
+          .openWorkspace(workspace.path);
+      if (!result.ok && context.mounted) {
+        AleraToast.show(
+          context,
+          message: result.message ?? 'Could not open workspace in Zed.',
+          tone: .error,
+        );
+      }
+    }());
   }
 
   void _toggleSidebar() {

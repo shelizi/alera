@@ -51,6 +51,7 @@ enum KeyboardActionId {
   addProject,
   toggleSidebar,
   createWorkspace,
+  openWorkspaceInZed,
   navigateBack,
   navigateForward,
   findInFiles,
@@ -201,6 +202,14 @@ const List<KeybindingDefinition> keybindingDefinitions = <KeybindingDefinition>[
     defaultBindings: .uniform(<String>['Mod+Shift+N']),
     searchKeywords: <String>['worktree', 'branch'],
     allowInTerminal: true,
+  ),
+  KeybindingDefinition(
+    id: .openWorkspaceInZed,
+    label: 'Open Workspace in Zed',
+    group: .workspace,
+    description: 'Open the active workspace in Zed.',
+    defaultBindings: .uniform(<String>[]),
+    searchKeywords: <String>['external editor', 'zed', 'worktree'],
   ),
   KeybindingDefinition(
     id: .navigateBack,

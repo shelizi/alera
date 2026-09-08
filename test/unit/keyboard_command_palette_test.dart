@@ -18,6 +18,16 @@ void main() {
     ]);
   });
 
+  test('Zed workspace command is searchable without a default shortcut', () {
+    final matches = filterKeyboardCommandPalette('zed');
+    final match = matches.singleWhere(
+      (match) => match.definition.id == KeyboardActionId.openWorkspaceInZed,
+    );
+
+    expect(match.definition.defaultBindings.windows, isEmpty);
+    expect(match.definition.defaultBindings.macos, isEmpty);
+    expect(match.definition.defaultBindings.linux, isEmpty);
+  });
   test('label matches outrank keyword matches', () {
     final matches = filterKeyboardCommandPalette('command');
 
