@@ -12,16 +12,21 @@ typedef WorkspaceFileInternalOpener<T> = Future<T> Function({
 
 enum WorkspaceFileOpenDestination { alera, zed }
 
+enum WorkspaceFileOpenStatus { opened, fellBack, failed }
+
 class const WorkspaceFileOpenResult<T>({
-  required this.destination,
+  required this.status,
+  this.destination,
   this.internalValue,
-  this.fellBack = false,
   this.message,
 }) {
-  final WorkspaceFileOpenDestination destination;
+  final WorkspaceFileOpenStatus status;
+  final WorkspaceFileOpenDestination? destination;
   final T? internalValue;
-  final bool fellBack;
   final String? message;
+
+  bool get ok => status != WorkspaceFileOpenStatus.failed;
+  bool get fellBack => status == WorkspaceFileOpenStatus.fellBack;
 }
 
 class WorkspaceFileOpenCoordinator {
@@ -69,12 +74,13 @@ class WorkspaceFileOpenCoordinator {
     if (result.ok) {
       _implicitFailureNotified = false;
       return WorkspaceFileOpenResult<T>(
+        status: WorkspaceFileOpenStatus.opened,
         destination: WorkspaceFileOpenDestination.zed,
       );
     }
     if (explicitTarget != null) {
       return WorkspaceFileOpenResult<T>(
-        destination: WorkspaceFileOpenDestination.zed,
+        status: WorkspaceFileOpenStatus.failed,
         message: result.message,
       );
     }
@@ -91,9 +97,9 @@ class WorkspaceFileOpenCoordinator {
       openInAlera: openInAlera,
     );
     return WorkspaceFileOpenResult<T>(
+      status: WorkspaceFileOpenStatus.fellBack,
       destination: fallback.destination,
       internalValue: fallback.internalValue,
-      fellBack: true,
       message: message,
     );
   }
@@ -129,6 +135,7 @@ class WorkspaceFileOpenCoordinator {
       preview: preview,
     );
     return WorkspaceFileOpenResult<T>(
+      status: WorkspaceFileOpenStatus.opened,
       destination: WorkspaceFileOpenDestination.alera,
       internalValue: value,
     );

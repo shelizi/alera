@@ -40,6 +40,7 @@ void main() {
       openInAlera: openInternal,
     );
 
+    expect(result.status, WorkspaceFileOpenStatus.opened);
     expect(result.destination, WorkspaceFileOpenDestination.alera);
     expect(result.internalValue, 'lib/main.dart');
     expect(internalOpens, <String>['lib/main.dart:true']);
@@ -57,6 +58,7 @@ void main() {
       column: 4,
     );
 
+    expect(result.status, WorkspaceFileOpenStatus.opened);
     expect(result.destination, WorkspaceFileOpenDestination.zed);
     expect(internalOpens, isEmpty);
     expect(launcher.files.single.filePath, endsWith('lib\\main.dart'));
@@ -79,6 +81,7 @@ void main() {
         relativePath: path,
         openInAlera: openInternal,
       );
+      expect(result.status, WorkspaceFileOpenStatus.opened);
       expect(result.destination, WorkspaceFileOpenDestination.alera);
     }
 
@@ -129,6 +132,9 @@ void main() {
       openInAlera: openInternal,
     );
 
+    expect(first.status, WorkspaceFileOpenStatus.fellBack);
+    expect(second.status, WorkspaceFileOpenStatus.fellBack);
+    expect(first.ok, isTrue);
     expect(first.fellBack, isTrue);
     expect(second.fellBack, isTrue);
     expect(first.destination, WorkspaceFileOpenDestination.alera);
@@ -150,7 +156,9 @@ void main() {
       openInAlera: openInternal,
     );
 
-    expect(result.destination, WorkspaceFileOpenDestination.zed);
+    expect(result.status, WorkspaceFileOpenStatus.failed);
+    expect(result.ok, isFalse);
+    expect(result.destination, isNull);
     expect(result.message, 'Zed is unavailable.');
     expect(result.fellBack, isFalse);
     expect(internalOpens, isEmpty);
