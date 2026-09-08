@@ -222,6 +222,7 @@ class _ExplorerNameDialogState extends State<_ExplorerNameDialog> {
 
 class const _ExplorerMenuDelegate({
   required final String fileManagerLabel,
+  required final bool canOpenInAlera,
   required final bool canFocusSourceControlFolders,
   required final bool Function(tree.VisibleNode node)
   isFocusedSourceControlRoot,
@@ -299,6 +300,12 @@ class const _ExplorerMenuDelegate({
             label: 'Open in Zed',
             leading: Icon(AleraIcons.external, size: 16),
           ),
+          if (canOpenInAlera && node.type == tree.NodeType.file)
+            const AleraDropdownEntry<_ExplorerAction>(
+              value: .openInAlera,
+              label: 'Open in Alera',
+              leading: Icon(AleraIcons.edit, size: 16),
+            ),
           const PopupMenuDivider(height: AleraTokens.space8),
           const AleraDropdownEntry<_ExplorerAction>(
             value: .rename,
@@ -433,6 +440,7 @@ enum _ExplorerAction {
   duplicate,
   reveal,
   openInZed,
+  openInAlera,
   delete,
   refresh,
   focusSourceControlRoot,

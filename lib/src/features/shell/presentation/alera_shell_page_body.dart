@@ -64,6 +64,10 @@ class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody> {
     final project = shell.activeProject;
     final workspace = shell.activeWorkspace;
     final controller = ref.read(workbenchControllerProvider.notifier);
+    final defaultCodeOpenTarget = ref
+        .watch(settingsControllerProvider)
+        .editor
+        .codeOpenTarget;
     final canSelectSourceControlRoot = project?.isFolder == true;
     final sourceControlScope = WorkspaceSourceControlScope.resolve(
       project: project,
@@ -138,7 +142,7 @@ class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody> {
                                 : null,
                             onOpenFile: (relativePath) {
                               unawaited(
-                                controller.openFileTab(
+                                _openWorkspaceFile(
                                   workspace: workspace,
                                   relativePath: relativePath,
                                   preview: true,
@@ -147,12 +151,24 @@ class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody> {
                             },
                             onOpenFilePermanently: (relativePath) {
                               unawaited(
-                                controller.openFileTab(
+                                _openWorkspaceFile(
                                   workspace: workspace,
                                   relativePath: relativePath,
                                 ),
                               );
                             },
+                            onOpenFileInAlera:
+                                defaultCodeOpenTarget == CodeOpenTarget.zed
+                                ? (relativePath) {
+                                    unawaited(
+                                      _openWorkspaceFile(
+                                        workspace: workspace,
+                                        relativePath: relativePath,
+                                        targetOverride: CodeOpenTarget.alera,
+                                      ),
+                                    );
+                                  }
+                                : null,
                             onRevealInExplorer: (relativePath) {
                               controller.revealInExplorer(
                                 workspace: workspace,
@@ -205,11 +221,27 @@ class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody> {
                                 },
                             onOpenSearchMatch: (target) {
                               unawaited(() async {
-                                final tab = await controller.openEditorTab(
-                                  workspace: workspace,
-                                  relativePath: target.relativePath,
-                                  preview: true,
-                                );
+                                final result = await ref
+                                    .read(workspaceFileOpenCoordinatorProvider)
+                                    .open<WorkspaceTabRecord>(
+                                      workspace: workspace,
+                                      relativePath: target.relativePath,
+                                      preview: true,
+                                      line: target.line,
+                                      column: target.column,
+                                      openInAlera:
+                                          ({
+                                            required workspace,
+                                            required relativePath,
+                                            required preview,
+                                          }) => controller.openEditorTab(
+                                            workspace: workspace,
+                                            relativePath: relativePath,
+                                            preview: preview,
+                                          ),
+                                    );
+                                final tab = result.internalValue;
+                                if (tab == null) return;
                                 ref
                                     .read(editorSessionRegistryProvider)
                                     .reveal(
@@ -264,6 +296,31 @@ class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody> {
       ),
     );
     return content;
+  }
+
+  Future<void> _openWorkspaceFile({
+    required Workspace workspace,
+    required String relativePath,
+    bool preview = false,
+    CodeOpenTarget? targetOverride,
+  }) async {
+    await ref
+        .read(workspaceFileOpenCoordinatorProvider)
+        .open<WorkspaceTabRecord>(
+          workspace: workspace,
+          relativePath: relativePath,
+          preview: preview,
+          targetOverride: targetOverride,
+          openInAlera:
+              ({required workspace, required relativePath, required preview}) =>
+                  ref
+                      .read(workbenchControllerProvider.notifier)
+                      .openFileTab(
+                        workspace: workspace,
+                        relativePath: relativePath,
+                        preview: preview,
+                      ),
+        );
   }
 
   Future<bool> _confirmCloseDirtyTabs(

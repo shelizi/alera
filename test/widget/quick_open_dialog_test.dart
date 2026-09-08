@@ -1,8 +1,12 @@
 import 'dart:async';
 
+import 'package:alera/src/features/external_editor/domain/external_editor_launch_result.dart';
+import 'package:alera/src/features/external_editor/domain/external_editor_launcher.dart';
 import 'package:alera/src/features/workbench/application/workbench_controller.dart';
 import 'package:alera/src/features/workbench/application/workbench_providers.dart';
 import 'package:alera/src/features/workbench/application/workbench_state.dart';
+import 'package:alera/src/features/workbench/application/workspace_file_open_coordinator.dart';
+import 'package:alera/src/features/workbench/application/workspace_file_open_coordinator_provider.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_service.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
@@ -42,6 +46,36 @@ void main() {
     await tester.sendKeyEvent(.enter);
     await tester.pumpAndSettle();
     expect(controller.openedFiles, <String>['lib/main_test.dart']);
+  });
+
+  testWidgets('routes editable files to Zed when it is the default target', (
+    tester,
+  ) async {
+    final workspace = _workspace('workspace-1', 'Main', r'C:\repo\main');
+    final controller = _QuickOpenTestController(_state(workspace));
+    final launcher = _QuickOpenExternalEditorLauncher();
+    final coordinator = WorkspaceFileOpenCoordinator(
+      externalEditorLauncher: launcher,
+      defaultTargetReader: () => CodeOpenTarget.zed,
+    );
+    await _pumpQuickOpen(
+      tester,
+      controller: controller,
+      service: _QuickOpenFileService(entries: <String>['lib/main.dart']),
+      coordinator: coordinator,
+    );
+
+    await tester.tap(find.text('Open Quick Open'));
+    await tester.pumpAndSettle();
+    await tester.sendKeyEvent(.enter);
+    await tester.pumpAndSettle();
+
+    expect(controller.openedFiles, isEmpty);
+    expect(launcher.fileRequests, hasLength(1));
+    expect(
+      launcher.fileRequests.single.filePath,
+      r'C:\repo\main\lib\main.dart',
+    );
   });
 
   testWidgets('ignores stale searches', (tester) async {
@@ -203,12 +237,22 @@ Future<void> _pumpQuickOpen(
   required _QuickOpenTestController controller,
   required _QuickOpenFileService service,
   FocusNode? anchorFocus,
+  WorkspaceFileOpenCoordinator? coordinator,
 }) async {
+  final effectiveCoordinator =
+      coordinator ??
+      WorkspaceFileOpenCoordinator(
+        externalEditorLauncher: _QuickOpenExternalEditorLauncher(),
+        defaultTargetReader: () => CodeOpenTarget.alera,
+      );
   await tester.pumpWidget(
     ProviderScope(
       overrides: [
         workbenchControllerProvider.overrideWith(() => controller),
         workspaceFileServiceProvider.overrideWithValue(service),
+        workspaceFileOpenCoordinatorProvider.overrideWithValue(
+          effectiveCoordinator,
+        ),
       ],
       child: MaterialApp(
         home: Scaffold(
@@ -368,4 +412,26 @@ class _QuickOpenTestController(final WorkbenchState _seed)
   void switchWorkspace(String workspaceId) {
     state = state.copyWith(activeWorkspaceId: workspaceId);
   }
+}
+
+class _QuickOpenExternalEditorLauncher implements ExternalEditorLauncher {
+  final List<ExternalEditorOpenRequest> fileRequests =
+      <ExternalEditorOpenRequest>[];
+
+  @override
+  Future<ExternalEditorAvailability> checkAvailability() async =>
+      const ExternalEditorAvailability(available: true);
+
+  @override
+  Future<ExternalEditorLaunchResult> openFile(
+    ExternalEditorOpenRequest request,
+  ) async {
+    fileRequests.add(request);
+    return ExternalEditorLaunchResultFactories.opened;
+  }
+
+  @override
+  Future<ExternalEditorLaunchResult> openWorkspace(
+    String workspacePath,
+  ) async => ExternalEditorLaunchResultFactories.opened;
 }

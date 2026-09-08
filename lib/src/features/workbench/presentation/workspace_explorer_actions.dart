@@ -55,6 +55,10 @@ extension _WorkspaceExplorerActions on _WorkspaceExplorerState {
         if (entry != null) {
           await _openInZed(entry);
         }
+      case _ExplorerAction.openInAlera:
+        if (entry != null && !_isDirectoryEntry(entry)) {
+          widget.onOpenFileInAlera?.call(entry.relativePath);
+        }
       case _ExplorerAction.delete:
         if (entry != null) {
           await _delete(entry);

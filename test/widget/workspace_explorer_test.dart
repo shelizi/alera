@@ -535,6 +535,25 @@ void main() {
     expect(launcher.workspacePaths, <String>[p.join('/repo/alera', 'src')]);
   });
 
+  testWidgets('context menu can explicitly open a file in Alera', (
+    tester,
+  ) async {
+    final service = _FakeWorkspaceFileService()
+      ..childrenByDirectory[''] = <native.WorkspaceFileEntry>[
+        _file('main.dart'),
+      ];
+    final openedInAlera = <String>[];
+    await _pumpExplorer(tester, service, onOpenFileInAlera: openedInAlera.add);
+
+    await tester.tap(find.text('main.dart'), buttons: kSecondaryMouseButton);
+    await tester.pumpAndSettle();
+    expect(find.text('Open in Alera'), findsOneWidget);
+    await tester.tap(find.text('Open in Alera'));
+    await tester.pumpAndSettle();
+
+    expect(openedInAlera, <String>['main.dart']);
+  });
+
   testWidgets('context menu focuses and clears source control root', (
     tester,
   ) async {
@@ -754,6 +773,7 @@ Future<void> _pumpExplorer(
   _FakeWorkspaceFileService service, {
   ValueChanged<String>? onOpenFile,
   ValueChanged<String>? onOpenFilePermanently,
+  ValueChanged<String>? onOpenFileInAlera,
   EditorSessionRegistry? registry,
   WorkspaceFolderOpener? folderOpener,
   ExternalEditorLauncher? externalEditorLauncher,
@@ -780,6 +800,7 @@ Future<void> _pumpExplorer(
               onModeChanged: (_) {},
               onOpenFile: onOpenFile ?? (_) {},
               onOpenFilePermanently: onOpenFilePermanently,
+              onOpenFileInAlera: onOpenFileInAlera,
               focusedSourceControlRoot: focusedSourceControlRoot,
               onFocusSourceControlFolder: onFocusSourceControlFolder,
               onClearSourceControlRoot: onClearSourceControlRoot,

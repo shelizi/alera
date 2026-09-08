@@ -42,6 +42,7 @@ class const WorkspaceExplorer({
   required final ValueChanged<WorkspaceExplorerMode> onModeChanged,
   required final ValueChanged<String> onOpenFile,
   final ValueChanged<String>? onOpenFilePermanently,
+  final ValueChanged<String>? onOpenFileInAlera,
   required final Future<void> Function(
     String oldRelativePath,
     String newRelativePath,
@@ -162,6 +163,7 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
                       expanderBuilder: _buildExpander,
                       contextMenuDelegate: _ExplorerMenuDelegate(
                         fileManagerLabel: _folderOpener.fileManagerLabel,
+                        canOpenInAlera: widget.onOpenFileInAlera != null,
                         canFocusSourceControlFolders:
                             widget.onFocusSourceControlFolder != null,
                         isFocusedSourceControlRoot: (node) {

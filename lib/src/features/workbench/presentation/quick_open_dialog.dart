@@ -7,7 +7,9 @@ import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:alera/src/design_system/layout/alera_dialog.dart';
 import 'package:alera/src/features/workbench/application/workbench_controller.dart';
 import 'package:alera/src/features/workbench/application/workbench_providers.dart';
+import 'package:alera/src/features/workbench/application/workspace_file_open_coordinator_provider.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_service.dart';
+import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/rust/api/workspace_files.dart' as native;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -263,11 +265,23 @@ class _QuickOpenDialogState extends ConsumerState<QuickOpenDialog> {
     Navigator.of(context).pop();
     unawaited(
       ref
-          .read(workbenchControllerProvider.notifier)
-          .openFileTab(
+          .read(workspaceFileOpenCoordinatorProvider)
+          .open<WorkspaceTabRecord>(
             workspace: workspace,
             relativePath: relativePath,
             preview: true,
+            openInAlera:
+                ({
+                  required workspace,
+                  required relativePath,
+                  required preview,
+                }) => ref
+                    .read(workbenchControllerProvider.notifier)
+                    .openFileTab(
+                      workspace: workspace,
+                      relativePath: relativePath,
+                      preview: preview,
+                    ),
           ),
     );
   }

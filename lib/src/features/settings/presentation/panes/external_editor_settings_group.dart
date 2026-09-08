@@ -3,6 +3,7 @@ import 'package:alera/src/design_system/forms/alera_dropdown_field.dart';
 import 'package:alera/src/design_system/forms/alera_setting_row.dart';
 import 'package:alera/src/design_system/layout/alera_settings_group.dart';
 import 'package:alera/src/features/external_editor/application/external_editor_providers.dart';
+import 'package:alera/src/features/external_editor/domain/external_editor_launcher.dart';
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
 import 'package:alera/src/features/settings/presentation/rows/settings_rows.dart';
 import 'package:flutter/material.dart';
