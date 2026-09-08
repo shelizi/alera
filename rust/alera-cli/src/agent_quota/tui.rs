@@ -85,8 +85,27 @@ async fn run_tui_command(
             pixel_width: 0,
             pixel_height: 0,
         })?;
-        let mut builder = CommandBuilder::new(&command);
-        for argument in arguments {
+        #[cfg(windows)]
+        let (command_binary, command_arguments) = {
+            let path = resolved
+                .as_ref()
+                .and_then(|r| r.get("PATH").map(String::as_str));
+            let resolved_path =
+                alera_core::process_shell::resolve_windows_executable(&command, None, path);
+            let lower = resolved_path.to_lowercase();
+            if lower.ends_with(".cmd") || lower.ends_with(".bat") {
+                let mut cmd_args = vec!["/c".to_string(), resolved_path];
+                cmd_args.extend(arguments);
+                ("cmd.exe".to_string(), cmd_args)
+            } else {
+                (resolved_path, arguments)
+            }
+        };
+        #[cfg(not(windows))]
+        let (command_binary, command_arguments) = (command.clone(), arguments);
+
+        let mut builder = CommandBuilder::new(&command_binary);
+        for argument in command_arguments {
             builder.arg(argument);
         }
         match resolved {

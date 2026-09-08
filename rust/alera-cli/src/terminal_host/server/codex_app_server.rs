@@ -12,7 +12,7 @@ use std::sync::{
 };
 use std::time::Duration;
 
-use alera_core::child_process::windowless_async_command;
+use alera_core::process_shell::windowless_async_shell_command;
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin};
@@ -67,9 +67,13 @@ impl CodexAppServer {
         inbox: UnboundedSender<ServerCommand>,
         cwd: Option<&str>,
     ) -> HostResult<Self> {
-        let mut command = windowless_async_command("codex");
+        let mut command = windowless_async_shell_command(
+            "codex",
+            &["app-server".to_string()],
+            cwd,
+            None,
+        );
         command
-            .arg("app-server")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

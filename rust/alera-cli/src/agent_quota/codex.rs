@@ -89,9 +89,19 @@ async fn fetch_codex_via_backend() -> Result<Option<QuotaSnapshot>> {
 
 async fn fetch_codex_via_rpc() -> QuotaSnapshot {
     let result = tokio::time::timeout(FETCH_TIMEOUT, async {
-        let mut command = windowless_async_command("codex");
+        let mut command = windowless_async_shell_command(
+            "codex",
+            &[
+                "-s".to_string(),
+                "read-only".to_string(),
+                "-a".to_string(),
+                "untrusted".to_string(),
+                "app-server".to_string(),
+            ],
+            None,
+            None,
+        );
         command
-            .args(["-s", "read-only", "-a", "untrusted", "app-server"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())

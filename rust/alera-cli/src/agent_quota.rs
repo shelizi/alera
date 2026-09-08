@@ -5,7 +5,7 @@ use std::process::Stdio;
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use alera_core::child_process::windowless_async_command;
+use alera_core::process_shell::windowless_async_shell_command;
 use alera_core::runtime::RuntimeStore;
 use anyhow::{anyhow, Context, Result};
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};

@@ -277,7 +277,6 @@ pub(super) fn plan_command(
         ),
         "agy" => {
             let mut arguments = vec![
-                "--print".to_string(),
                 "--sandbox".to_string(),
                 "--print-timeout".to_string(),
                 format!("{timeout}s"),

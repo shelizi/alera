@@ -1,6 +1,7 @@
 pub mod child_process;
 pub mod git;
 pub mod git_cli;
+pub mod process_shell;
 pub mod reading_diff;
 #[cfg(feature = "runtime")]
 pub mod runtime;

@@ -168,9 +168,17 @@ async fn anthropic_api_environment_present() -> bool {
 }
 
 async fn claude_auth_status(environment: &BTreeMap<String, String>) -> Option<bool> {
-    let mut command = windowless_async_command("claude");
+    let mut command = windowless_async_shell_command(
+        "claude",
+        &[
+            "auth".to_string(),
+            "status".to_string(),
+            "--json".to_string(),
+        ],
+        None,
+        environment.get("PATH").map(String::as_str),
+    );
     command
-        .args(["auth", "status", "--json"])
         .stdin(Stdio::null())
         .stderr(Stdio::null())
         .kill_on_drop(true);

@@ -249,7 +249,6 @@ aiAssistAgentSpecs = <AiAssistAgent, AiAssistAgentSpec>{
           required prompt,
           required timeoutSeconds,
         }) => <String>[
-          '--print',
           '--sandbox',
           '--print-timeout',
           '${timeoutSeconds}s',

@@ -1,7 +1,7 @@
 use super::ai_assist_failure_detail::ai_assist_failure_detail;
 use super::ai_assist_requests::AiAssistCommandPlan;
 use crate::terminal_host::host_error::{HostError, HostResult};
-use alera_core::child_process::windowless_async_command;
+use alera_core::process_shell::windowless_async_shell_command;
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
@@ -14,9 +14,14 @@ pub(super) async fn run_command(
     timeout_seconds: u64,
     cancel_rx: oneshot::Receiver<()>,
 ) -> HostResult<String> {
-    let mut command = windowless_async_command(&plan.binary);
+    let path = plan.environment.get("PATH").map(String::as_str);
+    let mut command = windowless_async_shell_command(
+        &plan.binary,
+        &plan.arguments,
+        Some(working_directory),
+        path,
+    );
     command
-        .args(&plan.arguments)
         .current_dir(working_directory)
         .kill_on_drop(true)
         .stdout(Stdio::piped())

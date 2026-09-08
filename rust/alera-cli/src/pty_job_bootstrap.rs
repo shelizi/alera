@@ -48,7 +48,18 @@ fn run_inner() -> Result<i32, String> {
     // must inherit both, so CREATE_NO_WINDOW from the normal command boundary
     // is intentionally not applicable here.
     #[allow(clippy::disallowed_methods)]
-    let status = Command::new(&request.shell)
+    let resolved =
+        alera_core::process_shell::resolve_windows_executable(&request.shell, None, None);
+    let is_batch = resolved.to_lowercase().ends_with(".cmd")
+        || resolved.to_lowercase().ends_with(".bat");
+    let mut command = if is_batch {
+        let mut cmd = Command::new("cmd.exe");
+        cmd.args(["/c", &resolved]);
+        cmd
+    } else {
+        Command::new(&resolved)
+    };
+    let status = command
         .args(&request.arguments)
         .env_remove(BOOTSTRAP_EVENT_ENV)
         .env_remove(BOOTSTRAP_PARENT_PID_ENV)

@@ -68,7 +68,8 @@ Gemini 3.5 Flash (Medium)
 
       expect(result.text, 'feat: add ai assist');
       expect(runner.executable, 'agy');
-      expect(runner.arguments, containsAll(<String>['--print', '--sandbox']));
+      expect(runner.arguments, contains('--sandbox'));
+      expect(runner.arguments, isNot(contains('--print')));
       expect(runner.arguments, isNot(contains('--model')));
       expect(runner.stdinText, contains('feature/ai-assist'));
       expect(runner.stdinClosed, isTrue);

@@ -61,7 +61,6 @@ fn agy_passes_an_explicit_discovered_model_unchanged() {
     assert_eq!(
         plan.arguments,
         [
-            "--print",
             "--sandbox",
             "--print-timeout",
             "120s",
