@@ -81,6 +81,7 @@ void main() {
       expect(editor.effectiveAutosaveDelaySeconds, 1);
       expect(editor.autosaveDebounce, const Duration(seconds: 1));
       expect(editor.externalEditor, ExternalEditorKind.zed);
+      expect(editor.codeOpenTarget, CodeOpenTarget.alera);
       expect(editor.zedExecutableMode, ExternalEditorExecutableMode.automatic);
       expect(editor.zedExecutablePath, isNull);
       expect(
@@ -100,6 +101,7 @@ void main() {
       expect(editor.autosaveEnabled, isFalse);
       expect(editor.autosaveDelaySeconds, 1);
       expect(editor.externalEditor, ExternalEditorKind.zed);
+      expect(editor.codeOpenTarget, CodeOpenTarget.alera);
       expect(editor.zedExecutableMode, ExternalEditorExecutableMode.automatic);
       expect(editor.zedExecutablePath, isNull);
       expect(

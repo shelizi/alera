@@ -7,6 +7,9 @@ part 'external_editor_launcher.mapper.dart';
 enum ExternalEditorKind { zed }
 
 @MappableEnum()
+enum CodeOpenTarget { alera, zed }
+
+@MappableEnum()
 enum ExternalEditorExecutableMode { automatic, custom }
 
 @MappableEnum()

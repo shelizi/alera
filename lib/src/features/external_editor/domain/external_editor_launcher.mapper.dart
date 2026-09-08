@@ -50,6 +50,52 @@ extension ExternalEditorKindMapperExtension on ExternalEditorKind {
   }
 }
 
+class CodeOpenTargetMapper extends EnumMapper<CodeOpenTarget> {
+  CodeOpenTargetMapper._();
+
+  static CodeOpenTargetMapper? _instance;
+  static CodeOpenTargetMapper ensureInitialized() {
+    if (_instance == null) {
+      MapperContainer.globals.use(_instance = CodeOpenTargetMapper._());
+    }
+    return _instance!;
+  }
+
+  static CodeOpenTarget fromValue(dynamic value) {
+    ensureInitialized();
+    return MapperContainer.globals.fromValue(value);
+  }
+
+  @override
+  CodeOpenTarget decode(dynamic value) {
+    switch (value) {
+      case r'alera':
+        return CodeOpenTarget.alera;
+      case r'zed':
+        return CodeOpenTarget.zed;
+      default:
+        throw MapperException.unknownEnumValue(value);
+    }
+  }
+
+  @override
+  dynamic encode(CodeOpenTarget self) {
+    switch (self) {
+      case CodeOpenTarget.alera:
+        return r'alera';
+      case CodeOpenTarget.zed:
+        return r'zed';
+    }
+  }
+}
+
+extension CodeOpenTargetMapperExtension on CodeOpenTarget {
+  String toValue() {
+    CodeOpenTargetMapper.ensureInitialized();
+    return MapperContainer.globals.toValue<CodeOpenTarget>(this) as String;
+  }
+}
+
 class ExternalEditorExecutableModeMapper
     extends EnumMapper<ExternalEditorExecutableMode> {
   ExternalEditorExecutableModeMapper._();

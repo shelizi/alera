@@ -1,4 +1,6 @@
 import 'package:alera/src/design_system/feedback/alera_toast.dart';
+import 'package:alera/src/design_system/forms/alera_dropdown_field.dart';
+import 'package:alera/src/design_system/forms/alera_setting_row.dart';
 import 'package:alera/src/design_system/layout/alera_settings_group.dart';
 import 'package:alera/src/features/external_editor/application/external_editor_providers.dart';
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
@@ -18,6 +20,27 @@ class const ExternalEditorSettingsGroup({
       title: 'External Editor',
       description: 'Open workspaces and files in Zed without changing Alera\'s built-in editor behavior.',
       children: <Widget>[
+        AleraSettingRow(
+          title: 'Default Code Open Target',
+          description: 'Choose where normal editable source and text files open. Dedicated Alera previews stay internal.',
+          child: AleraDropdownField<CodeOpenTarget>(
+            key: const ValueKey<String>('editor-default-code-open-target'),
+            value: settings.codeOpenTarget,
+            entries: const <AleraDropdownFieldEntry<CodeOpenTarget>>[
+              AleraDropdownFieldEntry<CodeOpenTarget>(
+                value: .alera,
+                label: 'Alera',
+              ),
+              AleraDropdownFieldEntry<CodeOpenTarget>(
+                value: .zed,
+                label: 'Zed',
+              ),
+            ],
+            onChanged: (value) => onChanged(
+              (settings) => settings.copyWith(codeOpenTarget: value),
+            ),
+          ),
+        ),
         SettingsSwitchRow(
           key: const ValueKey<String>('editor-zed-custom-executable-row'),
           title: 'Custom Zed Executable',

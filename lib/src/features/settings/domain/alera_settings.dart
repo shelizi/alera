@@ -252,6 +252,7 @@ class const EditorSettings({
   this.autosaveEnabled = false,
   this.autosaveDelaySeconds = defaultAutosaveDelaySeconds,
   this.externalEditor = ExternalEditorKind.zed,
+  this.codeOpenTarget = CodeOpenTarget.alera,
   this.zedExecutableMode = ExternalEditorExecutableMode.automatic,
   this.zedExecutablePath,
   this.externalEditorWorkspaceMode = ExternalEditorWorkspaceMode.newWindow,
@@ -273,6 +274,7 @@ class const EditorSettings({
   final int autosaveDelaySeconds;
 
   final ExternalEditorKind externalEditor;
+  final CodeOpenTarget codeOpenTarget;
   final ExternalEditorExecutableMode zedExecutableMode;
   final String? zedExecutablePath;
   final ExternalEditorWorkspaceMode externalEditorWorkspaceMode;
