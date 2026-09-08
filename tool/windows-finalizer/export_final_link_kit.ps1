@@ -446,6 +446,8 @@ try {
     Set-Content -LiteralPath (Join-Path $OutputDirectory 'AleraFinal.vcxproj') -Value $projectText -Encoding UTF8
 
     Copy-Item -LiteralPath (Join-Path $scriptDir 'finalize_windows.ps1') -Destination (Join-Path $OutputDirectory 'finalize_windows.ps1') -Force
+    Copy-Item -LiteralPath (Join-Path $scriptDir 'finalize_with_portable_sdk.cmd') -Destination (Join-Path $OutputDirectory 'finalize_with_portable_sdk.cmd') -Force
+    Copy-Item -LiteralPath (Join-Path $scriptDir 'PORTABLE-SDK-README.txt') -Destination (Join-Path $OutputDirectory 'PORTABLE-SDK-README.txt') -Force
 
     $manifest = [ordered]@{
         schemaVersion = 2
@@ -469,6 +471,7 @@ try {
         notes = @(
             'Flutter AOT, Rust, Ghostty, native assets, plugin DLLs, and plugin import libraries are prebuilt.',
             'The target machine recompiles the small Flutter C++ wrapper and Windows runner with the target MSVC toolset.',
+            'The Windows SDK may be supplied as a complete portable Windows Kits\10 directory; SDK installation/registry discovery is not required when -WindowsSdkRoot is used.',
             'flutter_wrapper_app.lib is intentionally excluded so no newer-toolset C++ object code crosses into a VS2022/v143 final link.'
         )
     }
@@ -509,7 +512,7 @@ try {
     }
 
     Write-Host "Final-Link Kit: $OutputDirectory" -ForegroundColor Green
-    Write-Host "Target command: powershell -ExecutionPolicy Bypass -File .\finalize_windows.ps1"
+    Write-Host "Target command: .\finalize_with_portable_sdk.cmd verify  (defaults to D:\Windows Kits\10 / SDK 10.0.26100.0 / v143)"
 }
 finally {
     $env:ALERA_FLAVOR = $oldFlavor
