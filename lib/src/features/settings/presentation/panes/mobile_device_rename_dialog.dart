@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/forms/alera_text_field.dart';
 import 'package:alera/src/design_system/layout/alera_dialog.dart';
@@ -63,7 +64,7 @@ class _MobileDeviceRenameDialogState extends State<MobileDeviceRenameDialog> {
               alignment: Alignment.centerRight,
               child: FilledButton(
                 onPressed: _submit,
-                child: const Text('Rename'),
+                child: Text(context.tr('Rename')),
               ),
             ),
           ],

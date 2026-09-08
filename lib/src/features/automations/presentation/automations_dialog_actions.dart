@@ -69,11 +69,11 @@ extension on _AutomationsDialogState {
           actions: <Widget>[
             TextButton(
               onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Cancel'),
+              child: Text(context.tr('Cancel')),
             ),
             FilledButton(
               onPressed: () => Navigator.of(context).pop(controller.text),
-              child: const Text('Import'),
+              child: Text(context.tr('Import')),
             ),
           ],
         ),
@@ -281,7 +281,7 @@ extension on _AutomationsDialogState {
           actions: <Widget>[
             TextButton(
               onPressed: () => Navigator.of(dialogContext).pop(),
-              child: const Text('Cancel'),
+              child: Text(context.tr('Cancel')),
             ),
             FilledButton(
               onPressed: () {
@@ -299,7 +299,7 @@ extension on _AutomationsDialogState {
                   _showMessage(error.message, error: true);
                 }
               },
-              child: const Text('Continue'),
+              child: Text(context.tr('Continue')),
             ),
           ],
         ),

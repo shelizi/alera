@@ -1,3 +1,5 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
+
 import 'dart:async';
 
 import 'package:alera/src/app/theme/alera_tokens.dart';
@@ -157,7 +159,7 @@ class _MobilePairingDialogState extends State<MobilePairingDialog> {
                   child: OutlinedButton.icon(
                     onPressed: _cancelling ? null : _cancelOffer,
                     icon: const Icon(AleraIcons.cancel, size: 16),
-                    label: const Text('Cancel Offer'),
+                    label: Text(context.tr('Cancel Offer')),
                   ),
                 ),
                 const SizedBox(width: AleraTokens.space8),

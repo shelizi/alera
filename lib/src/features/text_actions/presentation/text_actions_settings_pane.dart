@@ -1,3 +1,5 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
+
 import 'dart:async';
 
 import 'package:alera/src/app/theme/alera_tokens.dart';
@@ -63,7 +65,7 @@ class _TextActionsSettingsPaneState extends State<TextActionsSettingsPane> {
         masterAction: FilledButton.icon(
           onPressed: _newAction,
           icon: const Icon(AleraIcons.add, size: 16),
-          label: const Text('New Action'),
+          label: Text(context.tr('New Action')),
         ),
         master: actions.isEmpty
             ? const AleraEmptyState(

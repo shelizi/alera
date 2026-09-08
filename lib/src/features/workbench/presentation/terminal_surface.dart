@@ -1,3 +1,5 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
+
 import 'dart:async';
 
 import 'package:alera/src/app/providers.dart';
@@ -382,11 +384,11 @@ class _TerminalSurfaceState extends ConsumerState<TerminalSurface> {
           actions: <Widget>[
             TextButton(
               onPressed: () => Navigator.of(dialogContext).pop(false),
-              child: const Text('Cancel'),
+              child: Text(context.tr('Cancel')),
             ),
             FilledButton(
               onPressed: () => Navigator.of(dialogContext).pop(true),
-              child: const Text('Restart Terminal'),
+              child: Text(context.tr('Restart Terminal')),
             ),
           ],
         );

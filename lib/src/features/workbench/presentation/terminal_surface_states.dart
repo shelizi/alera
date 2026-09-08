@@ -138,12 +138,12 @@ class const _TerminalErrorState({
                 children: <Widget>[
                   FilledButton(
                     onPressed: () => unawaited(onReconnect()),
-                    child: const Text('Reconnect'),
+                    child: Text(context.tr('Reconnect')),
                   ),
                   if (onRestart case final restart?)
                     OutlinedButton(
                       onPressed: () => unawaited(restart()),
-                      child: const Text('Restart Terminal'),
+                      child: Text(context.tr('Restart Terminal')),
                     ),
                 ],
               ),

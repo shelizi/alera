@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_client_models.dart';
 import 'package:flutter/material.dart';
@@ -99,13 +100,13 @@ class _MobileDriverOverlayState extends State<MobileDriverOverlay> {
             children: <Widget>[
               FilledButton(
                 onPressed: widget.onTakeBack,
-                child: const Text('Take Back This Terminal'),
+                child: Text(context.tr('Take Back This Terminal')),
               ),
               if (widget.drivenCount > 1) ...<Widget>[
                 const SizedBox(width: AleraTokens.space8),
                 OutlinedButton(
                   onPressed: widget.onTakeBackAll,
-                  child: const Text('Take Back All Terminals'),
+                  child: Text(context.tr('Take Back All Terminals')),
                 ),
               ],
             ],
@@ -142,7 +143,7 @@ class _MobileDriverOverlayState extends State<MobileDriverOverlay> {
           const SizedBox(width: AleraTokens.space8),
           TextButton(
             onPressed: widget.onTakeBack,
-            child: const Text('Take Back'),
+            child: Text(context.tr('Take Back')),
           ),
           IconButton(
             tooltip: 'Expand',

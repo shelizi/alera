@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:alera/src/features/runtime_host/domain/runtime_host_status.dart';
@@ -155,12 +156,12 @@ class const RuntimeHostStatusPanel({
                   children: <Widget>[
                     OutlinedButton(
                       onPressed: busy ? null : onRefresh,
-                      child: const Text('Refresh'),
+                      child: Text(context.tr('Refresh')),
                     ),
                     if (!running)
                       FilledButton(
                         onPressed: busy ? null : onStart,
-                        child: const Text('Start'),
+                        child: Text(context.tr('Start')),
                       ),
                     if (running)
                       OutlinedButton(
@@ -173,12 +174,12 @@ class const RuntimeHostStatusPanel({
                                 ),
                               )
                             : null,
-                        child: const Text('Stop'),
+                        child: Text(context.tr('Stop')),
                       ),
                     if (updateAvailable)
                       FilledButton(
                         onPressed: busy ? null : onUpdate,
-                        child: const Text('Update Runtime'),
+                        child: Text(context.tr('Update Runtime')),
                       ),
                   ],
                 ),

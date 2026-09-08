@@ -132,18 +132,18 @@ extension _PromptWorkspaceDialogForm on _PromptWorkspaceDialogState {
                   if (_activeOperationId != null)
                     TextButton(
                       onPressed: _cancelGeneration,
-                      child: const Text('Cancel'),
+                      child: Text(context.tr('Cancel')),
                     ),
                 ] else if (created != null) ...<Widget>[
                   OutlinedButton(
                     onPressed: () => Navigator.of(context)
                         .pop(PromptWorkspaceDialogResult(creation: created)),
-                    child: const Text('Open Workspace'),
+                    child: Text(context.tr('Open Workspace')),
                   ),
                   const SizedBox(width: AleraTokens.space8),
                   FilledButton(
                     onPressed: _retryAgent,
-                    child: const Text('Retry Agent'),
+                    child: Text(context.tr('Retry Agent')),
                   ),
                 ] else
                   FilledButton.icon(
@@ -154,7 +154,7 @@ extension _PromptWorkspaceDialogForm on _PromptWorkspaceDialogState {
                         ? null
                         : _submit,
                     icon: const Icon(AleraIcons.agent, size: 16),
-                    label: const Text('Create And Start Agent'),
+                    label: Text(context.tr('Create And Start Agent')),
                   ),
               ],
             ),

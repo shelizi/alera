@@ -1,3 +1,5 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
+
 import 'dart:io';
 
 import 'package:alera/src/app/theme/alera_tokens.dart';
@@ -256,7 +258,7 @@ class const _WhisperModelRow({
                   transfer.status == AiDictationModelTransferStatus.queued)
                 OutlinedButton(
                   onPressed: onCancel,
-                  child: const Text('Cancel Download'),
+                  child: Text(context.tr('Cancel Download')),
                 )
               else if (!transfer.installed)
                 FilledButton(
@@ -273,7 +275,7 @@ class const _WhisperModelRow({
               else ...<Widget>[
                 OutlinedButton(
                   onPressed: selected ? null : onRemove,
-                  child: const Text('Remove Model'),
+                  child: Text(context.tr('Remove Model')),
                 ),
                 FilledButton(
                   onPressed: selected ? null : onSelect,

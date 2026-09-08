@@ -1,3 +1,5 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
+
 import 'dart:async';
 
 import 'package:alera/src/app/providers.dart';
@@ -137,13 +139,13 @@ class const UpdateSettingsSection({super.key}) extends ConsumerWidget {
                     FilledButton.icon(
                       onPressed: controller.installLatest,
                       icon: const Icon(AleraIcons.download, size: 16),
-                      label: const Text('Install Update'),
+                      label: Text(context.tr('Install Update')),
                     ),
                   if (state.status == AleraUpdateStatus.restartRequired)
                     FilledButton.icon(
                       onPressed: controller.restartApp,
                       icon: const Icon(AleraIcons.restart, size: 16),
-                      label: const Text('Restart Alera'),
+                      label: Text(context.tr('Restart Alera')),
                     ),
                   if (state.status == AleraUpdateStatus.error &&
                       state.latest != null &&
@@ -151,7 +153,7 @@ class const UpdateSettingsSection({super.key}) extends ConsumerWidget {
                     FilledButton.icon(
                       onPressed: controller.installLatest,
                       icon: const Icon(AleraIcons.refresh, size: 16),
-                      label: const Text('Try Again'),
+                      label: Text(context.tr('Try Again')),
                     ),
                 ],
               ),
@@ -207,7 +209,7 @@ class const _UpgradeCommand({required final String command})
           FilledButton.icon(
             onPressed: () => unawaited(_run(context, ref)),
             icon: const Icon(AleraIcons.terminal, size: 16),
-            label: const Text('Run Update'),
+            label: Text(context.tr('Run Update')),
           ),
         ],
       ),

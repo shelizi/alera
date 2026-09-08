@@ -1,3 +1,5 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
+
 import 'dart:async';
 
 import 'package:alera/src/app/theme/alera_tokens.dart';
@@ -277,7 +279,7 @@ class _AiDictationRemoteSettingsState
               if (_tokenConfigured)
                 OutlinedButton(
                   onPressed: _savingToken ? null : _clearToken,
-                  child: const Text('Remove Token'),
+                  child: Text(context.tr('Remove Token')),
                 ),
               FilledButton(
                 onPressed: _savingToken || _tokenController.text.trim().isEmpty

@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/forms/alera_dropdown_field.dart';
 import 'package:alera/src/design_system/forms/alera_setting_row.dart';
@@ -111,7 +112,7 @@ class const AgentProfileEditor({
                             ? null
                             : onTestCommand,
                         icon: const Icon(AleraIcons.terminal, size: 16),
-                        label: const Text('Test Command'),
+                        label: Text(context.tr('Test Command')),
                       ),
                     ),
                   ),
@@ -161,7 +162,7 @@ class const AgentProfileEditor({
                               ? null
                               : onTestCommand,
                           icon: const Icon(AleraIcons.terminal, size: 16),
-                          label: const Text('Test Command'),
+                          label: Text(context.tr('Test Command')),
                         ),
                       ),
                     ),
@@ -288,7 +289,7 @@ class const AgentProfileEditor({
               OutlinedButton.icon(
                 onPressed: hasSelection && !saving ? onRemove : null,
                 icon: const Icon(AleraIcons.delete, size: 16),
-                label: const Text('Remove'),
+                label: Text(context.tr('Remove')),
               ),
             ],
           ),

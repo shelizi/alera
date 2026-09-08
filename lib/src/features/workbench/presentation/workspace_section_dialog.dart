@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/forms/alera_dropdown_field.dart';
 import 'package:alera/src/design_system/forms/alera_text_field.dart';
@@ -170,7 +171,7 @@ class _SectionDialogState extends State<_SectionDialog> {
                 children: [
                   TextButton(
                     onPressed: _saving ? null : () => Navigator.pop(context),
-                    child: const Text('Cancel'),
+                    child: Text(context.tr('Cancel')),
                   ),
                   const SizedBox(width: AleraTokens.space8),
                   FilledButton(

@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/buttons/alera_icon_button.dart';
 import 'package:alera/src/design_system/feedback/alera_empty_state.dart';
@@ -107,7 +108,7 @@ class const AutomationDetailPane({
             message: snapshot.error.toString(),
             action: FilledButton(
               onPressed: onRefresh,
-              child: const Text('Retry'),
+              child: Text(context.tr('Retry')),
             ),
           );
         }
@@ -194,21 +195,24 @@ class const AutomationDetailContent({
               FilledButton.icon(
                 onPressed: onApprove,
                 icon: const Icon(AleraIcons.secure, size: 16),
-                label: const Text('Approve'),
+                label: Text(context.tr('Approve')),
               ),
             FilledButton.icon(
               onPressed: onRunNow,
               icon: const Icon(AleraIcons.agent, size: 16),
-              label: const Text('Run Now'),
+              label: Text(context.tr('Run Now')),
             ),
             OutlinedButton(
               onPressed: onPause ?? onResume,
               child: Text(onPause != null ? 'Pause' : 'Resume'),
             ),
             if (onRestore != null)
-              TextButton(onPressed: onRestore, child: const Text('Restore'))
+              TextButton(
+                onPressed: onRestore,
+                child: Text(context.tr('Restore')),
+              )
             else
-              TextButton(onPressed: onTrash, child: const Text('Trash')),
+              TextButton(onPressed: onTrash, child: Text(context.tr('Trash'))),
           ],
         ),
         const SizedBox(height: AleraTokens.space16),

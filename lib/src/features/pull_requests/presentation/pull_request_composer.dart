@@ -1,3 +1,5 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
+
 import 'dart:async';
 
 import 'package:alera/src/app/theme/alera_tokens.dart';
@@ -400,7 +402,7 @@ class _PullRequestComposerState extends ConsumerState<PullRequestComposer> {
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
                         : const Icon(AleraIcons.link, size: 16),
-                    label: const Text('Link'),
+                    label: Text(context.tr('Link')),
                   ),
                 if (widget.canCreateStack &&
                     widget.onCreateStack != null) ...<Widget>[
@@ -416,7 +418,7 @@ class _PullRequestComposerState extends ConsumerState<PullRequestComposer> {
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
                         : const Icon(AleraIcons.gitGraph, size: 16),
-                    label: const Text('Create Stack'),
+                    label: Text(context.tr('Create Stack')),
                   ),
                 ],
               ],
@@ -428,13 +430,13 @@ class _PullRequestComposerState extends ConsumerState<PullRequestComposer> {
               onPressed: widget.busy || _generating
                   ? null
                   : () => _switchMode(.link),
-              child: const Text('Link Existing Pull Request'),
+              child: Text(context.tr('Link Existing Pull Request')),
             ),
           ] else if (widget.canCreate) ...<Widget>[
             const SizedBox(height: AleraTokens.space8),
             TextButton(
               onPressed: widget.busy ? null : () => _switchMode(.create),
-              child: const Text('Create Pull Request'),
+              child: Text(context.tr('Create Pull Request')),
             ),
           ],
         ],

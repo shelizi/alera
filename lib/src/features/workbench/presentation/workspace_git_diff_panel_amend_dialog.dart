@@ -82,10 +82,13 @@ class _AmendCommitDialogState extends State<_AmendCommitDialog> {
               children: <Widget>[
                 TextButton(
                   onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('Cancel'),
+                  child: Text(context.tr('Cancel')),
                 ),
                 const SizedBox(width: AleraTokens.space8),
-                FilledButton(onPressed: _submit, child: const Text('Amend')),
+                FilledButton(
+                  onPressed: _submit,
+                  child: Text(context.tr('Amend')),
+                ),
               ],
             ),
           ],

@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:alera/src/features/automations/domain/automation_models.dart';
@@ -31,15 +32,18 @@ class const AutomationRunRow({
                 if (onResumeWaiting != null)
                   TextButton(
                     onPressed: onResumeWaiting,
-                    child: const Text('Resume'),
+                    child: Text(context.tr('Resume')),
                   ),
                 if (onExtendWaiting != null)
                   TextButton(
                     onPressed: onExtendWaiting,
-                    child: const Text('Extend'),
+                    child: Text(context.tr('Extend')),
                   ),
                 if (onCancel != null)
-                  TextButton(onPressed: onCancel, child: const Text('Cancel')),
+                  TextButton(
+                    onPressed: onCancel,
+                    child: Text(context.tr('Cancel')),
+                  ),
               ],
             ),
     );

@@ -41,7 +41,7 @@ class const _StashPickerDialog({required final List<GitStashEntry> stashes})
               alignment: Alignment.centerRight,
               child: TextButton(
                 onPressed: () => Navigator.of(context).pop(),
-                child: const Text('Cancel'),
+                child: Text(context.tr('Cancel')),
               ),
             ),
           ],

@@ -1,3 +1,5 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
+
 import 'dart:async';
 
 import 'package:alera/src/app/providers.dart';
@@ -379,7 +381,7 @@ class const _EnvironmentPresence({
               loading ? AleraIcons.loading : AleraIcons.refresh,
               size: 14,
             ),
-            label: const Text('Check Environment'),
+            label: Text(context.tr('Check Environment')),
           ),
         ),
       ],

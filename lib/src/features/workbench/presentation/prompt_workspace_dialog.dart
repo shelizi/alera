@@ -1,3 +1,5 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
+
 import 'dart:async';
 
 import 'package:alera/src/app/theme/alera_tokens.dart';
@@ -447,7 +449,7 @@ class _PromptWorkspaceDialogState extends State<PromptWorkspaceDialog> {
             onPressed: () =>
                 Navigator.of(context)
                     .pop(const PromptWorkspaceDialogResult(openManual: true)),
-            child: const Text('Continue Manually'),
+            child: Text(context.tr('Continue Manually')),
           ),
         ),
       ],

@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/providers.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
@@ -147,7 +148,7 @@ class _AleraCliRegistrationControlState
                         ),
                       )
                     : const Icon(AleraIcons.refresh, size: 16),
-                label: const Text('Refresh'),
+                label: Text(context.tr('Refresh')),
               ),
             ),
             SizedBox(

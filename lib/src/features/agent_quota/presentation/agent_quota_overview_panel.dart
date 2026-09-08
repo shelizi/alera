@@ -111,7 +111,7 @@ class const _AgentQuotaOverviewPanel({
                     child: FilledButton.tonalIcon(
                       onPressed: onOpenUsage,
                       icon: const Icon(AleraIcons.quota),
-                      label: const Text('Open Usage'),
+                      label: Text(context.tr('Open Usage')),
                     ),
                   ),
                 ],

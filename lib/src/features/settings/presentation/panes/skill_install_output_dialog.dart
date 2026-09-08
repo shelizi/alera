@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:alera/src/design_system/layout/alera_dialog.dart';
@@ -69,7 +70,7 @@ class const SkillInstallOutputDialog({
                   onPressed: () =>
                       Clipboard.setData(ClipboardData(text: output)),
                   icon: const Icon(AleraIcons.copy, size: 16),
-                  label: const Text('Copy Output'),
+                  label: Text(context.tr('Copy Output')),
                 ),
               ],
             ),

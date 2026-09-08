@@ -1,3 +1,5 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
+
 import 'dart:async';
 
 import 'package:alera/src/app/providers.dart';
@@ -192,7 +194,7 @@ class _RenameDialogState extends State<_RenameDialog> {
               children: <Widget>[
                 TextButton(
                   onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('Cancel'),
+                  child: Text(context.tr('Cancel')),
                 ),
                 const SizedBox(width: AleraTokens.space8),
                 FilledButton(

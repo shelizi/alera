@@ -21,12 +21,12 @@ class const _EmptyProjectsDialog({
                   ? FilledButton.icon(
                       onPressed: onAddProject,
                       icon: const Icon(AleraIcons.add, size: 16),
-                      label: const Text('Add Git Project'),
+                      label: Text(context.tr('Add Git Project')),
                     )
                   : null,
             ),
             const SizedBox(height: AleraTokens.space8),
-            TextButton(onPressed: onCancel, child: const Text('Cancel')),
+            TextButton(onPressed: onCancel, child: Text(context.tr('Cancel'))),
           ],
         ),
       ),

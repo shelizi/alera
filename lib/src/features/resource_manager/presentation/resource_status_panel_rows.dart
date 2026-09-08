@@ -297,7 +297,10 @@ class const _OrphanFooter({
                   ?.copyWith(color: AleraTokens.warning),
             ),
           ),
-          TextButton(onPressed: onKillOrphans, child: const Text('Kill All')),
+          TextButton(
+            onPressed: onKillOrphans,
+            child: Text(context.tr('Kill All')),
+          ),
         ],
       ),
     );

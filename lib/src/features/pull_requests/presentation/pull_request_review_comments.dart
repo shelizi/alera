@@ -108,7 +108,7 @@ class _PullRequestCommentsSectionState
                         _controller.clear();
                         setState(() => _composing = false);
                       },
-                child: const Text('Cancel'),
+                child: Text(context.tr('Cancel')),
               ),
               const SizedBox(width: AleraTokens.space6),
               FilledButton.icon(
@@ -120,7 +120,7 @@ class _PullRequestCommentsSectionState
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
                     : const Icon(AleraIcons.send, size: 16),
-                label: const Text('Post Comment'),
+                label: Text(context.tr('Post Comment')),
               ),
             ],
           ),

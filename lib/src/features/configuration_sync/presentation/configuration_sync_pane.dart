@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/design_system/configuration/alera_configuration_review.dart';
 import 'package:alera/src/features/configuration_sync/application/configuration_sync_controller.dart';
 import 'package:flutter/material.dart';
@@ -22,7 +23,7 @@ class const ConfigurationSyncPane({super.key}) extends ConsumerWidget {
                       Text(e.toString()),
                       TextButton(
                         onPressed: () => ref.invalidate(provider),
-                        child: const Text('Retry'),
+                        child: Text(context.tr('Retry')),
                       ),
                     ],
                   ),

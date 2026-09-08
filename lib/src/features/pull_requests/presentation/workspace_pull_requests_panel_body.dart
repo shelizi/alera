@@ -50,7 +50,7 @@ class const _PullRequestBody({
         message: 'Run `${_authCommand()}` to sign in, then refresh.',
         action: OutlinedButton(
           onPressed: controller.refresh,
-          child: const Text('Refresh'),
+          child: Text(context.tr('Refresh')),
         ),
       );
     }

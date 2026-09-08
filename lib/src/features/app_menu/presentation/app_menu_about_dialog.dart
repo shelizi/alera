@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/core/build_flavor.dart';
 import 'package:alera/src/design_system/buttons/alera_icon_button.dart';
@@ -84,11 +85,11 @@ class const AppMenuAboutDialog({
               children: <Widget>[
                 OutlinedButton(
                   onPressed: onCheckForUpdates,
-                  child: const Text('Check For Updates'),
+                  child: Text(context.tr('Check For Updates')),
                 ),
                 FilledButton(
                   onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('Close'),
+                  child: Text(context.tr('Close')),
                 ),
               ],
             ),

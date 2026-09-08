@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/feedback/alera_empty_state.dart';
 import 'package:alera/src/design_system/forms/alera_text_field.dart';
@@ -84,7 +85,7 @@ class _RunPolicyReviewDialogState extends ConsumerState<RunPolicyReviewDialog> {
               alignment: Alignment.centerRight,
               child: TextButton(
                 onPressed: () => Navigator.of(context).pop(),
-                child: const Text('Close'),
+                child: Text(context.tr('Close')),
               ),
             ),
           ],
@@ -148,12 +149,12 @@ class _RunPolicyReviewDialogState extends ConsumerState<RunPolicyReviewDialog> {
               ElevatedButton.icon(
                 onPressed: busy ? null : () => _approve(policy),
                 icon: Icon(busy ? AleraIcons.loading : AleraIcons.check),
-                label: const Text('Approve'),
+                label: Text(context.tr('Approve')),
               ),
               OutlinedButton.icon(
                 onPressed: busy ? null : () => _reject(policy),
                 icon: const Icon(AleraIcons.cancel),
-                label: const Text('Reject'),
+                label: Text(context.tr('Reject')),
               ),
             ],
           ),

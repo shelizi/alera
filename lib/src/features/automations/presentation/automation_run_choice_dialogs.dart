@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:flutter/material.dart';
 
 class const AutomationRunNowChoiceDialog({super.key}) extends StatefulWidget {
@@ -16,7 +17,7 @@ class _AutomationRunNowChoiceDialogState
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Run Now'),
+      title: Text(context.tr('Run Now')),
       content: Column(
         mainAxisSize: .min,
         children: <Widget>[
@@ -63,13 +64,13 @@ class _AutomationRunNowChoiceDialogState
       actions: <Widget>[
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Cancel'),
+          child: Text(context.tr('Cancel')),
         ),
         FilledButton(
           onPressed: () =>
               Navigator.of(context)
                   .pop((_precheck, _overlap, _draftTest, _exactRevision)),
-          child: const Text('Run'),
+          child: Text(context.tr('Run')),
         ),
       ],
     );
@@ -85,11 +86,11 @@ class const AutomationPauseChoiceDialog({super.key}) extends StatelessWidget {
       actions: <Widget>[
         TextButton(
           onPressed: () => Navigator.of(context).pop('continue-active'),
-          child: const Text('Continue Active'),
+          child: Text(context.tr('Continue Active')),
         ),
         FilledButton(
           onPressed: () => Navigator.of(context).pop('cancel-active'),
-          child: const Text('Cancel Active'),
+          child: Text(context.tr('Cancel Active')),
         ),
       ],
     );

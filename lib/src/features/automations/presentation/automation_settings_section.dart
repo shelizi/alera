@@ -1,3 +1,5 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
+
 import 'dart:async';
 
 import 'package:alera/src/design_system/feedback/alera_empty_state.dart';
@@ -100,7 +102,10 @@ class _AutomationSettingsSectionState
       return AleraEmptyState(
         title: 'Automation Settings Unavailable',
         message: _error!,
-        action: OutlinedButton(onPressed: _load, child: const Text('Retry')),
+        action: OutlinedButton(
+          onPressed: _load,
+          child: Text(context.tr('Retry')),
+        ),
       );
     }
     return AleraSettingsGroup(

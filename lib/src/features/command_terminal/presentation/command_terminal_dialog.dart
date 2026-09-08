@@ -1,3 +1,5 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
+
 import 'dart:async';
 
 import 'package:alera/src/app/theme/alera_tokens.dart';
@@ -133,7 +135,7 @@ class _CommandTerminalDialogState extends State<CommandTerminalDialog> {
                   children: <Widget>[
                     FilledButton(
                       onPressed: () => unawaited(_requestClose()),
-                      child: const Text('Close'),
+                      child: Text(context.tr('Close')),
                     ),
                   ],
                 ),

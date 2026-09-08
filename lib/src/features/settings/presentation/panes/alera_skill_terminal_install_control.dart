@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:alera/src/design_system/menus/alera_dropdown_entry.dart';
@@ -153,7 +154,7 @@ class _AleraSkillTerminalInstallControlState
               child: OutlinedButton.icon(
                 onPressed: _running ? null : _copyCommand,
                 icon: const Icon(AleraIcons.copy, size: 16),
-                label: const Text('Copy'),
+                label: Text(context.tr('Copy')),
               ),
             ),
             SizedBox(

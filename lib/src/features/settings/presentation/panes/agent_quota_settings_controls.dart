@@ -207,7 +207,7 @@ class const _ClaudeProfilesControl({
               }
             },
             icon: const Icon(AleraIcons.add, size: 14),
-            label: const Text('Add CCS Profile'),
+            label: Text(context.tr('Add CCS Profile')),
           ),
         ),
       ],
@@ -355,12 +355,12 @@ class _ClaudeProfileDialogState extends State<_ClaudeProfileDialog> {
               children: <Widget>[
                 TextButton(
                   onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('Cancel'),
+                  child: Text(context.tr('Cancel')),
                 ),
                 const SizedBox(width: AleraTokens.space8),
                 FilledButton(
                   onPressed: _save,
-                  child: const Text('Save Profile'),
+                  child: Text(context.tr('Save Profile')),
                 ),
               ],
             ),

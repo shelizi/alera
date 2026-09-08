@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/forms/alera_text_field.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
@@ -107,7 +108,7 @@ class _WorkspaceDirectoryRowState extends State<WorkspaceDirectoryRow> {
               OutlinedButton.icon(
                 onPressed: _browse,
                 icon: const Icon(AleraIcons.folderOpen, size: 16),
-                label: const Text('Browse'),
+                label: Text(context.tr('Browse')),
               ),
             ],
           ),

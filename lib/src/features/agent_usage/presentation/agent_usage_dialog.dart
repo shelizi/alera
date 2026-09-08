@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/buttons/alera_icon_button.dart';
 import 'package:alera/src/design_system/buttons/alera_segmented_button.dart';
@@ -224,7 +225,7 @@ class const _UsageUnavailable({
       message: error ?? 'No usage data is available for this host.',
       action: OutlinedButton(
         onPressed: onRefresh,
-        child: const Text('Try Again'),
+        child: Text(context.tr('Try Again')),
       ),
     );
   }

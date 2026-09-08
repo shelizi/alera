@@ -1,3 +1,5 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
+
 import 'dart:async';
 import 'dart:convert';
 
@@ -77,7 +79,7 @@ class _AutomationsDialogState extends ConsumerState<AutomationsDialog> {
                     message: error.toString(),
                     action: FilledButton(
                       onPressed: () => ref.invalidate(automationListProvider),
-                      child: const Text('Retry'),
+                      child: Text(context.tr('Retry')),
                     ),
                   ),
                   data: (items) => _buildContent(context, items),
@@ -117,7 +119,7 @@ class _AutomationsDialogState extends ConsumerState<AutomationsDialog> {
               message: 'Create a schedule to run approved work in a runtime-owned target.',
               action: FilledButton(
                 onPressed: () => unawaited(_createAutomation()),
-                child: const Text('New Automation'),
+                child: Text(context.tr('New Automation')),
               ),
             )
           : AleraPanel(
@@ -168,7 +170,7 @@ class _AutomationsDialogState extends ConsumerState<AutomationsDialog> {
                             ...items.expand((item) => item.tagIds).toSet(),
                           ], (value) => setState(() => _tagFilter = value)),
                           FilterChip(
-                            label: const Text('Trash'),
+                            label: Text(context.tr('Trash')),
                             selected: _includeTrashed,
                             onSelected: (value) =>
                                 setState(() => _includeTrashed = value),

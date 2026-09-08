@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/forms/alera_dropdown_field.dart';
 import 'package:alera/src/design_system/forms/alera_setting_row.dart';
@@ -180,13 +181,13 @@ class const TextActionEditor({
                   style: TextButton.styleFrom(
                     foregroundColor: AleraTokens.error,
                   ),
-                  label: const Text('Delete'),
+                  label: Text(context.tr('Delete')),
                 ),
               const Spacer(),
               FilledButton.icon(
                 onPressed: onSave,
                 icon: const Icon(AleraIcons.save, size: 16),
-                label: const Text('Save'),
+                label: Text(context.tr('Save')),
               ),
             ],
           ),

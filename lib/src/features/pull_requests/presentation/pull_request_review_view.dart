@@ -1,3 +1,5 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
+
 import 'dart:async';
 
 import 'package:alera/src/app/theme/alera_tokens.dart';
@@ -410,12 +412,12 @@ class _PullRequestReviewViewState extends State<PullRequestReviewView> {
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
                   : const Icon(AleraIcons.success, size: 16),
-              label: const Text('Save'),
+              label: Text(context.tr('Save')),
             ),
             const SizedBox(width: AleraTokens.space8),
             TextButton(
               onPressed: _busy ? null : () => setState(() => _editing = false),
-              child: const Text('Cancel'),
+              child: Text(context.tr('Cancel')),
             ),
           ],
         ),

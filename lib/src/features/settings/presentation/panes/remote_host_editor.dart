@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/feedback/alera_empty_state.dart';
 import 'package:alera/src/design_system/forms/alera_dropdown_field.dart';
@@ -176,7 +177,7 @@ class const RemoteHostEditor({
                     FilledButton.icon(
                       onPressed: saving || bootstrapping ? null : onSave,
                       icon: Icon(saving ? AleraIcons.loading : AleraIcons.save),
-                      label: const Text('Save'),
+                      label: Text(context.tr('Save')),
                     ),
                     OutlinedButton.icon(
                       onPressed: hasSelection && !planning && !bootstrapping
@@ -185,24 +186,24 @@ class const RemoteHostEditor({
                       icon: Icon(
                         planning ? AleraIcons.loading : AleraIcons.info,
                       ),
-                      label: const Text('Plan'),
+                      label: Text(context.tr('Plan')),
                     ),
                     OutlinedButton.icon(
                       onPressed: hasSelection && !saving && !bootstrapping
                           ? onBootstrap
                           : null,
                       icon: const Icon(AleraIcons.cloudUpload),
-                      label: const Text('Bootstrap'),
+                      label: Text(context.tr('Bootstrap')),
                     ),
                     OutlinedButton.icon(
                       onPressed: bootstrapping ? onCancel : null,
                       icon: const Icon(AleraIcons.cancel),
-                      label: const Text('Cancel'),
+                      label: Text(context.tr('Cancel')),
                     ),
                     TextButton.icon(
                       onPressed: saving || bootstrapping ? null : onRemove,
                       icon: const Icon(AleraIcons.delete),
-                      label: const Text('Remove'),
+                      label: Text(context.tr('Remove')),
                     ),
                   ],
                 ),

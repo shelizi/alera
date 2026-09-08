@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/buttons/alera_icon_button.dart';
 import 'package:alera/src/design_system/forms/alera_checkbox.dart';
@@ -132,7 +133,7 @@ class const ProjectConfigEditor({
                 child: OutlinedButton.icon(
                   onPressed: addCopyRule,
                   icon: const Icon(AleraIcons.add, size: 16),
-                  label: const Text('Add Copy Rule'),
+                  label: Text(context.tr('Add Copy Rule')),
                 ),
               ),
             ),
@@ -160,7 +161,7 @@ class const ProjectConfigEditor({
                 child: OutlinedButton.icon(
                   onPressed: addSetupCommand,
                   icon: const Icon(AleraIcons.add, size: 16),
-                  label: const Text('Add Setup Command'),
+                  label: Text(context.tr('Add Setup Command')),
                 ),
               ),
             ),
@@ -184,7 +185,7 @@ class const ProjectConfigEditor({
             if (useRepoFile != null) ...<Widget>[
               OutlinedButton(
                 onPressed: saving ? null : useRepoFile,
-                child: const Text('Use Repo File'),
+                child: Text(context.tr('Use Repo File')),
               ),
             ],
             FilledButton.icon(
