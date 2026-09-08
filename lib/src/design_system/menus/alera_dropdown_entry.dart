@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:flutter/material.dart';
@@ -53,7 +54,7 @@ class _AleraDropdownEntryState<T> extends State<AleraDropdownEntry<T>> {
               ],
               Expanded(
                 child: Text(
-                  widget.label,
+                  context.tr(widget.label),
                   style: Theme.of(context).textTheme.bodyMedium
                       ?.copyWith(color: color),
                 ),

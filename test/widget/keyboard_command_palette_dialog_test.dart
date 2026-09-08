@@ -1,9 +1,11 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/features/keyboard/domain/keyboard_action.dart';
 import 'package:alera/src/features/keyboard/presentation/keyboard_command_palette_dialog.dart';
 import 'package:alera/src/features/settings/application/settings_controller.dart';
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 void main() {
@@ -30,6 +32,29 @@ void main() {
     expect(find.text('Command Palette'), findsNothing);
   });
 
+  testWidgets('searches localized command labels in Traditional Chinese', (
+    tester,
+  ) async {
+    KeyboardActionId? executed;
+    await _pumpCommandPalette(
+      tester,
+      locale: const Locale('zh', 'TW'),
+      onExecute: (id) => executed = id,
+    );
+
+    await tester.tap(find.text('Open Command Palette'));
+    await tester.pumpAndSettle();
+    expect(find.text('指令面板'), findsWidgets);
+
+    await tester.enterText(find.byType(TextField), '設定');
+    await tester.pump();
+
+    expect(find.text('開啟設定'), findsOneWidget);
+    await tester.sendKeyEvent(.enter);
+    await tester.pumpAndSettle();
+    expect(executed, KeyboardActionId.openSettings);
+  });
+
   testWidgets('Escape closes and restores focus', (tester) async {
     final anchorFocus = FocusNode();
     addTearDown(anchorFocus.dispose);
@@ -54,6 +79,7 @@ Future<void> _pumpCommandPalette(
   WidgetTester tester, {
   ValueChanged<KeyboardActionId>? onExecute,
   FocusNode? anchorFocus,
+  Locale? locale,
 }) async {
   await tester.pumpWidget(
     ProviderScope(
@@ -63,6 +89,12 @@ Future<void> _pumpCommandPalette(
         ),
       ],
       child: MaterialApp(
+        locale: locale,
+        supportedLocales: supportedAleraLocales,
+        localizationsDelegates: const <LocalizationsDelegate<dynamic>>[
+          AleraLocalizationsDelegate(),
+          ...GlobalMaterialLocalizations.delegates,
+        ],
         home: Scaffold(
           body: Focus(
             focusNode: anchorFocus,

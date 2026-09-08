@@ -12,6 +12,7 @@ List<KeyboardCommandMatch> filterKeyboardCommandPalette(
   String query, {
   List<KeybindingDefinition> definitions = keybindingDefinitions,
   int limit = defaultKeyboardCommandPaletteResultLimit,
+  String Function(String source)? localize,
 }) {
   if (limit <= 0) {
     return const <KeyboardCommandMatch>[];
@@ -19,7 +20,11 @@ List<KeyboardCommandMatch> filterKeyboardCommandPalette(
   final normalizedQuery = query.trim().toLowerCase();
   final matches = <KeyboardCommandMatch>[];
   for (final definition in definitions) {
-    final score = _keyboardCommandScore(definition, normalizedQuery);
+    final score = _keyboardCommandScore(
+      definition,
+      normalizedQuery,
+      localize: localize,
+    );
     if (score != null) {
       matches.add(KeyboardCommandMatch(definition: definition, score: score));
     }
@@ -40,7 +45,11 @@ List<KeyboardCommandMatch> filterKeyboardCommandPalette(
   return matches.take(limit).toList(growable: false);
 }
 
-int? _keyboardCommandScore(KeybindingDefinition definition, String query) {
+int? _keyboardCommandScore(
+  KeybindingDefinition definition,
+  String query, {
+  String Function(String source)? localize,
+}) {
   if (query.isEmpty) {
     return 0;
   }
@@ -67,10 +76,25 @@ int? _keyboardCommandScore(KeybindingDefinition definition, String query) {
     return bestKeywordScore;
   }
 
+  final localizedText = <String>[];
+  if (localize != null) {
+    for (final source in <String>[
+      definition.label,
+      definition.description,
+      definition.group.label,
+    ]) {
+      final normalizedSource = source.toLowerCase();
+      final translated = localize(source).toLowerCase();
+      if (translated != normalizedSource) {
+        localizedText.add(translated);
+      }
+    }
+  }
   final searchableText = <String>[
     label,
     definition.description.toLowerCase(),
     definition.group.label.toLowerCase(),
+    ...localizedText,
   ].join(' ');
   if (searchableText.contains(query)) {
     return 60000 - searchableText.indexOf(query).clamp(0, 999).toInt();

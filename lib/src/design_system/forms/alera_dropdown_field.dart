@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/forms/alera_dropdown_filter_popover.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
@@ -188,7 +189,9 @@ class _AleraDropdownFieldState<T> extends State<AleraDropdownField<T>> {
     final field = Semantics(
       button: true,
       enabled: widget.enabled,
-      label: current?.label ?? widget.hintText,
+      label: current?.label == null
+          ? (widget.hintText == null ? null : context.tr(widget.hintText!))
+          : context.tr(current!.label),
       child: InkWell(
         onTap: widget.enabled
             ? () =>
@@ -218,7 +221,7 @@ class _AleraDropdownFieldState<T> extends State<AleraDropdownField<T>> {
                 ],
                 Expanded(
                   child: Text(
-                    current?.label ?? widget.hintText ?? '',
+                    context.tr(current?.label ?? widget.hintText ?? ''),
                     maxLines: 1,
                     overflow: .ellipsis,
                     style: theme.textTheme.bodyMedium?.copyWith(

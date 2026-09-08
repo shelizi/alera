@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:flutter/material.dart';
 
@@ -29,14 +30,14 @@ class const AleraEmptyState({
               ],
               if (title case final title? when title.trim().isNotEmpty) ...[
                 Text(
-                  title,
+                  context.tr(title),
                   textAlign: .center,
                   style: theme.textTheme.titleMedium,
                 ),
                 const SizedBox(height: AleraTokens.space8),
               ],
               Text(
-                message,
+                context.tr(message),
                 textAlign: .center,
                 style: theme.textTheme.bodyMedium?.copyWith(
                   color: AleraTokens.foregroundMuted,

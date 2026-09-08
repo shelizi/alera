@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/forms/alera_clipboard_paste_action.dart';
 import 'package:alera/src/design_system/forms/alera_text_actions_scope.dart';
@@ -88,9 +89,9 @@ class const AleraTextField({
         minLines: minLines,
         maxLines: maxLines,
         decoration: InputDecoration(
-          labelText: labelText,
-          hintText: hintText,
-          errorText: errorText,
+          labelText: labelText == null ? null : context.tr(labelText!),
+          hintText: hintText == null ? null : context.tr(hintText!),
+          errorText: errorText == null ? null : context.tr(errorText!),
           prefixIcon: prefixIcon == null ? null : Icon(prefixIcon, size: 16),
           suffixIcon: suffix,
         ),
@@ -127,9 +128,9 @@ class const AleraTextField({
           isDense: true,
           filled: true,
           fillColor: fillColor ?? AleraTokens.surface,
-          labelText: labelText,
-          hintText: hintText,
-          errorText: errorText,
+          labelText: labelText == null ? null : context.tr(labelText!),
+          hintText: hintText == null ? null : context.tr(hintText!),
+          errorText: errorText == null ? null : context.tr(errorText!),
           hintStyle: theme.textTheme.bodySmall?.copyWith(
             color: AleraTokens.foregroundFaint,
           ),

@@ -11,7 +11,7 @@ class const _EmptyProjectsView({required final VoidCallback onAddProject})
       action: FilledButton.icon(
         onPressed: onAddProject,
         icon: const Icon(AleraIcons.add, size: 16),
-        label: const Text('Add Your First Project'),
+        label: Text(context.tr('Add Your First Project')),
       ),
     );
   }
@@ -38,7 +38,7 @@ class const _SidebarFooter({
               OutlinedButton.icon(
                 onPressed: onAddProject,
                 icon: const Icon(AleraIcons.newFolder),
-                label: const Text('Add Project'),
+                label: Text(context.tr('Add Project')),
               ),
               const Spacer(),
               _FooterIconButton(

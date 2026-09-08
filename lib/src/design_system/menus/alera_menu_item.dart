@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:flutter/material.dart';
@@ -68,14 +69,14 @@ class const AleraMenuItem({
                           crossAxisAlignment: .start,
                           children: <Widget>[
                             Text(
-                              label,
+                              context.tr(label),
                               overflow: .ellipsis,
                               maxLines: 1,
                               style: labelStyle,
                             ),
                             const SizedBox(height: AleraTokens.space2),
                             Text(
-                              subtitle!,
+                              context.tr(subtitle!),
                               overflow: .ellipsis,
                               maxLines: 1,
                               style: theme.textTheme.labelSmall?.copyWith(
@@ -85,7 +86,7 @@ class const AleraMenuItem({
                           ],
                         )
                       : Text(
-                          label,
+                          context.tr(label),
                           overflow: .ellipsis,
                           maxLines: 1,
                           style: labelStyle,

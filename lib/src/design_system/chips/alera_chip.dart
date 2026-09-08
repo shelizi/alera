@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:flutter/material.dart';
@@ -49,7 +50,7 @@ class _AleraChipState extends State<AleraChip> {
 
   Widget _buildStatic(ThemeData theme, {Color? background}) {
     final label = Text(
-      widget.label,
+      context.tr(widget.label),
       maxLines: 1,
       overflow: .ellipsis,
       style: theme.textTheme.labelSmall?.copyWith(
@@ -136,7 +137,7 @@ class _AleraChipState extends State<AleraChip> {
           mainAxisSize: .min,
           children: <Widget>[
             Text(
-              widget.label,
+              context.tr(widget.label),
               style: theme.textTheme.labelSmall?.copyWith(
                 color: AleraTokens.foreground,
                 fontWeight: .w500,
@@ -167,6 +168,6 @@ class _AleraChipState extends State<AleraChip> {
     if (tooltip == null || tooltip.isEmpty) {
       return child;
     }
-    return Tooltip(message: tooltip, child: child);
+    return Tooltip(message: context.tr(tooltip), child: child);
   }
 }

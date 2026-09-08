@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/buttons/alera_icon_button.dart';
 import 'package:alera/src/design_system/buttons/alera_segmented_button.dart';
@@ -63,7 +64,7 @@ class _AddProjectDialogState extends State<AddProjectDialog> {
   Future<void> _browseLocalFolder() async {
     try {
       final selected = await getDirectoryPath(
-        confirmButtonText: 'Select Folder',
+        confirmButtonText: context.tr('Select Folder'),
         canCreateDirectories: true,
       );
       if (!mounted || selected == null || selected.trim().isEmpty) {
@@ -83,7 +84,7 @@ class _AddProjectDialogState extends State<AddProjectDialog> {
   Future<void> _browseCloneParentFolder() async {
     try {
       final selected = await getDirectoryPath(
-        confirmButtonText: 'Select Parent Folder',
+        confirmButtonText: context.tr('Select Parent Folder'),
         canCreateDirectories: true,
       );
       if (!mounted || selected == null || selected.trim().isEmpty) {
@@ -215,7 +216,10 @@ class _AddProjectDialogState extends State<AddProjectDialog> {
                   color: AleraTokens.accent,
                 ),
                 const SizedBox(width: AleraTokens.space8),
-                Text('Add Project', style: theme.textTheme.titleLarge),
+                Text(
+                  context.tr('Add Project'),
+                  style: theme.textTheme.titleLarge,
+                ),
               ],
             ),
             const SizedBox(height: AleraTokens.space16),
@@ -226,23 +230,25 @@ class _AddProjectDialogState extends State<AddProjectDialog> {
                   crossAxisAlignment: .start,
                   children: <Widget>[
                     Text(
-                      'Choose an existing local folder or clone a Git repository from a URL.',
+                      context.tr(
+                        'Choose an existing local folder or clone a Git repository from a URL.',
+                      ),
                       style: theme.textTheme.bodySmall,
                     ),
                     const SizedBox(height: AleraTokens.space16),
                     AleraSegmentedButton<_AddProjectMode>(
                       selected: _mode,
                       onSelectionChanged: _selectMode,
-                      segments: const <ButtonSegment<_AddProjectMode>>[
+                      segments: <ButtonSegment<_AddProjectMode>>[
                         ButtonSegment<_AddProjectMode>(
                           value: .localFolder,
-                          icon: Icon(AleraIcons.folderOpen, size: 16),
-                          label: Text('Local Folder'),
+                          icon: const Icon(AleraIcons.folderOpen, size: 16),
+                          label: Text(context.tr('Local Folder')),
                         ),
                         ButtonSegment<_AddProjectMode>(
                           value: .cloneFromUrl,
-                          icon: Icon(AleraIcons.cloudDownload, size: 16),
-                          label: Text('Clone From URL'),
+                          icon: const Icon(AleraIcons.cloudDownload, size: 16),
+                          label: Text(context.tr('Clone From URL')),
                         ),
                       ],
                     ),
@@ -281,12 +287,12 @@ class _AddProjectDialogState extends State<AddProjectDialog> {
               children: <Widget>[
                 TextButton(
                   onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('Cancel'),
+                  child: Text(context.tr('Cancel')),
                 ),
                 const SizedBox(width: AleraTokens.space8),
                 FilledButton(
                   onPressed: _canSubmit ? _submit : null,
-                  child: const Text('Add Project'),
+                  child: Text(context.tr('Add Project')),
                 ),
               ],
             ),
@@ -312,7 +318,9 @@ class const _LocalFolderFields({
       crossAxisAlignment: .start,
       children: <Widget>[
         Text(
-          'Alera will detect whether the folder is a Git repository. Non-Git folders only get a primary workspace.',
+          context.tr(
+            'Alera will detect whether the folder is a Git repository. Non-Git folders only get a primary workspace.',
+          ),
           style: theme.textTheme.bodySmall?.copyWith(
             color: AleraTokens.foregroundMuted,
           ),
@@ -360,7 +368,9 @@ class const _CloneFromUrlFields({
       crossAxisAlignment: .start,
       children: <Widget>[
         Text(
-          'Alera will run git clone into the destination folder and register the cloned repository.',
+          context.tr(
+            'Alera will run git clone into the destination folder and register the cloned repository.',
+          ),
           style: theme.textTheme.bodySmall?.copyWith(
             color: AleraTokens.foregroundMuted,
           ),
@@ -433,7 +443,12 @@ class const AddProjectProgressDialog({super.key, required final String message})
               child: CircularProgressIndicator(strokeWidth: 2),
             ),
             const SizedBox(width: AleraTokens.space12),
-            Flexible(child: Text(message, style: theme.textTheme.bodyMedium)),
+            Flexible(
+              child: Text(
+                context.tr(message),
+                style: theme.textTheme.bodyMedium,
+              ),
+            ),
           ],
         ),
       ),

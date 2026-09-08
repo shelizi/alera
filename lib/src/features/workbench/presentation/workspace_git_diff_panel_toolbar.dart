@@ -54,7 +54,7 @@ class const _SourceControlToolbar({
             children: <Widget>[
               Expanded(
                 child: Text(
-                  'Source Control',
+                  context.tr('Source Control'),
                   maxLines: 1,
                   overflow: .ellipsis,
                   style: Theme.of(context).textTheme.titleSmall,
@@ -329,9 +329,11 @@ class _AiCommitMessageButtonState extends State<_AiCommitMessageButton> {
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
       child: Tooltip(
-        message: widget.generating
-            ? 'Stop generating commit message'
-            : 'Generate commit message with AI',
+        message: context.tr(
+          widget.generating
+              ? 'Stop generating commit message'
+              : 'Generate commit message with AI',
+        ),
         child: IconButton(
           onPressed: onPressed,
           visualDensity: .compact,
@@ -422,7 +424,7 @@ class const _PrimaryActionButton({
                           children: <Widget>[
                             Icon(icon, size: 15, color: AleraTokens.onAccent),
                             const SizedBox(width: AleraTokens.space8),
-                            Text(label, style: textStyle),
+                            Text(context.tr(label), style: textStyle),
                           ],
                         ),
                       ),
@@ -434,7 +436,7 @@ class const _PrimaryActionButton({
                     color: AleraTokens.onAccent.withValues(alpha: 0.18),
                   ),
                   Tooltip(
-                    message: 'Source Control Actions',
+                    message: context.tr('Source Control Actions'),
                     child: Builder(
                       builder: (context) {
                         return InkWell(

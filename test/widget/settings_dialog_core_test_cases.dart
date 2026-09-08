@@ -70,6 +70,26 @@ void _registerSettingsDialogCoreTests() {
     await tester.pump();
   }
 
+  testWidgets('renders core settings navigation in Traditional Chinese', (
+    tester,
+  ) async {
+    await _pumpSettingsDialog(tester, locale: const Locale('zh', 'TW'));
+
+    expect(find.text('設定'), findsOneWidget);
+    expect(find.text('應用程式'), findsWidgets);
+    expect(find.text('語言'), findsWidgets);
+    expect(find.text('應用程式語言'), findsOneWidget);
+    expect(find.text('跟隨系統'), findsOneWidget);
+    expect(find.text('偏好設定'), findsOneWidget);
+
+    await tester.enterText(find.byType(TextField).first, '語言');
+    await tester.pump();
+
+    expect(find.text('應用程式'), findsWidgets);
+    expect(find.text('應用程式語言'), findsOneWidget);
+    expect(find.text('終端機'), findsNothing);
+  });
+
   testWidgets('shows terminal settings and filters with search', (
     tester,
   ) async {

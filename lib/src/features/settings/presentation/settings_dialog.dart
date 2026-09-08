@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/providers.dart';
 import 'package:alera/src/features/configuration_sync/presentation/configuration_sync_pane.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
@@ -400,7 +401,7 @@ class _SettingsDialogState extends ConsumerState<SettingsDialog> {
     ];
 
     final visibleSections = sections
-        .where((section) => section.matches(_query))
+        .where((section) => _matchesLocalizedSection(context, section, _query))
         .toList();
 
     final activeSection = visibleSections.isEmpty
@@ -429,7 +430,11 @@ class _SettingsDialogState extends ConsumerState<SettingsDialog> {
                 ? SettingsContent(
                     section: activeSection,
                     groupKeys: _keysFor(activeSection.id),
-                    scrollToGroupId: activeSection.firstMatchingGroupId(_query),
+                    scrollToGroupId: _firstLocalizedMatchingGroupId(
+                      context,
+                      activeSection,
+                      _query,
+                    ),
                     onClose: () => Navigator.of(context).pop(),
                   )
                 : NoSettingsResults(onClose: () => Navigator.of(context).pop()),
@@ -438,6 +443,58 @@ class _SettingsDialogState extends ConsumerState<SettingsDialog> {
       ),
     );
   }
+}
+
+bool _matchesLocalizedSection(
+  BuildContext context,
+  SettingsSectionData section,
+  String query,
+) {
+  if (section.matches(query)) {
+    return true;
+  }
+  if (query.isEmpty) {
+    return true;
+  }
+  final localizedValues = <String>[
+    context.tr(section.title),
+    context.tr(section.description),
+    for (final group in section.groups) context.tr(group.title),
+    for (final entry in section.entries) ...<String>[
+      context.tr(entry.title),
+      if (entry.description != null) context.tr(entry.description!),
+    ],
+  ];
+  return localizedValues.any((value) => value.toLowerCase().contains(query));
+}
+
+String? _firstLocalizedMatchingGroupId(
+  BuildContext context,
+  SettingsSectionData section,
+  String query,
+) {
+  final direct = section.firstMatchingGroupId(query);
+  if (direct != null || query.isEmpty) {
+    return direct;
+  }
+  for (final group in section.groups) {
+    if (context.tr(group.title).toLowerCase().contains(query)) {
+      return group.id;
+    }
+    for (final entry in section.entries) {
+      if (entry.groupId != group.id) {
+        continue;
+      }
+      final values = <String>[
+        context.tr(entry.title),
+        if (entry.description != null) context.tr(entry.description!),
+      ];
+      if (values.any((value) => value.toLowerCase().contains(query))) {
+        return group.id;
+      }
+    }
+  }
+  return null;
 }
 
 List<String> _mergeFontSuggestions(List<String> fonts) {

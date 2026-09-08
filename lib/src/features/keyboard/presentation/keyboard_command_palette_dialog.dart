@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/providers.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/forms/alera_text_field.dart';
@@ -49,6 +50,15 @@ class _KeyboardCommandPaletteDialogState
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _matches = filterKeyboardCommandPalette(
+      _queryController.text,
+      localize: context.tr,
+    );
+  }
+
+  @override
   void dispose() {
     _queryController.dispose();
     _queryFocusNode.dispose();
@@ -57,7 +67,7 @@ class _KeyboardCommandPaletteDialogState
 
   void _updateQuery(String query) {
     setState(() {
-      _matches = filterKeyboardCommandPalette(query);
+      _matches = filterKeyboardCommandPalette(query, localize: context.tr);
       _selectedIndex = 0;
     });
   }
@@ -125,7 +135,10 @@ class _KeyboardCommandPaletteDialogState
             child: Column(
               crossAxisAlignment: .stretch,
               children: <Widget>[
-                Text('Command Palette', style: theme.textTheme.titleMedium),
+                Text(
+                  context.tr('Command Palette'),
+                  style: theme.textTheme.titleMedium,
+                ),
                 const SizedBox(height: AleraTokens.space16),
                 AleraTextField(
                   controller: _queryController,
@@ -140,7 +153,9 @@ class _KeyboardCommandPaletteDialogState
                 Expanded(child: _buildResults(theme, resolver)),
                 const Divider(height: AleraTokens.space20),
                 Text(
-                  'Use Up and Down to navigate, Enter to run, or Escape to close.',
+                  context.tr(
+                    'Use Up and Down to navigate, Enter to run, or Escape to close.',
+                  ),
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: AleraTokens.foregroundFaint,
                   ),
@@ -159,8 +174,8 @@ class _KeyboardCommandPaletteDialogState
       return Center(
         child: Text(
           query.isEmpty
-              ? 'No commands are available.'
-              : 'No commands match "$query".',
+              ? context.tr('No commands are available.')
+              : '${context.tr('No commands match')} "$query".',
           style: theme.textTheme.bodyMedium?.copyWith(
             color: AleraTokens.foregroundMuted,
           ),
@@ -177,7 +192,7 @@ class _KeyboardCommandPaletteDialogState
         final selected = index == _selectedIndex;
         final chords = resolver.effectiveChords(definition.id);
         final shortcut = chords.isEmpty
-            ? 'No shortcut'
+            ? context.tr('No shortcut')
             : chords
                   .map(
                     (chord) => chord.format(isMacOS: resolver.platform.isMacOS),
@@ -209,12 +224,12 @@ class _KeyboardCommandPaletteDialogState
                       crossAxisAlignment: .start,
                       children: <Widget>[
                         Text(
-                          definition.label,
+                          context.tr(definition.label),
                           style: theme.textTheme.bodyMedium,
                         ),
                         const SizedBox(height: AleraTokens.space2),
                         Text(
-                          definition.description,
+                          context.tr(definition.description),
                           maxLines: 1,
                           overflow: .ellipsis,
                           style: theme.textTheme.bodySmall?.copyWith(

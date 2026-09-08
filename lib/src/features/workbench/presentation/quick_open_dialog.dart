@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/forms/alera_text_field.dart';
 import 'package:alera/src/design_system/icons/alera_file_icon.dart';
@@ -329,7 +330,10 @@ class _QuickOpenDialogState extends ConsumerState<QuickOpenDialog> {
               children: <Widget>[
                 Row(
                   children: <Widget>[
-                    Text('Quick Open', style: theme.textTheme.titleMedium),
+                    Text(
+                      context.tr('Quick Open'),
+                      style: theme.textTheme.titleMedium,
+                    ),
                     const SizedBox(width: AleraTokens.space12),
                     if (workspace != null)
                       Expanded(
@@ -358,7 +362,9 @@ class _QuickOpenDialogState extends ConsumerState<QuickOpenDialog> {
                 Expanded(child: _buildResults(theme)),
                 const Divider(height: AleraTokens.space20),
                 Text(
-                  'Use Up and Down to navigate, Enter to open, or Escape to close.',
+                  context.tr(
+                    'Use Up and Down to navigate, Enter to open, or Escape to close.',
+                  ),
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: AleraTokens.foregroundFaint,
                   ),
@@ -373,13 +379,13 @@ class _QuickOpenDialogState extends ConsumerState<QuickOpenDialog> {
 
   Widget _buildResults(ThemeData theme) {
     if (_loading) {
-      return const Center(
+      return Center(
         child: Column(
           mainAxisSize: .min,
           children: <Widget>[
-            CircularProgressIndicator(),
-            SizedBox(height: AleraTokens.space12),
-            Text('Loading workspace files...'),
+            const CircularProgressIndicator(),
+            const SizedBox(height: AleraTokens.space12),
+            Text(context.tr('Loading workspace files...')),
           ],
         ),
       );
@@ -394,7 +400,7 @@ class _QuickOpenDialogState extends ConsumerState<QuickOpenDialog> {
               Icon(AleraIcons.error, color: AleraTokens.error),
               const SizedBox(height: AleraTokens.space8),
               Text(
-                'Could not load workspace files.',
+                context.tr('Could not load workspace files.'),
                 style: theme.textTheme.bodyMedium,
                 textAlign: .center,
               ),
@@ -418,8 +424,8 @@ class _QuickOpenDialogState extends ConsumerState<QuickOpenDialog> {
       return Center(
         child: Text(
           query.isEmpty
-              ? 'No files are available in this workspace.'
-              : 'No files match "$query".',
+              ? context.tr('No files are available in this workspace.')
+              : '${context.tr('No files match')} "$query".',
           style: theme.textTheme.bodyMedium?.copyWith(
             color: AleraTokens.foregroundMuted,
           ),

@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/layout/alera_dialog.dart';
 import 'package:flutter/material.dart';
@@ -34,10 +35,10 @@ class const AleraConfirmDialog({
           mainAxisSize: .min,
           crossAxisAlignment: .start,
           children: <Widget>[
-            Text(title, style: theme.textTheme.titleMedium),
+            Text(context.tr(title), style: theme.textTheme.titleMedium),
             const SizedBox(height: AleraTokens.space12),
             Text(
-              message,
+              context.tr(message),
               style: theme.textTheme.bodyMedium?.copyWith(
                 color: AleraTokens.foregroundMuted,
               ),
@@ -48,7 +49,11 @@ class const AleraConfirmDialog({
                 Expanded(
                   child: TextButton(
                     onPressed: () => Navigator.of(context).pop(false),
-                    child: Text(cancelLabel, maxLines: 1, overflow: .ellipsis),
+                    child: Text(
+                      context.tr(cancelLabel),
+                      maxLines: 1,
+                      overflow: .ellipsis,
+                    ),
                   ),
                 ),
                 const SizedBox(width: AleraTokens.space8),
@@ -58,7 +63,11 @@ class const AleraConfirmDialog({
                         ? () => Navigator.of(context).pop(true)
                         : null,
                     style: confirmStyle,
-                    child: Text(confirmLabel, maxLines: 1, overflow: .ellipsis),
+                    child: Text(
+                      context.tr(confirmLabel),
+                      maxLines: 1,
+                      overflow: .ellipsis,
+                    ),
                   ),
                 ),
               ],

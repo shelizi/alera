@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/surfaces/alera_panel.dart';
 import 'package:flutter/material.dart';
@@ -25,7 +26,7 @@ class const AleraSettingsGroup({
             crossAxisAlignment: .start,
             children: <Widget>[
               Text(
-                title,
+                context.tr(title),
                 style: theme.textTheme.titleSmall?.copyWith(
                   color: AleraTokens.foreground,
                   fontWeight: .w600,
@@ -34,7 +35,7 @@ class const AleraSettingsGroup({
               if (description != null) ...<Widget>[
                 const SizedBox(height: AleraTokens.space4),
                 Text(
-                  description!,
+                  context.tr(description!),
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: AleraTokens.foregroundMuted,
                   ),

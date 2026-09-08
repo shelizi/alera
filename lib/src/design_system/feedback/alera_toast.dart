@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:flutter/material.dart';
 
 enum AleraToastTone { success, error, info }
@@ -26,7 +27,7 @@ abstract final class AleraToast {
       return;
     }
 
-    publish(message: message, tone: tone, duration: duration);
+    publish(message: context.tr(message), tone: tone, duration: duration);
   }
 
   static void publish({

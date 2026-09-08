@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:flutter/material.dart';
 
@@ -30,7 +31,7 @@ class const AleraSectionHeader({
           ],
           Expanded(
             child: Text(
-              label.toUpperCase(),
+              context.tr(label).toUpperCase(),
               style: theme.textTheme.labelSmall?.copyWith(
                 color: AleraTokens.foregroundFaint,
                 letterSpacing: 0.6,

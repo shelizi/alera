@@ -19,7 +19,10 @@ class const _ExplorerToolbar({
         padding: const EdgeInsets.symmetric(horizontal: AleraTokens.space8),
         child: Row(
           children: <Widget>[
-            Text(title, style: Theme.of(context).textTheme.titleSmall),
+            Text(
+              context.tr(title),
+              style: Theme.of(context).textTheme.titleSmall,
+            ),
             const Spacer(),
             AleraIconButton(
               tooltip: 'New file',
@@ -119,11 +122,11 @@ class const _ExplorerRow({
                     child: _GitStatusIndicator(status: status),
                   ),
                 if (sourceControlRoot)
-                  const Padding(
-                    padding: EdgeInsets.only(left: AleraTokens.space8),
+                  Padding(
+                    padding: const EdgeInsets.only(left: AleraTokens.space8),
                     child: Tooltip(
-                      message: 'Source control root',
-                      child: Icon(
+                      message: context.tr('Source control root'),
+                      child: const Icon(
                         AleraIcons.gitBranch,
                         size: 14,
                         color: AleraTokens.foregroundMuted,
@@ -199,7 +202,7 @@ class _ExplorerNameDialogState extends State<_ExplorerNameDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: Text(widget.title),
+      title: Text(context.tr(widget.title)),
       content: AleraTextField(
         controller: _controller,
         labelText: widget.label,
@@ -209,11 +212,11 @@ class _ExplorerNameDialogState extends State<_ExplorerNameDialog> {
       actions: <Widget>[
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Cancel'),
+          child: Text(context.tr('Cancel')),
         ),
         FilledButton(
           onPressed: () => Navigator.of(context).pop(_controller.text),
-          child: const Text('Create'),
+          child: Text(context.tr('Create')),
         ),
       ],
     );

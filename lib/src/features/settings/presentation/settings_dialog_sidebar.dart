@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/badges/alera_badge.dart';
 import 'package:alera/src/design_system/feedback/alera_empty_state.dart';
@@ -38,7 +39,7 @@ class const SettingsSidebar({
                 child: Align(
                   alignment: Alignment.centerLeft,
                   child: Text(
-                    'Settings',
+                    context.tr('Settings'),
                     style: theme.textTheme.titleSmall?.copyWith(
                       color: AleraTokens.foreground,
                       fontWeight: .w600,
@@ -165,7 +166,7 @@ class const SettingsNavItem({
               const SizedBox(width: AleraTokens.space8),
               Expanded(
                 child: Text(
-                  section.title,
+                  context.tr(section.title),
                   style: theme.textTheme.bodyMedium?.copyWith(
                     color: AleraTokens.foreground,
                     fontWeight: .w500,

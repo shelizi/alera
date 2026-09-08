@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/buttons/alera_icon_button.dart';
 import 'package:alera/src/design_system/chips/alera_chip.dart';
@@ -94,7 +95,7 @@ class _SettingsContentState extends State<SettingsContent> {
                   const SizedBox(width: AleraTokens.space8),
                   Expanded(
                     child: Text(
-                      section.title,
+                      context.tr(section.title),
                       style: theme.textTheme.titleLarge,
                     ),
                   ),
@@ -106,7 +107,9 @@ class _SettingsContentState extends State<SettingsContent> {
                         await Future.pause(.zero);
                         await section.onReset!();
                       },
-                      child: Text('Reset ${section.title}'),
+                      child: Text(
+                        '${context.tr('Reset')} ${context.tr(section.title)}',
+                      ),
                     ),
                   ],
                   const SizedBox(width: AleraTokens.space4),
@@ -120,7 +123,7 @@ class _SettingsContentState extends State<SettingsContent> {
               ),
               const SizedBox(height: AleraTokens.space4),
               Text(
-                section.description,
+                context.tr(section.description),
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: AleraTokens.foregroundMuted,
                 ),

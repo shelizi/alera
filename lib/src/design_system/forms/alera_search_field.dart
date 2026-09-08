@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/forms/alera_text_field.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
@@ -93,7 +94,7 @@ class _AleraSearchFieldState extends State<AleraSearchField> {
     final hasText = _controller.text.isNotEmpty;
     final clearButton = hasText
         ? IconButton(
-            tooltip: 'Clear',
+            tooltip: context.tr('Clear'),
             icon: const Icon(
               AleraIcons.close,
               size: 12,
@@ -116,7 +117,7 @@ class _AleraSearchFieldState extends State<AleraSearchField> {
         focusNode: widget.focusNode,
         autofocus: widget.autofocus,
         dense: widget.dense,
-        hintText: widget.hintText,
+        hintText: context.tr(widget.hintText),
         prefixIcon: AleraIcons.search,
         suffix: clearButton,
         onChanged: _handleChange,

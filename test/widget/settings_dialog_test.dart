@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/providers.dart';
 import 'package:alera/src/app/theme/alera_dark_theme.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
@@ -36,6 +37,7 @@ import 'package:alera/src/design_system/menus/alera_dropdown_entry.dart';
 import 'package:file_selector_platform_interface/file_selector_platform_interface.dart';
 import 'package:flutter_colorpicker/flutter_colorpicker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
@@ -61,6 +63,7 @@ Future<ProviderContainer> _pumpSettingsDialog(
   String initialSectionId = 'application',
   String? initialProjectId,
   List<dynamic> extraOverrides = const <dynamic>[],
+  Locale? locale,
 }) async {
   await tester.binding.setSurfaceSize(surfaceSize);
   addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -96,6 +99,12 @@ Future<ProviderContainer> _pumpSettingsDialog(
       container: container,
       child: MaterialApp(
         theme: buildAleraDarkTheme(),
+        locale: locale,
+        supportedLocales: supportedAleraLocales,
+        localizationsDelegates: const <LocalizationsDelegate<dynamic>>[
+          AleraLocalizationsDelegate(),
+          ...GlobalMaterialLocalizations.delegates,
+        ],
         home: SettingsDialog(
           initialSectionId: initialSectionId,
           initialProjectId: initialProjectId,

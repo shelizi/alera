@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/buttons/alera_icon_button.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
@@ -18,7 +19,7 @@ class const AleraDialogHeader({
       children: <Widget>[
         Expanded(
           child: Text(
-            title,
+            context.tr(title),
             style: theme.textTheme.titleSmall?.copyWith(
               color: AleraTokens.foreground,
               fontWeight: .w600,

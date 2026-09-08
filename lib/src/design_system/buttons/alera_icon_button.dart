@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:flutter/material.dart';
 
@@ -23,7 +24,7 @@ class const AleraIconButton({
   @override
   Widget build(BuildContext context) {
     return IconButton(
-      tooltip: tooltip,
+      tooltip: tooltip == null ? null : context.tr(tooltip!),
       onPressed: onPressed,
       mouseCursor: onPressed == null
           ? SystemMouseCursors.basic
