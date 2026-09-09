@@ -348,6 +348,35 @@ void main() {
     expect(find.byType(AleraMenuItem), findsNothing);
   });
 
+  testWidgets('dropdown entry can preserve a dynamic label in zh-TW', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _wrap(
+        AleraDropdownField<String>(
+          value: 'settings',
+          entries: const <AleraDropdownFieldEntry<String>>[
+            AleraDropdownFieldEntry<String>(
+              value: 'settings',
+              label: 'Settings',
+              localizeLabel: false,
+            ),
+          ],
+          filterable: true,
+          onChanged: (_) {},
+        ),
+        locale: const Locale('zh', 'TW'),
+      ),
+    );
+
+    expect(find.text('Settings'), findsOneWidget);
+    expect(find.text('設定'), findsNothing);
+    await tester.tap(find.text('Settings'));
+    await tester.pump();
+    expect(find.text('Settings'), findsNWidgets(2));
+    expect(find.text('設定'), findsNothing);
+  });
+
   testWidgets('menu item can preserve a dynamic label in zh-TW', (
     tester,
   ) async {

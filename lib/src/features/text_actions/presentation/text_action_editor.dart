@@ -112,6 +112,7 @@ class const TextActionEditor({
                       AleraDropdownFieldEntry<AiAssistAgent?>(
                         value: candidate,
                         label: candidate.label,
+                        localizeLabel: false,
                       ),
                   ],
                   onChanged: onAgentChanged,
@@ -133,6 +134,7 @@ class const TextActionEditor({
                         label: candidate.id.isEmpty
                             ? candidate.label
                             : candidate.label,
+                        localizeLabel: false,
                       ),
                   ],
                   onChanged: onModelChanged,
@@ -165,7 +167,7 @@ class const TextActionEditor({
           if (error case final error?) ...<Widget>[
             const SizedBox(height: AleraTokens.space12),
             Text(
-              error,
+              context.tr(error),
               style: Theme.of(context).textTheme.bodySmall
                   ?.copyWith(color: AleraTokens.error),
             ),

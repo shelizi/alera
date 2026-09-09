@@ -10,6 +10,7 @@ class const AleraDropdownFieldEntry<T>({
   required final T value,
   required final String label,
   final Widget? leading,
+  final bool localizeLabel = true,
   final bool enabled = true,
 });
 
@@ -75,6 +76,7 @@ class _AleraDropdownFieldState<T> extends State<AleraDropdownField<T>> {
             AleraDropdownEntry<int>(
               value: index,
               label: entry.label,
+              localizeLabel: entry.localizeLabel,
               leading: entry.leading,
               selected: entry.value == widget.value,
               enabled: entry.enabled,
@@ -101,6 +103,7 @@ class _AleraDropdownFieldState<T> extends State<AleraDropdownField<T>> {
           AleraDropdownEntry<T>(
             value: entry.value,
             label: entry.label,
+            localizeLabel: entry.localizeLabel,
             leading: entry.leading,
             selected: entry.value == widget.value,
             enabled: entry.enabled,
@@ -180,6 +183,14 @@ class _AleraDropdownFieldState<T> extends State<AleraDropdownField<T>> {
         break;
       }
     }
+    final currentLabel = current == null
+        ? null
+        : current.localizeLabel
+        ? context.tr(current.label)
+        : current.label;
+    final hintLabel = widget.hintText == null
+        ? null
+        : context.tr(widget.hintText!);
     final labelColor = !widget.enabled
         ? AleraTokens.foregroundFaint
         : current == null
@@ -189,9 +200,7 @@ class _AleraDropdownFieldState<T> extends State<AleraDropdownField<T>> {
     final field = Semantics(
       button: true,
       enabled: widget.enabled,
-      label: current?.label == null
-          ? (widget.hintText == null ? null : context.tr(widget.hintText!))
-          : context.tr(current!.label),
+      label: currentLabel ?? hintLabel,
       child: InkWell(
         onTap: widget.enabled
             ? () =>
@@ -221,7 +230,7 @@ class _AleraDropdownFieldState<T> extends State<AleraDropdownField<T>> {
                 ],
                 Expanded(
                   child: Text(
-                    context.tr(current?.label ?? widget.hintText ?? ''),
+                    currentLabel ?? hintLabel ?? '',
                     maxLines: 1,
                     overflow: .ellipsis,
                     style: theme.textTheme.bodyMedium?.copyWith(

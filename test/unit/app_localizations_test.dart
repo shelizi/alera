@@ -319,6 +319,18 @@ void main() {
       expect(l10n.translate('Zed is available.'), 'Zed 可使用。');
       expect(l10n.translate('Zed is available: 0.210.0'), 'Zed 可使用：0.210.0');
       expect(l10n.translate('Zed is not available.'), 'Zed 無法使用。');
+      expect(l10n.translate('Action'), '動作');
+      expect(l10n.translate('Enabled'), '已啟用');
+      expect(l10n.translate('Reasoning'), '推理');
+      expect(l10n.translate('Global (Codex)'), '全域（Codex）');
+      expect(l10n.translate('Running Settings.'), '正在執行「Settings」。');
+      expect(l10n.translate('Action name is required.'), '動作名稱為必填。');
+      expect(l10n.translate('Text action applied.'), '已套用文字操作。');
+      expect(l10n.translate('No matching options'), '沒有符合的選項');
+      expect(
+        l10n.translate('Text action failed: provider unavailable'),
+        '文字操作失敗：provider unavailable',
+      );
       expect(
         l10n.translate('Describe the replacement to generate.'),
         '描述要產生的替換內容。',

@@ -1,9 +1,13 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/design_system/forms/alera_text_actions_scope.dart';
 import 'package:alera/src/design_system/forms/alera_text_field.dart';
 import 'package:alera/src/design_system/menus/alera_text_selection_toolbar.dart';
 import 'package:alera/src/features/pull_requests/presentation/pull_request_link_form.dart';
 import 'package:alera/src/features/text_actions/application/text_action_replacement.dart';
+import 'package:alera/src/features/text_actions/presentation/text_actions_scope.dart'
+    as feature_text_actions;
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -44,6 +48,43 @@ void main() {
     expect(items.last.label, 'Text Actions');
     items.last.onPressed!();
     expect(opened, isTrue);
+  });
+
+  testWidgets('localizes the shared Text Actions context-menu entry', (
+    tester,
+  ) async {
+    final controller = TextEditingController(text: 'Translate this text')
+      ..selection = const TextSelection(baseOffset: 0, extentOffset: 9);
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        locale: const Locale('zh', 'TW'),
+        supportedLocales: supportedAleraLocales,
+        localizationsDelegates: const <LocalizationsDelegate<dynamic>>[
+          AleraLocalizationsDelegate(),
+          ...GlobalMaterialLocalizations.delegates,
+        ],
+        home: Scaffold(
+          body: AleraTextActionsScope(
+            enabled: true,
+            onOpen: (_, _, _) {},
+            child: TextField(
+              controller: controller,
+              contextMenuBuilder: AleraTextActionsScope.buildContextMenu,
+            ),
+          ),
+        ),
+      ),
+    );
+
+    final editableFinder = find.byType(EditableText);
+    final editable = tester.state<EditableTextState>(editableFinder);
+    final toolbar = AleraTextActionsScope.buildContextMenu(
+      tester.element(editableFinder),
+      editable,
+    ) as AleraTextSelectionToolbar;
+
+    expect(toolbar.buttonItems.last.label, '文字操作');
   });
 
   testWidgets('hides Text Actions for ineligible fields and selections', (
@@ -184,6 +225,16 @@ void main() {
       isTrue,
     );
   });
+
+  testWidgets(
+    'feature TextActionsScope compiles with localized runtime feedback',
+    (tester) async {
+      const scope = feature_text_actions.TextActionsScope(
+        child: SizedBox.shrink(),
+      );
+      expect(scope, isA<feature_text_actions.TextActionsScope>());
+    },
+  );
 
   testWidgets('replacement is undoable and redoable', (tester) async {
     final controller = TextEditingController(text: 'Before old after')

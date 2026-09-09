@@ -318,6 +318,22 @@ class AleraLocalizations {
       return '執行環境目前有 $details。';
     }
 
+    final globalValue = RegExp(r'^Global \((.+)\)$').firstMatch(source);
+    if (globalValue != null) {
+      final value = globalValue.group(1)!;
+      final translatedValue = _traditionalChinese[value] ?? value;
+      return '全域（$translatedValue）';
+    }
+    final runningTextAction = RegExp(r'^Running (.+)\.$').firstMatch(source);
+    if (runningTextAction != null) {
+      return '正在執行「${runningTextAction.group(1)}」。';
+    }
+    final textActionFailed = RegExp(r'^Text action failed: (.+)$')
+        .firstMatch(source);
+    if (textActionFailed != null) {
+      return '文字操作失敗：${textActionFailed.group(1)}';
+    }
+
     final zedAvailable = RegExp(r'^Zed is available(?:: (.+))?\.?$')
         .firstMatch(source);
     if (zedAvailable != null) {
@@ -1524,6 +1540,23 @@ class AleraLocalizations {
     'Inherit the global AI Assist agent by default.': '預設繼承全域 AI Assist Agent。',
     'Inherit the selected model unless overridden.': '除非覆寫，否則繼承目前選取的模型。',
     'Reasoning effort for the effective model.': '設定實際使用模型的推理強度。',
+    'Action': '動作',
+    'Enabled': '已啟用',
+    'Reasoning': '推理',
+    'No text actions': '尚無文字操作',
+    'Select a text action': '選擇文字操作',
+    'Delete Text Action': '刪除文字操作',
+    'Action ID is required.': '動作 ID 為必填。',
+    'Action name is required.': '動作名稱為必填。',
+    'Action prompt is required.': '動作提示詞為必填。',
+    'Action IDs must be unique.': '動作 ID 不可重複。',
+    'Action names must be unique.': '動作名稱不可重複。',
+    'Text changed while the action was running.': '執行動作期間文字已變更。',
+    'Text action returned no replacement text.': '文字操作未回傳可替換的文字。',
+    'Text action could not update this field.': '文字操作無法更新此欄位。',
+    'Text action applied.': '已套用文字操作。',
+    'Text action was canceled.': '已取消文字操作。',
+    'No matching options': '沒有符合的選項',
   };
 }
 
