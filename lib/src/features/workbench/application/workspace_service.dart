@@ -60,6 +60,11 @@ abstract interface class ManagedWorkspaceRuntime {
     String? name,
   });
 
+  Future<Workspace> switchWorkspaceBranch({
+    required Workspace workspace,
+    required String branch,
+  });
+
   Future<void> removeWorkspace({
     required Workspace workspace,
     bool? deleteBranch,
@@ -164,6 +169,94 @@ class WorkspaceService._(
     final next = workspace.copyWith(name: trimmedName, updatedAt: _now());
     await _repository.upsertWorkspace(next);
     return next;
+  }
+
+  Future<Workspace> switchWorkspaceBranch({
+    required Project project,
+    required Workspace workspace,
+    required String branch,
+  }) async {
+    if (!project.supportsLinkedWorkspaces) {
+      throw WorkspaceException(
+        'Branch switching requires a Git repository project',
+      );
+    }
+    if (workspace.projectId != project.id) {
+      throw WorkspaceException(
+        'Workspace does not belong to project ${project.id}',
+      );
+    }
+    final targetBranch = branch.trim();
+    if (targetBranch.isEmpty) {
+      throw WorkspaceException('Branch name is required');
+    }
+    await _validateBranchName(targetBranch);
+    if (workspace.branch == targetBranch) {
+      return workspace;
+    }
+    await _ensureTargetBranchExists(project, targetBranch);
+    final workspaces = await _repository.listWorkspaces(project.id);
+    if (workspaces.any(
+      (candidate) =>
+          candidate.id != workspace.id &&
+          candidate.isActive &&
+          candidate.branch == targetBranch,
+    )) {
+      throw WorkspaceException(
+        'A workspace for branch "$targetBranch" already exists',
+      );
+    }
+
+    final managedRuntime = _managedRuntime;
+    if (managedRuntime != null) {
+      return managedRuntime.switchWorkspaceBranch(
+        workspace: workspace,
+        branch: targetBranch,
+      );
+    }
+
+    final previousBranch = workspace.branch?.trim();
+    try {
+      await _gitBackend.checkoutBranch(
+        path: workspace.path,
+        branch: targetBranch,
+      );
+    } on GitException catch (error) {
+      throw WorkspaceException('git checkout failed', stderr: error.context);
+    }
+
+    final next = workspace.copyWith(
+      branch: targetBranch,
+      sourceBranch: null,
+      // Once a linked workspace moves away from the branch Alera created for
+      // it, that checkout is now borrowing an existing branch. Never let later
+      // cleanup delete that branch as though Alera owned it.
+      reusesExistingBranch: workspace.isMain ? false : true,
+      updatedAt: _now(),
+    );
+    try {
+      return await _repository.upsertWorkspace(next);
+    } catch (error) {
+      if (previousBranch != null &&
+          previousBranch.isNotEmpty &&
+          previousBranch != 'HEAD' &&
+          previousBranch != targetBranch) {
+        try {
+          await _gitBackend.checkoutBranch(
+            path: workspace.path,
+            branch: previousBranch,
+          );
+        } on GitException {
+          // Keep the original persistence failure. The caller will refresh the
+          // runtime snapshot and surface the inconsistent checkout if rollback
+          // itself could not be completed.
+        }
+      }
+      throw WorkspaceException(
+        'Could not persist workspace branch switch',
+        stderr: error.toString(),
+      );
+    }
   }
 
   Future<WorkspaceCreationResult> createLinkedWorkspace({

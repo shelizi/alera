@@ -1,6 +1,9 @@
 use serde_json::Value;
 
-use crate::managed_workspace::{ManagedWorkspaceCreateRequest, ManagedWorkspaceRemoveRequest};
+use crate::managed_workspace::{
+    ManagedWorkspaceCreateRequest, ManagedWorkspaceRemoveRequest,
+    ManagedWorkspaceSwitchBranchRequest,
+};
 use crate::terminal_host::host_error::{HostError, HostResult};
 
 use super::request_payloads::parse_payload;
@@ -123,6 +126,17 @@ impl ServerActor {
                         .get("closeSessions")
                         .and_then(Value::as_bool)
                         .unwrap_or(false),
+                );
+                Ok(true)
+            }
+            "workspace.switchBranch" => {
+                self.require_auth(client_id)?;
+                self.require_request_allowed(client_id, request_type)?;
+                let request: ManagedWorkspaceSwitchBranchRequest = parse_payload(payload)?;
+                self.start_runtime_mutation(
+                    client_id,
+                    request_id,
+                    RuntimeMutationRequest::SwitchWorkspaceBranch { request },
                 );
                 Ok(true)
             }

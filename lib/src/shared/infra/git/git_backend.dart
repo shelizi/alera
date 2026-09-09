@@ -30,6 +30,11 @@ abstract interface class GitBackend {
     required String branch,
   });
 
+  /// Makes an existing local [branch] active for the checkout at [path].
+  /// Implementations must reject unsafe switches rather than discarding local
+  /// changes or stealing a branch that belongs to another worktree.
+  Future<void> checkoutBranch({required String path, required String branch});
+
   /// Whether a local branch named [branch] exists in [repoPath].
   Future<bool> branchExists(String repoPath, String branch);
 

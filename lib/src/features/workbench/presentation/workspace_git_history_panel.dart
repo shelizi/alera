@@ -39,6 +39,7 @@ class const _GitHistoryPanel({
   onOpenCommitFile,
   required final Future<void> Function(String text, String label)
   onCopyCommitText,
+  final Future<void> Function(String branch)? onSwitchBranch,
 }) extends StatefulWidget {
   @override
   State<_GitHistoryPanel> createState() => _GitHistoryPanelState();
@@ -155,6 +156,9 @@ class _GitHistoryPanelState extends State<_GitHistoryPanel> {
                   onOpenActions: boundary
                       ? null
                       : (context) => _openActions(context, item),
+                  onOpenRefActions: widget.onSwitchBranch == null
+                      ? null
+                      : _openRefActions,
                 ),
                 if (expanded)
                   _CommitFiles(
@@ -228,6 +232,43 @@ class _GitHistoryPanelState extends State<_GitHistoryPanel> {
             });
           },
         );
+  }
+
+  Future<void> _openRefActions(
+    GitHistoryItemRef itemRef,
+    Offset globalPosition,
+  ) async {
+    final switchBranch = widget.onSwitchBranch;
+    final currentRef = widget.state.result?.currentRef;
+    if (switchBranch == null ||
+        !itemRef.id.startsWith('refs/heads/') ||
+        currentRef?.id == itemRef.id) {
+      return;
+    }
+    final overlay = Navigator.of(context).overlay?.context.findRenderObject();
+    if (overlay is! RenderBox) {
+      return;
+    }
+    final position = overlay.globalToLocal(globalPosition);
+    final action = await showMenu<_GitRefAction>(
+      context: context,
+      position: .fromLTRB(
+        position.dx,
+        position.dy,
+        overlay.size.width - position.dx,
+        overlay.size.height - position.dy,
+      ),
+      items: const <PopupMenuEntry<_GitRefAction>>[
+        AleraDropdownEntry<_GitRefAction>(
+          value: .switchBranch,
+          label: 'Switch to Branch',
+          leading: Icon(AleraIcons.gitBranch, size: 16),
+        ),
+      ],
+    );
+    if (action == _GitRefAction.switchBranch) {
+      await switchBranch(itemRef.name);
+    }
   }
 
   Future<void> _openActions(BuildContext context, GitHistoryItem item) async {
@@ -386,6 +427,8 @@ class _RefreshCommitsButtonState extends State<_RefreshCommitsButton>
 }
 
 enum _CommitAction { copyHash, copyMessage }
+
+enum _GitRefAction { switchBranch }
 
 class const _HistoryResizeHandle({required final ValueChanged<double> onResize})
     extends StatefulWidget {

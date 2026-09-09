@@ -64,6 +64,7 @@ class const WorkspaceGitDiffPanel({
   required final ValueChanged<GitDiffGroupMode> onGroupModeChanged,
   required final OpenGitDiffTabCallback onOpenGitDiff,
   required final OpenGitCommitDiffTabCallback onOpenGitCommitDiff,
+  final Future<void> Function(String branch)? onSwitchBranch,
   final ValueChanged<String>? onOpenFile,
   final ValueChanged<String>? onRevealInExplorer,
   final VoidCallback? onClearSourceControlRoot,
@@ -252,6 +253,9 @@ class _WorkspaceGitDiffPanelState extends ConsumerState<WorkspaceGitDiffPanel> {
                 onOpenCommit: _openCommitDiff,
                 onOpenCommitFile: _openCommitFile,
                 onCopyCommitText: _copyCommitText,
+                onSwitchBranch: widget.onSwitchBranch == null
+                    ? null
+                    : _switchBranch,
               ),
             ],
           ),
@@ -715,6 +719,17 @@ class _WorkspaceGitDiffPanelState extends ConsumerState<WorkspaceGitDiffPanel> {
       }
       return false;
     }
+  }
+
+  Future<void> _switchBranch(String branch) async {
+    final callback = widget.onSwitchBranch;
+    if (callback == null) {
+      return;
+    }
+    await _run(() async {
+      await callback(branch);
+      await _notifier.refresh();
+    }, successMessage: 'Switched to $branch');
   }
 
   Future<GitStashEntry?> _pickStash() {

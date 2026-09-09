@@ -7,6 +7,7 @@ import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_p
 
 const Duration _managedWorkspaceCreateTimeout = Duration(minutes: 30);
 const Duration _managedWorkspaceRemoveTimeout = Duration(minutes: 10);
+const Duration _managedWorkspaceSwitchBranchTimeout = Duration(minutes: 2);
 
 class RuntimeManagedWorkspaceClient(
   final RuntimeHostClient _client, {
@@ -71,6 +72,20 @@ class RuntimeManagedWorkspaceClient(
       _managedWorkspaceCreateTimeout,
     );
     return _creationResultFromJson(_asMap(payload));
+  }
+
+  @override
+  Future<Workspace> switchWorkspaceBranch({
+    required Workspace workspace,
+    required String branch,
+  }) async {
+    await _ensureReady();
+    final payload = await _client.runtimeRequest(
+      'workspace.switchBranch',
+      <String, Object?>{'id': workspace.id, 'branch': branch},
+      _managedWorkspaceSwitchBranchTimeout,
+    );
+    return _workspaceFromJson(_asMap(payload));
   }
 
   @override

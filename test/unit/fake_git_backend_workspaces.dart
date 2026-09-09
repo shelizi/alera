@@ -10,6 +10,7 @@ mixin _FakeGitBackendWorkspaceState {
   bool get listRemotesFails;
 
   GitException? createAndCheckoutBranchError;
+  GitException? checkoutBranchError;
   final Map<String, String> currentBranchesByPath = <String, String>{};
   final Map<String, Map<String, String?>> remotesByPath =
       <String, Map<String, String?>>{};
@@ -41,6 +42,24 @@ mixin _FakeGitBackendWorkspaceState {
     if (!sourceBranches.contains(branch)) {
       sourceBranches.add(branch);
     }
+  }
+
+  Future<void> checkoutBranch({
+    required String path,
+    required String branch,
+  }) async {
+    calls.add(
+      GitBackendCall('checkoutBranch', <String, Object?>{
+        'path': path,
+        'branch': branch,
+      }),
+    );
+    final error = checkoutBranchError;
+    if (error != null) {
+      throw error;
+    }
+    headBranch = branch;
+    currentBranchesByPath[path] = branch;
   }
 
   Future<List<GitRemote>> listRemotes(String path) async {

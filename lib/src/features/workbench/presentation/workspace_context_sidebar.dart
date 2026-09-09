@@ -31,6 +31,7 @@ class const WorkspaceContextSidebar({
   final ValueChanged<String>? onRevealInExplorer,
   required final OpenGitDiffTabCallback onOpenGitDiff,
   required final OpenGitCommitDiffTabCallback onOpenGitCommitDiff,
+  final Future<void> Function(String branch)? onSwitchBranch,
   required final ValueChanged<WorkspaceSearchMatchTarget> onOpenSearchMatch,
   required final Future<void> Function(
     String oldRelativePath,
@@ -95,6 +96,7 @@ class const WorkspaceContextSidebar({
                                 onGroupModeChanged: onSetGitDiffGroupMode,
                                 onOpenGitDiff: onOpenGitDiff,
                                 onOpenGitCommitDiff: onOpenGitCommitDiff,
+                                onSwitchBranch: onSwitchBranch,
                                 onOpenFile: onOpenFilePermanently ?? onOpenFile,
                                 onRevealInExplorer: onRevealInExplorer,
                                 onClearSourceControlRoot:

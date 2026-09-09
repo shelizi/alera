@@ -2,6 +2,7 @@ pub(super) fn is_serialized_runtime_mutation(request_type: &str) -> bool {
     matches!(
         request_type,
         "workspace.removeManaged"
+            | "workspace.switchBranch"
             | "project.remove"
             | "workspace.remove"
             | "workspace.removeForProject"

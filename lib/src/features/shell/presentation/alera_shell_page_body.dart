@@ -124,6 +124,15 @@ class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody> {
                             onSetGitDiffViewMode: controller.setGitDiffViewMode,
                             onSetGitDiffGroupMode:
                                 controller.setGitDiffGroupMode,
+                            onSwitchBranch: project == null
+                                ? null
+                                : (branch) async {
+                                    await controller.switchWorkspaceBranch(
+                                      project: project,
+                                      workspace: workspace,
+                                      branch: branch,
+                                    );
+                                  },
                             onFocusSourceControlFolder:
                                 canSelectSourceControlRoot
                                 ? (relativePath) {

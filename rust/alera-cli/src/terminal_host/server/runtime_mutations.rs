@@ -2,7 +2,10 @@ use alera_core::runtime::RuntimeStore;
 use serde_json::{json, Value};
 
 use crate::hosted_review_retention;
-use crate::managed_workspace::{remove_managed_workspace, ManagedWorkspaceRemoveRequest};
+use crate::managed_workspace::{
+    remove_managed_workspace, switch_managed_workspace_branch, ManagedWorkspaceRemoveRequest,
+    ManagedWorkspaceSwitchBranchRequest,
+};
 use crate::terminal_host::host_error::{HostError, HostResult};
 
 #[path = "runtime_mutation_hosted_review_retention.rs"]
@@ -24,6 +27,9 @@ pub(crate) enum RuntimeMutationRequest {
     },
     RemoveManagedWorkspace {
         request: ManagedWorkspaceRemoveRequest,
+    },
+    SwitchWorkspaceBranch {
+        request: ManagedWorkspaceSwitchBranchRequest,
     },
     RemoveTab {
         tab_id: String,
@@ -76,6 +82,10 @@ pub(super) enum RuntimeMutationEffect {
         workspace_ids: Vec<String>,
     },
     ManagedWorkspaceRemoved {
+        project_id: String,
+        workspace_id: String,
+    },
+    WorkspaceBranchSwitched {
         project_id: String,
         workspace_id: String,
     },
@@ -154,6 +164,21 @@ pub(super) async fn run_runtime_mutation(
                 Ok(RuntimeMutationCompletion {
                     response: serde_json::to_value(workspace).map_err(runtime_store_error)?,
                     effect: RuntimeMutationEffect::ManagedWorkspaceRemoved {
+                        project_id,
+                        workspace_id,
+                    },
+                    closed_tab_ids: Vec::new(),
+                })
+            }
+            RuntimeMutationRequest::SwitchWorkspaceBranch { request } => {
+                let workspace_id = request.id.clone();
+                let workspace = switch_managed_workspace_branch(&runtime_store, request)
+                    .await
+                    .map_err(runtime_store_error)?;
+                let project_id = workspace.project_id.clone();
+                Ok(RuntimeMutationCompletion {
+                    response: serde_json::to_value(workspace).map_err(runtime_store_error)?,
+                    effect: RuntimeMutationEffect::WorkspaceBranchSwitched {
                         project_id,
                         workspace_id,
                     },

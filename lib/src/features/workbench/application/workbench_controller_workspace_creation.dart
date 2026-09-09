@@ -68,7 +68,7 @@ mixin _WorkbenchControllerWorkspaceCreation
         reuseExistingBranch: reuseExistingBranch,
         name: name,
       );
-      _reconcileCreatedWorkspace(project, result.workspace);
+      _reconcileWorkspace(project, result.workspace);
       if (initializeTabs) {
         await selectWorkspace(project: project, workspace: result.workspace);
         await _openDeferredSetupTab(result);
@@ -94,6 +94,26 @@ mixin _WorkbenchControllerWorkspaceCreation
       }
       state = state.copyWith(error: null);
       return result;
+    } catch (error) {
+      state = state.copyWith(error: error.toString());
+      rethrow;
+    }
+  }
+
+  Future<Workspace> switchWorkspaceBranch({
+    required Project project,
+    required Workspace workspace,
+    required String branch,
+  }) async {
+    try {
+      final switched = await _workspaceService.switchWorkspaceBranch(
+        project: project,
+        workspace: workspace,
+        branch: branch,
+      );
+      _reconcileWorkspace(project, switched);
+      state = state.copyWith(error: null);
+      return switched;
     } catch (error) {
       state = state.copyWith(error: error.toString());
       rethrow;
@@ -136,7 +156,7 @@ mixin _WorkbenchControllerWorkspaceCreation
     }
   }
 
-  void _reconcileCreatedWorkspace(Project project, Workspace workspace) {
+  void _reconcileWorkspace(Project project, Workspace workspace) {
     final workspaces = List<Workspace>.from(state.workspacesFor(project.id));
     final index = workspaces.indexWhere((entry) => entry.id == workspace.id);
     if (index == -1) {

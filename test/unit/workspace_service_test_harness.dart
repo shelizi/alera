@@ -142,6 +142,8 @@ class _FakeWorkbenchRepository implements WorkbenchRepository {
 class _FakeManagedWorkspaceRuntime implements ManagedWorkspaceRuntime {
   Workspace? removedWorkspace;
   bool? deleteBranch;
+  Workspace? switchedWorkspace;
+  String? switchedBranch;
 
   @override
   Future<WorkspaceCreationResult> createLinkedWorkspace({
@@ -152,6 +154,21 @@ class _FakeManagedWorkspaceRuntime implements ManagedWorkspaceRuntime {
     String? name,
   }) {
     throw UnimplementedError();
+  }
+
+  @override
+  Future<Workspace> switchWorkspaceBranch({
+    required Workspace workspace,
+    required String branch,
+  }) async {
+    switchedWorkspace = workspace;
+    switchedBranch = branch;
+    return workspace.copyWith(
+      branch: branch,
+      sourceBranch: null,
+      reusesExistingBranch: workspace.isMain ? false : true,
+      updatedAt: DateTime.utc(2026, 5, 20, 12),
+    );
   }
 
   @override

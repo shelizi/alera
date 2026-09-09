@@ -63,6 +63,13 @@ pub struct ManagedWorkspaceRemoveRequest {
     pub close_sessions: bool,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedWorkspaceSwitchBranchRequest {
+    pub id: String,
+    pub branch: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceStorageImpact {
@@ -242,6 +249,58 @@ pub async fn create_managed_workspace(
         setup_report,
         deferred_setup_command: None,
     })
+}
+
+pub async fn switch_managed_workspace_branch(
+    store: &RuntimeStore,
+    request: ManagedWorkspaceSwitchBranchRequest,
+) -> Result<Workspace> {
+    let mut workspace = store
+        .find_workspace(&request.id)
+        .await?
+        .ok_or_else(|| anyhow!("Workspace not found: {}", request.id))?;
+    let project = store
+        .find_project(&workspace.project_id)
+        .await?
+        .ok_or_else(|| anyhow!("Project not found: {}", workspace.project_id))?;
+    if project.kind != ProjectKind::GitRepository {
+        bail!("Branch switching requires a Git repository project");
+    }
+    let branch = require_trimmed(&request.branch, "Branch name is required")?;
+    if !core_git::is_valid_branch_name(&branch)? {
+        bail!("Invalid branch name \"{branch}\"");
+    }
+    if workspace.branch.as_deref() == Some(branch.as_str()) {
+        return Ok(workspace);
+    }
+    ensure_target_branch_exists(&project, &branch)?;
+    let workspaces = store.list_workspaces(&project.id).await?;
+    if workspaces.iter().any(|candidate| {
+        candidate.id != workspace.id
+            && candidate.status == WorkspaceStatus::Active
+            && candidate.branch.as_deref() == Some(branch.as_str())
+    }) {
+        bail!("A workspace for branch \"{branch}\" already exists");
+    }
+
+    let previous_branch = workspace.branch.clone();
+    let workspace_path = workspace.path.clone();
+    core_git::checkout_branch(&workspace_path, &branch).context("git checkout failed")?;
+    workspace.branch = Some(branch.clone());
+    workspace.source_branch = None;
+    workspace.reuses_existing_branch = workspace.kind != WorkspaceKind::Main;
+    workspace.updated_at = Utc::now();
+    match store.upsert_workspace(workspace).await {
+        Ok(saved) => Ok(saved),
+        Err(error) => {
+            if let Some(previous) = previous_branch.as_deref().filter(|previous| {
+                !previous.is_empty() && *previous != "HEAD" && *previous != branch.as_str()
+            }) {
+                let _ = core_git::checkout_branch(&workspace_path, previous);
+            }
+            Err(error.into())
+        }
+    }
 }
 
 pub async fn remove_managed_workspace(
@@ -694,13 +753,17 @@ mod tests {
     use std::path::Path;
     use std::process::Command as StdCommand;
 
+    use alera_core::git as core_git;
     use alera_core::runtime::{
         Project, ProjectKind, RuntimeStore, Workspace, WorkspaceKind, WorkspaceStatus,
         WorktreeSetupStepKind, LOCAL_HOST_ID,
     };
     use chrono::Utc;
 
-    use super::{create_managed_workspace, slugify, ManagedWorkspaceCreateRequest};
+    use super::{
+        create_managed_workspace, slugify, switch_managed_workspace_branch,
+        ManagedWorkspaceCreateRequest, ManagedWorkspaceSwitchBranchRequest,
+    };
 
     #[test]
     fn slugify_matches_workspace_path_segments() {
@@ -1184,14 +1247,23 @@ mod tests {
         let repo = dir.path().join("repo");
         std::fs::create_dir(&repo).unwrap();
         init_git_repo(&repo);
-        run_git(&repo, &["remote", "add", "origin", remote_bare.to_str().unwrap()]);
+        run_git(
+            &repo,
+            &["remote", "add", "origin", remote_bare.to_str().unwrap()],
+        );
         run_git(&repo, &["push", "-u", "origin", "main"]);
         run_git(&remote_bare, &["symbolic-ref", "HEAD", "refs/heads/main"]);
 
         let other = dir.path().join("other");
         run_git(
             dir.path(),
-            &["clone", "-b", "main", remote_bare.to_str().unwrap(), "other"],
+            &[
+                "clone",
+                "-b",
+                "main",
+                remote_bare.to_str().unwrap(),
+                "other",
+            ],
         );
         run_git(&other, &["config", "user.email", "other@example.com"]);
         run_git(&other, &["config", "user.name", "Other"]);
@@ -1228,6 +1300,62 @@ mod tests {
 
         assert_eq!(result.workspace.branch.as_deref(), Some("feature/diverged"));
         assert!(worktree_path.join("local.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn switch_managed_workspace_branch_updates_checkout_and_runtime_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        init_git_repo(&repo);
+        run_git(&repo, &["branch", "feature/existing"]);
+        let store = seed_project(dir.path(), &repo).await;
+        let worktree_path = dir.path().join("workspaces").join("feature-current");
+        let created = create_managed_workspace(
+            &store,
+            ManagedWorkspaceCreateRequest {
+                id: Some("workspace-switch".to_string()),
+                project_id: "project-1".to_string(),
+                name: Some("feature/current".to_string()),
+                branch: "feature/current".to_string(),
+                source_branch: Some("main".to_string()),
+                reuse_existing_branch: false,
+                workspace_root: None,
+                path: Some(worktree_path.to_string_lossy().into_owned()),
+                parent_workspace_id: None,
+                defer_setup: true,
+                skip_setup: true,
+                setup_script_directory: None,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(!created.workspace.reuses_existing_branch);
+
+        let switched = switch_managed_workspace_branch(
+            &store,
+            ManagedWorkspaceSwitchBranchRequest {
+                id: created.workspace.id.clone(),
+                branch: "feature/existing".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(switched.branch.as_deref(), Some("feature/existing"));
+        assert!(switched.source_branch.is_none());
+        assert!(switched.reuses_existing_branch);
+        assert_eq!(
+            core_git::current_branch(&switched.path).unwrap(),
+            "feature/existing"
+        );
+        let persisted = store
+            .find_workspace(&switched.id)
+            .await
+            .unwrap()
+            .expect("persisted workspace");
+        assert_eq!(persisted.branch.as_deref(), Some("feature/existing"));
+        assert!(persisted.reuses_existing_branch);
     }
 
     async fn seed_project(root: &Path, repo: &Path) -> RuntimeStore {

@@ -206,6 +206,16 @@ impl ServerActor {
                 self.broadcast_workspaces_changed(Some(&project_id));
                 self.broadcast_workspace_tabs_changed(Some(&workspace_id));
             }
+            RuntimeMutationEffect::WorkspaceBranchSwitched {
+                project_id,
+                workspace_id,
+            } => {
+                // Branch switching mutates the checkout in place. Keep terminal
+                // and agent sessions alive; only invalidate workspace metadata
+                // and tab consumers that derive source-control state from it.
+                self.broadcast_workspaces_changed(Some(&project_id));
+                self.broadcast_workspace_tabs_changed(Some(&workspace_id));
+            }
             RuntimeMutationEffect::TabRemoved {
                 tab_id,
                 workspace_id,

@@ -5,6 +5,8 @@ class const _GitHistoryCommitRow({
   required final bool expanded,
   required final VoidCallback? onTap,
   required final void Function(BuildContext context)? onOpenActions,
+  required final void Function(GitHistoryItemRef itemRef, Offset position)?
+  onOpenRefActions,
 }) extends StatelessWidget {
   static const double _chevronSlotWidth = 14;
   static const double _actionsButtonWidth = 30;
@@ -113,7 +115,13 @@ class const _GitHistoryCommitRow({
                         constraints: BoxConstraints(
                           maxWidth: budget.refBadgeMaxWidth,
                         ),
-                        child: _GitRefBadge(itemRef: itemRef),
+                        child: _GitRefBadge(
+                          itemRef: itemRef,
+                          onOpenActions: onOpenRefActions == null
+                              ? null
+                              : (position) =>
+                                    onOpenRefActions!(itemRef, position),
+                        ),
                       ),
                     ],
                     if (hiddenRefCount > 0) ...<Widget>[
@@ -143,12 +151,14 @@ class const _GitHistoryCommitRow({
   }
 }
 
-class const _GitRefBadge({required final GitHistoryItemRef itemRef})
-    extends StatelessWidget {
+class const _GitRefBadge({
+  required final GitHistoryItemRef itemRef,
+  final ValueChanged<Offset>? onOpenActions,
+}) extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = _graphColor(itemRef.color);
-    return DecoratedBox(
+    final badge = DecoratedBox(
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(AleraTokens.radiusPill),
         border: Border.all(color: color ?? AleraTokens.borderSubtle),
@@ -168,6 +178,16 @@ class const _GitRefBadge({required final GitHistoryItemRef itemRef})
           ),
         ),
       ),
+    );
+    final onOpenActions = this.onOpenActions;
+    if (onOpenActions == null) {
+      return badge;
+    }
+    return GestureDetector(
+      behavior: .opaque,
+      onSecondaryTapDown: (details) => onOpenActions(details.globalPosition),
+      onLongPressStart: (details) => onOpenActions(details.globalPosition),
+      child: badge,
     );
   }
 }

@@ -7,6 +7,7 @@ import 'package:alera/src/features/workbench/domain/workspace_source_control_sco
 import 'package:alera/src/features/workbench/presentation/workspace_git_diff_panel.dart';
 import 'package:alera/src/shared/infra/git/git_diff_models.dart';
 import 'package:alera/src/shared/infra/git/git_providers.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -47,6 +48,32 @@ void main() {
     expect(find.text('feat/settings-fullscreen-modal'), findsNothing);
     expect(find.text('+4'), findsOneWidget);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('local branch refs expose a switch action on secondary click', (
+    tester,
+  ) async {
+    final backend = _multiRefBackend();
+    final switched = <String>[];
+
+    await _pumpPanel(
+      tester,
+      backend: backend,
+      width: 420,
+      height: 520,
+      onSwitchBranch: (branch) async => switched.add(branch),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('COMMITS'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('main'), buttons: kSecondaryMouseButton);
+    await tester.pumpAndSettle();
+    expect(find.text('Switch to Branch'), findsOneWidget);
+
+    await tester.tap(find.text('Switch to Branch'));
+    await tester.pumpAndSettle();
+    expect(switched, <String>['main']);
   });
 
   testWidgets('commits header toggles from anywhere except its actions', (
@@ -127,6 +154,7 @@ Future<void> _pumpPanel(
   required FakeGitBackend backend,
   required double width,
   required double height,
+  Future<void> Function(String branch)? onSwitchBranch,
 }) {
   final workspace = _workspace();
   return tester.pumpWidget(
@@ -175,6 +203,7 @@ Future<void> _pumpPanel(
                 message,
                 bool preview = false,
               }) async {},
+              onSwitchBranch: onSwitchBranch,
             ),
           ),
         ),

@@ -119,6 +119,124 @@ void _registerWorkspaceServiceCoreTests() {
     expect(gitBackend.calls, isEmpty);
   });
 
+  test('switchWorkspaceBranch switches checkout and preserves existing branch ownership', () async {
+    gitBackend.sourceBranches = <String>['main', 'feature/existing'];
+    final workspace = Workspace(
+      id: 'workspace-switch',
+      projectId: project.id,
+      name: 'Owned workspace',
+      branch: 'feature/owned',
+      path: p.join(tempDir.path, 'workspaces', 'owned'),
+      createdAt: .utc(2026, 5, 19),
+      updatedAt: .utc(2026, 5, 19),
+      kind: .linked,
+      status: .active,
+      sourceBranch: 'main',
+      reusesExistingBranch: false,
+    );
+    await repository.upsertWorkspace(workspace);
+
+    final switched = await service.switchWorkspaceBranch(
+      project: project,
+      workspace: workspace,
+      branch: '  feature/existing  ',
+    );
+
+    expect(switched.branch, 'feature/existing');
+    expect(switched.sourceBranch, isNull);
+    expect(switched.reusesExistingBranch, isTrue);
+    expect(switched.updatedAt, DateTime.utc(2026, 5, 20, 12));
+    expect(repository.workspaces.single, switched);
+    final checkout = gitBackend.calls.singleWhere(
+      (call) => call.method == 'checkoutBranch',
+    );
+    expect(checkout.args, <String, Object?>{
+      'path': workspace.path,
+      'branch': 'feature/existing',
+    });
+  });
+
+  test('switchWorkspaceBranch rejects a branch already assigned to another active workspace', () async {
+    gitBackend.sourceBranches = <String>['main', 'feature/existing'];
+    final current = Workspace(
+      id: 'workspace-current',
+      projectId: project.id,
+      name: 'Current',
+      branch: 'feature/current',
+      path: p.join(tempDir.path, 'workspaces', 'current'),
+      createdAt: .utc(2026, 5, 19),
+      updatedAt: .utc(2026, 5, 19),
+      kind: .linked,
+      status: .active,
+    );
+    final existing = current.copyWith(
+      id: 'workspace-existing',
+      name: 'Existing',
+      branch: 'feature/existing',
+      path: p.join(tempDir.path, 'workspaces', 'existing'),
+    );
+    await repository.upsertWorkspace(current);
+    await repository.upsertWorkspace(existing);
+
+    await expectLater(
+      service.switchWorkspaceBranch(
+        project: project,
+        workspace: current,
+        branch: 'feature/existing',
+      ),
+      throwsA(isA<WorkspaceException>()),
+    );
+
+    expect(
+      gitBackend.calls.where((call) => call.method == 'checkoutBranch'),
+      isEmpty,
+    );
+  });
+
+  test(
+    'switchWorkspaceBranch delegates managed workspaces to Runtime Host',
+    () async {
+      gitBackend.sourceBranches = <String>['main', 'feature/runtime'];
+      final runtime = _FakeManagedWorkspaceRuntime();
+      service = WorkspaceService(
+        repository: repository,
+        projectService: ProjectService(gitBackend),
+        gitBackend: gitBackend,
+        workspaceRoot: WorkspaceRoot(
+          override: p.join(tempDir.path, 'workspaces'),
+        ),
+        managedRuntime: runtime,
+        now: () => DateTime.utc(2026, 5, 20, 12),
+      );
+      final workspace = Workspace(
+        id: 'workspace-runtime',
+        projectId: project.id,
+        name: 'Runtime',
+        branch: 'feature/current',
+        path: p.join(tempDir.path, 'workspaces', 'runtime'),
+        createdAt: .utc(2026, 5, 19),
+        updatedAt: .utc(2026, 5, 19),
+        kind: .linked,
+        status: .active,
+      );
+      await repository.upsertWorkspace(workspace);
+
+      final switched = await service.switchWorkspaceBranch(
+        project: project,
+        workspace: workspace,
+        branch: 'feature/runtime',
+      );
+
+      expect(runtime.switchedWorkspace, workspace);
+      expect(runtime.switchedBranch, 'feature/runtime');
+      expect(switched.branch, 'feature/runtime');
+      expect(
+        gitBackend.calls.where((call) => call.method == 'checkoutBranch'),
+        isEmpty,
+      );
+    },
+  );
+
   test('createLinkedWorkspace creates a new worktree from the requested source branch', () async {
     gitBackend.sourceBranches = <String>['main', 'origin/main'];
 
