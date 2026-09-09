@@ -81,6 +81,7 @@ impl WindowsProcessJob {
     pub(super) fn bootstrap_command(
         &self,
         launch: &TerminalHostLaunch,
+        working_directory: &str,
     ) -> HostResult<CommandBuilder> {
         let executable = std::env::current_exe().map_err(|error| {
             HostError::state(format!("failed to locate PTY Job bootstrap: {error}"))
@@ -88,6 +89,7 @@ impl WindowsProcessJob {
         let request = serde_json::to_string(&serde_json::json!({
             "shell": launch.shell,
             "arguments": launch.arguments,
+            "workingDirectory": working_directory,
         }))
         .map_err(|error| HostError::state(format!("failed to encode PTY launch: {error}")))?;
         let mut command = CommandBuilder::new(executable);

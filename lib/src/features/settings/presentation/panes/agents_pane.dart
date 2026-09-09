@@ -155,6 +155,13 @@ class const AgentsSettingsPane({
                     controller.setAgentStatusHookEnabled(.grok, value),
               ),
               SettingsSwitchRow(
+                title: 'Devin Hooks',
+                description: 'Install Alera-managed Devin lifecycle hooks in the global Devin config.',
+                value: agents.agentStatusHooks.devin,
+                onChanged: (value) =>
+                    controller.setAgentStatusHookEnabled(.devin, value),
+              ),
+              SettingsSwitchRow(
                 title: 'fx Status',
                 description: 'Receive fx lifecycle state through its built-in local Herdr integration on macOS and Linux.',
                 value: agents.agentStatusHooks.fx,

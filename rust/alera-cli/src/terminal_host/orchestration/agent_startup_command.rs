@@ -203,7 +203,7 @@ mod tests {
 
     #[test]
     fn claude_and_cursor_take_the_same_terminated_positional() {
-        for agent_type in ["claude", "cursor", "grok"] {
+        for agent_type in ["claude", "cursor", "grok", "devin"] {
             assert_eq!(
                 initial_prompt_arguments(adapter(agent_type), "- Ship it"),
                 ["--", "- Ship it"],

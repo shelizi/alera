@@ -83,6 +83,10 @@ fn test_session() -> Session {
         killer: None,
         #[cfg(windows)]
         process_job: None,
+        #[cfg(windows)]
+        conpty_startup_cursor_query_tail: Vec::new(),
+        #[cfg(windows)]
+        conpty_startup_cursor_query_answered: false,
         terminated: false,
         checkpoint_gen: 0,
         checkpoint_armed: false,
@@ -96,6 +100,16 @@ fn test_session() -> Session {
         output_stream_bytes: 0,
         title_tracker: TerminalTitleTracker::default(),
     }
+}
+
+#[cfg(windows)]
+#[test]
+fn conpty_startup_cursor_query_is_detected_once_across_output_chunks() {
+    let mut session = test_session();
+
+    assert!(!session.take_initial_conpty_cursor_query(b"prefix\x1b["));
+    assert!(session.take_initial_conpty_cursor_query(b"6n suffix"));
+    assert!(!session.take_initial_conpty_cursor_query(b"\x1b[6n"));
 }
 
 #[test]

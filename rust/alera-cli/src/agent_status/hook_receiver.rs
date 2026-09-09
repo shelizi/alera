@@ -16,7 +16,7 @@ use crate::terminal_host::server::ServerCommand;
 
 const TOKEN_HEADER: &str = "X-Alera-Agent-Hook-Token";
 const REQUEST_MAX_BYTES: usize = 1_000_000;
-const SUPPORTED_AGENTS: [&str; 11] = [
+const SUPPORTED_AGENTS: [&str; 12] = [
     "codex",
     "claude",
     "copilot",
@@ -27,6 +27,7 @@ const SUPPORTED_AGENTS: [&str; 11] = [
     "pi",
     "amp",
     "grok",
+    "devin",
     "fx",
 ];
 

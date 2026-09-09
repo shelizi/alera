@@ -6,12 +6,14 @@ import 'package:alera/src/features/agent_status/infra/agent_hook_event_normalize
 import 'package:flutter_test/flutter_test.dart';
 
 part 'grok_agent_hook_event_normalizer_test_cases.dart';
+part 'devin_agent_hook_event_normalizer_test_cases.dart';
 part 'agy_agent_hook_event_normalizer_test_cases.dart';
 part 'agent_hook_event_normalizer_test_harness.dart';
 
 void main() {
   group('agent hook event normalizer', () {
     _registerGrokAgentHookEventNormalizerTests();
+    _registerDevinAgentHookEventNormalizerTests();
     _registerAgyAgentHookEventNormalizerTests();
 
     test('reads assistant messages from Codex transcript formats', () {

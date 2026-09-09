@@ -26,6 +26,7 @@ fn every_supported_agent_reports_working() {
         ("pi", "agent_start"),
         ("amp", "session.start"),
         ("grok", "UserPromptSubmit"),
+        ("devin", "UserPromptSubmit"),
         ("fx", "Working"),
     ] {
         let status = normalize_hook_event(&event(agent_type, event_name, json!({})), None)
@@ -121,7 +122,27 @@ fn lifecycle_events_are_detected_before_state_normalization() {
         "SessionEnd",
         json!({})
     )));
+    assert!(hook_event_closes_session(&event(
+        "devin",
+        "SessionEnd",
+        json!({})
+    )));
 }
+
+#[test]
+fn devin_hook_states_map_to_presence_states() {
+    for (event_name, expected) in [
+        ("UserPromptSubmit", AgentPresenceState::Working),
+        ("PermissionRequest", AgentPresenceState::Blocked),
+        ("Stop", AgentPresenceState::Done),
+        ("SessionEnd", AgentPresenceState::Done),
+    ] {
+        let status = normalize_hook_event(&event("devin", event_name, json!({})), None)
+            .unwrap_or_else(|| panic!("Devin {event_name} event was not normalized"));
+        assert_eq!(status.state, expected, "{event_name}");
+    }
+}
+
 
 #[test]
 fn fx_herdr_states_map_to_presence_states() {
