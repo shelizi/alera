@@ -224,7 +224,7 @@ class _SettingsButtonRowState extends State<SettingsButtonRow> {
                   width: AleraTokens.space16,
                   child: CircularProgressIndicator(strokeWidth: 2),
                 )
-              : Text(widget.buttonLabel),
+              : Text(context.tr(widget.buttonLabel)),
         ),
       ),
     );

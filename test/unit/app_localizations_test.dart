@@ -314,6 +314,11 @@ void main() {
       expect(l10n.translate('Showing 4 of 38'), '顯示 4 / 38');
       expect(l10n.translate('spaces'), '個空白');
       expect(l10n.translate('seconds'), '秒');
+      expect(l10n.translate('External Editor'), '外部編輯器');
+      expect(l10n.translate('Check Zed'), '檢查 Zed');
+      expect(l10n.translate('Zed is available.'), 'Zed 可使用。');
+      expect(l10n.translate('Zed is available: 0.210.0'), 'Zed 可使用：0.210.0');
+      expect(l10n.translate('Zed is not available.'), 'Zed 無法使用。');
       expect(
         l10n.translate('Describe the replacement to generate.'),
         '描述要產生的替換內容。',

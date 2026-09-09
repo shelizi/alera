@@ -318,6 +318,13 @@ class AleraLocalizations {
       return '執行環境目前有 $details。';
     }
 
+    final zedAvailable = RegExp(r'^Zed is available(?:: (.+))?\.?$')
+        .firstMatch(source);
+    if (zedAvailable != null) {
+      final version = zedAvailable.group(1);
+      return version == null ? 'Zed 可使用。' : 'Zed 可使用：$version';
+    }
+
     final selectedValue = RegExp(r'^Selected: (.+)$').firstMatch(source);
     if (selectedValue != null) {
       return '已選取：${selectedValue.group(1)}';
@@ -1451,6 +1458,28 @@ class AleraLocalizations {
     'Automatically save editor changes after a pause.': '暫停操作一段時間後自動儲存編輯器變更。',
     'Idle time before saving editor changes.': '儲存編輯器變更前的閒置時間。',
     'Search and select a syntax highlighting theme.': '搜尋並選擇語法醒目提示主題。',
+    'External Editor': '外部編輯器',
+    'Open workspaces and files in Zed without changing Alera\'s built-in editor behavior.':
+        '在 Zed 中開啟工作區與檔案，不變更 Alera 內建編輯器的行為。',
+    'Default Code Open Target': '預設程式碼開啟目標',
+    'Choose where normal editable source and text files open. Dedicated Alera previews stay internal.':
+        '選擇一般可編輯原始碼與文字檔的開啟位置；Alera 專用預覽仍保留在內部。',
+    'Custom Zed Executable': '自訂 Zed 執行檔',
+    'Off uses the zed command from the local command environment.':
+        '關閉時會使用本機命令環境中的 zed 指令。',
+    'Zed Executable': 'Zed 執行檔',
+    'Full path to the Zed executable on this machine.': '此機器上 Zed 執行檔的完整路徑。',
+    'Path to zed or zed.exe': 'zed 或 zed.exe 的路徑',
+    'Open Workspaces in New Window': '在新視窗開啟工作區',
+    'Use zed --new so each Alera worktree opens as a separate Zed workspace window.':
+        '使用 zed --new，讓每個 Alera worktree 各自在獨立的 Zed 工作區視窗中開啟。',
+    'Auto-open New Workspaces in Zed': '自動在 Zed 開啟新工作區',
+    'After Alera creates a linked workspace, open that workspace in Zed automatically.':
+        'Alera 建立連結工作區後，自動在 Zed 中開啟該工作區。',
+    'Check Zed': '檢查 Zed',
+    'Run a non-destructive zed --version check with the current executable setting.':
+        '使用目前的執行檔設定執行不會修改資料的 zed --version 檢查。',
+    'Zed is not available.': 'Zed 無法使用。',
     'Search syntax themes': '搜尋語法主題',
     'Prompt Append': '附加提示詞',
     'Add project-specific agent instructions': '新增專案專屬的 Agent 指示',

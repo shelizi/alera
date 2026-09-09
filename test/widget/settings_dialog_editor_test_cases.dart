@@ -85,4 +85,27 @@ void _registerSettingsDialogEditorTests() {
       EditorSettings.defaults.autosaveDelaySeconds,
     );
   });
+
+  testWidgets('renders external editor settings in Traditional Chinese', (
+    tester,
+  ) async {
+    await _pumpSettingsDialog(
+      tester,
+      initialSectionId: 'editor',
+      locale: const Locale('zh', 'TW'),
+    );
+
+    expect(find.text('外觀'), findsOneWidget);
+    expect(find.text('主題預設'), findsOneWidget);
+    expect(find.text('縮排'), findsOneWidget);
+    expect(find.text('自動儲存'), findsWidgets);
+    await tester.ensureVisible(find.text('外部編輯器'));
+    await tester.pump();
+    expect(find.text('外部編輯器'), findsOneWidget);
+    expect(find.text('預設程式碼開啟目標'), findsOneWidget);
+    expect(find.text('自訂 Zed 執行檔'), findsOneWidget);
+    expect(find.text('自動在 Zed 開啟新工作區'), findsOneWidget);
+    expect(find.text('檢查 Zed'), findsWidgets);
+    expect(find.textContaining('zed --version'), findsOneWidget);
+  });
 }
