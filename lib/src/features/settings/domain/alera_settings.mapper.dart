@@ -1077,6 +1077,13 @@ class AgentStatusHookSettingsMapper
     def: false,
   );
   static bool _$fx(AgentStatusHookSettings v) => v.fx;
+  static bool _$devin(AgentStatusHookSettings v) => v.devin;
+  static const Field<AgentStatusHookSettings, bool> _f$devin = Field(
+    'devin',
+    _$devin,
+    opt: true,
+    def: false,
+  );
   static const Field<AgentStatusHookSettings, bool> _f$fx = Field(
     'fx',
     _$fx,
@@ -1096,6 +1103,7 @@ class AgentStatusHookSettingsMapper
     #pi: _f$pi,
     #amp: _f$amp,
     #grok: _f$grok,
+    #devin: _f$devin,
     #fx: _f$fx,
   };
 
@@ -1111,6 +1119,7 @@ class AgentStatusHookSettingsMapper
       pi: data.dec(_f$pi),
       amp: data.dec(_f$amp),
       grok: data.dec(_f$grok),
+      devin: data.dec(_f$devin),
       fx: data.dec(_f$fx),
     );
   }
@@ -1196,6 +1205,7 @@ abstract class AgentStatusHookSettingsCopyWith<
     bool? pi,
     bool? amp,
     bool? grok,
+    bool? devin,
     bool? fx,
   });
   AgentStatusHookSettingsCopyWith<$R2, $In, $Out2> $chain<$R2, $Out2>(
@@ -1224,6 +1234,7 @@ class _AgentStatusHookSettingsCopyWithImpl<$R, $Out>
     bool? pi,
     bool? amp,
     bool? grok,
+    bool? devin,
     bool? fx,
   }) => $apply(
     FieldCopyWithData({
@@ -1237,6 +1248,7 @@ class _AgentStatusHookSettingsCopyWithImpl<$R, $Out>
       if (pi != null) #pi: pi,
       if (amp != null) #amp: amp,
       if (grok != null) #grok: grok,
+      if (devin != null) #devin: devin,
       if (fx != null) #fx: fx,
     }),
   );
@@ -1252,6 +1264,7 @@ class _AgentStatusHookSettingsCopyWithImpl<$R, $Out>
     pi: data.get(#pi, or: $value.pi),
     amp: data.get(#amp, or: $value.amp),
     grok: data.get(#grok, or: $value.grok),
+    devin: data.get(#devin, or: $value.devin),
     fx: data.get(#fx, or: $value.fx),
   );
 

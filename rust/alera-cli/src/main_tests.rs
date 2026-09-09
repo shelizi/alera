@@ -39,7 +39,7 @@ fn host_accessible_path_resolves_relative_workspace_paths_for_rpc() {
 
 #[test]
 fn terminal_actions_require_the_capability_for_their_rpc_surface() {
-    use crate::cli::{TerminalReadArgs, TerminalWriteArgs};
+    use crate::cli::{TerminalAttachArgs, TerminalReadArgs, TerminalWriteArgs};
     use crate::cli_orchestration::{
         OrchestrationTerminalListArgs, OrchestrationTerminalPruneArgs,
         OrchestrationTerminalShowArgs, OrchestrationTerminalWaitArgs,
@@ -78,6 +78,12 @@ fn terminal_actions_require_the_capability_for_their_rpc_surface() {
             submit,
         })
     };
+    let attach = TerminalAction::Attach(TerminalAttachArgs {
+        handle: "term-1".to_string(),
+        ready_file: None,
+        poll_ms: 50,
+        max_bytes: 1024,
+    });
 
     for action in [&list, &show, &prune] {
         assert_eq!(
@@ -90,6 +96,7 @@ fn terminal_actions_require_the_capability_for_their_rpc_surface() {
         Some(RUNTIME_HOST_ORCHESTRATION_WAIT_CAPABILITY)
     );
     assert_eq!(terminal_alias_commands::required_capability(&read), None);
+    assert_eq!(terminal_alias_commands::required_capability(&attach), None);
     assert_eq!(
         terminal_alias_commands::required_capability(&write(false, false)),
         None

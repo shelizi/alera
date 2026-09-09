@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/providers.dart';
 import 'package:alera/src/app/theme/alera_dark_theme.dart';
 import 'package:alera/src/features/keyboard/domain/keyboard_action.dart';
@@ -5,6 +6,7 @@ import 'package:alera/src/features/keyboard/presentation/keyboard_settings_pane.
 import 'package:alera/src/features/settings/application/settings_repository.dart';
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -12,6 +14,7 @@ void main() {
   Future<ProviderContainer> pumpPane(
     WidgetTester tester, {
     AleraSettings initialSettings = AleraSettings.defaults,
+    Locale? locale,
   }) async {
     await tester.binding.setSurfaceSize(const Size(1100, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -28,6 +31,12 @@ void main() {
       UncontrolledProviderScope(
         container: container,
         child: MaterialApp(
+          locale: locale,
+          supportedLocales: supportedAleraLocales,
+          localizationsDelegates: const <LocalizationsDelegate<dynamic>>[
+            AleraLocalizationsDelegate(),
+            ...GlobalMaterialLocalizations.delegates,
+          ],
           theme: buildAleraDarkTheme(),
           home: const Scaffold(
             body: SingleChildScrollView(child: KeyboardSettingsPane()),
@@ -54,6 +63,33 @@ void main() {
     expect(find.text('Split Right'), findsOneWidget);
     expect(find.text('App First'), findsOneWidget);
     expect(find.text('Terminal First'), findsOneWidget);
+  });
+
+  testWidgets('renders keyboard settings in Traditional Chinese', (
+    tester,
+  ) async {
+    await pumpPane(tester, locale: const Locale('zh', 'TW'));
+
+    expect(find.text('行為'), findsOneWidget);
+    expect(find.text('終端機取得焦點時'), findsOneWidget);
+    expect(find.text('應用程式優先'), findsOneWidget);
+    expect(find.text('終端機優先'), findsOneWidget);
+    expect(find.text('新增終端機分頁'), findsOneWidget);
+    expect(find.text('在目前工作區開啟終端機分頁。'), findsOneWidget);
+    expect(find.byTooltip('變更快速鍵'), findsWidgets);
+
+    final row = find.ancestor(
+      of: find.text('新增終端機分頁'),
+      matching: find.byType(Row),
+    );
+    final changeShortcut = find.descendant(
+      of: row.first,
+      matching: find.byTooltip('變更快速鍵'),
+    );
+    await tester.ensureVisible(changeShortcut);
+    await tester.tap(changeShortcut);
+    await tester.pump();
+    expect(find.text('請按下快速鍵…（Esc 取消）'), findsOneWidget);
   });
 
   testWidgets('changing the terminal policy persists', (tester) async {
@@ -238,7 +274,14 @@ void main() {
 
     await pumpPane(tester, initialSettings: initialSettings);
 
-    expect(find.text('Unassigned'), findsOneWidget);
+    final row = find.ancestor(
+      of: find.text('New Terminal Tab'),
+      matching: find.byType(Row),
+    );
+    expect(
+      find.descendant(of: row.first, matching: find.text('Unassigned')),
+      findsOneWidget,
+    );
   });
 }
 

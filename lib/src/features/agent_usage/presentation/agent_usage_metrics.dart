@@ -22,7 +22,7 @@ class const _UsageMetric({
         crossAxisAlignment: .start,
         children: <Widget>[
           Text(
-            label,
+            context.tr(label),
             style: Theme.of(context).textTheme.labelSmall
                 ?.copyWith(color: AleraTokens.foregroundMuted),
           ),
@@ -37,7 +37,7 @@ class const _UsageMetric({
           ),
           const SizedBox(height: AleraTokens.space2),
           Text(
-            detail,
+            context.tr(detail),
             style: Theme.of(context).textTheme.bodySmall
                 ?.copyWith(color: AleraTokens.foregroundFaint),
           ),

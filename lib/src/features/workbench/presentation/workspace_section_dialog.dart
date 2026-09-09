@@ -112,7 +112,7 @@ class _SectionDialogState extends State<_SectionDialog> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Text(
-                'Set Section',
+                context.tr('Set Section'),
                 style: Theme.of(context).textTheme.titleMedium,
               ),
               const SizedBox(height: AleraTokens.space16),

@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/buttons/alera_icon_button.dart';
 import 'package:alera/src/design_system/feedback/alera_toast.dart';
@@ -48,7 +49,9 @@ class const AiDictationControl({
           onPressed: !enabled || service.isImproving
               ? null
               : () => unawaited(
-                  busy ? _cancel(service) : _toggle(service, active),
+                  busy
+                      ? _cancel(context.aleraLocalizations, service)
+                      : _toggle(context.aleraLocalizations, service, active),
                 ),
         );
       },
@@ -66,27 +69,43 @@ class const AiDictationControl({
     }
   }
 
-  Future<void> _toggle(AiDictationService service, bool active) async {
+  Future<void> _toggle(
+    AleraLocalizations localizations,
+    AiDictationService service,
+    bool active,
+  ) async {
     try {
       if (active && service.isRecording) {
         await service.stop();
         final warning = service.takeWarning();
         if (warning != null) {
-          AleraToast.publish(message: warning, tone: .info);
+          AleraToast.publish(
+            message: localizations.translate(warning),
+            tone: .info,
+          );
         }
       } else {
         await service.start(targetId);
       }
     } on Object catch (error) {
-      AleraToast.publish(message: error.toString(), tone: .error);
+      AleraToast.publish(
+        message: localizations.translate(error.toString()),
+        tone: .error,
+      );
     }
   }
 
-  Future<void> _cancel(AiDictationService service) async {
+  Future<void> _cancel(
+    AleraLocalizations localizations,
+    AiDictationService service,
+  ) async {
     try {
       await service.cancel();
     } on Object catch (error) {
-      AleraToast.publish(message: error.toString(), tone: .error);
+      AleraToast.publish(
+        message: localizations.translate(error.toString()),
+        tone: .error,
+      );
     }
   }
 }

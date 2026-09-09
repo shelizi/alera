@@ -138,6 +138,13 @@ const List<ManagedAgentOption> grokSandboxOptions = <ManagedAgentOption>[
   ManagedAgentOption('strict', 'Strict'),
 ];
 
+const List<ManagedAgentOption> devinPermissionOptions = <ManagedAgentOption>[
+  ManagedAgentOption('auto', 'Auto'),
+  ManagedAgentOption('accept-edits', 'Accept Edits'),
+  ManagedAgentOption('smart', 'Smart'),
+  ManagedAgentOption('dangerous', 'Dangerous'),
+];
+
 /// The profile switcher a Claude Code profile may launch through. It takes the
 /// profile as its first positional argument and forwards the rest to `claude`
 /// unchanged. Mirrors `CCS_EXECUTABLE` in the Rust launch builder.
@@ -198,6 +205,9 @@ int managedAgentRiskScore(AgentType adapter, Map<String, Object?> config) {
     case AgentType.grok:
       addWhen(config['permissionMode'] == 'bypassPermissions', 100);
       addWhen(config['permissionMode'] == 'dontAsk', 40);
+    case AgentType.devin:
+      addWhen(config['permissionMode'] == 'dangerous', 100);
+      addWhen(config['permissionMode'] == 'smart', 30);
     case AgentType.amp:
     case AgentType.fx:
       break;
@@ -252,6 +262,9 @@ Set<String> managedAgentRiskMarkers(
         'bypassPermissions',
       );
       markWhen(config['permissionMode'] == 'dontAsk', 'dontAsk');
+    case AgentType.devin:
+      markWhen(config['permissionMode'] == 'dangerous', 'dangerous');
+      markWhen(config['permissionMode'] == 'smart', 'smart');
     case AgentType.amp:
     case AgentType.fx:
       break;
@@ -277,6 +290,8 @@ String managedAgentRiskWarning(AgentType adapter, Map<String, Object?> config) {
     AgentType.pi => 'This profile pre-approves project trust for Pi.',
     AgentType.grok =>
       'This profile lets Grok Build continue with reduced permission prompts.',
+    AgentType.devin =>
+      'This profile lets Devin take broader actions with less supervision.',
     AgentType.amp => '',
     AgentType.fx => '',
   };
@@ -395,6 +410,10 @@ String managedAgentCommandPreview(
       stringOption('permissionMode', '--permission-mode');
       stringOption('sandbox', '--sandbox');
       flag('disableWebSearch', '--disable-web-search');
+    case AgentType.devin:
+      stringOption('model', '--model');
+      stringOption('permissionMode', '--permission-mode');
+      flag('sandbox', '--sandbox');
     case AgentType.fx:
       flag('resumeLast', '--continue');
       flag('noAdditionalDirs', '--no-additional-dirs');

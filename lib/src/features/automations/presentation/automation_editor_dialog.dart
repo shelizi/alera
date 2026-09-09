@@ -240,7 +240,9 @@ class _AutomationEditorDialogState
           crossAxisAlignment: .stretch,
           children: <Widget>[
             Text(
-              widget.initial == null ? 'New Automation' : 'Edit Automation',
+              context.tr(
+                widget.initial == null ? 'New Automation' : 'Edit Automation',
+              ),
               style: Theme.of(context).textTheme.titleLarge,
             ),
             const SizedBox(height: AleraTokens.space16),
@@ -456,7 +458,7 @@ class _AutomationEditorDialogState
                     if (_error case final error?) ...<Widget>[
                       const SizedBox(height: AleraTokens.space12),
                       Text(
-                        error,
+                        context.tr(error),
                         style: const TextStyle(color: AleraTokens.error),
                       ),
                     ],

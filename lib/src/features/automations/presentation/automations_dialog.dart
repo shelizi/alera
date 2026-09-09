@@ -75,7 +75,7 @@ class _AutomationsDialogState extends ConsumerState<AutomationsDialog> {
                       const Center(child: CircularProgressIndicator()),
                   error: (error, _) => AleraEmptyState(
                     icon: AleraIcons.error,
-                    title: 'Automations unavailable',
+                    title: context.tr('Automations unavailable'),
                     message: error.toString(),
                     action: FilledButton(
                       onPressed: () => ref.invalidate(automationListProvider),
@@ -106,17 +106,19 @@ class _AutomationsDialogState extends ConsumerState<AutomationsDialog> {
       _detailFuture = ref.read(automationRepositoryProvider).show(selected.id);
     }
     return AleraMasterDetail(
-      masterTitle: 'Automations',
+      masterTitle: context.tr('Automations'),
       masterAction: AleraIconButton(
-        tooltip: 'New Automation',
+        tooltip: context.tr('New Automation'),
         icon: AleraIcons.add,
         onPressed: () => unawaited(_createAutomation()),
       ),
       master: visible.isEmpty
           ? AleraEmptyState(
               icon: AleraIcons.checks,
-              title: 'No automations',
-              message: 'Create a schedule to run approved work in a runtime-owned target.',
+              title: context.tr('No automations'),
+              message: context.tr(
+                'Create a schedule to run approved work in a runtime-owned target.',
+              ),
               action: FilledButton(
                 onPressed: () => unawaited(_createAutomation()),
                 child: Text(context.tr('New Automation')),
@@ -131,8 +133,8 @@ class _AutomationsDialogState extends ConsumerState<AutomationsDialog> {
                     children: <Widget>[
                       TextField(
                         controller: _search,
-                        decoration: const InputDecoration(
-                          labelText: 'Search',
+                        decoration: InputDecoration(
+                          labelText: context.tr('Search'),
                           prefixIcon: Icon(AleraIcons.search),
                         ),
                         onChanged: (_) => setState(() {}),
@@ -189,10 +191,12 @@ class _AutomationsDialogState extends ConsumerState<AutomationsDialog> {
               ],
             ),
       detail: selected == null
-          ? const AleraEmptyState(
+          ? AleraEmptyState(
               icon: AleraIcons.checks,
-              title: 'Select an automation',
-              message: 'Choose an automation to inspect its schedule, target, and runs.',
+              title: context.tr('Select an automation'),
+              message: context.tr(
+                'Choose an automation to inspect its schedule, target, and runs.',
+              ),
             )
           : AutomationDetailPane(
               future: _detailFuture ??= ref
@@ -258,12 +262,12 @@ class _AutomationsDialogState extends ConsumerState<AutomationsDialog> {
   ) {
     return DropdownButton<String?>(
       value: values.contains(value) ? value : null,
-      hint: Text(label),
+      hint: Text(context.tr(label)),
       items: <DropdownMenuItem<String?>>[
         for (final option in values.toSet())
           DropdownMenuItem<String?>(
             value: option,
-            child: Text(option ?? 'All $label'),
+            child: Text(option ?? context.tr('All $label')),
           ),
       ],
       onChanged: onChanged,

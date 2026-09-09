@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:alera_configuration/alera_configuration.dart';
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:flutter/material.dart';
 
@@ -27,10 +28,15 @@ class const AleraConfigurationReview({
     return Column(
       crossAxisAlignment: .stretch,
       children: [
-        Text('Target: $target', style: Theme.of(context).textTheme.titleMedium),
+        Text(
+          '${context.tr('Target')}: $target',
+          style: Theme.of(context).textTheme.titleMedium,
+        ),
         const SizedBox(height: AleraTokens.space12),
-        const Text(
-          'Configuration is stored in your Alera account and can be read by the service. Review custom commands and prompts for embedded secrets. Credentials and device permissions stay local.',
+        Text(
+          context.tr(
+            'Configuration is stored in your Alera account and can be read by the service. Review custom commands and prompts for embedded secrets. Credentials and device permissions stay local.',
+          ),
         ),
         const SizedBox(height: AleraTokens.space12),
         Wrap(
@@ -39,16 +45,16 @@ class const AleraConfigurationReview({
           children: [
             OutlinedButton(
               onPressed: state.busy ? null : onRefresh,
-              child: const Text('Review Changes'),
+              child: Text(context.tr('Review Changes')),
             ),
             OutlinedButton(
               onPressed: state.busy ? null : onHistory,
-              child: const Text('History'),
+              child: Text(context.tr('History')),
             ),
             if (review?.local.pending != null)
               OutlinedButton(
                 onPressed: state.busy ? null : onRetry,
-                child: const Text('Retry Pending Upload'),
+                child: Text(context.tr('Retry Pending Upload')),
               ),
           ],
         ),
@@ -64,21 +70,21 @@ class const AleraConfigurationReview({
         if (review != null) ...[
           const SizedBox(height: AleraTokens.space12),
           Text(
-            'Shared version: ${review.head?.revision ?? "None"} • Comparing: ${review.source?.revision ?? "Empty"}',
+            '${context.tr('Shared version')}: ${context.tr('${review.head?.revision ?? "None"}')} • ${context.tr('Comparing')}: ${context.tr('${review.source?.revision ?? "Empty"}')}',
           ),
           Text(
-            '${differences.length} differences • ${differences.where((d) => d.choice == null).length} unresolved',
+            '${differences.length} ${context.tr('differences')} • ${differences.where((d) => d.choice == null).length} ${context.tr('unresolved')}',
           ),
           Wrap(
             spacing: AleraTokens.space8,
             children: [
               TextButton(
                 onPressed: state.busy ? null : () => onChooseAll(.local),
-                child: const Text('Keep All Local'),
+                child: Text(context.tr('Keep All Local')),
               ),
               TextButton(
                 onPressed: state.busy ? null : () => onChooseAll(.remote),
-                child: const Text('Keep All Remote'),
+                child: Text(context.tr('Keep All Remote')),
               ),
             ],
           ),
@@ -92,29 +98,35 @@ class const AleraConfigurationReview({
                     crossAxisAlignment: .stretch,
                     children: [
                       Text(
-                        difference.label,
+                        context.tr(difference.label),
                         style: Theme.of(context).textTheme.titleSmall,
                       ),
                       if (difference.conflict)
-                        const Text(
-                          'Both sides changed this value. Choose what to keep.',
+                        Text(
+                          context.tr(
+                            'Both sides changed this value. Choose what to keep.',
+                          ),
                         ),
                       const SizedBox(height: AleraTokens.space8),
-                      SelectableText('Local: ${_display(difference, true)}'),
+                      SelectableText(
+                        '${context.tr('Local')}: ${context.tr(_display(difference, true))}',
+                      ),
                       const SizedBox(height: AleraTokens.space8),
-                      SelectableText('Remote: ${_display(difference, false)}'),
+                      SelectableText(
+                        '${context.tr('Remote')}: ${context.tr(_display(difference, false))}',
+                      ),
                       DropdownButton<ConfigurationChoice>(
                         isExpanded: true,
                         value: difference.choice,
-                        hint: const Text('Choose A Value'),
-                        items: const [
+                        hint: Text(context.tr('Choose A Value')),
+                        items: [
                           DropdownMenuItem(
                             value: .local,
-                            child: Text('Keep Local'),
+                            child: Text(context.tr('Keep Local')),
                           ),
                           DropdownMenuItem(
                             value: .remote,
-                            child: Text('Keep Remote'),
+                            child: Text(context.tr('Keep Remote')),
                           ),
                         ],
                         onChanged: state.busy
@@ -135,16 +147,16 @@ class const AleraConfigurationReview({
                                   as String?,
                           decoration: InputDecoration(
                             labelText: difference.path.contains('textActions')
-                                ? 'Action Name'
-                                : 'Profile Name',
+                                ? context.tr('Action Name')
+                                : context.tr('Profile Name'),
                           ),
                           onChanged: state.busy
                               ? null
                               : (value) => onRename(difference, value),
                         ),
                       SelectableText(
-                        'Result: ${difference.choice == null
-                            ? "Unresolved"
+                        '${context.tr('Result')}: ${difference.choice == null
+                            ? context.tr("Unresolved")
                             : difference.customResult != null
                             ? const JsonEncoder.withIndent("  ").convert(difference.result)
                             : _display(difference, difference.choice == ConfigurationChoice.local)}',
@@ -154,7 +166,7 @@ class const AleraConfigurationReview({
                 ),
               ),
             ),
-          Text('These changes apply only to $target.'),
+          Text('${context.tr('These changes apply only to')} $target.'),
           const SizedBox(height: AleraTokens.space8),
           Wrap(
             spacing: AleraTokens.space8,
@@ -164,30 +176,34 @@ class const AleraConfigurationReview({
                 onPressed: state.busy || review.merge.hasUnresolved
                     ? null
                     : () => onApply(false),
-                child: const Text('Apply To Device'),
+                child: Text(context.tr('Apply To Device')),
               ),
               FilledButton(
                 onPressed: state.busy || review.merge.hasUnresolved
                     ? null
                     : () => onApply(true),
-                child: const Text('Apply And Upload'),
+                child: Text(context.tr('Apply And Upload')),
               ),
             ],
           ),
           const SizedBox(height: AleraTokens.space12),
-          const Text(
-            'Leaving this screen without applying keeps your configuration unchanged. If upload fails after applying, local changes remain pending.',
+          Text(
+            context.tr(
+              'Leaving this screen without applying keeps your configuration unchanged. If upload fails after applying, local changes remain pending.',
+            ),
           ),
         ],
         for (final item in state.history)
           ListTile(
-            title: Text('Version ${item['revision']} • ${item['deviceName']}'),
+            title: Text(
+              '${context.tr('Version')} ${item['revision']} • ${item['deviceName']}',
+            ),
             subtitle: Text('${item['createdAt']}\n${item['summary']}'),
             trailing: TextButton(
               onPressed: state.busy
                   ? null
                   : () => onRestore(item['revision'] as int),
-              child: const Text('Compare'),
+              child: Text(context.tr('Compare')),
             ),
           ),
       ],

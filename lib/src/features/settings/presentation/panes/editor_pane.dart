@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/feedback/alera_empty_state.dart';
 import 'package:alera/src/design_system/forms/alera_search_field.dart';
@@ -155,7 +156,7 @@ class _EditorThemePickerSettingState extends State<_EditorThemePickerSetting> {
         crossAxisAlignment: .start,
         children: <Widget>[
           Text(
-            'Theme Preset',
+            context.tr('Theme Preset'),
             style: theme.textTheme.bodyMedium?.copyWith(
               color: AleraTokens.foreground,
               fontWeight: .w500,
@@ -163,7 +164,7 @@ class _EditorThemePickerSettingState extends State<_EditorThemePickerSetting> {
           ),
           const SizedBox(height: AleraTokens.space4),
           Text(
-            'Search and select a syntax highlighting theme.',
+            context.tr('Search and select a syntax highlighting theme.'),
             style: theme.textTheme.bodySmall?.copyWith(
               color: AleraTokens.foregroundMuted,
             ),
@@ -235,7 +236,7 @@ class const _EditorThemeSearchList({
                 children: <Widget>[
                   Expanded(
                     child: Text(
-                      'Selected: $selectedName',
+                      context.tr('Selected: $selectedName'),
                       overflow: .ellipsis,
                       maxLines: 1,
                       style: theme.textTheme.bodySmall?.copyWith(
@@ -245,8 +246,10 @@ class const _EditorThemeSearchList({
                   ),
                   const SizedBox(width: AleraTokens.space8),
                   Text(
-                    'Showing ${themes.length} of '
-                    '${editorSyntaxThemeCatalog.length}',
+                    context.tr(
+                      'Showing ${themes.length} of '
+                      '${editorSyntaxThemeCatalog.length}',
+                    ),
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: AleraTokens.foregroundMuted,
                     ),
@@ -270,6 +273,7 @@ class const _EditorThemeSearchList({
                         final entry = themes[index];
                         return AleraMenuItem(
                           label: entry.name,
+                          localizeLabel: false,
                           active: index == highlightedIndex,
                           selected: entry.name == selectedName,
                           leading: _EditorThemeColorDots(entry: entry),

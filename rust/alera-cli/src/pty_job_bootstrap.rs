@@ -20,6 +20,8 @@ pub(crate) const BOOTSTRAP_REQUEST_ENV: &str = "ALERA_PTY_JOB_BOOTSTRAP_REQUEST"
 struct BootstrapRequest {
     shell: String,
     arguments: Vec<String>,
+    #[serde(rename = "workingDirectory")]
+    working_directory: String,
 }
 
 pub(crate) fn is_invocation() -> bool {
@@ -60,6 +62,7 @@ fn run_inner() -> Result<i32, String> {
         Command::new(&resolved)
     };
     let status = command
+        .current_dir(&request.working_directory)
         .args(&request.arguments)
         .env_remove(BOOTSTRAP_EVENT_ENV)
         .env_remove(BOOTSTRAP_PARENT_PID_ENV)

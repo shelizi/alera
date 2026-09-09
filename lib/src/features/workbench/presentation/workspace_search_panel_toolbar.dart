@@ -27,7 +27,7 @@ class const _SearchToolbar({
         child: Row(
           children: <Widget>[
             Text(
-              'Search',
+              context.tr('Search'),
               style: Theme.of(context).textTheme.titleSmall
                   ?.copyWith(color: AleraTokens.foreground, fontWeight: .w600),
             ),

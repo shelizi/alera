@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:flutter/material.dart';
 
@@ -66,7 +67,7 @@ class _AleraMasterDetailState extends State<AleraMasterDetail> {
                       children: <Widget>[
                         Expanded(
                           child: Text(
-                            widget.masterTitle,
+                            context.tr(widget.masterTitle),
                             style: theme.textTheme.titleSmall?.copyWith(
                               color: AleraTokens.foreground,
                               fontWeight: .w600,
@@ -85,7 +86,7 @@ class _AleraMasterDetailState extends State<AleraMasterDetail> {
               currentWidth: masterWidth,
               minWidth: widget.masterMinWidth,
               maxWidth: maximumMasterWidth,
-              label: 'Resize ${widget.masterTitle} List',
+              label: context.tr('Resize ${widget.masterTitle} List'),
               onResize: (width) => setState(() {
                 _masterWidth = width;
               }),

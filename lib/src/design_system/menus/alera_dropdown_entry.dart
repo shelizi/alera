@@ -11,6 +11,7 @@ class const AleraDropdownEntry<T>({
   required final T value,
   required final String label,
   final Widget? leading,
+  final bool localizeLabel = true,
   final bool selected = false,
   final bool enabled = true,
 }) extends PopupMenuEntry<T> {
@@ -54,7 +55,9 @@ class _AleraDropdownEntryState<T> extends State<AleraDropdownEntry<T>> {
               ],
               Expanded(
                 child: Text(
-                  context.tr(widget.label),
+                  widget.localizeLabel
+                      ? context.tr(widget.label)
+                      : widget.label,
                   style: Theme.of(context).textTheme.bodyMedium
                       ?.copyWith(color: color),
                 ),

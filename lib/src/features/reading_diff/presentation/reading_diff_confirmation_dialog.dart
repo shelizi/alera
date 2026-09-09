@@ -28,7 +28,7 @@ class const ReadingDiffConfirmationDialog({
                 const SizedBox(width: AleraTokens.space8),
                 Expanded(
                   child: Text(
-                    'Generate Reading Diff',
+                    context.tr('Generate Reading Diff'),
                     style: theme.textTheme.titleMedium,
                   ),
                 ),
@@ -41,14 +41,18 @@ class const ReadingDiffConfirmationDialog({
                   crossAxisAlignment: .stretch,
                   children: <Widget>[
                     Text(
-                      'This manually runs the configured AI Assist agent and may consume subscription quota or other provider usage. The complete selected patch is provided, including portions hidden by preview truncation.',
+                      context.tr(
+                        'This manually runs the configured AI Assist agent and may consume subscription quota or other provider usage. The complete selected patch is provided, including portions hidden by preview truncation.',
+                      ),
                       style: theme.textTheme.bodyMedium?.copyWith(
                         color: AleraTokens.foregroundMuted,
                       ),
                     ),
                     const SizedBox(height: AleraTokens.space8),
                     Text(
-                      'The result opens with a behavioral overview and a condensed, non-applicable diff. It is not a bug or security review.',
+                      context.tr(
+                        'The result opens with a behavioral overview and a condensed, non-applicable diff. It is not a bug or security review.',
+                      ),
                       style: theme.textTheme.bodyMedium?.copyWith(
                         color: AleraTokens.foregroundMuted,
                       ),
@@ -64,15 +68,15 @@ class const ReadingDiffConfirmationDialog({
                     ),
                     _ReadingDiffDetail(
                       label: 'Effort',
-                      value: preparation.effort ?? 'Agent Default',
+                      value: preparation.effort ?? context.tr('Agent Default'),
                     ),
                     _ReadingDiffDetail(
                       label: 'Access',
                       value:
                           preparation.accessPolicy ==
                               AgentTaskAccessPolicy.repositoryReadOnly
-                          ? 'Repository Read Only'
-                          : 'Diff Only',
+                          ? context.tr('Repository Read Only')
+                          : context.tr('Diff Only'),
                     ),
                     _ReadingDiffDetail(
                       label: 'Diff Size',
@@ -122,7 +126,7 @@ class const _ReadingDiffDetail({
           SizedBox(
             width: AleraTokens.space48 * 2,
             child: Text(
-              label,
+              context.tr(label),
               style: Theme.of(context).textTheme.labelMedium
                   ?.copyWith(color: AleraTokens.foregroundMuted),
             ),

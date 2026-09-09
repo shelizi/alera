@@ -22,8 +22,9 @@ class const AgentUsageDailyChart({
       crossAxisAlignment: .stretch,
       children: <Widget>[
         Semantics(
-          label:
-              'Daily Claude Code, Codex, and Grok Build token usage. $semanticLabel',
+          label: context.tr(
+            'Daily Claude Code, Codex, and Grok Build token usage. $semanticLabel',
+          ),
           image: true,
           child: SizedBox(
             height: AleraTokens.usageChartHeight,

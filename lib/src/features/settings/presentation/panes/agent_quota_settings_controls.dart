@@ -311,7 +311,9 @@ class _ClaudeProfileDialogState extends State<_ClaudeProfileDialog> {
           crossAxisAlignment: .stretch,
           children: <Widget>[
             Text(
-              widget.initial == null ? 'Add CCS Profile' : 'Edit CCS Profile',
+              context.tr(
+                widget.initial == null ? 'Add CCS Profile' : 'Edit CCS Profile',
+              ),
               style: Theme.of(context).textTheme.titleLarge,
             ),
             const SizedBox(height: AleraTokens.space16),

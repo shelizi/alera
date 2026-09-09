@@ -144,7 +144,7 @@ class _KeyboardCommandPaletteDialogState
                   controller: _queryController,
                   focusNode: _queryFocusNode,
                   autofocus: true,
-                  hintText: 'Search commands',
+                  hintText: context.tr('Search commands'),
                   prefixIcon: AleraIcons.search,
                   onChanged: _updateQuery,
                   onSubmitted: (_) => _executeSelected(),

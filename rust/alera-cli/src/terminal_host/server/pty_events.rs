@@ -29,6 +29,27 @@ impl ServerActor {
     }
 
     async fn handle_pty_output(&mut self, session_id: String, data: Vec<u8>) {
+        #[cfg(windows)]
+        let cursor_response_error = self.sessions.get_mut(&session_id).and_then(|session| {
+            if !session.take_initial_conpty_cursor_query(&data) {
+                return None;
+            }
+            let session_instance_id = session.instance_id();
+            session
+                .queue_write(
+                    PtyWriteCompletion::ConPtyStartupCursorResponse {
+                        session_instance_id,
+                    },
+                    b"\x1b[1;1R",
+                )
+                .err()
+                .map(|error| error.wire_message())
+        });
+        #[cfg(windows)]
+        if let Some(message) = cursor_response_error {
+            self.broadcast_terminal_error(&session_id, message);
+        }
+
         let state = self.sessions.get_mut(&session_id).map(|session| {
             let (output_generation, durable_generation, title_change) =
                 session.append_output(&data);
@@ -203,6 +224,16 @@ impl ServerActor {
             | PtyWriteCompletion::TerminalPulse {
                 session_instance_id,
                 ..
+            } => {
+                // Internal writes only report errors; they never trigger startup submission.
+                let current = self.sessions.get(&session_id).map(Session::instance_id);
+                if let Some(message) = error.filter(|_| current == Some(session_instance_id)) {
+                    self.broadcast_terminal_error(&session_id, message);
+                }
+            }
+            #[cfg(windows)]
+            PtyWriteCompletion::ConPtyStartupCursorResponse {
+                session_instance_id,
             } => {
                 let current = self.sessions.get(&session_id).map(Session::instance_id);
                 if let Some(message) = error.filter(|_| current == Some(session_instance_id)) {

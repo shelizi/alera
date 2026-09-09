@@ -54,6 +54,7 @@ String agentDisplayName(AgentType agentType) {
     AgentType.pi => 'Pi',
     AgentType.amp => 'Amp',
     AgentType.grok => 'Grok Build',
+    AgentType.devin => 'Devin',
     AgentType.fx => 'fx',
   };
 }
@@ -86,6 +87,7 @@ _AgentIconAsset _agentAsset(AgentType agentType) {
       raster: true,
     ),
     AgentType.grok => const _AgentIconAsset(path: 'assets/agents/grok.svg'),
+    AgentType.devin => const _AgentIconAsset(path: 'assets/agents/devin.svg'),
     AgentType.fx => const _AgentIconAsset(path: 'assets/agents/fx.svg'),
   };
 }

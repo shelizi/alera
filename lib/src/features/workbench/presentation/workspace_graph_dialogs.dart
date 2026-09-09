@@ -111,7 +111,7 @@ class _WorkspaceTagsDialogState extends State<_WorkspaceTagsDialog> {
                 const SizedBox(width: AleraTokens.space8),
                 Expanded(
                   child: Text(
-                    'Manage Tags',
+                    context.tr('Manage Tags'),
                     style: theme.textTheme.titleMedium?.copyWith(
                       fontWeight: .bold,
                     ),
@@ -361,7 +361,7 @@ class _WorkspaceParentDialogState extends State<_WorkspaceParentDialog> {
                 const SizedBox(width: AleraTokens.space8),
                 Expanded(
                   child: Text(
-                    'Set Parent Workspace',
+                    context.tr('Set Parent Workspace'),
                     style: theme.textTheme.titleMedium?.copyWith(
                       fontWeight: .bold,
                     ),

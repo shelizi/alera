@@ -49,7 +49,7 @@ class const UpdateSettingsSection({super.key}) extends ConsumerWidget {
             bottom: AleraTokens.space8,
           ),
           child: Text(
-            'Updates',
+            context.tr('Updates'),
             style: theme.textTheme.titleSmall?.copyWith(
               color: AleraTokens.foreground,
               fontWeight: .w600,

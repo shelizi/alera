@@ -80,6 +80,9 @@ typedef RenameWorkspaceTabCallback = Future<void> Function({
   required String title,
 });
 typedef OpenWorkspaceFileCallback = Future<void> Function(String relativePath);
+typedef OpenExternalTerminalCallback = Future<void> Function(
+  WorkspaceTabRecord tab,
+);
 
 @visibleForTesting
 String workspaceTabTitleForTesting(WorkspaceTabRecord tab) =>
@@ -190,6 +193,7 @@ class const WorkspaceWorkbenchView({
   required final ValueChanged<String> onCloseTab,
   required final ValueChanged<List<String>> onCloseTabs,
   required final RenameWorkspaceTabCallback onRenameTab,
+  final OpenExternalTerminalCallback? onOpenExternalTerminal,
   required final OpenWorkspaceFileCallback onOpenEditor,
   required final OpenWorkspaceFileCallback onOpenMermanPreview,
   required final MoveWorkspaceTabCallback onMoveTab,
@@ -242,6 +246,7 @@ class _WorkspaceWorkbenchViewState extends State<WorkspaceWorkbenchView> {
           onCloseTab: widget.onCloseTab,
           onCloseTabs: widget.onCloseTabs,
           onRenameTab: widget.onRenameTab,
+          onOpenExternalTerminal: widget.onOpenExternalTerminal,
           onOpenEditor: widget.onOpenEditor,
           onOpenMermanPreview: widget.onOpenMermanPreview,
           onMoveTab: widget.onMoveTab,

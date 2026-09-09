@@ -52,6 +52,7 @@ pub fn build_managed_agent_launch(
         "pi" => build_pi(values, &mut arguments)?,
         "amp" => build_amp(values, &mut arguments)?,
         "grok" => build_grok(values, &mut arguments)?,
+        "devin" => build_devin(values, &mut arguments)?,
         "fx" => build_fx(values, &mut arguments)?,
         _ => return Err(format!("unsupported managed agent type: {agent_type}")),
     }
@@ -59,6 +60,20 @@ pub fn build_managed_agent_launch(
         executable,
         arguments,
     })
+}
+
+fn build_devin(values: &Map<String, Value>, arguments: &mut Vec<String>) -> Result<(), String> {
+    require_known_keys(values, &["model", "permissionMode", "sandbox"])?;
+    push_string(values, "model", "--model", arguments)?;
+    push_enum(
+        values,
+        "permissionMode",
+        "--permission-mode",
+        &["auto", "accept-edits", "smart", "dangerous"],
+        arguments,
+    )?;
+    push_flag(values, "sandbox", "--sandbox", arguments)?;
+    Ok(())
 }
 
 fn build_codex(values: &Map<String, Value>, arguments: &mut Vec<String>) -> Result<(), String> {

@@ -11,11 +11,6 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
-#[cfg(windows)]
-use base64::engine::general_purpose::STANDARD;
-#[cfg(windows)]
-use base64::Engine as _;
-
 const PROTOCOL_VERSION: i64 = 4;
 
 struct HostGuard(Child);
@@ -33,24 +28,6 @@ fn send(writer: &mut TcpStream, message: Value) {
     writer.write_all(&line).unwrap();
     writer.flush().unwrap();
 }
-
-#[cfg(windows)]
-fn answer_conpty_cursor_query(writer: &mut TcpStream, session_id: &str) {
-    send(
-        writer,
-        json!({
-            "id": 9_001,
-            "type": "write",
-            "payload": {
-                "sessionId": session_id,
-                "dataBase64": STANDARD.encode(b"\x1b[1;1R")
-            }
-        }),
-    );
-}
-
-#[cfg(not(windows))]
-fn answer_conpty_cursor_query(_writer: &mut TcpStream, _session_id: &str) {}
 
 fn read_response(reader: &mut BufReader<TcpStream>, id: i64) -> Value {
     loop {
@@ -162,7 +139,6 @@ fn workspace_sleep_removes_all_tabs_layout_and_sessions() {
             }
         }),
     );
-    answer_conpty_cursor_query(&mut writer, "sleep-session");
     assert_eq!(read_response(&mut reader, 4)["ok"], json!(true));
     send(
         &mut writer,

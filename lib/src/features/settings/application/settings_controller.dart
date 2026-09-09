@@ -106,7 +106,9 @@ class SettingsController extends _$SettingsController
     if (state.general.language == value) {
       return;
     }
-    await _save(state.copyWith(general: state.general.copyWith(language: value)));
+    await _save(
+      state.copyWith(general: state.general.copyWith(language: value)),
+    );
   });
 
   Future<void> updateWorkspaceDirectory(String? path) => _serialize(() async {
@@ -210,6 +212,7 @@ class SettingsController extends _$SettingsController
           AgentType.pi => current.copyWith(pi: value),
           AgentType.amp => current.copyWith(amp: value),
           AgentType.grok => current.copyWith(grok: value),
+          AgentType.devin => current.copyWith(devin: value),
           AgentType.fx => current.copyWith(fx: value),
         };
         if (current == next) {
