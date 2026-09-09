@@ -29,7 +29,47 @@ class AleraLocalizations {
     if (!isTraditionalChinese) {
       return source;
     }
-    return _traditionalChinese[source] ?? source;
+    return _traditionalChinese[source] ??
+        _translateDynamicTraditionalChinese(source) ??
+        source;
+  }
+
+  static String? _translateDynamicTraditionalChinese(String source) {
+    final singleDirty = RegExp(r'^(.+) has unsaved changes\.$')
+        .firstMatch(source);
+    if (singleDirty != null) {
+      return '「${singleDirty.group(1)}」有尚未儲存的變更。';
+    }
+    final multipleDirty = RegExp(r'^(\d+) editor tabs have unsaved changes\.$')
+        .firstMatch(source);
+    if (multipleDirty != null) {
+      return '有 ${multipleDirty.group(1)} 個編輯器分頁包含尚未儲存的變更。';
+    }
+    final activeAgent = RegExp(
+      r'^An agent is actively working in "(.+)"\. Closing will terminate the session\.$',
+    ).firstMatch(source);
+    if (activeAgent != null) {
+      return '代理程式正在「${activeAgent.group(1)}」中執行工作。關閉後將終止此工作階段。';
+    }
+    final runningProcess = RegExp(
+      r'^The process "(.+)" is still running in "(.+)"\. Closing will terminate it\.$',
+    ).firstMatch(source);
+    if (runningProcess != null) {
+      return '程序「${runningProcess.group(1)}」仍在「${runningProcess.group(2)}」中執行。關閉後將終止該程序。';
+    }
+    final runningCommand = RegExp(
+      r'^A command is still running in "(.+)"\. Closing will terminate it\.$',
+    ).firstMatch(source);
+    if (runningCommand != null) {
+      return '「${runningCommand.group(1)}」中仍有命令正在執行。關閉後將終止該命令。';
+    }
+    final busyTerminals = RegExp(
+      r'^(\d+) terminal tabs have running processes or active agents\. Closing will terminate them\.$',
+    ).firstMatch(source);
+    if (busyTerminals != null) {
+      return '有 ${busyTerminals.group(1)} 個終端機分頁仍有執行中程序或作用中代理程式。關閉後將終止它們。';
+    }
+    return null;
   }
 
   static const Map<String, String> _traditionalChinese = <String, String>{
@@ -307,6 +347,18 @@ class AleraLocalizations {
     'Condensed Diff': '精簡 Diff',
     'What Changed': '變更內容',
     'Chunk Analysis': '區塊分析',
+    'Refresh Worktrees': '重新整理工作樹',
+    'Confirm Before Closing Busy Terminals': '關閉忙碌終端機前確認',
+    'Ask for confirmation before closing tabs with running processes or active agents.':
+        '關閉仍有執行中程序或作用中代理程式的分頁前先要求確認。',
+    'Close Unsaved Editor?': '關閉未儲存的編輯器？',
+    'Close Unsaved Editors?': '關閉未儲存的編輯器分頁？',
+    'Stop Running Agent?': '停止執行中的代理程式？',
+    'Stop Running Command?': '停止執行中的命令？',
+    'Close Busy Terminals?': '關閉忙碌的終端機？',
+    'Stop And Close': '停止並關閉',
+    'Closing will end the command and every process it started. Anything halfway through will stay halfway through.':
+        '關閉後會終止此命令及它啟動的所有程序。任何尚未完成的操作都會停在目前狀態。',
     'New Branch': '新分支',
     'Existing Branch': '現有分支',
     'Loading files...': '正在載入檔案…',
