@@ -69,6 +69,11 @@ class AleraLocalizations {
     if (busyTerminals != null) {
       return '有 ${busyTerminals.group(1)} 個終端機分頁仍有執行中程序或作用中代理程式。關閉後將終止它們。';
     }
+    final originalPath = RegExp(r'^Original \((.+)\)$').firstMatch(source);
+    if (originalPath != null) {
+      return '原始（${originalPath.group(1)}）';
+    }
+
     return null;
   }
 
@@ -353,6 +358,8 @@ class AleraLocalizations {
     'Switch to Unified View': '切換至統一檢視',
     'Original': '原始',
     'Modified': '修改後',
+    'Empty': '空白',
+    'Deleted': '已刪除',
     'Refresh Worktrees': '重新整理工作樹',
     'Confirm Before Closing Busy Terminals': '關閉忙碌終端機前確認',
     'Ask for confirmation before closing tabs with running processes or active agents.':

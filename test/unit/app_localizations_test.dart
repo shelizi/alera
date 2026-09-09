@@ -45,6 +45,17 @@ void main() {
       expect(l10n.translate('Stop Running Command?'), '停止執行中的命令？');
       expect(l10n.translate('Stop And Close'), '停止並關閉');
     });
+    test('traditional Chinese localizes side-by-side diff labels', () {
+      final l10n = AleraLocalizations(const Locale('zh', 'TW'));
+      expect(l10n.translate('Original'), '原始');
+      expect(l10n.translate('Modified'), '修改後');
+      expect(l10n.translate('Empty'), '空白');
+      expect(l10n.translate('Deleted'), '已刪除');
+      expect(
+        l10n.translate('Original (lib/src/app.dart)'),
+        '原始（lib/src/app.dart）',
+      );
+    });
 
     test('traditional Chinese localizes dynamic close warnings', () {
       final l10n = AleraLocalizations(const Locale('zh', 'TW'));
