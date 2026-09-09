@@ -93,6 +93,26 @@ void main() {
       );
     });
 
+    test('traditional Chinese localizes runtime busy and ship dialogs', () {
+      final l10n = AleraLocalizations(const Locale('zh', 'TW'));
+      expect(l10n.translate('Ship Changes?'), '送出變更？');
+      expect(l10n.translate('Ship Staged Changes'), '送出已暫存變更');
+      expect(l10n.translate('Ship All Changes'), '送出所有變更');
+      expect(l10n.translate('Runtime Still Has Work'), '執行環境仍有工作進行中');
+      expect(
+        l10n.translate(
+          'The runtime has 2 open agent(s) and 1 active terminal session(s).',
+        ),
+        '執行環境目前有 2 個開啟中的代理程式、1 個作用中的終端機工作階段。',
+      );
+      expect(
+        l10n.translate(
+          'The runtime has 1 active background job(s). You can quit and leave the runtime running, or force stop it.',
+        ),
+        '執行環境目前有 1 個作用中的背景工作。你可以結束 Alera 並讓執行環境保持運作，或強制停止它。',
+      );
+    });
+
     test('traditional Chinese keeps product and provider brand names in English', () {
       final l10n = AleraLocalizations(const Locale('zh', 'TW'));
       expect(l10n.translate('Open in Zed'), contains('Zed'));

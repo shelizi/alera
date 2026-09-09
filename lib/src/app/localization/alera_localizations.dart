@@ -74,7 +74,51 @@ class AleraLocalizations {
       return '原始（${originalPath.group(1)}）';
     }
 
+    final runtimeBusyWithSuffix = RegExp(
+      r'^The runtime has (.+)\. (Force stop terminates them\.|You can quit and leave the runtime running, or force stop it\.)$',
+    ).firstMatch(source);
+    if (runtimeBusyWithSuffix != null) {
+      final details = _translateRuntimeBusyItems(
+        runtimeBusyWithSuffix.group(1)!,
+      );
+      final suffix = runtimeBusyWithSuffix.group(2)!;
+      final translatedSuffix = switch (suffix) {
+        'Force stop terminates them.' => '強制停止會終止這些工作。',
+        _ => '你可以結束 Alera 並讓執行環境保持運作，或強制停止它。',
+      };
+      return '執行環境目前有 $details。$translatedSuffix';
+    }
+
+    final runtimeBusy = RegExp(r'^The runtime has (.+)\.$').firstMatch(source);
+    if (runtimeBusy != null) {
+      final details = _translateRuntimeBusyItems(runtimeBusy.group(1)!);
+      return '執行環境目前有 $details。';
+    }
+
     return null;
+  }
+
+  static String _translateRuntimeBusyItems(String source) {
+    return source
+        .replaceAllMapped(
+          RegExp(r'(\d+) open agent\(s\)'),
+          (match) => '${match.group(1)} 個開啟中的代理程式',
+        )
+        .replaceAllMapped(
+          RegExp(r'(\d+) active terminal session\(s\)'),
+          (match) => '${match.group(1)} 個作用中的終端機工作階段',
+        )
+        .replaceAllMapped(
+          RegExp(r'(\d+) active background job\(s\)'),
+          (match) => '${match.group(1)} 個作用中的背景工作',
+        )
+        .replaceAllMapped(
+          RegExp(r'(\d+) active push subscription\(s\)'),
+          (match) => '${match.group(1)} 個作用中的推播訂閱',
+        )
+        .replaceAll(', and ', '、')
+        .replaceAll(' and ', '、')
+        .replaceAll(', ', '、');
   }
 
   static const Map<String, String> _traditionalChinese = <String, String>{
@@ -480,6 +524,22 @@ class AleraLocalizations {
     'Could not load diff.': '無法載入 Diff。',
     'No diff available.': '沒有可用的 Diff。',
     'No stashes to pop': '沒有可套用的 Stash',
+
+    'Ship Changes?': '送出變更？',
+    'Ship only staged changes, or stage all changes first and include them in the commit.':
+        '僅送出已暫存的變更，或先暫存所有變更並將其納入 Commit。',
+    'Ship Staged Changes': '送出已暫存變更',
+    'Ship All Changes': '送出所有變更',
+    'Runtime Still Has Work': '執行環境仍有工作進行中',
+    'Quit And Leave Runtime Open': '結束 Alera 並讓執行環境保持運作',
+    'Force Stop And Quit': '強制停止並結束 Alera',
+    'Force Stop Runtime': '強制停止執行環境',
+    'Force Stop': '強制停止',
+    'The runtime still has active work.': '執行環境仍有進行中的工作。',
+    'The runtime still has active work. Force stop terminates them.':
+        '執行環境仍有進行中的工作。強制停止會終止這些工作。',
+    'The runtime still has active work. You can quit and leave the runtime running, or force stop it.':
+        '執行環境仍有進行中的工作。你可以結束 Alera 並讓執行環境保持運作，或強制停止它。',
 
     'Active Run': '執行中工作',
     'Update With': '使用以下方式更新',

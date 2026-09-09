@@ -1,4 +1,5 @@
 import 'package:alera/src/app/theme/alera_tokens.dart';
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/design_system/layout/alera_dialog.dart';
 import 'package:flutter/material.dart';
 
@@ -35,16 +36,20 @@ class const AleraChoiceDialog<T>({
     final hasSecondary = secondaryLabel != null && secondaryValue != null;
     final primaryAction = FilledButton(
       onPressed: () => Navigator.of(context).pop(primaryValue),
-      child: Text(primaryLabel, maxLines: 1, overflow: .ellipsis),
+      child: Text(context.tr(primaryLabel), maxLines: 1, overflow: .ellipsis),
     );
     final secondaryAction = FilledButton(
       onPressed: () => Navigator.of(context).pop(secondaryValue as T),
       style: secondaryStyle,
-      child: Text(secondaryLabel ?? '', maxLines: 1, overflow: .ellipsis),
+      child: Text(
+        secondaryLabel == null ? '' : context.tr(secondaryLabel!),
+        maxLines: 1,
+        overflow: .ellipsis,
+      ),
     );
     final cancelAction = TextButton(
       onPressed: () => Navigator.of(context).pop(),
-      child: Text(cancelLabel, maxLines: 1, overflow: .ellipsis),
+      child: Text(context.tr(cancelLabel), maxLines: 1, overflow: .ellipsis),
     );
     return AleraDialog(
       maxWidth: 440,
@@ -54,10 +59,10 @@ class const AleraChoiceDialog<T>({
           mainAxisSize: .min,
           crossAxisAlignment: .start,
           children: <Widget>[
-            Text(title, style: theme.textTheme.titleMedium),
+            Text(context.tr(title), style: theme.textTheme.titleMedium),
             const SizedBox(height: AleraTokens.space12),
             Text(
-              message,
+              context.tr(message),
               style: theme.textTheme.bodyMedium?.copyWith(
                 color: AleraTokens.foregroundMuted,
               ),
