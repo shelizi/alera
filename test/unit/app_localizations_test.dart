@@ -194,6 +194,21 @@ void main() {
       expect(l10n.translate('days'), '天');
     });
 
+    test('traditional Chinese localizes automation detail chrome', () {
+      final l10n = AleraLocalizations(const Locale('zh', 'TW'));
+      expect(l10n.translate('Automation unavailable'), '無法取得自動化');
+      expect(l10n.translate('Pause'), '暫停');
+      expect(l10n.translate('Runs'), '執行紀錄');
+      expect(l10n.translate('Audit'), '稽核');
+      expect(l10n.translate('Schedule'), '排程');
+      expect(l10n.translate('Cron / time'), 'Cron / 時間');
+      expect(l10n.translate('Policies'), '政策');
+      expect(l10n.translate('Limits'), '限制');
+      expect(l10n.translate('Effective Policy'), '生效政策');
+      expect(l10n.translate('Signature Timeline'), '簽章時間軸');
+      expect(l10n.translate('Overlap'), '重疊處理');
+    });
+
     test('traditional Chinese localizes account settings', () {
       final l10n = AleraLocalizations(const Locale('zh', 'TW'));
       expect(l10n.translate('Account unavailable'), '無法取得帳號');

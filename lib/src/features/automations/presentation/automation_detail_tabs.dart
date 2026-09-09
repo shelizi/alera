@@ -32,7 +32,7 @@ class const AutomationOverviewTab({
           SelectableText(detail.automation.promptTemplate),
           const SizedBox(height: AleraTokens.space12),
           Text(
-            'Effective Policy',
+            context.tr('Effective Policy'),
             style: Theme.of(context).textTheme.titleSmall,
           ),
           const SizedBox(height: AleraTokens.space8),
@@ -44,7 +44,7 @@ class const AutomationOverviewTab({
           ),
           const SizedBox(height: AleraTokens.space12),
           Text(
-            'Signature Timeline',
+            context.tr('Signature Timeline'),
             style: Theme.of(context).textTheme.titleSmall,
           ),
           const SizedBox(height: AleraTokens.space8),
@@ -126,7 +126,9 @@ class const AutomationAuditTab({required final List<JsonMap> events, super.key})
                 ListTile(
                   dense: true,
                   contentPadding: EdgeInsets.zero,
-                  title: Text(event['action']?.toString() ?? 'Event'),
+                  title: Text(
+                    event['action']?.toString() ?? context.tr('Event'),
+                  ),
                   subtitle: Text(
                     '${event['createdAt'] ?? ''} · ${event['actor'] ?? ''}',
                   ),

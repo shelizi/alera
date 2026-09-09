@@ -109,7 +109,7 @@ class const AutomationDetailPane({
         if (snapshot.hasError) {
           return AleraEmptyState(
             icon: AleraIcons.error,
-            title: 'Automation unavailable',
+            title: context.tr('Automation unavailable'),
             message: snapshot.error.toString(),
             action: FilledButton(
               onPressed: onRefresh,
@@ -119,8 +119,8 @@ class const AutomationDetailPane({
         }
         final detail = snapshot.data;
         if (detail == null) {
-          return const AleraEmptyState(
-            message: 'No automation details available.',
+          return AleraEmptyState(
+            message: context.tr('No automation details available.'),
           );
         }
         return AutomationDetailContent(
@@ -209,7 +209,7 @@ class const AutomationDetailContent({
             ),
             OutlinedButton(
               onPressed: onPause ?? onResume,
-              child: Text(onPause != null ? 'Pause' : 'Resume'),
+              child: Text(context.tr(onPause != null ? 'Pause' : 'Resume')),
             ),
             if (onRestore != null)
               TextButton(
@@ -226,11 +226,11 @@ class const AutomationDetailContent({
             length: 3,
             child: Column(
               children: <Widget>[
-                const TabBar(
+                TabBar(
                   tabs: <Widget>[
-                    Tab(text: 'Overview'),
-                    Tab(text: 'Runs'),
-                    Tab(text: 'Audit'),
+                    Tab(text: context.tr('Overview')),
+                    Tab(text: context.tr('Runs')),
+                    Tab(text: context.tr('Audit')),
                   ],
                 ),
                 Expanded(
@@ -340,7 +340,10 @@ class const AutomationInfoRow({
         children: <Widget>[
           SizedBox(
             width: AleraTokens.automationInfoLabelWidth,
-            child: Text(label, style: Theme.of(context).textTheme.bodySmall),
+            child: Text(
+              context.tr(label),
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
           ),
           Expanded(child: Text(value, maxLines: 4, overflow: .ellipsis)),
         ],
