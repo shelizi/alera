@@ -23,7 +23,11 @@ enum GitDiffViewMode { tree, flat }
 @MappableEnum()
 enum GitDiffGroupMode { byArea, unified }
 
-/// Whether git diffs are rendered as a complete file or split side-by-side.
+/// Whether git diff content shows only changed hunks or the complete file.
+@MappableEnum()
+enum GitDiffContentMode { diffOnly, fullFile }
+
+/// Whether git diffs are laid out in one column or split side-by-side.
 @MappableEnum()
 enum GitDiffPresentationMode { unified, sideBySide }
 
@@ -41,13 +45,25 @@ class WorkbenchViewPrefsDecodeHook extends MappingHook {
 
   @override
   Object? beforeDecode(Object? value) {
-    if (value is! Map || value['activeContextPanelTab'] != 'agentCanvas') {
+    if (value is! Map) {
       return value;
     }
-    return <String, dynamic>{
+    final decoded = <String, dynamic>{
       for (final entry in value.entries) entry.key.toString(): entry.value,
-      'activeContextPanelTab': 'explorer',
     };
+    var changed = false;
+    if (decoded['activeContextPanelTab'] == 'agentCanvas') {
+      decoded['activeContextPanelTab'] = 'explorer';
+      changed = true;
+    }
+    if (!decoded.containsKey('gitDiffContentMode')) {
+      decoded['gitDiffContentMode'] =
+          decoded['gitDiffPresentationMode'] == 'sideBySide'
+          ? 'diffOnly'
+          : 'fullFile';
+      changed = true;
+    }
+    return changed ? decoded : value;
   }
 }
 
@@ -75,6 +91,7 @@ class const WorkbenchViewPrefs({
   this.explorerMode = WorkspaceExplorerMode.hideIgnored,
   this.gitDiffViewMode = GitDiffViewMode.tree,
   this.gitDiffGroupMode = GitDiffGroupMode.byArea,
+  this.gitDiffContentMode = GitDiffContentMode.fullFile,
   this.gitDiffPresentationMode = GitDiffPresentationMode.unified,
   this.pullRequestCreateAction = PullRequestCreateAction.publish,
   this.workspaceKindFilter = WorkspaceKindFilter.all,
@@ -136,7 +153,10 @@ class const WorkbenchViewPrefs({
   /// Whether Source Control groups files by staged state or shows one list.
   final GitDiffGroupMode gitDiffGroupMode;
 
-  /// Whether git diffs are rendered as a complete file or split side-by-side.
+  /// Whether git diff content shows only changed hunks or the complete file.
+  final GitDiffContentMode gitDiffContentMode;
+
+  /// Whether git diffs are laid out in one column or split side-by-side.
   final GitDiffPresentationMode gitDiffPresentationMode;
 
   /// Sticky create-PR split-button action (publish vs draft). App-wide and
@@ -172,6 +192,7 @@ class const WorkbenchViewPrefs({
     explorerMode: .hideIgnored,
     gitDiffViewMode: .tree,
     gitDiffGroupMode: .byArea,
+    gitDiffContentMode: .fullFile,
     gitDiffPresentationMode: .unified,
     pullRequestCreateAction: .publish,
     workspaceKindFilter: .all,

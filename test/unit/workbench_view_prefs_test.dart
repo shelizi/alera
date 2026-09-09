@@ -133,9 +133,40 @@ void main() {
       expect(restored.showPinnedWorkspacesBelow, isTrue);
       expect(restored.showActiveWorkspacesOnly, isFalse);
       expect(restored.gitDiffGroupMode, GitDiffGroupMode.byArea);
+      expect(restored.gitDiffContentMode, GitDiffContentMode.fullFile);
       expect(restored.gitDiffPresentationMode, GitDiffPresentationMode.unified);
     });
 
+    test('migrates legacy side-by-side prefs to diff-only content', () {
+      final restored = WorkbenchViewPrefs.fromJson(<String, Object?>{
+        'groupBy': 'project',
+        'projectSort': 'name',
+        'workspaceSort': 'name',
+        'selectedProjectIds': <String>[],
+        'collapsedProjectIds': <String>[],
+        'expandedWorkspaceIds': <String>[],
+        'gitDiffPresentationMode': 'sideBySide',
+      });
+
+      expect(restored.gitDiffContentMode, GitDiffContentMode.diffOnly);
+      expect(
+        restored.gitDiffPresentationMode,
+        GitDiffPresentationMode.sideBySide,
+      );
+    });
+
+    test('round-trips git diff content and layout independently', () {
+      final prefs = WorkbenchViewPrefs.defaults.copyWith(
+        gitDiffContentMode: .diffOnly,
+        gitDiffPresentationMode: .unified,
+      );
+      final restored = WorkbenchViewPrefs.fromJson(
+        Map<String, Object?>.from(prefs.toMap()),
+      );
+
+      expect(restored.gitDiffContentMode, GitDiffContentMode.diffOnly);
+      expect(restored.gitDiffPresentationMode, GitDiffPresentationMode.unified);
+    });
     test('round-trips the git diff presentation mode', () {
       final prefs = WorkbenchViewPrefs.defaults.copyWith(
         gitDiffPresentationMode: .sideBySide,

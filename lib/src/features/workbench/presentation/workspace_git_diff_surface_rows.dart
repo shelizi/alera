@@ -2,11 +2,12 @@ part of 'workspace_git_diff_surface.dart';
 
 class const _DiffFileList({
   required final GitDiffResult result,
-  required final Map<GitDiffFile, Uint8List> fullFileBytes,
+  required final Map<GitDiffFile, _FullFileContents> fullFileContents,
   required final String sourcePath,
   final String? sourceLabel,
   final String? commitOid,
   final String? parentOid,
+  final GitDiffContentMode contentMode = GitDiffContentMode.fullFile,
   final GitDiffPresentationMode presentationMode =
       GitDiffPresentationMode.unified,
 }) extends StatelessWidget {
@@ -14,11 +15,12 @@ class const _DiffFileList({
   Widget build(BuildContext context) {
     final rows = _DiffRows.fromResult(
       result,
-      fullFileBytes: fullFileBytes,
+      fullFileContents: fullFileContents,
       sourcePath: sourcePath,
       sourceLabel: sourceLabel,
       commitOid: commitOid,
       parentOid: parentOid,
+      contentMode: contentMode,
       presentationMode: presentationMode,
     );
     if (presentationMode == GitDiffPresentationMode.sideBySide) {
@@ -52,11 +54,12 @@ class const _DiffFileList({
 class const _DiffRows(final List<_DiffRow> items) {
   factory fromResult(
     GitDiffResult result, {
-    required Map<GitDiffFile, Uint8List> fullFileBytes,
+    required Map<GitDiffFile, _FullFileContents> fullFileContents,
     required String sourcePath,
     String? sourceLabel,
     String? commitOid,
     String? parentOid,
+    GitDiffContentMode contentMode = GitDiffContentMode.fullFile,
     GitDiffPresentationMode presentationMode = GitDiffPresentationMode.unified,
   }) {
     final items = <_DiffRow>[
@@ -77,21 +80,22 @@ class const _DiffRows(final List<_DiffRow> items) {
         items.add(const _BannerRow('Binary file diff is not shown.'));
       } else if (file.isLarge) {
         items.add(const _BannerRow('Large untracked file diff is not shown.'));
-      } else if (presentationMode == GitDiffPresentationMode.sideBySide) {
-        if (file.lines.isEmpty) {
-          items.add(const _BannerRow('No text diff for this file.'));
-        } else {
-          items.addAll(_buildSideBySideRows(file));
-        }
-        if (file.linePreviewTruncated) {
-          items.add(const _BannerRow('Diff line preview truncated.'));
-        }
       } else {
-        final fullFileRows = _buildFullFileRows(file, fullFileBytes[file]);
-        if (fullFileRows != null) {
-          items.addAll(fullFileRows);
+        final sideBySide =
+            presentationMode == GitDiffPresentationMode.sideBySide;
+        List<_DiffRow>? renderedRows;
+        if (contentMode == GitDiffContentMode.fullFile) {
+          final contents = fullFileContents[file];
+          renderedRows = sideBySide
+              ? _buildFullFileSideBySideRows(file, contents)
+              : _buildFullFileRows(file, contents?.singleSideBytes(file));
+        }
+        if (renderedRows != null) {
+          items.addAll(renderedRows);
         } else if (file.lines.isEmpty) {
           items.add(const _BannerRow('No text diff for this file.'));
+        } else if (sideBySide) {
+          items.addAll(_buildSideBySideRows(file));
         } else {
           for (final line in file.lines) {
             items.add(_DiffLineRow(line));

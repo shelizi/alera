@@ -1,5 +1,15 @@
 part of 'workspace_git_diff_surface.dart';
 
+final class _FullFileContents {
+  const _FullFileContents({this.oldBytes, this.newBytes});
+
+  final Uint8List? oldBytes;
+  final Uint8List? newBytes;
+
+  Uint8List? singleSideBytes(GitDiffFile file) =>
+      file.status == GitChangeStatus.deleted ? oldBytes : newBytes;
+}
+
 final class _FullFileLine {
   const _FullFileLine({
     required this.lineNumber,
@@ -87,14 +97,8 @@ class const _FullFileDiffLine({required final _FullFileLine line})
 }
 
 List<_DiffRow>? _buildFullFileRows(GitDiffFile file, Uint8List? bytes) {
-  if (bytes == null) return null;
-  final String text;
-  try {
-    text = utf8.decode(bytes);
-  } on FormatException {
-    return null;
-  }
-  final lines = _splitFullFileLines(text);
+  final lines = _decodeFullFileLines(bytes);
+  if (lines == null) return null;
   final forceKind = switch (file.status) {
     GitChangeStatus.deleted => GitDiffLineKind.deletion,
     GitChangeStatus.added ||
@@ -187,6 +191,187 @@ List<_DiffRow>? _buildFullFileRows(GitDiffFile file, Uint8List? bytes) {
   }
   appendUnchangedUntil(lines.length + 1);
   return rows;
+}
+
+List<_DiffRow>? _buildFullFileSideBySideRows(
+  GitDiffFile file,
+  _FullFileContents? contents,
+) {
+  if (contents == null) return null;
+  final oldLines = _decodeFullFileLines(contents.oldBytes);
+  final newLines = _decodeFullFileLines(contents.newBytes);
+  final oldLabel =
+      file.status == GitChangeStatus.added ||
+          file.status == GitChangeStatus.untracked
+      ? 'Empty'
+      : (file.oldPath != null && file.oldPath != file.path
+            ? 'Original (${file.oldPath})'
+            : 'Original');
+  final newLabel = file.status == GitChangeStatus.deleted
+      ? 'Deleted'
+      : 'Modified';
+
+  if (file.status == GitChangeStatus.added ||
+      file.status == GitChangeStatus.untracked) {
+    if (newLines == null) return null;
+    return <_DiffRow>[
+      _SideBySideHeaderRow(oldTitle: oldLabel, newTitle: newLabel),
+      for (var i = 0; i < newLines.length; i++)
+        _SideBySideDiffRow(
+          left: null,
+          right: _DiffSideLine(
+            lineNumber: i + 1,
+            text: newLines[i],
+            kind: GitDiffLineKind.addition,
+          ),
+        ),
+    ];
+  }
+  if (file.status == GitChangeStatus.deleted) {
+    if (oldLines == null) return null;
+    return <_DiffRow>[
+      _SideBySideHeaderRow(oldTitle: oldLabel, newTitle: newLabel),
+      for (var i = 0; i < oldLines.length; i++)
+        _SideBySideDiffRow(
+          left: _DiffSideLine(
+            lineNumber: i + 1,
+            text: oldLines[i],
+            kind: GitDiffLineKind.deletion,
+          ),
+          right: null,
+        ),
+    ];
+  }
+  if (oldLines == null || newLines == null) return null;
+
+  final rows = <_DiffRow>[
+    _SideBySideHeaderRow(oldTitle: oldLabel, newTitle: newLabel),
+  ];
+  var oldIndex = 0;
+  var newIndex = 0;
+  final pendingDeletions = <_DiffSideLine>[];
+  final pendingAdditions = <_DiffSideLine>[];
+
+  void flushChanges() {
+    if (pendingDeletions.isEmpty && pendingAdditions.isEmpty) return;
+    final count = math.max(pendingDeletions.length, pendingAdditions.length);
+    for (var i = 0; i < count; i++) {
+      rows.add(
+        _SideBySideDiffRow(
+          left: i < pendingDeletions.length ? pendingDeletions[i] : null,
+          right: i < pendingAdditions.length ? pendingAdditions[i] : null,
+        ),
+      );
+    }
+    pendingDeletions.clear();
+    pendingAdditions.clear();
+  }
+
+  void appendContextUntil(int oldTarget, int newTarget) {
+    flushChanges();
+    while (oldIndex < oldTarget || newIndex < newTarget) {
+      final hasOld = oldIndex < oldTarget && oldIndex < oldLines.length;
+      final hasNew = newIndex < newTarget && newIndex < newLines.length;
+      rows.add(
+        _SideBySideDiffRow(
+          left: hasOld
+              ? _DiffSideLine(
+                  lineNumber: oldIndex + 1,
+                  text: oldLines[oldIndex],
+                  kind: GitDiffLineKind.context,
+                )
+              : null,
+          right: hasNew
+              ? _DiffSideLine(
+                  lineNumber: newIndex + 1,
+                  text: newLines[newIndex],
+                  kind: GitDiffLineKind.context,
+                )
+              : null,
+        ),
+      );
+      if (hasOld) oldIndex += 1;
+      if (hasNew) newIndex += 1;
+      if (!hasOld && !hasNew) break;
+    }
+  }
+
+  for (final diffLine in file.lines) {
+    if (diffLine.kind == GitDiffLineKind.hunk) {
+      final match = _hunkHeaderRegExp.firstMatch(diffLine.text);
+      if (match == null) continue;
+      final oldStart = int.tryParse(match.group(1) ?? '') ?? (oldIndex + 1);
+      final newStart = int.tryParse(match.group(3) ?? '') ?? (newIndex + 1);
+      appendContextUntil(
+        math.max(oldStart - 1, oldIndex),
+        math.max(newStart - 1, newIndex),
+      );
+      continue;
+    }
+    if (diffLine.kind == GitDiffLineKind.header) continue;
+    if (diffLine.kind == GitDiffLineKind.deletion) {
+      if (pendingAdditions.isNotEmpty) flushChanges();
+      pendingDeletions.add(
+        _DiffSideLine(
+          lineNumber: oldIndex < oldLines.length ? oldIndex + 1 : null,
+          text: oldIndex < oldLines.length
+              ? oldLines[oldIndex]
+              : _extractContent(diffLine.text),
+          kind: GitDiffLineKind.deletion,
+        ),
+      );
+      if (oldIndex < oldLines.length) oldIndex += 1;
+      continue;
+    }
+    if (diffLine.kind == GitDiffLineKind.addition) {
+      pendingAdditions.add(
+        _DiffSideLine(
+          lineNumber: newIndex < newLines.length ? newIndex + 1 : null,
+          text: newIndex < newLines.length
+              ? newLines[newIndex]
+              : _extractContent(diffLine.text),
+          kind: GitDiffLineKind.addition,
+        ),
+      );
+      if (newIndex < newLines.length) newIndex += 1;
+      continue;
+    }
+    if (diffLine.kind == GitDiffLineKind.context) {
+      flushChanges();
+      rows.add(
+        _SideBySideDiffRow(
+          left: _DiffSideLine(
+            lineNumber: oldIndex < oldLines.length ? oldIndex + 1 : null,
+            text: oldIndex < oldLines.length
+                ? oldLines[oldIndex]
+                : _extractContent(diffLine.text),
+            kind: GitDiffLineKind.context,
+          ),
+          right: _DiffSideLine(
+            lineNumber: newIndex < newLines.length ? newIndex + 1 : null,
+            text: newIndex < newLines.length
+                ? newLines[newIndex]
+                : _extractContent(diffLine.text),
+            kind: GitDiffLineKind.context,
+          ),
+        ),
+      );
+      if (oldIndex < oldLines.length) oldIndex += 1;
+      if (newIndex < newLines.length) newIndex += 1;
+    }
+  }
+  flushChanges();
+  appendContextUntil(oldLines.length, newLines.length);
+  return rows;
+}
+
+List<String>? _decodeFullFileLines(Uint8List? bytes) {
+  if (bytes == null) return null;
+  try {
+    return _splitFullFileLines(utf8.decode(bytes));
+  } on FormatException {
+    return null;
+  }
 }
 
 List<String> _splitFullFileLines(String text) {

@@ -114,7 +114,13 @@ void main() {
     expect(find.text('line four'), findsOneWidget);
     expect(find.text('line five'), findsOneWidget);
     expect(
-      backend.calls.where((call) => call.method == 'diffBlobBytes').single.args,
+      backend.calls
+          .where(
+            (call) =>
+                call.method == 'diffBlobBytes' && call.args['oldSide'] == false,
+          )
+          .single
+          .args,
       containsPair('oldSide', false),
     );
   });
@@ -468,7 +474,7 @@ void main() {
     expect(_openFileButton(tester).onPressed, isNull);
   });
 
-  testWidgets('diff surface toggles between unified and side-by-side mode', (
+  testWidgets('diff content scope and layout toggle independently', (
     tester,
   ) async {
     final backend = FakeGitBackend()
@@ -479,41 +485,83 @@ void main() {
             area: .unstaged,
             status: .modified,
             lines: <GitDiffLine>[
-              GitDiffLine.hunk('@@ -10,2 +10,2 @@'),
-              GitDiffLine.deletion('-old line'),
-              GitDiffLine.addition('+new line'),
+              GitDiffLine.hunk('@@ -3,2 +3,2 @@'),
+              GitDiffLine.deletion('-old three'),
+              GitDiffLine.addition('+new three'),
+              GitDiffLine.context(' line four'),
             ],
             added: 1,
             removed: 1,
           ),
         ],
+      )
+      ..diffBlobBytesBySide[(
+        filePath: 'lib/main.dart',
+        oldSide: true,
+      )] = Uint8List.fromList(
+        'line one\nline two\nold three\nline four\nline five\n'.codeUnits,
+      )
+      ..diffBlobBytesBySide[(
+        filePath: 'lib/main.dart',
+        oldSide: false,
+      )] = Uint8List.fromList(
+        'line one\nline two\nnew three\nline four\nline five\n'.codeUnits,
       );
 
     await _pumpDiffSurface(tester, backend: backend);
     await tester.pumpAndSettle();
 
-    // Initially in unified mode
+    // Full file + single column (defaults).
+    expect(find.byTooltip('Switch to Diff Only'), findsOneWidget);
     expect(find.byTooltip('Switch to Side-by-Side View'), findsOneWidget);
-    expect(find.text('-old line'), findsOneWidget);
-    expect(find.text('+new line'), findsOneWidget);
+    expect(find.text('line one'), findsOneWidget);
+    expect(find.text('line five'), findsOneWidget);
+    expect(find.text('old three'), findsOneWidget);
+    expect(find.text('new three'), findsOneWidget);
     expect(find.text('Original'), findsNothing);
 
-    // Switch to side-by-side mode
+    // Diff only + single column.
+    await tester.tap(find.byTooltip('Switch to Diff Only'));
+    await tester.pump();
+    expect(find.byTooltip('Switch to Full File View'), findsOneWidget);
+    expect(find.byTooltip('Switch to Side-by-Side View'), findsOneWidget);
+    expect(find.text('line one'), findsNothing);
+    expect(find.text('line five'), findsNothing);
+    expect(find.text('-old three'), findsOneWidget);
+    expect(find.text('+new three'), findsOneWidget);
+    expect(find.text('Original'), findsNothing);
+
+    // Diff only + side-by-side.
     await tester.tap(find.byTooltip('Switch to Side-by-Side View'));
     await tester.pump();
-
     expect(find.byTooltip('Switch to Full File View'), findsOneWidget);
+    expect(find.byTooltip('Switch to Single-Column View'), findsOneWidget);
     expect(find.text('Original'), findsOneWidget);
     expect(find.text('Modified'), findsOneWidget);
-    expect(find.text('old line'), findsOneWidget);
-    expect(find.text('new line'), findsOneWidget);
-    expect(find.text('10'), findsWidgets);
+    expect(find.text('line one'), findsNothing);
+    expect(find.text('line five'), findsNothing);
+    expect(find.text('old three'), findsOneWidget);
+    expect(find.text('new three'), findsOneWidget);
 
-    // Switch back to full-file mode
+    // Full file + side-by-side.
     await tester.tap(find.byTooltip('Switch to Full File View'));
     await tester.pump();
+    expect(find.byTooltip('Switch to Diff Only'), findsOneWidget);
+    expect(find.byTooltip('Switch to Single-Column View'), findsOneWidget);
+    expect(find.text('Original'), findsOneWidget);
+    expect(find.text('Modified'), findsOneWidget);
+    expect(find.text('line one'), findsNWidgets(2));
+    expect(find.text('line five'), findsNWidgets(2));
+    expect(find.text('old three'), findsOneWidget);
+    expect(find.text('new three'), findsOneWidget);
 
+    // Full file + single column again.
+    await tester.tap(find.byTooltip('Switch to Single-Column View'));
+    await tester.pump();
+    expect(find.byTooltip('Switch to Diff Only'), findsOneWidget);
     expect(find.byTooltip('Switch to Side-by-Side View'), findsOneWidget);
     expect(find.text('Original'), findsNothing);
+    expect(find.text('line one'), findsOneWidget);
+    expect(find.text('line five'), findsOneWidget);
   });
 }

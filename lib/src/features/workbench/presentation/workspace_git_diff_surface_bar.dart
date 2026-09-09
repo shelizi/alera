@@ -13,6 +13,8 @@ class const _GitDiffBar({
   required final VoidCallback? onRegenerateReadingDiff,
   required final VoidCallback onCancelReadingDiff,
   required final VoidCallback? onToggleReadingDiff,
+  required final GitDiffContentMode contentMode,
+  required final VoidCallback onToggleContentMode,
   required final GitDiffPresentationMode presentationMode,
   required final VoidCallback onTogglePresentationMode,
 }) extends StatelessWidget {
@@ -72,8 +74,18 @@ class const _GitDiffBar({
               const SizedBox(width: AleraTokens.space2),
             ],
             AleraIconButton(
+              tooltip: contentMode == GitDiffContentMode.fullFile
+                  ? context.tr('Switch to Diff Only')
+                  : context.tr('Switch to Full File View'),
+              icon: contentMode == GitDiffContentMode.fullFile
+                  ? AleraIcons.diff
+                  : AleraIcons.file,
+              onPressed: onToggleContentMode,
+            ),
+            const SizedBox(width: AleraTokens.space2),
+            AleraIconButton(
               tooltip: presentationMode == GitDiffPresentationMode.sideBySide
-                  ? context.tr('Switch to Full File View')
+                  ? context.tr('Switch to Single-Column View')
                   : context.tr('Switch to Side-by-Side View'),
               icon: presentationMode == GitDiffPresentationMode.sideBySide
                   ? AleraIcons.diffUnified

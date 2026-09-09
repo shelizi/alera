@@ -184,10 +184,15 @@ void _registerWorkbenchControllerViewPrefsTests() {
     _controller.clearProjectFilters();
     _controller.setSearchQuery('terminal');
     _controller.setCollapsed(true);
+    _controller.setGitDiffContentMode(.diffOnly);
     _controller.setGitDiffPresentationMode(.sideBySide);
     _controller.setSidebarWidth(AleraTokens.sidebarMaxWidth + 400);
     await _flush();
 
+    expect(
+      _controller.state.viewPrefs.gitDiffContentMode,
+      GitDiffContentMode.diffOnly,
+    );
     expect(
       _controller.state.viewPrefs.gitDiffPresentationMode,
       GitDiffPresentationMode.sideBySide,

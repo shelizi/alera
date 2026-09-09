@@ -983,6 +983,8 @@ class AleraLocalizations {
     'Switch to Side-by-Side View': '切換至並排檢視',
     'Switch to Unified View': '切換至統一檢視',
     'Switch to Full File View': '切換至整檔檢視',
+    'Switch to Diff Only': '切換至僅顯示差異',
+    'Switch to Single-Column View': '切換至單欄檢視',
     'Original': '原始',
     'Modified': '修改後',
     'Empty': '空白',

@@ -50,7 +50,8 @@ class _WorkspaceGitDiffSurfaceState
     extends ConsumerState<WorkspaceGitDiffSurface> {
   Future<GitDiffResult>? _future;
   GitDiffResult? _loadedResult;
-  Map<GitDiffFile, Uint8List> _fullFileBytes = const <GitDiffFile, Uint8List>{};
+  Map<GitDiffFile, _FullFileContents> _fullFileContents =
+      const <GitDiffFile, _FullFileContents>{};
   ReadingDiffResult? _readingDiffResult;
   Uint8List? _readingDiffOriginalSnapshot;
   bool _showReadingDiff = false;
@@ -64,7 +65,17 @@ class _WorkspaceGitDiffSurfaceState
   bool _readingDiffCancelRequested = false;
   int _readingDiffGeneration = 0;
   int _diffLoadGeneration = 0;
+  GitDiffContentMode? _overrideContentMode;
   GitDiffPresentationMode? _overridePresentationMode;
+
+  GitDiffContentMode get _effectiveContentMode {
+    return _overrideContentMode ??
+        ref.watch(
+          workbenchControllerProvider.select(
+            (state) => state.viewPrefs.gitDiffContentMode,
+          ),
+        );
+  }
 
   GitDiffPresentationMode get _effectivePresentationMode {
     return _overridePresentationMode ??
@@ -73,6 +84,22 @@ class _WorkspaceGitDiffSurfaceState
             (state) => state.viewPrefs.gitDiffPresentationMode,
           ),
         );
+  }
+
+  void _toggleContentMode() {
+    final next = _effectiveContentMode == GitDiffContentMode.fullFile
+        ? GitDiffContentMode.diffOnly
+        : GitDiffContentMode.fullFile;
+    setState(() {
+      _overrideContentMode = next;
+    });
+    try {
+      ref
+          .read(workbenchControllerProvider.notifier)
+          .setGitDiffContentMode(next);
+    } catch (_) {
+      // In minimal test harnesses workbenchControllerProvider.notifier might not be wired.
+    }
   }
 
   void _togglePresentationMode() {
@@ -141,6 +168,7 @@ class _WorkspaceGitDiffSurfaceState
   @override
   Widget build(BuildContext context) {
     final filePath = widget.tab.filePath;
+    final contentMode = _effectiveContentMode;
     final presentationMode = _effectivePresentationMode;
     final aiAssistEnabled = ref.watch(
       settingsControllerProvider.select(
@@ -155,6 +183,8 @@ class _WorkspaceGitDiffSurfaceState
           _GitDiffBar(
             title: widget.tab.title,
             filePath: filePath,
+            contentMode: contentMode,
+            onToggleContentMode: _toggleContentMode,
             presentationMode: presentationMode,
             onTogglePresentationMode: _togglePresentationMode,
             onRefresh: _load,
@@ -220,7 +250,7 @@ class _WorkspaceGitDiffSurfaceState
                       final isCommitDiff = _isCommitBackedDiff;
                       return _DiffFileList(
                         result: result,
-                        fullFileBytes: _fullFileBytes,
+                        fullFileContents: _fullFileContents,
                         sourcePath: _sourceControlScope.path,
                         sourceLabel:
                             widget.tab.gitDiffSource ==
@@ -233,6 +263,7 @@ class _WorkspaceGitDiffSurfaceState
                         parentOid: isCommitDiff
                             ? widget.tab.gitDiffParentOid
                             : null,
+                        contentMode: contentMode,
                         presentationMode: presentationMode,
                       );
                     },

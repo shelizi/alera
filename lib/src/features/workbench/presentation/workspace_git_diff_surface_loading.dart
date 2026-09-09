@@ -59,7 +59,7 @@ extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
           };
     _updateDiffState(() {
       _loadedResult = null;
-      _fullFileBytes = const <GitDiffFile, Uint8List>{};
+      _fullFileContents = const <GitDiffFile, _FullFileContents>{};
       _readingDiffResult = null;
       _readingDiffOriginalSnapshot = null;
       _showReadingDiff = false;
@@ -79,7 +79,7 @@ extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
           _updateDiffState(() {
             _loadedResult = result;
           });
-          final fullFileBytes = await _loadFullFileBytes(
+          final fullFileContents = await _loadFullFileContents(
             backend: backend,
             sourceControlScope: sourceControlScope,
             result: result,
@@ -88,7 +88,7 @@ extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
             return;
           }
           _updateDiffState(() {
-            _fullFileBytes = fullFileBytes;
+            _fullFileContents = fullFileContents;
           });
         },
         onError: (_) {
@@ -103,34 +103,50 @@ extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
     );
   }
 
-  Future<Map<GitDiffFile, Uint8List>> _loadFullFileBytes({
+  Future<Map<GitDiffFile, _FullFileContents>> _loadFullFileContents({
     required GitBackend backend,
     required WorkspaceSourceControlScope sourceControlScope,
     required GitDiffResult result,
   }) async {
+    Future<Uint8List?> loadSide(GitDiffFile file, bool oldSide) async {
+      try {
+        return await backend.diffBlobBytes(
+          path: sourceControlScope.path,
+          filePath: file.path,
+          oldPath: file.oldPath,
+          area: _isCommitBackedDiff ? null : file.area,
+          commitOid: _isCommitBackedDiff ? widget.tab.gitDiffCommitOid : null,
+          parentOid: _isCommitBackedDiff ? widget.tab.gitDiffParentOid : null,
+          oldSide: oldSide,
+        );
+      } catch (_) {
+        return null;
+      }
+    }
+
     final entries = await Future.wait(
       result.files.map((file) async {
         if (file.isBinary || file.isLarge || file.isGitlink) {
           return null;
         }
-        final oldSide = file.status == GitChangeStatus.deleted;
-        try {
-          final bytes = await backend.diffBlobBytes(
-            path: sourceControlScope.path,
-            filePath: file.path,
-            oldPath: file.oldPath,
-            area: _isCommitBackedDiff ? null : file.area,
-            commitOid: _isCommitBackedDiff ? widget.tab.gitDiffCommitOid : null,
-            parentOid: _isCommitBackedDiff ? widget.tab.gitDiffParentOid : null,
-            oldSide: oldSide,
-          );
-          return bytes == null ? null : MapEntry(file, bytes);
-        } catch (_) {
-          return null;
-        }
+        final loadOld =
+            file.status != GitChangeStatus.added &&
+            file.status != GitChangeStatus.untracked;
+        final loadNew = file.status != GitChangeStatus.deleted;
+        final sides = await Future.wait(<Future<Uint8List?>>[
+          if (loadOld) loadSide(file, true) else Future.value(null),
+          if (loadNew) loadSide(file, false) else Future.value(null),
+        ]);
+        final contents = _FullFileContents(
+          oldBytes: sides[0],
+          newBytes: sides[1],
+        );
+        return contents.oldBytes == null && contents.newBytes == null
+            ? null
+            : MapEntry(file, contents);
       }),
     );
-    return <GitDiffFile, Uint8List>{
+    return <GitDiffFile, _FullFileContents>{
       for (final entry in entries)
         if (entry != null) entry.key: entry.value,
     };
