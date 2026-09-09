@@ -288,6 +288,16 @@ void main() {
       expect(l10n.translate('Add tag…'), '新增標籤…');
       expect(l10n.translate('Add project…'), '新增專案…');
       expect(l10n.translate('Terminal Input'), '終端機輸入');
+      expect(l10n.translate('Prompt Append'), '附加提示詞');
+      expect(l10n.translate('Save Override'), '儲存覆寫設定');
+      expect(l10n.translate('Custom Prompt'), '自訂提示詞');
+      expect(l10n.translate('Quota Group'), '配額群組');
+      expect(l10n.translate('CCS Profile'), 'CCS 設定檔');
+      expect(l10n.translate('Usage Name'), '用量顯示名稱');
+      expect(l10n.translate('Device Name'), '裝置名稱');
+      expect(l10n.translate('My Phone'), '我的手機');
+      expect(l10n.translate('Install Directory'), '安裝目錄');
+      expect(l10n.translate('Default per platform'), '依平台使用預設值');
       expect(
         l10n.translate('Microphone permission is required for AI Dictation.'),
         'AI 聽寫需要麥克風權限。',

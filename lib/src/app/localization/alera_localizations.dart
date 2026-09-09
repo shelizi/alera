@@ -1406,6 +1406,32 @@ class AleraLocalizations {
     'Idle time before saving editor changes.': '儲存編輯器變更前的閒置時間。',
     'Search and select a syntax highlighting theme.': '搜尋並選擇語法醒目提示主題。',
     'Search syntax themes': '搜尋語法主題',
+    'Prompt Append': '附加提示詞',
+    'Add project-specific agent instructions': '新增專案專屬的 Agent 指示',
+    'From': '來源',
+    'To': '目的地',
+    'Defaults to from': '預設與來源相同',
+    'Save Override': '儲存覆寫設定',
+    'Custom Prompt': '自訂提示詞',
+    'Optional instructions for every dispatched task': '每個派送工作可選用的額外指示',
+    'Quota Group': '配額群組',
+    'Command mode is for advanced or unsupported CLI options. Use an interactive command that can accept a dispatch and report completion.':
+        'Command 模式適用於進階或尚未支援的 CLI 選項。請使用可接收派送工作並回報完成狀態的互動式指令。',
+    'Profiles sharing a quota group drain the same usage bucket. Alera never measures this; it only avoids falling back inside the same group. Leave empty if unsure.':
+        '共用同一配額群組的設定檔會消耗相同的用量額度。Alera 不會量測額度，只會避免在同群組內進行 fallback；若不確定請留空。',
+    'Alias': '別名',
+    'CCS Profile': 'CCS 設定檔',
+    'Usage Name': '用量顯示名稱',
+    'Device Name': '裝置名稱',
+    'My Phone': '我的手機',
+    'Generating…': '產生中…',
+    'Generate': '產生',
+    'Host': '主機',
+    'Username': '使用者名稱',
+    'Port': '連接埠',
+    'Install Directory': '安裝目錄',
+    'Default per platform': '依平台使用預設值',
+    'Search built-in themes': '搜尋內建主題',
   };
 }
 

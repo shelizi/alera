@@ -120,7 +120,9 @@ class const AgentProfileEditor({
                 Padding(
                   padding: const EdgeInsets.all(AleraTokens.space12),
                   child: Text(
-                    'Command mode is for advanced or unsupported CLI options. Use an interactive command that can accept a dispatch and report completion.',
+                    context.tr(
+                      'Command mode is for advanced or unsupported CLI options. Use an interactive command that can accept a dispatch and report completion.',
+                    ),
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: AleraTokens.foregroundMuted,
                     ),
@@ -211,7 +213,9 @@ class const AgentProfileEditor({
                     const SizedBox(width: AleraTokens.space8),
                     Expanded(
                       child: Text(
-                        managedAgentRiskWarning(adapter, managedConfig),
+                        context.tr(
+                          managedAgentRiskWarning(adapter, managedConfig),
+                        ),
                         style: theme.textTheme.bodySmall?.copyWith(
                           color: AleraTokens.warning,
                         ),
@@ -249,9 +253,9 @@ class const AgentProfileEditor({
               Padding(
                 padding: const EdgeInsets.all(AleraTokens.space12),
                 child: Text(
-                  'Profiles sharing a quota group drain the same usage bucket. '
-                  'Alera never measures this; it only avoids falling back '
-                  'inside the same group. Leave empty if unsure.',
+                  context.tr(
+                    'Profiles sharing a quota group drain the same usage bucket. Alera never measures this; it only avoids falling back inside the same group. Leave empty if unsure.',
+                  ),
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: AleraTokens.foregroundMuted,
                   ),
@@ -284,7 +288,7 @@ class const AgentProfileEditor({
                   saving ? AleraIcons.loading : AleraIcons.save,
                   size: 16,
                 ),
-                label: Text(saving ? 'Saving' : 'Save'),
+                label: Text(context.tr(saving ? 'Saving' : 'Save')),
               ),
               OutlinedButton.icon(
                 onPressed: hasSelection && !saving ? onRemove : null,

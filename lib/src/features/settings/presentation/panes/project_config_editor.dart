@@ -197,7 +197,7 @@ class const ProjectConfigEditor({
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
                   : const Icon(AleraIcons.save, size: 16),
-              label: Text(saving ? 'Saving' : 'Save Override'),
+              label: Text(context.tr(saving ? 'Saving' : 'Save Override')),
             ),
           ],
         ),
@@ -240,7 +240,7 @@ class const _CopyRuleEditorRow({
           ),
           const SizedBox(width: AleraTokens.space8),
           Tooltip(
-            message: 'Overwrite existing destination',
+            message: context.tr('Overwrite existing destination'),
             child: AleraCheckbox(
               value: rule.overwrite,
               onChanged: (value) => onChanged(rule.copyWith(overwrite: value)),
@@ -248,7 +248,7 @@ class const _CopyRuleEditorRow({
           ),
           const SizedBox(width: AleraTokens.space8),
           AleraIconButton(
-            tooltip: 'Remove Copy Rule',
+            tooltip: context.tr('Remove Copy Rule'),
             onPressed: onRemove,
             icon: AleraIcons.delete,
           ),
@@ -281,7 +281,7 @@ class const _SetupCommandEditorRow({
           ),
           const SizedBox(width: AleraTokens.space8),
           AleraIconButton(
-            tooltip: 'Remove Setup Command',
+            tooltip: context.tr('Remove Setup Command'),
             onPressed: onRemove,
             icon: AleraIcons.delete,
           ),
