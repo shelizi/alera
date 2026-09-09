@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/providers.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/buttons/alera_icon_button.dart';
@@ -16,6 +18,7 @@ import 'package:alera/src/features/reading_diff/presentation/reading_diff_genera
 import 'package:alera/src/features/reading_diff/presentation/reading_diff_view.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_open_coordinator_provider.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_preview_kind.dart';
+import 'package:alera/src/features/workbench/domain/workbench_view_prefs.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_source_control_scope.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
@@ -29,6 +32,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 part 'workspace_git_diff_surface_rows.dart';
 part 'workspace_git_diff_surface_bar.dart';
 part 'workspace_git_diff_surface_loading.dart';
+part 'workspace_git_diff_surface_side_by_side.dart';
 
 class const WorkspaceGitDiffSurface({
   super.key,
@@ -57,6 +61,33 @@ class _WorkspaceGitDiffSurfaceState
   bool _readingDiffCancelRequested = false;
   int _readingDiffGeneration = 0;
   int _diffLoadGeneration = 0;
+  GitDiffPresentationMode? _overridePresentationMode;
+
+  GitDiffPresentationMode get _effectivePresentationMode {
+    return _overridePresentationMode ??
+        ref.watch(
+          workbenchControllerProvider.select(
+            (state) => state.viewPrefs.gitDiffPresentationMode,
+          ),
+        );
+  }
+
+  void _togglePresentationMode() {
+    final next =
+        _effectivePresentationMode == GitDiffPresentationMode.sideBySide
+        ? GitDiffPresentationMode.unified
+        : GitDiffPresentationMode.sideBySide;
+    setState(() {
+      _overridePresentationMode = next;
+    });
+    try {
+      ref
+          .read(workbenchControllerProvider.notifier)
+          .setGitDiffPresentationMode(next);
+    } catch (_) {
+      // In minimal test harnesses workbenchControllerProvider.notifier might not be wired.
+    }
+  }
 
   void _updateDiffState(VoidCallback update) => setState(update);
 
@@ -107,6 +138,7 @@ class _WorkspaceGitDiffSurfaceState
   @override
   Widget build(BuildContext context) {
     final filePath = widget.tab.filePath;
+    final presentationMode = _effectivePresentationMode;
     final aiAssistEnabled = ref.watch(
       settingsControllerProvider.select(
         (settings) => settings.aiAssist.enabled,
@@ -120,6 +152,8 @@ class _WorkspaceGitDiffSurfaceState
           _GitDiffBar(
             title: widget.tab.title,
             filePath: filePath,
+            presentationMode: presentationMode,
+            onTogglePresentationMode: _togglePresentationMode,
             onRefresh: _load,
             onOpenFile: _canOpenFile ? () => unawaited(_openFile()) : null,
             aiAssistEnabled: aiAssistEnabled,
@@ -195,6 +229,7 @@ class _WorkspaceGitDiffSurfaceState
                         parentOid: isCommitDiff
                             ? widget.tab.gitDiffParentOid
                             : null,
+                        presentationMode: presentationMode,
                       );
                     },
                   ),

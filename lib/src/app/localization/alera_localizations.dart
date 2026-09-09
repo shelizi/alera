@@ -347,6 +347,12 @@ class AleraLocalizations {
     'Condensed Diff': '精簡 Diff',
     'What Changed': '變更內容',
     'Chunk Analysis': '區塊分析',
+    'Side-by-Side View': '並排檢視',
+    'Unified View': '統一檢視',
+    'Switch to Side-by-Side View': '切換至並排檢視',
+    'Switch to Unified View': '切換至統一檢視',
+    'Original': '原始',
+    'Modified': '修改後',
     'Refresh Worktrees': '重新整理工作樹',
     'Confirm Before Closing Busy Terminals': '關閉忙碌終端機前確認',
     'Ask for confirmation before closing tabs with running processes or active agents.':

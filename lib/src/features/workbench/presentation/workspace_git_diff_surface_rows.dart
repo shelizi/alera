@@ -6,6 +6,8 @@ class const _DiffFileList({
   final String? sourceLabel,
   final String? commitOid,
   final String? parentOid,
+  final GitDiffPresentationMode presentationMode =
+      GitDiffPresentationMode.unified,
 }) extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
@@ -15,7 +17,28 @@ class const _DiffFileList({
       sourceLabel: sourceLabel,
       commitOid: commitOid,
       parentOid: parentOid,
+      presentationMode: presentationMode,
     );
+    if (presentationMode == GitDiffPresentationMode.sideBySide) {
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          final contentWidth = math.max(constraints.maxWidth, 720.0);
+          return SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: SizedBox(
+              width: contentWidth,
+              height: constraints.maxHeight,
+              child: ListView.builder(
+                padding: const EdgeInsets.only(bottom: AleraTokens.space16),
+                itemCount: rows.items.length,
+                itemBuilder: (context, index) =>
+                    rows.items[index].build(context),
+              ),
+            ),
+          );
+        },
+      );
+    }
     return ListView.builder(
       padding: const EdgeInsets.only(bottom: AleraTokens.space16),
       itemCount: rows.items.length,
@@ -31,6 +54,7 @@ class const _DiffRows(final List<_DiffRow> items) {
     String? sourceLabel,
     String? commitOid,
     String? parentOid,
+    GitDiffPresentationMode presentationMode = GitDiffPresentationMode.unified,
   }) {
     final items = <_DiffRow>[
       if (result.truncated) const _BannerRow('Diff truncated for preview.'),
@@ -52,6 +76,11 @@ class const _DiffRows(final List<_DiffRow> items) {
         items.add(const _BannerRow('Large untracked file diff is not shown.'));
       } else if (file.lines.isEmpty) {
         items.add(const _BannerRow('No text diff for this file.'));
+      } else if (presentationMode == GitDiffPresentationMode.sideBySide) {
+        items.addAll(_buildSideBySideRows(file));
+        if (file.linePreviewTruncated) {
+          items.add(const _BannerRow('Diff line preview truncated.'));
+        }
       } else {
         for (final line in file.lines) {
           items.add(_DiffLineRow(line));

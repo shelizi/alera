@@ -133,6 +133,20 @@ void main() {
       expect(restored.showPinnedWorkspacesBelow, isTrue);
       expect(restored.showActiveWorkspacesOnly, isFalse);
       expect(restored.gitDiffGroupMode, GitDiffGroupMode.byArea);
+      expect(restored.gitDiffPresentationMode, GitDiffPresentationMode.unified);
+    });
+
+    test('round-trips the git diff presentation mode', () {
+      final prefs = WorkbenchViewPrefs.defaults.copyWith(
+        gitDiffPresentationMode: .sideBySide,
+      );
+      final restored = WorkbenchViewPrefs.fromJson(
+        Map<String, Object?>.from(prefs.toMap()),
+      );
+      expect(
+        restored.gitDiffPresentationMode,
+        GitDiffPresentationMode.sideBySide,
+      );
     });
 
     test('round-trips the git diff group mode', () {

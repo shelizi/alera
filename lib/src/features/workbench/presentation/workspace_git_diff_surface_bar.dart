@@ -13,6 +13,8 @@ class const _GitDiffBar({
   required final VoidCallback? onRegenerateReadingDiff,
   required final VoidCallback onCancelReadingDiff,
   required final VoidCallback? onToggleReadingDiff,
+  required final GitDiffPresentationMode presentationMode,
+  required final VoidCallback onTogglePresentationMode,
 }) extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
@@ -69,6 +71,16 @@ class const _GitDiffBar({
               ],
               const SizedBox(width: AleraTokens.space2),
             ],
+            AleraIconButton(
+              tooltip: presentationMode == GitDiffPresentationMode.sideBySide
+                  ? context.tr('Switch to Unified View')
+                  : context.tr('Switch to Side-by-Side View'),
+              icon: presentationMode == GitDiffPresentationMode.sideBySide
+                  ? AleraIcons.diffUnified
+                  : AleraIcons.diffSideBySide,
+              onPressed: onTogglePresentationMode,
+            ),
+            const SizedBox(width: AleraTokens.space2),
             AleraIconButton(
               tooltip: onOpenFile == null
                   ? 'File is not available in working tree'

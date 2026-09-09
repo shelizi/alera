@@ -16,8 +16,13 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController {
   WorkspaceTabService get _workspaceTabService =>
       ref.read(workspaceTabServiceProvider);
 
-  WorkbenchViewPrefsRepository? get _viewPrefsRepository =>
-      ref.read(workbenchViewPrefsRepositoryProvider);
+  WorkbenchViewPrefsRepository? get _viewPrefsRepository {
+    try {
+      return ref.read(workbenchViewPrefsRepositoryProvider);
+    } catch (_) {
+      return null;
+    }
+  }
 
   StreamSubscription<WorkspaceSectionSnapshot>? _sectionsSub;
   StreamSubscription<List<Project>>? _projectsSub;

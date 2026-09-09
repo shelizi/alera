@@ -424,4 +424,53 @@ void main() {
     expect(find.text('Commit · lib/main.dart'), findsOneWidget);
     expect(_openFileButton(tester).onPressed, isNull);
   });
+
+  testWidgets('diff surface toggles between unified and side-by-side mode', (
+    tester,
+  ) async {
+    final backend = FakeGitBackend()
+      ..gitDiffResult = const GitDiffResult(
+        files: <GitDiffFile>[
+          GitDiffFile(
+            path: 'lib/main.dart',
+            area: .unstaged,
+            status: .modified,
+            lines: <GitDiffLine>[
+              GitDiffLine.hunk('@@ -10,2 +10,2 @@'),
+              GitDiffLine.deletion('-old line'),
+              GitDiffLine.addition('+new line'),
+            ],
+            added: 1,
+            removed: 1,
+          ),
+        ],
+      );
+
+    await _pumpDiffSurface(tester, backend: backend);
+    await tester.pumpAndSettle();
+
+    // Initially in unified mode
+    expect(find.byTooltip('Switch to Side-by-Side View'), findsOneWidget);
+    expect(find.text('-old line'), findsOneWidget);
+    expect(find.text('+new line'), findsOneWidget);
+    expect(find.text('Original'), findsNothing);
+
+    // Switch to side-by-side mode
+    await tester.tap(find.byTooltip('Switch to Side-by-Side View'));
+    await tester.pump();
+
+    expect(find.byTooltip('Switch to Unified View'), findsOneWidget);
+    expect(find.text('Original'), findsOneWidget);
+    expect(find.text('Modified'), findsOneWidget);
+    expect(find.text('old line'), findsOneWidget);
+    expect(find.text('new line'), findsOneWidget);
+    expect(find.text('10'), findsWidgets);
+
+    // Switch back to unified mode
+    await tester.tap(find.byTooltip('Switch to Unified View'));
+    await tester.pump();
+
+    expect(find.byTooltip('Switch to Side-by-Side View'), findsOneWidget);
+    expect(find.text('Original'), findsNothing);
+  });
 }
