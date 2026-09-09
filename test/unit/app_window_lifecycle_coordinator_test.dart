@@ -124,6 +124,32 @@ void main() {
       expect(window.preventCloseValues, <bool>[true]);
     });
 
+    test('hide-on-close does not wait for a slow window state save', () async {
+      final saveStarted = Completer<void>();
+      final finishSave = Completer<void>();
+      final repository = _RecordingStateRepository()
+        ..saveStarted = saveStarted
+        ..saveBarrier = finishSave.future;
+      final window = _RecordingWindowController();
+      final coordinator = AppWindowLifecycleCoordinator(
+        repository: repository,
+        window: window,
+        saveDebounce: .zero,
+        hideOnClose: () => true,
+      );
+      await coordinator.start();
+
+      window.emit((listener) => listener.onWindowClose());
+      await saveStarted.future;
+      await _waitFor(() => window.hideCalls == 1);
+
+      expect(window.hideCalls, 1);
+      expect(finishSave.isCompleted, isFalse);
+
+      finishSave.complete();
+      await coordinator.waitForPendingHide();
+    });
+
     test('requestQuit destroys even when hide-on-close is bound', () async {
       final repository = _RecordingStateRepository();
       final window = _RecordingWindowController();
@@ -231,6 +257,60 @@ void main() {
       expect(window.destroyCalls, 0);
     });
 
+    test('coalesces repeated window state saves before quit flush', () async {
+      final captureStarted = Completer<void>();
+      final releaseCapture = Completer<void>();
+      final window = _RecordingWindowController()
+        ..captureStarted = captureStarted
+        ..captureBarrier = releaseCapture.future;
+      final coordinator = AppWindowLifecycleCoordinator(
+        repository: _RecordingStateRepository(),
+        window: window,
+        saveDebounce: .zero,
+      );
+      await coordinator.start();
+
+      window.emit((listener) => listener.onWindowResized());
+      await captureStarted.future;
+      for (var i = 0; i < 50; i += 1) {
+        window.emit((listener) => listener.onWindowResized());
+      }
+
+      final quit = coordinator.requestQuit();
+      releaseCapture.complete();
+      await quit;
+
+      expect(window.captureCalls, 2);
+      expect(window.destroyCalls, 1);
+    });
+
+    test('requestQuit does not wait for a slow window state save', () async {
+      final saveStarted = Completer<void>();
+      final finishSave = Completer<void>();
+      final repository = _RecordingStateRepository()
+        ..saveStarted = saveStarted
+        ..saveBarrier = finishSave.future;
+      final window = _RecordingWindowController();
+      final coordinator = AppWindowLifecycleCoordinator(
+        repository: repository,
+        window: window,
+        saveDebounce: .zero,
+      );
+      await coordinator.start();
+
+      window.emit((listener) => listener.onWindowResized());
+      await saveStarted.future;
+
+      final quit = coordinator.requestQuit();
+      await _waitFor(() => window.destroyCalls == 1);
+
+      expect(window.destroyCalls, 1);
+      expect(finishSave.isCompleted, isFalse);
+
+      finishSave.complete();
+      await quit;
+    });
+
     test('closes once and ignores post-close state work', () async {
       final repository = _RecordingStateRepository();
       final window = _RecordingWindowController();
@@ -305,6 +385,9 @@ class _RecordingWindowController implements AppWindowController {
   int restoreCalls = 0;
   bool visible = true;
   bool minimized = false;
+  int captureCalls = 0;
+  Completer<void>? captureStarted;
+  Future<void>? captureBarrier;
   Completer<void>? hideStarted;
   Future<void>? hideBarrier;
 
@@ -367,7 +450,15 @@ class _RecordingWindowController implements AppWindowController {
   Future<bool> isMaximized() async => false;
 
   @override
-  Future<bool> isMinimized() async => minimized;
+  Future<bool> isMinimized() async {
+    captureCalls += 1;
+    final started = captureStarted;
+    if (started != null && !started.isCompleted) {
+      started.complete();
+    }
+    await captureBarrier;
+    return minimized;
+  }
 
   @override
   Future<void> maximize() async {}

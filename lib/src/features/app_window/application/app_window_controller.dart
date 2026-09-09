@@ -129,6 +129,7 @@ class AppWindowLifecycleCoordinator._({
   required final AppWindowController _window,
   required final AppWindowCloseStrategy _closeStrategy,
   required final Duration _saveDebounce,
+  required final Duration _closeFlushGracePeriod,
   required var Future<bool> Function()? _closeGate,
   required var bool Function()? _hideOnClose,
   required final Logger _logger,
@@ -139,6 +140,7 @@ class AppWindowLifecycleCoordinator._({
     AppWindowCloseStrategy closeStrategy =
         const DestroyAppWindowCloseStrategy(),
     Duration saveDebounce = const Duration(milliseconds: 350),
+    Duration closeFlushGracePeriod = const Duration(milliseconds: 50),
     Future<bool> Function()? closeGate,
     bool Function()? hideOnClose,
     Logger? logger,
@@ -147,6 +149,7 @@ class AppWindowLifecycleCoordinator._({
          window: window,
          closeStrategy: closeStrategy,
          saveDebounce: saveDebounce,
+         closeFlushGracePeriod: closeFlushGracePeriod,
          closeGate: closeGate,
          hideOnClose: hideOnClose,
          logger: logger ?? Logger('AppWindowLifecycleCoordinator'),
@@ -154,7 +157,8 @@ class AppWindowLifecycleCoordinator._({
 
   AppWindowState? _lastState;
   Timer? _debounceTimer;
-  Future<void> _saveQueue = Future<void>.value();
+  Future<void>? _saveInFlight;
+  bool _saveRequested = false;
   bool _started = false;
   bool _closing = false;
   bool _closeCommitted = false;
@@ -251,7 +255,7 @@ class AppWindowLifecycleCoordinator._({
 
   Future<void> _hideInsteadOfDestroy() async {
     try {
-      await flush();
+      await _flushWithinCloseGracePeriod();
       if (_quitting || _closing) {
         return;
       }
@@ -340,7 +344,7 @@ class AppWindowLifecycleCoordinator._({
     }
     _closeCommitted = true;
     try {
-      await flush();
+      await _flushWithinCloseGracePeriod();
     } catch (error, stackTrace) {
       _logWarningIfActive(
         'failed to flush app window state on close',
@@ -350,6 +354,14 @@ class AppWindowLifecycleCoordinator._({
     } finally {
       await _finishClose();
     }
+  }
+
+  /// Gives fast local state persistence a brief chance to finish without
+  /// letting slow storage keep a user-visible window open. Future.timeout does
+  /// not cancel the source future, so an in-flight save can finish in the
+  /// background while the close path continues.
+  Future<void> _flushWithinCloseGracePeriod() async {
+    await flush().timeout(_closeFlushGracePeriod, onTimeout: () {});
   }
 
   /// Marks teardown complete and destroys the window at most once.
@@ -379,26 +391,35 @@ class AppWindowLifecycleCoordinator._({
   }
 
   Future<void> _saveCurrentState() {
-    _saveQueue = _saveQueue
-        .then((_) async {
-          if (_closed) {
-            return;
-          }
+    if (_closed) {
+      return Future<void>.value();
+    }
+    _saveRequested = true;
+    return _saveInFlight ??= _drainSaveRequests();
+  }
+
+  Future<void> _drainSaveRequests() async {
+    try {
+      while (_saveRequested && !_closed) {
+        _saveRequested = false;
+        try {
           final state = await _captureCurrentState();
           if (state == null || state == _lastState) {
-            return;
+            continue;
           }
           _lastState = state;
           await _repository.save(state);
-        })
-        .catchError((Object error, StackTrace stackTrace) {
+        } catch (error, stackTrace) {
           _logWarningIfActive(
             'failed to save app window state',
             error,
             stackTrace,
           );
-        });
-    return _saveQueue;
+        }
+      }
+    } finally {
+      _saveInFlight = null;
+    }
   }
 
   Future<AppWindowState?> _captureCurrentState() async {
