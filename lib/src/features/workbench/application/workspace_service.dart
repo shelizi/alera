@@ -121,6 +121,7 @@ class WorkspaceService._(
     final branch = project.isGitRepository
         ? await _currentBranch(project.repoPath)
         : null;
+    final defaultName = _defaultMainWorkspaceName(branch, project.name);
     final now = _now();
     Workspace? mainWorkspace;
     for (final workspace in existing) {
@@ -134,7 +135,7 @@ class WorkspaceService._(
                 Workspace(
                   id: _uuid.v4(),
                   projectId: project.id,
-                  name: project.name,
+                  name: defaultName,
                   branch: branch,
                   path: project.repoPath,
                   createdAt: now,
@@ -450,6 +451,16 @@ class WorkspaceService._(
     } on GitException {
       return 'HEAD';
     }
+  }
+
+  String _defaultMainWorkspaceName(String? branch, String projectName) {
+    final trimmedBranch = branch?.trim();
+    if (trimmedBranch == null ||
+        trimmedBranch.isEmpty ||
+        trimmedBranch == 'HEAD') {
+      return projectName;
+    }
+    return trimmedBranch;
   }
 
   String _resolveWorkspacePath(Project project, String slug) {

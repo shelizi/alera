@@ -16,7 +16,7 @@ void _registerWorkspaceServiceCoreTests() {
       final workspace = await service.ensureMainWorkspace(project);
 
       expect(workspace.projectId, project.id);
-      expect(workspace.name, project.name);
+      expect(workspace.name, 'main');
       expect(workspace.branch, 'main');
       expect(workspace.path, project.repoPath);
       expect(workspace.kind, WorkspaceKind.main);
@@ -69,6 +69,7 @@ void _registerWorkspaceServiceCoreTests() {
       final workspace = await service.ensureMainWorkspace(project);
 
       expect(workspace.branch, 'HEAD');
+      expect(workspace.name, project.name);
     },
   );
 
