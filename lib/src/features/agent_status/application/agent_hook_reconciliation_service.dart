@@ -52,6 +52,7 @@ List<AgentType> enabledAgentStatusHookTypes(AgentStatusHookSettings settings) {
     if (settings.pi) AgentType.pi,
     if (settings.amp) AgentType.amp,
     if (settings.grok) AgentType.grok,
+    if (settings.devin) AgentType.devin,
     if (settings.fx) AgentType.fx,
   ];
 }

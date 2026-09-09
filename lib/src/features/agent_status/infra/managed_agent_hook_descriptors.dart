@@ -77,6 +77,10 @@ extension _ManagedAgentHookDescriptors on ManagedAgentHookInstallService {
       ),
       // coverage:ignore-start
       // Descriptor lookups for artifact-backed agents are guarded by
+      AgentType.devin => _devinDescriptor(
+        scriptFileName: scriptFileName,
+        scriptPath: scriptPath,
+      ),
       // _managedArtifact before this switch, and Cursor by its runtime-only
       // status. This branch protects future misuse.
       AgentType.cursor ||
@@ -84,7 +88,6 @@ extension _ManagedAgentHookDescriptors on ManagedAgentHookInstallService {
       AgentType.opencode2 ||
       AgentType.pi ||
       AgentType.amp ||
-      AgentType.devin ||
       AgentType.fx => throw ArgumentError.value(
         agentType,
         'agentType',

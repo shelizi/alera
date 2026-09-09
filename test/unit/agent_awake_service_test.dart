@@ -261,6 +261,7 @@ AgentStatusHookSettings _settingsFor(AgentType agentType) {
     AgentType.pi => const AgentStatusHookSettings(pi: true),
     AgentType.amp => const AgentStatusHookSettings(amp: true),
     AgentType.grok => const AgentStatusHookSettings(grok: true),
+    AgentType.devin => const AgentStatusHookSettings(devin: true),
     AgentType.fx => const AgentStatusHookSettings(fx: true),
   };
 }

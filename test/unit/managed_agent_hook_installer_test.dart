@@ -8,6 +8,7 @@ import 'package:path/path.dart' as p;
 
 part 'managed_agent_hook_installer_test_harness.dart';
 part 'managed_agent_hook_installer_grok_test_cases.dart';
+part 'managed_agent_hook_installer_devin_test_cases.dart';
 part 'managed_agent_hook_installer_amp_test_cases.dart';
 part 'managed_agent_hook_installer_agy_test_cases.dart';
 
@@ -31,6 +32,7 @@ void main() {
       }
     });
     _registerGrokHookInstallerTests(() => home, () => service);
+    _registerDevinHookInstallerTests(() => home, () => service);
     _registerAmpHookInstallerTests(() => home, () => service);
     _registerAgyHookInstallerTests(() => home, () => service);
     test('does not install Codex hooks into the user config', () {

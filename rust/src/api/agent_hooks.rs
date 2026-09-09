@@ -111,6 +111,7 @@ pub fn start_agent_hook_receiver(
             .route("/hook/pi", post(handle_pi))
             .route("/hook/amp", post(handle_amp))
             .route("/hook/grok", post(handle_grok))
+            .route("/hook/devin", post(handle_devin))
             .with_state(state);
         let _ = axum::serve(
             listener,
@@ -205,6 +206,9 @@ async fn handle_amp(State(state): State<AppState>, request: Request<Body>) -> im
 
 async fn handle_grok(State(state): State<AppState>, request: Request<Body>) -> impl IntoResponse {
     handle_hook_request(state, request, "grok").await
+}
+async fn handle_devin(State(state): State<AppState>, request: Request<Body>) -> impl IntoResponse {
+    handle_hook_request(state, request, "devin").await
 }
 
 async fn handle_hook_request(
@@ -400,6 +404,7 @@ fn is_session_close_event(event: &AgentHookEventDto) -> bool {
             | ("grok", "Stop")
             | ("grok", "StopFailure")
             | ("grok", "SessionEnd")
+            | ("devin", "SessionEnd")
     )
 }
 

@@ -220,6 +220,7 @@ class const AgentStatusHookSettings({
   this.pi = false,
   this.amp = false,
   this.grok = false,
+  this.devin = false,
   this.fx = false,
 }) with AgentStatusHookSettingsMappable {
   final bool codex;
@@ -232,6 +233,7 @@ class const AgentStatusHookSettings({
   final bool pi;
   final bool amp;
   final bool grok;
+  final bool devin;
   final bool fx;
 
   bool get anyEnabled =>
@@ -245,6 +247,7 @@ class const AgentStatusHookSettings({
       pi ||
       amp ||
       grok ||
+      devin ||
       fx;
 
   static const AgentStatusHookSettings defaults = AgentStatusHookSettings();

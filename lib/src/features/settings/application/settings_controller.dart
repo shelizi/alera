@@ -212,8 +212,7 @@ class SettingsController extends _$SettingsController
           AgentType.pi => current.copyWith(pi: value),
           AgentType.amp => current.copyWith(amp: value),
           AgentType.grok => current.copyWith(grok: value),
-          // Devin currently has no verified status-hook protocol in Alera.
-          AgentType.devin => current,
+          AgentType.devin => current.copyWith(devin: value),
           AgentType.fx => current.copyWith(fx: value),
         };
         if (current == next) {

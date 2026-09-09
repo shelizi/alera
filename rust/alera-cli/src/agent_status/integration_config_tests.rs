@@ -34,6 +34,63 @@ fn keeps_the_matcher_key_for_tool_scoped_events() {
     assert_eq!(definition["matcher"], json!("*"));
 }
 
+#[test]
+fn devin_hooks_preserve_user_definitions_and_omit_matchers() {
+    let mut config = Map::from_iter([
+        ("theme".to_string(), json!("dark")),
+        (
+            "hooks".to_string(),
+            json!({
+                "SessionStart": [
+                    {"hooks": [{"type": "command", "command": "echo user-start"}]}
+                ],
+                "PreToolUse": [
+                    {
+                        "matcher": "Bash",
+                        "hooks": [{"type": "command", "command": "echo user-tool"}]
+                    },
+                    {
+                        "hooks": [{
+                            "type": "command",
+                            "command": "/old/.alera/agent-hooks/alera-runtime-agent-hook.sh"
+                        }]
+                    }
+                ]
+            }),
+        ),
+    ]);
+
+    apply_devin_hooks(
+        &mut config,
+        Path::new("/home/user/.alera/agent-hooks/alera-runtime-agent-hook.sh"),
+    );
+
+    assert_eq!(config["theme"], json!("dark"));
+    let hooks = config["hooks"].as_object().expect("hooks object");
+    for event in [
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PostToolUse",
+        "PermissionRequest",
+        "Stop",
+        "SessionEnd",
+    ] {
+        let definitions = hooks[event].as_array().expect("hook definitions");
+        let managed = definitions.last().expect("managed definition");
+        assert!(
+            managed.get("matcher").is_none(),
+            "{event} must omit matcher"
+        );
+        let command = managed["hooks"][0]["command"].as_str().expect("command");
+        assert!(command.contains("devin"), "{event} must target Devin");
+        assert!(command.contains("alera-runtime-agent-hook"));
+    }
+    assert!(hooks["SessionStart"].to_string().contains("user-start"));
+    assert!(hooks["PreToolUse"].to_string().contains("user-tool"));
+    assert!(!hooks["PreToolUse"].to_string().contains("/old/.alera/"));
+}
+
 fn agy_bundle(config: &Map<String, Value>) -> &Map<String, Value> {
     config["alera-status"].as_object().expect("bundle object")
 }

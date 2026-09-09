@@ -90,6 +90,7 @@ pub fn prepare_enabled_integrations(
         settings.copilot.then(|| install_copilot(&script)),
         settings.agy.then(|| install_agy(&script)),
         settings.grok.then(|| install_grok(&script)),
+        settings.devin.then(|| install_devin(&script)),
         settings.opencode.then(install_opencode_plugin),
         settings.opencode2.then(install_opencode2_plugin),
         settings.pi.then(install_pi_plugin),
@@ -253,6 +254,33 @@ fn install_grok(script: &Path) -> anyhow::Result<()> {
     )
 }
 
+fn install_devin(script: &Path) -> anyhow::Result<()> {
+    let path = devin_user_config_path()?;
+    let mut config = read_json_object(&path)?.unwrap_or_default();
+    apply_devin_hooks(&mut config, script);
+    write_json_object(&path, &config)
+}
+
+fn apply_devin_hooks(config: &mut Map<String, Value>, script: &Path) {
+    let hooks = object_field(config, "hooks");
+    for event in [
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PostToolUse",
+        "PermissionRequest",
+        "Stop",
+        "SessionEnd",
+    ] {
+        let mut definitions = clean_managed_definitions(hooks.remove(event));
+        definitions.push(managed_hook_definition(
+            None,
+            &managed_command(script, "devin", event),
+        ));
+        hooks.insert(event.to_string(), Value::Array(definitions));
+    }
+}
+
 fn install_agy(script: &Path) -> anyhow::Result<()> {
     let path = home_dir()?.join(".gemini/config/hooks.json");
     let mut config = read_json_object(&path)?.unwrap_or_default();
@@ -385,6 +413,21 @@ pub(super) fn link_if_present(source: &Path, target: &Path) {
 
 pub(super) fn home_dir() -> anyhow::Result<PathBuf> {
     dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not resolve the user home directory."))
+}
+
+fn devin_user_config_path() -> anyhow::Result<PathBuf> {
+    #[cfg(windows)]
+    {
+        let root = env_path("APPDATA").unwrap_or(home_dir()?.join("AppData").join("Roaming"));
+        Ok(root.join("devin").join("config.json"))
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(home_dir()?
+            .join(".config")
+            .join("devin")
+            .join("config.json"))
+    }
 }
 
 fn env_path(key: &str) -> Option<PathBuf> {

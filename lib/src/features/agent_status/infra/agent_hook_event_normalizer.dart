@@ -54,9 +54,15 @@ NormalizedAgentStatus? normalizeAgentHookEvent(
     AgentType.pi => _normalizePiState(eventName),
     AgentType.amp => _normalizeAmpState(eventName),
     AgentType.grok => _normalizeGrokState(eventName, event.payload),
-    // Devin is launchable but does not install status hooks yet. Keep a
-    // conservative generic branch so externally supplied events stay safe.
-    AgentType.devin => null,
+    AgentType.devin => switch (eventName) {
+      'SessionStart' ||
+      'UserPromptSubmit' ||
+      'PreToolUse' ||
+      'PostToolUse' => AgentStatusState.working,
+      'PermissionRequest' => AgentStatusState.blocked,
+      'Stop' || 'SessionEnd' => AgentStatusState.done,
+      _ => null,
+    },
     AgentType.fx => switch (eventName) {
       'Working' => AgentStatusState.working,
       'Blocked' => AgentStatusState.blocked,
@@ -109,7 +115,7 @@ bool isAgentSessionCloseHookEvent(AgentHookEvent event) {
     AgentType.opencode2 ||
     AgentType.amp => false,
     AgentType.grok => _normalizeGrokEventName(eventName) == 'SessionEnd',
-    AgentType.devin => false,
+    AgentType.devin => eventName == 'SessionEnd',
     AgentType.fx => eventName == 'SessionEnd',
   };
 }
@@ -154,7 +160,8 @@ bool _isNewTurn(AgentType agentType, String eventName) {
     AgentType.pi => _isPiNewTurn(eventName),
     AgentType.amp => _isAmpNewTurn(eventName),
     AgentType.grok => _isGrokNewTurn(eventName),
-    AgentType.devin => false,
+    AgentType.devin =>
+      eventName == 'SessionStart' || eventName == 'UserPromptSubmit',
     AgentType.fx => eventName == 'Working',
   };
 }
