@@ -206,6 +206,32 @@ class AleraLocalizations {
       return '請執行 `${runProviderAuth.group(1)}` 登入，然後重新整理。';
     }
 
+    final accountRuntime = RegExp(r'^Runtime (.+)$').firstMatch(source);
+    if (accountRuntime != null) {
+      return '執行環境 ${accountRuntime.group(1)}';
+    }
+    final linkIdentityProvider = RegExp(r'^Link (Google|GitHub)$')
+        .firstMatch(source);
+    if (linkIdentityProvider != null) {
+      return '連結 ${linkIdentityProvider.group(1)}';
+    }
+    final activeMobileSubscriptions = RegExp(
+      r'^(\d+) active mobile subscription\(s\)\.$',
+    ).firstMatch(source);
+    if (activeMobileSubscriptions != null) {
+      return '${activeMobileSubscriptions.group(1)} 個作用中的行動裝置訂閱。';
+    }
+    final transferRuntimeAccount = RegExp(
+      r'^Transfer this runtime and its mobile subscriptions to account (.+)\? This installation will sign out\.$',
+    ).firstMatch(source);
+    if (transferRuntimeAccount != null) {
+      return '要將此執行環境及其行動裝置訂閱移轉到帳號 ${transferRuntimeAccount.group(1)} 嗎？此安裝將會登出。';
+    }
+    final signInFailure = RegExp(r'^Sign in failed: (.+)$').firstMatch(source);
+    if (signInFailure != null) {
+      return '登入失敗：${signInFailure.group(1)}';
+    }
+
     final originalPath = RegExp(r'^Original \((.+)\)$').firstMatch(source);
     if (originalPath != null) {
       return '原始（${originalPath.group(1)}）';
@@ -906,6 +932,51 @@ class AleraLocalizations {
     'Updates': '更新',
     'Support': '支援',
     'Identity': '身分',
+    'Account unavailable': '無法取得帳號',
+    'Your Alera identity protects cloud delivery and stays optional for local features.':
+        '你的 Alera 身分可保護雲端傳送，本機功能仍可不登入使用。',
+    'Continue With Google': '使用 Google 繼續',
+    'Sign in through your default browser.': '透過預設瀏覽器登入。',
+    'Continue With GitHub': '使用 GitHub 繼續',
+    'Uses profile and verified email access only. Repository access is never requested.':
+        '只會存取個人資料與已驗證的電子郵件，不會要求 Repository 存取權限。',
+    'Alera Account': 'Alera 帳號',
+    'Add another verified sign-in method to this account.':
+        '為此帳號新增另一個已驗證的登入方式。',
+    'Sign Out': '登出',
+    'Stops cloud push delivery from this runtime until you sign in again.':
+        '在你再次登入前，停止從此執行環境傳送雲端推播。',
+    'Browser Sign In': '瀏覽器登入',
+    'A provider authorization is waiting in your browser.':
+        '瀏覽器中正等待 Provider 授權。',
+    'Notifications are delivered only to mobile devices enrolled in this account.':
+        '通知只會傳送到已加入此帳號的行動裝置。',
+    'Enable Mobile Push': '啟用行動裝置推播',
+    'Sign in before enabling cloud delivery.': '請先登入，再啟用雲端傳送。',
+    'Attention Required': '需要注意',
+    'Notify for waiting or blocked agents, decision gates, and escalations.':
+        '當 Agent 等待中、受阻、需要決策或升級處理時通知。',
+    'Agent Finished': 'Agent 已完成',
+    'Notify when an agent finishes a turn.': 'Agent 完成一個回合時通知。',
+    'Terminal Ended': '終端機已結束',
+    'Notify when a terminal session exits or is closed.': '終端機工作階段結束或關閉時通知。',
+    'Move this runtime to another account or remove your cloud identity.':
+        '將此執行環境移轉到其他帳號，或移除你的雲端身分。',
+    'Target Account ID': '目標帳號 ID',
+    'Moving a runtime signs this installation out and requires authentication again.':
+        '移轉執行環境會讓此安裝登出，之後需要重新驗證。',
+    'Account ID': '帳號 ID',
+    'Move This Runtime': '移轉此執行環境',
+    'Transfer runtime ownership and its mobile subscriptions.':
+        '移轉執行環境的擁有權及其行動裝置訂閱。',
+    'Move Runtime': '移轉執行環境',
+    'Delete Alera Account': '刪除 Alera 帳號',
+    'Permanently removes provider identities, cloud sessions, subscriptions, and quota records.':
+        '永久移除 Provider 身分、雲端工作階段、訂閱與配額紀錄。',
+    'Delete Account': '刪除帳號',
+    'This permanently removes your Alera cloud identity, active sessions, mobile subscriptions, and quota records. Recent sign-in may be required.':
+        '這會永久移除你的 Alera 雲端身分、作用中的工作階段、行動裝置訂閱與配額紀錄。可能需要近期登入驗證。',
+
     'Mobile Push': '行動推播',
     'Ownership': '擁有權',
     'CLI And Skills': 'CLI 與技能',

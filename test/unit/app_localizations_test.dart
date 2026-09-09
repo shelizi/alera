@@ -164,6 +164,34 @@ void main() {
       expect(l10n.translate('Provider not detected'), '未偵測到 Provider');
     });
 
+    test('traditional Chinese localizes account settings', () {
+      final l10n = AleraLocalizations(const Locale('zh', 'TW'));
+      expect(l10n.translate('Account unavailable'), '無法取得帳號');
+      expect(l10n.translate('Continue With Google'), '使用 Google 繼續');
+      expect(l10n.translate('Continue With GitHub'), '使用 GitHub 繼續');
+      expect(l10n.translate('Alera Account'), 'Alera 帳號');
+      expect(l10n.translate('Runtime runtime-123'), '執行環境 runtime-123');
+      expect(l10n.translate('Link GitHub'), '連結 GitHub');
+      expect(l10n.translate('Sign Out'), '登出');
+      expect(l10n.translate('Mobile Push'), '行動推播');
+      expect(
+        l10n.translate('2 active mobile subscription(s).'),
+        '2 個作用中的行動裝置訂閱。',
+      );
+      expect(l10n.translate('Move This Runtime'), '移轉此執行環境');
+      expect(
+        l10n.translate(
+          'Transfer this runtime and its mobile subscriptions to account account-42? This installation will sign out.',
+        ),
+        '要將此執行環境及其行動裝置訂閱移轉到帳號 account-42 嗎？此安裝將會登出。',
+      );
+      expect(l10n.translate('Delete Alera Account'), '刪除 Alera 帳號');
+      expect(
+        l10n.translate('Sign in failed: provider rejected request'),
+        '登入失敗：provider rejected request',
+      );
+    });
+
     test('traditional Chinese localizes agent usage chrome', () {
       final l10n = AleraLocalizations(const Locale('zh', 'TW'));
       expect(l10n.translate('Usage'), '用量');
