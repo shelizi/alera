@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/layout/alera_dialog.dart';
 import 'package:flutter/material.dart';
@@ -48,7 +49,7 @@ Future<Color?> showAleraColorPickerDialog({
             crossAxisAlignment: .start,
             children: <Widget>[
               Text(
-                title,
+                context.tr(title),
                 style: theme.textTheme.titleMedium?.copyWith(fontWeight: .w600),
               ),
               const SizedBox(height: AleraTokens.space16),
@@ -67,12 +68,12 @@ Future<Color?> showAleraColorPickerDialog({
                 children: <Widget>[
                   TextButton(
                     onPressed: () => Navigator.of(context).pop(),
-                    child: const Text('Cancel'),
+                    child: Text(context.tr('Cancel')),
                   ),
                   const SizedBox(width: AleraTokens.space8),
                   FilledButton(
                     onPressed: () => Navigator.of(context).pop(selectedColor),
-                    child: const Text('Select'),
+                    child: Text(context.tr('Select')),
                   ),
                 ],
               ),

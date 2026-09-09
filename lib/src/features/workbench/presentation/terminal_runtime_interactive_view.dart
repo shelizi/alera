@@ -77,8 +77,9 @@ class _InteractiveTerminalViewState extends State<_InteractiveTerminalView> {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Could not open link: $uri')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${context.tr('Could not open link')}: $uri')),
+      );
     }
   }
 

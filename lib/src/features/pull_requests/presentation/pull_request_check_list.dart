@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/buttons/alera_icon_button.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
@@ -130,7 +131,7 @@ class _PullRequestCheckListState extends State<PullRequestCheckList> {
         for (final group in _CheckGroup.values)
           if (grouped[group] case final checks?)
             _CheckGroupSection(
-              label: _groupLabel(group, checks.length),
+              label: context.tr(_groupLabel(group, checks.length)),
               expanded: !_collapsedGroups.contains(group),
               onToggle: () => _toggleGroup(group),
               children: <Widget>[
@@ -243,7 +244,7 @@ class const _CheckRow({
             ),
             if (url != null && url.isNotEmpty)
               AleraIconButton(
-                tooltip: 'Open Check',
+                tooltip: context.tr('Open Check'),
                 icon: AleraIcons.external,
                 onPressed: () => onOpenUrl(url),
               ),
@@ -270,11 +271,14 @@ class const _CheckDetailsView({required final _CheckDetailsState state})
         left: AleraTokens.space24,
         bottom: AleraTokens.space8,
       ),
-      child: Align(alignment: Alignment.centerLeft, child: _body(theme)),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: _body(context, theme),
+      ),
     );
   }
 
-  Widget _body(ThemeData theme) {
+  Widget _body(BuildContext context, ThemeData theme) {
     if (state.loading) {
       return const Padding(
         padding: EdgeInsets.symmetric(vertical: AleraTokens.space4),
@@ -307,7 +311,7 @@ class const _CheckDetailsView({required final _CheckDetailsState state})
           ];
     if (lines.isEmpty) {
       return Text(
-        'No details available',
+        context.tr('No details available'),
         style: theme.textTheme.bodySmall?.copyWith(
           color: AleraTokens.foregroundMuted,
         ),
@@ -323,7 +327,7 @@ class const _CheckDetailsView({required final _CheckDetailsState state})
               TextSpan(
                 children: <InlineSpan>[
                   TextSpan(
-                    text: '$label: ',
+                    text: '${context.tr(label)}: ',
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: AleraTokens.foregroundMuted,
                     ),

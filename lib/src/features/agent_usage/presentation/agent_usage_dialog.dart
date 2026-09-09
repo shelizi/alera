@@ -119,21 +119,23 @@ class const AgentUsageDialogView({
                   mainAxisSize: .min,
                   children: <Widget>[
                     Text(
-                      hostId == 'local' ? 'Local Host' : hostId,
+                      hostId == 'local' ? context.tr('Local Host') : hostId,
                       style: AleraTokens.monoCompactStyle,
                     ),
                     if (loading && snapshot != null) ...<Widget>[
                       const SizedBox(width: AleraTokens.space12),
-                      const _UsageLoadStatus(
+                      _UsageLoadStatus(
                         icon: AleraIcons.sync,
-                        label: 'Updating',
-                        tooltip: 'Showing saved usage while new data loads in the background.',
+                        label: context.tr('Updating'),
+                        tooltip: context.tr(
+                          'Showing saved usage while new data loads in the background.',
+                        ),
                       ),
                     ] else if (error != null && snapshot != null) ...<Widget>[
                       const SizedBox(width: AleraTokens.space12),
                       _UsageLoadStatus(
                         icon: AleraIcons.warning,
-                        label: 'Update Failed',
+                        label: context.tr('Update Failed'),
                         tooltip: error!,
                         color: AleraTokens.warning,
                       ),
@@ -141,10 +143,19 @@ class const AgentUsageDialogView({
                     const SizedBox(width: AleraTokens.space12),
                     AleraSegmentedButton<int>(
                       dense: true,
-                      segments: const <ButtonSegment<int>>[
-                        ButtonSegment<int>(value: 7, label: Text('7 Days')),
-                        ButtonSegment<int>(value: 30, label: Text('30 Days')),
-                        ButtonSegment<int>(value: 90, label: Text('90 Days')),
+                      segments: <ButtonSegment<int>>[
+                        ButtonSegment<int>(
+                          value: 7,
+                          label: Text(context.tr('7 Days')),
+                        ),
+                        ButtonSegment<int>(
+                          value: 30,
+                          label: Text(context.tr('30 Days')),
+                        ),
+                        ButtonSegment<int>(
+                          value: 90,
+                          label: Text(context.tr('90 Days')),
+                        ),
                       ],
                       selected: days,
                       onSelectionChanged: onDaysChanged,

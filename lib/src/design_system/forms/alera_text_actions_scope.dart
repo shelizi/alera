@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:alera/src/app/localization/alera_localizations.dart';
+
 import 'package:alera/src/design_system/menus/alera_text_selection_toolbar.dart';
 import 'package:flutter/material.dart';
 
@@ -120,7 +122,7 @@ class const AleraTextActionsScope({
             .isNotEmpty) {
       items.add(
         ContextMenuButtonItem(
-          label: 'Text Actions',
+          label: context.tr('Text Actions'),
           onPressed: () {
             ContextMenuController.removeAny();
             final anchors = editableTextState.contextMenuAnchors;

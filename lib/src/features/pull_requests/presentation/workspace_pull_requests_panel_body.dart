@@ -231,7 +231,7 @@ class const _Header({
           child: Row(
             children: <Widget>[
               Text(
-                'Pull Request',
+                context.tr('Pull Request'),
                 style: theme.textTheme.labelLarge?.copyWith(
                   color: AleraTokens.foreground,
                 ),
@@ -245,7 +245,7 @@ class const _Header({
                 )
               else
                 AleraIconButton(
-                  tooltip: 'Refresh',
+                  tooltip: context.tr('Refresh'),
                   icon: AleraIcons.refresh,
                   onPressed: enabled ? onRefresh : null,
                 ),
@@ -282,10 +282,11 @@ class const _MessageBody({
 }) extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
+    final sourceTitle = title;
     return AleraEmptyState(
       icon: icon,
-      title: title,
-      message: message,
+      title: sourceTitle == null ? null : context.tr(sourceTitle),
+      message: context.tr(message),
       action: action,
     );
   }

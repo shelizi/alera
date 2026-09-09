@@ -91,7 +91,11 @@ class _TextActionsScopeState extends ConsumerState<TextActionsScope> {
       ),
       items: <PopupMenuEntry<TextAction>>[
         for (final action in actions)
-          AleraDropdownEntry<TextAction>(value: action, label: action.name),
+          AleraDropdownEntry<TextAction>(
+            value: action,
+            label: action.name,
+            localizeLabel: false,
+          ),
       ],
     );
     if (selectedAction == null || !mounted) {
@@ -132,7 +136,7 @@ class _TextActionsScopeState extends ConsumerState<TextActionsScope> {
     }
     _runningTargets.add(target.identity);
     final runId = 'text-action-${++_runSequence}';
-    AleraToast.publish(message: 'Running ${action.name}.');
+    AleraToast.show(context, message: 'Running ${action.name}.');
     try {
       final currentSettings = ref.read(settingsControllerProvider);
       final currentAction = currentSettings.textActions.actions
@@ -168,7 +172,8 @@ class _TextActionsScopeState extends ConsumerState<TextActionsScope> {
       }
       final currentValue = target.readValue();
       if (currentValue != captured) {
-        AleraToast.publish(
+        AleraToast.show(
+          context,
           message: 'Text changed while the action was running.',
         );
         return;
@@ -178,29 +183,36 @@ class _TextActionsScopeState extends ConsumerState<TextActionsScope> {
         current: currentValue,
         replacement: result.text,
       )) {
-        AleraToast.publish(
+        AleraToast.show(
+          context,
           message: 'Text action returned no replacement text.',
           tone: .error,
         );
         return;
       }
       if (!target.applyReplacement(captured, result.text)) {
-        AleraToast.publish(
+        AleraToast.show(
+          context,
           message: 'Text action could not update this field.',
           tone: .error,
         );
         return;
       }
-      AleraToast.publish(message: 'Text action applied.', tone: .success);
+      AleraToast.show(context, message: 'Text action applied.', tone: .success);
     } on AiAssistCanceledException {
-      AleraToast.publish(message: 'Text action was canceled.');
+      AleraToast.show(context, message: 'Text action was canceled.');
     } on AiAssistException catch (error) {
-      AleraToast.publish(
+      AleraToast.show(
+        context,
         message: 'Text action failed: ${error.message}',
         tone: .error,
       );
     } on Object catch (error) {
-      AleraToast.publish(message: 'Text action failed: $error', tone: .error);
+      AleraToast.show(
+        context,
+        message: 'Text action failed: $error',
+        tone: .error,
+      );
     } finally {
       _runningTargets.remove(target.identity);
     }

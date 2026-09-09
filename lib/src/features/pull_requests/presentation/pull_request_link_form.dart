@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/forms/alera_text_actions_scope.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
@@ -35,7 +36,7 @@ class _PullRequestLinkFormState extends State<PullRequestLinkForm> {
       crossAxisAlignment: .start,
       children: <Widget>[
         Text(
-          'Pull Request',
+          context.tr('Pull Request'),
           style: theme.textTheme.labelSmall?.copyWith(
             color: AleraTokens.foregroundMuted,
           ),
@@ -53,7 +54,7 @@ class _PullRequestLinkFormState extends State<PullRequestLinkForm> {
           cursorColor: AleraTokens.foreground,
           decoration: pullRequestFieldDecoration(
             theme,
-            hint: '#123 or pull request URL',
+            hint: context.tr('#123 or pull request URL'),
           ),
           onChanged: (_) => widget.onChanged(),
           onSubmitted: (_) {
@@ -65,7 +66,7 @@ class _PullRequestLinkFormState extends State<PullRequestLinkForm> {
         if (suggestion != null) ...<Widget>[
           const SizedBox(height: AleraTokens.space12),
           Text(
-            'Suggested pull request',
+            context.tr('Suggested pull request'),
             style: theme.textTheme.labelSmall?.copyWith(
               color: AleraTokens.foregroundMuted,
             ),

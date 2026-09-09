@@ -1,5 +1,7 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/design_system/layout/alera_master_detail.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -47,4 +49,33 @@ void main() {
 
     expect(tester.getSize(find.byKey(masterKey)).width, 420);
   });
+
+  testWidgets(
+    'localizes master title and resize semantics in Traditional Chinese',
+    (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          locale: const Locale('zh', 'TW'),
+          supportedLocales: supportedAleraLocales,
+          localizationsDelegates: const <LocalizationsDelegate<dynamic>>[
+            AleraLocalizationsDelegate(),
+            ...GlobalMaterialLocalizations.delegates,
+          ],
+          home: const SizedBox(
+            width: 800,
+            height: 320,
+            child: AleraMasterDetail(
+              masterTitle: 'Projects',
+              master: SizedBox(),
+              detail: SizedBox(),
+            ),
+          ),
+        ),
+      );
+
+      expect(find.text('專案'), findsOneWidget);
+      expect(find.text('Projects'), findsNothing);
+      expect(find.bySemanticsLabel('調整專案清單大小'), findsOneWidget);
+    },
+  );
 }

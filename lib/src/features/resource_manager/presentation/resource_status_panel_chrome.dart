@@ -26,7 +26,7 @@ class const _PanelHeader() extends StatelessWidget {
           ),
           const SizedBox(width: AleraTokens.space8),
           Text(
-            'Resource Manager',
+            context.tr('Resource Manager'),
             style: Theme.of(context).textTheme.labelLarge
                 ?.copyWith(color: AleraTokens.foreground),
           ),
@@ -53,8 +53,9 @@ class const _HostUnreachableNotice() extends StatelessWidget {
           const SizedBox(width: AleraTokens.space8),
           Expanded(
             child: Text(
-              'The runtime host is not responding. Use the host chip to '
-              'restart it.',
+              context.tr(
+                'The runtime host is not responding. Use the host chip to restart it.',
+              ),
               style: Theme.of(context).textTheme.bodySmall
                   ?.copyWith(color: AleraTokens.warning),
             ),
@@ -104,7 +105,9 @@ class const _TotalsRow({required final ResourceSnapshot snapshot})
           // overflowing the fixed-width panel.
           Flexible(
             child: Tooltip(
-              message: 'Share of the machine memory these processes hold.',
+              message: context.tr(
+                'Share of the machine memory these processes hold.',
+              ),
               child: Text(
                 formatResourceShareOfSystem(
                   memory,
@@ -129,12 +132,12 @@ class const _TotalsValue({
   @override
   Widget build(BuildContext context) {
     return Tooltip(
-      message: tooltip,
+      message: context.tr(tooltip),
       child: Row(
         mainAxisSize: .min,
         children: <Widget>[
           Text(
-            label,
+            context.tr(label),
             style: Theme.of(context).textTheme.bodySmall
                 ?.copyWith(color: AleraTokens.foregroundFaint),
           ),
@@ -218,7 +221,7 @@ class const _SortButton({
       selected: selected,
       button: true,
       child: Tooltip(
-        message: 'Sort By $label',
+        message: context.tr('Sort By $label'),
         child: InkWell(
           onTap: () => onPressed(column),
           mouseCursor: WidgetStateMouseCursor.clickable,
@@ -227,7 +230,7 @@ class const _SortButton({
             child: Padding(
               padding: const EdgeInsets.symmetric(vertical: AleraTokens.space4),
               child: Text(
-                label,
+                context.tr(label),
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                   color: selected
                       ? AleraTokens.foreground

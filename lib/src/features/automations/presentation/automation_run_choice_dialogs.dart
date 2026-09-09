@@ -44,7 +44,7 @@ class _AutomationRunNowChoiceDialogState
           ),
           DropdownButtonFormField<String>(
             initialValue: _overlap,
-            decoration: const InputDecoration(labelText: 'Overlap'),
+            decoration: InputDecoration(labelText: context.tr('Overlap')),
             items: <DropdownMenuItem<String>>[
               DropdownMenuItem(value: 'skip', child: Text(context.tr('Skip'))),
               DropdownMenuItem(

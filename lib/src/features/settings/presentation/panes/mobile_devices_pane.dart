@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/feedback/alera_empty_state.dart';
 import 'package:alera/src/design_system/forms/alera_setting_row.dart';
@@ -199,7 +200,7 @@ class _MobileDevicesSettingsPaneState
             child: FilledButton.icon(
               onPressed: _generating ? null : () => _generateOffer(status),
               icon: const Icon(AleraIcons.qrCode, size: 16),
-              label: Text(_generating ? 'Generating…' : 'Generate'),
+              label: Text(context.tr(_generating ? 'Generating…' : 'Generate')),
             ),
           ),
         ),

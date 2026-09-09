@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/design_system/layout/alera_confirm_dialog.dart';
 import 'package:alera/src/design_system/surfaces/alera_hover_card.dart';
 import 'package:alera/src/features/resource_manager/application/resource_manager_providers.dart';
@@ -49,7 +50,7 @@ class _ResourceStatusBarControlState
       // The chip runs its own InkWell, which would win the gesture arena over
       // the card's detector, so the chip drives pinning through the controller.
       pinOnTap: false,
-      semanticsLabel: 'Resource Manager',
+      semanticsLabel: context.tr('Resource Manager'),
       onVisibilityChanged: _handleVisibilityChanged,
       card: ResourceStatusPanel(
         snapshot: snapshot,

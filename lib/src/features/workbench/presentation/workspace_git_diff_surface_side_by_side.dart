@@ -41,7 +41,7 @@ class const _SideBySideHeaderRow({
                 vertical: AleraTokens.space4,
               ),
               child: Text(
-                oldTitle,
+                context.tr(oldTitle),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: style,
@@ -55,7 +55,7 @@ class const _SideBySideHeaderRow({
                 vertical: AleraTokens.space4,
               ),
               child: Text(
-                newTitle,
+                context.tr(newTitle),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: style,

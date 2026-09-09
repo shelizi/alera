@@ -29,7 +29,376 @@ class AleraLocalizations {
     if (!isTraditionalChinese) {
       return source;
     }
-    return _traditionalChinese[source] ?? source;
+    return _traditionalChinese[source] ??
+        _translateDynamicTraditionalChinese(source) ??
+        source;
+  }
+
+  static String? _translateDynamicTraditionalChinese(String source) {
+    final singleDirty = RegExp(r'^(.+) has unsaved changes\.$')
+        .firstMatch(source);
+    if (singleDirty != null) {
+      return '「${singleDirty.group(1)}」有尚未儲存的變更。';
+    }
+    final multipleDirty = RegExp(r'^(\d+) editor tabs have unsaved changes\.$')
+        .firstMatch(source);
+    if (multipleDirty != null) {
+      return '有 ${multipleDirty.group(1)} 個編輯器分頁包含尚未儲存的變更。';
+    }
+    final activeAgent = RegExp(
+      r'^An agent is actively working in "(.+)"\. Closing will terminate the session\.$',
+    ).firstMatch(source);
+    if (activeAgent != null) {
+      return '代理程式正在「${activeAgent.group(1)}」中執行工作。關閉後將終止此工作階段。';
+    }
+    final runningProcess = RegExp(
+      r'^The process "(.+)" is still running in "(.+)"\. Closing will terminate it\.$',
+    ).firstMatch(source);
+    if (runningProcess != null) {
+      return '程序「${runningProcess.group(1)}」仍在「${runningProcess.group(2)}」中執行。關閉後將終止該程序。';
+    }
+    final runningCommand = RegExp(
+      r'^A command is still running in "(.+)"\. Closing will terminate it\.$',
+    ).firstMatch(source);
+    if (runningCommand != null) {
+      return '「${runningCommand.group(1)}」中仍有命令正在執行。關閉後將終止該命令。';
+    }
+    final busyTerminals = RegExp(
+      r'^(\d+) terminal tabs have running processes or active agents\. Closing will terminate them\.$',
+    ).firstMatch(source);
+    if (busyTerminals != null) {
+      return '有 ${busyTerminals.group(1)} 個終端機分頁仍有執行中程序或作用中代理程式。關閉後將終止它們。';
+    }
+    final preservedAttachments = RegExp(
+      r'^(\d+) attached (?:item|items) will be preserved\.$',
+    ).firstMatch(source);
+    if (preservedAttachments != null) {
+      return '將保留 ${preservedAttachments.group(1)} 個附件。';
+    }
+
+    final effortLabel = RegExp(r'^(.+) Effort$').firstMatch(source);
+    if (effortLabel != null) {
+      return '推理強度：${effortLabel.group(1)}';
+    }
+    final chunkCount = RegExp(r'^(\d+) (?:Chunk|Chunks)$').firstMatch(source);
+    if (chunkCount != null) {
+      return '${chunkCount.group(1)} 個區塊';
+    }
+    final retainedLines = RegExp(r'^Kept (\d+)/(\d+) Changed Lines$')
+        .firstMatch(source);
+    if (retainedLines != null) {
+      return '保留 ${retainedLines.group(1)}/${retainedLines.group(2)} 行變更';
+    }
+    final chunkPosition = RegExp(r'^Chunk (\d+) of (\d+)$').firstMatch(source);
+    if (chunkPosition != null) {
+      return '區塊 ${chunkPosition.group(1)}/${chunkPosition.group(2)}';
+    }
+    final generatingChunk = RegExp(r'^Generating chunk (\d+) of (\d+)$')
+        .firstMatch(source);
+    if (generatingChunk != null) {
+      return '正在產生區塊 ${generatingChunk.group(1)}/${generatingChunk.group(2)}';
+    }
+    final repairingChunk = RegExp(r'^Repairing chunk (\d+) of (\d+)$')
+        .firstMatch(source);
+    if (repairingChunk != null) {
+      return '正在修復區塊 ${repairingChunk.group(1)}/${repairingChunk.group(2)}';
+    }
+    final combiningChunks = RegExp(r'^Combining (\d+) (?:chunk|chunks)$')
+        .firstMatch(source);
+    if (combiningChunks != null) {
+      return '正在合併 ${combiningChunks.group(1)} 個區塊';
+    }
+
+    final shortcutConflict = RegExp(
+      r'^(.+) is assigned to "(.+)"\. Reassign it to "(.+)"\?$',
+    ).firstMatch(source);
+    if (shortcutConflict != null) {
+      final conflictLabel =
+          _traditionalChinese[shortcutConflict.group(2)!] ??
+          shortcutConflict.group(2)!;
+      final targetLabel =
+          _traditionalChinese[shortcutConflict.group(3)!] ??
+          shortcutConflict.group(3)!;
+      return '${shortcutConflict.group(1)} 已指派給「$conflictLabel」。要重新指派給「$targetLabel」嗎？';
+    }
+    final unsupportedKey = RegExp(r'^Unsupported key: (.+)\.$')
+        .firstMatch(source);
+    if (unsupportedKey != null) {
+      return '不支援的按鍵：${unsupportedKey.group(1)}。';
+    }
+
+    final sortBy = RegExp(r'^Sort By (.+)$').firstMatch(source);
+    if (sortBy != null) {
+      final label = _traditionalChinese[sortBy.group(1)!] ?? sortBy.group(1)!;
+      return '依 $label 排序';
+    }
+    final orphanTerminals = RegExp(r'^(\d+) orphan terminal(?:s)?$')
+        .firstMatch(source);
+    if (orphanTerminals != null) {
+      return '${orphanTerminals.group(1)} 個孤立終端機';
+    }
+    final forceQuitTerminal = RegExp(
+      r'^Force-quits (.+)\. Anything running in that terminal is lost\.$',
+    ).firstMatch(source);
+    if (forceQuitTerminal != null) {
+      return '將強制關閉「${forceQuitTerminal.group(1)}」。該終端機中正在執行的所有工作都會遺失。';
+    }
+
+    final usageCount = RegExp(
+      r'^(\d+) (assistant responses|transcript sources|unpriced responses)$',
+    ).firstMatch(source);
+    if (usageCount != null) {
+      final noun = switch (usageCount.group(2)) {
+        'assistant responses' => '則 Assistant 回覆',
+        'transcript sources' => '個逐字稿來源',
+        _ => '則未計價回覆',
+      };
+      return '${usageCount.group(1)} $noun';
+    }
+    final usageInputShare = RegExp(r'^([0-9.]+%) of input$').firstMatch(source);
+    if (usageInputShare != null) {
+      return '占輸入 ${usageInputShare.group(1)}';
+    }
+    final usageScanSummary = RegExp(
+      r'^Scanned (\d+) files in (\d+) ms\. Transcript content stays on this host\.$',
+    ).firstMatch(source);
+    if (usageScanSummary != null) {
+      return '已掃描 ${usageScanSummary.group(1)} 個檔案，耗時 ${usageScanSummary.group(2)} ms。逐字稿內容會保留在此 Host。';
+    }
+    final usagePartial = RegExp(r'^(.+) (.+) is partial\.$').firstMatch(source);
+    if (usagePartial != null) {
+      return '${usagePartial.group(1)} ${usagePartial.group(2)} 的資料不完整。';
+    }
+    final dailyUsageSemantics = RegExp(
+      r'^Daily Claude Code, Codex, and Grok Build token usage\. (.+)$',
+    ).firstMatch(source);
+    if (dailyUsageSemantics != null) {
+      return 'Claude Code、Codex 與 Grok Build 每日 Token 用量。${dailyUsageSemantics.group(1)}';
+    }
+
+    final pullRequestCount = RegExp(r'^(Checks|Comments) \((\d+)\)$')
+        .firstMatch(source);
+    if (pullRequestCount != null) {
+      final label = pullRequestCount.group(1) == 'Checks' ? '檢查' : '留言';
+      return '$label（${pullRequestCount.group(2)}）';
+    }
+    final checkGroup = RegExp(
+      r'^(\d+) (failing|in progress|successful) Checks?$',
+    ).firstMatch(source);
+    if (checkGroup != null) {
+      final state = switch (checkGroup.group(2)) {
+        'failing' => '失敗',
+        'in progress' => '進行中',
+        _ => '成功',
+      };
+      return '${checkGroup.group(1)} 個$state檢查';
+    }
+
+    final installProviderCli = RegExp(
+      r'^Install `(.+)` and ensure it is on your PATH\.$',
+    ).firstMatch(source);
+    if (installProviderCli != null) {
+      return '請安裝 `${installProviderCli.group(1)}`，並確認它位於 PATH 中。';
+    }
+    final runProviderAuth = RegExp(r'^Run `(.+)` to sign in, then refresh\.$')
+        .firstMatch(source);
+    if (runProviderAuth != null) {
+      return '請執行 `${runProviderAuth.group(1)}` 登入，然後重新整理。';
+    }
+
+    final accountRuntime = RegExp(r'^Runtime (.+)$').firstMatch(source);
+    if (accountRuntime != null) {
+      return '執行環境 ${accountRuntime.group(1)}';
+    }
+    final linkIdentityProvider = RegExp(r'^Link (Google|GitHub)$')
+        .firstMatch(source);
+    if (linkIdentityProvider != null) {
+      return '連結 ${linkIdentityProvider.group(1)}';
+    }
+    final activeMobileSubscriptions = RegExp(
+      r'^(\d+) active mobile subscription\(s\)\.$',
+    ).firstMatch(source);
+    if (activeMobileSubscriptions != null) {
+      return '${activeMobileSubscriptions.group(1)} 個作用中的行動裝置訂閱。';
+    }
+    final transferRuntimeAccount = RegExp(
+      r'^Transfer this runtime and its mobile subscriptions to account (.+)\? This installation will sign out\.$',
+    ).firstMatch(source);
+    if (transferRuntimeAccount != null) {
+      return '要將此執行環境及其行動裝置訂閱移轉到帳號 ${transferRuntimeAccount.group(1)} 嗎？此安裝將會登出。';
+    }
+    final signInFailure = RegExp(r'^Sign in failed: (.+)$').firstMatch(source);
+    if (signInFailure != null) {
+      return '登入失敗：${signInFailure.group(1)}';
+    }
+
+    final resizeMasterList = RegExp(r'^Resize (.+) List$').firstMatch(source);
+    if (resizeMasterList != null) {
+      final label =
+          _traditionalChinese[resizeMasterList.group(1)!] ??
+          resizeMasterList.group(1)!;
+      return '調整$label清單大小';
+    }
+
+    final allAutomationFilter = RegExp(r'^All (State|Project|Profile|Tag)$')
+        .firstMatch(source);
+    if (allAutomationFilter != null) {
+      final label =
+          _traditionalChinese[allAutomationFilter.group(1)!] ??
+          allAutomationFilter.group(1)!;
+      return '所有$label';
+    }
+
+    final unknownPromptVariable = RegExp(r'^Unknown prompt variable: (.+)$')
+        .firstMatch(source);
+    if (unknownPromptVariable != null) {
+      return '未知的提示詞變數：${unknownPromptVariable.group(1)}';
+    }
+
+    final dictationDownloadProgress = RegExp(
+      r'^(\d+(?:\.\d+)? (?:KiB|MiB)) of (\d+(?:\.\d+)? (?:KiB|MiB))$',
+    ).firstMatch(source);
+    if (dictationDownloadProgress != null) {
+      return '${dictationDownloadProgress.group(1)} / ${dictationDownloadProgress.group(2)}';
+    }
+    final dictationInterrupted = RegExp(
+      r'^Download interrupted at (.+)\. Resume when ready\.$',
+    ).firstMatch(source);
+    if (dictationInterrupted != null) {
+      return '下載在 ${dictationInterrupted.group(1)} 時中斷，可在準備好後繼續。';
+    }
+    final dictationDownloadSize = RegExp(
+      r'^Download size (\d+(?:\.\d+)? (?:KiB|MiB))\.$',
+    ).firstMatch(source);
+    if (dictationDownloadSize != null) {
+      return '下載大小 ${dictationDownloadSize.group(1)}。';
+    }
+    final systemRecognitionFailed = RegExp(
+      r'^System speech recognition failed: (.+)$',
+    ).firstMatch(source);
+    if (systemRecognitionFailed != null) {
+      return '系統語音辨識失敗：${systemRecognitionFailed.group(1)}';
+    }
+    final systemRecognitionStartFailed = RegExp(
+      r'^System speech recognition could not start: (.+)$',
+    ).firstMatch(source);
+    if (systemRecognitionStartFailed != null) {
+      return '無法啟動系統語音辨識：${systemRecognitionStartFailed.group(1)}';
+    }
+    final speechProcessingFallback = RegExp(
+      r'^The transcript was inserted without speech processing: (.+)$',
+    ).firstMatch(source);
+    if (speechProcessingFallback != null) {
+      return '語音處理失敗，已插入原始轉錄內容：${speechProcessingFallback.group(1)}';
+    }
+
+    final originalPath = RegExp(r'^Original \((.+)\)$').firstMatch(source);
+    if (originalPath != null) {
+      return '原始（${originalPath.group(1)}）';
+    }
+
+    final runtimeBusyWithSuffix = RegExp(
+      r'^The runtime has (.+)\. (Force stop terminates them\.|You can quit and leave the runtime running, or force stop it\.)$',
+    ).firstMatch(source);
+    if (runtimeBusyWithSuffix != null) {
+      final details = _translateRuntimeBusyItems(
+        runtimeBusyWithSuffix.group(1)!,
+      );
+      final suffix = runtimeBusyWithSuffix.group(2)!;
+      final translatedSuffix = switch (suffix) {
+        'Force stop terminates them.' => '強制停止會終止這些工作。',
+        _ => '你可以結束 Alera 並讓執行環境保持運作，或強制停止它。',
+      };
+      return '執行環境目前有 $details。$translatedSuffix';
+    }
+
+    final runtimeBusy = RegExp(r'^The runtime has (.+)\.$').firstMatch(source);
+    if (runtimeBusy != null) {
+      final details = _translateRuntimeBusyItems(runtimeBusy.group(1)!);
+      return '執行環境目前有 $details。';
+    }
+
+    final generatedBranchExists = RegExp(
+      r'^(?:Bad state: )?The generated branch "(.+)" already exists\.$',
+    ).firstMatch(source);
+    if (generatedBranchExists != null) {
+      return '產生的 Branch「${generatedBranchExists.group(1)}」已存在。';
+    }
+    final workspaceIdentityUnavailable = RegExp(
+      r'^(?:Bad state: )?AI Assist could not generate an available workspace identity\.$',
+    ).firstMatch(source);
+    if (workspaceIdentityUnavailable != null) {
+      return 'AI Assist 無法產生可用的工作區識別。';
+    }
+    final retryAgentRequiresUpdate = RegExp(
+      r'^(?:Unsupported operation: )?Update Alera on this host before retrying agent launch safely\.$',
+    ).firstMatch(source);
+    if (retryAgentRequiresUpdate != null) {
+      return '請先更新此 Host 上的 Alera，再安全重試啟動 Agent。';
+    }
+    final originalAgentLaunchUnavailable = RegExp(
+      r'^(?:Bad state: )?The original agent launch identity is unavailable\.$',
+    ).firstMatch(source);
+    if (originalAgentLaunchUnavailable != null) {
+      return '原始 Agent 啟動識別無法使用。';
+    }
+
+    final globalValue = RegExp(r'^Global \((.+)\)$').firstMatch(source);
+    if (globalValue != null) {
+      final value = globalValue.group(1)!;
+      final translatedValue = _traditionalChinese[value] ?? value;
+      return '全域（$translatedValue）';
+    }
+    final runningTextAction = RegExp(r'^Running (.+)\.$').firstMatch(source);
+    if (runningTextAction != null) {
+      return '正在執行「${runningTextAction.group(1)}」。';
+    }
+    final textActionFailed = RegExp(r'^Text action failed: (.+)$')
+        .firstMatch(source);
+    if (textActionFailed != null) {
+      return '文字操作失敗：${textActionFailed.group(1)}';
+    }
+
+    final zedAvailable = RegExp(r'^Zed is available(?:: (.+))?\.?$')
+        .firstMatch(source);
+    if (zedAvailable != null) {
+      final version = zedAvailable.group(1);
+      return version == null ? 'Zed 可使用。' : 'Zed 可使用：$version';
+    }
+
+    final selectedValue = RegExp(r'^Selected: (.+)$').firstMatch(source);
+    if (selectedValue != null) {
+      return '已選取：${selectedValue.group(1)}';
+    }
+    final showingCount = RegExp(r'^Showing (\d+) of (\d+)$').firstMatch(source);
+    if (showingCount != null) {
+      return '顯示 ${showingCount.group(1)} / ${showingCount.group(2)}';
+    }
+
+    return null;
+  }
+
+  static String _translateRuntimeBusyItems(String source) {
+    return source
+        .replaceAllMapped(
+          RegExp(r'(\d+) open agent\(s\)'),
+          (match) => '${match.group(1)} 個開啟中的代理程式',
+        )
+        .replaceAllMapped(
+          RegExp(r'(\d+) active terminal session\(s\)'),
+          (match) => '${match.group(1)} 個作用中的終端機工作階段',
+        )
+        .replaceAllMapped(
+          RegExp(r'(\d+) active background job\(s\)'),
+          (match) => '${match.group(1)} 個作用中的背景工作',
+        )
+        .replaceAllMapped(
+          RegExp(r'(\d+) active push subscription\(s\)'),
+          (match) => '${match.group(1)} 個作用中的推播訂閱',
+        )
+        .replaceAll(', and ', '、')
+        .replaceAll(' and ', '、')
+        .replaceAll(', ', '、');
   }
 
   static const Map<String, String> _traditionalChinese = <String, String>{
@@ -163,6 +532,68 @@ class AleraLocalizations {
     'No commands are available.': '目前沒有可用的指令。',
     'No commands match': '沒有符合的指令：',
     'No shortcut': '無快速鍵',
+    'How shortcuts behave while a terminal is focused.': '設定終端機取得焦點時快速鍵的行為。',
+    'When a Terminal Is Focused': '終端機取得焦點時',
+    'App first lets Alera capture combinations the shell would otherwise receive. Terminal first defers to the shell.':
+        '「應用程式優先」會讓 Alera 攔截原本會傳給 Shell 的組合鍵；「終端機優先」則優先交由 Shell 處理。',
+    'Stop Recording': '停止錄製',
+    'Change Shortcut': '變更快速鍵',
+    'Press keys… (Esc to cancel)': '請按下快速鍵…（Esc 取消）',
+    'Disabled': '已停用',
+    'Unassigned': '未指派',
+    'Shortcut already in use': '快速鍵已被使用',
+    'Reassign': '重新指派',
+    'Enter a shortcut like Ctrl+Shift+P.': '請輸入快速鍵，例如 Ctrl+Shift+P。',
+    'A shortcut can only have one main key.': '快速鍵只能有一個主要按鍵。',
+    'Add a main key, like P or Enter.': '請加入主要按鍵，例如 P 或 Enter。',
+    'Use either Mod or a platform-specific modifier, not both.':
+        '請使用 Mod 或平台專用修飾鍵其中一種，不要同時使用。',
+    'Include at least one modifier key.': '請至少包含一個修飾鍵。',
+    'Press a non-modifier key too.': '請再按下一個非修飾鍵。',
+    'Unsupported key.': '不支援此按鍵。',
+    'Go to Tab 1': '前往分頁 1',
+    'Go to Tab 2': '前往分頁 2',
+    'Go to Tab 3': '前往分頁 3',
+    'Go to Tab 4': '前往分頁 4',
+    'Go to Tab 5': '前往分頁 5',
+    'Go to Tab 6': '前往分頁 6',
+    'Go to Tab 7': '前往分頁 7',
+    'Go to Tab 8': '前往分頁 8',
+    'Go to Last Tab': '前往最後一個分頁',
+    'Open the settings dialog.': '開啟設定對話框。',
+    'Open the runtime-local automation manager.': '開啟此執行環境的自動化管理器。',
+    'Search and open a file in the active workspace.': '搜尋並開啟目前工作區中的檔案。',
+    'Search and run an Alera command.': '搜尋並執行 Alera 指令。',
+    'Open the add-project dialog.': '開啟新增專案對話框。',
+    'Collapse or expand the project sidebar.': '收合或展開專案側邊欄。',
+    'Create a linked workspace for the active Git project.':
+        '為目前的 Git 專案建立連結工作區。',
+    'Open the active workspace in Zed.': '在 Zed 中開啟目前工作區。',
+    'Go to the previously selected workspace.': '前往先前選取的工作區。',
+    'Go to the next workspace in navigation history.': '前往導覽紀錄中的下一個工作區。',
+    'Open workspace search.': '開啟工作區搜尋。',
+    'Search the active terminal scrollback.': '搜尋目前終端機的捲動緩衝內容。',
+    'Show or hide the prompt composer for the active terminal.':
+        '顯示或隱藏目前終端機的提示詞輸入區。',
+    'Open workspace search and replace.': '開啟工作區搜尋與取代。',
+    'Save the active editor file.': '儲存目前編輯器檔案。',
+    'Open a terminal tab in the active workspace.': '在目前工作區開啟終端機分頁。',
+    'Close the active terminal tab.': '關閉目前的終端機分頁。',
+    'Select the next tab in the active pane.': '選取目前窗格中的下一個分頁。',
+    'Select the previous tab in the active pane.': '選取目前窗格中的上一個分頁。',
+    'Select the first tab in the active pane.': '選取目前窗格中的第一個分頁。',
+    'Select the second tab in the active pane.': '選取目前窗格中的第二個分頁。',
+    'Select the third tab in the active pane.': '選取目前窗格中的第三個分頁。',
+    'Select the fourth tab in the active pane.': '選取目前窗格中的第四個分頁。',
+    'Select the fifth tab in the active pane.': '選取目前窗格中的第五個分頁。',
+    'Select the sixth tab in the active pane.': '選取目前窗格中的第六個分頁。',
+    'Select the seventh tab in the active pane.': '選取目前窗格中的第七個分頁。',
+    'Select the eighth tab in the active pane.': '選取目前窗格中的第八個分頁。',
+    'Select the last tab in the active pane.': '選取目前窗格中的最後一個分頁。',
+    'Split the active pane to the right with a new terminal.':
+        '在目前窗格右側分割並開啟新的終端機。',
+    'Split the active pane downward with a new terminal.': '在目前窗格下方分割並開啟新的終端機。',
+    'Merge the active pane back into its sibling.': '將目前窗格合併回相鄰窗格。',
     'Global': '全域',
     'Workspace': '工作區',
     'Tabs': '分頁',
@@ -193,6 +624,68 @@ class AleraLocalizations {
     'Clone From URL': '從 URL 複製',
     'Project Path': '專案路徑',
     'Destination Folder': '目的地資料夾',
+    'Auth Method': '認證方式',
+    'Authentication': '驗證方式',
+    'Key': '金鑰',
+    'Password': '密碼',
+    'Platform': '平台',
+    'Architecture': '架構',
+    'Parent Workspace': '父工作區',
+    'No Parent': '無父工作區',
+    'Section Name': '區段名稱',
+    'Terminal Title': '終端機標題',
+    'Configuration is stored in your Alera account and can be read by the service. Review custom commands and prompts for embedded secrets. Credentials and device permissions stay local.':
+        '設定會儲存在你的 Alera 帳戶中，服務可讀取這些設定。請檢查自訂命令與提示詞是否包含機密資訊；憑證與裝置權限仍只保留在本機。',
+    'Review Changes': '檢視變更',
+    'History': '歷史記錄',
+    'Retry Pending Upload': '重試待上傳項目',
+    'Shared version': '共用版本',
+    'Comparing': '比較版本',
+    'differences': '項差異',
+    'unresolved': '項未解決',
+    'Keep All Local': '全部保留本機版本',
+    'Keep All Remote': '全部保留遠端版本',
+    'Both sides changed this value. Choose what to keep.':
+        '本機與遠端都修改了此值，請選擇要保留哪一個。',
+    'Local': '本機',
+    'Remote': '遠端',
+    'Choose A Value': '選擇一個值',
+    'Keep Local': '保留本機版本',
+    'Keep Remote': '保留遠端版本',
+    'Action Name': '動作名稱',
+    'Profile Name': '設定檔名稱',
+    'Result': '結果',
+    'Unresolved': '未解決',
+    '(Removed)': '（已移除）',
+    'These changes apply only to': '這些變更只會套用到',
+    'Apply To Device': '套用到裝置',
+    'Apply And Upload': '套用並上傳',
+    'Leaving this screen without applying keeps your configuration unchanged. If upload fails after applying, local changes remain pending.':
+        '離開此畫面而不套用時，設定會保持不變。若套用後上傳失敗，本機變更會保留為待上傳狀態。',
+    'Version': '版本',
+    'Compare': '比較',
+    'Shell environment reloaded': 'Shell 環境已重新載入',
+    'PATH entries': '個 PATH 項目',
+    'Could not reload shell environment': '無法重新載入 Shell 環境',
+    'Could not open link': '無法開啟連結',
+    'Existing Branch *': '現有分支 *',
+    'New Branch Name *': '新分支名稱 *',
+    'Workspace Name (Optional)': '工作區名稱（選填）',
+    'Search projects': '搜尋專案',
+    'Search Workspaces': '搜尋工作區',
+    'Search workspaces': '搜尋工作區',
+    'Replace': '取代',
+    'Files to include': '要包含的檔案',
+    'Files to exclude': '要排除的檔案',
+    'Hide details': '隱藏詳細資料',
+    'Show details': '顯示詳細資料',
+    'Hide replace': '隱藏取代欄位',
+    'Show replace': '顯示取代欄位',
+    'Search Terminal': '搜尋終端機',
+    'Search PDF': '搜尋 PDF',
+    'Add tag…': '新增標籤…',
+    'Add project…': '新增專案…',
+    'Terminal Input': '終端機輸入',
     'Display Name (Optional)': '顯示名稱（選填）',
     'Alera will detect whether the folder is a Git repository. Non-Git folders only get a primary workspace.':
         'Alera 會偵測資料夾是否為 Git 儲存庫；非 Git 資料夾只會建立主要工作區。',
@@ -249,6 +742,37 @@ class AleraLocalizations {
     'Remove Model': '移除模型',
     'Update Runtime': '更新 Runtime',
     'Kill All': '全部終止',
+    'A reading diff is an AI-guided, non-applicable abbreviation of the original diff.':
+        '閱讀 Diff 是由 AI 引導產生、不可直接套用的原始 Diff 精簡版本。',
+    'This overview explains the behavioral changes selected while condensing the diff. It does not identify bugs or security findings. Open Condensed Diff to inspect the retained source changes, or return to the original diff for the complete patch.': '此總覽說明精簡 Diff 時保留的行為變更，不代表錯誤或資安檢查結果。請開啟「精簡 Diff」檢視保留的原始碼變更，或返回原始 Diff 查看完整 Patch。',
+    'Cached Result': '快取結果',
+    'Preparing reading diff': '正在準備閱讀 Diff',
+    'Loading cached reading diff': '正在載入快取的閱讀 Diff',
+    'Loading the immutable diff and splitting it at safe boundaries.':
+        '正在載入不可變更的 Diff，並於安全邊界分割。',
+    'Using a previously generated and validated result.': '使用先前已產生並驗證的結果。',
+    'The agent is proposing safe elisions; Rust validates the plan.':
+        'Agent 正在提出安全的省略方案；Rust 會驗證該方案。',
+    'Rust rejected the plan; the agent is replacing it once.':
+        'Rust 已拒絕此方案；Agent 正在重新產生一次替代方案。',
+    'Rust is merging the validated chunks into the final reading diff.':
+        'Rust 正在將已驗證的區塊合併為最終閱讀 Diff。',
+    'Reading diff generation failed': '閱讀 Diff 產生失敗',
+    'This manually runs the configured AI Assist agent and may consume subscription quota or other provider usage. The complete selected patch is provided, including portions hidden by preview truncation.': '這會手動執行已設定的 AI Assist Agent，可能消耗訂閱額度或其他 Provider 用量。系統會提供完整的所選 Patch，包括預覽截斷而隱藏的部分。',
+    'The result opens with a behavioral overview and a condensed, non-applicable diff. It is not a bug or security review.':
+        '結果會先顯示行為總覽及不可直接套用的精簡 Diff；這不是錯誤或資安審查。',
+    'Agent': 'Agent',
+    'Model': '模型',
+    'Effort': '推理強度',
+    'Access': '存取權限',
+    'Diff Size': 'Diff 大小',
+    'Chunks': '區塊數',
+    'Agent Default': 'Agent 預設值',
+    'Repository Read Only': 'Repository 唯讀',
+    'Diff Only': '僅限 Diff',
+    'Could not prepare': '無法準備',
+    'condensed diff': '精簡 Diff',
+
     'Generate Reading Diff': '產生閱讀 Diff',
     'Install Update': '安裝更新',
     'Restart Alera': '重新啟動 Alera',
@@ -276,19 +800,165 @@ class AleraLocalizations {
     'Pause Automation': '暫停自動化',
     'Choose what to do with active runs.': '選擇如何處理目前執行中的工作。',
     'Loading automation policy...': '正在載入自動化政策…',
+    'Automation Policy Unavailable': '無法取得自動化政策',
+    'Automation Permissions': '自動化權限',
+    'Choose whether this profile may administer active definitions and whether it may execute them.':
+        '選擇此設定檔是否可管理作用中的自動化定義，以及是否可執行它們。',
+    'May Activate Or Edit Active Automations': '可啟用或編輯作用中的自動化',
+    'Allow a managed agent using this profile to activate or edit an active definition.':
+        '允許使用此設定檔的受管理 Agent 啟用或編輯作用中的自動化定義。',
+    'May Execute Automations': '可執行自動化',
+    'Opt this profile into scheduled and manual automation execution.':
+        '允許此設定檔執行排程與手動自動化。',
+    'Project Automation Policy Unavailable': '無法取得專案自動化政策',
+    'Automation Policy': '自動化政策',
+    'Repository declaration is read from alera.toml. Local approval can only restrict execution.':
+        'Repository 宣告會從 alera.toml 讀取；本機核准只能進一步限制執行。',
+    'Repository Declares Automations': 'Repository 宣告自動化',
+    'The repository declares automation use in alera.toml.':
+        'Repository 已在 alera.toml 宣告使用自動化。',
+    'Add an automation declaration to alera.toml before execution.':
+        '執行前請先在 alera.toml 新增自動化宣告。',
+    'Require Local Approval': '需要本機核准',
+    'Require an explicit human approval in addition to the repository declaration.':
+        '除了 Repository 宣告外，還需要明確的人工作業核准。',
+    'Local Approval Granted': '已授予本機核准',
+    'Grant the local approval required by a restrictive project policy.':
+        '授予限制性專案政策所要求的本機核准。',
+    'Loading Automation Settings': '正在載入自動化設定',
+    'Reading runtime automation settings.': '正在讀取執行環境的自動化設定。',
+    'Automation Settings Unavailable': '無法取得自動化設定',
+    'Automation History And Autostart': '自動化歷程與自動啟動',
+    'Keep scheduled work available without a window and control local retention.':
+        '讓排程工作在沒有視窗時仍可執行，並控制本機保留期限。',
+    'Start Automations At Login': '登入時啟動自動化',
+    'Start the persistent local automation host when you sign in. This is off by default.':
+        '登入時啟動常駐的本機自動化 Host；預設為關閉。',
+    'Run History Retention': '執行歷程保留期限',
+    'Keep final runs for at most this many days.': '最多保留已完成執行紀錄這麼多天。',
+    'Audit Retention': '稽核保留期限',
+    'Keep automation audit events for at most this many days.':
+        '最多保留自動化稽核事件這麼多天。',
+    'Trash Retention': '垃圾桶保留期限',
+    'Permanently remove trashed definitions after this many days.':
+        '垃圾桶中的定義超過此天數後永久刪除。',
+    'days': '天',
+
     'Notify On Success': '成功時通知',
     'Prompt Preview': '提示詞預覽',
+    'Automation unavailable': '無法取得自動化',
+    'Pause': '暫停',
+    'Runs': '執行紀錄',
+    'Audit': '稽核',
+    'Slug': 'Slug',
+    'Schedule': '排程',
+    'Cron / time': 'Cron / 時間',
+    'Target': '目標',
+    'Policies': '政策',
+    'Limits': '限制',
+    'Tags': '標籤',
+    'Revision': '版本',
+    'Prompt': '提示詞',
+    'Effective Policy': '生效政策',
+    'Signature Timeline': '簽章時間軸',
+    'Overlap': '重疊處理',
+
     'No active run or upcoming occurrence.': '目前沒有執行中或即將開始的工作。',
     'Scheduled occurrence': '排程執行',
     'No runs yet.': '尚無執行紀錄。',
     'No audit events yet.': '尚無稽核事件。',
     'Import Automations': '匯入自動化',
+    'Edit Automation': '編輯自動化',
+    'Project (Optional)': '專案（選填）',
+    'Tag Ids (Comma-separated)': '標籤 ID（以逗號分隔）',
+    'Prompt Template': '提示詞範本',
+    'Five-field Cron': '五欄 Cron',
+    'Run At (UTC)': '執行時間（UTC）',
+    'IANA Timezone': 'IANA 時區',
+    'Start At (Optional ISO-8601 UTC)': '開始時間（選填，ISO-8601 UTC）',
+    'End At (Optional ISO-8601 UTC)': '結束時間（選填，ISO-8601 UTC）',
+    'Maximum Scheduled Runs (Optional)': '最大排程執行次數（選填）',
+    'Source Workspace': '來源工作區',
+    'Tab': '分頁',
+    'Agent Conversation ID': 'Agent 對話 ID',
+    'Agent Profile': 'Agent 設定檔',
+    'Source Branch': '來源 Branch',
+    'Workspace Name Template': '工作區名稱範本',
+    'Precheck Command (Optional)': '前置檢查指令（選填）',
+    'Precheck Timeout (Seconds)': '前置檢查逾時（秒）',
+    'Setup': '設定',
+    'Misfire': '錯過排程',
+    'Cleanup': '清理',
+    'Queue Cap (Maximum 10)': '佇列上限（最多 10）',
+    'Inactivity Timeout (Seconds)': '閒置逾時（秒）',
+    'Heartbeat Interval (Seconds)': 'Heartbeat 間隔（秒）',
+    'Retry Attempts (Maximum 3)': '重試次數（最多 3）',
+    'Retry Backoff (Seconds)': '重試退避（秒）',
+    'Circuit Failure Threshold': 'Circuit 失敗門檻',
+    'Circuit Open (Seconds)': 'Circuit 開啟時間（秒）',
+    'Select...': '請選擇…',
+    'One-time': '單次',
+    'Existing Tab': '現有分頁',
+    'Fresh Tab': '新分頁',
+    'Managed Workspace': '受管理工作區',
+    'Name, slug, and prompt template are required.': '名稱、slug 與提示詞範本為必填。',
+    'The existing tab requires workspace, tab, and conversation ids.':
+        '現有分頁需要 workspace、tab 與 conversation ID。',
+    'The selected target requires its ids.': '所選目標需要填寫對應 ID。',
+    'Prompt template contains an unmatched closing delimiter.':
+        '提示詞範本包含未配對的結束分隔符。',
+    'Prompt template contains an unterminated variable.': '提示詞範本包含未結束的變數。',
+    'Versioned JSON Catalog': '版本化 JSON Catalog',
+    'Source Key To Local Id JSON': '來源 Key 到本機 ID 的 JSON',
+    'Map every source key to an existing local id.': '將每個來源 Key 對應到既有的本機 ID。',
+    'Automation created': '已建立自動化',
+    'Automation saved': '已儲存自動化',
+    'Automation cloned': '已複製自動化',
+    'Automation catalog copied to clipboard': '自動化 Catalog 已複製到剪貼簿',
+    'Automation catalog imported as drafts': '自動化 Catalog 已以草稿匯入',
+    'Automation approved': '已核准自動化',
+    'Automation run started': '自動化執行已開始',
+    'Automation paused': '自動化已暫停',
+    'Automation resumed': '自動化已繼續',
+    'Automation cancellation requested': '已要求取消自動化',
+    'Waiting run resumed': '等待中的執行已繼續',
+    'Waiting run extended': '已延長等待中的執行',
+
     'Map Imported Targets': '對應匯入目標',
     'App First': '應用程式優先',
     'Terminal First': '終端機優先',
     'From Prompt': '從提示詞',
     'Manual': '手動',
     'Daily Activity': '每日活動',
+    'Usage': '用量',
+    'Local Host': '本機 Host',
+    'Updating': '更新中',
+    'Showing saved usage while new data loads in the background.':
+        '正在背景載入新資料，同時顯示已儲存的用量資料。',
+    'Update Failed': '更新失敗',
+    '7 Days': '7 天',
+    '30 Days': '30 天',
+    '90 Days': '90 天',
+    'Usage Unavailable': '無法取得用量',
+    'No usage data is available for this host.': '此 Host 目前沒有可用的用量資料。',
+    'Processed Tokens': '已處理 Token',
+    'API-Equivalent Cost': 'API 等值成本',
+    'Sessions': '工作階段',
+    'Cached Input': '快取輸入',
+    'Cache Savings': '快取節省',
+    'Compared with full input rates': '與完整輸入費率相比',
+    'Tokens read from Claude Code, Codex, and Grok Build transcripts on this host.':
+        '從此 Host 上的 Claude Code、Codex 與 Grok Build 逐字稿讀取的 Token。',
+    'Breakdown': '明細',
+    'No Activity': '沒有活動',
+    'No Daily Activity': '沒有每日活動',
+    'Provider-reported costs': 'Provider 回報的成本',
+    'Current model rates': '目前模型費率',
+    'Cached model rates': '快取的模型費率',
+    'Pricing unavailable': '無法取得定價',
+    'Some model costs may be unavailable because pricing could not be loaded.':
+        '由於無法載入定價，部分模型成本可能無法取得。',
+
     'Profiles': '設定檔',
     'Grouped': '分組',
     'Models': '模型',
@@ -315,6 +985,20 @@ class AleraLocalizations {
     'Switch to Full File View': '切換至整檔檢視',
     'Original': '原始',
     'Modified': '修改後',
+    'Empty': '空白',
+    'Deleted': '已刪除',
+    'Refresh Worktrees': '重新整理工作樹',
+    'Confirm Before Closing Busy Terminals': '關閉忙碌終端機前確認',
+    'Ask for confirmation before closing tabs with running processes or active agents.':
+        '關閉仍有執行中程序或作用中代理程式的分頁前先要求確認。',
+    'Close Unsaved Editor?': '關閉未儲存的編輯器？',
+    'Close Unsaved Editors?': '關閉未儲存的編輯器分頁？',
+    'Stop Running Agent?': '停止執行中的代理程式？',
+    'Stop Running Command?': '停止執行中的命令？',
+    'Close Busy Terminals?': '關閉忙碌的終端機？',
+    'Stop And Close': '停止並關閉',
+    'Closing will end the command and every process it started. Anything halfway through will stay halfway through.':
+        '關閉後會終止此命令及它啟動的所有程序。任何尚未完成的操作都會停在目前狀態。',
     'New Branch': '新分支',
     'Existing Branch': '現有分支',
     'Loading files...': '正在載入檔案…',
@@ -335,6 +1019,29 @@ class AleraLocalizations {
     'Bar': '直線',
     'Underline': '底線',
     'New Host': '新增主機',
+    'SSH Targets': 'SSH 目標',
+    'Connection': '連線',
+    'SSH target used by the runtime host.': 'Runtime Host 使用的 SSH 目標。',
+    'Runtime Bootstrap': '執行環境初始化',
+    'Install the Alera runtime sidecar on this host.':
+        '在此主機安裝 Alera Runtime sidecar。',
+    'Bootstrap Plan': '初始化規劃',
+    'Remote hosts unavailable': '無法取得遠端主機',
+    'No remote hosts': '尚無遠端主機',
+    'Add an SSH target to bootstrap a runtime.': '新增 SSH 目標以初始化執行環境。',
+    'Remote runtime error': '遠端執行環境錯誤',
+    'Not installed': '尚未安裝',
+    'Planned': '已規劃',
+    'Installing': '安裝中',
+    'Installed': '已安裝',
+    'Failed': '失敗',
+    'Cancelled': '已取消',
+    'Auto': '自動',
+    'Alias, host, and username are required': '別名、主機與使用者名稱為必填。',
+    'Port must be between 1 and 65535': '連接埠必須介於 1 到 65535。',
+    'Cancel or wait for bootstrap before changing this host':
+        '變更此主機前，請取消初始化或等待初始化完成。',
+    'Remote runtime install started': '遠端執行環境已開始安裝',
     'No copy rules': '尚無複製規則',
     'No setup commands': '尚無設定指令',
     'Overwrite existing destination': '覆寫現有目的地',
@@ -363,6 +1070,23 @@ class AleraLocalizations {
     'Next Match': '下一個符合項目',
     'Close Search': '關閉搜尋',
     'Resource Manager': '資源管理員',
+    'The runtime host is not responding. Use the host chip to restart it.':
+        'Runtime Host 沒有回應。請使用 Host 狀態按鈕重新啟動。',
+    'Total CPU across Alera and every terminal it spawned, as a share of everything this machine can run at once.':
+        'Alera 與其啟動之所有終端機的 CPU 總用量，以此機器可同時執行的總容量為基準。',
+    'Resident memory of Alera, the runtime host, and every terminal process.':
+        'Alera、Runtime Host 與所有終端機程序目前占用的實體記憶體。',
+    'Share of the machine memory these processes hold.': '這些程序占用整台機器記憶體的比例。',
+    'Memory': '記憶體',
+    'Measuring resource usage': '正在測量資源用量',
+    'No terminal sessions are running': '目前沒有執行中的終端機工作階段',
+    'remote': '遠端',
+    'Unattributed Terminals': '未歸屬的終端機',
+    'Kill Orphan Terminal': '終止孤立終端機',
+    'Close Terminal Session': '關閉終端機工作階段',
+    'App': '應用程式',
+    'Runtime Host': 'Runtime Host',
+
     'Pane actions': '窗格操作',
     'Dismiss Error': '關閉錯誤',
     'New Workspace in This Project': '在此專案新增工作區',
@@ -398,7 +1122,50 @@ class AleraLocalizations {
     'Open Editor': '開啟編輯器',
     'Open Check': '開啟檢查',
     'Pull Request Actions': 'Pull Request 操作',
+    'Checks': '檢查',
+    'No checks reported': '尚未回報任何檢查結果',
+    'Edit Pull Request': '編輯 Pull Request',
+    'Open In Browser': '在瀏覽器中開啟',
+    'Title': '標題',
+    'Base Branch': '基底分支',
+    'The base branch is managed by the pull request stack.':
+        '基底分支由 Pull Request Stack 管理。',
+    'Draft': '草稿',
+    'Merged': '已合併',
+    'Closed': '已關閉',
+    'Comments': '留言',
+    'Start Conversation': '開始對話',
+    'Add Comment': '新增留言',
+    'Add a comment': '新增留言',
+    'No comments yet': '目前還沒有留言',
+    'Resolved': '已解決',
+    'No details available': '沒有可用的詳細資訊',
+    'Workflow': '工作流程',
+    'Event': '事件',
+    'Description': '說明',
+    'Started': '開始時間',
+    'Completed': '完成時間',
+    '#123 or pull request URL': '#123 或 Pull Request URL',
+    'Suggested pull request': '建議的 Pull Request',
+    'CLI not found': '找不到 CLI',
+    'Not authenticated': '尚未驗證身分',
+    'No remote': '沒有 Remote',
+    'This repository has no remote to detect a provider from.':
+        '此 Repository 沒有 Remote，無法據此偵測 Provider。',
+    'Provider not detected': '未偵測到 Provider',
+    'Could not detect the git hosting provider. Set it in project settings.':
+        '無法偵測 Git Hosting Provider，請在專案設定中指定。',
+    'Unsupported provider': '不支援的 Provider',
+    'This hosting provider is not supported yet.': '目前尚不支援此 Hosting Provider。',
+
     'Create Options': '建立選項',
+    'Automations unavailable': '無法取得自動化',
+    'No automations': '沒有自動化',
+    'Select an automation': '選擇自動化',
+    'State': '狀態',
+    'Profile': '設定檔',
+    'Tag': '標籤',
+
     'No automation details available.': '沒有可用的自動化詳細資料。',
     'Create a schedule to run approved work in a runtime-owned target.':
         '建立排程，在執行環境管理的目標上執行已核准工作。',
@@ -423,6 +1190,44 @@ class AleraLocalizations {
     'Could not load diff.': '無法載入 Diff。',
     'No diff available.': '沒有可用的 Diff。',
     'No stashes to pop': '沒有可套用的 Stash',
+
+    'Edit Message': '編輯訊息',
+    'Message': '訊息',
+    'Saving': '儲存中',
+    'Save And Restart': '儲存並重新開始',
+    'Save Message': '儲存訊息',
+    'Saving stops the active turn and replaces this message and all later responses. Files and actions already performed are not undone. Queued messages remain paused.':
+        '儲存會停止目前的回合，並取代此訊息及之後的所有回覆。已執行的檔案變更與操作不會復原，佇列中的訊息會維持暫停。',
+    'The message could not be saved. Your edit is still here.':
+        '無法儲存訊息，你的編輯內容仍保留在這裡。',
+    'Queued': '已排入佇列',
+    'Paused': '已暫停',
+    'Resume Queue': '繼續佇列',
+    'Pause Queue': '暫停佇列',
+    'Collapse Queue': '收合佇列',
+    'Expand Queue': '展開佇列',
+    'Check Delivery': '檢查傳送狀態',
+    'Attachment': '附件',
+    'Sending': '傳送中',
+    'Steer': '引導',
+    'Remove Queued Message': '移除佇列訊息',
+    'Message Actions': '訊息操作',
+
+    'Ship Changes?': '送出變更？',
+    'Ship only staged changes, or stage all changes first and include them in the commit.':
+        '僅送出已暫存的變更，或先暫存所有變更並將其納入 Commit。',
+    'Ship Staged Changes': '送出已暫存變更',
+    'Ship All Changes': '送出所有變更',
+    'Runtime Still Has Work': '執行環境仍有工作進行中',
+    'Quit And Leave Runtime Open': '結束 Alera 並讓執行環境保持運作',
+    'Force Stop And Quit': '強制停止並結束 Alera',
+    'Force Stop Runtime': '強制停止執行環境',
+    'Force Stop': '強制停止',
+    'The runtime still has active work.': '執行環境仍有進行中的工作。',
+    'The runtime still has active work. Force stop terminates them.':
+        '執行環境仍有進行中的工作。強制停止會終止這些工作。',
+    'The runtime still has active work. You can quit and leave the runtime running, or force stop it.':
+        '執行環境仍有進行中的工作。你可以結束 Alera 並讓執行環境保持運作，或強制停止它。',
 
     'Active Run': '執行中工作',
     'Update With': '使用以下方式更新',
@@ -455,6 +1260,51 @@ class AleraLocalizations {
     'Updates': '更新',
     'Support': '支援',
     'Identity': '身分',
+    'Account unavailable': '無法取得帳號',
+    'Your Alera identity protects cloud delivery and stays optional for local features.':
+        '你的 Alera 身分可保護雲端傳送，本機功能仍可不登入使用。',
+    'Continue With Google': '使用 Google 繼續',
+    'Sign in through your default browser.': '透過預設瀏覽器登入。',
+    'Continue With GitHub': '使用 GitHub 繼續',
+    'Uses profile and verified email access only. Repository access is never requested.':
+        '只會存取個人資料與已驗證的電子郵件，不會要求 Repository 存取權限。',
+    'Alera Account': 'Alera 帳號',
+    'Add another verified sign-in method to this account.':
+        '為此帳號新增另一個已驗證的登入方式。',
+    'Sign Out': '登出',
+    'Stops cloud push delivery from this runtime until you sign in again.':
+        '在你再次登入前，停止從此執行環境傳送雲端推播。',
+    'Browser Sign In': '瀏覽器登入',
+    'A provider authorization is waiting in your browser.':
+        '瀏覽器中正等待 Provider 授權。',
+    'Notifications are delivered only to mobile devices enrolled in this account.':
+        '通知只會傳送到已加入此帳號的行動裝置。',
+    'Enable Mobile Push': '啟用行動裝置推播',
+    'Sign in before enabling cloud delivery.': '請先登入，再啟用雲端傳送。',
+    'Attention Required': '需要注意',
+    'Notify for waiting or blocked agents, decision gates, and escalations.':
+        '當 Agent 等待中、受阻、需要決策或升級處理時通知。',
+    'Agent Finished': 'Agent 已完成',
+    'Notify when an agent finishes a turn.': 'Agent 完成一個回合時通知。',
+    'Terminal Ended': '終端機已結束',
+    'Notify when a terminal session exits or is closed.': '終端機工作階段結束或關閉時通知。',
+    'Move this runtime to another account or remove your cloud identity.':
+        '將此執行環境移轉到其他帳號，或移除你的雲端身分。',
+    'Target Account ID': '目標帳號 ID',
+    'Moving a runtime signs this installation out and requires authentication again.':
+        '移轉執行環境會讓此安裝登出，之後需要重新驗證。',
+    'Account ID': '帳號 ID',
+    'Move This Runtime': '移轉此執行環境',
+    'Transfer runtime ownership and its mobile subscriptions.':
+        '移轉執行環境的擁有權及其行動裝置訂閱。',
+    'Move Runtime': '移轉執行環境',
+    'Delete Alera Account': '刪除 Alera 帳號',
+    'Permanently removes provider identities, cloud sessions, subscriptions, and quota records.':
+        '永久移除 Provider 身分、雲端工作階段、訂閱與配額紀錄。',
+    'Delete Account': '刪除帳號',
+    'This permanently removes your Alera cloud identity, active sessions, mobile subscriptions, and quota records. Recent sign-in may be required.':
+        '這會永久移除你的 Alera 雲端身分、作用中的工作階段、行動裝置訂閱與配額紀錄。可能需要近期登入驗證。',
+
     'Mobile Push': '行動推播',
     'Ownership': '擁有權',
     'CLI And Skills': 'CLI 與技能',
@@ -474,6 +1324,122 @@ class AleraLocalizations {
     'Local Whisper Models': '本機 Whisper 模型',
     'Speech Processing': '語音處理',
     'Test AI Dictation': '測試 AI 聽寫',
+    'Choose where speech is converted to text on this device.':
+        '選擇要在此裝置的哪個位置將語音轉換成文字。',
+    'Enable AI Dictation': '啟用 AI 聽寫',
+    'Show microphone controls in supported composers.': '在支援的輸入區顯示麥克風控制項。',
+    'Transcription Engine': '轉錄引擎',
+    'Optional locale or language code. Leave blank for automatic detection.':
+        '選填的地區或語言代碼；留空會自動偵測。',
+    'Allow Online Speech Recognition': '允許線上語音辨識',
+    'Windows may send microphone audio to Microsoft to create the transcription.':
+        'Windows 可能會將麥克風音訊傳送給 Microsoft 以產生轉錄。',
+    'The system recognizer may send microphone audio to its online speech service.':
+        '系統辨識器可能會將麥克風音訊傳送到其線上語音服務。',
+    'Install multiple multilingual models and select one for local transcription.':
+        '可安裝多個多語言模型，並選擇一個用於本機轉錄。',
+    'Optionally improve the transcript with the agent subscription configured for Speech Messages in AI Assist settings.':
+        '可選擇使用 AI 輔助設定中「語音訊息」所設定的 Agent 訂閱來改善轉錄內容。',
+    'Automatic Processing': '自動處理',
+    'Raw text is always used if the selected agent is unavailable or fails.':
+        '若所選 Agent 無法使用或處理失敗，會一律使用原始文字。',
+    'Off': '關閉',
+    'Clean Up': '整理',
+    'Summarize': '摘要',
+    'Local Whisper': '本機 Whisper',
+    'Codex Subscription (Experimental)': 'Codex 訂閱（實驗性）',
+    'OpenAI-Compatible API': 'OpenAI 相容 API',
+    'System On-Device': '系統裝置端',
+    'System Recognition': '系統語音辨識',
+    'Record locally and transcribe with the selected Whisper model.':
+        '在本機錄音，並使用所選 Whisper 模型轉錄。',
+    'Use the experimental Codex app-server realtime API with your Codex subscription.':
+        '使用 Codex 訂閱搭配實驗性的 Codex app-server realtime API。',
+    'Send recordings to an OpenAI-compatible audio transcription endpoint.':
+        '將錄音傳送到 OpenAI 相容的音訊轉錄端點。',
+    'Use the platform recognizer only when it guarantees offline processing.':
+        '僅在平台辨識器保證離線處理時使用。',
+    'Use the platform speech service, which may process audio online.':
+        '使用平台語音服務；音訊可能在線上處理。',
+    'Send recordings to Codex or an OpenAI-compatible speech API. Transcription endpoints do not use reasoning effort.':
+        '將錄音傳送到 Codex 或 OpenAI 相容語音 API；轉錄端點不使用推理強度。',
+    'Runtime Update Required': '需要更新執行環境',
+    'Restart Alera to replace the running sidecar before configuring remote transcription.':
+        '設定遠端轉錄前，請重新啟動 Alera 以替換正在執行的 sidecar。',
+    'Allow Remote Audio Processing': '允許遠端音訊處理',
+    'Recordings may leave this device and are deleted locally after transcription.':
+        '錄音可能會離開此裝置，並在轉錄完成後從本機刪除。',
+    'Realtime Model': 'Realtime 模型',
+    'Optional Codex realtime model override. Leave blank to use the subscription default. This Codex API is experimental.':
+        '可選擇覆寫 Codex realtime 模型；留空使用訂閱預設值。此 Codex API 為實驗性。',
+    'Subscription default': '訂閱預設值',
+    'Base URL': 'Base URL',
+    'Base API URL. Alera appends /audio/transcriptions when needed and preserves query parameters.': 'API Base URL。Alera 會在需要時附加 /audio/transcriptions，並保留 query parameters。',
+    'Speech-to-text model accepted by the configured API.':
+        '設定的 API 所接受的語音轉文字模型。',
+    'Request Timeout': '請求逾時',
+    'Maximum time allowed for remote transcription.': '遠端轉錄允許的最長時間。',
+    'API Token': 'API Token',
+    'Checking saved token...': '正在檢查已儲存的 Token…',
+    'The saved token belongs to another API origin. Replace it before transcribing.':
+        '已儲存的 Token 屬於另一個 API origin；轉錄前請先替換。',
+    'A token is stored for this API origin.': '此 API origin 已儲存 Token。',
+    'No token is stored. Tokenless local APIs are also supported.':
+        '尚未儲存 Token；也支援不需要 Token 的本機 API。',
+    'Replace saved token': '替換已儲存的 Token',
+    'Replace Token': '替換 Token',
+    'Save Token': '儲存 Token',
+    'Test Transcript': '測試轉錄',
+    'Record a short sample with the current configuration and review the transcript here.':
+        '使用目前設定錄製短音訊，並在此檢視轉錄結果。',
+    'Your test transcription appears here': '測試轉錄結果會顯示在這裡',
+    'Enable AI Dictation before testing.': '測試前請先啟用 AI 聽寫。',
+    'Restart Alera to update the runtime before testing remote transcription.':
+        '測試遠端轉錄前，請重新啟動 Alera 以更新執行環境。',
+    'Allow remote audio processing before testing this engine.':
+        '測試此引擎前，請先允許遠端音訊處理。',
+    'Select the microphone, speak, then select Stop Dictation.':
+        '選取麥克風、開始說話，完成後選取「停止聽寫」。',
+    'Queue Download': '排入下載佇列',
+    'Selected': '已選取',
+    'Use Model': '使用模型',
+    'Queued. This download starts when the active transfer finishes.':
+        '已排入佇列；目前的傳輸完成後會開始下載。',
+    'Verifying downloaded model...': '正在驗證下載的模型…',
+    'The model download failed.': '模型下載失敗。',
+    'Installed and selected.': '已安裝並選取。',
+    'Installed on this device.': '已安裝在此裝置。',
+    'Fastest, with lower transcription accuracy.': '速度最快，但轉錄準確度較低。',
+    'Balanced speed and accuracy. Recommended for most devices.':
+        '兼顧速度與準確度，建議大多數裝置使用。',
+    'Improved accuracy with slower transcription.': '準確度較高，但轉錄速度較慢。',
+    'Highest curated accuracy with the largest memory cost.':
+        '提供最高的精選準確度，但記憶體占用也最大。',
+    'The model download could not finish. Try again.': '模型下載未能完成，請再試一次。',
+    'Select another installed model before removing this one.':
+        '移除此模型前，請先選擇另一個已安裝的模型。',
+    'Improving Transcript': '正在改善轉錄內容',
+    'Cancel Transcription': '取消轉錄',
+    'Stop Dictation': '停止聽寫',
+    'Start Dictation': '開始聽寫',
+    'Remote audio processing was disabled before transcription.':
+        '遠端音訊處理已在轉錄前停用。',
+    'Enable AI Dictation in Settings before recording.': '錄音前請先在設定中啟用 AI 聽寫。',
+    'The dictation text field is no longer available.': '聽寫文字欄位已無法使用。',
+    'Download the selected Whisper model in Settings before recording.':
+        '錄音前請先在設定中下載所選的 Whisper 模型。',
+    'Allow remote audio processing in AI Dictation settings first.':
+        '請先在 AI 聽寫設定中允許遠端音訊處理。',
+    'Microphone permission is required for AI Dictation.': 'AI 聽寫需要麥克風權限。',
+    'On-device speech recognition is unavailable for this locale.':
+        '此地區設定無法使用裝置端語音辨識。',
+    'Allow online speech recognition in AI Dictation settings first.':
+        '請先在 AI 聽寫設定中允許線上語音辨識。',
+    'The system recognizer did not produce a transcription.': '系統辨識器未產生轉錄內容。',
+    'The microphone did not produce an audio recording.': '麥克風未產生音訊錄音。',
+    'The text field was closed before dictation finished.': '聽寫完成前文字欄位已關閉。',
+    's': '秒',
+
     'Typography': '字型',
     'Cursor': '游標',
     'Appearance': '外觀',
@@ -487,6 +1453,20 @@ class AleraLocalizations {
     'Autosave': '自動儲存',
     'Tab Size': 'Tab 寬度',
     'Theme Preset': '主題預設',
+    'Search and select a built-in terminal color theme.': '搜尋並選擇內建的終端機配色主題。',
+    'Cursor Shape': '游標形狀',
+    'Cursor style for new terminal sessions.': '新終端機工作階段使用的游標樣式。',
+    'Toolbar Corner': '工具列位置',
+    'Where the pulse, composer, and refresh buttons sit on the terminal tab.':
+        '設定終端機分頁中的活動指示器、輸入區與重新整理按鈕位置。',
+    'Top Left': '左上',
+    'Top Right': '右上',
+    'Bottom Left': '左下',
+    'Bottom Right': '右下',
+    'Select color': '選擇顏色',
+    'Choose color': '選擇顏色',
+    'spaces': '個空白',
+    'seconds': '秒',
     'Autosave Delay': '自動儲存延遲',
     'Follow System': '跟隨系統',
     'English': 'English',
@@ -523,7 +1503,98 @@ class AleraLocalizations {
     'Automatically save editor changes after a pause.': '暫停操作一段時間後自動儲存編輯器變更。',
     'Idle time before saving editor changes.': '儲存編輯器變更前的閒置時間。',
     'Search and select a syntax highlighting theme.': '搜尋並選擇語法醒目提示主題。',
+    'External Editor': '外部編輯器',
+    'Open workspaces and files in Zed without changing Alera\'s built-in editor behavior.':
+        '在 Zed 中開啟工作區與檔案，不變更 Alera 內建編輯器的行為。',
+    'Default Code Open Target': '預設程式碼開啟目標',
+    'Choose where normal editable source and text files open. Dedicated Alera previews stay internal.':
+        '選擇一般可編輯原始碼與文字檔的開啟位置；Alera 專用預覽仍保留在內部。',
+    'Custom Zed Executable': '自訂 Zed 執行檔',
+    'Off uses the zed command from the local command environment.':
+        '關閉時會使用本機命令環境中的 zed 指令。',
+    'Zed Executable': 'Zed 執行檔',
+    'Full path to the Zed executable on this machine.': '此機器上 Zed 執行檔的完整路徑。',
+    'Path to zed or zed.exe': 'zed 或 zed.exe 的路徑',
+    'Open Workspaces in New Window': '在新視窗開啟工作區',
+    'Use zed --new so each Alera worktree opens as a separate Zed workspace window.':
+        '使用 zed --new，讓每個 Alera worktree 各自在獨立的 Zed 工作區視窗中開啟。',
+    'Auto-open New Workspaces in Zed': '自動在 Zed 開啟新工作區',
+    'After Alera creates a linked workspace, open that workspace in Zed automatically.':
+        'Alera 建立連結工作區後，自動在 Zed 中開啟該工作區。',
+    'Check Zed': '檢查 Zed',
+    'Run a non-destructive zed --version check with the current executable setting.':
+        '使用目前的執行檔設定執行不會修改資料的 zed --version 檢查。',
+    'Zed is not available.': 'Zed 無法使用。',
     'Search syntax themes': '搜尋語法主題',
+    'Prompt Append': '附加提示詞',
+    'Add project-specific agent instructions': '新增專案專屬的 Agent 指示',
+    'From': '來源',
+    'To': '目的地',
+    'Defaults to from': '預設與來源相同',
+    'Save Override': '儲存覆寫設定',
+    'Custom Prompt': '自訂提示詞',
+    'Optional instructions for every dispatched task': '每個派送工作可選用的額外指示',
+    'Quota Group': '配額群組',
+    'Command mode is for advanced or unsupported CLI options. Use an interactive command that can accept a dispatch and report completion.':
+        'Command 模式適用於進階或尚未支援的 CLI 選項。請使用可接收派送工作並回報完成狀態的互動式指令。',
+    'Profiles sharing a quota group drain the same usage bucket. Alera never measures this; it only avoids falling back inside the same group. Leave empty if unsure.':
+        '共用同一配額群組的設定檔會消耗相同的用量額度。Alera 不會量測額度，只會避免在同群組內進行 fallback；若不確定請留空。',
+    'Alias': '別名',
+    'CCS Profile': 'CCS 設定檔',
+    'Usage Name': '用量顯示名稱',
+    'Device Name': '裝置名稱',
+    'My Phone': '我的手機',
+    'Generating…': '產生中…',
+    'Generate': '產生',
+    'Host': '主機',
+    'Username': '使用者名稱',
+    'Port': '連接埠',
+    'Install Directory': '安裝目錄',
+    'Default per platform': '依平台使用預設值',
+    'Search built-in themes': '搜尋內建主題',
+    'Initial Prompt': '初始提示詞',
+    'Describe what the agent should build or paste an image':
+        '描述要讓 Agent 建立的內容，或貼上圖片',
+    'Loading branches': '正在載入 Branch',
+    'Select Branch': '選擇 Branch',
+    'Create an agent profile in settings': '請先在設定中建立 Agent 設定檔',
+    'Select Agent Profile': '選擇 Agent 設定檔',
+    'Create Another': '繼續建立下一個',
+    'Working': '處理中',
+    'Complete the prompt, project, branch, and agent profile.':
+        '請完成提示詞、專案、Branch 與 Agent 設定檔。',
+    'Generating workspace identity': '正在產生工作區識別',
+    'Checking generated branch': '正在檢查產生的 Branch',
+    'Creating workspace': '正在建立工作區',
+    'Starting agent': '正在啟動 Agent',
+    'Could not paste clipboard image.': '無法貼上剪貼簿圖片。',
+    'Choose every workspace setting yourself, including the branch name and optional parent workspace.':
+        '自行選擇所有工作區設定，包括 Branch 名稱與選填的父工作區。',
+    'Describe the replacement to generate.': '描述要產生的替換內容。',
+    'Define the reusable instruction and its availability.':
+        '定義可重複使用的指示及其可用狀態。',
+    'Show this action in the Text Actions menu.': '在 Text Actions 選單中顯示此動作。',
+    'Choose which CLI and model run this action.': '選擇執行此動作的 CLI 與模型。',
+    'Inherit the global AI Assist agent by default.': '預設繼承全域 AI Assist Agent。',
+    'Inherit the selected model unless overridden.': '除非覆寫，否則繼承目前選取的模型。',
+    'Reasoning effort for the effective model.': '設定實際使用模型的推理強度。',
+    'Action': '動作',
+    'Enabled': '已啟用',
+    'Reasoning': '推理',
+    'No text actions': '尚無文字操作',
+    'Select a text action': '選擇文字操作',
+    'Delete Text Action': '刪除文字操作',
+    'Action ID is required.': '動作 ID 為必填。',
+    'Action name is required.': '動作名稱為必填。',
+    'Action prompt is required.': '動作提示詞為必填。',
+    'Action IDs must be unique.': '動作 ID 不可重複。',
+    'Action names must be unique.': '動作名稱不可重複。',
+    'Text changed while the action was running.': '執行動作期間文字已變更。',
+    'Text action returned no replacement text.': '文字操作未回傳可替換的文字。',
+    'Text action could not update this field.': '文字操作無法更新此欄位。',
+    'Text action applied.': '已套用文字操作。',
+    'Text action was canceled.': '已取消文字操作。',
+    'No matching options': '沒有符合的選項',
   };
 }
 

@@ -197,8 +197,8 @@ class _PullRequestReviewViewState extends State<PullRequestReviewView> {
                 const SizedBox(height: AleraTokens.space16),
                 Text(
                   widget.checks.isEmpty
-                      ? 'Checks'
-                      : 'Checks (${widget.checks.length})',
+                      ? context.tr('Checks')
+                      : context.tr('Checks (${widget.checks.length})'),
                   style: theme.textTheme.labelMedium?.copyWith(
                     color: AleraTokens.foregroundMuted,
                   ),
@@ -206,7 +206,7 @@ class _PullRequestReviewViewState extends State<PullRequestReviewView> {
                 const SizedBox(height: AleraTokens.space8),
                 if (widget.checks.isEmpty)
                   Text(
-                    'No checks reported',
+                    context.tr('No checks reported'),
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: AleraTokens.foregroundMuted,
                     ),
@@ -313,17 +313,17 @@ class _PullRequestReviewViewState extends State<PullRequestReviewView> {
         const Spacer(),
         if (!_editing)
           AleraIconButton(
-            tooltip: 'Edit Pull Request',
+            tooltip: context.tr('Edit Pull Request'),
             icon: AleraIcons.edit,
             onPressed: _busy ? null : _startEditing,
           ),
         AleraIconButton(
-          tooltip: 'Open Pull Request Diff',
+          tooltip: context.tr('Open Pull Request Diff'),
           icon: AleraIcons.diff,
           onPressed: widget.onOpenDiff,
         ),
         AleraIconButton(
-          tooltip: 'Open In Browser',
+          tooltip: context.tr('Open In Browser'),
           icon: AleraIcons.external,
           onPressed: () => widget.onOpenUrl(review.url),
         ),
@@ -361,7 +361,7 @@ class _PullRequestReviewViewState extends State<PullRequestReviewView> {
       crossAxisAlignment: .stretch,
       children: <Widget>[
         Text(
-          'Title',
+          context.tr('Title'),
           style: theme.textTheme.labelSmall?.copyWith(
             color: AleraTokens.foregroundMuted,
           ),
@@ -376,7 +376,10 @@ class _PullRequestReviewViewState extends State<PullRequestReviewView> {
             color: AleraTokens.foreground,
           ),
           cursorColor: AleraTokens.foreground,
-          decoration: pullRequestFieldDecoration(theme, hint: 'Title'),
+          decoration: pullRequestFieldDecoration(
+            theme,
+            hint: context.tr('Title'),
+          ),
           onSubmitted: (_) {
             if (!_busy) {
               _save();
@@ -385,7 +388,7 @@ class _PullRequestReviewViewState extends State<PullRequestReviewView> {
         ),
         const SizedBox(height: AleraTokens.space12),
         AleraDropdownField<String>(
-          labelText: 'Base Branch',
+          labelText: context.tr('Base Branch'),
           value: _baseBranch,
           enabled: !_busy && widget.stack == null,
           entries: _baseEntries,
@@ -394,7 +397,7 @@ class _PullRequestReviewViewState extends State<PullRequestReviewView> {
         if (widget.stack != null) ...<Widget>[
           const SizedBox(height: AleraTokens.space4),
           Text(
-            'The base branch is managed by the pull request stack.',
+            context.tr('The base branch is managed by the pull request stack.'),
             style: theme.textTheme.bodySmall?.copyWith(
               color: AleraTokens.foregroundMuted,
             ),
@@ -447,7 +450,7 @@ class const _StateChip({required final HostedReviewState state})
         borderRadius: BorderRadius.circular(AleraTokens.radiusSm),
       ),
       child: Text(
-        label,
+        context.tr(label),
         style: theme.textTheme.labelSmall?.copyWith(
           color: color,
           fontWeight: .w600,

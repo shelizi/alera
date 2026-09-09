@@ -1,9 +1,11 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/design_system/forms/alera_text_field.dart';
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
 import 'package:alera/src/features/text_actions/domain/text_actions_settings.dart';
 import 'package:alera/src/features/text_actions/presentation/text_action_list_row.dart';
 import 'package:alera/src/features/text_actions/presentation/text_actions_settings_pane.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -83,6 +85,48 @@ void main() {
     expect(find.text('Second'), findsOneWidget);
     expect(find.text('Disabled'), findsOneWidget);
   });
+
+  testWidgets(
+    'renders Text Actions chrome and validation in Traditional Chinese',
+    (tester) async {
+      var settings = AleraSettings.defaults;
+      await tester.pumpWidget(
+        MaterialApp(
+          locale: const Locale('zh', 'TW'),
+          supportedLocales: supportedAleraLocales,
+          localizationsDelegates: const <LocalizationsDelegate<dynamic>>[
+            AleraLocalizationsDelegate(),
+            ...GlobalMaterialLocalizations.delegates,
+          ],
+          home: Scaffold(
+            body: StatefulBuilder(
+              builder: (context, setState) => TextActionsSettingsPane(
+                settings: settings.textActions,
+                aiAssistSettings: settings.aiAssist,
+                onChanged: (next) => setState(() {
+                  settings = settings.copyWith(
+                    textActions: next(settings.textActions),
+                  );
+                }),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      expect(find.text('文字操作'), findsOneWidget);
+      await tester.tap(find.text('新增動作'));
+      await tester.pumpAndSettle();
+      expect(find.text('動作'), findsOneWidget);
+      expect(find.text('已啟用'), findsOneWidget);
+      expect(find.textContaining('全域（'), findsWidgets);
+      final saveButton = find.text('儲存');
+      await tester.ensureVisible(saveButton);
+      await tester.tap(saveButton);
+      await tester.pump();
+      expect(find.text('動作名稱為必填。'), findsOneWidget);
+    },
+  );
 
   testWidgets('duplicates, disables, and deletes a saved action', (
     tester,

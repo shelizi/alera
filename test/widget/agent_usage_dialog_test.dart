@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_dark_theme.dart';
 import 'package:alera/src/design_system/surfaces/alera_panel.dart';
 import 'package:alera/src/features/agent_quota/presentation/agent_quota_provider_icon.dart';
@@ -6,6 +7,7 @@ import 'package:alera/src/features/agent_usage/presentation/agent_usage_dialog.d
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -206,6 +208,44 @@ void main() {
     expect(find.text('Models'), findsOneWidget);
   });
 
+  testWidgets('renders agent usage chrome in Traditional Chinese', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1280, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      _wrap(
+        AgentUsageDialogView(
+          hostId: 'local',
+          days: 30,
+          snapshot: _snapshot(includeGrok: true),
+          loading: false,
+          error: null,
+          onDaysChanged: (_) {},
+          onRefresh: () {},
+          onClose: () {},
+        ),
+        locale: const Locale('zh', 'TW'),
+      ),
+    );
+
+    expect(find.text('用量'), findsOneWidget);
+    expect(find.text('本機 Host'), findsOneWidget);
+    expect(find.text('30 天'), findsOneWidget);
+    expect(find.text('已處理 Token'), findsOneWidget);
+    expect(find.text('API 等值成本'), findsOneWidget);
+    expect(find.text('每日活動'), findsOneWidget);
+    expect(find.text('明細'), findsOneWidget);
+    expect(find.text('Claude Code'), findsWidgets);
+    expect(find.text('Codex'), findsWidgets);
+    expect(find.text('Grok Build'), findsWidgets);
+    expect(find.textContaining('逐字稿內容會保留在此 Host'), findsOneWidget);
+    expect(find.text('grok-4.5-build'), findsNothing);
+    await tester.tap(find.text('模型'));
+    await tester.pumpAndSettle();
+    expect(find.text('grok-4.5-build'), findsOneWidget);
+  });
+
   testWidgets('shows a retry state when usage is unavailable', (tester) async {
     var retries = 0;
     await tester.pumpWidget(
@@ -280,8 +320,14 @@ void main() {
   });
 }
 
-Widget _wrap(Widget child) {
+Widget _wrap(Widget child, {Locale? locale}) {
   return MaterialApp(
+    locale: locale,
+    supportedLocales: supportedAleraLocales,
+    localizationsDelegates: const <LocalizationsDelegate<dynamic>>[
+      AleraLocalizationsDelegate(),
+      ...GlobalMaterialLocalizations.delegates,
+    ],
     theme: buildAleraDarkTheme(),
     home: Scaffold(body: child),
   );

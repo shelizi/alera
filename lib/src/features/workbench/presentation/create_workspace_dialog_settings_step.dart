@@ -130,7 +130,7 @@ class const _WorkspaceSelectionSummary({
                   bottom: AleraTokens.space4,
                 ),
                 child: Text(
-                  'Project:',
+                  '${context.tr('Project')}:',
                   style: theme.textTheme.labelMedium?.copyWith(
                     color: AleraTokens.foregroundMuted,
                   ),
@@ -150,7 +150,9 @@ class const _WorkspaceSelectionSummary({
               Padding(
                 padding: const EdgeInsets.only(right: AleraTokens.space12),
                 child: Text(
-                  reuseExistingBranch ? 'Existing Branch:' : 'Source Branch:',
+                  reuseExistingBranch
+                      ? '${context.tr('Existing Branch')}:'
+                      : '${context.tr('Source Branch')}:',
                   style: theme.textTheme.labelMedium?.copyWith(
                     color: AleraTokens.foregroundMuted,
                   ),
@@ -228,7 +230,7 @@ class const _WorkspaceNameSyncBadge() extends StatelessWidget {
           ),
           const SizedBox(width: AleraTokens.space4),
           Text(
-            'Sync',
+            context.tr('Sync'),
             style: theme.textTheme.labelSmall?.copyWith(
               color: AleraTokens.accent,
               fontWeight: .w500,

@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/forms/alera_color_picker.dart';
 import 'package:flutter/material.dart';
@@ -44,7 +45,7 @@ class const AleraColorSwatch({
     }
 
     return Tooltip(
-      message: 'Select color',
+      message: context.tr('Select color'),
       child: Material(
         color: Colors.transparent,
         child: InkWell(

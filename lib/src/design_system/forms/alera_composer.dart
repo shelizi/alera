@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/buttons/alera_icon_button.dart';
 import 'package:alera/src/design_system/forms/alera_clipboard_paste_action.dart';
@@ -270,7 +271,7 @@ class const _TextActionsMenu({
                 ),
                 const SizedBox(width: AleraTokens.space6),
                 Text(
-                  'Text Actions',
+                  context.tr('Text Actions'),
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
                     color: enabled
                         ? AleraTokens.foregroundMuted

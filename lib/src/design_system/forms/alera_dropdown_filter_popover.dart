@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/forms/alera_dropdown_field.dart';
 import 'package:alera/src/design_system/forms/alera_text_field.dart';
@@ -189,7 +190,7 @@ class _AleraDropdownFilterPopoverState<T>
                             vertical: AleraTokens.space12,
                           ),
                           child: Text(
-                            'No matching options',
+                            context.tr('No matching options'),
                             style: theme.textTheme.bodySmall?.copyWith(
                               color: AleraTokens.foregroundFaint,
                             ),
@@ -207,6 +208,7 @@ class _AleraDropdownFilterPopoverState<T>
                             final entry = entries[index];
                             return AleraMenuItem(
                               label: entry.label,
+                              localizeLabel: entry.localizeLabel,
                               leading: entry.leading,
                               enabled: entry.enabled,
                               selected: entry.value == widget.selectedValue,

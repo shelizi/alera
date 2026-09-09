@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/buttons/alera_icon_button.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
@@ -35,7 +36,7 @@ class const ReadingDiffFailureView({
                 crossAxisAlignment: .start,
                 children: <Widget>[
                   Text(
-                    'Reading diff generation failed',
+                    context.tr('Reading diff generation failed'),
                     style: theme.textTheme.labelMedium?.copyWith(
                       color: AleraTokens.error,
                     ),

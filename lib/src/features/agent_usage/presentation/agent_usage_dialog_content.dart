@@ -82,7 +82,9 @@ class _AgentUsageContentState extends State<_AgentUsageContent> {
           ),
           const SizedBox(height: AleraTokens.space4),
           Text(
-            'Tokens read from Claude Code, Codex, and Grok Build transcripts on this host.',
+            context.tr(
+              'Tokens read from Claude Code, Codex, and Grok Build transcripts on this host.',
+            ),
             style: Theme.of(context).textTheme.bodySmall
                 ?.copyWith(color: AleraTokens.foregroundMuted),
           ),
@@ -93,7 +95,7 @@ class _AgentUsageContentState extends State<_AgentUsageContent> {
             children: <Widget>[
               Expanded(
                 child: Text(
-                  'Breakdown',
+                  context.tr('Breakdown'),
                   style: Theme.of(context).textTheme.titleSmall,
                 ),
               ),
@@ -236,7 +238,9 @@ class const _UsageSourceSummary({required final AgentUsageSnapshot snapshot})
   @override
   Widget build(BuildContext context) {
     return Text(
-      'Scanned ${snapshot.sources.fold(0, (sum, source) => sum + source.scannedFiles)} files in ${snapshot.scanDurationMs} ms. Transcript content stays on this host.',
+      context.tr(
+        'Scanned ${snapshot.sources.fold(0, (sum, source) => sum + source.scannedFiles)} files in ${snapshot.scanDurationMs} ms. Transcript content stays on this host.',
+      ),
       style: Theme.of(context).textTheme.bodySmall
           ?.copyWith(color: AleraTokens.foregroundFaint),
     );
@@ -266,7 +270,7 @@ class const _UsageCoverageNotice({required final AgentUsageSnapshot snapshot})
         border: Border.all(color: AleraTokens.border),
       ),
       child: Text(
-        messages.join(' '),
+        messages.map(context.tr).join(' '),
         style: Theme.of(context).textTheme.bodySmall
             ?.copyWith(color: AleraTokens.foregroundMuted),
       ),

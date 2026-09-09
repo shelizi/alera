@@ -15,7 +15,7 @@ extension _PullRequestComposerForm on _PullRequestComposerState {
       cursorColor: AleraTokens.foreground,
       decoration: pullRequestFieldDecoration(
         theme,
-        hint: 'Title',
+        hint: context.tr('Title'),
         hasTrailingControl: true,
       ),
       onChanged: (_) {
@@ -36,7 +36,7 @@ extension _PullRequestComposerForm on _PullRequestComposerState {
       cursorColor: AleraTokens.foreground,
       decoration: pullRequestFieldDecoration(
         theme,
-        hint: 'Description',
+        hint: context.tr('Description'),
         hasTrailingControl: true,
       ),
     );
@@ -64,7 +64,7 @@ extension _PullRequestComposerForm on _PullRequestComposerState {
       crossAxisAlignment: .stretch,
       children: <Widget>[
         AleraDropdownField<String>(
-          labelText: 'Base Branch',
+          labelText: context.tr('Base Branch'),
           value: _baseBranch,
           enabled: enabled,
           entries: _baseEntries,
@@ -80,7 +80,7 @@ extension _PullRequestComposerForm on _PullRequestComposerState {
           children: <Widget>[
             Expanded(
               child: Text(
-                'Title',
+                context.tr('Title'),
                 style: theme.textTheme.labelSmall?.copyWith(
                   color: AleraTokens.foregroundMuted,
                 ),
@@ -103,7 +103,7 @@ extension _PullRequestComposerForm on _PullRequestComposerState {
         const SizedBox(height: AleraTokens.space12),
         _labeledField(
           theme,
-          label: 'Description',
+          label: context.tr('Description'),
           child: _generating
               ? _AiGeneratingOverlay(child: descriptionWithDictation)
               : descriptionWithDictation,

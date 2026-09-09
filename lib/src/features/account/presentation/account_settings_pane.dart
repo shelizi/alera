@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/chips/alera_chip.dart';
 import 'package:alera/src/design_system/feedback/alera_empty_state.dart';
@@ -48,7 +49,7 @@ class _AccountSettingsPaneState extends ConsumerState<AccountSettingsPane> {
       loading: () => const Center(child: CircularProgressIndicator()),
       error: (error, _) => AleraEmptyState(
         icon: AleraIcons.account,
-        title: 'Account unavailable',
+        title: context.tr('Account unavailable'),
         message: _cleanError(error),
       ),
       data: (value) => SingleChildScrollView(
@@ -293,7 +294,7 @@ class _AccountSettingsPaneState extends ConsumerState<AccountSettingsPane> {
       return;
     }
     ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text(message)));
+        .showSnackBar(SnackBar(content: Text(context.tr(message))));
   }
 }
 

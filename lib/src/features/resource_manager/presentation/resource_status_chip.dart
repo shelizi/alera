@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:alera/src/features/resource_manager/domain/resource_snapshot.dart';
@@ -26,7 +27,7 @@ class const ResourceStatusChip({
         // InkWell default stays an arrow off the web.
         mouseCursor: WidgetStateMouseCursor.clickable,
         child: Tooltip(
-          message: 'Resource Manager',
+          message: context.tr('Resource Manager'),
           child: Container(
             height: AleraTokens.statusBarHeight,
             padding: const EdgeInsets.symmetric(horizontal: AleraTokens.space8),

@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:flutter/material.dart';
 
 import '../../app/theme/alera_tokens.dart';
@@ -61,7 +62,7 @@ class _AleraMessageEditorState extends State<AleraMessageEditor> {
   Widget build(BuildContext context) => PopScope(
     canPop: !_saving,
     child: AlertDialog(
-      title: const Text('Edit Message'),
+      title: Text(context.tr('Edit Message')),
       content: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -73,24 +74,28 @@ class _AleraMessageEditorState extends State<AleraMessageEditor> {
               enabled: !_saving,
               minLines: 3,
               maxLines: 8,
-              decoration: const InputDecoration(labelText: 'Message'),
+              decoration: InputDecoration(labelText: context.tr('Message')),
             ),
             if (widget.attachmentCount > 0)
               Text(
-                '${widget.attachmentCount} attached ${widget.attachmentCount == 1 ? 'item' : 'items'} will be preserved.',
+                context.tr(
+                  '${widget.attachmentCount} attached ${widget.attachmentCount == 1 ? 'item' : 'items'} will be preserved.',
+                ),
               ),
             if (widget.restartsHistory)
-              const Padding(
-                padding: EdgeInsets.only(top: AleraTokens.space12),
+              Padding(
+                padding: const EdgeInsets.only(top: AleraTokens.space12),
                 child: Text(
-                  'Saving stops the active turn and replaces this message and all later responses. Files and actions already performed are not undone. Queued messages remain paused.',
+                  context.tr(
+                    'Saving stops the active turn and replaces this message and all later responses. Files and actions already performed are not undone. Queued messages remain paused.',
+                  ),
                 ),
               ),
             if (_error != null)
               Padding(
                 padding: const EdgeInsets.only(top: AleraTokens.space8),
                 child: Text(
-                  _error!,
+                  context.tr(_error!),
                   style: TextStyle(color: AleraTokens.error),
                 ),
               ),
@@ -100,16 +105,18 @@ class _AleraMessageEditorState extends State<AleraMessageEditor> {
       actions: [
         TextButton(
           onPressed: _saving ? null : () => Navigator.of(context).pop(),
-          child: const Text('Cancel'),
+          child: Text(context.tr('Cancel')),
         ),
         FilledButton(
           onPressed: _saving ? null : _save,
           child: Text(
-            _saving
-                ? 'Saving'
-                : widget.restartsHistory
-                ? 'Save And Restart'
-                : 'Save Message',
+            context.tr(
+              _saving
+                  ? 'Saving'
+                  : widget.restartsHistory
+                  ? 'Save And Restart'
+                  : 'Save Message',
+            ),
           ),
         ),
       ],

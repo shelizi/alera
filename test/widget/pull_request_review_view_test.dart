@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/features/pull_requests/application/workspace_pull_request_state.dart';
 import 'package:alera/src/features/pull_requests/domain/hosted_review.dart';
@@ -10,6 +11,7 @@ import 'package:alera/src/features/pull_requests/domain/update_review_result.dar
 import 'package:alera/src/features/pull_requests/presentation/pull_request_comment_markdown.dart';
 import 'package:alera/src/features/pull_requests/presentation/pull_request_review_view.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 const _review = HostedReview(
@@ -49,8 +51,15 @@ Widget _wrap(
   bool canCloseReview = true,
   bool canChangeDraftStatus = true,
   bool canComment = true,
+  Locale? locale,
 }) {
   return MaterialApp(
+    locale: locale,
+    supportedLocales: supportedAleraLocales,
+    localizationsDelegates: const <LocalizationsDelegate<dynamic>>[
+      AleraLocalizationsDelegate(),
+      ...GlobalMaterialLocalizations.delegates,
+    ],
     home: Scaffold(
       body: PullRequestReviewView(
         review: review,
@@ -437,6 +446,26 @@ void main() {
       tester.widget<TextField>(find.byType(TextField)).controller?.text,
       'Keep this draft',
     );
+  });
+
+  testWidgets('renders review chrome in Traditional Chinese', (tester) async {
+    final callbacks = _Callbacks();
+    await tester.pumpWidget(_wrap(callbacks, locale: const Locale('zh', 'TW')));
+
+    expect(find.text('開啟'), findsOneWidget);
+    expect(find.text('檢查'), findsOneWidget);
+    expect(find.text('尚未回報任何檢查結果'), findsOneWidget);
+    expect(find.text('留言'), findsOneWidget);
+    expect(find.text('目前還沒有留言'), findsOneWidget);
+    expect(find.byTooltip('編輯 Pull Request'), findsOneWidget);
+    expect(find.byTooltip('開啟 Pull Request Diff'), findsOneWidget);
+    expect(find.byTooltip('在瀏覽器中開啟'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('編輯 Pull Request'));
+    await tester.pumpAndSettle();
+    expect(find.text('標題'), findsWidgets);
+    expect(find.text('基底分支'), findsOneWidget);
+    expect(find.text('feat: original'), findsOneWidget);
   });
 
   testWidgets('comments are read-only after the PR is merged', (tester) async {
