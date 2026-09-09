@@ -127,6 +127,23 @@ class AleraLocalizations {
       return '不支援的按鍵：${unsupportedKey.group(1)}。';
     }
 
+    final sortBy = RegExp(r'^Sort By (.+)$').firstMatch(source);
+    if (sortBy != null) {
+      final label = _traditionalChinese[sortBy.group(1)!] ?? sortBy.group(1)!;
+      return '依 $label 排序';
+    }
+    final orphanTerminals = RegExp(r'^(\d+) orphan terminal(?:s)?$')
+        .firstMatch(source);
+    if (orphanTerminals != null) {
+      return '${orphanTerminals.group(1)} 個孤立終端機';
+    }
+    final forceQuitTerminal = RegExp(
+      r'^Force-quits (.+)\. Anything running in that terminal is lost\.$',
+    ).firstMatch(source);
+    if (forceQuitTerminal != null) {
+      return '將強制關閉「${forceQuitTerminal.group(1)}」。該終端機中正在執行的所有工作都會遺失。';
+    }
+
     final originalPath = RegExp(r'^Original \((.+)\)$').firstMatch(source);
     if (originalPath != null) {
       return '原始（${originalPath.group(1)}）';
@@ -615,6 +632,23 @@ class AleraLocalizations {
     'Next Match': '下一個符合項目',
     'Close Search': '關閉搜尋',
     'Resource Manager': '資源管理員',
+    'The runtime host is not responding. Use the host chip to restart it.':
+        'Runtime Host 沒有回應。請使用 Host 狀態按鈕重新啟動。',
+    'Total CPU across Alera and every terminal it spawned, as a share of everything this machine can run at once.':
+        'Alera 與其啟動之所有終端機的 CPU 總用量，以此機器可同時執行的總容量為基準。',
+    'Resident memory of Alera, the runtime host, and every terminal process.':
+        'Alera、Runtime Host 與所有終端機程序目前占用的實體記憶體。',
+    'Share of the machine memory these processes hold.': '這些程序占用整台機器記憶體的比例。',
+    'Memory': '記憶體',
+    'Measuring resource usage': '正在測量資源用量',
+    'No terminal sessions are running': '目前沒有執行中的終端機工作階段',
+    'remote': '遠端',
+    'Unattributed Terminals': '未歸屬的終端機',
+    'Kill Orphan Terminal': '終止孤立終端機',
+    'Close Terminal Session': '關閉終端機工作階段',
+    'App': '應用程式',
+    'Runtime Host': 'Runtime Host',
+
     'Pane actions': '窗格操作',
     'Dismiss Error': '關閉錯誤',
     'New Workspace in This Project': '在此專案新增工作區',

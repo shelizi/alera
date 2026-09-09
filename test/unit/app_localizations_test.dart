@@ -136,6 +136,21 @@ void main() {
       }
     });
 
+    test('traditional Chinese localizes resource manager chrome', () {
+      final l10n = AleraLocalizations(const Locale('zh', 'TW'));
+      expect(l10n.translate('Memory'), '記憶體');
+      expect(l10n.translate('Sort By Memory'), '依 記憶體 排序');
+      expect(l10n.translate('1 orphan terminal'), '1 個孤立終端機');
+      expect(l10n.translate('3 orphan terminals'), '3 個孤立終端機');
+      expect(
+        l10n.translate(
+          'Force-quits Codex Agent. Anything running in that terminal is lost.',
+        ),
+        '將強制關閉「Codex Agent」。該終端機中正在執行的所有工作都會遺失。',
+      );
+      expect(l10n.translate('Runtime Host'), 'Runtime Host');
+    });
+
     test('traditional Chinese localizes runtime busy and ship dialogs', () {
       final l10n = AleraLocalizations(const Locale('zh', 'TW'));
       expect(l10n.translate('Ship Changes?'), '送出變更？');

@@ -1,9 +1,11 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_dark_theme.dart';
 import 'package:alera/src/features/resource_manager/domain/resource_snapshot.dart';
 import 'package:alera/src/features/resource_manager/domain/resource_tree.dart';
 import 'package:alera/src/features/resource_manager/presentation/resource_status_chip.dart';
 import 'package:alera/src/features/resource_manager/presentation/resource_status_panel.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 ResourceSnapshot _snapshot({bool warming = false, String? error}) =>
@@ -90,9 +92,16 @@ Future<void> _pump(
   ValueChanged<ResourceSessionRow>? onKillSession,
   VoidCallback? onKillOrphans,
   bool hostUnreachable = false,
+  Locale? locale,
 }) async {
   await tester.pumpWidget(
     MaterialApp(
+      locale: locale,
+      supportedLocales: supportedAleraLocales,
+      localizationsDelegates: const <LocalizationsDelegate<dynamic>>[
+        AleraLocalizationsDelegate(),
+        ...GlobalMaterialLocalizations.delegates,
+      ],
       theme: aleraDarkTheme,
       home: Scaffold(
         body: Center(
@@ -133,6 +142,34 @@ void main() {
     // The app and sidecar get their own rows, apart from the workspace tree.
     expect(find.text('App'), findsOneWidget);
     expect(find.text('Runtime Host'), findsOneWidget);
+  });
+
+  testWidgets('renders resource manager chrome in Traditional Chinese', (
+    tester,
+  ) async {
+    await _pump(
+      tester,
+      locale: const Locale('zh', 'TW'),
+      snapshot: _snapshot(error: 'connection refused'),
+      tree: _tree(
+        remote: true,
+        sessions: <ResourceSessionRow>[_session('Codex Agent')],
+        orphans: <ResourceSessionRow>[_session('stray', orphan: true)],
+      ),
+      hostUnreachable: true,
+    );
+
+    expect(find.text('資源管理員'), findsOneWidget);
+    expect(find.text('記憶體'), findsWidgets);
+    expect(find.byTooltip('依 記憶體 排序'), findsOneWidget);
+    expect(find.text('遠端'), findsOneWidget);
+    expect(find.text('未歸屬的終端機'), findsOneWidget);
+    expect(find.text('1 個孤立終端機'), findsOneWidget);
+    expect(find.byTooltip('終止孤立終端機'), findsOneWidget);
+    expect(find.text('應用程式'), findsOneWidget);
+    expect(find.text('Runtime Host'), findsOneWidget);
+    expect(find.text('Codex Agent'), findsOneWidget);
+    expect(find.textContaining('Runtime Host 沒有回應'), findsOneWidget);
   });
 
   testWidgets('the metric columns line up on rows with a close action', (

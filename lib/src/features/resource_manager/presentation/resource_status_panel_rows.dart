@@ -55,7 +55,7 @@ class const _WorkspaceSection({
         _MetricRow(
           indent: 1,
           label: workspace.name,
-          suffix: workspace.remote ? 'remote' : null,
+          suffix: workspace.remote ? context.tr('remote') : null,
           cpuMachinePercent: workspace.cpuMachinePercent,
           memoryBytes: workspace.memoryBytes,
         ),
@@ -82,7 +82,7 @@ class const _OrphanSection({
       children: <Widget>[
         _MetricRow(
           indent: 0,
-          label: 'Unattributed Terminals',
+          label: context.tr('Unattributed Terminals'),
           cpuMachinePercent: null,
           memoryBytes: null,
           bold: true,
@@ -256,7 +256,7 @@ class const _AleraSection({required final ResourceSnapshot snapshot})
         if (app != null)
           _MetricRow(
             indent: 1,
-            label: 'App',
+            label: context.tr('App'),
             cpuMachinePercent: machineCpuShare(app.cpuPercent, cores),
             memoryBytes: app.memoryBytes,
             sparkline: app.history,
@@ -264,7 +264,7 @@ class const _AleraSection({required final ResourceSnapshot snapshot})
         if (host != null)
           _MetricRow(
             indent: 1,
-            label: 'Runtime Host',
+            label: context.tr('Runtime Host'),
             cpuMachinePercent: machineCpuShare(host.cpuPercent, cores),
             memoryBytes: host.memoryBytes,
             sparkline: host.history,
@@ -292,7 +292,7 @@ class const _OrphanFooter({
         children: <Widget>[
           Expanded(
             child: Text(
-              '$count orphan terminal${count == 1 ? '' : 's'}',
+              context.tr('$count orphan terminal${count == 1 ? '' : 's'}'),
               style: Theme.of(context).textTheme.bodySmall
                   ?.copyWith(color: AleraTokens.warning),
             ),
