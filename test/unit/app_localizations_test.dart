@@ -272,6 +272,7 @@ void main() {
         '無法重新載入 Shell 環境',
       );
       expect(l10n.translate('Could not open link'), '無法開啟連結');
+      expect(l10n.translate('Resize Projects List'), '調整專案清單大小');
       expect(
         l10n.translate('Microphone permission is required for AI Dictation.'),
         'AI 聽寫需要麥克風權限。',

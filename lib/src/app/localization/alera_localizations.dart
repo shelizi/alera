@@ -232,6 +232,14 @@ class AleraLocalizations {
       return '登入失敗：${signInFailure.group(1)}';
     }
 
+    final resizeMasterList = RegExp(r'^Resize (.+) List$').firstMatch(source);
+    if (resizeMasterList != null) {
+      final label =
+          _traditionalChinese[resizeMasterList.group(1)!] ??
+          resizeMasterList.group(1)!;
+      return '調整$label清單大小';
+    }
+
     final allAutomationFilter = RegExp(r'^All (State|Project|Profile|Tag)$')
         .firstMatch(source);
     if (allAutomationFilter != null) {
