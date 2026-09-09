@@ -5,6 +5,7 @@ import 'dart:ffi' as ffi;
 import 'dart:io' show File, Platform;
 import 'dart:isolate';
 
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_buffer_budget.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_composer_controller.dart';

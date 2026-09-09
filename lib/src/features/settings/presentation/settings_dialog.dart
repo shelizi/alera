@@ -108,8 +108,8 @@ class _SettingsDialogState extends ConsumerState<SettingsDialog> {
         SnackBar(
           content: Text(
             count > 0
-                ? 'Shell environment reloaded ($count PATH entries)'
-                : 'Shell environment reloaded',
+                ? '${context.tr('Shell environment reloaded')} ($count ${context.tr('PATH entries')})'
+                : context.tr('Shell environment reloaded'),
           ),
         ),
       );
@@ -118,7 +118,9 @@ class _SettingsDialogState extends ConsumerState<SettingsDialog> {
         return;
       }
       messenger.showSnackBar(
-        const SnackBar(content: Text('Could not reload shell environment')),
+        SnackBar(
+          content: Text(context.tr('Could not reload shell environment')),
+        ),
       );
     }
   }

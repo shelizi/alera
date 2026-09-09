@@ -597,6 +597,10 @@ class AleraLocalizations {
         '離開此畫面而不套用時，設定會保持不變。若套用後上傳失敗，本機變更會保留為待上傳狀態。',
     'Version': '版本',
     'Compare': '比較',
+    'Shell environment reloaded': 'Shell 環境已重新載入',
+    'PATH entries': '個 PATH 項目',
+    'Could not reload shell environment': '無法重新載入 Shell 環境',
+    'Could not open link': '無法開啟連結',
     'Display Name (Optional)': '顯示名稱（選填）',
     'Alera will detect whether the folder is a Git repository. Non-Git folders only get a primary workspace.':
         'Alera 會偵測資料夾是否為 Git 儲存庫；非 Git 資料夾只會建立主要工作區。',

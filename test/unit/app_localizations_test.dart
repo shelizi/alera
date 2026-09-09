@@ -265,6 +265,13 @@ void main() {
       );
       expect(l10n.translate('Start Dictation'), '開始聽寫');
       expect(l10n.translate('Cancel Transcription'), '取消轉錄');
+      expect(l10n.translate('Shell environment reloaded'), 'Shell 環境已重新載入');
+      expect(l10n.translate('PATH entries'), '個 PATH 項目');
+      expect(
+        l10n.translate('Could not reload shell environment'),
+        '無法重新載入 Shell 環境',
+      );
+      expect(l10n.translate('Could not open link'), '無法開啟連結');
       expect(
         l10n.translate('Microphone permission is required for AI Dictation.'),
         'AI 聽寫需要麥克風權限。',
