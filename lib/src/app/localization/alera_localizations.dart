@@ -626,6 +626,8 @@ class AleraLocalizations {
     'Destination Folder': '目的地資料夾',
     'Auth Method': '認證方式',
     'Authentication': '驗證方式',
+    'Key': '金鑰',
+    'Password': '密碼',
     'Platform': '平台',
     'Architecture': '架構',
     'Parent Workspace': '父工作區',

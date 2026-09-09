@@ -31,6 +31,8 @@ void main() {
     test('traditional Chinese translates known UI strings', () {
       final l10n = AleraLocalizations(const Locale('zh', 'TW'));
       expect(l10n.translate('Settings'), '設定');
+      expect(l10n.translate('Key'), '金鑰');
+      expect(l10n.translate('Password'), '密碼');
       expect(l10n.translate('Add Project'), '新增專案');
       expect(l10n.translate('Open in Zed'), '在 Zed 中開啟');
     });
