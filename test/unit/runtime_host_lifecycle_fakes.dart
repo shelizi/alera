@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:alera/src/features/runtime_host/application/runtime_host_lifecycle_service.dart';
 import 'package:alera/src/features/runtime_host/domain/runtime_host_status.dart';
 import 'package:alera/src/features/runtime_host/infra/bundled_sidecar_version_probe.dart';
@@ -17,6 +19,8 @@ final class FakeRuntimeHostLifecycleClient({
   final Object? ensureStartedError,
   final Object? shutdownErrorOnSoft,
   final Object? shutdownErrorOnForce,
+  final Completer<void>? forceShutdownStarted,
+  final Future<void>? forceShutdownBarrier,
   final List<Object> probeErrorsAfterShutdown = const <Object>[],
 }) implements RuntimeHostLifecycleClient {
   final List<bool> shutdownCalls = <bool>[];
@@ -45,6 +49,16 @@ final class FakeRuntimeHostLifecycleClient({
     bool force = false,
   }) async {
     shutdownCalls.add(force);
+    if (force) {
+      if (forceShutdownStarted case final started?) {
+        if (!started.isCompleted) {
+          started.complete();
+        }
+      }
+      if (forceShutdownBarrier case final barrier?) {
+        await barrier;
+      }
+    }
     if (!force && busyOnSoftStop) {
       throw const RuntimeHostBusyException(
         message: 'Runtime host has 1 active agent(s), 1 active terminal session(s) and 0 active background job(s).',

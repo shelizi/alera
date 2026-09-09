@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:alera/src/features/runtime_host/application/runtime_host_lifecycle_service.dart';
 import 'package:alera/src/features/runtime_host/domain/runtime_host_quit_decision.dart';
 import 'package:alera/src/features/runtime_host/domain/runtime_host_status.dart';
@@ -204,6 +206,114 @@ void main() {
         expect(await client.probeRuntimeStatus(), isNotNull);
       },
     );
+
+    test('busy leave commits visual quit before returning', () async {
+      final client = FakeRuntimeHostLifecycleClient(
+        status: <String, Object?>{
+          'runtimeHostVersion': '1.2.0',
+          'persistent': false,
+        },
+        busyOnSoftStop: true,
+      );
+      final service = RuntimeHostLifecycleService(
+        client: client,
+        bundledVersionProbe: FakeBundledSidecarVersionProbe(
+          const BundledSidecarVersion(version: '1.2.0'),
+        ),
+        readConfig: () => TerminalHostConfig.defaults,
+      );
+      var visualQuitCommitted = false;
+
+      final allowed = await service.prepareAppQuit(
+        keepRuntimeOpen: false,
+        confirmBusyQuit: ({
+          required String title,
+          required String message,
+        }) async => RuntimeHostQuitDecision.leaveRuntimeOpen,
+        onBusyQuitCommitted: () {
+          visualQuitCommitted = true;
+        },
+      );
+
+      expect(allowed, isTrue);
+      expect(visualQuitCommitted, isTrue);
+      expect(client.shutdownCalls, <bool>[false]);
+    });
+
+    test('busy cancel does not commit visual quit', () async {
+      final client = FakeRuntimeHostLifecycleClient(
+        status: <String, Object?>{
+          'runtimeHostVersion': '1.2.0',
+          'persistent': false,
+        },
+        busyOnSoftStop: true,
+      );
+      final service = RuntimeHostLifecycleService(
+        client: client,
+        bundledVersionProbe: FakeBundledSidecarVersionProbe(
+          const BundledSidecarVersion(version: '1.2.0'),
+        ),
+        readConfig: () => TerminalHostConfig.defaults,
+      );
+      var visualQuitCommitted = false;
+
+      final allowed = await service.prepareAppQuit(
+        keepRuntimeOpen: false,
+        confirmBusyQuit: ({
+          required String title,
+          required String message,
+        }) async => RuntimeHostQuitDecision.cancel,
+        onBusyQuitCommitted: () {
+          visualQuitCommitted = true;
+        },
+      );
+
+      expect(allowed, isFalse);
+      expect(visualQuitCommitted, isFalse);
+    });
+
+    test('busy force commits visual quit before slow force shutdown', () async {
+      final forceShutdownStarted = Completer<void>();
+      final finishForceShutdown = Completer<void>();
+      final client = FakeRuntimeHostLifecycleClient(
+        status: <String, Object?>{
+          'runtimeHostVersion': '1.2.0',
+          'persistent': false,
+        },
+        busyOnSoftStop: true,
+        forceShutdownStarted: forceShutdownStarted,
+        forceShutdownBarrier: finishForceShutdown.future,
+      );
+      final service = RuntimeHostLifecycleService(
+        client: client,
+        bundledVersionProbe: FakeBundledSidecarVersionProbe(
+          const BundledSidecarVersion(version: '1.2.0'),
+        ),
+        readConfig: () => TerminalHostConfig.defaults,
+      );
+      final visualQuitCommitted = Completer<void>();
+      var quitCompleted = false;
+
+      final quit = service
+          .prepareAppQuit(
+            keepRuntimeOpen: false,
+            confirmBusyQuit: ({
+              required String title,
+              required String message,
+            }) async => RuntimeHostQuitDecision.forceStop,
+            onBusyQuitCommitted: () {
+              visualQuitCommitted.complete();
+            },
+          )
+          .whenComplete(() => quitCompleted = true);
+
+      await visualQuitCommitted.future;
+      await forceShutdownStarted.future;
+      expect(quitCompleted, isFalse);
+
+      finishForceShutdown.complete();
+      expect(await quit, isTrue);
+    });
 
     test('prepareAppQuit force-stops when busy quit chooses force', () async {
       final client = FakeRuntimeHostLifecycleClient(
