@@ -224,7 +224,7 @@ class const RemoteHostEditor({
                     crossAxisAlignment: .start,
                     children: <Widget>[
                       Text(
-                        progress?.message ?? 'Remote runtime error',
+                        context.tr(progress?.message ?? 'Remote runtime error'),
                         style: theme.textTheme.titleSmall?.copyWith(
                           color: AleraTokens.foreground,
                           fontWeight: .w600,
@@ -232,7 +232,7 @@ class const RemoteHostEditor({
                       ),
                       const SizedBox(height: AleraTokens.space4),
                       Text(
-                        statusDetail ?? 'Remote runtime error',
+                        context.tr(statusDetail ?? 'Remote runtime error'),
                         style: theme.textTheme.bodySmall?.copyWith(
                           color: !statusIsError
                               ? AleraTokens.foregroundMuted
@@ -287,7 +287,7 @@ class const _RemoteHostDropdown<T>({
       crossAxisAlignment: .start,
       children: <Widget>[
         Text(
-          label,
+          context.tr(label),
           style: theme.textTheme.labelSmall?.copyWith(
             color: AleraTokens.foregroundMuted,
           ),

@@ -302,6 +302,11 @@ void main() {
       expect(l10n.translate('Select Agent Profile'), '選擇 Agent 設定檔');
       expect(l10n.translate('Create Another'), '繼續建立下一個');
       expect(l10n.translate('Working'), '處理中');
+      expect(l10n.translate('SSH Targets'), 'SSH 目標');
+      expect(l10n.translate('Connection'), '連線');
+      expect(l10n.translate('Runtime Bootstrap'), '執行環境初始化');
+      expect(l10n.translate('Remote runtime error'), '遠端執行環境錯誤');
+      expect(l10n.translate('Installing'), '安裝中');
       expect(
         l10n.translate('Describe the replacement to generate.'),
         '描述要產生的替換內容。',
