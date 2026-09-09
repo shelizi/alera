@@ -396,7 +396,7 @@ class _PromptWorkspaceDialogState extends State<PromptWorkspaceDialog> {
                       ? null
                       : () => Navigator.of(context).pop(),
                   icon: const Icon(AleraIcons.close),
-                  tooltip: 'Close',
+                  tooltip: context.tr('Close'),
                 ),
               ],
             ),
@@ -437,7 +437,9 @@ class _PromptWorkspaceDialogState extends State<PromptWorkspaceDialog> {
       crossAxisAlignment: .start,
       children: <Widget>[
         Text(
-          'Choose every workspace setting yourself, including the branch name and optional parent workspace.',
+          context.tr(
+            'Choose every workspace setting yourself, including the branch name and optional parent workspace.',
+          ),
           style: theme.textTheme.bodyMedium?.copyWith(
             color: AleraTokens.foregroundMuted,
           ),

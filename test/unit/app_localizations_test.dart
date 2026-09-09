@@ -35,6 +35,43 @@ void main() {
       expect(l10n.translate('Open in Zed'), '在 Zed 中開啟');
     });
 
+    test(
+      'traditional Chinese localizes prompt workspace chrome and errors',
+      () {
+        final l10n = AleraLocalizations(const Locale('zh', 'TW'));
+        expect(l10n.translate('Generating workspace identity'), '正在產生工作區識別');
+        expect(l10n.translate('Starting agent'), '正在啟動 Agent');
+        expect(
+          l10n.translate('The generated branch "Settings" already exists.'),
+          '產生的 Branch「Settings」已存在。',
+        );
+        expect(
+          l10n.translate(
+            'Bad state: The generated branch "Editor" already exists.',
+          ),
+          '產生的 Branch「Editor」已存在。',
+        );
+        expect(
+          l10n.translate(
+            'Bad state: AI Assist could not generate an available workspace identity.',
+          ),
+          'AI Assist 無法產生可用的工作區識別。',
+        );
+        expect(
+          l10n.translate(
+            'Unsupported operation: Update Alera on this host before retrying agent launch safely.',
+          ),
+          '請先更新此 Host 上的 Alera，再安全重試啟動 Agent。',
+        );
+        expect(
+          l10n.translate(
+            'Bad state: The original agent launch identity is unavailable.',
+          ),
+          '原始 Agent 啟動識別無法使用。',
+        );
+      },
+    );
+
     test('traditional Chinese covers newly added terminal and worktree UI', () {
       final l10n = AleraLocalizations(const Locale('zh', 'TW'));
       expect(l10n.translate('Refresh Worktrees'), '重新整理工作樹');

@@ -41,6 +41,7 @@ extension _PromptWorkspaceDialogForm on _PromptWorkspaceDialogState {
                   AleraDropdownFieldEntry<Project>(
                     value: project,
                     label: project.name,
+                    localizeLabel: false,
                   ),
               ],
               enabled: !_working && created == null,
@@ -54,7 +55,11 @@ extension _PromptWorkspaceDialogForm on _PromptWorkspaceDialogState {
               value: _sourceBranch,
               entries: <AleraDropdownFieldEntry<String>>[
                 for (final branch in _branches)
-                  AleraDropdownFieldEntry<String>(value: branch, label: branch),
+                  AleraDropdownFieldEntry<String>(
+                    value: branch,
+                    label: branch,
+                    localizeLabel: false,
+                  ),
               ],
               enabled: !_working && !_loadingBranches && created == null,
               filterable: true,
@@ -73,6 +78,7 @@ extension _PromptWorkspaceDialogForm on _PromptWorkspaceDialogState {
                   AleraDropdownFieldEntry<String?>(
                     value: workspace.id,
                     label: _parentWorkspaceLabel(workspace),
+                    localizeLabel: false,
                   ),
               ],
               enabled: !_working && created == null,
@@ -93,6 +99,7 @@ extension _PromptWorkspaceDialogForm on _PromptWorkspaceDialogState {
                   AleraDropdownFieldEntry<AgentProfile>(
                     value: profile,
                     label: profile.name,
+                    localizeLabel: false,
                   ),
               ],
               enabled: !_working && created == null,
@@ -102,7 +109,7 @@ extension _PromptWorkspaceDialogForm on _PromptWorkspaceDialogState {
             if (_error != null) ...<Widget>[
               const SizedBox(height: AleraTokens.space16),
               Text(
-                _error!,
+                context.tr(_error!),
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: AleraTokens.error,
                 ),

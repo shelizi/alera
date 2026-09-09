@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:flutter/material.dart';
@@ -18,6 +19,7 @@ class const AleraCheckbox({
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final translatedLabel = label == null ? null : context.tr(label!);
     final box = AnimatedContainer(
       duration: AleraTokens.durationFast,
       width: _boxSize,
@@ -38,7 +40,7 @@ class const AleraCheckbox({
     return Semantics(
       checked: value,
       enabled: enabled,
-      label: label,
+      label: translatedLabel,
       child: InkWell(
         onTap: enabled ? () => onChanged(!value) : null,
         borderRadius: .circular(AleraTokens.radiusSm),
@@ -55,7 +57,7 @@ class const AleraCheckbox({
                     box,
                     const SizedBox(width: AleraTokens.space8),
                     Text(
-                      label!,
+                      translatedLabel!,
                       style: theme.textTheme.bodyMedium?.copyWith(
                         color: enabled
                             ? AleraTokens.foreground

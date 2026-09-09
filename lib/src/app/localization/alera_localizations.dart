@@ -318,6 +318,31 @@ class AleraLocalizations {
       return '執行環境目前有 $details。';
     }
 
+    final generatedBranchExists = RegExp(
+      r'^(?:Bad state: )?The generated branch "(.+)" already exists\.$',
+    ).firstMatch(source);
+    if (generatedBranchExists != null) {
+      return '產生的 Branch「${generatedBranchExists.group(1)}」已存在。';
+    }
+    final workspaceIdentityUnavailable = RegExp(
+      r'^(?:Bad state: )?AI Assist could not generate an available workspace identity\.$',
+    ).firstMatch(source);
+    if (workspaceIdentityUnavailable != null) {
+      return 'AI Assist 無法產生可用的工作區識別。';
+    }
+    final retryAgentRequiresUpdate = RegExp(
+      r'^(?:Unsupported operation: )?Update Alera on this host before retrying agent launch safely\.$',
+    ).firstMatch(source);
+    if (retryAgentRequiresUpdate != null) {
+      return '請先更新此 Host 上的 Alera，再安全重試啟動 Agent。';
+    }
+    final originalAgentLaunchUnavailable = RegExp(
+      r'^(?:Bad state: )?The original agent launch identity is unavailable\.$',
+    ).firstMatch(source);
+    if (originalAgentLaunchUnavailable != null) {
+      return '原始 Agent 啟動識別無法使用。';
+    }
+
     final globalValue = RegExp(r'^Global \((.+)\)$').firstMatch(source);
     if (globalValue != null) {
       final value = globalValue.group(1)!;
@@ -1532,6 +1557,15 @@ class AleraLocalizations {
     'Select Agent Profile': '選擇 Agent 設定檔',
     'Create Another': '繼續建立下一個',
     'Working': '處理中',
+    'Complete the prompt, project, branch, and agent profile.':
+        '請完成提示詞、專案、Branch 與 Agent 設定檔。',
+    'Generating workspace identity': '正在產生工作區識別',
+    'Checking generated branch': '正在檢查產生的 Branch',
+    'Creating workspace': '正在建立工作區',
+    'Starting agent': '正在啟動 Agent',
+    'Could not paste clipboard image.': '無法貼上剪貼簿圖片。',
+    'Choose every workspace setting yourself, including the branch name and optional parent workspace.':
+        '自行選擇所有工作區設定，包括 Branch 名稱與選填的父工作區。',
     'Describe the replacement to generate.': '描述要產生的替換內容。',
     'Define the reusable instruction and its availability.':
         '定義可重複使用的指示及其可用狀態。',
