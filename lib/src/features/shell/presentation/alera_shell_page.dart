@@ -21,7 +21,9 @@ import 'package:alera/src/features/pull_requests/application/workspace_pull_requ
 import 'package:alera/src/features/pull_requests/application/workspace_pull_request_notification_providers.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_service.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_open_coordinator_provider.dart';
+import 'package:alera/src/features/workbench/application/external_terminal_providers.dart';
 import 'package:alera/src/features/workbench/application/workbench_tab_attention.dart';
+import 'package:alera/src/features/workbench/domain/external_terminal_launcher.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/domain/workbench_layout.dart';
 import 'package:alera/src/features/workbench/domain/workbench_view_prefs.dart';

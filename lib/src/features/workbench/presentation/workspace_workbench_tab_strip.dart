@@ -14,6 +14,7 @@ class const _WorkspaceTabStrip({
   required final ValueChanged<String> onCloseTab,
   required final ValueChanged<List<String>> onCloseTabs,
   required final RenameWorkspaceTabCallback onRenameTab,
+  final OpenExternalTerminalCallback? onOpenExternalTerminal,
   required final VoidCallback onCreateTab,
   required final ValueChanged<WorkbenchDropZone> onSplitGroup,
   required final VoidCallback onMergeGroup,
@@ -204,6 +205,8 @@ class _WorkspaceTabStripState extends State<_WorkspaceTabStrip> {
                             onCloseTabs: widget.onCloseTabs,
                             onRename: (title) =>
                                 widget.onRenameTab(tabId: tab.id, title: title),
+                            onOpenExternalTerminal:
+                                widget.onOpenExternalTerminal,
                             onSplit: widget.onSplitGroup,
                           ),
                         ),

@@ -41,6 +41,7 @@ mod ssh_bootstrap;
 mod tab_record_factory;
 mod tailscale;
 mod terminal_alias_commands;
+mod terminal_attach;
 mod terminal_host;
 mod workspace_context;
 mod workspace_pinning;
@@ -216,6 +217,7 @@ async fn run_terminal_command(command: TerminalCommand) -> i32 {
                 Err(error) => print_error(error),
             }
         }
+        TerminalAction::Attach(args) => terminal_attach::run(&mut client, args).await,
     }
 }
 

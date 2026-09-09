@@ -300,6 +300,7 @@ impl ServerActor {
                 let selected = &bytes[start..end];
                 Ok(json!({
                     "handle": session_id,
+                    "running": session.running(),
                     "baseCursor": base_cursor,
                     "cursor": start_cursor,
                     "nextCursor": next_cursor,

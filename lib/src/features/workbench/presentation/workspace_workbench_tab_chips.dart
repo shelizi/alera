@@ -13,6 +13,7 @@ class const _DraggableWorkspaceTabChip({
   required final VoidCallback onClose,
   required final ValueChanged<List<String>> onCloseTabs,
   required final ValueChanged<String> onRename,
+  final OpenExternalTerminalCallback? onOpenExternalTerminal,
   required final ValueChanged<WorkbenchDropZone> onSplit,
 }) extends StatelessWidget {
   @override
@@ -60,6 +61,7 @@ class const _DraggableWorkspaceTabChip({
             onClose: onClose,
             onCloseTabs: onCloseTabs,
             onRename: onRename,
+            onOpenExternalTerminal: onOpenExternalTerminal,
             onSplit: onSplit,
           ),
         ),
@@ -74,6 +76,7 @@ class const _DraggableWorkspaceTabChip({
           onClose: onClose,
           onCloseTabs: onCloseTabs,
           onRename: onRename,
+          onOpenExternalTerminal: onOpenExternalTerminal,
           onSplit: onSplit,
         ),
       ),
@@ -92,6 +95,7 @@ class const _WorkspaceTabChip({
   required final VoidCallback onClose,
   required final ValueChanged<List<String>> onCloseTabs,
   required final ValueChanged<String> onRename,
+  final OpenExternalTerminalCallback? onOpenExternalTerminal,
   required final ValueChanged<WorkbenchDropZone> onSplit,
 }) extends ConsumerWidget {
   @override
@@ -229,6 +233,7 @@ enum _TabMenuAction {
   closeRight,
   changeTitle,
   generateTitle,
+  openExternalTerminal,
 }
 
 class const _WorkspaceTabLeadingIcon({

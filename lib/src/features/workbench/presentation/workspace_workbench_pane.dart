@@ -18,6 +18,7 @@ class const _WorkbenchPane({
   required final ValueChanged<String> onCloseTab,
   required final ValueChanged<List<String>> onCloseTabs,
   required final RenameWorkspaceTabCallback onRenameTab,
+  final OpenExternalTerminalCallback? onOpenExternalTerminal,
   required final OpenWorkspaceFileCallback onOpenEditor,
   required final OpenWorkspaceFileCallback onOpenMermanPreview,
   required final MoveWorkspaceTabCallback onMoveTab,
@@ -77,6 +78,7 @@ class const _WorkbenchPane({
                 onCloseTab: onCloseTab,
                 onCloseTabs: onCloseTabs,
                 onRenameTab: onRenameTab,
+                onOpenExternalTerminal: onOpenExternalTerminal,
                 onCreateTab: () =>
                     unawaited(onCreateTab(targetGroupId: groupId)),
                 onSplitGroup: (zone) =>
