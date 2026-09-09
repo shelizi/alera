@@ -76,6 +76,32 @@ void main() {
     expect(switched, <String>['main']);
   });
 
+  testWidgets('current branch ref still exposes its context menu', (
+    tester,
+  ) async {
+    final backend = _multiRefBackend();
+    final switched = <String>[];
+
+    await _pumpPanel(
+      tester,
+      backend: backend,
+      width: 420,
+      height: 520,
+      onSwitchBranch: (branch) async => switched.add(branch),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('COMMITS'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(
+      find.text('feat/settings-fullscreen-modal'),
+      buttons: kSecondaryMouseButton,
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Current Branch'), findsOneWidget);
+    expect(switched, isEmpty);
+  });
   testWidgets('commits header toggles from anywhere except its actions', (
     tester,
   ) async {

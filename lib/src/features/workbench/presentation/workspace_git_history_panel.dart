@@ -239,12 +239,10 @@ class _GitHistoryPanelState extends State<_GitHistoryPanel> {
     Offset globalPosition,
   ) async {
     final switchBranch = widget.onSwitchBranch;
-    final currentRef = widget.state.result?.currentRef;
-    if (switchBranch == null ||
-        !itemRef.id.startsWith('refs/heads/') ||
-        currentRef?.id == itemRef.id) {
+    if (switchBranch == null || !itemRef.id.startsWith('refs/heads/')) {
       return;
     }
+    final isCurrentBranch = widget.state.result?.currentRef?.id == itemRef.id;
     final overlay = Navigator.of(context).overlay?.context.findRenderObject();
     if (overlay is! RenderBox) {
       return;
@@ -258,11 +256,14 @@ class _GitHistoryPanelState extends State<_GitHistoryPanel> {
         overlay.size.width - position.dx,
         overlay.size.height - position.dy,
       ),
-      items: const <PopupMenuEntry<_GitRefAction>>[
+      items: <PopupMenuEntry<_GitRefAction>>[
         AleraDropdownEntry<_GitRefAction>(
           value: .switchBranch,
-          label: 'Switch to Branch',
-          leading: Icon(AleraIcons.gitBranch, size: 16),
+          label: isCurrentBranch ? 'Current Branch' : 'Switch to Branch',
+          localizeLabel: false,
+          selected: isCurrentBranch,
+          enabled: !isCurrentBranch,
+          leading: const Icon(AleraIcons.gitBranch, size: 16),
         ),
       ],
     );
