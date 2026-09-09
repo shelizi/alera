@@ -124,6 +124,32 @@ void main() {
       expect(window.preventCloseValues, <bool>[true]);
     });
 
+    test('hide-on-close does not wait for a slow window state save', () async {
+      final saveStarted = Completer<void>();
+      final finishSave = Completer<void>();
+      final repository = _RecordingStateRepository()
+        ..saveStarted = saveStarted
+        ..saveBarrier = finishSave.future;
+      final window = _RecordingWindowController();
+      final coordinator = AppWindowLifecycleCoordinator(
+        repository: repository,
+        window: window,
+        saveDebounce: .zero,
+        hideOnClose: () => true,
+      );
+      await coordinator.start();
+
+      window.emit((listener) => listener.onWindowClose());
+      await saveStarted.future;
+      await _waitFor(() => window.hideCalls == 1);
+
+      expect(window.hideCalls, 1);
+      expect(finishSave.isCompleted, isFalse);
+
+      finishSave.complete();
+      await coordinator.waitForPendingHide();
+    });
+
     test('requestQuit destroys even when hide-on-close is bound', () async {
       final repository = _RecordingStateRepository();
       final window = _RecordingWindowController();
@@ -256,6 +282,33 @@ void main() {
 
       expect(window.captureCalls, 2);
       expect(window.destroyCalls, 1);
+    });
+
+    test('requestQuit does not wait for a slow window state save', () async {
+      final saveStarted = Completer<void>();
+      final finishSave = Completer<void>();
+      final repository = _RecordingStateRepository()
+        ..saveStarted = saveStarted
+        ..saveBarrier = finishSave.future;
+      final window = _RecordingWindowController();
+      final coordinator = AppWindowLifecycleCoordinator(
+        repository: repository,
+        window: window,
+        saveDebounce: .zero,
+      );
+      await coordinator.start();
+
+      window.emit((listener) => listener.onWindowResized());
+      await saveStarted.future;
+
+      final quit = coordinator.requestQuit();
+      await _waitFor(() => window.destroyCalls == 1);
+
+      expect(window.destroyCalls, 1);
+      expect(finishSave.isCompleted, isFalse);
+
+      finishSave.complete();
+      await quit;
     });
 
     test('closes once and ignores post-close state work', () async {

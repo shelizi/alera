@@ -129,6 +129,7 @@ class AppWindowLifecycleCoordinator._({
   required final AppWindowController _window,
   required final AppWindowCloseStrategy _closeStrategy,
   required final Duration _saveDebounce,
+  required final Duration _closeFlushGracePeriod,
   required var Future<bool> Function()? _closeGate,
   required var bool Function()? _hideOnClose,
   required final Logger _logger,
@@ -139,6 +140,7 @@ class AppWindowLifecycleCoordinator._({
     AppWindowCloseStrategy closeStrategy =
         const DestroyAppWindowCloseStrategy(),
     Duration saveDebounce = const Duration(milliseconds: 350),
+    Duration closeFlushGracePeriod = const Duration(milliseconds: 50),
     Future<bool> Function()? closeGate,
     bool Function()? hideOnClose,
     Logger? logger,
@@ -147,6 +149,7 @@ class AppWindowLifecycleCoordinator._({
          window: window,
          closeStrategy: closeStrategy,
          saveDebounce: saveDebounce,
+         closeFlushGracePeriod: closeFlushGracePeriod,
          closeGate: closeGate,
          hideOnClose: hideOnClose,
          logger: logger ?? Logger('AppWindowLifecycleCoordinator'),
@@ -252,7 +255,7 @@ class AppWindowLifecycleCoordinator._({
 
   Future<void> _hideInsteadOfDestroy() async {
     try {
-      await flush();
+      await _flushWithinCloseGracePeriod();
       if (_quitting || _closing) {
         return;
       }
@@ -341,7 +344,7 @@ class AppWindowLifecycleCoordinator._({
     }
     _closeCommitted = true;
     try {
-      await flush();
+      await _flushWithinCloseGracePeriod();
     } catch (error, stackTrace) {
       _logWarningIfActive(
         'failed to flush app window state on close',
@@ -351,6 +354,14 @@ class AppWindowLifecycleCoordinator._({
     } finally {
       await _finishClose();
     }
+  }
+
+  /// Gives fast local state persistence a brief chance to finish without
+  /// letting slow storage keep a user-visible window open. Future.timeout does
+  /// not cancel the source future, so an in-flight save can finish in the
+  /// background while the close path continues.
+  Future<void> _flushWithinCloseGracePeriod() async {
+    await flush().timeout(_closeFlushGracePeriod, onTimeout: () {});
   }
 
   /// Marks teardown complete and destroys the window at most once.
