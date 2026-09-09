@@ -23,6 +23,10 @@ enum GitDiffViewMode { tree, flat }
 @MappableEnum()
 enum GitDiffGroupMode { byArea, unified }
 
+/// Whether git diffs are rendered inline as a unified list or split side-by-side.
+@MappableEnum()
+enum GitDiffPresentationMode { unified, sideBySide }
+
 /// Preferred primary action for the Checks-panel create-PR split button.
 @MappableEnum()
 enum PullRequestCreateAction { publish, draft }
@@ -71,6 +75,7 @@ class const WorkbenchViewPrefs({
   this.explorerMode = WorkspaceExplorerMode.hideIgnored,
   this.gitDiffViewMode = GitDiffViewMode.tree,
   this.gitDiffGroupMode = GitDiffGroupMode.byArea,
+  this.gitDiffPresentationMode = GitDiffPresentationMode.unified,
   this.pullRequestCreateAction = PullRequestCreateAction.publish,
   this.workspaceKindFilter = WorkspaceKindFilter.all,
   this.showActiveWorkspacesOnly = false,
@@ -131,6 +136,9 @@ class const WorkbenchViewPrefs({
   /// Whether Source Control groups files by staged state or shows one list.
   final GitDiffGroupMode gitDiffGroupMode;
 
+  /// Whether git diffs are rendered inline as a unified list or split side-by-side.
+  final GitDiffPresentationMode gitDiffPresentationMode;
+
   /// Sticky create-PR split-button action (publish vs draft). App-wide and
   /// persisted with the rest of the workbench view prefs.
   final PullRequestCreateAction pullRequestCreateAction;
@@ -164,6 +172,7 @@ class const WorkbenchViewPrefs({
     explorerMode: .hideIgnored,
     gitDiffViewMode: .tree,
     gitDiffGroupMode: .byArea,
+    gitDiffPresentationMode: .unified,
     pullRequestCreateAction: .publish,
     workspaceKindFilter: .all,
     showActiveWorkspacesOnly: false,

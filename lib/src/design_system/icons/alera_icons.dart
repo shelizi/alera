@@ -108,6 +108,8 @@ abstract final class const AleraIcons._() {
   static const IconData review = LucideIcons.fileSearch;
   static const IconData checks = LucideIcons.listChecks;
   static const IconData diff = LucideIcons.gitCompare;
+  static const IconData diffSideBySide = LucideIcons.columns2;
+  static const IconData diffUnified = LucideIcons.rows2;
 
   // Source control actions
   static const IconData gitCommit = AleraCodicons.check;

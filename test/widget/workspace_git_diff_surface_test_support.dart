@@ -22,6 +22,7 @@ Future<void> _pumpDiffSurface(
           workbenchControllerProvider.overrideWith(() => controller),
       ],
       child: MaterialApp(
+        theme: ThemeData(splashFactory: InkRipple.splashFactory),
         home: Scaffold(
           body: SizedBox(
             width: 900,

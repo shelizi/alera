@@ -59,3 +59,5 @@ test/golden/failures/
 # Keep only the fork overrides; Flutter generates the preview scaffolds.
 **/.widget_preview/*
 !**/.widget_preview/pubspec_overrides.yaml
+# Prebuilt native libraries
+/.prebuilt/

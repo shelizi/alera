@@ -69,15 +69,9 @@ class const _GroupBySegmented({
       onSelectionChanged: onChanged,
       segments: <ButtonSegment<WorkbenchGroupBy>>[
         ButtonSegment(value: .none, label: Text(context.tr('None'))),
-        ButtonSegment(
-          value: .project,
-          label: Text(context.tr('Project')),
-        ),
+        ButtonSegment(value: .project, label: Text(context.tr('Project'))),
         if (supportsSections)
-          ButtonSegment(
-            value: .section,
-            label: Text(context.tr('Section')),
-          ),
+          ButtonSegment(value: .section, label: Text(context.tr('Section'))),
       ],
     );
   }
