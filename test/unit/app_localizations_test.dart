@@ -164,6 +164,21 @@ void main() {
       expect(l10n.translate('Provider not detected'), '未偵測到 Provider');
     });
 
+    test('traditional Chinese localizes automation catalog chrome', () {
+      final l10n = AleraLocalizations(const Locale('zh', 'TW'));
+      expect(l10n.translate('Automations unavailable'), '無法取得自動化');
+      expect(l10n.translate('No automations'), '沒有自動化');
+      expect(l10n.translate('Select an automation'), '選擇自動化');
+      expect(l10n.translate('State'), '狀態');
+      expect(l10n.translate('Project'), '專案');
+      expect(l10n.translate('Profile'), '設定檔');
+      expect(l10n.translate('Tag'), '標籤');
+      expect(l10n.translate('All State'), '所有狀態');
+      expect(l10n.translate('All Project'), '所有專案');
+      expect(l10n.translate('All Profile'), '所有設定檔');
+      expect(l10n.translate('All Tag'), '所有標籤');
+    });
+
     test('traditional Chinese localizes account settings', () {
       final l10n = AleraLocalizations(const Locale('zh', 'TW'));
       expect(l10n.translate('Account unavailable'), '無法取得帳號');

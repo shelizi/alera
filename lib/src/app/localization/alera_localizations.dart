@@ -232,6 +232,15 @@ class AleraLocalizations {
       return '登入失敗：${signInFailure.group(1)}';
     }
 
+    final allAutomationFilter = RegExp(r'^All (State|Project|Profile|Tag)$')
+        .firstMatch(source);
+    if (allAutomationFilter != null) {
+      final label =
+          _traditionalChinese[allAutomationFilter.group(1)!] ??
+          allAutomationFilter.group(1)!;
+      return '所有$label';
+    }
+
     final originalPath = RegExp(r'^Original \((.+)\)$').firstMatch(source);
     if (originalPath != null) {
       return '原始（${originalPath.group(1)}）';
@@ -838,6 +847,13 @@ class AleraLocalizations {
     'This hosting provider is not supported yet.': '目前尚不支援此 Hosting Provider。',
 
     'Create Options': '建立選項',
+    'Automations unavailable': '無法取得自動化',
+    'No automations': '沒有自動化',
+    'Select an automation': '選擇自動化',
+    'State': '狀態',
+    'Profile': '設定檔',
+    'Tag': '標籤',
+
     'No automation details available.': '沒有可用的自動化詳細資料。',
     'Create a schedule to run approved work in a runtime-owned target.':
         '建立排程，在執行環境管理的目標上執行已核准工作。',
