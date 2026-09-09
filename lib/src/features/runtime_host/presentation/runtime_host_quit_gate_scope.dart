@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:alera/src/design_system/layout/alera_choice_dialog.dart';
 import 'package:alera/src/features/app_window/application/app_window_platform.dart';
 import 'package:alera/src/features/app_window/application/app_window_providers.dart';
@@ -25,6 +27,7 @@ class _RuntimeHostQuitGateScopeState
     final client = ref.read(runtimeHostClientProvider);
     client.beginAppQuit();
     var closeCommitted = false;
+    var visualQuitCommitted = false;
     try {
       final keepRuntimeOpen = ref
           .read(settingsControllerProvider)
@@ -35,6 +38,10 @@ class _RuntimeHostQuitGateScopeState
           .prepareAppQuit(
             keepRuntimeOpen: keepRuntimeOpen,
             confirmBusyQuit: _confirmBusyQuit,
+            onBusyQuitCommitted: () {
+              visualQuitCommitted = true;
+              _commitVisualQuit();
+            },
           );
       if (!allowed) {
         return false;
@@ -43,11 +50,34 @@ class _RuntimeHostQuitGateScopeState
       client.dispose();
       closeCommitted = true;
       return true;
+    } catch (_) {
+      if (visualQuitCommitted) {
+        _restoreAfterFailedCommittedQuit();
+      }
+      rethrow;
     } finally {
       if (!closeCommitted) {
         client.cancelAppQuit();
       }
     }
+  }
+
+  void _commitVisualQuit() {
+    if (!mounted) {
+      return;
+    }
+    final window = ref.read(appWindowControllerProvider);
+    // Do not await visibility verification. The native hide request is sent
+    // immediately while runtime teardown continues behind the hidden window.
+    unawaited(window.hide().catchError((Object _) {}));
+  }
+
+  void _restoreAfterFailedCommittedQuit() {
+    if (!mounted) {
+      return;
+    }
+    final window = ref.read(appWindowControllerProvider);
+    unawaited(window.show().catchError((Object _) {}));
   }
 
   Future<RuntimeHostQuitDecision> _confirmBusyQuit({

@@ -17,6 +17,8 @@ typedef RuntimeHostBusyQuitConfirm = Future<RuntimeHostQuitDecision> Function({
   required String message,
 });
 
+typedef RuntimeHostBusyQuitCommitted = void Function();
+
 abstract interface class RuntimeHostLifecycleClient {
   Future<Map<String, Object?>?> probeRuntimeStatus();
 
@@ -145,6 +147,7 @@ final class RuntimeHostLifecycleService({
   Future<bool> prepareAppQuit({
     required bool keepRuntimeOpen,
     RuntimeHostBusyQuitConfirm? confirmBusyQuit,
+    RuntimeHostBusyQuitCommitted? onBusyQuitCommitted,
   }) async {
     if (keepRuntimeOpen) {
       return true;
@@ -189,8 +192,12 @@ final class RuntimeHostLifecycleService({
         case RuntimeHostQuitDecision.cancel:
           return false;
         case RuntimeHostQuitDecision.leaveRuntimeOpen:
+          onBusyQuitCommitted?.call();
           return true;
         case RuntimeHostQuitDecision.forceStop:
+          // The user has already committed to quitting. Let the UI disappear
+          // before this potentially slow RPC waits for the detached sidecar.
+          onBusyQuitCommitted?.call();
           await _shutdownForAppQuit(force: true);
           return true;
       }
