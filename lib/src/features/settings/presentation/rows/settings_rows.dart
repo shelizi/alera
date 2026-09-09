@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/feedback/alera_empty_state.dart';
 import 'package:alera/src/design_system/forms/alera_number_field.dart';
@@ -140,7 +141,7 @@ class const SettingsNumberRow({
         min: min,
         max: max,
         step: step,
-        suffix: suffix,
+        suffix: suffix == null ? null : context.tr(suffix!),
         onChanged: onChanged,
       ),
     );
@@ -168,7 +169,7 @@ class const SettingsIntegerRow({
         min: min.toDouble(),
         max: max.toDouble(),
         step: step.toDouble(),
-        suffix: suffix,
+        suffix: suffix == null ? null : context.tr(suffix!),
         onChanged: (value) => onChanged(value.round()),
       ),
     );

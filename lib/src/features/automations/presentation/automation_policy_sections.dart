@@ -99,7 +99,7 @@ class _AutomationProfilePolicySectionState
     }
     if (_error != null && !_saving) {
       return AleraEmptyState(
-        title: 'Automation Policy Unavailable',
+        title: context.tr('Automation Policy Unavailable'),
         message: _error!,
         action: OutlinedButton(
           onPressed: _load,
@@ -225,7 +225,7 @@ class _AutomationProjectPolicySectionState
     }
     if (_error != null && !_saving) {
       return AleraEmptyState(
-        title: 'Project Automation Policy Unavailable',
+        title: context.tr('Project Automation Policy Unavailable'),
         message: _error!,
         action: OutlinedButton(
           onPressed: _load,

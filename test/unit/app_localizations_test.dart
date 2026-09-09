@@ -179,6 +179,21 @@ void main() {
       expect(l10n.translate('All Tag'), '所有標籤');
     });
 
+    test('traditional Chinese localizes automation policy and settings', () {
+      final l10n = AleraLocalizations(const Locale('zh', 'TW'));
+      expect(l10n.translate('Automation Policy Unavailable'), '無法取得自動化政策');
+      expect(l10n.translate('Automation Permissions'), '自動化權限');
+      expect(l10n.translate('May Execute Automations'), '可執行自動化');
+      expect(l10n.translate('Automation Policy'), '自動化政策');
+      expect(l10n.translate('Require Local Approval'), '需要本機核准');
+      expect(l10n.translate('Loading Automation Settings'), '正在載入自動化設定');
+      expect(l10n.translate('Automation Settings Unavailable'), '無法取得自動化設定');
+      expect(l10n.translate('Automation History And Autostart'), '自動化歷程與自動啟動');
+      expect(l10n.translate('Start Automations At Login'), '登入時啟動自動化');
+      expect(l10n.translate('Run History Retention'), '執行歷程保留期限');
+      expect(l10n.translate('days'), '天');
+    });
+
     test('traditional Chinese localizes account settings', () {
       final l10n = AleraLocalizations(const Locale('zh', 'TW'));
       expect(l10n.translate('Account unavailable'), '無法取得帳號');

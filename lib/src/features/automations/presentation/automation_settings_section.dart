@@ -93,14 +93,14 @@ class _AutomationSettingsSectionState
   @override
   Widget build(BuildContext context) {
     if (_loading) {
-      return const AleraEmptyState(
-        title: 'Loading Automation Settings',
-        message: 'Reading runtime automation settings.',
+      return AleraEmptyState(
+        title: context.tr('Loading Automation Settings'),
+        message: context.tr('Reading runtime automation settings.'),
       );
     }
     if (_error != null && !_saving) {
       return AleraEmptyState(
-        title: 'Automation Settings Unavailable',
+        title: context.tr('Automation Settings Unavailable'),
         message: _error!,
         action: OutlinedButton(
           onPressed: _load,

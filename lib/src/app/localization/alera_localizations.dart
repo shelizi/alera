@@ -630,6 +630,50 @@ class AleraLocalizations {
     'Pause Automation': '暫停自動化',
     'Choose what to do with active runs.': '選擇如何處理目前執行中的工作。',
     'Loading automation policy...': '正在載入自動化政策…',
+    'Automation Policy Unavailable': '無法取得自動化政策',
+    'Automation Permissions': '自動化權限',
+    'Choose whether this profile may administer active definitions and whether it may execute them.':
+        '選擇此設定檔是否可管理作用中的自動化定義，以及是否可執行它們。',
+    'May Activate Or Edit Active Automations': '可啟用或編輯作用中的自動化',
+    'Allow a managed agent using this profile to activate or edit an active definition.':
+        '允許使用此設定檔的受管理 Agent 啟用或編輯作用中的自動化定義。',
+    'May Execute Automations': '可執行自動化',
+    'Opt this profile into scheduled and manual automation execution.':
+        '允許此設定檔執行排程與手動自動化。',
+    'Project Automation Policy Unavailable': '無法取得專案自動化政策',
+    'Automation Policy': '自動化政策',
+    'Repository declaration is read from alera.toml. Local approval can only restrict execution.':
+        'Repository 宣告會從 alera.toml 讀取；本機核准只能進一步限制執行。',
+    'Repository Declares Automations': 'Repository 宣告自動化',
+    'The repository declares automation use in alera.toml.':
+        'Repository 已在 alera.toml 宣告使用自動化。',
+    'Add an automation declaration to alera.toml before execution.':
+        '執行前請先在 alera.toml 新增自動化宣告。',
+    'Require Local Approval': '需要本機核准',
+    'Require an explicit human approval in addition to the repository declaration.':
+        '除了 Repository 宣告外，還需要明確的人工作業核准。',
+    'Local Approval Granted': '已授予本機核准',
+    'Grant the local approval required by a restrictive project policy.':
+        '授予限制性專案政策所要求的本機核准。',
+    'Loading Automation Settings': '正在載入自動化設定',
+    'Reading runtime automation settings.': '正在讀取執行環境的自動化設定。',
+    'Automation Settings Unavailable': '無法取得自動化設定',
+    'Automation History And Autostart': '自動化歷程與自動啟動',
+    'Keep scheduled work available without a window and control local retention.':
+        '讓排程工作在沒有視窗時仍可執行，並控制本機保留期限。',
+    'Start Automations At Login': '登入時啟動自動化',
+    'Start the persistent local automation host when you sign in. This is off by default.':
+        '登入時啟動常駐的本機自動化 Host；預設為關閉。',
+    'Run History Retention': '執行歷程保留期限',
+    'Keep final runs for at most this many days.': '最多保留已完成執行紀錄這麼多天。',
+    'Audit Retention': '稽核保留期限',
+    'Keep automation audit events for at most this many days.':
+        '最多保留自動化稽核事件這麼多天。',
+    'Trash Retention': '垃圾桶保留期限',
+    'Permanently remove trashed definitions after this many days.':
+        '垃圾桶中的定義超過此天數後永久刪除。',
+    'days': '天',
+
     'Notify On Success': '成功時通知',
     'Prompt Preview': '提示詞預覽',
     'No active run or upcoming occurrence.': '目前沒有執行中或即將開始的工作。',
