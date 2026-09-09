@@ -256,6 +256,29 @@ void main() {
         l10n.translate('Download interrupted at 12.5 MiB. Resume when ready.'),
         '下載在 12.5 MiB 時中斷，可在準備好後繼續。',
       );
+      expect(l10n.translate('Download size 42.0 MiB.'), '下載大小 42.0 MiB。');
+      expect(
+        l10n.translate(
+          'Balanced speed and accuracy. Recommended for most devices.',
+        ),
+        '兼顧速度與準確度，建議大多數裝置使用。',
+      );
+      expect(l10n.translate('Start Dictation'), '開始聽寫');
+      expect(l10n.translate('Cancel Transcription'), '取消轉錄');
+      expect(
+        l10n.translate('Microphone permission is required for AI Dictation.'),
+        'AI 聽寫需要麥克風權限。',
+      );
+      expect(
+        l10n.translate('System speech recognition failed: provider detail'),
+        '系統語音辨識失敗：provider detail',
+      );
+      expect(
+        l10n.translate(
+          'The transcript was inserted without speech processing: raw error',
+        ),
+        '語音處理失敗，已插入原始轉錄內容：raw error',
+      );
     });
 
     test('traditional Chinese localizes account settings', () {

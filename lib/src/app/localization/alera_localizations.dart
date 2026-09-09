@@ -259,6 +259,30 @@ class AleraLocalizations {
     if (dictationInterrupted != null) {
       return '下載在 ${dictationInterrupted.group(1)} 時中斷，可在準備好後繼續。';
     }
+    final dictationDownloadSize = RegExp(
+      r'^Download size (\d+(?:\.\d+)? (?:KiB|MiB))\.$',
+    ).firstMatch(source);
+    if (dictationDownloadSize != null) {
+      return '下載大小 ${dictationDownloadSize.group(1)}。';
+    }
+    final systemRecognitionFailed = RegExp(
+      r'^System speech recognition failed: (.+)$',
+    ).firstMatch(source);
+    if (systemRecognitionFailed != null) {
+      return '系統語音辨識失敗：${systemRecognitionFailed.group(1)}';
+    }
+    final systemRecognitionStartFailed = RegExp(
+      r'^System speech recognition could not start: (.+)$',
+    ).firstMatch(source);
+    if (systemRecognitionStartFailed != null) {
+      return '無法啟動系統語音辨識：${systemRecognitionStartFailed.group(1)}';
+    }
+    final speechProcessingFallback = RegExp(
+      r'^The transcript was inserted without speech processing: (.+)$',
+    ).firstMatch(source);
+    if (speechProcessingFallback != null) {
+      return '語音處理失敗，已插入原始轉錄內容：${speechProcessingFallback.group(1)}';
+    }
 
     final originalPath = RegExp(r'^Original \((.+)\)$').firstMatch(source);
     if (originalPath != null) {
@@ -1233,6 +1257,35 @@ class AleraLocalizations {
     'The model download failed.': '模型下載失敗。',
     'Installed and selected.': '已安裝並選取。',
     'Installed on this device.': '已安裝在此裝置。',
+    'Fastest, with lower transcription accuracy.': '速度最快，但轉錄準確度較低。',
+    'Balanced speed and accuracy. Recommended for most devices.':
+        '兼顧速度與準確度，建議大多數裝置使用。',
+    'Improved accuracy with slower transcription.': '準確度較高，但轉錄速度較慢。',
+    'Highest curated accuracy with the largest memory cost.':
+        '提供最高的精選準確度，但記憶體占用也最大。',
+    'The model download could not finish. Try again.': '模型下載未能完成，請再試一次。',
+    'Select another installed model before removing this one.':
+        '移除此模型前，請先選擇另一個已安裝的模型。',
+    'Improving Transcript': '正在改善轉錄內容',
+    'Cancel Transcription': '取消轉錄',
+    'Stop Dictation': '停止聽寫',
+    'Start Dictation': '開始聽寫',
+    'Remote audio processing was disabled before transcription.':
+        '遠端音訊處理已在轉錄前停用。',
+    'Enable AI Dictation in Settings before recording.': '錄音前請先在設定中啟用 AI 聽寫。',
+    'The dictation text field is no longer available.': '聽寫文字欄位已無法使用。',
+    'Download the selected Whisper model in Settings before recording.':
+        '錄音前請先在設定中下載所選的 Whisper 模型。',
+    'Allow remote audio processing in AI Dictation settings first.':
+        '請先在 AI 聽寫設定中允許遠端音訊處理。',
+    'Microphone permission is required for AI Dictation.': 'AI 聽寫需要麥克風權限。',
+    'On-device speech recognition is unavailable for this locale.':
+        '此地區設定無法使用裝置端語音辨識。',
+    'Allow online speech recognition in AI Dictation settings first.':
+        '請先在 AI 聽寫設定中允許線上語音辨識。',
+    'The system recognizer did not produce a transcription.': '系統辨識器未產生轉錄內容。',
+    'The microphone did not produce an audio recording.': '麥克風未產生音訊錄音。',
+    'The text field was closed before dictation finished.': '聽寫完成前文字欄位已關閉。',
     's': '秒',
 
     'Typography': '字型',

@@ -232,7 +232,7 @@ class const _WhisperModelRow({
       AiDictationModelTransferStatus.idle when transfer.installed =>
         selected ? 'Installed and selected.' : 'Installed on this device.',
       AiDictationModelTransferStatus.idle =>
-        '${model.description} Download size ${_formatBytes(model.sizeBytes)}.',
+        '${context.tr(model.description)} ${context.tr('Download size ${_formatBytes(model.sizeBytes)}.')}',
     };
     return AleraSettingRow(
       title: model.label,
