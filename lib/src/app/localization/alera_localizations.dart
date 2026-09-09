@@ -144,6 +144,38 @@ class AleraLocalizations {
       return '將強制關閉「${forceQuitTerminal.group(1)}」。該終端機中正在執行的所有工作都會遺失。';
     }
 
+    final usageCount = RegExp(
+      r'^(\d+) (assistant responses|transcript sources|unpriced responses)$',
+    ).firstMatch(source);
+    if (usageCount != null) {
+      final noun = switch (usageCount.group(2)) {
+        'assistant responses' => '則 Assistant 回覆',
+        'transcript sources' => '個逐字稿來源',
+        _ => '則未計價回覆',
+      };
+      return '${usageCount.group(1)} $noun';
+    }
+    final usageInputShare = RegExp(r'^([0-9.]+%) of input$').firstMatch(source);
+    if (usageInputShare != null) {
+      return '占輸入 ${usageInputShare.group(1)}';
+    }
+    final usageScanSummary = RegExp(
+      r'^Scanned (\d+) files in (\d+) ms\. Transcript content stays on this host\.$',
+    ).firstMatch(source);
+    if (usageScanSummary != null) {
+      return '已掃描 ${usageScanSummary.group(1)} 個檔案，耗時 ${usageScanSummary.group(2)} ms。逐字稿內容會保留在此 Host。';
+    }
+    final usagePartial = RegExp(r'^(.+) (.+) is partial\.$').firstMatch(source);
+    if (usagePartial != null) {
+      return '${usagePartial.group(1)} ${usagePartial.group(2)} 的資料不完整。';
+    }
+    final dailyUsageSemantics = RegExp(
+      r'^Daily Claude Code, Codex, and Grok Build token usage\. (.+)$',
+    ).firstMatch(source);
+    if (dailyUsageSemantics != null) {
+      return 'Claude Code、Codex 與 Grok Build 每日 Token 用量。${dailyUsageSemantics.group(1)}';
+    }
+
     final originalPath = RegExp(r'^Original \((.+)\)$').firstMatch(source);
     if (originalPath != null) {
       return '原始（${originalPath.group(1)}）';
@@ -546,6 +578,35 @@ class AleraLocalizations {
     'From Prompt': '從提示詞',
     'Manual': '手動',
     'Daily Activity': '每日活動',
+    'Usage': '用量',
+    'Local Host': '本機 Host',
+    'Updating': '更新中',
+    'Showing saved usage while new data loads in the background.':
+        '正在背景載入新資料，同時顯示已儲存的用量資料。',
+    'Update Failed': '更新失敗',
+    '7 Days': '7 天',
+    '30 Days': '30 天',
+    '90 Days': '90 天',
+    'Usage Unavailable': '無法取得用量',
+    'No usage data is available for this host.': '此 Host 目前沒有可用的用量資料。',
+    'Processed Tokens': '已處理 Token',
+    'API-Equivalent Cost': 'API 等值成本',
+    'Sessions': '工作階段',
+    'Cached Input': '快取輸入',
+    'Cache Savings': '快取節省',
+    'Compared with full input rates': '與完整輸入費率相比',
+    'Tokens read from Claude Code, Codex, and Grok Build transcripts on this host.':
+        '從此 Host 上的 Claude Code、Codex 與 Grok Build 逐字稿讀取的 Token。',
+    'Breakdown': '明細',
+    'No Activity': '沒有活動',
+    'No Daily Activity': '沒有每日活動',
+    'Provider-reported costs': 'Provider 回報的成本',
+    'Current model rates': '目前模型費率',
+    'Cached model rates': '快取的模型費率',
+    'Pricing unavailable': '無法取得定價',
+    'Some model costs may be unavailable because pricing could not be loaded.':
+        '由於無法載入定價，部分模型成本可能無法取得。',
+
     'Profiles': '設定檔',
     'Grouped': '分組',
     'Models': '模型',

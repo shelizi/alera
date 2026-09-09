@@ -136,6 +136,28 @@ void main() {
       }
     });
 
+    test('traditional Chinese localizes agent usage chrome', () {
+      final l10n = AleraLocalizations(const Locale('zh', 'TW'));
+      expect(l10n.translate('Usage'), '用量');
+      expect(l10n.translate('30 Days'), '30 天');
+      expect(l10n.translate('Processed Tokens'), '已處理 Token');
+      expect(l10n.translate('49 assistant responses'), '49 則 Assistant 回覆');
+      expect(l10n.translate('3 transcript sources'), '3 個逐字稿來源');
+      expect(l10n.translate('25.0% of input'), '占輸入 25.0%');
+      expect(
+        l10n.translate(
+          'Scanned 4 files in 42 ms. Transcript content stays on this host.',
+        ),
+        '已掃描 4 個檔案，耗時 42 ms。逐字稿內容會保留在此 Host。',
+      );
+      expect(
+        l10n.translate(
+          'Daily Claude Code, Codex, and Grok Build token usage. 2026-08-10: 42 tokens',
+        ),
+        contains('Claude Code、Codex 與 Grok Build 每日 Token 用量。'),
+      );
+    });
+
     test('traditional Chinese localizes resource manager chrome', () {
       final l10n = AleraLocalizations(const Locale('zh', 'TW'));
       expect(l10n.translate('Memory'), '記憶體');
