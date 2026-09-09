@@ -91,6 +91,26 @@ fn devin_hooks_preserve_user_definitions_and_omit_matchers() {
     assert!(!hooks["PreToolUse"].to_string().contains("/old/.alera/"));
 }
 
+#[cfg(windows)]
+#[test]
+fn devin_windows_hooks_avoid_nested_cmd_quoting() {
+    let mut config = Map::new();
+    apply_devin_hooks(
+        &mut config,
+        Path::new(r"C:\Users\u\Alera Hooks\alera-runtime-agent-hook.cmd"),
+    );
+
+    let command = config["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+        .as_str()
+        .expect("managed Devin command");
+
+    assert_eq!(
+        command,
+        r#"set "ALERA_AGENT_TYPE=devin"&& set "ALERA_AGENT_HOOK_EVENT=SessionStart"&& call "C:\Users\u\Alera Hooks\alera-runtime-agent-hook.cmd""#
+    );
+    assert!(!command.contains("cmd /d /s /c"));
+}
+
 fn agy_bundle(config: &Map<String, Value>) -> &Map<String, Value> {
     config["alera-status"].as_object().expect("bundle object")
 }

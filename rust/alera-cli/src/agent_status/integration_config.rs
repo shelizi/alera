@@ -275,7 +275,7 @@ fn apply_devin_hooks(config: &mut Map<String, Value>, script: &Path) {
         let mut definitions = clean_managed_definitions(hooks.remove(event));
         definitions.push(managed_hook_definition(
             None,
-            &managed_command(script, "devin", event),
+            &devin_managed_command(script, event),
         ));
         hooks.insert(event.to_string(), Value::Array(definitions));
     }
@@ -324,6 +324,20 @@ pub(super) fn managed_hook_definition(matcher: Option<&str>, command: &str) -> V
         json!([{ "type": "command", "command": command }]),
     );
     Value::Object(definition)
+}
+
+fn devin_managed_command(script: &Path, event: &str) -> String {
+    #[cfg(windows)]
+    {
+        format!(
+            "set \"ALERA_AGENT_TYPE=devin\"&& set \"ALERA_AGENT_HOOK_EVENT={event}\"&& call \"{}\"",
+            script.display()
+        )
+    }
+    #[cfg(not(windows))]
+    {
+        managed_command(script, "devin", event)
+    }
 }
 
 pub(super) fn managed_command(script: &Path, agent: &str, event: &str) -> String {
