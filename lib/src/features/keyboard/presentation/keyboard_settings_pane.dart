@@ -276,14 +276,14 @@ class const _ShortcutBindingRow({
     final theme = Theme.of(context);
     if (recording) {
       return Text(
-        'Press keys… (Esc to cancel)',
+        context.tr('Press keys… (Esc to cancel)'),
         textAlign: .right,
         style: theme.textTheme.bodySmall?.copyWith(color: AleraTokens.accent),
       );
     }
     if (error case final String message) {
       return Text(
-        message,
+        context.tr(message),
         textAlign: .right,
         maxLines: 2,
         overflow: .ellipsis,
@@ -292,7 +292,7 @@ class const _ShortcutBindingRow({
     }
     if (disabled) {
       return Text(
-        'Disabled',
+        context.tr('Disabled'),
         textAlign: .right,
         style: theme.textTheme.bodySmall?.copyWith(
           color: AleraTokens.foregroundMuted,
@@ -301,7 +301,7 @@ class const _ShortcutBindingRow({
     }
     if (chords.isEmpty) {
       return Text(
-        'Unassigned',
+        context.tr('Unassigned'),
         textAlign: .right,
         style: theme.textTheme.bodySmall?.copyWith(
           color: AleraTokens.foregroundMuted,
@@ -340,7 +340,7 @@ class const _GroupCard({
             crossAxisAlignment: .start,
             children: <Widget>[
               Text(
-                title,
+                context.tr(title),
                 style: theme.textTheme.titleSmall?.copyWith(
                   color: AleraTokens.foreground,
                   fontWeight: .w600,
@@ -349,7 +349,7 @@ class const _GroupCard({
               if (description case final String text) ...<Widget>[
                 const SizedBox(height: AleraTokens.space4),
                 Text(
-                  text,
+                  context.tr(text),
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: AleraTokens.foregroundMuted,
                   ),

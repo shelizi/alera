@@ -1,4 +1,5 @@
 import 'package:alera/src/app/localization/alera_localizations.dart';
+import 'package:alera/src/features/keyboard/domain/keyboard_action.dart';
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -104,6 +105,35 @@ void main() {
       expect(l10n.translate('Combining 4 chunks'), '正在合併 4 個區塊');
       expect(l10n.translate('Repository Read Only'), 'Repository 唯讀');
       expect(l10n.translate('Diff Only'), '僅限 Diff');
+    });
+
+    test('traditional Chinese covers keyboard settings and registry metadata', () {
+      final l10n = AleraLocalizations(const Locale('zh', 'TW'));
+      expect(l10n.translate('When a Terminal Is Focused'), '終端機取得焦點時');
+      expect(l10n.translate('Press keys… (Esc to cancel)'), '請按下快速鍵…（Esc 取消）');
+      expect(
+        l10n.translate('Include at least one modifier key.'),
+        '請至少包含一個修飾鍵。',
+      );
+      expect(
+        l10n.translate(
+          'Ctrl+W is assigned to "Close Tab". Reassign it to "New Terminal Tab"?',
+        ),
+        'Ctrl+W 已指派給「關閉分頁」。要重新指派給「新增終端機分頁」嗎？',
+      );
+      for (final definition in keybindingDefinitions) {
+        expect(
+          l10n.translate(definition.label),
+          isNot(definition.label),
+          reason: 'Missing keyboard label translation: ${definition.label}',
+        );
+        expect(
+          l10n.translate(definition.description),
+          isNot(definition.description),
+          reason:
+              'Missing keyboard description translation: ${definition.description}',
+        );
+      }
     });
 
     test('traditional Chinese localizes runtime busy and ship dialogs', () {

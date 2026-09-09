@@ -109,6 +109,24 @@ class AleraLocalizations {
       return '正在合併 ${combiningChunks.group(1)} 個區塊';
     }
 
+    final shortcutConflict = RegExp(
+      r'^(.+) is assigned to "(.+)"\. Reassign it to "(.+)"\?$',
+    ).firstMatch(source);
+    if (shortcutConflict != null) {
+      final conflictLabel =
+          _traditionalChinese[shortcutConflict.group(2)!] ??
+          shortcutConflict.group(2)!;
+      final targetLabel =
+          _traditionalChinese[shortcutConflict.group(3)!] ??
+          shortcutConflict.group(3)!;
+      return '${shortcutConflict.group(1)} 已指派給「$conflictLabel」。要重新指派給「$targetLabel」嗎？';
+    }
+    final unsupportedKey = RegExp(r'^Unsupported key: (.+)\.$')
+        .firstMatch(source);
+    if (unsupportedKey != null) {
+      return '不支援的按鍵：${unsupportedKey.group(1)}。';
+    }
+
     final originalPath = RegExp(r'^Original \((.+)\)$').firstMatch(source);
     if (originalPath != null) {
       return '原始（${originalPath.group(1)}）';
@@ -292,6 +310,68 @@ class AleraLocalizations {
     'No commands are available.': '目前沒有可用的指令。',
     'No commands match': '沒有符合的指令：',
     'No shortcut': '無快速鍵',
+    'How shortcuts behave while a terminal is focused.': '設定終端機取得焦點時快速鍵的行為。',
+    'When a Terminal Is Focused': '終端機取得焦點時',
+    'App first lets Alera capture combinations the shell would otherwise receive. Terminal first defers to the shell.':
+        '「應用程式優先」會讓 Alera 攔截原本會傳給 Shell 的組合鍵；「終端機優先」則優先交由 Shell 處理。',
+    'Stop Recording': '停止錄製',
+    'Change Shortcut': '變更快速鍵',
+    'Press keys… (Esc to cancel)': '請按下快速鍵…（Esc 取消）',
+    'Disabled': '已停用',
+    'Unassigned': '未指派',
+    'Shortcut already in use': '快速鍵已被使用',
+    'Reassign': '重新指派',
+    'Enter a shortcut like Ctrl+Shift+P.': '請輸入快速鍵，例如 Ctrl+Shift+P。',
+    'A shortcut can only have one main key.': '快速鍵只能有一個主要按鍵。',
+    'Add a main key, like P or Enter.': '請加入主要按鍵，例如 P 或 Enter。',
+    'Use either Mod or a platform-specific modifier, not both.':
+        '請使用 Mod 或平台專用修飾鍵其中一種，不要同時使用。',
+    'Include at least one modifier key.': '請至少包含一個修飾鍵。',
+    'Press a non-modifier key too.': '請再按下一個非修飾鍵。',
+    'Unsupported key.': '不支援此按鍵。',
+    'Go to Tab 1': '前往分頁 1',
+    'Go to Tab 2': '前往分頁 2',
+    'Go to Tab 3': '前往分頁 3',
+    'Go to Tab 4': '前往分頁 4',
+    'Go to Tab 5': '前往分頁 5',
+    'Go to Tab 6': '前往分頁 6',
+    'Go to Tab 7': '前往分頁 7',
+    'Go to Tab 8': '前往分頁 8',
+    'Go to Last Tab': '前往最後一個分頁',
+    'Open the settings dialog.': '開啟設定對話框。',
+    'Open the runtime-local automation manager.': '開啟此執行環境的自動化管理器。',
+    'Search and open a file in the active workspace.': '搜尋並開啟目前工作區中的檔案。',
+    'Search and run an Alera command.': '搜尋並執行 Alera 指令。',
+    'Open the add-project dialog.': '開啟新增專案對話框。',
+    'Collapse or expand the project sidebar.': '收合或展開專案側邊欄。',
+    'Create a linked workspace for the active Git project.':
+        '為目前的 Git 專案建立連結工作區。',
+    'Open the active workspace in Zed.': '在 Zed 中開啟目前工作區。',
+    'Go to the previously selected workspace.': '前往先前選取的工作區。',
+    'Go to the next workspace in navigation history.': '前往導覽紀錄中的下一個工作區。',
+    'Open workspace search.': '開啟工作區搜尋。',
+    'Search the active terminal scrollback.': '搜尋目前終端機的捲動緩衝內容。',
+    'Show or hide the prompt composer for the active terminal.':
+        '顯示或隱藏目前終端機的提示詞輸入區。',
+    'Open workspace search and replace.': '開啟工作區搜尋與取代。',
+    'Save the active editor file.': '儲存目前編輯器檔案。',
+    'Open a terminal tab in the active workspace.': '在目前工作區開啟終端機分頁。',
+    'Close the active terminal tab.': '關閉目前的終端機分頁。',
+    'Select the next tab in the active pane.': '選取目前窗格中的下一個分頁。',
+    'Select the previous tab in the active pane.': '選取目前窗格中的上一個分頁。',
+    'Select the first tab in the active pane.': '選取目前窗格中的第一個分頁。',
+    'Select the second tab in the active pane.': '選取目前窗格中的第二個分頁。',
+    'Select the third tab in the active pane.': '選取目前窗格中的第三個分頁。',
+    'Select the fourth tab in the active pane.': '選取目前窗格中的第四個分頁。',
+    'Select the fifth tab in the active pane.': '選取目前窗格中的第五個分頁。',
+    'Select the sixth tab in the active pane.': '選取目前窗格中的第六個分頁。',
+    'Select the seventh tab in the active pane.': '選取目前窗格中的第七個分頁。',
+    'Select the eighth tab in the active pane.': '選取目前窗格中的第八個分頁。',
+    'Select the last tab in the active pane.': '選取目前窗格中的最後一個分頁。',
+    'Split the active pane to the right with a new terminal.':
+        '在目前窗格右側分割並開啟新的終端機。',
+    'Split the active pane downward with a new terminal.': '在目前窗格下方分割並開啟新的終端機。',
+    'Merge the active pane back into its sibling.': '將目前窗格合併回相鄰窗格。',
     'Global': '全域',
     'Workspace': '工作區',
     'Tabs': '分頁',
