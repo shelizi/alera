@@ -263,7 +263,7 @@ class _AiDictationRemoteSettingsState
           ),
           const SizedBox(height: AleraTokens.space8),
           Text(
-            status,
+            context.tr(status),
             style: Theme.of(context).textTheme.bodySmall?.copyWith(
               color: _tokenError == null
                   ? AleraTokens.foregroundMuted
@@ -285,7 +285,9 @@ class _AiDictationRemoteSettingsState
                 onPressed: _savingToken || _tokenController.text.trim().isEmpty
                     ? null
                     : _saveToken,
-                child: Text(_tokenConfigured ? 'Replace Token' : 'Save Token'),
+                child: Text(
+                  context.tr(_tokenConfigured ? 'Replace Token' : 'Save Token'),
+                ),
               ),
             ],
           ),

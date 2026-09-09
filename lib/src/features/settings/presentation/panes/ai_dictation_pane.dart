@@ -264,12 +264,14 @@ class const _WhisperModelRow({
                 FilledButton(
                   onPressed: onDownload,
                   child: Text(
-                    anotherDownloadActive
-                        ? 'Queue Download'
-                        : transfer.status ==
-                              AiDictationModelTransferStatus.resumable
-                        ? 'Resume'
-                        : 'Download',
+                    context.tr(
+                      anotherDownloadActive
+                          ? 'Queue Download'
+                          : transfer.status ==
+                                AiDictationModelTransferStatus.resumable
+                          ? 'Resume'
+                          : 'Download',
+                    ),
                   ),
                 )
               else ...<Widget>[
@@ -279,7 +281,7 @@ class const _WhisperModelRow({
                 ),
                 FilledButton(
                   onPressed: selected ? null : onSelect,
-                  child: Text(selected ? 'Selected' : 'Use Model'),
+                  child: Text(context.tr(selected ? 'Selected' : 'Use Model')),
                 ),
               ],
             ],

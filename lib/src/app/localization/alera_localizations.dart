@@ -247,6 +247,19 @@ class AleraLocalizations {
       return '未知的提示詞變數：${unknownPromptVariable.group(1)}';
     }
 
+    final dictationDownloadProgress = RegExp(
+      r'^(\d+(?:\.\d+)? (?:KiB|MiB)) of (\d+(?:\.\d+)? (?:KiB|MiB))$',
+    ).firstMatch(source);
+    if (dictationDownloadProgress != null) {
+      return '${dictationDownloadProgress.group(1)} / ${dictationDownloadProgress.group(2)}';
+    }
+    final dictationInterrupted = RegExp(
+      r'^Download interrupted at (.+)\. Resume when ready\.$',
+    ).firstMatch(source);
+    if (dictationInterrupted != null) {
+      return '下載在 ${dictationInterrupted.group(1)} 時中斷，可在準備好後繼續。';
+    }
+
     final originalPath = RegExp(r'^Original \((.+)\)$').firstMatch(source);
     if (originalPath != null) {
       return '原始（${originalPath.group(1)}）';
@@ -1135,6 +1148,93 @@ class AleraLocalizations {
     'Local Whisper Models': '本機 Whisper 模型',
     'Speech Processing': '語音處理',
     'Test AI Dictation': '測試 AI 聽寫',
+    'Choose where speech is converted to text on this device.':
+        '選擇要在此裝置的哪個位置將語音轉換成文字。',
+    'Enable AI Dictation': '啟用 AI 聽寫',
+    'Show microphone controls in supported composers.': '在支援的輸入區顯示麥克風控制項。',
+    'Transcription Engine': '轉錄引擎',
+    'Optional locale or language code. Leave blank for automatic detection.':
+        '選填的地區或語言代碼；留空會自動偵測。',
+    'Allow Online Speech Recognition': '允許線上語音辨識',
+    'Windows may send microphone audio to Microsoft to create the transcription.':
+        'Windows 可能會將麥克風音訊傳送給 Microsoft 以產生轉錄。',
+    'The system recognizer may send microphone audio to its online speech service.':
+        '系統辨識器可能會將麥克風音訊傳送到其線上語音服務。',
+    'Install multiple multilingual models and select one for local transcription.':
+        '可安裝多個多語言模型，並選擇一個用於本機轉錄。',
+    'Optionally improve the transcript with the agent subscription configured for Speech Messages in AI Assist settings.':
+        '可選擇使用 AI 輔助設定中「語音訊息」所設定的 Agent 訂閱來改善轉錄內容。',
+    'Automatic Processing': '自動處理',
+    'Raw text is always used if the selected agent is unavailable or fails.':
+        '若所選 Agent 無法使用或處理失敗，會一律使用原始文字。',
+    'Off': '關閉',
+    'Clean Up': '整理',
+    'Summarize': '摘要',
+    'Local Whisper': '本機 Whisper',
+    'Codex Subscription (Experimental)': 'Codex 訂閱（實驗性）',
+    'OpenAI-Compatible API': 'OpenAI 相容 API',
+    'System On-Device': '系統裝置端',
+    'System Recognition': '系統語音辨識',
+    'Record locally and transcribe with the selected Whisper model.':
+        '在本機錄音，並使用所選 Whisper 模型轉錄。',
+    'Use the experimental Codex app-server realtime API with your Codex subscription.':
+        '使用 Codex 訂閱搭配實驗性的 Codex app-server realtime API。',
+    'Send recordings to an OpenAI-compatible audio transcription endpoint.':
+        '將錄音傳送到 OpenAI 相容的音訊轉錄端點。',
+    'Use the platform recognizer only when it guarantees offline processing.':
+        '僅在平台辨識器保證離線處理時使用。',
+    'Use the platform speech service, which may process audio online.':
+        '使用平台語音服務；音訊可能在線上處理。',
+    'Send recordings to Codex or an OpenAI-compatible speech API. Transcription endpoints do not use reasoning effort.':
+        '將錄音傳送到 Codex 或 OpenAI 相容語音 API；轉錄端點不使用推理強度。',
+    'Runtime Update Required': '需要更新執行環境',
+    'Restart Alera to replace the running sidecar before configuring remote transcription.':
+        '設定遠端轉錄前，請重新啟動 Alera 以替換正在執行的 sidecar。',
+    'Allow Remote Audio Processing': '允許遠端音訊處理',
+    'Recordings may leave this device and are deleted locally after transcription.':
+        '錄音可能會離開此裝置，並在轉錄完成後從本機刪除。',
+    'Realtime Model': 'Realtime 模型',
+    'Optional Codex realtime model override. Leave blank to use the subscription default. This Codex API is experimental.':
+        '可選擇覆寫 Codex realtime 模型；留空使用訂閱預設值。此 Codex API 為實驗性。',
+    'Subscription default': '訂閱預設值',
+    'Base URL': 'Base URL',
+    'Base API URL. Alera appends /audio/transcriptions when needed and preserves query parameters.': 'API Base URL。Alera 會在需要時附加 /audio/transcriptions，並保留 query parameters。',
+    'Speech-to-text model accepted by the configured API.':
+        '設定的 API 所接受的語音轉文字模型。',
+    'Request Timeout': '請求逾時',
+    'Maximum time allowed for remote transcription.': '遠端轉錄允許的最長時間。',
+    'API Token': 'API Token',
+    'Checking saved token...': '正在檢查已儲存的 Token…',
+    'The saved token belongs to another API origin. Replace it before transcribing.':
+        '已儲存的 Token 屬於另一個 API origin；轉錄前請先替換。',
+    'A token is stored for this API origin.': '此 API origin 已儲存 Token。',
+    'No token is stored. Tokenless local APIs are also supported.':
+        '尚未儲存 Token；也支援不需要 Token 的本機 API。',
+    'Replace saved token': '替換已儲存的 Token',
+    'Replace Token': '替換 Token',
+    'Save Token': '儲存 Token',
+    'Test Transcript': '測試轉錄',
+    'Record a short sample with the current configuration and review the transcript here.':
+        '使用目前設定錄製短音訊，並在此檢視轉錄結果。',
+    'Your test transcription appears here': '測試轉錄結果會顯示在這裡',
+    'Enable AI Dictation before testing.': '測試前請先啟用 AI 聽寫。',
+    'Restart Alera to update the runtime before testing remote transcription.':
+        '測試遠端轉錄前，請重新啟動 Alera 以更新執行環境。',
+    'Allow remote audio processing before testing this engine.':
+        '測試此引擎前，請先允許遠端音訊處理。',
+    'Select the microphone, speak, then select Stop Dictation.':
+        '選取麥克風、開始說話，完成後選取「停止聽寫」。',
+    'Queue Download': '排入下載佇列',
+    'Selected': '已選取',
+    'Use Model': '使用模型',
+    'Queued. This download starts when the active transfer finishes.':
+        '已排入佇列；目前的傳輸完成後會開始下載。',
+    'Verifying downloaded model...': '正在驗證下載的模型…',
+    'The model download failed.': '模型下載失敗。',
+    'Installed and selected.': '已安裝並選取。',
+    'Installed on this device.': '已安裝在此裝置。',
+    's': '秒',
+
     'Typography': '字型',
     'Cursor': '游標',
     'Appearance': '外觀',

@@ -234,6 +234,30 @@ void main() {
       },
     );
 
+    test('traditional Chinese localizes AI dictation settings', () {
+      final l10n = AleraLocalizations(const Locale('zh', 'TW'));
+      expect(l10n.translate('Enable AI Dictation'), '啟用 AI 聽寫');
+      expect(l10n.translate('Transcription Engine'), '轉錄引擎');
+      expect(l10n.translate('Local Whisper'), '本機 Whisper');
+      expect(
+        l10n.translate('Codex Subscription (Experimental)'),
+        'Codex 訂閱（實驗性）',
+      );
+      expect(l10n.translate('OpenAI-Compatible API'), 'OpenAI 相容 API');
+      expect(l10n.translate('Runtime Update Required'), '需要更新執行環境');
+      expect(l10n.translate('Allow Remote Audio Processing'), '允許遠端音訊處理');
+      expect(l10n.translate('Request Timeout'), '請求逾時');
+      expect(l10n.translate('Save Token'), '儲存 Token');
+      expect(l10n.translate('Test Transcript'), '測試轉錄');
+      expect(l10n.translate('Queue Download'), '排入下載佇列');
+      expect(l10n.translate('Use Model'), '使用模型');
+      expect(l10n.translate('12.5 MiB of 42.0 MiB'), '12.5 MiB / 42.0 MiB');
+      expect(
+        l10n.translate('Download interrupted at 12.5 MiB. Resume when ready.'),
+        '下載在 12.5 MiB 時中斷，可在準備好後繼續。',
+      );
+    });
+
     test('traditional Chinese localizes account settings', () {
       final l10n = AleraLocalizations(const Locale('zh', 'TW'));
       expect(l10n.translate('Account unavailable'), '無法取得帳號');
