@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/features/reading_diff/application/reading_diff_generation_progress.dart';
 import 'package:flutter/material.dart';
@@ -31,12 +32,12 @@ class const ReadingDiffGenerationProgressView({
                 crossAxisAlignment: .start,
                 children: <Widget>[
                   Text(
-                    progress.label,
+                    context.tr(progress.label),
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                   const SizedBox(height: AleraTokens.space2),
                   Text(
-                    progress.description,
+                    context.tr(progress.description),
                     style: Theme.of(context).textTheme.labelSmall
                         ?.copyWith(color: AleraTokens.foregroundMuted),
                   ),

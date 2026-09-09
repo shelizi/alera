@@ -93,6 +93,19 @@ void main() {
       );
     });
 
+    test('traditional Chinese localizes reading diff UI', () {
+      final l10n = AleraLocalizations(const Locale('zh', 'TW'));
+      expect(l10n.translate('Reading diff generation failed'), '閱讀 Diff 產生失敗');
+      expect(l10n.translate('high Effort'), '推理強度：high');
+      expect(l10n.translate('2 Chunks'), '2 個區塊');
+      expect(l10n.translate('Kept 2/4 Changed Lines'), '保留 2/4 行變更');
+      expect(l10n.translate('Chunk 1 of 2'), '區塊 1/2');
+      expect(l10n.translate('Generating chunk 2 of 3'), '正在產生區塊 2/3');
+      expect(l10n.translate('Combining 4 chunks'), '正在合併 4 個區塊');
+      expect(l10n.translate('Repository Read Only'), 'Repository 唯讀');
+      expect(l10n.translate('Diff Only'), '僅限 Diff');
+    });
+
     test('traditional Chinese localizes runtime busy and ship dialogs', () {
       final l10n = AleraLocalizations(const Locale('zh', 'TW'));
       expect(l10n.translate('Ship Changes?'), '送出變更？');

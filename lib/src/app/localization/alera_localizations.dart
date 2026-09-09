@@ -76,6 +76,39 @@ class AleraLocalizations {
       return '將保留 ${preservedAttachments.group(1)} 個附件。';
     }
 
+    final effortLabel = RegExp(r'^(.+) Effort$').firstMatch(source);
+    if (effortLabel != null) {
+      return '推理強度：${effortLabel.group(1)}';
+    }
+    final chunkCount = RegExp(r'^(\d+) (?:Chunk|Chunks)$').firstMatch(source);
+    if (chunkCount != null) {
+      return '${chunkCount.group(1)} 個區塊';
+    }
+    final retainedLines = RegExp(r'^Kept (\d+)/(\d+) Changed Lines$')
+        .firstMatch(source);
+    if (retainedLines != null) {
+      return '保留 ${retainedLines.group(1)}/${retainedLines.group(2)} 行變更';
+    }
+    final chunkPosition = RegExp(r'^Chunk (\d+) of (\d+)$').firstMatch(source);
+    if (chunkPosition != null) {
+      return '區塊 ${chunkPosition.group(1)}/${chunkPosition.group(2)}';
+    }
+    final generatingChunk = RegExp(r'^Generating chunk (\d+) of (\d+)$')
+        .firstMatch(source);
+    if (generatingChunk != null) {
+      return '正在產生區塊 ${generatingChunk.group(1)}/${generatingChunk.group(2)}';
+    }
+    final repairingChunk = RegExp(r'^Repairing chunk (\d+) of (\d+)$')
+        .firstMatch(source);
+    if (repairingChunk != null) {
+      return '正在修復區塊 ${repairingChunk.group(1)}/${repairingChunk.group(2)}';
+    }
+    final combiningChunks = RegExp(r'^Combining (\d+) (?:chunk|chunks)$')
+        .firstMatch(source);
+    if (combiningChunks != null) {
+      return '正在合併 ${combiningChunks.group(1)} 個區塊';
+    }
+
     final originalPath = RegExp(r'^Original \((.+)\)$').firstMatch(source);
     if (originalPath != null) {
       return '原始（${originalPath.group(1)}）';
@@ -345,6 +378,37 @@ class AleraLocalizations {
     'Remove Model': '移除模型',
     'Update Runtime': '更新 Runtime',
     'Kill All': '全部終止',
+    'A reading diff is an AI-guided, non-applicable abbreviation of the original diff.':
+        '閱讀 Diff 是由 AI 引導產生、不可直接套用的原始 Diff 精簡版本。',
+    'This overview explains the behavioral changes selected while condensing the diff. It does not identify bugs or security findings. Open Condensed Diff to inspect the retained source changes, or return to the original diff for the complete patch.': '此總覽說明精簡 Diff 時保留的行為變更，不代表錯誤或資安檢查結果。請開啟「精簡 Diff」檢視保留的原始碼變更，或返回原始 Diff 查看完整 Patch。',
+    'Cached Result': '快取結果',
+    'Preparing reading diff': '正在準備閱讀 Diff',
+    'Loading cached reading diff': '正在載入快取的閱讀 Diff',
+    'Loading the immutable diff and splitting it at safe boundaries.':
+        '正在載入不可變更的 Diff，並於安全邊界分割。',
+    'Using a previously generated and validated result.': '使用先前已產生並驗證的結果。',
+    'The agent is proposing safe elisions; Rust validates the plan.':
+        'Agent 正在提出安全的省略方案；Rust 會驗證該方案。',
+    'Rust rejected the plan; the agent is replacing it once.':
+        'Rust 已拒絕此方案；Agent 正在重新產生一次替代方案。',
+    'Rust is merging the validated chunks into the final reading diff.':
+        'Rust 正在將已驗證的區塊合併為最終閱讀 Diff。',
+    'Reading diff generation failed': '閱讀 Diff 產生失敗',
+    'This manually runs the configured AI Assist agent and may consume subscription quota or other provider usage. The complete selected patch is provided, including portions hidden by preview truncation.': '這會手動執行已設定的 AI Assist Agent，可能消耗訂閱額度或其他 Provider 用量。系統會提供完整的所選 Patch，包括預覽截斷而隱藏的部分。',
+    'The result opens with a behavioral overview and a condensed, non-applicable diff. It is not a bug or security review.':
+        '結果會先顯示行為總覽及不可直接套用的精簡 Diff；這不是錯誤或資安審查。',
+    'Agent': 'Agent',
+    'Model': '模型',
+    'Effort': '推理強度',
+    'Access': '存取權限',
+    'Diff Size': 'Diff 大小',
+    'Chunks': '區塊數',
+    'Agent Default': 'Agent 預設值',
+    'Repository Read Only': 'Repository 唯讀',
+    'Diff Only': '僅限 Diff',
+    'Could not prepare': '無法準備',
+    'condensed diff': '精簡 Diff',
+
     'Generate Reading Diff': '產生閱讀 Diff',
     'Install Update': '安裝更新',
     'Restart Alera': '重新啟動 Alera',

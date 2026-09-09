@@ -40,7 +40,9 @@ class _ReadingDiffViewState extends State<ReadingDiffView> {
               crossAxisAlignment: .stretch,
               children: <Widget>[
                 Text(
-                  'A reading diff is an AI-guided, non-applicable abbreviation of the original diff.',
+                  context.tr(
+                    'A reading diff is an AI-guided, non-applicable abbreviation of the original diff.',
+                  ),
                   style: Theme.of(context).textTheme.bodySmall
                       ?.copyWith(color: AleraTokens.foregroundMuted),
                 ),
@@ -105,20 +107,26 @@ class const _ReadingDiffOverview({required final ReadingDiffResult result})
             if (result.model case final model?)
               AleraChip(label: model, leading: AleraIcons.agent),
             if (result.effort case final effort?)
-              AleraChip(label: '$effort Effort', leading: AleraIcons.plan),
+              AleraChip(
+                label: context.tr('$effort Effort'),
+                leading: AleraIcons.plan,
+              ),
             if (result.chunkCount case final chunkCount?)
               AleraChip(
-                label: '$chunkCount ${chunkCount == 1 ? 'Chunk' : 'Chunks'}',
+                label: context.tr(
+                  '$chunkCount ${chunkCount == 1 ? 'Chunk' : 'Chunks'}',
+                ),
                 leading: AleraIcons.contextCompact,
               ),
             AleraChip(
-              label:
-                  'Kept ${result.retainedChangedLines}/${result.changedLines} Changed Lines',
+              label: context.tr(
+                'Kept ${result.retainedChangedLines}/${result.changedLines} Changed Lines',
+              ),
               leading: AleraIcons.visible,
             ),
             if (result.fromCache)
-              const AleraChip(
-                label: 'Cached Result',
+              AleraChip(
+                label: context.tr('Cached Result'),
                 leading: AleraIcons.restore,
               ),
           ],
@@ -141,7 +149,9 @@ class const _ReadingDiffOverview({required final ReadingDiffResult result})
             borderRadius: BorderRadius.circular(AleraTokens.radiusMd),
           ),
           child: Text(
-            'This overview explains the behavioral changes selected while condensing the diff. It does not identify bugs or security findings. Open Condensed Diff to inspect the retained source changes, or return to the original diff for the complete patch.',
+            context.tr(
+              'This overview explains the behavioral changes selected while condensing the diff. It does not identify bugs or security findings. Open Condensed Diff to inspect the retained source changes, or return to the original diff for the complete patch.',
+            ),
             style: theme.textTheme.bodySmall?.copyWith(
               color: AleraTokens.foregroundMuted,
             ),
@@ -171,7 +181,7 @@ class const _ReadingDiffChunkSummaryCard({
           crossAxisAlignment: .start,
           children: <Widget>[
             Text(
-              'Chunk ${chunk.index + 1} of $totalChunks',
+              context.tr('Chunk ${chunk.index + 1} of $totalChunks'),
               style: Theme.of(context).textTheme.labelMedium
                   ?.copyWith(color: AleraTokens.foregroundMuted),
             ),
@@ -223,7 +233,7 @@ class _ReadingDiffTextState extends State<ReadingDiffText> {
           if (snapshot.hasError) {
             return Center(
               child: SelectableText(
-                'Could not prepare the ${widget.failureLabel}: ${snapshot.error}',
+                '${context.tr('Could not prepare')} ${context.tr(widget.failureLabel)}: ${snapshot.error}',
               ),
             );
           }
