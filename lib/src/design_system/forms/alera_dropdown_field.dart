@@ -252,7 +252,7 @@ class _AleraDropdownFieldState<T> extends State<AleraDropdownField<T>> {
       mainAxisSize: .min,
       children: <Widget>[
         Text(
-          label,
+          context.tr(label),
           style: theme.textTheme.labelSmall?.copyWith(
             color: AleraTokens.foregroundMuted,
           ),

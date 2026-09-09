@@ -1,10 +1,18 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/design_system/forms/alera_dropdown_field.dart';
 import 'package:alera/src/design_system/menus/alera_menu_item.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-Widget _wrap(Widget child) {
+Widget _wrap(Widget child, {Locale? locale}) {
   return MaterialApp(
+    locale: locale,
+    supportedLocales: supportedAleraLocales,
+    localizationsDelegates: const <LocalizationsDelegate<dynamic>>[
+      AleraLocalizationsDelegate(),
+      ...GlobalMaterialLocalizations.delegates,
+    ],
     home: Scaffold(
       body: Center(child: SizedBox(width: 240, child: child)),
     ),
@@ -130,6 +138,25 @@ void main() {
 
     expect(find.text('Auth Method'), findsOneWidget);
     expect(find.text('SSH Agent'), findsOneWidget);
+  });
+
+  testWidgets('localizes the field label at the render boundary', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _wrap(
+        AleraDropdownField<String>(
+          value: 'agent',
+          labelText: 'Auth Method',
+          entries: _entries,
+          onChanged: (_) {},
+        ),
+        locale: const Locale('zh', 'TW'),
+      ),
+    );
+
+    expect(find.text('認證方式'), findsOneWidget);
+    expect(find.text('Auth Method'), findsNothing);
   });
 
   testWidgets('a null-valued entry can be picked', (tester) async {
