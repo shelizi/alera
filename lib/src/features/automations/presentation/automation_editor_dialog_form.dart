@@ -36,10 +36,13 @@ extension on _AutomationEditorDialogState {
   }) {
     return DropdownButtonFormField<String>(
       initialValue: value,
-      decoration: InputDecoration(labelText: label),
+      decoration: InputDecoration(labelText: context.tr(label)),
       items: <DropdownMenuItem<String>>[
         for (final option in values)
-          DropdownMenuItem<String>(value: option, child: Text(_title(option))),
+          DropdownMenuItem<String>(
+            value: option,
+            child: Text(context.tr(_title(option))),
+          ),
       ],
       onChanged: onChanged,
     );
@@ -53,16 +56,16 @@ extension on _AutomationEditorDialogState {
   }) {
     final current = controller.text.trim();
     final labels = <String, String>{
-      if (optional) '': 'None',
+      if (optional) '': context.tr('None'),
       for (final option in options) option.id: option.label,
     };
     if (!labels.containsKey(current)) {
-      labels[current] = current.isEmpty ? 'Select...' : current;
+      labels[current] = current.isEmpty ? context.tr('Select...') : current;
     }
     final value = labels.containsKey(current) ? current : '';
     return DropdownButtonFormField<String>(
       initialValue: value,
-      decoration: InputDecoration(labelText: label),
+      decoration: InputDecoration(labelText: context.tr(label)),
       items: <DropdownMenuItem<String>>[
         for (final entry in labels.entries)
           DropdownMenuItem<String>(value: entry.key, child: Text(entry.value)),

@@ -62,8 +62,8 @@ extension on _AutomationsDialogState {
             controller: controller,
             minLines: 8,
             maxLines: 16,
-            decoration: const InputDecoration(
-              labelText: 'Versioned JSON Catalog',
+            decoration: InputDecoration(
+              labelText: context.tr('Versioned JSON Catalog'),
             ),
           ),
           actions: <Widget>[
@@ -251,7 +251,7 @@ extension on _AutomationsDialogState {
         backgroundColor: error
             ? AleraTokens.error
             : AleraTokens.surfaceElevated,
-        content: Text(message),
+        content: Text(context.tr(message)),
       ),
     );
   }
@@ -273,9 +273,11 @@ extension on _AutomationsDialogState {
             controller: controller,
             minLines: 8,
             maxLines: 16,
-            decoration: const InputDecoration(
-              labelText: 'Source Key To Local Id JSON',
-              helperText: 'Map every source key to an existing local id.',
+            decoration: InputDecoration(
+              labelText: context.tr('Source Key To Local Id JSON'),
+              helperText: context.tr(
+                'Map every source key to an existing local id.',
+              ),
             ),
           ),
           actions: <Widget>[

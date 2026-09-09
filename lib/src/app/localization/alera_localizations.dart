@@ -241,6 +241,12 @@ class AleraLocalizations {
       return '所有$label';
     }
 
+    final unknownPromptVariable = RegExp(r'^Unknown prompt variable: (.+)$')
+        .firstMatch(source);
+    if (unknownPromptVariable != null) {
+      return '未知的提示詞變數：${unknownPromptVariable.group(1)}';
+    }
+
     final originalPath = RegExp(r'^Original \((.+)\)$').firstMatch(source);
     if (originalPath != null) {
       return '原始（${originalPath.group(1)}）';
@@ -698,6 +704,62 @@ class AleraLocalizations {
     'No runs yet.': '尚無執行紀錄。',
     'No audit events yet.': '尚無稽核事件。',
     'Import Automations': '匯入自動化',
+    'Edit Automation': '編輯自動化',
+    'Project (Optional)': '專案（選填）',
+    'Tag Ids (Comma-separated)': '標籤 ID（以逗號分隔）',
+    'Prompt Template': '提示詞範本',
+    'Five-field Cron': '五欄 Cron',
+    'Run At (UTC)': '執行時間（UTC）',
+    'IANA Timezone': 'IANA 時區',
+    'Start At (Optional ISO-8601 UTC)': '開始時間（選填，ISO-8601 UTC）',
+    'End At (Optional ISO-8601 UTC)': '結束時間（選填，ISO-8601 UTC）',
+    'Maximum Scheduled Runs (Optional)': '最大排程執行次數（選填）',
+    'Source Workspace': '來源工作區',
+    'Tab': '分頁',
+    'Agent Conversation ID': 'Agent 對話 ID',
+    'Agent Profile': 'Agent 設定檔',
+    'Source Branch': '來源 Branch',
+    'Workspace Name Template': '工作區名稱範本',
+    'Precheck Command (Optional)': '前置檢查指令（選填）',
+    'Precheck Timeout (Seconds)': '前置檢查逾時（秒）',
+    'Setup': '設定',
+    'Misfire': '錯過排程',
+    'Cleanup': '清理',
+    'Queue Cap (Maximum 10)': '佇列上限（最多 10）',
+    'Inactivity Timeout (Seconds)': '閒置逾時（秒）',
+    'Heartbeat Interval (Seconds)': 'Heartbeat 間隔（秒）',
+    'Retry Attempts (Maximum 3)': '重試次數（最多 3）',
+    'Retry Backoff (Seconds)': '重試退避（秒）',
+    'Circuit Failure Threshold': 'Circuit 失敗門檻',
+    'Circuit Open (Seconds)': 'Circuit 開啟時間（秒）',
+    'Select...': '請選擇…',
+    'One-time': '單次',
+    'Existing Tab': '現有分頁',
+    'Fresh Tab': '新分頁',
+    'Managed Workspace': '受管理工作區',
+    'Name, slug, and prompt template are required.': '名稱、slug 與提示詞範本為必填。',
+    'The existing tab requires workspace, tab, and conversation ids.':
+        '現有分頁需要 workspace、tab 與 conversation ID。',
+    'The selected target requires its ids.': '所選目標需要填寫對應 ID。',
+    'Prompt template contains an unmatched closing delimiter.':
+        '提示詞範本包含未配對的結束分隔符。',
+    'Prompt template contains an unterminated variable.': '提示詞範本包含未結束的變數。',
+    'Versioned JSON Catalog': '版本化 JSON Catalog',
+    'Source Key To Local Id JSON': '來源 Key 到本機 ID 的 JSON',
+    'Map every source key to an existing local id.': '將每個來源 Key 對應到既有的本機 ID。',
+    'Automation created': '已建立自動化',
+    'Automation saved': '已儲存自動化',
+    'Automation cloned': '已複製自動化',
+    'Automation catalog copied to clipboard': '自動化 Catalog 已複製到剪貼簿',
+    'Automation catalog imported as drafts': '自動化 Catalog 已以草稿匯入',
+    'Automation approved': '已核准自動化',
+    'Automation run started': '自動化執行已開始',
+    'Automation paused': '自動化已暫停',
+    'Automation resumed': '自動化已繼續',
+    'Automation cancellation requested': '已要求取消自動化',
+    'Waiting run resumed': '等待中的執行已繼續',
+    'Waiting run extended': '已延長等待中的執行',
+
     'Map Imported Targets': '對應匯入目標',
     'App First': '應用程式優先',
     'Terminal First': '終端機優先',

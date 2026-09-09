@@ -209,6 +209,31 @@ void main() {
       expect(l10n.translate('Overlap'), '重疊處理');
     });
 
+    test(
+      'traditional Chinese localizes automation editor and import chrome',
+      () {
+        final l10n = AleraLocalizations(const Locale('zh', 'TW'));
+        expect(l10n.translate('Edit Automation'), '編輯自動化');
+        expect(l10n.translate('Project (Optional)'), '專案（選填）');
+        expect(l10n.translate('Prompt Template'), '提示詞範本');
+        expect(l10n.translate('Source Workspace'), '來源工作區');
+        expect(l10n.translate('Agent Profile'), 'Agent 設定檔');
+        expect(l10n.translate('Setup'), '設定');
+        expect(l10n.translate('Misfire'), '錯過排程');
+        expect(l10n.translate('Cleanup'), '清理');
+        expect(l10n.translate('Versioned JSON Catalog'), '版本化 JSON Catalog');
+        expect(
+          l10n.translate('Source Key To Local Id JSON'),
+          '來源 Key 到本機 ID 的 JSON',
+        );
+        expect(l10n.translate('Automation created'), '已建立自動化');
+        expect(
+          l10n.translate('Unknown prompt variable: {{workspace.foo}}'),
+          '未知的提示詞變數：{{workspace.foo}}',
+        );
+      },
+    );
+
     test('traditional Chinese localizes account settings', () {
       final l10n = AleraLocalizations(const Locale('zh', 'TW'));
       expect(l10n.translate('Account unavailable'), '無法取得帳號');
