@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/feedback/alera_empty_state.dart';
 import 'package:alera/src/design_system/forms/alera_search_field.dart';
@@ -74,7 +75,7 @@ class _ThemePickerSettingState extends State<ThemePickerSetting> {
         crossAxisAlignment: .start,
         children: <Widget>[
           Text(
-            'Theme Preset',
+            context.tr('Theme Preset'),
             style: theme.textTheme.bodyMedium?.copyWith(
               color: AleraTokens.foreground,
               fontWeight: .w500,

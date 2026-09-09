@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:flutter/material.dart';
 
 import '../../app/theme/alera_tokens.dart';
@@ -100,7 +101,7 @@ class _AleraMessageEditorState extends State<AleraMessageEditor> {
       actions: [
         TextButton(
           onPressed: _saving ? null : () => Navigator.of(context).pop(),
-          child: const Text('Cancel'),
+          child: Text(context.tr('Cancel')),
         ),
         FilledButton(
           onPressed: _saving ? null : _save,

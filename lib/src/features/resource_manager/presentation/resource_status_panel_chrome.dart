@@ -26,7 +26,7 @@ class const _PanelHeader() extends StatelessWidget {
           ),
           const SizedBox(width: AleraTokens.space8),
           Text(
-            'Resource Manager',
+            context.tr('Resource Manager'),
             style: Theme.of(context).textTheme.labelLarge
                 ?.copyWith(color: AleraTokens.foreground),
           ),

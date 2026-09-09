@@ -385,7 +385,7 @@ class _PromptWorkspaceDialogState extends State<PromptWorkspaceDialog> {
                 const SizedBox(width: AleraTokens.space8),
                 Expanded(
                   child: Text(
-                    'New Workspace',
+                    context.tr('New Workspace'),
                     style: theme.textTheme.titleMedium?.copyWith(
                       fontWeight: .bold,
                     ),

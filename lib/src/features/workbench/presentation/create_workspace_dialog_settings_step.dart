@@ -228,7 +228,7 @@ class const _WorkspaceNameSyncBadge() extends StatelessWidget {
           ),
           const SizedBox(width: AleraTokens.space4),
           Text(
-            'Sync',
+            context.tr('Sync'),
             style: theme.textTheme.labelSmall?.copyWith(
               color: AleraTokens.accent,
               fontWeight: .w500,

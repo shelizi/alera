@@ -28,7 +28,7 @@ class const ReadingDiffConfirmationDialog({
                 const SizedBox(width: AleraTokens.space8),
                 Expanded(
                   child: Text(
-                    'Generate Reading Diff',
+                    context.tr('Generate Reading Diff'),
                     style: theme.textTheme.titleMedium,
                   ),
                 ),

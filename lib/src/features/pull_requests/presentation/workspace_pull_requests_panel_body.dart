@@ -231,7 +231,7 @@ class const _Header({
           child: Row(
             children: <Widget>[
               Text(
-                'Pull Request',
+                context.tr('Pull Request'),
                 style: theme.textTheme.labelLarge?.copyWith(
                   color: AleraTokens.foreground,
                 ),
