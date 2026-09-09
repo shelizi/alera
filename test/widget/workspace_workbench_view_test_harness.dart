@@ -22,7 +22,13 @@ Future<void> _pumpWorkbenchView(
   Map<String, AgentStatusEntry> agentStatuses =
       const <String, AgentStatusEntry>{},
   bool agentTitlesAvailable = false,
+  List<String>? externalTerminalTabs,
 }) async {
+  final openExternalTerminal = externalTerminalTabs == null
+      ? null
+      : (WorkspaceTabRecord tab) async {
+          externalTerminalTabs?.add(tab.id);
+        };
   await tester.pumpWidget(
     ProviderScope(
       overrides: [
@@ -76,6 +82,7 @@ Future<void> _pumpWorkbenchView(
                     ({required String tabId, required String title}) async {
                       renamedTabs.add(title);
                     },
+                onOpenExternalTerminal: openExternalTerminal,
                 onOpenEditor: (_) async {},
                 onOpenMermanPreview: (_) async {},
                 onMoveTab:

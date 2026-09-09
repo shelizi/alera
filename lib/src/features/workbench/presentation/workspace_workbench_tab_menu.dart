@@ -48,6 +48,13 @@ extension _WorkspaceTabMenu on _WorkspaceTabChip {
           leading: _SplitDirectionGlyph(zone: .right),
         ),
         const PopupMenuDivider(height: AleraTokens.space8),
+        if (tab.kind == WorkspaceTabKind.terminal &&
+            onOpenExternalTerminal != null)
+          const AleraDropdownEntry<_TabMenuAction>(
+            value: .openExternalTerminal,
+            label: 'Open In External Terminal',
+            leading: Icon(AleraIcons.external, size: 16),
+          ),
         if (tab.isPreview && _KeepPreviewTabScope.maybeOf(context) != null)
           const AleraDropdownEntry<_TabMenuAction>(
             value: .keepOpen,
@@ -142,6 +149,8 @@ extension _WorkspaceTabMenu on _WorkspaceTabChip {
         if (title != null) {
           onRename(title);
         }
+      case _TabMenuAction.openExternalTerminal:
+        await onOpenExternalTerminal?.call(tab);
     }
   }
 }

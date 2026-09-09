@@ -115,6 +115,25 @@ extension _AleraShellPageBodyContent on _AleraShellPageBodyState {
           onRenameTab: ({required tabId, required title}) async {
             await controller.renameWorkspaceTab(tabId: tabId, title: title);
           },
+          onOpenExternalTerminal: (tab) async {
+            final result = await ref
+                .read(externalTerminalLauncherProvider)
+                .open(
+                  ExternalTerminalOpenRequest(
+                    workspacePath: workspace.path,
+                    terminalSessionId: tab.terminalSessionId,
+                    title: tab.title,
+                  ),
+                );
+            if (!result.ok) {
+              AleraToast.publish(
+                message:
+                    result.message ?? 'Could not open the terminal externally.',
+                tone: AleraToastTone.error,
+                duration: const Duration(seconds: 6),
+              );
+            }
+          },
           onOpenEditor: (relativePath) async {
             await controller.openEditorTab(
               workspace: workspace,

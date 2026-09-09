@@ -126,6 +126,38 @@ void _registerWorkspaceWorkbenchViewTabTests() {
     ]);
   });
 
+  testWidgets('terminal tab context menu opens an external terminal', (
+    tester,
+  ) async {
+    final tab = _tab('tab-1', title: 'Terminal');
+    final openedTabs = <String>[];
+
+    await _pumpWorkbenchView(
+      tester,
+      tabs: <WorkspaceTabRecord>[tab],
+      terminalRuntime: terminalRuntime,
+      layout: .single(workspaceId: _workspaceId, tabIds: <String>[tab.id]),
+      createdTabs: createdTabs,
+      selectedTabs: selectedTabs,
+      closedTabs: closedTabs,
+      closedTabGroups: closedTabGroups,
+      renamedTabs: renamedTabs,
+      movedTabs: movedTabs,
+      splitGroups: splitGroups,
+      mergedGroups: mergedGroups,
+      updatedRatios: updatedRatios,
+      externalTerminalTabs: openedTabs,
+    );
+
+    await _openTabContextMenu(tester, 'Terminal');
+    expect(find.text('Open In External Terminal'), findsOneWidget);
+
+    await tester.tap(find.text('Open In External Terminal'));
+    await tester.pumpAndSettle();
+
+    expect(openedTabs, <String>['tab-1']);
+  });
+
   testWidgets('tab context menu renames and splits the active group', (
     tester,
   ) async {

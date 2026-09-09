@@ -101,6 +101,8 @@ pub enum TerminalAction {
     Read(TerminalReadArgs),
     /// Write text, a file, or stdin to a terminal.
     Write(TerminalWriteArgs),
+    /// Attach an interactive native terminal client to an existing session.
+    Attach(TerminalAttachArgs),
 }
 
 #[derive(Debug, Args)]
@@ -128,6 +130,33 @@ pub struct TerminalWriteArgs {
     /// Submit to an interactive TUI using bracketed paste and a delayed Enter.
     #[arg(long, conflicts_with = "enter")]
     pub submit: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct TerminalAttachArgs {
+    /// Existing terminal session handle.
+    #[arg(long)]
+    pub handle: String,
+
+    /// Optional file touched after the session has been read successfully.
+    #[arg(long = "ready-file", value_name = "path")]
+    pub ready_file: Option<String>,
+
+    /// Poll interval used to read output from the runtime host.
+    #[arg(
+        long = "poll-ms",
+        default_value_t = 50,
+        value_parser = clap::value_parser!(u64).range(20..2_000),
+    )]
+    pub poll_ms: u64,
+
+    /// Maximum output bytes returned by one host read.
+    #[arg(
+        long = "max-bytes",
+        default_value_t = 65_536,
+        value_parser = clap::value_parser!(u64).range(1..)
+    )]
+    pub max_bytes: u64,
 }
 
 #[derive(Debug, Args)]
