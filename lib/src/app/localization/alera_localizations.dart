@@ -176,6 +176,24 @@ class AleraLocalizations {
       return 'Claude Code、Codex 與 Grok Build 每日 Token 用量。${dailyUsageSemantics.group(1)}';
     }
 
+    final pullRequestCount = RegExp(r'^(Checks|Comments) \((\d+)\)$')
+        .firstMatch(source);
+    if (pullRequestCount != null) {
+      final label = pullRequestCount.group(1) == 'Checks' ? '檢查' : '留言';
+      return '$label（${pullRequestCount.group(2)}）';
+    }
+    final checkGroup = RegExp(
+      r'^(\d+) (failing|in progress|successful) Checks?$',
+    ).firstMatch(source);
+    if (checkGroup != null) {
+      final state = switch (checkGroup.group(2)) {
+        'failing' => '失敗',
+        'in progress' => '進行中',
+        _ => '成功',
+      };
+      return '${checkGroup.group(1)} 個$state檢查';
+    }
+
     final originalPath = RegExp(r'^Original \((.+)\)$').firstMatch(source);
     if (originalPath != null) {
       return '原始（${originalPath.group(1)}）';
@@ -745,6 +763,30 @@ class AleraLocalizations {
     'Open Editor': '開啟編輯器',
     'Open Check': '開啟檢查',
     'Pull Request Actions': 'Pull Request 操作',
+    'Checks': '檢查',
+    'No checks reported': '尚未回報任何檢查結果',
+    'Edit Pull Request': '編輯 Pull Request',
+    'Open In Browser': '在瀏覽器中開啟',
+    'Title': '標題',
+    'Base Branch': '基底分支',
+    'The base branch is managed by the pull request stack.':
+        '基底分支由 Pull Request Stack 管理。',
+    'Draft': '草稿',
+    'Merged': '已合併',
+    'Closed': '已關閉',
+    'Comments': '留言',
+    'Start Conversation': '開始對話',
+    'Add Comment': '新增留言',
+    'Add a comment': '新增留言',
+    'No comments yet': '目前還沒有留言',
+    'Resolved': '已解決',
+    'No details available': '沒有可用的詳細資訊',
+    'Workflow': '工作流程',
+    'Event': '事件',
+    'Description': '說明',
+    'Started': '開始時間',
+    'Completed': '完成時間',
+
     'Create Options': '建立選項',
     'No automation details available.': '沒有可用的自動化詳細資料。',
     'Create a schedule to run approved work in a runtime-owned target.':

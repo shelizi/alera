@@ -136,6 +136,18 @@ void main() {
       }
     });
 
+    test('traditional Chinese localizes pull request review chrome', () {
+      final l10n = AleraLocalizations(const Locale('zh', 'TW'));
+      expect(l10n.translate('Checks'), '檢查');
+      expect(l10n.translate('Checks (3)'), '檢查（3）');
+      expect(l10n.translate('Comments (2)'), '留言（2）');
+      expect(l10n.translate('2 failing Checks'), '2 個失敗檢查');
+      expect(l10n.translate('1 in progress Check'), '1 個進行中檢查');
+      expect(l10n.translate('No comments yet'), '目前還沒有留言');
+      expect(l10n.translate('Edit Pull Request'), '編輯 Pull Request');
+      expect(l10n.translate('Base Branch'), '基底分支');
+    });
+
     test('traditional Chinese localizes agent usage chrome', () {
       final l10n = AleraLocalizations(const Locale('zh', 'TW'));
       expect(l10n.translate('Usage'), '用量');

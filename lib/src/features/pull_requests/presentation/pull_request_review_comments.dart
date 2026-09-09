@@ -61,8 +61,8 @@ class _PullRequestCommentsSectionState
           children: <Widget>[
             Text(
               widget.comments.isEmpty
-                  ? 'Comments'
-                  : 'Comments (${widget.comments.length})',
+                  ? context.tr('Comments')
+                  : context.tr('Comments (${widget.comments.length})'),
               style: theme.textTheme.labelMedium?.copyWith(
                 color: AleraTokens.foregroundMuted,
               ),
@@ -71,8 +71,8 @@ class _PullRequestCommentsSectionState
             if (widget.canComment && !_composing)
               AleraIconButton(
                 tooltip: widget.comments.isEmpty
-                    ? 'Start Conversation'
-                    : 'Add Comment',
+                    ? context.tr('Start Conversation')
+                    : context.tr('Add Comment'),
                 icon: AleraIcons.add,
                 onPressed: _busy ? null : _startComment,
               ),
@@ -94,7 +94,7 @@ class _PullRequestCommentsSectionState
             cursorColor: AleraTokens.foreground,
             decoration: pullRequestFieldDecoration(
               theme,
-              hint: 'Add a comment',
+              hint: context.tr('Add a comment'),
             ),
           ),
           const SizedBox(height: AleraTokens.space8),
@@ -128,7 +128,7 @@ class _PullRequestCommentsSectionState
         ],
         if (widget.comments.isEmpty)
           Text(
-            'No comments yet',
+            context.tr('No comments yet'),
             style: theme.textTheme.bodySmall?.copyWith(
               color: AleraTokens.foregroundMuted,
             ),
@@ -201,7 +201,7 @@ class const _ReviewCommentCard({
                 if (comment.url != null) ...<Widget>[
                   const SizedBox(width: AleraTokens.space4),
                   AleraIconButton(
-                    tooltip: 'Open Comment',
+                    tooltip: context.tr('Open Comment'),
                     icon: AleraIcons.external,
                     onPressed: () => onOpenUrl(comment.url!),
                   ),
@@ -231,14 +231,14 @@ class const _ReviewCommentCard({
                   if (onOpenCommentLocation != null) ...<Widget>[
                     const SizedBox(width: AleraTokens.space4),
                     AleraIconButton(
-                      tooltip: 'Open Comment Location',
+                      tooltip: context.tr('Open Comment Location'),
                       icon: AleraIcons.external,
                       onPressed: () => onOpenCommentLocation!(comment),
                     ),
                   ],
                   if (comment.resolved)
                     Text(
-                      'Resolved',
+                      context.tr('Resolved'),
                       style: theme.textTheme.labelSmall?.copyWith(
                         color: AleraTokens.success,
                       ),
