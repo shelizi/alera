@@ -622,6 +622,11 @@ class AleraLocalizations {
     'Show details': '顯示詳細資料',
     'Hide replace': '隱藏取代欄位',
     'Show replace': '顯示取代欄位',
+    'Search Terminal': '搜尋終端機',
+    'Search PDF': '搜尋 PDF',
+    'Add tag…': '新增標籤…',
+    'Add project…': '新增專案…',
+    'Terminal Input': '終端機輸入',
     'Display Name (Optional)': '顯示名稱（選填）',
     'Alera will detect whether the folder is a Git repository. Non-Git folders only get a primary workspace.':
         'Alera 會偵測資料夾是否為 Git 儲存庫；非 Git 資料夾只會建立主要工作區。',

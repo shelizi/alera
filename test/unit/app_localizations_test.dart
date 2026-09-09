@@ -283,6 +283,11 @@ void main() {
       expect(l10n.translate('Files to exclude'), '要排除的檔案');
       expect(l10n.translate('Match case'), '區分大小寫');
       expect(l10n.translate('Replace all'), '全部取代');
+      expect(l10n.translate('Search Terminal'), '搜尋終端機');
+      expect(l10n.translate('Search PDF'), '搜尋 PDF');
+      expect(l10n.translate('Add tag…'), '新增標籤…');
+      expect(l10n.translate('Add project…'), '新增專案…');
+      expect(l10n.translate('Terminal Input'), '終端機輸入');
       expect(
         l10n.translate('Microphone permission is required for AI Dictation.'),
         'AI 聽寫需要麥克風權限。',
