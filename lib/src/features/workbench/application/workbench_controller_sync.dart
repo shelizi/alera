@@ -23,6 +23,46 @@ mixin _WorkbenchControllerSync
     }
   }
 
+  void _syncWorktreeMetadataWatcher(Project project) {
+    final existing = _worktreeMetadataWatchers[project.id];
+    if (!project.supportsLinkedWorkspaces) {
+      if (existing != null) {
+        _worktreeMetadataWatchers.remove(project.id);
+        unawaited(existing.dispose());
+      }
+      return;
+    }
+    if (existing != null && p.equals(existing.repoPath, project.repoPath)) {
+      return;
+    }
+    if (existing != null) {
+      _worktreeMetadataWatchers.remove(project.id);
+      unawaited(existing.dispose());
+    }
+
+    final watcher = GitWorktreeMetadataWatcher(
+      repoPath: project.repoPath,
+      onRefresh: () => _refreshProjectWorktreesInBackground(project.id),
+    );
+    _worktreeMetadataWatchers[project.id] = watcher;
+    watcher.start();
+  }
+
+  Future<void> _refreshProjectWorktreesInBackground(String projectId) async {
+    if (_disposed) {
+      return;
+    }
+    final project = _projectById(state.projects, projectId);
+    if (project == null || !project.supportsLinkedWorkspaces) {
+      return;
+    }
+    try {
+      await _workspaceService.reconcile(project);
+    } catch (_) {
+      // Watcher refresh is best-effort. Manual refresh reports errors to UI.
+    }
+  }
+
   void _onProjectsChanged(List<Project> projects) {
     final validProjectIds = <String>{
       for (final project in projects) project.id,
@@ -123,6 +163,7 @@ mixin _WorkbenchControllerSync
     }
 
     for (final project in projects) {
+      _syncWorktreeMetadataWatcher(project);
       if (_workspaceSubs.containsKey(project.id)) {
         continue;
       }
@@ -154,6 +195,15 @@ mixin _WorkbenchControllerSync
         _tabSubProjectIds.remove(workspaceId);
       }
       _workspaceIdsWithClearedLayout.removeAll(removedWorkspaceIds);
+    }
+    final removedWatcherProjectIds = _worktreeMetadataWatchers.keys
+        .where((projectId) => !validProjectIds.contains(projectId))
+        .toList(growable: false);
+    for (final projectId in removedWatcherProjectIds) {
+      final watcher = _worktreeMetadataWatchers.remove(projectId);
+      if (watcher != null) {
+        unawaited(watcher.dispose());
+      }
     }
     _ensureSelectionHasTab();
   }

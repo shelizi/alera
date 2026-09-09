@@ -151,11 +151,14 @@ mixin _WorkbenchControllerProjects
           .map((tab) => tab.terminalSessionId)
           .where((id) => id.isNotEmpty)
           .toList(growable: false);
-      await _workspaceService.removeWorkspace(
-        project: project,
-        workspace: workspace,
-        deleteBranch: deleteBranch,
-        activeWorkspaceId: activeWorkspaceId,
+      await _withWorktreeRefreshSuspended(
+        project.id,
+        () => _workspaceService.removeWorkspace(
+          project: project,
+          workspace: workspace,
+          deleteBranch: deleteBranch,
+          activeWorkspaceId: activeWorkspaceId,
+        ),
       );
       // The managed runtime has already stopped the process trees. Keep local
       // disposal here so deletion from any caller releases the UI resources.

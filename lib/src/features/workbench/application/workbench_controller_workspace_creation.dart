@@ -61,12 +61,15 @@ mixin _WorkbenchControllerWorkspaceCreation
     String? parentWorkspaceId,
   }) async {
     try {
-      final result = await _workspaceService.createLinkedWorkspace(
-        project: project,
-        sourceBranch: sourceBranch,
-        newBranchName: newBranchName,
-        reuseExistingBranch: reuseExistingBranch,
-        name: name,
+      final result = await _withWorktreeRefreshSuspended(
+        project.id,
+        () => _workspaceService.createLinkedWorkspace(
+          project: project,
+          sourceBranch: sourceBranch,
+          newBranchName: newBranchName,
+          reuseExistingBranch: reuseExistingBranch,
+          name: name,
+        ),
       );
       _reconcileCreatedWorkspace(project, result.workspace);
       if (initializeTabs) {

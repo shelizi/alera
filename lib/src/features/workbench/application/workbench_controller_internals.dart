@@ -13,6 +13,19 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController {
 
   WorkspaceService get _workspaceService => ref.read(workspaceServiceProvider);
 
+  Future<T> _withWorktreeRefreshSuspended<T>(
+    String projectId,
+    Future<T> Function() action,
+  ) async {
+    final watcher = _worktreeMetadataWatchers[projectId];
+    await watcher?.suspendRefresh();
+    try {
+      return await action();
+    } finally {
+      watcher?.resumeRefresh();
+    }
+  }
+
   WorkspaceTabService get _workspaceTabService =>
       ref.read(workspaceTabServiceProvider);
 
@@ -29,6 +42,8 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController {
   StreamSubscription<WorkbenchViewPrefs>? _viewPrefsSub;
   final Map<String, StreamSubscription<List<Workspace>>> _workspaceSubs =
       <String, StreamSubscription<List<Workspace>>>{};
+  final Map<String, GitWorktreeMetadataWatcher> _worktreeMetadataWatchers =
+      <String, GitWorktreeMetadataWatcher>{};
   final Map<String, StreamSubscription<List<WorkspaceTabRecord>>> _tabSubs =
       <String, StreamSubscription<List<WorkspaceTabRecord>>>{};
   // Tracks which project each workspace-tab subscription belongs to, so subs
