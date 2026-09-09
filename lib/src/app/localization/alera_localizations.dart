@@ -69,6 +69,13 @@ class AleraLocalizations {
     if (busyTerminals != null) {
       return '有 ${busyTerminals.group(1)} 個終端機分頁仍有執行中程序或作用中代理程式。關閉後將終止它們。';
     }
+    final preservedAttachments = RegExp(
+      r'^(\d+) attached (?:item|items) will be preserved\.$',
+    ).firstMatch(source);
+    if (preservedAttachments != null) {
+      return '將保留 ${preservedAttachments.group(1)} 個附件。';
+    }
+
     final originalPath = RegExp(r'^Original \((.+)\)$').firstMatch(source);
     if (originalPath != null) {
       return '原始（${originalPath.group(1)}）';
@@ -524,6 +531,28 @@ class AleraLocalizations {
     'Could not load diff.': '無法載入 Diff。',
     'No diff available.': '沒有可用的 Diff。',
     'No stashes to pop': '沒有可套用的 Stash',
+
+    'Edit Message': '編輯訊息',
+    'Message': '訊息',
+    'Saving': '儲存中',
+    'Save And Restart': '儲存並重新開始',
+    'Save Message': '儲存訊息',
+    'Saving stops the active turn and replaces this message and all later responses. Files and actions already performed are not undone. Queued messages remain paused.':
+        '儲存會停止目前的回合，並取代此訊息及之後的所有回覆。已執行的檔案變更與操作不會復原，佇列中的訊息會維持暫停。',
+    'The message could not be saved. Your edit is still here.':
+        '無法儲存訊息，你的編輯內容仍保留在這裡。',
+    'Queued': '已排入佇列',
+    'Paused': '已暫停',
+    'Resume Queue': '繼續佇列',
+    'Pause Queue': '暫停佇列',
+    'Collapse Queue': '收合佇列',
+    'Expand Queue': '展開佇列',
+    'Check Delivery': '檢查傳送狀態',
+    'Attachment': '附件',
+    'Sending': '傳送中',
+    'Steer': '引導',
+    'Remove Queued Message': '移除佇列訊息',
+    'Message Actions': '訊息操作',
 
     'Ship Changes?': '送出變更？',
     'Ship only staged changes, or stage all changes first and include them in the commit.':

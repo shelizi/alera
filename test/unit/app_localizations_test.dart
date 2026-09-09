@@ -99,6 +99,12 @@ void main() {
       expect(l10n.translate('Ship Staged Changes'), '送出已暫存變更');
       expect(l10n.translate('Ship All Changes'), '送出所有變更');
       expect(l10n.translate('Runtime Still Has Work'), '執行環境仍有工作進行中');
+      expect(l10n.translate('Edit Message'), '編輯訊息');
+      expect(l10n.translate('Check Delivery'), '檢查傳送狀態');
+      expect(
+        l10n.translate('2 attached items will be preserved.'),
+        '將保留 2 個附件。',
+      );
       expect(
         l10n.translate(
           'The runtime has 2 open agent(s) and 1 active terminal session(s).',

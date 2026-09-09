@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:flutter/material.dart';
 
 import '../../app/theme/alera_tokens.dart';
@@ -79,18 +80,22 @@ class _AleraMessageQueueState extends State<AleraMessageQueue> {
             children: [
               Expanded(
                 child: Text(
-                  '${widget.messages.length} Queued${widget.paused ? ' · Paused' : ''}',
+                  '${widget.messages.length} ${context.tr('Queued')}${widget.paused ? ' · ${context.tr('Paused')}' : ''}',
                   style: Theme.of(context).textTheme.labelSmall,
                 ),
               ),
               if (widget.onTogglePaused != null)
                 TextButton(
                   onPressed: widget.onTogglePaused,
-                  child: Text(widget.paused ? 'Resume Queue' : 'Pause Queue'),
+                  child: Text(
+                    context.tr(widget.paused ? 'Resume Queue' : 'Pause Queue'),
+                  ),
                 ),
               if (widget.messages.length > 3)
                 IconButton(
-                  tooltip: _expanded ? 'Collapse Queue' : 'Expand Queue',
+                  tooltip: context.tr(
+                    _expanded ? 'Collapse Queue' : 'Expand Queue',
+                  ),
                   onPressed: () => setState(() => _expanded = !_expanded),
                   icon: Icon(
                     _expanded ? AleraIcons.chevronUp : AleraIcons.chevronDown,
@@ -112,7 +117,7 @@ class _AleraMessageQueueState extends State<AleraMessageQueue> {
           if (widget.messages.any((message) => message.status == 'uncertain'))
             TextButton(
               onPressed: widget.onReconcile,
-              child: const Text('Check Delivery'),
+              child: Text(context.tr('Check Delivery')),
             ),
         ],
       ),
@@ -139,7 +144,7 @@ class _AleraMessageQueueState extends State<AleraMessageQueue> {
               child: Tooltip(
                 message: row.text,
                 child: Text(
-                  row.text.isEmpty ? 'Attachment' : row.text,
+                  row.text.isEmpty ? context.tr('Attachment') : row.text,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -170,7 +175,7 @@ class _AleraMessageQueueState extends State<AleraMessageQueue> {
                   ? () => _run(row.id, widget.onSteer)
                   : null,
               icon: Icon(AleraIcons.steer, size: AleraTokens.space12),
-              label: Text(pending ? 'Sending' : 'Steer'),
+              label: Text(context.tr(pending ? 'Sending' : 'Steer')),
             ),
             IconButton(
               constraints: const BoxConstraints.tightFor(
@@ -181,7 +186,7 @@ class _AleraMessageQueueState extends State<AleraMessageQueue> {
               style: IconButton.styleFrom(
                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
               ),
-              tooltip: 'Remove Queued Message',
+              tooltip: context.tr('Remove Queued Message'),
               onPressed: editable ? () => _run(row.id, widget.onRemove) : null,
               icon: const Icon(AleraIcons.delete, size: AleraTokens.space16),
             ),
@@ -191,11 +196,14 @@ class _AleraMessageQueueState extends State<AleraMessageQueue> {
                 minimumSize: const Size.square(AleraTokens.space32),
                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
               ),
-              tooltip: 'Message Actions',
+              tooltip: context.tr('Message Actions'),
               enabled: editable,
               onSelected: (_) => _run(row.id, widget.onEdit),
-              itemBuilder: (_) => const [
-                PopupMenuItem(value: 'edit', child: Text('Edit Message')),
+              itemBuilder: (context) => [
+                PopupMenuItem(
+                  value: 'edit',
+                  child: Text(context.tr('Edit Message')),
+                ),
               ],
               icon: const Icon(AleraIcons.more, size: AleraTokens.space16),
             ),
