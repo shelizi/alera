@@ -154,7 +154,8 @@ class AppWindowLifecycleCoordinator._({
 
   AppWindowState? _lastState;
   Timer? _debounceTimer;
-  Future<void> _saveQueue = Future<void>.value();
+  Future<void>? _saveInFlight;
+  bool _saveRequested = false;
   bool _started = false;
   bool _closing = false;
   bool _closeCommitted = false;
@@ -379,26 +380,35 @@ class AppWindowLifecycleCoordinator._({
   }
 
   Future<void> _saveCurrentState() {
-    _saveQueue = _saveQueue
-        .then((_) async {
-          if (_closed) {
-            return;
-          }
+    if (_closed) {
+      return Future<void>.value();
+    }
+    _saveRequested = true;
+    return _saveInFlight ??= _drainSaveRequests();
+  }
+
+  Future<void> _drainSaveRequests() async {
+    try {
+      while (_saveRequested && !_closed) {
+        _saveRequested = false;
+        try {
           final state = await _captureCurrentState();
           if (state == null || state == _lastState) {
-            return;
+            continue;
           }
           _lastState = state;
           await _repository.save(state);
-        })
-        .catchError((Object error, StackTrace stackTrace) {
+        } catch (error, stackTrace) {
           _logWarningIfActive(
             'failed to save app window state',
             error,
             stackTrace,
           );
-        });
-    return _saveQueue;
+        }
+      }
+    } finally {
+      _saveInFlight = null;
+    }
   }
 
   Future<AppWindowState?> _captureCurrentState() async {

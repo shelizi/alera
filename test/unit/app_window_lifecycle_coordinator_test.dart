@@ -231,6 +231,33 @@ void main() {
       expect(window.destroyCalls, 0);
     });
 
+    test('coalesces repeated window state saves before quit flush', () async {
+      final captureStarted = Completer<void>();
+      final releaseCapture = Completer<void>();
+      final window = _RecordingWindowController()
+        ..captureStarted = captureStarted
+        ..captureBarrier = releaseCapture.future;
+      final coordinator = AppWindowLifecycleCoordinator(
+        repository: _RecordingStateRepository(),
+        window: window,
+        saveDebounce: .zero,
+      );
+      await coordinator.start();
+
+      window.emit((listener) => listener.onWindowResized());
+      await captureStarted.future;
+      for (var i = 0; i < 50; i += 1) {
+        window.emit((listener) => listener.onWindowResized());
+      }
+
+      final quit = coordinator.requestQuit();
+      releaseCapture.complete();
+      await quit;
+
+      expect(window.captureCalls, 2);
+      expect(window.destroyCalls, 1);
+    });
+
     test('closes once and ignores post-close state work', () async {
       final repository = _RecordingStateRepository();
       final window = _RecordingWindowController();
@@ -305,6 +332,9 @@ class _RecordingWindowController implements AppWindowController {
   int restoreCalls = 0;
   bool visible = true;
   bool minimized = false;
+  int captureCalls = 0;
+  Completer<void>? captureStarted;
+  Future<void>? captureBarrier;
   Completer<void>? hideStarted;
   Future<void>? hideBarrier;
 
@@ -367,7 +397,15 @@ class _RecordingWindowController implements AppWindowController {
   Future<bool> isMaximized() async => false;
 
   @override
-  Future<bool> isMinimized() async => minimized;
+  Future<bool> isMinimized() async {
+    captureCalls += 1;
+    final started = captureStarted;
+    if (started != null && !started.isCompleted) {
+      started.complete();
+    }
+    await captureBarrier;
+    return minimized;
+  }
 
   @override
   Future<void> maximize() async {}
