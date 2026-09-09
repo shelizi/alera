@@ -109,6 +109,39 @@ void _registerAgentStatusSnapshotTests(ProviderContainer Function() container) {
     expect(controller.state['session-1'], isNotNull);
   });
 
+  test(
+    'runtime delta updates one background session without dropping others',
+    () {
+      final controller = container().read(
+        agentStatusControllerProvider.notifier,
+      );
+      final initialAt = DateTime.utc(2026, 5, 26, 0, 30);
+      controller.replaceRuntimeSnapshot(<AgentStatusEntry>[
+        _snapshotEntry(updatedAt: initialAt),
+        _snapshotEntry(terminalSessionId: 'session-2', updatedAt: initialAt),
+      ]);
+
+      controller.mergeRuntimeDelta(
+        upserts: <AgentStatusEntry>[
+          _snapshotEntry(
+            state: AgentStatusState.waiting,
+            updatedAt: DateTime.utc(2026, 5, 26, 0, 31),
+          ),
+        ],
+      );
+
+      expect(controller.state['session-1']!.state, AgentStatusState.waiting);
+      expect(controller.state['session-2'], isNotNull);
+
+      controller.mergeRuntimeDelta(
+        removedSessionIds: const <String>['session-1'],
+      );
+
+      expect(controller.state['session-1'], isNull);
+      expect(controller.state['session-2'], isNotNull);
+    },
+  );
+
   test('unrelated sessions in the snapshot are kept', () {
     final controller = container().read(agentStatusControllerProvider.notifier);
     final at = DateTime.utc(2026, 5, 26, 0, 30);

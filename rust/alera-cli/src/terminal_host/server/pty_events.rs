@@ -361,7 +361,12 @@ impl ServerActor {
         session_id: &str,
         reason: &str,
     ) {
-        self.agent_presence.remove(session_id);
+        if self.agent_presence.remove(session_id) {
+            self.broadcast_agent_presence_changes(vec![json!({
+                "terminalSessionId": session_id,
+                "removed": true,
+            })]);
+        }
         self.forget_push_session(session_id);
         self.orchestration_activity_last_recorded.remove(session_id);
         self.orchestration_delivery_in_flight.remove(session_id);

@@ -188,6 +188,61 @@ class AgentStatusController extends _$AgentStatusController
     state = next;
   }
 
+  /// Applies a runtime-host presence delta without replacing unrelated
+  /// terminal sessions. Background tabs use this path so a single agent state
+  /// transition does not require a full `agentPresence.list` round-trip.
+  void mergeRuntimeDelta({
+    Iterable<AgentStatusEntry> upserts = const <AgentStatusEntry>[],
+    Iterable<String> removedSessionIds = const <String>[],
+  }) {
+    var next = state;
+    var changed = false;
+
+    void ensureMutable() {
+      if (identical(next, state)) {
+        next = <String, AgentStatusEntry>{...state};
+      }
+    }
+
+    for (final sessionId in removedSessionIds) {
+      _clearedAt.remove(sessionId);
+      _lifecycleGuard.clearTerminal(sessionId);
+      if (!next.containsKey(sessionId)) {
+        continue;
+      }
+      ensureMutable();
+      next.remove(sessionId);
+      changed = true;
+    }
+
+    for (final entry in upserts) {
+      final sessionId = entry.terminalSessionId;
+      if (_clearedAt[sessionId] case final clearedAt?) {
+        if (!entry.updatedAt.isAfter(clearedAt)) {
+          continue;
+        }
+        _clearedAt.remove(sessionId);
+      }
+      final previous = next[sessionId];
+      final resolvedLocally =
+          previous != null &&
+          previous.state == AgentStatusState.done &&
+          entry.state != AgentStatusState.done &&
+          !entry.updatedAt.isAfter(previous.updatedAt);
+      final resolved = resolvedLocally ? previous : entry;
+      if (previous == resolved) {
+        continue;
+      }
+      ensureMutable();
+      next[sessionId] = resolved;
+      changed = true;
+    }
+
+    if (changed) {
+      state = next;
+    }
+  }
+
   /// Merges the host's presence snapshot over local state.
   ///
   /// The host keeps a `working` presence for the life of the PTY when a
