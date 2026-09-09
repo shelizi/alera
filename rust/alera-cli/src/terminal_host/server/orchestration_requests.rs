@@ -552,6 +552,7 @@ impl ServerActor {
             return Err(HostError::format("entries must be an array."));
         };
         let mut became_ready = Vec::new();
+        let mut presence_changes = Vec::new();
         for entry in entries {
             let Some(handle) = entry
                 .get("terminalSessionId")
@@ -614,7 +615,26 @@ impl ServerActor {
                     .and_then(Value::as_bool)
                     .or_else(|| previous.and_then(|value| value.interrupted)),
             };
+            let presence_change = self.sessions.get(handle).map(|session| {
+                json!({
+                    "terminalSessionId": handle,
+                    "workspaceId": session.workspace_id.as_str(),
+                    "tabId": session.tab_id.as_str(),
+                    "agentType": presence.agent_type.as_str(),
+                    "state": presence.state.as_str(),
+                    "stateStartedAt": presence.state_started_at.to_rfc3339(),
+                    "updatedAt": presence.updated_at.to_rfc3339(),
+                    "prompt": presence.prompt.as_str(),
+                    "toolName": presence.tool_name.as_deref(),
+                    "toolInput": presence.tool_input.as_deref(),
+                    "lastAssistantMessage": presence.last_assistant_message.as_deref(),
+                    "interrupted": presence.interrupted,
+                })
+            });
             self.agent_presence.update_full(handle, presence);
+            if let Some(change) = presence_change {
+                presence_changes.push(change);
+            }
             self.queue_agent_push(handle, &agent_type, state, started_at, changed)
                 .await;
             if let Ok(Some(dispatch)) = self
@@ -635,7 +655,7 @@ impl ServerActor {
             self.dispatch_pending_agent_spawn(&handle).await;
             self.deliver_pending_messages(&handle).await;
         }
-        self.broadcast_agent_presence_changed();
+        self.broadcast_agent_presence_changes(presence_changes);
         Ok(json!({}))
     }
 

@@ -116,8 +116,8 @@ impl AgentPresenceRegistry {
             .retain(|_, entry| enabled_agents.contains(&entry.agent_type.as_str()));
     }
 
-    pub fn remove(&mut self, handle: &str) {
-        self.entries.remove(handle);
+    pub fn remove(&mut self, handle: &str) -> bool {
+        self.entries.remove(handle).is_some()
     }
 
     pub fn get(&self, handle: &str) -> Option<&AgentPresence> {
@@ -181,7 +181,8 @@ mod tests {
     fn remove_clears_presence() {
         let mut registry = AgentPresenceRegistry::default();
         registry.update("t1", "claude".into(), AgentPresenceState::Waiting);
-        registry.remove("t1");
+        assert!(registry.remove("t1"));
+        assert!(!registry.remove("t1"));
         assert!(registry.get("t1").is_none());
         assert!(!registry.is_injection_ready("t1"));
     }

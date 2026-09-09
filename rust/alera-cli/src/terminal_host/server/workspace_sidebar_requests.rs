@@ -54,6 +54,13 @@ impl ServerActor {
         self.broadcast_authenticated(event("agentPresenceChanged", json!({})));
     }
 
+    pub(super) fn broadcast_agent_presence_changes(&self, changes: Vec<Value>) {
+        if changes.is_empty() {
+            return;
+        }
+        self.broadcast_authenticated(event("agentPresenceChanged", json!({"changes": changes})));
+    }
+
     pub(super) async fn workspace_sidebar_snapshot(&self, client_id: u64) -> HostResult<Value> {
         self.require_auth(client_id)?;
         let projects = self

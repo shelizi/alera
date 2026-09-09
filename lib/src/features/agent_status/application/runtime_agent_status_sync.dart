@@ -10,6 +10,49 @@ part 'runtime_agent_status_sync.g.dart';
 
 const String _agentPresenceCoalesceKey = 'agentPresence';
 
+final class RuntimeAgentPresenceDelta {
+  const RuntimeAgentPresenceDelta({
+    required this.upserts,
+    required this.removedSessionIds,
+  });
+
+  final List<AgentStatusEntry> upserts;
+  final Set<String> removedSessionIds;
+}
+
+/// Decodes the compact payload emitted by newer runtime hosts.
+///
+/// A null result means the event came from an older host, or from a global
+/// invalidation that intentionally requires a full snapshot reconciliation.
+RuntimeAgentPresenceDelta? decodeRuntimeAgentPresenceDelta(
+  Map<String, Object?> payload,
+) {
+  final changes = payload['changes'];
+  if (changes is! List) {
+    return null;
+  }
+  final upserts = <AgentStatusEntry>[];
+  final removedSessionIds = <String>{};
+  for (final raw in changes.whereType<Map>()) {
+    final change = Map<String, Object?>.from(raw);
+    final sessionId = change['terminalSessionId'];
+    if (sessionId is! String || sessionId.isEmpty) {
+      continue;
+    }
+    if (change['removed'] == true) {
+      removedSessionIds.add(sessionId);
+      continue;
+    }
+    if (_entryFromRuntime(change) case final entry?) {
+      upserts.add(entry);
+    }
+  }
+  return RuntimeAgentPresenceDelta(
+    upserts: upserts,
+    removedSessionIds: removedSessionIds,
+  );
+}
+
 @Riverpod(keepAlive: true)
 void runtimeAgentStatusSync(Ref ref) {
   final client = ref.watch(runtimeHostClientProvider);
@@ -44,11 +87,21 @@ void runtimeAgentStatusSync(Ref ref) {
   }
 
   final subscription = client.runtimeEvents.listen((event) {
-    // The host broadcasts one event per hook, so an agent working through a
-    // task emits a steady stream of them. Each one costs a full snapshot RPC
-    // plus a rebuild of every listener, hence the coalescing.
+    // New hosts include per-session changes so background tabs update without
+    // a snapshot RPC. Empty legacy/global events still fall back to a
+    // coalesced full reconciliation.
     if (event.name == 'agentPresenceChanged') {
-      coalescer.schedule(_agentPresenceCoalesceKey, coalesceOwner, refresh);
+      final delta = decodeRuntimeAgentPresenceDelta(event.payload);
+      if (delta != null) {
+        ref
+            .read(agentStatusControllerProvider.notifier)
+            .mergeRuntimeDelta(
+              upserts: delta.upserts,
+              removedSessionIds: delta.removedSessionIds,
+            );
+      } else {
+        coalescer.schedule(_agentPresenceCoalesceKey, coalesceOwner, refresh);
+      }
     } else if (event.name == aleraRuntimeHostConnectedEvent) {
       // Reconnecting means the local snapshot may be stale in either
       // direction, so resync now instead of waiting out the debounce.
@@ -65,14 +118,14 @@ void runtimeAgentStatusSync(Ref ref) {
 }
 
 AgentStatusEntry? _entryFromRuntime(Map<String, Object?> json) {
-  final sessionId = json['handle'];
+  final sessionId = json['handle'] ?? json['terminalSessionId'];
   final workspaceId = json['workspaceId'];
   final tabId = json['tabId'];
   final agentType = AgentType.values
       .where((value) => value.key == json['agentType'])
       .firstOrNull;
   final state = AgentStatusState.values
-      .where((value) => value.key == json['agentState'])
+      .where((value) => value.key == (json['agentState'] ?? json['state']))
       .firstOrNull;
   if (sessionId is! String ||
       workspaceId is! String ||
