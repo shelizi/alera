@@ -11,7 +11,7 @@ String? _assistantTextFromHookEvent(AgentHookEvent event, String eventName) {
     AgentType.copilot ||
     AgentType.cursor ||
     AgentType.agy => null,
-    AgentType.grok || AgentType.fx => null,
+    AgentType.grok || AgentType.devin || AgentType.fx => null,
   };
 }
 

@@ -112,6 +112,13 @@ pub const AGENT_ADAPTERS: &[AgentAdapter] = &[
         startup_prompt: AgentStartupPrompt::PositionalAfterTerminator,
     },
     AgentAdapter {
+        agent_type: "devin",
+        default_command: "devin",
+        force_submit: true,
+        interrupt_bytes: CTRL_C,
+        startup_prompt: AgentStartupPrompt::PositionalAfterTerminator,
+    },
+    AgentAdapter {
         agent_type: "fx",
         default_command: "fx",
         force_submit: true,
@@ -149,6 +156,7 @@ mod tests {
                 "pi",
                 "amp",
                 "grok",
+                "devin",
                 "fx"
             ]
         );
@@ -179,6 +187,7 @@ mod tests {
                 ("pi", AgentStartupPrompt::Positional),
                 ("amp", AgentStartupPrompt::StdinScript),
                 ("grok", AgentStartupPrompt::PositionalAfterTerminator),
+                ("devin", AgentStartupPrompt::PositionalAfterTerminator),
                 ("fx", AgentStartupPrompt::TerminalAfterReady),
             ]
         );

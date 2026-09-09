@@ -98,6 +98,15 @@ fn every_adapter_builds_its_native_session_flags() {
             ],
         ),
         (
+            "devin",
+            json!({
+                "model": "opus",
+                "permissionMode": "smart",
+                "sandbox": true
+            }),
+            vec!["--model", "opus", "--permission-mode", "smart", "--sandbox"],
+        ),
+        (
             "fx",
             json!({
                 "resumeLast": true,

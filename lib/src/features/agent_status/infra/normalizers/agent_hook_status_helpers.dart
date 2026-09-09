@@ -11,7 +11,9 @@ bool _isInterrupted(AgentHookEvent event) {
     AgentType.opencode ||
     AgentType.opencode2 ||
     AgentType.pi => _isGenericInterrupted(event),
-    AgentType.grok || AgentType.fx => _isGenericInterrupted(event),
+    AgentType.grok ||
+    AgentType.devin ||
+    AgentType.fx => _isGenericInterrupted(event),
   };
 }
 

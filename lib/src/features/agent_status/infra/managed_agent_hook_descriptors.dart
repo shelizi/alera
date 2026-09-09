@@ -84,6 +84,7 @@ extension _ManagedAgentHookDescriptors on ManagedAgentHookInstallService {
       AgentType.opencode2 ||
       AgentType.pi ||
       AgentType.amp ||
+      AgentType.devin ||
       AgentType.fx => throw ArgumentError.value(
         agentType,
         'agentType',
@@ -105,6 +106,7 @@ extension _ManagedAgentHookDescriptors on ManagedAgentHookInstallService {
       AgentType.cursor ||
       AgentType.agy ||
       AgentType.grok ||
+      AgentType.devin ||
       AgentType.fx => null,
     };
   }

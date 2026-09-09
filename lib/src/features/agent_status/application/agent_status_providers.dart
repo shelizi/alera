@@ -331,6 +331,7 @@ bool isAgentStatusHookEnabled(
     AgentType.pi => settings.pi,
     AgentType.amp => settings.amp,
     AgentType.grok => settings.grok,
+    AgentType.devin => false,
     AgentType.fx => settings.fx,
   };
 }

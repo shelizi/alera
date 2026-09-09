@@ -24,6 +24,7 @@ enum AgentType(this.key) {
   pi('pi'),
   amp('amp'),
   grok('grok'),
+  devin('devin'),
   fx('fx');
 
   final String key;

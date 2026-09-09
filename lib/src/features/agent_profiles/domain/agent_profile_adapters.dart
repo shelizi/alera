@@ -19,6 +19,7 @@ const List<AgentType> spawnableAgentProfileAdapters = <AgentType>[
   AgentType.pi,
   AgentType.amp,
   AgentType.grok,
+  AgentType.devin,
   AgentType.fx,
 ];
 
@@ -35,6 +36,7 @@ const Map<AgentType, String> agentProfileDefaultCommands = <AgentType, String>{
   AgentType.pi: 'pi',
   AgentType.amp: 'amp',
   AgentType.grok: 'grok',
+  AgentType.devin: 'devin',
   AgentType.fx: 'fx',
 };
 

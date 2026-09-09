@@ -172,6 +172,7 @@ String _agentTypeLabel(AgentType agentType) {
     AgentType.pi => 'Pi',
     AgentType.amp => 'Amp',
     AgentType.grok => 'Grok Build',
+    AgentType.devin => 'Devin',
     AgentType.fx => 'fx',
   };
 }

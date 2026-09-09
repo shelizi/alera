@@ -101,6 +101,8 @@ class AgentTypeMapper extends EnumMapper<AgentType> {
         return AgentType.amp;
       case r'grok':
         return AgentType.grok;
+      case r'devin':
+        return AgentType.devin;
       case r'fx':
         return AgentType.fx;
       default:
@@ -131,6 +133,8 @@ class AgentTypeMapper extends EnumMapper<AgentType> {
         return r'amp';
       case AgentType.grok:
         return r'grok';
+      case AgentType.devin:
+        return r'devin';
       case AgentType.fx:
         return r'fx';
     }

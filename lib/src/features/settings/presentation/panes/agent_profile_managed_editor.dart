@@ -260,6 +260,18 @@ class const AgentProfileManagedEditor({
           keyName: 'fast',
         ),
       ],
+      AgentType.devin => <Widget>[
+        _choiceRow(
+          title: 'Permission Mode',
+          keyName: 'permissionMode',
+          options: devinPermissionOptions,
+        ),
+        _boolRow(
+          title: 'Sandbox',
+          description: 'Sandbox Devin exec-tool processes where supported.',
+          keyName: 'sandbox',
+        ),
+      ],
       AgentType.grok => <Widget>[
         _choiceRow(
           title: 'Reasoning Effort',
