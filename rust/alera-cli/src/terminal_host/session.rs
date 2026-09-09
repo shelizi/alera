@@ -93,6 +93,10 @@ pub enum PtyWriteCompletion {
         session_instance_id: u64,
         active: Arc<AtomicBool>,
     },
+    #[cfg(windows)]
+    ConPtyStartupCursorResponse {
+        session_instance_id: u64,
+    },
 }
 
 /// Raw PTY bytes, not an encoded payload.
@@ -158,6 +162,10 @@ pub struct Session {
     killer: Option<Box<dyn ChildKiller + Send + Sync>>,
     #[cfg(windows)]
     process_job: Option<WindowsProcessJob>,
+    #[cfg(windows)]
+    conpty_startup_cursor_query_tail: Vec<u8>,
+    #[cfg(windows)]
+    conpty_startup_cursor_query_answered: bool,
     terminated: bool,
     checkpoint_gen: u64,
     checkpoint_armed: bool,
@@ -198,12 +206,27 @@ impl Session {
         let spawned = {
             let launch = launch.clone();
             let terminal_handle = id.clone();
-            tokio::task::spawn_blocking(move || spawn_pty(launch, terminal_handle, cols, rows))
-                .await
-                .map_err(|error| HostError::state(format!("PTY setup worker failed: {error}")))??
+            let launch_working_directory = working_directory.clone();
+            tokio::task::spawn_blocking(move || {
+                spawn_pty(
+                    launch,
+                    terminal_handle,
+                    &launch_working_directory,
+                    cols,
+                    rows,
+                )
+            })
+            .await
+            .map_err(|error| HostError::state(format!("PTY setup worker failed: {error}")))??
         };
         #[cfg(not(windows))]
-        let spawned = spawn_pty(launch.clone(), id.clone(), cols, rows)?;
+        let spawned = spawn_pty(
+            launch.clone(),
+            id.clone(),
+            &working_directory,
+            cols,
+            rows,
+        )?;
         let SpawnedPty {
             child,
             master,
@@ -245,6 +268,10 @@ impl Session {
             killer: Some(killer),
             #[cfg(windows)]
             process_job: Some(process_job),
+            #[cfg(windows)]
+            conpty_startup_cursor_query_tail: Vec::new(),
+            #[cfg(windows)]
+            conpty_startup_cursor_query_answered: false,
             terminated: false,
             checkpoint_gen: 0,
             checkpoint_armed: false,
@@ -332,6 +359,27 @@ impl Session {
                 pixel_height: 0,
             });
         }
+    }
+
+    #[cfg(windows)]
+    pub(super) fn take_initial_conpty_cursor_query(&mut self, data: &[u8]) -> bool {
+        const QUERY: &[u8] = b"\x1b[6n";
+        if self.conpty_startup_cursor_query_answered {
+            return false;
+        }
+
+        let mut observed = Vec::with_capacity(self.conpty_startup_cursor_query_tail.len() + data.len());
+        observed.extend_from_slice(&self.conpty_startup_cursor_query_tail);
+        observed.extend_from_slice(data);
+        if observed.windows(QUERY.len()).any(|window| window == QUERY) {
+            self.conpty_startup_cursor_query_answered = true;
+            self.conpty_startup_cursor_query_tail.clear();
+            return true;
+        }
+
+        let keep = QUERY.len().saturating_sub(1).min(observed.len());
+        self.conpty_startup_cursor_query_tail = observed[observed.len() - keep..].to_vec();
+        false
     }
 
     /// Append PTY output to the scrollback and live-output batch. Returns a

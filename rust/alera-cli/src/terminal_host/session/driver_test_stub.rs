@@ -30,6 +30,10 @@ impl Session {
             killer: None,
             #[cfg(windows)]
             process_job: None,
+            #[cfg(windows)]
+            conpty_startup_cursor_query_tail: Vec::new(),
+            #[cfg(windows)]
+            conpty_startup_cursor_query_answered: true,
             terminated: false,
             checkpoint_gen: 0,
             checkpoint_armed: false,

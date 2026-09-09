@@ -51,12 +51,7 @@ fn default_terminal_launch_for(
             launch: TerminalHostLaunch {
                 label: "shell".to_string(),
                 shell: interactive_shell.to_string(),
-                arguments: vec![
-                    "/d".to_string(),
-                    "/s".to_string(),
-                    "/k".to_string(),
-                    format!("cd /d {}", cmd_quote(working_directory)),
-                ],
+                arguments: vec!["/d".to_string()],
                 environment,
             },
         },
@@ -120,10 +115,6 @@ fn sh_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
-fn cmd_quote(value: &str) -> String {
-    format!("\"{}\"", value.replace('"', "\"\""))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -152,10 +143,7 @@ mod tests {
             false,
         );
         assert_eq!(windows.launch.shell, "cmd.exe");
-        assert_eq!(
-            windows.launch.arguments,
-            ["/d", "/s", "/k", r#"cd /d "C:\repo ""main""""#]
-        );
+        assert_eq!(windows.launch.arguments, ["/d"]);
     }
 
     #[test]
@@ -212,9 +200,6 @@ mod tests {
             BTreeMap::new(),
             true,
         );
-        assert_eq!(
-            windows.launch.arguments,
-            ["/d", "/s", "/k", r#"cd /d "C:\repo""#]
-        );
+        assert_eq!(windows.launch.arguments, ["/d"]);
     }
 }

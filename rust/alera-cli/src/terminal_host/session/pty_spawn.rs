@@ -1,4 +1,6 @@
-use portable_pty::{native_pty_system, Child, ChildKiller, CommandBuilder, MasterPty, PtySize};
+use portable_pty::{native_pty_system, Child, ChildKiller, MasterPty, PtySize};
+#[cfg(not(windows))]
+use portable_pty::CommandBuilder;
 
 use crate::terminal_host::host_error::{HostError, HostResult};
 use crate::terminal_host::protocol::TerminalHostLaunch;
@@ -21,6 +23,7 @@ pub(super) struct SpawnedPty {
 pub(super) fn spawn_pty(
     launch: TerminalHostLaunch,
     terminal_handle: String,
+    working_directory: &str,
     cols: u16,
     rows: u16,
 ) -> HostResult<SpawnedPty> {
@@ -36,7 +39,9 @@ pub(super) fn spawn_pty(
         })
         .map_err(|error| HostError::state(error.to_string()))?;
     #[cfg(windows)]
-    let mut command = process_job.bootstrap_command(&launch)?;
+    let mut command = process_job.bootstrap_command(&launch, working_directory)?;
+    #[cfg(not(windows))]
+    let _ = working_directory;
     #[cfg(not(windows))]
     let mut command = {
         let mut command = CommandBuilder::new(&launch.shell);

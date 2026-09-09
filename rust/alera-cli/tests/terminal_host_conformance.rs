@@ -43,24 +43,6 @@ fn send(writer: &mut TcpStream, message: Value) {
     writer.flush().unwrap();
 }
 
-#[cfg(windows)]
-fn answer_conpty_cursor_query(writer: &mut TcpStream, session_id: &str) {
-    send(
-        writer,
-        json!({
-            "id": 9_001,
-            "type": "write",
-            "payload": {
-                "sessionId": session_id,
-                "dataBase64": STANDARD.encode(b"\x1b[1;1R")
-            }
-        }),
-    );
-}
-
-#[cfg(not(windows))]
-fn answer_conpty_cursor_query(_writer: &mut TcpStream, _session_id: &str) {}
-
 fn read_message(reader: &mut BufReader<TcpStream>) -> Value {
     let mut line = String::new();
     let read = reader
@@ -164,7 +146,6 @@ fn create_long_running_session(
             }
         }),
     );
-    answer_conpty_cursor_query(writer, session_id);
     let created = read_response(reader, id);
     assert_eq!(
         created["ok"],
@@ -358,7 +339,6 @@ fn full_protocol_sequence() {
             }
         }),
     );
-    answer_conpty_cursor_query(&mut writer, "s1");
 
     let mut output: Vec<u8> = Vec::new();
     let mut created = None;
@@ -418,7 +398,6 @@ fn full_protocol_sequence() {
             }
         }),
     );
-    answer_conpty_cursor_query(&mut writer2, "s1");
     let reattach = read_message(&mut reader2);
     assert_eq!(reattach["id"], json!(1));
     assert_eq!(reattach["ok"], json!(true));
@@ -448,6 +427,66 @@ fn full_protocol_sequence() {
         terminated["ok"],
         json!(true),
         "terminate failed: {terminated}"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_pty_starts_in_requested_working_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let working_directory = dir.path().join("workspace with spaces");
+    std::fs::create_dir_all(&working_directory).unwrap();
+    let control_path = dir.path().join("runtime-host.json");
+    let token = "test-token";
+    let (_guard, port) = spawn_host(dir.path(), &control_path, token);
+    let (mut writer, mut reader) = connect(port);
+    handshake(&mut writer, &mut reader, token);
+
+    let mut launch = terminal_host_test_platform::marker_exit_launch("unused", 0);
+    launch["arguments"] = json!(["/d", "/s", "/c", "cd"]);
+    send(
+        &mut writer,
+        json!({
+            "id": 1,
+            "type": "createOrAttach",
+            "payload": {
+                "sessionId": "cwd-session",
+                "workspaceId": "cwd-workspace",
+                "tabId": "cwd-tab",
+                "workingDirectory": working_directory.to_string_lossy(),
+                "launch": launch,
+                "cols": 80,
+                "rows": 24
+            }
+        }),
+    );
+
+    let mut output = Vec::new();
+    let mut created = false;
+    let mut exit_code = None;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline && exit_code.is_none() {
+        let message = read_message(&mut reader);
+        if message.get("id") == Some(&json!(1)) {
+            assert_eq!(message["ok"], json!(true), "createOrAttach failed: {message}");
+            created = true;
+            continue;
+        }
+        if collect_output(&message, &mut output) {
+            continue;
+        }
+        if message.get("event").and_then(Value::as_str) == Some("exit") {
+            exit_code = message["payload"]["exitCode"].as_i64();
+        }
+    }
+
+    assert!(created, "createOrAttach response was not observed");
+    assert_eq!(exit_code, Some(0));
+    let expected = working_directory.to_string_lossy().to_ascii_lowercase();
+    let actual = String::from_utf8_lossy(&output).to_ascii_lowercase();
+    assert!(
+        actual.contains(expected.as_str()),
+        "PTY started outside requested cwd; expected {expected:?}, output was {actual:?}"
     );
 }
 
@@ -609,7 +648,6 @@ fn pauses_output_per_client_and_resumes_from_a_delta() {
             }
         }),
     );
-    answer_conpty_cursor_query(&mut active_writer, "paused");
     let create = read_response(&mut active_reader, 1);
     assert_eq!(create["ok"], json!(true), "create failed: {create}");
 
@@ -1312,8 +1350,7 @@ fn remints_session_from_disk_after_restart_with_prior_scrollback() {
                 }
             }),
         );
-        answer_conpty_cursor_query(&mut writer, "s1");
-        // Drain until the exit event, which triggers an immediate checkpoint.
+            // Drain until the exit event, which triggers an immediate checkpoint.
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             assert!(Instant::now() < deadline, "never observed session exit");
@@ -1363,8 +1400,7 @@ fn remints_session_from_disk_after_restart_with_prior_scrollback() {
                 }
             }),
         );
-        answer_conpty_cursor_query(&mut writer, "s1");
-        let restored = read_message(&mut reader);
+            let restored = read_message(&mut reader);
         assert_eq!(restored["id"], json!(1));
         assert_eq!(restored["ok"], json!(true), "restore failed: {restored}");
         assert_eq!(restored["payload"]["created"], json!(true));
