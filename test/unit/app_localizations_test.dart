@@ -273,6 +273,16 @@ void main() {
       );
       expect(l10n.translate('Could not open link'), '無法開啟連結');
       expect(l10n.translate('Resize Projects List'), '調整專案清單大小');
+      expect(l10n.translate('Existing Branch *'), '現有分支 *');
+      expect(l10n.translate('New Branch Name *'), '新分支名稱 *');
+      expect(l10n.translate('Workspace Name (Optional)'), '工作區名稱（選填）');
+      expect(l10n.translate('Search projects'), '搜尋專案');
+      expect(l10n.translate('Search workspaces'), '搜尋工作區');
+      expect(l10n.translate('Replace'), '取代');
+      expect(l10n.translate('Files to include'), '要包含的檔案');
+      expect(l10n.translate('Files to exclude'), '要排除的檔案');
+      expect(l10n.translate('Match case'), '區分大小寫');
+      expect(l10n.translate('Replace all'), '全部取代');
       expect(
         l10n.translate('Microphone permission is required for AI Dictation.'),
         'AI 聽寫需要麥克風權限。',

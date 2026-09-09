@@ -186,7 +186,7 @@ class const _SearchChevronButton({
   @override
   Widget build(BuildContext context) {
     return Tooltip(
-      message: expanded ? 'Hide replace' : 'Show replace',
+      message: context.tr(expanded ? 'Hide replace' : 'Show replace'),
       child: InkResponse(
         onTap: onPressed,
         mouseCursor: SystemMouseCursors.click,
@@ -217,7 +217,7 @@ class const _SearchInlineToggleButton({
       fontWeight: active ? FontWeight.w700 : FontWeight.w600,
     );
     return _SearchInlineButtonFrame(
-      tooltip: tooltip,
+      tooltip: context.tr(tooltip),
       active: active,
       onPressed: onPressed,
       child: Text(label, style: style),
@@ -234,7 +234,7 @@ class const _SearchInlineIconButton({
   @override
   Widget build(BuildContext context) {
     return _SearchInlineButtonFrame(
-      tooltip: tooltip,
+      tooltip: context.tr(tooltip),
       active: active,
       onPressed: onPressed,
       child: Icon(
