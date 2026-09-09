@@ -146,6 +146,22 @@ void main() {
       expect(l10n.translate('No comments yet'), '目前還沒有留言');
       expect(l10n.translate('Edit Pull Request'), '編輯 Pull Request');
       expect(l10n.translate('Base Branch'), '基底分支');
+      expect(
+        l10n.translate('#123 or pull request URL'),
+        '#123 或 Pull Request URL',
+      );
+      expect(l10n.translate('Suggested pull request'), '建議的 Pull Request');
+      expect(l10n.translate('CLI not found'), '找不到 CLI');
+      expect(
+        l10n.translate('Install `gh` and ensure it is on your PATH.'),
+        '請安裝 `gh`，並確認它位於 PATH 中。',
+      );
+      expect(
+        l10n.translate('Run `gh auth login` to sign in, then refresh.'),
+        '請執行 `gh auth login` 登入，然後重新整理。',
+      );
+      expect(l10n.translate('Not authenticated'), '尚未驗證身分');
+      expect(l10n.translate('Provider not detected'), '未偵測到 Provider');
     });
 
     test('traditional Chinese localizes agent usage chrome', () {

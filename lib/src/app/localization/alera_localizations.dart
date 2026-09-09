@@ -194,6 +194,18 @@ class AleraLocalizations {
       return '${checkGroup.group(1)} 個$state檢查';
     }
 
+    final installProviderCli = RegExp(
+      r'^Install `(.+)` and ensure it is on your PATH\.$',
+    ).firstMatch(source);
+    if (installProviderCli != null) {
+      return '請安裝 `${installProviderCli.group(1)}`，並確認它位於 PATH 中。';
+    }
+    final runProviderAuth = RegExp(r'^Run `(.+)` to sign in, then refresh\.$')
+        .firstMatch(source);
+    if (runProviderAuth != null) {
+      return '請執行 `${runProviderAuth.group(1)}` 登入，然後重新整理。';
+    }
+
     final originalPath = RegExp(r'^Original \((.+)\)$').firstMatch(source);
     if (originalPath != null) {
       return '原始（${originalPath.group(1)}）';
@@ -786,6 +798,18 @@ class AleraLocalizations {
     'Description': '說明',
     'Started': '開始時間',
     'Completed': '完成時間',
+    '#123 or pull request URL': '#123 或 Pull Request URL',
+    'Suggested pull request': '建議的 Pull Request',
+    'CLI not found': '找不到 CLI',
+    'Not authenticated': '尚未驗證身分',
+    'No remote': '沒有 Remote',
+    'This repository has no remote to detect a provider from.':
+        '此 Repository 沒有 Remote，無法據此偵測 Provider。',
+    'Provider not detected': '未偵測到 Provider',
+    'Could not detect the git hosting provider. Set it in project settings.':
+        '無法偵測 Git Hosting Provider，請在專案設定中指定。',
+    'Unsupported provider': '不支援的 Provider',
+    'This hosting provider is not supported yet.': '目前尚不支援此 Hosting Provider。',
 
     'Create Options': '建立選項',
     'No automation details available.': '沒有可用的自動化詳細資料。',
