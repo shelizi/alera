@@ -23,7 +23,7 @@ enum GitDiffViewMode { tree, flat }
 @MappableEnum()
 enum GitDiffGroupMode { byArea, unified }
 
-/// Whether git diffs are rendered inline as a unified list or split side-by-side.
+/// Whether git diffs are rendered as a complete file or split side-by-side.
 @MappableEnum()
 enum GitDiffPresentationMode { unified, sideBySide }
 
@@ -136,7 +136,7 @@ class const WorkbenchViewPrefs({
   /// Whether Source Control groups files by staged state or shows one list.
   final GitDiffGroupMode gitDiffGroupMode;
 
-  /// Whether git diffs are rendered inline as a unified list or split side-by-side.
+  /// Whether git diffs are rendered as a complete file or split side-by-side.
   final GitDiffPresentationMode gitDiffPresentationMode;
 
   /// Sticky create-PR split-button action (publish vs draft). App-wide and

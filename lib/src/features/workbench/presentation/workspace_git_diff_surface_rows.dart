@@ -2,6 +2,7 @@ part of 'workspace_git_diff_surface.dart';
 
 class const _DiffFileList({
   required final GitDiffResult result,
+  required final Map<GitDiffFile, Uint8List> fullFileBytes,
   required final String sourcePath,
   final String? sourceLabel,
   final String? commitOid,
@@ -13,6 +14,7 @@ class const _DiffFileList({
   Widget build(BuildContext context) {
     final rows = _DiffRows.fromResult(
       result,
+      fullFileBytes: fullFileBytes,
       sourcePath: sourcePath,
       sourceLabel: sourceLabel,
       commitOid: commitOid,
@@ -50,6 +52,7 @@ class const _DiffFileList({
 class const _DiffRows(final List<_DiffRow> items) {
   factory fromResult(
     GitDiffResult result, {
+    required Map<GitDiffFile, Uint8List> fullFileBytes,
     required String sourcePath,
     String? sourceLabel,
     String? commitOid,
@@ -74,16 +77,25 @@ class const _DiffRows(final List<_DiffRow> items) {
         items.add(const _BannerRow('Binary file diff is not shown.'));
       } else if (file.isLarge) {
         items.add(const _BannerRow('Large untracked file diff is not shown.'));
-      } else if (file.lines.isEmpty) {
-        items.add(const _BannerRow('No text diff for this file.'));
       } else if (presentationMode == GitDiffPresentationMode.sideBySide) {
-        items.addAll(_buildSideBySideRows(file));
+        if (file.lines.isEmpty) {
+          items.add(const _BannerRow('No text diff for this file.'));
+        } else {
+          items.addAll(_buildSideBySideRows(file));
+        }
         if (file.linePreviewTruncated) {
           items.add(const _BannerRow('Diff line preview truncated.'));
         }
       } else {
-        for (final line in file.lines) {
-          items.add(_DiffLineRow(line));
+        final fullFileRows = _buildFullFileRows(file, fullFileBytes[file]);
+        if (fullFileRows != null) {
+          items.addAll(fullFileRows);
+        } else if (file.lines.isEmpty) {
+          items.add(const _BannerRow('No text diff for this file.'));
+        } else {
+          for (final line in file.lines) {
+            items.add(_DiffLineRow(line));
+          }
         }
         if (file.linePreviewTruncated) {
           items.add(const _BannerRow('Diff line preview truncated.'));

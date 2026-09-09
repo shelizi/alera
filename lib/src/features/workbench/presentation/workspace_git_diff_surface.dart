@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
@@ -32,6 +33,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 part 'workspace_git_diff_surface_rows.dart';
 part 'workspace_git_diff_surface_bar.dart';
 part 'workspace_git_diff_surface_loading.dart';
+part 'workspace_git_diff_surface_full_file.dart';
 part 'workspace_git_diff_surface_side_by_side.dart';
 
 class const WorkspaceGitDiffSurface({
@@ -48,6 +50,7 @@ class _WorkspaceGitDiffSurfaceState
     extends ConsumerState<WorkspaceGitDiffSurface> {
   Future<GitDiffResult>? _future;
   GitDiffResult? _loadedResult;
+  Map<GitDiffFile, Uint8List> _fullFileBytes = const <GitDiffFile, Uint8List>{};
   ReadingDiffResult? _readingDiffResult;
   Uint8List? _readingDiffOriginalSnapshot;
   bool _showReadingDiff = false;
@@ -217,6 +220,7 @@ class _WorkspaceGitDiffSurfaceState
                       final isCommitDiff = _isCommitBackedDiff;
                       return _DiffFileList(
                         result: result,
+                        fullFileBytes: _fullFileBytes,
                         sourcePath: _sourceControlScope.path,
                         sourceLabel:
                             widget.tab.gitDiffSource ==

@@ -76,6 +76,49 @@ void main() {
     expect(find.text('+line 6000'), findsNothing);
   });
 
+  testWidgets('full-file view includes unchanged lines outside diff hunks', (
+    tester,
+  ) async {
+    final backend = FakeGitBackend()
+      ..gitDiffResult = const GitDiffResult(
+        files: <GitDiffFile>[
+          GitDiffFile(
+            path: 'lib/large.dart',
+            area: .unstaged,
+            status: .modified,
+            lines: <GitDiffLine>[
+              GitDiffLine.hunk('@@ -3,2 +3,2 @@'),
+              GitDiffLine.deletion('-old three'),
+              GitDiffLine.addition('+new three'),
+              GitDiffLine.context(' line four'),
+            ],
+            added: 1,
+            removed: 1,
+          ),
+        ],
+      )
+      ..diffBlobBytesBySide[(
+        filePath: 'lib/large.dart',
+        oldSide: false,
+      )] = Uint8List.fromList(
+        'line one\nline two\nnew three\nline four\nline five\n'.codeUnits,
+      );
+
+    await _pumpDiffSurface(tester, backend: backend);
+    await tester.pumpAndSettle();
+
+    expect(find.text('line one'), findsOneWidget);
+    expect(find.text('line two'), findsOneWidget);
+    expect(find.text('old three'), findsOneWidget);
+    expect(find.text('new three'), findsOneWidget);
+    expect(find.text('line four'), findsOneWidget);
+    expect(find.text('line five'), findsOneWidget);
+    expect(
+      backend.calls.where((call) => call.method == 'diffBlobBytes').single.args,
+      containsPair('oldSide', false),
+    );
+  });
+
   testWidgets('diff surface disables opening deleted files', (tester) async {
     final backend = FakeGitBackend()
       ..gitDiffResult = const GitDiffResult(
@@ -459,15 +502,15 @@ void main() {
     await tester.tap(find.byTooltip('Switch to Side-by-Side View'));
     await tester.pump();
 
-    expect(find.byTooltip('Switch to Unified View'), findsOneWidget);
+    expect(find.byTooltip('Switch to Full File View'), findsOneWidget);
     expect(find.text('Original'), findsOneWidget);
     expect(find.text('Modified'), findsOneWidget);
     expect(find.text('old line'), findsOneWidget);
     expect(find.text('new line'), findsOneWidget);
     expect(find.text('10'), findsWidgets);
 
-    // Switch back to unified mode
-    await tester.tap(find.byTooltip('Switch to Unified View'));
+    // Switch back to full-file mode
+    await tester.tap(find.byTooltip('Switch to Full File View'));
     await tester.pump();
 
     expect(find.byTooltip('Switch to Side-by-Side View'), findsOneWidget);

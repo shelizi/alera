@@ -59,6 +59,7 @@ extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
           };
     _updateDiffState(() {
       _loadedResult = null;
+      _fullFileBytes = const <GitDiffFile, Uint8List>{};
       _readingDiffResult = null;
       _readingDiffOriginalSnapshot = null;
       _showReadingDiff = false;
@@ -71,12 +72,23 @@ extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
     });
     unawaited(
       nextFuture.then(
-        (result) {
+        (result) async {
           if (!mounted || _future != nextFuture) {
             return;
           }
           _updateDiffState(() {
             _loadedResult = result;
+          });
+          final fullFileBytes = await _loadFullFileBytes(
+            backend: backend,
+            sourceControlScope: sourceControlScope,
+            result: result,
+          );
+          if (!mounted || _future != nextFuture) {
+            return;
+          }
+          _updateDiffState(() {
+            _fullFileBytes = fullFileBytes;
           });
         },
         onError: (_) {
@@ -89,5 +101,38 @@ extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
         },
       ),
     );
+  }
+
+  Future<Map<GitDiffFile, Uint8List>> _loadFullFileBytes({
+    required GitBackend backend,
+    required WorkspaceSourceControlScope sourceControlScope,
+    required GitDiffResult result,
+  }) async {
+    final entries = await Future.wait(
+      result.files.map((file) async {
+        if (file.isBinary || file.isLarge || file.isGitlink) {
+          return null;
+        }
+        final oldSide = file.status == GitChangeStatus.deleted;
+        try {
+          final bytes = await backend.diffBlobBytes(
+            path: sourceControlScope.path,
+            filePath: file.path,
+            oldPath: file.oldPath,
+            area: _isCommitBackedDiff ? null : file.area,
+            commitOid: _isCommitBackedDiff ? widget.tab.gitDiffCommitOid : null,
+            parentOid: _isCommitBackedDiff ? widget.tab.gitDiffParentOid : null,
+            oldSide: oldSide,
+          );
+          return bytes == null ? null : MapEntry(file, bytes);
+        } catch (_) {
+          return null;
+        }
+      }),
+    );
+    return <GitDiffFile, Uint8List>{
+      for (final entry in entries)
+        if (entry != null) entry.key: entry.value,
+    };
   }
 }

@@ -73,7 +73,7 @@ class const _GitDiffBar({
             ],
             AleraIconButton(
               tooltip: presentationMode == GitDiffPresentationMode.sideBySide
-                  ? context.tr('Switch to Unified View')
+                  ? context.tr('Switch to Full File View')
                   : context.tr('Switch to Side-by-Side View'),
               icon: presentationMode == GitDiffPresentationMode.sideBySide
                   ? AleraIcons.diffUnified
