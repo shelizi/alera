@@ -1432,6 +1432,23 @@ class AleraLocalizations {
     'Install Directory': '安裝目錄',
     'Default per platform': '依平台使用預設值',
     'Search built-in themes': '搜尋內建主題',
+    'Initial Prompt': '初始提示詞',
+    'Describe what the agent should build or paste an image':
+        '描述要讓 Agent 建立的內容，或貼上圖片',
+    'Loading branches': '正在載入 Branch',
+    'Select Branch': '選擇 Branch',
+    'Create an agent profile in settings': '請先在設定中建立 Agent 設定檔',
+    'Select Agent Profile': '選擇 Agent 設定檔',
+    'Create Another': '繼續建立下一個',
+    'Working': '處理中',
+    'Describe the replacement to generate.': '描述要產生的替換內容。',
+    'Define the reusable instruction and its availability.':
+        '定義可重複使用的指示及其可用狀態。',
+    'Show this action in the Text Actions menu.': '在 Text Actions 選單中顯示此動作。',
+    'Choose which CLI and model run this action.': '選擇執行此動作的 CLI 與模型。',
+    'Inherit the global AI Assist agent by default.': '預設繼承全域 AI Assist Agent。',
+    'Inherit the selected model unless overridden.': '除非覆寫，否則繼承目前選取的模型。',
+    'Reasoning effort for the effective model.': '設定實際使用模型的推理強度。',
   };
 }
 

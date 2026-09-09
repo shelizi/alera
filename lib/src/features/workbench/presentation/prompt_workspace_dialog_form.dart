@@ -128,7 +128,7 @@ extension _PromptWorkspaceDialogForm on _PromptWorkspaceDialogState {
                     child: CircularProgressIndicator(strokeWidth: 2),
                   ),
                   const SizedBox(width: AleraTokens.space8),
-                  Expanded(child: Text(_phase ?? 'Working')),
+                  Expanded(child: Text(context.tr(_phase ?? 'Working'))),
                   if (_activeOperationId != null)
                     TextButton(
                       onPressed: _cancelGeneration,

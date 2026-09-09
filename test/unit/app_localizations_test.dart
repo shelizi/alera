@@ -298,6 +298,14 @@ void main() {
       expect(l10n.translate('My Phone'), '我的手機');
       expect(l10n.translate('Install Directory'), '安裝目錄');
       expect(l10n.translate('Default per platform'), '依平台使用預設值');
+      expect(l10n.translate('Initial Prompt'), '初始提示詞');
+      expect(l10n.translate('Select Agent Profile'), '選擇 Agent 設定檔');
+      expect(l10n.translate('Create Another'), '繼續建立下一個');
+      expect(l10n.translate('Working'), '處理中');
+      expect(
+        l10n.translate('Describe the replacement to generate.'),
+        '描述要產生的替換內容。',
+      );
       expect(
         l10n.translate('Microphone permission is required for AI Dictation.'),
         'AI 聽寫需要麥克風權限。',
