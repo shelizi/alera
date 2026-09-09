@@ -83,7 +83,7 @@ class _ThemePickerSettingState extends State<ThemePickerSetting> {
           ),
           const SizedBox(height: AleraTokens.space4),
           Text(
-            'Search and select a built-in terminal color theme.',
+            context.tr('Search and select a built-in terminal color theme.'),
             style: theme.textTheme.bodySmall?.copyWith(
               color: AleraTokens.foregroundMuted,
             ),
@@ -155,7 +155,7 @@ class const _ThemeSearchList({
                 children: <Widget>[
                   Expanded(
                     child: Text(
-                      'Selected: $selectedName',
+                      context.tr('Selected: $selectedName'),
                       overflow: .ellipsis,
                       maxLines: 1,
                       style: theme.textTheme.bodySmall?.copyWith(
@@ -165,7 +165,9 @@ class const _ThemeSearchList({
                   ),
                   const SizedBox(width: AleraTokens.space8),
                   Text(
-                    'Showing ${themes.length} of ${terminalThemeCatalog.length}',
+                    context.tr(
+                      'Showing ${themes.length} of ${terminalThemeCatalog.length}',
+                    ),
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: AleraTokens.foregroundMuted,
                     ),
@@ -189,6 +191,7 @@ class const _ThemeSearchList({
                         final entry = themes[index];
                         return AleraMenuItem(
                           label: entry.name,
+                          localizeLabel: false,
                           active: index == highlightedIndex,
                           selected: entry.name == selectedName,
                           leading: _ThemeColorDots(entry: entry),

@@ -17,6 +17,8 @@ class const AleraMenuItem({
   final VoidCallback? onHover,
   final Widget? leading,
   final String? subtitle,
+  final bool localizeLabel = true,
+  final bool localizeSubtitle = true,
   final bool enabled = true,
 }) extends StatelessWidget {
   @override
@@ -69,14 +71,16 @@ class const AleraMenuItem({
                           crossAxisAlignment: .start,
                           children: <Widget>[
                             Text(
-                              context.tr(label),
+                              localizeLabel ? context.tr(label) : label,
                               overflow: .ellipsis,
                               maxLines: 1,
                               style: labelStyle,
                             ),
                             const SizedBox(height: AleraTokens.space2),
                             Text(
-                              context.tr(subtitle!),
+                              localizeSubtitle
+                                  ? context.tr(subtitle!)
+                                  : subtitle!,
                               overflow: .ellipsis,
                               maxLines: 1,
                               style: theme.textTheme.labelSmall?.copyWith(
@@ -86,7 +90,7 @@ class const AleraMenuItem({
                           ],
                         )
                       : Text(
-                          context.tr(label),
+                          localizeLabel ? context.tr(label) : label,
                           overflow: .ellipsis,
                           maxLines: 1,
                           style: labelStyle,

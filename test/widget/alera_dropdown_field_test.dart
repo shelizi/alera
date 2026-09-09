@@ -347,4 +347,23 @@ void main() {
 
     expect(find.byType(AleraMenuItem), findsNothing);
   });
+
+  testWidgets('menu item can preserve a dynamic label in zh-TW', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _wrap(
+        AleraMenuItem(
+          label: 'Settings',
+          localizeLabel: false,
+          selected: false,
+          onTap: () {},
+        ),
+        locale: const Locale('zh', 'TW'),
+      ),
+    );
+
+    expect(find.text('Settings'), findsOneWidget);
+    expect(find.text('設定'), findsNothing);
+  });
 }

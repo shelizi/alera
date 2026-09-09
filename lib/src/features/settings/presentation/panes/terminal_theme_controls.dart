@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/buttons/alera_segmented_button.dart';
 import 'package:alera/src/design_system/feedback/alera_color_swatch.dart';
@@ -123,21 +124,21 @@ class const CursorShapeRow({
       child: AleraSegmentedButton<TerminalCursorShape>(
         selected: value,
         onSelectionChanged: onChanged,
-        segments: const <ButtonSegment<TerminalCursorShape>>[
+        segments: <ButtonSegment<TerminalCursorShape>>[
           ButtonSegment<TerminalCursorShape>(
             value: .block,
-            tooltip: 'Block',
-            icon: _CursorGlyph(shape: .block),
+            tooltip: context.tr('Block'),
+            icon: const _CursorGlyph(shape: .block),
           ),
           ButtonSegment<TerminalCursorShape>(
             value: .bar,
-            tooltip: 'Bar',
-            icon: _CursorGlyph(shape: .bar),
+            tooltip: context.tr('Bar'),
+            icon: const _CursorGlyph(shape: .bar),
           ),
           ButtonSegment<TerminalCursorShape>(
             value: .underline,
-            tooltip: 'Underline',
-            icon: _CursorGlyph(shape: .underline),
+            tooltip: context.tr('Underline'),
+            icon: const _CursorGlyph(shape: .underline),
           ),
         ],
       ),

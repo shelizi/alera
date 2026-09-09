@@ -9,6 +9,7 @@ void _registerSettingsDialogCoreTests() {
     SystemFontService? fontService,
     AiAssistModelDiscoveryService? modelDiscoveryService,
     List<dynamic> extraOverrides = const <dynamic>[],
+    Locale? locale,
   }) async {
     await tester.binding.setSurfaceSize(surfaceSize);
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -44,6 +45,12 @@ void _registerSettingsDialogCoreTests() {
         container: container,
         child: MaterialApp(
           theme: buildAleraDarkTheme(),
+          locale: locale,
+          supportedLocales: supportedAleraLocales,
+          localizationsDelegates: const <LocalizationsDelegate<dynamic>>[
+            AleraLocalizationsDelegate(),
+            ...GlobalMaterialLocalizations.delegates,
+          ],
           home: const SettingsDialog(),
         ),
       ),
@@ -54,11 +61,10 @@ void _registerSettingsDialogCoreTests() {
   }
 
   Future<void> selectTerminalSectionLocal(WidgetTester tester) async {
-    // The sidebar lists General and Terminal - tap the Terminal nav item to
-    // switch content. The first 'Terminal' text in the tree belongs to the
-    // sidebar nav item (the section header inside the content uses titleLarge
-    // and shows only when active).
-    await tester.tap(find.text('Terminal').first);
+    final nav = find.byKey(const ValueKey<String>('settings-nav-terminal'));
+    await tester.ensureVisible(nav);
+    await tester.pump();
+    await tester.tap(nav);
     await tester.pump();
   }
 
@@ -508,6 +514,52 @@ void _registerSettingsDialogCoreTests() {
       findsOneWidget,
     );
     expect(find.text('Theme Preset'), findsOneWidget);
+  });
+
+  testWidgets('theme settings localize chrome and preserve theme names', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        locale: const Locale('zh', 'TW'),
+        supportedLocales: supportedAleraLocales,
+        localizationsDelegates: const <LocalizationsDelegate<dynamic>>[
+          AleraLocalizationsDelegate(),
+          ...GlobalMaterialLocalizations.delegates,
+        ],
+        theme: buildAleraDarkTheme(),
+        home: Scaffold(
+          body: SizedBox(
+            width: 540,
+            child: buildThemePickerSettingForTesting(
+              value: TerminalThemeNames.aleraDark,
+              onChanged: (_) {},
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('主題預設'), findsOneWidget);
+    expect(find.text('搜尋並選擇內建的終端機配色主題。'), findsOneWidget);
+    expect(find.text('已選取：${TerminalThemeNames.aleraDark}'), findsOneWidget);
+    expect(find.textContaining('顯示 '), findsOneWidget);
+    expect(find.text(TerminalThemeNames.aleraDark), findsWidgets);
+  });
+
+  testWidgets('terminal theme controls localize labels and tooltips', (
+    tester,
+  ) async {
+    await pumpSettingsDialogLocal(tester, locale: const Locale('zh', 'TW'));
+    await selectTerminalSectionLocal(tester);
+
+    await tester.enterText(find.byType(TextField).first, 'cursor');
+    await tester.pump();
+    expect(find.text('游標形狀'), findsOneWidget);
+    await tester.ensureVisible(find.byTooltip('直線'));
+    await tester.pump();
+    expect(find.byTooltip('直線'), findsOneWidget);
   });
 
   testWidgets('edits destructive confirmation settings', (tester) async {

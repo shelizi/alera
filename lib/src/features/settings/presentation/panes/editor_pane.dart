@@ -236,7 +236,7 @@ class const _EditorThemeSearchList({
                 children: <Widget>[
                   Expanded(
                     child: Text(
-                      'Selected: $selectedName',
+                      context.tr('Selected: $selectedName'),
                       overflow: .ellipsis,
                       maxLines: 1,
                       style: theme.textTheme.bodySmall?.copyWith(
@@ -246,8 +246,10 @@ class const _EditorThemeSearchList({
                   ),
                   const SizedBox(width: AleraTokens.space8),
                   Text(
-                    'Showing ${themes.length} of '
-                    '${editorSyntaxThemeCatalog.length}',
+                    context.tr(
+                      'Showing ${themes.length} of '
+                      '${editorSyntaxThemeCatalog.length}',
+                    ),
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: AleraTokens.foregroundMuted,
                     ),
@@ -271,6 +273,7 @@ class const _EditorThemeSearchList({
                         final entry = themes[index];
                         return AleraMenuItem(
                           label: entry.name,
+                          localizeLabel: false,
                           active: index == highlightedIndex,
                           selected: entry.name == selectedName,
                           leading: _EditorThemeColorDots(entry: entry),

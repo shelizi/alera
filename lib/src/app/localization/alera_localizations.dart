@@ -318,6 +318,15 @@ class AleraLocalizations {
       return '執行環境目前有 $details。';
     }
 
+    final selectedValue = RegExp(r'^Selected: (.+)$').firstMatch(source);
+    if (selectedValue != null) {
+      return '已選取：${selectedValue.group(1)}';
+    }
+    final showingCount = RegExp(r'^Showing (\d+) of (\d+)$').firstMatch(source);
+    if (showingCount != null) {
+      return '顯示 ${showingCount.group(1)} / ${showingCount.group(2)}';
+    }
+
     return null;
   }
 
@@ -1392,6 +1401,20 @@ class AleraLocalizations {
     'Autosave': '自動儲存',
     'Tab Size': 'Tab 寬度',
     'Theme Preset': '主題預設',
+    'Search and select a built-in terminal color theme.': '搜尋並選擇內建的終端機配色主題。',
+    'Cursor Shape': '游標形狀',
+    'Cursor style for new terminal sessions.': '新終端機工作階段使用的游標樣式。',
+    'Toolbar Corner': '工具列位置',
+    'Where the pulse, composer, and refresh buttons sit on the terminal tab.':
+        '設定終端機分頁中的活動指示器、輸入區與重新整理按鈕位置。',
+    'Top Left': '左上',
+    'Top Right': '右上',
+    'Bottom Left': '左下',
+    'Bottom Right': '右下',
+    'Select color': '選擇顏色',
+    'Choose color': '選擇顏色',
+    'spaces': '個空白',
+    'seconds': '秒',
     'Autosave Delay': '自動儲存延遲',
     'Follow System': '跟隨系統',
     'English': 'English',

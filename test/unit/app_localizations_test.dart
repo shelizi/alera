@@ -307,6 +307,13 @@ void main() {
       expect(l10n.translate('Runtime Bootstrap'), '執行環境初始化');
       expect(l10n.translate('Remote runtime error'), '遠端執行環境錯誤');
       expect(l10n.translate('Installing'), '安裝中');
+      expect(l10n.translate('Cursor Shape'), '游標形狀');
+      expect(l10n.translate('Toolbar Corner'), '工具列位置');
+      expect(l10n.translate('Top Right'), '右上');
+      expect(l10n.translate('Selected: Alera Dark'), '已選取：Alera Dark');
+      expect(l10n.translate('Showing 4 of 38'), '顯示 4 / 38');
+      expect(l10n.translate('spaces'), '個空白');
+      expect(l10n.translate('seconds'), '秒');
       expect(
         l10n.translate('Describe the replacement to generate.'),
         '描述要產生的替換內容。',

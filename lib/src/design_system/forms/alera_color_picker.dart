@@ -49,7 +49,7 @@ Future<Color?> showAleraColorPickerDialog({
             crossAxisAlignment: .start,
             children: <Widget>[
               Text(
-                title,
+                context.tr(title),
                 style: theme.textTheme.titleMedium?.copyWith(fontWeight: .w600),
               ),
               const SizedBox(height: AleraTokens.space16),
