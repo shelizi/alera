@@ -15,6 +15,8 @@ void main() {
     final removedWorkspace = _workspace('removed-ws', removedProject.id, now);
     final state = WorkbenchState(
       projects: <Project>[liveProject, removedProject],
+      activeProjectId: removedProject.id,
+      activeWorkspaceId: removedWorkspace.id,
       workspacesByProject: <String, List<Workspace>>{
         liveProject.id: <Workspace>[liveWorkspace],
         removedProject.id: <Workspace>[removedWorkspace],
@@ -41,6 +43,8 @@ void main() {
 
     expect(plan.validProjectIds, <String>{liveProject.id});
     expect(plan.removedWorkspaces, <Workspace>[removedWorkspace]);
+    expect(plan.activeProjectId, liveProject.id);
+    expect(plan.activeWorkspaceId, isNull);
     expect(plan.workspacesByProject.keys, <String>[liveProject.id]);
     expect(plan.activeTabIdByWorkspace, <String, String>{
       liveWorkspace.id: 'live-tab',
@@ -52,6 +56,31 @@ void main() {
     });
     expect(plan.viewPrefsChanged, isTrue);
   });
+
+  test(
+    'keeps an active workspace that still belongs to the active project',
+    () {
+      final now = DateTime.utc(2026, 9, 10);
+      final project = _project('live', now);
+      final workspace = _workspace('live-ws', project.id, now);
+      final state = WorkbenchState(
+        projects: <Project>[project],
+        workspacesByProject: <String, List<Workspace>>{
+          project.id: <Workspace>[workspace],
+        },
+        activeProjectId: project.id,
+        activeWorkspaceId: workspace.id,
+      );
+
+      final plan = planWorkbenchProjectSetSync(
+        state: state,
+        projects: <Project>[project],
+      );
+
+      expect(plan.activeProjectId, project.id);
+      expect(plan.activeWorkspaceId, workspace.id);
+    },
+  );
 }
 
 Project _project(String id, DateTime now) => Project(

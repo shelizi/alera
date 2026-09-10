@@ -68,38 +68,18 @@ mixin _WorkbenchControllerSync
       _releaseRetiredWorkspaceSessions(workspace.id);
     }
 
-    final updatedWorkspaces = plan.workspacesByProject;
-    final updatedTabs = plan.tabsByWorkspace;
-    final updatedLayouts = plan.layoutByWorkspace;
-    final updatedActiveTabs = plan.activeTabIdByWorkspace;
-    final prunedViewPrefs = plan.viewPrefs;
-    final prefsChanged = plan.viewPrefsChanged;
-
-    final activeProjectId =
-        state.activeProjectId != null &&
-            validProjectIds.contains(state.activeProjectId)
-        ? state.activeProjectId
-        : (projects.isNotEmpty ? projects.first.id : null);
-    final activeWorkspaceId = _resolveActiveWorkspaceId(
-      activeProjectId: activeProjectId,
-      workspacesByProject: updatedWorkspaces,
-      preferredWorkspaceId: state.activeWorkspaceId,
-    );
-    final nextViewPrefs = prunedViewPrefs;
-    final viewPrefsChanged = prefsChanged;
-
     state = state.copyWith(
       projects: projects,
-      workspacesByProject: updatedWorkspaces,
-      tabsByWorkspace: updatedTabs,
-      viewPrefs: nextViewPrefs,
-      activeProjectId: activeProjectId,
-      activeWorkspaceId: activeWorkspaceId,
-      activeTabIdByWorkspace: updatedActiveTabs,
-      layoutByWorkspace: updatedLayouts,
+      workspacesByProject: plan.workspacesByProject,
+      tabsByWorkspace: plan.tabsByWorkspace,
+      viewPrefs: plan.viewPrefs,
+      activeProjectId: plan.activeProjectId,
+      activeWorkspaceId: plan.activeWorkspaceId,
+      activeTabIdByWorkspace: plan.activeTabIdByWorkspace,
+      layoutByWorkspace: plan.layoutByWorkspace,
     );
     _pruneWorktreeNavigationHistory();
-    if (viewPrefsChanged) {
+    if (plan.viewPrefsChanged) {
       unawaited(_persistViewPrefs());
     }
 

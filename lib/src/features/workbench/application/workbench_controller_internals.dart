@@ -242,25 +242,6 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController {
     }
   }
 
-  String? _resolveActiveWorkspaceId({
-    required String? activeProjectId,
-    required Map<String, List<Workspace>> workspacesByProject,
-    required String? preferredWorkspaceId,
-  }) {
-    if (activeProjectId != null) {
-      final workspaces =
-          workspacesByProject[activeProjectId] ?? const <Workspace>[];
-      // Keep an explicit selection only while it still belongs to the active
-      // project. Missing or stale selections intentionally stay empty.
-      if (preferredWorkspaceId != null &&
-          workspaces.any((workspace) => workspace.id == preferredWorkspaceId)) {
-        return preferredWorkspaceId;
-      }
-      return null;
-    }
-    return null;
-  }
-
   void _ensureSelectionHasTab() {
     final workspace = state.activeWorkspace;
     if (workspace == null) {

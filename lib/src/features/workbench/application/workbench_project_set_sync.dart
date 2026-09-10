@@ -9,6 +9,8 @@ final class WorkbenchProjectSetSyncPlan {
   const WorkbenchProjectSetSyncPlan({
     required this.validProjectIds,
     required this.removedWorkspaces,
+    required this.activeProjectId,
+    required this.activeWorkspaceId,
     required this.workspacesByProject,
     required this.tabsByWorkspace,
     required this.layoutByWorkspace,
@@ -19,6 +21,8 @@ final class WorkbenchProjectSetSyncPlan {
 
   final Set<String> validProjectIds;
   final List<Workspace> removedWorkspaces;
+  final String? activeProjectId;
+  final String? activeWorkspaceId;
   final Map<String, List<Workspace>> workspacesByProject;
   final Map<String, List<WorkspaceTabRecord>> tabsByWorkspace;
   final Map<String, WorkbenchLayout> layoutByWorkspace;
@@ -71,9 +75,27 @@ WorkbenchProjectSetSyncPlan planWorkbenchProjectSetSync({
       for (final workspace in workspaces) workspace.id,
   };
 
+  final activeProjectId =
+      state.activeProjectId != null &&
+          validProjectIds.contains(state.activeProjectId)
+      ? state.activeProjectId
+      : (projects.isNotEmpty ? projects.first.id : null);
+  final activeProjectWorkspaces = activeProjectId == null
+      ? const <Workspace>[]
+      : workspacesByProject[activeProjectId] ?? const <Workspace>[];
+  final activeWorkspaceId =
+      state.activeWorkspaceId != null &&
+          activeProjectWorkspaces.any(
+            (workspace) => workspace.id == state.activeWorkspaceId,
+          )
+      ? state.activeWorkspaceId
+      : null;
+
   return WorkbenchProjectSetSyncPlan(
     validProjectIds: validProjectIds,
     removedWorkspaces: removedWorkspaces,
+    activeProjectId: activeProjectId,
+    activeWorkspaceId: activeWorkspaceId,
     workspacesByProject: workspacesByProject,
     tabsByWorkspace: <String, List<WorkspaceTabRecord>>{
       for (final entry in state.tabsByWorkspace.entries)
