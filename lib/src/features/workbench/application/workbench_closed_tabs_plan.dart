@@ -1,6 +1,35 @@
 import 'package:alera/src/features/workbench/domain/workbench_layout.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 
+final class WorkbenchTabCloseSnapshot {
+  const WorkbenchTabCloseSnapshot({
+    required this.closedTabIds,
+    required this.closingTabs,
+    required this.closedActiveTab,
+  });
+
+  final Set<String> closedTabIds;
+  final Map<String, WorkspaceTabRecord> closingTabs;
+  final bool closedActiveTab;
+}
+
+WorkbenchTabCloseSnapshot captureWorkbenchTabCloseSnapshot({
+  required List<String> requestedTabIds,
+  required List<WorkspaceTabRecord> currentTabs,
+  required WorkbenchLayout? currentLayout,
+}) {
+  final closedTabIds = <String>{...requestedTabIds};
+  final activeTabId = currentLayout?.activeTabId;
+  return WorkbenchTabCloseSnapshot(
+    closedTabIds: closedTabIds,
+    closingTabs: <String, WorkspaceTabRecord>{
+      for (final tab in currentTabs)
+        if (closedTabIds.contains(tab.id)) tab.id: tab,
+    },
+    closedActiveTab: activeTabId != null && closedTabIds.contains(activeTabId),
+  );
+}
+
 final class WorkbenchClosedTabsPlan {
   const WorkbenchClosedTabsPlan({
     required this.layout,

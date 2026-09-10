@@ -13,24 +13,22 @@ mixin _WorkbenchControllerTabs
     required Workspace workspace,
     required List<String> tabIds,
   }) async {
-    final ids = <String>{...tabIds};
+    // Capture before closing: the tab watcher can sanitise the layout (and
+    // replace the active tab) synchronously while the close is in flight.
+    final snapshot = captureWorkbenchTabCloseSnapshot(
+      requestedTabIds: tabIds,
+      currentTabs: state.tabsFor(workspace.id),
+      currentLayout: state.layoutFor(workspace.id),
+    );
+    final ids = snapshot.closedTabIds;
     if (ids.isEmpty) {
       return;
     }
-    // Capture before closing: the tab watcher can sanitise the layout (and
-    // replace the active tab) synchronously while the close is in flight.
-    final priorActiveTabId = state.layoutFor(workspace.id)?.activeTabId;
-    final closedActiveTab =
-        priorActiveTabId != null && ids.contains(priorActiveTabId);
-    final closingTabs = <String, WorkspaceTabRecord>{
-      for (final tab in state.tabsFor(workspace.id))
-        if (ids.contains(tab.id)) tab.id: tab,
-    };
     await _tabClosingScope.run(workspace.id, () async {
       try {
         for (final tabId in ids) {
           await _workspaceTabService.closeTab(tabId);
-          final closedTab = closingTabs[tabId];
+          final closedTab = snapshot.closingTabs[tabId];
           if (closedTab != null) {
             await _hostedReviewRetention.releaseTab(workspace, closedTab);
           }
@@ -42,7 +40,8 @@ mixin _WorkbenchControllerTabs
             .tabsFor(workspace.id)
             .where((tab) => !ids.contains(tab.id))
             .toList(growable: false);
-        final mostRecentOpenTabId = closedActiveTab && remaining.isNotEmpty
+        final mostRecentOpenTabId =
+            snapshot.closedActiveTab && remaining.isNotEmpty
             ? _tabFocusHistory.mostRecentOpen(workspace.id, <String>{
                 for (final tab in remaining) tab.id,
               })
@@ -52,7 +51,7 @@ mixin _WorkbenchControllerTabs
           remainingTabs: remaining,
           currentLayout: state.layoutFor(workspace.id),
           closedTabIds: ids,
-          closedActiveTab: closedActiveTab,
+          closedActiveTab: snapshot.closedActiveTab,
           mostRecentOpenTabId: mostRecentOpenTabId,
         );
         _setTabsForWorkspace(workspace.id, remaining);

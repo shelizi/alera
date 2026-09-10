@@ -4,6 +4,65 @@ import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('close snapshot deduplicates ids and captures current tab records', () {
+    final first = _tab('first');
+    final second = _tab('second');
+    final layout = WorkbenchLayout.single(
+      workspaceId: 'workspace',
+      tabIds: <String>[first.id, second.id],
+    );
+
+    final snapshot = captureWorkbenchTabCloseSnapshot(
+      requestedTabIds: <String>[second.id, second.id, 'missing'],
+      currentTabs: <WorkspaceTabRecord>[first, second],
+      currentLayout: layout,
+    );
+
+    expect(snapshot.closedTabIds, <String>{second.id, 'missing'});
+    expect(snapshot.closingTabs, <String, WorkspaceTabRecord>{
+      second.id: second,
+    });
+    expect(snapshot.closedActiveTab, isTrue);
+  });
+
+  test(
+    'close snapshot does not mark active closed when another tab is requested',
+    () {
+      final first = _tab('first');
+      final second = _tab('second');
+      final base = WorkbenchLayout.single(
+        workspaceId: 'workspace',
+        tabIds: <String>[first.id, second.id],
+      );
+      final layout = base.setActiveTab(
+        groupId: base.activeGroupId,
+        tabId: first.id,
+      );
+
+      final snapshot = captureWorkbenchTabCloseSnapshot(
+        requestedTabIds: <String>[second.id],
+        currentTabs: <WorkspaceTabRecord>[first, second],
+        currentLayout: layout,
+      );
+
+      expect(snapshot.closedTabIds, <String>{second.id});
+      expect(snapshot.closingTabs.keys, <String>{second.id});
+      expect(snapshot.closedActiveTab, isFalse);
+    },
+  );
+
+  test('empty close request produces an empty snapshot', () {
+    final snapshot = captureWorkbenchTabCloseSnapshot(
+      requestedTabIds: const <String>[],
+      currentTabs: <WorkspaceTabRecord>[_tab('first')],
+      currentLayout: null,
+    );
+
+    expect(snapshot.closedTabIds, isEmpty);
+    expect(snapshot.closingTabs, isEmpty);
+    expect(snapshot.closedActiveTab, isFalse);
+  });
+
   test('removes closed tabs and refocuses the supplied recent survivor', () {
     final first = _tab('first');
     final second = _tab('second');
