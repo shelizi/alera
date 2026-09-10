@@ -34,12 +34,9 @@ mixin _WorkbenchControllerTabs
         if (closedTab != null) {
           await _releaseHostedReviewTab(workspace, closedTab);
         }
-        // Every close path must drop the live terminal handle and the editor
-        // document, or the xterm scrollback buffer outlives the tab. This is
-        // deliberately centralized here: callers used to pair these calls at
-        // every site, and the one that forgot leaked the whole emulator.
-        ref.read(terminalRuntimeLifecycleProvider).closeTab(tabId);
-        ref.read(editorSessionRegistryProvider).forget(tabId);
+        // Every explicit close path must drop the live terminal handle and
+        // editor document after persistence and hosted-review cleanup succeed.
+        _explicitResourceCleaner.closeTabLocalResources(tabId);
       }
       final remaining = state
           .tabsFor(workspace.id)

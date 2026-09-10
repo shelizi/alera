@@ -47,11 +47,11 @@ void main() {
 
       expect(
         source,
-        contains('_deletedWorkspaceResourceCleaner.closeLocalResources'),
+        contains('_explicitResourceCleaner.closeWorkspaceLocalResources'),
       );
       expect(
         source,
-        contains('_deletedWorkspaceResourceCleaner.clearObservers'),
+        contains('_explicitResourceCleaner.clearDeletedWorkspaceObservers'),
       );
       expect(source, isNot(contains('terminalRuntimeLifecycleProvider')));
       expect(source, isNot(contains('editorSessionRegistryProvider')));
@@ -61,6 +61,16 @@ void main() {
       expect(source, isNot(contains('agentHookReceiverProvider')));
     },
   );
+
+  test('tab close delegates explicit local cleanup to the shared cleaner', () {
+    final source = File(
+      'lib/src/features/workbench/application/workbench_controller_tabs.dart',
+    ).readAsStringSync();
+
+    expect(source, contains('_explicitResourceCleaner.closeTabLocalResources'));
+    expect(source, isNot(contains('terminalRuntimeLifecycleProvider')));
+    expect(source, isNot(contains('editorSessionRegistryProvider')));
+  });
 
   test('runtime coordinators depend on the narrow coordination contract', () {
     final source = File(

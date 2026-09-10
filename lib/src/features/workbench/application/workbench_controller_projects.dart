@@ -157,7 +157,7 @@ mixin _WorkbenchControllerProjects
       // The managed runtime has already stopped the process trees. Keep local
       // disposal before hosted-review cleanup, preserving the existing failure
       // boundary while moving provider-specific teardown out of the controller.
-      _deletedWorkspaceResourceCleaner.closeLocalResources(
+      _explicitResourceCleaner.closeWorkspaceLocalResources(
         workspace.id,
         workspaceTabs,
       );
@@ -169,7 +169,7 @@ mixin _WorkbenchControllerProjects
         );
       }
       _tabFocusHistory.forget(workspace.id);
-      _deletedWorkspaceResourceCleaner.clearObservers(
+      _explicitResourceCleaner.clearDeletedWorkspaceObservers(
         workspace.id,
         workspaceTabs,
       );

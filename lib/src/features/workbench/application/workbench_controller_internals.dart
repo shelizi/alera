@@ -29,12 +29,11 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController {
   WorkspaceTabService get _workspaceTabService =>
       ref.read(workspaceTabServiceProvider);
 
-  WorkbenchDeletedWorkspaceResourceCleaner
-  get _deletedWorkspaceResourceCleaner {
+  WorkbenchExplicitResourceCleaner get _explicitResourceCleaner {
     final clearTerminalSession = ref.exists(agentHookReceiverProvider)
         ? ref.read(agentHookReceiverProvider).clearTerminalSession
         : null;
-    return WorkbenchDeletedWorkspaceResourceCleaner(
+    return WorkbenchExplicitResourceCleaner(
       runtimeLifecycle: ref.read(terminalRuntimeLifecycleProvider),
       forgetEditorSession: ref.read(editorSessionRegistryProvider).forget,
       removeWorkspaceActivity: ref
