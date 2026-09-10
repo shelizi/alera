@@ -17,28 +17,10 @@ mixin _WorkbenchControllerSync
   }
 
   void _syncWorktreeMetadataWatcher(Project project) {
-    final existing = _worktreeMetadataWatchers[project.id];
-    if (!project.supportsLinkedWorkspaces) {
-      if (existing != null) {
-        _worktreeMetadataWatchers.remove(project.id);
-        unawaited(existing.dispose());
-      }
-      return;
-    }
-    if (existing != null && p.equals(existing.repoPath, project.repoPath)) {
-      return;
-    }
-    if (existing != null) {
-      _worktreeMetadataWatchers.remove(project.id);
-      unawaited(existing.dispose());
-    }
-
-    final watcher = GitWorktreeMetadataWatcher(
-      repoPath: project.repoPath,
-      onRefresh: () => _refreshProjectWorktreesInBackground(project.id),
+    _worktreeMetadataWatcherRegistry.sync(
+      project,
+      onRefresh: _refreshProjectWorktreesInBackground,
     );
-    _worktreeMetadataWatchers[project.id] = watcher;
-    watcher.start();
   }
 
   Future<void> _refreshProjectWorktreesInBackground(String projectId) async {
@@ -109,15 +91,7 @@ mixin _WorkbenchControllerSync
       }
       _workspaceIdsWithClearedLayout.removeAll(removedWorkspaceIds);
     }
-    final removedWatcherProjectIds = _worktreeMetadataWatchers.keys
-        .where((projectId) => !validProjectIds.contains(projectId))
-        .toList(growable: false);
-    for (final projectId in removedWatcherProjectIds) {
-      final watcher = _worktreeMetadataWatchers.remove(projectId);
-      if (watcher != null) {
-        unawaited(watcher.dispose());
-      }
-    }
+    _worktreeMetadataWatcherRegistry.prune(validProjectIds);
     _ensureSelectionHasTab();
   }
 

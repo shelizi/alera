@@ -33,7 +33,7 @@ import 'package:alera/src/features/workbench/application/workbench_view_prefs_re
 import 'package:alera/src/features/workbench/application/workspace_activity_controller.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_preview_kind.dart';
 import 'package:alera/src/features/workbench/application/workspace_graph_repository.dart';
-import 'package:alera/src/features/workbench/application/git_worktree_metadata_watcher.dart';
+import 'package:alera/src/features/workbench/application/workbench_worktree_metadata_watcher_registry.dart';
 import 'package:alera/src/features/workbench/application/workspace_service.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/domain/workbench_layout.dart';
@@ -85,10 +85,7 @@ class WorkbenchController extends _$WorkbenchController
       unawaited(_sectionsSub?.cancel());
       unawaited(_projectsSub?.cancel());
       unawaited(_viewPrefsSub?.cancel());
-      for (final watcher in _worktreeMetadataWatchers.values) {
-        unawaited(watcher.dispose());
-      }
-      _worktreeMetadataWatchers.clear();
+      _worktreeMetadataWatcherRegistry.disposeAll();
       _workspaceSubscriptions.cancelAll();
       _tabSubscriptions.cancelAll();
     });
