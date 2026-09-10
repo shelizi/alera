@@ -33,14 +33,14 @@ mixin _WorkbenchControllerPullRequestDiffTabs
         newTab = tab;
       }
       if (tab.gitDiffHostedReviewRetentionId == retentionId) {
-        await _persistHostedReviewRetention(
+        await _hostedReviewRetention.persist(
           workspace: workspace,
           relativeRoot: gitDiffRoot,
           retentionId: retentionId,
         );
         retainedByTab = true;
       } else {
-        await _releaseHostedReviewRetention(
+        await _hostedReviewRetention.release(
           workspace: workspace,
           relativeRoot: gitDiffRoot,
           retentionId: retentionId,
@@ -65,7 +65,7 @@ mixin _WorkbenchControllerPullRequestDiffTabs
         if (newTab case final tab?) {
           await _workspaceTabService.closeTab(tab.id);
         }
-        await _releaseHostedReviewRetention(
+        await _hostedReviewRetention.release(
           workspace: workspace,
           relativeRoot: gitDiffRoot,
           retentionId: retentionId,

@@ -84,7 +84,7 @@ mixin _WorkbenchControllerProjects
       _tabFocusHistory.forget(workspace.id);
       await _repository.removeWorkspaceTabsForWorkspace(workspace.id);
       for (final tab in workspaceTabs) {
-        await _releaseHostedReviewTab(workspace, tab);
+        await _hostedReviewRetention.releaseTab(workspace, tab);
       }
 
       final plan = planWorkbenchSleepWorkspace(
@@ -115,7 +115,7 @@ mixin _WorkbenchControllerProjects
       for (final workspace in removedWorkspaces) {
         _tabFocusHistory.forget(workspace.id);
         for (final tab in state.tabsFor(workspace.id)) {
-          await _releaseHostedReviewTab(workspace, tab);
+          await _hostedReviewRetention.releaseTab(workspace, tab);
         }
       }
       state = state.copyWith(error: null);
@@ -150,7 +150,7 @@ mixin _WorkbenchControllerProjects
         workspaceTabs,
       );
       for (final tab in workspaceTabs) {
-        await _releaseHostedReviewTab(
+        await _hostedReviewRetention.releaseTab(
           workspace,
           tab,
           fallbackWorkspacePath: project.repoPath,

@@ -61,7 +61,7 @@ mixin _WorkbenchControllerSync
     final validProjectIds = plan.validProjectIds;
 
     for (final workspace in plan.removedWorkspaces) {
-      _releaseHostedReviewTabsInBackground(
+      _hostedReviewRetention.releaseTabsInBackground(
         workspace,
         state.tabsFor(workspace.id),
       );
@@ -147,7 +147,7 @@ mixin _WorkbenchControllerSync
     for (final workspaceId in removedWorkspaceIds) {
       final workspace = _workspaceById(workspaceId);
       if (workspace != null) {
-        _releaseHostedReviewTabsInBackground(
+        _hostedReviewRetention.releaseTabsInBackground(
           workspace,
           state.tabsFor(workspaceId),
         );
@@ -209,7 +209,7 @@ mixin _WorkbenchControllerSync
     final removedTabs = plan.removedTabs;
     final workspace = _workspaceById(workspaceId);
     if (workspace != null) {
-      _releaseHostedReviewTabsInBackground(workspace, removedTabs);
+      _hostedReviewRetention.releaseTabsInBackground(workspace, removedTabs);
     }
     // A tab record that disappeared from persisted state can never reach its
     // live terminal handle again, so release the client-local terminal,

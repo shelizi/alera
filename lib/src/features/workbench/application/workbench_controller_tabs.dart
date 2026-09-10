@@ -32,7 +32,7 @@ mixin _WorkbenchControllerTabs
         await _workspaceTabService.closeTab(tabId);
         final closedTab = closingTabs[tabId];
         if (closedTab != null) {
-          await _releaseHostedReviewTab(workspace, closedTab);
+          await _hostedReviewRetention.releaseTab(workspace, closedTab);
         }
         // Every explicit close path must drop the live terminal handle and
         // editor document after persistence and hosted-review cleanup succeed.
