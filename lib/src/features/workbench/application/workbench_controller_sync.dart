@@ -224,10 +224,16 @@ mixin _WorkbenchControllerSync
     if (!_tabSubProjectIds.containsKey(workspaceId)) {
       return;
     }
-    final liveTabIds = <String>{for (final tab in tabs) tab.id};
-    final removedTabs = state
-        .tabsFor(workspaceId)
-        .where((tab) => !liveTabIds.contains(tab.id));
+    final layoutWasCleared = _workspaceIdsWithClearedLayout.contains(
+      workspaceId,
+    );
+    final plan = planWorkbenchTabSetSync(
+      state: state,
+      workspaceId: workspaceId,
+      tabs: tabs,
+      layoutWasCleared: layoutWasCleared,
+    );
+    final removedTabs = plan.removedTabs;
     final workspace = _workspaceById(workspaceId);
     if (workspace != null) {
       _releaseHostedReviewTabsInBackground(workspace, removedTabs);
@@ -250,48 +256,21 @@ mixin _WorkbenchControllerSync
             .clearTerminalSession(tab.terminalSessionId);
       }
     }
-    final nextTabs = Map<String, List<WorkspaceTabRecord>>.from(
-      state.tabsByWorkspace,
-    )..[workspaceId] = tabs;
-    if (tabs.isEmpty && _workspaceIdsWithClearedLayout.contains(workspaceId)) {
-      final nextLayouts = Map<String, WorkbenchLayout>.from(
-        state.layoutByWorkspace,
-      )..remove(workspaceId);
-      final activeTabs = Map<String, String>.from(state.activeTabIdByWorkspace)
-        ..remove(workspaceId);
-      state = state.copyWith(
-        tabsByWorkspace: nextTabs,
-        layoutByWorkspace: nextLayouts,
-        activeTabIdByWorkspace: activeTabs,
-      );
-      _ensureSelectionHasTab();
-      return;
-    }
     if (tabs.isNotEmpty) {
       _workspaceIdsWithClearedLayout.remove(workspaceId);
     }
-    final currentLayout = state.layoutFor(workspaceId);
-    if (currentLayout == null) {
-      state = state.copyWith(tabsByWorkspace: nextTabs);
-      if (!_loadingLayoutWorkspaceIds.contains(workspaceId)) {
-        unawaited(_loadLayoutForWorkspace(workspaceId));
-      }
-      _ensureSelectionHasTab();
-      return;
-    }
-
-    final layout = currentLayout.sanitize(tabs);
-    final nextLayouts = Map<String, WorkbenchLayout>.from(
-      state.layoutByWorkspace,
-    )..[workspaceId] = layout;
-    final activeTabs = _activeTabsWithLayout(layout);
     state = state.copyWith(
-      tabsByWorkspace: nextTabs,
-      layoutByWorkspace: nextLayouts,
-      activeTabIdByWorkspace: activeTabs,
+      tabsByWorkspace: plan.tabsByWorkspace,
+      layoutByWorkspace: plan.layoutByWorkspace,
+      activeTabIdByWorkspace: plan.activeTabIdByWorkspace,
     );
-    if (layout != currentLayout) {
-      _persistLayoutInBackground(layout);
+    if (plan.shouldLoadLayout &&
+        !_loadingLayoutWorkspaceIds.contains(workspaceId)) {
+      unawaited(_loadLayoutForWorkspace(workspaceId));
+    }
+    final layoutToPersist = plan.layoutToPersist;
+    if (layoutToPersist != null) {
+      _persistLayoutInBackground(layoutToPersist);
     }
     _ensureSelectionHasTab();
   }
