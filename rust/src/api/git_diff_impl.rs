@@ -9,8 +9,8 @@ use git2::{
 use super::{
     open_repo, GitChangeArea, GitChangeEntry, GitChangeGroup, GitChangeStatus, GitChangeTreeRow,
     GitChangeTreeRowKind, GitCommitChangeEntry, GitCommitCompareResult, GitCommitCompareStatus,
-    GitCommitCompareSummary, GitDiffFile, GitDiffLine, GitDiffLineKind, GitDiffResult, GitError,
-    GitErrorKind, GitStatusResult, GitSubmoduleStatus,
+    GitCommitCompareSummary, GitDiffFile, GitDiffLine, GitDiffLineKind, GitDiffPage, GitDiffResult,
+    GitError, GitErrorKind, GitStatusResult, GitSubmoduleStatus,
 };
 
 #[path = "git_diff_combined.rs"]
@@ -22,7 +22,9 @@ mod git_diff_untracked;
 #[path = "git_reading_diff_patch.rs"]
 pub(in crate::api) mod git_reading_diff_patch;
 
-use git_diff_combined::{append_combined_diff_file, git_diff_all_for_file};
+use git_diff_combined::{
+    append_combined_diff_file, append_combined_diff_for_path, git_diff_all_for_file,
+};
 use git_diff_render::render_diff_for_path;
 use git_diff_untracked::{build_untracked_patch, read_untracked_text_up_to, untracked_diff_file};
 
@@ -178,6 +180,32 @@ pub(super) fn git_diff_all(
     }
 
     Ok(GitDiffResult { files, truncated })
+}
+
+pub(super) fn git_diff_all_page(
+    path: String,
+    file_paths: Vec<String>,
+) -> Result<GitDiffPage, GitError> {
+    let repo = open_repo(&path)?;
+    let paths = GitPathContext::new(&repo, &path)?;
+    let mut files = Vec::new();
+    let mut total_bytes = 0usize;
+    let mut truncated = false;
+
+    for file_path in file_paths {
+        if append_combined_diff_for_path(
+            &repo,
+            &paths,
+            &file_path,
+            &mut files,
+            &mut total_bytes,
+            &mut truncated,
+        )? {
+            break;
+        }
+    }
+
+    Ok(GitDiffPage { files, truncated })
 }
 
 pub(super) fn git_commit_compare(

@@ -326,6 +326,11 @@ class const GitDiffResult({
   final bool truncated = false,
 });
 
+class const GitDiffPage({
+  required final List<GitDiffFile> files,
+  final bool truncated = false,
+});
+
 class const GitDiffFile({
   required final String path,
   required final GitChangeArea area,

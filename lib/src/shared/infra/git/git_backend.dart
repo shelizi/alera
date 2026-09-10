@@ -123,6 +123,13 @@ abstract interface class GitBackend {
   /// when [filePath] is provided.
   Future<GitDiffResult> diffAll({required String path, String? filePath});
 
+  /// Loads one bounded page of a combined working-tree diff. [filePaths] is
+  /// the current page from a stable snapshot returned by [status].
+  Future<GitDiffPage> diffAllPage({
+    required String path,
+    required List<String> filePaths,
+  });
+
   /// Immutable unified patch used as the source for a reading diff. Passing a
   /// commit selects a commit diff; [area] selects one worktree area; omitting
   /// both combines the visible working-tree changes.

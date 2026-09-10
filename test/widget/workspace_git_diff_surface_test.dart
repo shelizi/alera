@@ -76,6 +76,134 @@ void main() {
     expect(find.text('+line 6000'), findsNothing);
   });
 
+  testWidgets('diff preview renders before full-file hydration completes', (
+    tester,
+  ) async {
+    final backend = _BlockingDiffBlobBackend()
+      ..gitDiffResult = const GitDiffResult(
+        files: <GitDiffFile>[
+          GitDiffFile(
+            path: 'lib/first.dart',
+            area: .unstaged,
+            status: .modified,
+            lines: <GitDiffLine>[GitDiffLine.addition('+first diff')],
+          ),
+          GitDiffFile(
+            path: 'lib/second.dart',
+            area: .unstaged,
+            status: .modified,
+            lines: <GitDiffLine>[GitDiffLine.addition('+second diff')],
+          ),
+        ],
+      );
+    final firstOldSideGate = Completer<void>();
+    backend.gates[(filePath: 'lib/first.dart', oldSide: true)] =
+        firstOldSideGate;
+
+    await _pumpDiffSurface(tester, backend: backend);
+    await tester.pump();
+
+    expect(find.text('+first diff'), findsOneWidget);
+    expect(find.text('+second diff'), findsOneWidget);
+    expect(
+      backend.started,
+      contains((filePath: 'lib/first.dart', oldSide: true)),
+    );
+    expect(
+      backend.started.where((request) => request.filePath == 'lib/second.dart'),
+      isEmpty,
+    );
+
+    firstOldSideGate.complete();
+    await tester.pumpAndSettle();
+
+    expect(
+      backend.started.where((request) => request.filePath == 'lib/second.dart'),
+      isNotEmpty,
+    );
+  });
+
+  testWidgets('all diffs render the first file before later files load', (
+    tester,
+  ) async {
+    final backend = _ProgressiveAllDiffBackend()
+      ..gitStatusResult = const GitStatusResult(
+        entries: <GitChangeEntry>[
+          GitChangeEntry(
+            path: 'lib/first.dart',
+            area: .unstaged,
+            status: .modified,
+          ),
+          GitChangeEntry(
+            path: 'lib/second.dart',
+            area: .unstaged,
+            status: .modified,
+          ),
+        ],
+      )
+      ..diffByFile['lib/first.dart'] = const GitDiffResult(
+        files: <GitDiffFile>[
+          GitDiffFile(
+            path: 'lib/first.dart',
+            area: .unstaged,
+            status: .modified,
+            lines: <GitDiffLine>[GitDiffLine.addition('+first diff')],
+          ),
+        ],
+      )
+      ..diffByFile['lib/second.dart'] = const GitDiffResult(
+        files: <GitDiffFile>[
+          GitDiffFile(
+            path: 'lib/second.dart',
+            area: .unstaged,
+            status: .modified,
+            lines: <GitDiffLine>[GitDiffLine.addition('+second diff')],
+          ),
+        ],
+      );
+    final secondFileGate = Completer<void>();
+    backend.gates['lib/second.dart'] = secondFileGate;
+
+    await _pumpDiffSurface(
+      tester,
+      backend: backend,
+      tab: _diffTab(
+        scope: .all,
+        filePath: null,
+        area: null,
+        title: 'all changes',
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('+first diff'), findsOneWidget);
+    expect(find.text('+second diff'), findsNothing);
+    expect(backend.completedFilePaths, <String>['lib/first.dart']);
+    expect(
+      backend.calls
+          .where((call) => call.method == 'diffAllPage')
+          .single
+          .args['filePaths'],
+      <String>['lib/first.dart'],
+    );
+
+    secondFileGate.complete();
+    await tester.pumpAndSettle();
+
+    expect(find.text('+second diff'), findsOneWidget);
+    expect(backend.completedFilePaths, <String>[
+      'lib/first.dart',
+      'lib/second.dart',
+    ]);
+    expect(
+      backend.calls
+          .where((call) => call.method == 'diffAllPage')
+          .last
+          .args['filePaths'],
+      <String>['lib/second.dart'],
+    );
+  });
+
   testWidgets('full-file view includes unchanged lines outside diff hunks', (
     tester,
   ) async {

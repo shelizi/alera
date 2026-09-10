@@ -233,15 +233,16 @@ class _WorkspaceGitDiffSurfaceState
                 : FutureBuilder<GitDiffResult>(
                     future: _future,
                     builder: (context, snapshot) {
-                      if (snapshot.connectionState != ConnectionState.done) {
+                      final result = _loadedResult ?? snapshot.data;
+                      if (snapshot.connectionState != ConnectionState.done &&
+                          result == null) {
                         return const Center(child: CircularProgressIndicator());
                       }
-                      if (snapshot.hasError) {
+                      if (snapshot.hasError && result == null) {
                         return const _DiffMessage(
                           message: 'Could not load diff.',
                         );
                       }
-                      final result = snapshot.data;
                       if (result == null || result.files.isEmpty) {
                         return const _DiffMessage(
                           message: 'No diff available.',
