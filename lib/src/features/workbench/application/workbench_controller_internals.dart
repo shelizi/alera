@@ -85,7 +85,8 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController {
       WorkbenchMainWorkspacePreparationCoordinator();
   final WorkbenchLayoutLoadCoordinator _layoutLoading =
       WorkbenchLayoutLoadCoordinator();
-  final Set<String> _closingTabWorkspaceIds = <String>{};
+  final WorkbenchWorkspaceTabClosingScope _tabClosingScope =
+      WorkbenchWorkspaceTabClosingScope();
   final Set<String> _workspaceIdsWithClearedLayout = <String>{};
   final WorkbenchFileTabMutationQueue _fileTabMutations =
       WorkbenchFileTabMutationQueue();
@@ -172,7 +173,7 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController {
     if (workspace == null) {
       return;
     }
-    if (_closingTabWorkspaceIds.contains(workspace.id)) {
+    if (_tabClosingScope.isClosing(workspace.id)) {
       return;
     }
     if (state.tabsFor(workspace.id).isNotEmpty &&

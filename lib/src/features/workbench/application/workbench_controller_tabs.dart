@@ -26,51 +26,50 @@ mixin _WorkbenchControllerTabs
       for (final tab in state.tabsFor(workspace.id))
         if (ids.contains(tab.id)) tab.id: tab,
     };
-    try {
-      _closingTabWorkspaceIds.add(workspace.id);
-      for (final tabId in ids) {
-        await _workspaceTabService.closeTab(tabId);
-        final closedTab = closingTabs[tabId];
-        if (closedTab != null) {
-          await _hostedReviewRetention.releaseTab(workspace, closedTab);
+    await _tabClosingScope.run(workspace.id, () async {
+      try {
+        for (final tabId in ids) {
+          await _workspaceTabService.closeTab(tabId);
+          final closedTab = closingTabs[tabId];
+          if (closedTab != null) {
+            await _hostedReviewRetention.releaseTab(workspace, closedTab);
+          }
+          // Every explicit close path must drop the live terminal handle and
+          // editor document after persistence and hosted-review cleanup succeed.
+          _explicitResourceCleaner.closeTabLocalResources(tabId);
         }
-        // Every explicit close path must drop the live terminal handle and
-        // editor document after persistence and hosted-review cleanup succeed.
-        _explicitResourceCleaner.closeTabLocalResources(tabId);
+        final remaining = state
+            .tabsFor(workspace.id)
+            .where((tab) => !ids.contains(tab.id))
+            .toList(growable: false);
+        final mostRecentOpenTabId = closedActiveTab && remaining.isNotEmpty
+            ? _tabFocusHistory.mostRecentOpen(workspace.id, <String>{
+                for (final tab in remaining) tab.id,
+              })
+            : null;
+        final plan = planWorkbenchClosedTabs(
+          workspaceId: workspace.id,
+          remainingTabs: remaining,
+          currentLayout: state.layoutFor(workspace.id),
+          closedTabIds: ids,
+          closedActiveTab: closedActiveTab,
+          mostRecentOpenTabId: mostRecentOpenTabId,
+          activeWorkspaceId: state.activeWorkspaceId,
+        );
+        _setTabsForWorkspace(workspace.id, remaining);
+        if (plan.shouldForgetFocusHistory) {
+          _tabFocusHistory.forget(workspace.id);
+        }
+        await _applyLayout(plan.layout, persist: true);
+        state = state.copyWith(
+          activeWorkspaceId: plan.activeWorkspaceId,
+          error: null,
+        );
+      } catch (error) {
+        state = state.copyWith(error: error.toString());
+        rethrow;
       }
-      final remaining = state
-          .tabsFor(workspace.id)
-          .where((tab) => !ids.contains(tab.id))
-          .toList(growable: false);
-      final mostRecentOpenTabId = closedActiveTab && remaining.isNotEmpty
-          ? _tabFocusHistory.mostRecentOpen(workspace.id, <String>{
-              for (final tab in remaining) tab.id,
-            })
-          : null;
-      final plan = planWorkbenchClosedTabs(
-        workspaceId: workspace.id,
-        remainingTabs: remaining,
-        currentLayout: state.layoutFor(workspace.id),
-        closedTabIds: ids,
-        closedActiveTab: closedActiveTab,
-        mostRecentOpenTabId: mostRecentOpenTabId,
-        activeWorkspaceId: state.activeWorkspaceId,
-      );
-      _setTabsForWorkspace(workspace.id, remaining);
-      if (plan.shouldForgetFocusHistory) {
-        _tabFocusHistory.forget(workspace.id);
-      }
-      await _applyLayout(plan.layout, persist: true);
-      state = state.copyWith(
-        activeWorkspaceId: plan.activeWorkspaceId,
-        error: null,
-      );
-    } catch (error) {
-      state = state.copyWith(error: error.toString());
-      rethrow;
-    } finally {
-      _closingTabWorkspaceIds.remove(workspace.id);
-    }
+    });
   }
 
   Future<void> renameWorkspaceTab({

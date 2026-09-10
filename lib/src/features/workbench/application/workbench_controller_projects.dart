@@ -77,35 +77,34 @@ mixin _WorkbenchControllerProjects
   }
 
   Future<void> sleepWorkspace(Workspace workspace) async {
-    try {
-      final workspaceTabs = state.tabsFor(workspace.id);
-      _closingTabWorkspaceIds.add(workspace.id);
-      _workspaceIdsWithClearedLayout.add(workspace.id);
-      _tabFocusHistory.forget(workspace.id);
-      await _repository.removeWorkspaceTabsForWorkspace(workspace.id);
-      for (final tab in workspaceTabs) {
-        await _hostedReviewRetention.releaseTab(workspace, tab);
+    await _tabClosingScope.run(workspace.id, () async {
+      try {
+        final workspaceTabs = state.tabsFor(workspace.id);
+        _workspaceIdsWithClearedLayout.add(workspace.id);
+        _tabFocusHistory.forget(workspace.id);
+        await _repository.removeWorkspaceTabsForWorkspace(workspace.id);
+        for (final tab in workspaceTabs) {
+          await _hostedReviewRetention.releaseTab(workspace, tab);
+        }
+
+        final plan = planWorkbenchSleepWorkspace(
+          state: state,
+          workspaceId: workspace.id,
+        );
+
+        state = state.copyWith(
+          tabsByWorkspace: plan.tabsByWorkspace,
+          layoutByWorkspace: plan.layoutByWorkspace,
+          activeTabIdByWorkspace: plan.activeTabIdByWorkspace,
+          activeWorkspaceId: plan.activeWorkspaceId,
+          error: null,
+        );
+      } catch (error) {
+        _workspaceIdsWithClearedLayout.remove(workspace.id);
+        state = state.copyWith(error: error.toString());
+        rethrow;
       }
-
-      final plan = planWorkbenchSleepWorkspace(
-        state: state,
-        workspaceId: workspace.id,
-      );
-
-      state = state.copyWith(
-        tabsByWorkspace: plan.tabsByWorkspace,
-        layoutByWorkspace: plan.layoutByWorkspace,
-        activeTabIdByWorkspace: plan.activeTabIdByWorkspace,
-        activeWorkspaceId: plan.activeWorkspaceId,
-        error: null,
-      );
-    } catch (error) {
-      _workspaceIdsWithClearedLayout.remove(workspace.id);
-      state = state.copyWith(error: error.toString());
-      rethrow;
-    } finally {
-      _closingTabWorkspaceIds.remove(workspace.id);
-    }
+    });
   }
 
   Future<void> removeProject(String projectId) async {
