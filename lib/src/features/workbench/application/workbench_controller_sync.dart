@@ -85,28 +85,22 @@ mixin _WorkbenchControllerSync
 
     for (final project in projects) {
       _syncWorktreeMetadataWatcher(project);
-      if (_workspaceSubs.containsKey(project.id)) {
+      if (_workspaceSubscriptions.contains(project.id)) {
         continue;
       }
-      _workspaceSubs[project.id] = _repository
-          .watchWorkspaces(project.id)
-          .listen(
-            (workspaces) => _onWorkspacesChanged(project, workspaces),
-            // Re-subscription is guarded by `containsKey`, so a subscription
-            // that dies must drop out of the map or the project stops syncing
-            // for the rest of the session.
-            onError: (Object _) {},
-            onDone: () => _workspaceSubs.remove(project.id),
-            cancelOnError: false,
-          );
+      _workspaceSubscriptions.watch(
+        projectId: project.id,
+        stream: _repository.watchWorkspaces(project.id),
+        onData: (workspaces) => _onWorkspacesChanged(project, workspaces),
+      );
       unawaited(_ensureMainWorkspaceForProject(project));
     }
 
-    final removedProjectIds = _workspaceSubs.keys
+    final removedProjectIds = _workspaceSubscriptions.projectIds
         .where((projectId) => !validProjectIds.contains(projectId))
         .toList(growable: false);
     for (final projectId in removedProjectIds) {
-      _workspaceSubs.remove(projectId)?.cancel();
+      _workspaceSubscriptions.cancelProject(projectId);
       final removedWorkspaceIds = _tabSubscriptions.workspaceIdsForProject(
         projectId,
       );

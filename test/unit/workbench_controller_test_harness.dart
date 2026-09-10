@@ -498,6 +498,19 @@ class _FakeWorkbenchRepository implements WorkbenchRepository {
     return _layoutsByWorkspace[workspaceId];
   }
 
+  bool hasWorkspaceWatcher(String projectId) {
+    return _workspaceControllers.containsKey(projectId);
+  }
+
+  void killWorkspaceWatcher(String projectId) {
+    final controller = _workspaceControllers.remove(projectId);
+    if (controller == null) {
+      return;
+    }
+    controller.addError(StateError('terminal host connection closed'));
+    unawaited(controller.close());
+  }
+
   bool hasTabWatcher(String workspaceId) {
     return _tabControllers.containsKey(workspaceId);
   }

@@ -47,4 +47,50 @@ void _registerWorkbenchControllerWatcherRecoveryTests() {
       );
     },
   );
+  test(
+    're-subscribes workspaces after a watcher dies on a connection error',
+    () async {
+      await _controller.bootstrap();
+      await _flushUntil(
+        () => _harness.workbenchRepository.hasWorkspaceWatcher(
+          _harness.project.id,
+        ),
+      );
+
+      _harness.workbenchRepository.killWorkspaceWatcher(_harness.project.id);
+      await _flush();
+
+      await _harness.projectRepository.update(_harness.project);
+      await _flushUntil(
+        () => _harness.workbenchRepository.hasWorkspaceWatcher(
+          _harness.project.id,
+        ),
+      );
+
+      final workspace = Workspace(
+        id: 'workspace-after-recovery',
+        projectId: _harness.project.id,
+        name: 'Recovered',
+        branch: 'feature/recovered',
+        path: p.join(_harness.project.repoPath, '.worktrees', 'recovered'),
+        createdAt: .utc(2026, 5, 22),
+        updatedAt: .utc(2026, 5, 22),
+        kind: .linked,
+        status: .active,
+      );
+      await _harness.workbenchRepository.upsertWorkspace(workspace);
+      await _flushUntil(
+        () => _controller.state
+            .workspacesFor(_harness.project.id)
+            .any((candidate) => candidate.id == workspace.id),
+      );
+
+      expect(
+        _controller.state
+            .workspacesFor(_harness.project.id)
+            .map((entry) => entry.id),
+        contains(workspace.id),
+      );
+    },
+  );
 }

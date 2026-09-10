@@ -26,6 +26,7 @@ import 'package:alera/src/features/workbench/application/workbench_sleep_workspa
 import 'package:alera/src/features/workbench/application/workbench_tab_set_sync.dart';
 import 'package:alera/src/features/workbench/application/workbench_tab_subscription_registry.dart';
 import 'package:alera/src/features/workbench/application/workbench_workspace_set_sync.dart';
+import 'package:alera/src/features/workbench/application/workbench_workspace_subscription_registry.dart';
 import 'package:alera/src/features/workbench/application/workspace_descendants.dart';
 import 'package:alera/src/features/workbench/application/workbench_state.dart';
 import 'package:alera/src/features/workbench/application/workbench_view_prefs_repository.dart';
@@ -88,9 +89,7 @@ class WorkbenchController extends _$WorkbenchController
         unawaited(watcher.dispose());
       }
       _worktreeMetadataWatchers.clear();
-      for (final subscription in _workspaceSubs.values) {
-        unawaited(subscription.cancel());
-      }
+      _workspaceSubscriptions.cancelAll();
       _tabSubscriptions.cancelAll();
     });
     return const WorkbenchState();

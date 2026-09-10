@@ -76,8 +76,8 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController {
   StreamSubscription<WorkspaceSectionSnapshot>? _sectionsSub;
   StreamSubscription<List<Project>>? _projectsSub;
   StreamSubscription<WorkbenchViewPrefs>? _viewPrefsSub;
-  final Map<String, StreamSubscription<List<Workspace>>> _workspaceSubs =
-      <String, StreamSubscription<List<Workspace>>>{};
+  final WorkbenchWorkspaceSubscriptionRegistry _workspaceSubscriptions =
+      WorkbenchWorkspaceSubscriptionRegistry();
   final Map<String, GitWorktreeMetadataWatcher> _worktreeMetadataWatchers =
       <String, GitWorktreeMetadataWatcher>{};
   final WorkbenchTabSubscriptionRegistry _tabSubscriptions =
