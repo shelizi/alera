@@ -159,11 +159,7 @@ mixin _WorkbenchControllerSync
     if (tabs.isNotEmpty) {
       _clearedLayouts.forget(workspaceId);
     }
-    state = state.copyWith(
-      tabsByWorkspace: plan.tabsByWorkspace,
-      layoutByWorkspace: plan.layoutByWorkspace,
-      activeTabIdByWorkspace: plan.activeTabIdByWorkspace,
-    );
+    state = applyWorkbenchTabSetSyncPlan(state: state, plan: plan);
     if (plan.shouldLoadLayout) {
       unawaited(_loadLayoutForWorkspace(workspaceId));
     }

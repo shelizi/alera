@@ -36,6 +36,44 @@ void main() {
     expect(plan.shouldLoadLayout, isFalse);
   });
 
+  test('applies tab sync plan while preserving unrelated state', () {
+    final now = DateTime.utc(2026, 9, 10);
+    final liveTab = _tab('live', now);
+    final removedTab = _tab('removed', now);
+    final state = WorkbenchState(
+      activeProjectId: 'project',
+      activeWorkspaceId: 'workspace',
+      tabsByWorkspace: <String, List<WorkspaceTabRecord>>{
+        'workspace': <WorkspaceTabRecord>[liveTab, removedTab],
+      },
+      layoutByWorkspace: <String, WorkbenchLayout>{
+        'workspace': WorkbenchLayout.single(
+          workspaceId: 'workspace',
+          tabIds: <String>[liveTab.id, removedTab.id],
+        ),
+      },
+      activeTabIdByWorkspace: <String, String>{'workspace': removedTab.id},
+      searchQuery: 'keep-search',
+      error: 'keep-error',
+    );
+    final plan = planWorkbenchTabSetSync(
+      state: state,
+      workspaceId: 'workspace',
+      tabs: <WorkspaceTabRecord>[liveTab],
+      layoutWasCleared: false,
+    );
+
+    final next = applyWorkbenchTabSetSyncPlan(state: state, plan: plan);
+
+    expect(next.tabsByWorkspace, plan.tabsByWorkspace);
+    expect(next.layoutByWorkspace, plan.layoutByWorkspace);
+    expect(next.activeTabIdByWorkspace, plan.activeTabIdByWorkspace);
+    expect(next.activeProjectId, 'project');
+    expect(next.activeWorkspaceId, 'workspace');
+    expect(next.searchQuery, 'keep-search');
+    expect(next.error, 'keep-error');
+  });
+
   test('drops a cleared layout after its last tab disappears', () {
     final now = DateTime.utc(2026, 9, 10);
     final removedTab = _tab('removed', now);

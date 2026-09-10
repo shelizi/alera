@@ -31,6 +31,17 @@ final class WorkbenchTabSetSyncPlan {
   final bool shouldLoadLayout;
 }
 
+WorkbenchState applyWorkbenchTabSetSyncPlan({
+  required WorkbenchState state,
+  required WorkbenchTabSetSyncPlan plan,
+}) {
+  return state.copyWith(
+    tabsByWorkspace: plan.tabsByWorkspace,
+    layoutByWorkspace: plan.layoutByWorkspace,
+    activeTabIdByWorkspace: plan.activeTabIdByWorkspace,
+  );
+}
+
 WorkbenchTabSetSyncPlan planWorkbenchTabSetSync({
   required WorkbenchState state,
   required String workspaceId,
