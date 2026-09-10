@@ -17,19 +17,15 @@ mixin _WorkbenchControllerNavigation
       );
     }
     final currentTabs = state.tabsFor(workspaceId);
-    final layout = _layoutForMutation(workspaceId, currentTabs);
-    final tabs = <WorkspaceTabRecord>[
-      for (final current in currentTabs) current.id == tabId ? tab : current,
-      if (!currentTabs.any((current) => current.id == tabId)) tab,
-    ];
-    _setTabsForWorkspace(workspaceId, tabs);
-    if (layout.groupIdForTab(tabId) == null) {
-      await _applyLayout(
-        layout
-            .addTabToGroup(groupId: layout.activeGroupId, tabId: tabId)
-            .sanitize(tabs),
-        persist: true,
-      );
+    final plan = planWorkbenchPersistedTabRestore(
+      currentTabs: currentTabs,
+      layout: _layoutForMutation(workspaceId, currentTabs),
+      restoredTab: tab,
+    );
+    _setTabsForWorkspace(workspaceId, plan.tabs);
+    final layoutToPersist = plan.layoutToPersist;
+    if (layoutToPersist != null) {
+      await _applyLayout(layoutToPersist, persist: true);
     }
     if (!_disposed) {
       await selectWorkspaceTab(workspaceId: workspaceId, tabId: tabId);
