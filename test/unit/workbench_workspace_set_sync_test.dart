@@ -49,6 +49,71 @@ void main() {
     });
     expect(plan.viewPrefsChanged, isTrue);
   });
+
+  test(
+    'reconciles a missing workspace into only its project workspace list',
+    () {
+      final now = DateTime.utc(2026, 9, 10);
+      final project = _project('project', now);
+      final otherProject = _project('other-project', now);
+      final existing = _workspace('existing', project.id, now);
+      final added = _workspace('added', project.id, now);
+      final otherWorkspace = _workspace('other', otherProject.id, now);
+      final state = WorkbenchState(
+        projects: <Project>[project, otherProject],
+        workspacesByProject: <String, List<Workspace>>{
+          project.id: <Workspace>[existing],
+          otherProject.id: <Workspace>[otherWorkspace],
+        },
+        activeProjectId: otherProject.id,
+        activeWorkspaceId: otherWorkspace.id,
+        searchQuery: 'keep-search',
+      );
+
+      final next = reconcileWorkbenchWorkspaceState(
+        state: state,
+        project: project,
+        workspace: added,
+      );
+
+      expect(next.workspacesFor(project.id), <Workspace>[existing, added]);
+      expect(next.workspacesFor(otherProject.id), <Workspace>[otherWorkspace]);
+      expect(next.activeProjectId, otherProject.id);
+      expect(next.activeWorkspaceId, otherWorkspace.id);
+      expect(next.searchQuery, 'keep-search');
+    },
+  );
+
+  test('reconciles an existing workspace in place without duplicating it', () {
+    final now = DateTime.utc(2026, 9, 10);
+    final project = _project('project', now);
+    final existing = _workspace('workspace', project.id, now);
+    final sibling = _workspace('sibling', project.id, now);
+    final updated = Workspace(
+      id: existing.id,
+      projectId: project.id,
+      name: 'Updated workspace',
+      path: 'C:/updated',
+      createdAt: now,
+      updatedAt: now.add(const Duration(minutes: 1)),
+      kind: WorkspaceKind.main,
+      status: WorkspaceStatus.active,
+    );
+    final state = WorkbenchState(
+      projects: <Project>[project],
+      workspacesByProject: <String, List<Workspace>>{
+        project.id: <Workspace>[existing, sibling],
+      },
+    );
+
+    final next = reconcileWorkbenchWorkspaceState(
+      state: state,
+      project: project,
+      workspace: updated,
+    );
+
+    expect(next.workspacesFor(project.id), <Workspace>[updated, sibling]);
+  });
 }
 
 Project _project(String id, DateTime now) => Project(

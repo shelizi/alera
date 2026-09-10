@@ -5,6 +5,24 @@ import 'package:alera/src/features/workbench/domain/workbench_view_prefs.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 
+WorkbenchState reconcileWorkbenchWorkspaceState({
+  required WorkbenchState state,
+  required Project project,
+  required Workspace workspace,
+}) {
+  final workspaces = List<Workspace>.from(state.workspacesFor(project.id));
+  final index = workspaces.indexWhere((entry) => entry.id == workspace.id);
+  if (index == -1) {
+    workspaces.add(workspace);
+  } else {
+    workspaces[index] = workspace;
+  }
+  final workspacesByProject = Map<String, List<Workspace>>.from(
+    state.workspacesByProject,
+  )..[project.id] = workspaces;
+  return state.copyWith(workspacesByProject: workspacesByProject);
+}
+
 final class WorkbenchWorkspaceSetSyncPlan {
   const WorkbenchWorkspaceSetSyncPlan({
     required this.liveWorkspaceIds,

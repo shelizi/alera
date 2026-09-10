@@ -160,17 +160,10 @@ mixin _WorkbenchControllerWorkspaceCreation
   }
 
   void _reconcileWorkspace(Project project, Workspace workspace) {
-    final workspaces = List<Workspace>.from(state.workspacesFor(project.id));
-    final index = workspaces.indexWhere((entry) => entry.id == workspace.id);
-    if (index == -1) {
-      workspaces.add(workspace);
-    } else {
-      workspaces[index] = workspace;
-    }
-    state = state.copyWith(
-      workspacesByProject: Map<String, List<Workspace>>.from(
-        state.workspacesByProject,
-      )..[project.id] = workspaces,
+    state = reconcileWorkbenchWorkspaceState(
+      state: state,
+      project: project,
+      workspace: workspace,
     );
   }
 }
