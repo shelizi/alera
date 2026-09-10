@@ -308,16 +308,16 @@ mixin _WorkbenchControllerProjects
       project: project,
       workspace: workspace,
     );
-    if (ensureInitialTerminal) {
-      await _workspaceTabService.ensureInitialTerminalTab(workspace.id);
-    }
-    final tabs = await _workspaceTabService.listTabs(workspace.id);
-    _setTabsForWorkspace(workspace.id, tabs);
-    final layout = await _layoutResolver.resolve(
-      workspaceId: workspace.id,
-      tabs: tabs,
-    );
-    await _applyLayout(layout, persist: false);
+    final hydration =
+        await WorkbenchWorkspaceSelectionHydrator(
+          tabStore: _workspaceTabService,
+          layoutResolver: _layoutResolver,
+        ).hydrate(
+          workspaceId: workspace.id,
+          ensureInitialTerminal: ensureInitialTerminal,
+        );
+    _setTabsForWorkspace(workspace.id, hydration.tabs);
+    await _applyLayout(hydration.layout, persist: false);
     if (recordHistory &&
         _navigationHistory.record(project: project, workspace: workspace)) {
       _notifyNavigationHistoryChanged();

@@ -1,5 +1,6 @@
 import 'package:alera/src/features/workbench/application/workbench_repository.dart';
 import 'package:alera/src/features/workbench/application/workbench_tab_close_store.dart';
+import 'package:alera/src/features/workbench/application/workbench_workspace_selection_hydrator.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_preview_kind.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/domain/workspace_source_control_scope.dart';
@@ -14,7 +15,7 @@ class WorkspaceTabService._(
   final WorkbenchRepository _repository,
   final Uuid _uuid,
   final DateTime Function() _now,
-) implements WorkbenchTabCloseStore {
+) implements WorkbenchTabCloseStore, WorkbenchWorkspaceSelectionTabStore {
   factory({
     required WorkbenchRepository repository,
     Uuid? uuid,

@@ -1,8 +1,10 @@
 import 'package:alera/src/features/workbench/application/workbench_layout_repository.dart';
+import 'package:alera/src/features/workbench/application/workbench_workspace_selection_hydrator.dart';
 import 'package:alera/src/features/workbench/domain/workbench_layout.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 
-final class WorkbenchLayoutResolver {
+final class WorkbenchLayoutResolver
+    implements WorkbenchWorkspaceSelectionLayoutResolver {
   const WorkbenchLayoutResolver(this._repository);
 
   final WorkbenchLayoutRepository _repository;
