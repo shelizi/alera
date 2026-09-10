@@ -123,13 +123,33 @@ class WorkspaceService._(
         : null;
     final defaultName = _defaultMainWorkspaceName(branch, project.name);
     final now = _now();
+    final projectPath = _canonicalPath(project.repoPath);
+
     Workspace? mainWorkspace;
     for (final workspace in existing) {
-      if (workspace.isMain) {
+      if (workspace.isMain && _canonicalPath(workspace.path) == projectPath) {
         mainWorkspace = workspace;
         break;
       }
     }
+    if (mainWorkspace == null) {
+      for (final workspace in existing) {
+        if (_canonicalPath(workspace.path) == projectPath) {
+          mainWorkspace = workspace;
+          break;
+        }
+      }
+    }
+    if (mainWorkspace == null) {
+      for (final workspace in existing) {
+        if (workspace.isMain) {
+          mainWorkspace = workspace;
+          break;
+        }
+      }
+    }
+
+    final preserveName = mainWorkspace?.isMain ?? false;
     final next =
         (mainWorkspace ??
                 Workspace(
@@ -144,14 +164,36 @@ class WorkspaceService._(
                   status: .active,
                 ))
             .copyWith(
+              name: preserveName ? mainWorkspace!.name : defaultName,
               branch: branch,
               path: project.repoPath,
               updatedAt: now,
               kind: .main,
               status: .active,
               sourceBranch: null,
+              reusesExistingBranch: false,
             );
     await _repository.upsertWorkspace(next);
+
+    for (final workspace in existing) {
+      if (workspace.id == next.id) {
+        continue;
+      }
+      if (_canonicalPath(workspace.path) == projectPath) {
+        await _repository.removeWorkspace(workspace.id, cascadeTabs: true);
+        continue;
+      }
+      if (workspace.isMain) {
+        await _repository.upsertWorkspace(
+          workspace.copyWith(
+            kind: .linked,
+            updatedAt: now,
+            sourceBranch: null,
+            reusesExistingBranch: true,
+          ),
+        );
+      }
+    }
     return next;
   }
 
@@ -461,6 +503,17 @@ class WorkspaceService._(
       return projectName;
     }
     return trimmedBranch;
+  }
+
+  /// Resolves a workspace root to its real on-disk location so symlinked paths
+  /// compare consistently. Falls back to canonical string normalization when
+  /// the path no longer exists.
+  String _canonicalPath(String path) {
+    try {
+      return p.canonicalize(Directory(path).resolveSymbolicLinksSync());
+    } catch (_) {
+      return p.canonicalize(path);
+    }
   }
 
   String _resolveWorkspacePath(Project project, String slug) {
