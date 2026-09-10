@@ -9,7 +9,10 @@ void main() {
     final sleepingTab = _tab('sleeping-tab', workspaceId: 'sleeping');
     final otherTab = _tab('other-tab', workspaceId: 'other');
     final state = WorkbenchState(
+      activeProjectId: 'project',
       activeWorkspaceId: 'sleeping',
+      error: 'stale error',
+      searchQuery: 'keep-search',
       tabsByWorkspace: <String, List<WorkspaceTabRecord>>{
         'sleeping': <WorkspaceTabRecord>[sleepingTab],
         'other': <WorkspaceTabRecord>[otherTab],
@@ -30,18 +33,21 @@ void main() {
       },
     );
 
-    final plan = planWorkbenchSleepWorkspace(
+    final next = applyWorkbenchSleepWorkspaceState(
       state: state,
       workspaceId: 'sleeping',
     );
 
-    expect(plan.activeWorkspaceId, isNull);
-    expect(plan.tabsByWorkspace['sleeping'], isEmpty);
-    expect(plan.tabsByWorkspace['other'], <WorkspaceTabRecord>[otherTab]);
-    expect(plan.layoutByWorkspace.containsKey('sleeping'), isFalse);
-    expect(plan.layoutByWorkspace['other'], state.layoutByWorkspace['other']);
-    expect(plan.activeTabIdByWorkspace.containsKey('sleeping'), isFalse);
-    expect(plan.activeTabIdByWorkspace['other'], otherTab.id);
+    expect(next.activeWorkspaceId, isNull);
+    expect(next.activeProjectId, 'project');
+    expect(next.tabsByWorkspace['sleeping'], isEmpty);
+    expect(next.tabsByWorkspace['other'], <WorkspaceTabRecord>[otherTab]);
+    expect(next.layoutByWorkspace.containsKey('sleeping'), isFalse);
+    expect(next.layoutByWorkspace['other'], state.layoutByWorkspace['other']);
+    expect(next.activeTabIdByWorkspace.containsKey('sleeping'), isFalse);
+    expect(next.activeTabIdByWorkspace['other'], otherTab.id);
+    expect(next.searchQuery, 'keep-search');
+    expect(next.error, isNull);
   });
 
   test('sleeping an inactive workspace preserves the active workspace', () {
@@ -63,15 +69,15 @@ void main() {
       },
     );
 
-    final plan = planWorkbenchSleepWorkspace(
+    final next = applyWorkbenchSleepWorkspaceState(
       state: state,
       workspaceId: 'sleeping',
     );
 
-    expect(plan.activeWorkspaceId, 'active');
-    expect(plan.tabsByWorkspace['sleeping'], isEmpty);
-    expect(plan.layoutByWorkspace.containsKey('sleeping'), isFalse);
-    expect(plan.activeTabIdByWorkspace, <String, String>{
+    expect(next.activeWorkspaceId, 'active');
+    expect(next.tabsByWorkspace['sleeping'], isEmpty);
+    expect(next.layoutByWorkspace.containsKey('sleeping'), isFalse);
+    expect(next.activeTabIdByWorkspace, <String, String>{
       'active': 'active-tab',
     });
   });

@@ -83,17 +83,9 @@ mixin _WorkbenchControllerProjects
           await _hostedReviewRetention.releaseTab(workspace, tab);
         }
 
-        final plan = planWorkbenchSleepWorkspace(
+        state = applyWorkbenchSleepWorkspaceState(
           state: state,
           workspaceId: workspace.id,
-        );
-
-        state = state.copyWith(
-          tabsByWorkspace: plan.tabsByWorkspace,
-          layoutByWorkspace: plan.layoutByWorkspace,
-          activeTabIdByWorkspace: plan.activeTabIdByWorkspace,
-          activeWorkspaceId: plan.activeWorkspaceId,
-          error: null,
         );
       } catch (error) {
         _clearedLayouts.forget(workspace.id);

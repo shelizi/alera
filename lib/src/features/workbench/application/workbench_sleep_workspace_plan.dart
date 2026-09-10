@@ -2,21 +2,7 @@ import 'package:alera/src/features/workbench/application/workbench_state.dart';
 import 'package:alera/src/features/workbench/domain/workbench_layout.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 
-final class WorkbenchSleepWorkspacePlan {
-  const WorkbenchSleepWorkspacePlan({
-    required this.tabsByWorkspace,
-    required this.layoutByWorkspace,
-    required this.activeTabIdByWorkspace,
-    required this.activeWorkspaceId,
-  });
-
-  final Map<String, List<WorkspaceTabRecord>> tabsByWorkspace;
-  final Map<String, WorkbenchLayout> layoutByWorkspace;
-  final Map<String, String> activeTabIdByWorkspace;
-  final String? activeWorkspaceId;
-}
-
-WorkbenchSleepWorkspacePlan planWorkbenchSleepWorkspace({
+WorkbenchState applyWorkbenchSleepWorkspaceState({
   required WorkbenchState state,
   required String workspaceId,
 }) {
@@ -30,12 +16,13 @@ WorkbenchSleepWorkspacePlan planWorkbenchSleepWorkspace({
     state.activeTabIdByWorkspace,
   )..remove(workspaceId);
 
-  return WorkbenchSleepWorkspacePlan(
+  return state.copyWith(
     tabsByWorkspace: tabsByWorkspace,
     layoutByWorkspace: layoutByWorkspace,
     activeTabIdByWorkspace: activeTabIdByWorkspace,
     activeWorkspaceId: state.activeWorkspaceId == workspaceId
         ? null
         : state.activeWorkspaceId,
+    error: null,
   );
 }
