@@ -179,8 +179,7 @@ mixin _WorkbenchControllerSync
       layoutByWorkspace: plan.layoutByWorkspace,
       activeTabIdByWorkspace: plan.activeTabIdByWorkspace,
     );
-    if (plan.shouldLoadLayout &&
-        !_loadingLayoutWorkspaceIds.contains(workspaceId)) {
+    if (plan.shouldLoadLayout) {
       unawaited(_loadLayoutForWorkspace(workspaceId));
     }
     final layoutToPersist = plan.layoutToPersist;

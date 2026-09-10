@@ -83,7 +83,8 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController {
       WorkbenchTabSubscriptionRegistry();
   final WorkbenchMainWorkspacePreparationCoordinator _mainWorkspacePreparation =
       WorkbenchMainWorkspacePreparationCoordinator();
-  final Set<String> _loadingLayoutWorkspaceIds = <String>{};
+  final WorkbenchLayoutLoadCoordinator _layoutLoading =
+      WorkbenchLayoutLoadCoordinator();
   final Set<String> _closingTabWorkspaceIds = <String>{};
   final Set<String> _workspaceIdsWithClearedLayout = <String>{};
   Future<void>? _fileOpenQueue;
@@ -179,24 +180,20 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController {
     }
   }
 
-  Future<void> _loadLayoutForWorkspace(String workspaceId) async {
-    if (!_loadingLayoutWorkspaceIds.add(workspaceId)) {
-      return;
-    }
-    try {
-      final tabs = await _workspaceTabService.listTabs(workspaceId);
-      final layout = await _layoutResolver.resolve(
-        workspaceId: workspaceId,
-        tabs: tabs,
-      );
-      await _applyLayout(layout, persist: false);
-    } catch (error) {
-      if (!_disposed) {
-        state = state.copyWith(error: error.toString());
-      }
-    } finally {
-      _loadingLayoutWorkspaceIds.remove(workspaceId);
-    }
+  Future<void> _loadLayoutForWorkspace(String workspaceId) {
+    final tabService = _workspaceTabService;
+    final layoutResolver = _layoutResolver;
+    return _layoutLoading.load(
+      workspaceId: workspaceId,
+      listTabs: tabService.listTabs,
+      resolveLayout: layoutResolver.resolve,
+      applyLayout: (layout) => _applyLayout(layout, persist: false),
+      onError: (error) {
+        if (!_disposed) {
+          state = state.copyWith(error: error.toString());
+        }
+      },
+    );
   }
 
   WorkbenchLayout _layoutForMutation(
