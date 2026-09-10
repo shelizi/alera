@@ -515,6 +515,26 @@ void _registerWorkbenchControllerViewPrefsTests() {
     },
   );
 
+  test('concurrent bootstrap callers wait for the same bootstrap', () async {
+    final loadGate = Completer<WorkbenchViewPrefs>();
+    _harness.viewPrefsRepository.loadOverride = loadGate.future;
+
+    final first = _controller.bootstrap();
+    await _flush();
+    var secondCompleted = false;
+    final second = _controller.bootstrap().whenComplete(() {
+      secondCompleted = true;
+    });
+    await _flush();
+
+    expect(secondCompleted, isFalse);
+
+    loadGate.complete(WorkbenchViewPrefs.defaults);
+    await Future.wait<void>(<Future<void>>[first, second]);
+
+    expect(_controller.state.bootstrapped, isTrue);
+  });
+
   test('bootstrap prunes stale persisted project filters', () async {
     _harness.viewPrefsRepository.prefs = WorkbenchViewPrefs.defaults.copyWith(
       collapsedProjectIds: <String>{'stale-project', _harness.project.id},

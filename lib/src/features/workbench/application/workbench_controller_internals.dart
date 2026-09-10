@@ -95,8 +95,7 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController {
   final WorkspaceTabFocusHistory _tabFocusHistory = WorkspaceTabFocusHistory();
   final WorkbenchNavigationHistoryService _navigationHistory =
       WorkbenchNavigationHistoryService();
-
-  bool _bootstrapStarted = false;
+  final WorkbenchBootstrapGate _bootstrapGate = WorkbenchBootstrapGate();
 
   bool get canGoBack => _navigationHistory.canGoBack(state);
 

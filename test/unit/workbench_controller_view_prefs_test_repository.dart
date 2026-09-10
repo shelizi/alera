@@ -6,6 +6,7 @@ class _FakeWorkbenchViewPrefsRepository
   Object? loadError;
   Object? saveError;
   int saveCount = 0;
+  Future<WorkbenchViewPrefs>? loadOverride;
 
   @override
   Stream<WorkbenchViewPrefs> get changes => const Stream.empty();
@@ -14,6 +15,10 @@ class _FakeWorkbenchViewPrefsRepository
   Future<WorkbenchViewPrefs> load() async {
     if (loadError case final Object error) {
       throw error;
+    }
+    final override = loadOverride;
+    if (override != null) {
+      return override;
     }
     return prefs;
   }

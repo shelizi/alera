@@ -21,6 +21,7 @@ import 'package:alera/src/features/workbench/application/workbench_explicit_reso
 import 'package:alera/src/features/workbench/application/workbench_file_tab_mutation_queue.dart';
 import 'package:alera/src/features/workbench/application/workbench_hosted_review_retention_service.dart';
 import 'package:alera/src/features/workbench/application/workbench_bootstrap_orchestrator.dart';
+import 'package:alera/src/features/workbench/application/workbench_bootstrap_gate.dart';
 import 'package:alera/src/features/workbench/application/workbench_main_workspace_preparation_coordinator.dart';
 import 'package:alera/src/features/workbench/application/workbench_layout_load_coordinator.dart';
 import 'package:alera/src/features/workbench/application/workbench_layout_resolver.dart';
@@ -98,52 +99,50 @@ class WorkbenchController extends _$WorkbenchController
     return const WorkbenchState();
   }
 
-  Future<void> bootstrap() async {
-    if (_bootstrapStarted) {
-      return;
-    }
-    _bootstrapStarted = true;
-    final viewPrefsRepository = _viewPrefsRepository;
-    final projectRepository = _projectsService.projectRepository;
-    try {
-      await const WorkbenchBootstrapOrchestrator().run(
-        loadViewPrefs: () async {
-          final repository = viewPrefsRepository;
-          return repository == null ? null : await repository.load();
-        },
-        applyViewPrefs: (prefs) {
-          state = state.copyWith(viewPrefs: prefs);
-        },
-        watchViewPrefs: () {
-          final repository = viewPrefsRepository;
-          if (repository == null) {
-            return;
-          }
-          _rootSubscriptions.watchViewPrefs(
-            repository.changes,
-            onData: (prefs) {
-              if (!_disposed) state = state.copyWith(viewPrefs: prefs);
-            },
-          );
-        },
-        startSections: _startSections,
-        watchProjects: () {
-          _rootSubscriptions.watchProjectsRecovering(
-            projectRepository.watchAll,
-            onData: _onProjectsChanged,
-            onError: (Object _) {},
-          );
-        },
-        listProjects: projectRepository.listAll,
-        applyProjects: _onProjectsChanged,
-        ensureMainWorkspace: _ensureMainWorkspaceForProject,
-      );
-      state = state.copyWith(bootstrapped: true, error: null);
-    } catch (error) {
-      state = state.copyWith(
-        bootstrapped: true,
-        error: 'Failed to bootstrap workbench: $error',
-      );
-    }
+  Future<void> bootstrap() {
+    return _bootstrapGate.run(() async {
+      final viewPrefsRepository = _viewPrefsRepository;
+      final projectRepository = _projectsService.projectRepository;
+      try {
+        await const WorkbenchBootstrapOrchestrator().run(
+          loadViewPrefs: () async {
+            final repository = viewPrefsRepository;
+            return repository == null ? null : await repository.load();
+          },
+          applyViewPrefs: (prefs) {
+            state = state.copyWith(viewPrefs: prefs);
+          },
+          watchViewPrefs: () {
+            final repository = viewPrefsRepository;
+            if (repository == null) {
+              return;
+            }
+            _rootSubscriptions.watchViewPrefs(
+              repository.changes,
+              onData: (prefs) {
+                if (!_disposed) state = state.copyWith(viewPrefs: prefs);
+              },
+            );
+          },
+          startSections: _startSections,
+          watchProjects: () {
+            _rootSubscriptions.watchProjectsRecovering(
+              projectRepository.watchAll,
+              onData: _onProjectsChanged,
+              onError: (Object _) {},
+            );
+          },
+          listProjects: projectRepository.listAll,
+          applyProjects: _onProjectsChanged,
+          ensureMainWorkspace: _ensureMainWorkspaceForProject,
+        );
+        state = state.copyWith(bootstrapped: true, error: null);
+      } catch (error) {
+        state = state.copyWith(
+          bootstrapped: true,
+          error: 'Failed to bootstrap workbench: $error',
+        );
+      }
+    });
   }
 }
