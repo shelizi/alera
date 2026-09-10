@@ -7,6 +7,7 @@ import 'dart:isolate';
 
 import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
+import 'package:alera/src/features/workbench/application/terminal_runtime_lifecycle.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_buffer_budget.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_composer_controller.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_link_resolver.dart';
@@ -182,7 +183,7 @@ final class const NoopTerminalVisibilityLease()
   void dispose() {}
 }
 
-abstract interface class TerminalRuntime {
+abstract interface class TerminalRuntime implements TerminalRuntimeLifecycle {
   Stream<TerminalRuntimeExitEvent> get exits;
 
   TerminalSessionHandle sessionFor({
@@ -199,25 +200,6 @@ abstract interface class TerminalRuntime {
 
   /// Rechecks the buffer budget when the active workspace changes.
   void setActiveWorkspace(String? workspaceId);
-
-  void closeTab(String tabId);
-
-  void closeWorkspace(String workspaceId);
-
-  /// Frees the emulator and buffers for [tabId] without terminating the PTY.
-  ///
-  /// This is the cleanup for a tab record that disappeared from persisted
-  /// state (closed by another client, or removed by a background flow): the
-  /// handle can never be reached again through [sessionFor], so keeping it
-  /// would leak the whole scrollback buffer, while terminating the PTY here
-  /// could kill a session another client still owns.
-  void releaseTab(String tabId);
-
-  /// Frees every handle of [workspaceId] without terminating the PTYs.
-  ///
-  /// See [releaseTab] for when release is the right call instead of
-  /// [closeWorkspace].
-  void releaseWorkspace(String workspaceId);
 
   void dispose();
 }

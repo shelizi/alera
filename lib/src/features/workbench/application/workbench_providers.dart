@@ -258,29 +258,8 @@ void terminalHostWarmupCoordinator(Ref ref) {
 final terminalRuntimeLifecycleProvider = Provider<TerminalRuntimeLifecycle>((
   ref,
 ) {
-  return _TerminalRuntimeLifecycleAdapter(ref.watch(terminalRuntimeProvider));
+  return ref.watch(terminalRuntimeProvider);
 });
-
-final class _TerminalRuntimeLifecycleAdapter
-    implements TerminalRuntimeLifecycle {
-  const _TerminalRuntimeLifecycleAdapter(this._runtime);
-
-  final TerminalRuntime _runtime;
-
-  @override
-  void closeTab(String tabId) => _runtime.closeTab(tabId);
-
-  @override
-  void closeWorkspace(String workspaceId) =>
-      _runtime.closeWorkspace(workspaceId);
-
-  @override
-  void releaseTab(String tabId) => _runtime.releaseTab(tabId);
-
-  @override
-  void releaseWorkspace(String workspaceId) =>
-      _runtime.releaseWorkspace(workspaceId);
-}
 
 @Riverpod(keepAlive: true)
 TerminalRuntime terminalRuntime(Ref ref) {

@@ -22,4 +22,17 @@ void main() {
       }
     },
   );
+
+  test('full terminal runtime implements the lifecycle contract', () {
+    final source = File(
+      'lib/src/features/workbench/presentation/terminal_runtime.dart',
+    ).readAsStringSync();
+
+    expect(
+      source,
+      contains(
+        'abstract interface class TerminalRuntime implements TerminalRuntimeLifecycle',
+      ),
+    );
+  });
 }
