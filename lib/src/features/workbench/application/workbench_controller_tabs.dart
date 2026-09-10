@@ -54,16 +54,16 @@ mixin _WorkbenchControllerTabs
           closedTabIds: ids,
           closedActiveTab: closedActiveTab,
           mostRecentOpenTabId: mostRecentOpenTabId,
-          activeWorkspaceId: state.activeWorkspaceId,
         );
         _setTabsForWorkspace(workspace.id, remaining);
         if (plan.shouldForgetFocusHistory) {
           _tabFocusHistory.forget(workspace.id);
         }
         await _applyLayout(plan.layout, persist: true);
-        state = state.copyWith(
-          activeWorkspaceId: plan.activeWorkspaceId,
-          error: null,
+        state = completeWorkbenchTabRemovalState(
+          state: state,
+          workspaceId: workspace.id,
+          remainingTabs: remaining,
         );
       } catch (error) {
         state = state.copyWith(error: error.toString());
@@ -131,12 +131,10 @@ mixin _WorkbenchControllerTabs
           await _applyLayout(layout, persist: true);
         }
       }
-      state = state.copyWith(
-        activeWorkspaceId:
-            tabs.isEmpty && state.activeWorkspaceId == workspace.id
-            ? null
-            : state.activeWorkspaceId,
-        error: null,
+      state = completeWorkbenchTabRemovalState(
+        state: state,
+        workspaceId: workspace.id,
+        remainingTabs: tabs,
       );
     } catch (error) {
       state = state.copyWith(error: error.toString());

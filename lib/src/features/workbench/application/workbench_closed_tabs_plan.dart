@@ -4,12 +4,10 @@ import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 final class WorkbenchClosedTabsPlan {
   const WorkbenchClosedTabsPlan({
     required this.layout,
-    required this.activeWorkspaceId,
     required this.shouldForgetFocusHistory,
   });
 
   final WorkbenchLayout layout;
-  final String? activeWorkspaceId;
   final bool shouldForgetFocusHistory;
 }
 
@@ -20,7 +18,6 @@ WorkbenchClosedTabsPlan planWorkbenchClosedTabs({
   required Set<String> closedTabIds,
   required bool closedActiveTab,
   required String? mostRecentOpenTabId,
-  required String? activeWorkspaceId,
 }) {
   if (remainingTabs.isEmpty) {
     return WorkbenchClosedTabsPlan(
@@ -28,9 +25,6 @@ WorkbenchClosedTabsPlan planWorkbenchClosedTabs({
         workspaceId: workspaceId,
         tabIds: const <String>[],
       ),
-      activeWorkspaceId: activeWorkspaceId == workspaceId
-          ? null
-          : activeWorkspaceId,
       shouldForgetFocusHistory: true,
     );
   }
@@ -59,7 +53,6 @@ WorkbenchClosedTabsPlan planWorkbenchClosedTabs({
 
   return WorkbenchClosedTabsPlan(
     layout: layout,
-    activeWorkspaceId: activeWorkspaceId,
     shouldForgetFocusHistory: false,
   );
 }

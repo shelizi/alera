@@ -24,12 +24,10 @@ void main() {
       closedTabIds: <String>{first.id},
       closedActiveTab: true,
       mostRecentOpenTabId: third.id,
-      activeWorkspaceId: 'workspace',
     );
 
     expect(plan.layout.activeTabId, third.id);
     expect(plan.layout.groupIdForTab(first.id), isNull);
-    expect(plan.activeWorkspaceId, 'workspace');
     expect(plan.shouldForgetFocusHistory, isFalse);
   });
 
@@ -43,12 +41,10 @@ void main() {
         closedTabIds: const <String>{'last'},
         closedActiveTab: true,
         mostRecentOpenTabId: null,
-        activeWorkspaceId: 'workspace',
       );
 
       expect(plan.layout.activeTabId, isNull);
       expect(plan.layout.groups[plan.layout.activeGroupId]?.tabIds, isEmpty);
-      expect(plan.activeWorkspaceId, isNull);
       expect(plan.shouldForgetFocusHistory, isTrue);
     },
   );
@@ -72,11 +68,9 @@ void main() {
       closedTabIds: <String>{first.id},
       closedActiveTab: false,
       mostRecentOpenTabId: second.id,
-      activeWorkspaceId: 'other-workspace',
     );
 
     expect(plan.layout.activeTabId, second.id);
-    expect(plan.activeWorkspaceId, 'other-workspace');
     expect(plan.shouldForgetFocusHistory, isFalse);
   });
 }
