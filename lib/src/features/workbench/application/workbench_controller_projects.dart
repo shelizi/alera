@@ -76,19 +76,18 @@ mixin _WorkbenchControllerProjects
     await _tabClosingScope.run(workspace.id, () async {
       try {
         final workspaceTabs = state.tabsFor(workspace.id);
-        _clearedLayouts.mark(workspace.id);
-        _tabFocusHistory.forget(workspace.id);
-        await _repository.removeWorkspaceTabsForWorkspace(workspace.id);
-        for (final tab in workspaceTabs) {
-          await _hostedReviewRetention.releaseTab(workspace, tab);
-        }
+        await WorkbenchSleepWorkspaceCoordinator(
+          tabRemoval: _repository,
+          hostedReviewRetention: _hostedReviewRetention,
+          clearedLayouts: _clearedLayouts,
+          tabFocusHistory: _tabFocusHistory,
+        ).sleep(workspace: workspace, tabs: workspaceTabs);
 
         state = applyWorkbenchSleepWorkspaceState(
           state: state,
           workspaceId: workspace.id,
         );
       } catch (error) {
-        _clearedLayouts.forget(workspace.id);
         state = state.copyWith(error: error.toString());
         rethrow;
       }

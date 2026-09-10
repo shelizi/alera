@@ -5,7 +5,16 @@ import 'package:alera/src/features/workbench/domain/workspace_source_control_sco
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/shared/infra/git/git_backend.dart';
 
-final class WorkbenchHostedReviewRetentionService {
+abstract interface class WorkbenchHostedReviewTabRetention {
+  Future<void> releaseTab(
+    Workspace workspace,
+    WorkspaceTabRecord tab, {
+    String? fallbackWorkspacePath,
+  });
+}
+
+final class WorkbenchHostedReviewRetentionService
+    implements WorkbenchHostedReviewTabRetention {
   const WorkbenchHostedReviewRetentionService({required GitBackend gitBackend})
     : _gitBackend = gitBackend;
 

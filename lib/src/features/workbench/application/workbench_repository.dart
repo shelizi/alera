@@ -3,8 +3,14 @@ import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/domain/workbench_layout.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 
+abstract interface class WorkbenchWorkspaceTabRemovalRepository {
+  Future<void> removeWorkspaceTabsForWorkspace(String workspaceId);
+}
+
 abstract interface class WorkbenchRepository
-    implements WorkbenchLayoutRepository {
+    implements
+        WorkbenchLayoutRepository,
+        WorkbenchWorkspaceTabRemovalRepository {
   Future<List<Workspace>> listWorkspaces(String projectId);
 
   Stream<List<Workspace>> watchWorkspaces(String projectId);
@@ -32,8 +38,6 @@ abstract interface class WorkbenchRepository
   });
 
   Future<void> removeWorkspaceTab(String tabId);
-
-  Future<void> removeWorkspaceTabsForWorkspace(String workspaceId);
 
   Future<WorkbenchLayout?> findWorkbenchLayout(String workspaceId);
 
