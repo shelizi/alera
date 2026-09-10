@@ -127,27 +127,22 @@ mixin _WorkbenchControllerWorkspaceCreation
     if (project == null) {
       throw StateError('Workspace project not found: ${workspace.projectId}');
     }
-    final plan = planWorkbenchPromptWorkspaceCompletion(
-      agentTabId: agentTabId,
-      deferredSetupCommand: creation.deferredSetupCommand,
-    );
-    await _selectWorkspace(
-      project: project,
-      workspace: workspace,
-      ensureInitialTerminal: plan.ensureInitialTerminal,
-    );
-    await _openDeferredSetupTab(creation);
-    final agentTabIdToRefocus = plan.agentTabIdToRefocus;
-    if (agentTabIdToRefocus != null) {
-      final groupId = state
-          .layoutFor(workspace.id)
-          ?.groupIdForTab(agentTabIdToRefocus);
-      _setActiveTabInternal(
-        workspaceId: workspace.id,
-        tabId: agentTabIdToRefocus,
-        groupId: groupId,
-      );
-    }
+    await WorkbenchPromptWorkspaceCompletionCoordinator(
+      selectWorkspace: ({required ensureInitialTerminal}) => _selectWorkspace(
+        project: project,
+        workspace: workspace,
+        ensureInitialTerminal: ensureInitialTerminal,
+      ),
+      openDeferredSetupTab: _openDeferredSetupTab,
+      refocusAgentTab: (tabId) {
+        final groupId = state.layoutFor(workspace.id)?.groupIdForTab(tabId);
+        _setActiveTabInternal(
+          workspaceId: workspace.id,
+          tabId: tabId,
+          groupId: groupId,
+        );
+      },
+    ).run(creation: creation, agentTabId: agentTabId);
   }
 
   void _reconcileWorkspace(Project project, Workspace workspace) {
