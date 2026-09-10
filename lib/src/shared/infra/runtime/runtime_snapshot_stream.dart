@@ -57,28 +57,42 @@ Stream<T> runtimeSnapshotStream<T>({
   StreamSubscription<RuntimeHostEvent>? eventSub;
   Timer? retryTimer;
   var backoff = retryDelay;
-  var refreshGeneration = 0;
+  var refreshRunning = false;
+  var refreshQueued = false;
 
   Future<void> refresh() async {
     if (controller.isClosed) {
       return;
     }
-    final generation = ++refreshGeneration;
+    if (refreshRunning) {
+      refreshQueued = true;
+      return;
+    }
+
+    refreshRunning = true;
     try {
-      final value = await readSnapshot();
-      if (controller.isClosed || generation != refreshGeneration) {
-        return;
-      }
-      controller.add(value);
-      backoff = retryDelay;
-    } on Object {
-      if (controller.isClosed || generation != refreshGeneration) {
-        return;
-      }
-      retryTimer?.cancel();
-      retryTimer = Timer(backoff, () => unawaited(refresh()));
-      final next = backoff * 2;
-      backoff = next > maxRetryDelay ? maxRetryDelay : next;
+      do {
+        refreshQueued = false;
+        retryTimer?.cancel();
+        retryTimer = null;
+        try {
+          final value = await readSnapshot();
+          if (controller.isClosed) {
+            return;
+          }
+          controller.add(value);
+          backoff = retryDelay;
+        } on Object {
+          if (controller.isClosed) {
+            return;
+          }
+          retryTimer = Timer(backoff, () => unawaited(refresh()));
+          final next = backoff * 2;
+          backoff = next > maxRetryDelay ? maxRetryDelay : next;
+        }
+      } while (refreshQueued && !controller.isClosed);
+    } finally {
+      refreshRunning = false;
     }
   }
 

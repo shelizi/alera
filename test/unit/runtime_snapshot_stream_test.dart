@@ -170,47 +170,101 @@ void main() {
     expect(secondEmitted, <int>[11, 12, 13]);
   });
 
+  test('queues an event refresh behind an in-flight initial read', () async {
+    final client = _FakeRuntimeHostClient();
+    final coalescer = _coalescer();
+    final firstStarted = Completer<void>();
+    final releaseFirst = Completer<void>();
+    var reads = 0;
+    final emitted = <String>[];
+
+    final subscription = runtimeSnapshotStream<String>(
+      client: client,
+      eventNames: const <String>{'changed'},
+      readSnapshot: () async {
+        reads += 1;
+        if (reads == 1) {
+          firstStarted.complete();
+          await releaseFirst.future;
+          return 'old';
+        }
+        return 'new';
+      },
+      coalesceKey: 'key',
+      coalescer: coalescer,
+    ).listen(emitted.add);
+    addTearDown(subscription.cancel);
+
+    await firstStarted.future;
+    client.emit(const RuntimeHostEvent('changed', <String, Object?>{}));
+    await _settle(const Duration(milliseconds: 30));
+
+    expect(
+      reads,
+      1,
+      reason: 'the event must not start a parallel snapshot RPC',
+    );
+    expect(emitted, isEmpty);
+
+    releaseFirst.complete();
+    await _settle();
+
+    expect(reads, 2);
+    expect(emitted, <String>['old', 'new']);
+  });
+
   test(
-    'does not emit a stale initial read after a newer event refresh',
+    'serializes an event refresh behind an in-flight initial read',
     () async {
       final client = _FakeRuntimeHostClient();
       final coalescer = _coalescer();
-      final firstStarted = Completer<void>();
       final releaseFirst = Completer<void>();
       var reads = 0;
-      final emitted = <String>[];
+      var concurrentReads = 0;
+      var maxConcurrentReads = 0;
 
-      final subscription = runtimeSnapshotStream<String>(
+      final subscription = runtimeSnapshotStream<int>(
         client: client,
         eventNames: const <String>{'changed'},
         readSnapshot: () async {
           reads += 1;
-          if (reads == 1) {
-            firstStarted.complete();
-            await releaseFirst.future;
-            return 'old';
+          concurrentReads += 1;
+          if (concurrentReads > maxConcurrentReads) {
+            maxConcurrentReads = concurrentReads;
           }
-          return 'new';
+          try {
+            if (reads == 1) {
+              await releaseFirst.future;
+            }
+            return reads;
+          } finally {
+            concurrentReads -= 1;
+          }
         },
         coalesceKey: 'key',
         coalescer: coalescer,
-      ).listen(emitted.add);
+      ).listen((_) {});
       addTearDown(subscription.cancel);
 
-      await firstStarted.future;
+      await _settle(const Duration(milliseconds: 10));
+      expect(reads, 1);
+
       client.emit(const RuntimeHostEvent('changed', <String, Object?>{}));
       await _settle(const Duration(milliseconds: 30));
-
-      expect(reads, 2);
-      expect(emitted, <String>['new']);
 
       releaseFirst.complete();
       await _settle();
 
       expect(
-        emitted,
-        <String>['new'],
-        reason: 'an older initial request must not overwrite a newer snapshot',
+        reads,
+        2,
+        reason: 'the queued event still needs one fresh snapshot',
+      );
+      expect(
+        maxConcurrentReads,
+        1,
+        reason:
+            'refresh triggers must not start a second snapshot RPC in parallel',
       );
     },
   );
