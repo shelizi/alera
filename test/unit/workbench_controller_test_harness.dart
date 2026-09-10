@@ -241,7 +241,7 @@ class _FakeWorktreeSetupRunner implements WorktreeSetupRunner {
 
 class _FakeProjectRepository(final List<Project> _projects)
     implements ProjectRepository {
-  final StreamController<List<Project>> _projectsController =
+  StreamController<List<Project>> _projectsController =
       StreamController<List<Project>>.broadcast();
   Object? listAllError;
   Object? addError;
@@ -258,6 +258,15 @@ class _FakeProjectRepository(final List<Project> _projects)
 
   @override
   Stream<List<Project>> watchAll() => _projectsController.stream;
+
+  bool get hasWatcher => _projectsController.hasListener;
+
+  void killWatcher() {
+    final previous = _projectsController;
+    _projectsController = StreamController<List<Project>>.broadcast();
+    previous.addError(StateError('project watcher connection closed'));
+    unawaited(previous.close());
+  }
 
   Future<void> dispose() => _projectsController.close();
 

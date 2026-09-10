@@ -47,6 +47,28 @@ void _registerWorkbenchControllerWatcherRecoveryTests() {
       );
     },
   );
+  test('re-subscribes projects after the root watcher completes', () async {
+    await _controller.bootstrap();
+    await _flushUntil(() => _harness.projectRepository.hasWatcher);
+
+    _harness.projectRepository.killWatcher();
+    await _flushUntil(() => _harness.projectRepository.hasWatcher);
+
+    final project = await _harness.addProject(
+      'project-after-root-recovery',
+      'Recovered root watcher',
+    );
+    await _flushUntil(
+      () => _controller.state.projects.any(
+        (candidate) => candidate.id == project.id,
+      ),
+    );
+
+    expect(
+      _controller.state.projects.map((candidate) => candidate.id),
+      contains(project.id),
+    );
+  });
   test(
     're-subscribes workspaces after a watcher dies on a connection error',
     () async {

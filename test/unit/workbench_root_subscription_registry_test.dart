@@ -38,6 +38,56 @@ void main() {
     expect(registry.hasProjects, isFalse);
   });
 
+  test('recovering project watcher re-subscribes after completion', () async {
+    final first = StreamController<List<Project>>();
+    final second = StreamController<List<Project>>();
+    final registry = WorkbenchRootSubscriptionRegistry();
+    addTearDown(() {
+      registry.cancelAll();
+      return second.close();
+    });
+    var attempts = 0;
+    final snapshots = <List<Project>>[];
+
+    registry.watchProjectsRecovering(
+      () => attempts++ == 0 ? first.stream : second.stream,
+      onData: snapshots.add,
+      restartDelay: Duration.zero,
+    );
+
+    await first.close();
+    await _flush();
+    await _flush();
+
+    expect(attempts, 2);
+    expect(second.hasListener, isTrue);
+    second.add(const <Project>[]);
+    await _flush();
+    expect(snapshots, hasLength(1));
+  });
+
+  test('cancelAll cancels a pending project watcher restart', () async {
+    final first = StreamController<List<Project>>();
+    final registry = WorkbenchRootSubscriptionRegistry();
+    var attempts = 0;
+
+    registry.watchProjectsRecovering(
+      () {
+        attempts += 1;
+        return first.stream;
+      },
+      onData: (_) {},
+      restartDelay: const Duration(milliseconds: 25),
+    );
+
+    await first.close();
+    registry.cancelAll();
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+
+    expect(attempts, 1);
+    expect(registry.hasProjects, isFalse);
+  });
+
   test('old watcher completion cannot clear its replacement', () async {
     final cancellationGate = Completer<void>();
     final first = StreamController<List<Project>>(

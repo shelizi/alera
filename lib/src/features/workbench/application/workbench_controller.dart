@@ -128,8 +128,8 @@ class WorkbenchController extends _$WorkbenchController
         },
         startSections: _startSections,
         watchProjects: () {
-          _rootSubscriptions.watchProjects(
-            projectRepository.watchAll(),
+          _rootSubscriptions.watchProjectsRecovering(
+            projectRepository.watchAll,
             onData: _onProjectsChanged,
             onError: (Object _) {},
           );
