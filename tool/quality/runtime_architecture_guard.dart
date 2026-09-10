@@ -18,79 +18,19 @@ const _legacyTransportPaths = <String>[
   'lib/src/features/workbench/infra/terminal_host/terminal_host_frame_codec.dart',
   'lib/src/features/workbench/infra/terminal_host/terminal_host_socket_isolate.dart',
 ];
+const _scanRoots = <String>['lib/src', 'test'];
+const _platformRuntimeRoot = 'lib/src/platform/runtime_host';
+
+final _dependencyDirective = RegExp(
+  r'''^\s*(?:import|export|part)\s+['\"]([^'\"]+)['\"]''',
+);
 
 void main() {
   final violations = <String>[];
 
-  if (File(_legacyProtocolPath).existsSync()) {
-    violations.add(
-      'Runtime protocol is still owned by Workbench: $_legacyProtocolPath',
-    );
-  }
-  if (!File(_platformProtocolPath).existsSync()) {
-    violations.add('Missing neutral runtime protocol: $_platformProtocolPath');
-  }
-
-  final grep = Process.runSync('git', <String>[
-    'grep',
-    '-n',
-    '-F',
-    _legacyProtocolImport,
-    '--',
-    'lib/src',
-    'test',
-  ]);
-  if (grep.exitCode == 0) {
-    final matches = '${grep.stdout}'.trim();
-    if (matches.isNotEmpty) {
-      violations.add('Legacy runtime protocol imports:\n$matches');
-    }
-  } else if (grep.exitCode != 1) {
-    violations.add('Unable to scan runtime protocol imports: ${grep.stderr}');
-  }
-
-  for (final path in _legacyTransportPaths) {
-    if (File(path).existsSync()) {
-      violations.add('Runtime transport is still owned by Workbench: $path');
-    }
-  }
-  for (final path in _platformTransportPaths) {
-    if (!File(path).existsSync()) {
-      violations.add('Missing neutral runtime transport: $path');
-    }
-  }
-  for (final legacyImport in _legacyTransportImports) {
-    final transportGrep = Process.runSync('git', <String>[
-      'grep',
-      '-n',
-      '-F',
-      legacyImport,
-      '--',
-      'lib/src',
-      'test',
-    ]);
-    if (transportGrep.exitCode == 0) {
-      final matches = '${transportGrep.stdout}'.trim();
-      if (matches.isNotEmpty) {
-        violations.add('Legacy runtime transport imports:\n$matches');
-      }
-    } else if (transportGrep.exitCode != 1) {
-      violations.add(
-        'Unable to scan runtime transport imports: ${transportGrep.stderr}',
-      );
-    }
-  }
-
-  final platformProtocol = File(_platformProtocolPath);
-  if (platformProtocol.existsSync()) {
-    final source = platformProtocol.readAsStringSync();
-    final featureImport = RegExp(r"import 'package:alera/src/features/[^']+';");
-    if (featureImport.hasMatch(source)) {
-      violations.add(
-        'Runtime protocol boundary imports feature code: $_platformProtocolPath',
-      );
-    }
-  }
+  _checkMovedFiles(violations);
+  _checkLegacyReferences(violations);
+  _checkPlatformFeatureDependencies(violations);
 
   if (violations.isEmpty) {
     stdout.writeln('Runtime architecture guard passed.');
@@ -103,3 +43,114 @@ void main() {
   }
   exitCode = 1;
 }
+
+void _checkMovedFiles(List<String> violations) {
+  if (File(_legacyProtocolPath).existsSync()) {
+    violations.add(
+      'Runtime protocol is still owned by Workbench: $_legacyProtocolPath',
+    );
+  }
+  if (!File(_platformProtocolPath).existsSync()) {
+    violations.add('Missing neutral runtime protocol: $_platformProtocolPath');
+  }
+
+  for (final path in _legacyTransportPaths) {
+    if (File(path).existsSync()) {
+      violations.add('Runtime transport is still owned by Workbench: $path');
+    }
+  }
+  for (final path in _platformTransportPaths) {
+    if (!File(path).existsSync()) {
+      violations.add('Missing neutral runtime transport: $path');
+    }
+  }
+}
+
+void _checkLegacyReferences(List<String> violations) {
+  for (final legacyImport in <String>[
+    _legacyProtocolImport,
+    ..._legacyTransportImports,
+  ]) {
+    final matches = _findLiteralReferences(legacyImport);
+    if (matches.isNotEmpty) {
+      violations.add(
+        'Legacy runtime import still referenced:\n${matches.join('\n')}',
+      );
+    }
+  }
+}
+
+List<String> _findLiteralReferences(String needle) {
+  final matches = <String>[];
+  for (final root in _scanRoots) {
+    for (final file in _dartFilesUnder(root)) {
+      final lines = file.readAsLinesSync();
+      for (var index = 0; index < lines.length; index += 1) {
+        if (lines[index].contains(needle)) {
+          matches.add(
+            '${_displayPath(file)}:${index + 1}:${lines[index].trim()}',
+          );
+        }
+      }
+    }
+  }
+  return matches;
+}
+
+void _checkPlatformFeatureDependencies(List<String> violations) {
+  final platformRoot = Directory(_platformRuntimeRoot);
+  if (!platformRoot.existsSync()) {
+    violations.add('Missing neutral runtime root: $_platformRuntimeRoot');
+    return;
+  }
+
+  for (final file in _dartFilesUnder(_platformRuntimeRoot)) {
+    final lines = file.readAsLinesSync();
+    for (var index = 0; index < lines.length; index += 1) {
+      final match = _dependencyDirective.firstMatch(lines[index]);
+      final uri = match?.group(1);
+      if (uri != null && _resolvesToFeature(file, uri)) {
+        violations.add(
+          'Runtime boundary imports feature code: '
+          '${_displayPath(file)}:${index + 1}:$uri',
+        );
+      }
+    }
+  }
+}
+
+bool _resolvesToFeature(File owner, String uri) {
+  if (uri.startsWith('package:alera/src/features/')) {
+    return true;
+  }
+  if (uri.startsWith('dart:') || uri.startsWith('package:')) {
+    return false;
+  }
+
+  final featureRoot = Directory('lib/src/features').absolute.uri;
+  final resolved = owner.parent.absolute.uri.resolve(uri);
+  return _isWithin(resolved, featureRoot);
+}
+
+bool _isWithin(Uri candidate, Uri root) {
+  final candidatePath = candidate.normalizePath().path;
+  final normalizedRoot = root.normalizePath().path;
+  final rootPath = normalizedRoot.endsWith('/')
+      ? normalizedRoot
+      : '$normalizedRoot/';
+  return candidatePath.startsWith(rootPath);
+}
+
+Iterable<File> _dartFilesUnder(String rootPath) sync* {
+  final root = Directory(rootPath);
+  if (!root.existsSync()) {
+    return;
+  }
+  for (final entity in root.listSync(recursive: true, followLinks: false)) {
+    if (entity is File && entity.path.endsWith('.dart')) {
+      yield entity;
+    }
+  }
+}
+
+String _displayPath(File file) => file.path.replaceAll('\\', '/');
