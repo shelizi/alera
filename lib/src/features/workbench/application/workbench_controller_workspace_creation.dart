@@ -120,24 +120,24 @@ mixin _WorkbenchControllerWorkspaceCreation
     if (project == null) {
       throw StateError('Workspace project not found: ${workspace.projectId}');
     }
-    final setupCommand = creation.deferredSetupCommand?.trim();
-    final expectsPromptTab =
-        agentTabId?.trim().isNotEmpty == true ||
-        (setupCommand != null && setupCommand.isNotEmpty);
+    final plan = planWorkbenchPromptWorkspaceCompletion(
+      agentTabId: agentTabId,
+      deferredSetupCommand: creation.deferredSetupCommand,
+    );
     await _selectWorkspace(
       project: project,
       workspace: workspace,
-      ensureInitialTerminal: !expectsPromptTab,
+      ensureInitialTerminal: plan.ensureInitialTerminal,
     );
     await _openDeferredSetupTab(creation);
-    final resolvedAgentTabId = agentTabId?.trim();
-    if (resolvedAgentTabId != null && resolvedAgentTabId.isNotEmpty) {
+    final agentTabIdToRefocus = plan.agentTabIdToRefocus;
+    if (agentTabIdToRefocus != null) {
       final groupId = state
           .layoutFor(workspace.id)
-          ?.groupIdForTab(resolvedAgentTabId);
+          ?.groupIdForTab(agentTabIdToRefocus);
       _setActiveTabInternal(
         workspaceId: workspace.id,
-        tabId: resolvedAgentTabId,
+        tabId: agentTabIdToRefocus,
         groupId: groupId,
       );
     }

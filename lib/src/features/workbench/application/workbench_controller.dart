@@ -39,6 +39,7 @@ import 'package:alera/src/features/workbench/application/workbench_sleep_workspa
 import 'package:alera/src/features/workbench/application/workbench_tab_removal_state.dart';
 import 'package:alera/src/features/workbench/application/workbench_tab_set_sync.dart';
 import 'package:alera/src/features/workbench/application/workbench_tab_placement_plan.dart';
+import 'package:alera/src/features/workbench/application/workbench_prompt_workspace_completion_plan.dart';
 import 'package:alera/src/features/workbench/application/workbench_tab_subscription_registry.dart';
 import 'package:alera/src/features/workbench/application/workbench_workspace_tag_update_plan.dart';
 import 'package:alera/src/features/workbench/application/workbench_workspace_parent_update_service.dart';
