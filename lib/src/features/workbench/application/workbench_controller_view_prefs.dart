@@ -7,11 +7,12 @@ mixin _WorkbenchControllerViewPrefs
   }
 
   void toggleProjectCollapsed(String projectId) {
-    final next = Set<String>.from(state.viewPrefs.collapsedProjectIds);
-    if (!next.add(projectId)) {
-      next.remove(projectId);
-    }
-    _updateViewPrefs(state.viewPrefs.copyWith(collapsedProjectIds: next));
+    _updateViewPrefs(
+      toggleWorkbenchProjectCollapsedPrefs(
+        prefs: state.viewPrefs,
+        projectId: projectId,
+      ),
+    );
   }
 
   void setGroupBy(WorkbenchGroupBy groupBy) {
@@ -135,12 +136,11 @@ mixin _WorkbenchControllerViewPrefs
   }
 
   void toggleParentWorkspaceCollapsed(String workspaceId) {
-    final next = Set<String>.from(state.viewPrefs.collapsedParentWorkspaceIds);
-    if (!next.add(workspaceId)) {
-      next.remove(workspaceId);
-    }
     _updateViewPrefs(
-      state.viewPrefs.copyWith(collapsedParentWorkspaceIds: next),
+      toggleWorkbenchParentWorkspaceCollapsedPrefs(
+        prefs: state.viewPrefs,
+        workspaceId: workspaceId,
+      ),
     );
   }
 
@@ -171,26 +171,22 @@ mixin _WorkbenchControllerViewPrefs
   }
 
   void toggleWorkspaceExpanded(String workspaceId) {
-    final next = Set<String>.from(state.viewPrefs.expandedWorkspaceIds);
-    if (!next.add(workspaceId)) {
-      next.remove(workspaceId);
-    }
-    _updateViewPrefs(state.viewPrefs.copyWith(expandedWorkspaceIds: next));
+    _updateViewPrefs(
+      toggleWorkbenchWorkspaceExpandedPrefs(
+        prefs: state.viewPrefs,
+        workspaceId: workspaceId,
+      ),
+    );
   }
 
   void setWorkspaceExpanded(String workspaceId, bool expanded) {
-    final current = state.viewPrefs.expandedWorkspaceIds;
-    final isExpanded = current.contains(workspaceId);
-    if (expanded == isExpanded) {
-      return;
-    }
-    final next = Set<String>.from(current);
-    if (expanded) {
-      next.add(workspaceId);
-    } else {
-      next.remove(workspaceId);
-    }
-    _updateViewPrefs(state.viewPrefs.copyWith(expandedWorkspaceIds: next));
+    _updateViewPrefsIfChanged(
+      nextWorkbenchWorkspaceExpandedPrefs(
+        prefs: state.viewPrefs,
+        workspaceId: workspaceId,
+        expanded: expanded,
+      ),
+    );
   }
 
   void setRightSidebarVisible(bool visible) {
