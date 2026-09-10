@@ -19,6 +19,7 @@ import 'package:alera/src/features/workbench/application/workbench_navigation_hi
 import 'package:alera/src/features/workbench/application/workbench_retired_resource_cleaner.dart';
 import 'package:alera/src/features/workbench/application/workbench_explicit_resource_cleaner.dart';
 import 'package:alera/src/features/workbench/application/workbench_hosted_review_retention_service.dart';
+import 'package:alera/src/features/workbench/application/workbench_bootstrap_orchestrator.dart';
 import 'package:alera/src/features/workbench/application/workbench_closed_tabs_plan.dart';
 import 'package:alera/src/features/workbench/application/workbench_project_set_sync.dart';
 import 'package:alera/src/features/workbench/application/workbench_root_subscription_registry.dart';
@@ -96,33 +97,40 @@ class WorkbenchController extends _$WorkbenchController
       return;
     }
     _bootstrapStarted = true;
+    final viewPrefsRepository = _viewPrefsRepository;
+    final projectRepository = _projectsService.projectRepository;
     try {
-      final repo = _viewPrefsRepository;
-      if (repo != null) {
-        try {
-          final prefs = await repo.load();
+      await const WorkbenchBootstrapOrchestrator().run(
+        loadViewPrefs: () async {
+          final repository = viewPrefsRepository;
+          return repository == null ? null : await repository.load();
+        },
+        applyViewPrefs: (prefs) {
           state = state.copyWith(viewPrefs: prefs);
+        },
+        watchViewPrefs: () {
+          final repository = viewPrefsRepository;
+          if (repository == null) {
+            return;
+          }
           _rootSubscriptions.watchViewPrefs(
-            repo.changes,
+            repository.changes,
             onData: (prefs) {
               if (!_disposed) state = state.copyWith(viewPrefs: prefs);
             },
           );
-        } catch (_) {
-          // Fall back to defaults if loading fails; never block bootstrap.
-        }
-      }
-      _startSections();
-      _rootSubscriptions.watchProjects(
-        _projectsService.projectRepository.watchAll(),
-        onData: _onProjectsChanged,
-        onError: (Object _) {},
-      );
-      final initialProjects = await _projectsService.projectRepository
-          .listAll();
-      _onProjectsChanged(initialProjects);
-      await Future.wait<void>(
-        initialProjects.map(_ensureMainWorkspaceForProject),
+        },
+        startSections: _startSections,
+        watchProjects: () {
+          _rootSubscriptions.watchProjects(
+            projectRepository.watchAll(),
+            onData: _onProjectsChanged,
+            onError: (Object _) {},
+          );
+        },
+        listProjects: projectRepository.listAll,
+        applyProjects: _onProjectsChanged,
+        ensureMainWorkspace: _ensureMainWorkspaceForProject,
       );
       state = state.copyWith(bootstrapped: true, error: null);
     } catch (error) {
