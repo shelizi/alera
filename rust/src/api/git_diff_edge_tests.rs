@@ -1,6 +1,31 @@
 use super::*;
 
 #[test]
+fn git_diff_all_page_advances_through_the_file_snapshot() {
+    let repo = init_repo();
+    std::fs::write(repo.path().join("first.txt"), "first\n").expect("write first");
+    std::fs::write(repo.path().join("second.txt"), "second\n").expect("write second");
+    run_git(repo.path(), &["add", "."]);
+    run_git(repo.path(), &["commit", "-m", "add page files"]);
+    std::fs::write(repo.path().join("first.txt"), "first changed\n").expect("modify first");
+    std::fs::write(repo.path().join("second.txt"), "second changed\n").expect("modify second");
+
+    let first = git_diff_all_page(path_str(repo.path()), vec!["first.txt".to_string()]).unwrap();
+    assert_eq!(first.files.len(), 1);
+    assert_eq!(first.files[0].path, "first.txt");
+    assert!(!first.truncated);
+
+    let second = git_diff_all_page(path_str(repo.path()), vec!["second.txt".to_string()]).unwrap();
+    assert_eq!(second.files.len(), 1);
+    assert_eq!(second.files[0].path, "second.txt");
+    assert!(!second.truncated);
+
+    let empty = git_diff_all_page(path_str(repo.path()), Vec::new()).unwrap();
+    assert!(empty.files.is_empty());
+    assert!(!empty.truncated);
+}
+
+#[test]
 fn git_diff_returns_no_untracked_file_after_staging() {
     let repo = init_repo();
     std::fs::write(repo.path().join("stale.txt"), "stale\n").expect("write untracked");

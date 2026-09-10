@@ -40,6 +40,21 @@ mixin _FakeGitBackendDiffs {
     return gitDiffAllResult;
   }
 
+  GitDiffPage gitDiffAllPageResult = const GitDiffPage(files: []);
+
+  Future<GitDiffPage> diffAllPage({
+    required String path,
+    required List<String> filePaths,
+  }) async {
+    calls.add(
+      GitBackendCall('diffAllPage', <String, Object?>{
+        'path': path,
+        'filePaths': filePaths,
+      }),
+    );
+    return gitDiffAllPageResult;
+  }
+
   Future<Uint8List> readingDiffPatch({
     required String path,
     String? filePath,

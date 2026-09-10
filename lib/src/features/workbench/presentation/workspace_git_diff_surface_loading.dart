@@ -1,5 +1,16 @@
 part of 'workspace_git_diff_surface.dart';
 
+const _maxProgressiveDiffPreviewBytes = 512 * 1024;
+const _progressiveFirstDiffPageSize = 1;
+const _progressiveDiffPageSize = 4;
+
+class _ProgressiveDiffPage {
+  const _ProgressiveDiffPage({required this.result, required this.nextIndex});
+
+  final GitDiffResult result;
+  final int? nextIndex;
+}
+
 extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
   void _load() {
     final loadGeneration = ++_diffLoadGeneration;
@@ -9,16 +20,16 @@ extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
       unawaited(
         readingDiffCompletion.future.then((_) {
           if (mounted && loadGeneration == _diffLoadGeneration) {
-            _loadNow();
+            _loadNow(loadGeneration);
           }
         }),
       );
       return;
     }
-    _loadNow();
+    _loadNow(loadGeneration);
   }
 
-  void _loadNow() {
+  void _loadNow(int loadGeneration) {
     _readingDiffGeneration += 1;
     final backend = ref.read(gitBackendProvider);
     final scope = widget.tab.gitDiffScope;
@@ -29,6 +40,20 @@ extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
       widget.tab.gitDiffOldPath,
     );
     final area = widget.tab.gitDiffArea;
+    final progressiveAllPathsFuture =
+        !_isCommitBackedDiff && scope == WorkspaceGitDiffScope.all
+        ? _loadProgressiveAllPaths(
+            backend: backend,
+            sourceControlPath: sourceControlScope.path,
+          )
+        : null;
+    final progressiveFirstPageFuture = progressiveAllPathsFuture == null
+        ? null
+        : _loadFirstProgressiveAllPage(
+            backend: backend,
+            sourceControlPath: sourceControlScope.path,
+            pathsFuture: progressiveAllPathsFuture,
+          );
     final nextFuture = _isCommitBackedDiff
         ? _loadCommitDiff(
             backend: backend,
@@ -37,8 +62,8 @@ extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
             sourceOldPath: sourceOldPath,
           )
         : switch (scope) {
-            WorkspaceGitDiffScope.all => backend.diffAll(
-              path: sourceControlScope.path,
+            WorkspaceGitDiffScope.all => progressiveFirstPageFuture!.then(
+              (page) => page.result,
             ),
             WorkspaceGitDiffScope.fileAll =>
               sourceFilePath == null
@@ -72,27 +97,41 @@ extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
     });
     unawaited(
       nextFuture.then(
-        (result) async {
-          if (!mounted || _future != nextFuture) {
+        (result) {
+          if (!_isCurrentDiffLoad(nextFuture, loadGeneration)) {
             return;
           }
           _updateDiffState(() {
             _loadedResult = result;
           });
-          final fullFileContents = await _loadFullFileContents(
-            backend: backend,
-            sourceControlScope: sourceControlScope,
-            result: result,
-          );
-          if (!mounted || _future != nextFuture) {
-            return;
+          final allPathsFuture = progressiveAllPathsFuture;
+          final firstPageFuture = progressiveFirstPageFuture;
+          if (allPathsFuture != null && firstPageFuture != null) {
+            unawaited(
+              firstPageFuture.then(
+                (firstPage) => _loadRemainingProgressiveAllDiff(
+                  backend: backend,
+                  sourceControlPath: sourceControlScope.path,
+                  pathsFuture: allPathsFuture,
+                  firstPage: firstPage,
+                  nextFuture: nextFuture,
+                  loadGeneration: loadGeneration,
+                ),
+              ),
+            );
           }
-          _updateDiffState(() {
-            _fullFileContents = fullFileContents;
-          });
+          unawaited(
+            _loadFullFileContents(
+              backend: backend,
+              sourceControlScope: sourceControlScope,
+              result: result,
+              nextFuture: nextFuture,
+              loadGeneration: loadGeneration,
+            ),
+          );
         },
         onError: (_) {
-          if (!mounted || _future != nextFuture) {
+          if (!_isCurrentDiffLoad(nextFuture, loadGeneration)) {
             return;
           }
           _updateDiffState(() {
@@ -103,10 +142,180 @@ extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
     );
   }
 
-  Future<Map<GitDiffFile, _FullFileContents>> _loadFullFileContents({
+  Future<List<String>?> _loadProgressiveAllPaths({
+    required GitBackend backend,
+    required String sourceControlPath,
+  }) async {
+    final status = await backend.status(sourceControlPath);
+    final hasNestedSubmoduleChanges = status.entries.any((entry) {
+      final submodule = entry.submodule;
+      return submodule != null &&
+          (submodule.trackedChanges || submodule.untrackedChanges);
+    });
+    if (hasNestedSubmoduleChanges) {
+      // The combined Rust operation includes nested submodule worktree files;
+      // keep that path as one operation until it has a paged equivalent.
+      return null;
+    }
+    final paths = <String>{};
+    for (final entry in status.entries) {
+      paths.add(entry.path);
+    }
+    return paths.toList(growable: false);
+  }
+
+  Future<_ProgressiveDiffPage> _loadFirstProgressiveAllPage({
+    required GitBackend backend,
+    required String sourceControlPath,
+    required Future<List<String>?> pathsFuture,
+  }) async {
+    final paths = await pathsFuture;
+    if (paths == null) {
+      return _ProgressiveDiffPage(
+        result: await backend.diffAll(path: sourceControlPath),
+        nextIndex: null,
+      );
+    }
+    if (paths.isEmpty) {
+      return const _ProgressiveDiffPage(
+        result: GitDiffResult(files: []),
+        nextIndex: null,
+      );
+    }
+    final page = await backend.diffAllPage(
+      path: sourceControlPath,
+      filePaths: paths
+          .take(_progressiveFirstDiffPageSize)
+          .toList(growable: false),
+    );
+    return _ProgressiveDiffPage(
+      result: GitDiffResult(files: page.files, truncated: page.truncated),
+      nextIndex: paths.length > _progressiveFirstDiffPageSize
+          ? _progressiveFirstDiffPageSize
+          : null,
+    );
+  }
+
+  Future<void> _loadRemainingProgressiveAllDiff({
+    required GitBackend backend,
+    required String sourceControlPath,
+    required Future<List<String>?> pathsFuture,
+    required _ProgressiveDiffPage firstPage,
+    required Future<GitDiffResult> nextFuture,
+    required int loadGeneration,
+  }) async {
+    final paths = await pathsFuture;
+    if (paths == null || firstPage.nextIndex == null) {
+      return;
+    }
+    var accumulated = firstPage.result;
+    var accumulatedBytes = _diffPreviewBytes(firstPage.result);
+    if (accumulatedBytes >= _maxProgressiveDiffPreviewBytes) {
+      return;
+    }
+    var nextIndex = firstPage.nextIndex;
+    while (nextIndex != null && nextIndex < paths.length) {
+      if (!_isCurrentDiffLoad(nextFuture, loadGeneration)) {
+        return;
+      }
+      final pageStartIndex = nextIndex;
+      final pagePaths = paths
+          .skip(pageStartIndex)
+          .take(_progressiveDiffPageSize)
+          .toList(growable: false);
+      if (pagePaths.isEmpty) {
+        return;
+      }
+      final page = await _loadProgressiveDiffPage(
+        backend: backend,
+        sourceControlPath: sourceControlPath,
+        filePaths: pagePaths,
+      );
+      if (!_isCurrentDiffLoad(nextFuture, loadGeneration)) {
+        return;
+      }
+      if (page == null) {
+        return;
+      }
+      final result = GitDiffResult(
+        files: page.files,
+        truncated: page.truncated,
+      );
+      if (result.files.isNotEmpty) {
+        final resultBytes = _diffPreviewBytes(result);
+        if (resultBytes > _maxProgressiveDiffPreviewBytes - accumulatedBytes) {
+          _updateDiffState(() {
+            _loadedResult = GitDiffResult(
+              files: accumulated.files,
+              truncated: true,
+            );
+          });
+          return;
+        }
+        accumulated = GitDiffResult(
+          files: <GitDiffFile>[...accumulated.files, ...result.files],
+          truncated: accumulated.truncated || result.truncated,
+        );
+        accumulatedBytes += resultBytes;
+        _updateDiffState(() {
+          _loadedResult = accumulated;
+        });
+        unawaited(
+          _loadFullFileContents(
+            backend: backend,
+            sourceControlScope: _sourceControlScope,
+            result: result,
+            nextFuture: nextFuture,
+            loadGeneration: loadGeneration,
+          ),
+        );
+      }
+      nextIndex = pageStartIndex + pagePaths.length;
+    }
+  }
+
+  Future<GitDiffPage?> _loadProgressiveDiffPage({
+    required GitBackend backend,
+    required String sourceControlPath,
+    required List<String> filePaths,
+  }) async {
+    try {
+      return await backend.diffAllPage(
+        path: sourceControlPath,
+        filePaths: filePaths,
+      );
+    } catch (_) {
+      // A later page is best-effort once the first page is visible. Keep the
+      // already-rendered pages usable if a file changes or disappears.
+      return null;
+    }
+  }
+
+  int _diffPreviewBytes(GitDiffResult result) {
+    var total = 0;
+    for (final file in result.files) {
+      for (final line in file.lines) {
+        total += line.text.length + 1;
+      }
+    }
+    return total;
+  }
+
+  bool _isCurrentDiffLoad(
+    Future<GitDiffResult> nextFuture,
+    int loadGeneration,
+  ) {
+    return mounted &&
+        _future == nextFuture &&
+        _diffLoadGeneration == loadGeneration;
+  }
+
+  Future<void> _loadFullFileContents({
     required GitBackend backend,
     required WorkspaceSourceControlScope sourceControlScope,
     required GitDiffResult result,
+    required Future<GitDiffResult> nextFuture,
+    required int loadGeneration,
   }) async {
     Future<Uint8List?> loadSide(GitDiffFile file, bool oldSide) async {
       try {
@@ -124,31 +333,40 @@ extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
       }
     }
 
-    final entries = await Future.wait(
-      result.files.map((file) async {
-        if (file.isBinary || file.isLarge || file.isGitlink) {
-          return null;
-        }
-        final loadOld =
-            file.status != GitChangeStatus.added &&
-            file.status != GitChangeStatus.untracked;
-        final loadNew = file.status != GitChangeStatus.deleted;
-        final sides = await Future.wait(<Future<Uint8List?>>[
-          if (loadOld) loadSide(file, true) else Future.value(null),
-          if (loadNew) loadSide(file, false) else Future.value(null),
-        ]);
-        final contents = _FullFileContents(
-          oldBytes: sides[0],
-          newBytes: sides[1],
-        );
-        return contents.oldBytes == null && contents.newBytes == null
-            ? null
-            : MapEntry(file, contents);
-      }),
-    );
-    return <GitDiffFile, _FullFileContents>{
-      for (final entry in entries)
-        if (entry != null) entry.key: entry.value,
-    };
+    // Show the diff preview first, then hydrate one file at a time. Loading
+    // both blobs for every changed file in parallel can create a large native
+    // read burst and keeps the first frame waiting for unrelated files.
+    for (final file in result.files) {
+      if (!_isCurrentDiffLoad(nextFuture, loadGeneration)) {
+        return;
+      }
+      if (file.isBinary || file.isLarge || file.isGitlink) {
+        continue;
+      }
+      final loadOld =
+          file.status != GitChangeStatus.added &&
+          file.status != GitChangeStatus.untracked;
+      final loadNew = file.status != GitChangeStatus.deleted;
+      final sides = await Future.wait(<Future<Uint8List?>>[
+        if (loadOld) loadSide(file, true) else Future.value(null),
+        if (loadNew) loadSide(file, false) else Future.value(null),
+      ]);
+      if (!_isCurrentDiffLoad(nextFuture, loadGeneration)) {
+        return;
+      }
+      final contents = _FullFileContents(
+        oldBytes: sides[0],
+        newBytes: sides[1],
+      );
+      if (contents.oldBytes == null && contents.newBytes == null) {
+        continue;
+      }
+      _updateDiffState(() {
+        _fullFileContents = <GitDiffFile, _FullFileContents>{
+          ..._fullFileContents,
+          file: contents,
+        };
+      });
+    }
   }
 }

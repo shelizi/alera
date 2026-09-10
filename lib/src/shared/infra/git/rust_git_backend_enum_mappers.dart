@@ -94,24 +94,35 @@ extension on RustGitBackend {
     return GitDiffResult(
       truncated: result.truncated,
       files: result.files
-          .map(
-            (file) => GitDiffFile(
-              path: file.path,
-              oldPath: file.oldPath,
-              area: _toArea(file.area),
-              status: _toStatus(file.status),
-              lines: file.lines.map(_toDiffLine).toList(growable: false),
-              added: file.added,
-              removed: file.removed,
-              isBinary: file.isBinary,
-              isLarge: file.isLarge,
-              isGitlink: file.isGitlink,
-              truncated: file.truncated,
-              linePreviewTruncated: file.linePreviewTruncated,
-              sourceLabel: sourceLabel,
-            ),
-          )
+          .map((file) => _toDiffFile(file, sourceLabel: sourceLabel))
           .toList(growable: false),
+    );
+  }
+
+  GitDiffPage _toDiffPage(rust.GitDiffPage result) {
+    return GitDiffPage(
+      truncated: result.truncated,
+      files: result.files
+          .map((file) => _toDiffFile(file))
+          .toList(growable: false),
+    );
+  }
+
+  GitDiffFile _toDiffFile(rust.GitDiffFile file, {String? sourceLabel}) {
+    return GitDiffFile(
+      path: file.path,
+      oldPath: file.oldPath,
+      area: _toArea(file.area),
+      status: _toStatus(file.status),
+      lines: file.lines.map(_toDiffLine).toList(growable: false),
+      added: file.added,
+      removed: file.removed,
+      isBinary: file.isBinary,
+      isLarge: file.isLarge,
+      isGitlink: file.isGitlink,
+      truncated: file.truncated,
+      linePreviewTruncated: file.linePreviewTruncated,
+      sourceLabel: sourceLabel,
     );
   }
 }

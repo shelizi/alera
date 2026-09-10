@@ -159,6 +159,12 @@ pub struct GitDiffResult {
     pub truncated: bool,
 }
 
+/// One bounded page of a combined working-tree diff.
+pub struct GitDiffPage {
+    pub files: Vec<GitDiffFile>,
+    pub truncated: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GitHistoryRefCategory {
     Branches,
@@ -430,6 +436,10 @@ pub fn git_diff(
 
 pub fn git_diff_all(path: String, file_path: Option<String>) -> Result<GitDiffResult, GitError> {
     git_diff_impl::git_diff_all(path, file_path)
+}
+
+pub fn git_diff_all_page(path: String, file_paths: Vec<String>) -> Result<GitDiffPage, GitError> {
+    git_diff_impl::git_diff_all_page(path, file_paths)
 }
 
 pub fn git_history(

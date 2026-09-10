@@ -57,6 +57,14 @@ Future<GitDiffResult> gitDiff({
 Future<GitDiffResult> gitDiffAll({required String path, String? filePath}) =>
     RustLib.instance.api.crateApiGitGitDiffAll(path: path, filePath: filePath);
 
+Future<GitDiffPage> gitDiffAllPage({
+  required String path,
+  required List<String> filePaths,
+}) => RustLib.instance.api.crateApiGitGitDiffAllPage(
+  path: path,
+  filePaths: filePaths,
+);
+
 Future<GitHistoryResult> gitHistory({
   required String path,
   int? limit,
@@ -540,6 +548,25 @@ class GitDiffLine {
 }
 
 enum GitDiffLineKind { addition, deletion, hunk, header, context }
+
+/// One bounded page of a combined working-tree diff.
+class GitDiffPage {
+  final List<GitDiffFile> files;
+  final bool truncated;
+
+  const GitDiffPage({required this.files, required this.truncated});
+
+  @override
+  int get hashCode => files.hashCode ^ truncated.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is GitDiffPage &&
+          runtimeType == other.runtimeType &&
+          files == other.files &&
+          truncated == other.truncated;
+}
 
 class GitDiffResult {
   final List<GitDiffFile> files;

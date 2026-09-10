@@ -198,6 +198,15 @@ class const RustGitBackend()
       });
 
   @override
+  Future<GitDiffPage> diffAllPage({
+    required String path,
+    required List<String> filePaths,
+  }) => _guard(() async {
+    final result = await rust.gitDiffAllPage(path: path, filePaths: filePaths);
+    return _toDiffPage(result);
+  });
+
+  @override
   Future<Uint8List> readingDiffPatch({
     required String path,
     String? filePath,

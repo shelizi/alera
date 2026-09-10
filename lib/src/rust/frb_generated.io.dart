@@ -196,6 +196,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   GitDiffLineKind dco_decode_git_diff_line_kind(dynamic raw);
 
   @protected
+  GitDiffPage dco_decode_git_diff_page(dynamic raw);
+
+  @protected
   GitDiffResult dco_decode_git_diff_result(dynamic raw);
 
   @protected
@@ -796,6 +799,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   GitDiffLineKind sse_decode_git_diff_line_kind(SseDeserializer deserializer);
+
+  @protected
+  GitDiffPage sse_decode_git_diff_page(SseDeserializer deserializer);
 
   @protected
   GitDiffResult sse_decode_git_diff_result(SseDeserializer deserializer);
@@ -1562,6 +1568,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
     GitDiffLineKind self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_git_diff_page(GitDiffPage self, SseSerializer serializer);
 
   @protected
   void sse_encode_git_diff_result(GitDiffResult self, SseSerializer serializer);

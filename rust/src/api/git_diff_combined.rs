@@ -17,19 +17,38 @@ pub(super) fn git_diff_all_for_file(
     let mut total_bytes = 0usize;
     let mut truncated = false;
 
+    append_combined_diff_for_path(
+        repo,
+        paths,
+        file_path,
+        &mut files,
+        &mut total_bytes,
+        &mut truncated,
+    )?;
+
+    Ok(GitDiffResult { files, truncated })
+}
+
+pub(super) fn append_combined_diff_for_path(
+    repo: &Repository,
+    paths: &GitPathContext,
+    file_path: &str,
+    files: &mut Vec<GitDiffFile>,
+    total_bytes: &mut usize,
+    truncated: &mut bool,
+) -> Result<bool, GitError> {
     for area in [
         GitChangeArea::Untracked,
         GitChangeArea::Unstaged,
         GitChangeArea::Staged,
     ] {
         if let Some(file) = diff_file_for_area(repo, paths, file_path, area)? {
-            if append_combined_diff_file(&mut files, &mut total_bytes, &mut truncated, file) {
-                break;
+            if append_combined_diff_file(files, total_bytes, truncated, file) {
+                return Ok(true);
             }
         }
     }
-
-    Ok(GitDiffResult { files, truncated })
+    Ok(false)
 }
 
 pub(super) fn append_combined_diff_file(

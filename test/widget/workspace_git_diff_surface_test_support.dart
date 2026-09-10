@@ -143,3 +143,62 @@ class _GitDiffSurfaceTestController extends WorkbenchController {
     );
   }
 }
+
+class _BlockingDiffBlobBackend extends FakeGitBackend {
+  final Map<({String filePath, bool oldSide}), Completer<void>> gates =
+      <({String filePath, bool oldSide}), Completer<void>>{};
+  final List<({String filePath, bool oldSide})> started =
+      <({String filePath, bool oldSide})>[];
+
+  @override
+  Future<Uint8List?> diffBlobBytes({
+    required String path,
+    required String filePath,
+    String? oldPath,
+    GitChangeArea? area,
+    String? commitOid,
+    String? parentOid,
+    required bool oldSide,
+  }) async {
+    final request = (filePath: filePath, oldSide: oldSide);
+    started.add(request);
+    await gates[request]?.future;
+    return super.diffBlobBytes(
+      path: path,
+      filePath: filePath,
+      oldPath: oldPath,
+      area: area,
+      commitOid: commitOid,
+      parentOid: parentOid,
+      oldSide: oldSide,
+    );
+  }
+}
+
+class _ProgressiveAllDiffBackend extends FakeGitBackend {
+  final Map<String, GitDiffResult> diffByFile = <String, GitDiffResult>{};
+  final Map<String, Completer<void>> gates = <String, Completer<void>>{};
+  final List<String> requestedFilePaths = <String>[];
+  final List<String> completedFilePaths = <String>[];
+
+  @override
+  Future<GitDiffPage> diffAllPage({
+    required String path,
+    required List<String> filePaths,
+  }) async {
+    final files = <GitDiffFile>[];
+    for (final filePath in filePaths) {
+      requestedFilePaths.add(filePath);
+      await gates[filePath]?.future;
+      completedFilePaths.add(filePath);
+      files.addAll(diffByFile[filePath]?.files ?? const <GitDiffFile>[]);
+    }
+    calls.add(
+      GitBackendCall('diffAllPage', <String, Object?>{
+        'path': path,
+        'filePaths': filePaths,
+      }),
+    );
+    return GitDiffPage(files: files);
+  }
+}
