@@ -42,36 +42,27 @@ mixin _WorkbenchControllerTabs
           .tabsFor(workspace.id)
           .where((tab) => !ids.contains(tab.id))
           .toList(growable: false);
-      if (remaining.isNotEmpty) {
-        _setTabsForWorkspace(workspace.id, remaining);
-        var layout = _layoutForMutation(workspace.id, remaining);
-        for (final tabId in ids) {
-          layout = layout.removeTab(tabId);
-        }
-        layout = layout.sanitize(remaining);
-        if (closedActiveTab) {
-          layout = refocusMostRecentlyUsedTab(
-            layout: layout,
-            history: _tabFocusHistory,
-            workspaceId: workspace.id,
-            remaining: remaining,
-          );
-        }
-        await _applyLayout(layout, persist: true);
-      } else {
+      final mostRecentOpenTabId = closedActiveTab && remaining.isNotEmpty
+          ? _tabFocusHistory.mostRecentOpen(workspace.id, <String>{
+              for (final tab in remaining) tab.id,
+            })
+          : null;
+      final plan = planWorkbenchClosedTabs(
+        workspaceId: workspace.id,
+        remainingTabs: remaining,
+        currentLayout: state.layoutFor(workspace.id),
+        closedTabIds: ids,
+        closedActiveTab: closedActiveTab,
+        mostRecentOpenTabId: mostRecentOpenTabId,
+        activeWorkspaceId: state.activeWorkspaceId,
+      );
+      _setTabsForWorkspace(workspace.id, remaining);
+      if (plan.shouldForgetFocusHistory) {
         _tabFocusHistory.forget(workspace.id);
-        _setTabsForWorkspace(workspace.id, const <WorkspaceTabRecord>[]);
-        final layout = WorkbenchLayout.single(
-          workspaceId: workspace.id,
-          tabIds: const <String>[],
-        );
-        await _applyLayout(layout, persist: true);
       }
+      await _applyLayout(plan.layout, persist: true);
       state = state.copyWith(
-        activeWorkspaceId:
-            remaining.isEmpty && state.activeWorkspaceId == workspace.id
-            ? null
-            : state.activeWorkspaceId,
+        activeWorkspaceId: plan.activeWorkspaceId,
         error: null,
       );
     } catch (error) {
