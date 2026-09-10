@@ -252,6 +252,8 @@ class AgentQuotaProviderIdMapper extends EnumMapper<AgentQuotaProviderId> {
         return AgentQuotaProviderId.minimax;
       case r'zai':
         return AgentQuotaProviderId.zai;
+      case r'devin':
+        return AgentQuotaProviderId.devin;
       case r'opencode':
         return AgentQuotaProviderId.opencode;
       default:
@@ -278,6 +280,8 @@ class AgentQuotaProviderIdMapper extends EnumMapper<AgentQuotaProviderId> {
         return r'minimax';
       case AgentQuotaProviderId.zai:
         return r'zai';
+      case AgentQuotaProviderId.devin:
+        return r'devin';
       case AgentQuotaProviderId.opencode:
         return r'opencode';
     }
@@ -1076,7 +1080,6 @@ class AgentStatusHookSettingsMapper
     opt: true,
     def: false,
   );
-  static bool _$fx(AgentStatusHookSettings v) => v.fx;
   static bool _$devin(AgentStatusHookSettings v) => v.devin;
   static const Field<AgentStatusHookSettings, bool> _f$devin = Field(
     'devin',
@@ -1084,6 +1087,7 @@ class AgentStatusHookSettingsMapper
     opt: true,
     def: false,
   );
+  static bool _$fx(AgentStatusHookSettings v) => v.fx;
   static const Field<AgentStatusHookSettings, bool> _f$fx = Field(
     'fx',
     _$fx,
@@ -2292,6 +2296,15 @@ class AgentQuotaHostSettingsMapper
     opt: true,
     def: AgentQuotaProviderId.values,
   );
+  static int _$providerDefaultsVersion(AgentQuotaHostSettings v) =>
+      v.providerDefaultsVersion;
+  static const Field<AgentQuotaHostSettings, int> _f$providerDefaultsVersion =
+      Field(
+        'providerDefaultsVersion',
+        _$providerDefaultsVersion,
+        opt: true,
+        def: 2,
+      );
   static bool _$claudeDefaultEnabled(AgentQuotaHostSettings v) =>
       v.claudeDefaultEnabled;
   static const Field<AgentQuotaHostSettings, bool> _f$claudeDefaultEnabled =
@@ -2352,6 +2365,7 @@ class AgentQuotaHostSettingsMapper
   @override
   final MappableFields<AgentQuotaHostSettings> fields = const {
     #enabledProviders: _f$enabledProviders,
+    #providerDefaultsVersion: _f$providerDefaultsVersion,
     #claudeDefaultEnabled: _f$claudeDefaultEnabled,
     #claudeDefaultShowInUsage: _f$claudeDefaultShowInUsage,
     #claudeProfiles: _f$claudeProfiles,
@@ -2363,6 +2377,7 @@ class AgentQuotaHostSettingsMapper
   static AgentQuotaHostSettings _instantiate(DecodingData data) {
     return AgentQuotaHostSettings(
       enabledProviders: data.dec(_f$enabledProviders),
+      providerDefaultsVersion: data.dec(_f$providerDefaultsVersion),
       claudeDefaultEnabled: data.dec(_f$claudeDefaultEnabled),
       claudeDefaultShowInUsage: data.dec(_f$claudeDefaultShowInUsage),
       claudeProfiles: data.dec(_f$claudeProfiles),
@@ -2468,6 +2483,7 @@ abstract class AgentQuotaHostSettingsCopyWith<
   get unpinnedQuotaKeys;
   $R call({
     List<AgentQuotaProviderId>? enabledProviders,
+    int? providerDefaultsVersion,
     bool? claudeDefaultEnabled,
     bool? claudeDefaultShowInUsage,
     List<ClaudeQuotaProfileSettings>? claudeProfiles,
@@ -2533,6 +2549,7 @@ class _AgentQuotaHostSettingsCopyWithImpl<$R, $Out>
   @override
   $R call({
     List<AgentQuotaProviderId>? enabledProviders,
+    int? providerDefaultsVersion,
     bool? claudeDefaultEnabled,
     bool? claudeDefaultShowInUsage,
     List<ClaudeQuotaProfileSettings>? claudeProfiles,
@@ -2542,6 +2559,8 @@ class _AgentQuotaHostSettingsCopyWithImpl<$R, $Out>
   }) => $apply(
     FieldCopyWithData({
       if (enabledProviders != null) #enabledProviders: enabledProviders,
+      if (providerDefaultsVersion != null)
+        #providerDefaultsVersion: providerDefaultsVersion,
       if (claudeDefaultEnabled != null)
         #claudeDefaultEnabled: claudeDefaultEnabled,
       if (claudeDefaultShowInUsage != null)
@@ -2556,6 +2575,10 @@ class _AgentQuotaHostSettingsCopyWithImpl<$R, $Out>
   @override
   AgentQuotaHostSettings $make(CopyWithData data) => AgentQuotaHostSettings(
     enabledProviders: data.get(#enabledProviders, or: $value.enabledProviders),
+    providerDefaultsVersion: data.get(
+      #providerDefaultsVersion,
+      or: $value.providerDefaultsVersion,
+    ),
     claudeDefaultEnabled: data.get(
       #claudeDefaultEnabled,
       or: $value.claudeDefaultEnabled,

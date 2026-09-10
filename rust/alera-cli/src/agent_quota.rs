@@ -256,6 +256,7 @@ pub(crate) async fn fetch_agent_quotas(payload: Value) -> Result<Value> {
             "antigravity".to_string(),
             "minimax".to_string(),
             "zai".to_string(),
+            "devin".to_string(),
             "opencode".to_string(),
         ]
     } else {
@@ -310,6 +311,9 @@ pub(crate) async fn fetch_agent_quotas(payload: Value) -> Result<Value> {
                 let environment = environment.clone();
                 tasks.spawn(async move { fetch_zai(&names, &environment).await });
             }
+            "devin" => {
+                tasks.spawn(fetch_devin());
+            }
             "opencode" => {
                 tasks.spawn(async { fetch_opencode_snapshot("go").await });
                 tasks.spawn(async { fetch_opencode_snapshot("zen").await });
@@ -351,6 +355,7 @@ include!("agent_quota/codex_reset_store.rs");
 include!("agent_quota/grok.rs");
 include!("agent_quota/cursor.rs");
 include!("agent_quota/kimi.rs");
+include!("agent_quota/devin.rs");
 include!("agent_quota/plans.rs");
 include!("agent_quota/quota_snapshot.rs");
 include!("agent_quota/opencode.rs");

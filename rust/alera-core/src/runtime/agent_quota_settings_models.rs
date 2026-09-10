@@ -1,10 +1,14 @@
 use serde::{Deserialize, Serialize};
 
+const CURRENT_PROVIDER_DEFAULTS_VERSION: u32 = 2;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeAgentQuotaSettings {
     #[serde(default = "default_quota_providers")]
     pub enabled_providers: Vec<String>,
+    #[serde(default = "legacy_provider_defaults_version")]
+    pub provider_defaults_version: u32,
     #[serde(default = "default_true")]
     pub claude_default_enabled: bool,
     #[serde(default = "default_true")]
@@ -19,6 +23,7 @@ impl Default for RuntimeAgentQuotaSettings {
     fn default() -> Self {
         Self {
             enabled_providers: default_quota_providers(),
+            provider_defaults_version: CURRENT_PROVIDER_DEFAULTS_VERSION,
             claude_default_enabled: true,
             claude_default_show_in_usage: true,
             claude_profiles: Vec::new(),
@@ -29,7 +34,7 @@ impl Default for RuntimeAgentQuotaSettings {
 
 impl RuntimeAgentQuotaSettings {
     pub fn normalized(mut self) -> Self {
-        const SUPPORTED: [&str; 9] = [
+        const SUPPORTED: [&str; 10] = [
             "claude",
             "codex",
             "kimi",
@@ -38,8 +43,20 @@ impl RuntimeAgentQuotaSettings {
             "antigravity",
             "minimax",
             "zai",
+            "devin",
             "opencode",
         ];
+        if self.provider_defaults_version < CURRENT_PROVIDER_DEFAULTS_VERSION {
+            if !self.enabled_providers.is_empty()
+                && !self
+                    .enabled_providers
+                    .iter()
+                    .any(|provider| provider == "devin")
+            {
+                self.enabled_providers.push("devin".to_string());
+            }
+            self.provider_defaults_version = CURRENT_PROVIDER_DEFAULTS_VERSION;
+        }
         let mut seen = std::collections::HashSet::new();
         self.enabled_providers.retain(|provider| {
             SUPPORTED.contains(&provider.as_str()) && seen.insert(provider.clone())
@@ -136,11 +153,16 @@ fn default_quota_providers() -> Vec<String> {
         "antigravity",
         "minimax",
         "zai",
+        "devin",
         "opencode",
     ]
     .into_iter()
     .map(str::to_string)
     .collect()
+}
+
+fn legacy_provider_defaults_version() -> u32 {
+    1
 }
 
 fn non_blank_or(value: &str, fallback: fn() -> String) -> String {
@@ -196,6 +218,54 @@ mod tests {
                 .expect("legacy settings");
         assert!(!settings.claude_default_enabled);
         assert!(settings.claude_default_show_in_usage);
+    }
+
+    #[test]
+    fn legacy_provider_defaults_add_devin_once() {
+        let settings: RuntimeAgentQuotaSettings = serde_json::from_value(serde_json::json!({
+            "enabledProviders": ["claude", "codex"]
+        }))
+        .expect("legacy settings");
+        let migrated = settings.normalized();
+
+        assert_eq!(
+            migrated.provider_defaults_version,
+            CURRENT_PROVIDER_DEFAULTS_VERSION
+        );
+        assert!(migrated
+            .enabled_providers
+            .iter()
+            .any(|provider| provider == "devin"));
+    }
+
+    #[test]
+    fn current_provider_defaults_preserve_explicit_devin_disable() {
+        let settings: RuntimeAgentQuotaSettings = serde_json::from_value(serde_json::json!({
+            "enabledProviders": ["claude", "codex"],
+            "providerDefaultsVersion": CURRENT_PROVIDER_DEFAULTS_VERSION
+        }))
+        .expect("current settings");
+        let normalized = settings.normalized();
+
+        assert!(!normalized
+            .enabled_providers
+            .iter()
+            .any(|provider| provider == "devin"));
+    }
+
+    #[test]
+    fn legacy_empty_provider_list_stays_empty() {
+        let settings: RuntimeAgentQuotaSettings = serde_json::from_value(serde_json::json!({
+            "enabledProviders": []
+        }))
+        .expect("legacy settings");
+        let migrated = settings.normalized();
+
+        assert!(migrated.enabled_providers.is_empty());
+        assert_eq!(
+            migrated.provider_defaults_version,
+            CURRENT_PROVIDER_DEFAULTS_VERSION
+        );
     }
 
     #[test]

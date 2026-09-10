@@ -8,6 +8,7 @@ void main() {
       final local = quotas.forHost('local');
 
       expect(local.enabledProviders, AgentQuotaProviderId.values);
+      expect(local.enabledProviders, contains(AgentQuotaProviderId.devin));
       expect(local.claudeProfiles, isEmpty);
       expect(local.claudeDefaultEnabled, isTrue);
       expect(local.claudeDefaultShowInUsage, isTrue);
@@ -21,6 +22,7 @@ void main() {
 
     test('derives stable pin keys per provider and claude account', () {
       expect(AgentQuotaHostSettings.quotaPinKey(.codex), 'codex');
+      expect(AgentQuotaHostSettings.quotaPinKey(.devin), 'devin');
       expect(AgentQuotaHostSettings.quotaPinKey(.claude), 'claude:default');
       expect(
         AgentQuotaHostSettings.quotaPinKey(

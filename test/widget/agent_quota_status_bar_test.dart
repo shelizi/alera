@@ -315,6 +315,38 @@ void main() {
     expect(find.text('General Weekly'), findsOneWidget);
   });
 
+  testWidgets('shows Devin daily and weekly quota in the status bar', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _wrap(
+        settings: const AgentQuotaHostSettings(
+          enabledProviders: <AgentQuotaProviderId>[AgentQuotaProviderId.devin],
+        ),
+        snapshots: <AgentQuotaSnapshot>[
+          _snapshot(
+            provider: .devin,
+            displayName: 'Devin',
+            windows: <AgentQuotaWindow>[
+              _window('Daily', 30),
+              _window('Weekly', 50),
+            ],
+          ),
+        ],
+      ),
+    );
+
+    expect(find.text('D'), findsOneWidget);
+    expect(find.text('70%'), findsOneWidget);
+    expect(find.text('W'), findsOneWidget);
+    expect(find.text('50%'), findsOneWidget);
+    expect(find.byType(AgentQuotaProviderIcon), findsOneWidget);
+    expect(
+      tester.getCenter(find.text('D')).dx,
+      lessThan(tester.getCenter(find.text('W')).dx),
+    );
+  });
+
   testWidgets('pins the provider card on click until the next click', (
     tester,
   ) async {

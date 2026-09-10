@@ -10,6 +10,7 @@ enum AgentQuotaProviderId {
   antigravity,
   minimax,
   zai,
+  devin,
   opencode,
 }
 
@@ -23,6 +24,7 @@ extension AgentQuotaProviderIdLabel on AgentQuotaProviderId {
     AgentQuotaProviderId.antigravity => 'Antigravity',
     AgentQuotaProviderId.minimax => 'MiniMax',
     AgentQuotaProviderId.zai => 'Z.ai',
+    AgentQuotaProviderId.devin => 'Devin',
     AgentQuotaProviderId.opencode => 'OpenCode',
   };
 }
@@ -74,6 +76,7 @@ class const AgentQuotaEnvironmentSettings({
 @MappableClass()
 class const AgentQuotaHostSettings({
   this.enabledProviders = AgentQuotaProviderId.values,
+  this.providerDefaultsVersion = 2,
   this.claudeDefaultEnabled = true,
   this.claudeDefaultShowInUsage = true,
   this.claudeProfiles = const <ClaudeQuotaProfileSettings>[],
@@ -82,6 +85,7 @@ class const AgentQuotaHostSettings({
   this.unpinnedQuotaKeys = const <String>[],
 }) with AgentQuotaHostSettingsMappable {
   final List<AgentQuotaProviderId> enabledProviders;
+  final int providerDefaultsVersion;
   final bool claudeDefaultEnabled;
   final bool claudeDefaultShowInUsage;
   final List<ClaudeQuotaProfileSettings> claudeProfiles;

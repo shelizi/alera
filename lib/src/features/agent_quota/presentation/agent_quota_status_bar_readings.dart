@@ -132,7 +132,7 @@ String _shortWindowLabel(String label) {
   if (lower.contains('month')) {
     return 'M';
   }
-  if (lower.contains('day')) {
+  if (lower.contains('daily') || lower.contains('day')) {
     return 'D';
   }
   return label.length <= 4 ? label.toUpperCase() : 'Q';
@@ -158,6 +158,14 @@ int _readingOrder(AgentQuotaProviderId provider, String label) {
     }
     if (lower.contains('fable')) {
       return 2;
+    }
+    if (lower.contains('week')) {
+      return 1;
+    }
+  }
+  if (provider == AgentQuotaProviderId.devin) {
+    if (lower.contains('daily') || lower.contains('day')) {
+      return 0;
     }
     if (lower.contains('week')) {
       return 1;

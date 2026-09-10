@@ -18,6 +18,7 @@ class const AgentQuotaProviderIcon({
       AgentQuotaProviderId.codex => AgentType.codex,
       AgentQuotaProviderId.grok => AgentType.grok,
       AgentQuotaProviderId.cursor => AgentType.cursor,
+      AgentQuotaProviderId.devin => AgentType.devin,
       AgentQuotaProviderId.antigravity => AgentType.agy,
       AgentQuotaProviderId.opencode => AgentType.opencode,
       _ => null,
