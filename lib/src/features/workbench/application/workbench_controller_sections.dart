@@ -13,21 +13,9 @@ mixin _WorkbenchControllerSections
       (repository as WorkspaceSectionRepository).watchSections(),
       onData: (snapshot) {
         if (_disposed) return;
-        final sections = snapshot.sections;
-        final ids = sections.map((section) => section.id).toSet();
-        state = state.copyWith(
-          supportsSections: snapshot.supported,
-          sections: sections,
-          viewPrefs: state.viewPrefs.copyWith(
-            groupBy:
-                !snapshot.supported &&
-                    state.viewPrefs.groupBy == WorkbenchGroupBy.section
-                ? WorkbenchGroupBy.project
-                : state.viewPrefs.groupBy,
-            collapsedSectionIds: snapshot.supported
-                ? state.viewPrefs.collapsedSectionIds.intersection(ids)
-                : state.viewPrefs.collapsedSectionIds,
-          ),
+        state = applyWorkbenchSectionSnapshotState(
+          state: state,
+          snapshot: snapshot,
         );
       },
       onError: (Object error) {
