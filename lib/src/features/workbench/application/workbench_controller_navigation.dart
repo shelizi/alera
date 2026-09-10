@@ -60,60 +60,32 @@ mixin _WorkbenchControllerNavigation
   }
 
   Future<void> goBack() async {
-    _pruneWorktreeNavigationHistory();
-    final target = _worktreeNavigationHistory.peekBack(
-      isValid: _isLiveWorktreeNavigationTarget,
-    );
-    if (target == null) {
-      return;
-    }
-    final project = _projectById(state.projects, target.projectId);
-    final workspace = project == null
-        ? null
-        : state
-              .workspacesFor(project.id)
-              .where((candidate) => candidate.id == target.workspaceId)
-              .firstOrNull;
-    if (project == null || workspace == null) {
-      _pruneWorktreeNavigationHistory();
+    final selection = _navigationHistory.peekBack(state);
+    if (selection == null) {
       return;
     }
     await _selectWorkspace(
-      project: project,
-      workspace: workspace,
+      project: selection.project,
+      workspace: selection.workspace,
       ensureInitialTerminal: true,
       recordHistory: false,
     );
-    _worktreeNavigationHistory.commitBack(target);
+    _navigationHistory.commitBack(selection);
     _notifyNavigationHistoryChanged();
   }
 
   Future<void> goForward() async {
-    _pruneWorktreeNavigationHistory();
-    final target = _worktreeNavigationHistory.peekForward(
-      isValid: _isLiveWorktreeNavigationTarget,
-    );
-    if (target == null) {
-      return;
-    }
-    final project = _projectById(state.projects, target.projectId);
-    final workspace = project == null
-        ? null
-        : state
-              .workspacesFor(project.id)
-              .where((candidate) => candidate.id == target.workspaceId)
-              .firstOrNull;
-    if (project == null || workspace == null) {
-      _pruneWorktreeNavigationHistory();
+    final selection = _navigationHistory.peekForward(state);
+    if (selection == null) {
       return;
     }
     await _selectWorkspace(
-      project: project,
-      workspace: workspace,
+      project: selection.project,
+      workspace: selection.workspace,
       ensureInitialTerminal: true,
       recordHistory: false,
     );
-    _worktreeNavigationHistory.commitForward(target);
+    _navigationHistory.commitForward(selection);
     _notifyNavigationHistoryChanged();
   }
 }

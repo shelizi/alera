@@ -92,33 +92,17 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController {
   Future<void>? _fileOpenQueue;
 
   final WorkspaceTabFocusHistory _tabFocusHistory = WorkspaceTabFocusHistory();
-  final WorktreeNavigationHistory _worktreeNavigationHistory =
-      WorktreeNavigationHistory();
+  final WorkbenchNavigationHistoryService _navigationHistory =
+      WorkbenchNavigationHistoryService();
 
   bool _bootstrapStarted = false;
 
-  bool get canGoBack {
-    _pruneWorktreeNavigationHistory();
-    return _worktreeNavigationHistory.canGoBack;
-  }
+  bool get canGoBack => _navigationHistory.canGoBack(state);
 
-  bool get canGoForward {
-    _pruneWorktreeNavigationHistory();
-    return _worktreeNavigationHistory.canGoForward;
-  }
-
-  bool _isLiveWorktreeNavigationTarget(WorktreeNavigationTarget target) {
-    final project = _projectById(state.projects, target.projectId);
-    if (project == null) {
-      return false;
-    }
-    return state
-        .workspacesFor(project.id)
-        .any((workspace) => workspace.id == target.workspaceId);
-  }
+  bool get canGoForward => _navigationHistory.canGoForward(state);
 
   void _pruneWorktreeNavigationHistory() {
-    _worktreeNavigationHistory.prune(_isLiveWorktreeNavigationTarget);
+    _navigationHistory.prune(state);
   }
 
   void _notifyNavigationHistoryChanged() {

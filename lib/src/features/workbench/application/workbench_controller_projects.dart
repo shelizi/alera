@@ -445,12 +445,7 @@ mixin _WorkbenchControllerProjects
     final layout = await _ensureWorkbenchLayout(workspace.id, tabs);
     await _applyLayout(layout, persist: false);
     if (recordHistory &&
-        _worktreeNavigationHistory.record(
-          WorktreeNavigationTarget(
-            projectId: project.id,
-            workspaceId: workspace.id,
-          ),
-        )) {
+        _navigationHistory.record(project: project, workspace: workspace)) {
       _notifyNavigationHistoryChanged();
     }
   }

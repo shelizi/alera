@@ -15,6 +15,7 @@ import 'package:alera/src/features/workbench/application/workspace_tab_service.d
 import 'package:alera/src/features/workbench/application/workbench_repository.dart';
 import 'package:alera/src/features/workbench/application/workbench_providers.dart';
 import 'package:alera/src/features/workbench/application/workbench_listing.dart';
+import 'package:alera/src/features/workbench/application/workbench_navigation_history_service.dart';
 import 'package:alera/src/features/workbench/application/workbench_retired_resource_cleaner.dart';
 import 'package:alera/src/features/workbench/application/workbench_explicit_resource_cleaner.dart';
 import 'package:alera/src/features/workbench/application/workbench_hosted_review_retention_service.dart';
@@ -38,7 +39,6 @@ import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_creation_result.dart';
 import 'package:alera/src/features/workbench/domain/workspace_source_control_scope.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_focus_history.dart';
-import 'package:alera/src/features/workbench/domain/worktree_navigation_history.dart';
 import 'package:alera/src/shared/infra/git/git_diff_models.dart';
 import 'package:alera/src/shared/infra/git/git_providers.dart';
 import 'package:path/path.dart' as p;
