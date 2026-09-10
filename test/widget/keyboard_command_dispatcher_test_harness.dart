@@ -328,7 +328,13 @@ Future<_DispatcherPumpHarness> _pumpDispatcherHarness(
           externalEditorLauncher,
         ),
       settingsControllerProvider.overrideWith(
-        () => _DispatcherSettingsController(.defaults),
+        () => _DispatcherSettingsController(
+          AleraSettings.defaults.copyWith(
+            terminal: AleraSettings.defaults.terminal.copyWith(
+              confirmCloseRunningProcesses: false,
+            ),
+          ),
+        ),
       ),
     ],
   );

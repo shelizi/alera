@@ -1,6 +1,6 @@
 import 'package:alera/src/app/providers.dart';
 import 'package:alera/src/features/keyboard/application/keybinding_resolver.dart';
-import 'package:alera/src/features/keyboard/application/keyboard_command_dispatcher.dart';
+import 'package:alera/src/features/keyboard/presentation/keyboard_command_dispatcher.dart';
 import 'package:alera/src/features/keyboard/domain/key_chord.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';

@@ -5,7 +5,7 @@ import 'dart:async';
 import 'package:alera/src/app/providers.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/features/keyboard/application/keybinding_resolver.dart';
-import 'package:alera/src/features/keyboard/application/keyboard_command_dispatcher.dart';
+import 'package:alera/src/features/keyboard/presentation/keyboard_command_dispatcher.dart';
 import 'package:alera/src/features/keyboard/domain/key_chord.dart';
 import 'package:alera/src/features/keyboard/domain/keyboard_action.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_composer_drop_target.dart';
