@@ -70,9 +70,8 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController {
     }
   }
 
-  StreamSubscription<WorkspaceSectionSnapshot>? _sectionsSub;
-  StreamSubscription<List<Project>>? _projectsSub;
-  StreamSubscription<WorkbenchViewPrefs>? _viewPrefsSub;
+  final WorkbenchRootSubscriptionRegistry _rootSubscriptions =
+      WorkbenchRootSubscriptionRegistry();
   final WorkbenchWorkspaceSubscriptionRegistry _workspaceSubscriptions =
       WorkbenchWorkspaceSubscriptionRegistry();
   final WorkbenchWorktreeMetadataWatcherRegistry

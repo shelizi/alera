@@ -9,34 +9,33 @@ mixin _WorkbenchControllerSections
     final repository = _repository;
     if (repository is! WorkspaceSectionRepository) return;
     // Keep watching unsupported hosts: an in-app update can add this capability.
-    _sectionsSub = (repository as WorkspaceSectionRepository)
-        .watchSections()
-        .listen(
-          (snapshot) {
-            if (_disposed) return;
-            final sections = snapshot.sections;
-            final ids = sections.map((section) => section.id).toSet();
-            state = state.copyWith(
-              supportsSections: snapshot.supported,
-              sections: sections,
-              viewPrefs: state.viewPrefs.copyWith(
-                groupBy:
-                    !snapshot.supported &&
-                        state.viewPrefs.groupBy == WorkbenchGroupBy.section
-                    ? WorkbenchGroupBy.project
-                    : state.viewPrefs.groupBy,
-                collapsedSectionIds: snapshot.supported
-                    ? state.viewPrefs.collapsedSectionIds.intersection(ids)
-                    : state.viewPrefs.collapsedSectionIds,
-              ),
-            );
-          },
-          onError: (Object error) {
-            if (!_disposed) {
-              state = state.copyWith(error: 'Could not load sections: $error');
-            }
-          },
+    _rootSubscriptions.watchSections(
+      (repository as WorkspaceSectionRepository).watchSections(),
+      onData: (snapshot) {
+        if (_disposed) return;
+        final sections = snapshot.sections;
+        final ids = sections.map((section) => section.id).toSet();
+        state = state.copyWith(
+          supportsSections: snapshot.supported,
+          sections: sections,
+          viewPrefs: state.viewPrefs.copyWith(
+            groupBy:
+                !snapshot.supported &&
+                    state.viewPrefs.groupBy == WorkbenchGroupBy.section
+                ? WorkbenchGroupBy.project
+                : state.viewPrefs.groupBy,
+            collapsedSectionIds: snapshot.supported
+                ? state.viewPrefs.collapsedSectionIds.intersection(ids)
+                : state.viewPrefs.collapsedSectionIds,
+          ),
         );
+      },
+      onError: (Object error) {
+        if (!_disposed) {
+          state = state.copyWith(error: 'Could not load sections: $error');
+        }
+      },
+    );
   }
 
   Future<List<WorkspaceSection>> listWorkspaceSections() =>

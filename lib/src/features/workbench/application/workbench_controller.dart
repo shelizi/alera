@@ -21,6 +21,7 @@ import 'package:alera/src/features/workbench/application/workbench_explicit_reso
 import 'package:alera/src/features/workbench/application/workbench_hosted_review_retention_service.dart';
 import 'package:alera/src/features/workbench/application/workbench_closed_tabs_plan.dart';
 import 'package:alera/src/features/workbench/application/workbench_project_set_sync.dart';
+import 'package:alera/src/features/workbench/application/workbench_root_subscription_registry.dart';
 import 'package:alera/src/features/workbench/application/workbench_selection_state.dart';
 import 'package:alera/src/features/workbench/application/workbench_sleep_workspace_plan.dart';
 import 'package:alera/src/features/workbench/application/workbench_tab_set_sync.dart';
@@ -82,9 +83,7 @@ class WorkbenchController extends _$WorkbenchController
     _disposed = false;
     ref.onDispose(() {
       _disposed = true;
-      unawaited(_sectionsSub?.cancel());
-      unawaited(_projectsSub?.cancel());
-      unawaited(_viewPrefsSub?.cancel());
+      _rootSubscriptions.cancelAll();
       _worktreeMetadataWatcherRegistry.disposeAll();
       _workspaceSubscriptions.cancelAll();
       _tabSubscriptions.cancelAll();
@@ -103,21 +102,21 @@ class WorkbenchController extends _$WorkbenchController
         try {
           final prefs = await repo.load();
           state = state.copyWith(viewPrefs: prefs);
-          _viewPrefsSub = repo.changes.listen((prefs) {
-            if (!_disposed) state = state.copyWith(viewPrefs: prefs);
-          });
+          _rootSubscriptions.watchViewPrefs(
+            repo.changes,
+            onData: (prefs) {
+              if (!_disposed) state = state.copyWith(viewPrefs: prefs);
+            },
+          );
         } catch (_) {
           // Fall back to defaults if loading fails; never block bootstrap.
         }
       }
       _startSections();
-      _projectsSub = _projectsService.projectRepository.watchAll().listen(
-        _onProjectsChanged,
-        // A dead watcher is never re-created, so a stream that errors or
-        // completes must not leave a stale subscription behind.
+      _rootSubscriptions.watchProjects(
+        _projectsService.projectRepository.watchAll(),
+        onData: _onProjectsChanged,
         onError: (Object _) {},
-        onDone: () => _projectsSub = null,
-        cancelOnError: false,
       );
       final initialProjects = await _projectsService.projectRepository
           .listAll();
