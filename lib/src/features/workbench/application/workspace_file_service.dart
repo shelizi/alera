@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:alera/src/features/workbench/application/workbench_replaceable_tab_editor_sessions.dart';
 import 'package:alera/src/rust/api/workspace_files.dart' as native;
 import 'package:alera/src/rust/api/merman_viewer.dart' as merman_native;
 import 'package:alera/src/shared/infra/git/git_explorer_status.dart';

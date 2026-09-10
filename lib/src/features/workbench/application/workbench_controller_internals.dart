@@ -28,6 +28,8 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController {
 
   WorkspaceTabService get _workspaceTabService =>
       ref.read(workspaceTabServiceProvider);
+  WorkbenchReplaceableTabEditorSessions get _replaceableTabEditorSessions =>
+      ref.read(editorSessionRegistryProvider);
 
   WorkbenchHostedReviewRetentionService get _hostedReviewRetention =>
       WorkbenchHostedReviewRetentionService(

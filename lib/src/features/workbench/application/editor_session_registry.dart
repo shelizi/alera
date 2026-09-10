@@ -1,6 +1,7 @@
 part of 'workspace_file_service.dart';
 
-class EditorSessionRegistry extends ChangeNotifier {
+class EditorSessionRegistry extends ChangeNotifier
+    implements WorkbenchReplaceableTabEditorSessions {
   final Map<String, EditorDocumentSession> _documents =
       <String, EditorDocumentSession>{};
   final Map<String, EditorSessionHandle> _sessions =

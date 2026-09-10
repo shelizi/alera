@@ -215,42 +215,32 @@ mixin _WorkbenchControllerFileTabs
     createTab,
   }) async {
     try {
-      var previousTabs = state.tabsFor(workspace.id);
+      final previousTabs = state.tabsFor(workspace.id);
       final layout = _layoutForMutation(workspace.id, previousTabs);
       final groupId = targetGroupId ?? layout.activeGroupId;
-      var replacePreviewTabId = preview
-          ? workbenchPreviewTabIdInGroup(
-              layout: layout,
-              tabs: previousTabs,
-              groupId: groupId,
-            )
-          : null;
-      if (replacePreviewTabId != null &&
-          ref
-              .read(editorSessionRegistryProvider)
-              .isDirty(replacePreviewTabId)) {
-        await _keepPreviewTabUnlocked(replacePreviewTabId);
-        replacePreviewTabId = null;
-        previousTabs = state.tabsFor(workspace.id);
-      }
-      final tab = await createTab(
-        workspaceId: workspace.id,
-        preview: preview,
-        replacePreviewTabId: replacePreviewTabId,
-      );
-      final plan = planWorkbenchOpenedFileTab(
-        previousTabs: previousTabs,
-        layout: layout,
-        targetGroupId: groupId,
-        tab: tab,
-      );
-      if (plan.shouldForgetEditorSession) {
-        ref.read(editorSessionRegistryProvider).forget(tab.id);
-      }
-      _setTabsForWorkspace(workspace.id, plan.tabs);
-      await _applyLayout(plan.layout, persist: true);
+      final result =
+          await WorkbenchReplaceableTabOpenCoordinator(
+            editorSessions: _replaceableTabEditorSessions,
+          ).open(
+            workspaceId: workspace.id,
+            previousTabs: previousTabs,
+            layout: layout,
+            targetGroupId: groupId,
+            preview: preview,
+            keepPreviewTab: _workspaceTabService.keepPreviewTab,
+            onPreviewPinned: (tab) {
+              state = applyWorkbenchTabUpdateState(
+                state: state,
+                tab: tab,
+              ).copyWith(error: null);
+              return state.tabsFor(workspace.id);
+            },
+            createTab: createTab,
+          );
+      _setTabsForWorkspace(workspace.id, result.plan.tabs);
+      await _applyLayout(result.plan.layout, persist: true);
       state = state.copyWith(error: null);
-      return tab;
+      return result.tab;
     } catch (error) {
       state = state.copyWith(error: error.toString());
       rethrow;
