@@ -261,18 +261,8 @@ mixin _WorkbenchControllerProjects
       requestedTagIds: tagIds,
     );
     try {
-      for (final tagId in plan.tagIdsToRemove) {
-        await _workspaceGraphRepository.unassignTag(
-          workspaceId: workspace.id,
-          tagId: tagId,
-        );
-      }
-      for (final tagId in plan.tagIdsToAdd) {
-        await _workspaceGraphRepository.assignTag(
-          workspaceId: workspace.id,
-          tagId: tagId,
-        );
-      }
+      await WorkbenchWorkspaceTagUpdateService(_workspaceGraphRepository)
+          .apply(workspaceId: workspace.id, plan: plan);
       state = state.copyWith(error: null);
     } catch (error) {
       state = state.copyWith(error: error.toString());
