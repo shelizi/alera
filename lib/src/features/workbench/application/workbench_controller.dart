@@ -2,7 +2,6 @@ import 'package:alera/src/features/workbench/domain/workspace_section.dart';
 import 'package:alera/src/features/workbench/application/workspace_section_repository.dart';
 
 import 'dart:async';
-import 'dart:io';
 
 import 'package:alera/src/features/agent_status/application/agent_status_controller.dart';
 import 'package:alera/src/features/agent_status/application/agent_status_providers.dart';
@@ -25,6 +24,8 @@ import 'package:alera/src/features/workbench/application/workbench_file_preview_
 import 'package:alera/src/features/workbench/application/workbench_file_tab_open_plan.dart';
 import 'package:alera/src/features/workbench/application/workbench_file_tab_path_move_plan.dart';
 import 'package:alera/src/features/workbench/application/workbench_hosted_review_retention_service.dart';
+import 'package:alera/src/features/workbench/application/workbench_git_repository_probe_adapter.dart';
+import 'package:alera/src/features/workbench/application/workbench_source_control_folder_focus_service.dart';
 import 'package:alera/src/features/workbench/application/workbench_bootstrap_orchestrator.dart';
 import 'package:alera/src/features/workbench/application/workbench_bootstrap_gate.dart';
 import 'package:alera/src/features/workbench/application/workbench_main_workspace_preparation_coordinator.dart';
@@ -77,7 +78,6 @@ import 'package:alera/src/features/workbench/domain/workspace_source_control_sco
 import 'package:alera/src/features/workbench/domain/workspace_tab_focus_history.dart';
 import 'package:alera/src/shared/infra/git/git_diff_models.dart';
 import 'package:alera/src/shared/infra/git/git_providers.dart';
-import 'package:path/path.dart' as p;
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:uuid/uuid.dart';
 

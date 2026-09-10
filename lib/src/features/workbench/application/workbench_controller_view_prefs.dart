@@ -284,49 +284,32 @@ mixin _WorkbenchControllerViewPrefs
     required String relativePath,
   }) async {
     final project = _projectById(state.projects, workspace.projectId);
-    if (project == null || !project.isFolder) {
+    if (project == null) {
       return false;
     }
-    if (state.activeProjectId != project.id ||
-        state.activeWorkspaceId != workspace.id) {
-      return false;
-    }
-    final normalized = normalizeSourceControlRootRelativePath(relativePath);
-    if (normalized == null) {
-      return false;
-    }
-    final path = sourceControlRootAbsolutePath(
-      workspacePath: workspace.path,
-      relativeRoot: normalized,
-    );
-    if (!_hasDirectGitEntry(path)) {
-      return false;
-    }
-    final isRepository = await ref
-        .read(gitBackendProvider)
-        .isGitRepository(path);
-    if (!isRepository) {
-      return false;
-    }
-    if (state.activeProjectId != project.id ||
-        state.activeWorkspaceId != workspace.id) {
+    final relativeRoot =
+        await WorkbenchSourceControlFolderFocusService(
+          gitRepositoryProbe: _gitRepositoryProbe,
+        ).resolve(
+          project: project,
+          workspace: workspace,
+          relativePath: relativePath,
+          isSelectionActive: () =>
+              state.activeProjectId == project.id &&
+              state.activeWorkspaceId == workspace.id,
+        );
+    if (relativeRoot == null) {
       return false;
     }
     _updateViewPrefs(
       focusWorkbenchSourceControlRootPrefs(
         prefs: state.viewPrefs,
         workspaceId: workspace.id,
-        relativeRoot: normalized,
+        relativeRoot: relativeRoot,
       ),
     );
     state = state.copyWith(error: null);
     return true;
-  }
-
-  bool _hasDirectGitEntry(String path) {
-    final gitEntryPath = p.join(path, '.git');
-    return Directory(gitEntryPath).existsSync() ||
-        File(gitEntryPath).existsSync();
   }
 
   void clearFocusedSourceControlFolder({required Workspace workspace}) {

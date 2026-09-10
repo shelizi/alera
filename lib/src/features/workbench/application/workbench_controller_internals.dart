@@ -35,6 +35,8 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController {
       WorkbenchHostedReviewRetentionService(
         gitBackend: ref.read(gitBackendProvider),
       );
+  WorkbenchGitRepositoryProbe get _gitRepositoryProbe =>
+      WorkbenchGitRepositoryProbeAdapter(ref.read(gitBackendProvider));
 
   WorkbenchExplicitResourceCleaner get _explicitResourceCleaner {
     final clearTerminalSession = ref.exists(agentHookReceiverProvider)
