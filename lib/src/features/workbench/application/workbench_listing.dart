@@ -145,6 +145,47 @@ WorkbenchSidebarCollapseTargets visibleSidebarCollapseTargets(
   );
 }
 
+WorkbenchViewPrefs? nextWorkbenchCollapseAllPrefs(WorkbenchState state) {
+  final prefs = state.viewPrefs;
+  final targets = visibleSidebarCollapseTargets(state);
+  if (targets.isEmpty) {
+    return null;
+  }
+  final allCollapsed = targets.isCollapsed(prefs);
+  final actionTargets = allCollapsed
+      ? visibleSidebarCollapseTargets(
+          state,
+          includeCollapsedProjectDescendants: true,
+        )
+      : targets;
+  final nextSections = Set<String>.from(prefs.collapsedSectionIds);
+  final nextProjects = Set<String>.from(prefs.collapsedProjectIds);
+  final nextParentWorkspaces = Set<String>.from(
+    prefs.collapsedParentWorkspaceIds,
+  );
+  final nextExpandedWorkspaces = Set<String>.from(prefs.expandedWorkspaceIds);
+  if (allCollapsed) {
+    nextSections.removeAll(actionTargets.sectionIds);
+    nextProjects.removeAll(actionTargets.projectIds);
+    nextParentWorkspaces.removeAll(actionTargets.parentWorkspaceIds);
+    nextExpandedWorkspaces.addAll(actionTargets.workspaceIds);
+  } else {
+    nextSections.addAll(actionTargets.sectionIds);
+    nextProjects.addAll(actionTargets.projectIds);
+    nextParentWorkspaces.addAll(actionTargets.parentWorkspaceIds);
+    nextExpandedWorkspaces.removeAll(actionTargets.workspaceIds);
+  }
+  return prefs.copyWith(
+    collapsedSectionIds: nextSections,
+    othersSectionCollapsed: actionTargets.hasOthers
+        ? !allCollapsed
+        : prefs.othersSectionCollapsed,
+    collapsedProjectIds: nextProjects,
+    collapsedParentWorkspaceIds: nextParentWorkspaces,
+    expandedWorkspaceIds: nextExpandedWorkspaces,
+  );
+}
+
 bool _projectVisible(WorkbenchViewPrefs prefs, Project project) {
   if (prefs.selectedProjectIds.isEmpty) {
     return true;

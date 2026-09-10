@@ -165,46 +165,11 @@ mixin _WorkbenchControllerViewPrefs
   /// Collapses or expands every sidebar-visible grouping surface: project
   /// groups, parent workspace child trees, and workspace agent-run sections.
   void toggleCollapseAll() {
-    final prefs = state.viewPrefs;
-    final targets = visibleSidebarCollapseTargets(state);
-    if (targets.isEmpty) {
+    final nextPrefs = nextWorkbenchCollapseAllPrefs(state);
+    if (nextPrefs == null) {
       return;
     }
-    final allCollapsed = targets.isCollapsed(prefs);
-    final actionTargets = allCollapsed
-        ? visibleSidebarCollapseTargets(
-            state,
-            includeCollapsedProjectDescendants: true,
-          )
-        : targets;
-    final nextSections = Set<String>.from(prefs.collapsedSectionIds);
-    final nextProjects = Set<String>.from(prefs.collapsedProjectIds);
-    final nextParentWorkspaces = Set<String>.from(
-      prefs.collapsedParentWorkspaceIds,
-    );
-    final next = Set<String>.from(prefs.expandedWorkspaceIds);
-    if (allCollapsed) {
-      nextSections.removeAll(actionTargets.sectionIds);
-      nextProjects.removeAll(actionTargets.projectIds);
-      nextParentWorkspaces.removeAll(actionTargets.parentWorkspaceIds);
-      next.addAll(actionTargets.workspaceIds);
-    } else {
-      nextSections.addAll(actionTargets.sectionIds);
-      nextProjects.addAll(actionTargets.projectIds);
-      nextParentWorkspaces.addAll(actionTargets.parentWorkspaceIds);
-      next.removeAll(actionTargets.workspaceIds);
-    }
-    _updateViewPrefs(
-      prefs.copyWith(
-        collapsedSectionIds: nextSections,
-        othersSectionCollapsed: actionTargets.hasOthers
-            ? !allCollapsed
-            : prefs.othersSectionCollapsed,
-        collapsedProjectIds: nextProjects,
-        collapsedParentWorkspaceIds: nextParentWorkspaces,
-        expandedWorkspaceIds: next,
-      ),
-    );
+    _updateViewPrefs(nextPrefs);
   }
 
   void toggleWorkspaceExpanded(String workspaceId) {

@@ -116,6 +116,59 @@ void main() {
     },
   );
 
+  test(
+    'collapse-all prefs collapse every currently visible sidebar target',
+    () {
+      final initial = _state();
+      final state = initial.copyWith(
+        viewPrefs: initial.viewPrefs.copyWith(
+          expandedWorkspaceIds: <String>{
+            for (final workspaces in initial.workspacesByProject.values)
+              for (final workspace in workspaces) workspace.id,
+          },
+        ),
+      );
+
+      final next = nextWorkbenchCollapseAllPrefs(state);
+
+      expect(next, isNotNull);
+      expect(next!.collapsedSectionIds, <String>{'a', 'z'});
+      expect(next.othersSectionCollapsed, isTrue);
+      expect(next.collapsedParentWorkspaceIds, contains('parent'));
+      expect(next.expandedWorkspaceIds, isEmpty);
+    },
+  );
+
+  test('collapse-all prefs expand descendants hidden by collapsed headers', () {
+    final initial = _state();
+    final state = initial.copyWith(
+      viewPrefs: initial.viewPrefs.copyWith(
+        collapsedSectionIds: const <String>{'a', 'z'},
+        othersSectionCollapsed: true,
+        collapsedParentWorkspaceIds: const <String>{'parent'},
+        expandedWorkspaceIds: const <String>{},
+      ),
+    );
+
+    final next = nextWorkbenchCollapseAllPrefs(state);
+
+    expect(next, isNotNull);
+    expect(next!.collapsedSectionIds, isEmpty);
+    expect(next.othersSectionCollapsed, isFalse);
+    expect(next.collapsedParentWorkspaceIds, isEmpty);
+    expect(next.expandedWorkspaceIds, <String>{
+      'parent',
+      'unassigned',
+      'pinned',
+      'same',
+      'different',
+    });
+  });
+
+  test('collapse-all prefs return no update when there are no targets', () {
+    expect(nextWorkbenchCollapseAllPrefs(const WorkbenchState()), isNull);
+  });
+
   test('section activity uses member workspaces and keeps Others last', () {
     final state = _state();
     final withTabs = state.copyWith(
