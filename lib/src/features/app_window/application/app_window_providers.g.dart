@@ -202,7 +202,7 @@ final class AppWindowLifecycleCoordinatorProvider
 }
 
 String _$appWindowLifecycleCoordinatorHash() =>
-    r'cd701c2b5038caf5c56604db638e08dcc663e6c1';
+    r'6b11907dbaf3eade8970ce27a85f99c8762b701d';
 
 /// Observes the app lifecycle so recurring work can park while nobody can see
 /// its results.

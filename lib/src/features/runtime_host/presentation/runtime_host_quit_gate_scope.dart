@@ -24,7 +24,7 @@ class _RuntimeHostQuitGateScopeState
   bool _bound = false;
 
   Future<bool> _closeGate() async {
-    final client = ref.read(runtimeHostClientProvider);
+    final client = ref.read(socketTerminalHostClientProvider);
     client.beginAppQuit();
     var closeCommitted = false;
     var visualQuitCommitted = false;

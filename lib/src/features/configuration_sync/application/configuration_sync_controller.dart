@@ -10,7 +10,8 @@ part 'configuration_sync_controller.g.dart';
 @riverpod
 Future<ConfigurationSyncService> configurationSyncService(Ref ref) async {
   final client = ref.watch(runtimeHostClientProvider);
-  if (!await client.supportsRuntimeCapability('configurationSyncV1')) {
+  final capabilities = ref.watch(runtimeHostCapabilityClientProvider);
+  if (!await capabilities.supportsRuntimeCapability('configurationSyncV1')) {
     throw StateError('Update the runtime to synchronize configuration.');
   }
   await ref.watch(settingsRepositoryProvider).load();

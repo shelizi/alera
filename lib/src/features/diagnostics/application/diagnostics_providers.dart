@@ -54,7 +54,7 @@ void diagnosticsSettingsApplier(Ref ref) {
 /// runtime section is still the most useful thing available at that point.
 @riverpod
 Future<RuntimeDiagnosticsInfo> runtimeDiagnosticsInfo(Ref ref) async {
-  final client = ref.watch(runtimeHostClientProvider);
+  final client = ref.watch(socketTerminalHostClientProvider);
   try {
     final status = await client.probeRuntimeStatus();
     if (status == null) {

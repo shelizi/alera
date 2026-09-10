@@ -23,7 +23,7 @@ BundledSidecarVersionProbe bundledSidecarVersionProbe(Ref ref) {
 RuntimeHostLifecycleService runtimeHostLifecycleService(Ref ref) {
   return RuntimeHostLifecycleService(
     client: SocketRuntimeHostLifecycleClient(
-      ref.watch(runtimeHostClientProvider),
+      ref.watch(socketTerminalHostClientProvider),
     ),
     bundledVersionProbe: ref.watch(bundledSidecarVersionProbeProvider),
     readConfig: () {

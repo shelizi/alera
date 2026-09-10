@@ -31,7 +31,7 @@ AiDictationCredentialStore aiDictationCredentialStore(Ref ref) {
 
 @riverpod
 Future<bool> remoteAiDictationSupported(Ref ref) async {
-  final client = ref.read(runtimeHostClientProvider);
+  final client = ref.read(runtimeHostCapabilityClientProvider);
   return client.supportsRuntimeCapability(
     aleraRuntimeHostRemoteAiDictationCapability,
   );

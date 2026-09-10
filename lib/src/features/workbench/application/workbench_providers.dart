@@ -209,7 +209,7 @@ TerminalHostClient terminalHostClient(Ref ref) {
     settings.terminal,
     crashReporting: settings.diagnostics.crashReportingEnabled,
   );
-  final client = ref.watch(runtimeHostClientProvider);
+  final client = ref.watch(socketTerminalHostClientProvider);
   unawaited(
     client.configure(initialConfig).catchError(_ignoreProviderAsyncError),
   );
@@ -229,14 +229,13 @@ TerminalHostClient terminalHostClient(Ref ref) {
       );
     },
   );
-  ref.onDispose(client.dispose);
   return client;
 }
 
 @Riverpod(keepAlive: true)
 void terminalHostWarmupCoordinator(Ref ref) {
   final client = ref.watch(terminalHostClientProvider);
-  final runtimeClient = ref.watch(runtimeHostClientProvider);
+  final runtimeClient = ref.watch(socketTerminalHostClientProvider);
   unawaited(
     client
         .ensureStarted(

@@ -111,7 +111,9 @@ class _ResourceStatusBarControlState
   /// directly and without a prompt.
   Future<void> _killSession(ResourceSessionRow session) async {
     if (session.orphan) {
-      await ref.read(runtimeHostClientProvider).terminate(session.sessionId);
+      await ref
+          .read(socketTerminalHostClientProvider)
+          .terminate(session.sessionId);
       ref.invalidate(resourceSnapshotProvider);
       return;
     }
@@ -140,7 +142,7 @@ class _ResourceStatusBarControlState
   }
 
   Future<void> _killOrphans(List<ResourceSessionRow> orphans) async {
-    final client = ref.read(runtimeHostClientProvider);
+    final client = ref.read(socketTerminalHostClientProvider);
     await Future.wait(<Future<void>>[
       for (final orphan in orphans) client.terminate(orphan.sessionId),
     ]);

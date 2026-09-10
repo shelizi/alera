@@ -187,7 +187,7 @@ final class RemoteAiDictationSupportedProvider
 }
 
 String _$remoteAiDictationSupportedHash() =>
-    r'83313548ea5ec7e50e91cbf069f2a5fe5a5c9adf';
+    r'2723a379c25e15696d85282eb7c5afe94189f006';
 
 @ProviderFor(aiDictationService)
 final aiDictationServiceProvider = AiDictationServiceProvider._();
