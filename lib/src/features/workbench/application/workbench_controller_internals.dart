@@ -80,11 +80,8 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController {
       <String, StreamSubscription<List<Workspace>>>{};
   final Map<String, GitWorktreeMetadataWatcher> _worktreeMetadataWatchers =
       <String, GitWorktreeMetadataWatcher>{};
-  final Map<String, StreamSubscription<List<WorkspaceTabRecord>>> _tabSubs =
-      <String, StreamSubscription<List<WorkspaceTabRecord>>>{};
-  // Tracks which project each workspace-tab subscription belongs to, so subs
-  // can be pruned by project without relying on the (already-mutated) state.
-  final Map<String, String> _tabSubProjectIds = <String, String>{};
+  final WorkbenchTabSubscriptionRegistry _tabSubscriptions =
+      WorkbenchTabSubscriptionRegistry();
   final Set<String> _ensuringMainWorkspaceProjectIds = <String>{};
   final Set<String> _loadingLayoutWorkspaceIds = <String>{};
   final Set<String> _closingTabWorkspaceIds = <String>{};

@@ -107,13 +107,11 @@ mixin _WorkbenchControllerSync
         .toList(growable: false);
     for (final projectId in removedProjectIds) {
       _workspaceSubs.remove(projectId)?.cancel();
-      final removedWorkspaceIds = _tabSubProjectIds.entries
-          .where((entry) => entry.value == projectId)
-          .map((entry) => entry.key)
-          .toList(growable: false);
+      final removedWorkspaceIds = _tabSubscriptions.workspaceIdsForProject(
+        projectId,
+      );
       for (final workspaceId in removedWorkspaceIds) {
-        _tabSubs.remove(workspaceId)?.cancel();
-        _tabSubProjectIds.remove(workspaceId);
+        _tabSubscriptions.cancelWorkspace(workspaceId);
       }
       _workspaceIdsWithClearedLayout.removeAll(removedWorkspaceIds);
     }
@@ -136,13 +134,9 @@ mixin _WorkbenchControllerSync
       workspaces: workspaces,
     );
     final liveWorkspaceIds = plan.liveWorkspaceIds;
-    final removedWorkspaceIds = _tabSubProjectIds.entries
-        .where(
-          (entry) =>
-              entry.value == project.id &&
-              !liveWorkspaceIds.contains(entry.key),
-        )
-        .map((entry) => entry.key)
+    final removedWorkspaceIds = _tabSubscriptions
+        .workspaceIdsForProject(project.id)
+        .where((workspaceId) => !liveWorkspaceIds.contains(workspaceId))
         .toList(growable: false);
     for (final workspaceId in removedWorkspaceIds) {
       final workspace = _workspaceById(workspaceId);
@@ -155,27 +149,20 @@ mixin _WorkbenchControllerSync
       _releaseRetiredWorkspaceSessions(workspaceId);
     }
     for (final workspaceId in removedWorkspaceIds) {
-      _tabSubs.remove(workspaceId)?.cancel();
-      _tabSubProjectIds.remove(workspaceId);
+      _tabSubscriptions.cancelWorkspace(workspaceId);
     }
     _workspaceIdsWithClearedLayout.removeAll(removedWorkspaceIds);
     for (final workspace in workspaces) {
-      if (_tabSubs.containsKey(workspace.id)) {
+      if (_tabSubscriptions.contains(workspace.id)) {
         continue;
       }
-      _tabSubProjectIds[workspace.id] = project.id;
       unawaited(_loadLayoutForWorkspace(workspace.id));
-      _tabSubs[workspace.id] = _repository
-          .watchWorkspaceTabs(workspace.id)
-          .listen(
-            (tabs) => _onTabsChanged(workspace.id, tabs),
-            onError: (Object _) {},
-            onDone: () {
-              _tabSubs.remove(workspace.id);
-              _tabSubProjectIds.remove(workspace.id);
-            },
-            cancelOnError: false,
-          );
+      _tabSubscriptions.watch(
+        projectId: project.id,
+        workspaceId: workspace.id,
+        stream: _repository.watchWorkspaceTabs(workspace.id),
+        onData: (tabs) => _onTabsChanged(workspace.id, tabs),
+      );
     }
     state = state.copyWith(
       workspacesByProject: plan.workspacesByProject,
@@ -194,7 +181,7 @@ mixin _WorkbenchControllerSync
   }
 
   void _onTabsChanged(String workspaceId, List<WorkspaceTabRecord> tabs) {
-    if (!_tabSubProjectIds.containsKey(workspaceId)) {
+    if (!_tabSubscriptions.contains(workspaceId)) {
       return;
     }
     final layoutWasCleared = _workspaceIdsWithClearedLayout.contains(
