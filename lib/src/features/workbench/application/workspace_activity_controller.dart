@@ -11,11 +11,16 @@ part 'workspace_activity_controller.g.dart';
 /// agent transitions produce a single disk write.
 const Duration workspaceActivityFlushDelay = Duration(seconds: 2);
 
+abstract interface class WorkbenchWorkspaceActivityRecorder {
+  void recordActivity(String workspaceId, DateTime at);
+}
+
 /// Tracks the last discrete activity timestamp per workspace (agent state
 /// transitions, terminal lifecycle) and persists it with a debounce. State is
 /// the in-memory map used by the Agent Activity sort as its recency fallback.
 @Riverpod(keepAlive: true)
-class WorkspaceActivityController extends _$WorkspaceActivityController {
+class WorkspaceActivityController extends _$WorkspaceActivityController
+    implements WorkbenchWorkspaceActivityRecorder {
   WorkspaceActivityRepository? _repository;
   final Map<String, DateTime> _dirty = <String, DateTime>{};
   Timer? _flushTimer;
@@ -77,6 +82,7 @@ class WorkspaceActivityController extends _$WorkspaceActivityController {
 /// Feeds [WorkspaceActivityController] from discrete agent status transitions.
 /// Tool-by-tool updates within one state do not count as activity - only a
 /// `state`/`stateStartedAt` change marks the workspace as active.
+
 @Riverpod(keepAlive: true)
 void workspaceActivityCoordinator(Ref ref) {
   ref.listen<Map<String, AgentStatusEntry>>(agentStatusControllerProvider, (

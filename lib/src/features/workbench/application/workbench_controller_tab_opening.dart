@@ -34,9 +34,10 @@ mixin _WorkbenchControllerTabOpening
       );
       _setTabsForWorkspace(workspace.id, placement.tabs);
       await _applyLayout(placement.layout, persist: true);
-      ref
-          .read(workspaceActivityControllerProvider.notifier)
-          .recordActivity(workspace.id, DateTime.now().toUtc());
+      _workspaceActivityRecorder.recordActivity(
+        workspace.id,
+        DateTime.now().toUtc(),
+      );
       state = state.copyWith(error: null);
       return tab;
     } catch (error) {

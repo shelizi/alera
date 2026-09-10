@@ -14,6 +14,7 @@ import 'package:alera/src/features/projects/domain/project_config.dart';
 import 'package:alera/src/features/settings/application/settings_controller.dart';
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
 import 'package:alera/src/features/workbench/application/workbench_providers.dart';
+import 'package:alera/src/features/workbench/application/workspace_activity_controller.dart';
 import 'package:alera/src/features/workbench/application/workspace_search_controller.dart';
 import 'package:alera/src/features/workbench/application/workspace_tab_service.dart';
 import 'package:alera/src/features/workbench/application/workbench_controller.dart';

@@ -12,9 +12,14 @@ class const WorkspaceExplorerRevealRequest({
   required final int generation,
 });
 
+abstract interface class WorkbenchWorkspaceExplorerRevealSink {
+  void reveal({required String workspaceId, required String relativePath});
+}
+
 @Riverpod(keepAlive: true)
 class WorkspaceExplorerRevealController
-    extends _$WorkspaceExplorerRevealController {
+    extends _$WorkspaceExplorerRevealController
+    implements WorkbenchWorkspaceExplorerRevealSink {
   int _generation = 0;
 
   @override

@@ -30,6 +30,27 @@ void _registerWorkbenchControllerLifecycleTests() {
     },
   );
 
+  test('creating a terminal records workspace activity through the narrow recorder', () async {
+    await _controller.bootstrap();
+    final workspace = await _selectMainWorkspace(_controller, _harness);
+    final activity = _harness.container.read(
+      workspaceActivityControllerProvider.notifier,
+    );
+    activity.removeWorkspace(workspace.id);
+    expect(
+      _harness.container.read(workspaceActivityControllerProvider),
+      isNot(contains(workspace.id)),
+    );
+
+    await _controller.createTerminalTab(workspace);
+
+    expect(
+      _harness.container.read(
+        workspaceActivityControllerProvider,
+      )[workspace.id],
+      isNotNull,
+    );
+  });
   test('createWorkspace returns injected worktree setup warnings', () async {
     await _controller.bootstrap();
     const report = WorktreeSetupReport(

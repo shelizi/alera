@@ -226,9 +226,10 @@ mixin _WorkbenchControllerViewPrefs
     if (normalized == null) {
       return;
     }
-    ref
-        .read(workspaceExplorerRevealControllerProvider.notifier)
-        .reveal(workspaceId: workspace.id, relativePath: normalized);
+    _workspaceExplorerReveal.reveal(
+      workspaceId: workspace.id,
+      relativePath: normalized,
+    );
     setRightSidebarVisible(true);
     setContextPanelTab(.explorer);
   }
