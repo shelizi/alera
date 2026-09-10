@@ -87,7 +87,8 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController {
       WorkbenchLayoutLoadCoordinator();
   final WorkbenchWorkspaceTabClosingScope _tabClosingScope =
       WorkbenchWorkspaceTabClosingScope();
-  final Set<String> _workspaceIdsWithClearedLayout = <String>{};
+  final WorkbenchClearedLayoutRegistry _clearedLayouts =
+      WorkbenchClearedLayoutRegistry();
   final WorkbenchFileTabMutationQueue _fileTabMutations =
       WorkbenchFileTabMutationQueue();
 

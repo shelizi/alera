@@ -89,7 +89,7 @@ mixin _WorkbenchControllerSync
       for (final workspaceId in removedWorkspaceIds) {
         _tabSubscriptions.cancelWorkspace(workspaceId);
       }
-      _workspaceIdsWithClearedLayout.removeAll(removedWorkspaceIds);
+      _clearedLayouts.forgetAll(removedWorkspaceIds);
     }
     _worktreeMetadataWatcherRegistry.prune(validProjectIds);
     _ensureSelectionHasTab();
@@ -119,7 +119,7 @@ mixin _WorkbenchControllerSync
     for (final workspaceId in removedWorkspaceIds) {
       _tabSubscriptions.cancelWorkspace(workspaceId);
     }
-    _workspaceIdsWithClearedLayout.removeAll(removedWorkspaceIds);
+    _clearedLayouts.forgetAll(removedWorkspaceIds);
     for (final workspace in workspaces) {
       if (_tabSubscriptions.contains(workspace.id)) {
         continue;
@@ -152,9 +152,7 @@ mixin _WorkbenchControllerSync
     if (!_tabSubscriptions.contains(workspaceId)) {
       return;
     }
-    final layoutWasCleared = _workspaceIdsWithClearedLayout.contains(
-      workspaceId,
-    );
+    final layoutWasCleared = _clearedLayouts.contains(workspaceId);
     final plan = planWorkbenchTabSetSync(
       state: state,
       workspaceId: workspaceId,
@@ -172,7 +170,7 @@ mixin _WorkbenchControllerSync
     // client may still own.
     _retiredResourceCleaner.releaseTabs(removedTabs);
     if (tabs.isNotEmpty) {
-      _workspaceIdsWithClearedLayout.remove(workspaceId);
+      _clearedLayouts.forget(workspaceId);
     }
     state = state.copyWith(
       tabsByWorkspace: plan.tabsByWorkspace,

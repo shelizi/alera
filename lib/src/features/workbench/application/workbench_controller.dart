@@ -24,6 +24,7 @@ import 'package:alera/src/features/workbench/application/workbench_bootstrap_orc
 import 'package:alera/src/features/workbench/application/workbench_main_workspace_preparation_coordinator.dart';
 import 'package:alera/src/features/workbench/application/workbench_layout_load_coordinator.dart';
 import 'package:alera/src/features/workbench/application/workbench_layout_resolver.dart';
+import 'package:alera/src/features/workbench/application/workbench_cleared_layout_registry.dart';
 import 'package:alera/src/features/workbench/application/workbench_closed_tabs_plan.dart';
 import 'package:alera/src/features/workbench/application/workbench_project_set_sync.dart';
 import 'package:alera/src/features/workbench/application/workbench_root_subscription_registry.dart';

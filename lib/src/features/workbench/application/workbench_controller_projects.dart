@@ -80,7 +80,7 @@ mixin _WorkbenchControllerProjects
     await _tabClosingScope.run(workspace.id, () async {
       try {
         final workspaceTabs = state.tabsFor(workspace.id);
-        _workspaceIdsWithClearedLayout.add(workspace.id);
+        _clearedLayouts.mark(workspace.id);
         _tabFocusHistory.forget(workspace.id);
         await _repository.removeWorkspaceTabsForWorkspace(workspace.id);
         for (final tab in workspaceTabs) {
@@ -100,7 +100,7 @@ mixin _WorkbenchControllerProjects
           error: null,
         );
       } catch (error) {
-        _workspaceIdsWithClearedLayout.remove(workspace.id);
+        _clearedLayouts.forget(workspace.id);
         state = state.copyWith(error: error.toString());
         rethrow;
       }
