@@ -57,82 +57,80 @@ mixin _WorkbenchControllerViewPrefs
   }
 
   void toggleProjectFilter(String projectId) {
-    final next = Set<String>.from(state.viewPrefs.selectedProjectIds);
-    if (!next.add(projectId)) {
-      next.remove(projectId);
-    }
-    _updateViewPrefs(state.viewPrefs.copyWith(selectedProjectIds: next));
+    _updateViewPrefsIfChanged(
+      nextWorkbenchProjectFilterPrefs(
+        prefs: state.viewPrefs,
+        id: projectId,
+        mutation: WorkbenchFilterMutation.toggle,
+      ),
+    );
   }
 
   void addProjectFilter(String projectId) {
-    final current = state.viewPrefs.selectedProjectIds;
-    if (current.contains(projectId)) {
-      return;
-    }
-    _updateViewPrefs(
-      state.viewPrefs.copyWith(
-        selectedProjectIds: <String>{...current, projectId},
+    _updateViewPrefsIfChanged(
+      nextWorkbenchProjectFilterPrefs(
+        prefs: state.viewPrefs,
+        id: projectId,
+        mutation: WorkbenchFilterMutation.add,
       ),
     );
   }
 
   void removeProjectFilter(String projectId) {
-    final current = state.viewPrefs.selectedProjectIds;
-    if (!current.contains(projectId)) {
-      return;
-    }
-    _updateViewPrefs(
-      state.viewPrefs.copyWith(
-        selectedProjectIds: current.where((id) => id != projectId).toSet(),
+    _updateViewPrefsIfChanged(
+      nextWorkbenchProjectFilterPrefs(
+        prefs: state.viewPrefs,
+        id: projectId,
+        mutation: WorkbenchFilterMutation.remove,
       ),
     );
   }
 
   void clearProjectFilters() {
-    if (state.viewPrefs.selectedProjectIds.isEmpty) {
-      return;
-    }
-    _updateViewPrefs(
-      state.viewPrefs.copyWith(selectedProjectIds: const <String>{}),
+    _updateViewPrefsIfChanged(
+      nextWorkbenchProjectFilterPrefs(
+        prefs: state.viewPrefs,
+        mutation: WorkbenchFilterMutation.clear,
+      ),
     );
   }
 
   void toggleTagFilter(String tagId) {
-    final next = Set<String>.from(state.viewPrefs.selectedTagIds);
-    if (!next.add(tagId)) {
-      next.remove(tagId);
-    }
-    _updateViewPrefs(state.viewPrefs.copyWith(selectedTagIds: next));
+    _updateViewPrefsIfChanged(
+      nextWorkbenchTagFilterPrefs(
+        prefs: state.viewPrefs,
+        id: tagId,
+        mutation: WorkbenchFilterMutation.toggle,
+      ),
+    );
   }
 
   void addTagFilter(String tagId) {
-    final current = state.viewPrefs.selectedTagIds;
-    if (current.contains(tagId)) {
-      return;
-    }
-    _updateViewPrefs(
-      state.viewPrefs.copyWith(selectedTagIds: <String>{...current, tagId}),
+    _updateViewPrefsIfChanged(
+      nextWorkbenchTagFilterPrefs(
+        prefs: state.viewPrefs,
+        id: tagId,
+        mutation: WorkbenchFilterMutation.add,
+      ),
     );
   }
 
   void removeTagFilter(String tagId) {
-    final current = state.viewPrefs.selectedTagIds;
-    if (!current.contains(tagId)) {
-      return;
-    }
-    _updateViewPrefs(
-      state.viewPrefs.copyWith(
-        selectedTagIds: current.where((id) => id != tagId).toSet(),
+    _updateViewPrefsIfChanged(
+      nextWorkbenchTagFilterPrefs(
+        prefs: state.viewPrefs,
+        id: tagId,
+        mutation: WorkbenchFilterMutation.remove,
       ),
     );
   }
 
   void clearTagFilters() {
-    if (state.viewPrefs.selectedTagIds.isEmpty) {
-      return;
-    }
-    _updateViewPrefs(
-      state.viewPrefs.copyWith(selectedTagIds: const <String>{}),
+    _updateViewPrefsIfChanged(
+      nextWorkbenchTagFilterPrefs(
+        prefs: state.viewPrefs,
+        mutation: WorkbenchFilterMutation.clear,
+      ),
     );
   }
 
@@ -379,6 +377,12 @@ mixin _WorkbenchControllerViewPrefs
         },
       ),
     );
+  }
+
+  void _updateViewPrefsIfChanged(WorkbenchViewPrefs? prefs) {
+    if (prefs != null) {
+      _updateViewPrefs(prefs);
+    }
   }
 
   void _updateViewPrefs(WorkbenchViewPrefs prefs) {
