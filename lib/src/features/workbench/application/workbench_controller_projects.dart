@@ -426,17 +426,11 @@ mixin _WorkbenchControllerProjects
     required bool ensureInitialTerminal,
     bool recordHistory = true,
   }) async {
-    final prefs = state.viewPrefs;
-    final nextPrefs = prefs;
-    state = state.copyWith(
-      activeProjectId: project.id,
-      activeWorkspaceId: workspace.id,
-      viewPrefs: nextPrefs,
-      error: null,
+    state = selectWorkbenchWorkspace(
+      state: state,
+      project: project,
+      workspace: workspace,
     );
-    if (!identical(nextPrefs, prefs)) {
-      unawaited(_persistViewPrefs());
-    }
     if (ensureInitialTerminal) {
       await _workspaceTabService.ensureInitialTerminalTab(workspace.id);
     }
@@ -451,16 +445,6 @@ mixin _WorkbenchControllerProjects
   }
 
   Future<void> activateProject(Project project) async {
-    final prefs = state.viewPrefs;
-    final nextPrefs = prefs;
-    state = state.copyWith(
-      activeProjectId: project.id,
-      activeWorkspaceId: null,
-      viewPrefs: nextPrefs,
-      error: null,
-    );
-    if (!identical(nextPrefs, prefs)) {
-      unawaited(_persistViewPrefs());
-    }
+    state = activateWorkbenchProject(state: state, project: project);
   }
 }
