@@ -20,6 +20,11 @@ const _legacyTransportPaths = <String>[
 ];
 const _scanRoots = <String>['lib/src', 'test'];
 const _platformRuntimeRoot = 'lib/src/platform/runtime_host';
+const _featureRoot = 'lib/src/features';
+const _terminalRuntimeCompositionPath =
+    'lib/src/features/workbench/application/workbench_providers.dart';
+const _presentationTerminalRuntimeImport =
+    'package:alera/src/features/workbench/presentation/terminal_runtime.dart';
 
 final _dependencyDirective = RegExp(
   r'''^\s*(?:import|export|part)\s+['\"]([^'\"]+)['\"]''',
@@ -31,6 +36,7 @@ void main() {
   _checkMovedFiles(violations);
   _checkLegacyReferences(violations);
   _checkPlatformFeatureDependencies(violations);
+  _checkApplicationTerminalRuntimeDependencies(violations);
 
   if (violations.isEmpty) {
     stdout.writeln('Runtime architecture guard passed.');
@@ -113,6 +119,35 @@ void _checkPlatformFeatureDependencies(List<String> violations) {
         violations.add(
           'Runtime boundary imports feature code: '
           '${_displayPath(file)}:${index + 1}:$uri',
+        );
+      }
+    }
+  }
+}
+
+void _checkApplicationTerminalRuntimeDependencies(List<String> violations) {
+  for (final file in _dartFilesUnder(_featureRoot)) {
+    final path = _displayPath(file);
+    if (!path.contains('/application/') ||
+        path.endsWith('.g.dart') ||
+        path == _terminalRuntimeCompositionPath) {
+      continue;
+    }
+
+    final lines = file.readAsLinesSync();
+    for (var index = 0; index < lines.length; index += 1) {
+      final line = lines[index];
+      if (line.contains('terminalRuntimeProvider')) {
+        violations.add(
+          'Application code depends on the full terminal runtime provider: '
+          '$path:${index + 1}:${line.trim()}',
+        );
+      }
+      final match = _dependencyDirective.firstMatch(line);
+      if (match?.group(1) == _presentationTerminalRuntimeImport) {
+        violations.add(
+          'Application code imports the presentation terminal runtime: '
+          '$path:${index + 1}:$_presentationTerminalRuntimeImport',
         );
       }
     }
