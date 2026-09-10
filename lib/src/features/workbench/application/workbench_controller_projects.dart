@@ -233,24 +233,10 @@ mixin _WorkbenchControllerProjects
   }
 
   Future<WorkspaceTag> createWorkspaceTag(String name) async {
-    final trimmed = name.trim();
-    if (trimmed.isEmpty) {
-      throw WorkspaceException('Tag name is required.');
-    }
     try {
-      // Tag names are unique case-insensitively in the runtime store, so a
-      // duplicate name reuses the existing tag instead of minting a new id.
-      final lowered = trimmed.toLowerCase();
-      final existing = (await _workspaceGraphRepository.listTags())
-          .where((tag) => tag.name.toLowerCase() == lowered)
-          .firstOrNull;
-      if (existing != null) {
-        state = state.copyWith(error: null);
-        return existing;
-      }
-      final tag = await _workspaceGraphRepository.upsertTag(
-        .create(name: trimmed),
-      );
+      final tag = await WorkbenchWorkspaceTagCreationService(
+        _workspaceGraphRepository,
+      ).create(name);
       state = state.copyWith(error: null);
       return tag;
     } catch (error) {

@@ -80,12 +80,14 @@ abstract interface class WorkspaceParentRepository {
   });
 }
 
-abstract interface class WorkspaceGraphRepository
-    implements WorkspaceParentRepository {
+abstract interface class WorkspaceTagRepository {
   Future<List<WorkspaceTag>> listTags();
 
   Future<WorkspaceTag> upsertTag(WorkspaceTag tag);
+}
 
+abstract interface class WorkspaceGraphRepository
+    implements WorkspaceParentRepository, WorkspaceTagRepository {
   Future<void> removeTag(String tagId);
 
   Future<void> assignTag({required String workspaceId, required String tagId});
