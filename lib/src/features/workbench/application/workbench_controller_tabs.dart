@@ -105,34 +105,22 @@ mixin _WorkbenchControllerTabs
       if (result.isEmpty) {
         return;
       }
-      final closedIds = result.closedTabIds.toSet();
-      final byId = <String, WorkspaceTabRecord>{
-        for (final tab in result.updatedTabs) tab.id: tab,
-      };
-      final tabs = <WorkspaceTabRecord>[
-        for (final tab in state.tabsFor(workspace.id))
-          if (!closedIds.contains(tab.id)) byId[tab.id] ?? tab,
-      ];
-      _setTabsForWorkspace(workspace.id, tabs);
-      if (closedIds.isNotEmpty) {
-        if (tabs.isNotEmpty) {
-          var layout = _layoutForMutation(workspace.id, tabs);
-          for (final tabId in closedIds) {
-            layout = layout.removeTab(tabId);
-          }
-          await _applyLayout(layout.sanitize(tabs), persist: true);
-        } else {
-          final layout = WorkbenchLayout.single(
-            workspaceId: workspace.id,
-            tabIds: const <String>[],
-          );
-          await _applyLayout(layout, persist: true);
-        }
+      final plan = planWorkbenchFileTabPathMove(
+        workspaceId: workspace.id,
+        currentTabs: state.tabsFor(workspace.id),
+        currentLayout: state.layoutFor(workspace.id),
+        updatedTabs: result.updatedTabs,
+        closedTabIds: result.closedTabIds,
+      );
+      _setTabsForWorkspace(workspace.id, plan.tabs);
+      final layoutToPersist = plan.layoutToPersist;
+      if (layoutToPersist != null) {
+        await _applyLayout(layoutToPersist, persist: true);
       }
       state = completeWorkbenchTabRemovalState(
         state: state,
         workspaceId: workspace.id,
-        remainingTabs: tabs,
+        remainingTabs: plan.tabs,
       );
     } catch (error) {
       state = state.copyWith(error: error.toString());
