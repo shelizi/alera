@@ -1,18 +1,14 @@
 import 'dart:async';
-import 'dart:io' show Platform;
 
 import 'package:alera/src/features/agent_status/application/agent_status_controller.dart';
 import 'package:alera/src/features/agent_status/application/agent_status_providers.dart';
-import 'package:alera/src/features/app_window/application/app_window_providers.dart';
 import 'package:alera/src/features/command_terminal/domain/command_terminal_request.dart';
-import 'package:alera/src/design_system/feedback/alera_toast.dart';
 import 'package:alera/src/features/projects/application/project_providers.dart';
 import 'package:alera/src/features/projects/domain/project.dart';
 import 'package:alera/src/features/settings/application/settings_controller.dart';
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
 import 'package:alera/src/features/workbench/application/terminal_host_settings_config.dart';
-import 'package:alera/src/features/workbench/application/terminal_runtime_lifecycle.dart';
-import 'package:alera/src/features/workbench/application/terminal_runtime_focus.dart';
+import 'package:alera/src/features/workbench/application/terminal_runtime_bindings.dart';
 import 'package:alera/src/features/workbench/application/workbench_controller.dart';
 import 'package:alera/src/features/workbench/application/workbench_listing.dart';
 import 'package:alera/src/features/workbench/application/workbench_repository.dart';
@@ -37,19 +33,22 @@ import 'package:alera/src/features/workbench/infra/runtime_managed_workspace_cli
 import 'package:alera/src/features/workbench/infra/runtime_workspace_graph_repository.dart';
 import 'package:alera/src/features/workbench/infra/runtime_workbench_repository.dart';
 import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_client.dart';
-import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_pty_session.dart';
 import 'package:alera/src/features/workbench/infra/terminal_shell_startup_preparer.dart';
-import 'package:alera/src/features/workbench/presentation/terminal_runtime.dart';
 import 'package:alera/src/shared/infra/git/git_providers.dart';
 import 'package:alera/src/shared/infra/process/process_providers.dart';
 import 'package:alera/src/shared/infra/runtime/runtime_host_providers.dart';
 import 'package:alera/src/shared/infra/runtime/runtime_state_migration.dart';
 import 'package:alera/src/shared/infra/storage/storage_providers.dart';
-import 'package:alera/src/shared/infra/uri/uri_providers.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:logging/logging.dart';
-import 'package:meta/meta.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
+
+export 'package:alera/src/features/workbench/application/terminal_runtime_bindings.dart'
+    show
+        terminalRuntimeBindingsProvider,
+        terminalRuntimeLifecycleProvider,
+        terminalRuntimeCoordinationProvider,
+        terminalRuntimeFocusProvider;
 
 part 'workbench_providers.g.dart';
 
@@ -256,86 +255,6 @@ void terminalHostWarmupCoordinator(Ref ref) {
   );
 }
 
-final terminalRuntimeLifecycleProvider = Provider<TerminalRuntimeLifecycle>((
-  ref,
-) {
-  return ref.watch(terminalRuntimeProvider);
-});
-
-final terminalRuntimeCoordinationProvider =
-    Provider<TerminalRuntimeCoordination>((ref) {
-      return ref.watch(terminalRuntimeProvider);
-    });
-
-final terminalRuntimeFocusProvider = Provider<TerminalRuntimeFocus>((ref) {
-  return ref.watch(terminalRuntimeProvider);
-});
-
-@Riverpod(keepAlive: true)
-TerminalRuntime terminalRuntime(Ref ref) {
-  final terminalHostClient = ref.watch(terminalHostClientProvider);
-  final agentRuntimeOverlay = ref.watch(agentRuntimeOverlayServiceProvider);
-  final aleraCliShim = ref.watch(aleraCliTerminalShimServiceProvider);
-  final shellStartupPreparer = ref.watch(terminalShellStartupPreparerProvider);
-  final runtime = XtermTerminalRuntime(
-    ptySessionFactory: TerminalHostPtySessionFactory(
-      client: terminalHostClient,
-    ),
-    initialSettings: ref.read(settingsControllerProvider).terminal,
-    externalUriLauncher: ref.watch(externalUriLauncherProvider),
-    shellStartupPreparer: shellStartupPreparer,
-    terminalSessionCleanup: (terminalSessionId) {
-      // A terminal closed mid-turn never emits the Codex Stop hook, so the
-      // transcript watch has to be dropped here or its file poller outlives
-      // the session.
-      ref
-          .read(agentHookReceiverProvider)
-          .clearTerminalSession(terminalSessionId);
-      return agentRuntimeOverlay.clearTerminalOverlays(terminalSessionId);
-    },
-    terminalProcessCreated: (terminalSessionId) => ref
-        .read(agentStatusControllerProvider.notifier)
-        .clearTerminal(terminalSessionId),
-    interactionNotice: (message, {error = false}) {
-      AleraToast.publish(
-        message: message,
-        tone: error ? AleraToastTone.error : AleraToastTone.info,
-        duration: error
-            ? const Duration(seconds: 6)
-            : const Duration(seconds: 12),
-      );
-    },
-    agentHookEnvironmentBuilder:
-        ({required terminalSessionId, required workspaceId, required tabId}) {
-          final environment = <String, String>{};
-          Future<void> addAleraCliShim() async {
-            try {
-              _mergeTerminalLaunchEnvironment(
-                environment,
-                await aleraCliShim.prepareForTerminalLaunch(),
-              );
-            } catch (_) {}
-          }
-
-          return addAleraCliShim().then(
-            (_) => environment.isEmpty ? null : environment,
-          );
-        },
-  );
-  ref.listen<TerminalSettings>(
-    settingsControllerProvider.select((settings) => settings.terminal),
-    (_, next) => runtime.updateSettings(next),
-  );
-  final foreground = ref.watch(appForegroundProvider);
-  runtime.setAppForeground(foreground.isForeground);
-  final foregroundSub = foreground.changes.listen(runtime.setAppForeground);
-  ref.onDispose(() {
-    unawaited(foregroundSub.cancel());
-    runtime.dispose();
-  });
-  return runtime;
-}
-
 @Riverpod(keepAlive: true)
 TerminalShellStartupPreparer terminalShellStartupPreparer(Ref ref) {
   return AleraTerminalShellStartupPreparer();
@@ -452,51 +371,3 @@ void _ignoreProviderAsyncError(Object error, StackTrace stackTrace) {
       .warning('background provider work failed', error, stackTrace);
 }
 // coverage:ignore-end
-
-/// Joins path-list environment values (PATH-style), not filesystem path segments.
-///
-/// `ALERA_AGENT_WRAPPER_PATH` holds one or more wrapper *directories* separated
-/// by `:` on POSIX and `;` on Windows. Using [Platform.pathSeparator] (`/` or
-/// `\`) would split absolute paths into garbage fragments and drop the Amp /
-/// Cursor wrappers from PATH, so status plugins never load.
-@visibleForTesting
-void mergeTerminalLaunchEnvironmentForTesting(
-  Map<String, String> target,
-  Map<String, String>? source,
-) {
-  _mergeTerminalLaunchEnvironment(target, source);
-}
-
-void _mergeTerminalLaunchEnvironment(
-  Map<String, String> target,
-  Map<String, String>? source,
-) {
-  if (source == null || source.isEmpty) {
-    return;
-  }
-  final wrapperEntries = <String>[
-    ..._splitPathList(target['ALERA_AGENT_WRAPPER_PATH']),
-    ..._splitPathList(source['ALERA_AGENT_WRAPPER_PATH']),
-  ];
-  target.addAll(source);
-  if (wrapperEntries.isEmpty) {
-    target.remove('ALERA_AGENT_WRAPPER_PATH');
-    return;
-  }
-  final seen = <String>{};
-  target['ALERA_AGENT_WRAPPER_PATH'] = wrapperEntries
-      .where((entry) => entry.isNotEmpty && seen.add(entry))
-      .join(_pathListSeparator);
-}
-
-List<String> _splitPathList(String? value) {
-  if (value == null || value.isEmpty) {
-    return const <String>[];
-  }
-  return value
-      .split(_pathListSeparator)
-      .where((entry) => entry.isNotEmpty)
-      .toList(growable: false);
-}
-
-String get _pathListSeparator => Platform.isWindows ? ';' : ':';

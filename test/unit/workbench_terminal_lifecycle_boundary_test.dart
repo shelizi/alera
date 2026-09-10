@@ -72,6 +72,19 @@ void main() {
     expect(source, isNot(contains('editorSessionRegistryProvider')));
   });
 
+  test(
+    'workbench application no longer composes the full terminal runtime',
+    () {
+      final source = File(
+        'lib/src/features/workbench/application/workbench_providers.dart',
+      ).readAsStringSync();
+
+      expect(source, isNot(contains('/presentation/')));
+      expect(source, isNot(contains('TerminalRuntime terminalRuntime(')));
+      expect(source, isNot(contains('terminalRuntimeProvider')));
+    },
+  );
+
   test('runtime coordinators depend on the narrow coordination contract', () {
     final source = File(
       'lib/src/features/workbench/application/workbench_providers.dart',
@@ -108,8 +121,6 @@ void main() {
     ).readAsStringSync();
 
     expect(source, contains('abstract interface class TerminalRuntime'));
-    expect(source, contains('TerminalRuntimeLifecycle'));
-    expect(source, contains('TerminalRuntimeCoordination'));
-    expect(source, contains('TerminalRuntimeFocus'));
+    expect(source, contains('implements TerminalRuntimeBindings'));
   });
 }

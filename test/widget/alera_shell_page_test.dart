@@ -91,6 +91,7 @@ Future<_ShellPumpHarness> _pumpShell(
           const _FakeManagedWorkspaceRuntime(),
         ),
         terminalRuntimeProvider.overrideWith((ref) => runtime),
+        terminalRuntimeBindingOverride(),
         if (editorSessionRegistry != null)
           editorSessionRegistryProvider.overrideWithValue(
             editorSessionRegistry,

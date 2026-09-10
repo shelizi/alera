@@ -331,6 +331,7 @@ Future<_DispatcherPumpHarness> _pumpDispatcherHarness(
       workbenchControllerProvider.overrideWith(() => controller),
       agentProfilesProvider.overrideWith(() => _DispatcherAgentProfiles()),
       terminalRuntimeProvider.overrideWith((ref) => runtime),
+      terminalRuntimeBindingOverride(),
       if (externalEditorLauncher != null)
         externalEditorLauncherProvider.overrideWithValue(
           externalEditorLauncher,

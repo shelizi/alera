@@ -57,6 +57,7 @@ void main() {
       overrides: [
         workbenchControllerProvider.overrideWith(() => controller),
         terminalRuntimeProvider.overrideWith((ref) => runtime),
+        terminalRuntimeBindingOverride(),
       ],
     );
     addTearDown(container.dispose);

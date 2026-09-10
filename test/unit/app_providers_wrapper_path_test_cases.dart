@@ -14,7 +14,7 @@ void _registerAppProvidersWrapperPathTests() {
       'ALERA_AGENT_WRAPPER_PATH': aleraShim,
     };
 
-    mergeTerminalLaunchEnvironmentForTesting(target, <String, String>{
+    mergeTerminalLaunchEnvironment(target, <String, String>{
       'ALERA_AMP_CONFIG_DIR': '/overlay/amp',
       'ALERA_AGENT_WRAPPER_PATH': ampWrapper,
     });
@@ -27,7 +27,7 @@ void _registerAppProvidersWrapperPathTests() {
     expect(target['ALERA_RUNTIME_DIR'], '/runtime');
 
     // Merging again must not re-split absolute paths on filesystem separators.
-    mergeTerminalLaunchEnvironmentForTesting(target, <String, String>{
+    mergeTerminalLaunchEnvironment(target, <String, String>{
       'ALERA_AGENT_WRAPPER_PATH': ampWrapper,
     });
     expect(

@@ -21,10 +21,6 @@ const _legacyTransportPaths = <String>[
 const _scanRoots = <String>['lib/src', 'test'];
 const _platformRuntimeRoot = 'lib/src/platform/runtime_host';
 const _featureRoot = 'lib/src/features';
-const _terminalRuntimeCompositionPath =
-    'lib/src/features/workbench/application/workbench_providers.dart';
-const _presentationTerminalRuntimeImport =
-    'package:alera/src/features/workbench/presentation/terminal_runtime.dart';
 
 final _dependencyDirective = RegExp(
   r'''^\s*(?:import|export|part)\s+['\"]([^'\"]+)['\"]''',
@@ -135,8 +131,7 @@ void _checkApplicationPresentationDependencies(List<String> violations) {
     final lines = file.readAsLinesSync();
     for (var index = 0; index < lines.length; index += 1) {
       final line = lines[index];
-      if (line.contains('terminalRuntimeProvider') &&
-          path != _terminalRuntimeCompositionPath) {
+      if (line.contains('terminalRuntimeProvider')) {
         violations.add(
           'Application code depends on the full terminal runtime provider: '
           '$path:${index + 1}:${line.trim()}',
@@ -146,10 +141,6 @@ void _checkApplicationPresentationDependencies(List<String> violations) {
       final match = _dependencyDirective.firstMatch(line);
       final uri = match?.group(1);
       if (uri == null || !uri.contains('/presentation/')) {
-        continue;
-      }
-      if (path == _terminalRuntimeCompositionPath &&
-          uri == _presentationTerminalRuntimeImport) {
         continue;
       }
       violations.add(

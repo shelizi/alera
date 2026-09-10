@@ -229,6 +229,7 @@ void _registerAgentNotificationCoordinatorTests() {
           ),
           workbenchControllerProvider.overrideWith(() => controller),
           terminalRuntimeProvider.overrideWith((ref) => runtime),
+          terminalRuntimeBindingOverride(),
           ..._immediateNotificationDelivery,
         ],
       );

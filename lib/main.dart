@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:alera/src/app/app.dart';
+import 'package:alera/src/app/terminal_runtime_composition.dart';
 import 'package:alera/src/features/app_window/infra/app_window_bootstrap.dart';
 import 'package:alera/src/rust/frb_generated.dart';
 import 'package:alera/src/shared/infra/logging/app_logger.dart';
@@ -47,6 +48,7 @@ Future<void> _startApp() async {
     ProviderScope(
       observers: const <ProviderObserver>[LoggingProviderObserver()],
       overrides: [
+        terminalRuntimeBindingOverride(),
         if (windowBootstrap.database case final db?)
           aleraDatabaseProvider.overrideWith((ref) {
             ref.onDispose(() async {

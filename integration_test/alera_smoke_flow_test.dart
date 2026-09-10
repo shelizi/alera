@@ -92,6 +92,7 @@ void main() {
           managedWorkspaceRuntimeProvider.overrideWithValue(null),
           gitBackendProvider.overrideWithValue(gitBackend),
           terminalRuntimeProvider.overrideWith((ref) => terminalRuntime),
+          terminalRuntimeBindingOverride(),
         ],
         child: const AleraApp(),
       ),

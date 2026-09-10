@@ -88,6 +88,7 @@ class _WorkbenchHarness([ManagedWorkspaceRuntime? runtime]) {
         ),
         settingsControllerProvider.overrideWithValue(settings),
         terminalRuntimeProvider.overrideWithValue(terminalRuntime),
+        terminalRuntimeBindingsProvider.overrideWithValue(terminalRuntime),
         agentHookReceiverProvider.overrideWithValue(hookReceiver),
       ],
     );

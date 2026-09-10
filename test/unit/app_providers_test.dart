@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:alera/src/features/workbench/application/terminal_host_settings_config.dart';
+import 'package:alera/src/features/workbench/application/terminal_launch_environment.dart';
 import 'package:alera/src/app/providers.dart';
 import 'package:alera/src/features/command_terminal/domain/command_terminal_request.dart';
 import 'package:alera/src/features/agent_status/application/agent_awake_service.dart';
@@ -945,6 +946,7 @@ void main() {
         final container = ProviderContainer(
           overrides: [
             terminalRuntimeProvider.overrideWith((ref) => runtime),
+            terminalRuntimeBindingOverride(),
             workbenchControllerProvider.overrideWithValue(
               const WorkbenchState(),
             ),
@@ -997,6 +999,7 @@ void main() {
         final container = ProviderContainer(
           overrides: [
             terminalRuntimeProvider.overrideWith((ref) => runtime),
+            terminalRuntimeBindingOverride(),
             workbenchControllerProvider.overrideWithValue(
               WorkbenchState(
                 workspacesByProject: <String, List<Workspace>>{
@@ -1034,6 +1037,7 @@ void main() {
       final container = ProviderContainer(
         overrides: [
           terminalRuntimeProvider.overrideWith((ref) => runtime),
+          terminalRuntimeBindingOverride(),
           workbenchControllerProvider.overrideWithValue(const WorkbenchState()),
         ],
       );

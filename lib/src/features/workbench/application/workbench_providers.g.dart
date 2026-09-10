@@ -257,7 +257,7 @@ final class TerminalRuntimeActiveWorkspaceCoordinatorProvider
 }
 
 String _$terminalRuntimeActiveWorkspaceCoordinatorHash() =>
-    r'e01d17c5ce70a9aaa04ee477b661703888484b84';
+    r'af8b58feb6e28cd819eca30046378f866e2a5c72';
 
 @ProviderFor(workspaceActivityRepository)
 final workspaceActivityRepositoryProvider =
@@ -834,48 +834,6 @@ final class TerminalHostWarmupCoordinatorProvider
 String _$terminalHostWarmupCoordinatorHash() =>
     r'd1d9d291861301c30538537da0e091f97289ec5c';
 
-@ProviderFor(terminalRuntime)
-final terminalRuntimeProvider = TerminalRuntimeProvider._();
-
-final class TerminalRuntimeProvider
-    extends
-        $FunctionalProvider<TerminalRuntime, TerminalRuntime, TerminalRuntime>
-    with $Provider<TerminalRuntime> {
-  TerminalRuntimeProvider._()
-    : super(
-        from: null,
-        argument: null,
-        retry: null,
-        name: r'terminalRuntimeProvider',
-        isAutoDispose: false,
-        dependencies: null,
-        $allTransitiveDependencies: null,
-      );
-
-  @override
-  String debugGetCreateSourceHash() => _$terminalRuntimeHash();
-
-  @$internal
-  @override
-  $ProviderElement<TerminalRuntime> $createElement($ProviderPointer pointer) =>
-      $ProviderElement(pointer);
-
-  @override
-  TerminalRuntime create(Ref ref) {
-    return terminalRuntime(ref);
-  }
-
-  /// {@macro riverpod.override_with_value}
-  Override overrideWithValue(TerminalRuntime value) {
-    return $ProviderOverride(
-      origin: this,
-      providerOverride: $SyncValueProvider<TerminalRuntime>(value),
-    );
-  }
-}
-
-String _$terminalRuntimeHash() => r'a62f15f2346a52106d1d5a059a46217683c4d179';
-
 @ProviderFor(terminalShellStartupPreparer)
 final terminalShellStartupPreparerProvider =
     TerminalShellStartupPreparerProvider._();
@@ -966,4 +924,4 @@ final class TerminalRuntimeExitCoordinatorProvider
 }
 
 String _$terminalRuntimeExitCoordinatorHash() =>
-    r'f9aaa1121a88909b644a3d96083320520b389265';
+    r'fdfa362cb274aa23a5556cacb4a9d12afb7f38d7';
