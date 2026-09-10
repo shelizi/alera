@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:ui';
 
+import 'package:alera/src/features/app_window/application/app_window_close_state.dart';
 import 'package:alera/src/features/app_window/application/app_window_state_repository.dart';
 import 'package:alera/src/features/app_window/domain/app_window_state.dart';
 import 'package:logging/logging.dart';
@@ -160,10 +161,7 @@ class AppWindowLifecycleCoordinator._({
   Future<void>? _saveInFlight;
   bool _saveRequested = false;
   bool _started = false;
-  bool _closing = false;
-  bool _closeCommitted = false;
-  bool _closed = false;
-  bool _quitting = false;
+  AppWindowCloseStateMachine _closeState = const AppWindowCloseStateMachine();
   Future<void>? _hideFuture;
 
   /// Optional gate invoked before the window is destroyed. Return `false` to
@@ -181,7 +179,7 @@ class AppWindowLifecycleCoordinator._({
 
   /// True while a committed quit is in progress, so hide-on-close cannot
   /// swallow a tray or app-menu Quit.
-  bool get isQuitting => _quitting;
+  bool get isQuitting => _closeState.isQuitting;
 
   /// Completes when an in-flight hide-on-close finishes, or immediately.
   Future<void> waitForPendingHide() async {
@@ -192,7 +190,7 @@ class AppWindowLifecycleCoordinator._({
   }
 
   Future<void> start() async {
-    if (_started || _closed) {
+    if (_started || _closeState.isClosed) {
       return;
     }
     _started = true;
@@ -209,13 +207,13 @@ class AppWindowLifecycleCoordinator._({
     _debounceTimer = null;
     _window.removeListener(this);
     _started = false;
-    if (!_closing && !_closed) {
+    if (!_closeState.isClosing && !_closeState.isClosed) {
       await _window.setPreventClose(false);
     }
   }
 
   Future<void> flush() async {
-    if (_closed) {
+    if (_closeState.isClosed) {
       return;
     }
     _debounceTimer?.cancel();
@@ -225,29 +223,30 @@ class AppWindowLifecycleCoordinator._({
 
   @override
   void onWindowClose() {
-    if (_closing || _closed) {
+    if (_closeState.isClosing || _closeState.isClosed) {
       return;
     }
-    if (!_quitting && (_hideOnClose?.call() ?? false)) {
+    if (!_closeState.isQuitting && (_hideOnClose?.call() ?? false)) {
       _hideFuture ??= _hideInsteadOfDestroy();
       return;
     }
-    _closing = true;
+    _closeState = _closeState.beginUserClose();
     unawaited(_flushAndDestroy());
   }
 
   /// Commits a real process exit even when hide-on-close is enabled.
   Future<void> requestQuit() async {
-    if (_closing || _closed || _quitting) {
+    if (_closeState.isClosing ||
+        _closeState.isClosed ||
+        _closeState.isQuitting) {
       return;
     }
-    _quitting = true;
-    _closing = true;
+    _closeState = _closeState.beginQuit();
     final hide = _hideFuture;
     if (hide != null) {
       await hide;
     }
-    if (_closed) {
+    if (_closeState.isClosed) {
       return;
     }
     await _flushAndDestroy();
@@ -256,7 +255,7 @@ class AppWindowLifecycleCoordinator._({
   Future<void> _hideInsteadOfDestroy() async {
     try {
       await _flushWithinCloseGracePeriod();
-      if (_quitting || _closing) {
+      if (_closeState.isQuitting || _closeState.isClosing) {
         return;
       }
       try {
@@ -276,8 +275,7 @@ class AppWindowLifecycleCoordinator._({
   }
 
   void _resetQuitAttempt() {
-    _closing = false;
-    _quitting = false;
+    _closeState = _closeState.cancel();
     _hideFuture = null;
   }
 
@@ -312,7 +310,7 @@ class AppWindowLifecycleCoordinator._({
   void onWindowLeaveFullScreen() => _saveSoon(immediate: true);
 
   void _saveSoon({bool immediate = false}) {
-    if (!_started || _closing || _closed) {
+    if (!_started || _closeState.isClosing || _closeState.isClosed) {
       return;
     }
     _debounceTimer?.cancel();
@@ -342,7 +340,7 @@ class AppWindowLifecycleCoordinator._({
       _logWarningIfActive('app window close gate failed', error, stackTrace);
       return;
     }
-    _closeCommitted = true;
+    _closeState = _closeState.commit();
     try {
       await _flushWithinCloseGracePeriod();
     } catch (error, stackTrace) {
@@ -366,11 +364,10 @@ class AppWindowLifecycleCoordinator._({
 
   /// Marks teardown complete and destroys the window at most once.
   Future<void> _finishClose() async {
-    if (_closed) {
+    if (_closeState.isClosed) {
       return;
     }
-    _closed = true;
-    _closing = true;
+    _closeState = _closeState.complete();
     _started = false;
     _debounceTimer?.cancel();
     _debounceTimer = null;
@@ -384,14 +381,14 @@ class AppWindowLifecycleCoordinator._({
     StackTrace stackTrace,
   ) {
     // Desktop stdio may already be invalid once a committed close starts.
-    if (_closeCommitted || _closed) {
+    if (_closeState.isCommitted || _closeState.isClosed) {
       return;
     }
     _logger.warning(message, error, stackTrace);
   }
 
   Future<void> _saveCurrentState() {
-    if (_closed) {
+    if (_closeState.isClosed) {
       return Future<void>.value();
     }
     _saveRequested = true;
@@ -400,7 +397,7 @@ class AppWindowLifecycleCoordinator._({
 
   Future<void> _drainSaveRequests() async {
     try {
-      while (_saveRequested && !_closed) {
+      while (_saveRequested && !_closeState.isClosed) {
         _saveRequested = false;
         try {
           final state = await _captureCurrentState();
