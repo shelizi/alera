@@ -66,7 +66,22 @@ class const WorkspaceRelation({
   }
 }
 
-abstract interface class WorkspaceGraphRepository {
+abstract interface class WorkspaceParentRepository {
+  Future<List<WorkspaceRelation>> listRelations();
+
+  Future<WorkspaceRelation> linkWorkspaces({
+    required String parentWorkspaceId,
+    required String childWorkspaceId,
+  });
+
+  Future<void> unlinkWorkspaces({
+    required String parentWorkspaceId,
+    required String childWorkspaceId,
+  });
+}
+
+abstract interface class WorkspaceGraphRepository
+    implements WorkspaceParentRepository {
   Future<List<WorkspaceTag>> listTags();
 
   Future<WorkspaceTag> upsertTag(WorkspaceTag tag);
@@ -78,18 +93,6 @@ abstract interface class WorkspaceGraphRepository {
   Future<void> unassignTag({
     required String workspaceId,
     required String tagId,
-  });
-
-  Future<List<WorkspaceRelation>> listRelations();
-
-  Future<WorkspaceRelation> linkWorkspaces({
-    required String parentWorkspaceId,
-    required String childWorkspaceId,
-  });
-
-  Future<void> unlinkWorkspaces({
-    required String parentWorkspaceId,
-    required String childWorkspaceId,
   });
 }
 

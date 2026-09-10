@@ -314,65 +314,11 @@ mixin _WorkbenchControllerProjects
     required Workspace workspace,
     String? parentWorkspaceId,
   }) async {
-    final currentParentId = workspace.parentWorkspaceId?.trim();
-    final nextParentId = parentWorkspaceId?.trim();
-    if ((currentParentId == null || currentParentId.isEmpty) &&
-        (nextParentId == null || nextParentId.isEmpty)) {
-      return;
-    }
-    if (currentParentId == nextParentId) {
-      return;
-    }
-    var removedCurrentParent = false;
     try {
-      if (nextParentId != null && nextParentId.isNotEmpty) {
-        // The dialog disables descendant options, but its relations snapshot
-        // can be stale; re-validate against fresh relations before linking.
-        if (nextParentId == workspace.id) {
-          throw WorkspaceException('A workspace cannot be its own parent');
-        }
-        final relations = await _workspaceGraphRepository.listRelations();
-        if (workspaceDescendantIds(
-          workspace.id,
-          relations,
-        ).contains(nextParentId)) {
-          throw WorkspaceException(
-            'Cannot set a descendant workspace as parent',
-          );
-        }
-      }
-      if (currentParentId != null && currentParentId.isNotEmpty) {
-        await _workspaceGraphRepository.unlinkWorkspaces(
-          parentWorkspaceId: currentParentId,
-          childWorkspaceId: workspace.id,
-        );
-        removedCurrentParent = true;
-      }
-      if (nextParentId != null && nextParentId.isNotEmpty) {
-        try {
-          await _workspaceGraphRepository.linkWorkspaces(
-            parentWorkspaceId: nextParentId,
-            childWorkspaceId: workspace.id,
-          );
-        } catch (error) {
-          if (removedCurrentParent &&
-              currentParentId != null &&
-              currentParentId.isNotEmpty) {
-            try {
-              await _workspaceGraphRepository.linkWorkspaces(
-                parentWorkspaceId: currentParentId,
-                childWorkspaceId: workspace.id,
-              );
-            } catch (restoreError) {
-              throw WorkspaceException(
-                'Workspace parent update failed: $error. '
-                'Previous parent restore failed: $restoreError',
-              );
-            }
-          }
-          rethrow;
-        }
-      }
+      final changed = await WorkbenchWorkspaceParentUpdateService(
+        _workspaceGraphRepository,
+      ).update(workspace: workspace, parentWorkspaceId: parentWorkspaceId);
+      if (!changed) return;
       state = state.copyWith(error: null);
     } catch (error) {
       state = state.copyWith(error: error.toString());
