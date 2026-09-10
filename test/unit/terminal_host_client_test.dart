@@ -5,7 +5,7 @@ import 'dart:io';
 import 'package:alera/src/features/diagnostics/infra/crash_reporting.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_client.dart';
-import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_frame_codec.dart';
+import 'package:alera/src/platform/runtime_host/transport/terminal_host_frame_codec.dart';
 import 'package:alera/src/platform/runtime_host/protocol/terminal_host_protocol.dart';
 import 'package:alera/src/shared/infra/logging/app_logger.dart';
 import 'package:flutter_test/flutter_test.dart';

@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_frame_codec.dart';
+import 'package:alera/src/platform/runtime_host/transport/terminal_host_frame_codec.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

@@ -3,8 +3,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
 
-import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_frame_codec.dart';
-import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_socket_isolate.dart';
+import 'package:alera/src/platform/runtime_host/transport/terminal_host_frame_codec.dart';
+import 'package:alera/src/platform/runtime_host/transport/terminal_host_socket_isolate.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// Drives the isolate against a real loopback socket and collects what it

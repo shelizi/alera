@@ -14,7 +14,7 @@ import 'dart:io';
 import 'dart:isolate';
 import 'dart:typed_data';
 
-import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_frame_codec.dart';
+import 'package:alera/src/platform/runtime_host/transport/terminal_host_frame_codec.dart';
 
 /// Messages the isolate sends to the main isolate.
 const String terminalHostIsolateReady = 'ready';
