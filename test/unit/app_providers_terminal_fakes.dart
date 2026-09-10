@@ -43,6 +43,14 @@ class _FakeTerminalRuntime implements TerminalRuntime {
   TerminalSessionHandle? peekSession(String tabId) => null;
 
   @override
+  void requestFocus({
+    required Workspace workspace,
+    required WorkspaceTabRecord tab,
+  }) {
+    sessionFor(workspace: workspace, tab: tab).requestFocus();
+  }
+
+  @override
   void setActiveWorkspace(String? workspaceId) {}
 }
 
@@ -73,6 +81,14 @@ class _FocusableTerminalRuntime implements TerminalRuntime {
 
   @override
   TerminalSessionHandle? peekSession(String tabId) => null;
+
+  @override
+  void requestFocus({
+    required Workspace workspace,
+    required WorkspaceTabRecord tab,
+  }) {
+    sessionFor(workspace: workspace, tab: tab).requestFocus();
+  }
 
   @override
   void setActiveWorkspace(String? workspaceId) {}

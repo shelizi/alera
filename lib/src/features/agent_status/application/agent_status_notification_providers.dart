@@ -220,8 +220,7 @@ class _RiverpodAgentNotificationTerminalFocusRequester(final Ref _ref)
     required WorkspaceTabRecord tab,
   }) {
     _ref
-        .read(terminalRuntimeProvider)
-        .sessionFor(workspace: workspace, tab: tab)
-        .requestFocus();
+        .read(terminalRuntimeFocusProvider)
+        .requestFocus(workspace: workspace, tab: tab);
   }
 }

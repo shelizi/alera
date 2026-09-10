@@ -99,6 +99,14 @@ class FakeCommandTerminalRuntime({final bool running = true})
   TerminalSessionHandle? peekSession(String tabId) => sessions[tabId];
 
   @override
+  void requestFocus({
+    required Workspace workspace,
+    required WorkspaceTabRecord tab,
+  }) {
+    sessionFor(workspace: workspace, tab: tab).requestFocus();
+  }
+
+  @override
   void setActiveWorkspace(String? workspaceId) {}
 
   @override

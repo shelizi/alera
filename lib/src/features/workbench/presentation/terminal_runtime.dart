@@ -8,6 +8,7 @@ import 'dart:isolate';
 import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
 import 'package:alera/src/features/workbench/application/terminal_runtime_lifecycle.dart';
+import 'package:alera/src/features/workbench/application/terminal_runtime_focus.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_buffer_budget.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_composer_controller.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_link_resolver.dart';
@@ -184,7 +185,10 @@ final class const NoopTerminalVisibilityLease()
 }
 
 abstract interface class TerminalRuntime
-    implements TerminalRuntimeLifecycle, TerminalRuntimeCoordination {
+    implements
+        TerminalRuntimeLifecycle,
+        TerminalRuntimeCoordination,
+        TerminalRuntimeFocus {
   TerminalSessionHandle sessionFor({
     required Workspace workspace,
     required WorkspaceTabRecord tab,

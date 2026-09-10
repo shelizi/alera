@@ -12,6 +12,7 @@ import 'package:alera/src/features/settings/application/settings_controller.dart
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
 import 'package:alera/src/features/workbench/application/terminal_host_settings_config.dart';
 import 'package:alera/src/features/workbench/application/terminal_runtime_lifecycle.dart';
+import 'package:alera/src/features/workbench/application/terminal_runtime_focus.dart';
 import 'package:alera/src/features/workbench/application/workbench_controller.dart';
 import 'package:alera/src/features/workbench/application/workbench_listing.dart';
 import 'package:alera/src/features/workbench/application/workbench_repository.dart';
@@ -265,6 +266,10 @@ final terminalRuntimeCoordinationProvider =
     Provider<TerminalRuntimeCoordination>((ref) {
       return ref.watch(terminalRuntimeProvider);
     });
+
+final terminalRuntimeFocusProvider = Provider<TerminalRuntimeFocus>((ref) {
+  return ref.watch(terminalRuntimeProvider);
+});
 
 @Riverpod(keepAlive: true)
 TerminalRuntime terminalRuntime(Ref ref) {

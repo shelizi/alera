@@ -58,17 +58,24 @@ void main() {
     expect(exitCoordinator, isNot(contains('terminalRuntimeProvider')));
   });
 
+  test('agent notification focus depends on the narrow focus contract', () {
+    final source = File(
+      'lib/src/features/agent_status/application/agent_status_notification_providers.dart',
+    ).readAsStringSync();
+
+    expect(source, contains('terminalRuntimeFocusProvider'));
+    expect(source, isNot(contains('terminalRuntimeProvider')));
+    expect(source, isNot(contains('.sessionFor(')));
+  });
+
   test('full terminal runtime implements the narrow runtime contracts', () {
     final source = File(
       'lib/src/features/workbench/presentation/terminal_runtime.dart',
     ).readAsStringSync();
 
     expect(source, contains('abstract interface class TerminalRuntime'));
-    expect(
-      source,
-      contains(
-        'implements TerminalRuntimeLifecycle, TerminalRuntimeCoordination',
-      ),
-    );
+    expect(source, contains('TerminalRuntimeLifecycle'));
+    expect(source, contains('TerminalRuntimeCoordination'));
+    expect(source, contains('TerminalRuntimeFocus'));
   });
 }
