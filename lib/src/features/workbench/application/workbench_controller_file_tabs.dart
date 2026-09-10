@@ -238,32 +238,17 @@ mixin _WorkbenchControllerFileTabs
         preview: preview,
         replacePreviewTabId: replacePreviewTabId,
       );
-      WorkspaceTabRecord? previousTab;
-      for (final candidate in previousTabs) {
-        if (candidate.id == tab.id) {
-          previousTab = candidate;
-          break;
-        }
-      }
-      final alreadyOpen = previousTab != null;
-      if (previousTab != null &&
-          (previousTab.filePath != tab.filePath ||
-              previousTab.kind != tab.kind)) {
+      final plan = planWorkbenchOpenedFileTab(
+        previousTabs: previousTabs,
+        layout: layout,
+        targetGroupId: groupId,
+        tab: tab,
+      );
+      if (plan.shouldForgetEditorSession) {
         ref.read(editorSessionRegistryProvider).forget(tab.id);
       }
-      final tabs = alreadyOpen
-          ? previousTabs
-                .map((candidate) => candidate.id == tab.id ? tab : candidate)
-                .toList(growable: false)
-          : <WorkspaceTabRecord>[...previousTabs, tab];
-      _setTabsForWorkspace(workspace.id, tabs);
-      final nextLayout = alreadyOpen
-          ? layout.setActiveTab(
-              groupId: layout.groupIdForTab(tab.id) ?? groupId,
-              tabId: tab.id,
-            )
-          : layout.addTabToGroup(groupId: groupId, tabId: tab.id);
-      await _applyLayout(nextLayout.sanitize(tabs), persist: true);
+      _setTabsForWorkspace(workspace.id, plan.tabs);
+      await _applyLayout(plan.layout, persist: true);
       state = state.copyWith(error: null);
       return tab;
     } catch (error) {
