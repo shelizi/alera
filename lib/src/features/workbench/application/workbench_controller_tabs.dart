@@ -38,7 +38,7 @@ mixin _WorkbenchControllerTabs
         // document, or the xterm scrollback buffer outlives the tab. This is
         // deliberately centralized here: callers used to pair these calls at
         // every site, and the one that forgot leaked the whole emulator.
-        ref.read(terminalRuntimeProvider).closeTab(tabId);
+        ref.read(terminalRuntimeLifecycleProvider).closeTab(tabId);
         ref.read(editorSessionRegistryProvider).forget(tabId);
       }
       final remaining = state

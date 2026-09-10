@@ -10,7 +10,7 @@ mixin _WorkbenchControllerSync
   /// termination request for sessions this client no longer owns.
   void _releaseRetiredWorkspaceSessions(String workspaceId) {
     _tabFocusHistory.forget(workspaceId);
-    ref.read(terminalRuntimeProvider).releaseWorkspace(workspaceId);
+    ref.read(terminalRuntimeLifecycleProvider).releaseWorkspace(workspaceId);
     final editorSessions = ref.read(editorSessionRegistryProvider);
     for (final tab in state.tabsFor(workspaceId)) {
       editorSessions.forget(tab.id);
@@ -242,10 +242,10 @@ mixin _WorkbenchControllerSync
     // live terminal handle again, so the emulator buffer and the editor
     // document have to go now. Release rather than close: the PTY may still
     // belong to whichever client removed the record.
-    final runtime = ref.read(terminalRuntimeProvider);
+    final runtimeLifecycle = ref.read(terminalRuntimeLifecycleProvider);
     final editorSessions = ref.read(editorSessionRegistryProvider);
     for (final tab in removedTabs) {
-      runtime.releaseTab(tab.id);
+      runtimeLifecycle.releaseTab(tab.id);
       editorSessions.forget(tab.id);
       if (tab.kind == WorkspaceTabKind.terminal &&
           ref.exists(agentHookReceiverProvider)) {

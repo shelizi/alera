@@ -11,6 +11,7 @@ import 'package:alera/src/features/projects/domain/project.dart';
 import 'package:alera/src/features/settings/application/settings_controller.dart';
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
 import 'package:alera/src/features/workbench/application/terminal_host_settings_config.dart';
+import 'package:alera/src/features/workbench/application/terminal_runtime_lifecycle.dart';
 import 'package:alera/src/features/workbench/application/workbench_controller.dart';
 import 'package:alera/src/features/workbench/application/workbench_listing.dart';
 import 'package:alera/src/features/workbench/application/workbench_repository.dart';
@@ -252,6 +253,33 @@ void terminalHostWarmupCoordinator(Ref ref) {
         })
         .catchError(_ignoreProviderAsyncError),
   );
+}
+
+final terminalRuntimeLifecycleProvider = Provider<TerminalRuntimeLifecycle>((
+  ref,
+) {
+  return _TerminalRuntimeLifecycleAdapter(ref.watch(terminalRuntimeProvider));
+});
+
+final class _TerminalRuntimeLifecycleAdapter
+    implements TerminalRuntimeLifecycle {
+  const _TerminalRuntimeLifecycleAdapter(this._runtime);
+
+  final TerminalRuntime _runtime;
+
+  @override
+  void closeTab(String tabId) => _runtime.closeTab(tabId);
+
+  @override
+  void closeWorkspace(String workspaceId) =>
+      _runtime.closeWorkspace(workspaceId);
+
+  @override
+  void releaseTab(String tabId) => _runtime.releaseTab(tabId);
+
+  @override
+  void releaseWorkspace(String workspaceId) =>
+      _runtime.releaseWorkspace(workspaceId);
 }
 
 @Riverpod(keepAlive: true)

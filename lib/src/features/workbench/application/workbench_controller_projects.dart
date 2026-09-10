@@ -162,7 +162,7 @@ mixin _WorkbenchControllerProjects
       );
       // The managed runtime has already stopped the process trees. Keep local
       // disposal here so deletion from any caller releases the UI resources.
-      ref.read(terminalRuntimeProvider).closeWorkspace(workspace.id);
+      ref.read(terminalRuntimeLifecycleProvider).closeWorkspace(workspace.id);
       for (final tab in workspaceTabs) {
         ref.read(editorSessionRegistryProvider).forget(tab.id);
       }
