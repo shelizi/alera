@@ -43,4 +43,32 @@ void main() {
     expect(next.layoutFor('workspace'), layout);
     expect(next.activeTabIdByWorkspace, <String, String>{'other': 'other-tab'});
   });
+
+  test('setting active tab updates only the target workspace active tab', () {
+    final layout = WorkbenchLayout.single(
+      workspaceId: 'workspace',
+      tabIds: const <String>['layout-tab'],
+    );
+    final state = WorkbenchState(
+      layoutByWorkspace: <String, WorkbenchLayout>{'workspace': layout},
+      activeTabIdByWorkspace: const <String, String>{
+        'workspace': 'old-tab',
+        'other': 'other-tab',
+      },
+      searchQuery: 'keep-search',
+    );
+
+    final next = applyWorkbenchActiveTabState(
+      state: state,
+      workspaceId: 'workspace',
+      tabId: 'selected-tab',
+    );
+
+    expect(next.activeTabIdByWorkspace, <String, String>{
+      'workspace': 'selected-tab',
+      'other': 'other-tab',
+    });
+    expect(next.layoutByWorkspace, same(state.layoutByWorkspace));
+    expect(next.searchQuery, 'keep-search');
+  });
 }

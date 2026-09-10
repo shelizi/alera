@@ -19,3 +19,13 @@ WorkbenchState applyWorkbenchLayoutState({
     activeTabIdByWorkspace: activeTabs,
   );
 }
+
+WorkbenchState applyWorkbenchActiveTabState({
+  required WorkbenchState state,
+  required String workspaceId,
+  required String tabId,
+}) {
+  final activeTabs = Map<String, String>.from(state.activeTabIdByWorkspace)
+    ..[workspaceId] = tabId;
+  return state.copyWith(activeTabIdByWorkspace: activeTabs);
+}

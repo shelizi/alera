@@ -258,9 +258,11 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController {
       _applyLayoutInBackground(nextLayout, persist: true);
       return;
     }
-    final next = Map<String, String>.from(state.activeTabIdByWorkspace)
-      ..[workspaceId] = tabId;
-    state = state.copyWith(activeTabIdByWorkspace: next);
+    state = applyWorkbenchActiveTabState(
+      state: state,
+      workspaceId: workspaceId,
+      tabId: tabId,
+    );
     _tabFocusHistory.record(workspaceId, tabId);
   }
 
