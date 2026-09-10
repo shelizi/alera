@@ -235,10 +235,11 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController {
   }
 
   void _setTabsForWorkspace(String workspaceId, List<WorkspaceTabRecord> tabs) {
-    final nextTabs = Map<String, List<WorkspaceTabRecord>>.from(
-      state.tabsByWorkspace,
-    )..[workspaceId] = tabs;
-    state = state.copyWith(tabsByWorkspace: nextTabs);
+    state = applyWorkbenchTabsState(
+      state: state,
+      workspaceId: workspaceId,
+      tabs: tabs,
+    );
   }
 
   String _newPaneGroupId() => 'pane-${_uuid.v4()}';

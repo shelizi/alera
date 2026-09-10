@@ -2,6 +2,17 @@ import 'package:alera/src/features/workbench/application/workbench_state.dart';
 import 'package:alera/src/features/workbench/domain/workbench_layout.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 
+WorkbenchState applyWorkbenchTabsState({
+  required WorkbenchState state,
+  required String workspaceId,
+  required List<WorkspaceTabRecord> tabs,
+}) {
+  final tabsByWorkspace = Map<String, List<WorkspaceTabRecord>>.from(
+    state.tabsByWorkspace,
+  )..[workspaceId] = tabs;
+  return state.copyWith(tabsByWorkspace: tabsByWorkspace);
+}
+
 final class WorkbenchTabSetSyncPlan {
   const WorkbenchTabSetSyncPlan({
     required this.removedTabs,
@@ -31,9 +42,11 @@ WorkbenchTabSetSyncPlan planWorkbenchTabSetSync({
     for (final tab in state.tabsFor(workspaceId))
       if (!liveTabIds.contains(tab.id)) tab,
   ];
-  final tabsByWorkspace = Map<String, List<WorkspaceTabRecord>>.from(
-    state.tabsByWorkspace,
-  )..[workspaceId] = tabs;
+  final tabsByWorkspace = applyWorkbenchTabsState(
+    state: state,
+    workspaceId: workspaceId,
+    tabs: tabs,
+  ).tabsByWorkspace;
 
   if (tabs.isEmpty && layoutWasCleared) {
     final layoutByWorkspace = Map<String, WorkbenchLayout>.from(

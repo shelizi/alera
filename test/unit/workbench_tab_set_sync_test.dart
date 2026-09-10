@@ -80,6 +80,46 @@ void main() {
     expect(plan.shouldLoadLayout, isTrue);
     expect(plan.layoutToPersist, isNull);
   });
+
+  test('direct tab state replacement updates only the target workspace', () {
+    final now = DateTime.utc(2026, 9, 10);
+    final oldTab = _tab('old', now);
+    final nextTab = _tab('next', now);
+    final otherTab = WorkspaceTabRecord(
+      id: 'other',
+      workspaceId: 'other-workspace',
+      title: 'other',
+      createdAt: now,
+      updatedAt: now,
+    );
+    final layout = WorkbenchLayout.single(
+      workspaceId: 'workspace',
+      tabIds: <String>[oldTab.id],
+    );
+    final state = WorkbenchState(
+      tabsByWorkspace: <String, List<WorkspaceTabRecord>>{
+        'workspace': <WorkspaceTabRecord>[oldTab],
+        'other-workspace': <WorkspaceTabRecord>[otherTab],
+      },
+      layoutByWorkspace: <String, WorkbenchLayout>{'workspace': layout},
+      activeTabIdByWorkspace: <String, String>{'workspace': oldTab.id},
+      searchQuery: 'keep-search',
+    );
+
+    final next = applyWorkbenchTabsState(
+      state: state,
+      workspaceId: 'workspace',
+      tabs: <WorkspaceTabRecord>[nextTab],
+    );
+
+    expect(next.tabsByWorkspace['workspace'], <WorkspaceTabRecord>[nextTab]);
+    expect(next.tabsByWorkspace['other-workspace'], <WorkspaceTabRecord>[
+      otherTab,
+    ]);
+    expect(next.layoutByWorkspace, same(state.layoutByWorkspace));
+    expect(next.activeTabIdByWorkspace, same(state.activeTabIdByWorkspace));
+    expect(next.searchQuery, 'keep-search');
+  });
 }
 
 WorkspaceTabRecord _tab(String id, DateTime now) => WorkspaceTabRecord(
