@@ -312,15 +312,11 @@ mixin _WorkbenchControllerViewPrefs
         state.activeWorkspaceId != workspace.id) {
       return false;
     }
-    final nextRoots = <String, String>{
-      ...state.viewPrefs.sourceControlRootByWorkspaceId,
-      workspace.id: normalized,
-    };
     _updateViewPrefs(
-      state.viewPrefs.copyWith(
-        sourceControlRootByWorkspaceId: nextRoots,
-        activeContextPanelTab: .gitDiff,
-        rightSidebarVisible: true,
+      focusWorkbenchSourceControlRootPrefs(
+        prefs: state.viewPrefs,
+        workspaceId: workspace.id,
+        relativeRoot: normalized,
       ),
     );
     state = state.copyWith(error: null);
@@ -334,16 +330,11 @@ mixin _WorkbenchControllerViewPrefs
   }
 
   void clearFocusedSourceControlFolder({required Workspace workspace}) {
-    if (!state.viewPrefs.sourceControlRootByWorkspaceId.containsKey(
-      workspace.id,
-    )) {
-      return;
-    }
-    final nextRoots = Map<String, String>.from(
-      state.viewPrefs.sourceControlRootByWorkspaceId,
-    )..remove(workspace.id);
-    _updateViewPrefs(
-      state.viewPrefs.copyWith(sourceControlRootByWorkspaceId: nextRoots),
+    _updateViewPrefsIfChanged(
+      clearWorkbenchSourceControlRootPrefs(
+        prefs: state.viewPrefs,
+        workspaceId: workspace.id,
+      ),
     );
   }
 
@@ -352,25 +343,12 @@ mixin _WorkbenchControllerViewPrefs
     required String oldRelativePath,
     required String newRelativePath,
   }) {
-    final current =
-        state.viewPrefs.sourceControlRootByWorkspaceId[workspace.id];
-    if (current == null) {
-      return;
-    }
-    final nextRoot = _replaceSourceControlPathPrefix(
-      path: current,
-      oldPath: oldRelativePath,
-      newPath: newRelativePath,
-    );
-    if (nextRoot == null || nextRoot == current) {
-      return;
-    }
-    _updateViewPrefs(
-      state.viewPrefs.copyWith(
-        sourceControlRootByWorkspaceId: <String, String>{
-          ...state.viewPrefs.sourceControlRootByWorkspaceId,
-          workspace.id: nextRoot,
-        },
+    _updateViewPrefsIfChanged(
+      syncWorkbenchSourceControlRootAfterPathMovePrefs(
+        prefs: state.viewPrefs,
+        workspaceId: workspace.id,
+        oldRelativePath: oldRelativePath,
+        newRelativePath: newRelativePath,
       ),
     );
   }
@@ -384,29 +362,6 @@ mixin _WorkbenchControllerViewPrefs
   void _updateViewPrefs(WorkbenchViewPrefs prefs) {
     state = state.copyWith(viewPrefs: prefs);
     unawaited(_persistViewPrefs());
-  }
-
-  String? _replaceSourceControlPathPrefix({
-    required String path,
-    required String oldPath,
-    required String newPath,
-  }) {
-    final normalizedPath = normalizeSourceControlRootRelativePath(path);
-    final normalizedOld = normalizeSourceControlRootRelativePath(oldPath);
-    final normalizedNew = normalizeSourceControlRootRelativePath(newPath);
-    if (normalizedPath == null ||
-        normalizedOld == null ||
-        normalizedNew == null) {
-      return null;
-    }
-    if (normalizedPath == normalizedOld) {
-      return normalizedNew;
-    }
-    final prefix = '$normalizedOld/';
-    if (!normalizedPath.startsWith(prefix)) {
-      return null;
-    }
-    return '$normalizedNew/${normalizedPath.substring(prefix.length)}';
   }
 
   void setSearchQuery(String query) {
