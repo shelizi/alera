@@ -201,23 +201,11 @@ mixin _WorkbenchControllerProjects
     required String workspaceId,
     required bool isPinned,
   }) async {
-    final workspaces = <Workspace>[
-      for (final group in state.workspacesByProject.values) ...group,
-    ];
-    for (final id in [
-      workspaceId,
-      ...workspaceIdsDescendedFrom(workspaces, workspaceId),
-    ]) {
-      Workspace? current;
-      for (final workspace in workspaces) {
-        if (workspace.id == id) {
-          current = workspace;
-          break;
-        }
-      }
-      if (current == null || current.isPinned == isPinned) {
-        continue;
-      }
+    for (final id in workbenchWorkspaceTreePinTargets(
+      state: state,
+      workspaceId: workspaceId,
+      isPinned: isPinned,
+    )) {
       await setWorkspacePinned(workspaceId: id, isPinned: isPinned);
     }
   }
