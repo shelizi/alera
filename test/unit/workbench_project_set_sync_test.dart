@@ -82,6 +82,54 @@ void main() {
     },
   );
   test(
+    'applies project sync plan to state while preserving unrelated fields',
+    () {
+      final now = DateTime.utc(2026, 9, 10);
+      final liveProject = _project('live', now);
+      final removedProject = _project('removed', now);
+      final liveWorkspace = _workspace('live-ws', liveProject.id, now);
+      final removedWorkspace = _workspace('removed-ws', removedProject.id, now);
+      final state = WorkbenchState(
+        projects: <Project>[liveProject, removedProject],
+        activeProjectId: removedProject.id,
+        activeWorkspaceId: removedWorkspace.id,
+        workspacesByProject: <String, List<Workspace>>{
+          liveProject.id: <Workspace>[liveWorkspace],
+          removedProject.id: <Workspace>[removedWorkspace],
+        },
+        activeTabIdByWorkspace: <String, String>{
+          liveWorkspace.id: 'live-tab',
+          removedWorkspace.id: 'removed-tab',
+        },
+        searchQuery: 'keep-search',
+        error: 'keep-error',
+      );
+      final projects = <Project>[liveProject];
+      final plan = planWorkbenchProjectSetSync(
+        state: state,
+        projects: projects,
+      );
+
+      final next = applyWorkbenchProjectSetSyncPlan(
+        state: state,
+        projects: projects,
+        plan: plan,
+      );
+
+      expect(next.projects, projects);
+      expect(next.workspacesByProject, plan.workspacesByProject);
+      expect(next.tabsByWorkspace, plan.tabsByWorkspace);
+      expect(next.layoutByWorkspace, plan.layoutByWorkspace);
+      expect(next.activeTabIdByWorkspace, plan.activeTabIdByWorkspace);
+      expect(next.viewPrefs, plan.viewPrefs);
+      expect(next.activeProjectId, plan.activeProjectId);
+      expect(next.activeWorkspaceId, plan.activeWorkspaceId);
+      expect(next.searchQuery, 'keep-search');
+      expect(next.error, 'keep-error');
+    },
+  );
+
+  test(
     'project update replaces in place and preserves unrelated workbench state',
     () {
       final now = DateTime.utc(2026, 9, 10);

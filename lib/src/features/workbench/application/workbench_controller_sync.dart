@@ -50,15 +50,10 @@ mixin _WorkbenchControllerSync
       _releaseRetiredWorkspaceSessions(workspace.id);
     }
 
-    state = state.copyWith(
+    state = applyWorkbenchProjectSetSyncPlan(
+      state: state,
       projects: projects,
-      workspacesByProject: plan.workspacesByProject,
-      tabsByWorkspace: plan.tabsByWorkspace,
-      viewPrefs: plan.viewPrefs,
-      activeProjectId: plan.activeProjectId,
-      activeWorkspaceId: plan.activeWorkspaceId,
-      activeTabIdByWorkspace: plan.activeTabIdByWorkspace,
-      layoutByWorkspace: plan.layoutByWorkspace,
+      plan: plan,
     );
     _pruneWorktreeNavigationHistory();
     if (plan.viewPrefsChanged) {

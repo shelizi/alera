@@ -44,6 +44,23 @@ final class WorkbenchProjectSetSyncPlan {
   final bool viewPrefsChanged;
 }
 
+WorkbenchState applyWorkbenchProjectSetSyncPlan({
+  required WorkbenchState state,
+  required List<Project> projects,
+  required WorkbenchProjectSetSyncPlan plan,
+}) {
+  return state.copyWith(
+    projects: projects,
+    workspacesByProject: plan.workspacesByProject,
+    tabsByWorkspace: plan.tabsByWorkspace,
+    viewPrefs: plan.viewPrefs,
+    activeProjectId: plan.activeProjectId,
+    activeWorkspaceId: plan.activeWorkspaceId,
+    activeTabIdByWorkspace: plan.activeTabIdByWorkspace,
+    layoutByWorkspace: plan.layoutByWorkspace,
+  );
+}
+
 WorkbenchProjectSetSyncPlan planWorkbenchProjectSetSync({
   required WorkbenchState state,
   required List<Project> projects,
