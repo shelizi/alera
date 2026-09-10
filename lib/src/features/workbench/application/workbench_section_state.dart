@@ -22,3 +22,22 @@ WorkbenchState applyWorkbenchSectionSnapshotState({
     ),
   );
 }
+
+WorkbenchState toggleWorkbenchSectionCollapsedState({
+  required WorkbenchState state,
+  required String? sectionId,
+}) {
+  final prefs = state.viewPrefs;
+  if (sectionId == null) {
+    return state.copyWith(
+      viewPrefs: prefs.copyWith(
+        othersSectionCollapsed: !prefs.othersSectionCollapsed,
+      ),
+    );
+  }
+  final ids = Set<String>.from(prefs.collapsedSectionIds);
+  if (!ids.add(sectionId)) {
+    ids.remove(sectionId);
+  }
+  return state.copyWith(viewPrefs: prefs.copyWith(collapsedSectionIds: ids));
+}

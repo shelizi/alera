@@ -76,4 +76,47 @@ void main() {
     expect(next.viewPrefs.groupBy, WorkbenchGroupBy.none);
     expect(next.viewPrefs.collapsedSectionIds, <String>{'remember-me'});
   });
+  test('named section collapse toggle changes only collapsed section ids', () {
+    final prefs = WorkbenchViewPrefs.defaults.copyWith(
+      collapsedSectionIds: const <String>{'a'},
+      othersSectionCollapsed: true,
+      selectedProjectIds: const <String>{'project'},
+    );
+    final state = WorkbenchState(viewPrefs: prefs, searchQuery: 'keep-search');
+
+    final removed = toggleWorkbenchSectionCollapsedState(
+      state: state,
+      sectionId: 'a',
+    );
+    expect(removed.viewPrefs.collapsedSectionIds, isEmpty);
+    expect(removed.viewPrefs.othersSectionCollapsed, isTrue);
+    expect(
+      removed.viewPrefs.selectedProjectIds,
+      same(prefs.selectedProjectIds),
+    );
+    expect(removed.searchQuery, 'keep-search');
+
+    final added = toggleWorkbenchSectionCollapsedState(
+      state: state,
+      sectionId: 'b',
+    );
+    expect(added.viewPrefs.collapsedSectionIds, <String>{'a', 'b'});
+    expect(added.viewPrefs.othersSectionCollapsed, isTrue);
+  });
+
+  test('Others collapse toggle changes only the Others flag', () {
+    final prefs = WorkbenchViewPrefs.defaults.copyWith(
+      collapsedSectionIds: const <String>{'a'},
+      othersSectionCollapsed: false,
+    );
+    final state = WorkbenchState(viewPrefs: prefs);
+
+    final next = toggleWorkbenchSectionCollapsedState(
+      state: state,
+      sectionId: null,
+    );
+
+    expect(next.viewPrefs.othersSectionCollapsed, isTrue);
+    expect(next.viewPrefs.collapsedSectionIds, same(prefs.collapsedSectionIds));
+  });
 }

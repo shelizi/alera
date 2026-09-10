@@ -52,20 +52,10 @@ mixin _WorkbenchControllerSections
   }
 
   void toggleSectionCollapsed(String? sectionId) {
-    final prefs = state.viewPrefs;
-    if (sectionId == null) {
-      state = state.copyWith(
-        viewPrefs: prefs.copyWith(
-          othersSectionCollapsed: !prefs.othersSectionCollapsed,
-        ),
-      );
-    } else {
-      final ids = {...prefs.collapsedSectionIds};
-      if (!ids.add(sectionId)) ids.remove(sectionId);
-      state = state.copyWith(
-        viewPrefs: prefs.copyWith(collapsedSectionIds: ids),
-      );
-    }
+    state = toggleWorkbenchSectionCollapsedState(
+      state: state,
+      sectionId: sectionId,
+    );
     unawaited(_persistViewPrefs());
   }
 }
