@@ -176,15 +176,11 @@ mixin _WorkbenchControllerProjects
         workspaceId: workspaceId,
         name: name,
       );
-      final current = state.workspacesFor(workspace.projectId);
-      final nextWorkspaces = <String, List<Workspace>>{
-        ...state.workspacesByProject,
-        workspace.projectId: <Workspace>[
-          for (final candidate in current)
-            if (candidate.id == workspace.id) workspace else candidate,
-        ],
-      };
-      state = state.copyWith(workspacesByProject: nextWorkspaces, error: null);
+      state = reconcileWorkbenchWorkspaceState(
+        state: state,
+        projectId: workspace.projectId,
+        workspace: workspace,
+      ).copyWith(error: null);
     } catch (error) {
       state = state.copyWith(error: error.toString());
       rethrow;
@@ -200,17 +196,11 @@ mixin _WorkbenchControllerProjects
         workspaceId,
         isPinned,
       );
-      final current = state.workspacesFor(workspace.projectId);
-      state = state.copyWith(
-        workspacesByProject: <String, List<Workspace>>{
-          ...state.workspacesByProject,
-          workspace.projectId: <Workspace>[
-            for (final candidate in current)
-              if (candidate.id == workspace.id) workspace else candidate,
-          ],
-        },
-        error: null,
-      );
+      state = reconcileWorkbenchWorkspaceState(
+        state: state,
+        projectId: workspace.projectId,
+        workspace: workspace,
+      ).copyWith(error: null);
     } catch (error) {
       state = state.copyWith(error: error.toString());
       rethrow;

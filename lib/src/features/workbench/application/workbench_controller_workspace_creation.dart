@@ -162,7 +162,7 @@ mixin _WorkbenchControllerWorkspaceCreation
   void _reconcileWorkspace(Project project, Workspace workspace) {
     state = reconcileWorkbenchWorkspaceState(
       state: state,
-      project: project,
+      projectId: project.id,
       workspace: workspace,
     );
   }

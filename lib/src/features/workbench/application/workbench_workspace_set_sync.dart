@@ -7,10 +7,10 @@ import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 
 WorkbenchState reconcileWorkbenchWorkspaceState({
   required WorkbenchState state,
-  required Project project,
+  required String projectId,
   required Workspace workspace,
 }) {
-  final workspaces = List<Workspace>.from(state.workspacesFor(project.id));
+  final workspaces = List<Workspace>.from(state.workspacesFor(projectId));
   final index = workspaces.indexWhere((entry) => entry.id == workspace.id);
   if (index == -1) {
     workspaces.add(workspace);
@@ -19,7 +19,7 @@ WorkbenchState reconcileWorkbenchWorkspaceState({
   }
   final workspacesByProject = Map<String, List<Workspace>>.from(
     state.workspacesByProject,
-  )..[project.id] = workspaces;
+  )..[projectId] = workspaces;
   return state.copyWith(workspacesByProject: workspacesByProject);
 }
 

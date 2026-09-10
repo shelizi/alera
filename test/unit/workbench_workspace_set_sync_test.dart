@@ -72,7 +72,7 @@ void main() {
 
       final next = reconcileWorkbenchWorkspaceState(
         state: state,
-        project: project,
+        projectId: project.id,
         workspace: added,
       );
 
@@ -108,7 +108,7 @@ void main() {
 
     final next = reconcileWorkbenchWorkspaceState(
       state: state,
-      project: project,
+      projectId: project.id,
       workspace: updated,
     );
 
