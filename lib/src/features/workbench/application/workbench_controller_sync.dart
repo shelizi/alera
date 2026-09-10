@@ -64,81 +64,29 @@ mixin _WorkbenchControllerSync
   }
 
   void _onProjectsChanged(List<Project> projects) {
-    final validProjectIds = <String>{
-      for (final project in projects) project.id,
-    };
-    // Prune collapse/selection ids that point at removed projects. New
-    // projects are not added to either set so they show up expanded and (when
-    // there is no active selection) visible by default.
-    final prefs = state.viewPrefs;
-    final prunedCollapsed = prefs.collapsedProjectIds
-        .where(validProjectIds.contains)
-        .toSet();
-    final prunedSelected = prefs.selectedProjectIds
-        .where(validProjectIds.contains)
-        .toSet();
-    final removedProjectWorkspaceIds = <String>{
-      for (final entry in state.workspacesByProject.entries)
-        if (!validProjectIds.contains(entry.key))
-          for (final workspace in entry.value) workspace.id,
-    };
-    for (final entry in state.workspacesByProject.entries) {
-      if (validProjectIds.contains(entry.key)) {
-        continue;
-      }
-      for (final workspace in entry.value) {
-        _releaseHostedReviewTabsInBackground(
-          workspace,
-          state.tabsFor(workspace.id),
-        );
-        _releaseRetiredWorkspaceSessions(workspace.id);
-      }
-    }
-    final prunedSourceControlRoots =
-        Map<String, String>.from(prefs.sourceControlRootByWorkspaceId)
-          ..removeWhere(
-            (workspaceId, _) =>
-                removedProjectWorkspaceIds.contains(workspaceId),
-          );
-    final prefsChanged =
-        prunedCollapsed.length != prefs.collapsedProjectIds.length ||
-        prunedSelected.length != prefs.selectedProjectIds.length ||
-        prunedSourceControlRoots.length !=
-            prefs.sourceControlRootByWorkspaceId.length;
-    final prunedViewPrefs = prefsChanged
-        ? prefs.copyWith(
-            collapsedProjectIds: prunedCollapsed,
-            selectedProjectIds: prunedSelected,
-            sourceControlRootByWorkspaceId: prunedSourceControlRoots,
-          )
-        : prefs;
-    final updatedWorkspaces = <String, List<Workspace>>{
-      for (final entry in state.workspacesByProject.entries)
-        if (validProjectIds.contains(entry.key)) entry.key: entry.value,
-    };
-    final liveWorkspaceIds = <String>{
-      for (final workspaces in updatedWorkspaces.values)
-        for (final workspace in workspaces) workspace.id,
-    };
-    final updatedTabs = <String, List<WorkspaceTabRecord>>{
-      for (final entry in state.tabsByWorkspace.entries)
-        if (liveWorkspaceIds.contains(entry.key)) entry.key: entry.value,
-    };
-    final updatedLayouts = <String, WorkbenchLayout>{
-      for (final entry in state.layoutByWorkspace.entries)
-        if (liveWorkspaceIds.contains(entry.key)) entry.key: entry.value,
-    };
-    final updatedActiveTabs = <String, String>{
-      for (final entry in state.activeTabIdByWorkspace.entries)
-        if (liveWorkspaceIds.contains(entry.key)) entry.key: entry.value,
-    };
+    final plan = planWorkbenchProjectSetSync(state: state, projects: projects);
+    final validProjectIds = plan.validProjectIds;
 
-    final currentActiveProjectId =
+    for (final workspace in plan.removedWorkspaces) {
+      _releaseHostedReviewTabsInBackground(
+        workspace,
+        state.tabsFor(workspace.id),
+      );
+      _releaseRetiredWorkspaceSessions(workspace.id);
+    }
+
+    final updatedWorkspaces = plan.workspacesByProject;
+    final updatedTabs = plan.tabsByWorkspace;
+    final updatedLayouts = plan.layoutByWorkspace;
+    final updatedActiveTabs = plan.activeTabIdByWorkspace;
+    final prunedViewPrefs = plan.viewPrefs;
+    final prefsChanged = plan.viewPrefsChanged;
+
+    final activeProjectId =
         state.activeProjectId != null &&
             validProjectIds.contains(state.activeProjectId)
         ? state.activeProjectId
         : (projects.isNotEmpty ? projects.first.id : null);
-    final activeProjectId = currentActiveProjectId;
     final activeWorkspaceId = _resolveActiveWorkspaceId(
       activeProjectId: activeProjectId,
       workspacesByProject: updatedWorkspaces,
