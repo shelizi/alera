@@ -38,6 +38,7 @@ import 'package:alera/src/features/workbench/application/workbench_tab_set_sync.
 import 'package:alera/src/features/workbench/application/workbench_tab_subscription_registry.dart';
 import 'package:alera/src/features/workbench/application/workbench_workspace_tag_update_plan.dart';
 import 'package:alera/src/features/workbench/application/workbench_workspace_parent_update_service.dart';
+import 'package:alera/src/features/workbench/application/workbench_workspace_creation_parent_link_service.dart';
 import 'package:alera/src/features/workbench/application/workbench_workspace_tree_pin_policy.dart';
 import 'package:alera/src/features/workbench/application/workbench_workspace_set_sync.dart';
 import 'package:alera/src/features/workbench/application/workbench_workspace_subscription_registry.dart';

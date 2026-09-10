@@ -76,27 +76,11 @@ mixin _WorkbenchControllerWorkspaceCreation
         await selectWorkspace(project: project, workspace: result.workspace);
         await _openDeferredSetupTab(result);
       }
-      final parentId = parentWorkspaceId?.trim();
-      if (parentId != null && parentId.isNotEmpty) {
-        try {
-          await _workspaceGraphRepository.linkWorkspaces(
-            parentWorkspaceId: parentId,
-            childWorkspaceId: result.workspace.id,
-          );
-        } catch (error) {
-          // The workspace itself was created successfully, so the failure is
-          // reported as a warning on the result instead of failing the flow.
-          state = state.copyWith(error: null);
-          return WorkspaceCreationResult(
-            workspace: result.workspace,
-            setupReport: result.setupReport,
-            parentLinkError: error.toString(),
-            deferredSetupCommand: result.deferredSetupCommand,
-          );
-        }
-      }
+      final completed = await WorkbenchWorkspaceCreationParentLinkService(
+        _workspaceGraphRepository,
+      ).attach(result: result, parentWorkspaceId: parentWorkspaceId);
       state = state.copyWith(error: null);
-      return result;
+      return completed;
     } catch (error) {
       state = state.copyWith(error: error.toString());
       rethrow;
