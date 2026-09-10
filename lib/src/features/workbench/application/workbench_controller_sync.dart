@@ -127,15 +127,7 @@ mixin _WorkbenchControllerSync
         onData: (tabs) => _onTabsChanged(workspace.id, tabs),
       );
     }
-    state = state.copyWith(
-      workspacesByProject: plan.workspacesByProject,
-      viewPrefs: plan.viewPrefs,
-      activeProjectId: plan.activeProjectId,
-      activeWorkspaceId: plan.activeWorkspaceId,
-      layoutByWorkspace: plan.layoutByWorkspace,
-      tabsByWorkspace: plan.tabsByWorkspace,
-      activeTabIdByWorkspace: plan.activeTabIdByWorkspace,
-    );
+    state = applyWorkbenchWorkspaceSetSyncPlan(state: state, plan: plan);
     _pruneWorktreeNavigationHistory();
     if (plan.viewPrefsChanged) {
       unawaited(_persistViewPrefs());

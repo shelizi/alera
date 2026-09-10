@@ -50,6 +50,46 @@ void main() {
     expect(plan.viewPrefsChanged, isTrue);
   });
 
+  test('applies workspace sync plan while preserving unrelated state', () {
+    final now = DateTime.utc(2026, 9, 10);
+    final project = _project('project', now);
+    final liveWorkspace = _workspace('live-ws', project.id, now);
+    final removedWorkspace = _workspace('removed-ws', project.id, now);
+    final state = WorkbenchState(
+      projects: <Project>[project],
+      activeProjectId: project.id,
+      activeWorkspaceId: removedWorkspace.id,
+      workspacesByProject: <String, List<Workspace>>{
+        project.id: <Workspace>[liveWorkspace, removedWorkspace],
+      },
+      activeTabIdByWorkspace: <String, String>{
+        liveWorkspace.id: 'live-tab',
+        removedWorkspace.id: 'removed-tab',
+      },
+      searchQuery: 'keep-search',
+      error: 'keep-error',
+    );
+    final workspaces = <Workspace>[liveWorkspace];
+    final plan = planWorkbenchWorkspaceSetSync(
+      state: state,
+      project: project,
+      workspaces: workspaces,
+    );
+
+    final next = applyWorkbenchWorkspaceSetSyncPlan(state: state, plan: plan);
+
+    expect(next.projects, same(state.projects));
+    expect(next.workspacesByProject, plan.workspacesByProject);
+    expect(next.layoutByWorkspace, plan.layoutByWorkspace);
+    expect(next.tabsByWorkspace, plan.tabsByWorkspace);
+    expect(next.activeTabIdByWorkspace, plan.activeTabIdByWorkspace);
+    expect(next.viewPrefs, plan.viewPrefs);
+    expect(next.activeProjectId, plan.activeProjectId);
+    expect(next.activeWorkspaceId, plan.activeWorkspaceId);
+    expect(next.searchQuery, 'keep-search');
+    expect(next.error, 'keep-error');
+  });
+
   test(
     'reconciles a missing workspace into only its project workspace list',
     () {
