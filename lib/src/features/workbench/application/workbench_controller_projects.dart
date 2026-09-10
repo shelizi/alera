@@ -98,12 +98,16 @@ mixin _WorkbenchControllerProjects
     try {
       final removedWorkspaces = state.workspacesFor(projectId);
       await _projectsService.removeProject(projectId);
-      for (final workspace in removedWorkspaces) {
-        _tabFocusHistory.forget(workspace.id);
-        for (final tab in state.tabsFor(workspace.id)) {
-          await _hostedReviewRetention.releaseTab(workspace, tab);
-        }
-      }
+      await WorkbenchRemoveProjectCleanupCoordinator(
+        hostedReviewRetention: _hostedReviewRetention,
+        tabFocusHistory: _tabFocusHistory,
+      ).cleanup(<WorkbenchRemovedProjectWorkspace>[
+        for (final workspace in removedWorkspaces)
+          WorkbenchRemovedProjectWorkspace(
+            workspace: workspace,
+            tabs: state.tabsFor(workspace.id),
+          ),
+      ]);
       state = state.copyWith(error: null);
     } catch (error) {
       state = state.copyWith(error: error.toString());
