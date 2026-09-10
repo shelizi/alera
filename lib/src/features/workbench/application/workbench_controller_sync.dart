@@ -157,12 +157,12 @@ mixin _WorkbenchControllerSync
   }
 
   void _onWorkspacesChanged(Project project, List<Workspace> workspaces) {
-    final nextWorkspaces = Map<String, List<Workspace>>.from(
-      state.workspacesByProject,
-    )..[project.id] = workspaces;
-    final liveWorkspaceIds = <String>{
-      for (final workspace in workspaces) workspace.id,
-    };
+    final plan = planWorkbenchWorkspaceSetSync(
+      state: state,
+      project: project,
+      workspaces: workspaces,
+    );
+    final liveWorkspaceIds = plan.liveWorkspaceIds;
     final removedWorkspaceIds = _tabSubProjectIds.entries
         .where(
           (entry) =>
@@ -186,10 +186,6 @@ mixin _WorkbenchControllerSync
       _tabSubProjectIds.remove(workspaceId);
     }
     _workspaceIdsWithClearedLayout.removeAll(removedWorkspaceIds);
-    final nextLayouts = <String, WorkbenchLayout>{
-      for (final entry in state.layoutByWorkspace.entries)
-        if (!removedWorkspaceIds.contains(entry.key)) entry.key: entry.value,
-    };
     for (final workspace in workspaces) {
       if (_tabSubs.containsKey(workspace.id)) {
         continue;
@@ -208,66 +204,17 @@ mixin _WorkbenchControllerSync
             cancelOnError: false,
           );
     }
-    // Preserve the active project while it is still valid; never silently jump
-    // to a different project just because this project's workspaces changed.
-    final candidateProjectId =
-        (state.activeProjectId != null &&
-            state.projects.any((proj) => proj.id == state.activeProjectId))
-        ? state.activeProjectId
-        : project.id;
-    final activeWorkspaceId = _resolveActiveWorkspaceId(
-      activeProjectId: candidateProjectId,
-      workspacesByProject: nextWorkspaces,
-      preferredWorkspaceId: state.activeWorkspaceId,
-    );
-    // Drop any expansion entries that pointed at workspaces that no longer
-    // exist so the set stays tight.
-    final viewPrefs = state.viewPrefs;
-    final prunedExpanded = viewPrefs.expandedWorkspaceIds
-        .where(
-          (id) =>
-              !removedWorkspaceIds.contains(id) ||
-              liveWorkspaceIds.contains(id),
-        )
-        .toSet();
-    final expansionChanged =
-        prunedExpanded.length != viewPrefs.expandedWorkspaceIds.length;
-    final expandedViewPrefs = expansionChanged
-        ? viewPrefs.copyWith(expandedWorkspaceIds: prunedExpanded)
-        : viewPrefs;
-    final prunedSourceControlRoots =
-        Map<String, String>.from(
-          expandedViewPrefs.sourceControlRootByWorkspaceId,
-        )..removeWhere(
-          (workspaceId, _) => removedWorkspaceIds.contains(workspaceId),
-        );
-    final sourceControlRootsChanged =
-        prunedSourceControlRoots.length !=
-        expandedViewPrefs.sourceControlRootByWorkspaceId.length;
-    final workspacePrunedViewPrefs = sourceControlRootsChanged
-        ? expandedViewPrefs.copyWith(
-            sourceControlRootByWorkspaceId: prunedSourceControlRoots,
-          )
-        : expandedViewPrefs;
-    final nextViewPrefs = workspacePrunedViewPrefs;
-    final viewPrefsChanged = expansionChanged || sourceControlRootsChanged;
     state = state.copyWith(
-      workspacesByProject: nextWorkspaces,
-      viewPrefs: nextViewPrefs,
-      activeProjectId: candidateProjectId,
-      activeWorkspaceId: activeWorkspaceId,
-      layoutByWorkspace: nextLayouts,
-      tabsByWorkspace: <String, List<WorkspaceTabRecord>>{
-        for (final entry in state.tabsByWorkspace.entries)
-          if (!removedWorkspaceIds.contains(entry.key)) entry.key: entry.value,
-      },
-      activeTabIdByWorkspace: <String, String>{
-        for (final entry in state.activeTabIdByWorkspace.entries)
-          if (!removedWorkspaceIds.contains(entry.key)) entry.key: entry.value,
-      },
+      workspacesByProject: plan.workspacesByProject,
+      viewPrefs: plan.viewPrefs,
+      activeProjectId: plan.activeProjectId,
+      activeWorkspaceId: plan.activeWorkspaceId,
+      layoutByWorkspace: plan.layoutByWorkspace,
+      tabsByWorkspace: plan.tabsByWorkspace,
+      activeTabIdByWorkspace: plan.activeTabIdByWorkspace,
     );
     _pruneWorktreeNavigationHistory();
-    if (viewPrefsChanged) {
+    if (plan.viewPrefsChanged) {
       unawaited(_persistViewPrefs());
     }
     _ensureSelectionHasTab();
