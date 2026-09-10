@@ -78,7 +78,8 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController {
   _worktreeMetadataWatcherRegistry = WorkbenchWorktreeMetadataWatcherRegistry();
   final WorkbenchTabSubscriptionRegistry _tabSubscriptions =
       WorkbenchTabSubscriptionRegistry();
-  final Set<String> _ensuringMainWorkspaceProjectIds = <String>{};
+  final WorkbenchMainWorkspacePreparationCoordinator _mainWorkspacePreparation =
+      WorkbenchMainWorkspacePreparationCoordinator();
   final Set<String> _loadingLayoutWorkspaceIds = <String>{};
   final Set<String> _closingTabWorkspaceIds = <String>{};
   final Set<String> _workspaceIdsWithClearedLayout = <String>{};
@@ -307,21 +308,19 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController {
     _tabFocusHistory.record(workspaceId, tabId);
   }
 
-  Future<void> _ensureMainWorkspaceForProject(Project project) async {
-    if (!_ensuringMainWorkspaceProjectIds.add(project.id)) {
-      return;
-    }
-    try {
-      await _workspaceService.ensureMainWorkspace(project);
-      await _workspaceService.reconcile(project);
-    } catch (error) {
-      if (!_disposed) {
-        state = state.copyWith(
-          error: 'Failed to prepare workspace for "${project.name}": $error',
-        );
-      }
-    } finally {
-      _ensuringMainWorkspaceProjectIds.remove(project.id);
-    }
+  Future<void> _ensureMainWorkspaceForProject(Project project) {
+    final workspaceService = _workspaceService;
+    return _mainWorkspacePreparation.prepare(
+      project: project,
+      ensureMainWorkspace: workspaceService.ensureMainWorkspace,
+      reconcile: workspaceService.reconcile,
+      onError: (project, error) {
+        if (!_disposed) {
+          state = state.copyWith(
+            error: 'Failed to prepare workspace for "${project.name}": $error',
+          );
+        }
+      },
+    );
   }
 }
