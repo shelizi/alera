@@ -93,6 +93,10 @@ void runtimeAgentStatusSync(Ref ref) {
     if (event.name == 'agentPresenceChanged') {
       final delta = decodeRuntimeAgentPresenceDelta(event.payload);
       if (delta != null) {
+        // The event is newer than every snapshot request already in flight.
+        // Invalidate those requests before applying the delta so a late list
+        // response cannot replace this newer per-session state.
+        generation += 1;
         ref
             .read(agentStatusControllerProvider.notifier)
             .mergeRuntimeDelta(
