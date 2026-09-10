@@ -5,6 +5,19 @@ import 'package:alera/src/features/workbench/domain/workbench_view_prefs.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 
+WorkbenchState applyWorkbenchProjectUpdateState({
+  required WorkbenchState state,
+  required Project project,
+}) {
+  return state.copyWith(
+    projects: <Project>[
+      for (final candidate in state.projects)
+        if (candidate.id == project.id) project else candidate,
+    ],
+    error: null,
+  );
+}
+
 final class WorkbenchProjectSetSyncPlan {
   const WorkbenchProjectSetSyncPlan({
     required this.validProjectIds,

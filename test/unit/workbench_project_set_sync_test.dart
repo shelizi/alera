@@ -81,6 +81,49 @@ void main() {
       expect(plan.activeWorkspaceId, workspace.id);
     },
   );
+  test(
+    'project update replaces in place and preserves unrelated workbench state',
+    () {
+      final now = DateTime.utc(2026, 9, 10);
+      final first = _project('first', now);
+      final target = _project('target', now);
+      final updated = Project(
+        id: target.id,
+        name: 'Renamed target',
+        repoPath: target.repoPath,
+        createdAt: target.createdAt,
+        updatedAt: now.add(const Duration(minutes: 1)),
+      );
+      final workspace = _workspace('target-ws', target.id, now);
+      final prefs = WorkbenchViewPrefs.defaults.copyWith(
+        selectedProjectIds: <String>{target.id},
+      );
+      final state = WorkbenchState(
+        projects: <Project>[first, target],
+        workspacesByProject: <String, List<Workspace>>{
+          target.id: <Workspace>[workspace],
+        },
+        activeProjectId: target.id,
+        activeWorkspaceId: workspace.id,
+        viewPrefs: prefs,
+        searchQuery: 'keep-search',
+        error: 'stale error',
+      );
+
+      final next = applyWorkbenchProjectUpdateState(
+        state: state,
+        project: updated,
+      );
+
+      expect(next.projects, <Project>[first, updated]);
+      expect(next.activeProjectId, target.id);
+      expect(next.activeWorkspaceId, workspace.id);
+      expect(next.workspacesByProject, same(state.workspacesByProject));
+      expect(next.viewPrefs, same(prefs));
+      expect(next.searchQuery, 'keep-search');
+      expect(next.error, isNull);
+    },
+  );
 }
 
 Project _project(String id, DateTime now) => Project(

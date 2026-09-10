@@ -65,11 +65,7 @@ mixin _WorkbenchControllerProjects
         projectId: projectId,
         name: name,
       );
-      final projects = <Project>[
-        for (final candidate in state.projects)
-          if (candidate.id == project.id) project else candidate,
-      ];
-      state = state.copyWith(projects: projects, error: null);
+      state = applyWorkbenchProjectUpdateState(state: state, project: project);
     } catch (error) {
       state = state.copyWith(error: error.toString());
       rethrow;
