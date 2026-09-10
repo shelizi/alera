@@ -212,4 +212,122 @@ void _reconciliationTests() {
     expect(secondRun, hasLength(2));
     expect(secondRun.firstWhere((w) => !w.isMain).id, importedId);
   });
+
+  test(
+    'reconcile collapses duplicate metadata for the project root workspace',
+    () async {
+      gitBackend.headBranch = 'main';
+      final canonical = Workspace(
+        id: 'workspace-main',
+        projectId: project.id,
+        name: 'main',
+        branch: 'main',
+        path: project.repoPath,
+        createdAt: .utc(2026, 5, 19),
+        updatedAt: .utc(2026, 5, 19),
+        kind: .main,
+        status: .active,
+      );
+      final duplicate = Workspace(
+        id: 'workspace-default',
+        projectId: project.id,
+        name: 'Default',
+        branch: 'main',
+        path: project.repoPath,
+        createdAt: .utc(2026, 5, 20),
+        updatedAt: .utc(2026, 5, 20),
+        kind: .linked,
+        status: .active,
+        reusesExistingBranch: true,
+      );
+      await repository.upsertWorkspace(canonical);
+      await repository.upsertWorkspace(duplicate);
+      gitBackend.liveBranchByPath = <String, String>{project.repoPath: 'main'};
+
+      final workspaces = await service.reconcile(project);
+
+      expect(workspaces, hasLength(1));
+      expect(workspaces.single.id, canonical.id);
+      expect(workspaces.single.kind, WorkspaceKind.main);
+      expect(workspaces.single.path, project.repoPath);
+    },
+  );
+
+  test('reconcile promotes legacy root metadata instead of creating a duplicate main workspace', () async {
+    gitBackend.headBranch = 'main';
+    final legacy = Workspace(
+      id: 'workspace-legacy-default',
+      projectId: project.id,
+      name: 'Default',
+      branch: 'main',
+      path: project.repoPath,
+      createdAt: .utc(2026, 5, 19),
+      updatedAt: .utc(2026, 5, 19),
+      kind: .linked,
+      status: .active,
+      reusesExistingBranch: true,
+    );
+    await repository.upsertWorkspace(legacy);
+    gitBackend.liveBranchByPath = <String, String>{project.repoPath: 'main'};
+
+    final workspaces = await service.reconcile(project);
+
+    expect(workspaces, hasLength(1));
+    expect(workspaces.single.id, legacy.id);
+    expect(workspaces.single.kind, WorkspaceKind.main);
+    expect(workspaces.single.name, 'main');
+    expect(workspaces.single.reusesExistingBranch, isFalse);
+  });
+
+  test(
+    'reconcile demotes an extra main record for a distinct live worktree',
+    () async {
+      gitBackend.headBranch = 'main';
+      final canonical = Workspace(
+        id: 'workspace-main',
+        projectId: project.id,
+        name: 'main',
+        branch: 'main',
+        path: project.repoPath,
+        createdAt: .utc(2026, 5, 19),
+        updatedAt: .utc(2026, 5, 19),
+        kind: .main,
+        status: .active,
+      );
+      final linkedPath = p.join(tempDir.path, 'legacy-linked-worktree');
+      Directory(linkedPath).createSync(recursive: true);
+      final duplicateMain = Workspace(
+        id: 'workspace-extra-main',
+        projectId: project.id,
+        name: 'feature/legacy',
+        branch: 'feature/legacy',
+        path: linkedPath,
+        createdAt: .utc(2026, 5, 20),
+        updatedAt: .utc(2026, 5, 20),
+        kind: .main,
+        status: .active,
+      );
+      await repository.upsertWorkspace(canonical);
+      await repository.upsertWorkspace(duplicateMain);
+      gitBackend.liveBranchByPath = <String, String>{
+        project.repoPath: 'main',
+        linkedPath: 'feature/legacy',
+      };
+
+      final workspaces = await service.reconcile(project);
+
+      expect(workspaces.where((workspace) => workspace.isMain), hasLength(1));
+      expect(
+        workspaces
+            .singleWhere((workspace) => workspace.id == canonical.id)
+            .isMain,
+        isTrue,
+      );
+      final linked = workspaces.singleWhere(
+        (workspace) => workspace.id == duplicateMain.id,
+      );
+      expect(linked.kind, WorkspaceKind.linked);
+      expect(linked.reusesExistingBranch, isTrue);
+    },
+  );
 }

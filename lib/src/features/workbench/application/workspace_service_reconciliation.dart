@@ -103,15 +103,4 @@ extension WorkspaceServiceReconciliation on WorkspaceService {
     }
     return entries;
   }
-
-  /// Resolves [path] to its real on-disk location so symlinked worktree roots
-  /// (e.g. macOS `/var` -> `/private/var`) match git's reported paths. Falls
-  /// back to a canonicalized string when the path no longer exists.
-  String _canonicalPath(String path) {
-    try {
-      return p.canonicalize(Directory(path).resolveSymbolicLinksSync());
-    } catch (_) {
-      return p.canonicalize(path);
-    }
-  }
 }
