@@ -87,30 +87,18 @@ mixin _WorkbenchControllerProjects
         await _releaseHostedReviewTab(workspace, tab);
       }
 
-      final tabsByWorkspace = Map<String, List<WorkspaceTabRecord>>.from(
-        state.tabsByWorkspace,
-      )..[workspace.id] = const <WorkspaceTabRecord>[];
-      final layoutsByWorkspace = Map<String, WorkbenchLayout>.from(
-        state.layoutByWorkspace,
-      )..remove(workspace.id);
-      final activeTabsByWorkspace = Map<String, String>.from(
-        state.activeTabIdByWorkspace,
-      )..remove(workspace.id);
-      final wasActive = state.activeWorkspaceId == workspace.id;
-      final prefs = state.viewPrefs;
-      final nextPrefs = prefs;
+      final plan = planWorkbenchSleepWorkspace(
+        state: state,
+        workspaceId: workspace.id,
+      );
 
       state = state.copyWith(
-        tabsByWorkspace: tabsByWorkspace,
-        layoutByWorkspace: layoutsByWorkspace,
-        activeTabIdByWorkspace: activeTabsByWorkspace,
-        activeWorkspaceId: wasActive ? null : state.activeWorkspaceId,
-        viewPrefs: nextPrefs,
+        tabsByWorkspace: plan.tabsByWorkspace,
+        layoutByWorkspace: plan.layoutByWorkspace,
+        activeTabIdByWorkspace: plan.activeTabIdByWorkspace,
+        activeWorkspaceId: plan.activeWorkspaceId,
         error: null,
       );
-      if (!identical(nextPrefs, prefs)) {
-        unawaited(_persistViewPrefs());
-      }
     } catch (error) {
       _workspaceIdsWithClearedLayout.remove(workspace.id);
       state = state.copyWith(error: error.toString());

@@ -19,6 +19,7 @@ import 'package:alera/src/features/workbench/application/workbench_retired_resou
 import 'package:alera/src/features/workbench/application/workbench_explicit_resource_cleaner.dart';
 import 'package:alera/src/features/workbench/application/workbench_closed_tabs_plan.dart';
 import 'package:alera/src/features/workbench/application/workbench_project_set_sync.dart';
+import 'package:alera/src/features/workbench/application/workbench_sleep_workspace_plan.dart';
 import 'package:alera/src/features/workbench/application/workbench_tab_set_sync.dart';
 import 'package:alera/src/features/workbench/application/workbench_workspace_set_sync.dart';
 import 'package:alera/src/features/workbench/application/workspace_descendants.dart';
