@@ -96,15 +96,35 @@ void main() {
     },
   );
 
-  test('tab close delegates explicit local cleanup to the shared cleaner', () {
-    final source = File(
-      'lib/src/features/workbench/application/workbench_controller_tabs.dart',
-    ).readAsStringSync();
+  test(
+    'tab close delegates explicit local cleanup to the close coordinator',
+    () {
+      final controllerSource = File(
+        'lib/src/features/workbench/application/workbench_controller_tabs.dart',
+      ).readAsStringSync();
+      final coordinatorSource = File(
+        'lib/src/features/workbench/application/workbench_tab_close_coordinator.dart',
+      ).readAsStringSync();
 
-    expect(source, contains('_explicitResourceCleaner.closeTabLocalResources'));
-    expect(source, isNot(contains('terminalRuntimeLifecycleProvider')));
-    expect(source, isNot(contains('editorSessionRegistryProvider')));
-  });
+      expect(controllerSource, contains('WorkbenchTabCloseCoordinator('));
+      expect(
+        controllerSource,
+        isNot(contains('_explicitResourceCleaner.closeTabLocalResources')),
+      );
+      expect(
+        coordinatorSource,
+        contains('_resourceCleaner.closeTabLocalResources'),
+      );
+      expect(
+        controllerSource,
+        isNot(contains('terminalRuntimeLifecycleProvider')),
+      );
+      expect(
+        controllerSource,
+        isNot(contains('editorSessionRegistryProvider')),
+      );
+    },
+  );
 
   test(
     'workbench application no longer composes the full terminal runtime',

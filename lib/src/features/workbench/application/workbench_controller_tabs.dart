@@ -26,16 +26,11 @@ mixin _WorkbenchControllerTabs
     }
     await _tabClosingScope.run(workspace.id, () async {
       try {
-        for (final tabId in ids) {
-          await _workspaceTabService.closeTab(tabId);
-          final closedTab = snapshot.closingTabs[tabId];
-          if (closedTab != null) {
-            await _hostedReviewRetention.releaseTab(workspace, closedTab);
-          }
-          // Every explicit close path must drop the live terminal handle and
-          // editor document after persistence and hosted-review cleanup succeed.
-          _explicitResourceCleaner.closeTabLocalResources(tabId);
-        }
+        await WorkbenchTabCloseCoordinator(
+          tabStore: _workspaceTabService,
+          hostedReviewRetention: _hostedReviewRetention,
+          resourceCleaner: _explicitResourceCleaner,
+        ).close(workspace: workspace, snapshot: snapshot);
         final remaining = state
             .tabsFor(workspace.id)
             .where((tab) => !ids.contains(tab.id))
