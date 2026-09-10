@@ -1,3 +1,18 @@
+import 'dart:async';
+
+final class const TerminalRuntimeExitEvent({
+  required final String workspaceId,
+  required final String tabId,
+  required final int exitCode,
+  final bool autoCloseOnSuccess = false,
+});
+
+abstract interface class TerminalRuntimeCoordination {
+  Stream<TerminalRuntimeExitEvent> get exits;
+
+  void setActiveWorkspace(String? workspaceId);
+}
+
 abstract interface class TerminalRuntimeLifecycle {
   void closeTab(String tabId);
 

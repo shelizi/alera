@@ -113,7 +113,7 @@ List<WorkbenchSidebarRow> workbenchSidebarRows(Ref ref) {
 /// Rechecks the terminal memory budget when the active workspace changes.
 @Riverpod(keepAlive: true)
 void terminalRuntimeActiveWorkspaceCoordinator(Ref ref) {
-  final runtime = ref.watch(terminalRuntimeProvider);
+  final runtime = ref.watch(terminalRuntimeCoordinationProvider);
   ref.listen<String?>(
     workbenchControllerProvider.select((state) => state.activeWorkspaceId),
     (previous, next) => runtime.setActiveWorkspace(next),
@@ -261,6 +261,11 @@ final terminalRuntimeLifecycleProvider = Provider<TerminalRuntimeLifecycle>((
   return ref.watch(terminalRuntimeProvider);
 });
 
+final terminalRuntimeCoordinationProvider =
+    Provider<TerminalRuntimeCoordination>((ref) {
+      return ref.watch(terminalRuntimeProvider);
+    });
+
 @Riverpod(keepAlive: true)
 TerminalRuntime terminalRuntime(Ref ref) {
   final terminalHostClient = ref.watch(terminalHostClientProvider);
@@ -333,7 +338,8 @@ TerminalShellStartupPreparer terminalShellStartupPreparer(Ref ref) {
 
 @Riverpod(keepAlive: true)
 void terminalRuntimeExitCoordinator(Ref ref) {
-  final runtime = ref.watch(terminalRuntimeProvider);
+  final runtime = ref.watch(terminalRuntimeCoordinationProvider);
+  final lifecycle = ref.watch(terminalRuntimeLifecycleProvider);
   final closingTabIds = <String>{};
   var disposed = false;
 
@@ -348,7 +354,7 @@ void terminalRuntimeExitCoordinator(Ref ref) {
           .tabsFor(event.workspaceId)
           .any((tab) => tab.id == event.tabId);
       if (workspace == null || !tabStillExists) {
-        runtime.closeTab(event.tabId);
+        lifecycle.closeTab(event.tabId);
         return;
       }
       if (event.autoCloseOnSuccess && event.exitCode != 0) {

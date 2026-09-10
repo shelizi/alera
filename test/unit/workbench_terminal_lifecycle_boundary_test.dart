@@ -23,15 +23,36 @@ void main() {
     },
   );
 
-  test('full terminal runtime implements the lifecycle contract', () {
+  test('runtime coordinators depend on the narrow coordination contract', () {
+    final source = File(
+      'lib/src/features/workbench/application/workbench_providers.dart',
+    ).readAsStringSync();
+
+    final activeWorkspaceCoordinator = source.substring(
+      source.indexOf('void terminalRuntimeActiveWorkspaceCoordinator'),
+      source.indexOf('WorkspaceActivityRepository workspaceActivityRepository'),
+    );
+    final exitCoordinator = source.substring(
+      source.indexOf('void terminalRuntimeExitCoordinator'),
+    );
+
+    expect(
+      activeWorkspaceCoordinator,
+      isNot(contains('terminalRuntimeProvider')),
+    );
+    expect(exitCoordinator, isNot(contains('terminalRuntimeProvider')));
+  });
+
+  test('full terminal runtime implements the narrow runtime contracts', () {
     final source = File(
       'lib/src/features/workbench/presentation/terminal_runtime.dart',
     ).readAsStringSync();
 
+    expect(source, contains('abstract interface class TerminalRuntime'));
     expect(
       source,
       contains(
-        'abstract interface class TerminalRuntime implements TerminalRuntimeLifecycle',
+        'implements TerminalRuntimeLifecycle, TerminalRuntimeCoordination',
       ),
     );
   });

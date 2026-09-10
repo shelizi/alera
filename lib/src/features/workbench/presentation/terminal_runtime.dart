@@ -183,9 +183,8 @@ final class const NoopTerminalVisibilityLease()
   void dispose() {}
 }
 
-abstract interface class TerminalRuntime implements TerminalRuntimeLifecycle {
-  Stream<TerminalRuntimeExitEvent> get exits;
-
+abstract interface class TerminalRuntime
+    implements TerminalRuntimeLifecycle, TerminalRuntimeCoordination {
   TerminalSessionHandle sessionFor({
     required Workspace workspace,
     required WorkspaceTabRecord tab,
@@ -197,9 +196,6 @@ abstract interface class TerminalRuntime implements TerminalRuntimeLifecycle {
   /// calling [sessionFor] there built a full handle, with its own xterm
   /// buffer, for tabs the user never opened.
   TerminalSessionHandle? peekSession(String tabId);
-
-  /// Rechecks the buffer budget when the active workspace changes.
-  void setActiveWorkspace(String? workspaceId);
 
   void dispose();
 }
@@ -243,13 +239,6 @@ typedef TerminalSessionCleanup = FutureOr<void> Function(
 typedef TerminalProcessCreated = FutureOr<void> Function(
   String terminalSessionId,
 );
-
-final class const TerminalRuntimeExitEvent({
-  required final String workspaceId,
-  required final String tabId,
-  required final int exitCode,
-  final bool autoCloseOnSuccess = false,
-});
 
 abstract interface class TerminalPtySessionFactory {
   TerminalPtySession create({
