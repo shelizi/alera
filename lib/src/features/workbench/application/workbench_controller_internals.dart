@@ -200,13 +200,7 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController {
     WorkbenchLayout layout, {
     required bool persist,
   }) async {
-    final nextLayouts = Map<String, WorkbenchLayout>.from(
-      state.layoutByWorkspace,
-    )..[layout.workspaceId] = layout;
-    state = state.copyWith(
-      layoutByWorkspace: nextLayouts,
-      activeTabIdByWorkspace: _activeTabsWithLayout(layout),
-    );
+    state = applyWorkbenchLayoutState(state: state, layout: layout);
     final activeTabId = layout.activeTabId;
     if (activeTabId != null) {
       _tabFocusHistory.record(layout.workspaceId, activeTabId);
@@ -238,17 +232,6 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController {
     if (!_disposed) {
       state = state.copyWith(error: error.toString());
     }
-  }
-
-  Map<String, String> _activeTabsWithLayout(WorkbenchLayout layout) {
-    final activeTabs = Map<String, String>.from(state.activeTabIdByWorkspace);
-    final activeTabId = layout.activeTabId;
-    if (activeTabId == null) {
-      activeTabs.remove(layout.workspaceId);
-    } else {
-      activeTabs[layout.workspaceId] = activeTabId;
-    }
-    return activeTabs;
   }
 
   void _setTabsForWorkspace(String workspaceId, List<WorkspaceTabRecord> tabs) {
