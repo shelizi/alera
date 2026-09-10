@@ -61,24 +61,31 @@ mixin _WorkbenchControllerWorkspaceCreation
     String? parentWorkspaceId,
   }) async {
     try {
-      final result = await _withWorktreeRefreshSuspended(
-        project.id,
-        () => _workspaceService.createLinkedWorkspace(
-          project: project,
-          sourceBranch: sourceBranch,
-          newBranchName: newBranchName,
-          reuseExistingBranch: reuseExistingBranch,
-          name: name,
-        ),
-      );
-      _reconcileWorkspace(project, result.workspace);
-      if (initializeTabs) {
-        await selectWorkspace(project: project, workspace: result.workspace);
-        await _openDeferredSetupTab(result);
-      }
-      final completed = await WorkbenchWorkspaceCreationParentLinkService(
-        _workspaceGraphRepository,
-      ).attach(result: result, parentWorkspaceId: parentWorkspaceId);
+      final completed =
+          await WorkbenchWorkspaceCreationCoordinator(
+            createWorkspace: () => _withWorktreeRefreshSuspended(
+              project.id,
+              () => _workspaceService.createLinkedWorkspace(
+                project: project,
+                sourceBranch: sourceBranch,
+                newBranchName: newBranchName,
+                reuseExistingBranch: reuseExistingBranch,
+                name: name,
+              ),
+            ),
+            reconcileWorkspace: _reconcileWorkspace,
+            selectWorkspace: (project, workspace) =>
+                selectWorkspace(project: project, workspace: workspace),
+            openDeferredSetupTab: _openDeferredSetupTab,
+            attachParent: ({required result, parentWorkspaceId}) =>
+                WorkbenchWorkspaceCreationParentLinkService(
+                  _workspaceGraphRepository,
+                ).attach(result: result, parentWorkspaceId: parentWorkspaceId),
+          ).run(
+            project: project,
+            initializeTabs: initializeTabs,
+            parentWorkspaceId: parentWorkspaceId,
+          );
       state = state.copyWith(error: null);
       return completed;
     } catch (error) {
