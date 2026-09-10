@@ -285,25 +285,19 @@ mixin _WorkbenchControllerProjects
     required Workspace workspace,
     required Set<String> tagIds,
   }) async {
-    // Diff against the freshest known membership: the workspace snapshot may
-    // predate tag changes applied while the dialog was open.
-    final latest = state
-        .workspacesFor(workspace.projectId)
-        .where((candidate) => candidate.id == workspace.id)
-        .firstOrNull;
-    final current = (latest ?? workspace).tagIds.toSet();
-    final next = tagIds
-        .map((id) => id.trim())
-        .where((id) => id.isNotEmpty)
-        .toSet();
+    final plan = planWorkbenchWorkspaceTagUpdate(
+      state: state,
+      workspace: workspace,
+      requestedTagIds: tagIds,
+    );
     try {
-      for (final tagId in current.difference(next)) {
+      for (final tagId in plan.tagIdsToRemove) {
         await _workspaceGraphRepository.unassignTag(
           workspaceId: workspace.id,
           tagId: tagId,
         );
       }
-      for (final tagId in next.difference(current)) {
+      for (final tagId in plan.tagIdsToAdd) {
         await _workspaceGraphRepository.assignTag(
           workspaceId: workspace.id,
           tagId: tagId,
