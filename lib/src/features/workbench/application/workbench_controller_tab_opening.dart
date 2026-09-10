@@ -26,11 +26,14 @@ mixin _WorkbenchControllerTabOpening
         initialCommandOnce: initialCommandOnce,
         autoCloseOnSuccess: autoCloseOnSuccess,
       );
-      final tabs = <WorkspaceTabRecord>[...previousTabs, tab];
-      _setTabsForWorkspace(workspace.id, tabs);
-      final groupId = targetGroupId ?? layout.activeGroupId;
-      final nextLayout = layout.addTabToGroup(groupId: groupId, tabId: tab.id);
-      await _applyLayout(nextLayout.sanitize(tabs), persist: true);
+      final placement = planWorkbenchTabAddedToGroup(
+        previousTabs: previousTabs,
+        layout: layout,
+        tab: tab,
+        targetGroupId: targetGroupId,
+      );
+      _setTabsForWorkspace(workspace.id, placement.tabs);
+      await _applyLayout(placement.layout, persist: true);
       ref
           .read(workspaceActivityControllerProvider.notifier)
           .recordActivity(workspace.id, DateTime.now().toUtc());
