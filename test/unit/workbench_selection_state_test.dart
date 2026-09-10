@@ -67,6 +67,63 @@ void main() {
       expect(next.searchQuery, 'keep-search');
     },
   );
+  test('added project activation expands stale collapsed project prefs', () {
+    final project = _project('project');
+    final prefs = WorkbenchViewPrefs.defaults.copyWith(
+      collapsedProjectIds: <String>{project.id, 'other'},
+      selectedProjectIds: const <String>{'filtered'},
+    );
+    final state = WorkbenchState(
+      viewPrefs: prefs,
+      activeProjectId: 'old-project',
+      activeWorkspaceId: 'old-workspace',
+      searchQuery: 'keep-search',
+      error: 'old error',
+    );
+
+    final plan = planWorkbenchAddedProjectActivation(
+      state: state,
+      project: project,
+    );
+
+    expect(plan.viewPrefsChanged, isTrue);
+    expect(plan.state.activeProjectId, project.id);
+    expect(plan.state.activeWorkspaceId, isNull);
+    expect(plan.state.error, isNull);
+    expect(plan.state.searchQuery, 'keep-search');
+    expect(plan.state.viewPrefs.collapsedProjectIds, <String>{'other'});
+    expect(
+      plan.state.viewPrefs.selectedProjectIds,
+      same(prefs.selectedProjectIds),
+    );
+  });
+
+  test(
+    'added project activation preserves prefs identity when already expanded',
+    () {
+      final project = _project('project');
+      final prefs = WorkbenchViewPrefs.defaults.copyWith(
+        collapsedProjectIds: const <String>{'other'},
+      );
+      final state = WorkbenchState(
+        viewPrefs: prefs,
+        activeProjectId: 'old-project',
+        activeWorkspaceId: 'old-workspace',
+        error: 'old error',
+      );
+
+      final plan = planWorkbenchAddedProjectActivation(
+        state: state,
+        project: project,
+      );
+
+      expect(plan.viewPrefsChanged, isFalse);
+      expect(plan.state.viewPrefs, same(prefs));
+      expect(plan.state.activeProjectId, project.id);
+      expect(plan.state.activeWorkspaceId, isNull);
+      expect(plan.state.error, isNull);
+    },
+  );
 }
 
 Project _project(String id) {
