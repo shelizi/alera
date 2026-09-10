@@ -18,6 +18,7 @@ import 'package:alera/src/features/workbench/application/workbench_listing.dart'
 import 'package:alera/src/features/workbench/application/workbench_navigation_history_service.dart';
 import 'package:alera/src/features/workbench/application/workbench_retired_resource_cleaner.dart';
 import 'package:alera/src/features/workbench/application/workbench_explicit_resource_cleaner.dart';
+import 'package:alera/src/features/workbench/application/workbench_file_tab_mutation_queue.dart';
 import 'package:alera/src/features/workbench/application/workbench_hosted_review_retention_service.dart';
 import 'package:alera/src/features/workbench/application/workbench_bootstrap_orchestrator.dart';
 import 'package:alera/src/features/workbench/application/workbench_main_workspace_preparation_coordinator.dart';

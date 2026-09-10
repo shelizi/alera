@@ -87,7 +87,8 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController {
       WorkbenchLayoutLoadCoordinator();
   final Set<String> _closingTabWorkspaceIds = <String>{};
   final Set<String> _workspaceIdsWithClearedLayout = <String>{};
-  Future<void>? _fileOpenQueue;
+  final WorkbenchFileTabMutationQueue _fileTabMutations =
+      WorkbenchFileTabMutationQueue();
 
   final WorkspaceTabFocusHistory _tabFocusHistory = WorkspaceTabFocusHistory();
   final WorkbenchNavigationHistoryService _navigationHistory =

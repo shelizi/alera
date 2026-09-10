@@ -165,7 +165,7 @@ mixin _WorkbenchControllerFileTabs
   }
 
   Future<WorkspaceTabRecord> keepPreviewTab(String tabId) {
-    return _serializedFileTabMutation(() => _keepPreviewTabUnlocked(tabId));
+    return _fileTabMutations.run(() => _keepPreviewTabUnlocked(tabId));
   }
 
   Future<WorkspaceTabRecord> _openReplaceableTab({
@@ -179,7 +179,7 @@ mixin _WorkbenchControllerFileTabs
     })
     createTab,
   }) {
-    return _serializedFileTabMutation(
+    return _fileTabMutations.run(
       () => _openReplaceableTabUnlocked(
         workspace: workspace,
         targetGroupId: targetGroupId,
@@ -187,23 +187,6 @@ mixin _WorkbenchControllerFileTabs
         createTab: createTab,
       ),
     );
-  }
-
-  Future<T> _serializedFileTabMutation<T>(Future<T> Function() action) async {
-    final previous = _fileOpenQueue;
-    final gate = Completer<void>();
-    _fileOpenQueue = gate.future;
-    if (previous != null) {
-      await previous;
-    }
-    try {
-      return await action();
-    } finally {
-      gate.complete();
-      if (identical(_fileOpenQueue, gate.future)) {
-        _fileOpenQueue = null;
-      }
-    }
   }
 
   Future<WorkspaceTabRecord> _keepPreviewTabUnlocked(String tabId) async {
