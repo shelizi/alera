@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:alera/src/features/runtime_host/application/runtime_host_quit_planner.dart';
 import 'package:alera/src/features/runtime_host/domain/runtime_host_quit_decision.dart';
 import 'package:alera/src/features/runtime_host/domain/runtime_host_status.dart';
 import 'package:alera/src/features/runtime_host/infra/bundled_sidecar_version_probe.dart';
@@ -47,6 +48,7 @@ final class RuntimeHostLifecycleService({
   required final RuntimeHostLifecycleClient _client,
   required final BundledSidecarVersionProbe _bundledVersionProbe,
   required final TerminalHostConfig Function() _readConfig,
+  final RuntimeHostQuitPlanner _quitPlanner = const RuntimeHostQuitPlanner(),
   final Duration _shutdownSettleTimeout = const Duration(seconds: 8),
 }) {
   Future<RuntimeHostStatusSnapshot> loadStatus() async {
@@ -149,26 +151,27 @@ final class RuntimeHostLifecycleService({
     RuntimeHostBusyQuitConfirm? confirmBusyQuit,
     RuntimeHostBusyQuitCommitted? onBusyQuitCommitted,
   }) async {
-    if (keepRuntimeOpen) {
-      return true;
-    }
-
     Map<String, Object?>? liveStatus;
-    var statusUncertain = false;
-    try {
-      liveStatus = await _client.probeRuntimeStatus();
-    } catch (_) {
-      // Probe failure must not skip shutdown: the host may still be live.
-      statusUncertain = true;
-      liveStatus = null;
+    var statusKnown = true;
+    if (!keepRuntimeOpen) {
+      try {
+        liveStatus = await _client.probeRuntimeStatus();
+      } catch (_) {
+        // Probe failure must not skip shutdown: the host may still be live.
+        statusKnown = false;
+      }
     }
 
-    if (!statusUncertain && liveStatus == null) {
+    final initialPlan = _quitPlanner.initialPlan(
+      keepRuntimeOpen: keepRuntimeOpen,
+      statusKnown: statusKnown,
+      runtimeRunning: liveStatus != null,
+      persistent: liveStatus?['persistent'] == true,
+    );
+    if (initialPlan.action == RuntimeHostQuitAction.allowClose) {
       return true;
     }
-    if (liveStatus != null && liveStatus['persistent'] == true) {
-      return true;
-    }
+
     // Do not decide from the status snapshot alone. A push subscription should
     // keep a push-only runtime alive, but it must not hide terminals, agents,
     // or background jobs from the busy-quit confirmation. The shutdown reply
@@ -177,43 +180,44 @@ final class RuntimeHostLifecycleService({
       await _shutdownForAppQuit(force: false);
       return true;
     } on RuntimeHostBusyException catch (busy) {
-      if (_isPushOnlyBusy(busy)) {
-        // Mobile push intentionally keeps the detached runtime alive. This is
-        // an automatic leave-open decision, so the visible app can disappear
-        // immediately instead of waiting for native window destruction.
-        onBusyQuitCommitted?.call();
-        return true;
-      }
-      if (confirmBusyQuit == null) {
-        return false;
-      }
-      final decision = await confirmBusyQuit(
-        title: 'Runtime Still Has Work',
-        message:
-            '${runtimeHostBusyMessage(busy)} '
-            'You can quit and leave the runtime running, or force stop it.',
+      final busyState = RuntimeHostBusyState(
+        activeAgents: busy.activeAgents,
+        activeSessions: busy.activeSessions,
+        activeJobs: busy.activeJobs,
+        activePushSubscriptions: busy.activePushSubscriptions,
       );
-      switch (decision) {
-        case RuntimeHostQuitDecision.cancel:
+      var plan = _quitPlanner.busyPlan(busyState);
+      if (plan.action == RuntimeHostQuitAction.confirm) {
+        if (confirmBusyQuit == null) {
           return false;
-        case RuntimeHostQuitDecision.leaveRuntimeOpen:
-          onBusyQuitCommitted?.call();
+        }
+        final decision = await confirmBusyQuit(
+          title: 'Runtime Still Has Work',
+          message:
+              '${runtimeHostBusyMessage(busy)} '
+              'You can quit and leave the runtime running, or force stop it.',
+        );
+        plan = _quitPlanner.busyPlan(busyState, decision: decision);
+      }
+      if (plan.commitVisualQuit) {
+        onBusyQuitCommitted?.call();
+      }
+      switch (plan.action) {
+        case RuntimeHostQuitAction.allowClose:
+        case RuntimeHostQuitAction.leaveOpen:
           return true;
-        case RuntimeHostQuitDecision.forceStop:
-          // The user has already committed to quitting. Let the UI disappear
-          // before this potentially slow RPC waits for the detached sidecar.
-          onBusyQuitCommitted?.call();
+        case RuntimeHostQuitAction.cancel:
+          return false;
+        case RuntimeHostQuitAction.forceStop:
           await _shutdownForAppQuit(force: true);
           return true;
+        case RuntimeHostQuitAction.softStop:
+        case RuntimeHostQuitAction.confirm:
+          throw StateError(
+            'Runtime quit planner produced an invalid busy plan.',
+          );
       }
     }
-  }
-
-  bool _isPushOnlyBusy(RuntimeHostBusyException busy) {
-    return busy.activePushSubscriptions > 0 &&
-        busy.activeAgents == 0 &&
-        busy.activeSessions == 0 &&
-        busy.activeJobs == 0;
   }
 
   Future<void> _waitUntilStopped() async {
