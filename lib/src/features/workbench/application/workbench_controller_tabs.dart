@@ -81,12 +81,10 @@ mixin _WorkbenchControllerTabs
         tabId: tabId,
         title: title,
       );
-      final tabs = <WorkspaceTabRecord>[
-        for (final candidate in state.tabsFor(tab.workspaceId))
-          if (candidate.id == tab.id) tab else candidate,
-      ];
-      _setTabsForWorkspace(tab.workspaceId, tabs);
-      state = state.copyWith(error: null);
+      state = applyWorkbenchTabUpdateState(
+        state: state,
+        tab: tab,
+      ).copyWith(error: null);
     } catch (error) {
       state = state.copyWith(error: error.toString());
       rethrow;

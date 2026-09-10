@@ -119,6 +119,46 @@ void main() {
     expect(plan.layoutToPersist, isNull);
   });
 
+  test('tab update replaces an existing record in place', () {
+    final now = DateTime.utc(2026, 9, 10);
+    final oldTab = _tab('target', now);
+    final sibling = _tab('sibling', now);
+    final updated = WorkspaceTabRecord(
+      id: oldTab.id,
+      workspaceId: oldTab.workspaceId,
+      title: 'renamed',
+      createdAt: oldTab.createdAt,
+      updatedAt: now.add(const Duration(minutes: 1)),
+    );
+    final state = WorkbenchState(
+      tabsByWorkspace: <String, List<WorkspaceTabRecord>>{
+        'workspace': <WorkspaceTabRecord>[oldTab, sibling],
+      },
+      activeTabIdByWorkspace: <String, String>{'workspace': oldTab.id},
+      searchQuery: 'keep-search',
+    );
+
+    final next = applyWorkbenchTabUpdateState(state: state, tab: updated);
+
+    expect(next.tabsFor('workspace'), <WorkspaceTabRecord>[updated, sibling]);
+    expect(next.activeTabIdByWorkspace, same(state.activeTabIdByWorkspace));
+    expect(next.searchQuery, 'keep-search');
+  });
+
+  test('tab update is an identity no-op when the tab is not in state', () {
+    final now = DateTime.utc(2026, 9, 10);
+    final state = WorkbenchState(
+      tabsByWorkspace: <String, List<WorkspaceTabRecord>>{
+        'workspace': <WorkspaceTabRecord>[_tab('existing', now)],
+      },
+    );
+    final missing = _tab('missing', now);
+
+    final next = applyWorkbenchTabUpdateState(state: state, tab: missing);
+
+    expect(next, same(state));
+  });
+
   test('direct tab state replacement updates only the target workspace', () {
     final now = DateTime.utc(2026, 9, 10);
     final oldTab = _tab('old', now);

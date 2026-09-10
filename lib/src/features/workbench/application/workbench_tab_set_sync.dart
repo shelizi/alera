@@ -13,6 +13,24 @@ WorkbenchState applyWorkbenchTabsState({
   return state.copyWith(tabsByWorkspace: tabsByWorkspace);
 }
 
+WorkbenchState applyWorkbenchTabUpdateState({
+  required WorkbenchState state,
+  required WorkspaceTabRecord tab,
+}) {
+  final current = state.tabsFor(tab.workspaceId);
+  if (!current.any((candidate) => candidate.id == tab.id)) {
+    return state;
+  }
+  return applyWorkbenchTabsState(
+    state: state,
+    workspaceId: tab.workspaceId,
+    tabs: <WorkspaceTabRecord>[
+      for (final candidate in current)
+        if (candidate.id == tab.id) tab else candidate,
+    ],
+  );
+}
+
 final class WorkbenchTabSetSyncPlan {
   const WorkbenchTabSetSyncPlan({
     required this.removedTabs,

@@ -192,12 +192,10 @@ mixin _WorkbenchControllerFileTabs
   Future<WorkspaceTabRecord> _keepPreviewTabUnlocked(String tabId) async {
     try {
       final tab = await _workspaceTabService.keepPreviewTab(tabId);
-      final tabs = <WorkspaceTabRecord>[
-        for (final candidate in state.tabsFor(tab.workspaceId))
-          if (candidate.id == tab.id) tab else candidate,
-      ];
-      _setTabsForWorkspace(tab.workspaceId, tabs);
-      state = state.copyWith(error: null);
+      state = applyWorkbenchTabUpdateState(
+        state: state,
+        tab: tab,
+      ).copyWith(error: null);
       return tab;
     } catch (error) {
       state = state.copyWith(error: error.toString());
