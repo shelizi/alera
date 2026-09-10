@@ -23,6 +23,21 @@ void main() {
     },
   );
 
+  test(
+    'sync delegates retired resource cleanup to the application cleaner',
+    () {
+      final source = File(
+        'lib/src/features/workbench/application/workbench_controller_sync.dart',
+      ).readAsStringSync();
+
+      expect(source, contains('_retiredResourceCleaner.releaseWorkspace'));
+      expect(source, contains('_retiredResourceCleaner.releaseTabs'));
+      expect(source, isNot(contains('terminalRuntimeLifecycleProvider')));
+      expect(source, isNot(contains('editorSessionRegistryProvider')));
+      expect(source, isNot(contains('agentHookReceiverProvider')));
+    },
+  );
+
   test('runtime coordinators depend on the narrow coordination contract', () {
     final source = File(
       'lib/src/features/workbench/application/workbench_providers.dart',

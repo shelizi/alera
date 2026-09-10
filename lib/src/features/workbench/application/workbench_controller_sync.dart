@@ -10,17 +10,10 @@ mixin _WorkbenchControllerSync
   /// termination request for sessions this client no longer owns.
   void _releaseRetiredWorkspaceSessions(String workspaceId) {
     _tabFocusHistory.forget(workspaceId);
-    ref.read(terminalRuntimeLifecycleProvider).releaseWorkspace(workspaceId);
-    final editorSessions = ref.read(editorSessionRegistryProvider);
-    for (final tab in state.tabsFor(workspaceId)) {
-      editorSessions.forget(tab.id);
-      if (tab.kind == WorkspaceTabKind.terminal &&
-          ref.exists(agentHookReceiverProvider)) {
-        ref
-            .read(agentHookReceiverProvider)
-            .clearTerminalSession(tab.terminalSessionId);
-      }
-    }
+    _retiredResourceCleaner.releaseWorkspace(
+      workspaceId,
+      state.tabsFor(workspaceId),
+    );
   }
 
   void _syncWorktreeMetadataWatcher(Project project) {
@@ -239,23 +232,10 @@ mixin _WorkbenchControllerSync
       _releaseHostedReviewTabsInBackground(workspace, removedTabs);
     }
     // A tab record that disappeared from persisted state can never reach its
-    // live terminal handle again, so the emulator buffer and the editor
-    // document have to go now. Release rather than close: the PTY may still
-    // belong to whichever client removed the record.
-    final runtimeLifecycle = ref.read(terminalRuntimeLifecycleProvider);
-    final editorSessions = ref.read(editorSessionRegistryProvider);
-    for (final tab in removedTabs) {
-      runtimeLifecycle.releaseTab(tab.id);
-      editorSessions.forget(tab.id);
-      if (tab.kind == WorkspaceTabKind.terminal &&
-          ref.exists(agentHookReceiverProvider)) {
-        // The host may already have stopped the process before the explicit
-        // close reaches this client. Its transcript poller still has to go.
-        ref
-            .read(agentHookReceiverProvider)
-            .clearTerminalSession(tab.terminalSessionId);
-      }
-    }
+    // live terminal handle again, so release the client-local terminal,
+    // editor, and observer resources without terminating a PTY that another
+    // client may still own.
+    _retiredResourceCleaner.releaseTabs(removedTabs);
     if (tabs.isNotEmpty) {
       _workspaceIdsWithClearedLayout.remove(workspaceId);
     }
