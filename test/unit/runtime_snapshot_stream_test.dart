@@ -170,6 +170,51 @@ void main() {
     expect(secondEmitted, <int>[11, 12, 13]);
   });
 
+  test(
+    'does not emit a stale initial read after a newer event refresh',
+    () async {
+      final client = _FakeRuntimeHostClient();
+      final coalescer = _coalescer();
+      final firstStarted = Completer<void>();
+      final releaseFirst = Completer<void>();
+      var reads = 0;
+      final emitted = <String>[];
+
+      final subscription = runtimeSnapshotStream<String>(
+        client: client,
+        eventNames: const <String>{'changed'},
+        readSnapshot: () async {
+          reads += 1;
+          if (reads == 1) {
+            firstStarted.complete();
+            await releaseFirst.future;
+            return 'old';
+          }
+          return 'new';
+        },
+        coalesceKey: 'key',
+        coalescer: coalescer,
+      ).listen(emitted.add);
+      addTearDown(subscription.cancel);
+
+      await firstStarted.future;
+      client.emit(const RuntimeHostEvent('changed', <String, Object?>{}));
+      await _settle(const Duration(milliseconds: 30));
+
+      expect(reads, 2);
+      expect(emitted, <String>['new']);
+
+      releaseFirst.complete();
+      await _settle();
+
+      expect(
+        emitted,
+        <String>['new'],
+        reason: 'an older initial request must not overwrite a newer snapshot',
+      );
+    },
+  );
+
   test('de-duplicates an event arriving while a read is in flight', () async {
     final client = _FakeRuntimeHostClient();
     final coalescer = _coalescer();

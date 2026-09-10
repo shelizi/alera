@@ -57,20 +57,22 @@ Stream<T> runtimeSnapshotStream<T>({
   StreamSubscription<RuntimeHostEvent>? eventSub;
   Timer? retryTimer;
   var backoff = retryDelay;
+  var refreshGeneration = 0;
 
   Future<void> refresh() async {
     if (controller.isClosed) {
       return;
     }
+    final generation = ++refreshGeneration;
     try {
       final value = await readSnapshot();
-      if (controller.isClosed) {
+      if (controller.isClosed || generation != refreshGeneration) {
         return;
       }
       controller.add(value);
       backoff = retryDelay;
     } on Object {
-      if (controller.isClosed) {
+      if (controller.isClosed || generation != refreshGeneration) {
         return;
       }
       retryTimer?.cancel();
