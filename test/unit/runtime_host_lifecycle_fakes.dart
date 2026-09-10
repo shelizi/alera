@@ -14,6 +14,7 @@ final class FakeBundledSidecarVersionProbe(final BundledSidecarVersion version)
 final class FakeRuntimeHostLifecycleClient({
   var Map<String, Object?>? status,
   final bool busyOnSoftStop = false,
+  final RuntimeHostBusyException? softStopBusy,
   final bool probeThrows = false,
   final bool shutdownLeavesHostRunning = false,
   final Object? ensureStartedError,
@@ -58,6 +59,10 @@ final class FakeRuntimeHostLifecycleClient({
       if (forceShutdownBarrier case final barrier?) {
         await barrier;
       }
+    }
+    final explicitBusy = softStopBusy;
+    if (!force && explicitBusy != null) {
+      throw explicitBusy;
     }
     if (!force && busyOnSoftStop) {
       throw const RuntimeHostBusyException(

@@ -56,13 +56,63 @@ void main() {
       expect(client.shutdownCalls, isEmpty);
     });
 
-    test('prepareAppQuit leaves an active push runtime running', () async {
+    test(
+      'prepareAppQuit leaves push-only runtime running and commits visual quit',
+      () async {
+        final client = FakeRuntimeHostLifecycleClient(
+          status: <String, Object?>{
+            'runtimeHostVersion': '1.2.0',
+            'persistent': false,
+            'activePushSubscriptions': 1,
+          },
+          softStopBusy: const RuntimeHostBusyException(
+            message: 'Runtime host has 1 active push subscription(s).',
+            activePushSubscriptions: 1,
+          ),
+        );
+        final service = RuntimeHostLifecycleService(
+          client: client,
+          bundledVersionProbe: FakeBundledSidecarVersionProbe(
+            const BundledSidecarVersion(version: '1.2.0'),
+          ),
+          readConfig: () => TerminalHostConfig.defaults,
+        );
+        var confirmCalls = 0;
+        var visualQuitCommitted = false;
+
+        final allowed = await service.prepareAppQuit(
+          keepRuntimeOpen: false,
+          confirmBusyQuit:
+              ({required String title, required String message}) async {
+                confirmCalls += 1;
+                return RuntimeHostQuitDecision.cancel;
+              },
+          onBusyQuitCommitted: () {
+            visualQuitCommitted = true;
+          },
+        );
+
+        expect(allowed, isTrue);
+        expect(confirmCalls, 0);
+        expect(visualQuitCommitted, isTrue);
+        expect(client.shutdownCalls, <bool>[false]);
+        expect(await client.probeRuntimeStatus(), isNotNull);
+      },
+    );
+
+    test('active push does not suppress busy terminal confirmation', () async {
       final client = FakeRuntimeHostLifecycleClient(
         status: <String, Object?>{
           'runtimeHostVersion': '1.2.0',
           'persistent': false,
+          'activeSessions': 1,
           'activePushSubscriptions': 1,
         },
+        softStopBusy: const RuntimeHostBusyException(
+          message: 'Runtime host has 1 active terminal session(s) and 1 active push subscription(s).',
+          activeSessions: 1,
+          activePushSubscriptions: 1,
+        ),
       );
       final service = RuntimeHostLifecycleService(
         client: client,
@@ -71,11 +121,26 @@ void main() {
         ),
         readConfig: () => TerminalHostConfig.defaults,
       );
+      var confirmCalls = 0;
+      var visualQuitCommitted = false;
 
-      final allowed = await service.prepareAppQuit(keepRuntimeOpen: false);
+      final allowed = await service.prepareAppQuit(
+        keepRuntimeOpen: false,
+        confirmBusyQuit:
+            ({required String title, required String message}) async {
+              confirmCalls += 1;
+              return RuntimeHostQuitDecision.leaveRuntimeOpen;
+            },
+        onBusyQuitCommitted: () {
+          visualQuitCommitted = true;
+        },
+      );
 
       expect(allowed, isTrue);
-      expect(client.shutdownCalls, isEmpty);
+      expect(confirmCalls, 1);
+      expect(visualQuitCommitted, isTrue);
+      expect(client.shutdownCalls, <bool>[false]);
+      expect(await client.probeRuntimeStatus(), isNotNull);
     });
 
     test('prepareAppQuit soft-stops when status probe fails', () async {

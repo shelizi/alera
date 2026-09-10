@@ -169,16 +169,21 @@ final class RuntimeHostLifecycleService({
     if (liveStatus != null && liveStatus['persistent'] == true) {
       return true;
     }
-    if (liveStatus != null &&
-        liveStatus['activePushSubscriptions'] is int &&
-        (liveStatus['activePushSubscriptions'] as int) > 0) {
-      return true;
-    }
-
+    // Do not decide from the status snapshot alone. A push subscription should
+    // keep a push-only runtime alive, but it must not hide terminals, agents,
+    // or background jobs from the busy-quit confirmation. The shutdown reply
+    // carries the complete busy counts, including jobs not exposed by status.
     try {
       await _shutdownForAppQuit(force: false);
       return true;
     } on RuntimeHostBusyException catch (busy) {
+      if (_isPushOnlyBusy(busy)) {
+        // Mobile push intentionally keeps the detached runtime alive. This is
+        // an automatic leave-open decision, so the visible app can disappear
+        // immediately instead of waiting for native window destruction.
+        onBusyQuitCommitted?.call();
+        return true;
+      }
       if (confirmBusyQuit == null) {
         return false;
       }
@@ -202,6 +207,13 @@ final class RuntimeHostLifecycleService({
           return true;
       }
     }
+  }
+
+  bool _isPushOnlyBusy(RuntimeHostBusyException busy) {
+    return busy.activePushSubscriptions > 0 &&
+        busy.activeAgents == 0 &&
+        busy.activeSessions == 0 &&
+        busy.activeJobs == 0;
   }
 
   Future<void> _waitUntilStopped() async {
