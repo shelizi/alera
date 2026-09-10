@@ -39,26 +39,60 @@ void main() {
   );
 
   test(
-    'workspace deletion delegates provider cleanup to the deletion cleaner',
+    'workspace deletion delegates provider cleanup to the deletion coordinator',
     () {
-      final source = File(
+      final controllerSource = File(
         'lib/src/features/workbench/application/workbench_controller_projects.dart',
+      ).readAsStringSync();
+      final coordinatorSource = File(
+        'lib/src/features/workbench/application/workbench_delete_workspace_cleanup_coordinator.dart',
       ).readAsStringSync();
 
       expect(
-        source,
-        contains('_explicitResourceCleaner.closeWorkspaceLocalResources'),
+        controllerSource,
+        contains('WorkbenchDeleteWorkspaceCleanupCoordinator('),
       );
       expect(
-        source,
-        contains('_explicitResourceCleaner.clearDeletedWorkspaceObservers'),
+        controllerSource,
+        isNot(
+          contains('_explicitResourceCleaner.closeWorkspaceLocalResources'),
+        ),
       );
-      expect(source, isNot(contains('terminalRuntimeLifecycleProvider')));
-      expect(source, isNot(contains('editorSessionRegistryProvider')));
-      expect(source, isNot(contains('workspaceActivityControllerProvider')));
-      expect(source, isNot(contains('agentStatusControllerProvider')));
-      expect(source, isNot(contains('agentRuntimeOverlayServiceProvider')));
-      expect(source, isNot(contains('agentHookReceiverProvider')));
+      expect(
+        controllerSource,
+        isNot(
+          contains('_explicitResourceCleaner.clearDeletedWorkspaceObservers'),
+        ),
+      );
+      expect(
+        coordinatorSource,
+        contains('_resourceCleaner.closeWorkspaceLocalResources'),
+      );
+      expect(
+        coordinatorSource,
+        contains('_resourceCleaner.clearDeletedWorkspaceObservers'),
+      );
+      expect(
+        controllerSource,
+        isNot(contains('terminalRuntimeLifecycleProvider')),
+      );
+      expect(
+        controllerSource,
+        isNot(contains('editorSessionRegistryProvider')),
+      );
+      expect(
+        controllerSource,
+        isNot(contains('workspaceActivityControllerProvider')),
+      );
+      expect(
+        controllerSource,
+        isNot(contains('agentStatusControllerProvider')),
+      );
+      expect(
+        controllerSource,
+        isNot(contains('agentRuntimeOverlayServiceProvider')),
+      );
+      expect(controllerSource, isNot(contains('agentHookReceiverProvider')));
     },
   );
 

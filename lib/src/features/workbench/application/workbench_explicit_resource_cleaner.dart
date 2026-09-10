@@ -14,7 +14,20 @@ typedef WorkbenchExplicitAsyncResourceIdConsumer = Future<void> Function(
 /// actively terminated here. Workspace deletion uses two phases so the
 /// controller can preserve the hosted-review failure ordering between local
 /// resource teardown and observer cleanup.
-final class WorkbenchExplicitResourceCleaner {
+abstract interface class WorkbenchExplicitWorkspaceResourceCleaner {
+  void closeWorkspaceLocalResources(
+    String workspaceId,
+    Iterable<WorkspaceTabRecord> tabs,
+  );
+
+  void clearDeletedWorkspaceObservers(
+    String workspaceId,
+    Iterable<WorkspaceTabRecord> tabs,
+  );
+}
+
+final class WorkbenchExplicitResourceCleaner
+    implements WorkbenchExplicitWorkspaceResourceCleaner {
   const WorkbenchExplicitResourceCleaner({
     required TerminalRuntimeLifecycle runtimeLifecycle,
     required WorkbenchExplicitResourceIdConsumer forgetEditorSession,

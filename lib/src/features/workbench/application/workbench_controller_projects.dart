@@ -128,24 +128,17 @@ mixin _WorkbenchControllerProjects
           activeWorkspaceId: activeWorkspaceId,
         ),
       );
-      // The managed runtime has already stopped the process trees. Keep local
-      // disposal before hosted-review cleanup, preserving the existing failure
-      // boundary while moving provider-specific teardown out of the controller.
-      _explicitResourceCleaner.closeWorkspaceLocalResources(
-        workspace.id,
-        workspaceTabs,
-      );
-      for (final tab in workspaceTabs) {
-        await _hostedReviewRetention.releaseTab(
-          workspace,
-          tab,
-          fallbackWorkspacePath: project.repoPath,
-        );
-      }
-      _tabFocusHistory.forget(workspace.id);
-      _explicitResourceCleaner.clearDeletedWorkspaceObservers(
-        workspace.id,
-        workspaceTabs,
+      // The managed runtime has already stopped the process trees. Preserve the
+      // local -> hosted-review -> observer cleanup failure boundary in one
+      // application coordinator.
+      await WorkbenchDeleteWorkspaceCleanupCoordinator(
+        resourceCleaner: _explicitResourceCleaner,
+        hostedReviewRetention: _hostedReviewRetention,
+        tabFocusHistory: _tabFocusHistory,
+      ).cleanup(
+        workspace: workspace,
+        tabs: workspaceTabs,
+        fallbackWorkspacePath: project.repoPath,
       );
       state = state.copyWith(error: null);
     } catch (error) {
