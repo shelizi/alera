@@ -91,30 +91,32 @@ mixin _WorkbenchControllerTabs
     required String newRelativePath,
   }) async {
     try {
-      final result = await _workspaceTabService.updateFileTabPathsAfterMove(
+      await WorkbenchFileTabPathMoveCoordinator(
+        movePaths:
+            ({
+              required workspaceId,
+              required oldRelativePath,
+              required newRelativePath,
+            }) => _workspaceTabService.updateFileTabPathsAfterMove(
+              workspaceId: workspaceId,
+              oldRelativePath: oldRelativePath,
+              newRelativePath: newRelativePath,
+            ),
+        readCurrentTabs: () => state.tabsFor(workspace.id),
+        readCurrentLayout: () => state.layoutFor(workspace.id),
+        applyTabs: (tabs) => _setTabsForWorkspace(workspace.id, tabs),
+        applyLayout: (layout) => _applyLayout(layout, persist: true),
+        completeRemoval: (remainingTabs) {
+          state = completeWorkbenchTabRemovalState(
+            state: state,
+            workspaceId: workspace.id,
+            remainingTabs: remainingTabs,
+          );
+        },
+      ).run(
         workspaceId: workspace.id,
         oldRelativePath: oldRelativePath,
         newRelativePath: newRelativePath,
-      );
-      if (result.isEmpty) {
-        return;
-      }
-      final plan = planWorkbenchFileTabPathMove(
-        workspaceId: workspace.id,
-        currentTabs: state.tabsFor(workspace.id),
-        currentLayout: state.layoutFor(workspace.id),
-        updatedTabs: result.updatedTabs,
-        closedTabIds: result.closedTabIds,
-      );
-      _setTabsForWorkspace(workspace.id, plan.tabs);
-      final layoutToPersist = plan.layoutToPersist;
-      if (layoutToPersist != null) {
-        await _applyLayout(layoutToPersist, persist: true);
-      }
-      state = completeWorkbenchTabRemovalState(
-        state: state,
-        workspaceId: workspace.id,
-        remainingTabs: plan.tabs,
       );
     } catch (error) {
       state = state.copyWith(error: error.toString());
