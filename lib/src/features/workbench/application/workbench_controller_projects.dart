@@ -436,7 +436,10 @@ mixin _WorkbenchControllerProjects
     }
     final tabs = await _workspaceTabService.listTabs(workspace.id);
     _setTabsForWorkspace(workspace.id, tabs);
-    final layout = await _ensureWorkbenchLayout(workspace.id, tabs);
+    final layout = await _layoutResolver.resolve(
+      workspaceId: workspace.id,
+      tabs: tabs,
+    );
     await _applyLayout(layout, persist: false);
     if (recordHistory &&
         _navigationHistory.record(project: project, workspace: workspace)) {

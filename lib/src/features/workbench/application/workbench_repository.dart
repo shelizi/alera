@@ -1,8 +1,10 @@
+import 'package:alera/src/features/workbench/application/workbench_layout_repository.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/domain/workbench_layout.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 
-abstract interface class WorkbenchRepository {
+abstract interface class WorkbenchRepository
+    implements WorkbenchLayoutRepository {
   Future<List<Workspace>> listWorkspaces(String projectId);
 
   Stream<List<Workspace>> watchWorkspaces(String projectId);

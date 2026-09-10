@@ -13,6 +13,9 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController {
 
   WorkspaceService get _workspaceService => ref.read(workspaceServiceProvider);
 
+  WorkbenchLayoutResolver get _layoutResolver =>
+      WorkbenchLayoutResolver(_repository);
+
   Future<T> _withWorktreeRefreshSuspended<T>(
     String projectId,
     Future<T> Function() action,
@@ -182,7 +185,10 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController {
     }
     try {
       final tabs = await _workspaceTabService.listTabs(workspaceId);
-      final layout = await _ensureWorkbenchLayout(workspaceId, tabs);
+      final layout = await _layoutResolver.resolve(
+        workspaceId: workspaceId,
+        tabs: tabs,
+      );
       await _applyLayout(layout, persist: false);
     } catch (error) {
       if (!_disposed) {
@@ -191,24 +197,6 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController {
     } finally {
       _loadingLayoutWorkspaceIds.remove(workspaceId);
     }
-  }
-
-  Future<WorkbenchLayout> _ensureWorkbenchLayout(
-    String workspaceId,
-    List<WorkspaceTabRecord> tabs,
-  ) async {
-    final stored = await _repository.findWorkbenchLayout(workspaceId);
-    final layout =
-        stored ??
-        WorkbenchLayout.single(
-          workspaceId: workspaceId,
-          tabIds: <String>[for (final tab in tabs) tab.id],
-        );
-    final sanitized = layout.sanitize(tabs);
-    if (stored == null || sanitized != stored) {
-      await _repository.upsertWorkbenchLayout(sanitized);
-    }
-    return sanitized;
   }
 
   WorkbenchLayout _layoutForMutation(
