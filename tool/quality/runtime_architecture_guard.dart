@@ -36,7 +36,7 @@ void main() {
   _checkMovedFiles(violations);
   _checkLegacyReferences(violations);
   _checkPlatformFeatureDependencies(violations);
-  _checkApplicationTerminalRuntimeDependencies(violations);
+  _checkApplicationPresentationDependencies(violations);
 
   if (violations.isEmpty) {
     stdout.writeln('Runtime architecture guard passed.');
@@ -125,31 +125,37 @@ void _checkPlatformFeatureDependencies(List<String> violations) {
   }
 }
 
-void _checkApplicationTerminalRuntimeDependencies(List<String> violations) {
+void _checkApplicationPresentationDependencies(List<String> violations) {
   for (final file in _dartFilesUnder(_featureRoot)) {
     final path = _displayPath(file);
-    if (!path.contains('/application/') ||
-        path.endsWith('.g.dart') ||
-        path == _terminalRuntimeCompositionPath) {
+    if (!path.contains('/application/') || path.endsWith('.g.dart')) {
       continue;
     }
 
     final lines = file.readAsLinesSync();
     for (var index = 0; index < lines.length; index += 1) {
       final line = lines[index];
-      if (line.contains('terminalRuntimeProvider')) {
+      if (line.contains('terminalRuntimeProvider') &&
+          path != _terminalRuntimeCompositionPath) {
         violations.add(
           'Application code depends on the full terminal runtime provider: '
           '$path:${index + 1}:${line.trim()}',
         );
       }
+
       final match = _dependencyDirective.firstMatch(line);
-      if (match?.group(1) == _presentationTerminalRuntimeImport) {
-        violations.add(
-          'Application code imports the presentation terminal runtime: '
-          '$path:${index + 1}:$_presentationTerminalRuntimeImport',
-        );
+      final uri = match?.group(1);
+      if (uri == null || !uri.contains('/presentation/')) {
+        continue;
       }
+      if (path == _terminalRuntimeCompositionPath &&
+          uri == _presentationTerminalRuntimeImport) {
+        continue;
+      }
+      violations.add(
+        'Application code imports presentation code: '
+        '$path:${index + 1}:$uri',
+      );
     }
   }
 }

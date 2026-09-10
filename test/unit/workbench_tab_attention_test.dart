@@ -1,6 +1,7 @@
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 import 'package:alera/src/features/workbench/application/workbench_tab_attention.dart';
+import 'package:alera/src/features/workbench/presentation/workbench_tab_attention_presentation.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
