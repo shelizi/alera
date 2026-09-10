@@ -13,8 +13,25 @@ abstract interface class WorkbenchHostedReviewTabRetention {
   });
 }
 
+abstract interface class WorkbenchHostedReviewRangeRetention {
+  Future<void> persist({
+    required Workspace workspace,
+    required String? relativeRoot,
+    required String retentionId,
+  });
+
+  Future<void> release({
+    required Workspace workspace,
+    required String? relativeRoot,
+    required String retentionId,
+    String? fallbackWorkspacePath,
+  });
+}
+
 final class WorkbenchHostedReviewRetentionService
-    implements WorkbenchHostedReviewTabRetention {
+    implements
+        WorkbenchHostedReviewTabRetention,
+        WorkbenchHostedReviewRangeRetention {
   const WorkbenchHostedReviewRetentionService({required GitBackend gitBackend})
     : _gitBackend = gitBackend;
 

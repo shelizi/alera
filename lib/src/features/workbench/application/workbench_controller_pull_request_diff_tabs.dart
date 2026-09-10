@@ -12,65 +12,42 @@ mixin _WorkbenchControllerPullRequestDiffTabs
     String? subject,
     String? targetGroupId,
   }) async {
-    var retainedByTab = false;
-    WorkspaceTabRecord? newTab;
     try {
       final previousTabs = state.tabsFor(workspace.id);
       final layout = _layoutForMutation(workspace.id, previousTabs);
-      final tab = await _workspaceTabService.openOrCreateGitPullRequestDiffTab(
-        workspaceId: workspace.id,
-        gitDiffRoot: gitDiffRoot,
-        pullRequestNumber: pullRequestNumber,
-        commitOid: commitOid,
-        parentOid: parentOid,
-        retentionId: retentionId,
-        subject: subject,
-      );
-      final alreadyOpen = previousTabs.any(
-        (candidate) => candidate.id == tab.id,
-      );
-      if (!alreadyOpen) {
-        newTab = tab;
-      }
-      if (tab.gitDiffHostedReviewRetentionId == retentionId) {
-        await _hostedReviewRetention.persist(
-          workspace: workspace,
-          relativeRoot: gitDiffRoot,
-          retentionId: retentionId,
-        );
-        retainedByTab = true;
-      } else {
-        await _hostedReviewRetention.release(
-          workspace: workspace,
-          relativeRoot: gitDiffRoot,
-          retentionId: retentionId,
-        );
-      }
-      final tabs = alreadyOpen
-          ? previousTabs
-          : <WorkspaceTabRecord>[...previousTabs, tab];
-      _setTabsForWorkspace(workspace.id, tabs);
-      final groupId = targetGroupId ?? layout.activeGroupId;
-      final nextLayout = alreadyOpen
-          ? layout.setActiveTab(
-              groupId: layout.groupIdForTab(tab.id) ?? groupId,
-              tabId: tab.id,
-            )
-          : layout.addTabToGroup(groupId: groupId, tabId: tab.id);
-      await _applyLayout(nextLayout.sanitize(tabs), persist: true);
+      final tab =
+          await WorkbenchPullRequestDiffTabOpenCoordinator(
+            tabStore: WorkbenchPullRequestDiffTabStoreAdapter(
+              _workspaceTabService,
+            ),
+            hostedReviewRetention: _hostedReviewRetention,
+          ).open(
+            workspace: workspace,
+            previousTabs: previousTabs,
+            gitDiffRoot: gitDiffRoot,
+            pullRequestNumber: pullRequestNumber,
+            commitOid: commitOid,
+            parentOid: parentOid,
+            retentionId: retentionId,
+            subject: subject,
+            onReady: ({required tab, required alreadyOpen}) async {
+              final tabs = alreadyOpen
+                  ? previousTabs
+                  : <WorkspaceTabRecord>[...previousTabs, tab];
+              _setTabsForWorkspace(workspace.id, tabs);
+              final groupId = targetGroupId ?? layout.activeGroupId;
+              final nextLayout = alreadyOpen
+                  ? layout.setActiveTab(
+                      groupId: layout.groupIdForTab(tab.id) ?? groupId,
+                      tabId: tab.id,
+                    )
+                  : layout.addTabToGroup(groupId: groupId, tabId: tab.id);
+              await _applyLayout(nextLayout.sanitize(tabs), persist: true);
+            },
+          );
       state = state.copyWith(error: null);
       return tab;
     } catch (error) {
-      if (!retainedByTab) {
-        if (newTab case final tab?) {
-          await _workspaceTabService.closeTab(tab.id);
-        }
-        await _hostedReviewRetention.release(
-          workspace: workspace,
-          relativeRoot: gitDiffRoot,
-          retentionId: retentionId,
-        );
-      }
       state = state.copyWith(error: error.toString());
       rethrow;
     }
