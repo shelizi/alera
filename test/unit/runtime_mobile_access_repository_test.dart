@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:alera/src/features/mobile_devices/domain/mobile_access_status.dart';
 import 'package:alera/src/features/mobile_devices/infra/runtime_mobile_access_repository.dart';
-import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_protocol.dart';
+import 'package:alera/src/platform/runtime_host/protocol/terminal_host_protocol.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

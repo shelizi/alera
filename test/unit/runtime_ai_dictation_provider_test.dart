@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:alera/src/features/ai_dictation/domain/ai_dictation_request.dart';
 import 'package:alera/src/features/ai_dictation/infra/runtime_ai_dictation_credential_store.dart';
 import 'package:alera/src/features/ai_dictation/infra/runtime_ai_dictation_provider.dart';
-import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_protocol.dart';
+import 'package:alera/src/platform/runtime_host/protocol/terminal_host_protocol.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

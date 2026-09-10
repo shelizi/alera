@@ -1,5 +1,5 @@
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
-import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_protocol.dart';
+import 'package:alera/src/platform/runtime_host/protocol/terminal_host_protocol.dart';
 
 /// The sidecar configuration implied by the user's terminal settings.
 ///

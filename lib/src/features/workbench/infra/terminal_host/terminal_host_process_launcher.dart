@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:alera/src/core/build_flavor.dart';
 
 import 'package:alera/src/features/workbench/infra/terminal_host/alera_cli_sidecar.dart';
-import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_protocol.dart';
+import 'package:alera/src/platform/runtime_host/protocol/terminal_host_protocol.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 

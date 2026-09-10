@@ -4,7 +4,7 @@ import 'package:alera/src/design_system/feedback/alera_qr_code.dart';
 import 'package:alera/src/features/mobile_devices/application/mobile_access_providers.dart';
 import 'package:alera/src/features/mobile_devices/infra/runtime_mobile_access_repository.dart';
 import 'package:alera/src/features/settings/presentation/panes/mobile_devices_pane.dart';
-import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_protocol.dart';
+import 'package:alera/src/platform/runtime_host/protocol/terminal_host_protocol.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';

@@ -1,5 +1,5 @@
 import 'package:alera/src/features/workbench/application/workspace_activity_repository.dart';
-import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_protocol.dart';
+import 'package:alera/src/platform/runtime_host/protocol/terminal_host_protocol.dart';
 import 'package:logging/logging.dart';
 
 final Logger _log = Logger('RuntimeWorkspaceActivityRepository');

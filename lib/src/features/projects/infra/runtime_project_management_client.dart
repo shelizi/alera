@@ -1,7 +1,7 @@
 import 'dart:async';
 
 import 'package:alera/src/features/projects/domain/project.dart';
-import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_protocol.dart';
+import 'package:alera/src/platform/runtime_host/protocol/terminal_host_protocol.dart';
 import 'package:path/path.dart' as p;
 
 class RuntimeProjectManagementClient(final RuntimeHostClient _client) {

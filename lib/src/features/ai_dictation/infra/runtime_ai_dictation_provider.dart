@@ -2,7 +2,7 @@ import 'package:alera/src/features/ai_dictation/domain/ai_dictation_error.dart';
 import 'package:alera/src/features/ai_dictation/domain/ai_dictation_provider.dart';
 import 'package:alera/src/features/ai_dictation/domain/ai_dictation_request.dart';
 import 'package:alera/src/features/ai_dictation/domain/ai_dictation_result.dart';
-import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_protocol.dart';
+import 'package:alera/src/platform/runtime_host/protocol/terminal_host_protocol.dart';
 
 class RuntimeAiDictationProvider(final RuntimeHostClient _client)
     implements AiDictationProvider {

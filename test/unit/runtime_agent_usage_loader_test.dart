@@ -3,7 +3,7 @@ import 'package:alera/src/features/agent_usage/application/agent_usage_loader.da
 import 'package:alera/src/features/agent_usage/infra/runtime_agent_usage_loader.dart';
 import 'package:alera/src/features/remote_hosts/domain/ssh_target.dart';
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
-import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_protocol.dart';
+import 'package:alera/src/platform/runtime_host/protocol/terminal_host_protocol.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

@@ -11,7 +11,7 @@ import 'package:alera/src/features/settings/infra/drift_settings_repository.dart
 import 'package:alera/src/features/workbench/application/workbench_repository.dart';
 import 'package:alera/src/features/workbench/infra/drift_workbench_repository.dart';
 import 'package:alera/src/features/workbench/infra/runtime_workbench_repository.dart';
-import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_protocol.dart';
+import 'package:alera/src/platform/runtime_host/protocol/terminal_host_protocol.dart';
 import 'package:alera/src/shared/infra/runtime/runtime_host_providers.dart';
 import 'package:alera/src/shared/infra/storage/storage_providers.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';

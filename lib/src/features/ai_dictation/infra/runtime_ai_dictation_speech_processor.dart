@@ -1,6 +1,6 @@
 import 'package:alera/src/features/ai_dictation/application/ai_dictation_target_registry.dart';
 import 'package:alera/src/features/ai_dictation/domain/ai_dictation_settings.dart';
-import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_protocol.dart';
+import 'package:alera/src/platform/runtime_host/protocol/terminal_host_protocol.dart';
 
 abstract interface class AiDictationSpeechProcessor {
   Future<AiDictationSpeechProcessingResult> process({

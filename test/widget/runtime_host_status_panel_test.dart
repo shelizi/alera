@@ -8,7 +8,7 @@ import 'package:alera/src/features/runtime_host/infra/bundled_sidecar_version_pr
 import 'package:alera/src/features/runtime_host/presentation/runtime_host_status_panel.dart';
 import 'package:alera/src/features/runtime_host/presentation/runtime_host_status_bar.dart';
 import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_client_models.dart';
-import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_protocol.dart';
+import 'package:alera/src/platform/runtime_host/protocol/terminal_host_protocol.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';

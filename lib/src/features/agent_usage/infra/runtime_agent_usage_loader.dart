@@ -1,6 +1,6 @@
 import 'package:alera/src/features/agent_quota/infra/runtime_proxy_client.dart';
 import 'package:alera/src/features/agent_usage/application/agent_usage_loader.dart';
-import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_protocol.dart';
+import 'package:alera/src/platform/runtime_host/protocol/terminal_host_protocol.dart';
 
 class const RuntimeAgentUsageLoader(
   final RuntimeHostClient _runtimeClient,

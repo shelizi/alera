@@ -1,7 +1,7 @@
 import 'dart:async';
 
 import 'package:alera/src/features/orchestration/domain/run_execution_policy.dart';
-import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_protocol.dart';
+import 'package:alera/src/platform/runtime_host/protocol/terminal_host_protocol.dart';
 
 class RuntimeRunPolicyRepository(
   final RuntimeHostClient _client, {

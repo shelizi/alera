@@ -11,7 +11,7 @@ import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_c
 import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_frame_codec.dart';
 import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_socket_isolate.dart';
 import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_process_launcher.dart';
-import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_protocol.dart';
+import 'package:alera/src/platform/runtime_host/protocol/terminal_host_protocol.dart';
 import 'package:alera/src/shared/infra/logging/app_logger.dart';
 import 'package:alera/src/shared/infra/logging/log_redaction.dart';
 import 'package:ghostty_vte_flutter/ghostty_vte_flutter.dart';
