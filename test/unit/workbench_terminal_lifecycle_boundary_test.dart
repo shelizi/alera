@@ -38,6 +38,30 @@ void main() {
     },
   );
 
+  test(
+    'workspace deletion delegates provider cleanup to the deletion cleaner',
+    () {
+      final source = File(
+        'lib/src/features/workbench/application/workbench_controller_projects.dart',
+      ).readAsStringSync();
+
+      expect(
+        source,
+        contains('_deletedWorkspaceResourceCleaner.closeLocalResources'),
+      );
+      expect(
+        source,
+        contains('_deletedWorkspaceResourceCleaner.clearObservers'),
+      );
+      expect(source, isNot(contains('terminalRuntimeLifecycleProvider')));
+      expect(source, isNot(contains('editorSessionRegistryProvider')));
+      expect(source, isNot(contains('workspaceActivityControllerProvider')));
+      expect(source, isNot(contains('agentStatusControllerProvider')));
+      expect(source, isNot(contains('agentRuntimeOverlayServiceProvider')));
+      expect(source, isNot(contains('agentHookReceiverProvider')));
+    },
+  );
+
   test('runtime coordinators depend on the narrow coordination contract', () {
     final source = File(
       'lib/src/features/workbench/application/workbench_providers.dart',

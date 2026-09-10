@@ -145,12 +145,6 @@ mixin _WorkbenchControllerProjects
   }) async {
     try {
       final workspaceTabs = state.tabsFor(workspace.id);
-      final terminalSessionIds = state
-          .tabsFor(workspace.id)
-          .where((tab) => tab.kind == WorkspaceTabKind.terminal)
-          .map((tab) => tab.terminalSessionId)
-          .where((id) => id.isNotEmpty)
-          .toList(growable: false);
       await _withWorktreeRefreshSuspended(
         project.id,
         () => _workspaceService.removeWorkspace(
@@ -161,11 +155,12 @@ mixin _WorkbenchControllerProjects
         ),
       );
       // The managed runtime has already stopped the process trees. Keep local
-      // disposal here so deletion from any caller releases the UI resources.
-      ref.read(terminalRuntimeLifecycleProvider).closeWorkspace(workspace.id);
-      for (final tab in workspaceTabs) {
-        ref.read(editorSessionRegistryProvider).forget(tab.id);
-      }
+      // disposal before hosted-review cleanup, preserving the existing failure
+      // boundary while moving provider-specific teardown out of the controller.
+      _deletedWorkspaceResourceCleaner.closeLocalResources(
+        workspace.id,
+        workspaceTabs,
+      );
       for (final tab in workspaceTabs) {
         await _releaseHostedReviewTab(
           workspace,
@@ -174,21 +169,10 @@ mixin _WorkbenchControllerProjects
         );
       }
       _tabFocusHistory.forget(workspace.id);
-      ref
-          .read(workspaceActivityControllerProvider.notifier)
-          .removeWorkspace(workspace.id);
-      ref
-          .read(agentStatusControllerProvider.notifier)
-          .clearWorkspace(workspace.id);
-      final overlay = ref.read(agentRuntimeOverlayServiceProvider);
-      for (final sessionId in terminalSessionIds) {
-        if (ref.exists(agentHookReceiverProvider)) {
-          ref.read(agentHookReceiverProvider).clearTerminalSession(sessionId);
-        }
-        unawaited(
-          overlay.clearTerminalOverlays(sessionId).catchError((Object _) {}),
-        );
-      }
+      _deletedWorkspaceResourceCleaner.clearObservers(
+        workspace.id,
+        workspaceTabs,
+      );
       state = state.copyWith(error: null);
     } catch (error) {
       state = state.copyWith(error: error.toString());
