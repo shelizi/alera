@@ -322,13 +322,6 @@ mixin _ProjectWorkbenchSidebarActions
     if (confirmed != true || !mounted) {
       return;
     }
-    final runtime = ref.read(terminalRuntimeProvider);
-    final workspaces = ref
-        .read(workbenchControllerProvider)
-        .workspacesFor(project.id);
-    for (final workspace in workspaces) {
-      runtime.closeWorkspace(workspace.id);
-    }
     await _runWorkbenchSidebarMutation(
       mutation: .removeProject,
       execute: () async {

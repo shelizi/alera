@@ -14,32 +14,83 @@ void main() {
         ..record('workspace-1', 'tab-1')
         ..record('workspace-2', 'tab-3');
       final retention = _FakeRetention(events);
+      Future<void> removeProject() async => events.add('remove-project');
       final coordinator = WorkbenchRemoveProjectCleanupCoordinator(
+        closeLocalWorkspace: (workspaceId) => events.add('close:$workspaceId'),
         hostedReviewRetention: retention,
         tabFocusHistory: focus,
       );
 
-      await coordinator.cleanup(<WorkbenchRemovedProjectWorkspace>[
-        WorkbenchRemovedProjectWorkspace(
-          workspace: _workspace('workspace-1'),
-          tabs: <WorkspaceTabRecord>[
-            _tab('workspace-1', 'tab-1'),
-            _tab('workspace-1', 'tab-2'),
-          ],
-        ),
-        WorkbenchRemovedProjectWorkspace(
-          workspace: _workspace('workspace-2'),
-          tabs: <WorkspaceTabRecord>[_tab('workspace-2', 'tab-3')],
-        ),
-      ]);
+      await coordinator.remove(
+        removeProject: removeProject,
+        removedWorkspaces: <WorkbenchRemovedProjectWorkspace>[
+          WorkbenchRemovedProjectWorkspace(
+            workspace: _workspace('workspace-1'),
+            tabs: <WorkspaceTabRecord>[
+              _tab('workspace-1', 'tab-1'),
+              _tab('workspace-1', 'tab-2'),
+            ],
+          ),
+          WorkbenchRemovedProjectWorkspace(
+            workspace: _workspace('workspace-2'),
+            tabs: <WorkspaceTabRecord>[_tab('workspace-2', 'tab-3')],
+          ),
+        ],
+      );
 
       expect(events, <String>[
+        'close:workspace-1',
+        'close:workspace-2',
+        'remove-project',
         'forget:workspace-1',
         'release:workspace-1:tab-1',
         'release:workspace-1:tab-2',
         'forget:workspace-2',
         'release:workspace-2:tab-3',
       ]);
+    },
+  );
+
+  test(
+    'project removal failure closes local workspaces but skips cleanup',
+    () async {
+      final events = <String>[];
+      final focus = _RecordingFocusHistory(events)
+        ..record('workspace-1', 'tab-1')
+        ..record('workspace-2', 'tab-2');
+      final coordinator = WorkbenchRemoveProjectCleanupCoordinator(
+        closeLocalWorkspace: (workspaceId) => events.add('close:$workspaceId'),
+        hostedReviewRetention: _FakeRetention(events),
+        tabFocusHistory: focus,
+      );
+
+      await expectLater(
+        coordinator.remove(
+          removeProject: () async {
+            events.add('remove-project');
+            throw StateError('cannot remove');
+          },
+          removedWorkspaces: <WorkbenchRemovedProjectWorkspace>[
+            WorkbenchRemovedProjectWorkspace(
+              workspace: _workspace('workspace-1'),
+              tabs: <WorkspaceTabRecord>[_tab('workspace-1', 'tab-1')],
+            ),
+            WorkbenchRemovedProjectWorkspace(
+              workspace: _workspace('workspace-2'),
+              tabs: <WorkspaceTabRecord>[_tab('workspace-2', 'tab-2')],
+            ),
+          ],
+        ),
+        throwsStateError,
+      );
+
+      expect(events, <String>[
+        'close:workspace-1',
+        'close:workspace-2',
+        'remove-project',
+      ]);
+      expect(focus.mostRecentOpen('workspace-1', <String>{'tab-1'}), 'tab-1');
+      expect(focus.mostRecentOpen('workspace-2', <String>{'tab-2'}), 'tab-2');
     },
   );
 
@@ -50,6 +101,7 @@ void main() {
       ..record('workspace-2', 'tab-2');
     final retention = _FakeRetention(events, failOnTabId: 'tab-1');
     final coordinator = WorkbenchRemoveProjectCleanupCoordinator(
+      closeLocalWorkspace: (workspaceId) => events.add('close:$workspaceId'),
       hostedReviewRetention: retention,
       tabFocusHistory: focus,
     );

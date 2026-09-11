@@ -275,6 +275,8 @@ void _registerWorkbenchControllerLifecycleTests() {
       throwsStateError,
     );
 
+    expect(_harness.terminalRuntime.closedWorkspaceIds, contains(workspace.id));
+
     expect(
       _harness.gitBackend.calls.where(
         (call) =>

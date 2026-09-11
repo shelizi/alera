@@ -34,6 +34,7 @@ void main() {
         contains('WorkbenchSidebarTerminalSelectionCoordinator('),
       );
       expect(actionsSource, contains('terminalRuntimeFocusProvider'));
+      expect(actionsSource, isNot(contains('terminalRuntimeProvider')));
       expect(actionsSource, isNot(contains('.sessionFor(')));
     },
   );

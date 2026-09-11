@@ -230,6 +230,11 @@ void _registerWorkbenchControllerFailureTests() {
       await _flush();
 
       expect(
+        _harness.terminalRuntime.closedWorkspaceIds,
+        contains(secondWorkspace.id),
+      );
+
+      expect(
         _controller.state.projects.map((project) => project.id),
         isNot(contains(secondProject.id)),
       );

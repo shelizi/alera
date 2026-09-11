@@ -96,18 +96,21 @@ mixin _WorkbenchControllerProjects
 
   Future<void> removeProject(String projectId) async {
     try {
-      final removedWorkspaces = state.workspacesFor(projectId);
-      await _projectsService.removeProject(projectId);
-      await WorkbenchRemoveProjectCleanupCoordinator(
-        hostedReviewRetention: _hostedReviewRetention,
-        tabFocusHistory: _tabFocusHistory,
-      ).cleanup(<WorkbenchRemovedProjectWorkspace>[
-        for (final workspace in removedWorkspaces)
+      final removedWorkspaces = <WorkbenchRemovedProjectWorkspace>[
+        for (final workspace in state.workspacesFor(projectId))
           WorkbenchRemovedProjectWorkspace(
             workspace: workspace,
-            tabs: state.tabsFor(workspace.id),
+            tabs: List<WorkspaceTabRecord>.from(state.tabsFor(workspace.id)),
           ),
-      ]);
+      ];
+      await WorkbenchRemoveProjectCleanupCoordinator(
+        closeLocalWorkspace: _closeRemovedProjectWorkspace,
+        hostedReviewRetention: _hostedReviewRetention,
+        tabFocusHistory: _tabFocusHistory,
+      ).remove(
+        removeProject: () => _projectsService.removeProject(projectId),
+        removedWorkspaces: removedWorkspaces,
+      );
       state = state.copyWith(error: null);
     } catch (error) {
       state = state.copyWith(error: error.toString());

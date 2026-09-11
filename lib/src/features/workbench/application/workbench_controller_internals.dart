@@ -13,6 +13,9 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController {
 
   WorkspaceService get _workspaceService => ref.read(workspaceServiceProvider);
 
+  WorkbenchRemovedProjectWorkspaceCloser get _closeRemovedProjectWorkspace =>
+      ref.read(terminalRuntimeLifecycleProvider).closeWorkspace;
+
   WorkbenchSequencedLayoutRepository? _layoutRepository;
 
   WorkbenchSequencedLayoutRepository get _sequencedLayoutRepository =>
