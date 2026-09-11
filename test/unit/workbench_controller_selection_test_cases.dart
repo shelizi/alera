@@ -1,6 +1,40 @@
 part of 'workbench_controller_test.dart';
 
 void _registerWorkbenchControllerSelectionTests() {
+  test('workspace selection completion is ignored after the controller is disposed', () async {
+    final harness = _WorkbenchHarness();
+    final controller = harness._controller;
+
+    try {
+      await controller.bootstrap();
+      await _flushUntil(
+        () => controller.state.workspacesFor(harness.project.id).isNotEmpty,
+      );
+      final workspace = controller.state
+          .workspacesFor(harness.project.id)
+          .single;
+      final started = Completer<void>();
+      final release = Completer<void>();
+      harness.workbenchRepository.blockNextWorkspaceTabsList(
+        workspaceId: workspace.id,
+        started: started,
+        release: release,
+      );
+
+      final selecting = controller.selectWorkspace(
+        project: harness.project,
+        workspace: workspace,
+      );
+      await started.future;
+      harness.container.dispose();
+      release.complete();
+
+      await expectLater(selecting, completes);
+    } finally {
+      await harness.dispose();
+    }
+  });
+
   test('syncing a merman rename to text removes redundant preview tabs from state and layout', () async {
     await _controller.bootstrap();
     final workspace = await _selectMainWorkspace(_controller, _harness);
