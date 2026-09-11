@@ -33,6 +33,28 @@ void main() {
       expect(window.preventClose, isFalse);
     });
 
+    test('failed start rolls back listener and prevent-close state', () async {
+      final repository = _RecordingStateRepository()
+        ..loadError = StateError('load failed');
+      final window = _RecordingWindowController();
+      final coordinator = AppWindowLifecycleCoordinator(
+        repository: repository,
+        window: window,
+        saveDebounce: .zero,
+      );
+
+      await expectLater(coordinator.start(), throwsStateError);
+
+      expect(window.listeners, isEmpty);
+      expect(window.preventClose, isFalse);
+      expect(window.preventCloseValues, <bool>[true, false]);
+
+      repository.loadError = null;
+      await coordinator.start();
+      expect(window.listeners, <AppWindowEventListener>[coordinator]);
+      expect(window.preventClose, isTrue);
+    });
+
     test(
       'restart ignores state restored by an older in-flight start',
       () async {
@@ -419,6 +441,7 @@ class _RecordingStateRepository implements AppWindowStateRepository {
   Future<void>? saveBarrier;
   Completer<void>? loadStarted;
   Future<AppWindowState?>? loadOverride;
+  Object? loadError;
   final List<AppWindowState> saved = <AppWindowState>[];
 
   @override
@@ -437,6 +460,10 @@ class _RecordingStateRepository implements AppWindowStateRepository {
         started.complete();
       }
       return override;
+    }
+    final error = loadError;
+    if (error != null) {
+      throw error;
     }
     return state;
   }

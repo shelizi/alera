@@ -197,16 +197,21 @@ class AppWindowLifecycleCoordinator._({
     _started = true;
     final generation = ++_lifecycleGeneration;
     _window.addListener(this);
-    await _window.setPreventClose(true);
-    if (!_isStartCurrent(generation)) {
-      if (!_started && !_closeState.isClosing && !_closeState.isClosed) {
-        await _window.setPreventClose(false);
+    try {
+      await _window.setPreventClose(true);
+      if (!_isStartCurrent(generation)) {
+        if (!_started && !_closeState.isClosing && !_closeState.isClosed) {
+          await _window.setPreventClose(false);
+        }
+        return;
       }
-      return;
-    }
-    final restoredState = await _repository.load();
-    if (_isStartCurrent(generation)) {
-      _lastState = restoredState;
+      final restoredState = await _repository.load();
+      if (_isStartCurrent(generation)) {
+        _lastState = restoredState;
+      }
+    } catch (error, stackTrace) {
+      await _rollbackFailedStart(generation);
+      Error.throwWithStackTrace(error, stackTrace);
     }
   }
 
@@ -226,6 +231,24 @@ class AppWindowLifecycleCoordinator._({
 
   bool _isStartCurrent(int generation) =>
       _started && generation == _lifecycleGeneration;
+
+  Future<void> _rollbackFailedStart(int generation) async {
+    if (!_isStartCurrent(generation)) {
+      return;
+    }
+    _started = false;
+    _lifecycleGeneration += 1;
+    _window.removeListener(this);
+    try {
+      await _window.setPreventClose(false);
+    } catch (error, stackTrace) {
+      _logger.warning(
+        'failed to roll back app window lifecycle start',
+        error,
+        stackTrace,
+      );
+    }
+  }
 
   Future<void> flush() async {
     if (_closeState.isClosed) {
