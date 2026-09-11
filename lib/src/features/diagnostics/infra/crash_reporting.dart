@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:alera/src/core/build_flavor.dart';
 import 'package:alera/src/core/diagnostics/sentry_dsn.dart';
-import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_client_models.dart';
+import 'package:alera/src/platform/runtime_host/runtime_host_transport_errors.dart';
 import 'package:alera/src/shared/infra/logging/log_redaction.dart';
 import 'package:sentry/sentry.dart';
 

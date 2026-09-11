@@ -4,6 +4,8 @@ import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/platform/runtime_host/protocol/terminal_host_protocol.dart';
 import 'package:ghostty_vte_flutter/ghostty_vte_flutter.dart';
 
+export 'package:alera/src/platform/runtime_host/runtime_host_transport_errors.dart';
+
 abstract interface class TerminalHostClient {
   Stream<TerminalHostEvent> get events;
 
@@ -105,35 +107,6 @@ final class const TerminalPulseState({
       error: json['error'] as String?,
     );
   }
-}
-
-final class const TerminalHostRequestTimeoutException(
-  final String requestType,
-  final Duration duration,
-) implements Exception {
-  @override
-  String toString() {
-    return 'Terminal host request "$requestType" timed out after '
-        '${duration.inMilliseconds} ms.';
-  }
-}
-
-final class const TerminalHostConnectionClosedException([final Object? reason])
-    implements Exception {
-  @override
-  String toString() {
-    final reason = this.reason?.toString();
-    if (reason == null || reason.isEmpty) {
-      return 'Terminal host connection closed.';
-    }
-    return 'Terminal host connection closed: $reason';
-  }
-}
-
-final class const TerminalHostStartupException(final Object? cause)
-    implements Exception {
-  @override
-  String toString() => 'Terminal host did not start in time.';
 }
 
 final class const TerminalHostAttachment({

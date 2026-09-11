@@ -33,6 +33,7 @@ const _runtimeHostPresentationRoot =
 const _appWindowApplicationRoot = 'lib/src/features/app_window/application';
 const _resourceManagerPresentationRoot =
     'lib/src/features/resource_manager/presentation';
+const _diagnosticsInfraRoot = 'lib/src/features/diagnostics/infra';
 const _workbenchInfraImportPrefix =
     'package:alera/src/features/workbench/infra/';
 const _workbenchApplicationImportPrefix =
@@ -56,6 +57,7 @@ void main() {
   _checkRuntimeHostPresentationDependencies(violations);
   _checkAppWindowApplicationDependencies(violations);
   _checkResourceManagerPresentationDependencies(violations);
+  _checkDiagnosticsInfraDependencies(violations);
 
   if (violations.isEmpty) {
     stdout.writeln('Runtime architecture guard passed.');
@@ -281,6 +283,23 @@ void _checkResourceManagerPresentationDependencies(List<String> violations) {
       }
       violations.add(
         'Resource-manager presentation imports runtime transport infrastructure: '
+        '${_displayPath(file)}:${index + 1}:$uri',
+      );
+    }
+  }
+}
+
+void _checkDiagnosticsInfraDependencies(List<String> violations) {
+  for (final file in _dartFilesUnder(_diagnosticsInfraRoot)) {
+    final lines = file.readAsLinesSync();
+    for (var index = 0; index < lines.length; index += 1) {
+      final match = _dependencyDirective.firstMatch(lines[index]);
+      final uri = match?.group(1);
+      if (uri == null || !uri.startsWith(_workbenchInfraImportPrefix)) {
+        continue;
+      }
+      violations.add(
+        'Diagnostics infrastructure imports Workbench infrastructure: '
         '${_displayPath(file)}:${index + 1}:$uri',
       );
     }
