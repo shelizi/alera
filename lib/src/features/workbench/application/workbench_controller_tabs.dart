@@ -31,34 +31,22 @@ mixin _WorkbenchControllerTabs
           hostedReviewRetention: _hostedReviewRetention,
           resourceCleaner: _explicitResourceCleaner,
         ).close(workspace: workspace, snapshot: snapshot);
-        final remaining = state
-            .tabsFor(workspace.id)
-            .where((tab) => !ids.contains(tab.id))
-            .toList(growable: false);
-        final mostRecentOpenTabId =
-            snapshot.closedActiveTab && remaining.isNotEmpty
-            ? _tabFocusHistory.mostRecentOpen(workspace.id, <String>{
-                for (final tab in remaining) tab.id,
-              })
-            : null;
-        final plan = planWorkbenchClosedTabs(
-          workspaceId: workspace.id,
-          remainingTabs: remaining,
-          currentLayout: state.layoutFor(workspace.id),
-          closedTabIds: ids,
-          closedActiveTab: snapshot.closedActiveTab,
-          mostRecentOpenTabId: mostRecentOpenTabId,
-        );
-        _setTabsForWorkspace(workspace.id, remaining);
-        if (plan.shouldForgetFocusHistory) {
-          _tabFocusHistory.forget(workspace.id);
-        }
-        await _applyLayout(plan.layout, persist: true);
-        state = completeWorkbenchTabRemovalState(
-          state: state,
-          workspaceId: workspace.id,
-          remainingTabs: remaining,
-        );
+        await WorkbenchClosedTabsCompletionCoordinator(
+          readCurrentTabs: () => state.tabsFor(workspace.id),
+          readCurrentLayout: () => state.layoutFor(workspace.id),
+          mostRecentOpenTabId: (openTabIds) =>
+              _tabFocusHistory.mostRecentOpen(workspace.id, openTabIds),
+          applyTabs: (tabs) => _setTabsForWorkspace(workspace.id, tabs),
+          forgetFocusHistory: () => _tabFocusHistory.forget(workspace.id),
+          applyLayout: (layout) => _applyLayout(layout, persist: true),
+          completeRemoval: (remainingTabs) {
+            state = completeWorkbenchTabRemovalState(
+              state: state,
+              workspaceId: workspace.id,
+              remainingTabs: remainingTabs,
+            );
+          },
+        ).run(workspaceId: workspace.id, snapshot: snapshot);
       } catch (error) {
         state = state.copyWith(error: error.toString());
         rethrow;
