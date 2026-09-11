@@ -338,6 +338,8 @@ class _FakeWorkbenchRepository implements WorkbenchRepository {
   Completer<void>? _listWorkspaceTabsRelease;
   Completer<void>? _setWorkspacePinnedStarted;
   Completer<void>? _setWorkspacePinnedRelease;
+  Completer<void>? _upsertWorkspaceTabStarted;
+  Completer<void>? _upsertWorkspaceTabRelease;
   Completer<void>? _upsertWorkbenchLayoutStarted;
   Completer<void>? _upsertWorkbenchLayoutRelease;
   Completer<void>? _upsertWorkbenchLayoutCompleted;
@@ -555,7 +557,27 @@ class _FakeWorkbenchRepository implements WorkbenchRepository {
     _tabControllers[tab.workspaceId]?.add(
       List<WorkspaceTabRecord>.from(current),
     );
+    final started = _upsertWorkspaceTabStarted;
+    final release = _upsertWorkspaceTabRelease;
+    if (started != null) {
+      _upsertWorkspaceTabStarted = null;
+      _upsertWorkspaceTabRelease = null;
+      if (!started.isCompleted) {
+        started.complete();
+      }
+      if (release != null) {
+        await release.future;
+      }
+    }
     return tab;
+  }
+
+  void blockNextWorkspaceTabUpsert({
+    required Completer<void> started,
+    required Completer<void> release,
+  }) {
+    _upsertWorkspaceTabStarted = started;
+    _upsertWorkspaceTabRelease = release;
   }
 
   @override

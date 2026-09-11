@@ -1,6 +1,38 @@
 part of 'workbench_controller_test.dart';
 
 void _registerWorkbenchControllerLifecycleTests() {
+  test(
+    'tab rename completion is ignored after the controller is disposed',
+    () async {
+      final harness = _WorkbenchHarness();
+      final controller = harness._controller;
+
+      try {
+        await controller.bootstrap();
+        final workspace = await _selectMainWorkspace(controller, harness);
+        final tab = controller.state.tabsFor(workspace.id).single;
+        final started = Completer<void>();
+        final release = Completer<void>();
+        harness.workbenchRepository.blockNextWorkspaceTabUpsert(
+          started: started,
+          release: release,
+        );
+
+        final renaming = controller.renameWorkspaceTab(
+          tabId: tab.id,
+          title: 'Renamed after dispose',
+        );
+        await started.future;
+        harness.container.dispose();
+        release.complete();
+
+        await expectLater(renaming, completes);
+      } finally {
+        await harness.dispose();
+      }
+    },
+  );
+
   test('bootstrap prepares the main workspace without selecting it', () async {
     await _controller.bootstrap();
     await _flushUntil(

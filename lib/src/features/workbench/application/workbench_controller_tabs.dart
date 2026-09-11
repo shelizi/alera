@@ -63,12 +63,16 @@ mixin _WorkbenchControllerTabs
         tabId: tabId,
         title: title,
       );
-      state = applyWorkbenchTabUpdateState(
-        state: state,
-        tab: tab,
-      ).copyWith(error: null);
+      if (!_disposed) {
+        state = applyWorkbenchTabUpdateState(
+          state: state,
+          tab: tab,
+        ).copyWith(error: null);
+      }
     } catch (error) {
-      state = state.copyWith(error: error.toString());
+      if (!_disposed) {
+        state = state.copyWith(error: error.toString());
+      }
       rethrow;
     }
   }
