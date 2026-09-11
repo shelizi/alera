@@ -112,10 +112,18 @@ impl ServerActor {
             return;
         };
         let runtime_dir = self.runtime_dir.clone();
-        tokio::task::spawn_blocking(move || {
-            for upload_id in upload_ids {
-                cancel_upload(&runtime_dir, &upload_id);
-            }
+        let slots = self.deferred_request_slots.clone();
+        tokio::spawn(async move {
+            let _permit = match slots.acquire_owned().await {
+                Ok(permit) => permit,
+                Err(_) => return,
+            };
+            let _ = tokio::task::spawn_blocking(move || {
+                for upload_id in upload_ids {
+                    cancel_upload(&runtime_dir, &upload_id);
+                }
+            })
+            .await;
         });
     }
 
@@ -364,6 +372,53 @@ mod tests {
             store.append_chunk(&reservation.upload_id, 0, b"x"),
             Err(super::super::prompt_file_store::PromptFileStoreError::Missing)
         );
+    }
+
+    #[tokio::test]
+    async fn disconnected_upload_cleanup_respects_deferred_io_budget() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let store = PromptFileStore::in_runtime_dir(directory.path());
+        let (handle, _receiver) = ClientHandle::test_channels();
+        let mut actor = test_actor(
+            &directory,
+            HashMap::from([(1, mobile_client(handle, "phone"))]),
+            HashMap::new(),
+        )
+        .await;
+        actor.deferred_request_slots = Arc::new(tokio::sync::Semaphore::new(0));
+
+        let disconnected = store.start("budgeted-disconnect.bin", 2).expect("start");
+        actor.handle_mobile_prompt_file_finished(
+            1,
+            1,
+            "mobile.promptFile.start",
+            None,
+            Ok(json!({"uploadId": disconnected.upload_id})),
+        );
+        actor.dispose_client(1).await;
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert_eq!(
+            store
+                .append_chunk(&disconnected.upload_id, 0, b"x")
+                .expect("cleanup must wait for shared I/O admission"),
+            1
+        );
+
+        actor.deferred_request_slots.add_permits(1);
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                if matches!(
+                    store.append_chunk(&disconnected.upload_id, 1, b"y"),
+                    Err(super::super::prompt_file_store::PromptFileStoreError::Missing)
+                ) {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("disconnected upload should be cancelled after budget capacity is released");
     }
 
     #[tokio::test]
