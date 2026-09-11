@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/infra/runtime_workbench_repository.dart';
 import 'package:alera/src/platform/runtime_host/protocol/terminal_host_protocol.dart';
+import 'package:alera/src/platform/runtime_host/runtime_host_transport_errors.dart';
 import 'package:alera/src/shared/infra/runtime/runtime_change_coalescer.dart';
 import 'package:alera/src/shared/infra/runtime/runtime_snapshot_stream.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -75,6 +76,9 @@ void main() {
   );
 
   test('retries a failed read on its own, which drives reconnection', () async {
+    // A request timeout is transport uncertainty: another attempt can reopen or
+    // reuse the connection and should remain self-healing.
+
     final client = _FakeRuntimeHostClient();
     final coalescer = _coalescer();
     var failures = 2;
@@ -86,7 +90,10 @@ void main() {
       readSnapshot: () async {
         if (failures > 0) {
           failures -= 1;
-          throw StateError('host unavailable');
+          throw const TerminalHostRequestTimeoutException(
+            'snapshot.list',
+            Duration(milliseconds: 10),
+          );
         }
         return 'ready';
       },
@@ -99,6 +106,64 @@ void main() {
     await _settle(const Duration(milliseconds: 120));
     expect(emitted, <String>['ready']);
     expect(failures, 0);
+  });
+
+  test('treats typed host conflicts as non-retryable snapshots', () {
+    expect(
+      runtimeSnapshotReadErrorIsRecoverable(
+        const TerminalHostConflictException(
+          code: 'unsupported_request',
+          message: 'unsupported',
+        ),
+      ),
+      isFalse,
+    );
+  });
+
+  test('does not timer-retry a permanent snapshot read failure', () async {
+    final client = _FakeRuntimeHostClient();
+    final coalescer = _coalescer();
+    final failures = <RuntimeSnapshotReadFailure>[];
+    final emitted = <String>[];
+    var reads = 0;
+    var invalidPayload = true;
+
+    final subscription = runtimeSnapshotStream<String>(
+      client: client,
+      eventNames: const <String>{'changed'},
+      readSnapshot: () async {
+        reads += 1;
+        if (invalidPayload) throw const FormatException('invalid snapshot');
+        return 'recovered';
+      },
+      coalesceKey: 'key',
+      coalescer: coalescer,
+      retryDelay: _fastRetry,
+      onReadFailure: failures.add,
+    ).listen(emitted.add);
+    addTearDown(subscription.cancel);
+
+    await _settle(const Duration(milliseconds: 80));
+    expect(reads, 1, reason: 'permanent failures must not start a retry loop');
+    expect(failures, hasLength(1));
+    expect(failures.single.error, isA<FormatException>());
+    expect(failures.single.recoverable, isFalse);
+
+    invalidPayload = false;
+    client.emit(
+      const RuntimeHostEvent(
+        aleraRuntimeHostConnectedEvent,
+        <String, Object?>{},
+      ),
+    );
+    await _settle();
+
+    expect(
+      reads,
+      2,
+      reason: 'the stream stays alive for future refresh events',
+    );
+    expect(emitted, <String>['recovered']);
   });
 
   test('coalesces a burst of events into a single read', () async {
