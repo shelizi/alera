@@ -47,6 +47,7 @@ import 'package:alera/src/features/workbench/application/workbench_replaceable_t
 import 'package:alera/src/features/workbench/application/workbench_replaceable_tab_open_coordinator.dart';
 import 'package:alera/src/features/workbench/application/workbench_root_subscription_registry.dart';
 import 'package:alera/src/features/workbench/application/workbench_section_state.dart';
+import 'package:alera/src/features/workbench/application/workbench_serial_mutation_queue.dart';
 import 'package:alera/src/features/workbench/application/workbench_sequenced_layout_repository.dart';
 import 'package:alera/src/features/workbench/application/workbench_selection_state.dart';
 import 'package:alera/src/features/workbench/application/workbench_sleep_workspace_coordinator.dart';

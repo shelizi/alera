@@ -201,11 +201,13 @@ mixin _WorkbenchControllerProjects
   Future<void> setWorkspaceTreePinned({
     required String workspaceId,
     required bool isPinned,
-  }) async {
-    await WorkbenchWorkspaceTreePinCoordinator(
-      setPinned: ({required workspaceId, required isPinned}) =>
-          setWorkspacePinned(workspaceId: workspaceId, isPinned: isPinned),
-    ).run(state: state, workspaceId: workspaceId, isPinned: isPinned);
+  }) {
+    return _workspaceTreePinMutations.run<void>(
+      () => WorkbenchWorkspaceTreePinCoordinator(
+        setPinned: ({required workspaceId, required isPinned}) =>
+            setWorkspacePinned(workspaceId: workspaceId, isPinned: isPinned),
+      ).run(state: state, workspaceId: workspaceId, isPinned: isPinned),
+    );
   }
 
   Future<List<WorkspaceTag>> listWorkspaceTags() async {

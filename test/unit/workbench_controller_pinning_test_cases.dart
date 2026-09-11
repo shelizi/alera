@@ -80,6 +80,62 @@ void _registerWorkbenchControllerPinningTests() {
     },
   );
 
+  test('latest tree unpin wins over an older in-flight tree pin', () async {
+    await _controller.bootstrap();
+    final parent = await _selectMainWorkspace(_controller, _harness);
+    final child = await _harness.workbenchRepository.upsertWorkspace(
+      parent.copyWith(
+        id: 'child-concurrent-pin',
+        kind: WorkspaceKind.linked,
+        isPinned: false,
+        parentWorkspaceId: parent.id,
+      ),
+    );
+    await _flushUntil(
+      () => _controller.state
+          .workspacesFor(parent.projectId)
+          .any((workspace) => workspace.id == child.id),
+    );
+    final started = Completer<void>();
+    final release = Completer<void>();
+    _harness.workbenchRepository.blockNextWorkspacePinnedReturn(
+      started: started,
+      release: release,
+    );
+
+    final pinning = _controller.setWorkspaceTreePinned(
+      workspaceId: parent.id,
+      isPinned: true,
+    );
+    await started.future;
+    await _flushUntil(
+      () => _controller.state
+          .workspacesFor(parent.projectId)
+          .firstWhere((workspace) => workspace.id == parent.id)
+          .isPinned,
+    );
+
+    final unpinning = _controller.setWorkspaceTreePinned(
+      workspaceId: parent.id,
+      isPinned: false,
+    );
+    await _flush();
+
+    release.complete();
+    await Future.wait<void>(<Future<void>>[pinning, unpinning]);
+    await _flush();
+
+    final workspaces = _controller.state.workspacesFor(parent.projectId);
+    expect(
+      workspaces.firstWhere((workspace) => workspace.id == parent.id).isPinned,
+      isFalse,
+    );
+    expect(
+      workspaces.firstWhere((workspace) => workspace.id == child.id).isPinned,
+      isFalse,
+    );
+  });
+
   test('pins the workspace and every descendant', () async {
     await _controller.bootstrap();
     final parent = await _selectMainWorkspace(_controller, _harness);

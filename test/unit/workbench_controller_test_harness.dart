@@ -406,15 +406,15 @@ class _FakeWorkbenchRepository implements WorkbenchRepository {
     final current = (await findWorkspaceById(workspaceId))!;
     final updated = await upsertWorkspace(current.copyWith(isPinned: isPinned));
     final started = _setWorkspacePinnedStarted;
+    final release = _setWorkspacePinnedRelease;
+    _setWorkspacePinnedStarted = null;
+    _setWorkspacePinnedRelease = null;
     if (started != null && !started.isCompleted) {
       started.complete();
     }
-    final release = _setWorkspacePinnedRelease;
     if (release != null) {
       await release.future;
     }
-    _setWorkspacePinnedStarted = null;
-    _setWorkspacePinnedRelease = null;
     return updated;
   }
 

@@ -128,6 +128,8 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController {
       WorkbenchWorkspaceTagMutationQueue();
   final WorkbenchWorkspaceParentMutationQueue _workspaceParentMutations =
       WorkbenchWorkspaceParentMutationQueue();
+  final WorkbenchSerialMutationQueue _workspaceTreePinMutations =
+      WorkbenchSerialMutationQueue();
 
   final WorkspaceTabFocusHistory _tabFocusHistory = WorkspaceTabFocusHistory();
   final WorkbenchNavigationHistoryService _navigationHistory =
