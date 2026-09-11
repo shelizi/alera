@@ -49,8 +49,6 @@ pub enum ServerCommand {
         payload: Value,
     },
     WorkspaceSidebarSnapshotFinished {
-        client_id: u64,
-        request_id: i64,
         result: HostResult<Value>,
     },
     DeferredRequestFinished {

@@ -329,6 +329,7 @@ mod tests {
             deferred_request_slots: Arc::new(tokio::sync::Semaphore::new(
                 super::super::DEFERRED_REQUEST_CONCURRENCY,
             )),
+            workspace_sidebar_snapshots: Default::default(),
             inbox,
             next_client_id: Arc::new(AtomicU64::new(2)),
             mobile_gateway: None,

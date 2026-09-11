@@ -59,6 +59,72 @@ async fn workspace_sidebar_snapshot_is_deferred_so_control_requests_can_advance(
 }
 
 #[tokio::test]
+async fn concurrent_workspace_sidebar_snapshots_share_one_background_load() {
+    let dir = tempfile::tempdir().unwrap();
+    let (handle, mut responses) = ClientHandle::test_channels();
+    let mut actor = test_actor(
+        &dir,
+        HashMap::from([(1, local_client(handle))]),
+        HashMap::new(),
+    )
+    .await;
+    let (inbox, mut commands) = tokio::sync::mpsc::unbounded_channel();
+    actor.inbox = inbox;
+
+    for request_id in [31, 32] {
+        assert!(actor
+            .try_start_deferred_request(1, request_id, "workspaceSidebar.snapshot", &json!({}),)
+            .await
+            .unwrap());
+    }
+
+    let completion = tokio::time::timeout(Duration::from_secs(1), commands.recv())
+        .await
+        .expect("the shared snapshot worker should report completion")
+        .unwrap();
+    actor.handle(completion).await;
+
+    let mut response_ids = Vec::new();
+    for _ in 0..2 {
+        let response = tokio::time::timeout(Duration::from_secs(1), responses.recv())
+            .await
+            .expect("each coalesced request must receive a response")
+            .unwrap()
+            .as_json()
+            .unwrap();
+        assert_eq!(response["ok"], true);
+        response_ids.push(response["id"].as_i64().unwrap());
+    }
+    response_ids.sort_unstable();
+    assert_eq!(response_ids, vec![31, 32]);
+
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), commands.recv())
+            .await
+            .is_err(),
+        "coalesced sidebar requests should not start a second background load"
+    );
+
+    assert!(actor
+        .try_start_deferred_request(1, 33, "workspaceSidebar.snapshot", &json!({}))
+        .await
+        .unwrap());
+    let next_completion = tokio::time::timeout(Duration::from_secs(1), commands.recv())
+        .await
+        .expect("a later refresh should start a fresh snapshot load")
+        .unwrap();
+    actor.handle(next_completion).await;
+    let next_response = tokio::time::timeout(Duration::from_secs(1), responses.recv())
+        .await
+        .expect("the later refresh should receive a response")
+        .unwrap()
+        .as_json()
+        .unwrap();
+    assert_eq!(next_response["id"], 33);
+    assert_eq!(next_response["ok"], true);
+}
+
+#[tokio::test]
 async fn workspace_sidebar_snapshot_completion_is_dropped_after_client_disconnects() {
     let dir = tempfile::tempdir().unwrap();
     let (handle, mut responses) = ClientHandle::test_channels();

@@ -26,6 +26,28 @@ struct SetWorkspaceTagsRequest {
     tag_ids: Vec<String>,
 }
 
+#[derive(Default)]
+pub(super) struct WorkspaceSidebarSnapshotState {
+    in_flight: bool,
+    waiters: Vec<(u64, i64)>,
+}
+
+impl WorkspaceSidebarSnapshotState {
+    fn register(&mut self, client_id: u64, request_id: i64) -> bool {
+        self.waiters.push((client_id, request_id));
+        if self.in_flight {
+            return false;
+        }
+        self.in_flight = true;
+        true
+    }
+
+    fn take_waiters(&mut self) -> Vec<(u64, i64)> {
+        self.in_flight = false;
+        std::mem::take(&mut self.waiters)
+    }
+}
+
 impl ServerActor {
     pub(super) fn agent_presence_items(&self) -> Value {
         let items = self.orchestration_terminals(&json!({}))["items"]
@@ -61,7 +83,13 @@ impl ServerActor {
         self.broadcast_authenticated(event("agentPresenceChanged", json!({"changes": changes})));
     }
 
-    pub(super) fn start_workspace_sidebar_snapshot(&self, client_id: u64, request_id: i64) {
+    pub(super) fn start_workspace_sidebar_snapshot(&mut self, client_id: u64, request_id: i64) {
+        if !self
+            .workspace_sidebar_snapshots
+            .register(client_id, request_id)
+        {
+            return;
+        }
         let runtime_store = self.runtime_store.clone();
         let inbox = self.inbox.clone();
         let slots = self.deferred_request_slots.clone();
@@ -71,30 +99,27 @@ impl ServerActor {
                 .await
                 .expect("deferred request semaphore must remain open");
             let result = load_workspace_sidebar_snapshot(&runtime_store).await;
-            let _ = inbox.send(ServerCommand::WorkspaceSidebarSnapshotFinished {
-                client_id,
-                request_id,
-                result,
-            });
+            let _ = inbox.send(ServerCommand::WorkspaceSidebarSnapshotFinished { result });
         });
     }
 
-    pub(super) fn finish_workspace_sidebar_snapshot(
-        &self,
-        client_id: u64,
-        request_id: i64,
-        result: HostResult<Value>,
-    ) {
-        if self.require_auth(client_id).is_err() {
-            return;
-        }
+    pub(super) fn finish_workspace_sidebar_snapshot(&mut self, result: HostResult<Value>) {
+        let waiters = self.workspace_sidebar_snapshots.take_waiters();
         match result {
             Ok(mut payload) => {
                 payload["agentPresence"] = self.agent_presence_items();
-                self.client_write(client_id, ok_response(request_id, payload));
+                for (client_id, request_id) in waiters {
+                    if self.require_auth(client_id).is_ok() {
+                        self.client_write(client_id, ok_response(request_id, payload.clone()));
+                    }
+                }
             }
             Err(error) => {
-                self.client_write(client_id, error_response(request_id, &error));
+                for (client_id, request_id) in waiters {
+                    if self.require_auth(client_id).is_ok() {
+                        self.client_write(client_id, error_response(request_id, &error));
+                    }
+                }
             }
         }
     }

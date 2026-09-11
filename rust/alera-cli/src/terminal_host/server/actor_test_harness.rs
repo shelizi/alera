@@ -116,6 +116,7 @@ pub(super) async fn test_actor(
         deferred_request_slots: Arc::new(tokio::sync::Semaphore::new(
             super::DEFERRED_REQUEST_CONCURRENCY,
         )),
+        workspace_sidebar_snapshots: Default::default(),
         inbox,
         next_client_id: Arc::new(AtomicU64::new(10)),
         mobile_gateway: None,

@@ -249,6 +249,7 @@ struct ServerActor {
     codex_starting: Option<codex_server_startup::CodexServerStartup>,
     inbox: UnboundedSender<ServerCommand>,
     deferred_request_slots: Arc<Semaphore>,
+    workspace_sidebar_snapshots: workspace_sidebar_requests::WorkspaceSidebarSnapshotState,
     next_client_id: Arc<AtomicU64>,
     mobile_gateway: Option<JoinHandle<()>>,
     shutdown_gen: u64,
@@ -435,12 +436,8 @@ impl ServerActor {
             } => {
                 self.finish_mobile_network_snapshot(client_id, request_id, payload);
             }
-            ServerCommand::WorkspaceSidebarSnapshotFinished {
-                client_id,
-                request_id,
-                result,
-            } => {
-                self.finish_workspace_sidebar_snapshot(client_id, request_id, result);
+            ServerCommand::WorkspaceSidebarSnapshotFinished { result } => {
+                self.finish_workspace_sidebar_snapshot(result);
             }
             ServerCommand::DeferredRequestFinished {
                 client_id,
@@ -1180,6 +1177,7 @@ mod tests {
             codex: None,
             codex_starting: None,
             deferred_request_slots: Arc::new(Semaphore::new(DEFERRED_REQUEST_CONCURRENCY)),
+            workspace_sidebar_snapshots: Default::default(),
             inbox,
             next_client_id: Arc::new(AtomicU64::new(2)),
             mobile_gateway: None,
@@ -1256,6 +1254,7 @@ mod tests {
             codex: None,
             codex_starting: None,
             deferred_request_slots: Arc::new(Semaphore::new(DEFERRED_REQUEST_CONCURRENCY)),
+            workspace_sidebar_snapshots: Default::default(),
             inbox,
             next_client_id: Arc::new(AtomicU64::new(1)),
             mobile_gateway: None,
@@ -1350,6 +1349,7 @@ mod tests {
             codex: None,
             codex_starting: None,
             deferred_request_slots: Arc::new(Semaphore::new(DEFERRED_REQUEST_CONCURRENCY)),
+            workspace_sidebar_snapshots: Default::default(),
             inbox,
             next_client_id: Arc::new(AtomicU64::new(1)),
             mobile_gateway: None,
@@ -1439,6 +1439,7 @@ mod tests {
             codex: None,
             codex_starting: None,
             deferred_request_slots: Arc::new(Semaphore::new(DEFERRED_REQUEST_CONCURRENCY)),
+            workspace_sidebar_snapshots: Default::default(),
             inbox,
             next_client_id: Arc::new(AtomicU64::new(1)),
             mobile_gateway: None,
@@ -1550,6 +1551,7 @@ mod tests {
             codex: None,
             codex_starting: None,
             deferred_request_slots: Arc::new(Semaphore::new(DEFERRED_REQUEST_CONCURRENCY)),
+            workspace_sidebar_snapshots: Default::default(),
             inbox,
             next_client_id: Arc::new(AtomicU64::new(1)),
             mobile_gateway: None,
@@ -1634,6 +1636,7 @@ mod tests {
             codex: None,
             codex_starting: None,
             deferred_request_slots: Arc::new(Semaphore::new(DEFERRED_REQUEST_CONCURRENCY)),
+            workspace_sidebar_snapshots: Default::default(),
             inbox,
             next_client_id: Arc::new(AtomicU64::new(2)),
             mobile_gateway: None,

@@ -94,6 +94,7 @@ pub async fn run_terminal_host_server(
         deferred_request_slots: Arc::new(tokio::sync::Semaphore::new(
             super::DEFERRED_REQUEST_CONCURRENCY,
         )),
+        workspace_sidebar_snapshots: Default::default(),
         inbox,
         next_client_id,
         mobile_gateway: None,
