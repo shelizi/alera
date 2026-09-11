@@ -7,7 +7,6 @@ import 'package:alera/src/features/runtime_host/domain/runtime_host_status.dart'
 import 'package:alera/src/features/runtime_host/infra/bundled_sidecar_version_probe.dart';
 import 'package:alera/src/features/runtime_host/presentation/runtime_host_status_panel.dart';
 import 'package:alera/src/features/runtime_host/presentation/runtime_host_status_bar.dart';
-import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_client_models.dart';
 import 'package:alera/src/platform/runtime_host/protocol/terminal_host_protocol.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -214,7 +213,7 @@ void main() {
   testWidgets('start failure is shown instead of escaping the action', (
     tester,
   ) async {
-    final startupError = TerminalHostStartupException(
+    final startupError = RuntimeHostLifecycleStartupException(
       StateError('sidecar failed'),
     );
     final service = RuntimeHostLifecycleService(
@@ -303,6 +302,15 @@ final class _WidgetBundledProbe implements BundledSidecarVersionProbe {
 
 final class _FailingRuntimeHostClient(final Object startupError)
     implements RuntimeHostLifecycleClient {
+  @override
+  void beginAppQuit() {}
+
+  @override
+  void cancelAppQuit() {}
+
+  @override
+  void commitAppQuit() {}
+
   @override
   Future<Map<String, Object?>?> probeRuntimeStatus() async => null;
 
