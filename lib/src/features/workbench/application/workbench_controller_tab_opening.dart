@@ -82,25 +82,20 @@ mixin _WorkbenchControllerTabOpening
     try {
       final previousTabs = state.tabsFor(workspace.id);
       final layout = _layoutForMutation(workspace.id, previousTabs);
-      final tab = await _workspaceTabService.openOrCreateMermanPreviewTab(
-        workspaceId: workspace.id,
-        relativePath: relativePath,
-      );
-      final alreadyOpen = previousTabs.any(
-        (candidate) => candidate.id == tab.id,
-      );
-      final tabs = alreadyOpen
-          ? previousTabs
-          : <WorkspaceTabRecord>[...previousTabs, tab];
-      _setTabsForWorkspace(workspace.id, tabs);
-      final groupId = targetGroupId ?? layout.activeGroupId;
-      final nextLayout = alreadyOpen
-          ? layout.setActiveTab(
-              groupId: layout.groupIdForTab(tab.id) ?? groupId,
-              tabId: tab.id,
-            )
-          : layout.addTabToGroup(groupId: groupId, tabId: tab.id);
-      await _applyLayout(nextLayout.sanitize(tabs), persist: true);
+      final tab = await WorkbenchTabPlacementCoordinator(
+        openTab: () => _workspaceTabService.openOrCreateMermanPreviewTab(
+          workspaceId: workspace.id,
+          relativePath: relativePath,
+        ),
+        planPlacement: (tab) => planWorkbenchReusableTabToGroup(
+          previousTabs: previousTabs,
+          layout: layout,
+          tab: tab,
+          targetGroupId: targetGroupId,
+        ),
+        applyTabs: (tabs) => _setTabsForWorkspace(workspace.id, tabs),
+        applyLayout: (layout) => _applyLayout(layout, persist: true),
+      ).run();
       state = state.copyWith(error: null);
       return tab;
     } catch (error) {

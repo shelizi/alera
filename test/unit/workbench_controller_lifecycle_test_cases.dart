@@ -438,6 +438,22 @@ void _registerWorkbenchControllerLifecycleTests() {
     );
     expect(_controller.state.activeWorkspaceTab?.id, preview.id);
 
+    final reopenedPreview = await _controller.openMermanPreviewTab(
+      workspace: workspace,
+      relativePath: './docs/diagram.mmd',
+    );
+    await _flush();
+
+    expect(reopenedPreview.id, preview.id);
+    expect(
+      _controller.state
+          .tabsFor(workspace.id)
+          .where((tab) => tab.isMermanPreview),
+      hasLength(1),
+    );
+    expect(_controller.state.tabsFor(workspace.id), hasLength(3));
+    expect(_controller.state.activeWorkspaceTab?.id, preview.id);
+
     final reopenedEditor = await _controller.openEditorTab(
       workspace: workspace,
       relativePath: 'docs/diagram.mmd',

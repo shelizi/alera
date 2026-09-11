@@ -22,6 +22,29 @@ WorkbenchTabPlacementPlan planWorkbenchTabAddedToGroup({
   return WorkbenchTabPlacementPlan(tabs: tabs, layout: nextLayout);
 }
 
+WorkbenchTabPlacementPlan planWorkbenchReusableTabToGroup({
+  required List<WorkspaceTabRecord> previousTabs,
+  required WorkbenchLayout layout,
+  required WorkspaceTabRecord tab,
+  required String? targetGroupId,
+}) {
+  final alreadyOpen = previousTabs.any((candidate) => candidate.id == tab.id);
+  final tabs = alreadyOpen
+      ? previousTabs
+      : <WorkspaceTabRecord>[...previousTabs, tab];
+  final groupId = targetGroupId ?? layout.activeGroupId;
+  final nextLayout = alreadyOpen
+      ? layout.setActiveTab(
+          groupId: layout.groupIdForTab(tab.id) ?? groupId,
+          tabId: tab.id,
+        )
+      : layout.addTabToGroup(groupId: groupId, tabId: tab.id);
+  return WorkbenchTabPlacementPlan(
+    tabs: tabs,
+    layout: nextLayout.sanitize(tabs),
+  );
+}
+
 WorkbenchTabPlacementPlan planWorkbenchTabSplitIntoGroup({
   required List<WorkspaceTabRecord> previousTabs,
   required WorkbenchLayout layout,
