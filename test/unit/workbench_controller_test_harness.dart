@@ -316,6 +316,9 @@ class _FakeWorkbenchRepository implements WorkbenchRepository {
   final Map<String, StreamController<List<WorkspaceTabRecord>>>
   _tabControllers = <String, StreamController<List<WorkspaceTabRecord>>>{};
   Future<WorkbenchLayout?>? _findWorkbenchLayoutOverride;
+  String? _blockedListWorkspaceTabsId;
+  Completer<void>? _listWorkspaceTabsStarted;
+  Completer<void>? _listWorkspaceTabsRelease;
   Object? upsertWorkspaceError, upsertWorkspaceTabError;
   Object? upsertWorkbenchLayoutError, removeWorkspaceTabError;
   int upsertWorkbenchLayoutCalls = 0;
@@ -423,9 +426,32 @@ class _FakeWorkbenchRepository implements WorkbenchRepository {
 
   @override
   Future<List<WorkspaceTabRecord>> listWorkspaceTabs(String workspaceId) async {
+    if (_blockedListWorkspaceTabsId == workspaceId) {
+      final started = _listWorkspaceTabsStarted;
+      if (started != null && !started.isCompleted) {
+        started.complete();
+      }
+      final release = _listWorkspaceTabsRelease;
+      if (release != null) {
+        await release.future;
+      }
+      _blockedListWorkspaceTabsId = null;
+      _listWorkspaceTabsStarted = null;
+      _listWorkspaceTabsRelease = null;
+    }
     return List<WorkspaceTabRecord>.from(
       _tabsByWorkspace[workspaceId] ?? const <WorkspaceTabRecord>[],
     );
+  }
+
+  void blockNextWorkspaceTabsList({
+    required String workspaceId,
+    required Completer<void> started,
+    required Completer<void> release,
+  }) {
+    _blockedListWorkspaceTabsId = workspaceId;
+    _listWorkspaceTabsStarted = started;
+    _listWorkspaceTabsRelease = release;
   }
 
   @override

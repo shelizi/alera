@@ -145,6 +145,51 @@ void _registerWorkbenchControllerNavigationTests() {
     },
   );
 
+  test('selectWorkspaceTab does not focus a tab removed while workspace selection is in flight', () async {
+    await _controller.bootstrap();
+    final mainWorkspace = await _selectMainWorkspace(_controller, _harness);
+    final otherWorkspace = (await _controller.createWorkspace(
+      project: _harness.project,
+      sourceBranch: 'main',
+      newBranchName: 'feature/stale-tab-selection',
+    )).workspace;
+    final targetTab = _controller.state.tabsFor(otherWorkspace.id).first;
+    await _controller.selectWorkspace(
+      project: _harness.project,
+      workspace: mainWorkspace,
+    );
+
+    final started = Completer<void>();
+    final release = Completer<void>();
+    _harness.workbenchRepository.blockNextWorkspaceTabsList(
+      workspaceId: otherWorkspace.id,
+      started: started,
+      release: release,
+    );
+    final selecting = _controller.selectWorkspaceTab(
+      workspaceId: otherWorkspace.id,
+      tabId: targetTab.id,
+    );
+    await started.future;
+
+    await _harness.workbenchRepository.removeWorkspaceTab(targetTab.id);
+    await _flush();
+    release.complete();
+    await selecting;
+    await _flush();
+
+    expect(_controller.state.activeWorkspaceId, otherWorkspace.id);
+    expect(
+      _controller.state
+          .tabsFor(otherWorkspace.id)
+          .any((tab) => tab.id == targetTab.id),
+      isFalse,
+    );
+    expect(
+      _controller.state.activeTabIdByWorkspace[otherWorkspace.id],
+      isNot(targetTab.id),
+    );
+  });
   test('prunes navigation entries when their project is removed', () async {
     await _controller.bootstrap();
     await _selectMainWorkspace(_controller, _harness);

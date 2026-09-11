@@ -33,6 +33,9 @@ mixin _WorkbenchControllerNavigation
     if (workspace == null || project == null) return;
     if (state.activeWorkspaceId != workspaceId) {
       await selectWorkspace(project: project, workspace: workspace);
+      if (!state.tabsFor(workspaceId).any((tab) => tab.id == tabId)) {
+        return;
+      }
     }
     final groupId = state.layoutFor(workspaceId)?.groupIdForTab(tabId);
     _setActiveTabInternal(
