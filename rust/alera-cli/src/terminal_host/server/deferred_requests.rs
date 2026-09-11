@@ -12,6 +12,7 @@ use crate::terminal_host::protocol::{error_response, ok_response};
 
 use super::automation_policy_requests::load_automation_policy_show;
 use super::project_requests::{load_effective_project_config, load_project_branches};
+use super::prompt_image_requests::handle_prompt_image_request;
 use super::request_payloads::parse_payload;
 use super::requests::require_string_key;
 use super::runtime_mutations::RuntimeMutationRequest;
@@ -217,6 +218,26 @@ impl ServerActor {
                     request_type,
                     payload,
                 )?;
+                Ok(true)
+            }
+            "mobile.promptImage.start"
+            | "mobile.promptImage.chunk"
+            | "mobile.promptImage.complete"
+            | "mobile.promptImage.cancel" => {
+                self.require_auth(client_id)?;
+                self.require_request_allowed(client_id, request_type)?;
+                let runtime_dir = self.runtime_dir.clone();
+                let request_type = request_type.to_string();
+                let payload = payload.clone();
+                self.start_deferred_request(client_id, request_id, async move {
+                    tokio::task::spawn_blocking(move || {
+                        handle_prompt_image_request(runtime_dir, &request_type, &payload)
+                    })
+                    .await
+                    .map_err(|error| {
+                        HostError::state(format!("Prompt image operation failed: {error}"))
+                    })?
+                });
                 Ok(true)
             }
             "mobile.promptFile.start"

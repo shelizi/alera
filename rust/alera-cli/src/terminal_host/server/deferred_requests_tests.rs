@@ -62,6 +62,111 @@ async fn deferred_requests_bound_background_concurrency() {
 }
 
 #[tokio::test]
+async fn prompt_image_upload_io_is_deferred_from_the_actor_mailbox() {
+    let dir = tempfile::tempdir().unwrap();
+    let (handle, mut responses) = ClientHandle::test_channels();
+    let mut actor = test_actor(
+        &dir,
+        HashMap::from([(1, local_client(handle))]),
+        HashMap::new(),
+    )
+    .await;
+    let (inbox, mut commands) = tokio::sync::mpsc::unbounded_channel();
+    actor.inbox = inbox;
+
+    assert!(actor
+        .try_start_deferred_request(
+            1,
+            11,
+            "mobile.promptImage.start",
+            &json!({"format": "png", "sizeBytes": 8}),
+        )
+        .await
+        .unwrap());
+
+    actor
+        .handle_line(
+            1,
+            json!({"id": 12, "type": "status.get", "payload": {}}).to_string(),
+        )
+        .await;
+    let status = tokio::time::timeout(Duration::from_secs(1), responses.recv())
+        .await
+        .expect("status should not wait for prompt image filesystem work")
+        .unwrap()
+        .as_json()
+        .unwrap();
+    assert_eq!(status["id"], 12);
+
+    let start_completion = tokio::time::timeout(Duration::from_secs(1), commands.recv())
+        .await
+        .expect("prompt image start should report completion")
+        .unwrap();
+    actor.handle(start_completion).await;
+    let start = tokio::time::timeout(Duration::from_secs(1), responses.recv())
+        .await
+        .expect("prompt image start should answer the request")
+        .unwrap()
+        .as_json()
+        .unwrap();
+    assert_eq!(start["id"], 11);
+    assert_eq!(start["ok"], true);
+    let upload_id = start["payload"]["uploadId"].as_str().unwrap().to_string();
+
+    assert!(actor
+        .try_start_deferred_request(
+            1,
+            13,
+            "mobile.promptImage.chunk",
+            &json!({
+                "uploadId": upload_id,
+                "offset": 0,
+                "dataBase64": "iVBORw0KGgo=",
+            }),
+        )
+        .await
+        .unwrap());
+    let chunk_completion = tokio::time::timeout(Duration::from_secs(1), commands.recv())
+        .await
+        .expect("prompt image chunk should report completion")
+        .unwrap();
+    actor.handle(chunk_completion).await;
+    let chunk = tokio::time::timeout(Duration::from_secs(1), responses.recv())
+        .await
+        .expect("prompt image chunk should answer the request")
+        .unwrap()
+        .as_json()
+        .unwrap();
+    assert_eq!(chunk["id"], 13);
+    assert_eq!(chunk["ok"], true);
+    assert_eq!(chunk["payload"]["nextOffset"], 8);
+
+    assert!(actor
+        .try_start_deferred_request(
+            1,
+            14,
+            "mobile.promptImage.complete",
+            &json!({"uploadId": upload_id}),
+        )
+        .await
+        .unwrap());
+    let complete_completion = tokio::time::timeout(Duration::from_secs(1), commands.recv())
+        .await
+        .expect("prompt image completion should report completion")
+        .unwrap();
+    actor.handle(complete_completion).await;
+    let complete = tokio::time::timeout(Duration::from_secs(1), responses.recv())
+        .await
+        .expect("prompt image completion should answer the request")
+        .unwrap()
+        .as_json()
+        .unwrap();
+    assert_eq!(complete["id"], 14);
+    assert_eq!(complete["ok"], true);
+    assert!(std::path::Path::new(complete["payload"]["path"].as_str().unwrap()).is_file());
+}
+
+#[tokio::test]
 async fn project_registration_preparation_is_deferred_before_runtime_mutation() {
     let dir = tempfile::tempdir().unwrap();
     let project_path = dir.path().join("registered-project");
