@@ -3,7 +3,7 @@ import 'dart:io';
 
 import 'package:alera/src/features/workbench/domain/external_terminal_launcher.dart';
 import 'package:alera/src/features/workbench/infra/native_external_terminal_launcher.dart';
-import 'package:alera/src/features/workbench/infra/terminal_host/alera_cli_sidecar.dart';
+import 'package:alera/src/shared/infra/runtime/alera_cli_sidecar.dart';
 import 'package:alera/src/shared/infra/process/process_runner.dart';
 import 'package:flutter_test/flutter_test.dart';
 

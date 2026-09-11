@@ -2,10 +2,16 @@ import 'dart:io';
 
 const _legacyProtocolImport =
     'package:alera/src/features/workbench/infra/terminal_host/terminal_host_protocol.dart';
+const _legacyCliSidecarImport =
+    'package:alera/src/features/workbench/infra/terminal_host/alera_cli_sidecar.dart';
 const _platformProtocolPath =
     'lib/src/platform/runtime_host/protocol/terminal_host_protocol.dart';
 const _legacyProtocolPath =
     'lib/src/features/workbench/infra/terminal_host/terminal_host_protocol.dart';
+const _sharedCliSidecarPath =
+    'lib/src/shared/infra/runtime/alera_cli_sidecar.dart';
+const _legacyCliSidecarPath =
+    'lib/src/features/workbench/infra/terminal_host/alera_cli_sidecar.dart';
 const _legacyTransportImports = <String>[
   'package:alera/src/features/workbench/infra/terminal_host/terminal_host_frame_codec.dart',
   'package:alera/src/features/workbench/infra/terminal_host/terminal_host_socket_isolate.dart',
@@ -72,6 +78,17 @@ void _checkMovedFiles(List<String> violations) {
   if (!File(_platformProtocolPath).existsSync()) {
     violations.add('Missing neutral runtime protocol: $_platformProtocolPath');
   }
+  if (File(_legacyCliSidecarPath).existsSync()) {
+    violations.add(
+      'Runtime CLI sidecar resolver is still owned by Workbench: '
+      '$_legacyCliSidecarPath',
+    );
+  }
+  if (!File(_sharedCliSidecarPath).existsSync()) {
+    violations.add(
+      'Missing shared runtime CLI resolver: $_sharedCliSidecarPath',
+    );
+  }
 
   for (final path in _legacyTransportPaths) {
     if (File(path).existsSync()) {
@@ -88,6 +105,7 @@ void _checkMovedFiles(List<String> violations) {
 void _checkLegacyReferences(List<String> violations) {
   for (final legacyImport in <String>[
     _legacyProtocolImport,
+    _legacyCliSidecarImport,
     ..._legacyTransportImports,
   ]) {
     final matches = _findLiteralReferences(legacyImport);

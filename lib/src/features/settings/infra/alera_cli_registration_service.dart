@@ -1,6 +1,6 @@
 import 'dart:io';
 
-import 'package:alera/src/features/workbench/infra/terminal_host/alera_cli_sidecar.dart';
+import 'package:alera/src/shared/infra/runtime/alera_cli_sidecar.dart';
 import 'package:alera/src/shared/infra/process/command_environment_resolver.dart';
 import 'package:alera/src/shared/infra/process/process_runner.dart';
 import 'package:path/path.dart' as p;
