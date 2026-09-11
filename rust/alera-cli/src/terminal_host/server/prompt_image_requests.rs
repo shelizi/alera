@@ -12,7 +12,7 @@ use super::prompt_image_store::{
     PromptImageStore, MAX_PROMPT_IMAGE_CHUNK_BYTES, MAX_PROMPT_IMAGE_STORE_BYTES,
 };
 use super::requests::require_string_key;
-use super::ServerActor;
+use super::{ServerActor, ServerCommand};
 
 const MAX_ENCODED_CHUNK_BYTES: usize = MAX_PROMPT_IMAGE_CHUNK_BYTES.div_ceil(3) * 4;
 type UploadGate = Mutex<()>;
@@ -21,6 +21,140 @@ type UploadGateRegistry = Mutex<HashMap<String, Weak<UploadGate>>>;
 static UPLOAD_GATES: OnceLock<UploadGateRegistry> = OnceLock::new();
 
 impl ServerActor {
+    pub(super) fn start_mobile_prompt_image_request(
+        &self,
+        client_id: u64,
+        request_id: i64,
+        request_type: &str,
+        payload: &Value,
+    ) {
+        let runtime_dir = self.runtime_dir.clone();
+        let request_type = request_type.to_string();
+        let upload_id = payload
+            .get("uploadId")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let payload = payload.clone();
+        let inbox = self.inbox.clone();
+        let slots = self.deferred_request_slots.clone();
+        tokio::spawn(async move {
+            let _permit = match slots.acquire_owned().await {
+                Ok(permit) => permit,
+                Err(_) => return,
+            };
+            let operation = request_type.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                handle_prompt_image_request(runtime_dir, &request_type, &payload)
+            })
+            .await
+            .map_err(|error| HostError::state(format!("Prompt image operation failed: {error}")))
+            .and_then(|result| result);
+            let _ = inbox.send(ServerCommand::MobilePromptImageFinished {
+                client_id,
+                request_id,
+                request_type: operation,
+                upload_id,
+                result,
+            });
+        });
+    }
+
+    pub(super) fn handle_mobile_prompt_image_finished(
+        &mut self,
+        client_id: u64,
+        request_id: i64,
+        request_type: &str,
+        requested_upload_id: Option<&str>,
+        result: HostResult<Value>,
+    ) {
+        if matches!(
+            request_type,
+            "mobile.promptImage.complete" | "mobile.promptImage.cancel"
+        ) {
+            if let Some(upload_id) = requested_upload_id {
+                self.remove_mobile_prompt_image_upload(client_id, upload_id);
+            }
+        }
+        if !self.clients.contains_key(&client_id) {
+            self.cleanup_orphaned_prompt_image_start(request_type, &result);
+            return;
+        }
+        let response = match &result {
+            Ok(value) => crate::terminal_host::protocol::ok_response(request_id, value.clone()),
+            Err(error) => crate::terminal_host::protocol::error_response(request_id, error),
+        };
+        if !self.try_client_write(client_id, response) {
+            self.cleanup_orphaned_prompt_image_start(request_type, &result);
+            return;
+        }
+        if result.is_err() || request_type != "mobile.promptImage.start" {
+            return;
+        }
+        if let Some(upload_id) = result
+            .as_ref()
+            .ok()
+            .and_then(|value| value.get("uploadId"))
+            .and_then(Value::as_str)
+        {
+            self.mobile_prompt_image_uploads
+                .entry(client_id)
+                .or_default()
+                .insert(upload_id.to_string());
+        }
+    }
+
+    pub(super) fn cancel_mobile_prompt_image_uploads(&mut self, client_id: u64) {
+        let Some(upload_ids) = self.mobile_prompt_image_uploads.remove(&client_id) else {
+            return;
+        };
+        self.schedule_prompt_image_cleanup(upload_ids.into_iter().collect());
+    }
+
+    fn cleanup_orphaned_prompt_image_start(&self, request_type: &str, result: &HostResult<Value>) {
+        if request_type != "mobile.promptImage.start" {
+            return;
+        }
+        let Some(upload_id) = result
+            .as_ref()
+            .ok()
+            .and_then(|value| value.get("uploadId"))
+            .and_then(Value::as_str)
+        else {
+            return;
+        };
+        self.schedule_prompt_image_cleanup(vec![upload_id.to_string()]);
+    }
+
+    fn schedule_prompt_image_cleanup(&self, upload_ids: Vec<String>) {
+        let runtime_dir = self.runtime_dir.clone();
+        let slots = self.deferred_request_slots.clone();
+        tokio::spawn(async move {
+            let _permit = match slots.acquire_owned().await {
+                Ok(permit) => permit,
+                Err(_) => return,
+            };
+            let _ = tokio::task::spawn_blocking(move || {
+                let store = PromptImageStore::in_runtime_dir(&runtime_dir);
+                for upload_id in upload_ids {
+                    let _ = with_upload_gate(&upload_id, || {
+                        store.cancel(&upload_id).map_err(prompt_image_error)
+                    });
+                }
+            })
+            .await;
+        });
+    }
+
+    fn remove_mobile_prompt_image_upload(&mut self, client_id: u64, upload_id: &str) {
+        let Some(upload_ids) = self.mobile_prompt_image_uploads.get_mut(&client_id) else {
+            return;
+        };
+        upload_ids.remove(upload_id);
+        if upload_ids.is_empty() {
+            self.mobile_prompt_image_uploads.remove(&client_id);
+        }
+    }
+
     pub(super) fn start_mobile_prompt_image_upload(&self, payload: &Value) -> HostResult<Value> {
         handle_prompt_image_request(
             self.runtime_dir.clone(),

@@ -165,6 +165,123 @@ async fn prompt_file_uploads_respect_the_deferred_io_budget() {
 }
 
 #[tokio::test]
+async fn acknowledged_prompt_image_upload_is_cancelled_on_disconnect() {
+    let dir = tempfile::tempdir().unwrap();
+    let (handle, mut responses) = ClientHandle::test_channels();
+    let mut actor = test_actor(
+        &dir,
+        HashMap::from([(1, local_client(handle))]),
+        HashMap::new(),
+    )
+    .await;
+    let (inbox, mut commands) = tokio::sync::mpsc::unbounded_channel();
+    actor.inbox = inbox;
+
+    assert!(actor
+        .try_start_deferred_request(
+            1,
+            10,
+            "mobile.promptImage.start",
+            &json!({"format": "png", "sizeBytes": 16}),
+        )
+        .await
+        .unwrap());
+    let completion = tokio::time::timeout(Duration::from_secs(1), commands.recv())
+        .await
+        .expect("prompt image start should report completion")
+        .unwrap();
+    actor.handle(completion).await;
+    let response = tokio::time::timeout(Duration::from_secs(1), responses.recv())
+        .await
+        .expect("prompt image start should answer the request")
+        .unwrap()
+        .as_json()
+        .unwrap();
+    let upload_id = response["payload"]["uploadId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    actor.deferred_request_slots = std::sync::Arc::new(tokio::sync::Semaphore::new(0));
+    actor.dispose_client(1).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let store = super::prompt_image_store::PromptImageStore::in_runtime_dir(&actor.runtime_dir);
+    assert_eq!(
+        store
+            .append_chunk(&upload_id, 0, b"\x89PNG\r\n\x1a\n")
+            .expect("disconnect cleanup should wait for shared I/O admission"),
+        8
+    );
+
+    actor.deferred_request_slots.add_permits(1);
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if matches!(
+                store.append_chunk(&upload_id, 8, b"x"),
+                Err(super::prompt_image_store::PromptImageStoreError::Missing)
+            ) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("acknowledged prompt image reservation should be cancelled after disconnect");
+}
+
+#[tokio::test]
+async fn orphaned_prompt_image_start_is_cancelled_after_disconnect() {
+    let dir = tempfile::tempdir().unwrap();
+    let (handle, _responses) = ClientHandle::test_channels();
+    let mut actor = test_actor(
+        &dir,
+        HashMap::from([(1, local_client(handle))]),
+        HashMap::new(),
+    )
+    .await;
+    let (inbox, mut commands) = tokio::sync::mpsc::unbounded_channel();
+    actor.inbox = inbox;
+
+    assert!(actor
+        .try_start_deferred_request(
+            1,
+            15,
+            "mobile.promptImage.start",
+            &json!({"format": "png", "sizeBytes": 16}),
+        )
+        .await
+        .unwrap());
+    let completion = tokio::time::timeout(Duration::from_secs(1), commands.recv())
+        .await
+        .expect("prompt image start should report completion")
+        .unwrap();
+    let upload_id = match &completion {
+        super::ServerCommand::MobilePromptImageFinished {
+            result: Ok(value), ..
+        } => value["uploadId"].as_str().unwrap().to_string(),
+        _ => panic!("unexpected prompt image completion"),
+    };
+
+    actor.dispose_client(1).await;
+    actor.handle(completion).await;
+    let store = super::prompt_image_store::PromptImageStore::in_runtime_dir(&actor.runtime_dir);
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if matches!(
+                store.append_chunk(&upload_id, 0, b"\x89PNG\r\n\x1a\n"),
+                Err(super::prompt_image_store::PromptImageStoreError::Missing)
+            ) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("orphaned prompt image start should be cleaned after disconnect");
+}
+
+#[tokio::test]
 async fn prompt_image_upload_io_is_deferred_from_the_actor_mailbox() {
     let dir = tempfile::tempdir().unwrap();
     let (handle, mut responses) = ClientHandle::test_channels();

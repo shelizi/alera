@@ -145,6 +145,13 @@ pub enum ServerCommand {
         upload_id: Option<String>,
         result: HostResult<Value>,
     },
+    MobilePromptImageFinished {
+        client_id: u64,
+        request_id: i64,
+        request_type: String,
+        upload_id: Option<String>,
+        result: HostResult<Value>,
+    },
     AgentQuotaFinished {
         client_id: u64,
         request_id: i64,
