@@ -130,6 +130,61 @@ void _registerWorkbenchControllerWorkspaceGraphTests() {
     ]);
   });
 
+  test(
+    'concurrent workspace tag updates leave only the latest requested tags',
+    () async {
+      await _controller.bootstrap();
+      await _flushUntil(
+        () => _controller.state.workspacesFor(_harness.project.id).isNotEmpty,
+      );
+      final workspace = Workspace(
+        id: 'workspace-concurrent-tags',
+        projectId: _harness.project.id,
+        name: 'Feature',
+        path: '/tmp/workspace-concurrent-tags',
+        createdAt: .utc(2026, 5, 22),
+        updatedAt: .utc(2026, 5, 22),
+        kind: .linked,
+        status: .active,
+        tagIds: const <String>['tag-a'],
+      );
+      await _harness.workbenchRepository.upsertWorkspace(workspace);
+      await _flushUntil(
+        () => _controller.state
+            .workspacesFor(_harness.project.id)
+            .any((candidate) => candidate.id == workspace.id),
+      );
+      _harness.workspaceGraphRepository.tagAssignmentsByWorkspace[workspace
+          .id] = <String>{
+        'tag-a',
+      };
+
+      final first = _controller.updateWorkspaceTags(
+        workspace: workspace,
+        tagIds: <String>{'tag-b'},
+      );
+      final second = _controller.updateWorkspaceTags(
+        workspace: workspace,
+        tagIds: <String>{'tag-c'},
+      );
+      await Future.wait<void>(<Future<void>>[first, second]);
+
+      expect(
+        _harness.workspaceGraphRepository.tagAssignmentsByWorkspace[workspace
+            .id],
+        <String>{'tag-c'},
+      );
+      expect(
+        _controller.state
+            .workspacesFor(workspace.projectId)
+            .singleWhere((candidate) => candidate.id == workspace.id)
+            .tagIds
+            .toSet(),
+        <String>{'tag-c'},
+      );
+    },
+  );
+
   test('deleteWorkspaceTag removes the tag through the repository', () async {
     final tag = WorkspaceTag.create(name: 'review');
     await _harness.workspaceGraphRepository.upsertTag(tag);

@@ -136,6 +136,7 @@ class _FakeWorkspaceGraphRepository implements WorkspaceGraphRepository {
   final relations = <WorkspaceRelation>[];
   final assignedTags = <({String workspaceId, String tagId})>[];
   final unassignedTags = <({String workspaceId, String tagId})>[];
+  final tagAssignmentsByWorkspace = <String, Set<String>>{};
   final linkedWorkspaces =
       <({String parentWorkspaceId, String childWorkspaceId})>[];
   final unlinkedWorkspaces =
@@ -164,6 +165,9 @@ class _FakeWorkspaceGraphRepository implements WorkspaceGraphRepository {
     required String tagId,
   }) async {
     assignedTags.add((workspaceId: workspaceId, tagId: tagId));
+    tagAssignmentsByWorkspace
+        .putIfAbsent(workspaceId, () => <String>{})
+        .add(tagId);
   }
 
   @override
@@ -172,6 +176,7 @@ class _FakeWorkspaceGraphRepository implements WorkspaceGraphRepository {
     required String tagId,
   }) async {
     unassignedTags.add((workspaceId: workspaceId, tagId: tagId));
+    tagAssignmentsByWorkspace[workspaceId]?.remove(tagId);
   }
 
   @override

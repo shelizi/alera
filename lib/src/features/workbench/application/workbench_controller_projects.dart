@@ -256,20 +256,41 @@ mixin _WorkbenchControllerProjects
   Future<void> updateWorkspaceTags({
     required Workspace workspace,
     required Set<String> tagIds,
-  }) async {
-    final plan = planWorkbenchWorkspaceTagUpdate(
-      state: state,
-      workspace: workspace,
-      requestedTagIds: tagIds,
+  }) {
+    final wasTracked = _workspaceById(workspace.id) != null;
+    final requestedTagIds = normalizeWorkbenchWorkspaceTagIds(tagIds);
+    return _workspaceTagMutations.run<void>(
+      workspaceId: workspace.id,
+      action: () async {
+        final latest = _workspaceById(workspace.id);
+        if (wasTracked && latest == null) {
+          return;
+        }
+        final basis = latest ?? workspace;
+        final plan = planWorkbenchWorkspaceTagUpdate(
+          state: state,
+          workspace: basis,
+          requestedTagIds: requestedTagIds,
+        );
+        try {
+          await WorkbenchWorkspaceTagUpdateService(_workspaceGraphRepository)
+              .apply(workspaceId: workspace.id, plan: plan);
+          final latestAfter = _workspaceById(workspace.id);
+          if (latestAfter != null) {
+            state = applyWorkbenchWorkspaceUpdateState(
+              state: state,
+              workspace: latestAfter.copyWith(
+                tagIds: requestedTagIds.toList(growable: false),
+              ),
+            );
+          }
+          state = state.copyWith(error: null);
+        } catch (error) {
+          state = state.copyWith(error: error.toString());
+          rethrow;
+        }
+      },
     );
-    try {
-      await WorkbenchWorkspaceTagUpdateService(_workspaceGraphRepository)
-          .apply(workspaceId: workspace.id, plan: plan);
-      state = state.copyWith(error: null);
-    } catch (error) {
-      state = state.copyWith(error: error.toString());
-      rethrow;
-    }
   }
 
   Future<void> setWorkspaceParent({

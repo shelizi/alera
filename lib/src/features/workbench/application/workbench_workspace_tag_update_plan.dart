@@ -11,6 +11,10 @@ final class WorkbenchWorkspaceTagUpdatePlan {
   final Set<String> tagIdsToAdd;
 }
 
+Set<String> normalizeWorkbenchWorkspaceTagIds(Iterable<String> tagIds) {
+  return tagIds.map((id) => id.trim()).where((id) => id.isNotEmpty).toSet();
+}
+
 WorkbenchWorkspaceTagUpdatePlan planWorkbenchWorkspaceTagUpdate({
   required WorkbenchState state,
   required Workspace workspace,
@@ -24,10 +28,7 @@ WorkbenchWorkspaceTagUpdatePlan planWorkbenchWorkspaceTagUpdate({
     }
   }
   final current = (latest ?? workspace).tagIds.toSet();
-  final requested = requestedTagIds
-      .map((id) => id.trim())
-      .where((id) => id.isNotEmpty)
-      .toSet();
+  final requested = normalizeWorkbenchWorkspaceTagIds(requestedTagIds);
   return WorkbenchWorkspaceTagUpdatePlan(
     tagIdsToRemove: current.difference(requested),
     tagIdsToAdd: requested.difference(current),
