@@ -34,16 +34,14 @@ const _appWindowApplicationRoot = 'lib/src/features/app_window/application';
 const _resourceManagerPresentationRoot =
     'lib/src/features/resource_manager/presentation';
 const _diagnosticsInfraRoot = 'lib/src/features/diagnostics/infra';
-const _workbenchInfraImportPrefix =
-    'package:alera/src/features/workbench/infra/';
-const _workbenchApplicationImportPrefix =
-    'package:alera/src/features/workbench/application/';
-const _runtimeTransportInfraImportPrefix =
-    'package:alera/src/shared/infra/runtime/';
+const _workbenchInfraRoot = 'lib/src/features/workbench/infra';
+const _workbenchApplicationRoot = 'lib/src/features/workbench/application';
+const _runtimeTransportInfraRoot = 'lib/src/shared/infra/runtime';
 
 final _dependencyDirective = RegExp(
   r'''^\s*(?:import|export|part)\s+['\"]([^'\"]+)['\"]''',
 );
+final _exportDirective = RegExp(r'''^\s*export\s+['\"]([^'\"]+)['\"]''');
 
 void main() {
   final violations = <String>[];
@@ -177,13 +175,24 @@ void _checkApplicationPresentationDependencies(List<String> violations) {
 
       final match = _dependencyDirective.firstMatch(line);
       final uri = match?.group(1);
-      if (uri == null || !uri.contains('/presentation/')) {
+      if (uri == null) {
         continue;
       }
-      violations.add(
-        'Application code imports presentation code: '
-        '$path:${index + 1}:$uri',
-      );
+      if (_resolvesToPresentation(file, uri)) {
+        violations.add(
+          'Application code imports presentation code: '
+          '$path:${index + 1}:$uri',
+        );
+        continue;
+      }
+      final dependency = _resolveLocalDependency(file, uri);
+      if (dependency != null &&
+          _reexportsPresentation(dependency, <String>{})) {
+        violations.add(
+          'Application code reaches presentation code through an exported dependency: '
+          '$path:${index + 1}:$uri',
+        );
+      }
     }
   }
 }
@@ -200,7 +209,7 @@ void _checkCrossFeatureWorkbenchInfraDependencies(List<String> violations) {
     for (var index = 0; index < lines.length; index += 1) {
       final match = _dependencyDirective.firstMatch(lines[index]);
       final uri = match?.group(1);
-      if (uri == null || !uri.startsWith(_workbenchInfraImportPrefix)) {
+      if (uri == null || !_resolvesWithin(file, uri, _workbenchInfraRoot)) {
         continue;
       }
       violations.add(
@@ -222,7 +231,8 @@ void _checkRuntimeHostWorkbenchApplicationDependencies(
     for (var index = 0; index < lines.length; index += 1) {
       final match = _dependencyDirective.firstMatch(lines[index]);
       final uri = match?.group(1);
-      if (uri == null || !uri.startsWith(_workbenchApplicationImportPrefix)) {
+      if (uri == null ||
+          !_resolvesWithin(file, uri, _workbenchApplicationRoot)) {
         continue;
       }
       violations.add(
@@ -240,8 +250,8 @@ void _checkRuntimeHostPresentationDependencies(List<String> violations) {
       final match = _dependencyDirective.firstMatch(lines[index]);
       final uri = match?.group(1);
       if (uri == null ||
-          (!uri.startsWith(_runtimeTransportInfraImportPrefix) &&
-              !uri.startsWith(_workbenchInfraImportPrefix))) {
+          (!_resolvesWithin(file, uri, _runtimeTransportInfraRoot) &&
+              !_resolvesWithin(file, uri, _workbenchInfraRoot))) {
         continue;
       }
       violations.add(
@@ -261,7 +271,8 @@ void _checkAppWindowApplicationDependencies(List<String> violations) {
     for (var index = 0; index < lines.length; index += 1) {
       final match = _dependencyDirective.firstMatch(lines[index]);
       final uri = match?.group(1);
-      if (uri == null || !uri.startsWith(_runtimeTransportInfraImportPrefix)) {
+      if (uri == null ||
+          !_resolvesWithin(file, uri, _runtimeTransportInfraRoot)) {
         continue;
       }
       violations.add(
@@ -278,7 +289,8 @@ void _checkResourceManagerPresentationDependencies(List<String> violations) {
     for (var index = 0; index < lines.length; index += 1) {
       final match = _dependencyDirective.firstMatch(lines[index]);
       final uri = match?.group(1);
-      if (uri == null || !uri.startsWith(_runtimeTransportInfraImportPrefix)) {
+      if (uri == null ||
+          !_resolvesWithin(file, uri, _runtimeTransportInfraRoot)) {
         continue;
       }
       violations.add(
@@ -295,7 +307,7 @@ void _checkDiagnosticsInfraDependencies(List<String> violations) {
     for (var index = 0; index < lines.length; index += 1) {
       final match = _dependencyDirective.firstMatch(lines[index]);
       final uri = match?.group(1);
-      if (uri == null || !uri.startsWith(_workbenchInfraImportPrefix)) {
+      if (uri == null || !_resolvesWithin(file, uri, _workbenchInfraRoot)) {
         continue;
       }
       violations.add(
@@ -306,17 +318,57 @@ void _checkDiagnosticsInfraDependencies(List<String> violations) {
   }
 }
 
-bool _resolvesToFeature(File owner, String uri) {
-  if (uri.startsWith('package:alera/src/features/')) {
-    return true;
-  }
-  if (uri.startsWith('dart:') || uri.startsWith('package:')) {
+bool _resolvesToFeature(File owner, String uri) =>
+    _resolvesWithin(owner, uri, _featureRoot);
+
+bool _resolvesWithin(File owner, String uri, String rootPath) {
+  final dependency = _resolveLocalDependency(owner, uri);
+  return dependency != null &&
+      _isWithin(dependency.absolute.uri, Directory(rootPath).absolute.uri);
+}
+
+bool _resolvesToPresentation(File owner, String uri) {
+  final dependency = _resolveLocalDependency(owner, uri);
+  if (dependency == null ||
+      !_isWithin(
+        dependency.absolute.uri,
+        Directory(_featureRoot).absolute.uri,
+      )) {
     return false;
   }
+  return _displayPath(dependency.absolute).contains('/presentation/');
+}
 
-  final featureRoot = Directory('lib/src/features').absolute.uri;
-  final resolved = owner.parent.absolute.uri.resolve(uri);
-  return _isWithin(resolved, featureRoot);
+bool _reexportsPresentation(File file, Set<String> visited) {
+  final absolute = file.absolute;
+  if (!absolute.existsSync() || !visited.add(absolute.path)) {
+    return false;
+  }
+  for (final line in absolute.readAsLinesSync()) {
+    final uri = _exportDirective.firstMatch(line)?.group(1);
+    if (uri == null) {
+      continue;
+    }
+    if (_resolvesToPresentation(absolute, uri)) {
+      return true;
+    }
+    final dependency = _resolveLocalDependency(absolute, uri);
+    if (dependency != null && _reexportsPresentation(dependency, visited)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+File? _resolveLocalDependency(File owner, String uri) {
+  const packagePrefix = 'package:alera/';
+  if (uri.startsWith(packagePrefix)) {
+    return File('lib/${uri.substring(packagePrefix.length)}');
+  }
+  if (uri.startsWith('dart:') || uri.startsWith('package:')) {
+    return null;
+  }
+  return File.fromUri(owner.parent.absolute.uri.resolve(uri));
 }
 
 bool _isWithin(Uri candidate, Uri root) {

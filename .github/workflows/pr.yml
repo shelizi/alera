@@ -74,6 +74,11 @@ jobs:
       - name: Max lines ratchet
         run: dart tool/quality/check_max_lines.dart
 
+      - name: Runtime architecture guard
+        run: |
+          dart tool/quality/runtime_architecture_guard_test.dart
+          dart tool/quality/runtime_architecture_guard.dart
+
       - name: Analyze
         run: flutter analyze
 
