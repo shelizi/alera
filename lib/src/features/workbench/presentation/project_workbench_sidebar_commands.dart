@@ -12,6 +12,8 @@ final class _WorkbenchSidebarCommands {
     required this.toggleWorkspaceExpanded,
     required this.showWorkspaceSection,
     required this.clearWorkspaceSection,
+    required this.setCollapsed,
+    required this.activateProject,
   });
 
   final void Function(String? sectionId) toggleSectionCollapsed;
@@ -24,4 +26,6 @@ final class _WorkbenchSidebarCommands {
   final void Function(String workspaceId) toggleWorkspaceExpanded;
   final Future<void> Function(Workspace workspace) showWorkspaceSection;
   final Future<void> Function(Workspace workspace) clearWorkspaceSection;
+  final void Function(bool collapsed) setCollapsed;
+  final Future<void> Function(Project project) activateProject;
 }

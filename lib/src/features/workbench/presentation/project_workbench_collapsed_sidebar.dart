@@ -2,7 +2,7 @@ part of 'project_workbench_sidebar.dart';
 
 class const _CollapsedSidebar({
   required final WorkbenchState state,
-  required final WorkbenchController controller,
+  required final _WorkbenchSidebarCommands commands,
   required final VoidCallback onAddProject,
   required final VoidCallback onOpenSettings,
   required final VoidCallback onOpenAutomations,
@@ -24,8 +24,7 @@ class const _CollapsedSidebar({
           children: <Widget>[
             SidebarBrandRow(
               collapsed: true,
-              onToggleCollapsed: () =>
-                  controller.setCollapsed(!state.collapsed),
+              onToggleCollapsed: () => commands.setCollapsed(!state.collapsed),
             ),
             const Divider(height: 1, color: AleraTokens.borderSubtle),
             Expanded(
@@ -34,8 +33,8 @@ class const _CollapsedSidebar({
                 activeProjectId: state.activeProjectId,
                 workspaceCountByProject: workspaceCounts,
                 onSelectProject: (project) {
-                  controller.setCollapsed(false);
-                  unawaited(controller.activateProject(project));
+                  commands.setCollapsed(false);
+                  unawaited(commands.activateProject(project));
                 },
                 onAddProject: onAddProject,
               ),

@@ -65,12 +65,14 @@ class _ProjectWorkbenchSidebarState
           showWorkspaceSectionDialog(context, controller, workspace),
       clearWorkspaceSection: (workspace) =>
           _clearSection(context, controller, workspace),
+      setCollapsed: controller.setCollapsed,
+      activateProject: controller.activateProject,
     );
     final workspaceFolderOpener = ref.read(workspaceFolderOpenerProvider);
     if (state.collapsed) {
       return _CollapsedSidebar(
         state: state,
-        controller: controller,
+        commands: commands,
         onAddProject: _addProject,
         onOpenSettings: () => unawaited(_openSettings()),
         onOpenAutomations: () => unawaited(_openAutomations()),

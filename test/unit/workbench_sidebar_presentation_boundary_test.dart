@@ -12,11 +12,20 @@ void main() {
       final shellSource = File(
         'lib/src/features/workbench/presentation/project_workbench_sidebar_shell.dart',
       ).readAsStringSync();
+      final collapsedSource = File(
+        'lib/src/features/workbench/presentation/project_workbench_collapsed_sidebar.dart',
+      ).readAsStringSync();
 
       expect(bodySource, contains('_WorkbenchSidebarCommands commands'));
       expect(bodySource, isNot(contains('WorkbenchController controller')));
       expect(bodySource, isNot(contains('controller.')));
       expect(shellSource, contains('_WorkbenchSidebarCommands('));
+      expect(collapsedSource, contains('_WorkbenchSidebarCommands commands'));
+      expect(
+        collapsedSource,
+        isNot(contains('WorkbenchController controller')),
+      );
+      expect(collapsedSource, isNot(contains('controller.')));
     },
   );
 }
