@@ -45,6 +45,7 @@ import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 import '../unit/fake_project_config.dart';
 
 part 'settings_dialog_core_test_cases.dart';
+part 'settings_dialog_agents_test_cases.dart';
 part 'settings_dialog_editor_test_cases.dart';
 part 'settings_dialog_project_test_cases.dart';
 part 'settings_dialog_ai_assist_test_cases.dart';
@@ -122,8 +123,25 @@ Future<void> _selectTerminalSection(WidgetTester tester) async {
   await tester.pump();
 }
 
+Future<void> _selectTerminalSectionByNav(WidgetTester tester) async {
+  final nav = find.byKey(const ValueKey<String>('settings-nav-terminal'));
+  await tester.ensureVisible(nav);
+  await tester.pump();
+  await tester.tap(nav);
+  await tester.pump();
+}
+
+Future<void> _selectAiAssistSectionByNav(WidgetTester tester) async {
+  final nav = find.byKey(const ValueKey<String>('settings-nav-aiAssist'));
+  await tester.ensureVisible(nav);
+  await tester.pump();
+  await tester.tap(nav);
+  await tester.pump();
+}
+
 void main() {
   _registerSettingsDialogCoreTests();
+  _registerSettingsDialogAgentsTests();
   _registerSettingsDialogEditorTests();
   _registerSettingsDialogProjectTests();
   _registerSettingsDialogAiAssistTests();
