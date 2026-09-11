@@ -78,7 +78,7 @@ impl ServerActor {
             }
         }
         if !self.clients.contains_key(&client_id) {
-            cancel_orphaned_start(&self.runtime_dir, &result);
+            self.cleanup_orphaned_prompt_file_start(&result);
             return;
         }
         let response = match &result {
@@ -86,7 +86,7 @@ impl ServerActor {
             Err(error) => error_response(request_id, error),
         };
         if !self.try_client_write(client_id, response) {
-            cancel_orphaned_start(&self.runtime_dir, &result);
+            self.cleanup_orphaned_prompt_file_start(&result);
             return;
         }
         if result.is_err() {
@@ -111,6 +111,22 @@ impl ServerActor {
         let Some(upload_ids) = self.mobile_prompt_file_uploads.remove(&client_id) else {
             return;
         };
+        self.schedule_prompt_file_cleanup(upload_ids.into_iter().collect());
+    }
+
+    fn cleanup_orphaned_prompt_file_start(&self, result: &HostResult<Value>) {
+        let Some(upload_id) = result
+            .as_ref()
+            .ok()
+            .and_then(|value| value.get("uploadId"))
+            .and_then(Value::as_str)
+        else {
+            return;
+        };
+        self.schedule_prompt_file_cleanup(vec![upload_id.to_string()]);
+    }
+
+    fn schedule_prompt_file_cleanup(&self, upload_ids: Vec<String>) {
         let runtime_dir = self.runtime_dir.clone();
         let slots = self.deferred_request_slots.clone();
         tokio::spawn(async move {
@@ -372,6 +388,44 @@ mod tests {
             store.append_chunk(&reservation.upload_id, 0, b"x"),
             Err(super::super::prompt_file_store::PromptFileStoreError::Missing)
         );
+    }
+
+    #[tokio::test]
+    async fn orphaned_start_cleanup_respects_deferred_io_budget() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let store = PromptFileStore::in_runtime_dir(directory.path());
+        let mut actor = test_actor(&directory, HashMap::new(), HashMap::new()).await;
+        actor.deferred_request_slots = Arc::new(tokio::sync::Semaphore::new(0));
+        let orphaned = store.start("orphaned-budget.bin", 2).expect("start");
+
+        actor.handle_mobile_prompt_file_finished(
+            1,
+            1,
+            "mobile.promptFile.start",
+            None,
+            Ok(json!({"uploadId": orphaned.upload_id})),
+        );
+        assert_eq!(
+            store
+                .append_chunk(&orphaned.upload_id, 0, b"x")
+                .expect("orphan cleanup should wait for shared I/O admission"),
+            1
+        );
+
+        actor.deferred_request_slots.add_permits(1);
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if matches!(
+                    store.append_chunk(&orphaned.upload_id, 1, b"y"),
+                    Err(super::super::prompt_file_store::PromptFileStoreError::Missing)
+                ) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("orphaned prompt file start should be cancelled after admission");
     }
 
     #[tokio::test]
