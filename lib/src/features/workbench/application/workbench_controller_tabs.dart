@@ -205,17 +205,19 @@ mixin _WorkbenchControllerTabs
     try {
       final previousTabs = state.tabsFor(workspace.id);
       final layout = _layoutForMutation(workspace.id, previousTabs);
-      final tab = await _workspaceTabService.createTerminalTab(workspace.id);
-      final placement = planWorkbenchTabSplitIntoGroup(
-        previousTabs: previousTabs,
-        layout: layout,
-        tab: tab,
-        targetGroupId: groupId,
-        zone: zone,
-        newGroupId: _newPaneGroupId(),
-      );
-      _setTabsForWorkspace(workspace.id, placement.tabs);
-      await _applyLayout(placement.layout, persist: true);
+      final tab = await WorkbenchTabPlacementCoordinator(
+        openTab: () => _workspaceTabService.createTerminalTab(workspace.id),
+        planPlacement: (tab) => planWorkbenchTabSplitIntoGroup(
+          previousTabs: previousTabs,
+          layout: layout,
+          tab: tab,
+          targetGroupId: groupId,
+          zone: zone,
+          newGroupId: _newPaneGroupId(),
+        ),
+        applyTabs: (tabs) => _setTabsForWorkspace(workspace.id, tabs),
+        applyLayout: (layout) => _applyLayout(layout, persist: true),
+      ).run();
       state = state.copyWith(error: null);
       return tab;
     } catch (error) {

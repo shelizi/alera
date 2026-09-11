@@ -18,26 +18,28 @@ mixin _WorkbenchControllerTabOpening
     try {
       final previousTabs = state.tabsFor(workspace.id);
       final layout = _layoutForMutation(workspace.id, previousTabs);
-      final tab = await _workspaceTabService.createTerminalTab(
-        workspace.id,
-        title: title,
-        initialCommand: initialCommand,
-        spawnOnCreate: spawnOnCreate,
-        initialCommandOnce: initialCommandOnce,
-        autoCloseOnSuccess: autoCloseOnSuccess,
-      );
-      final placement = planWorkbenchTabAddedToGroup(
-        previousTabs: previousTabs,
-        layout: layout,
-        tab: tab,
-        targetGroupId: targetGroupId,
-      );
-      _setTabsForWorkspace(workspace.id, placement.tabs);
-      await _applyLayout(placement.layout, persist: true);
-      _workspaceActivityRecorder.recordActivity(
-        workspace.id,
-        DateTime.now().toUtc(),
-      );
+      final tab = await WorkbenchTabPlacementCoordinator(
+        openTab: () => _workspaceTabService.createTerminalTab(
+          workspace.id,
+          title: title,
+          initialCommand: initialCommand,
+          spawnOnCreate: spawnOnCreate,
+          initialCommandOnce: initialCommandOnce,
+          autoCloseOnSuccess: autoCloseOnSuccess,
+        ),
+        planPlacement: (tab) => planWorkbenchTabAddedToGroup(
+          previousTabs: previousTabs,
+          layout: layout,
+          tab: tab,
+          targetGroupId: targetGroupId,
+        ),
+        applyTabs: (tabs) => _setTabsForWorkspace(workspace.id, tabs),
+        applyLayout: (layout) => _applyLayout(layout, persist: true),
+        afterPlaced: (_) => _workspaceActivityRecorder.recordActivity(
+          workspace.id,
+          DateTime.now().toUtc(),
+        ),
+      ).run();
       state = state.copyWith(error: null);
       return tab;
     } catch (error) {
