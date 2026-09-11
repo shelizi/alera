@@ -289,13 +289,16 @@ class _ShellTestWorkbenchController(
 
   @override
   Future<void> removeProject(String projectId) async {
-    if (removeProjectFailure case final Object failure) {
-      throw failure;
-    }
     final removedWorkspaceIds = state
         .workspacesFor(projectId)
         .map((workspace) => workspace.id)
         .toSet();
+    for (final workspaceId in removedWorkspaceIds) {
+      ref.read(terminalRuntimeProvider).closeWorkspace(workspaceId);
+    }
+    if (removeProjectFailure case final Object failure) {
+      throw failure;
+    }
     final nextProjects = <Project>[
       for (final project in state.projects)
         if (project.id != projectId) project,

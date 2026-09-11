@@ -24,6 +24,12 @@ class const _FakeManagedWorkspaceRuntime()
   }) => throw UnsupportedError('Workspace creation is not used by shell tests');
 
   @override
+  Future<Workspace> switchWorkspaceBranch({
+    required Workspace workspace,
+    required String branch,
+  }) => throw UnsupportedError('Branch switching is not used by shell tests');
+
+  @override
   Future<void> removeWorkspace({
     required Workspace workspace,
     bool? deleteBranch,

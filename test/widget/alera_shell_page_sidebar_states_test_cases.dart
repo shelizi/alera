@@ -506,7 +506,7 @@ void _registerAleraShellSidebarStateTests() {
     addTearDown(subscription.cancel);
     final state = _linkedWorkbenchState(linkedExpanded: true);
 
-    await _pumpShell(
+    final harness = await _pumpShell(
       tester,
       state: state,
       controller: _ShellTestWorkbenchController(
@@ -527,6 +527,10 @@ void _registerAleraShellSidebarStateTests() {
     await tester.pump(const Duration(milliseconds: 300));
 
     expect(events.last.message, 'Bad state: remove project failed');
+    expect(
+      harness.runtime.closedWorkspaceIds,
+      containsAll(<String>['workspace-1', 'workspace-2']),
+    );
   });
 
   testWidgets('sidebar agent close failures surface an error toast event', (

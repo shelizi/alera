@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:alera/src/app/providers.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
@@ -33,6 +34,7 @@ import 'package:alera/src/features/workbench/presentation/widgets/workspace_agen
 import 'package:alera/src/features/workbench/presentation/workspace_workbench_view.dart';
 import 'package:alera/src/shared/infra/process/process_runner.dart';
 import 'package:alera/src/shared/infra/storage/drift_database.dart';
+import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_client_models.dart';
 import 'package:drift/native.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -40,6 +42,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import '../unit/terminal_host_test_fakes.dart';
 
 part 'alera_shell_page_test_harness.dart';
 part 'alera_shell_page_runtime_test_harness.dart';
@@ -69,6 +73,15 @@ Future<_ShellPumpHarness> _pumpShell(
 }) async {
   final shellController = controller ?? _ShellTestWorkbenchController(state);
   final runtime = terminalRuntime ?? _FakeTerminalRuntime();
+  final terminalHostClient = FakeTerminalHostClient(
+    attachment: TerminalHostAttachment(
+      sessionId: 'shell-test-session',
+      created: true,
+      running: true,
+      snapshot: Uint8List(0),
+    ),
+  );
+  addTearDown(terminalHostClient.dispose);
   final settingsController = _ShellSettingsController(
     settings ?? AleraSettings.defaults,
   );
@@ -91,6 +104,7 @@ Future<_ShellPumpHarness> _pumpShell(
           const _FakeManagedWorkspaceRuntime(),
         ),
         terminalRuntimeProvider.overrideWith((ref) => runtime),
+        terminalHostClientProvider.overrideWithValue(terminalHostClient),
         terminalRuntimeBindingOverride(),
         if (editorSessionRegistry != null)
           editorSessionRegistryProvider.overrideWithValue(
