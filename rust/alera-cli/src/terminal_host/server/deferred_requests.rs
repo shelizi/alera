@@ -105,6 +105,12 @@ impl ServerActor {
                 );
                 Ok(true)
             }
+            "project.register" => {
+                self.require_auth(client_id)?;
+                self.require_request_allowed(client_id, request_type)?;
+                self.start_project_registration(client_id, request_id, payload)?;
+                Ok(true)
+            }
             "projectConfig.effective" => {
                 self.require_auth(client_id)?;
                 self.require_request_allowed(client_id, request_type)?;

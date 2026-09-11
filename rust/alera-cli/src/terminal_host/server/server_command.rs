@@ -51,6 +51,11 @@ pub enum ServerCommand {
     WorkspaceSidebarSnapshotFinished {
         result: HostResult<Value>,
     },
+    ProjectRegistrationPrepared {
+        client_id: u64,
+        request_id: i64,
+        result: HostResult<crate::project_management::PreparedProjectRegistration>,
+    },
     DeferredRequestFinished {
         client_id: u64,
         request_id: i64,

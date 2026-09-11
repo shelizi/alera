@@ -439,6 +439,14 @@ impl ServerActor {
             ServerCommand::WorkspaceSidebarSnapshotFinished { result } => {
                 self.finish_workspace_sidebar_snapshot(result);
             }
+            ServerCommand::ProjectRegistrationPrepared {
+                client_id,
+                request_id,
+                result,
+            } => {
+                self.finish_project_registration(client_id, request_id, result)
+                    .await;
+            }
             ServerCommand::DeferredRequestFinished {
                 client_id,
                 request_id,

@@ -62,6 +62,91 @@ async fn deferred_requests_bound_background_concurrency() {
 }
 
 #[tokio::test]
+async fn project_registration_preparation_is_deferred_before_runtime_mutation() {
+    let dir = tempfile::tempdir().unwrap();
+    let project_path = dir.path().join("registered-project");
+    std::fs::create_dir_all(&project_path).unwrap();
+    let (handle, mut responses) = ClientHandle::test_channels();
+    let mut actor = test_actor(
+        &dir,
+        HashMap::from([(1, local_client(handle))]),
+        HashMap::new(),
+    )
+    .await;
+    let (inbox, mut commands) = tokio::sync::mpsc::unbounded_channel();
+    actor.inbox = inbox;
+
+    let deferred = actor
+        .try_start_deferred_request(
+            1,
+            21,
+            "project.register",
+            &json!({"path": project_path.to_string_lossy(), "name": "Deferred Project"}),
+        )
+        .await
+        .unwrap();
+    assert!(
+        deferred,
+        "project registration preparation should leave the actor mailbox"
+    );
+    assert!(
+        actor
+            .runtime_store
+            .list_projects()
+            .await
+            .unwrap()
+            .is_empty(),
+        "background preparation must not mutate the runtime store"
+    );
+
+    actor
+        .handle_line(
+            1,
+            json!({"id": 22, "type": "status.get", "payload": {}}).to_string(),
+        )
+        .await;
+    let status = tokio::time::timeout(Duration::from_secs(1), responses.recv())
+        .await
+        .expect("status response should not wait for project path preparation")
+        .unwrap()
+        .as_json()
+        .unwrap();
+    assert_eq!(status["id"], 22);
+    assert_eq!(status["ok"], true);
+
+    let completion = tokio::time::timeout(Duration::from_secs(1), commands.recv())
+        .await
+        .expect("project registration preparation should report completion")
+        .unwrap();
+    actor.handle(completion).await;
+    let mut saw_projects_changed = false;
+    let mut registration = None;
+    for _ in 0..4 {
+        let frame = tokio::time::timeout(Duration::from_secs(1), responses.recv())
+            .await
+            .expect("project registration should emit its broadcasts and RPC response")
+            .unwrap()
+            .as_json()
+            .unwrap();
+        saw_projects_changed |= frame["event"] == "projectsChanged";
+        if frame["id"] == 21 {
+            registration = Some(frame);
+            break;
+        }
+    }
+    assert!(saw_projects_changed);
+    let registration = registration.expect("project registration RPC response should be delivered");
+    assert_eq!(registration["id"], 21);
+    assert_eq!(registration["ok"], true);
+    assert_eq!(registration["payload"]["created"], true);
+    assert_eq!(
+        registration["payload"]["project"]["name"],
+        "Deferred Project"
+    );
+    assert_eq!(actor.runtime_store.list_projects().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
 async fn host_directory_list_is_deferred_so_control_requests_can_advance() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("item.txt"), "item").unwrap();

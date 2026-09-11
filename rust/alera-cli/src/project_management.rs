@@ -51,16 +51,54 @@ pub struct EffectiveProjectConfigPayload {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct PreparedProjectRegistration {
+    pub canonical_path: String,
+    pub name: String,
+    pub branch: Option<String>,
+    pub kind: ProjectKind,
+}
+
 pub async fn register_project(
     store: &RuntimeStore,
     raw_path: &str,
     requested_name: Option<&str>,
 ) -> Result<ProjectRegistration> {
+    let prepared = prepare_project_registration(raw_path, requested_name)?;
+    commit_project_registration(store, prepared).await
+}
+
+pub fn prepare_project_registration(
+    raw_path: &str,
+    requested_name: Option<&str>,
+) -> Result<PreparedProjectRegistration> {
     let path = validate_existing_directory(raw_path)?;
-    let canonical = canonical_string(&path)?;
+    let canonical_path = canonical_string(&path)?;
+    let branch = core_git::current_branch(&canonical_path).ok();
+    let kind = if branch.is_some() || Path::new(&canonical_path).join(".git").exists() {
+        ProjectKind::GitRepository
+    } else {
+        ProjectKind::Folder
+    };
+    let name = normalized_project_name(requested_name, &path)?;
+    Ok(PreparedProjectRegistration {
+        canonical_path,
+        name,
+        branch,
+        kind,
+    })
+}
+
+pub async fn commit_project_registration(
+    store: &RuntimeStore,
+    prepared: PreparedProjectRegistration,
+) -> Result<ProjectRegistration> {
     for project in store.list_projects().await? {
-        if paths_equal(&project.repo_path, &canonical) {
-            let main_workspace = ensure_main_workspace(store, &project).await?;
+        if paths_equal(&project.repo_path, &prepared.canonical_path) {
+            let branch = (project.kind == ProjectKind::GitRepository)
+                .then(|| prepared.branch.as_deref())
+                .flatten();
+            let main_workspace = ensure_main_workspace(store, &project, branch).await?;
             return Ok(ProjectRegistration {
                 project,
                 main_workspace,
@@ -69,19 +107,18 @@ pub async fn register_project(
         }
     }
 
-    let branch = core_git::current_branch(&canonical).ok();
-    let kind = if branch.is_some() || Path::new(&canonical).join(".git").exists() {
-        ProjectKind::GitRepository
-    } else {
-        ProjectKind::Folder
-    };
-    let name = normalized_project_name(requested_name, &path)?;
+    let PreparedProjectRegistration {
+        canonical_path,
+        name,
+        branch,
+        kind,
+    } = prepared;
     let main_workspace_name = default_main_workspace_name(branch.as_deref(), &name);
     let now = Utc::now();
     let project = Project {
         id: Uuid::new_v4().to_string(),
         name: name.clone(),
-        repo_path: canonical.clone(),
+        repo_path: canonical_path.clone(),
         created_at: now,
         updated_at: now,
         kind,
@@ -93,7 +130,7 @@ pub async fn register_project(
         project_id: project.id.clone(),
         name: main_workspace_name,
         branch,
-        path: canonical,
+        path: canonical_path,
         created_at: now,
         updated_at: now,
         kind: WorkspaceKind::Main,
@@ -285,7 +322,11 @@ fn validate_existing_directory(raw_path: &str) -> Result<PathBuf> {
     Ok(path)
 }
 
-async fn ensure_main_workspace(store: &RuntimeStore, project: &Project) -> Result<Workspace> {
+async fn ensure_main_workspace(
+    store: &RuntimeStore,
+    project: &Project,
+    prepared_branch: Option<&str>,
+) -> Result<Workspace> {
     if let Some(workspace) = store
         .list_workspaces(&project.id)
         .await?
@@ -296,7 +337,7 @@ async fn ensure_main_workspace(store: &RuntimeStore, project: &Project) -> Resul
     }
     let now = Utc::now();
     let branch = (project.kind == ProjectKind::GitRepository)
-        .then(|| core_git::current_branch(&project.repo_path).ok())
+        .then(|| prepared_branch.map(str::to_string))
         .flatten();
     store
         .upsert_workspace(Workspace {
