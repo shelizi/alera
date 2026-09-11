@@ -82,34 +82,23 @@ mixin _WorkbenchControllerSync
       project: project,
       workspaces: workspaces,
     );
-    final liveWorkspaceIds = plan.liveWorkspaceIds;
-    final removedWorkspaceIds = _tabSubscriptions
-        .workspaceIdsForProject(project.id)
-        .where((workspaceId) => !liveWorkspaceIds.contains(workspaceId))
-        .toList(growable: false);
-    for (final workspaceId in removedWorkspaceIds) {
-      _retiredWorkspaceCleanup.cleanup(
-        workspaceId: workspaceId,
-        workspace: _workspaceById(workspaceId),
-        tabs: state.tabsFor(workspaceId),
-      );
-    }
-    for (final workspaceId in removedWorkspaceIds) {
-      _tabSubscriptions.cancelWorkspace(workspaceId);
-    }
-    _clearedLayouts.forgetAll(removedWorkspaceIds);
-    for (final workspace in workspaces) {
-      if (_tabSubscriptions.contains(workspace.id)) {
-        continue;
-      }
-      unawaited(_loadLayoutForWorkspace(workspace.id));
-      _tabSubscriptions.watch(
-        projectId: project.id,
-        workspaceId: workspace.id,
-        stream: _repository.watchWorkspaceTabs(workspace.id),
-        onData: (tabs) => _onTabsChanged(workspace.id, tabs),
-      );
-    }
+    WorkbenchWorkspaceTabSubscriptionCoordinator(_tabSubscriptions).sync(
+      projectId: project.id,
+      workspaces: workspaces,
+      cleanupRetiredWorkspace: (workspaceId) {
+        _retiredWorkspaceCleanup.cleanup(
+          workspaceId: workspaceId,
+          workspace: _workspaceById(workspaceId),
+          tabs: state.tabsFor(workspaceId),
+        );
+      },
+      forgetClearedLayouts: _clearedLayouts.forgetAll,
+      loadLayoutInBackground: (workspaceId) {
+        unawaited(_loadLayoutForWorkspace(workspaceId));
+      },
+      watchTabs: _repository.watchWorkspaceTabs,
+      onTabsChanged: _onTabsChanged,
+    );
     state = applyWorkbenchWorkspaceSetSyncPlan(state: state, plan: plan);
     _pruneWorktreeNavigationHistory();
     if (plan.viewPrefsChanged) {
