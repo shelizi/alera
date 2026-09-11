@@ -31,6 +31,7 @@ void main() {
 
         expect(allowed, isTrue);
         expect(client.shutdownCalls, isEmpty);
+        expect(client.appQuitEvents, <String>['begin', 'commit']);
       },
     );
 
@@ -237,6 +238,32 @@ void main() {
 
       expect(allowed, isFalse);
       expect(client.shutdownCalls, <bool>[false]);
+      expect(client.appQuitEvents, <String>['begin', 'cancel']);
+    });
+
+    test('prepareAppQuit cancels transport when shutdown fails', () async {
+      final error = StateError('shutdown failed');
+      final client = FakeRuntimeHostLifecycleClient(
+        status: <String, Object?>{
+          'runtimeHostVersion': '1.2.0',
+          'persistent': false,
+        },
+        shutdownErrorOnSoft: error,
+      );
+      final service = RuntimeHostLifecycleService(
+        client: client,
+        bundledVersionProbe: FakeBundledSidecarVersionProbe(
+          const BundledSidecarVersion(version: '1.2.0'),
+        ),
+        readConfig: () => TerminalHostConfig.defaults,
+      );
+
+      await expectLater(
+        service.prepareAppQuit(keepRuntimeOpen: false),
+        throwsA(same(error)),
+      );
+
+      expect(client.appQuitEvents, <String>['begin', 'cancel']);
     });
 
     test(

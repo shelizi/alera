@@ -6,7 +6,6 @@ import 'package:alera/src/features/app_window/application/app_window_providers.d
 import 'package:alera/src/features/runtime_host/application/runtime_host_lifecycle_providers.dart';
 import 'package:alera/src/features/runtime_host/domain/runtime_host_quit_decision.dart';
 import 'package:alera/src/features/settings/application/settings_controller.dart';
-import 'package:alera/src/shared/infra/runtime/runtime_host_providers.dart';
 import 'package:alera/src/shared/infra/storage/storage_providers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -24,16 +23,13 @@ class _RuntimeHostQuitGateScopeState
   bool _bound = false;
 
   Future<bool> _closeGate() async {
-    final client = ref.read(socketTerminalHostClientProvider);
-    client.beginAppQuit();
-    var closeCommitted = false;
     var visualQuitCommitted = false;
     try {
       final keepRuntimeOpen = ref
           .read(settingsControllerProvider)
           .terminal
           .keepRuntimeOpenOnAppQuit;
-      final allowed = await ref
+      return await ref
           .read(runtimeHostLifecycleServiceProvider)
           .prepareAppQuit(
             keepRuntimeOpen: keepRuntimeOpen,
@@ -43,22 +39,11 @@ class _RuntimeHostQuitGateScopeState
               _commitVisualQuit();
             },
           );
-      if (!allowed) {
-        return false;
-      }
-      // Mirror the Linux detach path for all platforms when quitting.
-      client.dispose();
-      closeCommitted = true;
-      return true;
     } catch (_) {
       if (visualQuitCommitted) {
         _restoreAfterFailedCommittedQuit();
       }
       rethrow;
-    } finally {
-      if (!closeCommitted) {
-        client.cancelAppQuit();
-      }
     }
   }
 

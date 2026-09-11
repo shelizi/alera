@@ -45,6 +45,12 @@ final class const RuntimeHostLifecycleStartupException([this.cause])
 }
 
 abstract interface class RuntimeHostLifecycleClient {
+  void beginAppQuit();
+
+  void cancelAppQuit();
+
+  void commitAppQuit();
+
   Future<Map<String, Object?>?> probeRuntimeStatus();
 
   Future<RuntimeHostShutdownResult> shutdownRuntime({bool force = false});
@@ -155,6 +161,32 @@ final class RuntimeHostLifecycleService({
   /// chooses cancel, leave-open, or force-stop. Returns `false` only when the
   /// user cancels so the window should stay open.
   Future<bool> prepareAppQuit({
+    required bool keepRuntimeOpen,
+    RuntimeHostBusyQuitConfirm? confirmBusyQuit,
+    RuntimeHostBusyQuitCommitted? onBusyQuitCommitted,
+  }) async {
+    _client.beginAppQuit();
+    var committed = false;
+    try {
+      final allowed = await _prepareAppQuitAfterQuiesce(
+        keepRuntimeOpen: keepRuntimeOpen,
+        confirmBusyQuit: confirmBusyQuit,
+        onBusyQuitCommitted: onBusyQuitCommitted,
+      );
+      if (!allowed) {
+        return false;
+      }
+      _client.commitAppQuit();
+      committed = true;
+      return true;
+    } finally {
+      if (!committed) {
+        _client.cancelAppQuit();
+      }
+    }
+  }
+
+  Future<bool> _prepareAppQuitAfterQuiesce({
     required bool keepRuntimeOpen,
     RuntimeHostBusyQuitConfirm? confirmBusyQuit,
     RuntimeHostBusyQuitCommitted? onBusyQuitCommitted,

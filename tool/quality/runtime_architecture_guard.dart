@@ -22,8 +22,12 @@ const _scanRoots = <String>['lib/src', 'test'];
 const _platformRuntimeRoot = 'lib/src/platform/runtime_host';
 const _featureRoot = 'lib/src/features';
 const _runtimeHostApplicationRoot = 'lib/src/features/runtime_host/application';
+const _runtimeHostPresentationRoot =
+    'lib/src/features/runtime_host/presentation';
 const _workbenchInfraImportPrefix =
     'package:alera/src/features/workbench/infra/';
+const _runtimeTransportInfraImportPrefix =
+    'package:alera/src/shared/infra/runtime/';
 
 final _dependencyDirective = RegExp(
   r'''^\s*(?:import|export|part)\s+['\"]([^'\"]+)['\"]''',
@@ -37,6 +41,7 @@ void main() {
   _checkPlatformFeatureDependencies(violations);
   _checkApplicationPresentationDependencies(violations);
   _checkRuntimeHostApplicationDependencies(violations);
+  _checkRuntimeHostPresentationDependencies(violations);
 
   if (violations.isEmpty) {
     stdout.writeln('Runtime architecture guard passed.');
@@ -169,6 +174,23 @@ void _checkRuntimeHostApplicationDependencies(List<String> violations) {
       }
       violations.add(
         'Runtime-host application imports Workbench infrastructure: '
+        '${_displayPath(file)}:${index + 1}:$uri',
+      );
+    }
+  }
+}
+
+void _checkRuntimeHostPresentationDependencies(List<String> violations) {
+  for (final file in _dartFilesUnder(_runtimeHostPresentationRoot)) {
+    final lines = file.readAsLinesSync();
+    for (var index = 0; index < lines.length; index += 1) {
+      final match = _dependencyDirective.firstMatch(lines[index]);
+      final uri = match?.group(1);
+      if (uri == null || !uri.startsWith(_runtimeTransportInfraImportPrefix)) {
+        continue;
+      }
+      violations.add(
+        'Runtime-host presentation imports runtime transport infrastructure: '
         '${_displayPath(file)}:${index + 1}:$uri',
       );
     }

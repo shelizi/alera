@@ -7,6 +7,15 @@ final class SocketRuntimeHostLifecycleClient(
   final SocketTerminalHostClient _client,
 ) implements RuntimeHostLifecycleClient {
   @override
+  void beginAppQuit() => _client.beginAppQuit();
+
+  @override
+  void cancelAppQuit() => _client.cancelAppQuit();
+
+  @override
+  void commitAppQuit() => _client.dispose();
+
+  @override
   Future<Map<String, Object?>?> probeRuntimeStatus() =>
       _translateTransportErrors(_client.probeRuntimeStatus);
 

@@ -25,6 +25,7 @@ final class FakeRuntimeHostLifecycleClient({
   final List<Object> probeErrorsAfterShutdown = const <Object>[],
 }) implements RuntimeHostLifecycleClient {
   final List<bool> shutdownCalls = <bool>[];
+  final List<String> appQuitEvents = <String>[];
   int ensureStartedCalls = 0;
   bool _stopped = false;
   int _probeErrorsConsumed = 0;
@@ -81,6 +82,15 @@ final class FakeRuntimeHostLifecycleClient({
     }
     return RuntimeHostShutdownResult(stopped: true, forced: force);
   }
+
+  @override
+  void beginAppQuit() => appQuitEvents.add('begin');
+
+  @override
+  void cancelAppQuit() => appQuitEvents.add('cancel');
+
+  @override
+  void commitAppQuit() => appQuitEvents.add('commit');
 
   @override
   Future<void> ensureStarted({required TerminalHostConfig config}) async {
