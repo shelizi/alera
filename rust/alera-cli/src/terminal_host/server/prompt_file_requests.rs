@@ -38,7 +38,12 @@ impl ServerActor {
             .map(str::to_string);
         let payload = payload.clone();
         let inbox = self.inbox.clone();
+        let slots = self.deferred_request_slots.clone();
         tokio::spawn(async move {
+            let _permit = slots
+                .acquire_owned()
+                .await
+                .expect("deferred request semaphore must remain open");
             let operation = request_type.clone();
             let result = tokio::task::spawn_blocking(move || {
                 handle_prompt_file_request(runtime_dir, &request_type, &payload)

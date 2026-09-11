@@ -62,6 +62,52 @@ async fn deferred_requests_bound_background_concurrency() {
 }
 
 #[tokio::test]
+async fn prompt_file_uploads_respect_the_deferred_io_budget() {
+    let dir = tempfile::tempdir().unwrap();
+    let (handle, mut responses) = ClientHandle::test_channels();
+    let mut actor = test_actor(
+        &dir,
+        HashMap::from([(1, local_client(handle))]),
+        HashMap::new(),
+    )
+    .await;
+    actor.deferred_request_slots = std::sync::Arc::new(tokio::sync::Semaphore::new(0));
+    let (inbox, mut commands) = tokio::sync::mpsc::unbounded_channel();
+    actor.inbox = inbox;
+
+    assert!(actor
+        .try_start_deferred_request(
+            1,
+            9,
+            "mobile.promptFile.start",
+            &json!({"name": "budget.txt", "sizeBytes": 1}),
+        )
+        .await
+        .unwrap());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), commands.recv())
+            .await
+            .is_err(),
+        "prompt file I/O started without deferred budget capacity"
+    );
+
+    actor.deferred_request_slots.add_permits(1);
+    let completion = tokio::time::timeout(Duration::from_secs(1), commands.recv())
+        .await
+        .expect("prompt file worker should resume after budget capacity is released")
+        .unwrap();
+    actor.handle(completion).await;
+    let response = tokio::time::timeout(Duration::from_secs(1), responses.recv())
+        .await
+        .expect("prompt file start should answer after admission")
+        .unwrap()
+        .as_json()
+        .unwrap();
+    assert_eq!(response["id"], 9);
+    assert_eq!(response["ok"], true);
+}
+
+#[tokio::test]
 async fn prompt_image_upload_io_is_deferred_from_the_actor_mailbox() {
     let dir = tempfile::tempdir().unwrap();
     let (handle, mut responses) = ClientHandle::test_channels();
