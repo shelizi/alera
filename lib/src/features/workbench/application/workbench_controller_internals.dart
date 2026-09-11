@@ -74,6 +74,14 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController {
     );
   }
 
+  WorkbenchRetiredWorkspaceCleanupCoordinator get _retiredWorkspaceCleanup =>
+      WorkbenchRetiredWorkspaceCleanupCoordinator(
+        releaseHostedReviewTabsInBackground:
+            _hostedReviewRetention.releaseTabsInBackground,
+        forgetFocusHistory: _tabFocusHistory.forget,
+        releaseLocalWorkspace: _retiredResourceCleaner.releaseWorkspace,
+      );
+
   WorkbenchViewPrefsRepository? get _viewPrefsRepository {
     try {
       return ref.read(workbenchViewPrefsRepositoryProvider);

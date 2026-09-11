@@ -30,7 +30,11 @@ void main() {
         'lib/src/features/workbench/application/workbench_controller_sync.dart',
       ).readAsStringSync();
 
-      expect(source, contains('_retiredResourceCleaner.releaseWorkspace'));
+      expect(source, contains('_retiredWorkspaceCleanup.cleanup'));
+      expect(
+        source,
+        isNot(contains('_retiredResourceCleaner.releaseWorkspace')),
+      );
       expect(source, contains('_retiredResourceCleaner.releaseTabs'));
       expect(source, isNot(contains('terminalRuntimeLifecycleProvider')));
       expect(source, isNot(contains('editorSessionRegistryProvider')));

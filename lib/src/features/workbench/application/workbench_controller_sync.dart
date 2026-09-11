@@ -2,20 +2,6 @@ part of 'workbench_controller.dart';
 
 mixin _WorkbenchControllerSync
     on _$WorkbenchController, _WorkbenchControllerInternals {
-  /// Frees the live terminal handles and editor documents of a workspace that
-  /// no longer exists in persisted state.
-  ///
-  /// The managed runtime stops PTYs before publishing removal. Releasing local
-  /// handles also covers changes from another client without sending a second
-  /// termination request for sessions this client no longer owns.
-  void _releaseRetiredWorkspaceSessions(String workspaceId) {
-    _tabFocusHistory.forget(workspaceId);
-    _retiredResourceCleaner.releaseWorkspace(
-      workspaceId,
-      state.tabsFor(workspaceId),
-    );
-  }
-
   void _syncWorktreeMetadataWatcher(Project project) {
     _worktreeMetadataWatcherRegistry.sync(
       project,
@@ -43,11 +29,11 @@ mixin _WorkbenchControllerSync
     final validProjectIds = plan.validProjectIds;
 
     for (final workspace in plan.removedWorkspaces) {
-      _hostedReviewRetention.releaseTabsInBackground(
-        workspace,
-        state.tabsFor(workspace.id),
+      _retiredWorkspaceCleanup.cleanup(
+        workspaceId: workspace.id,
+        workspace: workspace,
+        tabs: state.tabsFor(workspace.id),
       );
-      _releaseRetiredWorkspaceSessions(workspace.id);
     }
 
     state = applyWorkbenchProjectSetSyncPlan(
@@ -102,14 +88,11 @@ mixin _WorkbenchControllerSync
         .where((workspaceId) => !liveWorkspaceIds.contains(workspaceId))
         .toList(growable: false);
     for (final workspaceId in removedWorkspaceIds) {
-      final workspace = _workspaceById(workspaceId);
-      if (workspace != null) {
-        _hostedReviewRetention.releaseTabsInBackground(
-          workspace,
-          state.tabsFor(workspaceId),
-        );
-      }
-      _releaseRetiredWorkspaceSessions(workspaceId);
+      _retiredWorkspaceCleanup.cleanup(
+        workspaceId: workspaceId,
+        workspace: _workspaceById(workspaceId),
+        tabs: state.tabsFor(workspaceId),
+      );
     }
     for (final workspaceId in removedWorkspaceIds) {
       _tabSubscriptions.cancelWorkspace(workspaceId);

@@ -18,6 +18,7 @@ import 'package:alera/src/features/workbench/application/workbench_navigation_hi
 import 'package:alera/src/features/workbench/application/workbench_persisted_tab_open_coordinator.dart';
 import 'package:alera/src/features/workbench/application/workbench_persisted_tab_restore_plan.dart';
 import 'package:alera/src/features/workbench/application/workbench_retired_resource_cleaner.dart';
+import 'package:alera/src/features/workbench/application/workbench_retired_workspace_cleanup_coordinator.dart';
 import 'package:alera/src/features/workbench/application/workbench_remove_project_cleanup_coordinator.dart';
 import 'package:alera/src/features/workbench/application/workbench_delete_workspace_cleanup_coordinator.dart';
 import 'package:alera/src/features/workbench/application/workbench_explicit_resource_cleaner.dart';
