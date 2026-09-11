@@ -23,6 +23,7 @@ use crate::terminal_host::orchestration::lifecycle_reconciliation::{
 use crate::terminal_host::protocol::event;
 use crate::terminal_host::session::Session;
 
+use super::dispatch_context_install::DispatchContextContinuation;
 use super::orchestration_owned_spawn::is_pending_orchestration_worker;
 use super::{ServerActor, ServerCommand};
 
@@ -774,12 +775,6 @@ impl ServerActor {
             )
             .await?;
         self.orchestration_activity_last_recorded.remove(handle);
-        if let Err(error) = self.install_dispatch_context(handle, &dispatch.id, &context_token) {
-            self.runtime_store
-                .fail_orchestration_startup(&dispatch.id, "could not install worker context")
-                .await?;
-            return Err(anyhow::anyhow!(error.to_string()));
-        }
         let preamble = build_dispatch_preamble(&PreambleParams {
             task_id,
             dispatch_id: &dispatch.id,
@@ -793,7 +788,6 @@ impl ServerActor {
             worker_kind: WorkerKind::PromptReturningAgent,
         });
         if !self.sessions.get(handle).is_some_and(Session::running) {
-            self.remove_dispatch_context(handle);
             self.runtime_store
                 .fail_orchestration_startup(&dispatch.id, "terminal not writable")
                 .await?;
@@ -801,16 +795,25 @@ impl ServerActor {
         }
         let force_submit =
             adapter_for(&config.agent_type).is_some_and(|adapter| adapter.force_submit);
-        if let Err(error) =
-            self.queue_orchestration_paste(handle, &preamble, Vec::new(), force_submit)
-        {
-            self.remove_dispatch_context(handle);
+        // The context write runs off the actor; the CoordinatorPaste
+        // continuation re-validates the run and session before injecting.
+        if let Err(error) = self.start_dispatch_context_install(
+            handle,
+            &dispatch.id,
+            &context_token,
+            DispatchContextContinuation::CoordinatorPaste {
+                run_id: config.run_id.clone(),
+                task_id: task_id.to_string(),
+                handle: handle.to_string(),
+                preamble,
+                force_submit,
+            },
+        ) {
             self.runtime_store
-                .fail_orchestration_startup(&dispatch.id, "terminal input unavailable")
+                .fail_orchestration_startup(&dispatch.id, "could not install worker context")
                 .await?;
-            return Err(anyhow::anyhow!(error.wire_message()));
+            return Err(anyhow::anyhow!(error.to_string()));
         }
-        self.coordinator_log(&format!("dispatched {task_id} to {handle}"));
         Ok(true)
     }
 

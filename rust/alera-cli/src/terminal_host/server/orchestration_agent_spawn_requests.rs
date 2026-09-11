@@ -1,12 +1,15 @@
-use alera_core::runtime::{OrchestrationDispatchStatus, WorkspaceStatus, WorkspaceTabRecord};
+use alera_core::runtime::{OrchestrationDispatchStatus, WorkspaceStatus};
 use serde_json::{json, Value};
 
 use crate::terminal_host::host_error::{HostError, HostResult};
-use crate::terminal_host::orchestration::agent_profile_launch_snapshot::AGENT_PROFILE_LAUNCH_SNAPSHOT_KEY;
-use crate::terminal_host::orchestration::agent_registry::{adapter_for, AgentStartupPrompt};
+use crate::terminal_host::orchestration::agent_registry::adapter_for;
 use crate::terminal_host::orchestration::coordinator_loop::CoordinatorConfig;
 use crate::terminal_host::orchestration::dispatch_preamble::{build_dispatch_bootstrap, BaseDrift};
 
+use super::dispatch_context_install::{
+    DispatchContextContinuation, DispatchInstallOrigin, PendingAgentSpawn,
+};
+use super::orchestration_requests::DispatchPreparation;
 use super::orchestration_validation::{optional_string, require_string, state_error};
 use super::ServerActor;
 
@@ -118,35 +121,47 @@ impl ServerActor {
                 continue;
             };
             let profile = self.coordinator_profile_for_task(task).await;
-            let handle = self
-                .coordinator_spawn_predispatched_worker(
-                    workspace_id,
-                    &config.agent_type,
-                    &task.id,
-                    config.coordinator_handle.as_deref(),
-                    preflight,
-                    profile.as_deref(),
-                )
-                .await?;
-            self.coordinator_log(&format!(
-                "created worker terminal {handle} with pre-dispatch for {}",
-                task.id
-            ));
+            // The spawn resumes from the dispatch context install completion;
+            // the "created worker terminal" log is emitted by that
+            // continuation.
+            self.coordinator_spawn_predispatched_worker(
+                &config.run_id,
+                workspace_id,
+                &config.agent_type,
+                &task.id,
+                config.coordinator_handle.as_deref(),
+                preflight,
+                profile.as_deref(),
+            )
+            .await?;
             break;
         }
         Ok(())
     }
 
-    pub(super) async fn orchestration_agent_spawn(&mut self, payload: &Value) -> HostResult<Value> {
-        self.orchestration_agent_spawn_with_preflight(payload, None)
-            .await
+    pub(super) async fn orchestration_agent_spawn_request(
+        &mut self,
+        client_id: u64,
+        request_id: i64,
+        payload: &Value,
+    ) -> HostResult<Option<Value>> {
+        self.orchestration_agent_spawn_with_preflight(
+            DispatchInstallOrigin::Request {
+                client_id,
+                request_id,
+            },
+            payload,
+            None,
+        )
+        .await
     }
 
     async fn orchestration_agent_spawn_with_preflight(
         &mut self,
+        origin: DispatchInstallOrigin,
         payload: &Value,
         preflight: Option<(String, Option<BaseDrift>)>,
-    ) -> HostResult<Value> {
+    ) -> HostResult<Option<Value>> {
         let workspace_id = require_string(payload, "workspace")?;
         let task_id = require_string(payload, "task")?;
         let from = require_string(payload, "from")?;
@@ -176,8 +191,8 @@ impl ServerActor {
             )));
         }
         if let Some(terminal) = optional_string(payload, "terminal") {
-            let response = self
-                .orchestration_dispatch(&json!({
+            let prepared = match self
+                .prepare_orchestration_dispatch(&json!({
                     "task": task_id,
                     "to": terminal,
                     "from": from,
@@ -188,8 +203,16 @@ impl ServerActor {
                     "agentProfile": resolved.profile_name,
                     "agentQuotaGroup": resolved.quota_group,
                 }))
-                .await?;
-            return Ok(response);
+                .await?
+            {
+                DispatchPreparation::Ready(prepared) => prepared,
+                DispatchPreparation::DryRun(_) => {
+                    return Err(HostError::state("unexpected dispatch dry run"))
+                }
+            };
+            // The dispatch's own continuation injects the preamble and answers
+            // this request once the context file exists.
+            return self.start_prepared_dispatch(prepared, origin).await;
         }
         let workspace = self
             .runtime_store
@@ -203,21 +226,13 @@ impl ServerActor {
             )));
         }
         let id = uuid::Uuid::new_v4().to_string();
-        let command = resolved.command.clone().unwrap_or_else(|| {
-            if resolved.managed_launch.is_some() {
-                String::new()
-            } else {
-                adapter.default_command.to_string()
-            }
-        });
         let keep_on_failure = payload
             .get("keepOnFailure")
             .and_then(Value::as_bool)
             .unwrap_or(false);
         let bootstrap = build_dispatch_bootstrap();
-        let prompt_after_ready = adapter.startup_prompt == AgentStartupPrompt::TerminalAfterReady;
-        let mut dispatch_response = Some(
-            self.orchestration_dispatch(&json!({
+        let prepared = match self
+            .prepare_orchestration_dispatch(&json!({
                 "task": task_id,
                 "to": id,
                 "from": from,
@@ -227,95 +242,45 @@ impl ServerActor {
                 "agentProfile": resolved.profile_name,
                 "agentQuotaGroup": resolved.quota_group,
             }))
-            .await?,
-        );
-        let now = chrono::Utc::now();
-        let orchestration_preflight = preflight.as_ref().and_then(|(task_spec, base_drift)| {
-            dispatch_response.as_ref().and_then(|response| {
-                let dispatch_id = response.pointer("/dispatch/id")?.as_str()?;
-                Some(json!({
-                    "taskId": task_id,
-                    "dispatchId": dispatch_id,
-                    "taskSpec": task_spec,
-                    "baseDrift": base_drift.as_ref().map(|drift| json!({
-                        "base": drift.base,
-                        "behind": drift.behind,
-                        "recentSubjects": drift.recent_subjects,
-                    })),
-                }))
-            })
-        });
-        let mut tab_payload = json!({
-            "terminalSessionId": id,
-            // OnRestart keeps the durable prompt even when delivery waits for
-            // a ready event. Each new PTY gets a fresh pending copy.
-            "initialPrompt": bootstrap.clone(),
-            "pendingAgentPrompt": prompt_after_ready.then(|| json!({
-                "agent": adapter.agent_type,
-                "prompt": bootstrap.clone(),
-            })),
-            "spawnOnCreate": true,
-            "orchestrationPreflight": orchestration_preflight,
-            "orchestrationSpawn": {
-                "task": task_id,
-                "from": from,
-                "agent": agent_type,
-                "owned": true,
-                "keepOnFailure": keep_on_failure,
+            .await?
+        {
+            DispatchPreparation::Ready(prepared) => prepared,
+            DispatchPreparation::DryRun(_) => {
+                return Err(HostError::state("unexpected dispatch dry run"))
             }
-        });
-        if let Some(snapshot) = resolved.launch_snapshot {
-            tab_payload[AGENT_PROFILE_LAUNCH_SNAPSHOT_KEY] = serde_json::to_value(snapshot)
-                .map_err(|error| {
-                    HostError::state(format!(
-                        "could not encode agent profile launch snapshot: {error}"
-                    ))
-                })?;
-        } else {
-            tab_payload["initialCommand"] = json!(command);
-            tab_payload["initialManagedAgentLaunch"] = json!(resolved.managed_launch);
-            tab_payload["agentType"] = json!(agent_type);
-        }
-        let tab = WorkspaceTabRecord {
-            id: id.clone(),
-            workspace_id: workspace_id.clone(),
-            kind: "terminal".to_string(),
-            title: optional_string(payload, "title")
-                .unwrap_or_else(|| format!("{} Worker", agent_type)),
-            created_at: now,
-            updated_at: now,
-            payload: tab_payload,
         };
-        if let Err(error) = self.upsert_workspace_tab_and_spawn(tab).await {
-            if let Some(dispatch_id) = dispatch_response
-                .as_ref()
-                .and_then(|value| value.pointer("/dispatch/id"))
-                .and_then(Value::as_str)
-            {
-                let _ = self
-                    .runtime_store
-                    .fail_orchestration_startup(dispatch_id, "terminal process failed to start")
-                    .await;
-                self.remove_dispatch_context(&id);
-            }
+        let dispatch_id = prepared.dispatch_id.clone();
+        let pending = PendingAgentSpawn {
+            handle: id.clone(),
+            resolved,
+            adapter,
+            preflight,
+            bootstrap,
+            keep_on_failure,
+            task,
+            workspace_id,
+            from,
+            title: optional_string(payload, "title"),
+            dispatch_response: prepared.response,
+        };
+        // The worker PTY must not exist before the context file it may read is
+        // on disk, so the spawn resumes from `DispatchContextInstalled`.
+        if let Err(error) = self.start_dispatch_context_install(
+            &id,
+            &prepared.dispatch_id,
+            &prepared.context_token,
+            DispatchContextContinuation::AgentSpawn {
+                origin,
+                pending: Box::new(pending),
+            },
+        ) {
+            let _ = self
+                .runtime_store
+                .fail_orchestration_startup(&dispatch_id, "could not install worker context")
+                .await;
             return Err(error);
         }
-        let mut response = json!({
-            "terminalHandle": id,
-            "agentType": adapter.agent_type,
-            "taskId": task.id,
-            "runId": task.run_id,
-            "workspaceId": workspace_id,
-            "coordinatorHandle": task.coordinator_handle,
-            "assigneeHandle": id,
-            "startupState": "terminal_started",
-            "acceptanceState": "awaiting_acceptance",
-        });
-        if let Some(dispatch) = dispatch_response.take() {
-            response["dispatch"] = dispatch["dispatch"].clone();
-            response["contextPath"] = dispatch["contextPath"].clone();
-        }
-        Ok(response)
+        Ok(None)
     }
 
     pub(super) async fn orchestration_agent_spawn_timeout(
@@ -428,32 +393,32 @@ impl ServerActor {
 
     pub(super) async fn coordinator_spawn_predispatched_worker(
         &mut self,
+        run_id: &str,
         workspace_id: &str,
         agent_type: &str,
         task_id: &str,
         coordinator_handle: Option<&str>,
         preflight: (String, Option<BaseDrift>),
         profile: Option<&str>,
-    ) -> anyhow::Result<String> {
+    ) -> anyhow::Result<()> {
         // A profile supersedes the run-level agent type, so send only one of
-        // them: the host rejects both together.
-        let response = self
-            .orchestration_agent_spawn_with_preflight(
-                &json!({
-                    "workspace": workspace_id,
-                    "agent": profile.is_none().then_some(agent_type),
-                    "profile": profile,
-                    "task": task_id,
-                    "from": coordinator_handle,
-                }),
-                Some(preflight),
-            )
-            .await
-            .map_err(|error| anyhow::anyhow!(error.wire_message()))?;
-        Ok(response
-            .get("terminalHandle")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown")
-            .to_string())
+        // them: the host rejects both together. The spawn itself resumes from
+        // the dispatch context install completion.
+        self.orchestration_agent_spawn_with_preflight(
+            DispatchInstallOrigin::Coordinator {
+                run_id: run_id.to_string(),
+            },
+            &json!({
+                "workspace": workspace_id,
+                "agent": profile.is_none().then_some(agent_type),
+                "profile": profile,
+                "task": task_id,
+                "from": coordinator_handle,
+            }),
+            Some(preflight),
+        )
+        .await
+        .map_err(|error| anyhow::anyhow!(error.wire_message()))?;
+        Ok(())
     }
 }

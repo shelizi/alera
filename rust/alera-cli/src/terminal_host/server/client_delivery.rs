@@ -323,6 +323,7 @@ mod tests {
             orchestration_delivery_in_flight: HashSet::new(),
             orchestration_delivery_backpressured: HashSet::new(),
             orchestration_activity_last_recorded: HashMap::new(),
+            pending_dispatch_installs: HashMap::new(),
             coordinators: HashMap::new(),
             resources: ResourceMonitorState::default(),
             terminal_pulses: Default::default(),

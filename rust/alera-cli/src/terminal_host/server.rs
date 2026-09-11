@@ -54,6 +54,7 @@ mod actor_test_harness;
 mod agent_hook_events;
 mod agent_profile_launch_requests;
 mod agent_prompt_composition;
+mod agent_spawn_install;
 mod agent_title_context;
 mod agent_title_events;
 mod agent_title_generation;
@@ -103,6 +104,10 @@ mod deferred_project_requests_tests;
 mod deferred_requests;
 #[cfg(test)]
 mod deferred_requests_tests;
+mod dispatch_context_continuations;
+mod dispatch_context_install;
+#[cfg(test)]
+mod dispatch_context_install_tests;
 mod host_service_agent_integrations;
 mod host_service_agent_quota;
 mod host_service_requests;
@@ -247,6 +252,7 @@ struct ServerActor {
     orchestration_delivery_in_flight: HashSet<String>,
     orchestration_delivery_backpressured: HashSet<String>,
     orchestration_activity_last_recorded: HashMap<String, Instant>,
+    pending_dispatch_installs: HashMap<String, dispatch_context_install::PendingDispatchContext>,
     coordinators: HashMap<String, CoordinatorHandle>,
     resources: ResourceMonitorState,
     terminal_pulses: terminal_pulse::TerminalPulseManager,
@@ -458,6 +464,14 @@ impl ServerActor {
                 result,
             } => {
                 self.finish_deferred_request(client_id, request_id, result);
+            }
+            ServerCommand::DispatchContextInstalled {
+                dispatch_id,
+                generation,
+                result,
+            } => {
+                self.finish_dispatch_context_install(dispatch_id, generation, result)
+                    .await;
             }
             ServerCommand::Pty {
                 session_id,
@@ -1199,6 +1213,7 @@ mod tests {
             orchestration_delivery_backpressured: HashSet::new(),
             orchestration_activity_last_recorded: HashMap::new(),
             coordinators: HashMap::new(),
+            pending_dispatch_installs: HashMap::new(),
             resources: ResourceMonitorState::default(),
             terminal_pulses: Default::default(),
             codex: None,
@@ -1277,6 +1292,7 @@ mod tests {
             orchestration_delivery_backpressured: HashSet::new(),
             orchestration_activity_last_recorded: HashMap::new(),
             coordinators: HashMap::new(),
+            pending_dispatch_installs: HashMap::new(),
             resources: ResourceMonitorState::default(),
             terminal_pulses: Default::default(),
             codex: None,
@@ -1373,6 +1389,7 @@ mod tests {
             orchestration_delivery_backpressured: HashSet::new(),
             orchestration_activity_last_recorded: HashMap::new(),
             coordinators: HashMap::new(),
+            pending_dispatch_installs: HashMap::new(),
             resources: ResourceMonitorState::default(),
             terminal_pulses: Default::default(),
             codex: None,
@@ -1464,6 +1481,7 @@ mod tests {
             orchestration_delivery_backpressured: HashSet::new(),
             orchestration_activity_last_recorded: HashMap::new(),
             coordinators: HashMap::new(),
+            pending_dispatch_installs: HashMap::new(),
             resources: ResourceMonitorState::default(),
             terminal_pulses: Default::default(),
             codex: None,
@@ -1577,6 +1595,7 @@ mod tests {
             orchestration_delivery_backpressured: HashSet::new(),
             orchestration_activity_last_recorded: HashMap::new(),
             coordinators: HashMap::new(),
+            pending_dispatch_installs: HashMap::new(),
             resources: ResourceMonitorState::default(),
             terminal_pulses: Default::default(),
             codex: None,
@@ -1663,6 +1682,7 @@ mod tests {
             orchestration_delivery_backpressured: HashSet::new(),
             orchestration_activity_last_recorded: HashMap::new(),
             coordinators: HashMap::new(),
+            pending_dispatch_installs: HashMap::new(),
             resources: ResourceMonitorState::default(),
             terminal_pulses: Default::default(),
             codex: None,

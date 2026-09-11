@@ -177,6 +177,13 @@ pub enum ServerCommand {
         operation_id: Option<String>,
         skill: Option<String>,
     },
+    /// A dispatch context write finished off the actor; the parked
+    /// continuation commits only after generation and owner revalidation.
+    DispatchContextInstalled {
+        dispatch_id: String,
+        generation: u64,
+        result: HostResult<()>,
+    },
     RuntimeMutationFinished(runtime_mutations::RuntimeMutationFinished),
     PrepareRuntimeMutation {
         request: runtime_mutations::RuntimeMutationRequest,

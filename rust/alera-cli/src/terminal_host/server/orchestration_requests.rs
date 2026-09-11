@@ -1,6 +1,3 @@
-use std::collections::HashMap;
-use std::path::Path;
-use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 
 use alera_core::runtime::{
@@ -27,31 +24,14 @@ use crate::terminal_host::orchestration::message_formatter::format_messages_for_
 use crate::terminal_host::orchestration::message_waiters::{MessageWaiter, WaitKind};
 use crate::terminal_host::protocol::{error_response, ok_response};
 
+use super::dispatch_context_install::{
+    DispatchContextContinuation, DispatchInstallOrigin,
+};
 use super::orchestration_validation::{
     optional_string, parse_message_type, parse_priority, parse_type_filter, prefixed_subject,
     require_string, state_error, wait_timeout_ms,
 };
 use super::{ServerActor, ServerCommand};
-
-type DispatchContextGate = Mutex<u64>;
-type DispatchContextGateRegistry = Mutex<HashMap<String, Weak<DispatchContextGate>>>;
-
-static DISPATCH_CONTEXT_GATES: OnceLock<DispatchContextGateRegistry> = OnceLock::new();
-
-fn dispatch_context_gate(path: &Path) -> HostResult<Arc<DispatchContextGate>> {
-    let key = path.to_string_lossy().into_owned();
-    let mut gates = DISPATCH_CONTEXT_GATES
-        .get_or_init(|| Mutex::new(HashMap::new()))
-        .lock()
-        .map_err(|error| HostError::state(format!("dispatch context registry failed: {error}")))?;
-    gates.retain(|_, gate| gate.strong_count() > 0);
-    if let Some(gate) = gates.get(&key).and_then(Weak::upgrade) {
-        return Ok(gate);
-    }
-    let gate = Arc::new(Mutex::new(0));
-    gates.insert(key, Arc::downgrade(&gate));
-    Ok(gate)
-}
 
 fn context_token_hash(token: &str) -> String {
     hex::encode(Sha256::digest(token.as_bytes()))
@@ -97,91 +77,27 @@ fn validate_result_schema_definition(schema_raw: &str) -> HostResult<()> {
         .map_err(|error| HostError::format(format!("result schema is invalid: {error}")))
 }
 
+/// The outcome of `prepare_orchestration_dispatch`: either a response the
+/// caller may answer with immediately, or a committed dispatch whose context
+/// install parks until `DispatchContextInstalled` lands.
+pub(super) enum DispatchPreparation {
+    DryRun(Value),
+    Ready(PreparedDispatch),
+}
+
+/// A committed dispatch waiting on its context install. The continuation
+/// turns this into the inject step plus the request's answer.
+pub(super) struct PreparedDispatch {
+    pub dispatch_id: String,
+    pub to: String,
+    pub context_token: String,
+    pub inject: bool,
+    pub force_submit: bool,
+    pub preamble: String,
+    pub response: Value,
+}
+
 impl ServerActor {
-    fn dispatch_context_path(&self, handle: &str) -> std::path::PathBuf {
-        let safe_handle: String = handle
-            .chars()
-            .map(|value| {
-                if value.is_ascii_alphanumeric() || value == '-' || value == '_' {
-                    value
-                } else {
-                    '_'
-                }
-            })
-            .collect();
-        self.runtime_dir
-            .join("orchestration-contexts")
-            .join(format!("{safe_handle}.json"))
-    }
-
-    pub(super) fn install_dispatch_context(
-        &self,
-        handle: &str,
-        dispatch_id: &str,
-        token: &str,
-    ) -> HostResult<()> {
-        let path = self.dispatch_context_path(handle);
-        let gate = dispatch_context_gate(&path)?;
-        let mut generation = gate
-            .lock()
-            .map_err(|error| HostError::state(format!("dispatch context gate failed: {error}")))?;
-        *generation = generation.wrapping_add(1);
-        let parent = path
-            .parent()
-            .ok_or_else(|| HostError::state("invalid dispatch context path"))?;
-        std::fs::create_dir_all(parent).map_err(|error| HostError::state(error.to_string()))?;
-        let bytes = serde_json::to_vec(&json!({ "dispatchId": dispatch_id, "token": token }))
-            .map_err(|error| HostError::state(error.to_string()))?;
-        #[cfg(unix)]
-        {
-            use std::io::Write;
-            use std::os::unix::fs::OpenOptionsExt;
-            let mut file = std::fs::OpenOptions::new()
-                .create(true)
-                .truncate(true)
-                .write(true)
-                .mode(0o600)
-                .open(path)
-                .map_err(|error| HostError::state(error.to_string()))?;
-            file.write_all(&bytes)
-                .map_err(|error| HostError::state(error.to_string()))?;
-        }
-        #[cfg(not(unix))]
-        std::fs::write(path, bytes).map_err(|error| HostError::state(error.to_string()))?;
-        Ok(())
-    }
-
-    pub(super) fn remove_dispatch_context(&self, handle: &str) {
-        let path = self.dispatch_context_path(handle);
-        let Ok(gate) = dispatch_context_gate(&path) else {
-            return;
-        };
-        let cleanup_generation = {
-            let Ok(mut generation) = gate.lock() else {
-                return;
-            };
-            *generation = generation.wrapping_add(1);
-            *generation
-        };
-        let slots = self.deferred_request_slots.clone();
-        tokio::spawn(async move {
-            let _permit = match slots.acquire_owned().await {
-                Ok(permit) => permit,
-                Err(_) => return,
-            };
-            let _ = tokio::task::spawn_blocking(move || {
-                let Ok(generation) = gate.lock() else {
-                    return;
-                };
-                if *generation != cleanup_generation {
-                    return;
-                }
-                let _ = std::fs::remove_file(path);
-            })
-            .await;
-        });
-    }
-
     /// Handles requests; wait-capable verbs return `Ok(None)` until a wake or timeout writes the response.
     pub(super) async fn handle_orchestration_request(
         &mut self,
@@ -192,7 +108,10 @@ impl ServerActor {
     ) -> HostResult<Option<Value>> {
         self.require_auth(client_id)?;
         match request_type {
-            "orchestration.agentSpawn" => self.orchestration_agent_spawn(payload).await.map(Some),
+            "orchestration.agentSpawn" => {
+                self.orchestration_agent_spawn_request(client_id, request_id, payload)
+                    .await
+            }
             "orchestration.agentSpawnTimeout" => self
                 .orchestration_agent_spawn_timeout(payload)
                 .await
@@ -245,7 +164,10 @@ impl ServerActor {
                 .orchestration_transfer_coordinator(payload)
                 .await
                 .map(Some),
-            "orchestration.dispatch" => self.orchestration_dispatch(payload).await.map(Some),
+            "orchestration.dispatch" => {
+                self.orchestration_dispatch_request(client_id, request_id, payload)
+                    .await
+            }
             "orchestration.dispatchShow" => {
                 self.orchestration_dispatch_show(payload).await.map(Some)
             }
@@ -735,7 +657,7 @@ impl ServerActor {
             return;
         };
         let tab_id = session.tab_id.clone();
-        let Ok(Some(mut tab)) = self.runtime_store.find_workspace_tab(&tab_id).await else {
+        let Ok(Some(tab)) = self.runtime_store.find_workspace_tab(&tab_id).await else {
             return;
         };
         let Some(pending) = tab.payload.get("pendingOrchestration").cloned() else {
@@ -765,20 +687,33 @@ impl ServerActor {
             "completionPolicy": "return-immediately",
             "terminalPolicy": "keep-open",
         });
-        if self.orchestration_dispatch(&dispatch_payload).await.is_ok() {
-            tab.payload["pendingOrchestration"] = Value::Null;
-            tab.updated_at = chrono::Utc::now();
-            let workspace_id = tab.workspace_id.clone();
-            let tab_id = tab.id.clone();
-            // Dropping this leaves the tab claiming a dispatch it already
-            // consumed, so a restart replays the prompt.
-            if let Err(error) = self.runtime_store.upsert_workspace_tab(tab).await {
-                tracing::error!(
-                    tab_id = %tab_id,
-                    "failed to clear the pending orchestration payload: {error}"
-                );
-            }
-            self.broadcast_workspace_tabs_changed(Some(&workspace_id));
+        let prepared = match self.prepare_orchestration_dispatch(&dispatch_payload).await {
+            Ok(DispatchPreparation::Ready(prepared)) => prepared,
+            // A failed dispatch leaves the pending marker so the next ready
+            // event retries.
+            _ => return,
+        };
+        let dispatch_id = prepared.dispatch_id.clone();
+        let to = prepared.to.clone();
+        if let Err(error) = self.start_dispatch_context_install(
+            &to,
+            &dispatch_id,
+            &prepared.context_token,
+            DispatchContextContinuation::DispatchRequest {
+                origin: DispatchInstallOrigin::Internal,
+                to: prepared.to,
+                inject: prepared.inject,
+                force_submit: prepared.force_submit,
+                preamble: prepared.preamble,
+                response: Value::Null,
+                consumed_tab: Some(tab),
+            },
+        ) {
+            let _ = self
+                .runtime_store
+                .fail_orchestration_startup(&dispatch_id, "could not install worker context")
+                .await;
+            tracing::error!("failed to start dispatch context install: {error}");
         }
     }
 
@@ -1097,7 +1032,72 @@ impl ServerActor {
 
     // --- dispatch -------------------------------------------------------------
 
-    pub(super) async fn orchestration_dispatch(&mut self, payload: &Value) -> HostResult<Value> {
+    /// Validates and commits the dispatch record, then parks the request while
+    /// the context file installs on the shared deferred I/O budget. The
+    /// `DispatchRequest` continuation injects the preamble and answers the
+    /// request once `DispatchContextInstalled` lands.
+    pub(super) async fn orchestration_dispatch_request(
+        &mut self,
+        client_id: u64,
+        request_id: i64,
+        payload: &Value,
+    ) -> HostResult<Option<Value>> {
+        let prepared = match self.prepare_orchestration_dispatch(payload).await? {
+            DispatchPreparation::DryRun(response) => return Ok(Some(response)),
+            DispatchPreparation::Ready(prepared) => prepared,
+        };
+        self.start_prepared_dispatch(
+            prepared,
+            DispatchInstallOrigin::Request {
+                client_id,
+                request_id,
+            },
+        )
+        .await
+    }
+
+    /// Starts the context install for an already-committed dispatch and parks
+    /// the origin until completion; a start failure fails the startup the same
+    /// way the synchronous install path did.
+    pub(super) async fn start_prepared_dispatch(
+        &mut self,
+        prepared: PreparedDispatch,
+        origin: DispatchInstallOrigin,
+    ) -> HostResult<Option<Value>> {
+        let dispatch_id = prepared.dispatch_id.clone();
+        let continuation = DispatchContextContinuation::DispatchRequest {
+            origin,
+            to: prepared.to.clone(),
+            inject: prepared.inject,
+            force_submit: prepared.force_submit,
+            preamble: prepared.preamble,
+            response: prepared.response,
+            consumed_tab: None,
+        };
+        match self.start_dispatch_context_install(
+            &prepared.to,
+            &prepared.dispatch_id,
+            &prepared.context_token,
+            continuation,
+        ) {
+            Ok(()) => Ok(None),
+            Err(error) => {
+                let _ = self
+                    .runtime_store
+                    .fail_orchestration_startup(&dispatch_id, "could not install worker context")
+                    .await;
+                Err(error)
+            }
+        }
+    }
+
+    /// All validation and store mutations for `orchestration.dispatch`; the
+    /// context install and the post-install inject step are left to the
+    /// continuation the caller attaches.
+    pub(super) async fn prepare_orchestration_dispatch(
+        &mut self,
+        payload: &Value,
+    ) -> HostResult<DispatchPreparation> {
         let task_id = require_string(payload, "task")?;
         let to = require_string(payload, "to")?;
         let from = require_string(payload, "from")?;
@@ -1161,7 +1161,9 @@ impl ServerActor {
                 gate_resolution: gate_resolution.as_ref(),
                 worker_kind: WorkerKind::BareShell,
             });
-            return Ok(json!({ "dryRun": true, "preamble": preamble }));
+            return Ok(DispatchPreparation::DryRun(
+                json!({ "dryRun": true, "preamble": preamble }),
+            ));
         }
 
         if inject {
@@ -1249,13 +1251,6 @@ impl ServerActor {
                 .map_err(state_error)?;
         }
         self.orchestration_activity_last_recorded.remove(&to);
-        if let Err(error) = self.install_dispatch_context(&to, &dispatch.id, &context_token) {
-            let _ = self
-                .runtime_store
-                .fail_orchestration_startup(&dispatch.id, "could not install worker context")
-                .await;
-            return Err(error);
-        }
         let preamble = build_dispatch_preamble(&PreambleParams {
             task_id: &task_id,
             dispatch_id: &dispatch.id,
@@ -1265,39 +1260,15 @@ impl ServerActor {
             gate_resolution: gate_resolution.as_ref(),
             worker_kind: WorkerKind::PromptReturningAgent,
         });
-
-        if inject {
-            if !self
-                .sessions
-                .get(&to)
-                .is_some_and(|session| session.running())
-            {
-                self.remove_dispatch_context(&to);
-                let _ = self
-                    .runtime_store
-                    .fail_orchestration_startup(&dispatch.id, "terminal session vanished")
-                    .await;
-                return Err(HostError::state(format!("terminal {to} vanished")));
-            }
-            let force_submit = payload
-                .get("forceSubmit")
-                .and_then(Value::as_bool)
-                .unwrap_or_else(|| {
-                    assumed_adapter
-                        .map(|adapter| adapter.force_submit)
-                        .unwrap_or(false)
-                });
-            if let Err(error) =
-                self.queue_orchestration_paste(&to, &preamble, Vec::new(), force_submit)
-            {
-                self.remove_dispatch_context(&to);
-                let _ = self
-                    .runtime_store
-                    .fail_orchestration_startup(&dispatch.id, "terminal input unavailable")
-                    .await;
-                return Err(error);
-            }
-        }
+        let force_submit = payload
+            .get("forceSubmit")
+            .and_then(Value::as_bool)
+            .unwrap_or_else(|| {
+                assumed_adapter
+                    .map(|adapter| adapter.force_submit)
+                    .unwrap_or(false)
+            });
+        let dispatch_id = dispatch.id.clone();
 
         let mut response = json!({
             "dispatch": dispatch,
@@ -1315,12 +1286,20 @@ impl ServerActor {
         });
         let bootstrap = build_dispatch_bootstrap();
         if return_preamble {
-            response["preamble"] = Value::String(preamble);
+            response["preamble"] = Value::String(preamble.clone());
         } else if !inject {
             response["preamble"] = Value::String(bootstrap.clone());
         }
         response["bootstrap"] = Value::String(bootstrap);
-        Ok(response)
+        Ok(DispatchPreparation::Ready(PreparedDispatch {
+            dispatch_id,
+            to,
+            context_token,
+            inject,
+            force_submit,
+            preamble,
+            response,
+        }))
     }
 
     async fn orchestration_dispatch_show(&mut self, payload: &Value) -> HostResult<Value> {
