@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:alera/src/features/workbench/application/workspace_activity_controller.dart';
 import 'package:alera/src/features/workbench/application/workspace_activity_repository.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -6,6 +8,9 @@ import 'package:flutter_test/flutter_test.dart';
 class _FakeWorkspaceActivityRepository implements WorkspaceActivityRepository {
   final Map<String, DateTime> stored = <String, DateTime>{};
   int upsertCalls = 0;
+  Completer<void>? upsertStarted;
+  Completer<void>? upsertRelease;
+  Completer<void>? upsertCompleted;
 
   @override
   Future<Map<String, DateTime>> loadAll() async =>
@@ -14,7 +19,24 @@ class _FakeWorkspaceActivityRepository implements WorkspaceActivityRepository {
   @override
   Future<void> upsertAll(Map<String, DateTime> entries) async {
     upsertCalls++;
+    final started = upsertStarted;
+    final release = upsertRelease;
+    final completed = upsertCompleted;
+    if (started != null) {
+      upsertStarted = null;
+      upsertRelease = null;
+      upsertCompleted = null;
+      if (!started.isCompleted) {
+        started.complete();
+      }
+      if (release != null) {
+        await release.future;
+      }
+    }
     stored.addAll(entries);
+    if (completed != null && !completed.isCompleted) {
+      completed.complete();
+    }
   }
 
   @override
@@ -92,6 +114,38 @@ void main() {
     expect(repository.upsertCalls, 1);
     expect(repository.stored.keys, containsAll(<String>['w-1', 'w-2']));
   });
+
+  test(
+    'removeWorkspace is not undone by an older in-flight activity flush',
+    () async {
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+      final repository = _FakeWorkspaceActivityRepository();
+      final controller = container.read(
+        workspaceActivityControllerProvider.notifier,
+      );
+      await controller.attachRepository(repository);
+      final started = Completer<void>();
+      final release = Completer<void>();
+      final completed = Completer<void>();
+      repository
+        ..upsertStarted = started
+        ..upsertRelease = release
+        ..upsertCompleted = completed;
+
+      controller.recordActivity('w-1', .utc(2026, 7, 4, 12));
+      await started.future;
+      controller.removeWorkspace('w-1');
+      await Future<void>.delayed(Duration.zero);
+
+      release.complete();
+      await completed.future;
+      await Future<void>.delayed(Duration.zero);
+
+      expect(container.read(workspaceActivityControllerProvider), isEmpty);
+      expect(repository.stored, isEmpty);
+    },
+  );
 
   test('removeWorkspace drops the entry from state and persistence', () async {
     final container = ProviderContainer();

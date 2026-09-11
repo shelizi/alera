@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:alera/src/features/agent_status/application/agent_status_controller.dart';
 import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 import 'package:alera/src/features/workbench/application/workspace_activity_repository.dart';
+import 'package:alera/src/features/workbench/application/workspace_activity_persistence_queue.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 part 'workspace_activity_controller.g.dart';
@@ -23,6 +24,8 @@ class WorkspaceActivityController extends _$WorkspaceActivityController
     implements WorkbenchWorkspaceActivityRecorder {
   WorkspaceActivityRepository? _repository;
   final Map<String, DateTime> _dirty = <String, DateTime>{};
+  final WorkspaceActivityPersistenceQueue _persistence =
+      WorkspaceActivityPersistenceQueue();
   Timer? _flushTimer;
 
   @override
@@ -61,7 +64,11 @@ class WorkspaceActivityController extends _$WorkspaceActivityController
     _dirty.remove(workspaceId);
     final repository = _repository;
     if (repository != null) {
-      unawaited(repository.remove(workspaceId).catchError((_) {}));
+      unawaited(
+        _persistence
+            .remove(repository: repository, workspaceId: workspaceId)
+            .catchError((_) {}),
+      );
     }
   }
 
@@ -74,7 +81,11 @@ class WorkspaceActivityController extends _$WorkspaceActivityController
       }
       final batch = Map<String, DateTime>.from(_dirty);
       _dirty.clear();
-      unawaited(repository.upsertAll(batch).catchError((_) {}));
+      unawaited(
+        _persistence
+            .upsertAll(repository: repository, entries: batch)
+            .catchError((_) {}),
+      );
     });
   }
 }
