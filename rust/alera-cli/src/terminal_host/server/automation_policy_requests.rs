@@ -1,6 +1,6 @@
 use alera_core::runtime::{
     AutomationActor, AutomationActorKind, AutomationAgentPolicy, AutomationDefinition,
-    AutomationProjectPolicy, AutomationTarget, ProjectKind,
+    AutomationProjectPolicy, AutomationTarget, ProjectKind, RuntimeStore,
 };
 use chrono::Utc;
 use serde_json::{json, Map, Value};
@@ -71,51 +71,7 @@ impl ServerActor {
                 serde_json::to_value(policy).map_err(|error| HostError::state(error.to_string()))
             }
             "show" => {
-                let mut result = Map::new();
-                if let Some(profile_id) = payload.get("profileId").and_then(Value::as_str) {
-                    let policy = self
-                        .runtime_store
-                        .automation_agent_policy(profile_id)
-                        .await
-                        .map_err(|error| HostError::state(error.to_string()))?;
-                    result.insert(
-                        "agent".to_string(),
-                        serde_json::to_value(policy)
-                            .map_err(|error| HostError::state(error.to_string()))?,
-                    );
-                }
-                if let Some(project_id) = payload.get("projectId").and_then(Value::as_str) {
-                    let policy = self.effective_project_policy(project_id).await?;
-                    result.insert(
-                        "project".to_string(),
-                        serde_json::to_value(policy)
-                            .map_err(|error| HostError::state(error.to_string()))?,
-                    );
-                }
-                if result.is_empty() {
-                    return Err(HostError::format(
-                        "policy show requires profileId or projectId",
-                    ));
-                }
-                if let Some(profile_id) = payload.get("profileId").and_then(Value::as_str) {
-                    let policy = self
-                        .runtime_store
-                        .automation_agent_policy(profile_id)
-                        .await
-                        .map_err(|error| HostError::state(error.to_string()))?;
-                    let project = if let Some(project_id) =
-                        payload.get("projectId").and_then(Value::as_str)
-                    {
-                        Some(self.effective_project_policy(project_id).await?)
-                    } else {
-                        None
-                    };
-                    result.insert(
-                        "effective".to_string(),
-                        json!({"targetProfile": policy, "project": project}),
-                    );
-                }
-                Ok(Value::Object(result))
+                load_automation_policy_show(self.runtime_store.clone(), payload.clone()).await
             }
             _ => Err(HostError::format(
                 "automation policy kind must be show, agent, or project",
@@ -244,7 +200,7 @@ impl ServerActor {
             .automation_project_policy(&workspace.project_id)
             .await
             .map_err(|error| HostError::state(error.to_string()))?;
-        if !repository_declares_automation(&workspace.path, &project.repo_path) {
+        if !repository_declares_automation(&workspace.path, &project.repo_path).await {
             return Err(HostError::state(format!(
                 "repository {} has no automation declaration in alera.toml",
                 workspace.project_id
@@ -286,26 +242,94 @@ impl ServerActor {
         &self,
         project_id: &str,
     ) -> HostResult<AutomationProjectPolicy> {
-        let mut policy = self
-            .runtime_store
-            .automation_project_policy(project_id)
-            .await
-            .map_err(|error| HostError::state(error.to_string()))?;
-        policy.repo_declared = self.repository_declared_for_project(project_id).await?;
-        Ok(policy)
+        load_effective_project_policy(&self.runtime_store, project_id).await
     }
 
     async fn repository_declared_for_project(&self, project_id: &str) -> HostResult<bool> {
-        let Some(project) = self
-            .runtime_store
-            .find_project(project_id)
-            .await
-            .map_err(|error| HostError::state(error.to_string()))?
-        else {
-            return Ok(false);
-        };
-        Ok(repository_declares_automation("", &project.repo_path))
+        repository_declared_for_project(&self.runtime_store, project_id).await
     }
+}
+
+pub(super) async fn load_automation_policy_show(
+    runtime_store: RuntimeStore,
+    payload: Value,
+) -> HostResult<Value> {
+    let profile_id = payload
+        .get("profileId")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let project_id = payload
+        .get("projectId")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    if profile_id.is_none() && project_id.is_none() {
+        return Err(HostError::format(
+            "policy show requires profileId or projectId",
+        ));
+    }
+
+    let agent_policy = if let Some(profile_id) = profile_id.as_deref() {
+        Some(
+            runtime_store
+                .automation_agent_policy(profile_id)
+                .await
+                .map_err(|error| HostError::state(error.to_string()))?,
+        )
+    } else {
+        None
+    };
+    let project_policy = if let Some(project_id) = project_id.as_deref() {
+        Some(load_effective_project_policy(&runtime_store, project_id).await?)
+    } else {
+        None
+    };
+
+    let mut result = Map::new();
+    if let Some(policy) = agent_policy.as_ref() {
+        result.insert(
+            "agent".to_string(),
+            serde_json::to_value(policy).map_err(|error| HostError::state(error.to_string()))?,
+        );
+    }
+    if let Some(policy) = project_policy.as_ref() {
+        result.insert(
+            "project".to_string(),
+            serde_json::to_value(policy).map_err(|error| HostError::state(error.to_string()))?,
+        );
+    }
+    if let Some(policy) = agent_policy {
+        result.insert(
+            "effective".to_string(),
+            json!({"targetProfile": policy, "project": project_policy}),
+        );
+    }
+    Ok(Value::Object(result))
+}
+
+async fn load_effective_project_policy(
+    runtime_store: &RuntimeStore,
+    project_id: &str,
+) -> HostResult<AutomationProjectPolicy> {
+    let mut policy = runtime_store
+        .automation_project_policy(project_id)
+        .await
+        .map_err(|error| HostError::state(error.to_string()))?;
+    policy.repo_declared = repository_declared_for_project(runtime_store, project_id).await?;
+    Ok(policy)
+}
+
+async fn repository_declared_for_project(
+    runtime_store: &RuntimeStore,
+    project_id: &str,
+) -> HostResult<bool> {
+    let Some(project) = runtime_store
+        .find_project(project_id)
+        .await
+        .map_err(|error| HostError::state(error.to_string()))?
+    else {
+        return Ok(false);
+    };
+    Ok(repository_declares_automation("", &project.repo_path).await)
 }
 
 fn require_policy_admin(actor: &AutomationActor) -> HostResult<()> {
@@ -326,37 +350,44 @@ pub(super) fn require_human_automation_actor(actor: &AutomationActor) -> HostRes
     Ok(())
 }
 
-fn repository_declares_automation(workspace_path: &str, project_repo_path: &str) -> bool {
+async fn repository_declares_automation(workspace_path: &str, project_repo_path: &str) -> bool {
     let candidates = [
         Path::new(workspace_path).join("alera.toml"),
         Path::new(project_repo_path).join("alera.toml"),
     ];
-    candidates.iter().any(|path| {
-        let Ok(contents) = std::fs::read_to_string(path) else {
-            return false;
+    for path in candidates {
+        let Ok(contents) = tokio::fs::read_to_string(path).await else {
+            continue;
         };
-        // toml 1.x FromStr for Value parses a single value, not a document.
-        // A file like `automation_declared = true` must go through from_str.
-        let Ok(value) = toml::from_str::<toml::Value>(&contents) else {
-            return false;
-        };
-        let Some(root) = value.as_table() else {
-            return false;
-        };
-        root.get("automation_declared")
-            .and_then(toml::Value::as_bool)
-            .unwrap_or(false)
-            || root
-                .get("automation")
-                .and_then(toml::Value::as_table)
-                .is_some_and(|table| {
-                    table
-                        .get("declared")
-                        .or_else(|| table.get("enabled"))
-                        .and_then(toml::Value::as_bool)
-                        .unwrap_or(false)
-                })
-    })
+        if contents_declare_automation(&contents) {
+            return true;
+        }
+    }
+    false
+}
+
+fn contents_declare_automation(contents: &str) -> bool {
+    // toml 1.x FromStr for Value parses a single value, not a document.
+    // A file like `automation_declared = true` must go through from_str.
+    let Ok(value) = toml::from_str::<toml::Value>(contents) else {
+        return false;
+    };
+    let Some(root) = value.as_table() else {
+        return false;
+    };
+    root.get("automation_declared")
+        .and_then(toml::Value::as_bool)
+        .unwrap_or(false)
+        || root
+            .get("automation")
+            .and_then(toml::Value::as_table)
+            .is_some_and(|table| {
+                table
+                    .get("declared")
+                    .or_else(|| table.get("enabled"))
+                    .and_then(toml::Value::as_bool)
+                    .unwrap_or(false)
+            })
 }
 
 fn decode_agent_policy(value: &Value, profile_id: &str) -> HostResult<AutomationAgentPolicy> {
@@ -404,37 +435,37 @@ mod tests {
         fs::write(dir.join("alera.toml"), contents).unwrap();
     }
 
-    #[test]
-    fn root_automation_declared_flag_is_recognized() {
+    #[tokio::test]
+    async fn root_automation_declared_flag_is_recognized() {
         let dir = tempfile::tempdir().unwrap();
         declare(dir.path(), "automation_declared = true\n");
-        assert!(repository_declares_automation(
-            dir.path().to_str().unwrap(),
-            "/missing"
-        ));
+        assert!(repository_declares_automation(dir.path().to_str().unwrap(), "/missing").await);
     }
 
-    #[test]
-    fn nested_automation_declared_flag_is_recognized() {
+    #[tokio::test]
+    async fn nested_automation_declared_flag_is_recognized() {
         let dir = tempfile::tempdir().unwrap();
         declare(dir.path(), "[automation]\ndeclared = true\n");
-        assert!(repository_declares_automation(
-            "",
-            dir.path().to_str().unwrap()
-        ));
+        assert!(repository_declares_automation("", dir.path().to_str().unwrap()).await);
     }
 
-    #[test]
-    fn missing_or_false_declaration_is_rejected() {
+    #[tokio::test]
+    async fn missing_or_false_declaration_is_rejected() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(!repository_declares_automation(
-            dir.path().to_str().unwrap(),
-            dir.path().to_str().unwrap()
-        ));
+        assert!(
+            !repository_declares_automation(
+                dir.path().to_str().unwrap(),
+                dir.path().to_str().unwrap()
+            )
+            .await
+        );
         declare(dir.path(), "automation_declared = false\n");
-        assert!(!repository_declares_automation(
-            dir.path().to_str().unwrap(),
-            dir.path().to_str().unwrap()
-        ));
+        assert!(
+            !repository_declares_automation(
+                dir.path().to_str().unwrap(),
+                dir.path().to_str().unwrap()
+            )
+            .await
+        );
     }
 }

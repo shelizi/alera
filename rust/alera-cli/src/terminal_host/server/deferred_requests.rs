@@ -10,6 +10,7 @@ use crate::project_management::list_host_directory;
 use crate::terminal_host::host_error::{HostError, HostResult};
 use crate::terminal_host::protocol::{error_response, ok_response};
 
+use super::automation_policy_requests::load_automation_policy_show;
 use super::project_requests::{load_effective_project_config, load_project_branches};
 use super::request_payloads::parse_payload;
 use super::requests::require_string_key;
@@ -81,6 +82,24 @@ impl ServerActor {
             return Ok(true);
         }
         match request_type {
+            "automation.policy"
+                if payload
+                    .get("kind")
+                    .and_then(Value::as_str)
+                    .unwrap_or("show")
+                    == "show"
+                    && payload.get("run").and_then(Value::as_str).is_none() =>
+            {
+                self.require_auth(client_id)?;
+                self.require_request_allowed(client_id, request_type)?;
+                let runtime_store = self.runtime_store.clone();
+                self.start_deferred_request(
+                    client_id,
+                    request_id,
+                    load_automation_policy_show(runtime_store, payload.clone()),
+                );
+                Ok(true)
+            }
             "projectConfig.effective" => {
                 self.require_auth(client_id)?;
                 self.require_request_allowed(client_id, request_type)?;

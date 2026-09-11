@@ -345,6 +345,102 @@ async fn effective_project_config_is_deferred_before_repository_file_read() {
     );
 }
 
+#[tokio::test]
+async fn automation_policy_show_is_deferred_before_repository_declaration_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo_path = dir.path().join("automation-repo");
+    std::fs::create_dir_all(&repo_path).unwrap();
+    std::fs::write(repo_path.join("alera.toml"), "automation_declared = true\n").unwrap();
+    let (handle, mut responses) = ClientHandle::test_channels();
+    let mut actor = test_actor(
+        &dir,
+        HashMap::from([(1, local_client(handle))]),
+        HashMap::new(),
+    )
+    .await;
+    let now = Utc::now();
+    actor
+        .runtime_store
+        .upsert_project(Project {
+            id: "automation-project".into(),
+            name: "Automation Project".into(),
+            repo_path: repo_path.to_string_lossy().into_owned(),
+            created_at: now,
+            updated_at: now,
+            kind: ProjectKind::Folder,
+        })
+        .await
+        .unwrap();
+    let (inbox, mut commands) = tokio::sync::mpsc::unbounded_channel();
+    actor.inbox = inbox;
+
+    let deferred = actor
+        .try_start_deferred_request(
+            1,
+            81,
+            "automation.policy",
+            &json!({"kind": "show", "projectId": "automation-project"}),
+        )
+        .await
+        .unwrap();
+    assert!(deferred);
+
+    actor
+        .handle_line(
+            1,
+            json!({"id": 82, "type": "status.get", "payload": {}}).to_string(),
+        )
+        .await;
+    let status = tokio::time::timeout(Duration::from_secs(1), responses.recv())
+        .await
+        .expect("status response should not wait for automation policy repository read")
+        .unwrap()
+        .as_json()
+        .unwrap();
+    assert_eq!(status["id"], 82);
+
+    let completion = tokio::time::timeout(Duration::from_secs(1), commands.recv())
+        .await
+        .expect("automation policy worker should report completion")
+        .unwrap();
+    actor.handle(completion).await;
+    let policy_response = tokio::time::timeout(Duration::from_secs(1), responses.recv())
+        .await
+        .expect("automation policy completion should answer the original request")
+        .unwrap()
+        .as_json()
+        .unwrap();
+    assert_eq!(policy_response["id"], 81);
+    assert_eq!(policy_response["ok"], true);
+    assert_eq!(policy_response["payload"]["project"]["repoDeclared"], true);
+}
+
+#[tokio::test]
+async fn automation_policy_mutations_and_run_bound_show_remain_actor_owned() {
+    let dir = tempfile::tempdir().unwrap();
+    let (handle, _responses) = ClientHandle::test_channels();
+    let mut actor = test_actor(
+        &dir,
+        HashMap::from([(1, local_client(handle))]),
+        HashMap::new(),
+    )
+    .await;
+
+    for payload in [
+        json!({"kind": "agent", "profileId": "profile", "policy": {}}),
+        json!({"kind": "project", "projectId": "project", "policy": {}}),
+        json!({"kind": "show", "projectId": "project", "run": "run-1"}),
+    ] {
+        assert!(
+            !actor
+                .try_start_deferred_request(1, 91, "automation.policy", &payload)
+                .await
+                .unwrap(),
+            "actor-owned policy request was unexpectedly deferred: {payload}"
+        );
+    }
+}
+
 fn init_git_repository(path: &Path) {
     std::fs::create_dir_all(path).unwrap();
     let repository = git2::Repository::init(path).unwrap();
