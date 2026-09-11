@@ -65,6 +65,24 @@ void _registerWorkbenchControllerWorkspaceGraphTests() {
     },
   );
 
+  test('concurrent same-name tag creation reuses one tag', () async {
+    final first = _controller.createWorkspaceTag('Review');
+    final second = _controller.createWorkspaceTag('  review  ');
+
+    final results = await Future.wait<WorkspaceTag>(<Future<WorkspaceTag>>[
+      first,
+      second,
+    ]);
+
+    expect(results[1].id, results[0].id);
+    expect(
+      _harness.workspaceGraphRepository.tags.where(
+        (tag) => tag.name.toLowerCase() == 'review',
+      ),
+      hasLength(1),
+    );
+  });
+
   test('updateWorkspaceTags applies only tag assignment diffs', () async {
     final workspace = Workspace(
       id: 'workspace-1',

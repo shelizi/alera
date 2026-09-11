@@ -149,6 +149,16 @@ class _FakeWorkspaceGraphRepository implements WorkspaceGraphRepository {
 
   @override
   Future<WorkspaceTag> upsertTag(WorkspaceTag tag) async {
+    final duplicate = tags
+        .where(
+          (candidate) =>
+              candidate.id != tag.id &&
+              candidate.name.toLowerCase() == tag.name.toLowerCase(),
+        )
+        .firstOrNull;
+    if (duplicate != null) {
+      return duplicate;
+    }
     tags.removeWhere((candidate) => candidate.id == tag.id);
     tags.add(tag);
     return tag;
