@@ -236,9 +236,9 @@ mixin _WorkbenchControllerFileTabs
               return state.tabsFor(workspace.id);
             },
             createTab: createTab,
+            applyTabs: (tabs) => _setTabsForWorkspace(workspace.id, tabs),
+            applyLayout: (layout) => _applyLayout(layout, persist: true),
           );
-      _setTabsForWorkspace(workspace.id, result.plan.tabs);
-      await _applyLayout(result.plan.layout, persist: true);
       state = state.copyWith(error: null);
       return result.tab;
     } catch (error) {

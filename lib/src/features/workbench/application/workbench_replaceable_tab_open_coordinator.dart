@@ -17,6 +17,12 @@ typedef WorkbenchKeepPreviewTab = Future<WorkspaceTabRecord> Function(
 typedef WorkbenchPreviewPinned = List<WorkspaceTabRecord> Function(
   WorkspaceTabRecord tab,
 );
+typedef WorkbenchReplaceableTabsApplier = void Function(
+  List<WorkspaceTabRecord> tabs,
+);
+typedef WorkbenchReplaceableLayoutApplier = Future<void> Function(
+  WorkbenchLayout layout,
+);
 
 final class WorkbenchReplaceableTabOpenResult {
   const WorkbenchReplaceableTabOpenResult({
@@ -44,6 +50,8 @@ final class WorkbenchReplaceableTabOpenCoordinator {
     required WorkbenchKeepPreviewTab keepPreviewTab,
     required WorkbenchPreviewPinned onPreviewPinned,
     required WorkbenchReplaceableTabFactory createTab,
+    required WorkbenchReplaceableTabsApplier applyTabs,
+    required WorkbenchReplaceableLayoutApplier applyLayout,
   }) async {
     var tabsBeforeOpen = previousTabs;
     var replacePreviewTabId = preview
@@ -75,6 +83,8 @@ final class WorkbenchReplaceableTabOpenCoordinator {
     if (plan.shouldForgetEditorSession) {
       _editorSessions.forget(tab.id);
     }
+    applyTabs(plan.tabs);
+    await applyLayout(plan.layout);
     return WorkbenchReplaceableTabOpenResult(tab: tab, plan: plan);
   }
 }

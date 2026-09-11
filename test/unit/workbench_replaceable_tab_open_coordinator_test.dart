@@ -5,6 +5,93 @@ import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('commits opened tabs before persisting the planned layout', () async {
+    final events = <String>[];
+    final existing = _tab('existing', path: 'lib/a.dart');
+    final opened = _tab('opened', path: 'lib/b.dart');
+    final layout = WorkbenchLayout.single(
+      workspaceId: 'workspace',
+      tabIds: <String>[existing.id],
+    );
+    final coordinator = WorkbenchReplaceableTabOpenCoordinator(
+      editorSessions: _FakeEditorSessions(events: events),
+    );
+
+    final result = await coordinator.open(
+      workspaceId: 'workspace',
+      previousTabs: <WorkspaceTabRecord>[existing],
+      layout: layout,
+      targetGroupId: layout.activeGroupId,
+      preview: false,
+      keepPreviewTab: (_) async => existing,
+      onPreviewPinned: (_) => <WorkspaceTabRecord>[existing],
+      createTab:
+          ({
+            required workspaceId,
+            required preview,
+            replacePreviewTabId,
+          }) async {
+            events.add('create');
+            return opened;
+          },
+      applyTabs: (tabs) =>
+          events.add('tabs:${tabs.map((tab) => tab.id).join(',')}'),
+      applyLayout: (layout) async => events.add('layout:${layout.activeTabId}'),
+    );
+
+    expect(result.tab, same(opened));
+    expect(events, <String>['create', 'tabs:existing,opened', 'layout:opened']);
+  });
+
+  test(
+    'layout failure keeps editor cleanup and applied tabs without rollback',
+    () async {
+      final events = <String>[];
+      final existing = _tab('preview', path: 'lib/a.dart', preview: true);
+      final layout = WorkbenchLayout.single(
+        workspaceId: 'workspace',
+        tabIds: <String>[existing.id],
+      );
+      final coordinator = WorkbenchReplaceableTabOpenCoordinator(
+        editorSessions: _FakeEditorSessions(events: events),
+      );
+
+      await expectLater(
+        coordinator.open(
+          workspaceId: 'workspace',
+          previousTabs: <WorkspaceTabRecord>[existing],
+          layout: layout,
+          targetGroupId: layout.activeGroupId,
+          preview: true,
+          keepPreviewTab: (_) async => existing,
+          onPreviewPinned: (_) => <WorkspaceTabRecord>[existing],
+          createTab:
+              ({
+                required workspaceId,
+                required preview,
+                replacePreviewTabId,
+              }) async {
+                events.add('create:$replacePreviewTabId');
+                return _tab('preview', path: 'lib/b.dart', preview: true);
+              },
+          applyTabs: (tabs) => events.add('tabs:${tabs.single.filePath}'),
+          applyLayout: (_) async {
+            events.add('layout');
+            throw StateError('layout failed');
+          },
+        ),
+        throwsStateError,
+      );
+
+      expect(events, <String>[
+        'dirty:preview',
+        'create:preview',
+        'forget:preview',
+        'tabs:lib/b.dart',
+        'layout',
+      ]);
+    },
+  );
   test('clean preview is offered as the replacement candidate', () async {
     final events = <String>[];
     final preview = _tab('preview', path: 'lib/a.dart', preview: true);
@@ -40,6 +127,8 @@ void main() {
             events.add('create:$replacePreviewTabId');
             return _tab('preview', path: 'lib/b.dart', preview: true);
           },
+      applyTabs: (_) {},
+      applyLayout: (_) async {},
     );
 
     expect(events, <String>[
@@ -90,6 +179,8 @@ void main() {
             events.add('create:$replacePreviewTabId');
             return _tab('new-tab', path: 'lib/b.dart', preview: true);
           },
+      applyTabs: (_) {},
+      applyLayout: (_) async {},
     );
 
     expect(events, <String>[
@@ -144,6 +235,8 @@ void main() {
               events.add('create:$replacePreviewTabId');
               throw StateError('create failed');
             },
+        applyTabs: (_) {},
+        applyLayout: (_) async {},
       ),
       throwsStateError,
     );
@@ -185,6 +278,8 @@ void main() {
             }) async {
               return _tab('preview', path: 'lib/b.dart', preview: true);
             },
+        applyTabs: (_) {},
+        applyLayout: (_) async {},
       );
 
       expect(events, <String>['dirty:preview', 'forget:preview']);
@@ -229,6 +324,8 @@ void main() {
             events.add('create:$replacePreviewTabId');
             return _tab('new-tab', path: 'lib/b.dart');
           },
+      applyTabs: (_) {},
+      applyLayout: (_) async {},
     );
 
     expect(events, <String>['create:null']);
