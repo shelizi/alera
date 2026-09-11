@@ -1,12 +1,18 @@
 import 'package:alera/src/features/workbench/application/workbench_hosted_review_retention_service.dart';
 import 'package:alera/src/features/workbench/application/workbench_pull_request_diff_tab_store.dart';
+import 'package:alera/src/features/workbench/application/workbench_tab_placement_plan.dart';
+import 'package:alera/src/features/workbench/domain/workbench_layout.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 
-typedef WorkbenchPullRequestDiffTabReady = Future<void> Function({
-  required WorkspaceTabRecord tab,
-  required bool alreadyOpen,
-});
+typedef WorkbenchPullRequestDiffTabPlacementPlanner =
+    WorkbenchTabPlacementPlan Function(WorkspaceTabRecord tab);
+typedef WorkbenchPullRequestDiffTabsApplier = void Function(
+  List<WorkspaceTabRecord> tabs,
+);
+typedef WorkbenchPullRequestDiffLayoutApplier = Future<void> Function(
+  WorkbenchLayout layout,
+);
 
 final class WorkbenchPullRequestDiffTabOpenCoordinator {
   const WorkbenchPullRequestDiffTabOpenCoordinator({
@@ -27,7 +33,9 @@ final class WorkbenchPullRequestDiffTabOpenCoordinator {
     required String parentOid,
     required String retentionId,
     String? subject,
-    required WorkbenchPullRequestDiffTabReady onReady,
+    required WorkbenchPullRequestDiffTabPlacementPlanner planPlacement,
+    required WorkbenchPullRequestDiffTabsApplier applyTabs,
+    required WorkbenchPullRequestDiffLayoutApplier applyLayout,
   }) async {
     var retainedByTab = false;
     WorkspaceTabRecord? newTab;
@@ -63,7 +71,9 @@ final class WorkbenchPullRequestDiffTabOpenCoordinator {
         );
       }
 
-      await onReady(tab: tab, alreadyOpen: alreadyOpen);
+      final placement = planPlacement(tab);
+      applyTabs(placement.tabs);
+      await applyLayout(placement.layout);
       return tab;
     } catch (_) {
       if (!retainedByTab) {

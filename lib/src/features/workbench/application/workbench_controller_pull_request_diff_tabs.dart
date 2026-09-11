@@ -30,20 +30,14 @@ mixin _WorkbenchControllerPullRequestDiffTabs
             parentOid: parentOid,
             retentionId: retentionId,
             subject: subject,
-            onReady: ({required tab, required alreadyOpen}) async {
-              final tabs = alreadyOpen
-                  ? previousTabs
-                  : <WorkspaceTabRecord>[...previousTabs, tab];
-              _setTabsForWorkspace(workspace.id, tabs);
-              final groupId = targetGroupId ?? layout.activeGroupId;
-              final nextLayout = alreadyOpen
-                  ? layout.setActiveTab(
-                      groupId: layout.groupIdForTab(tab.id) ?? groupId,
-                      tabId: tab.id,
-                    )
-                  : layout.addTabToGroup(groupId: groupId, tabId: tab.id);
-              await _applyLayout(nextLayout.sanitize(tabs), persist: true);
-            },
+            planPlacement: (tab) => planWorkbenchReusableTabToGroup(
+              previousTabs: previousTabs,
+              layout: layout,
+              tab: tab,
+              targetGroupId: targetGroupId,
+            ),
+            applyTabs: (tabs) => _setTabsForWorkspace(workspace.id, tabs),
+            applyLayout: (layout) => _applyLayout(layout, persist: true),
           );
       state = state.copyWith(error: null);
       return tab;

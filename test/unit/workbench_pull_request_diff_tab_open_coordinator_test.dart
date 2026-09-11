@@ -1,11 +1,54 @@
 import 'package:alera/src/features/workbench/application/workbench_hosted_review_retention_service.dart';
 import 'package:alera/src/features/workbench/application/workbench_pull_request_diff_tab_open_coordinator.dart';
 import 'package:alera/src/features/workbench/application/workbench_pull_request_diff_tab_store.dart';
+import 'package:alera/src/features/workbench/application/workbench_tab_placement_plan.dart';
+import 'package:alera/src/features/workbench/domain/workbench_layout.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test(
+    'retention is settled before planned tabs and layout are committed',
+    () async {
+      final events = <String>[];
+      final tab = _pullRequestTab(id: 'tab-new', retentionId: 'retention-new');
+      final coordinator = WorkbenchPullRequestDiffTabOpenCoordinator(
+        tabStore: _FakeStore(events: events, result: tab),
+        hostedReviewRetention: _FakeRangeRetention(events: events),
+      );
+
+      await coordinator.open(
+        workspace: _workspace(),
+        previousTabs: const <WorkspaceTabRecord>[],
+        pullRequestNumber: 385,
+        commitOid: 'head-385',
+        parentOid: 'base-385',
+        retentionId: 'retention-new',
+        planPlacement: (tab) {
+          events.add('plan:${tab.id}');
+          return WorkbenchTabPlacementPlan(
+            tabs: <WorkspaceTabRecord>[tab],
+            layout: WorkbenchLayout.single(
+              workspaceId: 'workspace',
+              tabIds: <String>[tab.id],
+            ),
+          );
+        },
+        applyTabs: (tabs) => events.add('tabs:${tabs.single.id}'),
+        applyLayout: (layout) async =>
+            events.add('layout:${layout.activeTabId}'),
+      );
+
+      expect(events, <String>[
+        'open:retention-new',
+        'persist:retention-new',
+        'plan:tab-new',
+        'tabs:tab-new',
+        'layout:tab-new',
+      ]);
+    },
+  );
   test(
     'new pull request tab persists the retention before placement',
     () async {
@@ -27,9 +70,13 @@ void main() {
         parentOid: 'base-385',
         retentionId: 'retention-new',
         subject: 'Subject',
-        onReady: ({required tab, required alreadyOpen}) async {
-          events.add('ready:${tab.id}:$alreadyOpen');
-        },
+        planPlacement: (tab) => _readyPlacement(
+          tab: tab,
+          previousTabs: const <WorkspaceTabRecord>[],
+          events: events,
+        ),
+        applyTabs: (_) {},
+        applyLayout: (_) async {},
       );
 
       expect(result, same(tab));
@@ -62,9 +109,13 @@ void main() {
       commitOid: 'head-385',
       parentOid: 'base-385',
       retentionId: 'retention-new',
-      onReady: ({required tab, required alreadyOpen}) async {
-        events.add('ready:${tab.id}:$alreadyOpen');
-      },
+      planPlacement: (tab) => _readyPlacement(
+        tab: tab,
+        previousTabs: <WorkspaceTabRecord>[tab],
+        events: events,
+      ),
+      applyTabs: (_) {},
+      applyLayout: (_) async {},
     );
 
     expect(events, <String>[
@@ -98,9 +149,12 @@ void main() {
           commitOid: 'head-385',
           parentOid: 'base-385',
           retentionId: 'retention-new',
-          onReady: ({required tab, required alreadyOpen}) async {
+          planPlacement: (tab) {
             events.add('ready');
+            return _placement(tab);
           },
+          applyTabs: (_) {},
+          applyLayout: (_) async {},
         ),
         throwsStateError,
       );
@@ -134,10 +188,13 @@ void main() {
           commitOid: 'head-385',
           parentOid: 'base-385',
           retentionId: 'retention-new',
-          onReady: ({required tab, required alreadyOpen}) async {
-            events.add('ready:${tab.id}:$alreadyOpen');
-            throw StateError('layout failed');
-          },
+          planPlacement: (tab) => _readyPlacement(
+            tab: tab,
+            previousTabs: const <WorkspaceTabRecord>[],
+            events: events,
+          ),
+          applyTabs: (_) {},
+          applyLayout: (_) async => throw StateError('layout failed'),
         ),
         throwsStateError,
       );
@@ -171,13 +228,42 @@ void main() {
         commitOid: 'head-385',
         parentOid: 'base-385',
         retentionId: 'retention-new',
-        onReady: ({required tab, required alreadyOpen}) async {},
+        planPlacement: _placement,
+        applyTabs: (_) {},
+        applyLayout: (_) async {},
       ),
       throwsStateError,
     );
 
     expect(events, <String>['open:retention-new', 'release:retention-new']);
   });
+}
+
+WorkbenchTabPlacementPlan _readyPlacement({
+  required WorkspaceTabRecord tab,
+  required List<WorkspaceTabRecord> previousTabs,
+  required List<String> events,
+}) {
+  final alreadyOpen = previousTabs.any((candidate) => candidate.id == tab.id);
+  events.add('ready:${tab.id}:$alreadyOpen');
+  return _placement(tab, previousTabs: previousTabs);
+}
+
+WorkbenchTabPlacementPlan _placement(
+  WorkspaceTabRecord tab, {
+  List<WorkspaceTabRecord> previousTabs = const <WorkspaceTabRecord>[],
+}) {
+  final alreadyOpen = previousTabs.any((candidate) => candidate.id == tab.id);
+  final tabs = alreadyOpen
+      ? previousTabs
+      : <WorkspaceTabRecord>[...previousTabs, tab];
+  return WorkbenchTabPlacementPlan(
+    tabs: tabs,
+    layout: WorkbenchLayout.single(
+      workspaceId: tab.workspaceId,
+      tabIds: <String>[for (final candidate in tabs) candidate.id],
+    ),
+  );
 }
 
 final class _FakeStore implements WorkbenchPullRequestDiffTabStore {
