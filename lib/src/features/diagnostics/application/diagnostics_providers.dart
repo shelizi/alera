@@ -1,10 +1,9 @@
 import 'package:alera/src/features/diagnostics/infra/crash_reporting.dart';
 import 'package:alera/src/features/diagnostics/infra/diagnostics_service.dart';
+import 'package:alera/src/features/runtime_host/application/runtime_host_lifecycle_providers.dart';
 import 'package:alera/src/features/settings/application/settings_controller.dart';
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
-import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_client.dart';
 import 'package:alera/src/shared/infra/logging/app_logger.dart';
-import 'package:alera/src/shared/infra/runtime/runtime_host_providers.dart';
 import 'package:alera/src/shared/infra/storage/storage_providers.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:logging/logging.dart';
@@ -54,7 +53,7 @@ void diagnosticsSettingsApplier(Ref ref) {
 /// runtime section is still the most useful thing available at that point.
 @riverpod
 Future<RuntimeDiagnosticsInfo> runtimeDiagnosticsInfo(Ref ref) async {
-  final client = ref.watch(socketTerminalHostClientProvider);
+  final client = ref.watch(runtimeHostLifecycleClientProvider);
   try {
     final status = await client.probeRuntimeStatus();
     if (status == null) {

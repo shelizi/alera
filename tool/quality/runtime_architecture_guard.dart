@@ -21,7 +21,6 @@ const _legacyTransportPaths = <String>[
 const _scanRoots = <String>['lib/src', 'test'];
 const _platformRuntimeRoot = 'lib/src/platform/runtime_host';
 const _featureRoot = 'lib/src/features';
-const _runtimeHostApplicationRoot = 'lib/src/features/runtime_host/application';
 const _runtimeHostPresentationRoot =
     'lib/src/features/runtime_host/presentation';
 const _appWindowApplicationRoot = 'lib/src/features/app_window/application';
@@ -41,7 +40,7 @@ void main() {
   _checkLegacyReferences(violations);
   _checkPlatformFeatureDependencies(violations);
   _checkApplicationPresentationDependencies(violations);
-  _checkRuntimeHostApplicationDependencies(violations);
+  _checkCrossFeatureWorkbenchInfraDependencies(violations);
   _checkRuntimeHostPresentationDependencies(violations);
   _checkAppWindowApplicationDependencies(violations);
 
@@ -162,9 +161,12 @@ void _checkApplicationPresentationDependencies(List<String> violations) {
   }
 }
 
-void _checkRuntimeHostApplicationDependencies(List<String> violations) {
-  for (final file in _dartFilesUnder(_runtimeHostApplicationRoot)) {
-    if (_displayPath(file).endsWith('.g.dart')) {
+void _checkCrossFeatureWorkbenchInfraDependencies(List<String> violations) {
+  for (final file in _dartFilesUnder(_featureRoot)) {
+    final path = _displayPath(file);
+    if (!path.contains('/application/') ||
+        path.endsWith('.g.dart') ||
+        path.startsWith('lib/src/features/workbench/')) {
       continue;
     }
     final lines = file.readAsLinesSync();
@@ -175,8 +177,8 @@ void _checkRuntimeHostApplicationDependencies(List<String> violations) {
         continue;
       }
       violations.add(
-        'Runtime-host application imports Workbench infrastructure: '
-        '${_displayPath(file)}:${index + 1}:$uri',
+        'Application code imports Workbench infrastructure across features: '
+        '$path:${index + 1}:$uri',
       );
     }
   }

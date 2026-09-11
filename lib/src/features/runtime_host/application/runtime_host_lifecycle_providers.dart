@@ -11,6 +11,7 @@ import 'package:alera/src/features/settings/application/settings_controller.dart
 import 'package:alera/src/features/workbench/application/workbench_providers.dart';
 import 'package:alera/src/platform/runtime_host/protocol/terminal_host_protocol.dart';
 import 'package:alera/src/shared/infra/runtime/runtime_host_providers.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart' show Provider;
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 part 'runtime_host_lifecycle_providers.g.dart';
@@ -20,12 +21,16 @@ BundledSidecarVersionProbe bundledSidecarVersionProbe(Ref ref) {
   return ProcessBundledSidecarVersionProbe();
 }
 
+final runtimeHostLifecycleClientProvider = Provider<RuntimeHostLifecycleClient>(
+  (ref) => SocketRuntimeHostLifecycleClient(
+    ref.watch(socketTerminalHostClientProvider),
+  ),
+);
+
 @Riverpod(keepAlive: true)
 RuntimeHostLifecycleService runtimeHostLifecycleService(Ref ref) {
   return RuntimeHostLifecycleService(
-    client: SocketRuntimeHostLifecycleClient(
-      ref.watch(socketTerminalHostClientProvider),
-    ),
+    client: ref.watch(runtimeHostLifecycleClientProvider),
     bundledVersionProbe: ref.watch(bundledSidecarVersionProbeProvider),
     readConfig: () {
       final settings = ref.read(settingsControllerProvider);
