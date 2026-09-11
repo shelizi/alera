@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:alera/src/app/app.dart';
+import 'package:alera/src/app/resource_manager_terminal_composition.dart';
 import 'package:alera/src/app/runtime_host_window_exit_composition.dart';
 import 'package:alera/src/app/terminal_runtime_composition.dart';
 import 'package:alera/src/features/app_window/infra/app_window_bootstrap.dart';
@@ -49,6 +50,7 @@ Future<void> _startApp() async {
     ProviderScope(
       observers: const <ProviderObserver>[LoggingProviderObserver()],
       overrides: [
+        resourceManagerTerminalBindingOverride(),
         terminalRuntimeBindingOverride(),
         runtimeHostWindowExitOverride(),
         if (windowBootstrap.database case final db?)

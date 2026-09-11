@@ -10,7 +10,6 @@ import 'package:alera/src/features/resource_manager/presentation/resource_status
 import 'package:alera/src/features/resource_manager/presentation/resource_status_panel.dart';
 import 'package:alera/src/features/workbench/application/workbench_controller.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
-import 'package:alera/src/shared/infra/runtime/runtime_host_providers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -111,9 +110,7 @@ class _ResourceStatusBarControlState
   /// directly and without a prompt.
   Future<void> _killSession(ResourceSessionRow session) async {
     if (session.orphan) {
-      await ref
-          .read(socketTerminalHostClientProvider)
-          .terminate(session.sessionId);
+      await ref.read(resourceSessionTerminatorProvider)(session.sessionId);
       ref.invalidate(resourceSnapshotProvider);
       return;
     }
@@ -142,10 +139,10 @@ class _ResourceStatusBarControlState
   }
 
   Future<void> _killOrphans(List<ResourceSessionRow> orphans) async {
-    final client = ref.read(socketTerminalHostClientProvider);
-    await Future.wait(<Future<void>>[
-      for (final orphan in orphans) client.terminate(orphan.sessionId),
-    ]);
+    await terminateResourceSessions(
+      terminator: ref.read(resourceSessionTerminatorProvider),
+      sessionIds: orphans.map((orphan) => orphan.sessionId),
+    );
     ref.invalidate(resourceSnapshotProvider);
   }
 

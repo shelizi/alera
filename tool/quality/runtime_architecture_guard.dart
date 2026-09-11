@@ -24,6 +24,8 @@ const _featureRoot = 'lib/src/features';
 const _runtimeHostPresentationRoot =
     'lib/src/features/runtime_host/presentation';
 const _appWindowApplicationRoot = 'lib/src/features/app_window/application';
+const _resourceManagerPresentationRoot =
+    'lib/src/features/resource_manager/presentation';
 const _workbenchInfraImportPrefix =
     'package:alera/src/features/workbench/infra/';
 const _runtimeTransportInfraImportPrefix =
@@ -43,6 +45,7 @@ void main() {
   _checkCrossFeatureWorkbenchInfraDependencies(violations);
   _checkRuntimeHostPresentationDependencies(violations);
   _checkAppWindowApplicationDependencies(violations);
+  _checkResourceManagerPresentationDependencies(violations);
 
   if (violations.isEmpty) {
     stdout.writeln('Runtime architecture guard passed.');
@@ -217,6 +220,23 @@ void _checkAppWindowApplicationDependencies(List<String> violations) {
       }
       violations.add(
         'App-window application imports runtime transport infrastructure: '
+        '${_displayPath(file)}:${index + 1}:$uri',
+      );
+    }
+  }
+}
+
+void _checkResourceManagerPresentationDependencies(List<String> violations) {
+  for (final file in _dartFilesUnder(_resourceManagerPresentationRoot)) {
+    final lines = file.readAsLinesSync();
+    for (var index = 0; index < lines.length; index += 1) {
+      final match = _dependencyDirective.firstMatch(lines[index]);
+      final uri = match?.group(1);
+      if (uri == null || !uri.startsWith(_runtimeTransportInfraImportPrefix)) {
+        continue;
+      }
+      violations.add(
+        'Resource-manager presentation imports runtime transport infrastructure: '
         '${_displayPath(file)}:${index + 1}:$uri',
       );
     }

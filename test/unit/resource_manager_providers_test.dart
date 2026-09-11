@@ -108,6 +108,19 @@ void main() {
     });
   });
 
+  test('terminateResourceSessions forwards every orphan session id', () async {
+    final terminated = <String>[];
+
+    await terminateResourceSessions(
+      terminator: (sessionId) async {
+        terminated.add(sessionId);
+      },
+      sessionIds: const <String>['orphan-1', 'orphan-2'],
+    );
+
+    expect(terminated, <String>['orphan-1', 'orphan-2']);
+  });
+
   group('polling cadence', () {
     test('the panel polls faster while it is open', () {
       // Open matches the host's own 2s sampling; closed keeps the chip fresh

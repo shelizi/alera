@@ -11,6 +11,7 @@ import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/platform/runtime_host/protocol/terminal_host_protocol.dart';
 import 'package:alera/src/shared/infra/runtime/runtime_host_providers.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart' show Provider;
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 part 'resource_manager_providers.g.dart';
@@ -28,6 +29,24 @@ const resourceSnapshotOpenInterval = Duration(seconds: 2);
 const resourceSnapshotClosedInterval = Duration(seconds: 15);
 
 const _resourceSnapshotTimeout = Duration(seconds: 5);
+
+typedef ResourceSessionTerminator = Future<void> Function(String sessionId);
+
+final resourceSessionTerminatorProvider = Provider<ResourceSessionTerminator>(
+  (ref) =>
+      (sessionId) => Future<void>.error(
+        StateError('Resource session terminator is not bound.'),
+      ),
+);
+
+Future<void> terminateResourceSessions({
+  required ResourceSessionTerminator terminator,
+  required Iterable<String> sessionIds,
+}) async {
+  await Future.wait(<Future<void>>[
+    for (final sessionId in sessionIds) terminator(sessionId),
+  ]);
+}
 
 /// Whether the resource panel is on screen. Drives the polling cadence.
 @riverpod
