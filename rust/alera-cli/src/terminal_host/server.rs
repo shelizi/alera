@@ -99,6 +99,8 @@ mod coordinator_requests;
 mod coordinator_stall_policy;
 mod declared_catalog_requests;
 mod deferred_requests;
+#[cfg(test)]
+mod deferred_requests_tests;
 mod host_service_agent_quota;
 mod host_service_requests;
 mod host_status;
@@ -436,6 +438,13 @@ impl ServerActor {
                 result,
             } => {
                 self.finish_workspace_sidebar_snapshot(client_id, request_id, result);
+            }
+            ServerCommand::DeferredBlockingRequestFinished {
+                client_id,
+                request_id,
+                result,
+            } => {
+                self.finish_deferred_blocking_request(client_id, request_id, result);
             }
             ServerCommand::Pty {
                 session_id,

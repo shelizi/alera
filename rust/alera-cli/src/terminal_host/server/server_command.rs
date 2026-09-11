@@ -53,6 +53,11 @@ pub enum ServerCommand {
         request_id: i64,
         result: HostResult<Value>,
     },
+    DeferredBlockingRequestFinished {
+        client_id: u64,
+        request_id: i64,
+        result: HostResult<Value>,
+    },
     Pty {
         session_id: String,
         event: PtyEvent,

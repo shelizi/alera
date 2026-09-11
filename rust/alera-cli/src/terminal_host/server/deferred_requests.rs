@@ -4,14 +4,56 @@ use crate::managed_workspace::{
     ManagedWorkspaceCreateRequest, ManagedWorkspaceRemoveRequest,
     ManagedWorkspaceSwitchBranchRequest,
 };
+use crate::project_management::list_host_directory;
 use crate::terminal_host::host_error::{HostError, HostResult};
+use crate::terminal_host::protocol::{error_response, ok_response};
 
 use super::request_payloads::parse_payload;
 use super::requests::require_string_key;
 use super::runtime_mutations::RuntimeMutationRequest;
-use super::ServerActor;
+use super::{ServerActor, ServerCommand};
 
 impl ServerActor {
+    pub(super) fn start_deferred_blocking_request<F>(
+        &self,
+        client_id: u64,
+        request_id: i64,
+        task: F,
+    ) where
+        F: FnOnce() -> HostResult<Value> + Send + 'static,
+    {
+        let inbox = self.inbox.clone();
+        tokio::spawn(async move {
+            let result = tokio::task::spawn_blocking(task)
+                .await
+                .unwrap_or_else(|error| {
+                    Err(HostError::state(format!(
+                        "Deferred request failed: {error}"
+                    )))
+                });
+            let _ = inbox.send(ServerCommand::DeferredBlockingRequestFinished {
+                client_id,
+                request_id,
+                result,
+            });
+        });
+    }
+
+    pub(super) fn finish_deferred_blocking_request(
+        &self,
+        client_id: u64,
+        request_id: i64,
+        result: HostResult<Value>,
+    ) {
+        if self.require_auth(client_id).is_err() {
+            return;
+        }
+        match result {
+            Ok(value) => self.client_write(client_id, ok_response(request_id, value)),
+            Err(error) => self.client_write(client_id, error_response(request_id, &error)),
+        }
+    }
+
     pub(super) async fn try_start_deferred_request(
         &mut self,
         client_id: u64,
@@ -26,6 +68,18 @@ impl ServerActor {
             return Ok(true);
         }
         match request_type {
+            "hostDirectory.list" => {
+                self.require_auth(client_id)?;
+                self.require_request_allowed(client_id, request_type)?;
+                let path = require_string_key(payload, "path")?.to_string();
+                self.start_deferred_blocking_request(client_id, request_id, move || {
+                    let entries = list_host_directory(&path)
+                        .map_err(|error| HostError::state(error.to_string()))?;
+                    serde_json::to_value(entries)
+                        .map_err(|error| HostError::state(error.to_string()))
+                });
+                Ok(true)
+            }
             "workspaceSidebar.snapshot" => {
                 self.require_auth(client_id)?;
                 self.require_request_allowed(client_id, request_type)?;
