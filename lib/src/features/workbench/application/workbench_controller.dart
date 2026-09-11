@@ -59,7 +59,7 @@ import 'package:alera/src/features/workbench/application/workbench_workspace_par
 import 'package:alera/src/features/workbench/application/workbench_workspace_selection_hydrator.dart';
 import 'package:alera/src/features/workbench/application/workbench_workspace_creation_coordinator.dart';
 import 'package:alera/src/features/workbench/application/workbench_workspace_creation_parent_link_service.dart';
-import 'package:alera/src/features/workbench/application/workbench_workspace_tree_pin_policy.dart';
+import 'package:alera/src/features/workbench/application/workbench_workspace_tree_pin_coordinator.dart';
 import 'package:alera/src/features/workbench/application/workbench_workspace_set_sync.dart';
 import 'package:alera/src/features/workbench/application/workbench_workspace_subscription_registry.dart';
 import 'package:alera/src/features/workbench/application/workbench_workspace_tab_closing_scope.dart';

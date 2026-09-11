@@ -197,13 +197,10 @@ mixin _WorkbenchControllerProjects
     required String workspaceId,
     required bool isPinned,
   }) async {
-    for (final id in workbenchWorkspaceTreePinTargets(
-      state: state,
-      workspaceId: workspaceId,
-      isPinned: isPinned,
-    )) {
-      await setWorkspacePinned(workspaceId: id, isPinned: isPinned);
-    }
+    await WorkbenchWorkspaceTreePinCoordinator(
+      setPinned: ({required workspaceId, required isPinned}) =>
+          setWorkspacePinned(workspaceId: workspaceId, isPinned: isPinned),
+    ).run(state: state, workspaceId: workspaceId, isPinned: isPinned);
   }
 
   Future<List<WorkspaceTag>> listWorkspaceTags() async {
