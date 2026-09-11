@@ -98,6 +98,8 @@ use mobile_gateway_replacement::MobileGatewayReplacement;
 mod coordinator_requests;
 mod coordinator_stall_policy;
 mod declared_catalog_requests;
+#[cfg(test)]
+mod deferred_project_requests_tests;
 mod deferred_requests;
 #[cfg(test)]
 mod deferred_requests_tests;
