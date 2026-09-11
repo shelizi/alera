@@ -9,6 +9,72 @@ import 'package:logging/logging.dart';
 
 void main() {
   group('AppWindowLifecycleCoordinator shutdown', () {
+    test('stop wins over an in-flight start prevent-close enable', () async {
+      final enableStarted = Completer<void>();
+      final enableRelease = Completer<void>();
+      final window = _RecordingWindowController()
+        ..enablePreventCloseStarted = enableStarted
+        ..enablePreventCloseBarrier = enableRelease.future;
+      final coordinator = AppWindowLifecycleCoordinator(
+        repository: _RecordingStateRepository(),
+        window: window,
+        saveDebounce: .zero,
+      );
+
+      final starting = coordinator.start();
+      await enableStarted.future;
+      await coordinator.stop();
+      expect(window.preventClose, isFalse);
+
+      enableRelease.complete();
+      await starting;
+
+      expect(window.listeners, isEmpty);
+      expect(window.preventClose, isFalse);
+    });
+
+    test(
+      'restart ignores state restored by an older in-flight start',
+      () async {
+        final firstLoadStarted = Completer<void>();
+        final firstLoad = Completer<AppWindowState?>();
+        final repository = _RecordingStateRepository()
+          ..loadStarted = firstLoadStarted
+          ..loadOverride = firstLoad.future;
+        final window = _RecordingWindowController();
+        final coordinator = AppWindowLifecycleCoordinator(
+          repository: repository,
+          window: window,
+          saveDebounce: .zero,
+        );
+
+        final firstStart = coordinator.start();
+        await firstLoadStarted.future;
+        await coordinator.stop();
+        repository.state = AppWindowState(
+          normalBounds: AppWindowBounds.fromRect(window.bounds),
+        );
+        await coordinator.start();
+
+        firstLoad.complete(
+          const AppWindowState(
+            normalBounds: AppWindowBounds(
+              left: 1,
+              top: 2,
+              width: 300,
+              height: 200,
+            ),
+          ),
+        );
+        await firstStart;
+        await coordinator.flush();
+
+        expect(repository.saved, isEmpty);
+        expect(window.preventClose, isTrue);
+        expect(window.listeners, <AppWindowEventListener>[coordinator]);
+      },
+    );
+
     test('resets close state before a gate failure is logged', () async {
       final repository = _RecordingStateRepository();
       final window = _RecordingWindowController();
@@ -351,6 +417,8 @@ class _RecordingStateRepository implements AppWindowStateRepository {
   Object? saveError;
   Completer<void>? saveStarted;
   Future<void>? saveBarrier;
+  Completer<void>? loadStarted;
+  Future<AppWindowState?>? loadOverride;
   final List<AppWindowState> saved = <AppWindowState>[];
 
   @override
@@ -359,7 +427,19 @@ class _RecordingStateRepository implements AppWindowStateRepository {
   }
 
   @override
-  Future<AppWindowState?> load() async => state;
+  Future<AppWindowState?> load() async {
+    final override = loadOverride;
+    if (override != null) {
+      loadOverride = null;
+      final started = loadStarted;
+      loadStarted = null;
+      if (started != null && !started.isCompleted) {
+        started.complete();
+      }
+      return override;
+    }
+    return state;
+  }
 
   @override
   Future<void> save(AppWindowState state) async {
@@ -390,6 +470,9 @@ class _RecordingWindowController implements AppWindowController {
   Future<void>? captureBarrier;
   Completer<void>? hideStarted;
   Future<void>? hideBarrier;
+  Completer<void>? enablePreventCloseStarted;
+  Future<void>? enablePreventCloseBarrier;
+  bool preventClose = false;
 
   void emit(void Function(AppWindowEventListener listener) notify) {
     for (final listener in List<AppWindowEventListener>.from(listeners)) {
@@ -479,6 +562,14 @@ class _RecordingWindowController implements AppWindowController {
   @override
   Future<void> setPreventClose(bool value) async {
     preventCloseValues.add(value);
+    if (value) {
+      final started = enablePreventCloseStarted;
+      if (started != null && !started.isCompleted) {
+        started.complete();
+      }
+      await enablePreventCloseBarrier;
+    }
+    preventClose = value;
   }
 
   @override

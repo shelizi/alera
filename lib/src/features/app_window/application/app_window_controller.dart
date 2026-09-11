@@ -161,6 +161,7 @@ class AppWindowLifecycleCoordinator._({
   Future<void>? _saveInFlight;
   bool _saveRequested = false;
   bool _started = false;
+  int _lifecycleGeneration = 0;
   AppWindowCloseStateMachine _closeState = const AppWindowCloseStateMachine();
   Future<void>? _hideFuture;
 
@@ -194,9 +195,19 @@ class AppWindowLifecycleCoordinator._({
       return;
     }
     _started = true;
+    final generation = ++_lifecycleGeneration;
     _window.addListener(this);
     await _window.setPreventClose(true);
-    _lastState = await _repository.load();
+    if (!_isStartCurrent(generation)) {
+      if (!_started && !_closeState.isClosing && !_closeState.isClosed) {
+        await _window.setPreventClose(false);
+      }
+      return;
+    }
+    final restoredState = await _repository.load();
+    if (_isStartCurrent(generation)) {
+      _lastState = restoredState;
+    }
   }
 
   Future<void> stop() async {
@@ -207,10 +218,14 @@ class AppWindowLifecycleCoordinator._({
     _debounceTimer = null;
     _window.removeListener(this);
     _started = false;
+    _lifecycleGeneration += 1;
     if (!_closeState.isClosing && !_closeState.isClosed) {
       await _window.setPreventClose(false);
     }
   }
+
+  bool _isStartCurrent(int generation) =>
+      _started && generation == _lifecycleGeneration;
 
   Future<void> flush() async {
     if (_closeState.isClosed) {
