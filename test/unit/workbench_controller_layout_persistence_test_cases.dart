@@ -70,6 +70,61 @@ void _registerWorkbenchControllerLayoutPersistenceTests() {
     expect(_harness.workbenchRepository.upsertWorkbenchLayoutCalls, 0);
   });
 
+  test(
+    'newer layout persistence wins when an older write completes late',
+    () async {
+      await _controller.bootstrap();
+      final workspace = await _selectMainWorkspace(_controller, _harness);
+      final groupId = _controller.state.layoutFor(workspace.id)!.activeGroupId;
+      await _controller.splitWorkbenchGroupWithTerminal(
+        workspace: workspace,
+        groupId: groupId,
+        zone: .right,
+      );
+      await _flush();
+
+      final baselineCalls =
+          _harness.workbenchRepository.upsertWorkbenchLayoutCalls;
+      final started = Completer<void>();
+      final release = Completer<void>();
+      final completed = Completer<void>();
+      _harness.workbenchRepository.blockNextWorkbenchLayoutUpsert(
+        started: started,
+        release: release,
+        completed: completed,
+      );
+
+      _controller.updateWorkbenchSplitRatio(
+        workspaceId: workspace.id,
+        nodePath: const <int>[],
+        ratio: 0.3,
+      );
+      await started.future;
+      _controller.updateWorkbenchSplitRatio(
+        workspaceId: workspace.id,
+        nodePath: const <int>[],
+        ratio: 0.7,
+      );
+      expect(_controller.state.layoutFor(workspace.id)!.root.ratio, 0.7);
+
+      release.complete();
+      await completed.future;
+      await _flushUntil(
+        () =>
+            _harness.workbenchRepository.upsertWorkbenchLayoutCalls >=
+            baselineCalls + 2,
+      );
+
+      expect(
+        _harness.workbenchRepository
+            .peekWorkbenchLayout(workspace.id)!
+            .root
+            .ratio,
+        0.7,
+      );
+    },
+  );
+
   test('background layout failures are recorded instead of escaping', () async {
     await _controller.bootstrap();
     final workspace = await _selectMainWorkspace(_controller, _harness);

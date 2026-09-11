@@ -321,6 +321,9 @@ class _FakeWorkbenchRepository implements WorkbenchRepository {
   Completer<void>? _listWorkspaceTabsRelease;
   Completer<void>? _setWorkspacePinnedStarted;
   Completer<void>? _setWorkspacePinnedRelease;
+  Completer<void>? _upsertWorkbenchLayoutStarted;
+  Completer<void>? _upsertWorkbenchLayoutRelease;
+  Completer<void>? _upsertWorkbenchLayoutCompleted;
   Object? upsertWorkspaceError, upsertWorkspaceTabError;
   Object? upsertWorkbenchLayoutError, removeWorkspaceTabError;
   int upsertWorkbenchLayoutCalls = 0;
@@ -537,8 +540,35 @@ class _FakeWorkbenchRepository implements WorkbenchRepository {
     if (upsertWorkbenchLayoutError case final Object error) {
       throw error;
     }
+    final started = _upsertWorkbenchLayoutStarted;
+    final release = _upsertWorkbenchLayoutRelease;
+    final completed = _upsertWorkbenchLayoutCompleted;
+    if (started != null) {
+      _upsertWorkbenchLayoutStarted = null;
+      _upsertWorkbenchLayoutRelease = null;
+      _upsertWorkbenchLayoutCompleted = null;
+      if (!started.isCompleted) {
+        started.complete();
+      }
+      if (release != null) {
+        await release.future;
+      }
+    }
     _layoutsByWorkspace[layout.workspaceId] = layout;
+    if (completed != null && !completed.isCompleted) {
+      completed.complete();
+    }
     return layout;
+  }
+
+  void blockNextWorkbenchLayoutUpsert({
+    required Completer<void> started,
+    required Completer<void> release,
+    required Completer<void> completed,
+  }) {
+    _upsertWorkbenchLayoutStarted = started;
+    _upsertWorkbenchLayoutRelease = release;
+    _upsertWorkbenchLayoutCompleted = completed;
   }
 
   void blockFindWorkbenchLayoutWith(Future<WorkbenchLayout?> future) {

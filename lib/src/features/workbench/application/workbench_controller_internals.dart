@@ -13,8 +13,13 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController {
 
   WorkspaceService get _workspaceService => ref.read(workspaceServiceProvider);
 
+  WorkbenchSequencedLayoutRepository? _layoutRepository;
+
+  WorkbenchSequencedLayoutRepository get _sequencedLayoutRepository =>
+      _layoutRepository ??= WorkbenchSequencedLayoutRepository(_repository);
+
   WorkbenchLayoutResolver get _layoutResolver =>
-      WorkbenchLayoutResolver(_repository);
+      WorkbenchLayoutResolver(_sequencedLayoutRepository);
 
   Future<T> _withWorktreeRefreshSuspended<T>(
     String projectId,
@@ -229,7 +234,7 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController {
       _tabFocusHistory.record(layout.workspaceId, activeTabId);
     }
     if (persist) {
-      await _repository.upsertWorkbenchLayout(layout);
+      await _sequencedLayoutRepository.upsertWorkbenchLayout(layout);
     }
   }
 
@@ -244,7 +249,7 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController {
 
   void _persistLayoutInBackground(WorkbenchLayout layout) {
     unawaited(
-      _repository
+      _sequencedLayoutRepository
           .upsertWorkbenchLayout(layout)
           .then<void>((_) {})
           .catchError(_recordLayoutError),
