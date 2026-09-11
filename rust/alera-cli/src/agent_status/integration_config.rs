@@ -460,5 +460,8 @@ fn sh_quote(value: &str) -> String {
 }
 
 #[cfg(test)]
+#[path = "integration_config_claude_tests.rs"]
+mod claude_tests;
+#[cfg(test)]
 #[path = "integration_config_tests.rs"]
 mod tests;
