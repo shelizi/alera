@@ -8,29 +8,16 @@ mixin _WorkbenchControllerNavigation
   Future<void> openPersistedWorkspaceTab({
     required String workspaceId,
     required String tabId,
-  }) async {
-    final tab = await _repository.findWorkspaceTabById(tabId);
-    if (_disposed) return;
-    if (tab == null || tab.workspaceId != workspaceId) {
-      throw StateError(
-        'The created tab is no longer available in this workspace.',
-      );
-    }
-    final currentTabs = state.tabsFor(workspaceId);
-    final plan = planWorkbenchPersistedTabRestore(
-      currentTabs: currentTabs,
-      layout: _layoutForMutation(workspaceId, currentTabs),
-      restoredTab: tab,
-    );
-    _setTabsForWorkspace(workspaceId, plan.tabs);
-    final layoutToPersist = plan.layoutToPersist;
-    if (layoutToPersist != null) {
-      await _applyLayout(layoutToPersist, persist: true);
-    }
-    if (!_disposed) {
-      await selectWorkspaceTab(workspaceId: workspaceId, tabId: tabId);
-    }
-  }
+  }) => WorkbenchPersistedTabOpenCoordinator(
+    findTab: _repository.findWorkspaceTabById,
+    isDisposed: () => _disposed,
+    readCurrentTabs: () => state.tabsFor(workspaceId),
+    layoutForMutation: (tabs) => _layoutForMutation(workspaceId, tabs),
+    applyTabs: (tabs) => _setTabsForWorkspace(workspaceId, tabs),
+    applyLayout: (layout) => _applyLayout(layout, persist: true),
+    selectTab: ({required workspaceId, required tabId}) =>
+        selectWorkspaceTab(workspaceId: workspaceId, tabId: tabId),
+  ).open(workspaceId: workspaceId, tabId: tabId);
 
   Future<void> selectWorkspaceTab({
     required String workspaceId,
