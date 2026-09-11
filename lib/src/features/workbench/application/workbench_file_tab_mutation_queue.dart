@@ -1,23 +1,7 @@
-import 'dart:async';
+import 'package:alera/src/features/workbench/application/workbench_serial_mutation_queue.dart';
 
 final class WorkbenchFileTabMutationQueue {
-  Future<void>? _tail;
+  final WorkbenchSerialMutationQueue _delegate = WorkbenchSerialMutationQueue();
 
-  Future<T> run<T>(Future<T> Function() action) async {
-    final previous = _tail;
-    final gate = Completer<void>();
-    final gateFuture = gate.future;
-    _tail = gateFuture;
-    if (previous != null) {
-      await previous;
-    }
-    try {
-      return await action();
-    } finally {
-      gate.complete();
-      if (identical(_tail, gateFuture)) {
-        _tail = null;
-      }
-    }
-  }
+  Future<T> run<T>(Future<T> Function() action) => _delegate.run(action);
 }
