@@ -9,6 +9,8 @@ mod git_ancestry_tests;
 mod git_diff_blob_tests;
 #[path = "git_diff_edge_tests.rs"]
 mod git_diff_edge_tests;
+#[path = "git_diff_pathspec_tests.rs"]
+mod git_diff_pathspec_tests;
 #[path = "git_explorer_status_tests.rs"]
 mod git_explorer_status_tests;
 #[path = "git_range_tests.rs"]
