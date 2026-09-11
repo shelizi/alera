@@ -212,15 +212,17 @@ pub async fn effective_project_config(
         });
     }
     let config_path = Path::new(&project.repo_path).join("alera.toml");
-    if !config_path.exists() {
-        return Ok(EffectiveProjectConfigPayload {
-            config: ProjectConfig::default(),
-            origin: "none",
-            error: None,
-        });
-    }
-    let parsed = std::fs::read_to_string(&config_path)
-        .with_context(|| format!("Could not load {}", config_path.display()))
+    let contents = match tokio::fs::read_to_string(&config_path).await {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(EffectiveProjectConfigPayload {
+                config: ProjectConfig::default(),
+                origin: "none",
+                error: None,
+            });
+        }
+        result => result.with_context(|| format!("Could not load {}", config_path.display())),
+    };
+    let parsed = contents
         .and_then(|contents| crate::project_config_toml::parse_project_config_toml(&contents));
     match parsed {
         Ok(config) => Ok(EffectiveProjectConfigPayload {

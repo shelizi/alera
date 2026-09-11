@@ -267,6 +267,84 @@ async fn workspace_repository_url_is_deferred_before_git_access() {
     );
 }
 
+#[tokio::test]
+async fn effective_project_config_is_deferred_before_repository_file_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo_path = dir.path().join("repo");
+    std::fs::create_dir_all(&repo_path).unwrap();
+    std::fs::write(
+        repo_path.join("alera.toml"),
+        "[new_workspace]\nprompt_append = \"From repository\"\n",
+    )
+    .unwrap();
+    let (handle, mut responses) = ClientHandle::test_channels();
+    let mut actor = test_actor(
+        &dir,
+        HashMap::from([(1, local_client(handle))]),
+        HashMap::new(),
+    )
+    .await;
+    let now = Utc::now();
+    actor
+        .runtime_store
+        .upsert_project(Project {
+            id: "project-config".into(),
+            name: "Project Config".into(),
+            repo_path: repo_path.to_string_lossy().into_owned(),
+            created_at: now,
+            updated_at: now,
+            kind: ProjectKind::Folder,
+        })
+        .await
+        .unwrap();
+    let (inbox, mut commands) = tokio::sync::mpsc::unbounded_channel();
+    actor.inbox = inbox;
+
+    let deferred = actor
+        .try_start_deferred_request(
+            1,
+            71,
+            "projectConfig.effective",
+            &json!({"projectId": "project-config"}),
+        )
+        .await
+        .unwrap();
+    assert!(deferred);
+
+    actor
+        .handle_line(
+            1,
+            json!({"id": 72, "type": "status.get", "payload": {}}).to_string(),
+        )
+        .await;
+    let status = tokio::time::timeout(Duration::from_secs(1), responses.recv())
+        .await
+        .expect("status response should not wait for alera.toml")
+        .unwrap()
+        .as_json()
+        .unwrap();
+    assert_eq!(status["id"], 72);
+
+    let completion = tokio::time::timeout(Duration::from_secs(1), commands.recv())
+        .await
+        .expect("effective config worker should report completion")
+        .unwrap();
+    actor.handle(completion).await;
+    let config_response = tokio::time::timeout(Duration::from_secs(1), responses.recv())
+        .await
+        .expect("effective config completion should answer the original request")
+        .unwrap()
+        .as_json()
+        .unwrap();
+    assert_eq!(config_response["id"], 71);
+    assert_eq!(config_response["ok"], true);
+    assert_eq!(config_response["payload"]["origin"], "repoFile");
+    assert_eq!(
+        config_response["payload"]["config"]["newWorkspace"]["promptAppend"],
+        "From repository"
+    );
+}
+
 fn init_git_repository(path: &Path) {
     std::fs::create_dir_all(path).unwrap();
     let repository = git2::Repository::init(path).unwrap();

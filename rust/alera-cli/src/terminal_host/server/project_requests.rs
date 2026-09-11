@@ -109,10 +109,7 @@ impl ServerActor {
         payload: &Value,
     ) -> HostResult<Value> {
         let project_id = string_key(payload, "projectId")?;
-        let result = effective_project_config(&self.runtime_store, &project_id)
-            .await
-            .map_err(state_error)?;
-        serde_json::to_value(result).map_err(state_error)
+        load_effective_project_config(self.runtime_store.clone(), project_id).await
     }
 
     pub(super) fn host_directory_roots_request(&self) -> HostResult<Value> {
@@ -441,6 +438,16 @@ async fn finish_failed_clone(
             None,
         )
         .await;
+}
+
+pub(super) async fn load_effective_project_config(
+    runtime_store: RuntimeStore,
+    project_id: String,
+) -> HostResult<Value> {
+    let result = effective_project_config(&runtime_store, &project_id)
+        .await
+        .map_err(state_error)?;
+    serde_json::to_value(result).map_err(state_error)
 }
 
 pub(super) async fn load_project_branches(
