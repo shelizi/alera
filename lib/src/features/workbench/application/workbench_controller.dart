@@ -39,6 +39,7 @@ import 'package:alera/src/features/workbench/application/workbench_cleared_layou
 import 'package:alera/src/features/workbench/application/workbench_closed_tabs_completion_coordinator.dart';
 import 'package:alera/src/features/workbench/application/workbench_closed_tabs_plan.dart';
 import 'package:alera/src/features/workbench/application/workbench_project_set_sync.dart';
+import 'package:alera/src/features/workbench/application/workbench_project_workspace_subscription_coordinator.dart';
 import 'package:alera/src/features/workbench/application/workbench_pull_request_diff_tab_open_coordinator.dart';
 import 'package:alera/src/features/workbench/application/workbench_pull_request_diff_tab_store_adapter.dart';
 import 'package:alera/src/features/workbench/application/workbench_replaceable_tab_editor_sessions.dart';

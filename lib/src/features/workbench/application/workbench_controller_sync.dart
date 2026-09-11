@@ -46,33 +46,21 @@ mixin _WorkbenchControllerSync
       unawaited(_persistViewPrefs());
     }
 
-    for (final project in projects) {
-      _syncWorktreeMetadataWatcher(project);
-      if (_workspaceSubscriptions.contains(project.id)) {
-        continue;
-      }
-      _workspaceSubscriptions.watch(
-        projectId: project.id,
-        stream: _repository.watchWorkspaces(project.id),
-        onData: (workspaces) => _onWorkspacesChanged(project, workspaces),
-      );
-      unawaited(_ensureMainWorkspaceForProject(project));
-    }
-
-    final removedProjectIds = _workspaceSubscriptions.projectIds
-        .where((projectId) => !validProjectIds.contains(projectId))
-        .toList(growable: false);
-    for (final projectId in removedProjectIds) {
-      _workspaceSubscriptions.cancelProject(projectId);
-      final removedWorkspaceIds = _tabSubscriptions.workspaceIdsForProject(
-        projectId,
-      );
-      for (final workspaceId in removedWorkspaceIds) {
-        _tabSubscriptions.cancelWorkspace(workspaceId);
-      }
-      _clearedLayouts.forgetAll(removedWorkspaceIds);
-    }
-    _worktreeMetadataWatcherRegistry.prune(validProjectIds);
+    WorkbenchProjectWorkspaceSubscriptionCoordinator(
+      workspaceSubscriptions: _workspaceSubscriptions,
+      tabSubscriptions: _tabSubscriptions,
+    ).sync(
+      projects: projects,
+      validProjectIds: validProjectIds,
+      syncMetadataWatcher: _syncWorktreeMetadataWatcher,
+      watchWorkspaces: _repository.watchWorkspaces,
+      onWorkspacesChanged: _onWorkspacesChanged,
+      ensureMainWorkspaceInBackground: (project) {
+        unawaited(_ensureMainWorkspaceForProject(project));
+      },
+      forgetClearedLayouts: _clearedLayouts.forgetAll,
+      pruneMetadataWatchers: _worktreeMetadataWatcherRegistry.prune,
+    );
     _ensureSelectionHasTab();
   }
 
