@@ -34,6 +34,22 @@ fn context_token_hash(token: &str) -> String {
     hex::encode(Sha256::digest(token.as_bytes()))
 }
 
+fn validate_dispatch_context_token(
+    dispatch: &OrchestrationDispatchContext,
+    payload: &Value,
+) -> HostResult<()> {
+    if let Some(expected_hash) = dispatch.context_token_hash.as_deref() {
+        let token = optional_string(payload, "contextToken")
+            .ok_or_else(|| HostError::state("dispatch context token is required"))?;
+        if context_token_hash(&token) != expected_hash {
+            return Err(HostError::state(
+                "dispatch context token is invalid or stale",
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn validate_result_schema(
     result: &serde_json::Map<String, Value>,
     schema_raw: Option<&str>,
@@ -1282,16 +1298,39 @@ impl ServerActor {
             .ok_or_else(|| {
                 HostError::state(format!("no active dispatch for terminal {terminal}"))
             })?;
-        if let Some(expected_hash) = dispatch.context_token_hash.as_deref() {
-            let token = optional_string(payload, "contextToken")
-                .ok_or_else(|| HostError::state("dispatch context token is required"))?;
-            if context_token_hash(&token) != expected_hash {
-                return Err(HostError::state(
-                    "dispatch context token is invalid or stale",
-                ));
-            }
-        }
+        validate_dispatch_context_token(&dispatch, payload)?;
         Ok(dispatch)
+    }
+
+    async fn completion_worker_dispatch(
+        &self,
+        payload: &Value,
+    ) -> HostResult<(OrchestrationDispatchContext, bool)> {
+        let terminal = optional_string(payload, "terminal").ok_or_else(|| {
+            HostError::format("terminal is required; run inside an Alera terminal.")
+        })?;
+        let active = self
+            .runtime_store
+            .active_orchestration_dispatch_for_handle(&terminal)
+            .await
+            .map_err(state_error)?;
+        let (dispatch, replay) = match active {
+            Some(dispatch) => (dispatch, false),
+            None => {
+                let latest = self
+                    .runtime_store
+                    .latest_orchestration_dispatch_for_handle(&terminal)
+                    .await
+                    .map_err(state_error)?
+                    .filter(|dispatch| dispatch.status == OrchestrationDispatchStatus::Completed)
+                    .ok_or_else(|| {
+                        HostError::state(format!("no active dispatch for terminal {terminal}"))
+                    })?;
+                (latest, true)
+            }
+        };
+        validate_dispatch_context_token(&dispatch, payload)?;
+        Ok((dispatch, replay))
     }
 
     async fn orchestration_dispatch_accept(&mut self, payload: &Value) -> HostResult<Value> {
@@ -1507,7 +1546,7 @@ impl ServerActor {
     }
 
     async fn orchestration_complete(&mut self, payload: &Value) -> HostResult<Value> {
-        let dispatch = self.active_worker_dispatch(payload).await?;
+        let (dispatch, completion_replay) = self.completion_worker_dispatch(payload).await?;
         let assignee = dispatch
             .assignee_handle
             .clone()
@@ -1526,6 +1565,11 @@ impl ServerActor {
             .get("completionKind")
             .and_then(Value::as_str)
             .unwrap_or("success");
+        if completion_replay && completion_kind != "success" {
+            return Err(HostError::state(format!(
+                "no active dispatch for terminal {assignee}"
+            )));
+        }
         for field in ["artifacts", "filesModified", "validation"] {
             if !result.get(field).is_some_and(Value::is_array) {
                 return Err(HostError::format(format!(
@@ -1566,8 +1610,10 @@ impl ServerActor {
             .complete_orchestration_dispatch(&dispatch.id, &assignee, &result_json)
             .await
             .map_err(state_error)?;
-        self.apply_terminal_completion_policy(&assignee, &completed.terminal_policy)
-            .await?;
+        if !completion_replay {
+            self.apply_terminal_completion_policy(&assignee, &completed.terminal_policy)
+                .await?;
+        }
         Ok(json!({
             "delivered": true,
             "lifecycleAccepted": true,
