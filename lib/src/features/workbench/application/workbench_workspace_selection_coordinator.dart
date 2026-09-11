@@ -14,6 +14,7 @@ typedef WorkbenchWorkspaceSelectionTabsApplier = void Function(
 typedef WorkbenchWorkspaceSelectionLayoutApplier = Future<void> Function(
   WorkbenchLayout layout,
 );
+typedef WorkbenchWorkspaceSelectionIsCurrent = bool Function();
 typedef WorkbenchWorkspaceSelectionHistoryRecorder = bool Function();
 typedef WorkbenchWorkspaceSelectionHistoryNotifier = void Function();
 
@@ -23,12 +24,14 @@ final class WorkbenchWorkspaceSelectionCoordinator {
     required WorkbenchWorkspaceSelectionHydrate hydrate,
     required WorkbenchWorkspaceSelectionTabsApplier applyTabs,
     required WorkbenchWorkspaceSelectionLayoutApplier applyLayout,
+    required WorkbenchWorkspaceSelectionIsCurrent isSelectionCurrent,
     required WorkbenchWorkspaceSelectionHistoryRecorder recordHistory,
     required WorkbenchWorkspaceSelectionHistoryNotifier notifyHistoryChanged,
   }) : _activateSelection = activateSelection,
        _hydrate = hydrate,
        _applyTabs = applyTabs,
        _applyLayout = applyLayout,
+       _isSelectionCurrent = isSelectionCurrent,
        _recordHistory = recordHistory,
        _notifyHistoryChanged = notifyHistoryChanged;
 
@@ -36,6 +39,7 @@ final class WorkbenchWorkspaceSelectionCoordinator {
   final WorkbenchWorkspaceSelectionHydrate _hydrate;
   final WorkbenchWorkspaceSelectionTabsApplier _applyTabs;
   final WorkbenchWorkspaceSelectionLayoutApplier _applyLayout;
+  final WorkbenchWorkspaceSelectionIsCurrent _isSelectionCurrent;
   final WorkbenchWorkspaceSelectionHistoryRecorder _recordHistory;
   final WorkbenchWorkspaceSelectionHistoryNotifier _notifyHistoryChanged;
 
@@ -49,8 +53,14 @@ final class WorkbenchWorkspaceSelectionCoordinator {
       workspaceId: workspaceId,
       ensureInitialTerminal: ensureInitialTerminal,
     );
+    if (!_isSelectionCurrent()) {
+      return;
+    }
     _applyTabs(hydration.tabs);
     await _applyLayout(hydration.layout);
+    if (!_isSelectionCurrent()) {
+      return;
+    }
     if (shouldRecordHistory && _recordHistory()) {
       _notifyHistoryChanged();
     }

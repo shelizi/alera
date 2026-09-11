@@ -190,6 +190,54 @@ void _registerWorkbenchControllerNavigationTests() {
       isNot(targetTab.id),
     );
   });
+
+  test('selectWorkspace drops hydration for a workspace removed while selection is in flight', () async {
+    await _controller.bootstrap();
+    final mainWorkspace = await _selectMainWorkspace(_controller, _harness);
+    final otherWorkspace = (await _controller.createWorkspace(
+      project: _harness.project,
+      sourceBranch: 'main',
+      newBranchName: 'feature/stale-workspace-selection',
+    )).workspace;
+    await _controller.selectWorkspace(
+      project: _harness.project,
+      workspace: mainWorkspace,
+    );
+
+    final started = Completer<void>();
+    final release = Completer<void>();
+    _harness.workbenchRepository.blockNextWorkspaceTabsList(
+      workspaceId: otherWorkspace.id,
+      started: started,
+      release: release,
+    );
+    final selecting = _controller.selectWorkspace(
+      project: _harness.project,
+      workspace: otherWorkspace,
+    );
+    await started.future;
+
+    await _harness.workbenchRepository.removeWorkspace(otherWorkspace.id);
+    await _flushUntil(
+      () => !_controller.state
+          .workspacesFor(_harness.project.id)
+          .any((workspace) => workspace.id == otherWorkspace.id),
+    );
+    release.complete();
+    await selecting;
+    await _flush();
+
+    expect(_controller.state.activeWorkspace, isNull);
+    expect(
+      _controller.state.tabsByWorkspace.containsKey(otherWorkspace.id),
+      isFalse,
+    );
+    expect(
+      _controller.state.layoutByWorkspace.containsKey(otherWorkspace.id),
+      isFalse,
+    );
+  });
+
   test('prunes navigation entries when their project is removed', () async {
     await _controller.bootstrap();
     await _selectMainWorkspace(_controller, _harness);

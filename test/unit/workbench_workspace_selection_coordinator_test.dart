@@ -24,6 +24,7 @@ void main() {
         applyTabs: (tabs) => events.add('tabs:${tabs.single.id}'),
         applyLayout: (layout) async =>
             events.add('layout:${layout.activeTabId}'),
+        isSelectionCurrent: () => true,
         recordHistory: () {
           events.add('history');
           return true;
@@ -96,6 +97,7 @@ void main() {
             },
         applyTabs: (_) => events.add('tabs'),
         applyLayout: (_) async => events.add('layout'),
+        isSelectionCurrent: () => true,
         recordHistory: () {
           events.add('history');
           return true;
@@ -116,6 +118,38 @@ void main() {
     },
   );
 
+  test('stale hydration skips tabs, layout, and history', () async {
+    final events = <String>[];
+    var current = true;
+    final coordinator = WorkbenchWorkspaceSelectionCoordinator(
+      activateSelection: () => events.add('activate'),
+      hydrate: ({required workspaceId, required ensureInitialTerminal}) async {
+        events.add('hydrate');
+        current = false;
+        return WorkbenchWorkspaceSelectionHydration(
+          tabs: <WorkspaceTabRecord>[_tab('tab')],
+          layout: _layout(<String>['tab']),
+        );
+      },
+      applyTabs: (_) => events.add('tabs'),
+      applyLayout: (_) async => events.add('layout'),
+      isSelectionCurrent: () => current,
+      recordHistory: () {
+        events.add('history');
+        return true;
+      },
+      notifyHistoryChanged: () => events.add('notify'),
+    );
+
+    await coordinator.select(
+      workspaceId: 'workspace',
+      ensureInitialTerminal: false,
+      shouldRecordHistory: true,
+    );
+
+    expect(events, <String>['activate', 'hydrate']);
+  });
+
   test('layout failure preserves applied tabs and skips history', () async {
     final events = <String>[];
     final tabs = <WorkspaceTabRecord>[_tab('tab')];
@@ -133,6 +167,7 @@ void main() {
         events.add('layout');
         throw StateError('layout failed');
       },
+      isSelectionCurrent: () => true,
       recordHistory: () {
         events.add('history');
         return true;
@@ -167,6 +202,7 @@ WorkbenchWorkspaceSelectionCoordinator _coordinator({
   },
   applyTabs: (_) => events.add('tabs'),
   applyLayout: (_) async => events.add('layout'),
+  isSelectionCurrent: () => true,
   recordHistory: () {
     events.add('history');
     return recordHistoryResult;

@@ -369,6 +369,9 @@ mixin _WorkbenchControllerProjects
             ),
         applyTabs: (tabs) => _setTabsForWorkspace(workspace.id, tabs),
         applyLayout: (layout) => _applyLayout(layout, persist: false),
+        isSelectionCurrent: () =>
+            state.activeProjectId == project.id &&
+            state.activeWorkspaceId == workspace.id,
         recordHistory: () =>
             _navigationHistory.record(project: project, workspace: workspace),
         notifyHistoryChanged: _notifyNavigationHistoryChanged,
