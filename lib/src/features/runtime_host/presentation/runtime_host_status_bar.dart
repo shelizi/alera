@@ -7,7 +7,6 @@ import 'package:alera/src/features/runtime_host/application/runtime_host_lifecyc
 import 'package:alera/src/features/runtime_host/application/runtime_host_lifecycle_service.dart';
 import 'package:alera/src/features/runtime_host/domain/runtime_host_status.dart';
 import 'package:alera/src/features/runtime_host/presentation/runtime_host_status_panel.dart';
-import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_client_models.dart';
 import 'package:alera/src/shared/infra/logging/app_logger.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -100,7 +99,7 @@ class _RuntimeHostStatusBarControlState
   }
 
   String _messageFor(Object error) {
-    if (error is TerminalHostStartupException) {
+    if (error is RuntimeHostLifecycleStartupException) {
       return 'Could not start the runtime host. Try again.';
     }
     if (error is StateError && error.message.contains('did not stop in time')) {

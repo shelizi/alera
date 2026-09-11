@@ -186,11 +186,13 @@ void _checkRuntimeHostPresentationDependencies(List<String> violations) {
     for (var index = 0; index < lines.length; index += 1) {
       final match = _dependencyDirective.firstMatch(lines[index]);
       final uri = match?.group(1);
-      if (uri == null || !uri.startsWith(_runtimeTransportInfraImportPrefix)) {
+      if (uri == null ||
+          (!uri.startsWith(_runtimeTransportInfraImportPrefix) &&
+              !uri.startsWith(_workbenchInfraImportPrefix))) {
         continue;
       }
       violations.add(
-        'Runtime-host presentation imports runtime transport infrastructure: '
+        'Runtime-host presentation imports transport infrastructure: '
         '${_displayPath(file)}:${index + 1}:$uri',
       );
     }
