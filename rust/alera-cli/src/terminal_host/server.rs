@@ -131,6 +131,7 @@ mod orchestration_wait_requests;
 mod output_delivery;
 #[cfg(test)]
 mod output_resume_tests;
+mod project_clone_requests;
 mod project_requests;
 mod prompt_file_requests;
 mod prompt_file_store;
