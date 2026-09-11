@@ -299,27 +299,33 @@ mixin _WorkbenchControllerProjects
     required Workspace workspace,
     required bool ensureInitialTerminal,
     bool recordHistory = true,
-  }) async {
-    state = selectWorkbenchWorkspace(
-      state: state,
-      project: project,
-      workspace: workspace,
-    );
-    final hydration =
-        await WorkbenchWorkspaceSelectionHydrator(
-          tabStore: _workspaceTabService,
-          layoutResolver: _layoutResolver,
-        ).hydrate(
-          workspaceId: workspace.id,
-          ensureInitialTerminal: ensureInitialTerminal,
-        );
-    _setTabsForWorkspace(workspace.id, hydration.tabs);
-    await _applyLayout(hydration.layout, persist: false);
-    if (recordHistory &&
-        _navigationHistory.record(project: project, workspace: workspace)) {
-      _notifyNavigationHistoryChanged();
-    }
-  }
+  }) =>
+      WorkbenchWorkspaceSelectionCoordinator(
+        activateSelection: () {
+          state = selectWorkbenchWorkspace(
+            state: state,
+            project: project,
+            workspace: workspace,
+          );
+        },
+        hydrate: ({required workspaceId, required ensureInitialTerminal}) =>
+            WorkbenchWorkspaceSelectionHydrator(
+              tabStore: _workspaceTabService,
+              layoutResolver: _layoutResolver,
+            ).hydrate(
+              workspaceId: workspaceId,
+              ensureInitialTerminal: ensureInitialTerminal,
+            ),
+        applyTabs: (tabs) => _setTabsForWorkspace(workspace.id, tabs),
+        applyLayout: (layout) => _applyLayout(layout, persist: false),
+        recordHistory: () =>
+            _navigationHistory.record(project: project, workspace: workspace),
+        notifyHistoryChanged: _notifyNavigationHistoryChanged,
+      ).select(
+        workspaceId: workspace.id,
+        ensureInitialTerminal: ensureInitialTerminal,
+        shouldRecordHistory: recordHistory,
+      );
 
   Future<void> activateProject(Project project) async {
     state = activateWorkbenchProject(state: state, project: project);
