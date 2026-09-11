@@ -79,16 +79,7 @@ impl ServerActor {
             )?;
             self.agent_presence
                 .retain_enabled(&settings.enabled_agents());
-            let runtime_dir = self.runtime_dir.clone();
-            let reconcile_settings = settings.clone();
-            let warnings = tokio::task::spawn_blocking(move || {
-                reconcile_agent_integrations(&runtime_dir, &reconcile_settings)
-            })
-            .await
-            .unwrap_or_else(|error| vec![error.to_string()]);
-            for warning in warnings {
-                tracing::warn!("alera agent integration warning: {warning}");
-            }
+            self.schedule_agent_integration_reconcile(settings);
             self.broadcast_agent_presence_changed();
         }
         if let Some(value) = payload.get("agentQuotas") {
@@ -375,6 +366,40 @@ mod tests {
     use super::validate_text_actions_settings;
     use alera_core::runtime::{RuntimeTextAction, RuntimeTextActionsSettings};
     use std::collections::HashMap;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn agent_status_hook_update_does_not_wait_for_reconcile_io_budget() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut actor = crate::terminal_host::server::actor_test_harness::test_actor(
+            &directory,
+            HashMap::new(),
+            HashMap::new(),
+        )
+        .await;
+        actor.deferred_request_slots = Arc::new(tokio::sync::Semaphore::new(0));
+        let settings = alera_core::runtime::RuntimeAgentStatusHookSettings::default();
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            actor.apply_mobile_runtime_settings(&serde_json::json!({
+                "agentStatusHooks": settings,
+            })),
+        )
+        .await
+        .expect("runtime settings persistence must not wait for hook filesystem admission")
+        .expect("runtime settings update");
+
+        assert_eq!(result["agentStatusHooks"], serde_json::json!(settings));
+        assert_eq!(
+            actor
+                .runtime_store
+                .agent_status_hook_settings()
+                .await
+                .unwrap(),
+            settings
+        );
+    }
 
     #[test]
     fn text_action_names_are_case_insensitively_unique() {

@@ -101,6 +101,7 @@ mod declared_catalog_requests;
 mod deferred_requests;
 #[cfg(test)]
 mod deferred_requests_tests;
+mod host_service_agent_integrations;
 mod host_service_agent_quota;
 mod host_service_requests;
 mod host_status;
