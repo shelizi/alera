@@ -7,6 +7,9 @@ class _FakeWorkbenchViewPrefsRepository
   Object? saveError;
   int saveCount = 0;
   Future<WorkbenchViewPrefs>? loadOverride;
+  Completer<void>? saveStarted;
+  Completer<void>? saveRelease;
+  Completer<void>? saveCompleted;
 
   @override
   Stream<WorkbenchViewPrefs> get changes => const Stream.empty();
@@ -29,6 +32,23 @@ class _FakeWorkbenchViewPrefsRepository
     if (saveError case final Object error) {
       throw error;
     }
+    final started = saveStarted;
+    final release = saveRelease;
+    final completed = saveCompleted;
+    if (started != null) {
+      saveStarted = null;
+      saveRelease = null;
+      saveCompleted = null;
+      if (!started.isCompleted) {
+        started.complete();
+      }
+      if (release != null) {
+        await release.future;
+      }
+    }
     this.prefs = prefs;
+    if (completed != null && !completed.isCompleted) {
+      completed.complete();
+    }
   }
 }

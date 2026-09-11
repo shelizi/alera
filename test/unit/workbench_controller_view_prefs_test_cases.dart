@@ -218,6 +218,32 @@ void _registerWorkbenchControllerViewPrefsTests() {
     expect(_harness.viewPrefsRepository.saveCount, greaterThan(0));
   });
 
+  test(
+    'newer view prefs save wins when an older save completes late',
+    () async {
+      await _controller.bootstrap();
+      await _flush();
+      final started = Completer<void>();
+      final release = Completer<void>();
+      final completed = Completer<void>();
+      _harness.viewPrefsRepository
+        ..saveStarted = started
+        ..saveRelease = release
+        ..saveCompleted = completed;
+
+      _controller.setSidebarWidth(320);
+      await started.future;
+      _controller.setSidebarWidth(440);
+      expect(_controller.state.viewPrefs.sidebarWidth, 440);
+
+      release.complete();
+      await completed.future;
+      await _flushUntil(() => _harness.viewPrefsRepository.saveCount >= 2);
+
+      expect(_harness.viewPrefsRepository.prefs.sidebarWidth, 440);
+    },
+  );
+
   test('selecting a folder workspace preserves source control and pull request tabs', () async {
     await _controller.bootstrap();
     final gitWorkspace = await _selectMainWorkspace(_controller, _harness);

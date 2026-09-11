@@ -77,6 +77,7 @@ import 'package:alera/src/features/workbench/application/workbench_state.dart';
 import 'package:alera/src/features/workbench/application/workbench_view_pref_expansion.dart';
 import 'package:alera/src/features/workbench/application/workbench_view_pref_filters.dart';
 import 'package:alera/src/features/workbench/application/workbench_view_prefs_repository.dart';
+import 'package:alera/src/features/workbench/application/workbench_view_prefs_persistence_queue.dart';
 import 'package:alera/src/features/workbench/application/workspace_activity_controller.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_preview_kind.dart';
 import 'package:alera/src/features/workbench/application/workspace_graph_repository.dart';

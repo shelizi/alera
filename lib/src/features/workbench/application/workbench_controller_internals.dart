@@ -119,6 +119,8 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController {
       WorkbenchClearedLayoutRegistry();
   final WorkbenchFileTabMutationQueue _fileTabMutations =
       WorkbenchFileTabMutationQueue();
+  final WorkbenchViewPrefsPersistenceQueue _viewPrefsPersistence =
+      WorkbenchViewPrefsPersistenceQueue();
 
   final WorkspaceTabFocusHistory _tabFocusHistory = WorkspaceTabFocusHistory();
   final WorkbenchNavigationHistoryService _navigationHistory =
@@ -144,8 +146,9 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController {
     if (repo == null) {
       return;
     }
+    final prefs = state.viewPrefs;
     try {
-      await repo.save(state.viewPrefs);
+      await _viewPrefsPersistence.save(repository: repo, prefs: prefs);
     } catch (_) {
       // Persistence is best-effort; never surface an error from the UI path.
     }
