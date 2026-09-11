@@ -1,4 +1,5 @@
 export 'package:alera/src/app/dependencies.dart';
+export 'package:alera/src/app/runtime_host_window_exit_composition.dart';
 export 'package:alera/src/app/terminal_runtime_composition.dart';
 export 'package:alera/src/features/workbench/presentation/terminal_runtime_providers.dart';
 export 'package:alera/src/features/agent_status/application/agent_status_controller.dart'

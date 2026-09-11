@@ -6,11 +6,17 @@ import 'package:alera/src/features/app_window/infra/lifecycle_app_foreground.dar
 import 'package:alera/src/features/app_window/infra/platform_app_window_close_strategy.dart';
 import 'package:alera/src/features/app_window/infra/screen_retriever_app_window_display_provider.dart';
 import 'package:alera/src/features/app_window/infra/window_manager_app_window_controller.dart';
-import 'package:alera/src/shared/infra/runtime/runtime_host_providers.dart';
 import 'package:alera/src/shared/infra/storage/storage_providers.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart' show Provider;
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 part 'app_window_providers.g.dart';
+
+typedef AppWindowBeforeLinuxExit = Future<void> Function();
+
+final appWindowBeforeLinuxExitProvider = Provider<AppWindowBeforeLinuxExit?>(
+  (ref) => null,
+);
 
 @Riverpod(keepAlive: true)
 AppWindowStateRepository appWindowStateRepository(Ref ref) {
@@ -34,11 +40,7 @@ AppWindowLifecycleCoordinator appWindowLifecycleCoordinator(Ref ref) {
     repository: ref.watch(appWindowStateRepositoryProvider),
     window: ref.watch(appWindowControllerProvider),
     closeStrategy: PlatformAppWindowCloseStrategy(
-      beforeLinuxExit: () async {
-        // Prefer the quit-gate dispose path; keep this as a safety net when the
-        // gate was never bound (tests / early exit).
-        ref.read(socketTerminalHostClientProvider).dispose();
-      },
+      beforeLinuxExit: ref.watch(appWindowBeforeLinuxExitProvider),
     ),
   );
   ref.onDispose(() {
