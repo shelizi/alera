@@ -1,3 +1,6 @@
+use std::collections::HashMap;
+use std::path::Path;
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 
 use alera_core::runtime::{
@@ -29,6 +32,26 @@ use super::orchestration_validation::{
     require_string, state_error, wait_timeout_ms,
 };
 use super::{ServerActor, ServerCommand};
+
+type DispatchContextGate = Mutex<u64>;
+type DispatchContextGateRegistry = Mutex<HashMap<String, Weak<DispatchContextGate>>>;
+
+static DISPATCH_CONTEXT_GATES: OnceLock<DispatchContextGateRegistry> = OnceLock::new();
+
+fn dispatch_context_gate(path: &Path) -> HostResult<Arc<DispatchContextGate>> {
+    let key = path.to_string_lossy().into_owned();
+    let mut gates = DISPATCH_CONTEXT_GATES
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .map_err(|error| HostError::state(format!("dispatch context registry failed: {error}")))?;
+    gates.retain(|_, gate| gate.strong_count() > 0);
+    if let Some(gate) = gates.get(&key).and_then(Weak::upgrade) {
+        return Ok(gate);
+    }
+    let gate = Arc::new(Mutex::new(0));
+    gates.insert(key, Arc::downgrade(&gate));
+    Ok(gate)
+}
 
 fn context_token_hash(token: &str) -> String {
     hex::encode(Sha256::digest(token.as_bytes()))
@@ -98,6 +121,11 @@ impl ServerActor {
         token: &str,
     ) -> HostResult<()> {
         let path = self.dispatch_context_path(handle);
+        let gate = dispatch_context_gate(&path)?;
+        let mut generation = gate
+            .lock()
+            .map_err(|error| HostError::state(format!("dispatch context gate failed: {error}")))?;
+        *generation = generation.wrapping_add(1);
         let parent = path
             .parent()
             .ok_or_else(|| HostError::state("invalid dispatch context path"))?;
@@ -124,7 +152,34 @@ impl ServerActor {
     }
 
     pub(super) fn remove_dispatch_context(&self, handle: &str) {
-        let _ = std::fs::remove_file(self.dispatch_context_path(handle));
+        let path = self.dispatch_context_path(handle);
+        let Ok(gate) = dispatch_context_gate(&path) else {
+            return;
+        };
+        let cleanup_generation = {
+            let Ok(mut generation) = gate.lock() else {
+                return;
+            };
+            *generation = generation.wrapping_add(1);
+            *generation
+        };
+        let slots = self.deferred_request_slots.clone();
+        tokio::spawn(async move {
+            let _permit = match slots.acquire_owned().await {
+                Ok(permit) => permit,
+                Err(_) => return,
+            };
+            let _ = tokio::task::spawn_blocking(move || {
+                let Ok(generation) = gate.lock() else {
+                    return;
+                };
+                if *generation != cleanup_generation {
+                    return;
+                }
+                let _ = std::fs::remove_file(path);
+            })
+            .await;
+        });
     }
 
     /// Handles requests; wait-capable verbs return `Ok(None)` until a wake or timeout writes the response.

@@ -62,6 +62,63 @@ async fn deferred_requests_bound_background_concurrency() {
 }
 
 #[tokio::test]
+async fn dispatch_context_cleanup_is_deferred_and_budgeted() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut actor = test_actor(&dir, HashMap::new(), HashMap::new()).await;
+    actor.deferred_request_slots = std::sync::Arc::new(tokio::sync::Semaphore::new(0));
+    let context_dir = actor.runtime_dir.join("orchestration-contexts");
+    std::fs::create_dir_all(&context_dir).unwrap();
+    let context_path = context_dir.join("cleanup.json");
+    std::fs::write(&context_path, b"context").unwrap();
+
+    actor.remove_dispatch_context("cleanup");
+    assert!(
+        context_path.exists(),
+        "dispatch context cleanup ran synchronously without background admission"
+    );
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(
+        context_path.exists(),
+        "dispatch context cleanup bypassed the deferred I/O budget"
+    );
+
+    actor.deferred_request_slots.add_permits(1);
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while context_path.exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("dispatch context cleanup should run after budget capacity is released");
+}
+
+#[tokio::test]
+async fn stale_dispatch_context_cleanup_cannot_delete_a_new_install() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut actor = test_actor(&dir, HashMap::new(), HashMap::new()).await;
+    actor.deferred_request_slots = std::sync::Arc::new(tokio::sync::Semaphore::new(0));
+    actor
+        .install_dispatch_context("reused", "old-dispatch", "old-token")
+        .unwrap();
+
+    actor.remove_dispatch_context("reused");
+    actor
+        .install_dispatch_context("reused", "new-dispatch", "new-token")
+        .unwrap();
+    actor.deferred_request_slots.add_permits(1);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let context_path = actor
+        .runtime_dir
+        .join("orchestration-contexts")
+        .join("reused.json");
+    let context: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(context_path).unwrap()).unwrap();
+    assert_eq!(context["dispatchId"], "new-dispatch");
+    assert_eq!(context["token"], "new-token");
+}
+
+#[tokio::test]
 async fn prompt_file_uploads_respect_the_deferred_io_budget() {
     let dir = tempfile::tempdir().unwrap();
     let (handle, mut responses) = ClientHandle::test_channels();
