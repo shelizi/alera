@@ -43,32 +43,32 @@ mixin _WorkbenchControllerNavigation
   }
 
   Future<void> goBack() async {
-    final selection = _navigationHistory.peekBack(state);
-    if (selection == null) {
-      return;
-    }
-    await _selectWorkspace(
-      project: selection.project,
-      workspace: selection.workspace,
-      ensureInitialTerminal: true,
-      recordHistory: false,
+    final changed = await _navigationHistory.navigateBack(
+      state,
+      select: (selection) => _selectWorkspace(
+        project: selection.project,
+        workspace: selection.workspace,
+        ensureInitialTerminal: true,
+        recordHistory: false,
+      ),
     );
-    _navigationHistory.commitBack(selection);
-    _notifyNavigationHistoryChanged();
+    if (changed) {
+      _notifyNavigationHistoryChanged();
+    }
   }
 
   Future<void> goForward() async {
-    final selection = _navigationHistory.peekForward(state);
-    if (selection == null) {
-      return;
-    }
-    await _selectWorkspace(
-      project: selection.project,
-      workspace: selection.workspace,
-      ensureInitialTerminal: true,
-      recordHistory: false,
+    final changed = await _navigationHistory.navigateForward(
+      state,
+      select: (selection) => _selectWorkspace(
+        project: selection.project,
+        workspace: selection.workspace,
+        ensureInitialTerminal: true,
+        recordHistory: false,
+      ),
     );
-    _navigationHistory.commitForward(selection);
-    _notifyNavigationHistoryChanged();
+    if (changed) {
+      _notifyNavigationHistoryChanged();
+    }
   }
 }

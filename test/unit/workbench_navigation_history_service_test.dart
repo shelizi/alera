@@ -65,6 +65,106 @@ void main() {
     expect(service.canGoBack(empty), isFalse);
     expect(service.canGoForward(empty), isFalse);
   });
+
+  test('navigateBack selects before committing the history cursor', () async {
+    final service = WorkbenchNavigationHistoryService();
+    final state = _navigationState();
+    service.record(
+      project: state.projects.first,
+      workspace: state.workspacesFor('p').first,
+    );
+    service.record(
+      project: state.projects.first,
+      workspace: state.workspacesFor('p')[1],
+    );
+    final events = <String>[];
+
+    final changed = await service.navigateBack(
+      state,
+      select: (selection) async {
+        events.add('select:${selection.workspace.id}');
+        expect(service.peekBack(state)?.workspace.id, 'w1');
+      },
+    );
+
+    expect(changed, isTrue);
+    expect(events, <String>['select:w1']);
+    expect(service.peekForward(state)?.workspace.id, 'w2');
+  });
+
+  test(
+    'navigateForward selects before committing the history cursor',
+    () async {
+      final service = WorkbenchNavigationHistoryService();
+      final state = _navigationState();
+      service.record(
+        project: state.projects.first,
+        workspace: state.workspacesFor('p').first,
+      );
+      service.record(
+        project: state.projects.first,
+        workspace: state.workspacesFor('p')[1],
+      );
+      final back = service.peekBack(state)!;
+      service.commitBack(back);
+      final events = <String>[];
+
+      final changed = await service.navigateForward(
+        state,
+        select: (selection) async {
+          events.add('select:${selection.workspace.id}');
+          expect(service.peekForward(state)?.workspace.id, 'w2');
+        },
+      );
+
+      expect(changed, isTrue);
+      expect(events, <String>['select:w2']);
+      expect(service.peekBack(state)?.workspace.id, 'w1');
+    },
+  );
+
+  test('navigation selection failure does not commit history', () async {
+    final service = WorkbenchNavigationHistoryService();
+    final state = _navigationState();
+    service.record(
+      project: state.projects.first,
+      workspace: state.workspacesFor('p').first,
+    );
+    service.record(
+      project: state.projects.first,
+      workspace: state.workspacesFor('p')[1],
+    );
+
+    await expectLater(
+      service.navigateBack(
+        state,
+        select: (_) async => throw StateError('selection failed'),
+      ),
+      throwsStateError,
+    );
+
+    expect(service.peekBack(state)?.workspace.id, 'w1');
+    expect(service.peekForward(state), isNull);
+  });
+
+  test(
+    'navigation returns false without invoking select when there is no target',
+    () async {
+      final service = WorkbenchNavigationHistoryService();
+      final state = _navigationState();
+      service.record(
+        project: state.projects.first,
+        workspace: state.workspacesFor('p').first,
+      );
+      var selected = false;
+
+      expect(
+        await service.navigateBack(state, select: (_) async => selected = true),
+        isFalse,
+      );
+      expect(selected, isFalse);
+    },
+  );
 }
 
 WorkbenchState _state(Project project, List<Workspace> workspaces) {
@@ -72,6 +172,14 @@ WorkbenchState _state(Project project, List<Workspace> workspaces) {
     projects: <Project>[project],
     workspacesByProject: <String, List<Workspace>>{project.id: workspaces},
   );
+}
+
+WorkbenchState _navigationState() {
+  final project = _project('p');
+  return _state(project, <Workspace>[
+    _workspace('w1', project.id),
+    _workspace('w2', project.id),
+  ]);
 }
 
 Project _project(String id) {

@@ -15,6 +15,10 @@ final class WorkbenchNavigationSelection {
   final Workspace workspace;
 }
 
+typedef WorkbenchNavigationSelectionHandler = Future<void> Function(
+  WorkbenchNavigationSelection selection,
+);
+
 final class WorkbenchNavigationHistoryService {
   WorkbenchNavigationHistoryService({WorktreeNavigationHistory? history})
     : _history = history ?? WorktreeNavigationHistory();
@@ -60,6 +64,32 @@ final class WorkbenchNavigationHistoryService {
 
   void commitForward(WorkbenchNavigationSelection selection) {
     _history.commitForward(selection.target);
+  }
+
+  Future<bool> navigateBack(
+    WorkbenchState state, {
+    required WorkbenchNavigationSelectionHandler select,
+  }) async {
+    final selection = peekBack(state);
+    if (selection == null) {
+      return false;
+    }
+    await select(selection);
+    commitBack(selection);
+    return true;
+  }
+
+  Future<bool> navigateForward(
+    WorkbenchState state, {
+    required WorkbenchNavigationSelectionHandler select,
+  }) async {
+    final selection = peekForward(state);
+    if (selection == null) {
+      return false;
+    }
+    await select(selection);
+    commitForward(selection);
+    return true;
   }
 
   void prune(WorkbenchState state) {
