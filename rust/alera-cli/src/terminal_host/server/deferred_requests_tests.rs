@@ -10,6 +10,58 @@ use super::actor_test_harness::{local_client, test_actor};
 use crate::terminal_host::client::ClientHandle;
 
 #[tokio::test]
+async fn deferred_requests_bound_background_concurrency() {
+    const EXPECTED_LIMIT: usize = super::DEFERRED_REQUEST_CONCURRENCY;
+    let dir = tempfile::tempdir().unwrap();
+    let actor = test_actor(&dir, HashMap::new(), HashMap::new()).await;
+    let gate = std::sync::Arc::new(tokio::sync::Semaphore::new(0));
+    let (started_tx, mut started_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (finished_tx, mut finished_rx) = tokio::sync::mpsc::unbounded_channel();
+
+    for request_id in 0..=EXPECTED_LIMIT as i64 {
+        let gate = gate.clone();
+        let started_tx = started_tx.clone();
+        let finished_tx = finished_tx.clone();
+        actor.start_deferred_request(1, request_id, async move {
+            started_tx.send(request_id).unwrap();
+            let permit = gate.acquire().await.unwrap();
+            permit.forget();
+            finished_tx.send(request_id).unwrap();
+            Ok(json!({}))
+        });
+    }
+    drop(started_tx);
+    drop(finished_tx);
+
+    for _ in 0..EXPECTED_LIMIT {
+        tokio::time::timeout(Duration::from_secs(1), started_rx.recv())
+            .await
+            .expect("the admitted requests should start")
+            .expect("started channel should remain open");
+    }
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), started_rx.recv())
+            .await
+            .is_err(),
+        "a request beyond the background concurrency budget started early"
+    );
+
+    gate.add_permits(EXPECTED_LIMIT);
+    tokio::time::timeout(Duration::from_secs(1), started_rx.recv())
+        .await
+        .expect("the queued request should start after capacity is released")
+        .expect("started channel should remain open");
+    gate.add_permits(1);
+
+    for _ in 0..=EXPECTED_LIMIT {
+        tokio::time::timeout(Duration::from_secs(1), finished_rx.recv())
+            .await
+            .expect("all deferred requests should finish")
+            .expect("finished channel should remain open");
+    }
+}
+
+#[tokio::test]
 async fn host_directory_list_is_deferred_so_control_requests_can_advance() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("item.txt"), "item").unwrap();

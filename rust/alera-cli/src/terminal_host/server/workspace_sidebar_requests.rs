@@ -64,7 +64,12 @@ impl ServerActor {
     pub(super) fn start_workspace_sidebar_snapshot(&self, client_id: u64, request_id: i64) {
         let runtime_store = self.runtime_store.clone();
         let inbox = self.inbox.clone();
+        let slots = self.deferred_request_slots.clone();
         tokio::spawn(async move {
+            let _permit = slots
+                .acquire_owned()
+                .await
+                .expect("deferred request semaphore must remain open");
             let result = load_workspace_sidebar_snapshot(&runtime_store).await;
             let _ = inbox.send(ServerCommand::WorkspaceSidebarSnapshotFinished {
                 client_id,

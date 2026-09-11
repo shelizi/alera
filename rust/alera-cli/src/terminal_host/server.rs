@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::{self, UnboundedSender};
-use tokio::sync::Notify;
+use tokio::sync::{Notify, Semaphore};
 use tokio::task::JoinHandle;
 
 use crate::agent_status::{start_agent_integrations, start_fx_herdr_receiver, start_hook_receiver};
@@ -181,6 +181,8 @@ const OUTPUT_BATCH_DELAY: Duration = Duration::from_millis(8);
 const OUTPUT_RESYNC_RETRY_DELAY: Duration = Duration::from_millis(16);
 const DURABLE_OUTPUT_BATCH_DELAY: Duration = Duration::from_millis(100);
 const OUTPUT_PERSISTENCE_BARRIER_TIMEOUT: Duration = Duration::from_secs(2);
+// Bounds active read-side work without making the actor mailbox wait for capacity.
+const DEFERRED_REQUEST_CONCURRENCY: usize = 8;
 const TERMINAL_INPUT_BACKPRESSURE_CODE: &str = "terminal_input_backpressure";
 /// Cap coalesced PTY→client batches so a verbose agent/build cannot grow an
 /// unbounded `output_batch` between timer flushes (early flush when exceeded).
@@ -246,6 +248,7 @@ struct ServerActor {
     codex: Option<codex_app_server::CodexAppServer>,
     codex_starting: Option<codex_server_startup::CodexServerStartup>,
     inbox: UnboundedSender<ServerCommand>,
+    deferred_request_slots: Arc<Semaphore>,
     next_client_id: Arc<AtomicU64>,
     mobile_gateway: Option<JoinHandle<()>>,
     shutdown_gen: u64,
@@ -1176,6 +1179,7 @@ mod tests {
             terminal_pulses: Default::default(),
             codex: None,
             codex_starting: None,
+            deferred_request_slots: Arc::new(Semaphore::new(DEFERRED_REQUEST_CONCURRENCY)),
             inbox,
             next_client_id: Arc::new(AtomicU64::new(2)),
             mobile_gateway: None,
@@ -1251,6 +1255,7 @@ mod tests {
             terminal_pulses: Default::default(),
             codex: None,
             codex_starting: None,
+            deferred_request_slots: Arc::new(Semaphore::new(DEFERRED_REQUEST_CONCURRENCY)),
             inbox,
             next_client_id: Arc::new(AtomicU64::new(1)),
             mobile_gateway: None,
@@ -1344,6 +1349,7 @@ mod tests {
             terminal_pulses: Default::default(),
             codex: None,
             codex_starting: None,
+            deferred_request_slots: Arc::new(Semaphore::new(DEFERRED_REQUEST_CONCURRENCY)),
             inbox,
             next_client_id: Arc::new(AtomicU64::new(1)),
             mobile_gateway: None,
@@ -1432,6 +1438,7 @@ mod tests {
             terminal_pulses: Default::default(),
             codex: None,
             codex_starting: None,
+            deferred_request_slots: Arc::new(Semaphore::new(DEFERRED_REQUEST_CONCURRENCY)),
             inbox,
             next_client_id: Arc::new(AtomicU64::new(1)),
             mobile_gateway: None,
@@ -1542,6 +1549,7 @@ mod tests {
             terminal_pulses: Default::default(),
             codex: None,
             codex_starting: None,
+            deferred_request_slots: Arc::new(Semaphore::new(DEFERRED_REQUEST_CONCURRENCY)),
             inbox,
             next_client_id: Arc::new(AtomicU64::new(1)),
             mobile_gateway: None,
@@ -1625,6 +1633,7 @@ mod tests {
             terminal_pulses: Default::default(),
             codex: None,
             codex_starting: None,
+            deferred_request_slots: Arc::new(Semaphore::new(DEFERRED_REQUEST_CONCURRENCY)),
             inbox,
             next_client_id: Arc::new(AtomicU64::new(2)),
             mobile_gateway: None,

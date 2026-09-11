@@ -113,6 +113,9 @@ pub(super) async fn test_actor(
         terminal_pulses: Default::default(),
         codex: None,
         codex_starting: None,
+        deferred_request_slots: Arc::new(tokio::sync::Semaphore::new(
+            super::DEFERRED_REQUEST_CONCURRENCY,
+        )),
         inbox,
         next_client_id: Arc::new(AtomicU64::new(10)),
         mobile_gateway: None,

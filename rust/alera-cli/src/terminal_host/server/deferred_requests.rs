@@ -24,7 +24,12 @@ impl ServerActor {
         F: Future<Output = HostResult<Value>> + Send + 'static,
     {
         let inbox = self.inbox.clone();
+        let slots = self.deferred_request_slots.clone();
         tokio::spawn(async move {
+            let _permit = slots
+                .acquire_owned()
+                .await
+                .expect("deferred request semaphore must remain open");
             let result = task.await;
             let _ = inbox.send(ServerCommand::DeferredRequestFinished {
                 client_id,

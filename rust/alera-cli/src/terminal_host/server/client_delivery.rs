@@ -326,6 +326,9 @@ mod tests {
             terminal_pulses: Default::default(),
             codex: None,
             codex_starting: None,
+            deferred_request_slots: Arc::new(tokio::sync::Semaphore::new(
+                super::super::DEFERRED_REQUEST_CONCURRENCY,
+            )),
             inbox,
             next_client_id: Arc::new(AtomicU64::new(2)),
             mobile_gateway: None,
