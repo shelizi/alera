@@ -133,6 +133,45 @@ void main() {
     await first;
   });
 
+  test('stale loads skip layout application and stale errors', () async {
+    final coordinator = WorkbenchLayoutLoadCoordinator();
+    final events = <String>[];
+    var current = true;
+
+    await coordinator.load(
+      workspaceId: 'workspace',
+      listTabs: (_) async => <WorkspaceTabRecord>[_tab('tab-a')],
+      resolveLayout: ({required workspaceId, required tabs}) async {
+        current = false;
+        return WorkbenchLayout.single(
+          workspaceId: workspaceId,
+          tabIds: <String>[for (final tab in tabs) tab.id],
+        );
+      },
+      applyLayout: (_) async => events.add('apply'),
+      isLoadCurrent: () => current,
+      onError: (_) => events.add('error'),
+    );
+
+    expect(events, isEmpty);
+
+    current = true;
+    await coordinator.load(
+      workspaceId: 'workspace',
+      listTabs: (_) async {
+        current = false;
+        throw StateError('stale failure');
+      },
+      resolveLayout: ({required workspaceId, required tabs}) async =>
+          WorkbenchLayout.single(workspaceId: workspaceId, tabIds: const []),
+      applyLayout: (_) async => events.add('apply'),
+      isLoadCurrent: () => current,
+      onError: (_) => events.add('error'),
+    );
+
+    expect(events, isEmpty);
+  });
+
   test('reports failures, releases the gate, and permits retry', () async {
     final coordinator = WorkbenchLayoutLoadCoordinator();
     final errors = <Object>[];

@@ -331,6 +331,8 @@ class _FakeWorkbenchRepository implements WorkbenchRepository {
   final Map<String, StreamController<List<WorkspaceTabRecord>>>
   _tabControllers = <String, StreamController<List<WorkspaceTabRecord>>>{};
   Future<WorkbenchLayout?>? _findWorkbenchLayoutOverride;
+  String? _findWorkbenchLayoutOverrideWorkspaceId;
+  Completer<void>? _findWorkbenchLayoutStarted;
   String? _blockedListWorkspaceTabsId;
   Completer<void>? _listWorkspaceTabsStarted;
   Completer<void>? _listWorkspaceTabsRelease;
@@ -518,7 +520,14 @@ class _FakeWorkbenchRepository implements WorkbenchRepository {
   @override
   Future<WorkbenchLayout?> findWorkbenchLayout(String workspaceId) async {
     final override = _findWorkbenchLayoutOverride;
-    if (override != null) {
+    final overrideWorkspaceId = _findWorkbenchLayoutOverrideWorkspaceId;
+    if (override != null &&
+        (overrideWorkspaceId == null || overrideWorkspaceId == workspaceId)) {
+      final started = _findWorkbenchLayoutStarted;
+      _findWorkbenchLayoutStarted = null;
+      if (started != null && !started.isCompleted) {
+        started.complete();
+      }
       return override;
     }
     return _layoutsByWorkspace[workspaceId];
@@ -586,11 +595,18 @@ class _FakeWorkbenchRepository implements WorkbenchRepository {
     _upsertWorkbenchLayoutCompleted = completed;
   }
 
-  void blockFindWorkbenchLayoutWith(Future<WorkbenchLayout?> future) {
+  void blockFindWorkbenchLayoutWith(
+    Future<WorkbenchLayout?> future, {
+    String? workspaceId,
+    Completer<void>? started,
+  }) {
     _findWorkbenchLayoutOverride = future;
+    _findWorkbenchLayoutOverrideWorkspaceId = workspaceId;
+    _findWorkbenchLayoutStarted = started;
     future.whenComplete(() {
       if (identical(_findWorkbenchLayoutOverride, future)) {
         _findWorkbenchLayoutOverride = null;
+        _findWorkbenchLayoutOverrideWorkspaceId = null;
       }
     });
   }

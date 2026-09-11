@@ -14,6 +14,7 @@ final class WorkbenchLayoutLoadCoordinator {
     })
     resolveLayout,
     required Future<void> Function(WorkbenchLayout layout) applyLayout,
+    bool Function()? isLoadCurrent,
     required void Function(Object error) onError,
   }) async {
     if (!_loadingWorkspaceIds.add(workspaceId)) {
@@ -22,9 +23,14 @@ final class WorkbenchLayoutLoadCoordinator {
     try {
       final tabs = await listTabs(workspaceId);
       final layout = await resolveLayout(workspaceId: workspaceId, tabs: tabs);
+      if (isLoadCurrent?.call() == false) {
+        return;
+      }
       await applyLayout(layout);
     } catch (error) {
-      onError(error);
+      if (isLoadCurrent?.call() != false) {
+        onError(error);
+      }
     } finally {
       _loadingWorkspaceIds.remove(workspaceId);
     }

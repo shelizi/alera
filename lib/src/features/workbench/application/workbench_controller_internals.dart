@@ -216,6 +216,7 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController {
       listTabs: tabService.listTabs,
       resolveLayout: layoutResolver.resolve,
       applyLayout: (layout) => _applyLayout(layout, persist: false),
+      isLoadCurrent: () => !_disposed && _workspaceById(workspaceId) != null,
       onError: (error) {
         if (!_disposed) {
           state = state.copyWith(error: error.toString());

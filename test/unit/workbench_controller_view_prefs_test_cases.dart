@@ -2,6 +2,65 @@ part of 'workbench_controller_test.dart';
 
 void _registerWorkbenchControllerViewPrefsTests() {
   test(
+    'background layout load does not restore layout for a removed workspace',
+    () async {
+      final workspace = Workspace(
+        id: 'workspace-stale-layout',
+        projectId: _harness.project.id,
+        name: 'Stale Layout',
+        branch: 'feature/stale-layout',
+        path: p.join(_harness.project.repoPath, 'stale-layout'),
+        createdAt: .utc(2026, 5, 22),
+        updatedAt: .utc(2026, 5, 22),
+        kind: .linked,
+        status: .active,
+      );
+      final tab = WorkspaceTabRecord(
+        id: 'stale-layout-tab',
+        workspaceId: workspace.id,
+        title: 'Terminal 1',
+        createdAt: .utc(2026, 5, 22),
+        updatedAt: .utc(2026, 5, 22),
+      );
+      final savedLayout = WorkbenchLayout.single(
+        workspaceId: workspace.id,
+        tabIds: <String>[tab.id],
+      );
+      final layoutStarted = Completer<void>();
+      final layoutRead = Completer<WorkbenchLayout?>();
+      _harness.workbenchRepository.blockFindWorkbenchLayoutWith(
+        layoutRead.future,
+        workspaceId: workspace.id,
+        started: layoutStarted,
+      );
+      await _harness.workbenchRepository.upsertWorkspace(workspace);
+      await _harness.workbenchRepository.upsertWorkspaceTab(tab);
+      await _harness.workbenchRepository.upsertWorkbenchLayout(savedLayout);
+
+      await _controller.bootstrap();
+      await layoutStarted.future;
+      await _harness.workbenchRepository.removeWorkspace(workspace.id);
+      await _flushUntil(
+        () => !_controller.state
+            .workspacesFor(_harness.project.id)
+            .any((candidate) => candidate.id == workspace.id),
+      );
+
+      layoutRead.complete(savedLayout);
+      await _flush();
+
+      expect(
+        _controller.state.layoutByWorkspace.containsKey(workspace.id),
+        isFalse,
+      );
+      expect(
+        _controller.state.activeTabIdByWorkspace.containsKey(workspace.id),
+        isFalse,
+      );
+    },
+  );
+
+  test(
     'tab watcher does not overwrite a saved split before layout load finishes',
     () async {
       final workspace = Workspace(
