@@ -82,6 +82,10 @@ mixin _WorkbenchControllerProjects
           clearedLayouts: _clearedLayouts,
           tabFocusHistory: _tabFocusHistory,
         ).sleep(workspace: workspace, tabs: workspaceTabs);
+        _explicitResourceCleaner.closeWorkspaceLocalResources(
+          workspace.id,
+          workspaceTabs,
+        );
 
         state = applyWorkbenchSleepWorkspaceState(
           state: state,

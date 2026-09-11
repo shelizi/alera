@@ -126,6 +126,12 @@ class _ShellTestWorkbenchController(
 
   @override
   Future<void> sleepWorkspace(Workspace workspace) async {
+    final tabs = List<WorkspaceTabRecord>.from(state.tabsFor(workspace.id));
+    ref.read(terminalRuntimeProvider).closeWorkspace(workspace.id);
+    final editorRegistry = ref.read(editorSessionRegistryProvider);
+    for (final tab in tabs) {
+      editorRegistry.forget(tab.id);
+    }
     final nextLayouts = <String, WorkbenchLayout>{...state.layoutByWorkspace}
       ..remove(workspace.id);
     final nextActiveTabs = <String, String>{...state.activeTabIdByWorkspace}

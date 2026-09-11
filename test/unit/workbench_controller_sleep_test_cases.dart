@@ -12,6 +12,27 @@ void _registerWorkbenchControllerSleepTests() {
       );
       await _flush();
 
+      final terminal = _controller.state
+          .tabsFor(workspace.id)
+          .firstWhere((tab) => tab.kind == WorkspaceTabKind.terminal);
+      final editor = _controller.state
+          .tabsFor(workspace.id)
+          .firstWhere((tab) => tab.kind == WorkspaceTabKind.editor);
+      _harness.terminalRuntime.sessionFor(workspace: workspace, tab: terminal);
+      final registry = _harness.container.read(editorSessionRegistryProvider);
+      registry.documentFor(editor.id)
+        ..acceptLoaded(
+          native_files.WorkspaceEditorTextFile(
+            rawContent: 'original',
+            displayContent: 'original',
+            contentToken: 'sleep-token',
+            modifiedMillis: 0,
+            size: .zero,
+          ),
+        )
+        ..updateCurrentText('unsaved');
+      expect(registry.isDirty(editor.id), isTrue);
+
       expect(
         _controller.state.tabsFor(workspace.id).map((tab) => tab.kind),
         <WorkspaceTabKind>[WorkspaceTabKind.terminal, WorkspaceTabKind.editor],
@@ -25,6 +46,12 @@ void _registerWorkbenchControllerSleepTests() {
       expect(_controller.state.layoutFor(workspace.id), isNull);
       expect(_controller.state.activeTabIdByWorkspace[workspace.id], isNull);
       expect(_controller.state.activeWorkspace, isNull);
+      expect(
+        _harness.terminalRuntime.closedWorkspaceIds,
+        contains(workspace.id),
+      );
+      expect(_harness.terminalRuntime.sessions, isEmpty);
+      expect(registry.isDirty(editor.id), isFalse);
       expect(
         await _harness.workbenchRepository.findWorkbenchLayout(workspace.id),
         isNull,

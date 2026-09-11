@@ -268,10 +268,6 @@ mixin _WorkspaceSidebarActions on ConsumerState<ProjectWorkbenchSidebar> {
       await ref
           .read(workbenchControllerProvider.notifier)
           .sleepWorkspace(workspace);
-      ref.read(terminalRuntimeProvider).closeWorkspace(workspace.id);
-      for (final tab in tabs) {
-        editorRegistry.forget(tab.id);
-      }
       if (!mounted) {
         return;
       }

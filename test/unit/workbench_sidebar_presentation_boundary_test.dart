@@ -18,6 +18,9 @@ void main() {
       final actionsSource = File(
         'lib/src/features/workbench/presentation/project_workbench_sidebar_actions.dart',
       ).readAsStringSync();
+      final workspaceActionsSource = File(
+        'lib/src/features/workbench/presentation/project_workbench_workspace_actions.dart',
+      ).readAsStringSync();
 
       expect(bodySource, contains('_WorkbenchSidebarCommands commands'));
       expect(bodySource, isNot(contains('WorkbenchController controller')));
@@ -36,6 +39,11 @@ void main() {
       expect(actionsSource, contains('terminalRuntimeFocusProvider'));
       expect(actionsSource, isNot(contains('terminalRuntimeProvider')));
       expect(actionsSource, isNot(contains('.sessionFor(')));
+      expect(
+        workspaceActionsSource,
+        isNot(contains('terminalRuntimeProvider')),
+      );
+      expect(workspaceActionsSource, isNot(contains('editorRegistry.forget')));
     },
   );
 }
