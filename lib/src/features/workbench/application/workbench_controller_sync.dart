@@ -107,15 +107,14 @@ mixin _WorkbenchControllerSync
       layoutWasCleared: layoutWasCleared,
     );
     final removedTabs = plan.removedTabs;
-    final workspace = _workspaceById(workspaceId);
-    if (workspace != null) {
-      _hostedReviewRetention.releaseTabsInBackground(workspace, removedTabs);
-    }
     // A tab record that disappeared from persisted state can never reach its
-    // live terminal handle again, so release the client-local terminal,
-    // editor, and observer resources without terminating a PTY that another
-    // client may still own.
-    _retiredResourceCleaner.releaseTabs(removedTabs);
+    // live terminal handle again, so release the hosted-review retention and
+    // client-local terminal/editor resources without terminating a PTY that
+    // another client may still own.
+    _retiredTabsCleanup.cleanup(
+      workspace: _workspaceById(workspaceId),
+      tabs: removedTabs,
+    );
     if (tabs.isNotEmpty) {
       _clearedLayouts.forget(workspaceId);
     }

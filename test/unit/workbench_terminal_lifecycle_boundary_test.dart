@@ -35,7 +35,8 @@ void main() {
         source,
         isNot(contains('_retiredResourceCleaner.releaseWorkspace')),
       );
-      expect(source, contains('_retiredResourceCleaner.releaseTabs'));
+      expect(source, contains('_retiredTabsCleanup.cleanup'));
+      expect(source, isNot(contains('_retiredResourceCleaner.releaseTabs')));
       expect(source, isNot(contains('terminalRuntimeLifecycleProvider')));
       expect(source, isNot(contains('editorSessionRegistryProvider')));
       expect(source, isNot(contains('agentHookReceiverProvider')));

@@ -81,6 +81,12 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController {
         forgetFocusHistory: _tabFocusHistory.forget,
         releaseLocalWorkspace: _retiredResourceCleaner.releaseWorkspace,
       );
+  WorkbenchRetiredTabsCleanupCoordinator get _retiredTabsCleanup =>
+      WorkbenchRetiredTabsCleanupCoordinator(
+        releaseHostedReviewTabsInBackground:
+            _hostedReviewRetention.releaseTabsInBackground,
+        releaseLocalTabs: _retiredResourceCleaner.releaseTabs,
+      );
 
   WorkbenchViewPrefsRepository? get _viewPrefsRepository {
     try {
