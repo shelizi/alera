@@ -15,6 +15,9 @@ void main() {
       final collapsedSource = File(
         'lib/src/features/workbench/presentation/project_workbench_collapsed_sidebar.dart',
       ).readAsStringSync();
+      final actionsSource = File(
+        'lib/src/features/workbench/presentation/project_workbench_sidebar_actions.dart',
+      ).readAsStringSync();
 
       expect(bodySource, contains('_WorkbenchSidebarCommands commands'));
       expect(bodySource, isNot(contains('WorkbenchController controller')));
@@ -26,6 +29,12 @@ void main() {
         isNot(contains('WorkbenchController controller')),
       );
       expect(collapsedSource, isNot(contains('controller.')));
+      expect(
+        actionsSource,
+        contains('WorkbenchSidebarTerminalSelectionCoordinator('),
+      );
+      expect(actionsSource, contains('terminalRuntimeFocusProvider'));
+      expect(actionsSource, isNot(contains('.sessionFor(')));
     },
   );
 }

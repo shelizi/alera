@@ -364,38 +364,12 @@ mixin _ProjectWorkbenchSidebarActions
 
   Future<void> _selectTerminal(Workspace workspace, String tabId) async {
     final controller = ref.read(workbenchControllerProvider.notifier);
-    final state = ref.read(workbenchControllerProvider);
-    if (state.activeWorkspaceId != workspace.id) {
-      Project? project;
-      for (final candidate in state.projects) {
-        if (candidate.id == workspace.projectId) {
-          project = candidate;
-          break;
-        }
-      }
-      if (project != null) {
-        await controller.selectWorkspace(
-          project: project,
-          workspace: workspace,
-        );
-      }
-    }
-    controller.setActiveTab(workspaceId: workspace.id, tabId: tabId);
-    WorkspaceTabRecord? tabRecord;
-    for (final tab
-        in ref.read(workbenchControllerProvider).tabsFor(workspace.id)) {
-      if (tab.id == tabId) {
-        tabRecord = tab;
-        break;
-      }
-    }
-    if (tabRecord == null) {
-      return;
-    }
-    ref
-        .read(terminalRuntimeProvider)
-        .sessionFor(workspace: workspace, tab: tabRecord)
-        .requestFocus();
+    await WorkbenchSidebarTerminalSelectionCoordinator(
+      selectWorkspaceTab: controller.selectWorkspaceTab,
+      readWorkspaceTabs: (workspaceId) =>
+          ref.read(workbenchControllerProvider).tabsFor(workspaceId),
+      terminalFocus: ref.read(terminalRuntimeFocusProvider),
+    ).select(workspace: workspace, tabId: tabId);
   }
 
   Future<void> _closeTerminal(Workspace workspace, String tabId) async {
