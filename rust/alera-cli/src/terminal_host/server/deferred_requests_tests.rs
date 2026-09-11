@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
+use alera_core::runtime::{Project, ProjectKind, Workspace};
+use chrono::Utc;
 use serde_json::json;
 
 use super::actor_test_harness::{local_client, test_actor};
@@ -93,4 +95,163 @@ async fn deferred_blocking_completion_is_dropped_after_client_disconnects() {
     actor.handle(completion).await;
 
     assert!(responses.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn project_branch_listing_is_deferred_before_git_access() {
+    let dir = tempfile::tempdir().unwrap();
+    let (handle, mut responses) = ClientHandle::test_channels();
+    let mut actor = test_actor(
+        &dir,
+        HashMap::from([(1, local_client(handle))]),
+        HashMap::new(),
+    )
+    .await;
+    let now = Utc::now();
+    actor
+        .runtime_store
+        .upsert_project(Project {
+            id: "project".into(),
+            name: "Project".into(),
+            repo_path: dir
+                .path()
+                .join("missing-repo")
+                .to_string_lossy()
+                .into_owned(),
+            created_at: now,
+            updated_at: now,
+            kind: ProjectKind::GitRepository,
+        })
+        .await
+        .unwrap();
+    let (inbox, mut commands) = tokio::sync::mpsc::unbounded_channel();
+    actor.inbox = inbox;
+
+    let deferred = actor
+        .try_start_deferred_request(
+            1,
+            51,
+            "project.branches.list",
+            &json!({"projectId": "project"}),
+        )
+        .await
+        .unwrap();
+    assert!(deferred);
+
+    actor
+        .handle_line(
+            1,
+            json!({"id": 52, "type": "status.get", "payload": {}}).to_string(),
+        )
+        .await;
+    let status = tokio::time::timeout(Duration::from_secs(1), responses.recv())
+        .await
+        .expect("status response should not wait for git branch listing")
+        .unwrap()
+        .as_json()
+        .unwrap();
+    assert_eq!(status["id"], 52);
+
+    let completion = tokio::time::timeout(Duration::from_secs(1), commands.recv())
+        .await
+        .expect("git branch worker should report completion")
+        .unwrap();
+    actor.handle(completion).await;
+    let branch_response = tokio::time::timeout(Duration::from_secs(1), responses.recv())
+        .await
+        .expect("git branch completion should answer the original request")
+        .unwrap()
+        .as_json()
+        .unwrap();
+    assert_eq!(branch_response["id"], 51);
+    assert_eq!(branch_response["ok"], false);
+}
+
+#[tokio::test]
+async fn workspace_repository_url_is_deferred_before_git_access() {
+    let dir = tempfile::tempdir().unwrap();
+    let (handle, mut responses) = ClientHandle::test_channels();
+    let mut actor = test_actor(
+        &dir,
+        HashMap::from([(1, local_client(handle))]),
+        HashMap::new(),
+    )
+    .await;
+    let now = Utc::now();
+    actor
+        .runtime_store
+        .upsert_project(Project {
+            id: "project".into(),
+            name: "Project".into(),
+            repo_path: dir
+                .path()
+                .join("missing-project-repo")
+                .to_string_lossy()
+                .into_owned(),
+            created_at: now,
+            updated_at: now,
+            kind: ProjectKind::GitRepository,
+        })
+        .await
+        .unwrap();
+    let workspace: Workspace = serde_json::from_value(json!({
+        "id": "workspace",
+        "instanceId": "instance",
+        "hostId": "local",
+        "projectId": "project",
+        "name": "Workspace",
+        "path": dir.path().join("missing-workspace-repo").to_string_lossy(),
+        "createdAt": now,
+        "updatedAt": now,
+        "kind": "main",
+        "status": "active",
+        "reusesExistingBranch": false
+    }))
+    .unwrap();
+    actor
+        .runtime_store
+        .upsert_workspace(workspace)
+        .await
+        .unwrap();
+    let (inbox, mut commands) = tokio::sync::mpsc::unbounded_channel();
+    actor.inbox = inbox;
+
+    let deferred = actor
+        .try_start_deferred_request(
+            1,
+            61,
+            "workspace.repositoryWebUrl",
+            &json!({"workspaceId": "workspace"}),
+        )
+        .await
+        .unwrap();
+    assert!(deferred);
+
+    actor
+        .handle_line(
+            1,
+            json!({"id": 62, "type": "status.get", "payload": {}}).to_string(),
+        )
+        .await;
+    let status = tokio::time::timeout(Duration::from_secs(1), responses.recv())
+        .await
+        .expect("status response should not wait for git remote lookup")
+        .unwrap()
+        .as_json()
+        .unwrap();
+    assert_eq!(status["id"], 62);
+
+    let completion = tokio::time::timeout(Duration::from_secs(1), commands.recv())
+        .await
+        .expect("git remote worker should report completion")
+        .unwrap();
+    actor.handle(completion).await;
+    let remote_response = tokio::time::timeout(Duration::from_secs(1), responses.recv())
+        .await
+        .expect("git remote completion should answer the original request")
+        .unwrap()
+        .as_json()
+        .unwrap();
+    assert_eq!(remote_response["id"], 61);
+    assert_eq!(remote_response["ok"], false);
 }

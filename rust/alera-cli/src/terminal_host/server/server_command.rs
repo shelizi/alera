@@ -53,7 +53,7 @@ pub enum ServerCommand {
         request_id: i64,
         result: HostResult<Value>,
     },
-    DeferredBlockingRequestFinished {
+    DeferredRequestFinished {
         client_id: u64,
         request_id: i64,
         result: HostResult<Value>,

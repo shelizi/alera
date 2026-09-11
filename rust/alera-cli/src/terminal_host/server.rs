@@ -439,12 +439,12 @@ impl ServerActor {
             } => {
                 self.finish_workspace_sidebar_snapshot(client_id, request_id, result);
             }
-            ServerCommand::DeferredBlockingRequestFinished {
+            ServerCommand::DeferredRequestFinished {
                 client_id,
                 request_id,
                 result,
             } => {
-                self.finish_deferred_blocking_request(client_id, request_id, result);
+                self.finish_deferred_request(client_id, request_id, result);
             }
             ServerCommand::Pty {
                 session_id,

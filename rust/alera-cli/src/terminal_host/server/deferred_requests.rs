@@ -1,4 +1,7 @@
-use serde_json::Value;
+use std::future::Future;
+
+use alera_core::git as core_git;
+use serde_json::{json, Value};
 
 use crate::managed_workspace::{
     ManagedWorkspaceCreateRequest, ManagedWorkspaceRemoveRequest,
@@ -14,6 +17,21 @@ use super::runtime_mutations::RuntimeMutationRequest;
 use super::{ServerActor, ServerCommand};
 
 impl ServerActor {
+    pub(super) fn start_deferred_request<F>(&self, client_id: u64, request_id: i64, task: F)
+    where
+        F: Future<Output = HostResult<Value>> + Send + 'static,
+    {
+        let inbox = self.inbox.clone();
+        tokio::spawn(async move {
+            let result = task.await;
+            let _ = inbox.send(ServerCommand::DeferredRequestFinished {
+                client_id,
+                request_id,
+                result,
+            });
+        });
+    }
+
     pub(super) fn start_deferred_blocking_request<F>(
         &self,
         client_id: u64,
@@ -22,24 +40,18 @@ impl ServerActor {
     ) where
         F: FnOnce() -> HostResult<Value> + Send + 'static,
     {
-        let inbox = self.inbox.clone();
-        tokio::spawn(async move {
-            let result = tokio::task::spawn_blocking(task)
+        self.start_deferred_request(client_id, request_id, async move {
+            tokio::task::spawn_blocking(task)
                 .await
                 .unwrap_or_else(|error| {
                     Err(HostError::state(format!(
                         "Deferred request failed: {error}"
                     )))
-                });
-            let _ = inbox.send(ServerCommand::DeferredBlockingRequestFinished {
-                client_id,
-                request_id,
-                result,
-            });
+                })
         });
     }
 
-    pub(super) fn finish_deferred_blocking_request(
+    pub(super) fn finish_deferred_request(
         &self,
         client_id: u64,
         request_id: i64,
@@ -68,6 +80,74 @@ impl ServerActor {
             return Ok(true);
         }
         match request_type {
+            "project.branches.list" => {
+                self.require_auth(client_id)?;
+                self.require_request_allowed(client_id, request_type)?;
+                let project_id = require_string_key(payload, "projectId")?.to_string();
+                let runtime_store = self.runtime_store.clone();
+                self.start_deferred_request(client_id, request_id, async move {
+                    let project = runtime_store
+                        .find_project(&project_id)
+                        .await
+                        .map_err(|error| HostError::state(error.to_string()))?
+                        .ok_or_else(|| {
+                            HostError::state(format!("Project not found: {project_id}"))
+                        })?;
+                    tokio::task::spawn_blocking(move || {
+                        let branches = core_git::list_branches(&project.repo_path)
+                            .map_err(|error| HostError::state(error.to_string()))?;
+                        let local_branches = branches
+                            .iter()
+                            .filter_map(|branch| {
+                                match core_git::branch_exists(&project.repo_path, branch) {
+                                    Ok(true) => Some(Ok(branch.clone())),
+                                    Ok(false) => None,
+                                    Err(error) => Some(Err(HostError::state(error.to_string()))),
+                                }
+                            })
+                            .collect::<HostResult<Vec<String>>>()?;
+                        Ok(json!({
+                            "projectId": project.id,
+                            "branches": branches,
+                            "localBranches": local_branches,
+                        }))
+                    })
+                    .await
+                    .unwrap_or_else(|error| {
+                        Err(HostError::state(format!(
+                            "Deferred request failed: {error}"
+                        )))
+                    })
+                });
+                Ok(true)
+            }
+            "workspace.repositoryWebUrl" => {
+                self.require_auth(client_id)?;
+                self.require_request_allowed(client_id, request_type)?;
+                let workspace_id = require_string_key(payload, "workspaceId")?.to_string();
+                let runtime_store = self.runtime_store.clone();
+                self.start_deferred_request(client_id, request_id, async move {
+                    let workspace = runtime_store
+                        .find_workspace(&workspace_id)
+                        .await
+                        .map_err(|error| HostError::state(error.to_string()))?
+                        .ok_or_else(|| {
+                            HostError::state(format!("Workspace not found: {workspace_id}"))
+                        })?;
+                    tokio::task::spawn_blocking(move || {
+                        let remote_url = core_git::repository_remote_url(&workspace.path)
+                            .map_err(|error| HostError::state(error.to_string()))?;
+                        Ok(json!({"remoteUrl": remote_url}))
+                    })
+                    .await
+                    .unwrap_or_else(|error| {
+                        Err(HostError::state(format!(
+                            "Deferred request failed: {error}"
+                        )))
+                    })
+                });
+                Ok(true)
+            }
             "hostDirectory.list" => {
                 self.require_auth(client_id)?;
                 self.require_request_allowed(client_id, request_type)?;
