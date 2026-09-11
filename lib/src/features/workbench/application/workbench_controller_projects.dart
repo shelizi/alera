@@ -160,9 +160,8 @@ mixin _WorkbenchControllerProjects
         workspaceId: workspaceId,
         name: name,
       );
-      state = reconcileWorkbenchWorkspaceState(
+      state = applyWorkbenchWorkspaceUpdateState(
         state: state,
-        projectId: workspace.projectId,
         workspace: workspace,
       ).copyWith(error: null);
     } catch (error) {
@@ -180,9 +179,8 @@ mixin _WorkbenchControllerProjects
         workspaceId,
         isPinned,
       );
-      state = reconcileWorkbenchWorkspaceState(
+      state = applyWorkbenchWorkspaceUpdateState(
         state: state,
-        projectId: workspace.projectId,
         workspace: workspace,
       ).copyWith(error: null);
     } catch (error) {

@@ -124,6 +124,40 @@ void main() {
     },
   );
 
+  test('updates only a workspace that is still tracked', () {
+    final now = DateTime.utc(2026, 9, 10);
+    final project = _project('project', now);
+    final existing = _workspace('workspace', project.id, now);
+    final sibling = _workspace('sibling', project.id, now);
+    final updated = existing.copyWith(
+      name: 'Updated workspace',
+      updatedAt: now.add(const Duration(minutes: 1)),
+    );
+    final state = WorkbenchState(
+      projects: <Project>[project],
+      workspacesByProject: <String, List<Workspace>>{
+        project.id: <Workspace>[existing, sibling],
+      },
+    );
+
+    final next = applyWorkbenchWorkspaceUpdateState(
+      state: state,
+      workspace: updated,
+    );
+    expect(next.workspacesFor(project.id), <Workspace>[updated, sibling]);
+
+    final missingState = state.copyWith(
+      workspacesByProject: <String, List<Workspace>>{
+        project.id: <Workspace>[sibling],
+      },
+    );
+    final missingNext = applyWorkbenchWorkspaceUpdateState(
+      state: missingState,
+      workspace: updated,
+    );
+    expect(missingNext, same(missingState));
+  });
+
   test('reconciles an existing workspace in place without duplicating it', () {
     final now = DateTime.utc(2026, 9, 10);
     final project = _project('project', now);

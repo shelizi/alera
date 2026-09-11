@@ -319,6 +319,8 @@ class _FakeWorkbenchRepository implements WorkbenchRepository {
   String? _blockedListWorkspaceTabsId;
   Completer<void>? _listWorkspaceTabsStarted;
   Completer<void>? _listWorkspaceTabsRelease;
+  Completer<void>? _setWorkspacePinnedStarted;
+  Completer<void>? _setWorkspacePinnedRelease;
   Object? upsertWorkspaceError, upsertWorkspaceTabError;
   Object? upsertWorkbenchLayoutError, removeWorkspaceTabError;
   int upsertWorkbenchLayoutCalls = 0;
@@ -384,7 +386,26 @@ class _FakeWorkbenchRepository implements WorkbenchRepository {
     bool isPinned,
   ) async {
     final current = (await findWorkspaceById(workspaceId))!;
-    return upsertWorkspace(current.copyWith(isPinned: isPinned));
+    final updated = await upsertWorkspace(current.copyWith(isPinned: isPinned));
+    final started = _setWorkspacePinnedStarted;
+    if (started != null && !started.isCompleted) {
+      started.complete();
+    }
+    final release = _setWorkspacePinnedRelease;
+    if (release != null) {
+      await release.future;
+    }
+    _setWorkspacePinnedStarted = null;
+    _setWorkspacePinnedRelease = null;
+    return updated;
+  }
+
+  void blockNextWorkspacePinnedReturn({
+    required Completer<void> started,
+    required Completer<void> release,
+  }) {
+    _setWorkspacePinnedStarted = started;
+    _setWorkspacePinnedRelease = release;
   }
 
   @override

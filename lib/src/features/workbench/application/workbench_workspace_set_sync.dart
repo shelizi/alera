@@ -23,6 +23,25 @@ WorkbenchState reconcileWorkbenchWorkspaceState({
   return state.copyWith(workspacesByProject: workspacesByProject);
 }
 
+WorkbenchState applyWorkbenchWorkspaceUpdateState({
+  required WorkbenchState state,
+  required Workspace workspace,
+}) {
+  final current = state.workspacesByProject[workspace.projectId];
+  if (current == null) {
+    return state;
+  }
+  final index = current.indexWhere((entry) => entry.id == workspace.id);
+  if (index == -1) {
+    return state;
+  }
+  final workspaces = List<Workspace>.from(current)..[index] = workspace;
+  final workspacesByProject = Map<String, List<Workspace>>.from(
+    state.workspacesByProject,
+  )..[workspace.projectId] = workspaces;
+  return state.copyWith(workspacesByProject: workspacesByProject);
+}
+
 final class WorkbenchWorkspaceSetSyncPlan {
   const WorkbenchWorkspaceSetSyncPlan({
     required this.liveWorkspaceIds,

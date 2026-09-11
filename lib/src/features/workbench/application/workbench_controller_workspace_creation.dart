@@ -105,8 +105,10 @@ mixin _WorkbenchControllerWorkspaceCreation
         workspace: workspace,
         branch: branch,
       );
-      _reconcileWorkspace(project, switched);
-      state = state.copyWith(error: null);
+      state = applyWorkbenchWorkspaceUpdateState(
+        state: state,
+        workspace: switched,
+      ).copyWith(error: null);
       return switched;
     } catch (error) {
       state = state.copyWith(error: error.toString());

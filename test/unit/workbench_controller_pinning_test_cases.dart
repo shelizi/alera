@@ -42,6 +42,44 @@ void _registerWorkbenchControllerPinningTests() {
     expect(_controller.state.error, isNull);
   });
 
+  test(
+    'does not resurrect a workspace removed while pinning is in flight',
+    () async {
+      await _controller.bootstrap();
+      final workspace = await _selectMainWorkspace(_controller, _harness);
+      final started = Completer<void>();
+      final release = Completer<void>();
+      _harness.workbenchRepository.blockNextWorkspacePinnedReturn(
+        started: started,
+        release: release,
+      );
+
+      final pinning = _controller.setWorkspacePinned(
+        workspaceId: workspace.id,
+        isPinned: true,
+      );
+      await started.future;
+      await _harness.workbenchRepository.removeWorkspace(workspace.id);
+      await _flushUntil(
+        () => _controller.state
+            .workspacesFor(workspace.projectId)
+            .every((candidate) => candidate.id != workspace.id),
+      );
+
+      release.complete();
+      await pinning;
+      await _flush();
+
+      expect(
+        _controller.state
+            .workspacesFor(workspace.projectId)
+            .map((entry) => entry.id),
+        isNot(contains(workspace.id)),
+      );
+      expect(_controller.state.error, isNull);
+    },
+  );
+
   test('pins the workspace and every descendant', () async {
     await _controller.bootstrap();
     final parent = await _selectMainWorkspace(_controller, _harness);
