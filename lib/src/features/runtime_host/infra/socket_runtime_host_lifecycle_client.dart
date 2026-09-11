@@ -31,29 +31,30 @@ final class SocketRuntimeHostLifecycleClient(
     try {
       return await operation();
     } catch (error, stackTrace) {
-      if (error is StateError &&
-          error.message.contains('No live Alera runtime host')) {
-        Error.throwWithStackTrace(
-          RuntimeHostLifecycleStoppedException(error),
-          stackTrace,
-        );
-      }
-      if (error is TerminalHostConnectionClosedException ||
-          error is TerminalHostRequestTimeoutException ||
-          error is StateError &&
-              error.message.contains('Terminal host connection closed')) {
-        Error.throwWithStackTrace(
-          RuntimeHostLifecycleTransportException(error),
-          stackTrace,
-        );
-      }
-      if (error is TerminalHostStartupException) {
-        Error.throwWithStackTrace(
-          RuntimeHostLifecycleStartupException(error),
-          stackTrace,
-        );
+      final mapped = mapRuntimeHostLifecycleTransportError(error);
+      if (mapped != null) {
+        Error.throwWithStackTrace(mapped, stackTrace);
       }
       rethrow;
     }
   }
+}
+
+Exception? mapRuntimeHostLifecycleTransportError(Object error) {
+  if (error is StateError &&
+      error.message.contains('No live Alera runtime host')) {
+    return RuntimeHostLifecycleStoppedException(error);
+  }
+  if (error is TerminalHostRequestTimeoutException) {
+    return RuntimeHostLifecycleOutcomeUnknownException(error);
+  }
+  if (error is TerminalHostConnectionClosedException ||
+      error is StateError &&
+          error.message.contains('Terminal host connection closed')) {
+    return RuntimeHostLifecycleTransportException(error);
+  }
+  if (error is TerminalHostStartupException) {
+    return RuntimeHostLifecycleStartupException(error);
+  }
+  return null;
 }

@@ -36,6 +36,15 @@ final class const RuntimeHostLifecycleTransportException([this.cause])
       cause?.toString() ?? 'Runtime host connection was interrupted.';
 }
 
+final class const RuntimeHostLifecycleOutcomeUnknownException([this.cause])
+    implements Exception {
+  final Object? cause;
+
+  @override
+  String toString() =>
+      cause?.toString() ?? 'Runtime host request outcome is unknown.';
+}
+
 final class const RuntimeHostLifecycleStartupException([this.cause])
     implements Exception {
   final Object? cause;
@@ -281,11 +290,17 @@ final class RuntimeHostLifecycleService({
     throw StateError('The runtime host did not stop in time.');
   }
 
-  /// App quit only needs the shutdown request accepted. The sidecar is
-  /// detached, so waiting for its cleanup would keep the native window open
-  /// while it terminates terminal trees and flushes its stores.
-  Future<void> _shutdownForAppQuit({required bool force}) {
-    return _requestShutdown(force: force);
+  /// App quit must not wait for a request whose reply was lost. A timeout means
+  /// the shutdown outcome is unknown, not successful; the detached sidecar may
+  /// still be alive and will remain governed by its own lifecycle timers.
+  /// Explicit Stop/Update paths do not suppress this outcome because they must
+  /// not launch a replacement runtime until the old host is confirmed gone.
+  Future<void> _shutdownForAppQuit({required bool force}) async {
+    try {
+      await _requestShutdown(force: force);
+    } on RuntimeHostLifecycleOutcomeUnknownException {
+      return;
+    }
   }
 
   /// Ask the live host to stop.

@@ -251,6 +251,57 @@ void main() {
       },
     );
 
+    test('stop propagates an unknown shutdown outcome', () async {
+      final client = FakeRuntimeHostLifecycleClient(
+        status: <String, Object?>{'runtimeHostVersion': '1.2.0'},
+        shutdownLeavesHostRunning: true,
+        shutdownErrorOnSoft:
+            const RuntimeHostLifecycleOutcomeUnknownException(),
+      );
+      final service = RuntimeHostLifecycleService(
+        client: client,
+        bundledVersionProbe: FakeBundledSidecarVersionProbe(
+          const BundledSidecarVersion(version: '1.2.0'),
+        ),
+        readConfig: () => TerminalHostConfig.defaults,
+      );
+
+      await expectLater(
+        service.stop(),
+        throwsA(isA<RuntimeHostLifecycleOutcomeUnknownException>()),
+      );
+      expect(client.shutdownCalls, <bool>[false]);
+    });
+
+    test(
+      'updateIfAvailable does not restart after an unknown shutdown outcome',
+      () async {
+        final client = FakeRuntimeHostLifecycleClient(
+          status: <String, Object?>{
+            'runtimeHostVersion': '0.1.0',
+            'runtimeHostCommit': 'old',
+          },
+          shutdownLeavesHostRunning: true,
+          shutdownErrorOnSoft:
+              const RuntimeHostLifecycleOutcomeUnknownException(),
+        );
+        final service = RuntimeHostLifecycleService(
+          client: client,
+          bundledVersionProbe: FakeBundledSidecarVersionProbe(
+            const BundledSidecarVersion(version: '0.1.0', commit: 'new'),
+          ),
+          readConfig: () => TerminalHostConfig.defaults,
+        );
+
+        await expectLater(
+          service.updateIfAvailable(),
+          throwsA(isA<RuntimeHostLifecycleOutcomeUnknownException>()),
+        );
+        expect(client.shutdownCalls, <bool>[false]);
+        expect(client.ensureStartedCalls, 0);
+      },
+    );
+
     test('stop propagates an unexpected shutdown error', () async {
       final client = FakeRuntimeHostLifecycleClient(
         status: <String, Object?>{'runtimeHostVersion': '1.2.0'},

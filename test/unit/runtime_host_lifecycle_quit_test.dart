@@ -435,6 +435,34 @@ void main() {
       expect(client.shutdownCalls, <bool>[false, true]);
     });
 
+    test(
+      'prepareAppQuit allows close when shutdown outcome is unknown',
+      () async {
+        final client = FakeRuntimeHostLifecycleClient(
+          status: <String, Object?>{
+            'runtimeHostVersion': '1.2.0',
+            'persistent': false,
+          },
+          shutdownLeavesHostRunning: true,
+          shutdownErrorOnSoft:
+              const RuntimeHostLifecycleOutcomeUnknownException(),
+        );
+        final service = RuntimeHostLifecycleService(
+          client: client,
+          bundledVersionProbe: FakeBundledSidecarVersionProbe(
+            const BundledSidecarVersion(version: '1.2.0'),
+          ),
+          readConfig: () => TerminalHostConfig.defaults,
+        );
+
+        final allowed = await service.prepareAppQuit(keepRuntimeOpen: false);
+
+        expect(allowed, isTrue);
+        expect(client.shutdownCalls, <bool>[false]);
+        expect(client.appQuitEvents, <String>['begin', 'commit']);
+      },
+    );
+
     test('prepareAppQuit treats a shutdown disconnect as success', () async {
       final client = FakeRuntimeHostLifecycleClient(
         status: <String, Object?>{
