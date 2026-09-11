@@ -1,6 +1,5 @@
 import 'package:alera/src/features/runtime_host/application/runtime_host_lifecycle_service.dart';
 import 'package:alera/src/features/runtime_host/domain/runtime_host_status.dart';
-import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_client_models.dart';
 import 'package:alera/src/platform/runtime_host/protocol/terminal_host_protocol.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -50,8 +49,10 @@ void main() {
       expect(status.activeSessions, 1);
     });
 
-    test('start propagates a terminal host startup failure', () async {
-      final error = TerminalHostStartupException(StateError('sidecar failed'));
+    test('start propagates a runtime host startup failure', () async {
+      final error = RuntimeHostLifecycleStartupException(
+        StateError('sidecar failed'),
+      );
       final client = FakeRuntimeHostLifecycleClient(ensureStartedError: error);
       final service = RuntimeHostLifecycleService(
         client: client,
@@ -174,7 +175,7 @@ void main() {
             'runtimeHostCommit': 'old',
           },
           busyOnSoftStop: true,
-          shutdownErrorOnForce: const TerminalHostConnectionClosedException(),
+          shutdownErrorOnForce: const RuntimeHostLifecycleTransportException(),
         );
         final service = RuntimeHostLifecycleService(
           client: client,
@@ -206,9 +207,7 @@ void main() {
             'runtimeHostVersion': '0.1.0',
             'runtimeHostCommit': 'old',
           },
-          shutdownErrorOnSoft: StateError(
-            'No live Alera runtime host is available.',
-          ),
+          shutdownErrorOnSoft: const RuntimeHostLifecycleStoppedException(),
         );
         final service = RuntimeHostLifecycleService(
           client: client,
@@ -227,16 +226,14 @@ void main() {
     );
 
     test(
-      'updateIfAvailable continues when shutdown returns a closed StateError',
+      'updateIfAvailable continues when shutdown transport is interrupted',
       () async {
         final client = FakeRuntimeHostLifecycleClient(
           status: <String, Object?>{
             'runtimeHostVersion': '0.1.0',
             'runtimeHostCommit': 'old',
           },
-          shutdownErrorOnSoft: StateError(
-            'Terminal host connection closed during authentication.',
-          ),
+          shutdownErrorOnSoft: const RuntimeHostLifecycleTransportException(),
         );
         final service = RuntimeHostLifecycleService(
           client: client,
@@ -288,11 +285,8 @@ void main() {
             'runtimeHostCommit': 'old',
           },
           probeErrorsAfterShutdown: const [
-            TerminalHostConnectionClosedException(),
-            TerminalHostRequestTimeoutException(
-              'status.get',
-              Duration(seconds: 10),
-            ),
+            RuntimeHostLifecycleTransportException(),
+            RuntimeHostLifecycleTransportException(),
           ],
         );
         final service = RuntimeHostLifecycleService(
@@ -318,7 +312,7 @@ void main() {
           'runtimeHostCommit': 'old',
         },
         probeErrorsAfterShutdown: [
-          StateError('No live Alera runtime host is available.'),
+          const RuntimeHostLifecycleStoppedException(),
         ],
       );
       final service = RuntimeHostLifecycleService(

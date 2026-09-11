@@ -4,7 +4,6 @@ import 'package:alera/src/features/runtime_host/application/runtime_host_quit_pl
 import 'package:alera/src/features/runtime_host/domain/runtime_host_quit_decision.dart';
 import 'package:alera/src/features/runtime_host/domain/runtime_host_status.dart';
 import 'package:alera/src/features/runtime_host/infra/bundled_sidecar_version_probe.dart';
-import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_client.dart';
 import 'package:alera/src/platform/runtime_host/protocol/terminal_host_protocol.dart';
 
 typedef RuntimeHostForceConfirm = Future<bool> Function({
@@ -20,28 +19,37 @@ typedef RuntimeHostBusyQuitConfirm = Future<RuntimeHostQuitDecision> Function({
 
 typedef RuntimeHostBusyQuitCommitted = void Function();
 
+final class const RuntimeHostLifecycleStoppedException([this.cause])
+    implements Exception {
+  final Object? cause;
+
+  @override
+  String toString() => cause?.toString() ?? 'Runtime host is already stopped.';
+}
+
+final class const RuntimeHostLifecycleTransportException([this.cause])
+    implements Exception {
+  final Object? cause;
+
+  @override
+  String toString() =>
+      cause?.toString() ?? 'Runtime host connection was interrupted.';
+}
+
+final class const RuntimeHostLifecycleStartupException([this.cause])
+    implements Exception {
+  final Object? cause;
+
+  @override
+  String toString() => cause?.toString() ?? 'Runtime host failed to start.';
+}
+
 abstract interface class RuntimeHostLifecycleClient {
   Future<Map<String, Object?>?> probeRuntimeStatus();
 
   Future<RuntimeHostShutdownResult> shutdownRuntime({bool force = false});
 
   Future<void> ensureStarted({required TerminalHostConfig config});
-}
-
-final class SocketRuntimeHostLifecycleClient(
-  final SocketTerminalHostClient _client,
-) implements RuntimeHostLifecycleClient {
-  @override
-  Future<Map<String, Object?>?> probeRuntimeStatus() =>
-      _client.probeRuntimeStatus();
-
-  @override
-  Future<RuntimeHostShutdownResult> shutdownRuntime({bool force = false}) =>
-      _client.shutdownRuntime(force: force);
-
-  @override
-  Future<void> ensureStarted({required TerminalHostConfig config}) =>
-      _client.ensureStarted(config: config);
 }
 
 final class RuntimeHostLifecycleService({
@@ -268,19 +276,11 @@ final class RuntimeHostLifecycleService({
     return _isHostGone(error) || _isTransientShutdownDisconnect(error);
   }
 
-  bool _isHostGone(Object error) {
-    return error is StateError &&
-        error.message.contains('No live Alera runtime host');
-  }
+  bool _isHostGone(Object error) =>
+      error is RuntimeHostLifecycleStoppedException;
 
-  bool _isTransientShutdownDisconnect(Object error) {
-    if (error is TerminalHostConnectionClosedException ||
-        error is TerminalHostRequestTimeoutException) {
-      return true;
-    }
-    return error is StateError &&
-        error.message.contains('Terminal host connection closed');
-  }
+  bool _isTransientShutdownDisconnect(Object error) =>
+      error is RuntimeHostLifecycleTransportException;
 }
 
 String runtimeHostBusyMessage(RuntimeHostBusyException busy) {

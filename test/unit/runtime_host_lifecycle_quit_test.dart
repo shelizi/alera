@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:alera/src/features/runtime_host/application/runtime_host_lifecycle_service.dart';
 import 'package:alera/src/features/runtime_host/domain/runtime_host_quit_decision.dart';
 import 'package:alera/src/features/runtime_host/domain/runtime_host_status.dart';
-import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_client_models.dart';
 import 'package:alera/src/platform/runtime_host/protocol/terminal_host_protocol.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -415,7 +414,7 @@ void main() {
           'runtimeHostVersion': '1.2.0',
           'persistent': false,
         },
-        shutdownErrorOnSoft: const TerminalHostConnectionClosedException(),
+        shutdownErrorOnSoft: const RuntimeHostLifecycleTransportException(),
       );
       final service = RuntimeHostLifecycleService(
         client: client,
