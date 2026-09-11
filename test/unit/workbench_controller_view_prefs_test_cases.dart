@@ -600,6 +600,27 @@ void _registerWorkbenchControllerViewPrefsTests() {
     },
   );
 
+  test(
+    'bootstrap completion is ignored after the controller is disposed',
+    () async {
+      final harness = _WorkbenchHarness();
+      final controller = harness._controller;
+      final loadGate = Completer<WorkbenchViewPrefs>();
+      harness.viewPrefsRepository.loadOverride = loadGate.future;
+
+      try {
+        final bootstrap = controller.bootstrap();
+        await _flush();
+        harness.container.dispose();
+        loadGate.complete(WorkbenchViewPrefs.defaults);
+
+        await expectLater(bootstrap, completes);
+      } finally {
+        await harness.dispose();
+      }
+    },
+  );
+
   test('concurrent bootstrap callers wait for the same bootstrap', () async {
     final loadGate = Completer<WorkbenchViewPrefs>();
     _harness.viewPrefsRepository.loadOverride = loadGate.future;

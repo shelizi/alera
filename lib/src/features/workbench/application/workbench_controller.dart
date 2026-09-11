@@ -151,11 +151,13 @@ class WorkbenchController extends _$WorkbenchController
             return repository == null ? null : await repository.load();
           },
           applyViewPrefs: (prefs) {
-            state = state.copyWith(viewPrefs: prefs);
+            if (!_disposed) {
+              state = state.copyWith(viewPrefs: prefs);
+            }
           },
           watchViewPrefs: () {
             final repository = viewPrefsRepository;
-            if (repository == null) {
+            if (_disposed || repository == null) {
               return;
             }
             _rootSubscriptions.watchViewPrefs(
@@ -165,8 +167,15 @@ class WorkbenchController extends _$WorkbenchController
               },
             );
           },
-          startSections: _startSections,
+          startSections: () {
+            if (!_disposed) {
+              _startSections();
+            }
+          },
           watchProjects: () {
+            if (_disposed) {
+              return;
+            }
             _rootSubscriptions.watchProjectsRecovering(
               projectRepository.watchAll,
               onData: _onProjectsChanged,
@@ -174,15 +183,25 @@ class WorkbenchController extends _$WorkbenchController
             );
           },
           listProjects: projectRepository.listAll,
-          applyProjects: _onProjectsChanged,
-          ensureMainWorkspace: _ensureMainWorkspaceForProject,
+          applyProjects: (projects) {
+            if (!_disposed) {
+              _onProjectsChanged(projects);
+            }
+          },
+          ensureMainWorkspace: (project) => _disposed
+              ? Future<void>.value()
+              : _ensureMainWorkspaceForProject(project),
         );
-        state = state.copyWith(bootstrapped: true, error: null);
+        if (!_disposed) {
+          state = state.copyWith(bootstrapped: true, error: null);
+        }
       } catch (error) {
-        state = state.copyWith(
-          bootstrapped: true,
-          error: 'Failed to bootstrap workbench: $error',
-        );
+        if (!_disposed) {
+          state = state.copyWith(
+            bootstrapped: true,
+            error: 'Failed to bootstrap workbench: $error',
+          );
+        }
       }
     });
   }
