@@ -2,13 +2,12 @@ import 'dart:async';
 
 import 'package:alera/src/features/app_window/application/app_window_providers.dart';
 import 'package:alera/src/features/app_window/domain/foreground_parked_refresh.dart';
-import 'package:alera/src/features/workbench/application/terminal_host_settings_config.dart';
+import 'package:alera/src/features/runtime_host/application/runtime_host_settings_config.dart';
 import 'package:alera/src/features/runtime_host/application/runtime_host_lifecycle_service.dart';
 import 'package:alera/src/features/runtime_host/domain/runtime_host_status.dart';
 import 'package:alera/src/features/runtime_host/infra/bundled_sidecar_version_probe.dart';
 import 'package:alera/src/features/runtime_host/infra/socket_runtime_host_lifecycle_client.dart';
 import 'package:alera/src/features/settings/application/settings_controller.dart';
-import 'package:alera/src/features/workbench/application/workbench_providers.dart';
 import 'package:alera/src/platform/runtime_host/protocol/terminal_host_protocol.dart';
 import 'package:alera/src/shared/infra/runtime/runtime_host_providers.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart' show Provider;
@@ -47,8 +46,6 @@ Future<RuntimeHostStatusSnapshot> runtimeHostStatus(Ref ref) async {
   final service = ref.watch(runtimeHostLifecycleServiceProvider);
   final client = ref.watch(runtimeHostClientProvider);
   final foreground = ref.watch(appForegroundProvider);
-  // Keep status in sync after the shell warms the host.
-  ref.watch(terminalHostWarmupCoordinatorProvider);
   final sub = client.runtimeEvents.listen((event) {
     if (event.name == aleraRuntimeHostConnectedEvent) {
       ref.invalidateSelf();

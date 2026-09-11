@@ -1,5 +1,5 @@
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
-import 'package:alera/src/features/workbench/application/terminal_host_settings_config.dart';
+import 'package:alera/src/features/runtime_host/application/runtime_host_settings_config.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

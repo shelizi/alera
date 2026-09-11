@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:alera/src/features/workbench/application/terminal_host_settings_config.dart';
+import 'package:alera/src/features/runtime_host/application/runtime_host_settings_config.dart';
 import 'package:alera/src/features/workbench/application/terminal_launch_environment.dart';
 import 'package:alera/src/app/providers.dart';
 import 'package:alera/src/features/command_terminal/domain/command_terminal_request.dart';
@@ -298,8 +298,8 @@ void main() {
       container.read(terminalHostWarmupCoordinatorProvider);
       await Future.pause(.zero);
 
-      // What the mapping produces is terminal_host_settings_config_test's
-      // job; this only checks the warmup sends it.
+      // What the mapping produces is runtime_host_settings_config's test job;
+      // this only checks the warmup sends it.
       expect(client.ensureStartedConfigs.map((c) => c.toJson()), <Object?>[
         terminalHostConfigFor(settings.terminal).toJson(),
       ]);

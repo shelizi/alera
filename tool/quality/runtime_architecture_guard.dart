@@ -21,6 +21,7 @@ const _legacyTransportPaths = <String>[
 const _scanRoots = <String>['lib/src', 'test'];
 const _platformRuntimeRoot = 'lib/src/platform/runtime_host';
 const _featureRoot = 'lib/src/features';
+const _runtimeHostApplicationRoot = 'lib/src/features/runtime_host/application';
 const _runtimeHostPresentationRoot =
     'lib/src/features/runtime_host/presentation';
 const _appWindowApplicationRoot = 'lib/src/features/app_window/application';
@@ -28,6 +29,8 @@ const _resourceManagerPresentationRoot =
     'lib/src/features/resource_manager/presentation';
 const _workbenchInfraImportPrefix =
     'package:alera/src/features/workbench/infra/';
+const _workbenchApplicationImportPrefix =
+    'package:alera/src/features/workbench/application/';
 const _runtimeTransportInfraImportPrefix =
     'package:alera/src/shared/infra/runtime/';
 
@@ -43,6 +46,7 @@ void main() {
   _checkPlatformFeatureDependencies(violations);
   _checkApplicationPresentationDependencies(violations);
   _checkCrossFeatureWorkbenchInfraDependencies(violations);
+  _checkRuntimeHostWorkbenchApplicationDependencies(violations);
   _checkRuntimeHostPresentationDependencies(violations);
   _checkAppWindowApplicationDependencies(violations);
   _checkResourceManagerPresentationDependencies(violations);
@@ -182,6 +186,28 @@ void _checkCrossFeatureWorkbenchInfraDependencies(List<String> violations) {
       violations.add(
         'Application code imports Workbench infrastructure across features: '
         '$path:${index + 1}:$uri',
+      );
+    }
+  }
+}
+
+void _checkRuntimeHostWorkbenchApplicationDependencies(
+  List<String> violations,
+) {
+  for (final file in _dartFilesUnder(_runtimeHostApplicationRoot)) {
+    if (_displayPath(file).endsWith('.g.dart')) {
+      continue;
+    }
+    final lines = file.readAsLinesSync();
+    for (var index = 0; index < lines.length; index += 1) {
+      final match = _dependencyDirective.firstMatch(lines[index]);
+      final uri = match?.group(1);
+      if (uri == null || !uri.startsWith(_workbenchApplicationImportPrefix)) {
+        continue;
+      }
+      violations.add(
+        'Runtime-host application imports Workbench application code: '
+        '${_displayPath(file)}:${index + 1}:$uri',
       );
     }
   }
