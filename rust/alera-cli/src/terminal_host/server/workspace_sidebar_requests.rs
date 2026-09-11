@@ -218,16 +218,8 @@ impl ServerActor {
         payload: &Value,
     ) -> HostResult<Value> {
         self.require_auth(client_id)?;
-        let workspace_id = string_field(payload, "workspaceId")?;
-        let workspace = self
-            .runtime_store
-            .find_workspace(workspace_id)
-            .await
-            .map_err(state_error)?
-            .ok_or_else(|| HostError::state(format!("Workspace not found: {workspace_id}")))?;
-        let remote_url = core_git::repository_remote_url(&workspace.path)
-            .map_err(|error| HostError::state(error.to_string()))?;
-        Ok(json!({"remoteUrl": remote_url}))
+        let workspace_id = string_field(payload, "workspaceId")?.to_string();
+        load_workspace_repository_web_url(self.runtime_store.clone(), workspace_id).await
     }
 
     pub(super) async fn create_workspace_tag(
@@ -277,6 +269,28 @@ impl ServerActor {
         self.broadcast_workspaces_changed(Some(&project_id));
         serde_json::to_value(workspace).map_err(state_error)
     }
+}
+
+pub(super) async fn load_workspace_repository_web_url(
+    runtime_store: RuntimeStore,
+    workspace_id: String,
+) -> HostResult<Value> {
+    let workspace = runtime_store
+        .find_workspace(&workspace_id)
+        .await
+        .map_err(state_error)?
+        .ok_or_else(|| HostError::state(format!("Workspace not found: {workspace_id}")))?;
+    tokio::task::spawn_blocking(move || {
+        let remote_url = core_git::repository_remote_url(&workspace.path)
+            .map_err(|error| HostError::state(error.to_string()))?;
+        Ok(json!({"remoteUrl": remote_url}))
+    })
+    .await
+    .unwrap_or_else(|error| {
+        Err(HostError::state(format!(
+            "Deferred request failed: {error}"
+        )))
+    })
 }
 
 async fn load_workspace_sidebar_snapshot(runtime_store: &RuntimeStore) -> HostResult<Value> {

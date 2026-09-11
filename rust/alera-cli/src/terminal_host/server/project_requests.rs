@@ -1,8 +1,9 @@
 use std::process::Stdio;
 
 use alera_core::child_process::windowless_async_command;
+use alera_core::git as core_git;
 use alera_core::runtime::{
-    ProjectCloneJob, ProjectCloneJobPhase, ProjectCloneJobStatus, ProjectConfig,
+    ProjectCloneJob, ProjectCloneJobPhase, ProjectCloneJobStatus, ProjectConfig, RuntimeStore,
 };
 use chrono::Utc;
 use regex::Regex;
@@ -121,6 +122,11 @@ impl ServerActor {
     pub(super) fn host_directory_list_request(&self, payload: &Value) -> HostResult<Value> {
         let path = string_key(payload, "path")?;
         serde_json::to_value(list_host_directory(&path).map_err(state_error)?).map_err(state_error)
+    }
+
+    pub(super) async fn project_branches_request(&self, payload: &Value) -> HostResult<Value> {
+        let project_id = string_key(payload, "projectId")?;
+        load_project_branches(self.runtime_store.clone(), project_id).await
     }
 
     pub(super) async fn project_clone_start_request(
@@ -435,6 +441,41 @@ async fn finish_failed_clone(
             None,
         )
         .await;
+}
+
+pub(super) async fn load_project_branches(
+    runtime_store: RuntimeStore,
+    project_id: String,
+) -> HostResult<Value> {
+    let project = runtime_store
+        .find_project(&project_id)
+        .await
+        .map_err(state_error)?
+        .ok_or_else(|| HostError::state(format!("Project not found: {project_id}")))?;
+    tokio::task::spawn_blocking(move || {
+        let branches = core_git::list_branches(&project.repo_path).map_err(state_error)?;
+        let local_branches = branches
+            .iter()
+            .filter_map(
+                |branch| match core_git::branch_exists(&project.repo_path, branch) {
+                    Ok(true) => Some(Ok(branch.clone())),
+                    Ok(false) => None,
+                    Err(error) => Some(Err(state_error(error))),
+                },
+            )
+            .collect::<HostResult<Vec<String>>>()?;
+        Ok(json!({
+            "projectId": project.id,
+            "branches": branches,
+            "localBranches": local_branches,
+        }))
+    })
+    .await
+    .unwrap_or_else(|error| {
+        Err(HostError::state(format!(
+            "Deferred request failed: {error}"
+        )))
+    })
 }
 
 fn sanitized_clone_source(raw: &str) -> String {

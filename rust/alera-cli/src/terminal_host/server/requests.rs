@@ -1,9 +1,6 @@
-use alera_core::{
-    git as core_git,
-    runtime::{
-        LinkedReview, Project, ProjectConfig, WorkbenchLayoutRecord, Workspace, WorkspaceTabRecord,
-        WorkspaceTag,
-    },
+use alera_core::runtime::{
+    LinkedReview, Project, ProjectConfig, WorkbenchLayoutRecord, Workspace, WorkspaceTabRecord,
+    WorkspaceTag,
 };
 use chrono::{DateTime, Utc};
 use serde_json::{json, Map, Value};
@@ -546,30 +543,7 @@ impl ServerActor {
             }
             "project.branches.list" => {
                 self.require_auth(client_id)?;
-                let project_id = require_string_key(payload, "projectId")?;
-                let project = self
-                    .runtime_store
-                    .find_project(&project_id)
-                    .await
-                    .map_err(|error| HostError::state(error.to_string()))?
-                    .ok_or_else(|| HostError::state(format!("Project not found: {project_id}")))?;
-                let branches = core_git::list_branches(&project.repo_path)
-                    .map_err(|error| HostError::state(error.to_string()))?;
-                let local_branches = branches
-                    .iter()
-                    .filter_map(|branch| {
-                        match core_git::branch_exists(&project.repo_path, branch) {
-                            Ok(true) => Some(Ok(branch.clone())),
-                            Ok(false) => None,
-                            Err(error) => Some(Err(HostError::state(error.to_string()))),
-                        }
-                    })
-                    .collect::<HostResult<Vec<String>>>()?;
-                Ok(json!({
-                    "projectId": project.id,
-                    "branches": branches,
-                    "localBranches": local_branches,
-                }))
+                self.project_branches_request(payload).await
             }
             "project.upsert" => {
                 self.require_auth(client_id)?;

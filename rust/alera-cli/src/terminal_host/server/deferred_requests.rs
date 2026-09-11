@@ -1,7 +1,6 @@
 use std::future::Future;
 
-use alera_core::git as core_git;
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use crate::managed_workspace::{
     ManagedWorkspaceCreateRequest, ManagedWorkspaceRemoveRequest,
@@ -11,9 +10,11 @@ use crate::project_management::list_host_directory;
 use crate::terminal_host::host_error::{HostError, HostResult};
 use crate::terminal_host::protocol::{error_response, ok_response};
 
+use super::project_requests::load_project_branches;
 use super::request_payloads::parse_payload;
 use super::requests::require_string_key;
 use super::runtime_mutations::RuntimeMutationRequest;
+use super::workspace_sidebar_requests::load_workspace_repository_web_url;
 use super::{ServerActor, ServerCommand};
 
 impl ServerActor {
@@ -85,40 +86,11 @@ impl ServerActor {
                 self.require_request_allowed(client_id, request_type)?;
                 let project_id = require_string_key(payload, "projectId")?.to_string();
                 let runtime_store = self.runtime_store.clone();
-                self.start_deferred_request(client_id, request_id, async move {
-                    let project = runtime_store
-                        .find_project(&project_id)
-                        .await
-                        .map_err(|error| HostError::state(error.to_string()))?
-                        .ok_or_else(|| {
-                            HostError::state(format!("Project not found: {project_id}"))
-                        })?;
-                    tokio::task::spawn_blocking(move || {
-                        let branches = core_git::list_branches(&project.repo_path)
-                            .map_err(|error| HostError::state(error.to_string()))?;
-                        let local_branches = branches
-                            .iter()
-                            .filter_map(|branch| {
-                                match core_git::branch_exists(&project.repo_path, branch) {
-                                    Ok(true) => Some(Ok(branch.clone())),
-                                    Ok(false) => None,
-                                    Err(error) => Some(Err(HostError::state(error.to_string()))),
-                                }
-                            })
-                            .collect::<HostResult<Vec<String>>>()?;
-                        Ok(json!({
-                            "projectId": project.id,
-                            "branches": branches,
-                            "localBranches": local_branches,
-                        }))
-                    })
-                    .await
-                    .unwrap_or_else(|error| {
-                        Err(HostError::state(format!(
-                            "Deferred request failed: {error}"
-                        )))
-                    })
-                });
+                self.start_deferred_request(
+                    client_id,
+                    request_id,
+                    load_project_branches(runtime_store, project_id),
+                );
                 Ok(true)
             }
             "workspace.repositoryWebUrl" => {
@@ -126,26 +98,11 @@ impl ServerActor {
                 self.require_request_allowed(client_id, request_type)?;
                 let workspace_id = require_string_key(payload, "workspaceId")?.to_string();
                 let runtime_store = self.runtime_store.clone();
-                self.start_deferred_request(client_id, request_id, async move {
-                    let workspace = runtime_store
-                        .find_workspace(&workspace_id)
-                        .await
-                        .map_err(|error| HostError::state(error.to_string()))?
-                        .ok_or_else(|| {
-                            HostError::state(format!("Workspace not found: {workspace_id}"))
-                        })?;
-                    tokio::task::spawn_blocking(move || {
-                        let remote_url = core_git::repository_remote_url(&workspace.path)
-                            .map_err(|error| HostError::state(error.to_string()))?;
-                        Ok(json!({"remoteUrl": remote_url}))
-                    })
-                    .await
-                    .unwrap_or_else(|error| {
-                        Err(HostError::state(format!(
-                            "Deferred request failed: {error}"
-                        )))
-                    })
-                });
+                self.start_deferred_request(
+                    client_id,
+                    request_id,
+                    load_workspace_repository_web_url(runtime_store, workspace_id),
+                );
                 Ok(true)
             }
             "hostDirectory.list" => {

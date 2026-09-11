@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::Path;
 use std::time::Duration;
 
 use alera_core::runtime::{Project, ProjectKind, Workspace};
@@ -100,6 +101,8 @@ async fn deferred_blocking_completion_is_dropped_after_client_disconnects() {
 #[tokio::test]
 async fn project_branch_listing_is_deferred_before_git_access() {
     let dir = tempfile::tempdir().unwrap();
+    let repo_path = dir.path().join("repo");
+    init_git_repository(&repo_path);
     let (handle, mut responses) = ClientHandle::test_channels();
     let mut actor = test_actor(
         &dir,
@@ -113,11 +116,7 @@ async fn project_branch_listing_is_deferred_before_git_access() {
         .upsert_project(Project {
             id: "project".into(),
             name: "Project".into(),
-            repo_path: dir
-                .path()
-                .join("missing-repo")
-                .to_string_lossy()
-                .into_owned(),
+            repo_path: repo_path.to_string_lossy().into_owned(),
             created_at: now,
             updated_at: now,
             kind: ProjectKind::GitRepository,
@@ -164,12 +163,24 @@ async fn project_branch_listing_is_deferred_before_git_access() {
         .as_json()
         .unwrap();
     assert_eq!(branch_response["id"], 51);
-    assert_eq!(branch_response["ok"], false);
+    assert_eq!(branch_response["ok"], true);
+    assert!(branch_response["payload"]["branches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|branch| branch == "feature"));
+    assert!(branch_response["payload"]["localBranches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|branch| branch == "feature"));
 }
 
 #[tokio::test]
 async fn workspace_repository_url_is_deferred_before_git_access() {
     let dir = tempfile::tempdir().unwrap();
+    let repo_path = dir.path().join("repo");
+    init_git_repository(&repo_path);
     let (handle, mut responses) = ClientHandle::test_channels();
     let mut actor = test_actor(
         &dir,
@@ -183,11 +194,7 @@ async fn workspace_repository_url_is_deferred_before_git_access() {
         .upsert_project(Project {
             id: "project".into(),
             name: "Project".into(),
-            repo_path: dir
-                .path()
-                .join("missing-project-repo")
-                .to_string_lossy()
-                .into_owned(),
+            repo_path: repo_path.to_string_lossy().into_owned(),
             created_at: now,
             updated_at: now,
             kind: ProjectKind::GitRepository,
@@ -200,7 +207,7 @@ async fn workspace_repository_url_is_deferred_before_git_access() {
         "hostId": "local",
         "projectId": "project",
         "name": "Workspace",
-        "path": dir.path().join("missing-workspace-repo").to_string_lossy(),
+        "path": repo_path.to_string_lossy(),
         "createdAt": now,
         "updatedAt": now,
         "kind": "main",
@@ -253,5 +260,27 @@ async fn workspace_repository_url_is_deferred_before_git_access() {
         .as_json()
         .unwrap();
     assert_eq!(remote_response["id"], 61);
-    assert_eq!(remote_response["ok"], false);
+    assert_eq!(remote_response["ok"], true);
+    assert_eq!(
+        remote_response["payload"]["remoteUrl"],
+        "https://example.com/alera.git"
+    );
+}
+
+fn init_git_repository(path: &Path) {
+    std::fs::create_dir_all(path).unwrap();
+    let repository = git2::Repository::init(path).unwrap();
+    let signature = git2::Signature::now("Alera Test", "alera@example.test").unwrap();
+    let tree_id = repository.index().unwrap().write_tree().unwrap();
+    let tree = repository.find_tree(tree_id).unwrap();
+    let commit_id = repository
+        .commit(Some("HEAD"), &signature, &signature, "initial", &tree, &[])
+        .unwrap();
+    drop(tree);
+    let commit = repository.find_commit(commit_id).unwrap();
+    repository.branch("feature", &commit, false).unwrap();
+    drop(commit);
+    repository
+        .remote("origin", "https://example.com/alera.git")
+        .unwrap();
 }
