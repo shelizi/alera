@@ -259,6 +259,63 @@ void _registerWorkbenchControllerWorkspaceGraphTests() {
   });
 
   test(
+    'concurrent workspace parent updates leave only the latest parent',
+    () async {
+      await _controller.bootstrap();
+      await _flushUntil(
+        () => _controller.state.workspacesFor(_harness.project.id).isNotEmpty,
+      );
+      final workspace = Workspace(
+        id: 'workspace-concurrent-parent',
+        projectId: _harness.project.id,
+        name: 'Feature',
+        path: '/tmp/workspace-concurrent-parent',
+        createdAt: .utc(2026, 5, 22),
+        updatedAt: .utc(2026, 5, 22),
+        kind: .linked,
+        status: .active,
+        parentWorkspaceId: 'parent-old',
+      );
+      await _harness.workbenchRepository.upsertWorkspace(workspace);
+      await _flushUntil(
+        () => _controller.state
+            .workspacesFor(_harness.project.id)
+            .any((candidate) => candidate.id == workspace.id),
+      );
+      await _harness.workspaceGraphRepository.linkWorkspaces(
+        parentWorkspaceId: 'parent-old',
+        childWorkspaceId: workspace.id,
+      );
+      _harness.workspaceGraphRepository
+        ..linkedWorkspaces.clear()
+        ..unlinkedWorkspaces.clear();
+
+      final first = _controller.setWorkspaceParent(
+        workspace: workspace,
+        parentWorkspaceId: 'parent-b',
+      );
+      final second = _controller.setWorkspaceParent(
+        workspace: workspace,
+        parentWorkspaceId: 'parent-c',
+      );
+      await Future.wait<void>(<Future<void>>[first, second]);
+
+      final parents = _harness.workspaceGraphRepository.relations
+          .where((relation) => relation.childWorkspaceId == workspace.id)
+          .map((relation) => relation.parentWorkspaceId)
+          .toSet();
+      expect(parents, <String>{'parent-c'});
+      expect(
+        _controller.state
+            .workspacesFor(workspace.projectId)
+            .singleWhere((candidate) => candidate.id == workspace.id)
+            .parentWorkspaceId,
+        'parent-c',
+      );
+    },
+  );
+
+  test(
     'setWorkspaceParent restores the previous parent when relink fails',
     () async {
       final workspace = Workspace(

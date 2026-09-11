@@ -296,17 +296,40 @@ mixin _WorkbenchControllerProjects
   Future<void> setWorkspaceParent({
     required Workspace workspace,
     String? parentWorkspaceId,
-  }) async {
-    try {
-      final changed = await WorkbenchWorkspaceParentUpdateService(
-        _workspaceGraphRepository,
-      ).update(workspace: workspace, parentWorkspaceId: parentWorkspaceId);
-      if (!changed) return;
-      state = state.copyWith(error: null);
-    } catch (error) {
-      state = state.copyWith(error: error.toString());
-      rethrow;
-    }
+  }) {
+    final wasTracked = _workspaceById(workspace.id) != null;
+    final requestedParentId = normalizeWorkbenchWorkspaceParentId(
+      parentWorkspaceId,
+    );
+    return _workspaceParentMutations.run<void>(
+      workspaceId: workspace.id,
+      action: () async {
+        final latest = _workspaceById(workspace.id);
+        if (wasTracked && latest == null) {
+          return;
+        }
+        final basis = latest ?? workspace;
+        try {
+          final changed = await WorkbenchWorkspaceParentUpdateService(
+            _workspaceGraphRepository,
+          ).update(workspace: basis, parentWorkspaceId: requestedParentId);
+          if (!changed) return;
+          final latestAfter = _workspaceById(workspace.id);
+          if (latestAfter != null) {
+            state = applyWorkbenchWorkspaceUpdateState(
+              state: state,
+              workspace: latestAfter.copyWith(
+                parentWorkspaceId: requestedParentId,
+              ),
+            );
+          }
+          state = state.copyWith(error: null);
+        } catch (error) {
+          state = state.copyWith(error: error.toString());
+          rethrow;
+        }
+      },
+    );
   }
 
   Future<void> selectWorkspace({

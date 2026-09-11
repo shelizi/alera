@@ -11,8 +11,10 @@ final class WorkbenchWorkspaceParentUpdateService {
     required Workspace workspace,
     String? parentWorkspaceId,
   }) async {
-    final currentParentId = _normalizedId(workspace.parentWorkspaceId);
-    final nextParentId = _normalizedId(parentWorkspaceId);
+    final currentParentId = normalizeWorkbenchWorkspaceParentId(
+      workspace.parentWorkspaceId,
+    );
+    final nextParentId = normalizeWorkbenchWorkspaceParentId(parentWorkspaceId);
     if (currentParentId == nextParentId) {
       return false;
     }
@@ -66,7 +68,7 @@ final class WorkbenchWorkspaceParentUpdateService {
   }
 }
 
-String? _normalizedId(String? value) {
+String? normalizeWorkbenchWorkspaceParentId(String? value) {
   final trimmed = value?.trim();
   return trimmed == null || trimmed.isEmpty ? null : trimmed;
 }
