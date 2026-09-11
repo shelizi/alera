@@ -4,6 +4,20 @@ void _registerSettingsDialogAgentsTests() {
   testWidgets('edits agent status notification and awake settings', (
     tester,
   ) async {
+    Future<void> toggleSwitchRow(String title) async {
+      final toggle = find.descendant(
+        of: find.ancestor(
+          of: find.text(title),
+          matching: find.byType(SettingsSwitchRow),
+        ),
+        matching: find.byType(Switch),
+      );
+      await tester.ensureVisible(toggle);
+      await tester.pump();
+      await tester.tap(toggle);
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+
     final container = await _pumpSettingsDialog(tester);
 
     // Agent hooks and behavior settings live in the Agents section.
@@ -16,7 +30,7 @@ void _registerSettingsDialogAgentsTests() {
     await tester.ensureVisible(find.text('Agent Status Notifications'));
     await tester.pump();
 
-    for (final label in const <String>[
+    const hookLabels = <String>[
       'Codex Hooks',
       'Claude Code Hooks',
       'GitHub Copilot Hooks',
@@ -27,8 +41,10 @@ void _registerSettingsDialogAgentsTests() {
       'Pi Hooks',
       'Amp Hooks',
       'Grok Build Hooks',
+      'Devin Hooks',
       'fx Status',
-    ]) {
+    ];
+    for (final label in hookLabels) {
       expect(find.text(label), findsOneWidget);
     }
     expect(find.text('Show Tab Titles in Sidebar'), findsOneWidget);
@@ -38,45 +54,13 @@ void _registerSettingsDialogAgentsTests() {
       findsOneWidget,
     );
 
-    await tester.ensureVisible(find.text('Codex Hooks'));
-    await tester.pump();
-    await tester.tap(find.byType(Switch).at(0));
-    await tester.pump(const Duration(milliseconds: 50));
-    for (final entry in const <({String label, int switchIndex})>[
-      (label: 'Claude Code Hooks', switchIndex: 1),
-      (label: 'GitHub Copilot Hooks', switchIndex: 2),
-      (label: 'Cursor Hooks', switchIndex: 3),
-      (label: 'Antigravity Hooks', switchIndex: 4),
-      (label: 'OpenCode Hooks', switchIndex: 5),
-      (label: 'OpenCode 2 Hooks', switchIndex: 6),
-      (label: 'Pi Hooks', switchIndex: 7),
-      (label: 'Amp Hooks', switchIndex: 8),
-      (label: 'Grok Build Hooks', switchIndex: 9),
-      (label: 'fx Status', switchIndex: 10),
-    ]) {
-      await tester.ensureVisible(find.text(entry.label));
-      await tester.pump();
-      await tester.tap(find.byType(Switch).at(entry.switchIndex));
-      await tester.pump(const Duration(milliseconds: 50));
+    for (final label in hookLabels) {
+      await toggleSwitchRow(label);
     }
-    await tester.ensureVisible(find.text('Show Tab Titles in Sidebar'));
-    await tester.pump();
-    await tester.tap(find.byType(Switch).at(11));
-    await tester.pump(const Duration(milliseconds: 50));
-    await tester.ensureVisible(find.text('Agent Status Notifications'));
-    await tester.pump();
-    await tester.tap(find.byType(Switch).at(12));
-    await tester.pump(const Duration(milliseconds: 50));
-    await tester.ensureVisible(find.text('Agent Finished Notifications'));
-    await tester.pump();
-    await tester.tap(find.byType(Switch).at(13));
-    await tester.pump(const Duration(milliseconds: 50));
-    await tester.ensureVisible(
-      find.text('Keep Computer Awake While Agents Are Working'),
-    );
-    await tester.pump();
-    await tester.tap(find.byType(Switch).at(14));
-    await tester.pump(const Duration(milliseconds: 50));
+    await toggleSwitchRow('Show Tab Titles in Sidebar');
+    await toggleSwitchRow('Agent Status Notifications');
+    await toggleSwitchRow('Agent Finished Notifications');
+    await toggleSwitchRow('Keep Computer Awake While Agents Are Working');
 
     final hooks = container
         .read(settingsControllerProvider)
@@ -93,6 +77,7 @@ void _registerSettingsDialogAgentsTests() {
       hooks.pi,
       hooks.amp,
       hooks.grok,
+      hooks.devin,
       hooks.fx,
     ], everyElement(isTrue));
     final behavior = container.read(settingsControllerProvider).agents;
