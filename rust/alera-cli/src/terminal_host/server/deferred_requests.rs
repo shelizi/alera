@@ -26,6 +26,12 @@ impl ServerActor {
             return Ok(true);
         }
         match request_type {
+            "workspaceSidebar.snapshot" => {
+                self.require_auth(client_id)?;
+                self.require_request_allowed(client_id, request_type)?;
+                self.start_workspace_sidebar_snapshot(client_id, request_id);
+                Ok(true)
+            }
             "mobile.status.get"
                 if payload.get("includeNetworkStatus").and_then(Value::as_bool) != Some(false) =>
             {

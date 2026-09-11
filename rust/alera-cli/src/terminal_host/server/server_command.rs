@@ -48,6 +48,11 @@ pub enum ServerCommand {
         request_id: i64,
         payload: Value,
     },
+    WorkspaceSidebarSnapshotFinished {
+        client_id: u64,
+        request_id: i64,
+        result: HostResult<Value>,
+    },
     Pty {
         session_id: String,
         event: PtyEvent,

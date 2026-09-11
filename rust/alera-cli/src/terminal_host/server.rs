@@ -167,6 +167,8 @@ mod workspace_section_requests;
 #[cfg(test)]
 mod workspace_section_requests_tests;
 mod workspace_sidebar_requests;
+#[cfg(test)]
+mod workspace_sidebar_requests_tests;
 
 pub use server_command::ServerCommand;
 
@@ -427,6 +429,13 @@ impl ServerActor {
                 payload,
             } => {
                 self.finish_mobile_network_snapshot(client_id, request_id, payload);
+            }
+            ServerCommand::WorkspaceSidebarSnapshotFinished {
+                client_id,
+                request_id,
+                result,
+            } => {
+                self.finish_workspace_sidebar_snapshot(client_id, request_id, result);
             }
             ServerCommand::Pty {
                 session_id,

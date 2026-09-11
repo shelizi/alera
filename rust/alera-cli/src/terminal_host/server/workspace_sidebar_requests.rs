@@ -1,6 +1,6 @@
 use alera_core::{
     git as core_git,
-    runtime::{SharedWorkbenchPrefsWriter, SharedWorkbenchViewPrefs, WorkspaceTag},
+    runtime::{RuntimeStore, SharedWorkbenchPrefsWriter, SharedWorkbenchViewPrefs, WorkspaceTag},
 };
 use chrono::Utc;
 use serde::Deserialize;
@@ -8,9 +8,9 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::terminal_host::host_error::{HostError, HostResult};
-use crate::terminal_host::protocol::event;
+use crate::terminal_host::protocol::{error_response, event, ok_response};
 
-use super::ServerActor;
+use super::{ServerActor, ServerCommand};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -61,50 +61,44 @@ impl ServerActor {
         self.broadcast_authenticated(event("agentPresenceChanged", json!({"changes": changes})));
     }
 
+    pub(super) fn start_workspace_sidebar_snapshot(&self, client_id: u64, request_id: i64) {
+        let runtime_store = self.runtime_store.clone();
+        let inbox = self.inbox.clone();
+        tokio::spawn(async move {
+            let result = load_workspace_sidebar_snapshot(&runtime_store).await;
+            let _ = inbox.send(ServerCommand::WorkspaceSidebarSnapshotFinished {
+                client_id,
+                request_id,
+                result,
+            });
+        });
+    }
+
+    pub(super) fn finish_workspace_sidebar_snapshot(
+        &self,
+        client_id: u64,
+        request_id: i64,
+        result: HostResult<Value>,
+    ) {
+        if self.require_auth(client_id).is_err() {
+            return;
+        }
+        match result {
+            Ok(mut payload) => {
+                payload["agentPresence"] = self.agent_presence_items();
+                self.client_write(client_id, ok_response(request_id, payload));
+            }
+            Err(error) => {
+                self.client_write(client_id, error_response(request_id, &error));
+            }
+        }
+    }
+
     pub(super) async fn workspace_sidebar_snapshot(&self, client_id: u64) -> HostResult<Value> {
         self.require_auth(client_id)?;
-        let projects = self
-            .runtime_store
-            .list_projects()
-            .await
-            .map_err(state_error)?;
-        let workspaces = self
-            .runtime_store
-            .list_all_workspaces()
-            .await
-            .map_err(state_error)?;
-        let tags = self.runtime_store.list_tags().await.map_err(state_error)?;
-        let activity = self
-            .runtime_store
-            .list_workspace_activity()
-            .await
-            .map_err(state_error)?;
-        let view_prefs = self
-            .runtime_store
-            .shared_workbench_view_prefs()
-            .await
-            .map_err(state_error)?;
-        let runtime_settings = self
-            .runtime_store
-            .runtime_settings()
-            .await
-            .map_err(state_error)?;
-        let terminal_tab_count_by_workspace_id = self
-            .runtime_store
-            .terminal_tab_counts_by_workspace()
-            .await
-            .map_err(state_error)?;
-        Ok(json!({
-            "projects": projects,
-            "workspaces": workspaces,
-            "tags": tags,
-            "sections": self.runtime_store.list_workspace_sections().await.map_err(state_error)?,
-            "activity": activity,
-            "viewPrefs": view_prefs,
-            "runtimeSettings": runtime_settings,
-            "agentPresence": self.agent_presence_items(),
-            "terminalTabCountByWorkspaceId": terminal_tab_count_by_workspace_id,
-        }))
+        let mut payload = load_workspace_sidebar_snapshot(&self.runtime_store).await?;
+        payload["agentPresence"] = self.agent_presence_items();
+        Ok(payload)
     }
 
     pub(super) async fn workbench_view_prefs(&self, client_id: u64) -> HostResult<Value> {
@@ -283,6 +277,45 @@ impl ServerActor {
         self.broadcast_workspaces_changed(Some(&project_id));
         serde_json::to_value(workspace).map_err(state_error)
     }
+}
+
+async fn load_workspace_sidebar_snapshot(runtime_store: &RuntimeStore) -> HostResult<Value> {
+    let projects = runtime_store.list_projects().await.map_err(state_error)?;
+    let workspaces = runtime_store
+        .list_all_workspaces()
+        .await
+        .map_err(state_error)?;
+    let tags = runtime_store.list_tags().await.map_err(state_error)?;
+    let sections = runtime_store
+        .list_workspace_sections()
+        .await
+        .map_err(state_error)?;
+    let activity = runtime_store
+        .list_workspace_activity()
+        .await
+        .map_err(state_error)?;
+    let view_prefs = runtime_store
+        .shared_workbench_view_prefs()
+        .await
+        .map_err(state_error)?;
+    let runtime_settings = runtime_store
+        .runtime_settings()
+        .await
+        .map_err(state_error)?;
+    let terminal_tab_count_by_workspace_id = runtime_store
+        .terminal_tab_counts_by_workspace()
+        .await
+        .map_err(state_error)?;
+    Ok(json!({
+        "projects": projects,
+        "workspaces": workspaces,
+        "tags": tags,
+        "sections": sections,
+        "activity": activity,
+        "viewPrefs": view_prefs,
+        "runtimeSettings": runtime_settings,
+        "terminalTabCountByWorkspaceId": terminal_tab_count_by_workspace_id,
+    }))
 }
 
 fn string_field<'a>(payload: &'a Value, key: &str) -> HostResult<&'a str> {
