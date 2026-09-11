@@ -2,7 +2,7 @@ part of 'project_workbench_sidebar.dart';
 
 class const _SidebarBody({
   required final WorkbenchState state,
-  required final WorkbenchController controller,
+  required final _WorkbenchSidebarCommands commands,
   required final List<WorkbenchSidebarRow> rows,
   required final Future<void> Function(Project project, Workspace workspace)
   onOpenWorkspace,
@@ -62,7 +62,7 @@ class const _SidebarBody({
   ) {
     final row = rows[index];
     if (row is WorkbenchSectionHeaderRow) {
-      return _WorkspaceSectionHeader(row: row, controller: controller);
+      return _WorkspaceSectionHeader(row: row, commands: commands);
     }
     if (row is WorkbenchPinnedHeaderRow) {
       return _SidebarSectionTile(
@@ -70,7 +70,7 @@ class const _SidebarBody({
         label: 'Pinned',
         count: row.workspaceCount,
         expanded: !row.collapsed,
-        onToggle: controller.togglePinnedSectionCollapsed,
+        onToggle: commands.togglePinnedSectionCollapsed,
       );
     }
     if (row is WorkbenchAllHeaderRow) {
@@ -81,7 +81,7 @@ class const _SidebarBody({
         count: row.workspaceCount,
         expanded: !row.collapsed,
         showTopDivider: previous is WorkbenchWorkspaceRow,
-        onToggle: controller.toggleAllSectionCollapsed,
+        onToggle: commands.toggleAllSectionCollapsed,
       );
     }
     if (row is WorkbenchProjectHeaderRow) {
@@ -94,12 +94,14 @@ class const _SidebarBody({
           project: row.project,
           expanded: !row.collapsed,
           workspaceCount: row.workspaceCount,
-          onToggle: () => controller.toggleProjectCollapsed(row.project.id),
+          onToggle: () => commands.toggleProjectCollapsed(row.project.id),
           onCreateWorkspace: row.project.supportsLinkedWorkspaces
               ? () => onCreateWorkspace(row.project)
               : null,
           onRefreshWorktrees: row.project.supportsLinkedWorkspaces
-              ? () => controller.reconcileProjectWorkspaces(row.project.id)
+              ? () => unawaited(
+                  commands.reconcileProjectWorkspaces(row.project.id),
+                )
               : null,
           onOpenProjectSettings: () =>
               unawaited(onOpenProjectSettings(row.project)),
@@ -128,8 +130,7 @@ class const _SidebarBody({
           childrenCollapsed: row.childrenCollapsed,
           isPinnedCopy: row.isPinnedCopy,
           onToggleChildren: row.hasVisibleChildren
-              ? () =>
-                    controller.toggleParentWorkspaceCollapsed(row.workspace.id)
+              ? () => commands.toggleParentWorkspaceCollapsed(row.workspace.id)
               : null,
           onTap: () => onOpenWorkspace(row.project, row.workspace),
           onOpenFolder: () => unawaited(onOpenWorkspaceFolder(row.workspace)),
@@ -141,7 +142,7 @@ class const _SidebarBody({
               unawaited(onOpenProjectSettings(row.project)),
           onSleep: () => onSleepWorkspace(row.workspace),
           onToggleExpanded: () =>
-              controller.toggleWorkspaceExpanded(row.workspace.id),
+              commands.toggleWorkspaceExpanded(row.workspace.id),
           fileManagerLabel: fileManagerLabel,
           onRename: () => onRenameWorkspace(row.workspace),
           onSetPinned: () =>
@@ -154,15 +155,11 @@ class const _SidebarBody({
               : null,
           onManageTags: () => onManageWorkspaceTags(row.workspace),
           onSetSection: state.supportsSections
-              ? () => showWorkspaceSectionDialog(
-                  context,
-                  controller,
-                  row.workspace,
-                )
+              ? () => commands.showWorkspaceSection(row.workspace)
               : null,
           onClearSection:
               state.supportsSections && row.workspace.sectionId != null
-              ? () => _clearSection(context, controller, row.workspace)
+              ? () => commands.clearWorkspaceSection(row.workspace)
               : null,
           onSetParent: () => onSetWorkspaceParent(row.workspace),
           onClearParent: row.workspace.hasParentWorkspace

@@ -52,6 +52,20 @@ class _ProjectWorkbenchSidebarState
       collapsed: sidebar.collapsed,
     );
     final controller = ref.read(workbenchControllerProvider.notifier);
+    final commands = _WorkbenchSidebarCommands(
+      toggleSectionCollapsed: controller.toggleSectionCollapsed,
+      deleteWorkspaceSection: controller.deleteWorkspaceSection,
+      togglePinnedSectionCollapsed: controller.togglePinnedSectionCollapsed,
+      toggleAllSectionCollapsed: controller.toggleAllSectionCollapsed,
+      toggleProjectCollapsed: controller.toggleProjectCollapsed,
+      reconcileProjectWorkspaces: controller.reconcileProjectWorkspaces,
+      toggleParentWorkspaceCollapsed: controller.toggleParentWorkspaceCollapsed,
+      toggleWorkspaceExpanded: controller.toggleWorkspaceExpanded,
+      showWorkspaceSection: (workspace) =>
+          showWorkspaceSectionDialog(context, controller, workspace),
+      clearWorkspaceSection: (workspace) =>
+          _clearSection(context, controller, workspace),
+    );
     final workspaceFolderOpener = ref.read(workspaceFolderOpenerProvider);
     if (state.collapsed) {
       return _CollapsedSidebar(
@@ -107,7 +121,7 @@ class _ProjectWorkbenchSidebarState
                               );
                               return _SidebarBody(
                                 state: state,
-                                controller: controller,
+                                commands: commands,
                                 rows: rows,
                                 onOpenWorkspace: _openWorkspace,
                                 onOpenWorkspaceFolder: openWorkspaceFolder,

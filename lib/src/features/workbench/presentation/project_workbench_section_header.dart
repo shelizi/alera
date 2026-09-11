@@ -1,9 +1,9 @@
 part of 'project_workbench_sidebar.dart';
 
 class _WorkspaceSectionHeader extends StatelessWidget {
-  const _WorkspaceSectionHeader({required this.row, required this.controller});
+  const _WorkspaceSectionHeader({required this.row, required this.commands});
   final WorkbenchSectionHeaderRow row;
-  final WorkbenchController controller;
+  final _WorkbenchSidebarCommands commands;
 
   Future<void> _menu(BuildContext context, Offset position) async {
     final overlay =
@@ -31,7 +31,7 @@ class _WorkspaceSectionHeader extends StatelessWidget {
     );
     if (confirmed != true || !context.mounted) return;
     try {
-      await controller.deleteWorkspaceSection(row.section!.id);
+      await commands.deleteWorkspaceSection(row.section!.id);
     } catch (error) {
       if (context.mounted) {
         AleraToast.show(
@@ -53,7 +53,7 @@ class _WorkspaceSectionHeader extends StatelessWidget {
       label: row.label,
       count: row.workspaceCount,
       expanded: !row.collapsed,
-      onToggle: () => controller.toggleSectionCollapsed(row.section?.id),
+      onToggle: () => commands.toggleSectionCollapsed(row.section?.id),
     ),
   );
 }
