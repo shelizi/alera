@@ -10,8 +10,15 @@ extension _SectionListing on _WorkbenchSidebarRowBuilder {
       for (final section in state.sections) section.id: section,
     };
     final members = <String?, List<Workspace>>{};
+    final archived = <Workspace>[];
     for (final project in projects) {
       for (final workspace in state.workspacesFor(project.id)) {
+        if (workspace.isArchived) {
+          if (_isWorkspaceVisible(project, workspace)) {
+            archived.add(workspace);
+          }
+          continue;
+        }
         if (!_isWorkspaceVisibleBelow(project, workspace)) continue;
         final id = sectionsById.containsKey(workspace.sectionId)
             ? workspace.sectionId
@@ -74,6 +81,15 @@ extension _SectionListing on _WorkbenchSidebarRowBuilder {
         showProjectChip: true,
       );
     }
+    _appendArchivedRows(
+      rows,
+      scopeId: 'global',
+      workspaces: _sortWorkspaces(archived, pinMainOnRecent: true),
+      projectOf: (workspace) => projectById[workspace.projectId]!,
+      headerIndent: 0,
+      baseIndent: 1,
+      showProjectChip: true,
+    );
   }
 }
 

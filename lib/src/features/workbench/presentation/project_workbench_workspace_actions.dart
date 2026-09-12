@@ -12,6 +12,8 @@ const String _openInZedAction = 'open-in-zed';
 const String _copyPathAction = 'copy-path';
 const String _openInBrowserAction = 'open-in-browser';
 const String _sleepAction = 'sleep';
+const String _archiveAction = 'archive';
+const String _restoreAction = 'restore';
 const String _manageTagsAction = 'manage-tags';
 const String _togglePinAction = 'toggle-pin';
 const String _pinWorkspaceTreeAction = 'pin-workspace-tree';
@@ -24,7 +26,9 @@ const String _removeAction = 'remove';
 
 /// Builds the right-click menu entries for a workspace row. [hasClearParent]
 /// gates the "Clear Parent Workspace" item and [canRemove] disables the remove
-/// action for the main (non-deletable) workspace.
+/// action for the main (non-deletable) workspace. [isArchived] swaps Sleep for
+/// Restore; [canRemove] doubles as the "not the main workspace" gate for
+/// Archive since main workspaces cannot be archived or removed.
 List<PopupMenuEntry<String>> workspaceContextMenuEntries({
   required String fileManagerLabel,
   bool supportsSections = false,
@@ -32,6 +36,7 @@ List<PopupMenuEntry<String>> workspaceContextMenuEntries({
   required bool hasClearParent,
   required bool canRemove,
   required bool isPinned,
+  required bool isArchived,
   bool hasDescendants = false,
 }) {
   return <PopupMenuEntry<String>>[
@@ -120,11 +125,36 @@ List<PopupMenuEntry<String>> workspaceContextMenuEntries({
       label: 'Copy Path',
     ),
     const PopupMenuDivider(height: AleraTokens.space8),
-    const AleraDropdownEntry<String>(
-      value: _sleepAction,
-      leading: Icon(AleraIcons.theme, size: 16, color: AleraTokens.foreground),
-      label: 'Sleep',
-    ),
+    if (!isArchived)
+      const AleraDropdownEntry<String>(
+        value: _sleepAction,
+        leading: Icon(
+          AleraIcons.theme,
+          size: 16,
+          color: AleraTokens.foreground,
+        ),
+        label: 'Sleep',
+      ),
+    if (isArchived)
+      const AleraDropdownEntry<String>(
+        value: _restoreAction,
+        leading: Icon(
+          AleraIcons.unarchive,
+          size: 16,
+          color: AleraTokens.foreground,
+        ),
+        label: 'Restore',
+      )
+    else if (canRemove)
+      const AleraDropdownEntry<String>(
+        value: _archiveAction,
+        leading: Icon(
+          AleraIcons.archive,
+          size: 16,
+          color: AleraTokens.foreground,
+        ),
+        label: 'Archive',
+      ),
     AleraDropdownEntry<String>(
       value: _removeAction,
       leading: Icon(
@@ -279,6 +309,79 @@ mixin _WorkspaceSidebarActions on ConsumerState<ProjectWorkbenchSidebar> {
       AleraToast.show(
         context,
         message: 'Could not sleep workspace: $error',
+        tone: .error,
+      );
+    }
+  }
+
+  Future<void> archiveWorkspace(Workspace workspace) async {
+    if (workspace.isMain || workspace.isArchived) {
+      return;
+    }
+    final state = ref.read(workbenchControllerProvider);
+    final tabs = state.tabsFor(workspace.id);
+    final editorRegistry = ref.read(editorSessionRegistryProvider);
+    final dirtyEditorCount = tabs
+        .where((tab) => editorRegistry.isDirty(tab.id))
+        .length;
+    final dirtyWarning = dirtyEditorCount == 0
+        ? ''
+        : dirtyEditorCount == 1
+        ? ' One editor has unsaved changes that will be discarded.'
+        : ' $dirtyEditorCount editors have unsaved changes that will be discarded.';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AleraConfirmDialog(
+        title: 'Archive Workspace?',
+        message:
+            'This closes all tabs and terminal sessions for "${workspace.name}" '
+            'and moves it to the Archived section. The workspace, branch, and '
+            'files will be preserved.$dirtyWarning',
+        confirmLabel: 'Archive',
+        destructive: true,
+      ),
+    );
+    if (confirmed != true || !mounted) {
+      return;
+    }
+
+    try {
+      await ref
+          .read(workbenchControllerProvider.notifier)
+          .archiveWorkspace(workspace);
+      if (!mounted) {
+        return;
+      }
+      AleraToast.show(context, message: 'Workspace archived', tone: .success);
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      AleraToast.show(
+        context,
+        message: 'Could not archive workspace: $error',
+        tone: .error,
+      );
+    }
+  }
+
+  /// Restores the workspace and opens it - tapping an archived row and the
+  /// Restore menu item share this entry point.
+  Future<void> restoreWorkspace(Workspace workspace) async {
+    if (!workspace.isArchived) {
+      return;
+    }
+    try {
+      await ref
+          .read(workbenchControllerProvider.notifier)
+          .restoreWorkspace(workspace, select: true);
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      AleraToast.show(
+        context,
+        message: 'Could not restore workspace: $error',
         tone: .error,
       );
     }

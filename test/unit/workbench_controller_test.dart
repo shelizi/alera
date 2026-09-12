@@ -69,6 +69,7 @@ part 'workbench_controller_terminal_runtime_fakes.dart';
 part 'workbench_controller_selection_test_cases.dart';
 part 'workbench_controller_terminal_cleanup_test_cases.dart';
 part 'workbench_controller_agent_tab_test_cases.dart';
+part 'workbench_controller_archive_test_cases.dart';
 
 late _WorkbenchHarness _harness;
 late WorkbenchController _controller;
@@ -103,5 +104,6 @@ void main() {
     _registerWorkbenchControllerPreviewTabTests();
     _registerWorkbenchControllerTerminalCleanupTests();
     _registerWorkbenchControllerAgentTabTests();
+    _registerWorkbenchControllerArchiveTests();
   });
 }

@@ -17,6 +17,7 @@ import 'package:alera/src/features/keyboard/presentation/keyboard_shortcuts_scop
 import 'package:alera/src/features/projects/domain/project.dart';
 import 'package:alera/src/features/pull_requests/application/workspace_pull_request_monitor_providers.dart';
 import 'package:alera/src/features/pull_requests/application/workspace_pull_request_notification_providers.dart';
+import 'package:alera/src/features/workbench/application/workbench_archive_sweep.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_service.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_open_coordinator_provider.dart';
 import 'package:alera/src/features/workbench/application/external_terminal_providers.dart';

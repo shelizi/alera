@@ -48,6 +48,7 @@ void main() {
       expect(general.showTrayBadge, isTrue);
       expect(general.showPullRequestStatusInSidebar, isTrue);
       expect(general.pullRequestFailureNotificationsEnabled, isFalse);
+      expect(general.autoArchiveWorkspacesAfterDays, 30);
     });
 
     test('agent defaults are conservative', () {
@@ -158,6 +159,7 @@ void main() {
         'starClicked': true,
         'confirmProjectRemoval': false,
         'confirmWorkspaceRemoval': true,
+        'autoArchiveWorkspacesAfterDays': 7,
       });
       final agents = AgentSettings.fromJson(<String, Object?>{
         'agentStatusHooks': <String, Object?>{
@@ -181,6 +183,7 @@ void main() {
       expect(general.showDockBadge, isTrue);
       expect(general.showPullRequestStatusInSidebar, isTrue);
       expect(general.pullRequestFailureNotificationsEnabled, isFalse);
+      expect(general.autoArchiveWorkspacesAfterDays, 7);
       expect(agents.agentStatusHooks.codex, isTrue);
       expect(agents.agentStatusHooks.claude, isFalse);
       expect(agents.agentStatusHooks.copilot, isTrue);

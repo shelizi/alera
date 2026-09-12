@@ -90,6 +90,49 @@ void main() {
       expect(stored?.isPinned, isTrue);
     });
 
+    test('round-trips workspace archive state', () async {
+      final db = AleraDatabase(executor: NativeDatabase.memory());
+      addTearDown(db.close);
+      final repository = DriftWorkbenchRepository(db);
+      final now = DateTime.utc(2026, 9, 1, 12);
+      final archivedAt = DateTime.utc(2026, 8, 20, 8, 30);
+      final workspace = _workspace(
+        id: 'workspace-archived',
+        projectId: 'project-1',
+        now: now,
+        kind: .linked,
+      );
+      await repository.upsertWorkspace(workspace);
+      expect(
+        (await repository.findWorkspaceById(workspace.id))?.isArchived,
+        isFalse,
+      );
+
+      final archived = await repository.upsertWorkspace(
+        workspace.copyWith(archivedAt: archivedAt),
+      );
+
+      expect(archived.isArchived, isTrue);
+      expect(archived.archivedAt, archivedAt);
+      final stored = await repository.findWorkspaceById(workspace.id);
+      expect(stored?.archivedAt, archivedAt);
+      // Archived rows keep status active and stay in listing results.
+      expect(stored?.status, WorkspaceStatus.active);
+      expect(
+        (await repository.listWorkspaces('project-1')).single.isArchived,
+        isTrue,
+      );
+
+      final restored = await repository.upsertWorkspace(
+        archived.copyWith(archivedAt: null),
+      );
+      expect(restored.isArchived, isFalse);
+      expect(
+        (await repository.findWorkspaceById(workspace.id))?.archivedAt,
+        isNull,
+      );
+    });
+
     test(
       'removes one workspace without cascading tabs when requested',
       () async {

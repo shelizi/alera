@@ -12,6 +12,7 @@ void main() {
                 hasClearParent: true,
                 canRemove: true,
                 isPinned: true,
+                isArchived: false,
                 supportsSections: true,
                 hasSection: true,
                 hasDescendants: true,
@@ -39,6 +40,7 @@ void main() {
         hasClearParent: false,
         canRemove: true,
         isPinned: false,
+        isArchived: false,
         supportsSections: true,
       ).whereType<AleraDropdownEntry<String>>().map((entry) => entry.label);
       expect(unassigned, contains('Set Section'));
@@ -54,6 +56,7 @@ void main() {
       hasClearParent: false,
       canRemove: true,
       isPinned: false,
+      isArchived: false,
     );
 
     expect(
@@ -71,8 +74,36 @@ void main() {
         'Open in Project Settings',
         'Copy Path',
         'Sleep',
+        'Archive',
         'Remove',
       ],
     );
+  });
+
+  test('archived workspaces swap Sleep for Restore and hide Archive', () {
+    final labels = workspaceContextMenuEntries(
+      fileManagerLabel: 'Files',
+      hasClearParent: false,
+      canRemove: true,
+      isPinned: false,
+      isArchived: true,
+    ).whereType<AleraDropdownEntry<String>>().map((entry) => entry.label);
+
+    expect(labels, contains('Restore'));
+    expect(labels, isNot(contains('Sleep')));
+    expect(labels, isNot(contains('Archive')));
+  });
+
+  test('the main workspace cannot archive since canRemove is false', () {
+    final labels = workspaceContextMenuEntries(
+      fileManagerLabel: 'Files',
+      hasClearParent: false,
+      canRemove: false,
+      isPinned: false,
+      isArchived: false,
+    ).whereType<AleraDropdownEntry<String>>().map((entry) => entry.label);
+
+    expect(labels, contains('Sleep'));
+    expect(labels, isNot(contains('Archive')));
   });
 }

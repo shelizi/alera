@@ -11,6 +11,20 @@ applicationSearchEntries = buildSettingsSearchEntryCatalog(const {
       keywords: <String>['worktree', 'folder', 'location', 'path'],
     ),
   },
+  'workspaces': {
+    'Auto-Archive After Inactivity': SettingsSearchEntryDetails(
+      description: 'Move inactive workspaces into the Archived section.',
+      keywords: <String>[
+        'archive',
+        'archived',
+        'inactive',
+        'workspace',
+        'cleanup',
+        'idle',
+        'hide',
+      ],
+    ),
+  },
   'safety': {
     'Confirm Project Removal': SettingsSearchEntryDetails(
       description: 'Ask before unregistering a project.',

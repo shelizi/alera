@@ -104,6 +104,75 @@ extension WorkbenchCatalogOwnerProjects on WorkbenchCatalogOwner {
     });
   }
 
+  /// Archives [workspace]: sleeps it first so tabs and terminal sessions
+  /// close, then stamps `archivedAt`. The workspace keeps
+  /// [WorkspaceStatus.active] and its `sectionId` so restore lands it back in
+  /// place and listing endpoints keep returning the row.
+  Future<void> archiveWorkspace(Workspace workspace) async {
+    if (workspace.isMain || workspace.isArchived) {
+      return;
+    }
+    await sleepWorkspace(workspace);
+    final latest = _host.workspaceById(workspace.id);
+    if (latest == null || latest.isArchived) {
+      return;
+    }
+    try {
+      final now = DateTime.now().toUtc();
+      final persisted = await _host.workbenchRepository.upsertWorkspace(
+        latest.copyWith(archivedAt: now, updatedAt: now),
+      );
+      _host.emitState(
+        applyWorkbenchWorkspaceUpdateState(
+          state: _host.readState(),
+          workspace: persisted,
+        ).copyWith(error: null),
+      );
+    } catch (error) {
+      _host.emitState(_host.readState().copyWith(error: error.toString()));
+      rethrow;
+    }
+  }
+
+  /// Clears `archivedAt` and bumps `updatedAt` so the sweep does not
+  /// immediately re-archive the workspace. When [select] is true the
+  /// workspace is opened through the selection owner afterwards.
+  Future<void> restoreWorkspace(
+    Workspace workspace, {
+    bool select = false,
+  }) async {
+    if (!workspace.isArchived) {
+      return;
+    }
+    try {
+      final persisted = await _host.workbenchRepository.upsertWorkspace(
+        workspace.copyWith(archivedAt: null, updatedAt: DateTime.now().toUtc()),
+      );
+      _host.emitState(
+        applyWorkbenchWorkspaceUpdateState(
+          state: _host.readState(),
+          workspace: persisted,
+        ).copyWith(error: null),
+      );
+      if (select) {
+        final project = _projectById(
+          _host.readState().projects,
+          persisted.projectId,
+        );
+        if (project != null) {
+          await _host.selectCatalogWorkspace(
+            project: project,
+            workspace: persisted,
+            ensureInitialTerminal: true,
+          );
+        }
+      }
+    } catch (error) {
+      _host.emitState(_host.readState().copyWith(error: error.toString()));
+      rethrow;
+    }
+  }
+
   Future<void> removeProject(String projectId) async {
     try {
       final state = _host.readState();

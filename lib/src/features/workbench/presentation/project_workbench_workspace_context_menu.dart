@@ -20,6 +20,7 @@ extension _WorkspaceContextMenu on _WorkspaceRowState {
         hasClearParent: widget.onClearParent != null,
         canRemove: widget.onDelete != null,
         isPinned: widget.workspace.isPinned,
+        isArchived: widget.workspace.isArchived,
         hasDescendants: widget.onPinWorkspaceTree != null,
       ),
     );
@@ -54,6 +55,10 @@ extension _WorkspaceContextMenu on _WorkspaceRowState {
       widget.onOpenInBrowser();
     } else if (selected == _sleepAction) {
       widget.onSleep();
+    } else if (selected == _archiveAction) {
+      widget.onArchive();
+    } else if (selected == _restoreAction) {
+      widget.onRestore();
     } else if (selected == _removeAction) {
       widget.onDelete?.call();
     }

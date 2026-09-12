@@ -255,6 +255,7 @@ Workspace _workspaceFromRow(WorkspacesTableData row) {
     reusesExistingBranch: row.reusesExistingBranch,
     isPinned: row.isPinned,
     hostId: 'local',
+    archivedAt: row.archivedAt?.toUtc(),
   );
 }
 
@@ -272,6 +273,7 @@ WorkspacesTableCompanion _workspaceCompanion(Workspace workspace) {
     sourceBranch: Value(workspace.sourceBranch),
     reusesExistingBranch: Value(workspace.reusesExistingBranch),
     isPinned: Value(workspace.isPinned),
+    archivedAt: Value(workspace.archivedAt?.toUtc()),
   );
 }
 

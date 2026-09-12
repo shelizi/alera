@@ -14,6 +14,8 @@ class const _SidebarBody({
   required final Future<void> Function(Workspace workspace)
   onOpenWorkspaceInBrowser,
   required final Future<void> Function(Workspace workspace) onSleepWorkspace,
+  required final Future<void> Function(Workspace workspace) onArchiveWorkspace,
+  required final Future<void> Function(Workspace workspace) onRestoreWorkspace,
   required final Future<void> Function(Project project) onCreateWorkspace,
   required final Future<void> Function(Project project) onOpenProjectSettings,
   required final Future<void> Function(Project project, Workspace workspace)
@@ -34,22 +36,37 @@ class const _SidebarBody({
   required final String fileManagerLabel,
   required final _TerminalTabCallback onSelectTerminal,
   required final _TerminalTabCallback onCloseTerminal,
-}) extends StatelessWidget {
+}) extends ConsumerWidget {
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     if (rows.isEmpty) {
       return _EmptyResultsView(query: state.searchQuery);
     }
+    // Archived collapse state is session-local, so the rows provider emits
+    // every archived row and this layer hides the collapsed ones.
+    final archivedCollapsedKeys = ref.watch(
+      workbenchArchivedSectionsCollapseProvider,
+    );
+    final visibleRows = collapseArchivedSidebarRows(
+      rows,
+      archivedCollapsedKeys,
+    );
     return ListView.builder(
       padding: const EdgeInsets.only(
         top: AleraTokens.space4,
         bottom: AleraTokens.space8,
       ),
-      itemCount: rows.length,
+      itemCount: visibleRows.length,
       itemBuilder: (context, index) {
         return KeyedSubtree(
-          key: ValueKey<String>(rows[index].key),
-          child: _buildRow(context, rows, index),
+          key: ValueKey<String>(visibleRows[index].key),
+          child: _buildRow(
+            context,
+            ref,
+            visibleRows,
+            index,
+            archivedCollapsedKeys,
+          ),
         );
       },
     );
@@ -57,8 +74,10 @@ class const _SidebarBody({
 
   Widget _buildRow(
     BuildContext context,
+    WidgetRef ref,
     List<WorkbenchSidebarRow> rows,
     int index,
+    Set<String> archivedCollapsedKeys,
   ) {
     final row = rows[index];
     if (row is WorkbenchSectionHeaderRow) {
@@ -82,6 +101,22 @@ class const _SidebarBody({
         expanded: !row.collapsed,
         showTopDivider: previous is WorkbenchWorkspaceRow,
         onToggle: commands.toggleAllSectionCollapsed,
+      );
+    }
+    if (row is WorkbenchArchivedHeaderRow) {
+      final previous = index > 0 ? rows[index - 1] : null;
+      return Padding(
+        padding: EdgeInsets.only(left: AleraTokens.space12 * row.indent),
+        child: _SidebarSectionTile(
+          leadingIcon: AleraIcons.archive,
+          label: 'Archived',
+          count: row.workspaceCount,
+          expanded: !archivedCollapsedKeys.contains(row.key),
+          showTopDivider: row.indent == 0 && previous is WorkbenchWorkspaceRow,
+          onToggle: () => ref
+              .read(workbenchArchivedSectionsCollapseProvider.notifier)
+              .toggle(row.key),
+        ),
       );
     }
     if (row is WorkbenchProjectHeaderRow) {
@@ -132,7 +167,9 @@ class const _SidebarBody({
           onToggleChildren: row.hasVisibleChildren
               ? () => commands.toggleParentWorkspaceCollapsed(row.workspace.id)
               : null,
-          onTap: () => onOpenWorkspace(row.project, row.workspace),
+          onTap: () => row.workspace.isArchived
+              ? unawaited(onRestoreWorkspace(row.workspace))
+              : unawaited(onOpenWorkspace(row.project, row.workspace)),
           onOpenFolder: () => unawaited(onOpenWorkspaceFolder(row.workspace)),
           onOpenInZed: () => unawaited(onOpenWorkspaceInZed(row.workspace)),
           onCopyPath: () => unawaited(onCopyWorkspacePath(row.workspace)),
@@ -141,6 +178,8 @@ class const _SidebarBody({
           onOpenProjectSettings: () =>
               unawaited(onOpenProjectSettings(row.project)),
           onSleep: () => onSleepWorkspace(row.workspace),
+          onArchive: () => onArchiveWorkspace(row.workspace),
+          onRestore: () => onRestoreWorkspace(row.workspace),
           onToggleExpanded: () =>
               commands.toggleWorkspaceExpanded(row.workspace.id),
           fileManagerLabel: fileManagerLabel,

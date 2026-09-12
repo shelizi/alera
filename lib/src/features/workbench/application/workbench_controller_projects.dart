@@ -34,6 +34,12 @@ mixin _WorkbenchControllerProjects
   Future<void> sleepWorkspace(Workspace workspace) =>
       _catalogOwner.sleepWorkspace(workspace);
 
+  Future<void> archiveWorkspace(Workspace workspace) =>
+      _catalogOwner.archiveWorkspace(workspace);
+
+  Future<void> restoreWorkspace(Workspace workspace, {bool select = false}) =>
+      _catalogOwner.restoreWorkspace(workspace, select: select);
+
   Future<void> removeProject(String projectId) =>
       _catalogOwner.removeProject(projectId);
 

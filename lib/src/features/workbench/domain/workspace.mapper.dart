@@ -216,6 +216,12 @@ class WorkspaceMapper extends ClassMapperBase<Workspace> {
     opt: true,
     def: 0,
   );
+  static DateTime? _$archivedAt(Workspace v) => v.archivedAt;
+  static const Field<Workspace, DateTime> _f$archivedAt = Field(
+    'archivedAt',
+    _$archivedAt,
+    opt: true,
+  );
 
   @override
   final MappableFields<Workspace> fields = const {
@@ -238,6 +244,7 @@ class WorkspaceMapper extends ClassMapperBase<Workspace> {
     #sectionId: _f$sectionId,
     #parentWorkspaceId: _f$parentWorkspaceId,
     #childCount: _f$childCount,
+    #archivedAt: _f$archivedAt,
   };
 
   static Workspace _instantiate(DecodingData data) {
@@ -261,6 +268,7 @@ class WorkspaceMapper extends ClassMapperBase<Workspace> {
       sectionId: data.dec(_f$sectionId),
       parentWorkspaceId: data.dec(_f$parentWorkspaceId),
       childCount: data.dec(_f$childCount),
+      archivedAt: data.dec(_f$archivedAt),
     );
   }
 
@@ -345,6 +353,7 @@ abstract class WorkspaceCopyWith<$R, $In extends Workspace, $Out>
     String? sectionId,
     String? parentWorkspaceId,
     int? childCount,
+    DateTime? archivedAt,
   });
   WorkspaceCopyWith<$R2, $In, $Out2> $chain<$R2, $Out2>(Then<$Out2, $R2> t);
 }
@@ -392,6 +401,7 @@ class _WorkspaceCopyWithImpl<$R, $Out>
     Object? sectionId = $none,
     Object? parentWorkspaceId = $none,
     int? childCount,
+    Object? archivedAt = $none,
   }) => $apply(
     FieldCopyWithData({
       if (id != null) #id: id,
@@ -414,6 +424,7 @@ class _WorkspaceCopyWithImpl<$R, $Out>
       if (sectionId != $none) #sectionId: sectionId,
       if (parentWorkspaceId != $none) #parentWorkspaceId: parentWorkspaceId,
       if (childCount != null) #childCount: childCount,
+      if (archivedAt != $none) #archivedAt: archivedAt,
     }),
   );
   @override
@@ -443,6 +454,7 @@ class _WorkspaceCopyWithImpl<$R, $Out>
       or: $value.parentWorkspaceId,
     ),
     childCount: data.get(#childCount, or: $value.childCount),
+    archivedAt: data.get(#archivedAt, or: $value.archivedAt),
   );
 
   @override

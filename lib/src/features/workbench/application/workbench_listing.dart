@@ -56,9 +56,11 @@ WorkbenchSidebarCollapseTargets visibleSidebarCollapseTargets(
   final workspaceIds = <String>{};
   final parentWorkspaceIds = <String>{};
 
+  // Archived rows live under their own headers and are not collapse targets.
   Iterable<Workspace> visibleWorkspacesFor(Project project) {
     return state
         .workspacesFor(project.id)
+        .where((workspace) => !workspace.isArchived)
         .where(
           (workspace) => _workspaceVisible(
             prefs,
@@ -247,16 +249,45 @@ int countVisibleWorkspaces(WorkbenchState state) {
       continue;
     }
     for (final workspace in state.workspacesFor(project.id)) {
-      if (_workspaceVisible(
-        prefs,
-        _sectionNameMatches(state, workspace, query) ? '' : query,
-        project,
-        workspace,
-        state.tabsFor(workspace.id),
-      )) {
+      if (!workspace.isArchived &&
+          _workspaceVisible(
+            prefs,
+            _sectionNameMatches(state, workspace, query) ? '' : query,
+            project,
+            workspace,
+            state.tabsFor(workspace.id),
+          )) {
         count++;
       }
     }
   }
   return count;
+}
+
+/// Drops the workspace rows owned by collapsed Archived group headers.
+/// [collapsedKeys] holds [WorkbenchArchivedHeaderRow.key] values; the keys are
+/// session-local, which is why this runs outside [buildSidebarRows].
+List<WorkbenchSidebarRow> collapseArchivedSidebarRows(
+  List<WorkbenchSidebarRow> rows,
+  Set<String> collapsedKeys,
+) {
+  if (collapsedKeys.isEmpty) {
+    return rows;
+  }
+  var hiding = false;
+  final result = <WorkbenchSidebarRow>[];
+  for (final row in rows) {
+    if (row is WorkbenchArchivedHeaderRow) {
+      hiding = collapsedKeys.contains(row.key);
+      result.add(row);
+      continue;
+    }
+    if (row is! WorkbenchWorkspaceRow || !row.workspace.isArchived) {
+      hiding = false;
+    }
+    if (!hiding) {
+      result.add(row);
+    }
+  }
+  return result;
 }

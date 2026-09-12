@@ -47,6 +47,7 @@ fn workspace(id: &str, project_id: &str) -> Workspace {
         parent_workspace_id: None,
         section_id: None,
         child_count: 0,
+        archived_at: None,
     }
 }
 
@@ -71,6 +72,35 @@ async fn workspace_pin_roundtrip_is_idempotent_and_preserves_recency() {
         .unwrap_err()
         .to_string()
         .contains("workspace not found"));
+}
+
+#[tokio::test]
+async fn workspace_archive_roundtrip_persists_timestamp() {
+    let (_dir, store) = store().await;
+    store.upsert_project(project("p")).await.unwrap();
+    let original = store.upsert_workspace(workspace("w", "p")).await.unwrap();
+    assert!(original.archived_at.is_none());
+
+    let archived_at = Utc::now();
+    let mut archived = original.clone();
+    archived.archived_at = Some(archived_at);
+    let stored = store.upsert_workspace(archived).await.unwrap();
+    assert_eq!(
+        stored.archived_at.map(|ts| ts.timestamp_millis()),
+        Some(archived_at.timestamp_millis())
+    );
+
+    // Archived rows stay in the listing with `status` untouched so reconcile
+    // keeps seeing the on-disk worktree instead of re-registering it.
+    let listed = store.list_workspaces("p").await.unwrap();
+    let listed_workspace = listed.iter().find(|w| w.id == "w").unwrap();
+    assert!(listed_workspace.archived_at.is_some());
+    assert_eq!(listed_workspace.status, WorkspaceStatus::Active);
+
+    let mut restored = stored.clone();
+    restored.archived_at = None;
+    let restored = store.upsert_workspace(restored).await.unwrap();
+    assert!(restored.archived_at.is_none());
 }
 
 #[tokio::test]
@@ -116,5 +146,9 @@ async fn workspace_pin_column_is_added_to_legacy_runtime_databases() {
     assert!(columns.iter().any(|row| {
         row.try_get::<String, _>("name")
             .is_ok_and(|name| name == "isPinned")
+    }));
+    assert!(columns.iter().any(|row| {
+        row.try_get::<String, _>("name")
+            .is_ok_and(|name| name == "archivedAt")
     }));
 }

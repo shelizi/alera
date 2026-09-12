@@ -52,6 +52,21 @@ impl ServerActor {
                     .await,
             )?;
         }
+        if let Some(value) = payload.get("autoArchiveWorkspacesAfterDays") {
+            let days = value.as_i64().ok_or_else(|| {
+                HostError::format("autoArchiveWorkspacesAfterDays must be an integer.")
+            })?;
+            if days < 0 {
+                return Err(HostError::format(
+                    "autoArchiveWorkspacesAfterDays must be zero or greater.",
+                ));
+            }
+            runtime_value(
+                self.runtime_store
+                    .set_auto_archive_workspaces_after_days(days)
+                    .await,
+            )?;
+        }
         if let Some(value) = payload.get("defaultAgentProfileId") {
             let profile_id = match value {
                 Value::String(value) => Some(value.as_str()),

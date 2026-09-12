@@ -67,6 +67,9 @@ class RuntimeSettingsRepository({
           confirmWorkspaceRemoval:
               runtime['confirmWorkspaceRemoval'] as bool? ??
               legacy.general.confirmWorkspaceRemoval,
+          autoArchiveWorkspacesAfterDays:
+              (runtime['autoArchiveWorkspacesAfterDays'] as num?)?.toInt() ??
+              legacy.general.autoArchiveWorkspacesAfterDays,
         ),
         agents: legacy.agents.copyWith(
           defaultAgentProfileId: defaultAgentProfileId,
@@ -109,6 +112,8 @@ class RuntimeSettingsRepository({
       'workspaceDirectory': settings.general.workspaceDirectory,
       'confirmProjectRemoval': settings.general.confirmProjectRemoval,
       'confirmWorkspaceRemoval': settings.general.confirmWorkspaceRemoval,
+      'autoArchiveWorkspacesAfterDays':
+          settings.general.autoArchiveWorkspacesAfterDays,
       'defaultAgentProfileId': settings.agents.defaultAgentProfileId,
       'agentStatusHooks': settings.agents.agentStatusHooks.toMap(),
       'agentQuotas': settings.agents.quotas.forHost('local').toMap(),

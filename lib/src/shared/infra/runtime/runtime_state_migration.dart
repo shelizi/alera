@@ -136,6 +136,13 @@ final class RuntimeStateMigration({
         null) {
       patch['confirmProjectRemoval'] = settings.general.confirmProjectRemoval;
     }
+    if (await _metadataValue(
+          'settings.general.autoArchiveWorkspacesAfterDays',
+        ) ==
+        null) {
+      patch['autoArchiveWorkspacesAfterDays'] =
+          settings.general.autoArchiveWorkspacesAfterDays;
+    }
     if (await _metadataValue('settings.agents.quotas') == null) {
       patch['agentQuotas'] = settings.agents.quotas.forHost('local').toMap();
     }

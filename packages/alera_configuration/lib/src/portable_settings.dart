@@ -5,6 +5,7 @@ const desktopPortableFields = <String, List<String>>{
   'general': [
     'confirmProjectRemoval',
     'confirmWorkspaceRemoval',
+    'autoArchiveWorkspacesAfterDays',
     'showTrayIcon',
     'showDockBadge',
     'showTrayBadge',

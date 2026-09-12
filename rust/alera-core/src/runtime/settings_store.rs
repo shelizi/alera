@@ -12,6 +12,9 @@ impl RuntimeStore {
             workspace_directory: self.get_workspace_directory().await?,
             confirm_project_removal: self.confirm_project_removal().await?,
             confirm_workspace_removal: self.confirm_workspace_removal().await?,
+            auto_archive_workspaces_after_days: self
+                .auto_archive_workspaces_after_days()
+                .await?,
             default_agent_profile_id: self.default_agent_profile_id().await?,
             agent_status_hooks: self.agent_status_hook_settings().await?,
             agent_quotas: self.agent_quota_settings().await?,
@@ -205,6 +208,27 @@ impl RuntimeStore {
         self.set_metadata(
             "settings.general.confirmWorkspaceRemoval",
             if value { "true" } else { "false" },
+        )
+        .await?;
+        self.runtime_settings().await
+    }
+
+    pub async fn auto_archive_workspaces_after_days(&self) -> Result<i64> {
+        Ok(self
+            .get_metadata("settings.general.autoArchiveWorkspacesAfterDays")
+            .await?
+            .and_then(|value| value.parse::<i64>().ok())
+            .map(|value| value.max(0))
+            .unwrap_or(30))
+    }
+
+    pub async fn set_auto_archive_workspaces_after_days(
+        &self,
+        value: i64,
+    ) -> Result<RuntimeSettings> {
+        self.set_metadata(
+            "settings.general.autoArchiveWorkspacesAfterDays",
+            &value.max(0).to_string(),
         )
         .await?;
         self.runtime_settings().await

@@ -61,6 +61,7 @@ async fn create_managed_workspace_rejects_existing_id_before_worktree_create() {
             parent_workspace_id: None,
             section_id: None,
             child_count: 0,
+            archived_at: None,
         })
         .await
         .unwrap();
@@ -186,6 +187,7 @@ async fn create_managed_workspace_returns_the_linked_parent() {
             parent_workspace_id: None,
             section_id: None,
             child_count: 0,
+            archived_at: None,
         })
         .await
         .unwrap();

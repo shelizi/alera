@@ -46,6 +46,7 @@ async fn rejects_main_workspace_during_removal_validation() {
             parent_workspace_id: None,
             section_id: None,
             child_count: 0,
+            archived_at: None,
         })
         .await
         .unwrap();

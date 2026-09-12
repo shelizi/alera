@@ -64,6 +64,8 @@ pub struct Workspace {
     pub parent_workspace_id: Option<String>,
     #[serde(default)]
     pub child_count: i64,
+    #[serde(default)]
+    pub archived_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

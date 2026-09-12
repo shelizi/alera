@@ -12,6 +12,10 @@ pub struct RuntimeSettings {
     pub confirm_project_removal: bool,
     #[serde(default = "default_true")]
     pub confirm_workspace_removal: bool,
+    /// Days of inactivity before the desktop sweeps a workspace into the
+    /// Archived section. `0` disables automatic archiving.
+    #[serde(default = "default_auto_archive_workspaces_after_days")]
+    pub auto_archive_workspaces_after_days: i64,
     #[serde(default)]
     pub default_agent_profile_id: Option<String>,
     #[serde(default)]
@@ -35,6 +39,7 @@ impl Default for RuntimeSettings {
             workspace_directory: None,
             confirm_project_removal: true,
             confirm_workspace_removal: true,
+            auto_archive_workspaces_after_days: 30,
             default_agent_profile_id: None,
             agent_status_hooks: RuntimeAgentStatusHookSettings::default(),
             agent_quotas: RuntimeAgentQuotaSettings::default(),
@@ -360,4 +365,8 @@ impl RuntimeAgentStatusHookSettings {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_auto_archive_workspaces_after_days() -> i64 {
+    30
 }
