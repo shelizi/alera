@@ -51,6 +51,7 @@ import 'package:flutter/services.dart';
 
 part 'project_workbench_collapsed_sidebar.dart';
 part 'project_workbench_sidebar_body.dart';
+part 'project_workbench_sidebar_tiles.dart';
 part 'project_workbench_sidebar_commands.dart';
 part 'project_workbench_section_header.dart';
 part 'project_workbench_workspace_actions.dart';
