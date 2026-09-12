@@ -943,6 +943,17 @@ Desktop、Mobile、Rust 各自仍有 protocol parsing/DTO 宣告。已有 old-ho
 
 已知阻礙：owner 是 plain class 不能 extends notifier（`part of` + `_$WorkbenchController` 限制）；`workbench_controller_provider_boundary_test.dart` 只掃 `workbench_controller*.dart` 前綴，新 owner 檔名需擴大掃描範圍；`focusSourceControlRoot` 實作寫在 shared `WorkbenchViewPrefs`，歸 selection 需先經 facade 寫入（可能是刻意的 contract 變更，後續再定）；跨欄位 plan（`planWorkbench*SetSync`/`applyWorkbenchSleepWorkspaceState`）留在共享 sync 層由各 owner 呼叫。
 
+### 15.7 P6 完成狀態（2026-09-12）
+
+四個 owner 已全部抽出，`WorkbenchController` 降為 facade（54 個呼叫點簽名不變），`_WorkbenchControllerInternals` 只剩 state emit、`_disposed`、view-prefs 持久化與四組 port forwarder：
+
+- `workbench_selection_owner.dart`（322 行）：active project/workspace/tab、navigation history、searchQuery/collapsed、source-control focused root（經 viewPrefs 路徑寫入）。merged `9769edca`。
+- `workbench_tab_layout_owner.dart`（301）+ opening/file_tabs/tabs 三個 part：tab CRUD、preview/replaceable、pane split/merge/ratio、layout load/apply/persist 鏈、`_onTabsChanged`、`_tabClosingScope`。merged `f1fe0011`。
+- `workbench_catalog_owner.dart`（306）+ sync/projects/sections/workspace_creation 四個 part：project/workspace/section 讀模型、`bootstrap()`、三段 `_on*Changed`、`WorkspaceService` 入口。merged `ec058b3f`。
+- `workbench_lifecycle_owner.dart`（150）：四個 subscription registry、cleaner/cleanup coordinator、dispose 順序（root → worktree watcher → workspace → tab）。merged（見 git log）。
+
+Owner 之間互不直接參照，跨域呼叫經各自 `*OwnerHost` port 由 internals 轉交；provider boundary test 已擴大掃描 `workbench_*_owner.dart`。順帶修好既知失敗的 `workbench_terminal_lifecycle_boundary_test`（sleep 清理改走 port 後滿足邊界斷言）。`workbench_controller_test.dart` 全綠。
+
 ---
 
 ## 16. Phase 4：Terminal
