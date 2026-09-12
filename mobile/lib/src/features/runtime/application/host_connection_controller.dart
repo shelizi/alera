@@ -94,7 +94,9 @@ class HostConnectionController extends _$HostConnectionController {
   }
 
   Future<RuntimeRestartResult> restartRuntime({bool force = false}) async {
-    final client = _client ?? state.value;
+    // state.value retains the client a reconnect already disposed, so only
+    // the bound live client may carry a restart.
+    final client = _client;
     if (client == null) {
       throw StateError('Host is not connected.');
     }

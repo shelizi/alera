@@ -116,14 +116,15 @@ void main() {
     );
     final stateWhileOpening = container.read(provider);
     expect(stateWhileOpening.isLoading, isTrue);
-    // AsyncNotifier retains the previous value while loading, so restartRuntime
-    // sees the client that the reconnect path has already disposed.
+    // AsyncNotifier retains the previous value while loading, but that value
+    // is the client the reconnect path already disposed; restart must refuse
+    // it rather than reuse it.
     expect(stateWhileOpening.hasValue, isTrue);
 
     final controller = container.read(provider.notifier);
     await expectLater(
       controller.restartRuntime(),
-      throwsA(isA<UnsupportedError>()),
+      throwsA(isA<StateError>()),
     );
 
     gateway.reply(1, stalledHello, _directPayload(stalledHello));
