@@ -1,8 +1,65 @@
 part of 'workbench_controller.dart';
 
-mixin _WorkbenchControllerInternals on _$WorkbenchController {
+mixin _WorkbenchControllerInternals on _$WorkbenchController
+    implements WorkbenchSelectionOwnerHost {
   final Uuid _uuid = const Uuid();
   bool _disposed = false;
+
+  /// Selection and navigation live behind a narrow host port so the owner
+  /// stays free of provider reads.
+  late final WorkbenchSelectionOwner _selectionOwner = WorkbenchSelectionOwner(
+    this,
+  );
+
+  @override
+  WorkbenchState readState() => state;
+
+  @override
+  void emitState(WorkbenchState next) => state = next;
+
+  @override
+  bool get isDisposed => _disposed;
+
+  @override
+  WorkbenchWorkspaceSelectionTabStore get selectionTabStore =>
+      _workspaceTabService;
+
+  @override
+  WorkbenchWorkspaceSelectionLayoutResolver get selectionLayoutResolver =>
+      _layoutResolver;
+
+  @override
+  WorkbenchGitRepositoryProbe get gitRepositoryProbe => _gitRepositoryProbe;
+
+  @override
+  void applyWorkspaceTabs(String workspaceId, List<WorkspaceTabRecord> tabs) =>
+      _setTabsForWorkspace(workspaceId, tabs);
+
+  @override
+  Future<void> applyWorkspaceLayout(
+    WorkbenchLayout layout, {
+    required bool persist,
+  }) => _applyLayout(layout, persist: persist);
+
+  @override
+  void applyWorkspaceLayoutInBackground(
+    WorkbenchLayout layout, {
+    required bool persist,
+  }) => _applyLayoutInBackground(layout, persist: persist);
+
+  @override
+  void activateWorkspaceTab({
+    required String workspaceId,
+    required String tabId,
+    String? groupId,
+  }) => _setActiveTabInternal(
+    workspaceId: workspaceId,
+    tabId: tabId,
+    groupId: groupId,
+  );
+
+  @override
+  void updateViewPrefs(WorkbenchViewPrefs prefs) => _updateViewPrefs(prefs);
 
   ProjectsService get _projectsService => ref.read(projectsServiceProvider);
 
@@ -132,22 +189,14 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController {
       WorkbenchSerialMutationQueue();
 
   final WorkspaceTabFocusHistory _tabFocusHistory = WorkspaceTabFocusHistory();
-  final WorkbenchNavigationHistoryService _navigationHistory =
-      WorkbenchNavigationHistoryService();
   final WorkbenchBootstrapGate _bootstrapGate = WorkbenchBootstrapGate();
 
-  bool get canGoBack => _navigationHistory.canGoBack(state);
+  bool get canGoBack => _selectionOwner.canGoBack;
 
-  bool get canGoForward => _navigationHistory.canGoForward(state);
+  bool get canGoForward => _selectionOwner.canGoForward;
 
   void _pruneWorktreeNavigationHistory() {
-    _navigationHistory.prune(state);
-  }
-
-  void _notifyNavigationHistoryChanged() {
-    if (!_disposed) {
-      state = state.copyWith();
-    }
+    _selectionOwner.pruneNavigationHistory();
   }
 
   Future<void> _persistViewPrefs() async {
@@ -161,6 +210,17 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController {
     } catch (_) {
       // Persistence is best-effort; never surface an error from the UI path.
     }
+  }
+
+  void _updateViewPrefsIfChanged(WorkbenchViewPrefs? prefs) {
+    if (prefs != null) {
+      _updateViewPrefs(prefs);
+    }
+  }
+
+  void _updateViewPrefs(WorkbenchViewPrefs prefs) {
+    state = state.copyWith(viewPrefs: prefs);
+    unawaited(_persistViewPrefs());
   }
 
   Project? _projectById(Iterable<Project> projects, String? projectId) {

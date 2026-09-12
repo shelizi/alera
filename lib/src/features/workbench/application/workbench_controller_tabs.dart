@@ -116,27 +116,18 @@ mixin _WorkbenchControllerTabs
     }
   }
 
-  void setActiveTab({required String workspaceId, required String tabId}) {
-    final layout = state.layoutFor(workspaceId);
-    final groupId = layout?.groupIdForTab(tabId);
-    _setActiveTabInternal(
-      workspaceId: workspaceId,
-      tabId: tabId,
-      groupId: groupId,
-    );
-  }
+  void setActiveTab({required String workspaceId, required String tabId}) =>
+      _selectionOwner.setActiveTab(workspaceId: workspaceId, tabId: tabId);
 
   void setActiveWorkspaceTab({
     required String workspaceId,
     required String groupId,
     required String tabId,
-  }) {
-    _setActiveTabInternal(
-      workspaceId: workspaceId,
-      groupId: groupId,
-      tabId: tabId,
-    );
-  }
+  }) => _selectionOwner.setActiveWorkspaceTab(
+    workspaceId: workspaceId,
+    groupId: groupId,
+    tabId: tabId,
+  );
 
   /// Promotes [groupId] to the workspace's active group when a pane in it
   /// receives real keyboard focus. Idempotent so it can be wired directly to
@@ -149,18 +140,10 @@ mixin _WorkbenchControllerTabs
   void focusWorkbenchGroup({
     required String workspaceId,
     required String groupId,
-  }) {
-    final layout = state.layoutFor(workspaceId);
-    if (layout == null || layout.activeGroupId == groupId) {
-      return;
-    }
-    final tabId = layout.groups[groupId]?.activeTabId;
-    if (tabId == null) {
-      return;
-    }
-    final nextLayout = layout.setActiveTab(groupId: groupId, tabId: tabId);
-    _applyLayoutInBackground(nextLayout, persist: false);
-  }
+  }) => _selectionOwner.focusWorkbenchGroup(
+    workspaceId: workspaceId,
+    groupId: groupId,
+  );
 
   Future<void> moveWorkspaceTab({
     required String workspaceId,

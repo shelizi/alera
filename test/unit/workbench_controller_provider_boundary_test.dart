@@ -4,14 +4,18 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   test(
-    'workbench controller parts do not compose Riverpod providers directly',
+    'workbench controller parts and owners do not compose Riverpod providers '
+    'directly',
     () {
       final files = Directory('lib/src/features/workbench/application')
           .listSync()
           .whereType<File>()
           .where((file) {
             final name = file.uri.pathSegments.last;
-            return name.startsWith('workbench_controller') &&
+            final isControllerPart = name.startsWith('workbench_controller');
+            final isOwner =
+                name.startsWith('workbench_') && name.endsWith('_owner.dart');
+            return (isControllerPart || isOwner) &&
                 name.endsWith('.dart') &&
                 name != 'workbench_controller_internals.dart' &&
                 name != 'workbench_controller.g.dart';
@@ -30,8 +34,9 @@ void main() {
         leaks,
         isEmpty,
         reason:
-            'Controller parts must use narrow capabilities composed in '
-            'workbench_controller_internals.dart instead of reading providers.',
+            'Controller parts and owners must use narrow capabilities '
+            'composed in workbench_controller_internals.dart instead of '
+            'reading providers.',
       );
     },
   );

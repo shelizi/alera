@@ -283,44 +283,13 @@ mixin _WorkbenchControllerViewPrefs
   Future<bool> focusSourceControlFolder({
     required Workspace workspace,
     required String relativePath,
-  }) async {
-    final project = _projectById(state.projects, workspace.projectId);
-    if (project == null) {
-      return false;
-    }
-    final relativeRoot =
-        await WorkbenchSourceControlFolderFocusService(
-          gitRepositoryProbe: _gitRepositoryProbe,
-        ).resolve(
-          project: project,
-          workspace: workspace,
-          relativePath: relativePath,
-          isSelectionActive: () =>
-              state.activeProjectId == project.id &&
-              state.activeWorkspaceId == workspace.id,
-        );
-    if (relativeRoot == null) {
-      return false;
-    }
-    _updateViewPrefs(
-      focusWorkbenchSourceControlRootPrefs(
-        prefs: state.viewPrefs,
-        workspaceId: workspace.id,
-        relativeRoot: relativeRoot,
-      ),
-    );
-    state = state.copyWith(error: null);
-    return true;
-  }
+  }) => _selectionOwner.focusSourceControlFolder(
+    workspace: workspace,
+    relativePath: relativePath,
+  );
 
-  void clearFocusedSourceControlFolder({required Workspace workspace}) {
-    _updateViewPrefsIfChanged(
-      clearWorkbenchSourceControlRootPrefs(
-        prefs: state.viewPrefs,
-        workspaceId: workspace.id,
-      ),
-    );
-  }
+  void clearFocusedSourceControlFolder({required Workspace workspace}) =>
+      _selectionOwner.clearFocusedSourceControlFolder(workspace: workspace);
 
   void syncSourceControlRootAfterPathMove({
     required Workspace workspace,
@@ -337,30 +306,9 @@ mixin _WorkbenchControllerViewPrefs
     );
   }
 
-  void _updateViewPrefsIfChanged(WorkbenchViewPrefs? prefs) {
-    if (prefs != null) {
-      _updateViewPrefs(prefs);
-    }
-  }
+  void setSearchQuery(String query) => _selectionOwner.setSearchQuery(query);
 
-  void _updateViewPrefs(WorkbenchViewPrefs prefs) {
-    state = state.copyWith(viewPrefs: prefs);
-    unawaited(_persistViewPrefs());
-  }
-
-  void setSearchQuery(String query) {
-    if (state.searchQuery == query) {
-      return;
-    }
-    state = state.copyWith(searchQuery: query);
-  }
-
-  void setCollapsed(bool value) {
-    if (state.collapsed == value) {
-      return;
-    }
-    state = state.copyWith(collapsed: value);
-  }
+  void setCollapsed(bool value) => _selectionOwner.setCollapsed(value);
 
   void setSidebarWidth(double value) {
     final clamped = value.clamp(
