@@ -1,6 +1,10 @@
 const DEVIN_USER_STATUS_PATH: &str =
     "/exa.seat_management_pb.SeatManagementService/GetUserStatus";
 const DEVIN_DAILY_WINDOW_MINUTES: i64 = 1_440;
+const DEVIN_CLI_VERSION_TIMEOUT: Duration = Duration::from_secs(5);
+/// The service parses version metadata and fails outright on values it cannot
+/// parse, so an undetectable CLI still sends a parseable semver.
+const DEVIN_CLI_VERSION_FALLBACK: &str = "1.0.0";
 
 #[derive(Debug, Deserialize)]
 struct DevinCredentialFile {
@@ -34,6 +38,10 @@ async fn fetch_devin() -> QuotaSnapshot {
         }
     };
 
+    let cli_version = devin_cli_version()
+        .await
+        .unwrap_or_else(|| DEVIN_CLI_VERSION_FALLBACK.to_string());
+
     let url = match devin_user_status_url(&credentials.api_server_url) {
         Ok(url) => url,
         Err(error) => {
@@ -57,11 +65,9 @@ async fn fetch_devin() -> QuotaSnapshot {
             "metadata": {
                 "apiKey": credentials.api_key,
                 "ideName": "devin",
-                // Devin's own client tolerates "unknown" when its version
-                // cannot be resolved, so quota refresh does not need to spawn
-                // another CLI process just to populate metadata.
-                "ideVersion": "unknown",
-                "extensionVersion": "unknown",
+                "ideVersion": &cli_version,
+                "extensionName": "devin-cli",
+                "extensionVersion": &cli_version,
                 "locale": "en",
             }
         }))
@@ -145,15 +151,70 @@ async fn read_devin_credentials() -> Result<Option<DevinCredentials>> {
     Ok(None)
 }
 
+/// The installed CLI's own version, reported in the request the same way the
+/// CLI identifies itself to the seat-management service.
+async fn devin_cli_version() -> Option<String> {
+    for binary in devin_cli_binary_candidates() {
+        let probe = alera_core::child_process::windowless_async_command(&binary)
+            .arg("--version")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .output();
+        let output = match tokio::time::timeout(DEVIN_CLI_VERSION_TIMEOUT, probe).await {
+            Ok(Ok(output)) if output.status.success() => output,
+            _ => continue,
+        };
+        if let Some(version) = parse_devin_cli_version(&String::from_utf8_lossy(&output.stdout))
+        {
+            return Some(version);
+        }
+    }
+    None
+}
+
+/// `devin 3000.6.14 (18033302)` -> `3000.6.14`.
+fn parse_devin_cli_version(output: &str) -> Option<String> {
+    let version = output.lines().next()?.split_whitespace().nth(1)?;
+    let semver = version.contains('.')
+        && version
+            .split('.')
+            .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()));
+    semver.then(|| version.to_string())
+}
+
+/// PATH first, then the standard install root the CLI's own installer uses.
+fn devin_cli_binary_candidates() -> Vec<PathBuf> {
+    let binary = if cfg!(windows) { "devin.exe" } else { "devin" };
+    let mut candidates = vec![PathBuf::from(binary)];
+    for base in [dirs::data_local_dir(), dirs::data_dir()]
+        .into_iter()
+        .flatten()
+    {
+        candidates.push(base.join("devin/cli/bin").join(binary));
+    }
+    if let Some(home) = home_dir() {
+        candidates.push(home.join(".local/share/devin/cli/bin").join(binary));
+    }
+    candidates
+}
+
 async fn devin_credentials_paths() -> Vec<PathBuf> {
     let xdg_data_home = shell_environment_value("XDG_DATA_HOME").await;
     let home = home_dir();
-    devin_credentials_path_candidates(xdg_data_home.as_deref(), home.as_deref())
+    devin_credentials_path_candidates(
+        xdg_data_home.as_deref(),
+        home.as_deref(),
+        dirs::data_dir(),
+        dirs::data_local_dir(),
+    )
 }
 
 fn devin_credentials_path_candidates(
     xdg_data_home: Option<&str>,
     home: Option<&std::path::Path>,
+    data_dir: Option<PathBuf>,
+    data_local_dir: Option<PathBuf>,
 ) -> Vec<PathBuf> {
     let mut paths = Vec::new();
     if let Some(value) = xdg_data_home {
@@ -161,6 +222,12 @@ fn devin_credentials_path_candidates(
         if !path.as_os_str().is_empty() {
             paths.push(path.join("devin/credentials.toml"));
         }
+    }
+    // Platform data dirs cover Windows (%APPDATA%, %LOCALAPPDATA%) and macOS
+    // (~/Library/Application Support); on Linux data_dir resolves to the same
+    // ~/.local/share as the home fallback below and is deduplicated.
+    for base in [data_dir, data_local_dir].into_iter().flatten() {
+        paths.push(base.join("devin/credentials.toml"));
     }
     if let Some(home) = home {
         paths.push(home.join(".local/share/devin/credentials.toml"));
@@ -285,15 +352,51 @@ mod devin_tests {
     }
 
     #[test]
-    fn builds_credentials_paths_from_xdg_then_home() {
+    fn builds_credentials_paths_from_xdg_platform_dirs_then_home() {
         let paths = devin_credentials_path_candidates(
             Some("C:/xdg-data"),
             Some(std::path::Path::new("C:/Users/test")),
+            Some(PathBuf::from("C:/Users/test/AppData/Roaming")),
+            Some(PathBuf::from("C:/Users/test/AppData/Local")),
         );
 
-        assert_eq!(paths.len(), 2);
+        assert_eq!(paths.len(), 4);
         assert!(paths[0].ends_with("devin/credentials.toml"));
-        assert!(paths[1].ends_with(".local/share/devin/credentials.toml"));
+        assert_eq!(
+            paths[1],
+            PathBuf::from("C:/Users/test/AppData/Roaming/devin/credentials.toml")
+        );
+        assert_eq!(
+            paths[2],
+            PathBuf::from("C:/Users/test/AppData/Local/devin/credentials.toml")
+        );
+        assert!(paths[3].ends_with(".local/share/devin/credentials.toml"));
+    }
+
+    #[test]
+    fn deduplicates_data_dir_matching_home_fallback() {
+        let paths = devin_credentials_path_candidates(
+            None,
+            Some(std::path::Path::new("/home/test")),
+            Some(PathBuf::from("/home/test/.local/share")),
+            Some(PathBuf::from("/home/test/.local/share")),
+        );
+
+        assert_eq!(
+            paths,
+            vec![PathBuf::from("/home/test/.local/share/devin/credentials.toml")]
+        );
+    }
+
+    #[test]
+    fn parses_cli_version_output() {
+        assert_eq!(
+            parse_devin_cli_version("devin 3000.6.14 (18033302)\n"),
+            Some("3000.6.14".to_string())
+        );
+        assert_eq!(parse_devin_cli_version("devin unknown"), None);
+        assert_eq!(parse_devin_cli_version(""), None);
+        assert_eq!(parse_devin_cli_version("devin"), None);
     }
 
     #[test]

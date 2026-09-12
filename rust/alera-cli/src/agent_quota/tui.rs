@@ -43,6 +43,36 @@ enum TuiCompletion {
     Antigravity,
 }
 
+/// How long to wait for the TUI's prompt before sending the slash command.
+/// Cold starts can spend seconds in an automatic sign-in refresh or a folder
+/// trust prompt before the input line exists.
+const TUI_STARTUP_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// Folder-trust prompts ("Do you trust the contents of this project?") gate
+/// the main input and swallow Enter as their own confirmation, which eats a
+/// slash command sent while they are open.
+fn tui_requests_folder_trust(output: &str) -> bool {
+    let lower = output.to_lowercase();
+    lower.contains("trust this folder") || lower.contains("trust the contents")
+}
+
+/// Replies to cursor-position queries (ESC[6n) embedded in PTY output.
+///
+/// A freshly attached ConPTY client emits the query and parks until the
+/// terminal answers; without a reply the process eventually exits without
+/// producing output. POSIX TUIs issue the same query during startup, so this
+/// is unconditional. `carry` retains a short tail so a query split across
+/// reads is still detected.
+fn answer_cursor_queries(chunk: &[u8], carry: &mut Vec<u8>, writer: &mut dyn Write) {
+    let mut window = std::mem::take(carry);
+    window.extend_from_slice(chunk);
+    if window.windows(4).any(|slice| slice == b"\x1b[6n") {
+        let _ = writer.write_all(b"\x1b[1;1R");
+        let _ = writer.flush();
+    }
+    carry.extend_from_slice(&window[window.len().saturating_sub(3)..]);
+}
+
 /// Environment for a quota CLI, or `None` when the shell could not be probed
 /// and the inherited environment has to stand in.
 ///
@@ -105,7 +135,7 @@ async fn run_tui_command(
         let (command_binary, command_arguments) = (command.clone(), arguments);
 
         let mut builder = CommandBuilder::new(&command_binary);
-        for argument in command_arguments {
+        for argument in &command_arguments {
             builder.arg(argument);
         }
         match resolved {
@@ -149,11 +179,22 @@ async fn run_tui_command(
 
         let startup_started = Instant::now();
         let mut startup_output = Vec::new();
-        while startup_started.elapsed() < Duration::from_secs(8) {
+        let mut trust_confirmed = false;
+        let mut dsr_carry = Vec::new();
+        while startup_started.elapsed() < TUI_STARTUP_TIMEOUT {
             match rx.recv_timeout(Duration::from_millis(250)) {
                 Ok(chunk) => {
+                    answer_cursor_queries(&chunk, &mut dsr_carry, writer.as_mut());
                     startup_output.extend_from_slice(&chunk);
                     let clean = strip_terminal_sequences(&String::from_utf8_lossy(&startup_output));
+                    if !trust_confirmed && tui_requests_folder_trust(&clean) {
+                        // Default selection is "Yes, I trust this folder".
+                        let _ = writer.write_all(b"\r");
+                        let _ = writer.flush();
+                        trust_confirmed = true;
+                        startup_output.clear();
+                        continue;
+                    }
                     if clean.contains("? for shortcuts")
                         || clean.contains("Type a request")
                         || clean.contains("What can I help you")
@@ -173,9 +214,23 @@ async fn run_tui_command(
         while started.elapsed() < PTY_TIMEOUT {
             match rx.recv_timeout(Duration::from_millis(250)) {
                 Ok(chunk) => {
+                    answer_cursor_queries(&chunk, &mut dsr_carry, writer.as_mut());
                     output.extend_from_slice(&chunk);
                     if output.len() > 200_000 {
                         output.drain(..output.len() - 200_000);
+                    }
+                    if !trust_confirmed {
+                        let clean =
+                            strip_terminal_sequences(&String::from_utf8_lossy(&output));
+                        if tui_requests_folder_trust(&clean) {
+                            let _ = writer.write_all(b"\r");
+                            let _ = writer.flush();
+                            std::thread::sleep(Duration::from_millis(500));
+                            let _ = writer.write_all(format!("{slash_command}\r").as_bytes());
+                            let _ = writer.flush();
+                            trust_confirmed = true;
+                            output.clear();
+                        }
                     }
                     last_data = Instant::now();
                 }
