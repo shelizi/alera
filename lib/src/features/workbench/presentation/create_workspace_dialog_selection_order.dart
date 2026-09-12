@@ -5,9 +5,12 @@ extension _CreateWorkspaceDialogSelectionOrder on _CreateWorkspaceDialogState {
       sortProjectsForSelection(widget.projects);
 
   List<WorkspaceParentCandidate> get _parentCandidates {
+    final selectedProjectId = _selectedProject?.id;
     final candidates = <WorkspaceParentCandidate>[
       for (final candidate in widget.parentCandidates)
-        if (candidate.workspace.status == WorkspaceStatus.active) candidate,
+        if (candidate.workspace.status == WorkspaceStatus.active &&
+            candidate.project.id == selectedProjectId)
+          candidate,
     ];
     candidates.sort(
       (left, right) => compareWorkspaceParentSelectionKeys(

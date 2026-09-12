@@ -440,6 +440,10 @@ void main() {
       }
 
       expect(parentField().value, aleraMain.id);
+      expect(parentField().entries.map((entry) => entry.value), <String?>[
+        null,
+        aleraMain.id,
+      ]);
       final projectField = tester.widget<AleraDropdownField<Project>>(
         find.byWidgetPredicate(
           (widget) =>
@@ -459,7 +463,6 @@ void main() {
         null,
         orcaMain.id,
         orcaFeature.id,
-        aleraMain.id,
       ]);
 
       parentField().onChanged(orcaFeature.id);

@@ -281,6 +281,13 @@ class _CreateWorkspaceDialogState extends State<CreateWorkspaceDialog> {
     setState(() {
       _selectedProject = project;
       _sourceBranchError = null;
+      final selectedParentId = _selectedParentWorkspaceId;
+      if (selectedParentId != null &&
+          !_parentCandidates.any(
+            (candidate) => candidate.workspace.id == selectedParentId,
+          )) {
+        _selectedParentWorkspaceId = null;
+      }
     });
     _loadBranches(project);
   }

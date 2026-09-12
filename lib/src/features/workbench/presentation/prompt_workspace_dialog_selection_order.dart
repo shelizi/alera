@@ -22,9 +22,11 @@ extension _PromptWorkspaceDialogSelectionOrder on _PromptWorkspaceDialogState {
     final projectNameById = <String, String>{
       for (final project in widget.projects) project.id: project.name,
     };
+    final selectedProjectId = _project?.id;
     final workspaces = <Workspace>[
       for (final workspace in widget.parentWorkspaces)
-        if (workspace.isActive) workspace,
+        if (workspace.isActive && workspace.projectId == selectedProjectId)
+          workspace,
     ];
     workspaces.sort(
       (left, right) => compareWorkspaceParentSelectionKeys(

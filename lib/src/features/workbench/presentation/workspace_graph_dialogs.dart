@@ -340,6 +340,13 @@ class _WorkspaceParentDialogState extends State<_WorkspaceParentDialog> {
         : null;
   }
 
+  String _optionLabel(WorkspaceParentOption option) {
+    if (option.project.id == widget.workspace.projectId) {
+      return option.label;
+    }
+    return '${option.label} (other project)';
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -384,7 +391,7 @@ class _WorkspaceParentDialogState extends State<_WorkspaceParentDialog> {
                   if (option.workspace.id != widget.workspace.id)
                     AleraDropdownFieldEntry<String?>(
                       value: option.workspace.id,
-                      label: option.label,
+                      label: _optionLabel(option),
                       enabled: !descendants.contains(option.workspace.id),
                     ),
               ],

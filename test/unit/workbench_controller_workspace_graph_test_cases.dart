@@ -246,6 +246,72 @@ void _registerWorkbenchControllerWorkspaceGraphTests() {
     expect(_harness.workspaceGraphRepository.linkedWorkspaces, isEmpty);
   });
 
+  test('setWorkspaceParent rejects a parent from another project', () async {
+    await _controller.bootstrap();
+    final secondProject = await _harness.addProject('project-2', 'Beta');
+    await _flushUntil(
+      () => _controller.state.workspacesFor(secondProject.id).isNotEmpty,
+    );
+    final foreignParent = _controller.state
+        .workspacesFor(secondProject.id)
+        .single;
+    final workspace = Workspace(
+      id: 'workspace-1',
+      projectId: _harness.project.id,
+      name: 'Feature',
+      path: '/tmp/workspace-1',
+      createdAt: .utc(2026, 5, 22),
+      updatedAt: .utc(2026, 5, 22),
+      kind: .linked,
+      status: .active,
+    );
+
+    await expectLater(
+      _controller.setWorkspaceParent(
+        workspace: workspace,
+        parentWorkspaceId: foreignParent.id,
+      ),
+      throwsA(isA<WorkspaceException>()),
+    );
+
+    expect(_harness.workspaceGraphRepository.unlinkedWorkspaces, isEmpty);
+    expect(_harness.workspaceGraphRepository.linkedWorkspaces, isEmpty);
+  });
+
+  test('setWorkspaceParent clears a legacy cross-project parent', () async {
+    await _controller.bootstrap();
+    final secondProject = await _harness.addProject('project-2', 'Beta');
+    await _flushUntil(
+      () => _controller.state.workspacesFor(secondProject.id).isNotEmpty,
+    );
+    final foreignParent = _controller.state
+        .workspacesFor(secondProject.id)
+        .single;
+    await _harness.workspaceGraphRepository.linkWorkspaces(
+      parentWorkspaceId: foreignParent.id,
+      childWorkspaceId: 'workspace-1',
+    );
+    _harness.workspaceGraphRepository.linkedWorkspaces.clear();
+    final workspace = Workspace(
+      id: 'workspace-1',
+      projectId: _harness.project.id,
+      name: 'Feature',
+      path: '/tmp/workspace-1',
+      createdAt: .utc(2026, 5, 22),
+      updatedAt: .utc(2026, 5, 22),
+      kind: .linked,
+      status: .active,
+      parentWorkspaceId: foreignParent.id,
+    );
+
+    await _controller.setWorkspaceParent(workspace: workspace);
+
+    expect(_harness.workspaceGraphRepository.unlinkedWorkspaces, <Object>[
+      (parentWorkspaceId: foreignParent.id, childWorkspaceId: workspace.id),
+    ]);
+    expect(_harness.workspaceGraphRepository.linkedWorkspaces, isEmpty);
+  });
+
   test('setWorkspaceParent replaces and clears parent relationships', () async {
     final workspace = Workspace(
       id: 'workspace-1',

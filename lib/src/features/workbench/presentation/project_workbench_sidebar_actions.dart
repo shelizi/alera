@@ -264,7 +264,7 @@ mixin _ProjectWorkbenchSidebarActions
         final selection = await showWorkspaceParentDialog(
           context: context,
           workspace: workspace,
-          options: _workspaceParentOptions(),
+          options: _workspaceParentOptions(workspace),
           relations: relations,
         );
         if (selection == null || !mounted) {
@@ -291,14 +291,31 @@ mixin _ProjectWorkbenchSidebarActions
     );
   }
 
-  List<WorkspaceParentOption> _workspaceParentOptions() {
+  List<WorkspaceParentOption> _workspaceParentOptions(Workspace workspace) {
     final state = ref.read(workbenchControllerProvider);
-    return <WorkspaceParentOption>[
+    final options = <WorkspaceParentOption>[
       for (final project in state.projects)
-        for (final workspace in state.workspacesFor(project.id))
-          if (workspace.isActive)
-            WorkspaceParentOption(project: project, workspace: workspace),
+        if (project.id == workspace.projectId)
+          for (final candidate in state.workspacesFor(project.id))
+            if (candidate.isActive)
+              WorkspaceParentOption(project: project, workspace: candidate),
     ];
+    // A legacy cross-project parent stays listed so it can still be inspected
+    // or cleared instead of silently disappearing from the dialog.
+    final parentId = workspace.parentWorkspaceId;
+    if (parentId != null &&
+        options.every((option) => option.workspace.id != parentId)) {
+      for (final project in state.projects) {
+        for (final candidate in state.workspacesFor(project.id)) {
+          if (candidate.id == parentId) {
+            options.add(
+              WorkspaceParentOption(project: project, workspace: candidate),
+            );
+          }
+        }
+      }
+    }
+    return options;
   }
 
   Future<void> _removeProject(Project project) async {
