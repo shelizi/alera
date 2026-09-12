@@ -1,0 +1,6 @@
+{
+  "event": "outputResyncRequired",
+  "payload": {
+    "sessionId": "s1"
+  }
+}

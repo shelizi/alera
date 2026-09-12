@@ -201,6 +201,8 @@ mod terminal_startup_commands;
 #[cfg(test)]
 mod wire_fixture_tests;
 #[cfg(test)]
+mod wire_fixture_tests_stream;
+#[cfg(test)]
 mod workspace_contract_tests;
 mod workspace_pinning;
 mod workspace_section_requests;
