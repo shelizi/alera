@@ -107,6 +107,7 @@ void main() {
           'antigravity',
           'minimax',
           'zai',
+          'devin',
           'opencode',
         ],
       );

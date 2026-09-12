@@ -58,111 +58,6 @@ extension AppLanguageMapperExtension on AppLanguage {
   }
 }
 
-class TerminalCursorShapeMapper extends EnumMapper<TerminalCursorShape> {
-  TerminalCursorShapeMapper._();
-
-  static TerminalCursorShapeMapper? _instance;
-  static TerminalCursorShapeMapper ensureInitialized() {
-    if (_instance == null) {
-      MapperContainer.globals.use(_instance = TerminalCursorShapeMapper._());
-    }
-    return _instance!;
-  }
-
-  static TerminalCursorShape fromValue(dynamic value) {
-    ensureInitialized();
-    return MapperContainer.globals.fromValue(value);
-  }
-
-  @override
-  TerminalCursorShape decode(dynamic value) {
-    switch (value) {
-      case r'block':
-        return TerminalCursorShape.block;
-      case r'bar':
-        return TerminalCursorShape.bar;
-      case r'underline':
-        return TerminalCursorShape.underline;
-      default:
-        throw MapperException.unknownEnumValue(value);
-    }
-  }
-
-  @override
-  dynamic encode(TerminalCursorShape self) {
-    switch (self) {
-      case TerminalCursorShape.block:
-        return r'block';
-      case TerminalCursorShape.bar:
-        return r'bar';
-      case TerminalCursorShape.underline:
-        return r'underline';
-    }
-  }
-}
-
-extension TerminalCursorShapeMapperExtension on TerminalCursorShape {
-  String toValue() {
-    TerminalCursorShapeMapper.ensureInitialized();
-    return MapperContainer.globals.toValue<TerminalCursorShape>(this) as String;
-  }
-}
-
-class TerminalToolbarCornerMapper extends EnumMapper<TerminalToolbarCorner> {
-  TerminalToolbarCornerMapper._();
-
-  static TerminalToolbarCornerMapper? _instance;
-  static TerminalToolbarCornerMapper ensureInitialized() {
-    if (_instance == null) {
-      MapperContainer.globals.use(_instance = TerminalToolbarCornerMapper._());
-    }
-    return _instance!;
-  }
-
-  static TerminalToolbarCorner fromValue(dynamic value) {
-    ensureInitialized();
-    return MapperContainer.globals.fromValue(value);
-  }
-
-  @override
-  TerminalToolbarCorner decode(dynamic value) {
-    switch (value) {
-      case r'topLeft':
-        return TerminalToolbarCorner.topLeft;
-      case r'topRight':
-        return TerminalToolbarCorner.topRight;
-      case r'bottomLeft':
-        return TerminalToolbarCorner.bottomLeft;
-      case r'bottomRight':
-        return TerminalToolbarCorner.bottomRight;
-      default:
-        throw MapperException.unknownEnumValue(value);
-    }
-  }
-
-  @override
-  dynamic encode(TerminalToolbarCorner self) {
-    switch (self) {
-      case TerminalToolbarCorner.topLeft:
-        return r'topLeft';
-      case TerminalToolbarCorner.topRight:
-        return r'topRight';
-      case TerminalToolbarCorner.bottomLeft:
-        return r'bottomLeft';
-      case TerminalToolbarCorner.bottomRight:
-        return r'bottomRight';
-    }
-  }
-}
-
-extension TerminalToolbarCornerMapperExtension on TerminalToolbarCorner {
-  String toValue() {
-    TerminalToolbarCornerMapper.ensureInitialized();
-    return MapperContainer.globals.toValue<TerminalToolbarCorner>(this)
-        as String;
-  }
-}
-
 class DiagnosticsLogLevelMapper extends EnumMapper<DiagnosticsLogLevel> {
   DiagnosticsLogLevelMapper._();
 
@@ -296,701 +191,109 @@ extension AgentQuotaProviderIdMapperExtension on AgentQuotaProviderId {
   }
 }
 
-class TerminalColorOverridesMapper
-    extends ClassMapperBase<TerminalColorOverrides> {
-  TerminalColorOverridesMapper._();
+class TerminalCursorShapeMapper extends EnumMapper<TerminalCursorShape> {
+  TerminalCursorShapeMapper._();
 
-  static TerminalColorOverridesMapper? _instance;
-  static TerminalColorOverridesMapper ensureInitialized() {
+  static TerminalCursorShapeMapper? _instance;
+  static TerminalCursorShapeMapper ensureInitialized() {
     if (_instance == null) {
-      MapperContainer.globals.use(_instance = TerminalColorOverridesMapper._());
+      MapperContainer.globals.use(_instance = TerminalCursorShapeMapper._());
     }
     return _instance!;
   }
 
-  @override
-  final String id = 'TerminalColorOverrides';
-
-  static String? _$foreground(TerminalColorOverrides v) => v.foreground;
-  static const Field<TerminalColorOverrides, String> _f$foreground = Field(
-    'foreground',
-    _$foreground,
-    opt: true,
-  );
-  static String? _$background(TerminalColorOverrides v) => v.background;
-  static const Field<TerminalColorOverrides, String> _f$background = Field(
-    'background',
-    _$background,
-    opt: true,
-  );
-  static String? _$cursor(TerminalColorOverrides v) => v.cursor;
-  static const Field<TerminalColorOverrides, String> _f$cursor = Field(
-    'cursor',
-    _$cursor,
-    opt: true,
-  );
-  static String? _$selection(TerminalColorOverrides v) => v.selection;
-  static const Field<TerminalColorOverrides, String> _f$selection = Field(
-    'selection',
-    _$selection,
-    opt: true,
-  );
-
-  @override
-  final MappableFields<TerminalColorOverrides> fields = const {
-    #foreground: _f$foreground,
-    #background: _f$background,
-    #cursor: _f$cursor,
-    #selection: _f$selection,
-  };
-
-  static TerminalColorOverrides _instantiate(DecodingData data) {
-    return TerminalColorOverrides(
-      foreground: data.dec(_f$foreground),
-      background: data.dec(_f$background),
-      cursor: data.dec(_f$cursor),
-      selection: data.dec(_f$selection),
-    );
+  static TerminalCursorShape fromValue(dynamic value) {
+    ensureInitialized();
+    return MapperContainer.globals.fromValue(value);
   }
 
   @override
-  final Function instantiate = _instantiate;
-
-  static TerminalColorOverrides fromMap(Map<String, dynamic> map) {
-    return ensureInitialized().decodeMap<TerminalColorOverrides>(map);
+  TerminalCursorShape decode(dynamic value) {
+    switch (value) {
+      case r'block':
+        return TerminalCursorShape.block;
+      case r'bar':
+        return TerminalCursorShape.bar;
+      case r'underline':
+        return TerminalCursorShape.underline;
+      default:
+        throw MapperException.unknownEnumValue(value);
+    }
   }
 
-  static TerminalColorOverrides fromJson(String json) {
-    return ensureInitialized().decodeJson<TerminalColorOverrides>(json);
+  @override
+  dynamic encode(TerminalCursorShape self) {
+    switch (self) {
+      case TerminalCursorShape.block:
+        return r'block';
+      case TerminalCursorShape.bar:
+        return r'bar';
+      case TerminalCursorShape.underline:
+        return r'underline';
+    }
   }
 }
 
-mixin TerminalColorOverridesMappable {
-  String toJson() {
-    return TerminalColorOverridesMapper.ensureInitialized()
-        .encodeJson<TerminalColorOverrides>(this as TerminalColorOverrides);
-  }
-
-  Map<String, dynamic> toMap() {
-    return TerminalColorOverridesMapper.ensureInitialized()
-        .encodeMap<TerminalColorOverrides>(this as TerminalColorOverrides);
-  }
-
-  TerminalColorOverridesCopyWith<
-    TerminalColorOverrides,
-    TerminalColorOverrides,
-    TerminalColorOverrides
-  >
-  get copyWith =>
-      _TerminalColorOverridesCopyWithImpl<
-        TerminalColorOverrides,
-        TerminalColorOverrides
-      >(this as TerminalColorOverrides, $identity, $identity);
-  @override
-  String toString() {
-    return TerminalColorOverridesMapper.ensureInitialized().stringifyValue(
-      this as TerminalColorOverrides,
-    );
-  }
-
-  @override
-  bool operator ==(Object other) {
-    return TerminalColorOverridesMapper.ensureInitialized().equalsValue(
-      this as TerminalColorOverrides,
-      other,
-    );
-  }
-
-  @override
-  int get hashCode {
-    return TerminalColorOverridesMapper.ensureInitialized().hashValue(
-      this as TerminalColorOverrides,
-    );
+extension TerminalCursorShapeMapperExtension on TerminalCursorShape {
+  String toValue() {
+    TerminalCursorShapeMapper.ensureInitialized();
+    return MapperContainer.globals.toValue<TerminalCursorShape>(this) as String;
   }
 }
 
-extension TerminalColorOverridesValueCopy<$R, $Out>
-    on ObjectCopyWith<$R, TerminalColorOverrides, $Out> {
-  TerminalColorOverridesCopyWith<$R, TerminalColorOverrides, $Out>
-  get $asTerminalColorOverrides => $base.as(
-    (v, t, t2) => _TerminalColorOverridesCopyWithImpl<$R, $Out>(v, t, t2),
-  );
-}
+class TerminalToolbarCornerMapper extends EnumMapper<TerminalToolbarCorner> {
+  TerminalToolbarCornerMapper._();
 
-abstract class TerminalColorOverridesCopyWith<
-  $R,
-  $In extends TerminalColorOverrides,
-  $Out
->
-    implements ClassCopyWith<$R, $In, $Out> {
-  $R call({
-    String? foreground,
-    String? background,
-    String? cursor,
-    String? selection,
-  });
-  TerminalColorOverridesCopyWith<$R2, $In, $Out2> $chain<$R2, $Out2>(
-    Then<$Out2, $R2> t,
-  );
-}
-
-class _TerminalColorOverridesCopyWithImpl<$R, $Out>
-    extends ClassCopyWithBase<$R, TerminalColorOverrides, $Out>
-    implements
-        TerminalColorOverridesCopyWith<$R, TerminalColorOverrides, $Out> {
-  _TerminalColorOverridesCopyWithImpl(super.value, super.then, super.then2);
-
-  @override
-  late final ClassMapperBase<TerminalColorOverrides> $mapper =
-      TerminalColorOverridesMapper.ensureInitialized();
-  @override
-  $R call({
-    Object? foreground = $none,
-    Object? background = $none,
-    Object? cursor = $none,
-    Object? selection = $none,
-  }) => $apply(
-    FieldCopyWithData({
-      if (foreground != $none) #foreground: foreground,
-      if (background != $none) #background: background,
-      if (cursor != $none) #cursor: cursor,
-      if (selection != $none) #selection: selection,
-    }),
-  );
-  @override
-  TerminalColorOverrides $make(CopyWithData data) => TerminalColorOverrides(
-    foreground: data.get(#foreground, or: $value.foreground),
-    background: data.get(#background, or: $value.background),
-    cursor: data.get(#cursor, or: $value.cursor),
-    selection: data.get(#selection, or: $value.selection),
-  );
-
-  @override
-  TerminalColorOverridesCopyWith<$R2, TerminalColorOverrides, $Out2>
-  $chain<$R2, $Out2>(Then<$Out2, $R2> t) =>
-      _TerminalColorOverridesCopyWithImpl<$R2, $Out2>($value, $cast, t);
-}
-
-class TerminalSettingsMapper extends ClassMapperBase<TerminalSettings> {
-  TerminalSettingsMapper._();
-
-  static TerminalSettingsMapper? _instance;
-  static TerminalSettingsMapper ensureInitialized() {
+  static TerminalToolbarCornerMapper? _instance;
+  static TerminalToolbarCornerMapper ensureInitialized() {
     if (_instance == null) {
-      MapperContainer.globals.use(_instance = TerminalSettingsMapper._());
-      TerminalCursorShapeMapper.ensureInitialized();
-      TerminalColorOverridesMapper.ensureInitialized();
-      TerminalToolbarCornerMapper.ensureInitialized();
+      MapperContainer.globals.use(_instance = TerminalToolbarCornerMapper._());
     }
     return _instance!;
   }
 
-  @override
-  final String id = 'TerminalSettings';
-
-  static String _$fontFamily(TerminalSettings v) => v.fontFamily;
-  static const Field<TerminalSettings, String> _f$fontFamily = Field(
-    'fontFamily',
-    _$fontFamily,
-  );
-  static double _$fontSize(TerminalSettings v) => v.fontSize;
-  static const Field<TerminalSettings, double> _f$fontSize = Field(
-    'fontSize',
-    _$fontSize,
-  );
-  static int _$fontWeight(TerminalSettings v) => v.fontWeight;
-  static const Field<TerminalSettings, int> _f$fontWeight = Field(
-    'fontWeight',
-    _$fontWeight,
-    opt: true,
-    def: 400,
-  );
-  static double _$lineHeight(TerminalSettings v) => v.lineHeight;
-  static const Field<TerminalSettings, double> _f$lineHeight = Field(
-    'lineHeight',
-    _$lineHeight,
-  );
-  static double _$paddingX(TerminalSettings v) => v.paddingX;
-  static const Field<TerminalSettings, double> _f$paddingX = Field(
-    'paddingX',
-    _$paddingX,
-    opt: true,
-    def: AleraTokens.space12,
-  );
-  static double _$paddingY(TerminalSettings v) => v.paddingY;
-  static const Field<TerminalSettings, double> _f$paddingY = Field(
-    'paddingY',
-    _$paddingY,
-    opt: true,
-    def: AleraTokens.space12,
-  );
-  static TerminalCursorShape _$cursorShape(TerminalSettings v) => v.cursorShape;
-  static const Field<TerminalSettings, TerminalCursorShape> _f$cursorShape =
-      Field('cursorShape', _$cursorShape);
-  static bool _$cursorBlink(TerminalSettings v) => v.cursorBlink;
-  static const Field<TerminalSettings, bool> _f$cursorBlink = Field(
-    'cursorBlink',
-    _$cursorBlink,
-    opt: true,
-    def: false,
-  );
-  static double _$cursorOpacity(TerminalSettings v) => v.cursorOpacity;
-  static const Field<TerminalSettings, double> _f$cursorOpacity = Field(
-    'cursorOpacity',
-    _$cursorOpacity,
-    opt: true,
-    def: 1,
-  );
-  static String _$themeName(TerminalSettings v) => v.themeName;
-  static const Field<TerminalSettings, String> _f$themeName = Field(
-    'themeName',
-    _$themeName,
-    opt: true,
-    def: TerminalThemeNames.aleraDark,
-  );
-  static double _$backgroundOpacity(TerminalSettings v) => v.backgroundOpacity;
-  static const Field<TerminalSettings, double> _f$backgroundOpacity = Field(
-    'backgroundOpacity',
-    _$backgroundOpacity,
-    opt: true,
-    def: 1,
-  );
-  static String? _$wordSeparators(TerminalSettings v) => v.wordSeparators;
-  static const Field<TerminalSettings, String> _f$wordSeparators = Field(
-    'wordSeparators',
-    _$wordSeparators,
-    opt: true,
-  );
-  static TerminalColorOverrides _$colorOverrides(TerminalSettings v) =>
-      v.colorOverrides;
-  static const Field<TerminalSettings, TerminalColorOverrides>
-  _f$colorOverrides = Field(
-    'colorOverrides',
-    _$colorOverrides,
-    opt: true,
-    def: const TerminalColorOverrides(),
-  );
-  static int _$scrollbackLines(TerminalSettings v) => v.scrollbackLines;
-  static const Field<TerminalSettings, int> _f$scrollbackLines = Field(
-    'scrollbackLines',
-    _$scrollbackLines,
-  );
-  static int _$tuiScrollSensitivity(TerminalSettings v) =>
-      v.tuiScrollSensitivity;
-  static const Field<TerminalSettings, int> _f$tuiScrollSensitivity = Field(
-    'tuiScrollSensitivity',
-    _$tuiScrollSensitivity,
-    opt: true,
-    def: 1,
-  );
-  static bool _$clipboardOnSelect(TerminalSettings v) => v.clipboardOnSelect;
-  static const Field<TerminalSettings, bool> _f$clipboardOnSelect = Field(
-    'clipboardOnSelect',
-    _$clipboardOnSelect,
-    opt: true,
-    def: false,
-  );
-  static bool _$allowOsc52Clipboard(TerminalSettings v) =>
-      v.allowOsc52Clipboard;
-  static const Field<TerminalSettings, bool> _f$allowOsc52Clipboard = Field(
-    'allowOsc52Clipboard',
-    _$allowOsc52Clipboard,
-    opt: true,
-    def: false,
-  );
-  static bool _$showComposerByDefault(TerminalSettings v) =>
-      v.showComposerByDefault;
-  static const Field<TerminalSettings, bool> _f$showComposerByDefault = Field(
-    'showComposerByDefault',
-    _$showComposerByDefault,
-    opt: true,
-    def: false,
-  );
-  static TerminalToolbarCorner _$toolbarCorner(TerminalSettings v) =>
-      v.toolbarCorner;
-  static const Field<TerminalSettings, TerminalToolbarCorner> _f$toolbarCorner =
-      Field(
-        'toolbarCorner',
-        _$toolbarCorner,
-        opt: true,
-        def: TerminalToolbarCorner.topRight,
-      );
-  static int _$hostEmptyShutdownDelaySeconds(TerminalSettings v) =>
-      v.hostEmptyShutdownDelaySeconds;
-  static const Field<TerminalSettings, int> _f$hostEmptyShutdownDelaySeconds =
-      Field(
-        'hostEmptyShutdownDelaySeconds',
-        _$hostEmptyShutdownDelaySeconds,
-        opt: true,
-        def: 30,
-      );
-  static int _$hostDetachedSessionShutdownDelaySeconds(TerminalSettings v) =>
-      v.hostDetachedSessionShutdownDelaySeconds;
-  static const Field<TerminalSettings, int>
-  _f$hostDetachedSessionShutdownDelaySeconds = Field(
-    'hostDetachedSessionShutdownDelaySeconds',
-    _$hostDetachedSessionShutdownDelaySeconds,
-    opt: true,
-    def: 60 * 60,
-  );
-  static int _$hostScrollbackBytes(TerminalSettings v) => v.hostScrollbackBytes;
-  static const Field<TerminalSettings, int> _f$hostScrollbackBytes = Field(
-    'hostScrollbackBytes',
-    _$hostScrollbackBytes,
-    opt: true,
-    def: 10 * 1000 * 1000,
-  );
-  static int _$bufferBudgetMegabytes(TerminalSettings v) =>
-      v.bufferBudgetMegabytes;
-  static const Field<TerminalSettings, int> _f$bufferBudgetMegabytes = Field(
-    'bufferBudgetMegabytes',
-    _$bufferBudgetMegabytes,
-    opt: true,
-    def: 256,
-  );
-  static bool _$keepRuntimeOpenOnAppQuit(TerminalSettings v) =>
-      v.keepRuntimeOpenOnAppQuit;
-  static const Field<TerminalSettings, bool> _f$keepRuntimeOpenOnAppQuit =
-      Field(
-        'keepRuntimeOpenOnAppQuit',
-        _$keepRuntimeOpenOnAppQuit,
-        opt: true,
-        def: false,
-      );
-  static bool? _$loginShell(TerminalSettings v) => v.loginShell;
-  static const Field<TerminalSettings, bool> _f$loginShell = Field(
-    'loginShell',
-    _$loginShell,
-    opt: true,
-  );
-  static bool _$confirmCloseRunningProcesses(TerminalSettings v) =>
-      v.confirmCloseRunningProcesses;
-  static const Field<TerminalSettings, bool> _f$confirmCloseRunningProcesses =
-      Field(
-        'confirmCloseRunningProcesses',
-        _$confirmCloseRunningProcesses,
-        opt: true,
-        def: true,
-      );
-
-  @override
-  final MappableFields<TerminalSettings> fields = const {
-    #fontFamily: _f$fontFamily,
-    #fontSize: _f$fontSize,
-    #fontWeight: _f$fontWeight,
-    #lineHeight: _f$lineHeight,
-    #paddingX: _f$paddingX,
-    #paddingY: _f$paddingY,
-    #cursorShape: _f$cursorShape,
-    #cursorBlink: _f$cursorBlink,
-    #cursorOpacity: _f$cursorOpacity,
-    #themeName: _f$themeName,
-    #backgroundOpacity: _f$backgroundOpacity,
-    #wordSeparators: _f$wordSeparators,
-    #colorOverrides: _f$colorOverrides,
-    #scrollbackLines: _f$scrollbackLines,
-    #tuiScrollSensitivity: _f$tuiScrollSensitivity,
-    #clipboardOnSelect: _f$clipboardOnSelect,
-    #allowOsc52Clipboard: _f$allowOsc52Clipboard,
-    #showComposerByDefault: _f$showComposerByDefault,
-    #toolbarCorner: _f$toolbarCorner,
-    #hostEmptyShutdownDelaySeconds: _f$hostEmptyShutdownDelaySeconds,
-    #hostDetachedSessionShutdownDelaySeconds:
-        _f$hostDetachedSessionShutdownDelaySeconds,
-    #hostScrollbackBytes: _f$hostScrollbackBytes,
-    #bufferBudgetMegabytes: _f$bufferBudgetMegabytes,
-    #keepRuntimeOpenOnAppQuit: _f$keepRuntimeOpenOnAppQuit,
-    #loginShell: _f$loginShell,
-    #confirmCloseRunningProcesses: _f$confirmCloseRunningProcesses,
-  };
-
-  @override
-  final MappingHook hook = const _LegacyKeepRuntimeOpenHook();
-  static TerminalSettings _instantiate(DecodingData data) {
-    return TerminalSettings(
-      fontFamily: data.dec(_f$fontFamily),
-      fontSize: data.dec(_f$fontSize),
-      fontWeight: data.dec(_f$fontWeight),
-      lineHeight: data.dec(_f$lineHeight),
-      paddingX: data.dec(_f$paddingX),
-      paddingY: data.dec(_f$paddingY),
-      cursorShape: data.dec(_f$cursorShape),
-      cursorBlink: data.dec(_f$cursorBlink),
-      cursorOpacity: data.dec(_f$cursorOpacity),
-      themeName: data.dec(_f$themeName),
-      backgroundOpacity: data.dec(_f$backgroundOpacity),
-      wordSeparators: data.dec(_f$wordSeparators),
-      colorOverrides: data.dec(_f$colorOverrides),
-      scrollbackLines: data.dec(_f$scrollbackLines),
-      tuiScrollSensitivity: data.dec(_f$tuiScrollSensitivity),
-      clipboardOnSelect: data.dec(_f$clipboardOnSelect),
-      allowOsc52Clipboard: data.dec(_f$allowOsc52Clipboard),
-      showComposerByDefault: data.dec(_f$showComposerByDefault),
-      toolbarCorner: data.dec(_f$toolbarCorner),
-      hostEmptyShutdownDelaySeconds: data.dec(_f$hostEmptyShutdownDelaySeconds),
-      hostDetachedSessionShutdownDelaySeconds: data.dec(
-        _f$hostDetachedSessionShutdownDelaySeconds,
-      ),
-      hostScrollbackBytes: data.dec(_f$hostScrollbackBytes),
-      bufferBudgetMegabytes: data.dec(_f$bufferBudgetMegabytes),
-      keepRuntimeOpenOnAppQuit: data.dec(_f$keepRuntimeOpenOnAppQuit),
-      loginShell: data.dec(_f$loginShell),
-      confirmCloseRunningProcesses: data.dec(_f$confirmCloseRunningProcesses),
-    );
+  static TerminalToolbarCorner fromValue(dynamic value) {
+    ensureInitialized();
+    return MapperContainer.globals.fromValue(value);
   }
 
   @override
-  final Function instantiate = _instantiate;
-
-  static TerminalSettings fromMap(Map<String, dynamic> map) {
-    return ensureInitialized().decodeMap<TerminalSettings>(map);
+  TerminalToolbarCorner decode(dynamic value) {
+    switch (value) {
+      case r'topLeft':
+        return TerminalToolbarCorner.topLeft;
+      case r'topRight':
+        return TerminalToolbarCorner.topRight;
+      case r'bottomLeft':
+        return TerminalToolbarCorner.bottomLeft;
+      case r'bottomRight':
+        return TerminalToolbarCorner.bottomRight;
+      default:
+        throw MapperException.unknownEnumValue(value);
+    }
   }
 
-  static TerminalSettings fromJson(String json) {
-    return ensureInitialized().decodeJson<TerminalSettings>(json);
+  @override
+  dynamic encode(TerminalToolbarCorner self) {
+    switch (self) {
+      case TerminalToolbarCorner.topLeft:
+        return r'topLeft';
+      case TerminalToolbarCorner.topRight:
+        return r'topRight';
+      case TerminalToolbarCorner.bottomLeft:
+        return r'bottomLeft';
+      case TerminalToolbarCorner.bottomRight:
+        return r'bottomRight';
+    }
   }
 }
 
-mixin TerminalSettingsMappable {
-  String toJson() {
-    return TerminalSettingsMapper.ensureInitialized()
-        .encodeJson<TerminalSettings>(this as TerminalSettings);
+extension TerminalToolbarCornerMapperExtension on TerminalToolbarCorner {
+  String toValue() {
+    TerminalToolbarCornerMapper.ensureInitialized();
+    return MapperContainer.globals.toValue<TerminalToolbarCorner>(this)
+        as String;
   }
-
-  Map<String, dynamic> toMap() {
-    return TerminalSettingsMapper.ensureInitialized()
-        .encodeMap<TerminalSettings>(this as TerminalSettings);
-  }
-
-  TerminalSettingsCopyWith<TerminalSettings, TerminalSettings, TerminalSettings>
-  get copyWith =>
-      _TerminalSettingsCopyWithImpl<TerminalSettings, TerminalSettings>(
-        this as TerminalSettings,
-        $identity,
-        $identity,
-      );
-  @override
-  String toString() {
-    return TerminalSettingsMapper.ensureInitialized().stringifyValue(
-      this as TerminalSettings,
-    );
-  }
-
-  @override
-  bool operator ==(Object other) {
-    return TerminalSettingsMapper.ensureInitialized().equalsValue(
-      this as TerminalSettings,
-      other,
-    );
-  }
-
-  @override
-  int get hashCode {
-    return TerminalSettingsMapper.ensureInitialized().hashValue(
-      this as TerminalSettings,
-    );
-  }
-}
-
-extension TerminalSettingsValueCopy<$R, $Out>
-    on ObjectCopyWith<$R, TerminalSettings, $Out> {
-  TerminalSettingsCopyWith<$R, TerminalSettings, $Out>
-  get $asTerminalSettings =>
-      $base.as((v, t, t2) => _TerminalSettingsCopyWithImpl<$R, $Out>(v, t, t2));
-}
-
-abstract class TerminalSettingsCopyWith<$R, $In extends TerminalSettings, $Out>
-    implements ClassCopyWith<$R, $In, $Out> {
-  TerminalColorOverridesCopyWith<
-    $R,
-    TerminalColorOverrides,
-    TerminalColorOverrides
-  >
-  get colorOverrides;
-  $R call({
-    String? fontFamily,
-    double? fontSize,
-    int? fontWeight,
-    double? lineHeight,
-    double? paddingX,
-    double? paddingY,
-    TerminalCursorShape? cursorShape,
-    bool? cursorBlink,
-    double? cursorOpacity,
-    String? themeName,
-    double? backgroundOpacity,
-    String? wordSeparators,
-    TerminalColorOverrides? colorOverrides,
-    int? scrollbackLines,
-    int? tuiScrollSensitivity,
-    bool? clipboardOnSelect,
-    bool? allowOsc52Clipboard,
-    bool? showComposerByDefault,
-    TerminalToolbarCorner? toolbarCorner,
-    int? hostEmptyShutdownDelaySeconds,
-    int? hostDetachedSessionShutdownDelaySeconds,
-    int? hostScrollbackBytes,
-    int? bufferBudgetMegabytes,
-    bool? keepRuntimeOpenOnAppQuit,
-    bool? loginShell,
-    bool? confirmCloseRunningProcesses,
-  });
-  TerminalSettingsCopyWith<$R2, $In, $Out2> $chain<$R2, $Out2>(
-    Then<$Out2, $R2> t,
-  );
-}
-
-class _TerminalSettingsCopyWithImpl<$R, $Out>
-    extends ClassCopyWithBase<$R, TerminalSettings, $Out>
-    implements TerminalSettingsCopyWith<$R, TerminalSettings, $Out> {
-  _TerminalSettingsCopyWithImpl(super.value, super.then, super.then2);
-
-  @override
-  late final ClassMapperBase<TerminalSettings> $mapper =
-      TerminalSettingsMapper.ensureInitialized();
-  @override
-  TerminalColorOverridesCopyWith<
-    $R,
-    TerminalColorOverrides,
-    TerminalColorOverrides
-  >
-  get colorOverrides =>
-      $value.colorOverrides.copyWith.$chain((v) => call(colorOverrides: v));
-  @override
-  $R call({
-    String? fontFamily,
-    double? fontSize,
-    int? fontWeight,
-    double? lineHeight,
-    double? paddingX,
-    double? paddingY,
-    TerminalCursorShape? cursorShape,
-    bool? cursorBlink,
-    double? cursorOpacity,
-    String? themeName,
-    double? backgroundOpacity,
-    Object? wordSeparators = $none,
-    TerminalColorOverrides? colorOverrides,
-    int? scrollbackLines,
-    int? tuiScrollSensitivity,
-    bool? clipboardOnSelect,
-    bool? allowOsc52Clipboard,
-    bool? showComposerByDefault,
-    TerminalToolbarCorner? toolbarCorner,
-    int? hostEmptyShutdownDelaySeconds,
-    int? hostDetachedSessionShutdownDelaySeconds,
-    int? hostScrollbackBytes,
-    int? bufferBudgetMegabytes,
-    bool? keepRuntimeOpenOnAppQuit,
-    Object? loginShell = $none,
-    bool? confirmCloseRunningProcesses,
-  }) => $apply(
-    FieldCopyWithData({
-      if (fontFamily != null) #fontFamily: fontFamily,
-      if (fontSize != null) #fontSize: fontSize,
-      if (fontWeight != null) #fontWeight: fontWeight,
-      if (lineHeight != null) #lineHeight: lineHeight,
-      if (paddingX != null) #paddingX: paddingX,
-      if (paddingY != null) #paddingY: paddingY,
-      if (cursorShape != null) #cursorShape: cursorShape,
-      if (cursorBlink != null) #cursorBlink: cursorBlink,
-      if (cursorOpacity != null) #cursorOpacity: cursorOpacity,
-      if (themeName != null) #themeName: themeName,
-      if (backgroundOpacity != null) #backgroundOpacity: backgroundOpacity,
-      if (wordSeparators != $none) #wordSeparators: wordSeparators,
-      if (colorOverrides != null) #colorOverrides: colorOverrides,
-      if (scrollbackLines != null) #scrollbackLines: scrollbackLines,
-      if (tuiScrollSensitivity != null)
-        #tuiScrollSensitivity: tuiScrollSensitivity,
-      if (clipboardOnSelect != null) #clipboardOnSelect: clipboardOnSelect,
-      if (allowOsc52Clipboard != null)
-        #allowOsc52Clipboard: allowOsc52Clipboard,
-      if (showComposerByDefault != null)
-        #showComposerByDefault: showComposerByDefault,
-      if (toolbarCorner != null) #toolbarCorner: toolbarCorner,
-      if (hostEmptyShutdownDelaySeconds != null)
-        #hostEmptyShutdownDelaySeconds: hostEmptyShutdownDelaySeconds,
-      if (hostDetachedSessionShutdownDelaySeconds != null)
-        #hostDetachedSessionShutdownDelaySeconds:
-            hostDetachedSessionShutdownDelaySeconds,
-      if (hostScrollbackBytes != null)
-        #hostScrollbackBytes: hostScrollbackBytes,
-      if (bufferBudgetMegabytes != null)
-        #bufferBudgetMegabytes: bufferBudgetMegabytes,
-      if (keepRuntimeOpenOnAppQuit != null)
-        #keepRuntimeOpenOnAppQuit: keepRuntimeOpenOnAppQuit,
-      if (loginShell != $none) #loginShell: loginShell,
-      if (confirmCloseRunningProcesses != null)
-        #confirmCloseRunningProcesses: confirmCloseRunningProcesses,
-    }),
-  );
-  @override
-  TerminalSettings $make(CopyWithData data) => TerminalSettings(
-    fontFamily: data.get(#fontFamily, or: $value.fontFamily),
-    fontSize: data.get(#fontSize, or: $value.fontSize),
-    fontWeight: data.get(#fontWeight, or: $value.fontWeight),
-    lineHeight: data.get(#lineHeight, or: $value.lineHeight),
-    paddingX: data.get(#paddingX, or: $value.paddingX),
-    paddingY: data.get(#paddingY, or: $value.paddingY),
-    cursorShape: data.get(#cursorShape, or: $value.cursorShape),
-    cursorBlink: data.get(#cursorBlink, or: $value.cursorBlink),
-    cursorOpacity: data.get(#cursorOpacity, or: $value.cursorOpacity),
-    themeName: data.get(#themeName, or: $value.themeName),
-    backgroundOpacity: data.get(
-      #backgroundOpacity,
-      or: $value.backgroundOpacity,
-    ),
-    wordSeparators: data.get(#wordSeparators, or: $value.wordSeparators),
-    colorOverrides: data.get(#colorOverrides, or: $value.colorOverrides),
-    scrollbackLines: data.get(#scrollbackLines, or: $value.scrollbackLines),
-    tuiScrollSensitivity: data.get(
-      #tuiScrollSensitivity,
-      or: $value.tuiScrollSensitivity,
-    ),
-    clipboardOnSelect: data.get(
-      #clipboardOnSelect,
-      or: $value.clipboardOnSelect,
-    ),
-    allowOsc52Clipboard: data.get(
-      #allowOsc52Clipboard,
-      or: $value.allowOsc52Clipboard,
-    ),
-    showComposerByDefault: data.get(
-      #showComposerByDefault,
-      or: $value.showComposerByDefault,
-    ),
-    toolbarCorner: data.get(#toolbarCorner, or: $value.toolbarCorner),
-    hostEmptyShutdownDelaySeconds: data.get(
-      #hostEmptyShutdownDelaySeconds,
-      or: $value.hostEmptyShutdownDelaySeconds,
-    ),
-    hostDetachedSessionShutdownDelaySeconds: data.get(
-      #hostDetachedSessionShutdownDelaySeconds,
-      or: $value.hostDetachedSessionShutdownDelaySeconds,
-    ),
-    hostScrollbackBytes: data.get(
-      #hostScrollbackBytes,
-      or: $value.hostScrollbackBytes,
-    ),
-    bufferBudgetMegabytes: data.get(
-      #bufferBudgetMegabytes,
-      or: $value.bufferBudgetMegabytes,
-    ),
-    keepRuntimeOpenOnAppQuit: data.get(
-      #keepRuntimeOpenOnAppQuit,
-      or: $value.keepRuntimeOpenOnAppQuit,
-    ),
-    loginShell: data.get(#loginShell, or: $value.loginShell),
-    confirmCloseRunningProcesses: data.get(
-      #confirmCloseRunningProcesses,
-      or: $value.confirmCloseRunningProcesses,
-    ),
-  );
-
-  @override
-  TerminalSettingsCopyWith<$R2, TerminalSettings, $Out2> $chain<$R2, $Out2>(
-    Then<$Out2, $R2> t,
-  ) => _TerminalSettingsCopyWithImpl<$R2, $Out2>($value, $cast, t);
 }
 
 class AgentStatusHookSettingsMapper
@@ -3428,4 +2731,701 @@ class _AleraSettingsCopyWithImpl<$R, $Out>
   AleraSettingsCopyWith<$R2, AleraSettings, $Out2> $chain<$R2, $Out2>(
     Then<$Out2, $R2> t,
   ) => _AleraSettingsCopyWithImpl<$R2, $Out2>($value, $cast, t);
+}
+
+class TerminalSettingsMapper extends ClassMapperBase<TerminalSettings> {
+  TerminalSettingsMapper._();
+
+  static TerminalSettingsMapper? _instance;
+  static TerminalSettingsMapper ensureInitialized() {
+    if (_instance == null) {
+      MapperContainer.globals.use(_instance = TerminalSettingsMapper._());
+      TerminalCursorShapeMapper.ensureInitialized();
+      TerminalColorOverridesMapper.ensureInitialized();
+      TerminalToolbarCornerMapper.ensureInitialized();
+    }
+    return _instance!;
+  }
+
+  @override
+  final String id = 'TerminalSettings';
+
+  static String _$fontFamily(TerminalSettings v) => v.fontFamily;
+  static const Field<TerminalSettings, String> _f$fontFamily = Field(
+    'fontFamily',
+    _$fontFamily,
+  );
+  static double _$fontSize(TerminalSettings v) => v.fontSize;
+  static const Field<TerminalSettings, double> _f$fontSize = Field(
+    'fontSize',
+    _$fontSize,
+  );
+  static int _$fontWeight(TerminalSettings v) => v.fontWeight;
+  static const Field<TerminalSettings, int> _f$fontWeight = Field(
+    'fontWeight',
+    _$fontWeight,
+    opt: true,
+    def: 400,
+  );
+  static double _$lineHeight(TerminalSettings v) => v.lineHeight;
+  static const Field<TerminalSettings, double> _f$lineHeight = Field(
+    'lineHeight',
+    _$lineHeight,
+  );
+  static double _$paddingX(TerminalSettings v) => v.paddingX;
+  static const Field<TerminalSettings, double> _f$paddingX = Field(
+    'paddingX',
+    _$paddingX,
+    opt: true,
+    def: AleraTokens.space12,
+  );
+  static double _$paddingY(TerminalSettings v) => v.paddingY;
+  static const Field<TerminalSettings, double> _f$paddingY = Field(
+    'paddingY',
+    _$paddingY,
+    opt: true,
+    def: AleraTokens.space12,
+  );
+  static TerminalCursorShape _$cursorShape(TerminalSettings v) => v.cursorShape;
+  static const Field<TerminalSettings, TerminalCursorShape> _f$cursorShape =
+      Field('cursorShape', _$cursorShape);
+  static bool _$cursorBlink(TerminalSettings v) => v.cursorBlink;
+  static const Field<TerminalSettings, bool> _f$cursorBlink = Field(
+    'cursorBlink',
+    _$cursorBlink,
+    opt: true,
+    def: false,
+  );
+  static double _$cursorOpacity(TerminalSettings v) => v.cursorOpacity;
+  static const Field<TerminalSettings, double> _f$cursorOpacity = Field(
+    'cursorOpacity',
+    _$cursorOpacity,
+    opt: true,
+    def: 1,
+  );
+  static String _$themeName(TerminalSettings v) => v.themeName;
+  static const Field<TerminalSettings, String> _f$themeName = Field(
+    'themeName',
+    _$themeName,
+    opt: true,
+    def: TerminalThemeNames.aleraDark,
+  );
+  static double _$backgroundOpacity(TerminalSettings v) => v.backgroundOpacity;
+  static const Field<TerminalSettings, double> _f$backgroundOpacity = Field(
+    'backgroundOpacity',
+    _$backgroundOpacity,
+    opt: true,
+    def: 1,
+  );
+  static String? _$wordSeparators(TerminalSettings v) => v.wordSeparators;
+  static const Field<TerminalSettings, String> _f$wordSeparators = Field(
+    'wordSeparators',
+    _$wordSeparators,
+    opt: true,
+  );
+  static TerminalColorOverrides _$colorOverrides(TerminalSettings v) =>
+      v.colorOverrides;
+  static const Field<TerminalSettings, TerminalColorOverrides>
+  _f$colorOverrides = Field(
+    'colorOverrides',
+    _$colorOverrides,
+    opt: true,
+    def: const TerminalColorOverrides(),
+  );
+  static int _$scrollbackLines(TerminalSettings v) => v.scrollbackLines;
+  static const Field<TerminalSettings, int> _f$scrollbackLines = Field(
+    'scrollbackLines',
+    _$scrollbackLines,
+  );
+  static int _$tuiScrollSensitivity(TerminalSettings v) =>
+      v.tuiScrollSensitivity;
+  static const Field<TerminalSettings, int> _f$tuiScrollSensitivity = Field(
+    'tuiScrollSensitivity',
+    _$tuiScrollSensitivity,
+    opt: true,
+    def: 1,
+  );
+  static bool _$clipboardOnSelect(TerminalSettings v) => v.clipboardOnSelect;
+  static const Field<TerminalSettings, bool> _f$clipboardOnSelect = Field(
+    'clipboardOnSelect',
+    _$clipboardOnSelect,
+    opt: true,
+    def: false,
+  );
+  static bool _$allowOsc52Clipboard(TerminalSettings v) =>
+      v.allowOsc52Clipboard;
+  static const Field<TerminalSettings, bool> _f$allowOsc52Clipboard = Field(
+    'allowOsc52Clipboard',
+    _$allowOsc52Clipboard,
+    opt: true,
+    def: false,
+  );
+  static bool _$showComposerByDefault(TerminalSettings v) =>
+      v.showComposerByDefault;
+  static const Field<TerminalSettings, bool> _f$showComposerByDefault = Field(
+    'showComposerByDefault',
+    _$showComposerByDefault,
+    opt: true,
+    def: false,
+  );
+  static TerminalToolbarCorner _$toolbarCorner(TerminalSettings v) =>
+      v.toolbarCorner;
+  static const Field<TerminalSettings, TerminalToolbarCorner> _f$toolbarCorner =
+      Field(
+        'toolbarCorner',
+        _$toolbarCorner,
+        opt: true,
+        def: TerminalToolbarCorner.topRight,
+      );
+  static int _$hostEmptyShutdownDelaySeconds(TerminalSettings v) =>
+      v.hostEmptyShutdownDelaySeconds;
+  static const Field<TerminalSettings, int> _f$hostEmptyShutdownDelaySeconds =
+      Field(
+        'hostEmptyShutdownDelaySeconds',
+        _$hostEmptyShutdownDelaySeconds,
+        opt: true,
+        def: 30,
+      );
+  static int _$hostDetachedSessionShutdownDelaySeconds(TerminalSettings v) =>
+      v.hostDetachedSessionShutdownDelaySeconds;
+  static const Field<TerminalSettings, int>
+  _f$hostDetachedSessionShutdownDelaySeconds = Field(
+    'hostDetachedSessionShutdownDelaySeconds',
+    _$hostDetachedSessionShutdownDelaySeconds,
+    opt: true,
+    def: 60 * 60,
+  );
+  static int _$hostScrollbackBytes(TerminalSettings v) => v.hostScrollbackBytes;
+  static const Field<TerminalSettings, int> _f$hostScrollbackBytes = Field(
+    'hostScrollbackBytes',
+    _$hostScrollbackBytes,
+    opt: true,
+    def: 10 * 1000 * 1000,
+  );
+  static int _$bufferBudgetMegabytes(TerminalSettings v) =>
+      v.bufferBudgetMegabytes;
+  static const Field<TerminalSettings, int> _f$bufferBudgetMegabytes = Field(
+    'bufferBudgetMegabytes',
+    _$bufferBudgetMegabytes,
+    opt: true,
+    def: 256,
+  );
+  static bool _$keepRuntimeOpenOnAppQuit(TerminalSettings v) =>
+      v.keepRuntimeOpenOnAppQuit;
+  static const Field<TerminalSettings, bool> _f$keepRuntimeOpenOnAppQuit =
+      Field(
+        'keepRuntimeOpenOnAppQuit',
+        _$keepRuntimeOpenOnAppQuit,
+        opt: true,
+        def: false,
+      );
+  static bool? _$loginShell(TerminalSettings v) => v.loginShell;
+  static const Field<TerminalSettings, bool> _f$loginShell = Field(
+    'loginShell',
+    _$loginShell,
+    opt: true,
+  );
+  static bool _$confirmCloseRunningProcesses(TerminalSettings v) =>
+      v.confirmCloseRunningProcesses;
+  static const Field<TerminalSettings, bool> _f$confirmCloseRunningProcesses =
+      Field(
+        'confirmCloseRunningProcesses',
+        _$confirmCloseRunningProcesses,
+        opt: true,
+        def: true,
+      );
+
+  @override
+  final MappableFields<TerminalSettings> fields = const {
+    #fontFamily: _f$fontFamily,
+    #fontSize: _f$fontSize,
+    #fontWeight: _f$fontWeight,
+    #lineHeight: _f$lineHeight,
+    #paddingX: _f$paddingX,
+    #paddingY: _f$paddingY,
+    #cursorShape: _f$cursorShape,
+    #cursorBlink: _f$cursorBlink,
+    #cursorOpacity: _f$cursorOpacity,
+    #themeName: _f$themeName,
+    #backgroundOpacity: _f$backgroundOpacity,
+    #wordSeparators: _f$wordSeparators,
+    #colorOverrides: _f$colorOverrides,
+    #scrollbackLines: _f$scrollbackLines,
+    #tuiScrollSensitivity: _f$tuiScrollSensitivity,
+    #clipboardOnSelect: _f$clipboardOnSelect,
+    #allowOsc52Clipboard: _f$allowOsc52Clipboard,
+    #showComposerByDefault: _f$showComposerByDefault,
+    #toolbarCorner: _f$toolbarCorner,
+    #hostEmptyShutdownDelaySeconds: _f$hostEmptyShutdownDelaySeconds,
+    #hostDetachedSessionShutdownDelaySeconds:
+        _f$hostDetachedSessionShutdownDelaySeconds,
+    #hostScrollbackBytes: _f$hostScrollbackBytes,
+    #bufferBudgetMegabytes: _f$bufferBudgetMegabytes,
+    #keepRuntimeOpenOnAppQuit: _f$keepRuntimeOpenOnAppQuit,
+    #loginShell: _f$loginShell,
+    #confirmCloseRunningProcesses: _f$confirmCloseRunningProcesses,
+  };
+
+  @override
+  final MappingHook hook = const _LegacyKeepRuntimeOpenHook();
+  static TerminalSettings _instantiate(DecodingData data) {
+    return TerminalSettings(
+      fontFamily: data.dec(_f$fontFamily),
+      fontSize: data.dec(_f$fontSize),
+      fontWeight: data.dec(_f$fontWeight),
+      lineHeight: data.dec(_f$lineHeight),
+      paddingX: data.dec(_f$paddingX),
+      paddingY: data.dec(_f$paddingY),
+      cursorShape: data.dec(_f$cursorShape),
+      cursorBlink: data.dec(_f$cursorBlink),
+      cursorOpacity: data.dec(_f$cursorOpacity),
+      themeName: data.dec(_f$themeName),
+      backgroundOpacity: data.dec(_f$backgroundOpacity),
+      wordSeparators: data.dec(_f$wordSeparators),
+      colorOverrides: data.dec(_f$colorOverrides),
+      scrollbackLines: data.dec(_f$scrollbackLines),
+      tuiScrollSensitivity: data.dec(_f$tuiScrollSensitivity),
+      clipboardOnSelect: data.dec(_f$clipboardOnSelect),
+      allowOsc52Clipboard: data.dec(_f$allowOsc52Clipboard),
+      showComposerByDefault: data.dec(_f$showComposerByDefault),
+      toolbarCorner: data.dec(_f$toolbarCorner),
+      hostEmptyShutdownDelaySeconds: data.dec(_f$hostEmptyShutdownDelaySeconds),
+      hostDetachedSessionShutdownDelaySeconds: data.dec(
+        _f$hostDetachedSessionShutdownDelaySeconds,
+      ),
+      hostScrollbackBytes: data.dec(_f$hostScrollbackBytes),
+      bufferBudgetMegabytes: data.dec(_f$bufferBudgetMegabytes),
+      keepRuntimeOpenOnAppQuit: data.dec(_f$keepRuntimeOpenOnAppQuit),
+      loginShell: data.dec(_f$loginShell),
+      confirmCloseRunningProcesses: data.dec(_f$confirmCloseRunningProcesses),
+    );
+  }
+
+  @override
+  final Function instantiate = _instantiate;
+
+  static TerminalSettings fromMap(Map<String, dynamic> map) {
+    return ensureInitialized().decodeMap<TerminalSettings>(map);
+  }
+
+  static TerminalSettings fromJson(String json) {
+    return ensureInitialized().decodeJson<TerminalSettings>(json);
+  }
+}
+
+mixin TerminalSettingsMappable {
+  String toJson() {
+    return TerminalSettingsMapper.ensureInitialized()
+        .encodeJson<TerminalSettings>(this as TerminalSettings);
+  }
+
+  Map<String, dynamic> toMap() {
+    return TerminalSettingsMapper.ensureInitialized()
+        .encodeMap<TerminalSettings>(this as TerminalSettings);
+  }
+
+  TerminalSettingsCopyWith<TerminalSettings, TerminalSettings, TerminalSettings>
+  get copyWith =>
+      _TerminalSettingsCopyWithImpl<TerminalSettings, TerminalSettings>(
+        this as TerminalSettings,
+        $identity,
+        $identity,
+      );
+  @override
+  String toString() {
+    return TerminalSettingsMapper.ensureInitialized().stringifyValue(
+      this as TerminalSettings,
+    );
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return TerminalSettingsMapper.ensureInitialized().equalsValue(
+      this as TerminalSettings,
+      other,
+    );
+  }
+
+  @override
+  int get hashCode {
+    return TerminalSettingsMapper.ensureInitialized().hashValue(
+      this as TerminalSettings,
+    );
+  }
+}
+
+extension TerminalSettingsValueCopy<$R, $Out>
+    on ObjectCopyWith<$R, TerminalSettings, $Out> {
+  TerminalSettingsCopyWith<$R, TerminalSettings, $Out>
+  get $asTerminalSettings =>
+      $base.as((v, t, t2) => _TerminalSettingsCopyWithImpl<$R, $Out>(v, t, t2));
+}
+
+abstract class TerminalSettingsCopyWith<$R, $In extends TerminalSettings, $Out>
+    implements ClassCopyWith<$R, $In, $Out> {
+  TerminalColorOverridesCopyWith<
+    $R,
+    TerminalColorOverrides,
+    TerminalColorOverrides
+  >
+  get colorOverrides;
+  $R call({
+    String? fontFamily,
+    double? fontSize,
+    int? fontWeight,
+    double? lineHeight,
+    double? paddingX,
+    double? paddingY,
+    TerminalCursorShape? cursorShape,
+    bool? cursorBlink,
+    double? cursorOpacity,
+    String? themeName,
+    double? backgroundOpacity,
+    String? wordSeparators,
+    TerminalColorOverrides? colorOverrides,
+    int? scrollbackLines,
+    int? tuiScrollSensitivity,
+    bool? clipboardOnSelect,
+    bool? allowOsc52Clipboard,
+    bool? showComposerByDefault,
+    TerminalToolbarCorner? toolbarCorner,
+    int? hostEmptyShutdownDelaySeconds,
+    int? hostDetachedSessionShutdownDelaySeconds,
+    int? hostScrollbackBytes,
+    int? bufferBudgetMegabytes,
+    bool? keepRuntimeOpenOnAppQuit,
+    bool? loginShell,
+    bool? confirmCloseRunningProcesses,
+  });
+  TerminalSettingsCopyWith<$R2, $In, $Out2> $chain<$R2, $Out2>(
+    Then<$Out2, $R2> t,
+  );
+}
+
+class _TerminalSettingsCopyWithImpl<$R, $Out>
+    extends ClassCopyWithBase<$R, TerminalSettings, $Out>
+    implements TerminalSettingsCopyWith<$R, TerminalSettings, $Out> {
+  _TerminalSettingsCopyWithImpl(super.value, super.then, super.then2);
+
+  @override
+  late final ClassMapperBase<TerminalSettings> $mapper =
+      TerminalSettingsMapper.ensureInitialized();
+  @override
+  TerminalColorOverridesCopyWith<
+    $R,
+    TerminalColorOverrides,
+    TerminalColorOverrides
+  >
+  get colorOverrides =>
+      $value.colorOverrides.copyWith.$chain((v) => call(colorOverrides: v));
+  @override
+  $R call({
+    String? fontFamily,
+    double? fontSize,
+    int? fontWeight,
+    double? lineHeight,
+    double? paddingX,
+    double? paddingY,
+    TerminalCursorShape? cursorShape,
+    bool? cursorBlink,
+    double? cursorOpacity,
+    String? themeName,
+    double? backgroundOpacity,
+    Object? wordSeparators = $none,
+    TerminalColorOverrides? colorOverrides,
+    int? scrollbackLines,
+    int? tuiScrollSensitivity,
+    bool? clipboardOnSelect,
+    bool? allowOsc52Clipboard,
+    bool? showComposerByDefault,
+    TerminalToolbarCorner? toolbarCorner,
+    int? hostEmptyShutdownDelaySeconds,
+    int? hostDetachedSessionShutdownDelaySeconds,
+    int? hostScrollbackBytes,
+    int? bufferBudgetMegabytes,
+    bool? keepRuntimeOpenOnAppQuit,
+    Object? loginShell = $none,
+    bool? confirmCloseRunningProcesses,
+  }) => $apply(
+    FieldCopyWithData({
+      if (fontFamily != null) #fontFamily: fontFamily,
+      if (fontSize != null) #fontSize: fontSize,
+      if (fontWeight != null) #fontWeight: fontWeight,
+      if (lineHeight != null) #lineHeight: lineHeight,
+      if (paddingX != null) #paddingX: paddingX,
+      if (paddingY != null) #paddingY: paddingY,
+      if (cursorShape != null) #cursorShape: cursorShape,
+      if (cursorBlink != null) #cursorBlink: cursorBlink,
+      if (cursorOpacity != null) #cursorOpacity: cursorOpacity,
+      if (themeName != null) #themeName: themeName,
+      if (backgroundOpacity != null) #backgroundOpacity: backgroundOpacity,
+      if (wordSeparators != $none) #wordSeparators: wordSeparators,
+      if (colorOverrides != null) #colorOverrides: colorOverrides,
+      if (scrollbackLines != null) #scrollbackLines: scrollbackLines,
+      if (tuiScrollSensitivity != null)
+        #tuiScrollSensitivity: tuiScrollSensitivity,
+      if (clipboardOnSelect != null) #clipboardOnSelect: clipboardOnSelect,
+      if (allowOsc52Clipboard != null)
+        #allowOsc52Clipboard: allowOsc52Clipboard,
+      if (showComposerByDefault != null)
+        #showComposerByDefault: showComposerByDefault,
+      if (toolbarCorner != null) #toolbarCorner: toolbarCorner,
+      if (hostEmptyShutdownDelaySeconds != null)
+        #hostEmptyShutdownDelaySeconds: hostEmptyShutdownDelaySeconds,
+      if (hostDetachedSessionShutdownDelaySeconds != null)
+        #hostDetachedSessionShutdownDelaySeconds:
+            hostDetachedSessionShutdownDelaySeconds,
+      if (hostScrollbackBytes != null)
+        #hostScrollbackBytes: hostScrollbackBytes,
+      if (bufferBudgetMegabytes != null)
+        #bufferBudgetMegabytes: bufferBudgetMegabytes,
+      if (keepRuntimeOpenOnAppQuit != null)
+        #keepRuntimeOpenOnAppQuit: keepRuntimeOpenOnAppQuit,
+      if (loginShell != $none) #loginShell: loginShell,
+      if (confirmCloseRunningProcesses != null)
+        #confirmCloseRunningProcesses: confirmCloseRunningProcesses,
+    }),
+  );
+  @override
+  TerminalSettings $make(CopyWithData data) => TerminalSettings(
+    fontFamily: data.get(#fontFamily, or: $value.fontFamily),
+    fontSize: data.get(#fontSize, or: $value.fontSize),
+    fontWeight: data.get(#fontWeight, or: $value.fontWeight),
+    lineHeight: data.get(#lineHeight, or: $value.lineHeight),
+    paddingX: data.get(#paddingX, or: $value.paddingX),
+    paddingY: data.get(#paddingY, or: $value.paddingY),
+    cursorShape: data.get(#cursorShape, or: $value.cursorShape),
+    cursorBlink: data.get(#cursorBlink, or: $value.cursorBlink),
+    cursorOpacity: data.get(#cursorOpacity, or: $value.cursorOpacity),
+    themeName: data.get(#themeName, or: $value.themeName),
+    backgroundOpacity: data.get(
+      #backgroundOpacity,
+      or: $value.backgroundOpacity,
+    ),
+    wordSeparators: data.get(#wordSeparators, or: $value.wordSeparators),
+    colorOverrides: data.get(#colorOverrides, or: $value.colorOverrides),
+    scrollbackLines: data.get(#scrollbackLines, or: $value.scrollbackLines),
+    tuiScrollSensitivity: data.get(
+      #tuiScrollSensitivity,
+      or: $value.tuiScrollSensitivity,
+    ),
+    clipboardOnSelect: data.get(
+      #clipboardOnSelect,
+      or: $value.clipboardOnSelect,
+    ),
+    allowOsc52Clipboard: data.get(
+      #allowOsc52Clipboard,
+      or: $value.allowOsc52Clipboard,
+    ),
+    showComposerByDefault: data.get(
+      #showComposerByDefault,
+      or: $value.showComposerByDefault,
+    ),
+    toolbarCorner: data.get(#toolbarCorner, or: $value.toolbarCorner),
+    hostEmptyShutdownDelaySeconds: data.get(
+      #hostEmptyShutdownDelaySeconds,
+      or: $value.hostEmptyShutdownDelaySeconds,
+    ),
+    hostDetachedSessionShutdownDelaySeconds: data.get(
+      #hostDetachedSessionShutdownDelaySeconds,
+      or: $value.hostDetachedSessionShutdownDelaySeconds,
+    ),
+    hostScrollbackBytes: data.get(
+      #hostScrollbackBytes,
+      or: $value.hostScrollbackBytes,
+    ),
+    bufferBudgetMegabytes: data.get(
+      #bufferBudgetMegabytes,
+      or: $value.bufferBudgetMegabytes,
+    ),
+    keepRuntimeOpenOnAppQuit: data.get(
+      #keepRuntimeOpenOnAppQuit,
+      or: $value.keepRuntimeOpenOnAppQuit,
+    ),
+    loginShell: data.get(#loginShell, or: $value.loginShell),
+    confirmCloseRunningProcesses: data.get(
+      #confirmCloseRunningProcesses,
+      or: $value.confirmCloseRunningProcesses,
+    ),
+  );
+
+  @override
+  TerminalSettingsCopyWith<$R2, TerminalSettings, $Out2> $chain<$R2, $Out2>(
+    Then<$Out2, $R2> t,
+  ) => _TerminalSettingsCopyWithImpl<$R2, $Out2>($value, $cast, t);
+}
+
+class TerminalColorOverridesMapper
+    extends ClassMapperBase<TerminalColorOverrides> {
+  TerminalColorOverridesMapper._();
+
+  static TerminalColorOverridesMapper? _instance;
+  static TerminalColorOverridesMapper ensureInitialized() {
+    if (_instance == null) {
+      MapperContainer.globals.use(_instance = TerminalColorOverridesMapper._());
+    }
+    return _instance!;
+  }
+
+  @override
+  final String id = 'TerminalColorOverrides';
+
+  static String? _$foreground(TerminalColorOverrides v) => v.foreground;
+  static const Field<TerminalColorOverrides, String> _f$foreground = Field(
+    'foreground',
+    _$foreground,
+    opt: true,
+  );
+  static String? _$background(TerminalColorOverrides v) => v.background;
+  static const Field<TerminalColorOverrides, String> _f$background = Field(
+    'background',
+    _$background,
+    opt: true,
+  );
+  static String? _$cursor(TerminalColorOverrides v) => v.cursor;
+  static const Field<TerminalColorOverrides, String> _f$cursor = Field(
+    'cursor',
+    _$cursor,
+    opt: true,
+  );
+  static String? _$selection(TerminalColorOverrides v) => v.selection;
+  static const Field<TerminalColorOverrides, String> _f$selection = Field(
+    'selection',
+    _$selection,
+    opt: true,
+  );
+
+  @override
+  final MappableFields<TerminalColorOverrides> fields = const {
+    #foreground: _f$foreground,
+    #background: _f$background,
+    #cursor: _f$cursor,
+    #selection: _f$selection,
+  };
+
+  static TerminalColorOverrides _instantiate(DecodingData data) {
+    return TerminalColorOverrides(
+      foreground: data.dec(_f$foreground),
+      background: data.dec(_f$background),
+      cursor: data.dec(_f$cursor),
+      selection: data.dec(_f$selection),
+    );
+  }
+
+  @override
+  final Function instantiate = _instantiate;
+
+  static TerminalColorOverrides fromMap(Map<String, dynamic> map) {
+    return ensureInitialized().decodeMap<TerminalColorOverrides>(map);
+  }
+
+  static TerminalColorOverrides fromJson(String json) {
+    return ensureInitialized().decodeJson<TerminalColorOverrides>(json);
+  }
+}
+
+mixin TerminalColorOverridesMappable {
+  String toJson() {
+    return TerminalColorOverridesMapper.ensureInitialized()
+        .encodeJson<TerminalColorOverrides>(this as TerminalColorOverrides);
+  }
+
+  Map<String, dynamic> toMap() {
+    return TerminalColorOverridesMapper.ensureInitialized()
+        .encodeMap<TerminalColorOverrides>(this as TerminalColorOverrides);
+  }
+
+  TerminalColorOverridesCopyWith<
+    TerminalColorOverrides,
+    TerminalColorOverrides,
+    TerminalColorOverrides
+  >
+  get copyWith =>
+      _TerminalColorOverridesCopyWithImpl<
+        TerminalColorOverrides,
+        TerminalColorOverrides
+      >(this as TerminalColorOverrides, $identity, $identity);
+  @override
+  String toString() {
+    return TerminalColorOverridesMapper.ensureInitialized().stringifyValue(
+      this as TerminalColorOverrides,
+    );
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return TerminalColorOverridesMapper.ensureInitialized().equalsValue(
+      this as TerminalColorOverrides,
+      other,
+    );
+  }
+
+  @override
+  int get hashCode {
+    return TerminalColorOverridesMapper.ensureInitialized().hashValue(
+      this as TerminalColorOverrides,
+    );
+  }
+}
+
+extension TerminalColorOverridesValueCopy<$R, $Out>
+    on ObjectCopyWith<$R, TerminalColorOverrides, $Out> {
+  TerminalColorOverridesCopyWith<$R, TerminalColorOverrides, $Out>
+  get $asTerminalColorOverrides => $base.as(
+    (v, t, t2) => _TerminalColorOverridesCopyWithImpl<$R, $Out>(v, t, t2),
+  );
+}
+
+abstract class TerminalColorOverridesCopyWith<
+  $R,
+  $In extends TerminalColorOverrides,
+  $Out
+>
+    implements ClassCopyWith<$R, $In, $Out> {
+  $R call({
+    String? foreground,
+    String? background,
+    String? cursor,
+    String? selection,
+  });
+  TerminalColorOverridesCopyWith<$R2, $In, $Out2> $chain<$R2, $Out2>(
+    Then<$Out2, $R2> t,
+  );
+}
+
+class _TerminalColorOverridesCopyWithImpl<$R, $Out>
+    extends ClassCopyWithBase<$R, TerminalColorOverrides, $Out>
+    implements
+        TerminalColorOverridesCopyWith<$R, TerminalColorOverrides, $Out> {
+  _TerminalColorOverridesCopyWithImpl(super.value, super.then, super.then2);
+
+  @override
+  late final ClassMapperBase<TerminalColorOverrides> $mapper =
+      TerminalColorOverridesMapper.ensureInitialized();
+  @override
+  $R call({
+    Object? foreground = $none,
+    Object? background = $none,
+    Object? cursor = $none,
+    Object? selection = $none,
+  }) => $apply(
+    FieldCopyWithData({
+      if (foreground != $none) #foreground: foreground,
+      if (background != $none) #background: background,
+      if (cursor != $none) #cursor: cursor,
+      if (selection != $none) #selection: selection,
+    }),
+  );
+  @override
+  TerminalColorOverrides $make(CopyWithData data) => TerminalColorOverrides(
+    foreground: data.get(#foreground, or: $value.foreground),
+    background: data.get(#background, or: $value.background),
+    cursor: data.get(#cursor, or: $value.cursor),
+    selection: data.get(#selection, or: $value.selection),
+  );
+
+  @override
+  TerminalColorOverridesCopyWith<$R2, TerminalColorOverrides, $Out2>
+  $chain<$R2, $Out2>(Then<$Out2, $R2> t) =>
+      _TerminalColorOverridesCopyWithImpl<$R2, $Out2>($value, $cast, t);
 }
