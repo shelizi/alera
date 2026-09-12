@@ -121,6 +121,61 @@ extension WorkbenchTabLayoutOwnerOpening on WorkbenchTabLayoutOwner {
     }
   }
 
+  Future<WorkspaceTabRecord> openGitHistoryTab({
+    required Workspace workspace,
+    String? gitDiffRoot,
+    String? targetGroupId,
+  }) async {
+    try {
+      final previousTabs = _host.readState().tabsFor(workspace.id);
+      final layout = _layoutForMutation(workspace.id, previousTabs);
+      final tab = await WorkbenchTabPlacementCoordinator(
+        openTab: () => _host.workspaceTabService.openOrCreateGitHistoryTab(
+          workspaceId: workspace.id,
+          gitDiffRoot: gitDiffRoot,
+        ),
+        planPlacement: (tab) => planWorkbenchReusableTabToGroup(
+          previousTabs: previousTabs,
+          layout: layout,
+          tab: tab,
+          targetGroupId: targetGroupId,
+        ),
+        applyTabs: (tabs) => applyWorkspaceTabs(workspace.id, tabs),
+        applyLayout: (layout) => applyWorkspaceLayout(layout, persist: true),
+      ).run();
+      _host.emitState(_host.readState().copyWith(error: null));
+      return tab;
+    } catch (error) {
+      _host.emitState(_host.readState().copyWith(error: error.toString()));
+      rethrow;
+    }
+  }
+
+  Future<void> setGitHistoryAllBranches({
+    required String tabId,
+    required bool allBranches,
+  }) async {
+    try {
+      final tab = await _host.workspaceTabService.setGitHistoryAllBranches(
+        tabId: tabId,
+        allBranches: allBranches,
+      );
+      if (tab != null && !_host.isDisposed) {
+        _host.emitState(
+          applyWorkbenchTabUpdateState(
+            state: _host.readState(),
+            tab: tab,
+          ).copyWith(error: null),
+        );
+      }
+    } catch (error) {
+      if (!_host.isDisposed) {
+        _host.emitState(_host.readState().copyWith(error: error.toString()));
+      }
+      rethrow;
+    }
+  }
+
   Future<WorkspaceTabRecord> openGitPullRequestDiffTab({
     required Workspace workspace,
     String? gitDiffRoot,

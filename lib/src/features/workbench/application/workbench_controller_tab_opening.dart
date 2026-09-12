@@ -46,4 +46,24 @@ mixin _WorkbenchControllerTabOpening
     relativePath: relativePath,
     targetGroupId: targetGroupId,
   );
+
+  /// The main-area commit graph tab for a workspace's source-control scope.
+  Future<WorkspaceTabRecord> openGitHistoryTab({
+    required Workspace workspace,
+    String? gitDiffRoot,
+    String? targetGroupId,
+  }) => _tabLayoutOwner.openGitHistoryTab(
+    workspace: workspace,
+    gitDiffRoot: gitDiffRoot,
+    targetGroupId: targetGroupId,
+  );
+
+  /// Persists the commit-graph tab's All Branches toggle.
+  Future<void> setGitHistoryAllBranches({
+    required String tabId,
+    required bool allBranches,
+  }) => _tabLayoutOwner.setGitHistoryAllBranches(
+    tabId: tabId,
+    allBranches: allBranches,
+  );
 }

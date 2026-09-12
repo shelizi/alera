@@ -64,6 +64,10 @@ class const _WorkspaceTabContent({
         workspace: workspace,
         tab: tab,
       ),
+      WorkspaceTabKind.gitHistory => WorkspaceGitHistorySurface(
+        workspace: workspace,
+        tab: tab,
+      ),
     };
   }
 }

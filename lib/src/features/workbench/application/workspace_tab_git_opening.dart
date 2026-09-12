@@ -180,6 +180,56 @@ extension WorkspaceTabGitOpening on WorkspaceTabService {
     return tab;
   }
 
+  /// The main-area commit graph is shared per workspace and source-control
+  /// root, so reopening focuses the existing tab instead of duplicating it.
+  Future<WorkspaceTabRecord> openOrCreateGitHistoryTab({
+    required String workspaceId,
+    String? gitDiffRoot,
+  }) async {
+    final normalizedRoot = normalizeSourceControlRootRelativePath(gitDiffRoot);
+    final existing = await _repository.listWorkspaceTabs(workspaceId);
+    for (final tab in existing) {
+      if (tab.kind == WorkspaceTabKind.gitHistory &&
+          tab.gitDiffRoot == normalizedRoot) {
+        return tab;
+      }
+    }
+    final tab = WorkspaceTabRecord(
+      id: _uuid.v4(),
+      workspaceId: workspaceId,
+      kind: .gitHistory,
+      title: 'Commit Graph',
+      createdAt: _now(),
+      updatedAt: _now(),
+      payload: <String, Object?>{
+        workspaceTabGitDiffRootPayloadKey: ?normalizedRoot,
+        workspaceTabGitHistoryAllBranchesPayloadKey: true,
+      },
+    );
+    await _repository.upsertWorkspaceTab(tab);
+    return tab;
+  }
+
+  /// Persists the All Branches toggle of a commit-graph tab so a reopened or
+  /// remotely synced tab keeps the last selection.
+  Future<WorkspaceTabRecord?> setGitHistoryAllBranches({
+    required String tabId,
+    required bool allBranches,
+  }) async {
+    final tab = await _repository.findWorkspaceTabById(tabId);
+    if (tab == null || tab.kind != WorkspaceTabKind.gitHistory) {
+      return null;
+    }
+    final next = tab.copyWith(
+      updatedAt: _now(),
+      payload: <String, Object?>{
+        ...tab.payload,
+        workspaceTabGitHistoryAllBranchesPayloadKey: allBranches,
+      },
+    );
+    return _repository.upsertWorkspaceTab(next);
+  }
+
   Future<WorkspaceTabRecord> _upsertGitDiffTab({
     required String workspaceId,
     required List<WorkspaceTabRecord> existing,

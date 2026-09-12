@@ -199,7 +199,8 @@ fn git_history_includes_upstream_only_commits() {
     run_git(source.path(), &["push"]);
     run_git(&clone_path, &["fetch", "origin"]);
 
-    let history = git_history(path_str(&clone_path), Some(50), None).unwrap();
+    let history =
+        git_history(path_str(&clone_path), Some(50), None, None, None).unwrap();
 
     assert!(history.has_incoming_changes);
     assert_eq!(history.remote_ref.unwrap().name, "origin/main");
@@ -214,7 +215,8 @@ fn git_history_refs_peel_annotated_tags_to_commits() {
     let repo = init_repo();
     run_git(repo.path(), &["tag", "-a", "v1.0.0", "-m", "release v1"]);
 
-    let history = git_history(path_str(repo.path()), Some(50), None).unwrap();
+    let history =
+        git_history(path_str(repo.path()), Some(50), None, None, None).unwrap();
 
     let initial = history
         .items
@@ -251,7 +253,14 @@ fn git_history_filters_commits_for_scoped_workspace_path() {
         "app change 2",
     );
 
-    let history = git_history(path_str(&repo.path().join("packages/app")), Some(50), None).unwrap();
+    let history = git_history(
+        path_str(&repo.path().join("packages/app")),
+        Some(50),
+        None,
+        None,
+        None,
+    )
+    .unwrap();
     let subjects = history
         .items
         .iter()
@@ -320,7 +329,14 @@ fn git_history_suppresses_divergence_markers_outside_scoped_workspace_path() {
         "local other change",
     );
 
-    let history = git_history(path_str(&clone_path.join("packages/app")), Some(50), None).unwrap();
+    let history = git_history(
+        path_str(&clone_path.join("packages/app")),
+        Some(50),
+        None,
+        None,
+        None,
+    )
+    .unwrap();
     let subjects = history
         .items
         .iter()
@@ -332,6 +348,95 @@ fn git_history_suppresses_divergence_markers_outside_scoped_workspace_path() {
     assert!(subjects.contains(&"app change"));
     assert!(!subjects.contains(&"remote other change"));
     assert!(!subjects.contains(&"local other change"));
+}
+
+#[test]
+fn git_history_include_all_refs_walks_other_branch_tips() {
+    let repo = init_repo();
+    run_git(repo.path(), &["checkout", "-b", "feature"]);
+    commit_file(repo.path(), "feature.txt", "feature\n", "feature change");
+    run_git(repo.path(), &["checkout", "main"]);
+    commit_file(repo.path(), "main.txt", "main\n", "main change");
+
+    let head_only =
+        git_history(path_str(repo.path()), Some(50), None, None, None).unwrap();
+    assert!(!head_only
+        .items
+        .iter()
+        .any(|item| item.subject == "feature change"));
+
+    let all = git_history(
+        path_str(repo.path()),
+        Some(50),
+        None,
+        Some(true),
+        None,
+    )
+    .unwrap();
+    let subjects = all
+        .items
+        .iter()
+        .map(|item| item.subject.as_str())
+        .collect::<Vec<_>>();
+
+    assert!(subjects.contains(&"feature change"));
+    assert!(subjects.contains(&"main change"));
+    assert!(subjects.contains(&"initial"));
+}
+
+#[test]
+fn git_history_offset_pages_visible_items() {
+    let repo = init_repo();
+    commit_file(repo.path(), "a.txt", "1\n", "commit 1");
+    commit_file(repo.path(), "a.txt", "2\n", "commit 2");
+    commit_file(repo.path(), "a.txt", "3\n", "commit 3");
+
+    let full =
+        git_history(path_str(repo.path()), Some(50), None, None, None).unwrap();
+    let first =
+        git_history(path_str(repo.path()), Some(2), None, None, None).unwrap();
+    let rest = git_history(
+        path_str(repo.path()),
+        Some(2),
+        None,
+        None,
+        Some(2),
+    )
+    .unwrap();
+    let past_end = git_history(
+        path_str(repo.path()),
+        Some(2),
+        None,
+        None,
+        Some(full.items.len() as u32),
+    )
+    .unwrap();
+
+    let full_ids = full
+        .items
+        .iter()
+        .map(|item| item.id.as_str())
+        .collect::<Vec<_>>();
+
+    assert!(first.has_more);
+    assert_eq!(
+        first
+            .items
+            .iter()
+            .map(|item| item.id.as_str())
+            .collect::<Vec<_>>(),
+        full_ids[..2].to_vec(),
+    );
+    assert!(!rest.has_more);
+    assert_eq!(
+        rest.items
+            .iter()
+            .map(|item| item.id.as_str())
+            .collect::<Vec<_>>(),
+        full_ids[2..].to_vec(),
+    );
+    assert!(past_end.items.is_empty());
+    assert!(!past_end.has_more);
 }
 
 #[test]

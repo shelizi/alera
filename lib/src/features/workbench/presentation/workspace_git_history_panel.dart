@@ -40,6 +40,7 @@ class const _GitHistoryPanel({
   required final Future<void> Function(String text, String label)
   onCopyCommitText,
   final Future<void> Function(String branch)? onSwitchBranch,
+  final VoidCallback? onOpenCommitGraph,
 }) extends StatefulWidget {
   @override
   State<_GitHistoryPanel> createState() => _GitHistoryPanelState();
@@ -104,6 +105,8 @@ class _GitHistoryPanelState extends State<_GitHistoryPanel> {
                         showCount: result != null,
                       ),
                     ),
+                    const SizedBox(width: AleraTokens.space4),
+                    _OpenCommitGraphButton(onPressed: widget.onOpenCommitGraph),
                     const SizedBox(width: AleraTokens.space4),
                     _RefreshCommitsButton(
                       loading: widget.state.loading,
@@ -352,6 +355,35 @@ class const _HistoryHeaderLabel({
           ),
         ],
       ],
+    );
+  }
+}
+
+class const _OpenCommitGraphButton({required final VoidCallback? onPressed})
+    extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      tooltip: 'Open Commit Graph',
+      onPressed: onPressed,
+      icon: const Icon(
+        AleraIcons.maximize,
+        size: 14,
+        color: AleraTokens.foregroundMuted,
+      ),
+      visualDensity: .compact,
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints(minWidth: 30, minHeight: 30),
+      style: IconButton.styleFrom(
+        backgroundColor: AleraTokens.surfaceVariant,
+        side: const BorderSide(color: AleraTokens.borderSubtle),
+        minimumSize: const Size(30, 30),
+        maximumSize: const Size(30, 30),
+        tapTargetSize: .shrinkWrap,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AleraTokens.radiusMd),
+        ),
+      ),
     );
   }
 }

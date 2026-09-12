@@ -136,4 +136,39 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(TerminalTabView), findsOneWidget);
   });
+
+  testWidgets('Renders a commit graph tab chip without a terminal body', (
+    tester,
+  ) async {
+    final client = FakeTerminalClient()
+      ..tabs = <WorkspaceTabSummary>[
+        fakeTab(id: 'tab-1', title: 'Terminal 1'),
+        fakeTab(id: 'tab-2', title: 'Commit Graph', kind: 'gitHistory'),
+      ];
+    addTearDown(client.dispose);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          terminalClientProvider('host-1').overrideWith((ref) async => client),
+          workspaceClientProvider('host-1').overrideWith((ref) async => client),
+        ],
+        child: const MaterialApp(
+          home: WorkspaceTabsScreen(
+            hostId: 'host-1',
+            workspace: WorkspaceSummary(
+              id: 'workspace-1',
+              projectId: 'project-1',
+              name: 'Workspace',
+              path: '/repo',
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Commit Graph'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 }

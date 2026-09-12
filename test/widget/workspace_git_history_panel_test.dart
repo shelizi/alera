@@ -2,8 +2,12 @@ import 'package:alera/src/design_system/surfaces/hover_container.dart';
 import 'package:alera/src/features/settings/application/settings_controller.dart';
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
 import 'package:alera/src/features/workbench/application/source_control_watcher.dart';
+import 'package:alera/src/features/workbench/application/workbench_providers.dart';
+import 'package:alera/src/features/workbench/application/workbench_repository.dart';
+import 'package:alera/src/features/workbench/domain/workbench_layout.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_source_control_scope.dart';
+import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_git_diff_panel.dart';
 import 'package:alera/src/shared/infra/git/git_diff_models.dart';
 import 'package:alera/src/shared/infra/git/git_providers.dart';
@@ -111,10 +115,10 @@ void main() {
     await tester.pumpAndSettle();
 
     final header = tester.getRect(find.byType(HoverContainer));
-    final refresh = tester.getRect(find.byTooltip('Refresh Commits'));
+    final openGraph = tester.getRect(find.byTooltip('Open Commit Graph'));
 
-    // Empty space between the label and the refresh action still expands.
-    await tester.tapAt(Offset(refresh.left - 8, header.center.dy));
+    // Empty space between the label and the header actions still expands.
+    await tester.tapAt(Offset(openGraph.left - 8, header.center.dy));
     await tester.pumpAndSettle();
     expect(find.text('Add Feature'), findsOneWidget);
 
@@ -123,6 +127,39 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Add Feature'), findsOneWidget);
     expect(backend.calls.where((call) => call.method == 'history').length, 2);
+  });
+
+  testWidgets('the commit graph button opens a main-area graph tab', (
+    tester,
+  ) async {
+    final backend = _multiRefBackend();
+    final repository = _FakeWorkbenchRepository();
+
+    await _pumpPanel(
+      tester,
+      backend: backend,
+      width: 420,
+      height: 520,
+      repository: repository,
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Open Commit Graph'));
+    await tester.pumpAndSettle();
+
+    final graphTabs = repository.tabs
+        .where((tab) => tab.kind == WorkspaceTabKind.gitHistory)
+        .toList();
+    expect(graphTabs, hasLength(1));
+    expect(graphTabs.single.title, 'Commit Graph');
+    expect(graphTabs.single.gitHistoryAllBranches, isTrue);
+    // The panel stays on its current-branch history scope.
+    expect(
+      backend.calls
+          .where((call) => call.method == 'history')
+          .map((call) => call.args['includeAllRefs']),
+      everyElement(isNot(isTrue)),
+    );
   });
 }
 
@@ -181,12 +218,15 @@ Future<void> _pumpPanel(
   required double width,
   required double height,
   Future<void> Function(String branch)? onSwitchBranch,
+  _FakeWorkbenchRepository? repository,
 }) {
   final workspace = _workspace();
   return tester.pumpWidget(
     ProviderScope(
       overrides: [
         gitBackendProvider.overrideWithValue(backend),
+        if (repository != null)
+          workbenchRepositoryProvider.overrideWithValue(repository),
         sourceControlWatcherProvider.overrideWithValue(
           FakeSourceControlWatcher(),
         ),
@@ -256,4 +296,97 @@ class _PanelSettingsController(final AleraSettings _settings)
     extends SettingsController {
   @override
   AleraSettings build() => _settings;
+}
+
+class _FakeWorkbenchRepository implements WorkbenchRepository {
+  final List<WorkspaceTabRecord> tabs = <WorkspaceTabRecord>[];
+  final Map<String, WorkbenchLayout> layouts = <String, WorkbenchLayout>{};
+
+  @override
+  Future<Workspace?> findWorkspaceById(String workspaceId) async => null;
+
+  @override
+  Future<WorkspaceTabRecord?> findWorkspaceTabById(String tabId) async {
+    for (final tab in tabs) {
+      if (tab.id == tabId) {
+        return tab;
+      }
+    }
+    return null;
+  }
+
+  @override
+  Future<WorkbenchLayout?> findWorkbenchLayout(String workspaceId) async {
+    return layouts[workspaceId];
+  }
+
+  @override
+  Future<List<WorkspaceTabRecord>> listWorkspaceTabs(String workspaceId) async {
+    return tabs
+        .where((tab) => tab.workspaceId == workspaceId)
+        .toList(growable: false);
+  }
+
+  @override
+  Future<List<Workspace>> listWorkspaces(String projectId) async =>
+      const <Workspace>[];
+
+  @override
+  Future<void> removeWorkspaceTab(String tabId) async {
+    tabs.removeWhere((tab) => tab.id == tabId);
+  }
+
+  @override
+  Future<void> removeWorkspaceTabsForWorkspace(String workspaceId) async {}
+
+  @override
+  Future<void> removeWorkspace(
+    String workspaceId, {
+    bool cascadeTabs = true,
+  }) async {}
+
+  @override
+  Future<void> removeWorkspacesForProject(String projectId) async {}
+
+  @override
+  Future<void> removeWorkbenchLayout(String workspaceId) async {
+    layouts.remove(workspaceId);
+  }
+
+  @override
+  Future<WorkspaceTabRecord> upsertWorkspaceTab(
+    WorkspaceTabRecord tab, {
+    bool manualRename = false,
+  }) async {
+    final index = tabs.indexWhere((record) => record.id == tab.id);
+    if (index == -1) {
+      tabs.add(tab);
+    } else {
+      tabs[index] = tab;
+    }
+    return tab;
+  }
+
+  @override
+  Future<WorkbenchLayout> upsertWorkbenchLayout(WorkbenchLayout layout) async {
+    layouts[layout.workspaceId] = layout;
+    return layout;
+  }
+
+  @override
+  Future<Workspace> upsertWorkspace(Workspace workspace) async => workspace;
+
+  @override
+  Future<Workspace> setWorkspacePinned(
+    String workspaceId,
+    bool isPinned,
+  ) async => throw StateError('Workspace not found');
+
+  @override
+  Stream<List<WorkspaceTabRecord>> watchWorkspaceTabs(String workspaceId) =>
+      const Stream<List<WorkspaceTabRecord>>.empty();
+
+  @override
+  Stream<List<Workspace>> watchWorkspaces(String projectId) =>
+      const Stream<List<Workspace>>.empty();
 }

@@ -1,0 +1,547 @@
+import 'dart:async';
+import 'dart:math' as math;
+
+import 'package:alera/src/app/theme/alera_tokens.dart';
+import 'package:alera/src/design_system/buttons/alera_icon_button.dart';
+import 'package:alera/src/design_system/feedback/alera_empty_state.dart';
+import 'package:alera/src/design_system/feedback/alera_toast.dart';
+import 'package:alera/src/design_system/icons/alera_icons.dart';
+import 'package:alera/src/design_system/forms/alera_checkbox.dart';
+import 'package:alera/src/features/workbench/application/workbench_controller.dart';
+import 'package:alera/src/features/workbench/domain/workspace.dart';
+import 'package:alera/src/features/workbench/domain/workspace_source_control_scope.dart';
+import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
+import 'package:alera/src/features/workbench/presentation/workspace_git_history_graph.dart';
+import 'package:alera/src/shared/infra/git/git_diff_models.dart';
+import 'package:alera/src/shared/infra/git/git_exception.dart';
+import 'package:alera/src/shared/infra/git/git_history_graph.dart';
+import 'package:alera/src/shared/infra/git/git_providers.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+/// Main-area commit graph tab. Walks every branch tip by default and pages
+/// history in with offset pagination, keeping swimlanes continuous across
+/// page boundaries by seeding each page with the previous row's lanes.
+class const WorkspaceGitHistorySurface({
+  super.key,
+  required final Workspace workspace,
+  required final WorkspaceTabRecord tab,
+}) extends ConsumerStatefulWidget {
+  static const int pageSize = 200;
+
+  @override
+  ConsumerState<WorkspaceGitHistorySurface> createState() =>
+      _WorkspaceGitHistorySurfaceState();
+}
+
+class _WorkspaceGitHistorySurfaceState
+    extends ConsumerState<WorkspaceGitHistorySurface> {
+  final ScrollController _verticalController = ScrollController();
+  final ScrollController _horizontalController = ScrollController();
+  final Map<String, GitCommitCompareResult> _compareCache =
+      <String, GitCommitCompareResult>{};
+
+  List<GitHistoryItem> _items = const <GitHistoryItem>[];
+  List<GitHistoryItemViewModel> _viewModels = const <GitHistoryItemViewModel>[];
+  Map<String, GitHistoryGraphColorId?> _colorMap =
+      const <String, GitHistoryGraphColorId?>{};
+  GitHistoryItemRef? _currentRef;
+  GitHistoryItemRef? _remoteRef;
+  GitHistoryItemRef? _baseRef;
+  late bool _allBranches = widget.tab.gitHistoryAllBranches;
+  bool _loading = false;
+  bool _loadingMore = false;
+  bool _hasMore = false;
+  bool _pageFailed = false;
+  String? _error;
+  int _generation = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _verticalController.addListener(_onScroll);
+    _reload();
+  }
+
+  @override
+  void dispose() {
+    _generation += 1;
+    _verticalController.dispose();
+    _horizontalController.dispose();
+    super.dispose();
+  }
+
+  WorkspaceSourceControlScope get _sourceControlScope {
+    final root = normalizeSourceControlRootRelativePath(widget.tab.gitDiffRoot);
+    if (root == null) {
+      return WorkspaceSourceControlScope(
+        workspaceId: widget.workspace.id,
+        workspacePath: widget.workspace.path,
+        path: widget.workspace.path,
+      );
+    }
+    return WorkspaceSourceControlScope(
+      workspaceId: widget.workspace.id,
+      workspacePath: widget.workspace.path,
+      path: sourceControlRootAbsolutePath(
+        workspacePath: widget.workspace.path,
+        relativeRoot: root,
+      ),
+      relativeRoot: root,
+    );
+  }
+
+  void _onScroll() {
+    if (!_verticalController.hasClients ||
+        !_hasMore ||
+        _loading ||
+        _loadingMore ||
+        _pageFailed) {
+      return;
+    }
+    final position = _verticalController.position;
+    if (position.pixels >= position.maxScrollExtent - 160) {
+      unawaited(_loadMore());
+    }
+  }
+
+  Future<void> _reload() async {
+    final generation = ++_generation;
+    setState(() {
+      _items = const <GitHistoryItem>[];
+      _viewModels = const <GitHistoryItemViewModel>[];
+      _hasMore = false;
+      _pageFailed = false;
+      _error = null;
+      _loading = true;
+    });
+    try {
+      final result = await ref
+          .read(gitBackendProvider)
+          .history(
+            _sourceControlScope.path,
+            limit: WorkspaceGitHistorySurface.pageSize,
+            includeAllRefs: _allBranches,
+          );
+      if (!mounted || generation != _generation) {
+        return;
+      }
+      setState(() {
+        _items = result.items;
+        _hasMore = result.hasMore;
+        _loading = false;
+        _currentRef = result.currentRef;
+        _remoteRef = result.remoteRef;
+        _baseRef = result.baseRef;
+        _colorMap = buildDefaultGitHistoryColorMap(
+          currentRef: result.currentRef,
+          remoteRef: result.remoteRef,
+          baseRef: result.baseRef,
+        );
+        _viewModels = _buildViewModels(result.items);
+      });
+      // A short first page may not fill the viewport, which means the scroll
+      // listener never fires, so pull the next page eagerly instead.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && generation == _generation) {
+          _onScroll();
+        }
+      });
+    } catch (error) {
+      if (!mounted || generation != _generation) {
+        return;
+      }
+      setState(() {
+        _loading = false;
+        _error = error.toString();
+      });
+    }
+  }
+
+  Future<void> _loadMore() async {
+    if (_loadingMore || !_hasMore) {
+      return;
+    }
+    final generation = _generation;
+    setState(() {
+      _loadingMore = true;
+      _pageFailed = false;
+    });
+    try {
+      final result = await ref
+          .read(gitBackendProvider)
+          .history(
+            _sourceControlScope.path,
+            limit: WorkspaceGitHistorySurface.pageSize,
+            includeAllRefs: _allBranches,
+            offset: _items.length,
+          );
+      if (!mounted || generation != _generation) {
+        return;
+      }
+      setState(() {
+        _items = <GitHistoryItem>[..._items, ...result.items];
+        _viewModels = <GitHistoryItemViewModel>[
+          ..._viewModels,
+          ..._buildViewModels(result.items),
+        ];
+        _hasMore = result.hasMore;
+        _loadingMore = false;
+      });
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && generation == _generation) {
+          _onScroll();
+        }
+      });
+    } catch (_) {
+      if (!mounted || generation != _generation) {
+        return;
+      }
+      setState(() {
+        _loadingMore = false;
+        _pageFailed = true;
+      });
+    }
+  }
+
+  List<GitHistoryItemViewModel> _buildViewModels(List<GitHistoryItem> items) {
+    return buildGitHistoryViewModelsFromItems(
+      items,
+      colorMap: _colorMap,
+      currentRef: _currentRef,
+      remoteRef: _remoteRef,
+      baseRef: _baseRef,
+      initialSwimlanes:
+          _viewModels.lastOrNull?.outputSwimlanes ??
+          const <GitHistoryGraphNode>[],
+    );
+  }
+
+  Future<void> _setAllBranches(bool value) async {
+    if (value == _allBranches) {
+      return;
+    }
+    setState(() => _allBranches = value);
+    unawaited(_reload());
+    try {
+      await ref
+          .read(workbenchControllerProvider.notifier)
+          .setGitHistoryAllBranches(tabId: widget.tab.id, allBranches: value);
+    } catch (_) {
+      // Persistence failures only lose the saved preference; the current
+      // view already switched and stays correct for this session.
+    }
+  }
+
+  Future<void> _openCommit(GitHistoryItem item) async {
+    try {
+      final compare =
+          _compareCache[item.id] ??
+          await ref
+              .read(gitBackendProvider)
+              .commitCompare(path: _sourceControlScope.path, commitId: item.id);
+      if (!mounted) {
+        return;
+      }
+      if (compare.summary.status != GitCommitCompareStatus.ready) {
+        throw GitInternalException(
+          compare.summary.errorMessage ?? 'Failed to load commit diff.',
+        );
+      }
+      _compareCache[item.id] = compare;
+      await ref
+          .read(workbenchControllerProvider.notifier)
+          .openGitCommitDiffTab(
+            workspace: widget.workspace,
+            scope: .all,
+            gitDiffRoot: _sourceControlScope.relativeRoot,
+            commitOid: compare.summary.commitOid,
+            parentOid: compare.summary.parentOid,
+            compareRef: compare.summary.compareRef,
+            subject: item.subject,
+            message: item.message,
+          );
+    } catch (error) {
+      if (mounted) {
+        AleraToast.show(context, message: error.toString(), tone: .error);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: const BoxDecoration(color: AleraTokens.surface),
+      child: Column(
+        children: <Widget>[
+          _buildToolbar(context),
+          const Divider(height: 1, color: AleraTokens.borderSubtle),
+          Expanded(child: _buildBody(context)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildToolbar(BuildContext context) {
+    final theme = Theme.of(context);
+    return SizedBox(
+      height: AleraTokens.sidebarHeaderHeight,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: AleraTokens.space12),
+        child: Row(
+          children: <Widget>[
+            const Icon(
+              AleraIcons.gitGraph,
+              size: 16,
+              color: AleraTokens.foregroundMuted,
+            ),
+            const SizedBox(width: AleraTokens.space8),
+            Text(
+              'Commits',
+              style: theme.textTheme.titleSmall?.copyWith(
+                fontWeight: .w600,
+                color: AleraTokens.foreground,
+              ),
+            ),
+            if (_items.isNotEmpty) ...<Widget>[
+              const SizedBox(width: AleraTokens.space8),
+              Text(
+                _hasMore ? '${_items.length}+' : '${_items.length}',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: AleraTokens.foregroundFaint,
+                ),
+              ),
+            ],
+            const SizedBox(width: AleraTokens.space16),
+            AleraCheckbox(
+              value: _allBranches,
+              onChanged: (value) => unawaited(_setAllBranches(value)),
+              label: 'All Branches',
+            ),
+            const Spacer(),
+            if (_loading || _loadingMore)
+              const Padding(
+                padding: EdgeInsets.only(right: AleraTokens.space8),
+                child: SizedBox(
+                  width: 12,
+                  height: 12,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              ),
+            AleraIconButton(
+              tooltip: 'Refresh Commits',
+              icon: AleraIcons.refresh,
+              onPressed: _loading ? null : () => unawaited(_reload()),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBody(BuildContext context) {
+    if (_error != null && _items.isEmpty) {
+      return AleraEmptyState(message: _error!);
+    }
+    if (_viewModels.isEmpty) {
+      if (_loading) {
+        return const Center(
+          child: SizedBox(
+            width: 16,
+            height: 16,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+        );
+      }
+      return const AleraEmptyState(message: 'No commits yet');
+    }
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final graphWidth = _viewModels.fold<double>(
+          0,
+          (width, viewModel) =>
+              math.max(width, GitHistoryGraph.widthFor(viewModel)),
+        );
+        const double minContentWidth = 320;
+        final contentWidth = math.max(
+          constraints.maxWidth,
+          graphWidth + minContentWidth,
+        );
+        return Scrollbar(
+          controller: _horizontalController,
+          child: SingleChildScrollView(
+            controller: _horizontalController,
+            scrollDirection: .horizontal,
+            child: SizedBox(
+              width: contentWidth,
+              child: Scrollbar(
+                controller: _verticalController,
+                child: ListView.builder(
+                  controller: _verticalController,
+                  itemCount:
+                      _viewModels.length +
+                      ((_loadingMore || _pageFailed) ? 1 : 0),
+                  itemBuilder: (context, index) {
+                    if (index >= _viewModels.length) {
+                      return _buildFooter();
+                    }
+                    return _CommitGraphRow(
+                      viewModel: _viewModels[index],
+                      graphWidth: graphWidth,
+                      onTap: () => unawaited(
+                        _openCommit(_viewModels[index].historyItem),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildFooter() {
+    if (_pageFailed) {
+      return SizedBox(
+        height: 32,
+        child: Center(
+          child: TextButton(
+            onPressed: () => unawaited(_loadMore()),
+            child: Text(
+              'Could not load more commits. Retry',
+              style: Theme.of(context).textTheme.labelSmall
+                  ?.copyWith(color: AleraTokens.accent),
+            ),
+          ),
+        ),
+      );
+    }
+    return const SizedBox(
+      height: 32,
+      child: Center(
+        child: SizedBox(
+          width: 14,
+          height: 14,
+          child: CircularProgressIndicator(strokeWidth: 2),
+        ),
+      ),
+    );
+  }
+
+  static String _relativeTime(DateTime? timestamp) {
+    if (timestamp == null) {
+      return '';
+    }
+    final difference = DateTime.now().difference(timestamp.toLocal());
+    if (difference.isNegative) {
+      return 'just now';
+    }
+    if (difference.inMinutes < 1) {
+      return 'just now';
+    }
+    if (difference.inHours < 1) {
+      return '${difference.inMinutes}m ago';
+    }
+    if (difference.inDays < 1) {
+      return '${difference.inHours}h ago';
+    }
+    if (difference.inDays < 30) {
+      return '${difference.inDays}d ago';
+    }
+    final local = timestamp.toLocal();
+    final month = local.month.toString().padLeft(2, '0');
+    final day = local.day.toString().padLeft(2, '0');
+    return '${local.year}-$month-$day';
+  }
+}
+
+class const _CommitGraphRow({
+  required final GitHistoryItemViewModel viewModel,
+  required final double graphWidth,
+  required final VoidCallback onTap,
+}) extends StatelessWidget {
+  static const double _refBadgeMaxWidth = 160;
+  static const double _metaWidth = 88;
+
+  @override
+  Widget build(BuildContext context) {
+    final item = viewModel.historyItem;
+    final theme = Theme.of(context);
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: InkWell(
+        onTap: onTap,
+        mouseCursor: SystemMouseCursors.click,
+        child: SizedBox(
+          height: 28,
+          child: Padding(
+            padding: const EdgeInsets.only(
+              left: AleraTokens.space8,
+              right: AleraTokens.space12,
+            ),
+            child: Row(
+              children: <Widget>[
+                SizedBox(
+                  width: graphWidth,
+                  child: Align(
+                    alignment: .centerLeft,
+                    child: GitHistoryGraph(viewModel: viewModel),
+                  ),
+                ),
+                const SizedBox(width: AleraTokens.space4),
+                Expanded(
+                  child: Text(
+                    item.subject,
+                    maxLines: 1,
+                    overflow: .ellipsis,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: AleraTokens.foreground,
+                    ),
+                  ),
+                ),
+                for (final itemRef in item.references) ...<Widget>[
+                  const SizedBox(width: AleraTokens.space4),
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(
+                      maxWidth: _refBadgeMaxWidth,
+                    ),
+                    child: GitRefBadge(itemRef: itemRef),
+                  ),
+                ],
+                const SizedBox(width: AleraTokens.space8),
+                SizedBox(
+                  width: 140,
+                  child: Text(
+                    item.author ?? '',
+                    maxLines: 1,
+                    overflow: .ellipsis,
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: AleraTokens.foregroundMuted,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: AleraTokens.space8),
+                SizedBox(
+                  width: _metaWidth,
+                  child: Text(
+                    _WorkspaceGitHistorySurfaceState._relativeTime(
+                      item.timestamp,
+                    ),
+                    maxLines: 1,
+                    overflow: .ellipsis,
+                    textAlign: .end,
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: AleraTokens.foregroundFaint,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}

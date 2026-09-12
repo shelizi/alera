@@ -244,6 +244,8 @@ abstract class RustLibApi extends BaseApi {
     required String path,
     int? limit,
     String? baseRef,
+    bool? includeAllRefs,
+    int? offset,
   });
 
   Future<List<GitStashEntry>> crateApiGitGitListStashes({required String path});
@@ -1570,6 +1572,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required String path,
     int? limit,
     String? baseRef,
+    bool? includeAllRefs,
+    int? offset,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -1578,6 +1582,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_String(path, serializer);
           sse_encode_opt_box_autoadd_u_32(limit, serializer);
           sse_encode_opt_String(baseRef, serializer);
+          sse_encode_opt_box_autoadd_bool(includeAllRefs, serializer);
+          sse_encode_opt_box_autoadd_u_32(offset, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -1590,7 +1596,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: sse_decode_git_error,
         ),
         constMeta: kCrateApiGitGitHistoryConstMeta,
-        argValues: [path, limit, baseRef],
+        argValues: [path, limit, baseRef, includeAllRefs, offset],
         apiImpl: this,
       ),
     );
@@ -1598,7 +1604,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateApiGitGitHistoryConstMeta => const TaskConstMeta(
     debugName: "git_history",
-    argNames: ["path", "limit", "baseRef"],
+    argNames: ["path", "limit", "baseRef", "includeAllRefs", "offset"],
   );
 
   @override
@@ -4121,6 +4127,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  bool dco_decode_box_autoadd_bool(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw as bool;
+  }
+
+  @protected
   GitChangeArea dco_decode_box_autoadd_git_change_area(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_git_change_area(raw);
@@ -4974,6 +4986,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  bool? dco_decode_opt_box_autoadd_bool(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw == null ? null : dco_decode_box_autoadd_bool(raw);
+  }
+
+  @protected
   GitChangeArea? dco_decode_opt_box_autoadd_git_change_area(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null ? null : dco_decode_box_autoadd_git_change_area(raw);
@@ -5761,6 +5779,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return (sse_decode_ai_dictation_request(deserializer));
+  }
+
+  @protected
+  bool sse_decode_box_autoadd_bool(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_bool(deserializer));
   }
 
   @protected
@@ -6898,6 +6922,17 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  bool? sse_decode_opt_box_autoadd_bool(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    if (sse_decode_bool(deserializer)) {
+      return (sse_decode_box_autoadd_bool(deserializer));
+    } else {
+      return null;
+    }
+  }
+
+  @protected
   GitChangeArea? sse_decode_opt_box_autoadd_git_change_area(
     SseDeserializer deserializer,
   ) {
@@ -7835,6 +7870,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_ai_dictation_request(self, serializer);
+  }
+
+  @protected
+  void sse_encode_box_autoadd_bool(bool self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_bool(self, serializer);
   }
 
   @protected
@@ -8818,6 +8859,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_bool(self != null, serializer);
     if (self != null) {
       sse_encode_String(self, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_opt_box_autoadd_bool(bool? self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    sse_encode_bool(self != null, serializer);
+    if (self != null) {
+      sse_encode_box_autoadd_bool(self, serializer);
     }
   }
 

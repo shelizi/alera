@@ -23,7 +23,7 @@ class const _GitHistoryCommitRow({
     required int refCount,
   }) {
     var fixedWidth =
-        _GitHistoryGraph.widthFor(viewModel) +
+        GitHistoryGraph.widthFor(viewModel) +
         AleraTokens.space4 +
         _chevronSlotWidth +
         AleraTokens.space4 +
@@ -82,7 +82,7 @@ class const _GitHistoryCommitRow({
                     item.references.length - budget.visibleRefCount;
                 return Row(
                   children: <Widget>[
-                    _GitHistoryGraph(viewModel: viewModel),
+                    GitHistoryGraph(viewModel: viewModel),
                     const SizedBox(width: AleraTokens.space4),
                     if (!boundary)
                       Icon(
@@ -115,7 +115,7 @@ class const _GitHistoryCommitRow({
                         constraints: BoxConstraints(
                           maxWidth: budget.refBadgeMaxWidth,
                         ),
-                        child: _GitRefBadge(
+                        child: GitRefBadge(
                           itemRef: itemRef,
                           onOpenActions: onOpenRefActions == null
                               ? null
@@ -147,47 +147,6 @@ class const _GitHistoryCommitRow({
           ),
         ),
       ),
-    );
-  }
-}
-
-class const _GitRefBadge({
-  required final GitHistoryItemRef itemRef,
-  final ValueChanged<Offset>? onOpenActions,
-}) extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    final color = _graphColor(itemRef.color);
-    final badge = DecoratedBox(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(AleraTokens.radiusPill),
-        border: Border.all(color: color ?? AleraTokens.borderSubtle),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(
-          horizontal: AleraTokens.space6,
-          vertical: AleraTokens.space2,
-        ),
-        child: Text(
-          itemRef.name,
-          maxLines: 1,
-          overflow: .ellipsis,
-          style: Theme.of(context).textTheme.labelSmall?.copyWith(
-            color: color ?? AleraTokens.foregroundMuted,
-            fontSize: 10,
-          ),
-        ),
-      ),
-    );
-    final onOpenActions = this.onOpenActions;
-    if (onOpenActions == null) {
-      return badge;
-    }
-    return GestureDetector(
-      behavior: .opaque,
-      onSecondaryTapDown: (details) => onOpenActions(details.globalPosition),
-      onLongPressStart: (details) => onOpenActions(details.globalPosition),
-      child: badge,
     );
   }
 }

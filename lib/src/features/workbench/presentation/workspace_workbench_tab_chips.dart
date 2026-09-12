@@ -256,6 +256,11 @@ class const _WorkspaceTabLeadingIcon({
         size: 12,
         color: color,
       ),
+      WorkspaceTabKind.gitHistory => Icon(
+        AleraIcons.gitGraph,
+        size: 12,
+        color: color,
+      ),
       WorkspaceTabKind.terminal => Icon(
         AleraIcons.terminal,
         size: 12,
@@ -270,7 +275,8 @@ double _tabTitleMaxWidth(WorkspaceTabKind kind) {
     WorkspaceTabKind.editor ||
     WorkspaceTabKind.markdownViewer ||
     WorkspaceTabKind.pdf ||
-    WorkspaceTabKind.gitDiff => 180,
+    WorkspaceTabKind.gitDiff ||
+    WorkspaceTabKind.gitHistory => 180,
     WorkspaceTabKind.terminal => 92,
   };
 }

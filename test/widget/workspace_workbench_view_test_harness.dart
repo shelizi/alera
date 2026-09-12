@@ -25,6 +25,7 @@ Future<void> _pumpWorkbenchView(
   List<String>? externalTerminalTabs,
   List<AgentType> installedAgents = const <AgentType>[],
   List<({AgentType agentType, String? targetGroupId})>? createdAgentTabs,
+  FakeGitBackend? gitBackend,
 }) async {
   final openExternalTerminal = externalTerminalTabs == null
       ? null
@@ -38,6 +39,8 @@ Future<void> _pumpWorkbenchView(
           (ref) async => agentTitlesAvailable,
         ),
         installedAgentClisProvider.overrideWith((ref) async => installedAgents),
+        if (gitBackend != null)
+          gitBackendProvider.overrideWithValue(gitBackend),
       ],
       child: MaterialApp(
         home: Scaffold(

@@ -446,8 +446,10 @@ pub fn git_history(
     path: String,
     limit: Option<u32>,
     base_ref: Option<String>,
+    include_all_refs: Option<bool>,
+    offset: Option<u32>,
 ) -> Result<GitHistoryResult, GitError> {
-    git_history_impl::git_history(path, limit, base_ref)
+    git_history_impl::git_history(path, limit, base_ref, include_all_refs, offset)
 }
 
 pub fn git_commit_compare(
