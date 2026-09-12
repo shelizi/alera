@@ -25,14 +25,38 @@ abstract interface class TerminalRuntimeSessionOwnerHost {
 ///
 /// A handle leaves this registry when its view is released or evicted, but the
 /// host-side durable session is terminated only for an explicit close.
-final class TerminalRuntimeSessionOwner {
-  TerminalRuntimeSessionOwner(this._host);
+final class TerminalRuntimeSessionOwner
+    implements TerminalRuntimeViewBufferOwnerHost {
+  TerminalRuntimeSessionOwner(
+    this._host, {
+    TerminalRuntimeViewBufferOwner Function(
+      TerminalRuntimeViewBufferOwnerHost host,
+    )?
+    viewBufferOwnerBuilder,
+  }) {
+    _viewBufferOwner =
+        viewBufferOwnerBuilder?.call(this) ??
+        TerminalRuntimeViewBufferOwner(this);
+  }
 
   final TerminalRuntimeSessionOwnerHost _host;
+  late final TerminalRuntimeViewBufferOwner _viewBufferOwner;
   final Map<String, _XtermTerminalSessionHandle> _sessions =
       <String, _XtermTerminalSessionHandle>{};
-  String? _activeWorkspaceId;
-  bool _appForeground = true;
+
+  @override
+  TerminalSettings get terminalSettings => _host.terminalSettings;
+
+  @override
+  Iterable<TerminalSessionHandle> get liveSessions => _sessions.values;
+
+  @override
+  void evictSession(String tabId) {
+    final session = _sessions.remove(tabId);
+    if (session != null) {
+      _disposeSession(session, terminatePty: false);
+    }
+  }
 
   TerminalSessionHandle sessionFor({
     required Workspace workspace,
@@ -45,7 +69,7 @@ final class TerminalRuntimeSessionOwner {
         tab: tab,
       );
       final xtermHandle = handle as _XtermTerminalSessionHandle;
-      xtermHandle.setAppForeground(_appForeground);
+      xtermHandle.setAppForeground(_viewBufferOwner.isAppForeground);
       // Apply only at session creation so toggling the setting later does not
       // reopen composers the user already closed.
       if (_host.terminalSettings.showComposerByDefault) {
@@ -72,63 +96,19 @@ final class TerminalRuntimeSessionOwner {
     }
     // Lowering the budget in settings has to take effect now, not at the next
     // workspace switch.
-    _enforceBufferBudget();
+    _viewBufferOwner.enforceBufferBudget();
   }
 
   void setActiveWorkspace(String? workspaceId) {
-    if (_activeWorkspaceId == workspaceId) {
-      return;
-    }
-    _activeWorkspaceId = workspaceId;
-    _enforceBufferBudget();
+    _viewBufferOwner.setActiveWorkspace(workspaceId);
   }
 
   void setAppForeground(bool foreground) {
-    if (_appForeground == foreground) {
-      return;
-    }
-    _appForeground = foreground;
-    for (final session in _sessions.values) {
-      session.setAppForeground(foreground);
-    }
+    _viewBufferOwner.setAppForeground(foreground);
   }
 
   void _handleVisibilityChanged(_XtermTerminalSessionHandle handle) {
-    if (handle.isVisible) {
-      return;
-    }
-    // A terminal going off screen is the only moment a new eviction candidate
-    // appears, so this is the sweep trigger rather than a timer.
-    _enforceBufferBudget();
-  }
-
-  /// Detaches the coldest terminals until the estimated buffer total fits.
-  ///
-  /// Eviction never terminates the PTY, so the agent keeps running on the host
-  /// and the scrollback is restored from the host snapshot on return.
-  void _enforceBufferBudget() {
-    final budget = TerminalBufferBudget(
-      budgetBytes: _host.terminalSettings.bufferBudgetMegabytes * 1024 * 1024,
-    );
-    if (budget.isUnbounded || _sessions.isEmpty) {
-      return;
-    }
-    final pinned = <String>{
-      for (final entry in _sessions.entries)
-        if (entry.value.isVisible) entry.key,
-    };
-    final evictions = budget.selectEvictions(
-      live: <TerminalBufferUsage>[
-        for (final session in _sessions.values) session.bufferUsage,
-      ],
-      pinnedTabIds: pinned,
-    );
-    for (final tabId in evictions) {
-      final session = _sessions.remove(tabId);
-      if (session != null) {
-        _disposeSession(session, terminatePty: false);
-      }
-    }
+    _viewBufferOwner.handleVisibilityChanged(handle);
   }
 
   void _handleSessionExit(TerminalRuntimeExitEvent event) {

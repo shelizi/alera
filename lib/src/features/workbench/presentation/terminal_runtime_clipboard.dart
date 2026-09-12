@@ -1,54 +1,18 @@
 part of 'terminal_runtime.dart';
 
 void _storeTerminalClipboard(_XtermTerminalSessionHandle handle, String text) {
-  if (handle._disposed) return;
-  if (!handle._settings.allowOsc52Clipboard) {
-    handle._osc52Blocked();
-    return;
-  }
-  unawaited(
-    handle._clipboard.writeText(text).catchError((Object error) {
-      handle._notifyInteraction(
-        'Could not copy terminal selection.',
-        error: true,
-      );
-    }),
+  handle._launchInputOwner.storeClipboard(
+    text: text,
+    allowOsc52Clipboard: handle._settings.allowOsc52Clipboard,
+    isDisposed: handle._disposed,
   );
 }
 
-void _pasteTerminalText(_XtermTerminalSessionHandle handle, String text) {
-  if (handle._disposed || text.isEmpty) {
-    return;
-  }
-  handle._terminal.paste(text);
-}
-
-Future<void> _pasteTerminalClipboard(_XtermTerminalSessionHandle handle) async {
-  String? text;
-  try {
-    text = await handle._clipboard.readText();
-  } catch (_) {
-    // Image-only clipboards can reject text-flavor reads on some platforms.
-  }
-  if (handle._disposed) {
-    return;
-  }
-  if (text != null && text.isNotEmpty) {
-    _pasteTerminalText(handle, text);
-    return;
-  }
-  try {
-    final imagePath = await handle._clipboard.saveImageAsTempFile();
-    if (handle._disposed || imagePath == null || imagePath.isEmpty) {
-      return;
-    }
-    // Shell quoting would corrupt the generated path for at least one of
-    // POSIX, PowerShell, cmd, or the foreground TUI. Let the terminal apply
-    // bracketed paste only when the foreground program enabled DECSET 2004.
-    handle._terminal.paste(sanitizeTerminalImagePastePath(imagePath));
-  } catch (error) {
-    handle._notifyInteraction('Could not paste clipboard image.', error: true);
-  }
+Future<void> _pasteTerminalClipboard(_XtermTerminalSessionHandle handle) {
+  return handle._launchInputOwner.pasteClipboard(
+    isDisposed: handle._disposed,
+    onPasteText: (text) => handle._launchInputOwner.pasteText(handle, text),
+  );
 }
 
 void _handleTerminalSelectionChanged(_XtermTerminalSessionHandle handle) {
@@ -73,13 +37,10 @@ void _handleTerminalSelectionChanged(_XtermTerminalSessionHandle handle) {
     if (text.isEmpty) {
       return;
     }
-    unawaited(
-      handle._clipboard.writeText(text).catchError((Object error) {
-        handle._notifyInteraction(
-          'Could not copy terminal selection.',
-          error: true,
-        );
-      }),
+    handle._launchInputOwner.storeClipboard(
+      text: text,
+      allowOsc52Clipboard: true,
+      isDisposed: handle._disposed,
     );
   });
 }
@@ -89,40 +50,5 @@ void _publishTerminalInteraction(
   String message, {
   required bool error,
 }) {
-  handle._interactionNotice?.call(message, error: error);
-}
-
-xterm.Terminal _createSessionTerminal(_XtermTerminalSessionHandle handle) {
-  return xterm.Terminal(
-    reflowWithHiddenCursor: false,
-    preserveOrphanCombiningMarks: true,
-    allowITerm2ClipboardCapture: false,
-    allowKittyClipboard: false,
-    // An unset callback lets TerminalView install its system clipboard reader.
-    onClipboardQuery: (_) => null,
-    clipboardDecoder: decodeTerminalOsc52Payload,
-    maxLines: handle._settings.scrollbackLines,
-    platform: _xtermTargetPlatform,
-    wordSeparators: _wordSeparatorsFromSettings(
-      handle._settings.wordSeparators,
-    ),
-  );
-}
-
-void _attachSessionTerminal(
-  _XtermTerminalSessionHandle handle,
-  xterm.Terminal terminal,
-) {
-  terminal.onTitleChange = handle._handleTitleChanged;
-  terminal.onOutput = handle._handleTerminalInput;
-  terminal.onResize = handle._handleTerminalResize;
-  terminal.onClipboardStore = (_, text) =>
-      _storeTerminalClipboard(handle, text);
-}
-
-void _detachSessionTerminal(xterm.Terminal terminal) {
-  terminal.onTitleChange = null;
-  terminal.onOutput = null;
-  terminal.onResize = null;
-  terminal.onClipboardStore = null;
+  handle._launchInputOwner.notifyInteraction(message, error: error);
 }
