@@ -870,6 +870,15 @@ Desktop、Mobile、Rust 各自仍有 protocol parsing/DTO 宣告。已有 old-ho
 - 過程中 pin 住的非直覺契約：mobile prefs conflict 是 untyped error（只有 `agentProfile.remove` 走 typed `errorCode`）；`projectCloneJobsChanged` 不在 desktop `runtimeHostEventNames` allowlist（desktop 丟棄、mobile 全收）；`agentTitleStatus: generating` 投影正規化為 `failed`。
 - 未覆蓋的 fixture 面向（下一批接著做）：workspace lifecycle、shutdown/lifecycle errors、terminal binary frame/output resync、unknown/missing fields、old capability downgrade。
 
+#### P5 二批已完成（`3e07a492`/`11941334`、`7faaa003`/`d3034424`、`0d5b56f2`/`80829ff1`）
+
+- 40 個 salvaged fixtures 分三線補上消費測試，全部以實際 `ServerActor` frame 驗證後收進 `test/fixtures/wire/`（現共 59 份）。
+- Stream 線（`wire_fixture_tests_stream.rs` + `terminal_host_wire_stream_fixtures_test.dart`）：output event、output_paused/resume delta + snapshot、resync_required、四個 broadcast event scoped/wildcard 形狀。11 fixture 全 match 實際輸出。
+- Lifecycle 線（`wire_fixture_tests_lifecycle.rs` + `terminal_host_wire_lifecycle_fixtures_test.dart`）：mobile_hello（含 version_mismatch）、binary hello in-band upgrade 後全 frame 化、host shutdown（含 force 計數 running session）、host restart、unknown_fields 端對端忽略、mobile shutdown denial、empty ok。
+- Requests/error 線（`wire_fixture_tests_requests.rs` + `terminal_host_wire_requests_fixtures_test.dart`）：project.register round-trip、workspace createManaged（含 deferSetup payload）、tab/workspace not_found、`host_busy`（含 runningSessions 計數）、`runtime_mutation_busy`。
+- 歷史契約降為子集/decode 斷言（現行 host 不再產生、保留防回歸）：`output_resumed_snapshot.legacy`（缺 delta/resetInteractionModes/snapshot 行列數）、`host_shutdown.minimal`、`mobile_hello.legacy`、`workspace_create_managed.legacy`、`host_busy.legacy`、legacy mobile view-prefs request（server backfill 缺失欄位）。
+- 過程中 pin 住的非直覺契約：binary-capable client 的 binary output 在 socket isolate 解為 `TerminalHostOutputTextEvent`（非 `TerminalHostOutputEvent`）；`runtime_mutation_busy` 錯誤會被 client `_sendTerminalHostRequestWithMutationRetry` 重試而非立即 surface（測試改為 pin retry 行為）。
+
 ---
 
 ## 15. Phase 3：Workbench 真正 owner 拆分
