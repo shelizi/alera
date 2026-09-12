@@ -150,7 +150,13 @@ void main() {
 
     expect(
       backend.calls.where((call) => call.method == 'history').single.args,
-      <String, Object?>{'path': nestedScope.path, 'limit': 50, 'baseRef': null},
+      <String, Object?>{
+        'path': nestedScope.path,
+        'limit': 50,
+        'baseRef': null,
+        'includeAllRefs': false,
+        'offset': null,
+      },
     );
     expect(
       backend.calls.where((call) => call.method == 'commitCompare').single.args,

@@ -198,7 +198,13 @@ void _registerWorkspaceGitDiffPanelPreviewTests() {
     expect(find.text('Add Feature'), findsOneWidget);
     expect(
       backend.calls.where((call) => call.method == 'history').single.args,
-      <String, Object?>{'path': '/tmp/project', 'limit': 50, 'baseRef': null},
+      <String, Object?>{
+        'path': '/tmp/project',
+        'limit': 50,
+        'baseRef': null,
+        'includeAllRefs': false,
+        'offset': null,
+      },
     );
 
     final mouse = await tester.createGesture(kind: .mouse, pointer: 1);
