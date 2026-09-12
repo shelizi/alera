@@ -5,7 +5,8 @@ use crate::terminal_host::protocol::error_response;
 use crate::terminal_host::session::workspace_shutdown::WorkspaceShutdown;
 
 use super::runtime_mutations::{
-    run_runtime_mutation, RuntimeMutationFinished, RuntimeMutationOutcome, RuntimeMutationRequest,
+    preflight_runtime_mutation, run_runtime_mutation, RuntimeMutationFinished,
+    RuntimeMutationOutcome, RuntimeMutationRequest,
 };
 use super::{ServerActor, ServerCommand};
 
@@ -116,21 +117,25 @@ impl ServerActor {
         let runtime_store = self.runtime_store.clone();
         let inbox = self.inbox.clone();
         tokio::spawn(async move {
-            let prepared = match &request.mutation {
-                RuntimeMutationRequest::RemoveManagedWorkspace { .. }
-                | RuntimeMutationRequest::RemoveWorkspace { .. }
-                | RuntimeMutationRequest::RemoveProject { .. }
-                | RuntimeMutationRequest::RemoveProjectWorkspaces { .. } => {
-                    let (completion, receiver) = tokio::sync::oneshot::channel();
-                    let _ = inbox.send(ServerCommand::PrepareRuntimeMutation {
-                        request: request.mutation.clone(),
-                        completion,
-                    });
-                    receiver.await.unwrap_or_else(|_| {
-                        Err(HostError::state("Runtime stopped before workspace cleanup"))
-                    })
-                }
-                _ => Ok(WorkspaceShutdown::default()),
+            let prepared = match preflight_runtime_mutation(&runtime_store, &request.mutation).await
+            {
+                Ok(()) => match &request.mutation {
+                    RuntimeMutationRequest::RemoveManagedWorkspace { .. }
+                    | RuntimeMutationRequest::RemoveWorkspace { .. }
+                    | RuntimeMutationRequest::RemoveProject { .. }
+                    | RuntimeMutationRequest::RemoveProjectWorkspaces { .. } => {
+                        let (completion, receiver) = tokio::sync::oneshot::channel();
+                        let _ = inbox.send(ServerCommand::PrepareRuntimeMutation {
+                            request: request.mutation.clone(),
+                            completion,
+                        });
+                        receiver.await.unwrap_or_else(|_| {
+                            Err(HostError::state("Runtime stopped before workspace cleanup"))
+                        })
+                    }
+                    _ => Ok(WorkspaceShutdown::default()),
+                },
+                Err(error) => Err(error),
             };
             let mut stopped_workspace_tab_ids = Vec::new();
             let mut pending_workspace_shutdown = None;

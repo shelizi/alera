@@ -3,8 +3,8 @@ use serde_json::{json, Value};
 
 use crate::hosted_review_retention;
 use crate::managed_workspace::{
-    remove_managed_workspace, switch_managed_workspace_branch, ManagedWorkspaceRemoveRequest,
-    ManagedWorkspaceSwitchBranchRequest,
+    remove_managed_workspace, switch_managed_workspace_branch, validate_managed_workspace_removal,
+    ManagedWorkspaceRemoveRequest, ManagedWorkspaceSwitchBranchRequest,
 };
 use crate::terminal_host::host_error::{HostError, HostResult};
 
@@ -99,6 +99,18 @@ pub(super) enum RuntimeMutationEffect {
     WorkspaceSlept {
         workspace_id: String,
     },
+}
+
+pub(super) async fn preflight_runtime_mutation(
+    runtime_store: &RuntimeStore,
+    request: &RuntimeMutationRequest,
+) -> HostResult<()> {
+    if let RuntimeMutationRequest::RemoveManagedWorkspace { request } = request {
+        validate_managed_workspace_removal(runtime_store, request)
+            .await
+            .map_err(runtime_store_error)?;
+    }
+    Ok(())
 }
 
 pub(super) async fn run_runtime_mutation(

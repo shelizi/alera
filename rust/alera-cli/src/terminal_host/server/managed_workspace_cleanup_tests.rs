@@ -13,6 +13,8 @@ use crate::terminal_host::session::Session;
 use super::actor_test_harness::{local_client, test_actor};
 use super::{ServerActor, ServerCommand};
 
+#[path = "managed_workspace_preflight_tests.rs"]
+mod preflight_tests;
 #[path = "managed_workspace_shutdown_retry_tests.rs"]
 mod shutdown_retry_tests;
 
@@ -28,6 +30,10 @@ struct Fixture {
 
 impl Fixture {
     async fn new() -> Self {
+        Self::new_with_workspace_id("workspace").await
+    }
+
+    async fn new_with_workspace_id(workspace_id: &str) -> Self {
         let root = tempfile::tempdir().unwrap();
         let repo_path = root.path().join("repo");
         let repo = git2::Repository::init(&repo_path).unwrap();
@@ -74,7 +80,7 @@ impl Fixture {
             .await
             .unwrap();
         let workspace = create_managed_workspace(&actor.runtime_store, serde_json::from_value::<ManagedWorkspaceCreateRequest>(json!({
-            "id": "workspace", "projectId": "project", "branch": "feature/remove", "sourceBranch": "main", "skipSetup": true,
+            "id": workspace_id, "projectId": "project", "branch": "feature/remove", "sourceBranch": "main", "skipSetup": true,
         })).unwrap()).await.unwrap().workspace;
         for (id, kind) in [("tab-terminal", "terminal"), ("editor", "editor")] {
             actor
@@ -92,6 +98,7 @@ impl Fixture {
                 .unwrap();
         }
         let mut terminal = Session::driver_test_stub("terminal", 80, 24);
+        terminal.workspace_id = workspace_id.to_string();
         terminal.append_output(b"retained scrollback");
         actor.sessions.insert("terminal".into(), terminal);
         let mut other = Session::driver_test_stub("other", 80, 24);
@@ -115,6 +122,10 @@ impl Fixture {
                 json!({"id": 1, "type": request_type, "payload": payload}).to_string(),
             )
             .await;
+        self.wait_for_response(1).await
+    }
+
+    async fn wait_for_response(&mut self, request_id: i64) -> Value {
         tokio::time::timeout(Duration::from_secs(10), async {
             loop {
                 tokio::select! {
@@ -133,7 +144,7 @@ impl Fixture {
                     },
                     frame = self.responses.recv() => {
                         let response = frame.unwrap().as_json().unwrap();
-                        if response["id"] == 1 { return response; }
+                        if response["id"] == request_id { return response; }
                         self.events.push(response);
                     }
                 }

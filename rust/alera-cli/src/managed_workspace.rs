@@ -18,6 +18,10 @@ use uuid::Uuid;
 
 use crate::worktree_setup::{prepare_deferred_worktree_setup, run_worktree_setup};
 
+#[cfg(test)]
+#[path = "managed_workspace_removal_test_gate.rs"]
+pub(crate) mod managed_workspace_removal_test_gate;
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ManagedWorkspaceCreateRequest {
@@ -373,6 +377,8 @@ pub async fn validate_managed_workspace_removal(
     store: &RuntimeStore,
     request: &ManagedWorkspaceRemoveRequest,
 ) -> Result<()> {
+    #[cfg(test)]
+    managed_workspace_removal_test_gate::wait_if_installed(&request.id).await;
     managed_workspace_removal(store, request).await.map(drop)
 }
 

@@ -50,11 +50,11 @@ impl ServerActor {
     ) -> crate::terminal_host::host_error::HostResult<WorkspaceShutdown> {
         use crate::terminal_host::host_error::HostError;
 
-        // Revalidate after queueing and before terminating anything. A rejected
-        // path or automation owner must leave the user's running work intact.
-        crate::managed_workspace::validate_managed_workspace_removal(&self.runtime_store, request)
-            .await
-            .map_err(|error| HostError::state(error.to_string()))?;
+        if !request.close_sessions
+            && request.active_workspace_id.as_deref() == Some(request.id.as_str())
+        {
+            return Err(HostError::state("Workspace is active in the workbench"));
+        }
         if request.close_sessions {
             let mut shutdown = WorkspaceShutdown::capture(
                 self.sessions
@@ -85,7 +85,9 @@ impl ServerActor {
             .values()
             .any(|session| session.workspace_id == request.id && session.running())
         {
-            return Err(HostError::state("Workspace has live sessions"));
+            return Err(HostError::state(
+                "Workspace has a live terminal session or process",
+            ));
         }
         Ok(WorkspaceShutdown::default())
     }

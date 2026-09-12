@@ -320,45 +320,6 @@ impl ServerActor {
                 self.require_auth(client_id)?;
                 self.require_request_allowed(client_id, request_type)?;
                 let request: ManagedWorkspaceRemoveRequest = parse_payload(payload)?;
-                if !request.close_sessions
-                    && request.active_workspace_id.as_deref() == Some(request.id.as_str())
-                {
-                    return Err(HostError::state("Workspace is active in the workbench"));
-                }
-                if !request.close_sessions
-                    && self
-                        .sessions
-                        .values()
-                        .any(|session| session.workspace_id == request.id && session.running())
-                {
-                    return Err(HostError::state(
-                        "Workspace has a live terminal session or process",
-                    ));
-                }
-                let has_active_automation =
-                    crate::managed_workspace::workspace_has_active_automation_owner(
-                        &self.runtime_store,
-                        &request.id,
-                    )
-                    .await
-                    .map_err(|error| HostError::state(error.to_string()))?;
-                if has_active_automation {
-                    return Err(HostError::state(
-                        "Workspace is owned by an active automation",
-                    ));
-                }
-                crate::managed_workspace::validate_managed_workspace_removal(
-                    &self.runtime_store,
-                    &request,
-                )
-                .await
-                .map_err(|error| HostError::state(error.to_string()))?;
-                crate::managed_workspace::validate_workspace_storage_path(
-                    &self.runtime_store,
-                    &request.id,
-                )
-                .await
-                .map_err(|error| HostError::state(error.to_string()))?;
                 self.start_runtime_mutation(
                     client_id,
                     request_id,
