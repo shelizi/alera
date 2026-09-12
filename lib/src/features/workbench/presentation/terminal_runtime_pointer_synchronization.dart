@@ -60,8 +60,8 @@ extension _TerminalPointerSynchronization on _XtermTerminalSessionHandle {
         return;
       }
       _pointerInputResumePending = false;
-      if (_output.length > _pointerInputCatchUpChars) {
-        _pointerInputCatchUpChars = _output.length;
+      if (_pump.pipeline.length > _pointerInputCatchUpChars) {
+        _pointerInputCatchUpChars = _pump.pipeline.length;
       }
       _refreshPointerInputSuspension();
     });
@@ -74,7 +74,7 @@ extension _TerminalPointerSynchronization on _XtermTerminalSessionHandle {
   }
 
   void _completePointerInputSnapshotCatchUp() {
-    _pointerInputCatchUpChars = _output.length;
+    _pointerInputCatchUpChars = _pump.pipeline.length;
     _refreshPointerInputSuspension();
   }
 
