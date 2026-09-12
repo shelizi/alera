@@ -1,0 +1,94 @@
+# Agent and runtime settings operation contract
+
+This table answers the eight transaction/replay questions from the architecture refactor handoff (section 13) for the agent profile catalog, presence, quota/usage, runtime-settings, AI assist/dictation, and host lifecycle requests handled by `ServerActor`: `agentProfile.*`, `agentPresence.list`, `agentQuota.*`, `agentUsage.snapshot`, `runtimeSettings.*` and their `mobile.*` variants, `aiText.*`, `aiDictation.*`, `host.*`, `configure`, and `status.get`. Companion to `orchestration-operation-contract.md`, `project-operation-contract.md`, `workspace-operation-contract.md`, `tab-layout-operation-contract.md`, and `shared-prefs-operation-contract.md`; update the table and its pinning tests together.
+
+Scope: orchestration-agent operations (`orchestration.*` dispatch/spawn/status writes) are covered by `docs/orchestration-operation-contract.md`; this doc covers the agent profile/presence/quota surface only. Account (`account.*`), host-tool installs (`cliRegistration.*`, `agentSkill.install`), `resources.snapshot`, `shellEnvironment.reload`, and `runtimeMetadata.*` are out of scope here.
+
+Authority is `ServerActor` on the terminal-host mailbox. Profiles persist in the `agentProfiles` table and runtime settings in `runtimeMetadata`, both through `RuntimeStore`; agent presence and the quota cache are in-memory only. Three execution surfaces exist:
+
+- Mailbox ops: profile CRUD, settings get/update, presence/status reads, lifecycle verbs run inline on the actor.
+- Spawned jobs: `agentQuota.*`/`agentUsage.*`, `aiText.*` generations, and `aiDictation.*` transcriptions run on `tokio` tasks and answer later through `ServerCommand` completions (`AgentQuotaFinished`, `AiAssistFinished`, `AiDictationFinished`, `HostToolFinished`); the reply targets the requesting client connection and drops silently if it is gone.
+- Maintenance jobs: settings writes that touch hooks or autostart schedule `DeferredRequestClass::Maintenance` work that re-reads persisted state off the actor, so the committed update never waits on filesystem reconcile.
+
+## Agent profiles
+
+The defining rule of this domain is optimistic concurrency on `revision`: updates, reorders, impact reads, and removals carry `expectedRevision` and fail with the typed conflict `errorCode: agent_profile_revision_conflict` (details: `profileId`, `expectedRevision`, `currentRevision`) when it does not match the stored revision. Clients must refresh and retry rather than re-apply.
+
+| Operation | Instance check | Replay | Same id + different payload | Commit vs publish | Lost reply retry | Restart recovery | Stale owner / wrong actor |
+|---|---|---|---|---|---|---|---|
+| `agentProfile.list` | none | Read; `{kind: "agentProfiles", items, filters}` sorted by `sortOrder`, name, id | n/a | Read only | Safe | Persisted | n/a |
+| `agentProfile.upsert` | `agentType` must name a registered adapter; `name` must be case-insensitively unique (plain `state` error, not a conflict); an update (`id` present) requires `expectedRevision`, a create accepts it optionally | Revision-checked upsert: the update carries `WHERE revision = expected` and bumps `revision`, so a retried write after a lost reply fails closed with the typed conflict once the first write landed | A create whose `expectedRevision` expects an existing row conflicts; a taken name on a different id is a plain `agent profile name already exists` error | Commit, then `agentProfilesChanged` broadcast | Typed conflict tells the client to refresh instead of applying twice | Persisted; `revision`/`sortOrder`/`createdAt` survive restart | Not on the mobile allowlist, so desktop/CLI writers only |
+| `agentProfile.reorder` | `ids` must list each stored profile exactly once and `expectedRevisions` must cover every stored profile's current revision | Whole-catalog OCC in one `BEGIN IMMEDIATE` transaction: any membership or revision mismatch aborts the reorder with the typed conflict | n/a | Commit, then `agentProfilesChanged`; only rows whose `sortOrder` actually moved bump their revision | Typed conflict | Persisted | Local-only via `require_authenticated_local_request`; a stale reorder conflicts instead of merging |
+| `agentProfile.removalImpact` | `id` plus required `expectedRevision` | Read; a missing profile answers `exists: false` instead of erroring | n/a | Read only | Typed conflict on a stale revision | Persisted | References are reported by id only; automation prompts, tab titles, and commands never appear in the impact payload |
+| `agentProfile.remove` | `id` plus required `expectedRevision` plus `confirmed: true` (a format error otherwise); blocking references (automation targets, active execution-policy runs, tabs) fail with a plain `agent profile removal is blocked by N reference(s)` error | Idempotent: a retry against an already-removed profile answers `removed: false` | n/a | Delete, `defaultAgentProfileId` cleanup, and `automationAgentPolicies` cleanup commit in one transaction, then `agentProfilesChanged` + `runtimeSettingsChanged` + `automationsChanged` broadcast only when `removed` | Safe; the second call reports `removed: false` | Persisted | Stale revision is the typed conflict while blocked removal is a plain `state` error, so clients can tell "refresh" from "still referenced" |
+| `agentProfile.launch` | Workspace must exist and be `active`; profile must exist; effective project config must load | Not deduplicated: each call mints a new tab id | n/a | The tab row commits through `upsert_workspace_tab_and_spawn`, then the `spawnOnCreate` spawn runs; a spawn failure removes the tab and terminates its sessions before the error returns | Duplicates the launch | Persisted tab; startup `reconcile_spawn_on_create_tabs` respawns or removes | Mobile-allowed |
+| `agentProfile.launchIdempotent` | Same checks as `launch` plus a non-blank `clientMutationId` of at most 128 bytes | Idempotent per `(callerScope, workspaceId, clientMutationId)`: the receipt row and the tab row commit atomically in `record_agent_profile_launch`, and a replay returns the stored (redacted) result without spawning | The same mutation id with a different payload digest fails `clientMutationId was already used with a different agentProfile.launch payload.` | Receipt + tab commit atomically, then the spawn runs; a spawn failure removes the tab row, which also drops the receipt | Replay returns the stored result | Receipts persist across restart; a failed launch's receipt is removed with its tab | `callerScope` derives from the authenticated client (`mobile:<device>` / `local:app` / `local:cli`), so one device cannot replay another's mutation id |
+
+## Agent presence
+
+Presence is a read model fed by `orchestration.agentStatus` hook forwarding (see the orchestration contract for the write path). `agentPresence.list` joins the in-memory `AgentPresenceRegistry` over live sessions and returns only sessions whose entry carries `agentType` and `agentState`.
+
+| Operation | Instance check | Replay | Same id + different payload | Commit vs publish | Lost reply retry | Restart recovery | Stale owner / wrong actor |
+|---|---|---|---|---|---|---|---|
+| `agentPresence.list` | none | Read | n/a | Read only | Safe | In-memory only: a host restart clears presence until agent hooks re-report | Entries exist only for sessions the host still runs; an `agentStatusHooks` settings update drops disabled agents' rows via `retain_enabled` before `agentPresenceChanged` broadcasts |
+
+## Quota and usage snapshots
+
+The quota cache is `agent_quota_cache: (Instant, environment_signature, payload)` with a 15-minute TTL, where the signature hashes the caller-supplied `environmentValues`. Nothing here persists.
+
+| Operation | Instance check | Replay | Same id + different payload | Commit vs publish | Lost reply retry | Restart recovery | Stale owner / wrong actor |
+|---|---|---|---|---|---|---|---|
+| `agentQuota.snapshot` | none | Served from the in-memory cache when the environment signature matches and the entry is under 15 minutes old; `forceRefresh` bypasses | A different `environmentValues` map is a different cache signature, not a conflict | The spawned fetch merges into the cache, then the reply, then `agentQuotasChanged` | A retry with the same env and no `forceRefresh` is a cache hit | Not persisted; the cache dies with the host | A failed refetch with a matching-signature cache answers the cached payload marked `stale` instead of an error; a per-provider failure keeps the previous ok snapshot as `stale` |
+| `agentUsage.snapshot` | `sinceDay`/`untilDay` required | Not cached; each call re-reads the persisted quota settings and re-runs the collector | n/a | Spawned job replies via `HostToolFinished`; no broadcast | Re-runs the query | n/a | n/a |
+| `agentQuota.fetchClaudeTui` | `accountId` required | Not deduplicated; each call refetches the one account | n/a | The fetched snapshot upserts into the cache by `(provider, accountId)`, then the reply, then `agentQuotasChanged` | Refetches the account | In-memory cache | An unknown `accountId` falls back to the raw id as the display name instead of erroring |
+| `agentQuota.consumeCodexResetCredit` | none | Not deduplicated: a retry consumes another reset credit | n/a | The external consume runs, then the returned snapshot merges into the cache, then the reply + `agentQuotasChanged` | Consumes again; the only non-replay-safe operation in this doc | In-memory cache | n/a |
+
+## Runtime settings
+
+`RuntimeSettings` assembles ten `runtimeMetadata`-backed sections; `runtimeSettings.update` applies only the keys present in the payload and answers with the post-write assembly. There is no settings revision: writes are last-write-wins per key.
+
+| Operation | Instance check | Replay | Same id + different payload | Commit vs publish | Lost reply retry | Restart recovery | Stale owner / wrong actor |
+|---|---|---|---|---|---|---|---|
+| `runtimeSettings.get` / `mobile.runtimeSettings.get` | none | Read of the assembled `RuntimeSettings` | n/a | Read only | Safe | Persisted | n/a |
+| `runtimeSettings.update` | Per-key validation before each write (bad types are `FormatException`s; `agentQuotas`, `aiTextGeneration`, and `textActions` have semantic validators) | Value write per key: re-applying the same payload rewrites the same values | Last write wins per key | Each section setter commits to `runtimeMetadata`, then the reply carries the re-assembled settings, then `runtimeSettingsChanged` | Safe: the retry rewrites the same values | Persisted | No OCC, so a stale client silently overwrites a newer value; not on the mobile allowlist |
+| `mobile.runtimeSettings.update` | Same validation plus a key allowlist | Same as `runtimeSettings.update` | Same | Same; unlike the desktop route, an unsupported key fails before any write | Safe | Persisted | Keys outside `workspaceDirectory`, `confirmProjectRemoval`, `confirmWorkspaceRemoval`, `defaultAgentProfileId`, `agentStatusHooks`, `agentQuotas`, `mobilePushNotifications`, `automation` fail `Unsupported mobile setting` |
+
+Deferred side effects of a settings update:
+
+- `automation` updates schedule `automation.autostart.reconcile` on the Maintenance class. The deferred job re-reads the persisted settings when it runs, so rapid toggles coalesce onto the latest state and a reconcile failure only logs a warning; the committed update is never failed or rolled back by it (handoff section 12.1 option A; pinned by `host_service_autostart_tests.rs`).
+- `agentStatusHooks` updates persist, then trim the presence registry, broadcast `agentPresenceChanged`, and schedule `agent.integrations.reconcile` on the Maintenance class with a latest-wins generation guard serialized per runtime dir. Reconcile warnings are logged, not reported.
+- `agentQuotas` updates clear the in-memory quota cache so the next `agentQuota.snapshot` refetches.
+- `mobilePushNotifications` forces `enabled: false` before persisting (privacy-portable build); cloud push can never activate through this route.
+- `aiTextGeneration` updates that disable AI Assist or automatic titles cancel in-flight automatic title jobs and reset their tabs' `agentTitleStatus` to `idle` before the broadcast.
+
+## AI assist and dictation
+
+`aiText.*` generations and `aiDictation.*` transcriptions spawn off the actor and hold at most one in-flight job per `operationId`/`requestId` in process-global registries.
+
+| Operation | Instance check | Replay | Same id + different payload | Commit vs publish | Lost reply retry | Restart recovery | Stale owner / wrong actor |
+|---|---|---|---|---|---|---|---|
+| `aiText.agentTitle.generate` | Tab must exist, be a `terminal`/`codex` tab, and match `expectedConversationId` + `expectedRevision` against the tab payload | Not deduplicated; a second call while a job runs fails `Title generation is already running.` | Stale expectations fail `The conversation or title changed. Try again.` (a plain `state` error, not a typed conflict) | The tab's `agentTitleStatus` writes first, then the job spawns; the reply arrives when the job finishes | A retry with current expectations queues a new job | Jobs are in-memory; the persisted `agentTitle*` state survives | Mobile-allowed |
+| `aiText.workspaceIdentity.generate` | `operationId`, `projectId`, `prompt` required; the project is resolved inside the spawned job | An in-flight `operationId` is a singleton: a duplicate fails `AI Assist is already running for this operation.` | Reusing a finished operation id runs again | Spawned job replies via `AiAssistFinished` | A retry after the job ended re-runs the generation | In-memory | Mobile-allowed |
+| `aiText.speechMessage.generate` | `operationId`, `text`, `mode` (`cleanUp`/`summarize`), and `workspaceId` or `tabId` required | Same in-flight singleton rule | n/a | Same | Same | In-memory | Mobile-allowed |
+| `aiText.cancel` | `operationId` required | Idempotent: removing a missing entry answers `canceled: false` | n/a | In-memory oneshot signal | Safe | In-memory | n/a |
+| `aiDictation.transcribe` / `mobile.aiDictation.transcribe` | `requestId` must be unique among in-flight dictations (a duplicate fails `another dictation request is already using this id`); audio caps at 25 MB; local Whisper requires 16-bit mono 16 kHz WAV | Not deduplicated | Reusing a live `requestId` fails rather than queuing | The spawned job replies via `AiDictationFinished` | Re-runs after the first attempt finishes | In-memory | `aiDictation.transcribe` is local-only and requires a remote engine; the mobile `whisper` engine stays on-device while `openAiCompatible`/`codexSubscription` run on the paired host |
+| `aiDictation.cancel` / `mobile.aiDictation.cancel` | `requestId` required | Idempotent: an unknown id answers `canceled: false` | n/a | In-memory cancel covering both remote and local-Whisper requests | Safe | In-memory | n/a |
+| `mobile.aiDictation.capabilities` | none | Read of supported backends/models | n/a | Read only | Safe | n/a | Never carries provider secrets |
+| `aiDictation.credentials.status` / `.save` / `.clear` | Local-only; `save` requires `token` + `baseUrl` and stores the origin derived from the URL | Value write: `save` overwrites and `clear` of nothing still answers `configured: false` | n/a | The credential file write commits under the runtime dir before the reply | Safe | Persisted in the runtime dir | A credential bound to a different origin makes `transcribe` fail until it is replaced or cleared |
+
+## Host lifecycle and status
+
+| Operation | Instance check | Replay | Same id + different payload | Commit vs publish | Lost reply retry | Restart recovery | Stale owner / wrong actor |
+|---|---|---|---|---|---|---|---|
+| `status.get` | none | Read of versions, advertised capabilities, and live counts | n/a | Read only | Safe | Live counts recompute per call | `logDirectory` is absent until file logging initializes; `runtimeCapabilities` is additive, so clients must tolerate new entries; mobile-allowed |
+| `configure` | none | Re-applying the same config is a no-op write | Last write wins | `crashReporting` flips live (the sidecar outlives the app), the config applies, then the idle shutdown timer reschedules | Safe | Config is per-process; the app resends it on attach | n/a |
+| `host.promotePersistent` | none | Idempotent: an already-persistent host answers `persistent: true` without touching the control file | n/a | The control file is marked first, then `config.persistent` flips and the idle shutdown timer is cancelled | Safe | The persistent flag lives in the control file | Not on the mobile allowlist |
+| `host.shutdown` | Non-force calls fail busy while agents, sessions, jobs, or push subscriptions are active; the error lists the counts | n/a: it ends the runtime | n/a | The response is queued before the `ShutdownRuntimeAfterWrite` marker, so the caller receives `stopped: true` before disposal drops the connection (pinned by `shutdown_response_precedes_disposal_marker`) | A retry either repeats the busy error or finds the host gone | n/a | Mobile clients get `Mobile clients cannot stop the runtime host.`; `force: true` skips the busy check |
+| `host.restart` | Same busy guard as `host.shutdown` | n/a | n/a | The response is queued before the `RestartRuntimeAfterWrite` marker | Same | n/a | The only mobile-allowed lifecycle verb |
+
+Known gaps:
+
+- `runtimeSettings.update` validates and writes keys in payload order rather than validating the whole payload first, so a payload mixing a valid early key with an invalid later one leaves the early keys committed. There is also no settings revision, so two writers race last-write-wins with no conflict signal.
+- `agentQuota.consumeCodexResetCredit` has no idempotency key; a retry after a lost reply spends another reset credit.
+- `agentProfile.upsert` name-uniqueness failures and `aiText.agentTitle.generate` stale-expectation failures are plain `state` errors, not typed conflicts, so clients cannot machine-distinguish them from other state errors.
+- Agent presence and the quota cache are in-memory, so a host restart silently empties both; clients rediscover presence through `agentPresenceChanged` and quota through a fresh `agentQuota.snapshot`.
