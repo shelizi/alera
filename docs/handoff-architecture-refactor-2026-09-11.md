@@ -823,6 +823,16 @@ Actor validates dispatch mutation + reserves generation/owner
 - 已記錄缺口：`workspaceTag.create` 無 name 唯一檢查（retry 產生同名不同 id 的 tag）；`createManaged` retry 是 fail-closed 而非回傳首次建立的 workspace。
 - 新測試 `workspace_contract_tests.rs` pin 住：`workspace.remove`/`workspace.sleep` 二次呼叫為零刪除冪等、`layout.upsert` 同 workspaceId last-write-wins。其餘格子由 `managed_workspace_cleanup_tests`/`preflight_tests`/`workspace_section_requests_tests`/`runtime_mutations/tests.rs` 既有覆蓋。
 
+#### Tab/Layout domain 已完成
+
+- Contract matrix 落在 `docs/tab-layout-operation-contract.md`：涵蓋 `tab.list`/`find`/`upsert`/`rename`/`remove`/`removeForWorkspace` 與 `layout.find`/`upsert`/`remove`。關鍵不變量已列明：tab payload 的 host-owned 欄位（`agentTitle*`）client 不可覆寫、`spawnOnCreate` spawn 失敗時 tab 列 rollback（先刪列再終止 session）、`tab.remove` 在 enqueue 前先於 actor 取消 title job、startup `reconcile_spawn_on_create_tabs` 對失敗恢復採同樣的刪列語意。
+- 新測試 `tab_layout_contract_tests.rs` pin 住：`tab.remove`/`tab.removeForWorkspace` retry 冪等、spawn-on-create 失敗不留 tab 列不留 session。
+
+#### Shared Workbench Preferences domain 已完成
+
+- Contract matrix 落在 `docs/shared-prefs-operation-contract.md`：涵蓋 `workbenchViewPrefs.get`/`update` 與 `workspaceActivity.*`。此 domain 的核心規則是非對稱樂觀鎖：desktop 是權威 writer 恆 last-write-wins，mobile 必須帶符合的 `expectedRevision` 否則收 typed conflict；`sectionSort`/`collapsedSectionIds`/`othersSectionCollapsed` 三個 legacy key 在寫入前從現值 backfill。
+- `workbench_shared_state_store_tests.rs` 新增 `desktop_writer_bypasses_the_revision_check`，與既有 mobile stale-revision 拒絕、activity max-wins、tab remove 冪等、sleep cascade 範圍測試互補。
+
 ---
 
 ## 14. Phase 2/3：跨語言 wire contract

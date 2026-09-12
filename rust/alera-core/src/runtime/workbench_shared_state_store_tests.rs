@@ -36,6 +36,31 @@ async fn desktop_initializes_shared_prefs_and_mobile_rejects_stale_revision() {
     assert!(error.to_string().contains("changed on desktop"));
 }
 
+#[tokio::test]
+async fn desktop_writer_bypasses_the_revision_check() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = RuntimeStore::open(dir.path()).await.unwrap();
+
+    store
+        .update_shared_workbench_view_prefs(
+            SharedWorkbenchViewPrefs::default(),
+            Some(0),
+            SharedWorkbenchPrefsWriter::Desktop,
+        )
+        .await
+        .unwrap();
+
+    let next = store
+        .update_shared_workbench_view_prefs(
+            SharedWorkbenchViewPrefs::default(),
+            Some(0),
+            SharedWorkbenchPrefsWriter::Desktop,
+        )
+        .await
+        .unwrap();
+    assert_eq!(next.revision, 2, "desktop writes are last-write-wins");
+}
+
 #[test]
 fn legacy_shared_view_prefs_show_pinned_workspaces_below() {
     let mut encoded = serde_json::to_value(SharedWorkbenchViewPrefs::default()).unwrap();
