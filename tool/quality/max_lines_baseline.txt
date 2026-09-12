@@ -26,7 +26,6 @@
 580	test/unit/desktop_update_service_test.dart
 591	rust/alera-cli/src/terminal_host/orchestration/lifecycle_reconciliation.rs
 587	lib/src/features/workbench/presentation/workspace_git_history_panel.dart
-645	lib/src/features/workbench/presentation/terminal_runtime_shell_launches.dart
 650	test/unit/fake_git_backend.dart
 653	test/unit/runtime_repositories_test.dart
 655	rust/alera-cli/src/mobile_access.rs
