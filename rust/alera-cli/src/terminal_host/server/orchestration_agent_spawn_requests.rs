@@ -10,7 +10,7 @@ use crate::terminal_host::orchestration::dispatch_preamble::build_dispatch_boots
 use super::dispatch_context_install::{
     DispatchContextContinuation, DispatchInstallOrigin, PendingAgentSpawn,
 };
-use super::orchestration_requests::DispatchPreparation;
+use super::orchestration_dispatch_requests::DispatchPreparation;
 use super::orchestration_validation::{optional_string, require_string, state_error};
 use super::ServerActor;
 

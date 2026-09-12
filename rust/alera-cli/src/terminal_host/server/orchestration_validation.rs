@@ -84,8 +84,34 @@ pub(super) fn prefixed_subject(prefix: &str, subject: &str) -> String {
     format!("{prefix}{}", &subject[..end])
 }
 
+pub(super) fn validate_result_schema(
+    result: &serde_json::Map<String, Value>,
+    schema_raw: Option<&str>,
+) -> HostResult<()> {
+    let Some(schema_raw) = schema_raw else {
+        return Ok(());
+    };
+    let schema: Value = serde_json::from_str(schema_raw)
+        .map_err(|error| HostError::state(format!("stored result schema is invalid: {error}")))?;
+    let validator = jsonschema::validator_for(&schema)
+        .map_err(|error| HostError::state(format!("stored result schema is invalid: {error}")))?;
+    validator
+        .validate(&Value::Object(result.clone()))
+        .map_err(|error| HostError::format(format!("result does not match schema: {error}")))
+}
+
+pub(super) fn validate_result_schema_definition(schema_raw: &str) -> HostResult<()> {
+    let schema: Value = serde_json::from_str(schema_raw)
+        .map_err(|error| HostError::format(format!("result schema is invalid JSON: {error}")))?;
+    jsonschema::validator_for(&schema)
+        .map(|_| ())
+        .map_err(|error| HostError::format(format!("result schema is invalid: {error}")))
+}
+
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
 
     #[test]
@@ -114,5 +140,45 @@ mod tests {
         assert!(prefixed.starts_with("Re: "));
         assert!(prefixed.len() <= ORCHESTRATION_SUBJECT_MAX_BYTES);
         assert!(prefixed.is_char_boundary(prefixed.len()));
+    }
+
+    #[test]
+    fn result_schema_distinguishes_integer_from_fractional_number() {
+        let schema = r#"{"properties":{"count":{"type":"integer"}}}"#;
+        for value in [json!(1), json!(1.0)] {
+            let result = json!({"count": value}).as_object().unwrap().clone();
+            assert!(validate_result_schema(&result, Some(schema)).is_ok());
+        }
+        let fractional = json!({"count": 1.5}).as_object().unwrap().clone();
+        assert!(validate_result_schema(&fractional, Some(schema)).is_err());
+    }
+
+    #[test]
+    fn result_schema_enforces_nested_enum_items_and_additional_properties() {
+        let schema = r#"{
+            "type":"object",
+            "required":["status","details"],
+            "additionalProperties":false,
+            "properties":{
+                "status":{"enum":["ok"]},
+                "details":{
+                    "type":"object",
+                    "required":["checks"],
+                    "properties":{"checks":{"type":"array","items":{"type":"boolean"}}}
+                }
+            }
+        }"#;
+        let valid = json!({"status":"ok","details":{"checks":[true, false]}})
+            .as_object()
+            .unwrap()
+            .clone();
+        assert!(validate_result_schema(&valid, Some(schema)).is_ok());
+        for invalid in [
+            json!({"status":"bad","details":{"checks":[true]}}),
+            json!({"status":"ok","details":{"checks":["yes"]}}),
+            json!({"status":"ok","details":{"checks":[]},"extra":true}),
+        ] {
+            assert!(validate_result_schema(invalid.as_object().unwrap(), Some(schema)).is_err());
+        }
     }
 }

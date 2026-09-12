@@ -135,10 +135,18 @@ mod mobile_terminal_viewport_tests;
 mod mobile_workspace_file_paths;
 mod mobile_workspace_file_requests;
 mod orchestration_agent_spawn_requests;
+mod orchestration_completion_requests;
+#[cfg(test)]
+mod orchestration_contract_tests;
+mod orchestration_dispatch_requests;
+mod orchestration_gate_requests;
+mod orchestration_message_requests;
 mod orchestration_owned_spawn;
 mod orchestration_policy_requests;
 mod orchestration_profile_spawn;
 mod orchestration_requests;
+mod orchestration_run_requests;
+mod orchestration_task_requests;
 mod orchestration_terminal_requests;
 mod orchestration_validation;
 mod orchestration_wait_requests;

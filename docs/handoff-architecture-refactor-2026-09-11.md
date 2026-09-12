@@ -805,6 +805,12 @@ Actor validates dispatch mutation + reserves generation/owner
 
 `c1d88258` 已處理的 orchestration completion replay 不要重寫；只補缺少的矩陣情境。
 
+#### Orchestration domain 已完成
+
+- `orchestration_requests.rs`（原 2151 行最大 offender）按 capability 拆成 message/task/dispatch/completion/run/gate 六個 request 檔；message waiter 機械併入 `orchestration_wait_requests.rs`，result schema 驗證併入 `orchestration_validation.rs`，主檔只留 router + agent presence 入口。拆後最大 478 行，全部低於 500。
+- Contract matrix 落在 `docs/orchestration-operation-contract.md`：每個 operation 的 authority、instance 驗證、replay 語意、commit/publish 順序、lost-reply retry、restart 恢復、stale owner 處理都已列明；`send`/`reply`/`ask`/`escalate` 無 client idempotency key（retry 會寫重複列）是目前接受的缺口，已在文件標註。
+- 新測試 `orchestration_contract_tests.rs` 補上缺口情境：dispatch retry 失敗收斂、dispatchAccept 重放保留首次 accepted_at、taskCancel/gateResolve/heartbeat/taskRecover/workerDone 的 typed 拒絕。
+
 ---
 
 ## 14. Phase 2/3：跨語言 wire contract
