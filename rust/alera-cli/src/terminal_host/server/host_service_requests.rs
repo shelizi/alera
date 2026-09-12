@@ -103,28 +103,8 @@ impl ServerActor {
         if let Some(value) = payload.get("automation") {
             let settings: RuntimeAutomationSettings = serde_json::from_value(value.clone())
                 .map_err(|_| HostError::format("automation settings are invalid."))?;
-            runtime_value(
-                self.runtime_store
-                    .set_automation_settings(settings.clone())
-                    .await,
-            )?;
-            let home = std::env::var_os("HOME")
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|| self.runtime_dir.clone());
-            let app_data = std::env::var_os("APPDATA").map(std::path::PathBuf::from);
-            let xdg_config = std::env::var_os("XDG_CONFIG_HOME").map(std::path::PathBuf::from);
-            if let Ok(executable) = std::env::current_exe() {
-                let paths = crate::automation_autostart::build_autostart_paths(
-                    crate::automation_autostart::current_platform(),
-                    &home,
-                    app_data.as_deref(),
-                    xdg_config.as_deref(),
-                    &executable,
-                    &self.runtime_dir,
-                );
-                crate::automation_autostart::reconcile_autostart(&settings, &paths)
-                    .map_err(|error| HostError::state(error.to_string()))?;
-            }
+            runtime_value(self.runtime_store.set_automation_settings(settings).await)?;
+            self.schedule_autostart_reconcile();
         }
         if refresh_push_subscriptions {
             self.start_push_subscription_sync(None);
@@ -163,6 +143,29 @@ impl ServerActor {
         let value = runtime_value(self.runtime_store.runtime_settings().await)?;
         self.broadcast_authenticated(event("runtimeSettingsChanged", json!({})));
         Ok(value)
+    }
+
+    /// Login-item reconcile runs off the actor on the shared deferred budget.
+    /// The job re-reads the persisted settings when it runs, so rapid toggles
+    /// coalesce onto the latest state and a reconcile failure can never fail
+    /// the settings update that already committed.
+    fn schedule_autostart_reconcile(&self) {
+        let store = self.runtime_store.clone();
+        let runtime_dir = self.runtime_dir.clone();
+        if let Err(error) = self.deferred_admission.schedule(
+            super::deferred_admission::DeferredRequestClass::Maintenance,
+            "automation.autostart.reconcile",
+            None,
+            async move {
+                crate::automation_autostart::reconcile_runtime_autostart(&store, &runtime_dir)
+                    .await;
+            },
+        ) {
+            tracing::warn!(
+                "autostart reconcile was not admitted: {}",
+                error.wire_message()
+            );
+        }
     }
 
     pub(super) fn start_cli_registration_request(

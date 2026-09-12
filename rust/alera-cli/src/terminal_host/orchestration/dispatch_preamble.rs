@@ -1,8 +1,4 @@
-pub struct BaseDrift {
-    pub base: String,
-    pub behind: u64,
-    pub recent_subjects: Vec<String>,
-}
+use alera_core::git::GitBaseDrift;
 
 pub struct PreambleParams<'a> {
     pub task_id: &'a str,
@@ -18,7 +14,7 @@ pub struct PreambleParams<'a> {
     /// target worktree is behind its tracking remote. Callers must NOT
     /// pre-populate this with empty data; the drift section is a
     /// loud-but-rare signal.
-    pub base_drift: Option<&'a BaseDrift>,
+    pub base_drift: Option<&'a GitBaseDrift>,
     /// Appended when the task had a resolved decision gate: the worker sees
     /// the human's answer from line 1 of the re-dispatch.
     pub gate_resolution: Option<&'a GateResolution>,
@@ -130,7 +126,7 @@ Your dispatch ID is: {dispatch_id}
 
 /// Defense-in-depth: the worker sees the drift from line 1 instead of
 /// discovering it via stale line numbers in artifacts later.
-fn build_drift_section(drift: &BaseDrift) -> String {
+fn build_drift_section(drift: &GitBaseDrift) -> String {
     let subjects = drift
         .recent_subjects
         .iter()
@@ -208,7 +204,7 @@ mod tests {
     use super::*;
 
     fn params<'a>(
-        drift: Option<&'a BaseDrift>,
+        drift: Option<&'a GitBaseDrift>,
         gate: Option<&'a GateResolution>,
     ) -> PreambleParams<'a> {
         PreambleParams {
@@ -278,7 +274,7 @@ mod tests {
 
     #[test]
     fn drift_section_appended_only_when_behind() {
-        let drift = BaseDrift {
+        let drift = GitBaseDrift {
             base: "origin/main".to_string(),
             behind: 25,
             recent_subjects: vec!["fix: a".to_string(), "feat: b".to_string()],
@@ -290,7 +286,7 @@ mod tests {
         assert!(preamble.contains("git fetch && git rebase origin/main"));
         assert!(!preamble.contains("git pull --rebase\norigin/main"));
 
-        let zero = BaseDrift {
+        let zero = GitBaseDrift {
             base: "origin/main".to_string(),
             behind: 0,
             recent_subjects: vec![],

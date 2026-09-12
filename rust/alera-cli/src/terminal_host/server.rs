@@ -96,6 +96,9 @@ mod configuration_requests;
 mod configuration_transfers;
 mod mobile_gateway_replacement;
 use mobile_gateway_replacement::MobileGatewayReplacement;
+mod coordinator_dispatch;
+#[cfg(test)]
+mod coordinator_drift_probe_tests;
 mod coordinator_requests;
 mod coordinator_stall_policy;
 mod declared_catalog_requests;
@@ -114,6 +117,8 @@ mod dispatch_context_install;
 mod dispatch_context_install_tests;
 mod host_service_agent_integrations;
 mod host_service_agent_quota;
+#[cfg(test)]
+mod host_service_autostart_tests;
 mod host_service_requests;
 mod host_status;
 mod lifecycle;
@@ -255,6 +260,9 @@ struct ServerActor {
     orchestration_delivery_backpressured: HashSet<String>,
     orchestration_activity_last_recorded: HashMap<String, Instant>,
     pending_dispatch_installs: HashMap<String, dispatch_context_install::PendingDispatchContext>,
+    /// Runs with a drift probe parked off the actor; the probe completion
+    /// resumes the dispatch round. One in-flight probe per run.
+    pending_drift_probes: HashSet<String>,
     coordinators: HashMap<String, CoordinatorHandle>,
     resources: ResourceMonitorState,
     terminal_pulses: terminal_pulse::TerminalPulseManager,
@@ -712,6 +720,9 @@ impl ServerActor {
                 self.handle_project_clone_finished(job_id).await
             }
             ServerCommand::CoordinatorTick { run_id } => self.handle_coordinator_tick(run_id).await,
+            ServerCommand::CoordinatorDriftProbed { run_id, drift } => {
+                self.handle_coordinator_drift_probed(run_id, drift).await
+            }
             ServerCommand::ResourceSampleTick => self.handle_resource_sample_tick(),
             ServerCommand::ResourceSampleReady { snapshot } => {
                 self.handle_resource_sample_ready(snapshot)
@@ -1215,6 +1226,7 @@ mod tests {
             orchestration_delivery_backpressured: HashSet::new(),
             orchestration_activity_last_recorded: HashMap::new(),
             coordinators: HashMap::new(),
+            pending_drift_probes: HashSet::new(),
             pending_dispatch_installs: HashMap::new(),
             resources: ResourceMonitorState::default(),
             terminal_pulses: Default::default(),
@@ -1294,6 +1306,7 @@ mod tests {
             orchestration_delivery_backpressured: HashSet::new(),
             orchestration_activity_last_recorded: HashMap::new(),
             coordinators: HashMap::new(),
+            pending_drift_probes: HashSet::new(),
             pending_dispatch_installs: HashMap::new(),
             resources: ResourceMonitorState::default(),
             terminal_pulses: Default::default(),
@@ -1391,6 +1404,7 @@ mod tests {
             orchestration_delivery_backpressured: HashSet::new(),
             orchestration_activity_last_recorded: HashMap::new(),
             coordinators: HashMap::new(),
+            pending_drift_probes: HashSet::new(),
             pending_dispatch_installs: HashMap::new(),
             resources: ResourceMonitorState::default(),
             terminal_pulses: Default::default(),
@@ -1483,6 +1497,7 @@ mod tests {
             orchestration_delivery_backpressured: HashSet::new(),
             orchestration_activity_last_recorded: HashMap::new(),
             coordinators: HashMap::new(),
+            pending_drift_probes: HashSet::new(),
             pending_dispatch_installs: HashMap::new(),
             resources: ResourceMonitorState::default(),
             terminal_pulses: Default::default(),
@@ -1597,6 +1612,7 @@ mod tests {
             orchestration_delivery_backpressured: HashSet::new(),
             orchestration_activity_last_recorded: HashMap::new(),
             coordinators: HashMap::new(),
+            pending_drift_probes: HashSet::new(),
             pending_dispatch_installs: HashMap::new(),
             resources: ResourceMonitorState::default(),
             terminal_pulses: Default::default(),
@@ -1684,6 +1700,7 @@ mod tests {
             orchestration_delivery_backpressured: HashSet::new(),
             orchestration_activity_last_recorded: HashMap::new(),
             coordinators: HashMap::new(),
+            pending_drift_probes: HashSet::new(),
             pending_dispatch_installs: HashMap::new(),
             resources: ResourceMonitorState::default(),
             terminal_pulses: Default::default(),

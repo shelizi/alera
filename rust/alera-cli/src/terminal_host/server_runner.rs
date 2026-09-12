@@ -88,6 +88,7 @@ pub async fn run_terminal_host_server(
         orchestration_delivery_backpressured: HashSet::new(),
         orchestration_activity_last_recorded: HashMap::new(),
         pending_dispatch_installs: HashMap::new(),
+        pending_drift_probes: HashSet::new(),
         coordinators: HashMap::new(),
         resources: ResourceMonitorState::default(),
         terminal_pulses: Default::default(),

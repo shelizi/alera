@@ -27,28 +27,81 @@ pub(crate) fn current_platform() -> AutostartPlatform {
     }
 }
 
+/// Best-effort reconcile that reads the persisted settings at run time, so
+/// jobs coalesce onto the latest state no matter when they were enqueued.
 pub(crate) async fn reconcile_runtime_autostart(runtime_store: &RuntimeStore, runtime_dir: &Path) {
     let Ok(settings) = runtime_store.automation_settings().await else {
         return;
     };
+    let Some(paths) = autostart_paths(runtime_dir) else {
+        return;
+    };
+    match tokio::task::spawn_blocking(move || reconcile_autostart(&settings, &paths)).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            tracing::warn!("automation autostart reconciliation failed: {error}")
+        }
+        Err(error) => {
+            tracing::warn!("automation autostart reconciliation failed: {error}")
+        }
+    }
+}
+
+pub(crate) fn autostart_paths(runtime_dir: &Path) -> Option<AutostartPaths> {
+    #[cfg(test)]
+    if let Some(paths) = test_override::current() {
+        return Some(paths);
+    }
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| runtime_dir.to_path_buf());
     let app_data = std::env::var_os("APPDATA").map(PathBuf::from);
     let xdg_config = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from);
-    let Ok(executable) = std::env::current_exe() else {
-        return;
-    };
-    let paths = build_autostart_paths(
+    let executable = std::env::current_exe().ok()?;
+    Some(build_autostart_paths(
         current_platform(),
         &home,
         app_data.as_deref(),
         xdg_config.as_deref(),
         &executable,
         runtime_dir,
-    );
-    if let Err(error) = reconcile_autostart(&settings, &paths) {
-        tracing::warn!("automation autostart reconciliation failed: {error}");
+    ))
+}
+
+#[cfg(test)]
+pub(crate) mod test_override {
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+
+    use super::AutostartPaths;
+
+    static LOCK: Mutex<()> = Mutex::new(());
+    static PATHS: OnceLock<Mutex<Option<AutostartPaths>>> = OnceLock::new();
+
+    fn slot() -> &'static Mutex<Option<AutostartPaths>> {
+        PATHS.get_or_init(|| Mutex::new(None))
+    }
+
+    /// Serializes autostart-override tests and clears the override on drop so
+    /// a parallel test never reconciles against another test's paths.
+    pub(crate) struct OverrideGuard(#[allow(dead_code)] MutexGuard<'static, ()>);
+
+    impl Drop for OverrideGuard {
+        fn drop(&mut self) {
+            *slot().lock().unwrap_or_else(|error| error.into_inner()) = None;
+        }
+    }
+
+    pub(crate) fn begin(paths: AutostartPaths) -> OverrideGuard {
+        let guard = LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        *slot().lock().unwrap_or_else(|error| error.into_inner()) = Some(paths);
+        OverrideGuard(guard)
+    }
+
+    pub(crate) fn current() -> Option<AutostartPaths> {
+        slot()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
     }
 }
 

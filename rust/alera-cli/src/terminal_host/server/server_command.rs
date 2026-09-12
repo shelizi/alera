@@ -5,6 +5,7 @@ use crate::ssh_bootstrap::SshTargetBootstrapProgress;
 use crate::terminal_host::client::ClientHandle;
 use crate::terminal_host::host_error::HostResult;
 use crate::terminal_host::session::PtyEvent;
+use alera_core::git::GitBaseDrift;
 use alera_core::runtime::SshBootstrapStatus;
 
 use super::{account_requests, push_delivery, runtime_mutations, ClientKind};
@@ -243,6 +244,12 @@ pub enum ServerCommand {
     /// One coordinator loop iteration, enqueued by the ticker task.
     CoordinatorTick {
         run_id: String,
+    },
+    /// A coordinator base-drift probe finished off the actor; the parked
+    /// dispatch round resumes only if the run is still live.
+    CoordinatorDriftProbed {
+        run_id: String,
+        drift: Option<GitBaseDrift>,
     },
     /// One resource sampling iteration, enqueued by the ticker task.
     ResourceSampleTick,

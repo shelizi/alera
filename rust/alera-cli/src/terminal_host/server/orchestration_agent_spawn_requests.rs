@@ -1,10 +1,11 @@
+use alera_core::git::GitBaseDrift;
 use alera_core::runtime::{OrchestrationDispatchStatus, WorkspaceStatus};
 use serde_json::{json, Value};
 
 use crate::terminal_host::host_error::{HostError, HostResult};
 use crate::terminal_host::orchestration::agent_registry::adapter_for;
 use crate::terminal_host::orchestration::coordinator_loop::CoordinatorConfig;
-use crate::terminal_host::orchestration::dispatch_preamble::{build_dispatch_bootstrap, BaseDrift};
+use crate::terminal_host::orchestration::dispatch_preamble::build_dispatch_bootstrap;
 
 use super::dispatch_context_install::{
     DispatchContextContinuation, DispatchInstallOrigin, PendingAgentSpawn,
@@ -91,6 +92,7 @@ impl ServerActor {
         &mut self,
         config: &CoordinatorConfig,
         ready: &[alera_core::runtime::OrchestrationTask],
+        drift: Option<&GitBaseDrift>,
     ) -> anyhow::Result<()> {
         let Some(workspace_id) = &config.workspace_id else {
             self.coordinator_log(
@@ -117,9 +119,10 @@ impl ServerActor {
         // a worker that has been asked nothing never reports that it is idle,
         // so a bare terminal would sit there holding the task forever.
         for task in ready {
-            let Some(preflight) = self.coordinator_dispatch_preflight(config, task).await else {
+            let Some(spec) = self.coordinator_preflight_with_drift(task, drift) else {
                 continue;
             };
+            let preflight = (spec, drift.cloned());
             let profile = self.coordinator_profile_for_task(task).await;
             // The spawn resumes from the dispatch context install completion;
             // the "created worker terminal" log is emitted by that
@@ -160,7 +163,7 @@ impl ServerActor {
         &mut self,
         origin: DispatchInstallOrigin,
         payload: &Value,
-        preflight: Option<(String, Option<BaseDrift>)>,
+        preflight: Option<(String, Option<GitBaseDrift>)>,
     ) -> HostResult<Option<Value>> {
         let workspace_id = require_string(payload, "workspace")?;
         let task_id = require_string(payload, "task")?;
@@ -398,7 +401,7 @@ impl ServerActor {
         agent_type: &str,
         task_id: &str,
         coordinator_handle: Option<&str>,
-        preflight: (String, Option<BaseDrift>),
+        preflight: (String, Option<GitBaseDrift>),
         profile: Option<&str>,
     ) -> anyhow::Result<()> {
         // A profile supersedes the run-level agent type, so send only one of
