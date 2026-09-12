@@ -39,6 +39,7 @@ part 'terminal_runtime_xterm_widget_cases.dart';
 part 'terminal_runtime_native_test_harness.dart';
 part 'terminal_runtime_session_owner_cases.dart';
 part 'terminal_runtime_view_buffer_owner_cases.dart';
+part 'terminal_runtime_launch_input_owner_cases.dart';
 
 void main() {
   _registerTerminalRuntimeHelperGroup();
@@ -56,5 +57,6 @@ void main() {
     _registerXtermRuntimeWidgetTests();
     _registerTerminalRuntimeSessionOwnerTests();
     _registerTerminalRuntimeViewBufferOwnerTests();
+    _registerTerminalRuntimeLaunchInputOwnerTests();
   });
 }

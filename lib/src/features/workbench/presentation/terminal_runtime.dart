@@ -38,6 +38,7 @@ part 'terminal_runtime_ghostty_adapter.dart';
 part 'terminal_runtime_xterm_runtime.dart';
 part 'terminal_runtime_session_owner.dart';
 part 'terminal_runtime_view_buffer_owner.dart';
+part 'terminal_runtime_launch_input_owner.dart';
 part 'terminal_runtime_session_handle.dart';
 part 'terminal_runtime_session_pty.dart';
 part 'terminal_runtime_terminal_pulse.dart';

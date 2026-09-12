@@ -3,15 +3,16 @@ part of 'terminal_runtime.dart';
 /// PTY creation and generation filtering for a session handle.
 extension _XtermTerminalSessionPty on _XtermTerminalSessionHandle {
   Future<bool> _startPtySession() async {
-    final launches = _shellLaunchesBuilder();
+    final launches = _launchInputOwner.candidateLaunches();
     if (launches.isEmpty) {
       throw StateError(_noTerminalShellCandidatesMessage());
     }
-    final agentHookEnvironment = await _agentHookEnvironmentBuilder?.call(
-      terminalSessionId: _tab.terminalSessionId,
-      workspaceId: _workspace.id,
-      tabId: _tab.id,
-    );
+    final agentHookEnvironment =
+        await _launchInputOwner.buildAgentHookEnvironment(
+          terminalSessionId: _tab.terminalSessionId,
+          workspaceId: _workspace.id,
+          tabId: _tab.id,
+        );
     Object? lastError;
     for (final launch in launches) {
       final session = _ptySessionFactory.create(
@@ -25,45 +26,26 @@ extension _XtermTerminalSessionPty on _XtermTerminalSessionHandle {
       );
       _activePtyGeneration = generation;
       try {
-        final sanitizedLaunch = _launchWithSanitizedAgentHookEnvironment(
-          _settings.resolvedLoginShell ? _launchAsLoginShell(launch) : launch,
-          agentHookEnvironment,
+        final prepared = await _launchInputOwner.prepareLaunch(
+          launch: launch,
+          workspacePath: _workspace.path,
+          resolvedLoginShell: _settings.resolvedLoginShell,
+          agentHookEnvironment: agentHookEnvironment,
         );
-        final workspaceAwarePowerShellLaunch =
-            _isWindowsPowerShellLaunch(sanitizedLaunch)
-            ? _launchInWorkingDirectory(sanitizedLaunch, _workspace.path)
-            : null;
-        final preparedLaunch = await _shellStartupPreparer?.prepare(
-          workspaceAwarePowerShellLaunch ?? sanitizedLaunch,
-        );
-        final interactiveLaunch =
-            preparedLaunch ?? workspaceAwarePowerShellLaunch ?? sanitizedLaunch;
-        final workspaceLaunch = workspaceAwarePowerShellLaunch == null
-            ? _launchInWorkingDirectory(interactiveLaunch, _workspace.path)
-            : interactiveLaunch;
         await session.start(
-          launch: workspaceLaunch,
+          launch: prepared.workspaceLaunch,
           workingDirectory: _workspace.path,
           cols: _terminal.viewWidth,
           rows: _terminal.viewHeight,
-          onProcessCreated: () async {
-            bool isCurrent() =>
-                !_disposed && _activePtyGeneration == generation;
-            if (!isCurrent()) {
-              return;
-            }
-            await _terminalProcessCreated?.call(_tab.terminalSessionId);
-            if (!isCurrent()) {
-              return;
-            }
-            await _deliverTerminalProcessStartup(
-              session: session,
-              launch: workspaceLaunch,
-              interactiveShell: interactiveLaunch.shell,
-              initialCommand: _tab.initialCommand,
-              isCurrent: isCurrent,
-            );
-          },
+          onProcessCreated: () => _launchInputOwner.onProcessCreated(
+            terminalSessionId: _tab.terminalSessionId,
+            session: session,
+            workspaceLaunch: prepared.workspaceLaunch,
+            interactiveShell: prepared.interactiveShell,
+            initialCommand: _tab.initialCommand,
+            isCurrent: () =>
+                !_disposed && _activePtyGeneration == generation,
+          ),
         );
         if (_disposed || _activePtyGeneration != generation) {
           unawaited(sub.cancel());

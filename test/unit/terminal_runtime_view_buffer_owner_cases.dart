@@ -134,6 +134,7 @@ void _registerTerminalRuntimeViewBufferOwnerTests() {
 
 final class _FakeViewBufferOwnerHost
     implements TerminalRuntimeViewBufferOwnerHost {
+  @override
   TerminalSettings terminalSettings = TerminalSettings.defaults;
   final List<TerminalSessionHandle> sessions = <TerminalSessionHandle>[];
   final List<String> evictedTabIds = <String>[];

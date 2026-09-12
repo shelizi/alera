@@ -4,13 +4,8 @@ class XtermTerminalRuntime._(
   final TerminalPtySessionFactory _ptySessionFactory,
   var TerminalSettings _settings,
   final ExternalUriLauncher _externalUriLauncher,
-  final List<GhosttyTerminalShellLaunch> Function() _shellLaunchesBuilder,
-  final TerminalLaunchEnvironmentBuilder? _agentHookEnvironmentBuilder,
-  final TerminalShellStartupPreparer? _shellStartupPreparer,
+  final TerminalRuntimeLaunchInputOwner _launchInputOwner,
   final TerminalSessionCleanup? _terminalSessionCleanup,
-  final TerminalProcessCreated? _terminalProcessCreated,
-  final TerminalClipboard _terminalClipboard,
-  final void Function(String message, {bool error})? _interactionNotice,
 ) implements TerminalRuntime, TerminalRuntimeSessionOwnerHost {
   factory({
     TerminalPtySessionFactory? ptySessionFactory,
@@ -23,24 +18,42 @@ class XtermTerminalRuntime._(
     TerminalProcessCreated? terminalProcessCreated,
     TerminalClipboard? terminalClipboard,
     void Function(String message, {bool error})? interactionNotice,
+    TerminalRuntimeLaunchInputOwner? launchInputOwner,
   }) {
+    var osc52BlockedNoticeShown = false;
+    void notifyOsc52Blocked() {
+      if (osc52BlockedNoticeShown) {
+        return;
+      }
+      osc52BlockedNoticeShown = true;
+      interactionNotice?.call(
+        'Terminal clipboard write blocked. Enable OSC 52 clipboard writes in terminal settings.',
+      );
+    }
+
+    final resolvedLaunchInputOwner =
+        launchInputOwner ??
+        TerminalRuntimeLaunchInputOwner(
+          shellLaunchesBuilder: shellLaunchesBuilder ?? _terminalShellLaunches,
+          agentHookEnvironmentBuilder: agentHookEnvironmentBuilder,
+          shellStartupPreparer: shellStartupPreparer,
+          terminalProcessCreated: terminalProcessCreated,
+          clipboard: terminalClipboard ?? const NativeTerminalClipboard(),
+          interactionNotice: interactionNotice,
+          onOsc52Blocked: notifyOsc52Blocked,
+        );
+
     return XtermTerminalRuntime._(
       ptySessionFactory ?? const DefaultTerminalPtySessionFactory(),
       initialSettings ?? TerminalSettings.defaults,
       externalUriLauncher ?? UrlLauncherExternalUriLauncher(),
-      shellLaunchesBuilder ?? _terminalShellLaunches,
-      agentHookEnvironmentBuilder,
-      shellStartupPreparer,
+      resolvedLaunchInputOwner,
       terminalSessionCleanup,
-      terminalProcessCreated,
-      terminalClipboard ?? const NativeTerminalClipboard(),
-      interactionNotice,
     );
   }
 
   final StreamController<TerminalRuntimeExitEvent> _exitController =
       StreamController<TerminalRuntimeExitEvent>.broadcast();
-  bool _osc52BlockedNoticeShown = false;
   late final TerminalRuntimeSessionOwner _sessionOwner =
       TerminalRuntimeSessionOwner(this);
 
@@ -95,25 +108,9 @@ class XtermTerminalRuntime._(
       _ptySessionFactory,
       _settings,
       _externalUriLauncher,
-      _shellLaunchesBuilder,
-      _agentHookEnvironmentBuilder,
-      _shellStartupPreparer,
-      _terminalProcessCreated,
-      _terminalClipboard,
-      _interactionNotice,
-      _notifyOsc52Blocked,
+      _launchInputOwner,
       owner._handleSessionExit,
       owner._handleVisibilityChanged,
-    );
-  }
-
-  void _notifyOsc52Blocked() {
-    if (_osc52BlockedNoticeShown) {
-      return;
-    }
-    _osc52BlockedNoticeShown = true;
-    _interactionNotice?.call(
-      'Terminal clipboard write blocked. Enable OSC 52 clipboard writes in terminal settings.',
     );
   }
 

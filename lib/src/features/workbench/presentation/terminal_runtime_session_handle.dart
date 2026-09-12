@@ -7,13 +7,7 @@ class _XtermTerminalSessionHandle(
   final TerminalPtySessionFactory _ptySessionFactory,
   var TerminalSettings _settings,
   final ExternalUriLauncher _externalUriLauncher,
-  final List<GhosttyTerminalShellLaunch> Function() _shellLaunchesBuilder,
-  final TerminalLaunchEnvironmentBuilder? _agentHookEnvironmentBuilder,
-  final TerminalShellStartupPreparer? _shellStartupPreparer,
-  final TerminalProcessCreated? _terminalProcessCreated,
-  final TerminalClipboard _clipboard,
-  final void Function(String message, {bool error})? _interactionNotice,
-  final VoidCallback _osc52Blocked,
+  final TerminalRuntimeLaunchInputOwner _launchInputOwner,
   final void Function(TerminalRuntimeExitEvent event) _onExit,
   this._onVisibilityChanged,
 ) extends TerminalSessionHandle
@@ -254,7 +248,7 @@ class _XtermTerminalSessionHandle(
       hardwareKeyboardOnly: _terminalHardwareKeyboardOnly,
       mouseWheelSensitivity: _settings.tuiScrollSensitivity.clamp(1, 10),
       onPaste: _pasteFromClipboard,
-      onCopy: _clipboard.writeText,
+      onCopy: _launchInputOwner.clipboard.writeText,
     );
   }
 
