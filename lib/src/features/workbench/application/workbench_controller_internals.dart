@@ -1,13 +1,18 @@
 part of 'workbench_controller.dart';
 
 mixin _WorkbenchControllerInternals on _$WorkbenchController
-    implements WorkbenchSelectionOwnerHost {
-  final Uuid _uuid = const Uuid();
+    implements WorkbenchSelectionOwnerHost, WorkbenchTabLayoutOwnerHost {
   bool _disposed = false;
 
   /// Selection and navigation live behind a narrow host port so the owner
   /// stays free of provider reads.
   late final WorkbenchSelectionOwner _selectionOwner = WorkbenchSelectionOwner(
+    this,
+  );
+
+  /// Tab and layout operations live behind a narrow host port so the owner
+  /// stays free of provider reads.
+  late final WorkbenchTabLayoutOwner _tabLayoutOwner = WorkbenchTabLayoutOwner(
     this,
   );
 
@@ -26,33 +31,36 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController
 
   @override
   WorkbenchWorkspaceSelectionLayoutResolver get selectionLayoutResolver =>
-      _layoutResolver;
+      _tabLayoutOwner.layoutResolver;
 
   @override
   WorkbenchGitRepositoryProbe get gitRepositoryProbe => _gitRepositoryProbe;
 
   @override
   void applyWorkspaceTabs(String workspaceId, List<WorkspaceTabRecord> tabs) =>
-      _setTabsForWorkspace(workspaceId, tabs);
+      _tabLayoutOwner.applyWorkspaceTabs(workspaceId, tabs);
 
   @override
   Future<void> applyWorkspaceLayout(
     WorkbenchLayout layout, {
     required bool persist,
-  }) => _applyLayout(layout, persist: persist);
+  }) => _tabLayoutOwner.applyWorkspaceLayout(layout, persist: persist);
 
   @override
   void applyWorkspaceLayoutInBackground(
     WorkbenchLayout layout, {
     required bool persist,
-  }) => _applyLayoutInBackground(layout, persist: persist);
+  }) => _tabLayoutOwner.applyWorkspaceLayoutInBackground(
+    layout,
+    persist: persist,
+  );
 
   @override
   void activateWorkspaceTab({
     required String workspaceId,
     required String tabId,
     String? groupId,
-  }) => _setActiveTabInternal(
+  }) => _tabLayoutOwner.activateWorkspaceTab(
     workspaceId: workspaceId,
     tabId: tabId,
     groupId: groupId,
@@ -60,6 +68,52 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController
 
   @override
   void updateViewPrefs(WorkbenchViewPrefs prefs) => _updateViewPrefs(prefs);
+
+  @override
+  WorkspaceTabService get workspaceTabService => _workspaceTabService;
+
+  @override
+  WorkbenchLayoutRepository get layoutRepository => _repository;
+
+  @override
+  Future<WorkspaceTabRecord?> findPersistedWorkspaceTab(String tabId) =>
+      _repository.findWorkspaceTabById(tabId);
+
+  @override
+  WorkbenchHostedReviewRetentionService get hostedReviewRetention =>
+      _hostedReviewRetention;
+
+  @override
+  WorkbenchExplicitResourceCleaner get explicitResourceCleaner =>
+      _explicitResourceCleaner;
+
+  @override
+  WorkbenchRetiredTabsCleanupCoordinator get retiredTabsCleanup =>
+      _retiredTabsCleanup;
+
+  @override
+  WorkbenchReplaceableTabEditorSessions get replaceableTabEditorSessions =>
+      _replaceableTabEditorSessions;
+
+  @override
+  WorkbenchWorkspaceActivityRecorder get workspaceActivityRecorder =>
+      _workspaceActivityRecorder;
+
+  @override
+  Workspace? workspaceById(String workspaceId) => _workspaceById(workspaceId);
+
+  @override
+  bool isWorkspaceTabSubscriptionActive(String workspaceId) =>
+      _tabSubscriptions.contains(workspaceId);
+
+  @override
+  Future<void> selectPersistedWorkspaceTab({
+    required String workspaceId,
+    required String tabId,
+  }) => _selectionOwner.selectWorkspaceTab(
+    workspaceId: workspaceId,
+    tabId: tabId,
+  );
 
   ProjectsService get _projectsService => ref.read(projectsServiceProvider);
 
@@ -72,14 +126,6 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController
 
   WorkbenchRemovedProjectWorkspaceCloser get _closeRemovedProjectWorkspace =>
       ref.read(terminalRuntimeLifecycleProvider).closeWorkspace;
-
-  WorkbenchSequencedLayoutRepository? _layoutRepository;
-
-  WorkbenchSequencedLayoutRepository get _sequencedLayoutRepository =>
-      _layoutRepository ??= WorkbenchSequencedLayoutRepository(_repository);
-
-  WorkbenchLayoutResolver get _layoutResolver =>
-      WorkbenchLayoutResolver(_sequencedLayoutRepository);
 
   Future<T> _withWorktreeRefreshSuspended<T>(
     String projectId,
@@ -143,7 +189,7 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController
       WorkbenchRetiredWorkspaceCleanupCoordinator(
         releaseHostedReviewTabsInBackground:
             _hostedReviewRetention.releaseTabsInBackground,
-        forgetFocusHistory: _tabFocusHistory.forget,
+        forgetFocusHistory: _tabLayoutOwner.tabFocusHistory.forget,
         releaseLocalWorkspace: _retiredResourceCleaner.releaseWorkspace,
       );
   WorkbenchRetiredTabsCleanupCoordinator get _retiredTabsCleanup =>
@@ -171,14 +217,6 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController
       WorkbenchTabSubscriptionRegistry();
   final WorkbenchMainWorkspacePreparationCoordinator _mainWorkspacePreparation =
       WorkbenchMainWorkspacePreparationCoordinator();
-  final WorkbenchLayoutLoadCoordinator _layoutLoading =
-      WorkbenchLayoutLoadCoordinator();
-  final WorkbenchWorkspaceTabClosingScope _tabClosingScope =
-      WorkbenchWorkspaceTabClosingScope();
-  final WorkbenchClearedLayoutRegistry _clearedLayouts =
-      WorkbenchClearedLayoutRegistry();
-  final WorkbenchFileTabMutationQueue _fileTabMutations =
-      WorkbenchFileTabMutationQueue();
   final WorkbenchViewPrefsPersistenceQueue _viewPrefsPersistence =
       WorkbenchViewPrefsPersistenceQueue();
   final WorkbenchWorkspaceTagMutationQueue _workspaceTagMutations =
@@ -188,7 +226,6 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController
   final WorkbenchSerialMutationQueue _workspaceTreePinMutations =
       WorkbenchSerialMutationQueue();
 
-  final WorkspaceTabFocusHistory _tabFocusHistory = WorkspaceTabFocusHistory();
   final WorkbenchBootstrapGate _bootstrapGate = WorkbenchBootstrapGate();
 
   bool get canGoBack => _selectionOwner.canGoBack;
@@ -252,120 +289,6 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController
     if (plan.viewPrefsChanged) {
       unawaited(_persistViewPrefs());
     }
-  }
-
-  void _ensureSelectionHasTab() {
-    final workspace = state.activeWorkspace;
-    if (workspace == null) {
-      return;
-    }
-    if (_tabClosingScope.isClosing(workspace.id)) {
-      return;
-    }
-    if (state.tabsFor(workspace.id).isNotEmpty &&
-        state.layoutFor(workspace.id) == null) {
-      unawaited(_loadLayoutForWorkspace(workspace.id));
-    }
-  }
-
-  Future<void> _loadLayoutForWorkspace(String workspaceId) {
-    final tabService = _workspaceTabService;
-    final layoutResolver = _layoutResolver;
-    return _layoutLoading.load(
-      workspaceId: workspaceId,
-      listTabs: tabService.listTabs,
-      resolveLayout: layoutResolver.resolve,
-      applyLayout: (layout) => _applyLayout(layout, persist: false),
-      isLoadCurrent: () => !_disposed && _workspaceById(workspaceId) != null,
-      onError: (error) {
-        if (!_disposed) {
-          state = state.copyWith(error: error.toString());
-        }
-      },
-    );
-  }
-
-  WorkbenchLayout _layoutForMutation(
-    String workspaceId,
-    List<WorkspaceTabRecord> tabs,
-  ) {
-    return (state.layoutFor(workspaceId) ??
-            WorkbenchLayout.single(
-              workspaceId: workspaceId,
-              tabIds: <String>[for (final tab in tabs) tab.id],
-            ))
-        .sanitize(tabs);
-  }
-
-  Future<void> _applyLayout(
-    WorkbenchLayout layout, {
-    required bool persist,
-  }) async {
-    state = applyWorkbenchLayoutState(state: state, layout: layout);
-    final activeTabId = layout.activeTabId;
-    if (activeTabId != null) {
-      _tabFocusHistory.record(layout.workspaceId, activeTabId);
-    }
-    if (persist) {
-      await _sequencedLayoutRepository.upsertWorkbenchLayout(layout);
-    }
-  }
-
-  void _applyLayoutInBackground(
-    WorkbenchLayout layout, {
-    required bool persist,
-  }) {
-    unawaited(
-      _applyLayout(layout, persist: persist).catchError(_recordLayoutError),
-    );
-  }
-
-  void _persistLayoutInBackground(WorkbenchLayout layout) {
-    unawaited(
-      _sequencedLayoutRepository
-          .upsertWorkbenchLayout(layout)
-          .then<void>((_) {})
-          .catchError(_recordLayoutError),
-    );
-  }
-
-  void _recordLayoutError(Object error) {
-    if (!_disposed) {
-      state = state.copyWith(error: error.toString());
-    }
-  }
-
-  void _setTabsForWorkspace(String workspaceId, List<WorkspaceTabRecord> tabs) {
-    state = applyWorkbenchTabsState(
-      state: state,
-      workspaceId: workspaceId,
-      tabs: tabs,
-    );
-  }
-
-  String _newPaneGroupId() => 'pane-${_uuid.v4()}';
-
-  void _setActiveTabInternal({
-    required String workspaceId,
-    required String tabId,
-    String? groupId,
-  }) {
-    final layout = state.layoutFor(workspaceId);
-    final resolvedGroupId = groupId ?? layout?.groupIdForTab(tabId);
-    if (layout != null && resolvedGroupId != null) {
-      final nextLayout = layout.setActiveTab(
-        groupId: resolvedGroupId,
-        tabId: tabId,
-      );
-      _applyLayoutInBackground(nextLayout, persist: true);
-      return;
-    }
-    state = applyWorkbenchActiveTabState(
-      state: state,
-      workspaceId: workspaceId,
-      tabId: tabId,
-    );
-    _tabFocusHistory.record(workspaceId, tabId);
   }
 
   Future<void> _ensureMainWorkspaceForProject(Project project) {

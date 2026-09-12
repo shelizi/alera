@@ -11,39 +11,14 @@ mixin _WorkbenchControllerPullRequestDiffTabs
     required String retentionId,
     String? subject,
     String? targetGroupId,
-  }) async {
-    try {
-      final previousTabs = state.tabsFor(workspace.id);
-      final layout = _layoutForMutation(workspace.id, previousTabs);
-      final tab =
-          await WorkbenchPullRequestDiffTabOpenCoordinator(
-            tabStore: WorkbenchPullRequestDiffTabStoreAdapter(
-              _workspaceTabService,
-            ),
-            hostedReviewRetention: _hostedReviewRetention,
-          ).open(
-            workspace: workspace,
-            previousTabs: previousTabs,
-            gitDiffRoot: gitDiffRoot,
-            pullRequestNumber: pullRequestNumber,
-            commitOid: commitOid,
-            parentOid: parentOid,
-            retentionId: retentionId,
-            subject: subject,
-            planPlacement: (tab) => planWorkbenchReusableTabToGroup(
-              previousTabs: previousTabs,
-              layout: layout,
-              tab: tab,
-              targetGroupId: targetGroupId,
-            ),
-            applyTabs: (tabs) => _setTabsForWorkspace(workspace.id, tabs),
-            applyLayout: (layout) => _applyLayout(layout, persist: true),
-          );
-      state = state.copyWith(error: null);
-      return tab;
-    } catch (error) {
-      state = state.copyWith(error: error.toString());
-      rethrow;
-    }
-  }
+  }) => _tabLayoutOwner.openGitPullRequestDiffTab(
+    workspace: workspace,
+    gitDiffRoot: gitDiffRoot,
+    pullRequestNumber: pullRequestNumber,
+    commitOid: commitOid,
+    parentOid: parentOid,
+    retentionId: retentionId,
+    subject: subject,
+    targetGroupId: targetGroupId,
+  );
 }

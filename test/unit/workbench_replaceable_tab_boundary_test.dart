@@ -5,7 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   test('replaceable file tab orchestration uses the narrow editor-session contract', () {
     final controllerSource = File(
-      'lib/src/features/workbench/application/workbench_controller_file_tabs.dart',
+      'lib/src/features/workbench/application/workbench_tab_layout_owner_file_tabs.dart',
     ).readAsStringSync();
     final coordinatorSource = File(
       'lib/src/features/workbench/application/workbench_replaceable_tab_open_coordinator.dart',

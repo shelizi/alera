@@ -139,7 +139,7 @@ mixin _WorkbenchControllerWorkspaceCreation
       openDeferredSetupTab: _openDeferredSetupTab,
       refocusAgentTab: (tabId) {
         final groupId = state.layoutFor(workspace.id)?.groupIdForTab(tabId);
-        _setActiveTabInternal(
+        _tabLayoutOwner.activateWorkspaceTab(
           workspaceId: workspace.id,
           tabId: tabId,
           groupId: groupId,

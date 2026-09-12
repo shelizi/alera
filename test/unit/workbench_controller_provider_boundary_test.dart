@@ -14,7 +14,7 @@ void main() {
             final name = file.uri.pathSegments.last;
             final isControllerPart = name.startsWith('workbench_controller');
             final isOwner =
-                name.startsWith('workbench_') && name.endsWith('_owner.dart');
+                name.startsWith('workbench_') && name.contains('_owner');
             return (isControllerPart || isOwner) &&
                 name.endsWith('.dart') &&
                 name != 'workbench_controller_internals.dart' &&

@@ -58,10 +58,10 @@ mixin _WorkbenchControllerSync
       ensureMainWorkspaceInBackground: (project) {
         unawaited(_ensureMainWorkspaceForProject(project));
       },
-      forgetClearedLayouts: _clearedLayouts.forgetAll,
+      forgetClearedLayouts: _tabLayoutOwner.clearedLayouts.forgetAll,
       pruneMetadataWatchers: _worktreeMetadataWatcherRegistry.prune,
     );
-    _ensureSelectionHasTab();
+    _tabLayoutOwner.ensureSelectionHasTab();
   }
 
   void _onWorkspacesChanged(Project project, List<Workspace> workspaces) {
@@ -80,52 +80,16 @@ mixin _WorkbenchControllerSync
           tabs: state.tabsFor(workspaceId),
         );
       },
-      forgetClearedLayouts: _clearedLayouts.forgetAll,
-      loadLayoutInBackground: (workspaceId) {
-        unawaited(_loadLayoutForWorkspace(workspaceId));
-      },
+      forgetClearedLayouts: _tabLayoutOwner.clearedLayouts.forgetAll,
+      loadLayoutInBackground: _tabLayoutOwner.loadLayoutForWorkspace,
       watchTabs: _repository.watchWorkspaceTabs,
-      onTabsChanged: _onTabsChanged,
+      onTabsChanged: _tabLayoutOwner.handleTabsChanged,
     );
     state = applyWorkbenchWorkspaceSetSyncPlan(state: state, plan: plan);
     _pruneWorktreeNavigationHistory();
     if (plan.viewPrefsChanged) {
       unawaited(_persistViewPrefs());
     }
-    _ensureSelectionHasTab();
-  }
-
-  void _onTabsChanged(String workspaceId, List<WorkspaceTabRecord> tabs) {
-    if (!_tabSubscriptions.contains(workspaceId)) {
-      return;
-    }
-    final layoutWasCleared = _clearedLayouts.contains(workspaceId);
-    final plan = planWorkbenchTabSetSync(
-      state: state,
-      workspaceId: workspaceId,
-      tabs: tabs,
-      layoutWasCleared: layoutWasCleared,
-    );
-    final removedTabs = plan.removedTabs;
-    // A tab record that disappeared from persisted state can never reach its
-    // live terminal handle again, so release the hosted-review retention and
-    // client-local terminal/editor resources without terminating a PTY that
-    // another client may still own.
-    _retiredTabsCleanup.cleanup(
-      workspace: _workspaceById(workspaceId),
-      tabs: removedTabs,
-    );
-    if (tabs.isNotEmpty) {
-      _clearedLayouts.forget(workspaceId);
-    }
-    state = applyWorkbenchTabSetSyncPlan(state: state, plan: plan);
-    if (plan.shouldLoadLayout) {
-      unawaited(_loadLayoutForWorkspace(workspaceId));
-    }
-    final layoutToPersist = plan.layoutToPersist;
-    if (layoutToPersist != null) {
-      _persistLayoutInBackground(layoutToPersist);
-    }
-    _ensureSelectionHasTab();
+    _tabLayoutOwner.ensureSelectionHasTab();
   }
 }

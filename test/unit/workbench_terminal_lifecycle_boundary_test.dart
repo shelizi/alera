@@ -23,25 +23,25 @@ void main() {
     },
   );
 
-  test(
-    'sync delegates retired resource cleanup to the application cleaner',
-    () {
-      final source = File(
-        'lib/src/features/workbench/application/workbench_controller_sync.dart',
-      ).readAsStringSync();
+  test('sync delegates retired resource cleanup to the application cleaner', () {
+    final source = File(
+      'lib/src/features/workbench/application/workbench_controller_sync.dart',
+    ).readAsStringSync();
+    final ownerSource = File(
+      'lib/src/features/workbench/application/workbench_tab_layout_owner.dart',
+    ).readAsStringSync();
 
-      expect(source, contains('_retiredWorkspaceCleanup.cleanup'));
-      expect(
-        source,
-        isNot(contains('_retiredResourceCleaner.releaseWorkspace')),
-      );
-      expect(source, contains('_retiredTabsCleanup.cleanup'));
-      expect(source, isNot(contains('_retiredResourceCleaner.releaseTabs')));
-      expect(source, isNot(contains('terminalRuntimeLifecycleProvider')));
-      expect(source, isNot(contains('editorSessionRegistryProvider')));
-      expect(source, isNot(contains('agentHookReceiverProvider')));
-    },
-  );
+    expect(source, contains('_retiredWorkspaceCleanup.cleanup'));
+    expect(source, isNot(contains('_retiredResourceCleaner.releaseWorkspace')));
+    expect(ownerSource, contains('retiredTabsCleanup.cleanup'));
+    expect(ownerSource, isNot(contains('_retiredResourceCleaner.releaseTabs')));
+    expect(source, isNot(contains('terminalRuntimeLifecycleProvider')));
+    expect(source, isNot(contains('editorSessionRegistryProvider')));
+    expect(source, isNot(contains('agentHookReceiverProvider')));
+    expect(ownerSource, isNot(contains('terminalRuntimeLifecycleProvider')));
+    expect(ownerSource, isNot(contains('editorSessionRegistryProvider')));
+    expect(ownerSource, isNot(contains('agentHookReceiverProvider')));
+  });
 
   test(
     'workspace deletion delegates provider cleanup to the deletion coordinator',
@@ -105,7 +105,7 @@ void main() {
     'tab close delegates explicit local cleanup to the close coordinator',
     () {
       final controllerSource = File(
-        'lib/src/features/workbench/application/workbench_controller_tabs.dart',
+        'lib/src/features/workbench/application/workbench_tab_layout_owner_tabs.dart',
       ).readAsStringSync();
       final coordinatorSource = File(
         'lib/src/features/workbench/application/workbench_tab_close_coordinator.dart',

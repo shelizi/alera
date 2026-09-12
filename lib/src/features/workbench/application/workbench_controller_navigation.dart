@@ -8,16 +8,10 @@ mixin _WorkbenchControllerNavigation
   Future<void> openPersistedWorkspaceTab({
     required String workspaceId,
     required String tabId,
-  }) => WorkbenchPersistedTabOpenCoordinator(
-    findTab: _repository.findWorkspaceTabById,
-    isDisposed: () => _disposed,
-    readCurrentTabs: () => state.tabsFor(workspaceId),
-    layoutForMutation: (tabs) => _layoutForMutation(workspaceId, tabs),
-    applyTabs: (tabs) => _setTabsForWorkspace(workspaceId, tabs),
-    applyLayout: (layout) => _applyLayout(layout, persist: true),
-    selectTab: ({required workspaceId, required tabId}) =>
-        selectWorkspaceTab(workspaceId: workspaceId, tabId: tabId),
-  ).open(workspaceId: workspaceId, tabId: tabId);
+  }) => _tabLayoutOwner.openPersistedWorkspaceTab(
+    workspaceId: workspaceId,
+    tabId: tabId,
+  );
 
   Future<void> selectWorkspaceTab({
     required String workspaceId,
