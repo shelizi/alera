@@ -1,0 +1,31 @@
+{
+  "id": 22,
+  "ok": true,
+  "payload": {
+    "deferredSetupCommand": "<deferredSetupCommand:0>",
+    "setupReport": {
+      "steps": []
+    },
+    "workspace": {
+      "branch": "feature/fixture",
+      "childCount": 0,
+      "createdAt": "2000-01-01T00:00:01.000Z",
+      "hostId": "local",
+      "id": "workspace-2",
+      "instanceId": "00000000-0000-4000-8000-000000000002",
+      "isPinned": false,
+      "kind": "linked",
+      "name": "Feature Workspace",
+      "parentWorkspaceId": null,
+      "path": "<path:3>",
+      "projectId": "project-1",
+      "reusesExistingBranch": false,
+      "sectionId": null,
+      "sourceBranch": "main",
+      "status": "active",
+      "tagIds": [],
+      "tagNames": [],
+      "updatedAt": "2000-01-01T00:00:01.000Z"
+    }
+  }
+}

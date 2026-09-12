@@ -1,0 +1,8 @@
+{
+  "id": 21,
+  "type": "project.register",
+  "payload": {
+    "path": "<repo-path>",
+    "name": "Fixture Project"
+  }
+}
