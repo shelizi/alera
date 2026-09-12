@@ -833,6 +833,18 @@ Actor validates dispatch mutation + reserves generation/owner
 - Contract matrix 落在 `docs/shared-prefs-operation-contract.md`：涵蓋 `workbenchViewPrefs.get`/`update` 與 `workspaceActivity.*`。此 domain 的核心規則是非對稱樂觀鎖：desktop 是權威 writer 恆 last-write-wins，mobile 必須帶符合的 `expectedRevision` 否則收 typed conflict；`sectionSort`/`collapsedSectionIds`/`othersSectionCollapsed` 三個 legacy key 在寫入前從現值 backfill。
 - `workbench_shared_state_store_tests.rs` 新增 `desktop_writer_bypasses_the_revision_check`，與既有 mobile stale-revision 拒絕、activity max-wins、tab remove 冪等、sleep cascade 範圍測試互補。
 
+#### Agent/Settings domain 已完成
+
+- Contract matrix 落在 `docs/agent-settings-operation-contract.md`：涵蓋 `agentProfile.*`（含 `launchIdempotent` 的 `clientMutationId` receipt）、`agentPresence.list`、`agentQuota.*`/`agentUsage.snapshot`、`runtimeSettings.*` 與 `mobile.*` 變體、`aiText.*`、`aiDictation.*`、`host.*`、`configure`、`status.get`，並列出三個執行面（mailbox op、spawned job、Maintenance deferred）與 settings update 的 deferred side effects。
+- 新測試 `agent_settings_contract_tests.rs` pin 住：`agentProfile.upsert` stale `expectedRevision` 回 typed conflict 且不覆寫、`agentProfile.remove` 區分 format error / typed conflict / 冪等 retry、`runtimeSettings.update` 重放冪等、`mobile.runtimeSettings.update` 拒絕 desktop-only key、`status.get` 形狀穩定。
+- 記錄的缺口：`runtimeSettings.update` 逐 key 寫入（mixed payload 可能部分提交）且無 revision/OCC、`agentQuota.consumeCodexResetCredit` 無 idempotency key、name 衝突與 stale-title 失敗是 plain `state` error。
+
+#### Terminal domain 已完成
+
+- Contract matrix 落在 `docs/terminal-operation-contract.md`：涵蓋 `createOrAttach`/`write`/`resize`/`terminal.read`/`setOutputPaused`/`detach`/`terminate`、mobile `terminal.create`/`attach`/`restart`/`reclaim`、`terminal.driver.*`/`runningProcesses`/`terminal.pulse.*`，並補一張「Internal machinery」表（output 雙軌 batch、resync tick、durable barrier、checkpoint、PTY exit、client disconnect、idle shutdown、spawnOnCreate 恢復、instance-id fencing、`restore_exited`）。
+- 新測試 `terminal_contract_tests.rs` pin 住：live session attach 不 re-validate metadata、`terminal.restart` metadata 不符 fail-closed、`write` 三種錯誤面、`detach` 保留 PTY + checkpoint 而 `terminate` 刪除 tab+session+history、`dispose_client` 不殺 PTY且過期 shutdown tick 被忽略。
+- 記錄的缺口：`write` 無 op id（lost reply retry 會重複寫入）、`terminate` 非冪等（retry 回 `not attached`，與從未 attach 無法區分）、`terminal_input_backpressure` 是字串前綴而非 typed error。
+
 ---
 
 ## 14. Phase 2/3：跨語言 wire contract
