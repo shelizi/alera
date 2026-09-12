@@ -92,15 +92,17 @@ impl ServerActor {
         }
         let runtime_store = self.runtime_store.clone();
         let inbox = self.inbox.clone();
-        let slots = self.deferred_request_slots.clone();
-        tokio::spawn(async move {
-            let _permit = slots
-                .acquire_owned()
-                .await
-                .expect("deferred request semaphore must remain open");
-            let result = load_workspace_sidebar_snapshot(&runtime_store).await;
-            let _ = inbox.send(ServerCommand::WorkspaceSidebarSnapshotFinished { result });
-        });
+        if let Err(error) = self.deferred_admission.schedule(
+            super::deferred_admission::DeferredRequestClass::Bulk,
+            "workspaceSidebar.snapshot",
+            None,
+            async move {
+                let result = load_workspace_sidebar_snapshot(&runtime_store).await;
+                let _ = inbox.send(ServerCommand::WorkspaceSidebarSnapshotFinished { result });
+            },
+        ) {
+            self.finish_workspace_sidebar_snapshot(Err(error));
+        }
     }
 
     pub(super) fn finish_workspace_sidebar_snapshot(&mut self, result: HostResult<Value>) {

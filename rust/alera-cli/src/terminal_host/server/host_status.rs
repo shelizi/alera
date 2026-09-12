@@ -117,6 +117,7 @@ impl ServerActor {
             "activeAgents": self.agent_presence_items().as_array().map_or(0, Vec::len),
             "activePushSubscriptions": self.account_push.active_subscriptions,
             "mobileGatewayEnabled": self.mobile_gateway.is_some(),
+            "deferredAdmission": self.deferred_admission.snapshot(),
         })
     }
 }

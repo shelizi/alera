@@ -11,6 +11,7 @@ use crate::terminal_host::host_error::{HostError, HostResult};
 use crate::terminal_host::protocol::{error_response, ok_response};
 
 use super::automation_policy_requests::load_automation_policy_show;
+use super::deferred_admission::DeferredRequestClass;
 use super::project_requests::{load_effective_project_config, load_project_branches};
 use super::request_payloads::parse_payload;
 use super::requests::require_string_key;
@@ -19,35 +20,43 @@ use super::workspace_sidebar_requests::load_workspace_repository_web_url;
 use super::{ServerActor, ServerCommand};
 
 impl ServerActor {
-    pub(super) fn start_deferred_request<F>(&self, client_id: u64, request_id: i64, task: F)
+    pub(super) fn start_deferred_request<F>(
+        &self,
+        client_id: u64,
+        request_id: i64,
+        request_type: &str,
+        task: F,
+    ) -> HostResult<()>
     where
         F: Future<Output = HostResult<Value>> + Send + 'static,
     {
         let inbox = self.inbox.clone();
-        let slots = self.deferred_request_slots.clone();
-        tokio::spawn(async move {
-            let _permit = slots
-                .acquire_owned()
-                .await
-                .expect("deferred request semaphore must remain open");
-            let result = task.await;
-            let _ = inbox.send(ServerCommand::DeferredRequestFinished {
-                client_id,
-                request_id,
-                result,
-            });
-        });
+        self.deferred_admission.schedule(
+            DeferredRequestClass::Bulk,
+            request_type,
+            Some(client_id),
+            async move {
+                let result = task.await;
+                let _ = inbox.send(ServerCommand::DeferredRequestFinished {
+                    client_id,
+                    request_id,
+                    result,
+                });
+            },
+        )
     }
 
     pub(super) fn start_deferred_blocking_request<F>(
         &self,
         client_id: u64,
         request_id: i64,
+        request_type: &str,
         task: F,
-    ) where
+    ) -> HostResult<()>
+    where
         F: FnOnce() -> HostResult<Value> + Send + 'static,
     {
-        self.start_deferred_request(client_id, request_id, async move {
+        self.start_deferred_request(client_id, request_id, request_type, async move {
             tokio::task::spawn_blocking(task)
                 .await
                 .unwrap_or_else(|error| {
@@ -55,7 +64,7 @@ impl ServerActor {
                         "Deferred request failed: {error}"
                     )))
                 })
-        });
+        })
     }
 
     pub(super) fn finish_deferred_request(
@@ -101,8 +110,9 @@ impl ServerActor {
                 self.start_deferred_request(
                     client_id,
                     request_id,
+                    request_type,
                     load_automation_policy_show(runtime_store, payload.clone()),
-                );
+                )?;
                 Ok(true)
             }
             "project.register" => {
@@ -119,8 +129,9 @@ impl ServerActor {
                 self.start_deferred_request(
                     client_id,
                     request_id,
+                    request_type,
                     load_effective_project_config(runtime_store, project_id),
-                );
+                )?;
                 Ok(true)
             }
             "project.branches.list" => {
@@ -131,8 +142,9 @@ impl ServerActor {
                 self.start_deferred_request(
                     client_id,
                     request_id,
+                    request_type,
                     load_project_branches(runtime_store, project_id),
-                );
+                )?;
                 Ok(true)
             }
             "workspace.repositoryWebUrl" => {
@@ -143,20 +155,26 @@ impl ServerActor {
                 self.start_deferred_request(
                     client_id,
                     request_id,
+                    request_type,
                     load_workspace_repository_web_url(runtime_store, workspace_id),
-                );
+                )?;
                 Ok(true)
             }
             "hostDirectory.list" => {
                 self.require_auth(client_id)?;
                 self.require_request_allowed(client_id, request_type)?;
                 let path = require_string_key(payload, "path")?.to_string();
-                self.start_deferred_blocking_request(client_id, request_id, move || {
-                    let entries = list_host_directory(&path)
-                        .map_err(|error| HostError::state(error.to_string()))?;
-                    serde_json::to_value(entries)
-                        .map_err(|error| HostError::state(error.to_string()))
-                });
+                self.start_deferred_blocking_request(
+                    client_id,
+                    request_id,
+                    request_type,
+                    move || {
+                        let entries = list_host_directory(&path)
+                            .map_err(|error| HostError::state(error.to_string()))?;
+                        serde_json::to_value(entries)
+                            .map_err(|error| HostError::state(error.to_string()))
+                    },
+                )?;
                 Ok(true)
             }
             "workspaceSidebar.snapshot" => {
@@ -230,7 +248,7 @@ impl ServerActor {
                     request_id,
                     request_type,
                     payload,
-                );
+                )?;
                 Ok(true)
             }
             "mobile.promptFile.start"
@@ -239,7 +257,12 @@ impl ServerActor {
             | "mobile.promptFile.cancel" => {
                 self.require_auth(client_id)?;
                 self.require_request_allowed(client_id, request_type)?;
-                self.start_mobile_prompt_file_request(client_id, request_id, request_type, payload);
+                self.start_mobile_prompt_file_request(
+                    client_id,
+                    request_id,
+                    request_type,
+                    payload,
+                )?;
                 Ok(true)
             }
             "workspace.createManaged" => {

@@ -204,11 +204,13 @@ impl ServerActor {
             },
         );
         let inbox = self.inbox.clone();
-        let slots = self.deferred_request_slots.clone();
-        let dispatch_id = dispatch_id.to_string();
-        tokio::spawn(async move {
-            let result = match slots.acquire_owned().await {
-                Ok(_permit) => tokio::task::spawn_blocking(move || {
+        let dispatch_id_owned = dispatch_id.to_string();
+        if let Err(error) = self.deferred_admission.schedule(
+            super::deferred_admission::DeferredRequestClass::DispatchCritical,
+            "orchestration.dispatchContext.install",
+            None,
+            async move {
+                let result = tokio::task::spawn_blocking(move || {
                     write_dispatch_context_file(&gate, generation, &path, &bytes)
                 })
                 .await
@@ -216,15 +218,17 @@ impl ServerActor {
                     Err(HostError::state(format!(
                         "dispatch context install failed: {error}"
                     )))
-                }),
-                Err(_) => Err(HostError::state("deferred request budget closed")),
-            };
-            let _ = inbox.send(ServerCommand::DispatchContextInstalled {
-                dispatch_id,
-                generation,
-                result,
-            });
-        });
+                });
+                let _ = inbox.send(ServerCommand::DispatchContextInstalled {
+                    dispatch_id: dispatch_id_owned,
+                    generation,
+                    result,
+                });
+            },
+        ) {
+            self.pending_dispatch_installs.remove(dispatch_id);
+            return Err(error);
+        }
         Ok(())
     }
 
@@ -256,23 +260,28 @@ impl ServerActor {
             }
         }
 
-        let slots = self.deferred_request_slots.clone();
-        tokio::spawn(async move {
-            let _permit = match slots.acquire_owned().await {
-                Ok(permit) => permit,
-                Err(_) => return,
-            };
-            let _ = tokio::task::spawn_blocking(move || {
-                let Ok(generation) = gate.lock() else {
-                    return;
-                };
-                if *generation != cleanup_generation {
-                    return;
-                }
-                let _ = std::fs::remove_file(path);
-            })
-            .await;
-        });
+        if let Err(error) = self.deferred_admission.schedule(
+            super::deferred_admission::DeferredRequestClass::Maintenance,
+            "orchestration.dispatchContext.cleanup",
+            None,
+            async move {
+                let _ = tokio::task::spawn_blocking(move || {
+                    let Ok(generation) = gate.lock() else {
+                        return;
+                    };
+                    if *generation != cleanup_generation {
+                        return;
+                    }
+                    let _ = std::fs::remove_file(path);
+                })
+                .await;
+            },
+        ) {
+            tracing::warn!(
+                "dispatch context cleanup was not admitted: {}",
+                error.wire_message()
+            );
+        }
     }
 
     /// Resumes a parked install: re-validates the reserved generation and the

@@ -190,6 +190,7 @@ impl ServerActor {
         self.orchestration_waiters.remove_client(client_id);
         self.cancel_queued_runtime_mutations(client_id);
         self.release_mobile_driver_for_client(client_id);
+        self.deferred_admission.disconnect_client(client_id);
         self.cancel_mobile_prompt_file_uploads(client_id);
         self.cancel_mobile_prompt_image_uploads(client_id);
         let session_ids: Vec<String> = self.sessions.keys().cloned().collect();
@@ -329,9 +330,9 @@ mod tests {
             terminal_pulses: Default::default(),
             codex: None,
             codex_starting: None,
-            deferred_request_slots: Arc::new(tokio::sync::Semaphore::new(
-                super::super::DEFERRED_REQUEST_CONCURRENCY,
-            )),
+            deferred_admission: Arc::new(
+                super::super::deferred_admission::DeferredAdmission::default(),
+            ),
             workspace_sidebar_snapshots: Default::default(),
             inbox,
             next_client_id: Arc::new(AtomicU64::new(2)),

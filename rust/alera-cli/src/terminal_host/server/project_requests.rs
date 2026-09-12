@@ -38,28 +38,27 @@ impl ServerActor {
         let path = request.path;
         let name = request.name;
         let inbox = self.inbox.clone();
-        let slots = self.deferred_request_slots.clone();
-        tokio::spawn(async move {
-            let _permit = slots
-                .acquire_owned()
+        self.deferred_admission.schedule(
+            super::deferred_admission::DeferredRequestClass::Bulk,
+            "project.register",
+            Some(client_id),
+            async move {
+                let result = tokio::task::spawn_blocking(move || {
+                    prepare_project_registration(&path, name.as_deref()).map_err(state_error)
+                })
                 .await
-                .expect("deferred request semaphore must remain open");
-            let result = tokio::task::spawn_blocking(move || {
-                prepare_project_registration(&path, name.as_deref()).map_err(state_error)
-            })
-            .await
-            .unwrap_or_else(|error| {
-                Err(HostError::state(format!(
-                    "Project registration preparation failed: {error}"
-                )))
-            });
-            let _ = inbox.send(ServerCommand::ProjectRegistrationPrepared {
-                client_id,
-                request_id,
-                result,
-            });
-        });
-        Ok(())
+                .unwrap_or_else(|error| {
+                    Err(HostError::state(format!(
+                        "Project registration preparation failed: {error}"
+                    )))
+                });
+                let _ = inbox.send(ServerCommand::ProjectRegistrationPrepared {
+                    client_id,
+                    request_id,
+                    result,
+                });
+            },
+        )
     }
 
     pub(super) async fn finish_project_registration(

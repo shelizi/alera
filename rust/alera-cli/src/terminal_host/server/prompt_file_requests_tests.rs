@@ -8,6 +8,7 @@ use super::*;
 use crate::terminal_host::client::ClientHandle;
 
 use super::super::actor_test_harness::{mobile_client, test_actor};
+use super::super::deferred_admission::DeferredAdmission;
 
 #[test]
 fn mutations_for_one_upload_are_serialized() {
@@ -102,7 +103,11 @@ async fn orphaned_start_cleanup_respects_deferred_io_budget() {
     let directory = tempfile::tempdir().expect("tempdir");
     let store = PromptFileStore::in_runtime_dir(directory.path());
     let mut actor = test_actor(&directory, HashMap::new(), HashMap::new()).await;
-    actor.deferred_request_slots = Arc::new(tokio::sync::Semaphore::new(0));
+    actor.deferred_admission = Arc::new(DeferredAdmission::paused_with_limits(
+        usize::MAX,
+        usize::MAX,
+        0,
+    ));
     let orphaned = store.start("orphaned-budget.bin", 2).expect("start");
 
     actor.handle_mobile_prompt_file_finished(
@@ -119,7 +124,7 @@ async fn orphaned_start_cleanup_respects_deferred_io_budget() {
         1
     );
 
-    actor.deferred_request_slots.add_permits(1);
+    actor.deferred_admission.add_test_permits(1);
     tokio::time::timeout(Duration::from_secs(1), async {
         loop {
             if matches!(
@@ -146,7 +151,11 @@ async fn disconnected_upload_cleanup_respects_deferred_io_budget() {
         HashMap::new(),
     )
     .await;
-    actor.deferred_request_slots = Arc::new(tokio::sync::Semaphore::new(0));
+    actor.deferred_admission = Arc::new(DeferredAdmission::paused_with_limits(
+        usize::MAX,
+        usize::MAX,
+        0,
+    ));
 
     let disconnected = store.start("budgeted-disconnect.bin", 2).expect("start");
     actor.handle_mobile_prompt_file_finished(
@@ -166,7 +175,7 @@ async fn disconnected_upload_cleanup_respects_deferred_io_budget() {
         1
     );
 
-    actor.deferred_request_slots.add_permits(1);
+    actor.deferred_admission.add_test_permits(1);
     tokio::time::timeout(std::time::Duration::from_secs(1), async {
         loop {
             if matches!(

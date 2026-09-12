@@ -93,9 +93,7 @@ pub async fn run_terminal_host_server(
         terminal_pulses: Default::default(),
         codex: None,
         codex_starting: None,
-        deferred_request_slots: Arc::new(tokio::sync::Semaphore::new(
-            super::DEFERRED_REQUEST_CONCURRENCY,
-        )),
+        deferred_admission: Arc::new(super::deferred_admission::DeferredAdmission::default()),
         workspace_sidebar_snapshots: Default::default(),
         inbox,
         next_client_id,

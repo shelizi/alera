@@ -27,7 +27,7 @@ impl ServerActor {
         request_id: i64,
         request_type: &str,
         payload: &Value,
-    ) {
+    ) -> HostResult<()> {
         let runtime_dir = self.runtime_dir.clone();
         let request_type = request_type.to_string();
         let upload_id = payload
@@ -36,27 +36,29 @@ impl ServerActor {
             .map(str::to_string);
         let payload = payload.clone();
         let inbox = self.inbox.clone();
-        let slots = self.deferred_request_slots.clone();
-        tokio::spawn(async move {
-            let _permit = match slots.acquire_owned().await {
-                Ok(permit) => permit,
-                Err(_) => return,
-            };
-            let operation = request_type.clone();
-            let result = tokio::task::spawn_blocking(move || {
-                handle_prompt_image_request(runtime_dir, &request_type, &payload)
-            })
-            .await
-            .map_err(|error| HostError::state(format!("Prompt image operation failed: {error}")))
-            .and_then(|result| result);
-            let _ = inbox.send(ServerCommand::MobilePromptImageFinished {
-                client_id,
-                request_id,
-                request_type: operation,
-                upload_id,
-                result,
-            });
-        });
+        self.deferred_admission.schedule(
+            super::deferred_admission::DeferredRequestClass::Bulk,
+            request_type.clone(),
+            Some(client_id),
+            async move {
+                let operation = request_type.clone();
+                let result = tokio::task::spawn_blocking(move || {
+                    handle_prompt_image_request(runtime_dir, &request_type, &payload)
+                })
+                .await
+                .map_err(|error| {
+                    HostError::state(format!("Prompt image operation failed: {error}"))
+                })
+                .and_then(|result| result);
+                let _ = inbox.send(ServerCommand::MobilePromptImageFinished {
+                    client_id,
+                    request_id,
+                    request_type: operation,
+                    upload_id,
+                    result,
+                });
+            },
+        )
     }
 
     pub(super) fn handle_mobile_prompt_image_finished(
@@ -127,22 +129,27 @@ impl ServerActor {
 
     fn schedule_prompt_image_cleanup(&self, upload_ids: Vec<String>) {
         let runtime_dir = self.runtime_dir.clone();
-        let slots = self.deferred_request_slots.clone();
-        tokio::spawn(async move {
-            let _permit = match slots.acquire_owned().await {
-                Ok(permit) => permit,
-                Err(_) => return,
-            };
-            let _ = tokio::task::spawn_blocking(move || {
-                let store = PromptImageStore::in_runtime_dir(&runtime_dir);
-                for upload_id in upload_ids {
-                    let _ = with_upload_gate(&upload_id, || {
-                        store.cancel(&upload_id).map_err(prompt_image_error)
-                    });
-                }
-            })
-            .await;
-        });
+        if let Err(error) = self.deferred_admission.schedule(
+            super::deferred_admission::DeferredRequestClass::Maintenance,
+            "mobile.promptImage.cleanup",
+            None,
+            async move {
+                let _ = tokio::task::spawn_blocking(move || {
+                    let store = PromptImageStore::in_runtime_dir(&runtime_dir);
+                    for upload_id in upload_ids {
+                        let _ = with_upload_gate(&upload_id, || {
+                            store.cancel(&upload_id).map_err(prompt_image_error)
+                        });
+                    }
+                })
+                .await;
+            },
+        ) {
+            tracing::warn!(
+                "prompt image cleanup was not admitted: {}",
+                error.wire_message()
+            );
+        }
     }
 
     fn remove_mobile_prompt_image_upload(&mut self, client_id: u64, upload_id: &str) {

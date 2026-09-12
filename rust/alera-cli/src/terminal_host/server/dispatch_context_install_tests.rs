@@ -5,6 +5,7 @@ use alera_core::runtime::{OrchestrationDispatchStatus, OrchestrationTaskStatus};
 use serde_json::json;
 
 use super::actor_test_harness::{local_client, test_actor};
+use super::deferred_admission::DeferredAdmission;
 use super::dispatch_context_install::DispatchContextContinuation;
 use crate::terminal_host::client::ClientHandle;
 
@@ -32,7 +33,11 @@ async fn ready_task(actor: &super::ServerActor, workspace_id: &str) -> String {
 async fn dispatch_context_cleanup_is_deferred_and_budgeted() {
     let dir = tempfile::tempdir().unwrap();
     let mut actor = test_actor(&dir, HashMap::new(), HashMap::new()).await;
-    actor.deferred_request_slots = std::sync::Arc::new(tokio::sync::Semaphore::new(0));
+    actor.deferred_admission = std::sync::Arc::new(DeferredAdmission::paused_with_limits(
+        usize::MAX,
+        usize::MAX,
+        0,
+    ));
     let context_dir = actor.runtime_dir.join("orchestration-contexts");
     std::fs::create_dir_all(&context_dir).unwrap();
     let context_path = context_dir.join("cleanup.json");
@@ -49,7 +54,7 @@ async fn dispatch_context_cleanup_is_deferred_and_budgeted() {
         "dispatch context cleanup bypassed the deferred I/O budget"
     );
 
-    actor.deferred_request_slots.add_permits(1);
+    actor.deferred_admission.add_test_permits(1);
     tokio::time::timeout(Duration::from_secs(1), async {
         while context_path.exists() {
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -69,7 +74,11 @@ async fn dispatch_context_install_is_deferred_from_the_actor_mailbox() {
         HashMap::new(),
     )
     .await;
-    actor.deferred_request_slots = std::sync::Arc::new(tokio::sync::Semaphore::new(0));
+    actor.deferred_admission = std::sync::Arc::new(DeferredAdmission::paused_with_limits(
+        usize::MAX,
+        usize::MAX,
+        0,
+    ));
     let (inbox, mut commands) = tokio::sync::mpsc::unbounded_channel();
     actor.inbox = inbox;
     let task_id = ready_task(&actor, "w1").await;
@@ -106,7 +115,7 @@ async fn dispatch_context_install_is_deferred_from_the_actor_mailbox() {
         .unwrap();
     assert_eq!(status["id"], 31);
 
-    actor.deferred_request_slots.add_permits(1);
+    actor.deferred_admission.add_test_permits(1);
     let completion = tokio::time::timeout(Duration::from_secs(1), commands.recv())
         .await
         .expect("dispatch context install should report completion")
@@ -138,7 +147,11 @@ async fn dispatch_context_install_is_deferred_from_the_actor_mailbox() {
 async fn stale_dispatch_context_install_cannot_overwrite_a_newer_one() {
     let dir = tempfile::tempdir().unwrap();
     let mut actor = test_actor(&dir, HashMap::new(), HashMap::new()).await;
-    actor.deferred_request_slots = std::sync::Arc::new(tokio::sync::Semaphore::new(0));
+    actor.deferred_admission = std::sync::Arc::new(DeferredAdmission::paused_with_limits(
+        usize::MAX,
+        usize::MAX,
+        0,
+    ));
     actor
         .start_dispatch_context_install(
             "reused",
@@ -157,7 +170,7 @@ async fn stale_dispatch_context_install_cannot_overwrite_a_newer_one() {
             DispatchContextContinuation::Detached,
         )
         .unwrap();
-    actor.deferred_request_slots.add_permits(3);
+    actor.deferred_admission.add_test_permits(3);
     let context_path = actor
         .runtime_dir
         .join("orchestration-contexts")
@@ -192,7 +205,11 @@ async fn dispatch_context_completion_is_dropped_when_the_dispatch_owner_died() {
         HashMap::new(),
     )
     .await;
-    actor.deferred_request_slots = std::sync::Arc::new(tokio::sync::Semaphore::new(0));
+    actor.deferred_admission = std::sync::Arc::new(DeferredAdmission::paused_with_limits(
+        usize::MAX,
+        usize::MAX,
+        0,
+    ));
     let (inbox, mut commands) = tokio::sync::mpsc::unbounded_channel();
     actor.inbox = inbox;
     let task_id = ready_task(&actor, "w1").await;
@@ -220,7 +237,7 @@ async fn dispatch_context_completion_is_dropped_when_the_dispatch_owner_died() {
         .await
         .unwrap();
 
-    actor.deferred_request_slots.add_permits(1);
+    actor.deferred_admission.add_test_permits(1);
     let completion = tokio::time::timeout(Duration::from_secs(1), commands.recv())
         .await
         .expect("dispatch context install should still report completion")
@@ -232,6 +249,81 @@ async fn dispatch_context_completion_is_dropped_when_the_dispatch_owner_died() {
             .is_err(),
         "a dead dispatch owner must not get a late install commit"
     );
+}
+
+#[tokio::test]
+async fn dispatch_context_install_jumps_ahead_of_queued_bulk_work() {
+    let dir = tempfile::tempdir().unwrap();
+    let (handle, mut responses) = ClientHandle::test_channels();
+    let mut actor = test_actor(
+        &dir,
+        HashMap::from([(1, local_client(handle))]),
+        HashMap::new(),
+    )
+    .await;
+    actor.deferred_admission =
+        std::sync::Arc::new(DeferredAdmission::paused_with_limits(1, usize::MAX, 0));
+    actor.deferred_admission.add_test_permits(1);
+    let (inbox, mut commands) = tokio::sync::mpsc::unbounded_channel();
+    actor.inbox = inbox;
+    let task_id = ready_task(&actor, "w1").await;
+
+    let (blocker_started_tx, blocker_started_rx) = tokio::sync::oneshot::channel();
+    let (blocker_release_tx, blocker_release_rx) = tokio::sync::oneshot::channel();
+    actor
+        .start_deferred_request(1, 60, "test.blocker", async move {
+            let _ = blocker_started_tx.send(());
+            let _ = blocker_release_rx.await;
+            Ok(json!({}))
+        })
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(1), blocker_started_rx)
+        .await
+        .expect("the bulk blocker should hold the only deferred slot")
+        .unwrap();
+
+    actor
+        .start_deferred_request(1, 61, "test.bulk", async { Ok(json!({})) })
+        .unwrap();
+
+    actor
+        .handle_line(
+            1,
+            json!({
+                "id": 62,
+                "type": "orchestration.dispatch",
+                "payload": {"task": task_id, "to": "worker-jump", "from": "coordinator"},
+            })
+            .to_string(),
+        )
+        .await;
+
+    let _ = blocker_release_tx.send(());
+    let install = loop {
+        let command = tokio::time::timeout(Duration::from_secs(1), commands.recv())
+            .await
+            .expect("the dispatch context install should complete")
+            .unwrap();
+        match command {
+            super::ServerCommand::DispatchContextInstalled { .. } => break command,
+            super::ServerCommand::DeferredRequestFinished { request_id, .. } => {
+                assert_ne!(
+                    request_id, 61,
+                    "the queued bulk request started before the dispatch context install"
+                );
+            }
+            _ => panic!("unexpected deferred completion"),
+        }
+    };
+    actor.handle(install).await;
+    let response = tokio::time::timeout(Duration::from_secs(1), responses.recv())
+        .await
+        .expect("the dispatch should answer after its context install")
+        .unwrap()
+        .as_json()
+        .unwrap();
+    assert_eq!(response["id"], 62);
+    assert_eq!(response["ok"], true);
 }
 
 #[tokio::test]

@@ -4,11 +4,12 @@ use std::time::Duration;
 use serde_json::json;
 
 use super::actor_test_harness::{local_client, test_actor};
+use super::deferred_admission::DeferredAdmission;
 use crate::terminal_host::client::ClientHandle;
 
 #[tokio::test]
 async fn deferred_requests_bound_background_concurrency() {
-    const EXPECTED_LIMIT: usize = super::DEFERRED_REQUEST_CONCURRENCY;
+    const EXPECTED_LIMIT: usize = super::deferred_admission::DEFERRED_REQUEST_CONCURRENCY;
     let dir = tempfile::tempdir().unwrap();
     let actor = test_actor(&dir, HashMap::new(), HashMap::new()).await;
     let gate = std::sync::Arc::new(tokio::sync::Semaphore::new(0));
@@ -19,13 +20,15 @@ async fn deferred_requests_bound_background_concurrency() {
         let gate = gate.clone();
         let started_tx = started_tx.clone();
         let finished_tx = finished_tx.clone();
-        actor.start_deferred_request(1, request_id, async move {
-            started_tx.send(request_id).unwrap();
-            let permit = gate.acquire().await.unwrap();
-            permit.forget();
-            finished_tx.send(request_id).unwrap();
-            Ok(json!({}))
-        });
+        actor
+            .start_deferred_request(1, request_id, "test.deferred", async move {
+                started_tx.send(request_id).unwrap();
+                let permit = gate.acquire().await.unwrap();
+                permit.forget();
+                finished_tx.send(request_id).unwrap();
+                Ok(json!({}))
+            })
+            .unwrap();
     }
     drop(started_tx);
     drop(finished_tx);
@@ -68,7 +71,11 @@ async fn prompt_file_uploads_respect_the_deferred_io_budget() {
         HashMap::new(),
     )
     .await;
-    actor.deferred_request_slots = std::sync::Arc::new(tokio::sync::Semaphore::new(0));
+    actor.deferred_admission = std::sync::Arc::new(DeferredAdmission::paused_with_limits(
+        usize::MAX,
+        usize::MAX,
+        0,
+    ));
     let (inbox, mut commands) = tokio::sync::mpsc::unbounded_channel();
     actor.inbox = inbox;
 
@@ -88,7 +95,7 @@ async fn prompt_file_uploads_respect_the_deferred_io_budget() {
         "prompt file I/O started without deferred budget capacity"
     );
 
-    actor.deferred_request_slots.add_permits(1);
+    actor.deferred_admission.add_test_permits(1);
     let completion = tokio::time::timeout(Duration::from_secs(1), commands.recv())
         .await
         .expect("prompt file worker should resume after budget capacity is released")
@@ -142,7 +149,11 @@ async fn acknowledged_prompt_image_upload_is_cancelled_on_disconnect() {
         .unwrap()
         .to_string();
 
-    actor.deferred_request_slots = std::sync::Arc::new(tokio::sync::Semaphore::new(0));
+    actor.deferred_admission = std::sync::Arc::new(DeferredAdmission::paused_with_limits(
+        usize::MAX,
+        usize::MAX,
+        0,
+    ));
     actor.dispose_client(1).await;
     tokio::time::sleep(Duration::from_millis(100)).await;
 
@@ -154,7 +165,7 @@ async fn acknowledged_prompt_image_upload_is_cancelled_on_disconnect() {
         8
     );
 
-    actor.deferred_request_slots.add_permits(1);
+    actor.deferred_admission.add_test_permits(1);
     tokio::time::timeout(Duration::from_secs(1), async {
         loop {
             if matches!(

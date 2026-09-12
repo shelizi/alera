@@ -377,7 +377,13 @@ mod tests {
             HashMap::new(),
         )
         .await;
-        actor.deferred_request_slots = Arc::new(tokio::sync::Semaphore::new(0));
+        actor.deferred_admission = Arc::new(
+            crate::terminal_host::server::deferred_admission::DeferredAdmission::paused_with_limits(
+                usize::MAX,
+                usize::MAX,
+                0,
+            ),
+        );
         let settings = alera_core::runtime::RuntimeAgentStatusHookSettings::default();
 
         let result = tokio::time::timeout(

@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::{self, UnboundedSender};
-use tokio::sync::{Notify, Semaphore};
+use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 
 use crate::agent_status::{start_agent_integrations, start_fx_herdr_receiver, start_hook_receiver};
@@ -99,6 +99,10 @@ use mobile_gateway_replacement::MobileGatewayReplacement;
 mod coordinator_requests;
 mod coordinator_stall_policy;
 mod declared_catalog_requests;
+mod deferred_admission;
+mod deferred_admission_metrics;
+#[cfg(test)]
+mod deferred_admission_tests;
 #[cfg(test)]
 mod deferred_project_requests_tests;
 mod deferred_requests;
@@ -190,8 +194,6 @@ const OUTPUT_BATCH_DELAY: Duration = Duration::from_millis(8);
 const OUTPUT_RESYNC_RETRY_DELAY: Duration = Duration::from_millis(16);
 const DURABLE_OUTPUT_BATCH_DELAY: Duration = Duration::from_millis(100);
 const OUTPUT_PERSISTENCE_BARRIER_TIMEOUT: Duration = Duration::from_secs(2);
-// Bounds active read-side work without making the actor mailbox wait for capacity.
-const DEFERRED_REQUEST_CONCURRENCY: usize = 8;
 const TERMINAL_INPUT_BACKPRESSURE_CODE: &str = "terminal_input_backpressure";
 /// Cap coalesced PTY→client batches so a verbose agent/build cannot grow an
 /// unbounded `output_batch` between timer flushes (early flush when exceeded).
@@ -259,7 +261,7 @@ struct ServerActor {
     codex: Option<codex_app_server::CodexAppServer>,
     codex_starting: Option<codex_server_startup::CodexServerStartup>,
     inbox: UnboundedSender<ServerCommand>,
-    deferred_request_slots: Arc<Semaphore>,
+    deferred_admission: Arc<deferred_admission::DeferredAdmission>,
     workspace_sidebar_snapshots: workspace_sidebar_requests::WorkspaceSidebarSnapshotState,
     next_client_id: Arc<AtomicU64>,
     mobile_gateway: Option<JoinHandle<()>>,
@@ -1218,7 +1220,7 @@ mod tests {
             terminal_pulses: Default::default(),
             codex: None,
             codex_starting: None,
-            deferred_request_slots: Arc::new(Semaphore::new(DEFERRED_REQUEST_CONCURRENCY)),
+            deferred_admission: Arc::new(deferred_admission::DeferredAdmission::default()),
             workspace_sidebar_snapshots: Default::default(),
             inbox,
             next_client_id: Arc::new(AtomicU64::new(2)),
@@ -1297,7 +1299,7 @@ mod tests {
             terminal_pulses: Default::default(),
             codex: None,
             codex_starting: None,
-            deferred_request_slots: Arc::new(Semaphore::new(DEFERRED_REQUEST_CONCURRENCY)),
+            deferred_admission: Arc::new(deferred_admission::DeferredAdmission::default()),
             workspace_sidebar_snapshots: Default::default(),
             inbox,
             next_client_id: Arc::new(AtomicU64::new(1)),
@@ -1394,7 +1396,7 @@ mod tests {
             terminal_pulses: Default::default(),
             codex: None,
             codex_starting: None,
-            deferred_request_slots: Arc::new(Semaphore::new(DEFERRED_REQUEST_CONCURRENCY)),
+            deferred_admission: Arc::new(deferred_admission::DeferredAdmission::default()),
             workspace_sidebar_snapshots: Default::default(),
             inbox,
             next_client_id: Arc::new(AtomicU64::new(1)),
@@ -1486,7 +1488,7 @@ mod tests {
             terminal_pulses: Default::default(),
             codex: None,
             codex_starting: None,
-            deferred_request_slots: Arc::new(Semaphore::new(DEFERRED_REQUEST_CONCURRENCY)),
+            deferred_admission: Arc::new(deferred_admission::DeferredAdmission::default()),
             workspace_sidebar_snapshots: Default::default(),
             inbox,
             next_client_id: Arc::new(AtomicU64::new(1)),
@@ -1600,7 +1602,7 @@ mod tests {
             terminal_pulses: Default::default(),
             codex: None,
             codex_starting: None,
-            deferred_request_slots: Arc::new(Semaphore::new(DEFERRED_REQUEST_CONCURRENCY)),
+            deferred_admission: Arc::new(deferred_admission::DeferredAdmission::default()),
             workspace_sidebar_snapshots: Default::default(),
             inbox,
             next_client_id: Arc::new(AtomicU64::new(1)),
@@ -1687,7 +1689,7 @@ mod tests {
             terminal_pulses: Default::default(),
             codex: None,
             codex_starting: None,
-            deferred_request_slots: Arc::new(Semaphore::new(DEFERRED_REQUEST_CONCURRENCY)),
+            deferred_admission: Arc::new(deferred_admission::DeferredAdmission::default()),
             workspace_sidebar_snapshots: Default::default(),
             inbox,
             next_client_id: Arc::new(AtomicU64::new(2)),

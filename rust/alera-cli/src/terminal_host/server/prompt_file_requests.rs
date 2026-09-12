@@ -29,7 +29,7 @@ impl ServerActor {
         request_id: i64,
         request_type: &str,
         payload: &Value,
-    ) {
+    ) -> HostResult<()> {
         let runtime_dir = self.runtime_dir.clone();
         let request_type = request_type.to_string();
         let upload_id = payload
@@ -38,27 +38,27 @@ impl ServerActor {
             .map(str::to_string);
         let payload = payload.clone();
         let inbox = self.inbox.clone();
-        let slots = self.deferred_request_slots.clone();
-        tokio::spawn(async move {
-            let _permit = slots
-                .acquire_owned()
+        self.deferred_admission.schedule(
+            super::deferred_admission::DeferredRequestClass::Bulk,
+            request_type.clone(),
+            Some(client_id),
+            async move {
+                let operation = request_type.clone();
+                let result = tokio::task::spawn_blocking(move || {
+                    handle_prompt_file_request(runtime_dir, &request_type, &payload)
+                })
                 .await
-                .expect("deferred request semaphore must remain open");
-            let operation = request_type.clone();
-            let result = tokio::task::spawn_blocking(move || {
-                handle_prompt_file_request(runtime_dir, &request_type, &payload)
-            })
-            .await
-            .map_err(|error| HostError::state(format!("Prompt file operation failed: {error}")))
-            .and_then(|result| result);
-            let _ = inbox.send(ServerCommand::MobilePromptFileFinished {
-                client_id,
-                request_id,
-                request_type: operation,
-                upload_id,
-                result,
-            });
-        });
+                .map_err(|error| HostError::state(format!("Prompt file operation failed: {error}")))
+                .and_then(|result| result);
+                let _ = inbox.send(ServerCommand::MobilePromptFileFinished {
+                    client_id,
+                    request_id,
+                    request_type: operation,
+                    upload_id,
+                    result,
+                });
+            },
+        )
     }
 
     pub(super) fn handle_mobile_prompt_file_finished(
@@ -128,19 +128,24 @@ impl ServerActor {
 
     fn schedule_prompt_file_cleanup(&self, upload_ids: Vec<String>) {
         let runtime_dir = self.runtime_dir.clone();
-        let slots = self.deferred_request_slots.clone();
-        tokio::spawn(async move {
-            let _permit = match slots.acquire_owned().await {
-                Ok(permit) => permit,
-                Err(_) => return,
-            };
-            let _ = tokio::task::spawn_blocking(move || {
-                for upload_id in upload_ids {
-                    cancel_upload(&runtime_dir, &upload_id);
-                }
-            })
-            .await;
-        });
+        if let Err(error) = self.deferred_admission.schedule(
+            super::deferred_admission::DeferredRequestClass::Maintenance,
+            "mobile.promptFile.cleanup",
+            None,
+            async move {
+                let _ = tokio::task::spawn_blocking(move || {
+                    for upload_id in upload_ids {
+                        cancel_upload(&runtime_dir, &upload_id);
+                    }
+                })
+                .await;
+            },
+        ) {
+            tracing::warn!(
+                "prompt file cleanup was not admitted: {}",
+                error.wire_message()
+            );
+        }
     }
 
     fn remove_mobile_prompt_file_upload(&mut self, client_id: u64, upload_id: &str) {

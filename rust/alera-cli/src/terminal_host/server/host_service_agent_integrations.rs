@@ -69,31 +69,38 @@ impl ServerActor {
         let runtime_dir = self.runtime_dir.clone();
         let state = agent_integration_reconcile_state(&runtime_dir);
         let generation = state.next_generation();
-        let slots = self.deferred_request_slots.clone();
-        tokio::spawn(async move {
-            let Some(_serial) = state.acquire_if_latest(generation).await else {
-                return;
-            };
-            let _permit = match slots.acquire_owned().await {
-                Ok(permit) => permit,
-                Err(_) => return,
-            };
-            if !state.is_latest(generation) {
-                return;
-            }
-            match tokio::task::spawn_blocking(move || {
-                reconcile_agent_integrations(&runtime_dir, &settings)
-            })
-            .await
-            {
-                Ok(warnings) => {
-                    for warning in warnings {
-                        tracing::warn!("alera agent integration warning: {warning}");
+        if let Err(error) = self.deferred_admission.schedule(
+            super::deferred_admission::DeferredRequestClass::Maintenance,
+            "agent.integrations.reconcile",
+            None,
+            async move {
+                let Some(_serial) = state.acquire_if_latest(generation).await else {
+                    return;
+                };
+                if !state.is_latest(generation) {
+                    return;
+                }
+                match tokio::task::spawn_blocking(move || {
+                    reconcile_agent_integrations(&runtime_dir, &settings)
+                })
+                .await
+                {
+                    Ok(warnings) => {
+                        for warning in warnings {
+                            tracing::warn!("alera agent integration warning: {warning}");
+                        }
+                    }
+                    Err(error) => {
+                        tracing::warn!("alera agent integration reconcile failed: {error}")
                     }
                 }
-                Err(error) => tracing::warn!("alera agent integration reconcile failed: {error}"),
-            }
-        });
+            },
+        ) {
+            tracing::warn!(
+                "alera agent integration reconcile was not admitted: {}",
+                error.wire_message()
+            );
+        }
     }
 }
 
