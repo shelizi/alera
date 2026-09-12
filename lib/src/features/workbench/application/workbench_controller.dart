@@ -15,21 +15,24 @@ import 'package:alera/src/features/workbench/application/workbench_repository.da
 import 'package:alera/src/features/workbench/application/workbench_providers.dart';
 import 'package:alera/src/features/workbench/application/workbench_listing.dart';
 import 'package:alera/src/features/workbench/application/workbench_layout_repository.dart';
-import 'package:alera/src/features/workbench/application/workbench_retired_resource_cleaner.dart';
 import 'package:alera/src/features/workbench/application/workbench_cleared_layout_registry.dart';
 import 'package:alera/src/features/workbench/application/workbench_retired_tabs_cleanup_coordinator.dart';
 import 'package:alera/src/features/workbench/application/workbench_retired_workspace_cleanup_coordinator.dart';
 import 'package:alera/src/features/workbench/application/workbench_remove_project_cleanup_coordinator.dart';
+import 'package:alera/src/features/workbench/application/workbench_root_subscription_registry.dart';
 import 'package:alera/src/features/workbench/application/workbench_explicit_resource_cleaner.dart';
 import 'package:alera/src/features/workbench/application/workbench_hosted_review_retention_service.dart';
 import 'package:alera/src/features/workbench/application/workbench_git_repository_probe_adapter.dart';
 import 'package:alera/src/features/workbench/application/workbench_source_control_folder_focus_service.dart';
 import 'package:alera/src/features/workbench/application/workbench_catalog_owner.dart';
+import 'package:alera/src/features/workbench/application/workbench_lifecycle_owner.dart';
 import 'package:alera/src/features/workbench/application/workbench_replaceable_tab_editor_sessions.dart';
 import 'package:alera/src/features/workbench/application/workbench_selection_owner.dart';
 import 'package:alera/src/features/workbench/application/workbench_tab_layout_owner.dart';
 import 'package:alera/src/features/workbench/application/workbench_tab_subscription_registry.dart';
+import 'package:alera/src/features/workbench/application/workbench_workspace_subscription_registry.dart';
 import 'package:alera/src/features/workbench/application/workbench_workspace_tab_closing_scope.dart';
+import 'package:alera/src/features/workbench/application/workbench_worktree_metadata_watcher_registry.dart';
 import 'package:alera/src/features/workbench/application/workbench_workspace_selection_hydrator.dart';
 import 'package:alera/src/features/workbench/application/workbench_source_control_root_prefs.dart';
 import 'package:alera/src/features/workbench/application/workbench_state.dart';
@@ -47,6 +50,8 @@ import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_creation_result.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_focus_history.dart';
 import 'package:alera/src/features/workbench/domain/workspace_source_control_scope.dart';
+import 'package:alera/src/features/workbench/application/terminal_runtime_lifecycle.dart';
+import 'package:alera/src/shared/infra/git/git_backend.dart';
 import 'package:alera/src/shared/infra/git/git_diff_models.dart';
 import 'package:alera/src/shared/infra/git/git_providers.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
@@ -83,8 +88,7 @@ class WorkbenchController extends _$WorkbenchController
     _disposed = false;
     ref.onDispose(() {
       _disposed = true;
-      _catalogOwner.dispose();
-      _tabSubscriptions.cancelAll();
+      _lifecycleOwner.dispose();
     });
     return const WorkbenchState();
   }
