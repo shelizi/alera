@@ -19,6 +19,8 @@ import 'package:alera/src/shared/infra/git/git_providers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+part 'workspace_git_history_commit_row.dart';
+
 /// Main-area commit graph tab. Walks every branch tip by default and pages
 /// history in with offset pagination, keeping swimlanes continuous across
 /// page boundaries by seeding each page with the previous row's lanes.
@@ -454,94 +456,5 @@ class _WorkspaceGitHistorySurfaceState
     final month = local.month.toString().padLeft(2, '0');
     final day = local.day.toString().padLeft(2, '0');
     return '${local.year}-$month-$day';
-  }
-}
-
-class const _CommitGraphRow({
-  required final GitHistoryItemViewModel viewModel,
-  required final double graphWidth,
-  required final VoidCallback onTap,
-}) extends StatelessWidget {
-  static const double _refBadgeMaxWidth = 160;
-  static const double _metaWidth = 88;
-
-  @override
-  Widget build(BuildContext context) {
-    final item = viewModel.historyItem;
-    final theme = Theme.of(context);
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: InkWell(
-        onTap: onTap,
-        mouseCursor: SystemMouseCursors.click,
-        child: SizedBox(
-          height: 28,
-          child: Padding(
-            padding: const EdgeInsets.only(
-              left: AleraTokens.space8,
-              right: AleraTokens.space12,
-            ),
-            child: Row(
-              children: <Widget>[
-                SizedBox(
-                  width: graphWidth,
-                  child: Align(
-                    alignment: .centerLeft,
-                    child: GitHistoryGraph(viewModel: viewModel),
-                  ),
-                ),
-                const SizedBox(width: AleraTokens.space4),
-                Expanded(
-                  child: Text(
-                    item.subject,
-                    maxLines: 1,
-                    overflow: .ellipsis,
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: AleraTokens.foreground,
-                    ),
-                  ),
-                ),
-                for (final itemRef in item.references) ...<Widget>[
-                  const SizedBox(width: AleraTokens.space4),
-                  ConstrainedBox(
-                    constraints: const BoxConstraints(
-                      maxWidth: _refBadgeMaxWidth,
-                    ),
-                    child: GitRefBadge(itemRef: itemRef),
-                  ),
-                ],
-                const SizedBox(width: AleraTokens.space8),
-                SizedBox(
-                  width: 140,
-                  child: Text(
-                    item.author ?? '',
-                    maxLines: 1,
-                    overflow: .ellipsis,
-                    style: theme.textTheme.labelSmall?.copyWith(
-                      color: AleraTokens.foregroundMuted,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: AleraTokens.space8),
-                SizedBox(
-                  width: _metaWidth,
-                  child: Text(
-                    _WorkspaceGitHistorySurfaceState._relativeTime(
-                      item.timestamp,
-                    ),
-                    maxLines: 1,
-                    overflow: .ellipsis,
-                    textAlign: .end,
-                    style: theme.textTheme.labelSmall?.copyWith(
-                      color: AleraTokens.foregroundFaint,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
   }
 }
