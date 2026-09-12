@@ -37,12 +37,21 @@ class _GitDiffTreeState extends State<_GitDiffTree> {
   Widget build(BuildContext context) {
     final rows = widget.rows.isEmpty ? _fallbackRows() : widget.rows;
     final directoryCapabilities = _directoryCapabilities(rows);
-    return Column(
-      crossAxisAlignment: .stretch,
-      children: <Widget>[
-        for (final row in _visibleRows(rows))
-          ..._buildRows(row, directoryCapabilities),
-      ],
+    final visible = _visibleRows(rows).toList(growable: false);
+    // Lazy rows keep large trees from inflating thousands of widgets at once.
+    return SliverList.builder(
+      itemCount: visible.length,
+      itemBuilder: (context, index) {
+        final children = _buildRows(visible[index], directoryCapabilities);
+        if (children.length == 1) {
+          return children.single;
+        }
+        return Column(
+          crossAxisAlignment: .stretch,
+          mainAxisSize: .min,
+          children: children,
+        );
+      },
     );
   }
 
