@@ -1154,6 +1154,20 @@ max-lines 尚未全清前，第 8 步會是 repo-wide exit 1；必須確認 offe
 
 歸屬：Explorer 半邊屬 Workbench（Batch I 前可先獨立做），source control 半邊屬 Git（Batch J）。共用同一套「有界合併 refresh」模式，建議作為獨立批次插在 Batch G/H 之後或併入 Batch J 前半。
 
+#### Batch L 已完成（`d3d2d6db` + `10b809a2`）
+
+- Explorer `_watchRefreshQueue` 無界 Future 鏈 → in-flight + pending 目錄集合合併；每輪 drain 最多一次 `explorerStatusSnapshot`。
+- Source control watcher 新增 `_watcherReloadNotBefore` cooldown floor：reload 結束仍有訊號 queued 時，下一次 watcher reload 間隔 250ms→500ms→1000ms→2000ms 遞增；floor 同時限制新訊號 debounce 才不被頂替繞過；無 queued 即歸零。
+- `_syncWatchedDirectories` 集合無變化時不再重送 `updateExplorerWatcher`。
+- Source control 異動清單改 lazy：groups 走 `CustomScrollView` + 每 group `SliverList.builder`，tree mode 走 `SliverList.builder`；2500 筆清單只建 viewport 內的 row。
+
+#### Batch L 殘留（實測仍卡頓時接著做）
+
+- `gitStatus()` 一次回傳完整 entry list，FRB 反序列化在 UI isolate 上跑：幾千筆時 decode 仍是單次大工作。方向：payload 分頁（先傳前 N + 計數）或 status 摘要化；會動 wire contract，先等 P5 golden fixture 定義。
+- `_groupsFor(status)` 的 group/sort 是 UI isolate 上的同步 O(n) 工作；量大時可移入 isolate 或快取（status revision 未變不重算）。
+- `WorkspaceSourceControlState` 每次 reload 全表重建；可考慮結構共享或 entry-level diffing。
+- 驗證方式：以 `E:\Dropbox\work\coding-tools-mcp` 之類的大異動 repo 實測，觀察 decode/分組是否仍是卡點。
+
 ---
 
 ## 25. 交接完成條件與目前真實狀態
