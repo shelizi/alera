@@ -878,6 +878,8 @@ Desktop、Mobile、Rust 各自仍有 protocol parsing/DTO 宣告。已有 old-ho
 - Requests/error 線（`wire_fixture_tests_requests.rs` + `terminal_host_wire_requests_fixtures_test.dart`）：project.register round-trip、workspace createManaged（含 deferSetup payload）、tab/workspace not_found、`host_busy`（含 runningSessions 計數）、`runtime_mutation_busy`。
 - 歷史契約降為子集/decode 斷言（現行 host 不再產生、保留防回歸）：`output_resumed_snapshot.legacy`（缺 delta/resetInteractionModes/snapshot 行列數）、`host_shutdown.minimal`、`mobile_hello.legacy`、`workspace_create_managed.legacy`、`host_busy.legacy`、legacy mobile view-prefs request（server backfill 缺失欄位）。
 - 過程中 pin 住的非直覺契約：binary-capable client 的 binary output 在 socket isolate 解為 `TerminalHostOutputTextEvent`（非 `TerminalHostOutputEvent`）；`runtime_mutation_busy` 錯誤會被 client `_sendTerminalHostRequestWithMutationRetry` 重試而非立即 surface（測試改為 pin retry 行為）。
+- 後續 contract 變更：`feat/workspace-archive`（`79ea3c49`）讓 workspace payload 新增 `archivedAt` 欄位——三個含 workspace 物件的 fixture 已補上（`archivedAt: null`）；`workspace_create_managed.legacy` 維持歷史形狀不動。
+- 檔案面維護：`wire_fixture_tests_lifecycle.rs`（679→422）與 `wire_fixture_tests_requests.rs`（584→433）超線後各拆出 `*_hello.rs`/`*_workspace.rs` 姊妹模組，helpers 以 `pub(super)` 共享。
 
 ---
 
