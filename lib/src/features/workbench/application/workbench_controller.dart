@@ -16,7 +16,6 @@ import 'package:alera/src/features/workbench/application/workspace_tab_service.d
 import 'package:alera/src/features/workbench/application/workbench_repository.dart';
 import 'package:alera/src/features/workbench/application/workbench_providers.dart';
 import 'package:alera/src/features/workbench/application/workbench_listing.dart';
-import 'package:alera/src/features/workbench/application/workbench_navigation_history_service.dart';
 import 'package:alera/src/features/workbench/application/workbench_persisted_tab_open_coordinator.dart';
 import 'package:alera/src/features/workbench/application/workbench_persisted_tab_restore_plan.dart';
 import 'package:alera/src/features/workbench/application/workbench_retired_resource_cleaner.dart';
@@ -50,6 +49,7 @@ import 'package:alera/src/features/workbench/application/workbench_replaceable_t
 import 'package:alera/src/features/workbench/application/workbench_root_subscription_registry.dart';
 import 'package:alera/src/features/workbench/application/workbench_section_state.dart';
 import 'package:alera/src/features/workbench/application/workbench_serial_mutation_queue.dart';
+import 'package:alera/src/features/workbench/application/workbench_selection_owner.dart';
 import 'package:alera/src/features/workbench/application/workbench_sequenced_layout_repository.dart';
 import 'package:alera/src/features/workbench/application/workbench_selection_state.dart';
 import 'package:alera/src/features/workbench/application/workbench_sleep_workspace_coordinator.dart';
@@ -67,7 +67,6 @@ import 'package:alera/src/features/workbench/application/workbench_workspace_tag
 import 'package:alera/src/features/workbench/application/workbench_workspace_tag_update_service.dart';
 import 'package:alera/src/features/workbench/application/workbench_workspace_parent_mutation_queue.dart';
 import 'package:alera/src/features/workbench/application/workbench_workspace_parent_update_service.dart';
-import 'package:alera/src/features/workbench/application/workbench_workspace_selection_coordinator.dart';
 import 'package:alera/src/features/workbench/application/workbench_workspace_selection_hydrator.dart';
 import 'package:alera/src/features/workbench/application/workbench_workspace_creation_coordinator.dart';
 import 'package:alera/src/features/workbench/application/workbench_workspace_creation_parent_link_service.dart';

@@ -338,51 +338,14 @@ mixin _WorkbenchControllerProjects
     required Project project,
     required Workspace workspace,
   }) {
-    return _selectWorkspace(
+    return _selectionOwner.selectWorkspace(
       project: project,
       workspace: workspace,
       ensureInitialTerminal: true,
     );
   }
 
-  Future<void> _selectWorkspace({
-    required Project project,
-    required Workspace workspace,
-    required bool ensureInitialTerminal,
-    bool recordHistory = true,
-  }) =>
-      WorkbenchWorkspaceSelectionCoordinator(
-        activateSelection: () {
-          state = selectWorkbenchWorkspace(
-            state: state,
-            project: project,
-            workspace: workspace,
-          );
-        },
-        hydrate: ({required workspaceId, required ensureInitialTerminal}) =>
-            WorkbenchWorkspaceSelectionHydrator(
-              tabStore: _workspaceTabService,
-              layoutResolver: _layoutResolver,
-            ).hydrate(
-              workspaceId: workspaceId,
-              ensureInitialTerminal: ensureInitialTerminal,
-            ),
-        applyTabs: (tabs) => _setTabsForWorkspace(workspace.id, tabs),
-        applyLayout: (layout) => _applyLayout(layout, persist: false),
-        isSelectionCurrent: () =>
-            !_disposed &&
-            state.activeProjectId == project.id &&
-            state.activeWorkspaceId == workspace.id,
-        recordHistory: () =>
-            _navigationHistory.record(project: project, workspace: workspace),
-        notifyHistoryChanged: _notifyNavigationHistoryChanged,
-      ).select(
-        workspaceId: workspace.id,
-        ensureInitialTerminal: ensureInitialTerminal,
-        shouldRecordHistory: recordHistory,
-      );
-
   Future<void> activateProject(Project project) async {
-    state = activateWorkbenchProject(state: state, project: project);
+    _selectionOwner.activateProject(project);
   }
 }

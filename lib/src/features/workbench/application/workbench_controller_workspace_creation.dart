@@ -130,11 +130,12 @@ mixin _WorkbenchControllerWorkspaceCreation
       throw StateError('Workspace project not found: ${workspace.projectId}');
     }
     await WorkbenchPromptWorkspaceCompletionCoordinator(
-      selectWorkspace: ({required ensureInitialTerminal}) => _selectWorkspace(
-        project: project,
-        workspace: workspace,
-        ensureInitialTerminal: ensureInitialTerminal,
-      ),
+      selectWorkspace: ({required ensureInitialTerminal}) =>
+          _selectionOwner.selectWorkspace(
+            project: project,
+            workspace: workspace,
+            ensureInitialTerminal: ensureInitialTerminal,
+          ),
       openDeferredSetupTab: _openDeferredSetupTab,
       refocusAgentTab: (tabId) {
         final groupId = state.layoutFor(workspace.id)?.groupIdForTab(tabId);
