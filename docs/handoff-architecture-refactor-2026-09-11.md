@@ -992,9 +992,13 @@ Owner 之間互不直接參照，跨域呼叫經各自 `*OwnerHost` port 由 int
 - 選項取捨：採 `part of` 而非獨立 library，因 `_XtermTerminalSessionHandle` private 面過大；未來若要獨立拆需先把 handle 內部面收成窄介面。
 - 剩餘：renderer adapter、shell launch/input delivery、view resource/buffer budget 三個 owner。
 
-### 16.1 進行中（2026-09-13）
+### 16.1 進度（2026-09-13，`1ba27bbd`..`01ecd20b`，已 merge）
 
-- 剩三個 owner 的批次已派給 agy worker（worktree `alera-wt-p7-terminal2`、branch `refactor/p7-terminal-owners-2`）：renderer adapter、shell launch/input delivery、view resource/buffer budget，要求每抽完一個先驗證綠再繼續，session-owner 語義不得回改。
+- 剩三個 owner 全部落地：`TerminalRuntimeViewBufferOwner`（`terminal_runtime_view_buffer_owner.dart`，窄 port `TerminalRuntimeViewBufferOwnerHost` = `terminalSettings`/`liveSessions`/`evictSession`，持有 budget policy、eviction sweep、active workspace、app foreground）、`TerminalRuntimeLaunchInputOwner`（`terminal_runtime_launch_input_owner.dart`，shell launch prepare + agent hook env + clipboard + per-session `TerminalRuntimeLaunchInputOwnerHost` port 管 paste/submit/deferred-Enter timer）、`TerminalRuntimeRendererAdapterOwner`（`terminal_runtime_renderer_adapter_owner.dart`，constructor 注入 service facade：emulator 建立/attach/detach、theme/font/cursor 解析、view build、link 處理）。
+- `terminal_runtime_submit_delivery.dart` 刪除，submit/paste/deferred-Enter timer 語意原樣搬入 launch owner（identical-session 守衛保留）；`terminal_runtime_shell_launches.dart` 645→433，agent hook env 淨化移至 `terminal_runtime_agent_hook_environment.dart`。
+- 範式備註：session/view-buffer owner 走「runtime implements host port」；launch/renderer 是 constructor 注入 service（launch 另加 per-session host port 給 input delivery）；renderer 無回呼需求故無 port。
+- 殘留：per-handle 的 visibility lease/buffer accounting（`terminal_runtime_buffer_accounting.dart`）與 `_TerminalOutputPipeline`/batching 仍在 handle 側；view buffer owner 目前只收 runtime 層 budget policy。更深的 per-session 狀態所有權列後續。
+- 主線驗證：`terminal_runtime_native_test.dart` + `terminal_surface_test.dart` 150/150 綠（含 23 個新 owner 測試）、analyze 乾淨、ratchet ok。
 
 `TerminalRuntime` 實際 logical library 很大，下一步按 ownership 拆：
 
@@ -1317,7 +1321,7 @@ max-lines 尚未全清前，第 8 步會是 repo-wide exit 1；必須確認 offe
 - Phase 2：已完成大量 read-side/background I/O mailbox 去阻塞、8-slot active budget、sidebar single-flight、project registration prepare/commit、upload lifecycle cleanup、agent hook latest-wins reconcile、wire fixtures（59 份、Rust 41 + Dart 26 測試全綠）
 - Phase 2 尚未完成：dispatch context install、pending task total backpressure、部分 settings/autostart/managed-workspace preflight、transaction/replay matrix
 - Phase 3（P6）：Workbench facade + 4 owner（Selection / Tab-Layout / Catalog / Lifecycle）全部落地
-- Phase 4（P7）：Terminal session owner、Git loader/cache owner、Mobile transition matrix + client factory 已落地；Terminal 剩 renderer/shell-launch/buffer-budget 三個 owner 進行中
+- Phase 4（P7）：Terminal 四 owner（session / view-buffer / launch-input / renderer-adapter）、Git loader/cache owner、Mobile transition matrix + client factory 全部落地
 - 已知非重構 regression：`alera_shell_page_test.dart` 3 個失敗（sidebar agent counts / new-tab agent entry 相關，見 §7.4）
 - 其他 worktree：使用者保有多個 feature worktree，不要清理或吸收
 - Merge/rebase/deploy/build release：本工作未做
