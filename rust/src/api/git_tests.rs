@@ -906,16 +906,19 @@ fn git_status_splits_untracked_unstaged_and_staged_changes() {
             && entry.added.is_none()
             && entry.removed == Some(0)
     }));
+    // Groups and tree rows are derived on the Dart side, so the wire result
+    // carries the flat entries only, ordered untracked then unstaged then staged.
+    assert!(status.groups.is_empty());
     assert_eq!(
         status
-            .groups
+            .entries
             .iter()
-            .map(|group| group.area)
+            .map(|entry| entry.area)
             .collect::<Vec<_>>(),
         vec![
-            GitChangeArea::Staged,
-            GitChangeArea::Unstaged,
             GitChangeArea::Untracked,
+            GitChangeArea::Unstaged,
+            GitChangeArea::Staged,
         ]
     );
 }
@@ -1715,34 +1718,29 @@ fn git_status_for_path_limits_results_to_selected_file() {
 }
 
 #[test]
-fn git_status_returns_tree_projection_for_source_control_panel() {
+fn git_status_leaves_groups_empty_for_client_side_tree_projection() {
     let repo = init_repo();
     std::fs::create_dir_all(repo.path().join("lib/src")).expect("create lib src");
     std::fs::write(repo.path().join("lib/src/a.dart"), "a\n").expect("write a");
     std::fs::write(repo.path().join("lib/b.dart"), "b\n").expect("write b");
 
     let status = git_status(path_str(repo.path())).unwrap();
-    let group = status
-        .groups
-        .iter()
-        .find(|group| group.area == GitChangeArea::Untracked)
-        .expect("untracked group");
 
-    assert_eq!(group.entries.len(), 2);
-    assert!(group.tree_rows.iter().any(|row| {
-        row.kind == GitChangeTreeRowKind::Directory
-            && row.path == "lib"
-            && row.depth == 0
-            && row.file_count == 2
-    }));
-    assert!(group.tree_rows.iter().any(|row| {
-        row.kind == GitChangeTreeRowKind::File
-            && row.path == "lib/b.dart"
-            && row
-                .entry
-                .as_ref()
-                .is_some_and(|entry| entry.path == "lib/b.dart")
-    }));
+    // The source control panel rebuilds groups and tree rows on the Dart side
+    // from these flat entries, so nested paths cross the bridge exactly once.
+    assert!(status.groups.is_empty());
+    assert_eq!(
+        status
+            .entries
+            .iter()
+            .map(|entry| entry.path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["lib/b.dart", "lib/src/a.dart"]
+    );
+    assert!(status
+        .entries
+        .iter()
+        .all(|entry| entry.area == GitChangeArea::Untracked));
 }
 
 #[test]

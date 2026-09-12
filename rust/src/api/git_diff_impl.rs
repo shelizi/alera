@@ -7,10 +7,10 @@ use git2::{
 };
 
 use super::{
-    open_repo, GitChangeArea, GitChangeEntry, GitChangeGroup, GitChangeStatus, GitChangeTreeRow,
-    GitChangeTreeRowKind, GitCommitChangeEntry, GitCommitCompareResult, GitCommitCompareStatus,
-    GitCommitCompareSummary, GitDiffFile, GitDiffLine, GitDiffLineKind, GitDiffPage, GitDiffResult,
-    GitError, GitErrorKind, GitStatusResult, GitSubmoduleStatus,
+    open_repo, GitChangeArea, GitChangeEntry, GitChangeStatus, GitCommitChangeEntry,
+    GitCommitCompareResult, GitCommitCompareStatus, GitCommitCompareSummary, GitDiffFile,
+    GitDiffLine, GitDiffLineKind, GitDiffPage, GitDiffResult, GitError, GitErrorKind,
+    GitStatusResult, GitSubmoduleStatus,
 };
 
 #[path = "git_diff_combined.rs"]
@@ -885,142 +885,13 @@ fn diff_line_stats_for_paths(
 }
 
 fn status_result_from_entries(entries: Vec<GitChangeEntry>) -> GitStatusResult {
-    let groups = [
-        GitChangeArea::Staged,
-        GitChangeArea::Unstaged,
-        GitChangeArea::Untracked,
-    ]
-    .into_iter()
-    .filter_map(|area| {
-        let entries = entries
-            .iter()
-            .filter(|entry| entry.area == area)
-            .cloned()
-            .collect::<Vec<_>>();
-        if entries.is_empty() {
-            return None;
-        }
-        let tree_rows = build_tree_rows(&entries);
-        Some(GitChangeGroup {
-            area,
-            entries,
-            tree_rows,
-        })
-    })
-    .collect();
-    GitStatusResult { entries, groups }
-}
-
-fn build_tree_rows(entries: &[GitChangeEntry]) -> Vec<GitChangeTreeRow> {
-    let mut root = StatusTreeNode::directory(String::new(), String::new(), 0);
-    for entry in entries {
-        let parts = entry
-            .path
-            .split('/')
-            .filter(|part| !part.is_empty())
-            .collect::<Vec<_>>();
-        if parts.is_empty() {
-            continue;
-        }
-        let mut parent = &mut root;
-        for index in 0..parts.len().saturating_sub(1) {
-            let path = parts[..=index].join("/");
-            parent = parent.directory_child(parts[index].to_string(), path, index as u32);
-        }
-        parent.children.push(StatusTreeNode::file(
-            parts.last().unwrap().to_string(),
-            entry.path.clone(),
-            parts.len().saturating_sub(1) as u32,
-            entry.clone(),
-        ));
-    }
-    root.sort_recursively();
-    let mut rows = Vec::new();
-    for child in &root.children {
-        child.append_rows(&mut rows);
-    }
-    rows
-}
-
-struct StatusTreeNode {
-    name: String,
-    path: String,
-    depth: u32,
-    entry: Option<GitChangeEntry>,
-    children: Vec<StatusTreeNode>,
-}
-
-impl StatusTreeNode {
-    fn directory(name: String, path: String, depth: u32) -> Self {
-        Self {
-            name,
-            path,
-            depth,
-            entry: None,
-            children: Vec::new(),
-        }
-    }
-
-    fn file(name: String, path: String, depth: u32, entry: GitChangeEntry) -> Self {
-        Self {
-            name,
-            path,
-            depth,
-            entry: Some(entry),
-            children: Vec::new(),
-        }
-    }
-
-    fn directory_child(&mut self, name: String, path: String, depth: u32) -> &mut StatusTreeNode {
-        if let Some(index) = self
-            .children
-            .iter()
-            .position(|child| child.entry.is_none() && child.name == name)
-        {
-            return &mut self.children[index];
-        }
-        self.children
-            .push(StatusTreeNode::directory(name, path, depth));
-        self.children.last_mut().expect("directory child exists")
-    }
-
-    fn sort_recursively(&mut self) {
-        self.children.sort_by(|a, b| match (&a.entry, &b.entry) {
-            (None, Some(_)) => std::cmp::Ordering::Less,
-            (Some(_), None) => std::cmp::Ordering::Greater,
-            _ => a.name.cmp(&b.name),
-        });
-        for child in &mut self.children {
-            child.sort_recursively();
-        }
-    }
-
-    fn append_rows(&self, rows: &mut Vec<GitChangeTreeRow>) {
-        rows.push(GitChangeTreeRow {
-            kind: if self.entry.is_some() {
-                GitChangeTreeRowKind::File
-            } else {
-                GitChangeTreeRowKind::Directory
-            },
-            name: self.name.clone(),
-            path: self.path.clone(),
-            depth: self.depth,
-            file_count: self.file_count(),
-            entry: self.entry.clone(),
-        });
-        for child in &self.children {
-            child.append_rows(rows);
-        }
-    }
-
-    fn file_count(&self) -> u32 {
-        if self.entry.is_some() {
-            return 1;
-        }
-        self.children
-            .iter()
-            .map(StatusTreeNode::file_count)
-            .sum::<u32>()
+    // The Dart side derives groups and tree rows via GitChangeGroup.fromEntries.
+    // Sending them here would serialize every entry three times over the bridge
+    // (flat list, per-group list, and per-file tree row), which stalls decoding
+    // on the UI isolate for large changesets.
+    GitStatusResult {
+        entries,
+        groups: Vec::new(),
     }
 }
 
