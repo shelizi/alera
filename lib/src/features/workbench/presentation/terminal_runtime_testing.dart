@@ -82,27 +82,31 @@ void deliverTerminalOutputFrameForTesting(TerminalSessionHandle session) {
 /// timer.
 @visibleForTesting
 bool terminalOutputFlushScheduledForTesting(TerminalSessionHandle session) {
-  return (session as _XtermTerminalSessionHandle)._output.flushScheduled;
+  return (session as _XtermTerminalSessionHandle)._pump.pipeline.flushScheduled;
 }
 
 /// Whether the pending flush is waiting on the cadence floor rather than on the
 /// next frame.
 @visibleForTesting
 bool terminalOutputFlushDeferredForTesting(TerminalSessionHandle session) {
-  return (session as _XtermTerminalSessionHandle)._output.flushTimer != null;
+  return (session as _XtermTerminalSessionHandle)
+          ._pump
+          .pipeline
+          .flushTimer !=
+      null;
 }
 
 @visibleForTesting
 void forceDeferredTerminalOutputFlushForTesting(TerminalSessionHandle session) {
-  final output = (session as _XtermTerminalSessionHandle)._output;
-  output.flushTimer?.cancel();
-  output.flushScheduled = true;
-  output.flushTimer = Timer(const Duration(hours: 1), () {});
+  final pipeline = (session as _XtermTerminalSessionHandle)._pump.pipeline;
+  pipeline.flushTimer?.cancel();
+  pipeline.flushScheduled = true;
+  pipeline.flushTimer = Timer(const Duration(hours: 1), () {});
 }
 
 @visibleForTesting
 int terminalOutputFlushCountForTesting(TerminalSessionHandle session) {
-  return (session as _XtermTerminalSessionHandle)._output.flushCount;
+  return (session as _XtermTerminalSessionHandle)._pump.pipeline.flushCount;
 }
 
 @visibleForTesting
@@ -116,17 +120,17 @@ int terminalOutputFrameCutoffForTesting(String value) {
 
 @visibleForTesting
 int pendingTerminalOutputCharsForTesting(TerminalSessionHandle session) {
-  return (session as _XtermTerminalSessionHandle)._output.length;
+  return (session as _XtermTerminalSessionHandle)._pump.pipeline.length;
 }
 
 @visibleForTesting
 int pendingLiveTerminalOutputCharsForTesting(TerminalSessionHandle session) {
-  return (session as _XtermTerminalSessionHandle)._output.liveLength;
+  return (session as _XtermTerminalSessionHandle)._pump.pipeline.liveLength;
 }
 
 @visibleForTesting
 int pendingRestoreTerminalOutputCharsForTesting(TerminalSessionHandle session) {
-  return (session as _XtermTerminalSessionHandle)._output.restoreLength;
+  return (session as _XtermTerminalSessionHandle)._pump.pipeline.restoreLength;
 }
 
 /// The head chunk itself, so a test can assert it is consumed in place rather
@@ -135,13 +139,15 @@ int pendingRestoreTerminalOutputCharsForTesting(TerminalSessionHandle session) {
 String? pendingTerminalOutputHeadChunkForTesting(
   TerminalSessionHandle session,
 ) {
-  final pending = (session as _XtermTerminalSessionHandle)._output.pending;
+  final pending =
+      (session as _XtermTerminalSessionHandle)._pump.pipeline.pending;
   return pending.isEmpty ? null : pending.first.text;
 }
 
 @visibleForTesting
 int pendingTerminalOutputHeadForTesting(TerminalSessionHandle session) {
-  final pending = (session as _XtermTerminalSessionHandle)._output.pending;
+  final pending =
+      (session as _XtermTerminalSessionHandle)._pump.pipeline.pending;
   return pending.isEmpty ? 0 : pending.first.head;
 }
 

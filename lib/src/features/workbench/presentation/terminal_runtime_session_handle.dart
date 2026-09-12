@@ -12,7 +12,9 @@ class _XtermTerminalSessionHandle(
   this._onVisibilityChanged,
 ) extends TerminalSessionHandle
     with _TerminalSearchSessionSupport, _TerminalSessionCapabilitiesSupport
-    implements TerminalRuntimeLaunchInputOwnerHost {
+    implements TerminalRuntimeLaunchInputOwnerHost,
+        _TerminalSessionVisibilityHost,
+        _TerminalSessionOutputHost {
   this {
     _terminal = _createTerminal();
     _attachTerminal(_terminal);
@@ -51,7 +53,8 @@ class _XtermTerminalSessionHandle(
   @override
   late final StreamSubscription<String> _decodedOutputSub;
 
-  final _TerminalOutputPipeline _output = _TerminalOutputPipeline();
+  late final _TerminalSessionOutputPump _pump =
+      _TerminalSessionOutputPump(this);
   @override
   TerminalPtySession? _ptySession;
   StreamSubscription<TerminalPtySessionEvent>? _ptySessionSub;
@@ -66,7 +69,8 @@ class _XtermTerminalSessionHandle(
   final Set<int> _exitedPtyGenerations = <int>{};
   final Set<int> _suppressedExitPtyGenerations = <int>{};
   @override
-  final Set<Object> _visibilityLeases = <Object>{};
+  late final _TerminalSessionVisibilityAccounting _visibility =
+      _TerminalSessionVisibilityAccounting(this);
 
   bool _starting = false;
   TerminalSessionOperation? _operation;
@@ -78,10 +82,6 @@ class _XtermTerminalSessionHandle(
     displayTitle,
   );
   String? _errorMessage;
-  @override
-  bool _visible = false;
-  bool _appForeground = true;
-  DateTime? _lastVisibleAt;
   @override
   final ValueNotifier<TerminalRestoreProgress?> _restoreProgress =
       ValueNotifier<TerminalRestoreProgress?>(null);
@@ -110,16 +110,37 @@ class _XtermTerminalSessionHandle(
   ValueListenable<String> get titleListenable => _titleNotifier;
 
   @override
-  bool get isVisible => _visible;
+  bool get isVisible => _visibility.isVisible;
 
-  bool get _outputVisible => _visible && _appForeground;
+  bool get _outputVisible => _visibility.isOutputVisible;
+
+  @override
+  TerminalBufferUsage get bufferUsage =>
+      _visibility.estimateUsage(tabId, _terminal);
 
   @override
   ValueListenable<TerminalRestoreProgress?> get restoreProgress =>
       _restoreProgress;
 
+  // _TerminalSessionVisibilityHost implementation.
   @override
-  TerminalBufferUsage get bufferUsage => _estimateBufferUsage();
+  void onOutputVisibilityChanged() {
+    _syncPtyOutputVisibility();
+    if (_visibility.isOutputVisible) {
+      _pump.scheduleFlush();
+    } else {
+      _pump.pipeline.cancelDeferredFlush();
+    }
+  }
+
+  @override
+  void onVisibilityChanged() => _onVisibilityChanged(this);
+
+  @override
+  void scheduleOutputFlush() => _pump.scheduleFlush();
+
+  @override
+  void cancelDeferredFlush() => _pump.pipeline.cancelDeferredFlush();
 
   @override
   String get displayTitle {
@@ -195,7 +216,7 @@ class _XtermTerminalSessionHandle(
   void _notifySessionListeners() => notifyListeners();
 
   @override
-  TerminalVisibilityLease acquireVisibility() => _acquireVisibilityLease();
+  TerminalVisibilityLease acquireVisibility() => _visibility.acquireLease();
 
   @override
   Widget buildView({
@@ -326,20 +347,45 @@ class _XtermTerminalSessionHandle(
 
   void _handleTerminalOutput(String data) => _queueTerminalOutput(data);
 
-  void _writeToTerminal(String data) => _writeSessionTerminal(this, data);
+  // _TerminalSessionOutputHost implementation.
+  @override
+  bool get isOutputVisible => _visibility.isOutputVisible;
+
+  @override
+  void writeToTerminal(String data) {
+    if (data.isEmpty || _disposed) {
+      return;
+    }
+    _terminal.write(data);
+  }
+
+  @override
+  void advanceRestore(int chars) => _advanceRestore(chars);
+
+  @override
+  void finishRestore() => _finishRestore();
+
+  @override
+  void advancePointerInputCatchUp(int chars) =>
+      _advancePointerInputCatchUp(chars);
+
+  @override
+  void discardPointerInputCatchUp({
+    required int offset,
+    required int chars,
+  }) => _discardPointerInputCatchUp(offset: offset, chars: chars);
+
+  void _writeToTerminal(String data) => writeToTerminal(data);
 
   void _queueTerminalOutput(
     String data, {
     _TerminalOutputSource source = _TerminalOutputSource.live,
-  }) => _queueSessionTerminalOutput(this, data, source: source);
-
-  void _scheduleTerminalOutputFlush() =>
-      _scheduleSessionTerminalOutputFlush(this);
+  }) => _pump.queue(data, source: source);
 
   void _flushPendingTerminalOutputFrame({bool force = false}) =>
-      _flushSessionTerminalOutputFrame(this, force: force);
+      _pump.flushFrame(force: force);
 
-  void _flushPendingTerminalOutputNow() => _flushSessionTerminalOutputNow(this);
+  void _flushPendingTerminalOutputNow() => _pump.flushNow();
 
   void _replaceTerminalWithSnapshot(
     List<int> data, {
@@ -354,8 +400,7 @@ class _XtermTerminalSessionHandle(
 
   @override
   void _clearPendingTerminalOutput() {
-    _output.cancelDeferredFlush();
-    _output.clear();
+    _pump.clearPending();
   }
 
   Future<void> _stopPtySession({required bool suppressExit}) async {

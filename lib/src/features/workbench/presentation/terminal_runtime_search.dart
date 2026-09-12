@@ -32,11 +32,7 @@ mixin _TerminalSearchSessionSupport on TerminalSessionHandle {
 
   ValueNotifier<TerminalRestoreProgress?> get _restoreProgress;
 
-  Set<Object> get _visibilityLeases;
-
-  set _visible(bool value);
-
-  set _appForeground(bool value);
+  _TerminalSessionVisibilityAccounting get _visibility;
 
   bool get _disposed;
   set _disposed(bool value);
@@ -83,9 +79,9 @@ mixin _TerminalSearchSessionSupport on TerminalSessionHandle {
     _disposed = true;
     _startAttempt += 1;
     _outputVisibilityGeneration += 1;
-    _visibilityLeases.clear();
-    _visible = false;
-    _appForeground = false;
+    _visibility.leases.clear();
+    _visibility.visible = false;
+    _visibility.appForeground = false;
     _pointerInputResumePending = false;
     _pointerInputCatchUpChars = 0;
     _searchController.dispose();

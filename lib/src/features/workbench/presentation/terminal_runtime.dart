@@ -47,6 +47,7 @@ part 'terminal_runtime_search.dart';
 part 'terminal_runtime_session_recovery.dart';
 part 'terminal_runtime_clipboard.dart';
 part 'terminal_runtime_output_batching.dart';
+part 'terminal_runtime_output_pump.dart';
 part 'terminal_runtime_output_pipeline.dart';
 part 'terminal_runtime_pointer_synchronization.dart';
 part 'terminal_runtime_startup_delivery.dart';
@@ -57,6 +58,7 @@ part 'terminal_login_shell_launch.dart';
 part 'terminal_runtime_rendering.dart';
 part 'terminal_runtime_posix_io.dart';
 part 'terminal_runtime_buffer_accounting.dart';
+part 'terminal_runtime_visibility_accounting.dart';
 part 'terminal_runtime_restore_progress.dart';
 part 'terminal_runtime_testing.dart';
 
