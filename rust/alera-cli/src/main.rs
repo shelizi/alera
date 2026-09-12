@@ -21,6 +21,10 @@ mod login_shell_environment;
 mod managed_workspace;
 #[cfg(test)]
 mod managed_workspace_removal_tests;
+#[cfg(test)]
+mod managed_workspace_setup_tests;
+#[cfg(test)]
+mod managed_workspace_tests;
 mod mobile_access;
 mod native_credential_entry;
 mod netbird;
