@@ -317,4 +317,25 @@ impl ServerActor {
         self.run_dispatch_context_continuation(&dispatch_id, pending)
             .await;
     }
+
+    /// Startup recovery: dispatches still `awaiting_acceptance` can never
+    /// accept after a restart - sessions and in-flight installs are
+    /// process-local, and the DB only stores the context token hash, so the
+    /// file cannot be rebuilt. Fails the startup so the task returns to the
+    /// retry policy, then removes the context through the generation gate.
+    /// Runs once before the command loop, so it cannot double-fire.
+    pub(super) async fn recover_orphaned_dispatch_startups(&mut self) {
+        let orphaned = match self.runtime_store.fail_orphaned_startup_dispatches().await {
+            Ok(orphaned) => orphaned,
+            Err(error) => {
+                tracing::error!("failed to sweep orphaned dispatch startups: {error}");
+                return;
+            }
+        };
+        for dispatch in &orphaned {
+            if let Some(handle) = dispatch.assignee_handle.as_deref() {
+                self.remove_dispatch_context(handle);
+            }
+        }
+    }
 }

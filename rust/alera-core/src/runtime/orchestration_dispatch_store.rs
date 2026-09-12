@@ -554,6 +554,32 @@ impl RuntimeStore {
         Ok(expired)
     }
 
+    /// Dispatches still awaiting acceptance when the host starts can never
+    /// accept: sessions and pending installs die with the process. Fails
+    /// each so its task returns to the startup retry/stall policy.
+    pub async fn fail_orphaned_startup_dispatches(
+        &self,
+    ) -> Result<Vec<OrchestrationDispatchContext>> {
+        let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "SELECT {DISPATCH_COLUMNS} FROM orchestrationDispatchContexts \
+             WHERE status = 'awaiting_acceptance'"
+        )))
+        .fetch_all(self.pool())
+        .await?;
+        let contexts: Vec<_> = rows
+            .into_iter()
+            .map(dispatch_from_row)
+            .collect::<Result<_>>()?;
+        let mut orphaned = Vec::with_capacity(contexts.len());
+        for ctx in contexts {
+            orphaned.push(
+                self.fail_orchestration_startup(&ctx.id, "host restarted during dispatch startup")
+                    .await?,
+            );
+        }
+        Ok(orphaned)
+    }
+
     /// Dispatched contexts whose dispatch and last heartbeat both predate the
     /// threshold (ISO lexicographic comparison).
     pub async fn stale_orchestration_dispatches(

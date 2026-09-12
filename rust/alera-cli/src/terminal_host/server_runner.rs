@@ -119,6 +119,7 @@ pub async fn run_terminal_host_server(
     actor.restart_remote_relay().await;
     actor.reconcile_interrupted_project_clones().await;
     actor.reconcile_spawn_on_create_tabs().await;
+    actor.recover_orphaned_dispatch_startups().await;
     if actor.account_push.push_enabled
         && actor.account_push.service.local_account().await?.is_some()
     {
