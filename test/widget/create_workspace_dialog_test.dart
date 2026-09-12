@@ -1,3 +1,4 @@
+import 'package:alera/src/design_system/forms/alera_dropdown_field.dart';
 import 'package:alera/src/features/projects/domain/project.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_creation_result.dart';
@@ -435,6 +436,74 @@ void main() {
     },
   );
 
+  testWidgets(
+    'filters parent candidates to the selected project and clears a stale selection',
+    (tester) async {
+      final alera = _project(id: 'alera', name: 'Alera');
+      final orca = _orca();
+      final aleraMain = _workspace(
+        id: 'alera-main',
+        projectId: alera.id,
+        name: 'Alera',
+      );
+      final orcaMain = _workspace(
+        id: 'orca-main',
+        projectId: orca.id,
+        name: 'Orca',
+      );
+
+      await _pumpDialogLauncher(
+        tester,
+        projects: <Project>[alera, orca],
+        parentCandidates: <WorkspaceParentCandidate>[
+          WorkspaceParentCandidate(project: alera, workspace: aleraMain),
+          WorkspaceParentCandidate(project: orca, workspace: orcaMain),
+        ],
+        loadBranches: (_) async => const <String>['main'],
+        onSubmit: (_) {},
+      );
+
+      AleraDropdownField<String?> parentField() {
+        return tester.widget<AleraDropdownField<String?>>(
+          find.byWidgetPredicate(
+            (widget) =>
+                widget is AleraDropdownField<String?> &&
+                widget.labelText == 'Parent Workspace',
+          ),
+        );
+      }
+
+      await tester.tap(find.text('Open'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Orca'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Continue'));
+      await tester.pumpAndSettle();
+
+      expect(parentField().entries.map((entry) => entry.value), <String?>[
+        null,
+        'orca-main',
+      ]);
+
+      parentField().onChanged('orca-main');
+      await tester.pump();
+      expect(parentField().value, 'orca-main');
+
+      await tester.tap(find.text('Back'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Alera'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Continue'));
+      await tester.pumpAndSettle();
+
+      expect(parentField().value, isNull);
+      expect(parentField().entries.map((entry) => entry.value), <String?>[
+        null,
+        'alera-main',
+      ]);
+    },
+  );
+
   testWidgets('submits from the new-branch and name fields', (tester) async {
     final results = <MockSubmitResult?>[];
 
@@ -508,6 +577,8 @@ Future<void> _pumpDialogLauncher(
   required Future<List<String>> Function(Project project) loadBranches,
   required ValueChanged<MockSubmitResult?> onSubmit,
   Project? initialProject,
+  List<WorkspaceParentCandidate> parentCandidates =
+      const <WorkspaceParentCandidate>[],
   Set<String> existingBranches = const <String>{},
   Future<bool> Function(Project project, String branch)? checkBranchExists,
   String? Function(Project project)? getProjectActiveBranch,
@@ -526,6 +597,7 @@ Future<void> _pumpDialogLauncher(
                     builder: (_) => CreateWorkspaceDialog(
                       projects: projects,
                       initialProject: initialProject,
+                      parentCandidates: parentCandidates,
                       loadBranches: loadBranches,
                       getProjectActiveBranch:
                           getProjectActiveBranch ?? ((_) => null),
@@ -601,3 +673,22 @@ Project _project({String id = 'project-1', String name = 'Alera'}) {
 }
 
 Project _orca() => _project(id: 'orca', name: 'Orca');
+
+Workspace _workspace({
+  required String id,
+  required String projectId,
+  required String name,
+}) {
+  final now = DateTime.utc(2026, 5, 21);
+  return Workspace(
+    id: id,
+    projectId: projectId,
+    name: name,
+    branch: 'main',
+    path: '/repo/$projectId/$id',
+    createdAt: now,
+    updatedAt: now,
+    kind: .main,
+    status: .active,
+  );
+}

@@ -10,6 +10,7 @@ final class WorkbenchWorkspaceParentUpdateService {
   Future<bool> update({
     required Workspace workspace,
     String? parentWorkspaceId,
+    required Workspace? Function(String workspaceId) workspaceById,
   }) async {
     final currentParentId = normalizeWorkbenchWorkspaceParentId(
       workspace.parentWorkspaceId,
@@ -22,6 +23,14 @@ final class WorkbenchWorkspaceParentUpdateService {
     if (nextParentId != null) {
       if (nextParentId == workspace.id) {
         throw WorkspaceException('A workspace cannot be its own parent');
+      }
+      // Untracked workspaces fall through to the store, which enforces the
+      // same-project rule authoritatively.
+      final parent = workspaceById(nextParentId);
+      if (parent != null && parent.projectId != workspace.projectId) {
+        throw WorkspaceException(
+          'Parent workspace must belong to the same project',
+        );
       }
       final relations = await _repository.listRelations();
       if (workspaceDescendantIds(

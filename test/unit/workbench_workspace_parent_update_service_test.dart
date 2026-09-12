@@ -12,7 +12,11 @@ void main() {
       final service = WorkbenchWorkspaceParentUpdateService(repo);
       final workspace = _workspace(parentWorkspaceId: ' parent ');
 
-      await service.update(workspace: workspace, parentWorkspaceId: 'parent');
+      await service.update(
+        workspace: workspace,
+        parentWorkspaceId: 'parent',
+        workspaceById: _noWorkspaces,
+      );
 
       expect(repo.calls, isEmpty);
     },
@@ -23,7 +27,11 @@ void main() {
     final service = WorkbenchWorkspaceParentUpdateService(repo);
     final workspace = _workspace(parentWorkspaceId: 'parent-old');
 
-    await service.update(workspace: workspace, parentWorkspaceId: '   ');
+    await service.update(
+      workspace: workspace,
+      parentWorkspaceId: '   ',
+      workspaceById: _noWorkspaces,
+    );
 
     expect(repo.calls, <String>['unlink:parent-old->workspace']);
   });
@@ -33,7 +41,11 @@ void main() {
     final service = WorkbenchWorkspaceParentUpdateService(repo);
 
     await expectLater(
-      service.update(workspace: _workspace(), parentWorkspaceId: ' workspace '),
+      service.update(
+        workspace: _workspace(),
+        parentWorkspaceId: ' workspace ',
+        workspaceById: _noWorkspaces,
+      ),
       throwsA(
         isA<WorkspaceException>().having(
           (error) => error.toString(),
@@ -44,6 +56,63 @@ void main() {
     );
 
     expect(repo.calls, isEmpty);
+  });
+
+  test('rejects a parent from another project before unlinking', () async {
+    final repo = _FakeWorkspaceParentRepository();
+    final service = WorkbenchWorkspaceParentUpdateService(repo);
+    final workspaces = <String, Workspace>{
+      'other-parent': _workspace(
+        id: 'other-parent',
+        projectId: 'other-project',
+      ),
+    };
+
+    await expectLater(
+      service.update(
+        workspace: _workspace(parentWorkspaceId: 'parent-old'),
+        parentWorkspaceId: 'other-parent',
+        workspaceById: (id) => workspaces[id],
+      ),
+      throwsA(
+        isA<WorkspaceException>().having(
+          (error) => error.toString(),
+          'message',
+          contains('same project'),
+        ),
+      ),
+    );
+
+    expect(repo.calls, isEmpty);
+  });
+
+  test('links a same-project parent resolved through the lookup', () async {
+    final repo = _FakeWorkspaceParentRepository();
+    final service = WorkbenchWorkspaceParentUpdateService(repo);
+    final workspaces = <String, Workspace>{
+      'parent-new': _workspace(id: 'parent-new'),
+    };
+
+    await service.update(
+      workspace: _workspace(),
+      parentWorkspaceId: 'parent-new',
+      workspaceById: (id) => workspaces[id],
+    );
+
+    expect(repo.calls, <String>['list', 'link:parent-new->workspace']);
+  });
+
+  test('leaves an untracked parent to the store-level checks', () async {
+    final repo = _FakeWorkspaceParentRepository();
+    final service = WorkbenchWorkspaceParentUpdateService(repo);
+
+    await service.update(
+      workspace: _workspace(),
+      parentWorkspaceId: 'parent-remote',
+      workspaceById: _noWorkspaces,
+    );
+
+    expect(repo.calls, <String>['list', 'link:parent-remote->workspace']);
   });
 
   test('rejects a descendant using fresh relations before unlinking', () async {
@@ -58,6 +127,7 @@ void main() {
       service.update(
         workspace: _workspace(parentWorkspaceId: 'parent-old'),
         parentWorkspaceId: 'grandchild',
+        workspaceById: _noWorkspaces,
       ),
       throwsA(
         isA<WorkspaceException>().having(
@@ -78,6 +148,7 @@ void main() {
     await service.update(
       workspace: _workspace(parentWorkspaceId: 'parent-old'),
       parentWorkspaceId: ' parent-new ',
+      workspaceById: _noWorkspaces,
     );
 
     expect(repo.calls, <String>[
@@ -99,6 +170,7 @@ void main() {
         service.update(
           workspace: _workspace(parentWorkspaceId: 'parent-old'),
           parentWorkspaceId: 'parent-new',
+          workspaceById: _noWorkspaces,
         ),
         throwsA(same(linkError)),
       );
@@ -124,6 +196,7 @@ void main() {
         service.update(
           workspace: _workspace(parentWorkspaceId: 'parent-old'),
           parentWorkspaceId: 'parent-new',
+          workspaceById: _noWorkspaces,
         ),
         throwsA(
           isA<WorkspaceException>()
@@ -143,9 +216,15 @@ void main() {
   );
 }
 
-Workspace _workspace({String? parentWorkspaceId}) => Workspace(
-  id: 'workspace',
-  projectId: 'project',
+Workspace? _noWorkspaces(String _) => null;
+
+Workspace _workspace({
+  String id = 'workspace',
+  String projectId = 'project',
+  String? parentWorkspaceId,
+}) => Workspace(
+  id: id,
+  projectId: projectId,
   name: 'Workspace',
   path: 'C:/workspace',
   createdAt: DateTime.utc(2026, 9, 10),

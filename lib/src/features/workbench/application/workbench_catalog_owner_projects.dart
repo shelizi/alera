@@ -334,9 +334,14 @@ extension WorkbenchCatalogOwnerProjects on WorkbenchCatalogOwner {
         }
         final basis = latest ?? workspace;
         try {
-          final changed = await WorkbenchWorkspaceParentUpdateService(
-            _host.workspaceGraphRepository,
-          ).update(workspace: basis, parentWorkspaceId: requestedParentId);
+          final changed =
+              await WorkbenchWorkspaceParentUpdateService(
+                _host.workspaceGraphRepository,
+              ).update(
+                workspace: basis,
+                parentWorkspaceId: requestedParentId,
+                workspaceById: _host.workspaceById,
+              );
           if (!changed) return;
           final latestAfter = _host.workspaceById(workspace.id);
           if (latestAfter != null) {

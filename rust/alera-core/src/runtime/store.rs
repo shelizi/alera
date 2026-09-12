@@ -1236,6 +1236,12 @@ impl RuntimeStore {
             .find_workspace(child_workspace_id)
             .await?
             .ok_or_else(|| RuntimeStoreError::Message("Child workspace not found".to_string()))?;
+        if parent.project_id != child.project_id {
+            return Err(RuntimeStoreError::Message(
+                "Parent workspace must belong to the same project".to_string(),
+            )
+            .into());
+        }
         if self
             .descendant_ids(child_workspace_id)
             .await?
@@ -1811,6 +1817,28 @@ mod tests {
         store.link_workspaces("a", "b").await.unwrap();
         let error = store.link_workspaces("b", "a").await.unwrap_err();
         assert!(error.to_string().contains("cycle"));
+    }
+
+    #[tokio::test]
+    async fn workspace_relations_require_the_same_project() {
+        let (_dir, store) = store().await;
+        store.upsert_project(project("p")).await.unwrap();
+        store.upsert_project(project("other")).await.unwrap();
+        store.upsert_workspace(workspace("a", "p")).await.unwrap();
+        store.upsert_workspace(workspace("b", "p")).await.unwrap();
+        store
+            .upsert_workspace(workspace("x", "other"))
+            .await
+            .unwrap();
+
+        let error = store.link_workspaces("x", "a").await.unwrap_err();
+        assert!(error.to_string().contains("same project"));
+
+        store.link_workspaces("a", "b").await.unwrap();
+        let relations = store.list_relations().await.unwrap();
+        assert_eq!(relations.len(), 1);
+        assert_eq!(relations[0].parent_workspace_id, "a");
+        assert_eq!(relations[0].child_workspace_id, "b");
     }
 
     #[tokio::test]
