@@ -1,0 +1,12 @@
+{
+  "id": 25,
+  "type": "tab.find",
+  "payload": {
+    "id": "terminal-1",
+    "futureField": {
+      "nested": true
+    },
+    "futureList": [1, 2, 3]
+  },
+  "extraTopLevel": 42
+}

@@ -1,0 +1,5 @@
+{
+  "id": 26,
+  "ok": false,
+  "error": "Mobile clients cannot call terminal host request: host.shutdown"
+}

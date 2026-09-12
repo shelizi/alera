@@ -1,0 +1,12 @@
+{
+  "id": 23,
+  "type": "mobile.hello",
+  "payload": {
+    "protocolVersion": 1,
+    "deviceId": "device-1",
+    "deviceToken": "token-1",
+    "cloudDeviceId": "cloud-installation-1",
+    "binaryFrames": true,
+    "supportedTabKinds": []
+  }
+}
