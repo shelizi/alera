@@ -192,6 +192,8 @@ mod terminal_pulse;
 mod terminal_session_requests;
 mod terminal_spawn;
 mod terminal_startup_commands;
+#[cfg(test)]
+mod workspace_contract_tests;
 mod workspace_pinning;
 mod workspace_section_requests;
 #[cfg(test)]

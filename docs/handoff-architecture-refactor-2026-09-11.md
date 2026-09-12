@@ -817,6 +817,12 @@ Actor validates dispatch mutation + reserves generation/owner
 - 新測試 `project_contract_tests.rs` pin 住三個關鍵格：register retry 回同一 project 不複製、`project.remove` 二次呼叫為零刪除的冪等成功、terminal 狀態 clone job 的 cancel 回存 job 列而非錯誤。deferred read 面（branches/effective config/host directory/disconnect drop）已由 `deferred_project_requests_tests.rs` 覆蓋。
 - 此 domain 只補文件與測試，未改 production code：`project_requests.rs`/`project_clone_requests.rs`/`runtime_mutations.rs` 的 ownership 拆分在 Batch E/P2 已就位，無需再拆。
 
+#### Workspace domain 已完成
+
+- Contract matrix 落在 `docs/workspace-operation-contract.md`：涵蓋 `workspace.*` CRUD/pin/rename、managed lifecycle（`createManaged`/`runSetup`/`storageImpact`/`switchBranch`/`sleep`/`remove*`）、`workspaceTag.*`、`workspaceRelation.*`、`workspaceSection.*`、`workspaceActivity.*`、`linkedReview.*`、`layout.*`、`workspaceCascade.preview`。三個執行面已列明：mailbox CRUD、spawn 型 deferred job（`managed_workspace_jobs` gate shutdown timer）、runtime-mutation worker。
+- 已記錄缺口：`workspaceTag.create` 無 name 唯一檢查（retry 產生同名不同 id 的 tag）；`createManaged` retry 是 fail-closed 而非回傳首次建立的 workspace。
+- 新測試 `workspace_contract_tests.rs` pin 住：`workspace.remove`/`workspace.sleep` 二次呼叫為零刪除冪等、`layout.upsert` 同 workspaceId last-write-wins。其餘格子由 `managed_workspace_cleanup_tests`/`preflight_tests`/`workspace_section_requests_tests`/`runtime_mutations/tests.rs` 既有覆蓋。
+
 ---
 
 ## 14. Phase 2/3：跨語言 wire contract
