@@ -456,7 +456,7 @@ dart run tool/quality/check_max_lines.dart
 
 ### 7.4 已知既有失敗與外部 worker 操作註記（2026-09-13）
 
-- `test/widget/alera_shell_page_test.dart` 有 3 個失敗：`new-tab agent entry opens and focuses an agent session`、`sidebar agent rows can switch workspaces and request focus`、`workspace rows group duplicate collapsed agents by type`（"+1" badge）。已在無重構改動的 baseline 上複現，來源是 `d9fa88ab`/`fe6d7314` 等 sidebar/agent feature 合入後測試與實作未對上，**非本重構線的 regression**；待修。
+- `test/widget/alera_shell_page_test.dart` 曾有 3 個失敗（`d9fa88ab`/`fe6d7314` 合入後測試未對上），已修（`db5e8cd4`，83/83 綠）：兩個是 `_ShellTestWorkbenchController` harness 缺口（`createAgentTab`/`selectWorkspaceTab` 未覆寫走到真實 DB 路徑），一個是期望過期（`WorkspaceAgentCompactSummary` 現按 state 分組顯示 count，`+N` 僅 >3 種 group 溢出時用）。全測試側修正，無 lib/ 改動。
 - `agy-worker`（Antigravity CLI）操作特性：預設 model 會空轉（跑完 baseline 測試就停、無產出），需 `--model claude-sonnet-4-6` 才會實作；`agy -p` 經 `agy.cmd` shim 時 prompt 只吃第一行且總長 ~8KB 上限，成功模式是單行 prompt + `--new-project --add-dir <repo>`，並要求 foreground 執行指令（否則 agent 把 build 丟背景就結束 turn）。
 - Codex（`luna-worker`）沙箱無法 commit linked worktree（`.git/objects` 在外部 repo），commit 由 parent 代行；多個 codex worker 平行時 `%TEMP%` 輸出目錄撞名，需在任務卡指定不同目錄。
 
