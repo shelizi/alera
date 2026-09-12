@@ -33,6 +33,8 @@ import 'package:alera/src/shared/infra/runtime/runtime_host_providers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+part 'settings_dialog_search.dart';
+
 // The dialog fills most of the screen so the settings surface feels like a
 // full window while still leaving a small breathing margin on large displays.
 const double _kDialogWidthFraction = 0.92;
@@ -445,58 +447,6 @@ class _SettingsDialogState extends ConsumerState<SettingsDialog> {
       ),
     );
   }
-}
-
-bool _matchesLocalizedSection(
-  BuildContext context,
-  SettingsSectionData section,
-  String query,
-) {
-  if (section.matches(query)) {
-    return true;
-  }
-  if (query.isEmpty) {
-    return true;
-  }
-  final localizedValues = <String>[
-    context.tr(section.title),
-    context.tr(section.description),
-    for (final group in section.groups) context.tr(group.title),
-    for (final entry in section.entries) ...<String>[
-      context.tr(entry.title),
-      if (entry.description != null) context.tr(entry.description!),
-    ],
-  ];
-  return localizedValues.any((value) => value.toLowerCase().contains(query));
-}
-
-String? _firstLocalizedMatchingGroupId(
-  BuildContext context,
-  SettingsSectionData section,
-  String query,
-) {
-  final direct = section.firstMatchingGroupId(query);
-  if (direct != null || query.isEmpty) {
-    return direct;
-  }
-  for (final group in section.groups) {
-    if (context.tr(group.title).toLowerCase().contains(query)) {
-      return group.id;
-    }
-    for (final entry in section.entries) {
-      if (entry.groupId != group.id) {
-        continue;
-      }
-      final values = <String>[
-        context.tr(entry.title),
-        if (entry.description != null) context.tr(entry.description!),
-      ];
-      if (values.any((value) => value.toLowerCase().contains(query))) {
-        return group.id;
-      }
-    }
-  }
-  return null;
 }
 
 List<String> _mergeFontSuggestions(List<String> fonts) {
