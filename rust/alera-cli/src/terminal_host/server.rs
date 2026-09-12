@@ -54,6 +54,8 @@ mod actor_test_harness;
 mod agent_hook_events;
 mod agent_profile_launch_requests;
 mod agent_prompt_composition;
+#[cfg(test)]
+mod agent_settings_contract_tests;
 mod agent_spawn_install;
 mod agent_title_context;
 mod agent_title_events;
