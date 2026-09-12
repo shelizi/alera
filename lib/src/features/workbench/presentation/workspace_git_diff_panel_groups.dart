@@ -249,3 +249,69 @@ class const _GitDiffMessage({required final String message})
     );
   }
 }
+
+extension _WorkspaceGitDiffPanelGrouping on _WorkspaceGitDiffPanelState {
+  void _toggleSectionCollapsed(String key) {
+    _setPanelState(() {
+      if (!_collapsedSections.add(key)) {
+        _collapsedSections.remove(key);
+      }
+    });
+  }
+
+  void _toggleTreeNodeCollapsed(String key) {
+    _setPanelState(() {
+      if (!_collapsedTreeNodes.add(key)) {
+        _collapsedTreeNodes.remove(key);
+      }
+    });
+  }
+
+  bool get _isFilterVisible =>
+      _filterVisible || _filterController.text.trim().isNotEmpty;
+
+  void _toggleFilterVisibility() {
+    _setPanelState(() {
+      _filterVisible = !_isFilterVisible;
+    });
+  }
+
+  bool _allVisibleNodesCollapsed(WorkspaceSourceControlState? state) {
+    final keys = _visibleCollapsibleKeys(state);
+    return keys.isNotEmpty &&
+        keys.every(
+          (key) =>
+              _collapsedSections.contains(key) ||
+              _collapsedTreeNodes.contains(key),
+        );
+  }
+
+  void _toggleAllVisibleNodes(WorkspaceSourceControlState? state) {
+    final keys = _visibleCollapsibleKeys(state);
+    if (keys.isEmpty) {
+      return;
+    }
+    _setPanelState(() {
+      final allCollapsed = keys.every(
+        (key) =>
+            _collapsedSections.contains(key) ||
+            _collapsedTreeNodes.contains(key),
+      );
+      for (final key in keys) {
+        if (key.startsWith('section:')) {
+          if (allCollapsed) {
+            _collapsedSections.remove(key);
+          } else {
+            _collapsedSections.add(key);
+          }
+        } else {
+          if (allCollapsed) {
+            _collapsedTreeNodes.remove(key);
+          } else {
+            _collapsedTreeNodes.add(key);
+          }
+        }
+      }
+    });
+  }
+}

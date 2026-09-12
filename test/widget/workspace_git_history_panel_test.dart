@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:alera/src/design_system/surfaces/hover_container.dart';
 import 'package:alera/src/features/settings/application/settings_controller.dart';
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
@@ -16,6 +18,142 @@ import '../unit/fake_git_backend.dart';
 import '../unit/fake_source_control_watcher.dart';
 
 void main() {
+  testWidgets('late history from an old repository scope is ignored', (
+    tester,
+  ) async {
+    final firstHistory = Completer<GitHistoryResult>();
+    final workspace = _workspace();
+    final watcher = FakeSourceControlWatcher();
+    final backend = FakeGitBackend()
+      ..gitHistoryResultQueue.add(firstHistory.future);
+
+    await _pumpPanel(
+      tester,
+      backend: backend,
+      workspace: workspace,
+      watcher: watcher,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('COMMITS'));
+    await tester.pump();
+
+    backend.gitHistoryResult = _historyWithCommit(
+      id: 'repo-b-commit',
+      subject: 'Repo B Commit',
+    );
+    final nestedScope = _nestedScope(workspace);
+    await _pumpPanel(
+      tester,
+      backend: backend,
+      workspace: workspace,
+      sourceControlScope: nestedScope,
+      watcher: watcher,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('COMMITS'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Repo B Commit'), findsOneWidget);
+
+    firstHistory.complete(
+      _historyWithCommit(id: 'repo-a-commit', subject: 'Repo A Commit'),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Repo B Commit'), findsOneWidget);
+    expect(find.text('Repo A Commit'), findsNothing);
+    final historyCalls = backend.calls
+        .where((call) => call.method == 'history')
+        .toList();
+    expect(
+      historyCalls.map((call) => call.args['path']),
+      containsAll(<String>[workspace.path, nestedScope.path]),
+    );
+  });
+
+  testWidgets('compare cache is scoped and reused within one repository', (
+    tester,
+  ) async {
+    final workspace = _workspace();
+    final watcher = FakeSourceControlWatcher();
+    final backend = FakeGitBackend()
+      ..gitHistoryResult = _historyWithCommit(
+        id: 'same-commit',
+        subject: 'Shared Commit',
+      );
+
+    await _pumpPanel(
+      tester,
+      backend: backend,
+      workspace: workspace,
+      watcher: watcher,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('COMMITS'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Shared Commit'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Shared Commit'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Shared Commit'));
+    await tester.pumpAndSettle();
+
+    List<GitBackendCall> compareCalls() =>
+        backend.calls.where((call) => call.method == 'commitCompare').toList();
+    expect(compareCalls(), hasLength(1));
+    expect(compareCalls().single.args['path'], workspace.path);
+
+    final nestedScope = _nestedScope(workspace);
+    await _pumpPanel(
+      tester,
+      backend: backend,
+      workspace: workspace,
+      sourceControlScope: nestedScope,
+      watcher: watcher,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('COMMITS'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Shared Commit'));
+    await tester.pumpAndSettle();
+
+    expect(compareCalls(), hasLength(2));
+    expect(compareCalls().last.args['path'], nestedScope.path);
+  });
+
+  testWidgets('nested repository root scopes history and commit compare', (
+    tester,
+  ) async {
+    final workspace = _workspace();
+    final nestedScope = _nestedScope(workspace);
+    final backend = FakeGitBackend()
+      ..gitHistoryResult = _historyWithCommit(
+        id: 'nested-commit',
+        subject: 'Nested Commit',
+      );
+
+    await _pumpPanel(
+      tester,
+      backend: backend,
+      workspace: workspace,
+      sourceControlScope: nestedScope,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('COMMITS'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Nested Commit'));
+    await tester.pumpAndSettle();
+
+    expect(
+      backend.calls.where((call) => call.method == 'history').single.args,
+      <String, Object?>{'path': nestedScope.path, 'limit': 50, 'baseRef': null},
+    );
+    expect(
+      backend.calls.where((call) => call.method == 'commitCompare').single.args,
+      <String, Object?>{'path': nestedScope.path, 'commitId': 'nested-commit'},
+    );
+  });
+
   testWidgets('commit rows truncate ref badges instead of overflowing', (
     tester,
   ) async {
@@ -178,17 +316,20 @@ FakeGitBackend _multiRefBackend() {
 Future<void> _pumpPanel(
   WidgetTester tester, {
   required FakeGitBackend backend,
-  required double width,
-  required double height,
+  Workspace? workspace,
+  WorkspaceSourceControlScope? sourceControlScope,
+  FakeSourceControlWatcher? watcher,
+  double width = 420,
+  double height = 520,
   Future<void> Function(String branch)? onSwitchBranch,
 }) {
-  final workspace = _workspace();
+  final resolvedWorkspace = workspace ?? _workspace();
   return tester.pumpWidget(
     ProviderScope(
       overrides: [
         gitBackendProvider.overrideWithValue(backend),
         sourceControlWatcherProvider.overrideWithValue(
-          FakeSourceControlWatcher(),
+          watcher ?? FakeSourceControlWatcher(),
         ),
         settingsControllerProvider.overrideWith(
           () => _PanelSettingsController(.defaults),
@@ -200,12 +341,14 @@ Future<void> _pumpPanel(
             width: width,
             height: height,
             child: WorkspaceGitDiffPanel(
-              workspace: workspace,
-              sourceControlScope: WorkspaceSourceControlScope(
-                workspaceId: workspace.id,
-                workspacePath: workspace.path,
-                path: workspace.path,
-              ),
+              workspace: resolvedWorkspace,
+              sourceControlScope:
+                  sourceControlScope ??
+                  WorkspaceSourceControlScope(
+                    workspaceId: resolvedWorkspace.id,
+                    workspacePath: resolvedWorkspace.path,
+                    path: resolvedWorkspace.path,
+                  ),
               viewMode: .flat,
               onViewModeChanged: (_) {},
               groupMode: .byArea,
@@ -237,6 +380,37 @@ Future<void> _pumpPanel(
     ),
   );
 }
+
+GitHistoryResult _historyWithCommit({
+  required String id,
+  required String subject,
+}) => GitHistoryResult(
+  currentRef: GitHistoryItemRef(
+    id: 'refs/heads/main',
+    name: 'main',
+    revision: id,
+  ),
+  hasIncomingChanges: false,
+  hasOutgoingChanges: false,
+  hasMore: false,
+  limit: 50,
+  items: <GitHistoryItem>[
+    GitHistoryItem(
+      id: id,
+      parentIds: const <String>[],
+      subject: subject,
+      message: subject,
+    ),
+  ],
+);
+
+WorkspaceSourceControlScope _nestedScope(Workspace workspace) =>
+    WorkspaceSourceControlScope(
+      workspaceId: workspace.id,
+      workspacePath: workspace.path,
+      path: '${workspace.path}/packages/app',
+      relativeRoot: 'packages/app',
+    );
 
 Workspace _workspace() {
   final now = DateTime.utc(2026, 6, 6);
