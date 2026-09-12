@@ -51,7 +51,7 @@ final class WorkspaceExplorerRevealControllerProvider
 }
 
 String _$workspaceExplorerRevealControllerHash() =>
-    r'd4f06706cfb7bbbdcd32e1f7dc53f9dd2241e1da';
+    r'3af5a7eba4402bd12e3fd0333e1d3b34ed5a9076';
 
 abstract class _$WorkspaceExplorerRevealController
     extends $Notifier<WorkspaceExplorerRevealRequest?> {

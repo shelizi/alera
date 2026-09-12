@@ -105,7 +105,7 @@ final class RuntimeHostLifecycleServiceProvider
 }
 
 String _$runtimeHostLifecycleServiceHash() =>
-    r'ae9e10294424026819ac802ea366b483d2395f26';
+    r'711506533d28190f60d4102f905d174f716651ad';
 
 @ProviderFor(runtimeHostStatus)
 final runtimeHostStatusProvider = RuntimeHostStatusProvider._();
@@ -146,4 +146,4 @@ final class RuntimeHostStatusProvider
   }
 }
 
-String _$runtimeHostStatusHash() => r'776c5a73d801861f185630ea07a27a66c36b5599';
+String _$runtimeHostStatusHash() => r'daf4db725dfa0ff97412d1e4deeccdb9e7fd38bb';

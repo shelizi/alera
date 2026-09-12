@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:alera/src/app/providers.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
@@ -9,6 +8,7 @@ import 'package:alera/src/design_system/feedback/alera_status_dot.dart';
 import 'package:alera/src/design_system/feedback/alera_toast.dart';
 import 'package:alera/src/features/ai_assist/application/agent_title_providers.dart';
 import 'package:alera/src/features/agent_profiles/application/agent_profile_providers.dart';
+import 'package:alera/src/features/agent_profiles/application/local_agent_providers.dart';
 import 'package:alera/src/features/agent_profiles/domain/agent_profile.dart';
 import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 import 'package:alera/src/features/agent_quota/domain/agent_quota.dart';
@@ -71,6 +71,7 @@ Future<_ShellPumpHarness> _pumpShell(
   Map<String, AgentStatusEntry> agentStatuses =
       const <String, AgentStatusEntry>{},
   bool agentTitlesAvailable = false,
+  List<AgentType> installedAgents = const <AgentType>[],
 }) async {
   final shellController = controller ?? _ShellTestWorkbenchController(state);
   final runtime = terminalRuntime ?? _FakeTerminalRuntime();
@@ -116,6 +117,7 @@ Future<_ShellPumpHarness> _pumpShell(
         agentTitleAvailableProvider.overrideWith(
           (ref) async => agentTitlesAvailable,
         ),
+        installedAgentClisProvider.overrideWith((ref) async => installedAgents),
         if (workspaceFolderOpener != null)
           workspaceFolderOpenerProvider.overrideWith(
             (ref) => workspaceFolderOpener,

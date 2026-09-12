@@ -30,6 +30,25 @@ enum AgentType(this.key) {
   final String key;
 }
 
+/// The display name shown wherever the app refers to an agent adapter, e.g.
+/// the new-tab menu, status dots, and settings labels.
+String agentDisplayName(AgentType agentType) {
+  return switch (agentType) {
+    AgentType.codex => 'Codex',
+    AgentType.claude => 'Claude Code',
+    AgentType.copilot => 'GitHub Copilot',
+    AgentType.cursor => 'Cursor',
+    AgentType.agy => 'Antigravity',
+    AgentType.opencode => 'OpenCode',
+    AgentType.opencode2 => 'OpenCode 2',
+    AgentType.pi => 'Pi',
+    AgentType.amp => 'Amp',
+    AgentType.grok => 'Grok Build',
+    AgentType.devin => 'Devin',
+    AgentType.fx => 'fx',
+  };
+}
+
 class const AgentHookEvent({
   required this.terminalSessionId,
   required this.workspaceId,

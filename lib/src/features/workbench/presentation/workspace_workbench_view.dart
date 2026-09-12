@@ -12,7 +12,9 @@ import 'package:alera/src/design_system/buttons/alera_icon_button.dart';
 import 'package:alera/src/design_system/icons/alera_file_icon.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:alera/src/design_system/menus/alera_dropdown_entry.dart';
+import 'package:alera/src/features/agent_profiles/application/local_agent_providers.dart';
 import 'package:alera/src/features/agent_status/domain/agent_status.dart';
+import 'package:alera/src/features/agent_status/presentation/agent_identity_icon.dart';
 import 'package:alera/src/design_system/feedback/alera_status_dot.dart';
 import 'package:alera/src/features/projects/domain/project.dart';
 import 'package:alera/src/features/workbench/application/workbench_tab_attention.dart';
@@ -46,6 +48,10 @@ part 'workspace_workbench_tab_menu.dart';
 part 'workspace_workbench_resize_handle.dart';
 
 typedef CreateTerminalTabCallback = Future<void> Function({
+  String? targetGroupId,
+});
+typedef CreateAgentTabCallback = Future<void> Function({
+  required AgentType agentType,
   String? targetGroupId,
 });
 typedef OpenFileTabCallback = Future<void> Function({
@@ -188,6 +194,7 @@ class const WorkspaceWorkbenchView({
   required final WorkbenchTabCompletionAcknowledgements
   completionAcknowledgements,
   required final CreateTerminalTabCallback onCreateTab,
+  required final CreateAgentTabCallback onCreateAgentTab,
   required final OpenFileTabCallback onOpenEditorTab,
   required final OpenFileTabCallback onOpenMarkdownViewerTab,
   required final SelectWorkspaceTabCallback onSelectTab,
@@ -241,6 +248,7 @@ class _WorkspaceWorkbenchViewState extends State<WorkspaceWorkbenchView> {
           agentStatuses: widget.agentStatuses,
           completionAcknowledgements: widget.completionAcknowledgements,
           onCreateTab: widget.onCreateTab,
+          onCreateAgentTab: widget.onCreateAgentTab,
           onOpenEditorTab: widget.onOpenEditorTab,
           onOpenMarkdownViewerTab: widget.onOpenMarkdownViewerTab,
           onSelectTab: widget.onSelectTab,

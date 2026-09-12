@@ -48,6 +48,27 @@ mixin _WorkbenchControllerTabOpening
     }
   }
 
+  /// A terminal tab that launches a locally installed agent CLI. The command
+  /// stays on the record so a transparent PTY remint re-enters the agent,
+  /// which is what keeps the tab's agent identity across host restarts.
+  Future<WorkspaceTabRecord> createAgentTab(
+    Workspace workspace, {
+    required AgentType agentType,
+    String? targetGroupId,
+  }) {
+    final command = agentProfileDefaultCommands[agentType];
+    if (command == null) {
+      throw StateError('No default launch command for agent ${agentType.key}.');
+    }
+    return createTerminalTab(
+      workspace,
+      targetGroupId: targetGroupId,
+      title: agentDisplayName(agentType),
+      initialCommand: command,
+      spawnOnCreate: true,
+    );
+  }
+
   /// Opens the "Setup" terminal for a workspace whose worktree setup the host
   /// prepared instead of running, so a long `pnpm install` is visible work
   /// rather than a spinner on the create dialog.

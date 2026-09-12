@@ -23,11 +23,13 @@ Future<void> _pumpWorkbenchView(
       const <String, AgentStatusEntry>{},
   bool agentTitlesAvailable = false,
   List<String>? externalTerminalTabs,
+  List<AgentType> installedAgents = const <AgentType>[],
+  List<({AgentType agentType, String? targetGroupId})>? createdAgentTabs,
 }) async {
   final openExternalTerminal = externalTerminalTabs == null
       ? null
       : (WorkspaceTabRecord tab) async {
-          externalTerminalTabs?.add(tab.id);
+          externalTerminalTabs.add(tab.id);
         };
   await tester.pumpWidget(
     ProviderScope(
@@ -35,6 +37,7 @@ Future<void> _pumpWorkbenchView(
         agentTitleAvailableProvider.overrideWith(
           (ref) async => agentTitlesAvailable,
         ),
+        installedAgentClisProvider.overrideWith((ref) async => installedAgents),
       ],
       child: MaterialApp(
         home: Scaffold(
@@ -54,6 +57,13 @@ Future<void> _pumpWorkbenchView(
                 onCreateTab: ({String? targetGroupId}) async {
                   createdTabs.add(targetGroupId);
                 },
+                onCreateAgentTab:
+                    ({required agentType, String? targetGroupId}) async {
+                      createdAgentTabs?.add((
+                        agentType: agentType,
+                        targetGroupId: targetGroupId,
+                      ));
+                    },
                 onOpenEditorTab:
                     ({required relativePath, targetGroupId}) async {
                       selectedTabs.add(
