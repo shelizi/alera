@@ -334,7 +334,7 @@ void _registerAleraShellSidebarActionTests() {
     );
   });
 
-  testWidgets('workspace rows group duplicate collapsed agents by type', (
+  testWidgets('workspace rows group duplicate collapsed agents by state', (
     tester,
   ) async {
     await _pumpShell(
@@ -357,7 +357,13 @@ void _registerAleraShellSidebarActionTests() {
     );
 
     expect(find.byType(WorkspaceAgentCompactSummary), findsOneWidget);
-    expect(find.text('+1'), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byType(WorkspaceAgentCompactSummary),
+        matching: find.text('2'),
+      ),
+      findsOneWidget,
+    );
   });
 
   testWidgets('closing a sidebar agent row closes the runtime tab', (

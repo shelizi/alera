@@ -48,6 +48,24 @@ class _ShellTestWorkbenchController(
   }
 
   @override
+  Future<void> selectWorkspaceTab({
+    required String workspaceId,
+    required String tabId,
+  }) async {
+    final workspace = state.workspacesByProject.values
+        .expand((workspaces) => workspaces)
+        .where((workspace) => workspace.id == workspaceId)
+        .firstOrNull;
+    final project = workspace == null
+        ? null
+        : state.projects.where((p) => p.id == workspace.projectId).firstOrNull;
+    if (workspace != null && project != null) {
+      await selectWorkspace(project: project, workspace: workspace);
+    }
+    setActiveTab(workspaceId: workspaceId, tabId: tabId);
+  }
+
+  @override
   void setActiveTab({required String workspaceId, required String tabId}) {
     final layout = state.layoutFor(workspaceId);
     final groupId = layout?.groupIdForTab(tabId);
@@ -169,6 +187,25 @@ class _ShellTestWorkbenchController(
       layout.addTabToGroup(groupId: groupId, tabId: tab.id).sanitize(nextTabs),
     );
     return tab;
+  }
+
+  @override
+  Future<WorkspaceTabRecord> createAgentTab(
+    Workspace workspace, {
+    required AgentType agentType,
+    String? targetGroupId,
+  }) {
+    final command = agentProfileDefaultCommands[agentType];
+    if (command == null) {
+      throw StateError('No default launch command for agent ${agentType.key}.');
+    }
+    return createTerminalTab(
+      workspace,
+      targetGroupId: targetGroupId,
+      title: agentDisplayName(agentType),
+      initialCommand: command,
+      spawnOnCreate: true,
+    );
   }
 
   @override
