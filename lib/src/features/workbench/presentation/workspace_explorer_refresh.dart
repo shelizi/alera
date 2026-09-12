@@ -122,6 +122,8 @@ extension _WorkspaceExplorerRefresh on _WorkspaceExplorerState {
     final handle = _watcherHandle;
     _watchSubscription = null;
     _watcherHandle = null;
+    _pendingWatchedDirectories.clear();
+    _lastSyncedWatchedDirectories = null;
     await subscription?.cancel();
     if (handle != null) {
       await _workspaceFiles.stopExplorerWatcher(handle: handle);
@@ -133,20 +135,51 @@ extension _WorkspaceExplorerRefresh on _WorkspaceExplorerState {
     if (handle == null) {
       return;
     }
+    final watchedPaths = _childrenByDirectory.keys.toSet();
+    final lastSynced = _lastSyncedWatchedDirectories;
+    if (lastSynced != null &&
+        lastSynced.length == watchedPaths.length &&
+        lastSynced.containsAll(watchedPaths)) {
+      return;
+    }
+    _lastSyncedWatchedDirectories = watchedPaths;
     try {
       await _workspaceFiles.updateExplorerWatcher(
         handle: handle,
-        watchedRelativePaths: _childrenByDirectory.keys.toList(growable: false),
+        watchedRelativePaths: watchedPaths.toList(growable: false),
       );
     } catch (_) {
+      _lastSyncedWatchedDirectories = null;
       // File watching is best-effort; explicit refresh still works.
     }
   }
 
   void _scheduleWatchedRefresh(native.WorkspaceExplorerWatchBatch batch) {
-    _watchRefreshQueue = _watchRefreshQueue
-        .then((_) => _refreshWatchedDirectories(batch.directoryRelativePaths))
-        .catchError((_) {});
+    _pendingWatchedDirectories.addAll(batch.directoryRelativePaths);
+    if (_watchRefreshInFlight) {
+      return;
+    }
+    _watchRefreshInFlight = true;
+    unawaited(_drainWatchedRefreshes());
+  }
+
+  Future<void> _drainWatchedRefreshes() async {
+    try {
+      while (mounted && _pendingWatchedDirectories.isNotEmpty) {
+        final relativePaths = _pendingWatchedDirectories.toList(
+          growable: false,
+        );
+        _pendingWatchedDirectories.clear();
+        try {
+          await _refreshWatchedDirectories(relativePaths);
+        } catch (_) {
+          // Best-effort watcher refresh: a failed batch must not strand
+          // directories that were queued behind it.
+        }
+      }
+    } finally {
+      _watchRefreshInFlight = false;
+    }
   }
 
   Future<void> _refreshWatchedDirectories(List<String> relativePaths) async {

@@ -16,6 +16,7 @@ import 'package:alera/src/features/workbench/presentation/workspace_explorer.dar
 import 'package:alera/src/rust/api/workspace_files.dart' as native;
 import 'package:alera/src/shared/infra/process/process_runner.dart';
 import 'package:alera/src/shared/infra/git/git_backend.dart';
+import 'package:alera/src/shared/infra/git/git_explorer_status.dart';
 import 'package:alera/src/shared/infra/git/git_providers.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -35,6 +36,7 @@ part 'workspace_explorer_reveal_cases.dart';
 part 'workspace_explorer_file_tree_cases.dart';
 part 'workspace_explorer_mode_cases.dart';
 part 'workspace_explorer_action_cases.dart';
+part 'workspace_explorer_watch_cases.dart';
 part 'workspace_explorer_test_harness.dart';
 part 'workspace_explorer_fake_file_service.dart';
 
@@ -46,4 +48,5 @@ void main() {
   _registerWorkspaceExplorerFileTreeTests();
   _registerWorkspaceExplorerModeTests();
   _registerWorkspaceExplorerActionTests();
+  _registerWorkspaceExplorerWatchTests();
 }

@@ -71,7 +71,9 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
   native.WorkspaceExplorerTreeProjection? _projection;
   native.WorkspaceExplorerWatcherHandle? _watcherHandle;
   StreamSubscription<native.WorkspaceExplorerWatchBatch>? _watchSubscription;
-  Future<void> _watchRefreshQueue = Future<void>.value();
+  bool _watchRefreshInFlight = false;
+  final Set<String> _pendingWatchedDirectories = <String>{};
+  Set<String>? _lastSyncedWatchedDirectories;
   late final WorkspaceFileService _workspaceFiles;
   late final EditorSessionRegistry _editorSessions;
   late final WorkspaceFolderOpener _folderOpener;

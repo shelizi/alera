@@ -72,8 +72,10 @@ class WorkspaceSourceControlController
   StreamSubscription<native.SourceControlWatchSignal>? _watchSubscription;
   native.SourceControlWatcherHandle? _watcherHandle;
   Timer? _watcherReloadDebounceTimer;
+  DateTime? _watcherReloadNotBefore;
   bool _watcherReloadInFlight = false;
   bool _watcherReloadQueued = false;
+  int _queuedWatcherReloads = 0;
   bool _disposed = false;
 
   @override
@@ -283,6 +285,7 @@ class WorkspaceSourceControlController
   void _stopWatching() {
     _disposed = true;
     _watcherReloadQueued = false;
+    _watcherReloadNotBefore = null;
     _watcherReloadDebounceTimer?.cancel();
     _watcherReloadDebounceTimer = null;
     final subscription = _watchSubscription;
@@ -298,8 +301,16 @@ class WorkspaceSourceControlController
 
   void _scheduleWatcherReload() {
     _watcherReloadDebounceTimer?.cancel();
+    var delay = _watcherReloadDebounce;
+    final notBefore = _watcherReloadNotBefore;
+    if (notBefore != null) {
+      final remaining = notBefore.difference(DateTime.now());
+      if (remaining > delay) {
+        delay = remaining;
+      }
+    }
     _watcherReloadDebounceTimer = Timer(
-      _watcherReloadDebounce,
+      delay,
       () => unawaited(_reloadFromWatcher()),
     );
   }
@@ -329,6 +340,10 @@ class WorkspaceSourceControlController
       // Best-effort background refresh: keep the current state on failure.
     } finally {
       _watcherReloadInFlight = false;
+      if (!_watcherReloadQueued) {
+        _queuedWatcherReloads = 0;
+        _watcherReloadNotBefore = null;
+      }
       _scheduleQueuedWatcherReload();
     }
   }
@@ -338,6 +353,14 @@ class WorkspaceSourceControlController
       return;
     }
     _watcherReloadQueued = false;
+    // Signals already waiting when a reload finished mean changes are
+    // arriving faster than scans complete; back off so sustained churn does
+    // not pin a full status scan every few hundred milliseconds. The floor
+    // also gates fresh signals, otherwise they would shortcut the cooldown.
+    final delay =
+        _watcherReloadDebounce * (1 << _queuedWatcherReloads.clamp(0, 3));
+    _queuedWatcherReloads += 1;
+    _watcherReloadNotBefore = DateTime.now().add(delay);
     _scheduleWatcherReload();
   }
 

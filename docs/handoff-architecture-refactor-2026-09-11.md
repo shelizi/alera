@@ -1142,6 +1142,18 @@ max-lines 尚未全清前，第 8 步會是 repo-wide exit 1；必須確認 offe
 
 最後整併擴充性與發布/量測，不要提前擴大本輪 blast radius。
 
+### Batch L：檔案與異動風暴下的 UI refresh backpressure
+
+使用者回報：檔案過多或異動檔案過多時桌面端卡住。已確認的機制：
+
+- Explorer watcher（`workspace_explorer_refresh.dart`）：Dart 端 `_scheduleWatchedRefresh` 把每個 batch 串進**無界** `_watchRefreshQueue`；每個 batch 都跑一次 `_refreshGitStatusSnapshot`（完整 `git status` FRB）加逐目錄 `projectExplorerTree`，風暴期間 queue 只增不減，停止後仍持續卡頓。需改成 in-flight + pending-merge（對齊 `workspace_source_control_controller.dart` 的 `_watcherReloadInFlight/Queued` 模式），合併待處理 batch 的目錄集合，且 git snapshot 每次 drain 最多跑一次。
+- Source control watcher：native 與 Dart 端已有 debounce/coalescing，但持續異動時每輪仍是完整 `status()+repositoryState()+listStashes()` 全掃描。需加 min-interval/adaptive throttle。
+- 大量異動檔案：`GitStatusResult` 完整清單過 FRB 後整表重建，無上限/虛擬化。需界定 payload 上限或渲染上限。
+- `_syncWatchedDirectories` 在目錄異動時重送完整 watched 清單，可改增量。
+- Red test 方向：fake watcher batch 風暴下，status 呼叫次數有界、queue 不增長、風暴結束後 UI 立即收斂。
+
+歸屬：Explorer 半邊屬 Workbench（Batch I 前可先獨立做），source control 半邊屬 Git（Batch J）。共用同一套「有界合併 refresh」模式，建議作為獨立批次插在 Batch G/H 之後或併入 Batch J 前半。
+
 ---
 
 ## 25. 交接完成條件與目前真實狀態

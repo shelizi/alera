@@ -126,6 +126,79 @@ void main() {
     },
   );
 
+  test(
+    'sustained watch churn backs off instead of scanning every few hundred ms',
+    () async {
+      final backend = _BlockingStatusGitBackend()
+        ..gitStatusResult = _statusWith(1);
+      final watcher = FakeSourceControlWatcher();
+      addTearDown(watcher.dispose);
+      await _boot(backend, watcher);
+
+      int statusCalls() =>
+          backend.calls.where((call) => call.method == 'status').length;
+
+      // One churn cycle: a signal triggers a reload that blocks on a gate,
+      // then a second signal lands while the scan is genuinely in flight so
+      // it is queued rather than replacing the pending trigger, then the
+      // gate releases. Cycles run back-to-back so each scheduled replay is
+      // caught by the next cycle's gate, keeping the backlog non-empty like
+      // a real file storm.
+      Future<void> churnCycle() async {
+        final gate = Completer<void>();
+        backend.statusGates.add(gate);
+        final before = statusCalls();
+        watcher.emitChange();
+        while (statusCalls() == before) {
+          await Future.pause(const Duration(milliseconds: 25));
+        }
+        watcher.emitChange();
+        await Future.pause(const Duration(milliseconds: 350));
+        gate.complete();
+        await Future.pause(const Duration(milliseconds: 50));
+      }
+
+      await churnCycle();
+      await churnCycle();
+      await churnCycle();
+      final callsAfterCycles = statusCalls();
+
+      // The third consecutive queued replay waits out the longest cooldown; a
+      // fixed 250ms debounce would already have fired by now.
+      await Future.pause(const Duration(milliseconds: 600));
+      expect(statusCalls(), callsAfterCycles);
+
+      await Future.pause(const Duration(milliseconds: 600));
+      expect(statusCalls(), callsAfterCycles + 1);
+    },
+  );
+
+  test('watch reload cadence recovers once the burst ends', () async {
+    final backend = _BlockingStatusGitBackend()
+      ..gitStatusResult = _statusWith(1);
+    final watcher = FakeSourceControlWatcher();
+    addTearDown(watcher.dispose);
+    await _boot(backend, watcher);
+
+    int statusCalls() =>
+        backend.calls.where((call) => call.method == 'status').length;
+
+    final gate = Completer<void>();
+    backend.statusGates.add(gate);
+    watcher.emitChange();
+    await Future.pause(const Duration(milliseconds: 350));
+    watcher.emitChange();
+    await Future.pause(const Duration(milliseconds: 350));
+    gate.complete();
+    await Future.pause(const Duration(milliseconds: 400));
+    final callsAfterBurst = statusCalls();
+
+    // The burst has ended: a later single signal must reload promptly again.
+    watcher.emitChange();
+    await Future.pause(const Duration(milliseconds: 350));
+    expect(statusCalls(), callsAfterBurst + 1);
+  });
+
   test('disposing the controller stops the watcher', () async {
     final backend = FakeGitBackend()..gitStatusResult = _statusWith(0);
     final watcher = FakeSourceControlWatcher();
