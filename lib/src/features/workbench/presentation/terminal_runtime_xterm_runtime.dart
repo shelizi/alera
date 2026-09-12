@@ -11,7 +11,7 @@ class XtermTerminalRuntime._(
   final TerminalProcessCreated? _terminalProcessCreated,
   final TerminalClipboard _terminalClipboard,
   final void Function(String message, {bool error})? _interactionNotice,
-) implements TerminalRuntime {
+) implements TerminalRuntime, TerminalRuntimeSessionOwnerHost {
   factory({
     TerminalPtySessionFactory? ptySessionFactory,
     TerminalSettings? initialSettings,
@@ -38,129 +38,73 @@ class XtermTerminalRuntime._(
     );
   }
 
-  String? _activeWorkspaceId;
-  bool _appForeground = true;
   final StreamController<TerminalRuntimeExitEvent> _exitController =
       StreamController<TerminalRuntimeExitEvent>.broadcast();
-  final Map<String, _XtermTerminalSessionHandle> _sessions =
-      <String, _XtermTerminalSessionHandle>{};
   bool _osc52BlockedNoticeShown = false;
+  late final TerminalRuntimeSessionOwner _sessionOwner =
+      TerminalRuntimeSessionOwner(this);
 
   @override
   Stream<TerminalRuntimeExitEvent> get exits => _exitController.stream;
 
   void updateSettings(TerminalSettings settings) {
     _settings = settings;
-    for (final session in _sessions.values) {
-      session.applySettings(settings);
-    }
-    // Lowering the budget in settings has to take effect now, not at the next
-    // workspace switch.
-    _enforceBufferBudget();
+    _sessionOwner.applySettings();
   }
 
   @override
   TerminalSessionHandle sessionFor({
     required Workspace workspace,
     required WorkspaceTabRecord tab,
-  }) {
-    return _sessions
-        .putIfAbsent(tab.id, () {
-          final handle = _XtermTerminalSessionHandle(
-            workspace,
-            tab,
-            _ptySessionFactory,
-            _settings,
-            _externalUriLauncher,
-            _shellLaunchesBuilder,
-            _agentHookEnvironmentBuilder,
-            _shellStartupPreparer,
-            _terminalProcessCreated,
-            _terminalClipboard,
-            _interactionNotice,
-            _notifyOsc52Blocked,
-            _handleSessionExit,
-            _handleVisibilityChanged,
-          )..setAppForeground(_appForeground);
-          // Apply only at session creation so toggling the setting later does
-          // not reopen composers the user already closed.
-          if (_settings.showComposerByDefault) {
-            handle.composerController.show();
-          }
-          return handle;
-        })
-        .sync(workspace: workspace, tab: tab);
-  }
+  }) => _sessionOwner.sessionFor(workspace: workspace, tab: tab);
 
   @override
-  TerminalSessionHandle? peekSession(String tabId) => _sessions[tabId];
+  TerminalSessionHandle? peekSession(String tabId) =>
+      _sessionOwner.peekSession(tabId);
 
   @override
   void requestFocus({
     required Workspace workspace,
     required WorkspaceTabRecord tab,
-  }) {
-    sessionFor(workspace: workspace, tab: tab).requestFocus();
-  }
+  }) => _sessionOwner.requestFocus(workspace: workspace, tab: tab);
 
   @override
   void setActiveWorkspace(String? workspaceId) {
-    if (_activeWorkspaceId == workspaceId) {
-      return;
-    }
-    _activeWorkspaceId = workspaceId;
-    _enforceBufferBudget();
+    _sessionOwner.setActiveWorkspace(workspaceId);
   }
 
   /// Parks terminal delivery and frame scheduling while the desktop window is
   /// hidden. The sidecar keeps the PTY and its bounded scrollback alive, then
   /// resynchronises from the delivery cursor when the window returns.
-  void setAppForeground(bool foreground) {
-    if (_appForeground == foreground) {
-      return;
-    }
-    _appForeground = foreground;
-    for (final session in _sessions.values) {
-      session.setAppForeground(foreground);
-    }
-  }
+  void setAppForeground(bool foreground) =>
+      _sessionOwner.setAppForeground(foreground);
 
-  void _handleVisibilityChanged(_XtermTerminalSessionHandle handle) {
-    if (handle.isVisible) {
-      return;
-    }
-    // A terminal going off screen is the only moment a new eviction candidate
-    // appears, so this is the sweep trigger rather than a timer.
-    _enforceBufferBudget();
-  }
+  @override
+  TerminalSettings get terminalSettings => _settings;
 
-  /// Detaches the coldest terminals until the estimated buffer total fits.
-  ///
-  /// Eviction never terminates the PTY, so the agent keeps running on the host
-  /// and the scrollback is restored from the host snapshot on return.
-  void _enforceBufferBudget() {
-    final budget = TerminalBufferBudget(
-      budgetBytes: _settings.bufferBudgetMegabytes * 1024 * 1024,
+  @override
+  TerminalSessionHandle createSession({
+    required TerminalRuntimeSessionOwner owner,
+    required Workspace workspace,
+    required WorkspaceTabRecord tab,
+  }) {
+    return _XtermTerminalSessionHandle(
+      owner,
+      workspace,
+      tab,
+      _ptySessionFactory,
+      _settings,
+      _externalUriLauncher,
+      _shellLaunchesBuilder,
+      _agentHookEnvironmentBuilder,
+      _shellStartupPreparer,
+      _terminalProcessCreated,
+      _terminalClipboard,
+      _interactionNotice,
+      _notifyOsc52Blocked,
+      owner._handleSessionExit,
+      owner._handleVisibilityChanged,
     );
-    if (budget.isUnbounded || _sessions.isEmpty) {
-      return;
-    }
-    final pinned = <String>{
-      for (final entry in _sessions.entries)
-        if (entry.value.isVisible) entry.key,
-    };
-    final evictions = budget.selectEvictions(
-      live: <TerminalBufferUsage>[
-        for (final session in _sessions.values) session.bufferUsage,
-      ],
-      pinnedTabIds: pinned,
-    );
-    for (final tabId in evictions) {
-      final session = _sessions.remove(tabId);
-      if (session != null) {
-        _disposeSession(session, terminatePty: false);
-      }
-    }
   }
 
   void _notifyOsc52Blocked() {
@@ -180,61 +124,37 @@ class XtermTerminalRuntime._(
   }
 
   @override
-  void closeTab(String tabId) {
-    final session = _sessions.remove(tabId);
-    if (session != null) {
-      _disposeSession(session, terminatePty: true);
-    }
-  }
+  void forwardSessionExit(TerminalRuntimeExitEvent event) =>
+      _handleSessionExit(event);
 
   @override
-  void closeWorkspace(String workspaceId) {
-    final removed = _sessions.entries
-        .where((entry) => entry.value.workspaceId == workspaceId)
-        .map((entry) => entry.key)
-        .toList(growable: false);
-    for (final tabId in removed) {
-      final session = _sessions.remove(tabId);
-      if (session != null) {
-        _disposeSession(session, terminatePty: true);
-      }
-    }
-  }
+  void closeTab(String tabId) => _sessionOwner.closeTab(tabId);
 
   @override
-  void releaseTab(String tabId) {
-    final session = _sessions.remove(tabId);
-    if (session != null) {
-      _disposeSession(session, terminatePty: false);
-    }
-  }
+  void closeWorkspace(String workspaceId) =>
+      _sessionOwner.closeWorkspace(workspaceId);
 
   @override
-  void releaseWorkspace(String workspaceId) {
-    final removed = _sessions.entries
-        .where((entry) => entry.value.workspaceId == workspaceId)
-        .map((entry) => entry.key)
-        .toList(growable: false);
-    for (final tabId in removed) {
-      releaseTab(tabId);
-    }
-  }
+  void releaseTab(String tabId) => _sessionOwner.releaseTab(tabId);
+
+  @override
+  void releaseWorkspace(String workspaceId) =>
+      _sessionOwner.releaseWorkspace(workspaceId);
 
   @override
   void dispose() {
-    for (final session in _sessions.values) {
-      _disposeSession(session, terminatePty: false);
-    }
-    _sessions.clear();
+    _sessionOwner.dispose();
     unawaited(_exitController.close());
   }
 
-  void _disposeSession(
-    _XtermTerminalSessionHandle session, {
+  @override
+  void disposeSession(
+    TerminalSessionHandle session, {
     required bool terminatePty,
   }) {
-    final terminalSessionId = session.terminalSessionId;
-    session.dispose(terminatePty: terminatePty);
+    final xtermSession = session as _XtermTerminalSessionHandle;
+    final terminalSessionId = xtermSession.terminalSessionId;
+    xtermSession.dispose(terminatePty: terminatePty);
     final cleanup = _terminalSessionCleanup;
     if (terminatePty && cleanup != null) {
       unawaited(
