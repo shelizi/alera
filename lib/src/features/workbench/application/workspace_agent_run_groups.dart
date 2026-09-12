@@ -1,9 +1,17 @@
 import 'package:alera/src/features/agent_status/domain/agent_status.dart';
+import 'package:alera/src/features/workbench/application/workbench_tab_acknowledgements.dart';
 import 'package:alera/src/features/workbench/application/workspace_agent_status_projection.dart';
 
 /// Display buckets for the compact agent summary. Enum order is display
 /// order: attention-needing states surface first.
-enum WorkspaceAgentGroupKind { waiting, blocked, interrupted, working, done }
+enum WorkspaceAgentGroupKind {
+  waiting,
+  blocked,
+  interrupted,
+  doneUnacked,
+  working,
+  done,
+}
 
 class const WorkspaceAgentRunGroup({
   required final WorkspaceAgentGroupKind kind,
@@ -12,13 +20,16 @@ class const WorkspaceAgentRunGroup({
 
 /// Groups a workspace's agent runs by visual state for the compact summary
 /// pill. Interruption wins over the reported state, mirroring the per-row
-/// indicator.
+/// indicator. [acknowledgedCompletions] maps a terminal session id to the
+/// completion epoch (`stateStartedAt`) the user has already viewed; done runs
+/// past that view land in [WorkspaceAgentGroupKind.doneUnacked].
 List<WorkspaceAgentRunGroup> groupWorkspaceAgentRuns(
-  List<WorkspaceAgentRun> runs,
-) {
+  List<WorkspaceAgentRun> runs, {
+  Map<String, DateTime> acknowledgedCompletions = const <String, DateTime>{},
+}) {
   final byKind = <WorkspaceAgentGroupKind, List<WorkspaceAgentRun>>{};
   for (final run in runs) {
-    final kind = _groupKindOf(run.status);
+    final kind = _groupKindOf(run.status, acknowledgedCompletions);
     byKind.putIfAbsent(kind, () => <WorkspaceAgentRun>[]).add(run);
   }
   return <WorkspaceAgentRunGroup>[
@@ -28,7 +39,10 @@ List<WorkspaceAgentRunGroup> groupWorkspaceAgentRuns(
   ];
 }
 
-WorkspaceAgentGroupKind _groupKindOf(AgentStatusEntry status) {
+WorkspaceAgentGroupKind _groupKindOf(
+  AgentStatusEntry status,
+  Map<String, DateTime> acknowledgedCompletions,
+) {
   if (status.interrupted ?? false) {
     return WorkspaceAgentGroupKind.interrupted;
   }
@@ -36,6 +50,9 @@ WorkspaceAgentGroupKind _groupKindOf(AgentStatusEntry status) {
     AgentStatusState.waiting => WorkspaceAgentGroupKind.waiting,
     AgentStatusState.blocked => WorkspaceAgentGroupKind.blocked,
     AgentStatusState.working => WorkspaceAgentGroupKind.working,
-    AgentStatusState.done => WorkspaceAgentGroupKind.done,
+    AgentStatusState.done =>
+      isCompletionAcknowledged(acknowledgedCompletions, status)
+          ? WorkspaceAgentGroupKind.done
+          : WorkspaceAgentGroupKind.doneUnacked,
   };
 }

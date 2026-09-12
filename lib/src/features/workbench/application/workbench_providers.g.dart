@@ -208,7 +208,7 @@ final class WorkbenchSidebarRowsProvider
 }
 
 String _$workbenchSidebarRowsHash() =>
-    r'0b482653907b020b8dfc01c1a3a1f2550bcee5b2';
+    r'0124389c0fe466ee211101c55e5714cdd6607b34';
 
 /// Rechecks the terminal memory budget when the active workspace changes.
 

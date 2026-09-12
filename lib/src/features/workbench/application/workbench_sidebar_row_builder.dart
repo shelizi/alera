@@ -4,6 +4,7 @@ class _WorkbenchSidebarRowBuilder(
   final WorkbenchState state, {
   required final Map<String, AgentStatusEntry> agentStatuses,
   required final Map<String, DateTime> lastActivityByWorkspaceId,
+  required final Map<String, DateTime> acknowledgedCompletions,
   required final DateTime now,
 }) {
   this
@@ -15,6 +16,8 @@ class _WorkbenchSidebarRowBuilder(
 
   final _attentionByWorkspaceId = <String, WorkspaceAttention>{};
   final _activityByWorkspaceId = <String, AgentActivityRank?>{};
+  final _agentRunsByWorkspaceId = <String, List<WorkspaceAgentRun>>{};
+  final _agentGroupsByWorkspaceId = <String, List<WorkspaceAgentRunGroup>>{};
 
   List<WorkbenchSidebarRow> build() {
     final visibleProjects = _visibleProjects();
@@ -186,11 +189,22 @@ class _WorkbenchSidebarRowBuilder(
         continue;
       }
       final collapsed = prefs.collapsedProjectIds.contains(project.id);
+      final agentCounts = <WorkspaceAgentGroupKind, int>{};
+      for (final workspace in workspaces) {
+        for (final group in _agentGroupsOf(workspace.id)) {
+          agentCounts.update(
+            group.kind,
+            (count) => count + group.runs.length,
+            ifAbsent: () => group.runs.length,
+          );
+        }
+      }
       rows.add(
         WorkbenchProjectHeaderRow(
           project: project,
           workspaceCount: workspaces.length,
           collapsed: collapsed,
+          agentCounts: agentCounts,
         ),
       );
       if (collapsed) {
@@ -260,10 +274,7 @@ class _WorkbenchSidebarRowBuilder(
     );
     for (final entry in tree) {
       final tabs = state.tabsFor(entry.workspace.id);
-      final agentRuns = visibleWorkspaceAgentRuns(
-        tabs: tabs,
-        agentStatuses: agentStatuses,
-      );
+      final agentRuns = _agentRunsOf(entry.workspace.id);
       rows.add(
         WorkbenchWorkspaceRow(
           project: projectOf(entry.workspace),
@@ -272,7 +283,7 @@ class _WorkbenchSidebarRowBuilder(
           indent: baseIndent + entry.depth,
           expanded: prefs.expandedWorkspaceIds.contains(entry.workspace.id),
           agentRuns: agentRuns,
-          agentRunGroups: groupWorkspaceAgentRuns(agentRuns),
+          agentRunGroups: _agentGroupsOf(entry.workspace.id),
           hasTerminalTabs: tabs.any(
             (tab) => tab.kind == WorkspaceTabKind.terminal,
           ),
@@ -306,6 +317,28 @@ class _WorkbenchSidebarRowBuilder(
       workspacesFor: state.workspacesFor,
       workspaceVisible: _isWorkspaceVisible,
       activityOf: _activityOf,
+    );
+  }
+
+  /// Runs are memoized per workspace: a workspace can render twice (pinned
+  /// copy plus its regular row) and project headers aggregate the same runs.
+  List<WorkspaceAgentRun> _agentRunsOf(String workspaceId) {
+    return _agentRunsByWorkspaceId.putIfAbsent(
+      workspaceId,
+      () => visibleWorkspaceAgentRuns(
+        tabs: state.tabsFor(workspaceId),
+        agentStatuses: agentStatuses,
+      ),
+    );
+  }
+
+  List<WorkspaceAgentRunGroup> _agentGroupsOf(String workspaceId) {
+    return _agentGroupsByWorkspaceId.putIfAbsent(
+      workspaceId,
+      () => groupWorkspaceAgentRuns(
+        _agentRunsOf(workspaceId),
+        acknowledgedCompletions: acknowledgedCompletions,
+      ),
     );
   }
 

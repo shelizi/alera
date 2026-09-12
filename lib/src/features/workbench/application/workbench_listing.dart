@@ -20,18 +20,22 @@ part 'workbench_listing_sort.dart';
 /// [state]. Pure function - easy to unit test.
 ///
 /// [lastActivityByWorkspaceId] supplies the persisted recency fallback for the
-/// Agent Activity sort.
+/// Agent Activity sort. [acknowledgedCompletions] maps a terminal session id
+/// to the completion epoch the user has viewed, splitting done runs into the
+/// read and unread buckets.
 List<WorkbenchSidebarRow> buildSidebarRows(
   WorkbenchState state, {
   Map<String, AgentStatusEntry> agentStatuses =
       const <String, AgentStatusEntry>{},
   Map<String, DateTime> lastActivityByWorkspaceId = const <String, DateTime>{},
+  Map<String, DateTime> acknowledgedCompletions = const <String, DateTime>{},
   DateTime? now,
 }) {
   return _WorkbenchSidebarRowBuilder(
     state,
     agentStatuses: agentStatuses,
     lastActivityByWorkspaceId: lastActivityByWorkspaceId,
+    acknowledgedCompletions: acknowledgedCompletions,
     now: now ?? DateTime.now().toUtc(),
   ).build();
 }

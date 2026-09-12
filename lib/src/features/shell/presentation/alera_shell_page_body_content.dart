@@ -56,7 +56,6 @@ extension _AleraShellPageBodyContent on _AleraShellPageBodyState {
             onReclaimAll: () => unawaited(driverPresence.reclaimAll()),
           ),
           agentStatuses: agentStatuses,
-          completionAcknowledgements: _completionAcknowledgements,
           onCreateTab: ({targetGroupId}) async {
             final tab = await controller.createTerminalTab(
               workspace,

@@ -8,8 +8,6 @@ class const _WorkspaceTabStrip({
   required final bool canCloseSplit,
   required final TerminalRuntime terminalRuntime,
   required final Map<String, AgentStatusEntry> agentStatuses,
-  required final WorkbenchTabCompletionAcknowledgements
-  completionAcknowledgements,
   required final ValueChanged<String> onSelectTab,
   required final ValueChanged<String> onCloseTab,
   required final ValueChanged<List<String>> onCloseTabs,
@@ -20,12 +18,12 @@ class const _WorkspaceTabStrip({
   required final ValueChanged<WorkbenchDropZone> onSplitGroup,
   required final VoidCallback onMergeGroup,
   required final MoveWorkspaceTabCallback onMoveTab,
-}) extends StatefulWidget {
+}) extends ConsumerStatefulWidget {
   @override
-  State<_WorkspaceTabStrip> createState() => _WorkspaceTabStripState();
+  ConsumerState<_WorkspaceTabStrip> createState() => _WorkspaceTabStripState();
 }
 
-class _WorkspaceTabStripState extends State<_WorkspaceTabStrip> {
+class _WorkspaceTabStripState extends ConsumerState<_WorkspaceTabStrip> {
   final ScrollController _scrollController = ScrollController();
   bool _hasOverflow = false;
   int? _insertionGapIndex;
@@ -75,9 +73,19 @@ class _WorkspaceTabStripState extends State<_WorkspaceTabStrip> {
     if (activeTab == null) {
       return;
     }
-    widget.completionAcknowledgements.acknowledge(
-      widget.agentStatuses[activeTab.terminalSessionId],
-    );
+    final sessionId = activeTab.terminalSessionId;
+    // Provider mutations are not allowed inside widget life-cycles, so the
+    // acknowledgement lands after this frame instead of directly here.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+      ref
+          .read(
+            workbenchTabCompletionAcknowledgementsControllerProvider.notifier,
+          )
+          .acknowledge(widget.agentStatuses[sessionId]);
+    });
   }
 
   int? _resolvedDropIndex(_WorkspaceTabDragData data, int gapIndex) {
@@ -142,6 +150,9 @@ class _WorkspaceTabStripState extends State<_WorkspaceTabStrip> {
   @override
   Widget build(BuildContext context) {
     WidgetsBinding.instance.addPostFrameCallback((_) => _syncOverflow());
+    final acknowledgedCompletions = ref.watch(
+      workbenchTabCompletionAcknowledgementsControllerProvider,
+    );
     final addButton = _NewTabButton(
       groupId: widget.groupId,
       onCreateTab: widget.onCreateTab,
@@ -188,18 +199,20 @@ class _WorkspaceTabStripState extends State<_WorkspaceTabStrip> {
                             active: tab.id == widget.activeTabId,
                             terminalRuntime: widget.terminalRuntime,
                             status: widget.agentStatuses[tab.terminalSessionId],
-                            completionAcknowledged: widget
-                                .completionAcknowledgements
-                                .isAcknowledged(
-                                  widget.agentStatuses[tab.terminalSessionId],
-                                ),
+                            completionAcknowledged: isCompletionAcknowledged(
+                              acknowledgedCompletions,
+                              widget.agentStatuses[tab.terminalSessionId],
+                            ),
                             groupTabs: widget.tabs,
                             onSelect: () {
-                              setState(() {
-                                widget.completionAcknowledgements.acknowledge(
-                                  widget.agentStatuses[tab.terminalSessionId],
-                                );
-                              });
+                              ref
+                                  .read(
+                                    workbenchTabCompletionAcknowledgementsControllerProvider
+                                        .notifier,
+                                  )
+                                  .acknowledge(
+                                    widget.agentStatuses[tab.terminalSessionId],
+                                  );
                               widget.onSelectTab(tab.id);
                               _maybeKeepPreviewTab(tab);
                             },

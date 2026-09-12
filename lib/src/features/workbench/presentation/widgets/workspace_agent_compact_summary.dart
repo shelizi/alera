@@ -1,15 +1,12 @@
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
-import 'package:alera/src/features/agent_status/domain/agent_status.dart';
-import 'package:alera/src/features/agent_status/presentation/agent_identity_icon.dart';
 import 'package:alera/src/features/workbench/application/workspace_agent_run_groups.dart';
-import 'package:alera/src/features/workbench/application/workspace_agent_status_projection.dart';
-import 'package:alera/src/features/workbench/presentation/widgets/agent_run_state_indicator.dart';
+import 'package:alera/src/features/workbench/presentation/widgets/agent_run_spinner_scope.dart';
 import 'package:flutter/material.dart';
 
 /// Compact tray control for a workspace's agent runs: agents grouped by state,
-/// each group showing its state glyph plus up to three overlapping identity
-/// icons. Clicking toggles the expanded per-agent rows under the workspace.
+/// each group showing its state glyph plus a run count. Clicking toggles the
+/// expanded per-agent rows under the workspace.
 class const WorkspaceAgentCompactSummary({
   super.key,
   required final List<WorkspaceAgentRunGroup> groups,
@@ -21,9 +18,6 @@ class const WorkspaceAgentCompactSummary({
   final String? tooltipOverride;
 
   static const int _maxVisibleGroups = 3;
-  static const int _maxIconsPerGroup = 3;
-  static const double _iconSize = 14;
-  static const double _iconOverlap = 4;
 
   @override
   Widget build(BuildContext context) {
@@ -50,7 +44,10 @@ class const WorkspaceAgentCompactSummary({
             children: <Widget>[
               for (final (index, group) in visibleGroups.indexed) ...<Widget>[
                 if (index > 0) const SizedBox(width: AleraTokens.space6),
-                _GroupCluster(group: group),
+                WorkspaceAgentGroupCount(
+                  kind: group.kind,
+                  count: group.runs.length,
+                ),
               ],
               if (hiddenGroupRuns > 0) ...<Widget>[
                 const SizedBox(width: AleraTokens.space4),
@@ -75,80 +72,104 @@ class const WorkspaceAgentCompactSummary({
   }
 }
 
-class const _GroupCluster({required final WorkspaceAgentRunGroup group})
-    extends StatelessWidget {
+/// State glyph for one [WorkspaceAgentGroupKind]. The compact tray and the
+/// project header badge share this mapping so a count beside a glyph means
+/// the same thing in both places.
+class const WorkspaceAgentGroupGlyph({
+  super.key,
+  required final WorkspaceAgentGroupKind kind,
+  this.size = 11,
+}) extends StatelessWidget {
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox.square(
+      dimension: size,
+      child: Center(child: _buildGlyph(context)),
+    );
+  }
+
+  Widget _buildGlyph(BuildContext context) {
+    if (kind == WorkspaceAgentGroupKind.working) {
+      if (AgentRunSharedSpinner.isAvailable(context)) {
+        return AgentRunSharedSpinner(
+          size: size - 2,
+          color: AleraTokens.warning,
+          strokeWidth: 1.7,
+        );
+      }
+      return SizedBox.square(
+        dimension: size - 2,
+        child: const CircularProgressIndicator(
+          strokeWidth: 1.7,
+          color: AleraTokens.warning,
+        ),
+      );
+    }
+    final (icon, color) = switch (kind) {
+      WorkspaceAgentGroupKind.waiting => (
+        AleraIcons.notifications,
+        AleraTokens.warning,
+      ),
+      WorkspaceAgentGroupKind.blocked => (
+        AleraIcons.notifications,
+        AleraTokens.error,
+      ),
+      WorkspaceAgentGroupKind.interrupted => (
+        AleraIcons.cancel,
+        AleraTokens.error,
+      ),
+      // An unread completion is still an attention state, so it borrows the
+      // warning tint instead of the done green.
+      WorkspaceAgentGroupKind.doneUnacked => (
+        AleraIcons.success,
+        AleraTokens.warning,
+      ),
+      WorkspaceAgentGroupKind.working => (
+        AleraIcons.sync,
+        AleraTokens.warning,
+      ), // coverage:ignore-line
+      WorkspaceAgentGroupKind.done => (AleraIcons.success, AleraTokens.success),
+    };
+    return Icon(icon, size: size, color: color);
+  }
+}
+
+/// One [WorkspaceAgentGroupKind] glyph plus its run count.
+class const WorkspaceAgentGroupCount({
+  super.key,
+  required final WorkspaceAgentGroupKind kind,
+  required final int count,
+}) extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    const iconSize = WorkspaceAgentCompactSummary._iconSize;
-    const overlap = WorkspaceAgentCompactSummary._iconOverlap;
-    final iconRuns = _representativeRunsByAgentType(group.runs)
-        .take(WorkspaceAgentCompactSummary._maxIconsPerGroup)
-        .toList();
-    final hiddenCount = group.runs.length - iconRuns.length;
-    final width = iconSize + (iconRuns.length - 1) * (iconSize - overlap);
     return Row(
       mainAxisSize: .min,
       children: <Widget>[
-        AgentRunStateIndicator(status: group.runs.first.status, size: 11),
+        WorkspaceAgentGroupGlyph(kind: kind),
         const SizedBox(width: AleraTokens.space2),
-        SizedBox(
-          width: width,
-          height: iconSize,
-          child: Stack(
-            children: <Widget>[
-              for (final (index, run) in iconRuns.indexed)
-                Positioned(
-                  key: ValueKey<AgentType>(run.status.agentType),
-                  left: index * (iconSize - overlap),
-                  child: Container(
-                    width: iconSize,
-                    height: iconSize,
-                    decoration: BoxDecoration(
-                      color: AleraTokens.surfaceVariant,
-                      shape: .circle,
-                      border: Border.all(color: AleraTokens.borderSubtle),
-                    ),
-                    child: Center(
-                      child: AgentIdentityIcon(
-                        agentType: run.status.agentType,
-                        size: 9,
-                        color: AleraTokens.foregroundMuted,
-                      ),
-                    ),
-                  ),
-                ),
-            ],
+        Text(
+          '$count',
+          style: theme.textTheme.labelSmall?.copyWith(
+            color: AleraTokens.foregroundMuted,
+            fontWeight: .w600,
           ),
         ),
-        if (hiddenCount > 0) ...<Widget>[
-          const SizedBox(width: AleraTokens.space2),
-          Text(
-            '+$hiddenCount',
-            style: theme.textTheme.labelSmall?.copyWith(
-              color: AleraTokens.foregroundFaint,
-            ),
-          ),
-        ],
       ],
     );
   }
 }
 
-/// One run per agent type, ordered by agent type rather than by the run order.
-///
-/// Runs arrive in creation order; sorting the representatives by agent type
-/// keeps a group's icons in a fixed order regardless of status churn.
-List<WorkspaceAgentRun> _representativeRunsByAgentType(
-  List<WorkspaceAgentRun> runs,
-) {
-  final seen = <AgentType>{};
-  final representatives = <WorkspaceAgentRun>[
-    for (final run in runs)
-      if (seen.add(run.status.agentType)) run,
-  ];
-  representatives.sort(
-    (a, b) => a.status.agentType.index.compareTo(b.status.agentType.index),
-  );
-  return representatives;
+/// Tooltip label for a group kind; mirrors the per-run state label.
+String workspaceAgentGroupLabel(WorkspaceAgentGroupKind kind) {
+  return switch (kind) {
+    WorkspaceAgentGroupKind.waiting => 'Waiting for input',
+    WorkspaceAgentGroupKind.blocked => 'Blocked',
+    WorkspaceAgentGroupKind.interrupted => 'Interrupted',
+    WorkspaceAgentGroupKind.doneUnacked => 'Done (Unread)',
+    WorkspaceAgentGroupKind.working => 'Working',
+    WorkspaceAgentGroupKind.done => 'Done',
+  };
 }

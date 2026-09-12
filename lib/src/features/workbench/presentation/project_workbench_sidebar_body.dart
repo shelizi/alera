@@ -94,6 +94,7 @@ class const _SidebarBody({
           project: row.project,
           expanded: !row.collapsed,
           workspaceCount: row.workspaceCount,
+          agentCounts: row.agentCounts,
           onToggle: () => commands.toggleProjectCollapsed(row.project.id),
           onCreateWorkspace: row.project.supportsLinkedWorkspaces
               ? () => onCreateWorkspace(row.project)
@@ -308,6 +309,8 @@ class const _ProjectHeaderTile({
   required final Project project,
   required final bool expanded,
   required final int workspaceCount,
+  final Map<WorkspaceAgentGroupKind, int> agentCounts =
+      const <WorkspaceAgentGroupKind, int>{},
   required final VoidCallback onToggle,
   required final VoidCallback? onCreateWorkspace,
   final VoidCallback? onRefreshWorktrees,
@@ -429,6 +432,10 @@ class _ProjectHeaderTileState extends State<_ProjectHeaderTile> {
                   ),
                 ),
                 const SizedBox(width: AleraTokens.space6),
+                if (widget.agentCounts.isNotEmpty) ...<Widget>[
+                  _ProjectAgentCountBadge(agentCounts: widget.agentCounts),
+                  const SizedBox(width: AleraTokens.space6),
+                ],
                 Text(
                   widget.workspaceCount.toString(),
                   style: theme.textTheme.labelSmall?.copyWith(
@@ -459,6 +466,34 @@ class _ProjectHeaderTileState extends State<_ProjectHeaderTile> {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Per-state agent counts summed across a project's workspaces, rendered
+/// before the workspace count. Reuses the compact tray's glyph and count so a
+/// number beside a glyph means the same thing in both places.
+class const _ProjectAgentCountBadge({
+  required final Map<WorkspaceAgentGroupKind, int> agentCounts,
+}) extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    final entries = <(WorkspaceAgentGroupKind, int)>[
+      for (final kind in WorkspaceAgentGroupKind.values)
+        if (agentCounts[kind] case final int count when count > 0)
+          (kind, count),
+    ];
+    return Row(
+      mainAxisSize: .min,
+      children: <Widget>[
+        for (final (index, entry) in entries.indexed) ...<Widget>[
+          if (index > 0) const SizedBox(width: AleraTokens.space6),
+          Tooltip(
+            message: '${entry.$2} ${workspaceAgentGroupLabel(entry.$1)}',
+            child: WorkspaceAgentGroupCount(kind: entry.$1, count: entry.$2),
+          ),
+        ],
+      ],
     );
   }
 }

@@ -42,8 +42,8 @@ void main() {
 
     expect(groups.map((g) => g.kind), <WorkspaceAgentGroupKind>[
       WorkspaceAgentGroupKind.waiting,
+      WorkspaceAgentGroupKind.doneUnacked,
       WorkspaceAgentGroupKind.working,
-      WorkspaceAgentGroupKind.done,
     ]);
     expect(
       groups
@@ -60,6 +60,56 @@ void main() {
     ]);
 
     expect(groups.single.kind, WorkspaceAgentGroupKind.interrupted);
+  });
+
+  test('done runs split into unacked and acked buckets', () {
+    final unacked = _run('t-1', .done);
+    final acked = _run('t-2', .done);
+
+    final groups = groupWorkspaceAgentRuns(
+      <WorkspaceAgentRun>[unacked, acked],
+      acknowledgedCompletions: <String, DateTime>{
+        acked.status.terminalSessionId: acked.status.stateStartedAt,
+      },
+    );
+
+    expect(groups.map((g) => g.kind), <WorkspaceAgentGroupKind>[
+      WorkspaceAgentGroupKind.doneUnacked,
+      WorkspaceAgentGroupKind.done,
+    ]);
+    expect(groups.first.runs.single.tab.id, 't-1');
+    expect(groups.last.runs.single.tab.id, 't-2');
+  });
+
+  test('a stale ack epoch leaves the done run unacked', () {
+    final run = _run('t-1', .done);
+
+    final groups = groupWorkspaceAgentRuns(
+      <WorkspaceAgentRun>[run],
+      acknowledgedCompletions: <String, DateTime>{
+        run.status.terminalSessionId: _t0.subtract(const Duration(minutes: 1)),
+      },
+    );
+
+    expect(groups.single.kind, WorkspaceAgentGroupKind.doneUnacked);
+  });
+
+  test('doneUnacked sorts ahead of working and done in display order', () {
+    final unacked = _run('t-1', .done);
+    final acked = _run('t-2', .done);
+
+    final groups = groupWorkspaceAgentRuns(
+      <WorkspaceAgentRun>[_run('t-3', .working), unacked, acked],
+      acknowledgedCompletions: <String, DateTime>{
+        acked.status.terminalSessionId: acked.status.stateStartedAt,
+      },
+    );
+
+    expect(groups.map((g) => g.kind), <WorkspaceAgentGroupKind>[
+      WorkspaceAgentGroupKind.doneUnacked,
+      WorkspaceAgentGroupKind.working,
+      WorkspaceAgentGroupKind.done,
+    ]);
   });
 
   test('an empty run list produces no groups', () {

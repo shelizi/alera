@@ -47,6 +47,8 @@ class const WorkbenchProjectHeaderRow({
   required final Project project,
   required final int workspaceCount,
   required final bool collapsed,
+  final Map<WorkspaceAgentGroupKind, int> agentCounts =
+      const <WorkspaceAgentGroupKind, int>{},
 }) extends WorkbenchSidebarRow {
   @override
   String get key => 'project:${project.id}';
