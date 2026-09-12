@@ -811,6 +811,12 @@ Actor validates dispatch mutation + reserves generation/owner
 - Contract matrix 落在 `docs/orchestration-operation-contract.md`：每個 operation 的 authority、instance 驗證、replay 語意、commit/publish 順序、lost-reply retry、restart 恢復、stale owner 處理都已列明；`send`/`reply`/`ask`/`escalate` 無 client idempotency key（retry 會寫重複列）是目前接受的缺口，已在文件標註。
 - 新測試 `orchestration_contract_tests.rs` 補上缺口情境：dispatch retry 失敗收斂、dispatchAccept 重放保留首次 accepted_at、taskCancel/gateResolve/heartbeat/taskRecover/workerDone 的 typed 拒絕。
 
+#### Project domain 已完成
+
+- Contract matrix 落在 `docs/project-operation-contract.md`：涵蓋 `project.register`/`rename`/`upsert`/`remove(.preview)`/`list`/`branches.list`、`projectConfig.*`、`hostDirectory.*`、`project.clone.*` 每個 operation 的 authority、replay 語意、commit/publish 順序、lost-reply retry、restart 恢復。已記錄的缺口：`clone.start` 無 `(parent_path, directory_name)` dedupe key，重複 start 可能讓兩個 runner 競爭同一 destination。
+- 新測試 `project_contract_tests.rs` pin 住三個關鍵格：register retry 回同一 project 不複製、`project.remove` 二次呼叫為零刪除的冪等成功、terminal 狀態 clone job 的 cancel 回存 job 列而非錯誤。deferred read 面（branches/effective config/host directory/disconnect drop）已由 `deferred_project_requests_tests.rs` 覆蓋。
+- 此 domain 只補文件與測試，未改 production code：`project_requests.rs`/`project_clone_requests.rs`/`runtime_mutations.rs` 的 ownership 拆分在 Batch E/P2 已就位，無需再拆。
+
 ---
 
 ## 14. Phase 2/3：跨語言 wire contract
