@@ -9,7 +9,7 @@ extension WorkbenchCatalogOwnerSections on WorkbenchCatalogOwner {
     final repository = _host.workbenchRepository;
     if (repository is! WorkspaceSectionRepository) return;
     // Keep watching unsupported hosts: an in-app update can add this capability.
-    _rootSubscriptions.watchSections(
+    _host.rootSubscriptions.watchSections(
       (repository as WorkspaceSectionRepository).watchSections(),
       onData: (snapshot) {
         if (_host.isDisposed) return;

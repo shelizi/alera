@@ -4,7 +4,7 @@ part of 'workbench_catalog_owner.dart';
 /// workspace snapshots that become sync plans applied to the state.
 extension WorkbenchCatalogOwnerSync on WorkbenchCatalogOwner {
   void _syncWorktreeMetadataWatcher(Project project) {
-    _worktreeMetadataWatcherRegistry.sync(
+    _host.worktreeMetadataWatcherRegistry.sync(
       project,
       onRefresh: _refreshProjectWorktreesInBackground,
     );
@@ -53,7 +53,7 @@ extension WorkbenchCatalogOwnerSync on WorkbenchCatalogOwner {
     }
 
     WorkbenchProjectWorkspaceSubscriptionCoordinator(
-      workspaceSubscriptions: _workspaceSubscriptions,
+      workspaceSubscriptions: _host.workspaceSubscriptions,
       tabSubscriptions: _host.tabSubscriptions,
     ).sync(
       projects: projects,
@@ -65,7 +65,7 @@ extension WorkbenchCatalogOwnerSync on WorkbenchCatalogOwner {
         unawaited(_ensureMainWorkspaceForProject(project));
       },
       forgetClearedLayouts: _host.clearedLayouts.forgetAll,
-      pruneMetadataWatchers: _worktreeMetadataWatcherRegistry.prune,
+      pruneMetadataWatchers: _host.worktreeMetadataWatcherRegistry.prune,
     );
     _host.ensureSelectionHasTab();
   }

@@ -94,6 +94,16 @@ abstract interface class WorkbenchCatalogOwnerHost {
   /// Closes the managed runtime side of a removed project workspace.
   WorkbenchRemovedProjectWorkspaceCloser get removedProjectWorkspaceCloser;
 
+  /// Root watchers owned by the lifecycle owner: projects, sections and view
+  /// prefs.
+  WorkbenchRootSubscriptionRegistry get rootSubscriptions;
+
+  /// Per-project workspace watchers owned by the lifecycle owner.
+  WorkbenchWorkspaceSubscriptionRegistry get workspaceSubscriptions;
+
+  /// Worktree metadata watchers owned by the lifecycle owner.
+  WorkbenchWorktreeMetadataWatcherRegistry get worktreeMetadataWatcherRegistry;
+
   /// Tab subscriptions shared with the tab/layout owner.
   WorkbenchTabSubscriptionRegistry get tabSubscriptions;
 
@@ -156,12 +166,6 @@ final class WorkbenchCatalogOwner {
   final WorkbenchCatalogOwnerHost _host;
 
   final WorkbenchBootstrapGate _bootstrapGate = WorkbenchBootstrapGate();
-  final WorkbenchRootSubscriptionRegistry _rootSubscriptions =
-      WorkbenchRootSubscriptionRegistry();
-  final WorkbenchWorkspaceSubscriptionRegistry _workspaceSubscriptions =
-      WorkbenchWorkspaceSubscriptionRegistry();
-  final WorkbenchWorktreeMetadataWatcherRegistry
-  _worktreeMetadataWatcherRegistry = WorkbenchWorktreeMetadataWatcherRegistry();
   final WorkbenchMainWorkspacePreparationCoordinator _mainWorkspacePreparation =
       WorkbenchMainWorkspacePreparationCoordinator();
   final WorkbenchWorkspaceTagMutationQueue _workspaceTagMutations =
@@ -170,14 +174,6 @@ final class WorkbenchCatalogOwner {
       WorkbenchWorkspaceParentMutationQueue();
   final WorkbenchSerialMutationQueue _workspaceTreePinMutations =
       WorkbenchSerialMutationQueue();
-
-  /// Cancels every watcher this owner started. Runs before the shared tab
-  /// subscription registry so tab callbacks stop after workspace callbacks.
-  void dispose() {
-    _rootSubscriptions.cancelAll();
-    _worktreeMetadataWatcherRegistry.disposeAll();
-    _workspaceSubscriptions.cancelAll();
-  }
 
   Future<void> bootstrap() {
     return _bootstrapGate.run(() async {
@@ -199,7 +195,7 @@ final class WorkbenchCatalogOwner {
             if (_host.isDisposed || repository == null) {
               return;
             }
-            _rootSubscriptions.watchViewPrefs(
+            _host.rootSubscriptions.watchViewPrefs(
               repository.changes,
               onData: (prefs) {
                 if (!_host.isDisposed) {
@@ -217,7 +213,7 @@ final class WorkbenchCatalogOwner {
             if (_host.isDisposed) {
               return;
             }
-            _rootSubscriptions.watchProjectsRecovering(
+            _host.rootSubscriptions.watchProjectsRecovering(
               projectRepository.watchAll,
               onData: _onProjectsChanged,
               onError: (Object _) {},
@@ -255,7 +251,7 @@ final class WorkbenchCatalogOwner {
     String projectId,
     Future<T> Function() action,
   ) {
-    return _worktreeMetadataWatcherRegistry.withRefreshSuspended(
+    return _host.worktreeMetadataWatcherRegistry.withRefreshSuspended(
       projectId,
       action,
     );

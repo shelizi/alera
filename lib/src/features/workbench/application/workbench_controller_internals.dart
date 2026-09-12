@@ -4,8 +4,17 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController
     implements
         WorkbenchSelectionOwnerHost,
         WorkbenchTabLayoutOwnerHost,
-        WorkbenchCatalogOwnerHost {
+        WorkbenchCatalogOwnerHost,
+        WorkbenchLifecycleOwnerHost {
   bool _disposed = false;
+
+  /// Subscription registries, resource cleaners and teardown ordering live
+  /// behind a narrow host port so the owner stays free of provider reads.
+  /// Constructed first: the other owners reach its registries through the
+  /// forwarded host ports below.
+  late final WorkbenchLifecycleOwner _lifecycleOwner = WorkbenchLifecycleOwner(
+    this,
+  );
 
   /// Selection and navigation live behind a narrow host port so the owner
   /// stays free of provider reads.
@@ -88,15 +97,15 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController
 
   @override
   WorkbenchHostedReviewRetentionService get hostedReviewRetention =>
-      _hostedReviewRetention;
+      _lifecycleOwner.hostedReviewRetention;
 
   @override
   WorkbenchExplicitResourceCleaner get explicitResourceCleaner =>
-      _explicitResourceCleaner;
+      _lifecycleOwner.explicitResourceCleaner;
 
   @override
   WorkbenchRetiredTabsCleanupCoordinator get retiredTabsCleanup =>
-      _retiredTabsCleanup;
+      _lifecycleOwner.retiredTabsCleanup;
 
   @override
   WorkbenchReplaceableTabEditorSessions get replaceableTabEditorSessions =>
@@ -111,7 +120,7 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController
 
   @override
   bool isWorkspaceTabSubscriptionActive(String workspaceId) =>
-      _tabSubscriptions.contains(workspaceId);
+      _lifecycleOwner.isWorkspaceTabSubscriptionActive(workspaceId);
 
   @override
   Future<void> selectPersistedWorkspaceTab({
@@ -140,14 +149,28 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController
 
   @override
   WorkbenchRetiredWorkspaceCleanupCoordinator get retiredWorkspaceCleanup =>
-      _retiredWorkspaceCleanup;
+      _lifecycleOwner.retiredWorkspaceCleanup;
 
   @override
   WorkbenchRemovedProjectWorkspaceCloser get removedProjectWorkspaceCloser =>
-      _closeRemovedProjectWorkspace;
+      _lifecycleOwner.removedProjectWorkspaceCloser;
 
   @override
-  WorkbenchTabSubscriptionRegistry get tabSubscriptions => _tabSubscriptions;
+  WorkbenchRootSubscriptionRegistry get rootSubscriptions =>
+      _lifecycleOwner.rootSubscriptions;
+
+  @override
+  WorkbenchWorkspaceSubscriptionRegistry get workspaceSubscriptions =>
+      _lifecycleOwner.workspaceSubscriptions;
+
+  @override
+  WorkbenchWorktreeMetadataWatcherRegistry
+  get worktreeMetadataWatcherRegistry =>
+      _lifecycleOwner.worktreeMetadataWatcherRegistry;
+
+  @override
+  WorkbenchTabSubscriptionRegistry get tabSubscriptions =>
+      _lifecycleOwner.tabSubscriptions;
 
   @override
   WorkbenchWorkspaceTabClosingScope get workspaceTabClosingScope =>
@@ -207,8 +230,30 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController
 
   WorkspaceService get _workspaceService => ref.read(workspaceServiceProvider);
 
-  WorkbenchRemovedProjectWorkspaceCloser get _closeRemovedProjectWorkspace =>
-      ref.read(terminalRuntimeLifecycleProvider).closeWorkspace;
+  @override
+  TerminalRuntimeLifecycle get terminalRuntimeLifecycle =>
+      ref.read(terminalRuntimeLifecycleProvider);
+
+  @override
+  GitBackend get gitBackend => ref.read(gitBackendProvider);
+
+  @override
+  WorkbenchExplicitResourceIdConsumer get removeWorkspaceActivity =>
+      ref.read(workspaceActivityControllerProvider.notifier).removeWorkspace;
+
+  @override
+  WorkbenchExplicitResourceIdConsumer get clearAgentWorkspace =>
+      ref.read(agentStatusControllerProvider.notifier).clearWorkspace;
+
+  @override
+  WorkbenchExplicitResourceIdConsumer? get clearTerminalSession =>
+      ref.exists(agentHookReceiverProvider)
+      ? ref.read(agentHookReceiverProvider).clearTerminalSession
+      : null;
+
+  @override
+  WorkbenchExplicitAsyncResourceIdConsumer get clearTerminalOverlays =>
+      ref.read(agentRuntimeOverlayServiceProvider).clearTerminalOverlays;
 
   WorkspaceTabService get _workspaceTabService =>
       ref.read(workspaceTabServiceProvider);
@@ -220,57 +265,8 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController
   WorkbenchWorkspaceActivityRecorder get _workspaceActivityRecorder =>
       ref.read(workspaceActivityControllerProvider.notifier);
 
-  WorkbenchHostedReviewRetentionService get _hostedReviewRetention =>
-      WorkbenchHostedReviewRetentionService(
-        gitBackend: ref.read(gitBackendProvider),
-      );
   WorkbenchGitRepositoryProbe get _gitRepositoryProbe =>
       WorkbenchGitRepositoryProbeAdapter(ref.read(gitBackendProvider));
-
-  WorkbenchExplicitResourceCleaner get _explicitResourceCleaner {
-    final clearTerminalSession = ref.exists(agentHookReceiverProvider)
-        ? ref.read(agentHookReceiverProvider).clearTerminalSession
-        : null;
-    return WorkbenchExplicitResourceCleaner(
-      runtimeLifecycle: ref.read(terminalRuntimeLifecycleProvider),
-      forgetEditorSession: ref.read(editorSessionRegistryProvider).forget,
-      removeWorkspaceActivity: ref
-          .read(workspaceActivityControllerProvider.notifier)
-          .removeWorkspace,
-      clearAgentWorkspace: ref
-          .read(agentStatusControllerProvider.notifier)
-          .clearWorkspace,
-      clearTerminalSession: clearTerminalSession,
-      clearTerminalOverlays: ref
-          .read(agentRuntimeOverlayServiceProvider)
-          .clearTerminalOverlays,
-    );
-  }
-
-  WorkbenchRetiredResourceCleaner get _retiredResourceCleaner {
-    final clearTerminalSession = ref.exists(agentHookReceiverProvider)
-        ? ref.read(agentHookReceiverProvider).clearTerminalSession
-        : null;
-    return WorkbenchRetiredResourceCleaner(
-      runtimeLifecycle: ref.read(terminalRuntimeLifecycleProvider),
-      forgetEditorSession: ref.read(editorSessionRegistryProvider).forget,
-      clearTerminalSession: clearTerminalSession,
-    );
-  }
-
-  WorkbenchRetiredWorkspaceCleanupCoordinator get _retiredWorkspaceCleanup =>
-      WorkbenchRetiredWorkspaceCleanupCoordinator(
-        releaseHostedReviewTabsInBackground:
-            _hostedReviewRetention.releaseTabsInBackground,
-        forgetFocusHistory: _tabLayoutOwner.tabFocusHistory.forget,
-        releaseLocalWorkspace: _retiredResourceCleaner.releaseWorkspace,
-      );
-  WorkbenchRetiredTabsCleanupCoordinator get _retiredTabsCleanup =>
-      WorkbenchRetiredTabsCleanupCoordinator(
-        releaseHostedReviewTabsInBackground:
-            _hostedReviewRetention.releaseTabsInBackground,
-        releaseLocalTabs: _retiredResourceCleaner.releaseTabs,
-      );
 
   WorkbenchViewPrefsRepository? get _viewPrefsRepository {
     try {
@@ -280,8 +276,6 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController
     }
   }
 
-  final WorkbenchTabSubscriptionRegistry _tabSubscriptions =
-      WorkbenchTabSubscriptionRegistry();
   final WorkbenchViewPrefsPersistenceQueue _viewPrefsPersistence =
       WorkbenchViewPrefsPersistenceQueue();
 
