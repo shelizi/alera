@@ -19,6 +19,8 @@ class const _WorkspaceRow({
   required final VoidCallback onOpenInBrowser,
   required final VoidCallback onOpenProjectSettings,
   required final VoidCallback onSleep,
+  required final VoidCallback onArchive,
+  required final VoidCallback onRestore,
   required final VoidCallback onToggleExpanded,
   required final String fileManagerLabel,
   required final VoidCallback onRename,
@@ -153,7 +155,9 @@ class _WorkspaceRowState extends State<_WorkspaceRow> {
                                     softWrap: false,
                                     overflow: .ellipsis,
                                     style: theme.textTheme.bodyMedium?.copyWith(
-                                      color: AleraTokens.foreground,
+                                      color: widget.workspace.isArchived
+                                          ? AleraTokens.foregroundMuted
+                                          : AleraTokens.foreground,
                                       fontWeight: .w600,
                                     ),
                                   ),

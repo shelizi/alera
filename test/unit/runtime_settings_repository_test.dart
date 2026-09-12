@@ -158,6 +158,53 @@ void main() {
     },
   );
 
+  test(
+    'auto-archive days round-trip through runtime settings payloads',
+    () async {
+      final client = _RecordingRuntimeHostClient();
+      final repository = RuntimeSettingsRepository(
+        client: client,
+        legacyRepository: _MemorySettingsRepository(),
+      );
+
+      await repository.save(
+        AleraSettings.defaults.copyWith(
+          general: AleraSettings.defaults.general.copyWith(
+            autoArchiveWorkspacesAfterDays: 14,
+          ),
+        ),
+      );
+      expect(
+        client
+            .payloads['runtimeSettings.update']!
+            .single['autoArchiveWorkspacesAfterDays'],
+        14,
+      );
+
+      client.responses['runtimeSettings.get'] = <String, Object?>{
+        'workspaceDirectory': '/tmp/workspaces',
+        'autoArchiveWorkspacesAfterDays': 0,
+      };
+      final loaded = await repository.load();
+      expect(loaded.general.autoArchiveWorkspacesAfterDays, 0);
+
+      // Older hosts that never heard of the key keep the default.
+      client.responses['runtimeSettings.get'] = <String, Object?>{};
+      final legacy = _MemorySettingsRepository();
+      legacy.settings = AleraSettings.defaults.copyWith(
+        general: AleraSettings.defaults.general.copyWith(
+          autoArchiveWorkspacesAfterDays: 45,
+        ),
+      );
+      final legacyRepository = RuntimeSettingsRepository(
+        client: client,
+        legacyRepository: legacy,
+      );
+      final loadedLegacy = await legacyRepository.load();
+      expect(loadedLegacy.general.autoArchiveWorkspacesAfterDays, 45);
+    },
+  );
+
   test('save sends the selected default agent profile', () async {
     final client = _RecordingRuntimeHostClient();
     final repository = RuntimeSettingsRepository(

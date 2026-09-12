@@ -175,6 +175,7 @@ Workspace _workspaceFromJson(Map<String, Object?> json) {
     tagNames: _stringList(json['tagNames']),
     parentWorkspaceId: _emptyToNull(json['parentWorkspaceId']),
     childCount: (json['childCount'] as num?)?.toInt() ?? 0,
+    archivedAt: _optionalTimestamp(json['archivedAt']),
   );
 }
 
@@ -212,4 +213,9 @@ String? _emptyToNull(Object? value) {
     return null;
   }
   return value;
+}
+
+DateTime? _optionalTimestamp(Object? value) {
+  final text = _emptyToNull(value);
+  return text == null ? null : DateTime.parse(text).toUtc();
 }

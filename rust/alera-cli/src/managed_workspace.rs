@@ -207,6 +207,7 @@ pub async fn create_managed_workspace(
         parent_workspace_id: None,
         section_id: None,
         child_count: 0,
+        archived_at: None,
     };
     let mut workspace = store.upsert_workspace(workspace).await?;
     if let Some(parent_workspace_id) = request.parent_workspace_id.as_deref() {

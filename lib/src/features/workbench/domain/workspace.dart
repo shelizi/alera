@@ -29,6 +29,7 @@ class const Workspace({
   this.sectionId,
   this.parentWorkspaceId,
   this.childCount = 0,
+  this.archivedAt,
 }) with WorkspaceMappable {
   final String id;
   final String projectId;
@@ -49,10 +50,15 @@ class const Workspace({
   final String? sectionId;
   final String? parentWorkspaceId;
   final int childCount;
+  final DateTime? archivedAt;
 
   bool get isMain => kind == WorkspaceKind.main;
 
   bool get isActive => status == WorkspaceStatus.active;
+
+  /// Archived rows keep [WorkspaceStatus.active] so listing endpoints still
+  /// return them; archiving is a display state, not removal.
+  bool get isArchived => archivedAt != null;
 
   bool get hasParentWorkspace => parentWorkspaceId?.trim().isNotEmpty ?? false;
 

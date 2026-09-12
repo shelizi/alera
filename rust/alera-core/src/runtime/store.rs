@@ -104,6 +104,8 @@ impl RuntimeStore {
             .await?;
         self.ensure_column("workspaces", "isPinned", "INTEGER NOT NULL DEFAULT 0")
             .await?;
+        self.ensure_column("workspaces", "archivedAt", "TEXT")
+            .await?;
         self.ensure_column(
             "mobileAccessSettings",
             "endpointMode",
@@ -795,7 +797,7 @@ impl RuntimeStore {
     pub async fn list_workspaces(&self, project_id: &str) -> Result<Vec<Workspace>> {
         let rows = sqlx::query(
             "SELECT id, instanceId, hostId, projectId, name, branch, path, createdAt, updatedAt, \
-             kind, status, sourceBranch, reusesExistingBranch, isPinned \
+             kind, status, sourceBranch, reusesExistingBranch, isPinned, archivedAt \
              FROM workspaces WHERE projectId = ? AND status = 'active' \
              ORDER BY CASE kind WHEN 'main' THEN 0 ELSE 1 END, createdAt ASC, name COLLATE NOCASE ASC",
         )
@@ -808,7 +810,7 @@ impl RuntimeStore {
     pub async fn list_all_workspaces(&self) -> Result<Vec<Workspace>> {
         let rows = sqlx::query(
             "SELECT id, instanceId, hostId, projectId, name, branch, path, createdAt, updatedAt, \
-             kind, status, sourceBranch, reusesExistingBranch, isPinned \
+             kind, status, sourceBranch, reusesExistingBranch, isPinned, archivedAt \
              FROM workspaces WHERE status = 'active' \
              ORDER BY projectId ASC, CASE kind WHEN 'main' THEN 0 ELSE 1 END, createdAt ASC",
         )
@@ -820,7 +822,7 @@ impl RuntimeStore {
     pub async fn find_workspace(&self, workspace_id: &str) -> Result<Option<Workspace>> {
         let row = sqlx::query(
             "SELECT id, instanceId, hostId, projectId, name, branch, path, createdAt, updatedAt, \
-             kind, status, sourceBranch, reusesExistingBranch, isPinned FROM workspaces WHERE id = ?",
+             kind, status, sourceBranch, reusesExistingBranch, isPinned, archivedAt FROM workspaces WHERE id = ?",
         )
         .bind(workspace_id)
         .fetch_optional(&self.pool)
@@ -841,14 +843,14 @@ impl RuntimeStore {
         sqlx::query(
             "INSERT INTO workspaces \
              (id, instanceId, hostId, projectId, name, branch, path, createdAt, updatedAt, \
-              kind, status, sourceBranch, reusesExistingBranch, isPinned) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+              kind, status, sourceBranch, reusesExistingBranch, isPinned, archivedAt) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
              ON CONFLICT(id) DO UPDATE SET \
              instanceId = excluded.instanceId, hostId = excluded.hostId, projectId = excluded.projectId, \
              name = excluded.name, branch = excluded.branch, path = excluded.path, \
              updatedAt = excluded.updatedAt, kind = excluded.kind, status = excluded.status, \
              sourceBranch = excluded.sourceBranch, reusesExistingBranch = excluded.reusesExistingBranch, \
-             isPinned = excluded.isPinned",
+             isPinned = excluded.isPinned, archivedAt = excluded.archivedAt",
         )
         .bind(&workspace.id)
         .bind(&workspace.instance_id)
@@ -864,6 +866,7 @@ impl RuntimeStore {
         .bind(&workspace.source_branch)
         .bind(if workspace.reuses_existing_branch { 1_i64 } else { 0_i64 })
         .bind(if workspace.is_pinned { 1_i64 } else { 0_i64 })
+        .bind(workspace.archived_at.map(format_timestamp))
         .execute(&self.pool)
         .await?;
         self.find_workspace(&workspace.id).await?.ok_or_else(|| {
@@ -1505,6 +1508,9 @@ impl RuntimeStore {
             parent_workspace_id,
             section_id: self.workspace_section_id(&id).await?,
             child_count,
+            archived_at: row
+                .try_get::<Option<String>, _>("archivedAt")?
+                .map(|value| parse_timestamp(&value)),
         })
     }
 
@@ -1780,6 +1786,7 @@ mod tests {
             parent_workspace_id: None,
             section_id: None,
             child_count: 0,
+            archived_at: None,
         }
     }
 

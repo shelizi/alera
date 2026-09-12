@@ -85,7 +85,9 @@ class _WorkbenchSidebarRowBuilder(
             .workspacesFor(project.id)
             .where(
               (workspace) =>
-                  workspace.isPinned && _isWorkspaceVisible(project, workspace),
+                  workspace.isPinned &&
+                  !workspace.isArchived &&
+                  _isWorkspaceVisible(project, workspace),
             )
             .toList(),
         pinMainOnRecent: true,
@@ -111,7 +113,9 @@ class _WorkbenchSidebarRowBuilder(
     final pinned = <Workspace>[];
     for (final project in visibleProjects) {
       for (final workspace in state.workspacesFor(project.id)) {
-        if (!workspace.isPinned || !_isWorkspaceVisible(project, workspace)) {
+        if (!workspace.isPinned ||
+            workspace.isArchived ||
+            !_isWorkspaceVisible(project, workspace)) {
           continue;
         }
         projectByWorkspaceId[workspace.id] = project;
@@ -181,11 +185,26 @@ class _WorkbenchSidebarRowBuilder(
       final workspaces = _sortWorkspaces(
         state
             .workspacesFor(project.id)
-            .where((workspace) => _isWorkspaceVisibleBelow(project, workspace))
+            .where(
+              (workspace) =>
+                  !workspace.isArchived &&
+                  _isWorkspaceVisibleBelow(project, workspace),
+            )
             .toList(),
         pinMainOnRecent: true,
       );
-      if (filtersHideEmptyProjects && workspaces.isEmpty) {
+      final archived = _sortWorkspaces(
+        state
+            .workspacesFor(project.id)
+            .where(
+              (workspace) =>
+                  workspace.isArchived &&
+                  _isWorkspaceVisible(project, workspace),
+            )
+            .toList(),
+        pinMainOnRecent: true,
+      );
+      if (filtersHideEmptyProjects && workspaces.isEmpty && archived.isEmpty) {
         continue;
       }
       final collapsed = prefs.collapsedProjectIds.contains(project.id);
@@ -217,6 +236,15 @@ class _WorkbenchSidebarRowBuilder(
         baseIndent: 1,
         showProjectChip: false,
       );
+      _appendArchivedRows(
+        rows,
+        scopeId: project.id,
+        workspaces: archived,
+        projectOf: (_) => project,
+        headerIndent: 1,
+        baseIndent: 2,
+        showProjectChip: false,
+      );
     }
   }
 
@@ -227,8 +255,16 @@ class _WorkbenchSidebarRowBuilder(
   }) {
     final projectByWorkspaceId = <String, Project>{};
     final workspaces = <Workspace>[];
+    final archived = <Workspace>[];
     for (final project in visibleProjects) {
       for (final workspace in state.workspacesFor(project.id)) {
+        if (workspace.isArchived) {
+          if (_isWorkspaceVisible(project, workspace)) {
+            projectByWorkspaceId[workspace.id] = project;
+            archived.add(workspace);
+          }
+          continue;
+        }
         if (!_isWorkspaceVisibleBelow(project, workspace)) {
           continue;
         }
@@ -256,6 +292,46 @@ class _WorkbenchSidebarRowBuilder(
         showProjectChip: true,
       );
     }
+    _appendArchivedRows(
+      rows,
+      scopeId: 'global',
+      workspaces: _sortWorkspaces(archived, pinMainOnRecent: false),
+      projectOf: (workspace) => projectByWorkspaceId[workspace.id]!,
+      headerIndent: 0,
+      baseIndent: 0,
+      showProjectChip: true,
+    );
+  }
+
+  /// Emits the Archived header followed by its rows when any archived
+  /// workspaces match. The header's collapse state is session-local, so
+  /// collapsing happens in the sidebar body, not here.
+  void _appendArchivedRows(
+    List<WorkbenchSidebarRow> rows, {
+    required String scopeId,
+    required List<Workspace> workspaces,
+    required Project Function(Workspace) projectOf,
+    required int headerIndent,
+    required int baseIndent,
+    required bool showProjectChip,
+  }) {
+    if (workspaces.isEmpty) {
+      return;
+    }
+    rows.add(
+      WorkbenchArchivedHeaderRow(
+        scopeId: scopeId,
+        workspaceCount: workspaces.length,
+        indent: headerIndent,
+      ),
+    );
+    _appendWorkspaceTreeRows(
+      rows,
+      workspaces: workspaces,
+      projectOf: projectOf,
+      baseIndent: baseIndent,
+      showProjectChip: showProjectChip,
+    );
   }
 
   void _appendWorkspaceTreeRows(

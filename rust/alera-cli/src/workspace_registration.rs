@@ -31,5 +31,6 @@ pub fn from_args(args: WorkspaceRegisterArgs) -> Workspace {
         parent_workspace_id: None,
         section_id: None,
         child_count: 0,
+        archived_at: None,
     }
 }

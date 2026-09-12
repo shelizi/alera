@@ -99,7 +99,8 @@ pub(super) fn validate_settings(settings: &Value) -> Result<()> {
                 | "tabSize"
                 | "autosaveDelaySeconds"
                 | "timeoutSeconds"
-                | "tuiScrollSensitivity" => {
+                | "tuiScrollSensitivity"
+                | "autoArchiveWorkspacesAfterDays" => {
                     if value.as_u64().is_none_or(|v| v > 10000) {
                         bail!("Invalid integer setting: {key}");
                     }

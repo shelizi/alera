@@ -54,6 +54,18 @@ class const WorkbenchProjectHeaderRow({
   String get key => 'project:${project.id}';
 }
 
+/// Header for the Archived group. Collapse state is session-local (see
+/// `workbenchArchivedSectionsCollapseProvider`), so the row carries no
+/// `collapsed` flag - the sidebar body resolves it at build time.
+class const WorkbenchArchivedHeaderRow({
+  required final String scopeId,
+  required final int workspaceCount,
+  required final int indent,
+}) extends WorkbenchSidebarRow {
+  @override
+  String get key => 'archived:$scopeId';
+}
+
 class const WorkbenchPinnedHeaderRow({
   required final int workspaceCount,
   required final bool collapsed,

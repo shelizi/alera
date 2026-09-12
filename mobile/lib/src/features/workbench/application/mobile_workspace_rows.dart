@@ -300,6 +300,11 @@ bool _matchesFilters(
   MobileViewPrefs prefs, {
   required bool hasActivity,
 }) {
+  // Archived workspaces stay registered on the host but are hidden here;
+  // restoring happens on the desktop sidebar.
+  if (workspace.isArchived) {
+    return false;
+  }
   if (prefs.selectedProjectIds.isNotEmpty &&
       !prefs.selectedProjectIds.contains(workspace.projectId)) {
     return false;

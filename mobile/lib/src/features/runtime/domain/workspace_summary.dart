@@ -19,9 +19,14 @@ class const WorkspaceSummary({
   final String? sourceBranch,
   final bool reusesExistingBranch = false,
   final DateTime? updatedAt,
+  final DateTime? archivedAt,
 }) {
   bool get isMain => kind == 'main';
   bool get hasParent => parentWorkspaceId != null;
+
+  /// Archived workspaces stay registered on the host but the mobile list
+  /// hides them; `status` remains `active` either way.
+  bool get isArchived => archivedAt != null;
 
   factory fromJson(Map<String, Object?> json) {
     return WorkspaceSummary(
@@ -41,6 +46,7 @@ class const WorkspaceSummary({
       sourceBranch: json.optionalString('sourceBranch'),
       reusesExistingBranch: json['reusesExistingBranch'] == true,
       updatedAt: json.optionalDateTime('updatedAt'),
+      archivedAt: json.optionalDateTime('archivedAt'),
     );
   }
 }

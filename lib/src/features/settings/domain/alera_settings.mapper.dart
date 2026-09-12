@@ -956,6 +956,15 @@ class GeneralSettingsMapper extends ClassMapperBase<GeneralSettings> {
     opt: true,
     def: false,
   );
+  static int _$autoArchiveWorkspacesAfterDays(GeneralSettings v) =>
+      v.autoArchiveWorkspacesAfterDays;
+  static const Field<GeneralSettings, int> _f$autoArchiveWorkspacesAfterDays =
+      Field(
+        'autoArchiveWorkspacesAfterDays',
+        _$autoArchiveWorkspacesAfterDays,
+        opt: true,
+        def: 30,
+      );
 
   @override
   final MappableFields<GeneralSettings> fields = const {
@@ -971,6 +980,7 @@ class GeneralSettingsMapper extends ClassMapperBase<GeneralSettings> {
     #showPullRequestStatusInSidebar: _f$showPullRequestStatusInSidebar,
     #pullRequestFailureNotificationsEnabled:
         _f$pullRequestFailureNotificationsEnabled,
+    #autoArchiveWorkspacesAfterDays: _f$autoArchiveWorkspacesAfterDays,
   };
 
   static GeneralSettings _instantiate(DecodingData data) {
@@ -989,6 +999,9 @@ class GeneralSettingsMapper extends ClassMapperBase<GeneralSettings> {
       ),
       pullRequestFailureNotificationsEnabled: data.dec(
         _f$pullRequestFailureNotificationsEnabled,
+      ),
+      autoArchiveWorkspacesAfterDays: data.dec(
+        _f$autoArchiveWorkspacesAfterDays,
       ),
     );
   }
@@ -1067,6 +1080,7 @@ abstract class GeneralSettingsCopyWith<$R, $In extends GeneralSettings, $Out>
     bool? showTrayBadge,
     bool? showPullRequestStatusInSidebar,
     bool? pullRequestFailureNotificationsEnabled,
+    int? autoArchiveWorkspacesAfterDays,
   });
   GeneralSettingsCopyWith<$R2, $In, $Out2> $chain<$R2, $Out2>(
     Then<$Out2, $R2> t,
@@ -1094,6 +1108,7 @@ class _GeneralSettingsCopyWithImpl<$R, $Out>
     bool? showTrayBadge,
     bool? showPullRequestStatusInSidebar,
     bool? pullRequestFailureNotificationsEnabled,
+    int? autoArchiveWorkspacesAfterDays,
   }) => $apply(
     FieldCopyWithData({
       if (language != null) #language: language,
@@ -1112,6 +1127,8 @@ class _GeneralSettingsCopyWithImpl<$R, $Out>
       if (pullRequestFailureNotificationsEnabled != null)
         #pullRequestFailureNotificationsEnabled:
             pullRequestFailureNotificationsEnabled,
+      if (autoArchiveWorkspacesAfterDays != null)
+        #autoArchiveWorkspacesAfterDays: autoArchiveWorkspacesAfterDays,
     }),
   );
   @override
@@ -1141,6 +1158,10 @@ class _GeneralSettingsCopyWithImpl<$R, $Out>
     pullRequestFailureNotificationsEnabled: data.get(
       #pullRequestFailureNotificationsEnabled,
       or: $value.pullRequestFailureNotificationsEnabled,
+    ),
+    autoArchiveWorkspacesAfterDays: data.get(
+      #autoArchiveWorkspacesAfterDays,
+      or: $value.autoArchiveWorkspacesAfterDays,
     ),
   );
 

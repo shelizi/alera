@@ -62,6 +62,7 @@ async fn removing_tab_releases_its_hosted_review_refs() {
             parent_workspace_id: None,
             section_id: None,
             child_count: 0,
+            archived_at: None,
         })
         .await
         .unwrap();

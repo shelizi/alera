@@ -197,6 +197,44 @@ void main() {
     );
   });
 
+  test('Archived workspaces stay hidden even when they match the filters', () {
+    final now = DateTime.utc(2026, 9, 1, 12);
+    final archived = WorkspaceSummary.fromJson(<String, Object?>{
+      'id': 'archived',
+      'projectId': 'project',
+      'name': 'archived',
+      'path': '/tmp/archived',
+      'kind': 'linked',
+      'updatedAt': now.toIso8601String(),
+      'archivedAt': now.subtract(const Duration(days: 40)).toIso8601String(),
+    });
+    expect(archived.isArchived, isTrue);
+
+    final rows = buildMobileWorkspaceRows(
+      workspaces: <WorkspaceSummary>[
+        _workspace('live', now),
+        archived,
+        _workspace('pinned-archived', now, archived: true, isPinned: true),
+      ],
+      projects: const [],
+      prefs: const MobileViewPrefs(groupBy: .none),
+      terminalTabCountByWorkspaceId: const <String, int>{'pinned-archived': 1},
+      searchQuery: 'archived',
+      now: now,
+    );
+
+    expect(_workspaceIds(rows), isEmpty);
+    expect(rows.whereType<MobilePinnedHeaderRow>(), isEmpty);
+
+    final unfiltered = buildMobileWorkspaceRows(
+      workspaces: <WorkspaceSummary>[_workspace('live', now), archived],
+      projects: const [],
+      prefs: const MobileViewPrefs(groupBy: .none),
+      now: now,
+    );
+    expect(_workspaceIds(unfiltered), <String>['live']);
+  });
+
   test('An active descendant promotes its workspace tree', () {
     final now = DateTime.utc(2026, 7, 18, 12);
     final rows = buildMobileWorkspaceRows(
@@ -232,6 +270,8 @@ WorkspaceSummary _workspace(
   String? parentWorkspaceId,
   String kind = 'linked',
   List<String> tagIds = const <String>[],
+  bool archived = false,
+  bool isPinned = false,
 }) {
   return WorkspaceSummary(
     id: id,
@@ -241,7 +281,9 @@ WorkspaceSummary _workspace(
     parentWorkspaceId: parentWorkspaceId,
     kind: kind,
     tagIds: tagIds,
+    isPinned: isPinned,
     updatedAt: updatedAt,
+    archivedAt: archived ? updatedAt : null,
   );
 }
 

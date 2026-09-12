@@ -162,6 +162,21 @@ class SettingsController extends _$SettingsController
     );
   });
 
+  /// `0` disables the automatic archive sweep entirely.
+  Future<void> setAutoArchiveWorkspacesAfterDays(int value) => _serialize(
+    () async {
+      final next = value < 0 ? 0 : value;
+      if (state.general.autoArchiveWorkspacesAfterDays == next) {
+        return;
+      }
+      await _save(
+        state.copyWith(
+          general: state.general.copyWith(autoArchiveWorkspacesAfterDays: next),
+        ),
+      );
+    },
+  );
+
   Future<void> setKeepAliveEnabled(bool value) => _serialize(() async {
     if (state.general.keepAliveEnabled == value) {
       return;

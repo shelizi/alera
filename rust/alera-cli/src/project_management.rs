@@ -143,6 +143,7 @@ pub async fn commit_project_registration(
         parent_workspace_id: None,
         section_id: None,
         child_count: 0,
+        archived_at: None,
     };
     store.upsert_project(project.clone()).await?;
     if let Err(error) = store.upsert_workspace(main_workspace.clone()).await {
@@ -360,6 +361,7 @@ async fn ensure_main_workspace(
             parent_workspace_id: None,
             section_id: None,
             child_count: 0,
+            archived_at: None,
         })
         .await
 }

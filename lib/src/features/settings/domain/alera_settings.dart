@@ -127,6 +127,7 @@ class const GeneralSettings({
   this.showTrayBadge = true,
   this.showPullRequestStatusInSidebar = true,
   this.pullRequestFailureNotificationsEnabled = false,
+  this.autoArchiveWorkspacesAfterDays = 30,
 }) with GeneralSettingsMappable {
   /// Language used by the Alera interface. System resolves Chinese locales to
   /// Traditional Chinese and falls back to English for unsupported locales.
@@ -162,6 +163,10 @@ class const GeneralSettings({
 
   /// Keep monitoring while hidden and notify when checks enter a failed state.
   final bool pullRequestFailureNotificationsEnabled;
+
+  /// Days of inactivity before a workspace moves to the Archived section.
+  /// `0` disables automatic archiving.
+  final int autoArchiveWorkspacesAfterDays;
 
   static const GeneralSettings defaults = GeneralSettings();
 

@@ -27,6 +27,7 @@ fn workspace(status: WorkspaceStatus) -> Workspace {
         parent_workspace_id: None,
         section_id: None,
         child_count: 0,
+        archived_at: None,
     }
 }
 

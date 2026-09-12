@@ -38,8 +38,7 @@ class const ApplicationSettingsPane({
             children: <Widget>[
               AleraSettingRow(
                 title: 'App Language',
-                description:
-                    'Follow the system language or choose a language for Alera.',
+                description: 'Follow the system language or choose a language for Alera.',
                 child: AleraDropdownField<AppLanguage>(
                   value: general.language,
                   entries: const <AleraDropdownFieldEntry<AppLanguage>>[
@@ -70,6 +69,25 @@ class const ApplicationSettingsPane({
               WorkspaceDirectoryRow(
                 value: general.workspaceDirectory,
                 onChanged: (next) => controller.updateWorkspaceDirectory(next),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: AleraTokens.space16),
+        KeyedSubtree(
+          key: groupKeys['workspaces'],
+          child: AleraSettingsGroup(
+            title: 'Workspaces',
+            description: 'Automatic archiving for inactive workspaces.',
+            children: <Widget>[
+              SettingsIntegerRow(
+                title: 'Auto-Archive After Inactivity',
+                description: 'Days without activity before a workspace moves to the Archived section. Set to 0 to keep workspaces listed.',
+                value: general.autoArchiveWorkspacesAfterDays,
+                min: 0,
+                max: 365,
+                step: 1,
+                onChanged: controller.setAutoArchiveWorkspacesAfterDays,
               ),
             ],
           ),
