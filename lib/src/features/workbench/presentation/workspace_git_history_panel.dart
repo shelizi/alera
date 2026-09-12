@@ -1,5 +1,13 @@
 part of 'workspace_git_diff_panel.dart';
 
+extension _WorkspaceGitHistoryPanelOwnerBinding on _WorkspaceGitDiffPanelState {
+  void _onGitHistoryChanged() {
+    if (mounted) {
+      _setPanelState(() {});
+    }
+  }
+}
+
 enum _GitHistoryPanelStatus { idle, loading, ready, error }
 
 class const _GitHistoryPanelLoadState._({

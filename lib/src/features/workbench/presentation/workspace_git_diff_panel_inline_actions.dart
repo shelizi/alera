@@ -77,3 +77,233 @@ class const _AreaActions({
     );
   }
 }
+
+extension _WorkspaceGitDiffPanelActions on _WorkspaceGitDiffPanelState {
+  void _toggleSubmodule(GitChangeEntry entry) {
+    _setPanelState(() {
+      if (!_expandedSubmodules.remove(entry.id)) {
+        _expandedSubmodules.add(entry.id);
+      }
+    });
+  }
+
+  Future<void> _refresh() {
+    return _run(
+      () => _notifier.refresh(),
+      successMessage: 'Source control refreshed',
+    );
+  }
+
+  Future<void> _runToolbarAction(_SourceControlMenuAction action) async {
+    if (_actionRequiresMessage(action)) {
+      await _commitAction(action);
+      return;
+    }
+    await _handleMenuAction(action);
+  }
+
+  Future<void> _handleMenuAction(_SourceControlMenuAction action) async {
+    switch (action) {
+      case _SourceControlMenuAction.refresh:
+        await _refresh();
+      case _SourceControlMenuAction.commit:
+      case _SourceControlMenuAction.commitPush:
+      case _SourceControlMenuAction.commitSync:
+        await _commitAction(action);
+      case _SourceControlMenuAction.amend:
+        await _amendAction();
+      case _SourceControlMenuAction.stageAll:
+        await _stage(null);
+      case _SourceControlMenuAction.unstageAll:
+        await _run(() => _notifier.unstage(null), successMessage: 'Unstaged');
+      case _SourceControlMenuAction.discardAll:
+        await _discard(null);
+      case _SourceControlMenuAction.fetch:
+        await _run(() => _notifier.fetch(), successMessage: 'Fetched');
+      case _SourceControlMenuAction.pull:
+        await _run(() => _notifier.pull(), successMessage: 'Pulled');
+      case _SourceControlMenuAction.push:
+        await _run(() => _notifier.push(), successMessage: 'Pushed');
+      case _SourceControlMenuAction.publishBranch:
+        await _run(() => _notifier.push(), successMessage: 'Branch published');
+      case _SourceControlMenuAction.sync:
+        await _run(() => _notifier.sync(), successMessage: 'Synced');
+      case _SourceControlMenuAction.stash:
+        await _run(() => _notifier.stash(), successMessage: 'Stashed');
+      case _SourceControlMenuAction.stashPop:
+        final stash = await _pickStash();
+        if (stash == null) {
+          return;
+        }
+        await _run(
+          () => _notifier.stashPop(stash.index),
+          successMessage: 'Stash popped',
+        );
+      case _SourceControlMenuAction.openChangesInZed:
+        await _openChangesInZed(
+          ref
+              .read(
+                workspaceSourceControlControllerProvider(
+                  widget.sourceControlScope.path,
+                ),
+              )
+              .asData
+              ?.value,
+        );
+    }
+  }
+
+  Future<void> _stage(String? filePath) {
+    return _run(() => _notifier.stage(filePath), successMessage: 'Staged');
+  }
+
+  Future<void> _unstage(String? filePath) {
+    return _run(() => _notifier.unstage(filePath), successMessage: 'Unstaged');
+  }
+
+  Future<void> _stageArea(GitChangeArea area, String? filePath) {
+    return _run(
+      () => _notifier.stageArea(area, filePath: filePath),
+      successMessage: 'Staged',
+    );
+  }
+
+  Future<void> _stageEntry(GitChangeEntry entry) {
+    return _run(() => _notifier.stageEntry(entry), successMessage: 'Staged');
+  }
+
+  Future<void> _unstageEntry(GitChangeEntry entry) {
+    return _run(
+      () => _notifier.unstageEntry(entry),
+      successMessage: 'Unstaged',
+    );
+  }
+
+  Future<void> _unstageArea(GitChangeArea area, String? filePath) {
+    return _run(
+      () => _notifier.unstageArea(area, filePath: filePath),
+      successMessage: 'Unstaged',
+    );
+  }
+
+  Future<void> _discard(String? filePath) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AleraConfirmDialog(
+        title: filePath == null ? 'Discard All Changes?' : 'Discard Changes?',
+        message: filePath == null
+            ? 'This permanently discards unstaged and untracked changes in this workspace.'
+            : 'This permanently discards unstaged and untracked changes in "$filePath".',
+        confirmLabel: 'Discard',
+        destructive: true,
+      ),
+    );
+    if (confirmed != true || !mounted) {
+      return;
+    }
+    await _run(
+      () => _notifier.discard(filePath),
+      successMessage: filePath == null
+          ? 'Changes discarded'
+          : 'Change discarded',
+    );
+  }
+
+  Future<void> _discardAreaWithConfirmation(
+    GitChangeArea area,
+    String? filePath,
+  ) async {
+    final target = filePath ?? area.label.toLowerCase();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AleraConfirmDialog(
+        title: 'Discard Changes?',
+        message: 'This permanently discards changes in "$target".',
+        confirmLabel: 'Discard',
+        destructive: true,
+      ),
+    );
+    if (confirmed != true || !mounted) {
+      return;
+    }
+    await _run(
+      () => _notifier.discardArea(area, filePath: filePath),
+      successMessage: 'Changes discarded',
+    );
+  }
+
+  Future<void> _discardEntry(GitChangeEntry entry) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AleraConfirmDialog(
+        title: 'Discard Changes?',
+        message:
+            'This permanently discards unstaged and untracked changes in "${entry.path}".',
+        confirmLabel: 'Discard',
+        destructive: true,
+      ),
+    );
+    if (confirmed != true || !mounted) {
+      return;
+    }
+    await _run(
+      () => _notifier.discardEntry(entry),
+      successMessage: 'Change discarded',
+    );
+  }
+
+  Future<bool> _run(
+    Future<void> Function() action, {
+    required String successMessage,
+  }) async {
+    try {
+      await action();
+      if (mounted) {
+        AleraToast.show(context, message: successMessage, tone: .success);
+        _invalidateGitHistoryAfterMutation();
+      }
+      return true;
+    } catch (error) {
+      if (mounted) {
+        AleraToast.show(context, message: _messageFor(error), tone: .error);
+      }
+      return false;
+    }
+  }
+
+  Future<void> _switchBranch(String branch) async {
+    final callback = widget.onSwitchBranch;
+    if (callback == null) {
+      return;
+    }
+    await _run(() async {
+      await callback(branch);
+      await _notifier.refresh();
+    }, successMessage: 'Switched to $branch');
+  }
+
+  Future<GitStashEntry?> _pickStash() {
+    final current = ref
+        .read(
+          workspaceSourceControlControllerProvider(
+            widget.sourceControlScope.path,
+          ),
+        )
+        .asData
+        ?.value;
+    final stashes = current?.stashes ?? const <GitStashEntry>[];
+    if (stashes.isEmpty) {
+      AleraToast.show(context, message: 'No stashes to pop');
+      return Future<GitStashEntry?>.value();
+    }
+    return showDialog<GitStashEntry>(
+      context: context,
+      builder: (_) => _StashPickerDialog(stashes: stashes),
+    );
+  }
+
+  WorkspaceSourceControlController get _notifier => ref.read(
+    workspaceSourceControlControllerProvider(widget.sourceControlScope.path)
+        .notifier,
+  );
+}

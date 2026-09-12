@@ -111,3 +111,161 @@ class const _CommitMessageField({
     borderSide: BorderSide(color: color),
   );
 }
+
+extension _WorkspaceGitDiffPanelCommitActions on _WorkspaceGitDiffPanelState {
+  Future<void> _commitAction(_SourceControlMenuAction action) async {
+    final message = _messageController.text.trim();
+    if (message.isEmpty) {
+      return;
+    }
+    final committed = await switch (action) {
+      _SourceControlMenuAction.commit => _run(
+        () => _notifier.commit(message),
+        successMessage: 'Committed',
+      ),
+      _SourceControlMenuAction.commitPush => _run(
+        () => _notifier.commitAndPush(message),
+        successMessage: 'Committed and pushed',
+      ),
+      _SourceControlMenuAction.commitSync => _run(
+        () => _notifier.commitAndSync(message),
+        successMessage: 'Committed and synced',
+      ),
+      _ => Future<bool>.value(false),
+    };
+    if (committed && mounted) {
+      _messageController.clear();
+      _setPanelState(() {});
+    }
+  }
+
+  Future<void> _generateCommitMessage() async {
+    final state = ref
+        .read(
+          workspaceSourceControlControllerProvider(
+            widget.sourceControlScope.path,
+          ),
+        )
+        .asData
+        ?.value;
+    final settings = ref.read(settingsControllerProvider).aiAssist;
+    if (_generatingCommitMessage ||
+        state == null ||
+        !settings.enabled ||
+        !state.hasStagedChanges ||
+        state.repositoryState.hasConflicts ||
+        state.isBusy) {
+      return;
+    }
+    final requestWorkspacePath = widget.sourceControlScope.path;
+    final generationId = _commitMessageGenerationId + 1;
+    final initialText = _messageController.text;
+    _setPanelState(() {
+      _commitMessageGenerationId = generationId;
+      _generatingCommitMessage = true;
+    });
+    try {
+      final result = await ref
+          .read(aiAssistServiceProvider)
+          .generate(
+            AiAssistRequest(
+              operation: .commitMessage,
+              workspacePath: requestWorkspacePath,
+              settings: settings,
+            ),
+          );
+      if (!mounted) {
+        return;
+      }
+      if (!_isCurrentCommitMessageGeneration(
+        workspacePath: requestWorkspacePath,
+        generationId: generationId,
+      )) {
+        return;
+      }
+      if (_messageController.text == initialText) {
+        _messageController.text = result.text;
+        _messageController.selection = TextSelection.collapsed(
+          offset: _messageController.text.length,
+        );
+        _setPanelState(() {});
+        AleraToast.show(
+          context,
+          message: 'Commit message generated with ${result.agentLabel}',
+          tone: .success,
+        );
+      } else {
+        AleraToast.show(
+          context,
+          message:
+              'Generated message was not applied because the field changed.',
+          tone: .info,
+        );
+      }
+    } on AiAssistCanceledException {
+      return;
+    } catch (error) {
+      if (_isCurrentCommitMessageGeneration(
+        workspacePath: requestWorkspacePath,
+        generationId: generationId,
+      )) {
+        AleraToast.show(context, message: _messageFor(error), tone: .error);
+      }
+    } finally {
+      if (_isCurrentCommitMessageGeneration(
+        workspacePath: requestWorkspacePath,
+        generationId: generationId,
+      )) {
+        _setPanelState(() => _generatingCommitMessage = false);
+      }
+    }
+  }
+
+  bool _isCurrentCommitMessageGeneration({
+    required String workspacePath,
+    required int generationId,
+  }) {
+    return mounted &&
+        widget.sourceControlScope.path == workspacePath &&
+        _commitMessageGenerationId == generationId;
+  }
+
+  void _cancelGenerateCommitMessage() {
+    _aiAssistService.cancel(widget.sourceControlScope.path, .commitMessage);
+  }
+
+  Future<void> _amendAction() async {
+    final state = ref
+        .read(
+          workspaceSourceControlControllerProvider(
+            widget.sourceControlScope.path,
+          ),
+        )
+        .asData
+        ?.value;
+    final initialMessage = state?.repositoryState.headMessage;
+    if (initialMessage == null || initialMessage.trim().isEmpty) {
+      return;
+    }
+    final message = await showDialog<String>(
+      context: context,
+      builder: (_) => _AmendCommitDialog(initialMessage: initialMessage),
+    );
+    if (message == null || !mounted) {
+      return;
+    }
+    await _run(
+      () => _notifier.amendCommit(message),
+      successMessage: 'Commit amended',
+    );
+  }
+
+  bool _actionRequiresMessage(_SourceControlMenuAction action) {
+    return switch (action) {
+      _SourceControlMenuAction.commit ||
+      _SourceControlMenuAction.commitPush ||
+      _SourceControlMenuAction.commitSync => true,
+      _ => false,
+    };
+  }
+}
