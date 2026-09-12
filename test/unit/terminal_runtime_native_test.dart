@@ -16,6 +16,7 @@ import 'package:alera/src/features/workbench/application/terminal_runtime_lifecy
 import 'package:alera/src/features/workbench/presentation/terminal_buffer_budget.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_runtime.dart';
 import 'package:alera/src/shared/infra/uri/external_uri_launcher.dart';
+import 'package:fake_async/fake_async.dart';
 import 'package:ffi/ffi.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -40,6 +41,7 @@ part 'terminal_runtime_native_test_harness.dart';
 part 'terminal_runtime_session_owner_cases.dart';
 part 'terminal_runtime_view_buffer_owner_cases.dart';
 part 'terminal_runtime_launch_input_owner_cases.dart';
+part 'terminal_runtime_renderer_adapter_owner_cases.dart';
 
 void main() {
   _registerTerminalRuntimeHelperGroup();
@@ -58,5 +60,6 @@ void main() {
     _registerTerminalRuntimeSessionOwnerTests();
     _registerTerminalRuntimeViewBufferOwnerTests();
     _registerTerminalRuntimeLaunchInputOwnerTests();
+    _registerTerminalRuntimeRendererAdapterOwnerTests();
   });
 }

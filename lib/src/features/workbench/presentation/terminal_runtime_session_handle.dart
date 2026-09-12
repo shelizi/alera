@@ -11,7 +11,8 @@ class _XtermTerminalSessionHandle(
   final void Function(TerminalRuntimeExitEvent event) _onExit,
   this._onVisibilityChanged,
 ) extends TerminalSessionHandle
-    with _TerminalSearchSessionSupport, _TerminalSessionCapabilitiesSupport {
+    with _TerminalSearchSessionSupport, _TerminalSessionCapabilitiesSupport
+    implements TerminalRuntimeLaunchInputOwnerHost {
   this {
     _terminal = _createTerminal();
     _attachTerminal(_terminal);
@@ -371,7 +372,7 @@ class _XtermTerminalSessionHandle(
     _pendingPtySize = null;
     _selectionCopyTimer?.cancel();
     _selectionCopyTimer = null;
-    _cancelDeferredSubmitEnter(this);
+    _launchInputOwner.cancelDeferredSubmitEnter(this);
     final generation = _activePtyGeneration;
     if (suppressExit && generation != null) {
       _suppressedExitPtyGenerations.add(generation);
@@ -406,7 +407,7 @@ class _XtermTerminalSessionHandle(
   }
 
   @override
-  void pasteText(String text) => _pasteTerminalText(this, text);
+  void pasteText(String text) => _launchInputOwner.pasteText(this, text);
 
   @override
   Future<bool> submitText(String text) async {
@@ -417,8 +418,30 @@ class _XtermTerminalSessionHandle(
     if (_disposed || !_running || _ptySession == null) {
       return false;
     }
-    return _submitTerminalText(this, text);
+    return _launchInputOwner.submitText(this, text);
   }
+
+  @override
+  bool get isDisposed => _disposed;
+
+  @override
+  TerminalPtySession? get ptySession => _ptySession;
+
+  @override
+  bool get bracketedPasteMode => _terminal.bracketedPasteMode;
+
+  @override
+  void pasteToTerminal(String text) => _terminal.paste(text);
+
+  @override
+  void deliverInput(String data) => _handleTerminalInput(data);
+
+  @override
+  Timer? get deferredSubmitEnterTimer => _deferredSubmitEnterTimer;
+
+  @override
+  set deferredSubmitEnterTimer(Timer? timer) =>
+      _deferredSubmitEnterTimer = timer;
 
   void _requestFocusNow() {
     _rendererAdapterOwner.requestFocusNow(_focusNode, isDisposed: _disposed);

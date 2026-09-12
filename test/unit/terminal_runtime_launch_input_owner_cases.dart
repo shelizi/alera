@@ -196,5 +196,62 @@ void _registerTerminalRuntimeLaunchInputOwnerTests() {
 
       expect(pasted, equals('/tmp/img.png'));
     });
+
+    test('submitText returns false without a live session', () {
+      final owner = TerminalRuntimeLaunchInputOwner(
+        shellLaunchesBuilder: () => const <GhosttyTerminalShellLaunch>[],
+        clipboard: _FakeTerminalClipboard(),
+        onOsc52Blocked: () {},
+      );
+      final host = _FakeLaunchInputOwnerHost();
+
+      expect(owner.submitText(host, 'echo hi'), isFalse);
+      expect(host.pasted, isEmpty);
+    });
+
+    test('submitText fallback pastes then defers the enter key', () {
+      fakeAsync((async) {
+        final owner = TerminalRuntimeLaunchInputOwner(
+          shellLaunchesBuilder: () => const <GhosttyTerminalShellLaunch>[],
+          clipboard: _FakeTerminalClipboard(),
+          onOsc52Blocked: () {},
+        );
+        final host = _FakeLaunchInputOwnerHost()
+          ..ptySession = _FakeTerminalPtySession();
+
+        expect(owner.submitText(host, 'echo hi'), isTrue);
+        expect(host.pasted, equals(<String>['echo hi']));
+        expect(host.inputs, isEmpty);
+        expect(host.deferredSubmitEnterTimer, isNotNull);
+
+        async.elapse(terminalAgentPromptSubmitDelay);
+        expect(host.inputs, equals(<String>['\r']));
+        expect(host.deferredSubmitEnterTimer, isNull);
+      });
+    });
   });
+}
+
+final class _FakeLaunchInputOwnerHost
+    implements TerminalRuntimeLaunchInputOwnerHost {
+  @override
+  bool isDisposed = false;
+
+  @override
+  TerminalPtySession? ptySession;
+
+  @override
+  bool bracketedPasteMode = false;
+
+  final List<String> pasted = <String>[];
+  final List<String> inputs = <String>[];
+
+  @override
+  Timer? deferredSubmitEnterTimer;
+
+  @override
+  void pasteToTerminal(String text) => pasted.add(text);
+
+  @override
+  void deliverInput(String data) => inputs.add(data);
 }

@@ -8,17 +8,10 @@ void _storeTerminalClipboard(_XtermTerminalSessionHandle handle, String text) {
   );
 }
 
-void _pasteTerminalText(_XtermTerminalSessionHandle handle, String text) {
-  if (handle._disposed || text.isEmpty) {
-    return;
-  }
-  handle._terminal.paste(text);
-}
-
 Future<void> _pasteTerminalClipboard(_XtermTerminalSessionHandle handle) {
   return handle._launchInputOwner.pasteClipboard(
     isDisposed: handle._disposed,
-    onPasteText: (text) => _pasteTerminalText(handle, text),
+    onPasteText: (text) => handle._launchInputOwner.pasteText(handle, text),
   );
 }
 

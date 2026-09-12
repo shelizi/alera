@@ -1,5 +1,26 @@
 part of 'terminal_runtime.dart';
 
+/// The narrow per-session capabilities [TerminalRuntimeLaunchInputOwner]
+/// needs for paste and submit delivery.
+abstract interface class TerminalRuntimeLaunchInputOwnerHost {
+  bool get isDisposed;
+
+  TerminalPtySession? get ptySession;
+
+  bool get bracketedPasteMode;
+
+  /// Feeds [text] through the emulator's paste path (bracketed paste when
+  /// the application enabled it).
+  void pasteToTerminal(String text);
+
+  /// Sends [data] to the PTY as if the user typed it.
+  void deliverInput(String data);
+
+  /// The pending deferred-CR timer slot for [submitText]'s fallback path.
+  Timer? get deferredSubmitEnterTimer;
+  set deferredSubmitEnterTimer(Timer? timer);
+}
+
 final class TerminalPreparedLaunch {
   const TerminalPreparedLaunch({
     required this.workspaceLaunch,
@@ -110,6 +131,51 @@ final class TerminalRuntimeLaunchInputOwner {
 
   void notifyOsc52Blocked() {
     _onOsc52Blocked();
+  }
+
+  /// Inserts [text] as if the user pasted it.
+  void pasteText(TerminalRuntimeLaunchInputOwnerHost host, String text) {
+    if (host.isDisposed || text.isEmpty) {
+      return;
+    }
+    host.pasteToTerminal(text);
+  }
+
+  /// Pastes [text] into the foreground process and presses Enter.
+  ///
+  /// Backends that can queue the CR as their own delayed write take the
+  /// deferred-enter path so no other client can interleave; the rest paste
+  /// first and schedule the CR on [host]'s timer slot.
+  bool submitText(TerminalRuntimeLaunchInputOwnerHost host, String text) {
+    final session = host.ptySession;
+    if (host.isDisposed || session == null) {
+      return false;
+    }
+
+    if (session is DeferredEnterTerminalPtySession &&
+        session.supportsDeferredEnter) {
+      final bytes = buildTerminalSubmitPayloadBytes(
+        text,
+        bracketedPasteMode: host.bracketedPasteMode,
+      );
+      return session.writeBytesWithDeferredEnter(bytes);
+    }
+
+    pasteText(host, text);
+    cancelDeferredSubmitEnter(host);
+    host.deferredSubmitEnterTimer = Timer(terminalAgentPromptSubmitDelay, () {
+      host.deferredSubmitEnterTimer = null;
+      if (host.isDisposed || !identical(host.ptySession, session)) {
+        return;
+      }
+      host.deliverInput('\r');
+    });
+    return true;
+  }
+
+  void cancelDeferredSubmitEnter(TerminalRuntimeLaunchInputOwnerHost host) {
+    host.deferredSubmitEnterTimer?.cancel();
+    host.deferredSubmitEnterTimer = null;
   }
 
   void storeClipboard({
