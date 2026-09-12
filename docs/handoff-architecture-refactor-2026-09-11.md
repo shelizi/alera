@@ -997,8 +997,14 @@ Owner 之間互不直接參照，跨域呼叫經各自 `*OwnerHost` port 由 int
 - 剩三個 owner 全部落地：`TerminalRuntimeViewBufferOwner`（`terminal_runtime_view_buffer_owner.dart`，窄 port `TerminalRuntimeViewBufferOwnerHost` = `terminalSettings`/`liveSessions`/`evictSession`，持有 budget policy、eviction sweep、active workspace、app foreground）、`TerminalRuntimeLaunchInputOwner`（`terminal_runtime_launch_input_owner.dart`，shell launch prepare + agent hook env + clipboard + per-session `TerminalRuntimeLaunchInputOwnerHost` port 管 paste/submit/deferred-Enter timer）、`TerminalRuntimeRendererAdapterOwner`（`terminal_runtime_renderer_adapter_owner.dart`，constructor 注入 service facade：emulator 建立/attach/detach、theme/font/cursor 解析、view build、link 處理）。
 - `terminal_runtime_submit_delivery.dart` 刪除，submit/paste/deferred-Enter timer 語意原樣搬入 launch owner（identical-session 守衛保留）；`terminal_runtime_shell_launches.dart` 645→433，agent hook env 淨化移至 `terminal_runtime_agent_hook_environment.dart`。
 - 範式備註：session/view-buffer owner 走「runtime implements host port」；launch/renderer 是 constructor 注入 service（launch 另加 per-session host port 給 input delivery）；renderer 無回呼需求故無 port。
-- 殘留：per-handle 的 visibility lease/buffer accounting（`terminal_runtime_buffer_accounting.dart`）與 `_TerminalOutputPipeline`/batching 仍在 handle 側；view buffer owner 目前只收 runtime 層 budget policy。更深的 per-session 狀態所有權列後續。
 - 主線驗證：`terminal_runtime_native_test.dart` + `terminal_surface_test.dart` 150/150 綠（含 23 個新 owner 測試）、analyze 乾淨、ratchet ok。
+
+### 16.2 進度（2026-09-13，`8ccdd0f0` merge）
+
+- Per-session 狀態已從 handle 收編：`_TerminalSessionVisibilityAccounting`（`terminal_runtime_visibility_accounting.dart`，leases/visible/appForeground/lastVisibleAt + `_TerminalSessionVisibilityHost` port 觸發 PTY pause/flush/owner 通知）與 `_TerminalSessionOutputPump`（`terminal_runtime_output_pump.dart`，持有 `_TerminalOutputPipeline` + queue/trim/schedule/drain/flushNow，`handle` 以 `_TerminalSessionOutputHost` port 供 write/restore/pointer-catchup 回呼）。
+- Handle 不再持有 pipeline 或 visibility 原始欄位；`buffer_accounting.dart` 60→9（只剩 foreground 委派）、`output_batching.dart` 217→48（surrogate helpers + constants）；`session_handle.dart` 494 行逼近上限，再塞東西需先拆。
+- 良性微差異：lease-release→hidden 時原本 deferred flush timer 到點自行 no-op，現在 `onOutputVisibilityChanged` 主動 cancel；輸出行為等價，僅 `flushScheduled` flag 觀察值不同。
+- 驗證：150/150 綠、analyze clean、ratchet ok。
 
 `TerminalRuntime` 實際 logical library 很大，下一步按 ownership 拆：
 
