@@ -851,6 +851,13 @@ Desktop、Mobile、Rust 各自仍有 protocol parsing/DTO 宣告。已有 old-ho
 
 同一 fixture 由 Rust producer 與 Desktop/Mobile consumer round-trip。等 fixture 穩定後才評估 shared schema/codegen。
 
+#### P5 首批已完成（`ef703467`）
+
+- Golden fixtures 落在 `test/fixtures/wire/`（repo root，Rust 與 Dart 讀同一份檔）：response envelope（ok/unauthenticated/format/conflict）、`tab.list`/`tab.find`/`tab.upsert` 的 desktop vs mobile 投影差異、`workbenchViewPrefs.update` mobile conflict、agentProfile remove typed conflict、四個 broadcast event 形狀。
+- 三側驗證：Rust `wire_fixture_tests.rs`（10 tests，真實 `ServerActor` 路徑逐欄位比對）、Desktop `terminal_host_wire_fixtures_test.dart`（6 tests，loopback socket）、Mobile `mobile_runtime_wire_fixtures_test.dart`（3 tests，WebSocket upgrade）。
+- 過程中 pin 住的非直覺契約：mobile prefs conflict 是 untyped error（只有 `agentProfile.remove` 走 typed `errorCode`）；`projectCloneJobsChanged` 不在 desktop `runtimeHostEventNames` allowlist（desktop 丟棄、mobile 全收）；`agentTitleStatus: generating` 投影正規化為 `failed`。
+- 未覆蓋的 fixture 面向（下一批接著做）：workspace lifecycle、shutdown/lifecycle errors、terminal binary frame/output resync、unknown/missing fields、old capability downgrade。
+
 ---
 
 ## 15. Phase 3：Workbench 真正 owner 拆分
@@ -1188,11 +1195,13 @@ max-lines 尚未全清前，第 8 步會是 repo-wide exit 1；必須確認 offe
 - Source control watcher 新增 `_watcherReloadNotBefore` cooldown floor：reload 結束仍有訊號 queued 時，下一次 watcher reload 間隔 250ms→500ms→1000ms→2000ms 遞增；floor 同時限制新訊號 debounce 才不被頂替繞過；無 queued 即歸零。
 - `_syncWatchedDirectories` 集合無變化時不再重送 `updateExplorerWatcher`。
 - Source control 異動清單改 lazy：groups 走 `CustomScrollView` + 每 group `SliverList.builder`，tree mode 走 `SliverList.builder`；2500 筆清單只建 viewport 內的 row。
+- `0766fb13`：`git_status*` wire 改單次傳輸——原本每筆變更走橋三次（`entries` + `groups[].entries` + `tree_rows[].entry`），現在只傳 flat `entries`，groups/tree rows 由 Dart `GitChangeGroup.fromEntries` 重建，decode 量約降 66%；wire schema 未變、不需 FRB regen。已知可見差異：submodule 同時有 range+worktree 變更時同 area 顯示序改為 path 排序。
+- `88ca68f3`：刪掉 Dart 側已不可達的 group/tree-row pass-through mapper。
+- `fccf6a37`：panel 派生資料 memoize——`_filteredStatus`/`_groupsFor`/`_visibleCollapsibleKeys` 依 `identical(status)` + query + groupMode 快取，collapse toggle 與一般 rebuild 不再重算 sort+tree。
 
 #### Batch L 殘留（實測仍卡頓時接著做）
 
-- `gitStatus()` 一次回傳完整 entry list，FRB 反序列化在 UI isolate 上跑：幾千筆時 decode 仍是單次大工作。方向：payload 分頁（先傳前 N + 計數）或 status 摘要化；會動 wire contract，先等 P5 golden fixture 定義。
-- `_groupsFor(status)` 的 group/sort 是 UI isolate 上的同步 O(n) 工作；量大時可移入 isolate 或快取（status revision 未變不重算）。
+- `gitStatus()` 仍一次回傳完整 entry list：單次 decode 已減半以上，但幾萬筆時 Dart 端 `fromEntries` 的 sort+tree build 仍是 UI isolate 上的 O(n log n) 單次工作。方向：payload 分頁（先傳前 N + 計數）或 status 摘要化；會動 wire contract，P5 fixture 已落地可在此基礎上加。
 - `WorkspaceSourceControlState` 每次 reload 全表重建；可考慮結構共享或 entry-level diffing。
 - 驗證方式：以 `E:\Dropbox\work\coding-tools-mcp` 之類的大異動 repo 實測，觀察 decode/分組是否仍是卡點。
 
