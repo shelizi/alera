@@ -1,0 +1,21 @@
+{
+  "id": 23,
+  "ok": true,
+  "payload": {
+    "protocolVersion": 1,
+    "runtime": "alera",
+    "runtimeCapabilities": [
+      "runtimeStore",
+      "managedWorkspaceLifecycle",
+      "mobileCompanionAccess",
+      "mobileWorkspaceMutations",
+      "mobileProjectManagementV1"
+    ],
+    "authenticated": true,
+    "device": {
+      "id": "device-1",
+      "displayName": "Fixture Phone",
+      "permission": "fullControl"
+    }
+  }
+}

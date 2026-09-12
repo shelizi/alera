@@ -1,0 +1,12 @@
+{
+  "id": 26,
+  "ok": true,
+  "payload": {
+    "stopped": true,
+    "forced": false,
+    "activeSessions": 0,
+    "activeJobs": 0,
+    "activeAgents": 0,
+    "activePushSubscriptions": 0
+  }
+}

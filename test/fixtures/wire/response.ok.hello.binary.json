@@ -1,0 +1,8 @@
+{
+  "id": 0,
+  "ok": true,
+  "payload": {
+    "binaryFrames": true,
+    "clientKind": "app"
+  }
+}
