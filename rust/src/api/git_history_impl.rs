@@ -1,13 +1,16 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashSet, VecDeque};
 use std::path::Path;
 
-use git2::{BranchType, ErrorCode, Oid, Repository, Sort};
+use git2::{Oid, Repository, Sort};
 
 use super::git_diff_paths::GitPathContext;
 use super::{
     current_head_commit, head_branch_name, open_repo, GitError, GitHistoryItem, GitHistoryItemRef,
     GitHistoryRefCategory, GitHistoryResult,
 };
+
+#[path = "git_history_refs.rs"]
+mod git_history_refs;
 
 const DEFAULT_HISTORY_LIMIT: u32 = 50;
 const MAX_HISTORY_LIMIT: u32 = 200;
@@ -40,18 +43,19 @@ pub(super) fn git_history(
     };
     let head_oid = head.id();
     let branch_name = head_branch_name(&repo);
-    let current_ref = resolve_current_ref(&repo, &branch_name, head_oid)?;
-    let remote_ref = resolve_upstream_ref(&repo, &branch_name)?;
+    let current_ref = git_history_refs::resolve_current_ref(&repo, &branch_name, head_oid)?;
+    let remote_ref = git_history_refs::resolve_upstream_ref(&repo, &branch_name)?;
     let remote_oid = remote_ref
         .as_ref()
         .and_then(|remote| remote.revision.as_deref())
         .and_then(|value| Oid::from_str(value).ok());
-    let base_ref = resolve_named_ref(&repo, base_ref.as_deref())?.filter(|base| {
-        base.id != current_ref.id
-            && remote_ref
-                .as_ref()
-                .is_none_or(|remote| remote.id != base.id)
-    });
+    let base_ref =
+        git_history_refs::resolve_named_ref(&repo, base_ref.as_deref())?.filter(|base| {
+            base.id != current_ref.id
+                && remote_ref
+                    .as_ref()
+                    .is_none_or(|remote| remote.id != base.id)
+        });
     let merge_base_oid = if let Some(remote_oid) = remote_oid {
         if remote_oid != head_oid {
             repo.merge_base(head_oid, remote_oid).ok()
@@ -61,7 +65,7 @@ pub(super) fn git_history(
     } else {
         None
     };
-    let refs_by_oid = refs_by_oid(&repo)?;
+    let refs_by_oid = git_history_refs::refs_by_oid(&repo)?;
     let mut revwalk = repo.revwalk().map_err(GitError::from_git2)?;
     revwalk.push(head_oid).map_err(GitError::from_git2)?;
     if let Some(remote_oid) = remote_oid.filter(|remote_oid| *remote_oid != head_oid) {
@@ -141,92 +145,6 @@ pub(super) fn git_history(
     })
 }
 
-fn resolve_current_ref(
-    repo: &Repository,
-    branch_name: &str,
-    head_oid: Oid,
-) -> Result<GitHistoryItemRef, GitError> {
-    if branch_name != "HEAD" {
-        return Ok(GitHistoryItemRef {
-            id: format!("refs/heads/{branch_name}"),
-            name: branch_name.to_string(),
-            revision: Some(head_oid.to_string()),
-            category: Some(GitHistoryRefCategory::Branches),
-        });
-    }
-    let _ = repo;
-    Ok(GitHistoryItemRef {
-        id: head_oid.to_string(),
-        name: short_oid(head_oid),
-        revision: Some(head_oid.to_string()),
-        category: Some(GitHistoryRefCategory::Commits),
-    })
-}
-
-fn resolve_upstream_ref(
-    repo: &Repository,
-    branch_name: &str,
-) -> Result<Option<GitHistoryItemRef>, GitError> {
-    if branch_name == "HEAD" {
-        return Ok(None);
-    }
-    let Ok(local) = repo.find_branch(branch_name, BranchType::Local) else {
-        return Ok(None);
-    };
-    let Ok(upstream) = local.upstream() else {
-        return Ok(None);
-    };
-    let Some(oid) = upstream.get().target() else {
-        return Ok(None);
-    };
-    let full_name = upstream.get().name().unwrap_or_default();
-    Ok(Some(history_ref_from_full_name(
-        full_name,
-        upstream
-            .name()
-            .map_err(GitError::from_git2)?
-            .unwrap_or(full_name),
-        oid,
-    )))
-}
-
-fn resolve_named_ref(
-    repo: &Repository,
-    name: Option<&str>,
-) -> Result<Option<GitHistoryItemRef>, GitError> {
-    let Some(name) = name.map(str::trim).filter(|name| !name.is_empty()) else {
-        return Ok(None);
-    };
-    if name.starts_with('-') {
-        return Ok(None);
-    }
-    let object = match repo.revparse_single(name) {
-        Ok(object) => object,
-        Err(error)
-            if matches!(
-                error.code(),
-                ErrorCode::NotFound | ErrorCode::Ambiguous | ErrorCode::InvalidSpec
-            ) =>
-        {
-            return Ok(None);
-        }
-        Err(error) => return Err(GitError::from_git2(error)),
-    };
-    let commit = match object.peel_to_commit() {
-        Ok(commit) => commit,
-        Err(_) => return Ok(None),
-    };
-    let full_name = repo
-        .find_reference(name)
-        .ok()
-        .and_then(|reference| reference.name().ok().map(ToString::to_string));
-    Ok(Some(history_ref_from_full_name(
-        full_name.as_deref().unwrap_or(name),
-        name,
-        commit.id(),
-    )))
-}
-
 /// Seeds the revwalk with every local and remote-tracking branch tip so the
 /// history covers all branches, not only HEAD and its upstream. `*/HEAD`
 /// symbolic refs and tips already pushed are skipped.
@@ -262,50 +180,6 @@ fn push_branch_tips(
         }
     }
     Ok(())
-}
-
-fn refs_by_oid(repo: &Repository) -> Result<HashMap<Oid, Vec<GitHistoryItemRef>>, GitError> {
-    let mut output: HashMap<Oid, Vec<GitHistoryItemRef>> = HashMap::new();
-    let references = repo.references().map_err(GitError::from_git2)?;
-    for reference in references {
-        let reference = reference.map_err(GitError::from_git2)?;
-        let Ok(full_name) = reference.name() else {
-            continue;
-        };
-        if full_name == "HEAD" || full_name.ends_with("/HEAD") {
-            continue;
-        }
-        let category = category_for_ref(full_name);
-        if category.is_none() {
-            continue;
-        }
-        let oid = if category == Some(GitHistoryRefCategory::Tags) {
-            reference
-                .peel_to_commit()
-                .ok()
-                .map(|commit| commit.id())
-                .or_else(|| reference.target())
-        } else {
-            reference
-                .target()
-                .or_else(|| reference.peel_to_commit().ok().map(|commit| commit.id()))
-        };
-        let Some(oid) = oid else {
-            continue;
-        };
-        output
-            .entry(oid)
-            .or_default()
-            .push(history_ref_from_full_name(
-                full_name,
-                short_name_for_ref(full_name),
-                oid,
-            ));
-    }
-    for refs in output.values_mut() {
-        refs.sort_by(compare_refs);
-    }
-    Ok(output)
 }
 
 fn commit_touches_workspace(
@@ -442,54 +316,6 @@ fn history_item_from_commit(
         author_email: commit.author().email().ok().map(ToString::to_string),
         timestamp: Some(commit.author().when().seconds().saturating_mul(1000)),
         references: references.cloned().unwrap_or_default(),
-    }
-}
-
-fn history_ref_from_full_name(full_name: &str, fallback_name: &str, oid: Oid) -> GitHistoryItemRef {
-    let category = category_for_ref(full_name).unwrap_or(GitHistoryRefCategory::Commits);
-    GitHistoryItemRef {
-        id: full_name.to_string(),
-        name: short_name_for_ref(full_name)
-            .strip_prefix("tag: ")
-            .unwrap_or_else(|| short_name_for_ref(fallback_name))
-            .to_string(),
-        revision: Some(oid.to_string()),
-        category: Some(category),
-    }
-}
-
-fn category_for_ref(full_name: &str) -> Option<GitHistoryRefCategory> {
-    if full_name.starts_with("refs/heads/") {
-        Some(GitHistoryRefCategory::Branches)
-    } else if full_name.starts_with("refs/remotes/") {
-        Some(GitHistoryRefCategory::RemoteBranches)
-    } else if full_name.starts_with("refs/tags/") {
-        Some(GitHistoryRefCategory::Tags)
-    } else {
-        None
-    }
-}
-
-fn short_name_for_ref(full_name: &str) -> &str {
-    full_name
-        .strip_prefix("refs/heads/")
-        .or_else(|| full_name.strip_prefix("refs/remotes/"))
-        .or_else(|| full_name.strip_prefix("refs/tags/"))
-        .unwrap_or(full_name)
-}
-
-fn compare_refs(a: &GitHistoryItemRef, b: &GitHistoryItemRef) -> std::cmp::Ordering {
-    ref_order(a)
-        .cmp(&ref_order(b))
-        .then_with(|| a.name.cmp(&b.name))
-}
-
-fn ref_order(reference: &GitHistoryItemRef) -> u8 {
-    match reference.category {
-        Some(GitHistoryRefCategory::Branches) => 1,
-        Some(GitHistoryRefCategory::RemoteBranches) => 2,
-        Some(GitHistoryRefCategory::Tags) => 3,
-        _ => 99,
     }
 }
 
