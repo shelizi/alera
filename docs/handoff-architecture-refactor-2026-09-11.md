@@ -1062,7 +1062,7 @@ Presentation 保留 render/input/transient UI state。
 ### 18.1 進度（2026-09-13，`d3777452`/`beebbcd8`）
 
 - Concrete client 建立已抽出：`host_connection_client_factory.dart`（`HostConnectionClientFactory.openWithin(ConnectionAttempt)`，承接 paired-host lookup、relay fallback、cancellation、stack trace 保留）；`host_connection_controller.dart` 466→393，retry/epoch/attempt lifecycle/dispose policy 留在 controller。
-- `UnsupportedError` 語意刻意不動（matrix 測試 pin 住實際行為）；是否改為乾淨 `StateError` 是獨立的行為變更決策，待使用者定案。
+- `UnsupportedError` 語意已定案修正（`e05e805b`）：`restartRuntime` 不再 fallback 到 `state.value`（那是 reconnect 已 dispose 的舊 client），reconnect in-flight 時乾淨拋 `StateError('Host is not connected.')`；matrix 測試改 pin `StateError`。
 
 `HostConnectionController` 已有 retry、epoch、opening attempt、dispose。先補狀態轉移測試再拆 concrete client：
 
