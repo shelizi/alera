@@ -1,5 +1,4 @@
 import 'package:alera/src/features/workbench/domain/workspace_section.dart';
-import 'package:alera/src/features/workbench/application/workspace_section_repository.dart';
 
 import 'dart:async';
 
@@ -17,43 +16,21 @@ import 'package:alera/src/features/workbench/application/workbench_providers.dar
 import 'package:alera/src/features/workbench/application/workbench_listing.dart';
 import 'package:alera/src/features/workbench/application/workbench_layout_repository.dart';
 import 'package:alera/src/features/workbench/application/workbench_retired_resource_cleaner.dart';
+import 'package:alera/src/features/workbench/application/workbench_cleared_layout_registry.dart';
 import 'package:alera/src/features/workbench/application/workbench_retired_tabs_cleanup_coordinator.dart';
 import 'package:alera/src/features/workbench/application/workbench_retired_workspace_cleanup_coordinator.dart';
 import 'package:alera/src/features/workbench/application/workbench_remove_project_cleanup_coordinator.dart';
-import 'package:alera/src/features/workbench/application/workbench_delete_workspace_cleanup_coordinator.dart';
 import 'package:alera/src/features/workbench/application/workbench_explicit_resource_cleaner.dart';
 import 'package:alera/src/features/workbench/application/workbench_hosted_review_retention_service.dart';
 import 'package:alera/src/features/workbench/application/workbench_git_repository_probe_adapter.dart';
 import 'package:alera/src/features/workbench/application/workbench_source_control_folder_focus_service.dart';
-import 'package:alera/src/features/workbench/application/workbench_bootstrap_orchestrator.dart';
-import 'package:alera/src/features/workbench/application/workbench_bootstrap_gate.dart';
-import 'package:alera/src/features/workbench/application/workbench_main_workspace_preparation_coordinator.dart';
-import 'package:alera/src/features/workbench/application/workbench_project_set_sync.dart';
-import 'package:alera/src/features/workbench/application/workbench_project_workspace_subscription_coordinator.dart';
+import 'package:alera/src/features/workbench/application/workbench_catalog_owner.dart';
 import 'package:alera/src/features/workbench/application/workbench_replaceable_tab_editor_sessions.dart';
-import 'package:alera/src/features/workbench/application/workbench_root_subscription_registry.dart';
-import 'package:alera/src/features/workbench/application/workbench_section_state.dart';
-import 'package:alera/src/features/workbench/application/workbench_serial_mutation_queue.dart';
 import 'package:alera/src/features/workbench/application/workbench_selection_owner.dart';
-import 'package:alera/src/features/workbench/application/workbench_selection_state.dart';
-import 'package:alera/src/features/workbench/application/workbench_sleep_workspace_coordinator.dart';
-import 'package:alera/src/features/workbench/application/workbench_sleep_workspace_plan.dart';
 import 'package:alera/src/features/workbench/application/workbench_tab_layout_owner.dart';
-import 'package:alera/src/features/workbench/application/workbench_prompt_workspace_completion_coordinator.dart';
 import 'package:alera/src/features/workbench/application/workbench_tab_subscription_registry.dart';
-import 'package:alera/src/features/workbench/application/workbench_workspace_tag_creation_service.dart';
-import 'package:alera/src/features/workbench/application/workbench_workspace_tag_mutation_queue.dart';
-import 'package:alera/src/features/workbench/application/workbench_workspace_tag_update_plan.dart';
-import 'package:alera/src/features/workbench/application/workbench_workspace_tag_update_service.dart';
-import 'package:alera/src/features/workbench/application/workbench_workspace_parent_mutation_queue.dart';
-import 'package:alera/src/features/workbench/application/workbench_workspace_parent_update_service.dart';
+import 'package:alera/src/features/workbench/application/workbench_workspace_tab_closing_scope.dart';
 import 'package:alera/src/features/workbench/application/workbench_workspace_selection_hydrator.dart';
-import 'package:alera/src/features/workbench/application/workbench_workspace_creation_coordinator.dart';
-import 'package:alera/src/features/workbench/application/workbench_workspace_creation_parent_link_service.dart';
-import 'package:alera/src/features/workbench/application/workbench_workspace_tree_pin_coordinator.dart';
-import 'package:alera/src/features/workbench/application/workbench_workspace_set_sync.dart';
-import 'package:alera/src/features/workbench/application/workbench_workspace_subscription_registry.dart';
-import 'package:alera/src/features/workbench/application/workbench_workspace_tab_subscription_coordinator.dart';
 import 'package:alera/src/features/workbench/application/workbench_source_control_root_prefs.dart';
 import 'package:alera/src/features/workbench/application/workbench_state.dart';
 import 'package:alera/src/features/workbench/application/workbench_view_pref_expansion.dart';
@@ -62,13 +39,13 @@ import 'package:alera/src/features/workbench/application/workbench_view_prefs_re
 import 'package:alera/src/features/workbench/application/workbench_view_prefs_persistence_queue.dart';
 import 'package:alera/src/features/workbench/application/workspace_activity_controller.dart';
 import 'package:alera/src/features/workbench/application/workspace_graph_repository.dart';
-import 'package:alera/src/features/workbench/application/workbench_worktree_metadata_watcher_registry.dart';
 import 'package:alera/src/features/workbench/application/workspace_service.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/domain/workbench_layout.dart';
 import 'package:alera/src/features/workbench/domain/workbench_view_prefs.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_creation_result.dart';
+import 'package:alera/src/features/workbench/domain/workspace_tab_focus_history.dart';
 import 'package:alera/src/features/workbench/domain/workspace_source_control_scope.dart';
 import 'package:alera/src/shared/infra/git/git_diff_models.dart';
 import 'package:alera/src/shared/infra/git/git_providers.dart';
@@ -84,7 +61,6 @@ part 'workbench_controller_pull_request_diff_tabs.dart';
 part 'workbench_controller_workspace_creation.dart';
 part 'workbench_controller_tabs.dart';
 part 'workbench_controller_view_prefs.dart';
-part 'workbench_controller_sync.dart';
 part 'workbench_controller_sections.dart';
 
 @Riverpod(keepAlive: true)
@@ -101,84 +77,17 @@ class WorkbenchController extends _$WorkbenchController
         _WorkbenchControllerWorkspaceCreation,
         _WorkbenchControllerTabs,
         _WorkbenchControllerViewPrefs,
-        _WorkbenchControllerSync,
         _WorkbenchControllerSections {
   @override
   WorkbenchState build() {
     _disposed = false;
     ref.onDispose(() {
       _disposed = true;
-      _rootSubscriptions.cancelAll();
-      _worktreeMetadataWatcherRegistry.disposeAll();
-      _workspaceSubscriptions.cancelAll();
+      _catalogOwner.dispose();
       _tabSubscriptions.cancelAll();
     });
     return const WorkbenchState();
   }
 
-  Future<void> bootstrap() {
-    return _bootstrapGate.run(() async {
-      final viewPrefsRepository = _viewPrefsRepository;
-      final projectRepository = _projectsService.projectRepository;
-      try {
-        await const WorkbenchBootstrapOrchestrator().run(
-          loadViewPrefs: () async {
-            final repository = viewPrefsRepository;
-            return repository == null ? null : await repository.load();
-          },
-          applyViewPrefs: (prefs) {
-            if (!_disposed) {
-              state = state.copyWith(viewPrefs: prefs);
-            }
-          },
-          watchViewPrefs: () {
-            final repository = viewPrefsRepository;
-            if (_disposed || repository == null) {
-              return;
-            }
-            _rootSubscriptions.watchViewPrefs(
-              repository.changes,
-              onData: (prefs) {
-                if (!_disposed) state = state.copyWith(viewPrefs: prefs);
-              },
-            );
-          },
-          startSections: () {
-            if (!_disposed) {
-              _startSections();
-            }
-          },
-          watchProjects: () {
-            if (_disposed) {
-              return;
-            }
-            _rootSubscriptions.watchProjectsRecovering(
-              projectRepository.watchAll,
-              onData: _onProjectsChanged,
-              onError: (Object _) {},
-            );
-          },
-          listProjects: projectRepository.listAll,
-          applyProjects: (projects) {
-            if (!_disposed) {
-              _onProjectsChanged(projects);
-            }
-          },
-          ensureMainWorkspace: (project) => _disposed
-              ? Future<void>.value()
-              : _ensureMainWorkspaceForProject(project),
-        );
-        if (!_disposed) {
-          state = state.copyWith(bootstrapped: true, error: null);
-        }
-      } catch (error) {
-        if (!_disposed) {
-          state = state.copyWith(
-            bootstrapped: true,
-            error: 'Failed to bootstrap workbench: $error',
-          );
-        }
-      }
-    });
-  }
+  Future<void> bootstrap() => _catalogOwner.bootstrap();
 }

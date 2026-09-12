@@ -1,61 +1,28 @@
 part of 'workbench_controller.dart';
 
+/// Facade over the catalog owner: workspace section CRUD and sidebar
+/// section-collapsed preferences.
 mixin _WorkbenchControllerSections
     on _$WorkbenchController, _WorkbenchControllerInternals {
-  WorkspaceSectionRepository get _sectionRepository =>
-      _repository as WorkspaceSectionRepository;
-
-  void _startSections() {
-    final repository = _repository;
-    if (repository is! WorkspaceSectionRepository) return;
-    // Keep watching unsupported hosts: an in-app update can add this capability.
-    _rootSubscriptions.watchSections(
-      (repository as WorkspaceSectionRepository).watchSections(),
-      onData: (snapshot) {
-        if (_disposed) return;
-        state = applyWorkbenchSectionSnapshotState(
-          state: state,
-          snapshot: snapshot,
-        );
-      },
-      onError: (Object error) {
-        if (!_disposed) {
-          state = state.copyWith(error: 'Could not load sections: $error');
-        }
-      },
-    );
-  }
-
   Future<List<WorkspaceSection>> listWorkspaceSections() =>
-      _sectionRepository.listSections();
+      _catalogOwner.listWorkspaceSections();
 
   Future<void> saveWorkspaceSection(
     String workspaceId, {
     String? sectionId,
     String? newName,
-  }) async {
-    if (newName != null) {
-      await _sectionRepository.createSection(newName, workspaceId);
-    } else {
-      await _sectionRepository.setSection(workspaceId, sectionId);
-    }
-  }
+  }) => _catalogOwner.saveWorkspaceSection(
+    workspaceId,
+    sectionId: sectionId,
+    newName: newName,
+  );
 
   Future<void> deleteWorkspaceSection(String sectionId) =>
-      _sectionRepository.removeSection(sectionId);
+      _catalogOwner.deleteWorkspaceSection(sectionId);
 
-  void setSectionSort(WorkbenchSortBy sort) {
-    state = state.copyWith(
-      viewPrefs: state.viewPrefs.copyWith(sectionSort: sort),
-    );
-    unawaited(_persistViewPrefs());
-  }
+  void setSectionSort(WorkbenchSortBy sort) =>
+      _catalogOwner.setSectionSort(sort);
 
-  void toggleSectionCollapsed(String? sectionId) {
-    state = toggleWorkbenchSectionCollapsedState(
-      state: state,
-      sectionId: sectionId,
-    );
-    unawaited(_persistViewPrefs());
-  }
+  void toggleSectionCollapsed(String? sectionId) =>
+      _catalogOwner.toggleSectionCollapsed(sectionId);
 }

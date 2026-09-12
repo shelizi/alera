@@ -1,338 +1,101 @@
 part of 'workbench_controller.dart';
 
+/// Facade over the catalog owner: project and workspace catalog mutations
+/// plus selection entry points that stay delegated to the selection owner.
 mixin _WorkbenchControllerProjects
-    on
-        _$WorkbenchController,
-        _WorkbenchControllerInternals,
-        _WorkbenchControllerTabOpening {
+    on _$WorkbenchController, _WorkbenchControllerInternals {
   Future<List<String>> listSourceBranches(Project project) =>
-      _workspaceService.listSourceBranches(project);
+      _catalogOwner.listSourceBranches(project);
 
-  Future<void> reconcileProjectWorkspaces(String projectId) async {
-    final project = _projectById(state.projects, projectId);
-    if (project == null) return;
-    try {
-      await _workspaceService.reconcile(project);
-      state = state.copyWith(error: null);
-    } catch (error) {
-      state = state.copyWith(error: error.toString());
-      rethrow;
-    }
-  }
+  Future<void> reconcileProjectWorkspaces(String projectId) =>
+      _catalogOwner.reconcileProjectWorkspaces(projectId);
 
-  Future<Project> addLocalProject({required String path, String? name}) async {
-    try {
-      final project = await _projectsService.addLocalProject(
-        path: path,
-        name: name,
-      );
-      await _activateAddedProject(project);
-      return project;
-    } catch (error) {
-      state = state.copyWith(error: error.toString());
-      rethrow;
-    }
-  }
+  Future<Project> addLocalProject({required String path, String? name}) =>
+      _catalogOwner.addLocalProject(path: path, name: name);
 
   Future<Project> cloneProject({
     required String gitUrl,
     required String destinationPath,
     String? name,
-  }) async {
-    try {
-      final project = await _projectsService.cloneProject(
-        gitUrl: gitUrl,
-        destinationPath: destinationPath,
-        name: name,
-      );
-      await _activateAddedProject(project);
-      return project;
-    } catch (error) {
-      state = state.copyWith(error: error.toString());
-      rethrow;
-    }
-  }
+  }) => _catalogOwner.cloneProject(
+    gitUrl: gitUrl,
+    destinationPath: destinationPath,
+    name: name,
+  );
 
   Future<Project> addProject({required String repoPath, String? name}) =>
-      addLocalProject(path: repoPath, name: name);
+      _catalogOwner.addProject(repoPath: repoPath, name: name);
 
   Future<void> renameProject({
     required String projectId,
     required String name,
-  }) async {
-    try {
-      final project = await _projectsService.renameProject(
-        projectId: projectId,
-        name: name,
-      );
-      state = applyWorkbenchProjectUpdateState(state: state, project: project);
-    } catch (error) {
-      state = state.copyWith(error: error.toString());
-      rethrow;
-    }
-  }
+  }) => _catalogOwner.renameProject(projectId: projectId, name: name);
 
-  Future<void> sleepWorkspace(Workspace workspace) async {
-    await _tabLayoutOwner.tabClosingScope.run(workspace.id, () async {
-      try {
-        final workspaceTabs = state.tabsFor(workspace.id);
-        await WorkbenchSleepWorkspaceCoordinator(
-          tabRemoval: _repository,
-          hostedReviewRetention: _hostedReviewRetention,
-          clearedLayouts: _tabLayoutOwner.clearedLayouts,
-          tabFocusHistory: _tabLayoutOwner.tabFocusHistory,
-        ).sleep(workspace: workspace, tabs: workspaceTabs);
-        _explicitResourceCleaner.closeWorkspaceLocalResources(
-          workspace.id,
-          workspaceTabs,
-        );
+  Future<void> sleepWorkspace(Workspace workspace) =>
+      _catalogOwner.sleepWorkspace(workspace);
 
-        state = applyWorkbenchSleepWorkspaceState(
-          state: state,
-          workspaceId: workspace.id,
-        );
-      } catch (error) {
-        state = state.copyWith(error: error.toString());
-        rethrow;
-      }
-    });
-  }
-
-  Future<void> removeProject(String projectId) async {
-    try {
-      final removedWorkspaces = <WorkbenchRemovedProjectWorkspace>[
-        for (final workspace in state.workspacesFor(projectId))
-          WorkbenchRemovedProjectWorkspace(
-            workspace: workspace,
-            tabs: List<WorkspaceTabRecord>.from(state.tabsFor(workspace.id)),
-          ),
-      ];
-      await WorkbenchRemoveProjectCleanupCoordinator(
-        closeLocalWorkspace: _closeRemovedProjectWorkspace,
-        hostedReviewRetention: _hostedReviewRetention,
-        tabFocusHistory: _tabLayoutOwner.tabFocusHistory,
-      ).remove(
-        removeProject: () => _projectsService.removeProject(projectId),
-        removedWorkspaces: removedWorkspaces,
-      );
-      state = state.copyWith(error: null);
-    } catch (error) {
-      state = state.copyWith(error: error.toString());
-      rethrow;
-    }
-  }
+  Future<void> removeProject(String projectId) =>
+      _catalogOwner.removeProject(projectId);
 
   Future<void> deleteWorkspace({
     required Project project,
     required Workspace workspace,
     bool deleteBranch = true,
     String? activeWorkspaceId,
-  }) async {
-    try {
-      final workspaceTabs = state.tabsFor(workspace.id);
-      await _withWorktreeRefreshSuspended(
-        project.id,
-        () => _workspaceService.removeWorkspace(
-          project: project,
-          workspace: workspace,
-          deleteBranch: deleteBranch,
-          activeWorkspaceId: activeWorkspaceId,
-        ),
-      );
-      // The managed runtime has already stopped the process trees. Preserve the
-      // local -> hosted-review -> observer cleanup failure boundary in one
-      // application coordinator.
-      await WorkbenchDeleteWorkspaceCleanupCoordinator(
-        resourceCleaner: _explicitResourceCleaner,
-        hostedReviewRetention: _hostedReviewRetention,
-        tabFocusHistory: _tabLayoutOwner.tabFocusHistory,
-      ).cleanup(
-        workspace: workspace,
-        tabs: workspaceTabs,
-        fallbackWorkspacePath: project.repoPath,
-      );
-      state = state.copyWith(error: null);
-    } catch (error) {
-      state = state.copyWith(error: error.toString());
-      rethrow;
-    }
-  }
+  }) => _catalogOwner.deleteWorkspace(
+    project: project,
+    workspace: workspace,
+    deleteBranch: deleteBranch,
+    activeWorkspaceId: activeWorkspaceId,
+  );
 
   Future<void> renameWorkspace({
     required String workspaceId,
     required String name,
-  }) async {
-    try {
-      final workspace = await _workspaceService.renameWorkspace(
-        workspaceId: workspaceId,
-        name: name,
-      );
-      state = applyWorkbenchWorkspaceUpdateState(
-        state: state,
-        workspace: workspace,
-      ).copyWith(error: null);
-    } catch (error) {
-      state = state.copyWith(error: error.toString());
-      rethrow;
-    }
-  }
+  }) => _catalogOwner.renameWorkspace(workspaceId: workspaceId, name: name);
 
   Future<void> setWorkspacePinned({
     required String workspaceId,
     required bool isPinned,
-  }) async {
-    try {
-      final workspace = await _repository.setWorkspacePinned(
-        workspaceId,
-        isPinned,
-      );
-      state = applyWorkbenchWorkspaceUpdateState(
-        state: state,
-        workspace: workspace,
-      ).copyWith(error: null);
-    } catch (error) {
-      state = state.copyWith(error: error.toString());
-      rethrow;
-    }
-  }
+  }) => _catalogOwner.setWorkspacePinned(
+    workspaceId: workspaceId,
+    isPinned: isPinned,
+  );
 
   /// Pins or unpins [workspaceId] and every descendant of [workspaceId].
   /// No-ops workspaces that already match [isPinned].
   Future<void> setWorkspaceTreePinned({
     required String workspaceId,
     required bool isPinned,
-  }) {
-    return _workspaceTreePinMutations.run<void>(
-      () => WorkbenchWorkspaceTreePinCoordinator(
-        setPinned: ({required workspaceId, required isPinned}) =>
-            setWorkspacePinned(workspaceId: workspaceId, isPinned: isPinned),
-      ).run(state: state, workspaceId: workspaceId, isPinned: isPinned),
-    );
-  }
+  }) => _catalogOwner.setWorkspaceTreePinned(
+    workspaceId: workspaceId,
+    isPinned: isPinned,
+  );
 
-  Future<List<WorkspaceTag>> listWorkspaceTags() async {
-    try {
-      final tags = await _workspaceGraphRepository.listTags();
-      state = state.copyWith(error: null);
-      return tags;
-    } catch (error) {
-      state = state.copyWith(error: error.toString());
-      rethrow;
-    }
-  }
+  Future<List<WorkspaceTag>> listWorkspaceTags() =>
+      _catalogOwner.listWorkspaceTags();
 
-  Future<List<WorkspaceRelation>> listWorkspaceRelations() async {
-    try {
-      final relations = await _workspaceGraphRepository.listRelations();
-      state = state.copyWith(error: null);
-      return relations;
-    } catch (error) {
-      state = state.copyWith(error: error.toString());
-      rethrow;
-    }
-  }
+  Future<List<WorkspaceRelation>> listWorkspaceRelations() =>
+      _catalogOwner.listWorkspaceRelations();
 
-  Future<WorkspaceTag> createWorkspaceTag(String name) async {
-    try {
-      final tag = await WorkbenchWorkspaceTagCreationService(
-        _workspaceGraphRepository,
-      ).create(name);
-      state = state.copyWith(error: null);
-      return tag;
-    } catch (error) {
-      state = state.copyWith(error: error.toString());
-      rethrow;
-    }
-  }
+  Future<WorkspaceTag> createWorkspaceTag(String name) =>
+      _catalogOwner.createWorkspaceTag(name);
 
-  Future<void> deleteWorkspaceTag(String tagId) async {
-    try {
-      await _workspaceGraphRepository.removeTag(tagId);
-      state = state.copyWith(error: null);
-    } catch (error) {
-      state = state.copyWith(error: error.toString());
-      rethrow;
-    }
-  }
+  Future<void> deleteWorkspaceTag(String tagId) =>
+      _catalogOwner.deleteWorkspaceTag(tagId);
 
   Future<void> updateWorkspaceTags({
     required Workspace workspace,
     required Set<String> tagIds,
-  }) {
-    final wasTracked = _workspaceById(workspace.id) != null;
-    final requestedTagIds = normalizeWorkbenchWorkspaceTagIds(tagIds);
-    return _workspaceTagMutations.run<void>(
-      workspaceId: workspace.id,
-      action: () async {
-        final latest = _workspaceById(workspace.id);
-        if (wasTracked && latest == null) {
-          return;
-        }
-        final basis = latest ?? workspace;
-        final plan = planWorkbenchWorkspaceTagUpdate(
-          state: state,
-          workspace: basis,
-          requestedTagIds: requestedTagIds,
-        );
-        try {
-          await WorkbenchWorkspaceTagUpdateService(_workspaceGraphRepository)
-              .apply(workspaceId: workspace.id, plan: plan);
-          final latestAfter = _workspaceById(workspace.id);
-          if (latestAfter != null) {
-            state = applyWorkbenchWorkspaceUpdateState(
-              state: state,
-              workspace: latestAfter.copyWith(
-                tagIds: requestedTagIds.toList(growable: false),
-              ),
-            );
-          }
-          state = state.copyWith(error: null);
-        } catch (error) {
-          state = state.copyWith(error: error.toString());
-          rethrow;
-        }
-      },
-    );
-  }
+  }) => _catalogOwner.updateWorkspaceTags(workspace: workspace, tagIds: tagIds);
 
   Future<void> setWorkspaceParent({
     required Workspace workspace,
     String? parentWorkspaceId,
-  }) {
-    final wasTracked = _workspaceById(workspace.id) != null;
-    final requestedParentId = normalizeWorkbenchWorkspaceParentId(
-      parentWorkspaceId,
-    );
-    return _workspaceParentMutations.run<void>(
-      workspaceId: workspace.id,
-      action: () async {
-        final latest = _workspaceById(workspace.id);
-        if (wasTracked && latest == null) {
-          return;
-        }
-        final basis = latest ?? workspace;
-        try {
-          final changed = await WorkbenchWorkspaceParentUpdateService(
-            _workspaceGraphRepository,
-          ).update(workspace: basis, parentWorkspaceId: requestedParentId);
-          if (!changed) return;
-          final latestAfter = _workspaceById(workspace.id);
-          if (latestAfter != null) {
-            state = applyWorkbenchWorkspaceUpdateState(
-              state: state,
-              workspace: latestAfter.copyWith(
-                parentWorkspaceId: requestedParentId,
-              ),
-            );
-          }
-          state = state.copyWith(error: null);
-        } catch (error) {
-          state = state.copyWith(error: error.toString());
-          rethrow;
-        }
-      },
-    );
-  }
+  }) => _catalogOwner.setWorkspaceParent(
+    workspace: workspace,
+    parentWorkspaceId: parentWorkspaceId,
+  );
 
   Future<void> selectWorkspace({
     required Project project,

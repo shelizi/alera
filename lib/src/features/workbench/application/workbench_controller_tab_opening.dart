@@ -37,16 +37,6 @@ mixin _WorkbenchControllerTabOpening
     targetGroupId: targetGroupId,
   );
 
-  /// Opens the "Setup" terminal for a workspace whose worktree setup the host
-  /// prepared instead of running, so a long `pnpm install` is visible work
-  /// rather than a spinner on the create dialog.
-  ///
-  /// A failure here does not fail the creation: the workspace exists and the
-  /// setup can be run by hand, so it is reported as an error on the state
-  /// instead of unwinding the flow.
-  Future<void> _openDeferredSetupTab(WorkspaceCreationResult result) =>
-      _tabLayoutOwner.openDeferredSetupTab(result);
-
   Future<WorkspaceTabRecord> openMermanPreviewTab({
     required Workspace workspace,
     required String relativePath,

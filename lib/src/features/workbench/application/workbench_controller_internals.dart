@@ -1,7 +1,10 @@
 part of 'workbench_controller.dart';
 
 mixin _WorkbenchControllerInternals on _$WorkbenchController
-    implements WorkbenchSelectionOwnerHost, WorkbenchTabLayoutOwnerHost {
+    implements
+        WorkbenchSelectionOwnerHost,
+        WorkbenchTabLayoutOwnerHost,
+        WorkbenchCatalogOwnerHost {
   bool _disposed = false;
 
   /// Selection and navigation live behind a narrow host port so the owner
@@ -15,6 +18,10 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController
   late final WorkbenchTabLayoutOwner _tabLayoutOwner = WorkbenchTabLayoutOwner(
     this,
   );
+
+  /// Project/workspace/section catalog operations live behind a narrow host
+  /// port so the owner stays free of provider reads.
+  late final WorkbenchCatalogOwner _catalogOwner = WorkbenchCatalogOwner(this);
 
   @override
   WorkbenchState readState() => state;
@@ -115,6 +122,82 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController
     tabId: tabId,
   );
 
+  @override
+  ProjectsService get projectsService => _projectsService;
+
+  @override
+  WorkbenchRepository get workbenchRepository => _repository;
+
+  @override
+  WorkspaceService get workspaceService => _workspaceService;
+
+  @override
+  WorkspaceGraphRepository get workspaceGraphRepository =>
+      _workspaceGraphRepository;
+
+  @override
+  WorkbenchViewPrefsRepository? get viewPrefsRepository => _viewPrefsRepository;
+
+  @override
+  WorkbenchRetiredWorkspaceCleanupCoordinator get retiredWorkspaceCleanup =>
+      _retiredWorkspaceCleanup;
+
+  @override
+  WorkbenchRemovedProjectWorkspaceCloser get removedProjectWorkspaceCloser =>
+      _closeRemovedProjectWorkspace;
+
+  @override
+  WorkbenchTabSubscriptionRegistry get tabSubscriptions => _tabSubscriptions;
+
+  @override
+  WorkbenchWorkspaceTabClosingScope get workspaceTabClosingScope =>
+      _tabLayoutOwner.tabClosingScope;
+
+  @override
+  WorkbenchClearedLayoutRegistry get clearedLayouts =>
+      _tabLayoutOwner.clearedLayouts;
+
+  @override
+  WorkspaceTabFocusHistory get tabFocusHistory =>
+      _tabLayoutOwner.tabFocusHistory;
+
+  @override
+  void persistViewPrefs() {
+    unawaited(_persistViewPrefs());
+  }
+
+  @override
+  void pruneWorktreeNavigationHistory() =>
+      _selectionOwner.pruneNavigationHistory();
+
+  @override
+  Future<void> selectCatalogWorkspace({
+    required Project project,
+    required Workspace workspace,
+    required bool ensureInitialTerminal,
+  }) => _selectionOwner.selectWorkspace(
+    project: project,
+    workspace: workspace,
+    ensureInitialTerminal: ensureInitialTerminal,
+  );
+
+  @override
+  Future<void> openDeferredSetupTab(WorkspaceCreationResult result) =>
+      _tabLayoutOwner.openDeferredSetupTab(result);
+
+  @override
+  Future<void> loadLayoutForWorkspace(String workspaceId) =>
+      _tabLayoutOwner.loadLayoutForWorkspace(workspaceId);
+
+  @override
+  void handleWorkspaceTabsChanged(
+    String workspaceId,
+    List<WorkspaceTabRecord> tabs,
+  ) => _tabLayoutOwner.handleTabsChanged(workspaceId, tabs);
+
+  @override
+  void ensureSelectionHasTab() => _tabLayoutOwner.ensureSelectionHasTab();
+
   ProjectsService get _projectsService => ref.read(projectsServiceProvider);
 
   WorkbenchRepository get _repository => ref.read(workbenchRepositoryProvider);
@@ -126,16 +209,6 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController
 
   WorkbenchRemovedProjectWorkspaceCloser get _closeRemovedProjectWorkspace =>
       ref.read(terminalRuntimeLifecycleProvider).closeWorkspace;
-
-  Future<T> _withWorktreeRefreshSuspended<T>(
-    String projectId,
-    Future<T> Function() action,
-  ) {
-    return _worktreeMetadataWatcherRegistry.withRefreshSuspended(
-      projectId,
-      action,
-    );
-  }
 
   WorkspaceTabService get _workspaceTabService =>
       ref.read(workspaceTabServiceProvider);
@@ -207,34 +280,14 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController
     }
   }
 
-  final WorkbenchRootSubscriptionRegistry _rootSubscriptions =
-      WorkbenchRootSubscriptionRegistry();
-  final WorkbenchWorkspaceSubscriptionRegistry _workspaceSubscriptions =
-      WorkbenchWorkspaceSubscriptionRegistry();
-  final WorkbenchWorktreeMetadataWatcherRegistry
-  _worktreeMetadataWatcherRegistry = WorkbenchWorktreeMetadataWatcherRegistry();
   final WorkbenchTabSubscriptionRegistry _tabSubscriptions =
       WorkbenchTabSubscriptionRegistry();
-  final WorkbenchMainWorkspacePreparationCoordinator _mainWorkspacePreparation =
-      WorkbenchMainWorkspacePreparationCoordinator();
   final WorkbenchViewPrefsPersistenceQueue _viewPrefsPersistence =
       WorkbenchViewPrefsPersistenceQueue();
-  final WorkbenchWorkspaceTagMutationQueue _workspaceTagMutations =
-      WorkbenchWorkspaceTagMutationQueue();
-  final WorkbenchWorkspaceParentMutationQueue _workspaceParentMutations =
-      WorkbenchWorkspaceParentMutationQueue();
-  final WorkbenchSerialMutationQueue _workspaceTreePinMutations =
-      WorkbenchSerialMutationQueue();
-
-  final WorkbenchBootstrapGate _bootstrapGate = WorkbenchBootstrapGate();
 
   bool get canGoBack => _selectionOwner.canGoBack;
 
   bool get canGoForward => _selectionOwner.canGoForward;
-
-  void _pruneWorktreeNavigationHistory() {
-    _selectionOwner.pruneNavigationHistory();
-  }
 
   Future<void> _persistViewPrefs() async {
     final repo = _viewPrefsRepository;
@@ -260,50 +313,10 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController
     unawaited(_persistViewPrefs());
   }
 
-  Project? _projectById(Iterable<Project> projects, String? projectId) {
-    if (projectId == null) {
-      return null;
-    }
-    for (final project in projects) {
-      if (project.id == projectId) {
-        return project;
-      }
-    }
-    return null;
-  }
-
   Workspace? _workspaceById(String workspaceId) {
     return state.workspacesByProject.values
         .expand((workspaces) => workspaces)
         .where((workspace) => workspace.id == workspaceId)
         .firstOrNull;
-  }
-
-  Future<void> _activateAddedProject(Project project) async {
-    await _ensureMainWorkspaceForProject(project);
-    final plan = planWorkbenchAddedProjectActivation(
-      state: state,
-      project: project,
-    );
-    state = plan.state;
-    if (plan.viewPrefsChanged) {
-      unawaited(_persistViewPrefs());
-    }
-  }
-
-  Future<void> _ensureMainWorkspaceForProject(Project project) {
-    final workspaceService = _workspaceService;
-    return _mainWorkspacePreparation.prepare(
-      project: project,
-      ensureMainWorkspace: workspaceService.ensureMainWorkspace,
-      reconcile: workspaceService.reconcile,
-      onError: (project, error) {
-        if (!_disposed) {
-          state = state.copyWith(
-            error: 'Failed to prepare workspace for "${project.name}": $error',
-          );
-        }
-      },
-    );
   }
 }
