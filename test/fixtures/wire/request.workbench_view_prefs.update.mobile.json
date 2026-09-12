@@ -1,0 +1,24 @@
+{
+  "id": 1,
+  "type": "workbenchViewPrefs.update",
+  "payload": {
+    "expectedRevision": 7,
+    "prefs": {
+      "groupBy": "project",
+      "sectionSort": "name",
+      "collapsedSectionIds": [],
+      "othersSectionCollapsed": false,
+      "projectSort": "name",
+      "workspaceSort": "name",
+      "selectedProjectIds": [],
+      "selectedTagIds": [],
+      "collapsedProjectIds": [],
+      "collapsedParentWorkspaceIds": [],
+      "pinnedSectionCollapsed": false,
+      "allSectionCollapsed": false,
+      "showPinnedWorkspacesBelow": true,
+      "workspaceKindFilter": "all",
+      "showActiveWorkspacesOnly": false
+    }
+  }
+}

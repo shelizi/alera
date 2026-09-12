@@ -1,0 +1,5 @@
+{
+  "id": 1,
+  "ok": false,
+  "error": "FormatException: workspaceId is required."
+}

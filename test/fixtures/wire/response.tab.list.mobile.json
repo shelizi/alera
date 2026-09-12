@@ -1,0 +1,28 @@
+{
+  "id": 1,
+  "ok": true,
+  "payload": [
+    {
+      "id": "terminal-1",
+      "workspaceId": "workspace-1",
+      "kind": "terminal",
+      "title": "Flutter",
+      "createdAt": "2026-07-27T12:34:56.789Z",
+      "updatedAt": "2026-07-27T12:34:56.789Z",
+      "payload": {
+        "agentProfileLaunchV1": {
+          "version": 1,
+          "launch": {
+            "kind": "command",
+            "command": "fx"
+          }
+        },
+        "agentTitleConversationId": "conv-1",
+        "agentTitleRevision": "rev-1",
+        "agentTitleStatus": "failed",
+        "agentTitleSource": "agent",
+        "shell": "zsh"
+      }
+    }
+  ]
+}

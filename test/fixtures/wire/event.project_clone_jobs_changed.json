@@ -1,0 +1,6 @@
+{
+  "event": "projectCloneJobsChanged",
+  "payload": {
+    "id": "job-1"
+  }
+}

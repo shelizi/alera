@@ -1,0 +1,9 @@
+{
+  "id": 1,
+  "type": "agentProfile.remove",
+  "payload": {
+    "id": "profile-1",
+    "expectedRevision": 7,
+    "confirmed": true
+  }
+}

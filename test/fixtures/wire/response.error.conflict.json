@@ -1,0 +1,11 @@
+{
+  "id": 1,
+  "ok": false,
+  "error": "Agent profile revision conflict for profile-1: expected Some(7), current Some(0). Refresh the profile and try again.",
+  "errorCode": "agent_profile_revision_conflict",
+  "errorDetails": {
+    "profileId": "profile-1",
+    "expectedRevision": 7,
+    "currentRevision": 0
+  }
+}

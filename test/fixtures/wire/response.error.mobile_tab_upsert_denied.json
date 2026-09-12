@@ -1,0 +1,5 @@
+{
+  "id": 1,
+  "ok": false,
+  "error": "Mobile clients cannot call terminal host request: tab.upsert"
+}
