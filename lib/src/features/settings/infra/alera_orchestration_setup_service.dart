@@ -47,7 +47,7 @@ class const AleraOrchestrationSetupResult({
     );
     if (needsAttention.isNotEmpty) {
       final labels = needsAttention
-          .map((status) => _agentTypeLabel(status.agentType))
+          .map((status) => agentDisplayName(status.agentType))
           .join(', ');
       return 'Skill installed · hooks need attention: $labels';
     }
@@ -83,7 +83,7 @@ class const AleraOrchestrationHookSetupResult({
     final unhealthy = _unhealthy;
     if (unhealthy.isNotEmpty) {
       final labels = unhealthy
-          .map((status) => _agentTypeLabel(status.agentType))
+          .map((status) => agentDisplayName(status.agentType))
           .join(', ');
       return 'Hooks need attention: $labels';
     }
@@ -158,21 +158,4 @@ class const AleraOrchestrationSetupService({
       );
     }
   }
-}
-
-String _agentTypeLabel(AgentType agentType) {
-  return switch (agentType) {
-    AgentType.codex => 'Codex',
-    AgentType.claude => 'Claude Code',
-    AgentType.copilot => 'GitHub Copilot',
-    AgentType.cursor => 'Cursor',
-    AgentType.agy => 'Antigravity',
-    AgentType.opencode => 'OpenCode',
-    AgentType.opencode2 => 'OpenCode 2',
-    AgentType.pi => 'Pi',
-    AgentType.amp => 'Amp',
-    AgentType.grok => 'Grok Build',
-    AgentType.devin => 'Devin',
-    AgentType.fx => 'fx',
-  };
 }

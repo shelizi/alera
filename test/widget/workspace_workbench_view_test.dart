@@ -1,6 +1,7 @@
 // ignore_for_file: library_private_types_in_public_api
 
 import 'package:alera/src/features/ai_assist/application/agent_title_providers.dart';
+import 'package:alera/src/features/agent_profiles/application/local_agent_providers.dart';
 import 'package:alera/src/design_system/feedback/alera_status_dot.dart';
 import 'package:alera/src/design_system/menus/alera_dropdown_entry.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
@@ -29,6 +30,7 @@ part 'workspace_workbench_view_test_harness.dart';
 
 late _FakeTerminalRuntime terminalRuntime;
 late List<String?> createdTabs;
+late List<({AgentType agentType, String? targetGroupId})> createdAgentTabs;
 late List<_SelectedTabAction> selectedTabs;
 late List<String> closedTabs;
 late List<List<String>> closedTabGroups;
@@ -44,6 +46,7 @@ void main() {
     setUp(() {
       terminalRuntime = _FakeTerminalRuntime();
       createdTabs = <String?>[];
+      createdAgentTabs = <({AgentType agentType, String? targetGroupId})>[];
       selectedTabs = <_SelectedTabAction>[];
       closedTabs = <String>[];
       closedTabGroups = <List<String>>[];

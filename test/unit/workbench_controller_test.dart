@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:alera/src/features/agent_status/application/agent_status_providers.dart';
+import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 import 'package:alera/src/features/agent_status/infra/agent_hook_receiver.dart';
 import 'package:alera/src/app/dependencies.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
@@ -67,6 +68,7 @@ part 'workbench_controller_test_harness.dart';
 part 'workbench_controller_terminal_runtime_fakes.dart';
 part 'workbench_controller_selection_test_cases.dart';
 part 'workbench_controller_terminal_cleanup_test_cases.dart';
+part 'workbench_controller_agent_tab_test_cases.dart';
 
 late _WorkbenchHarness _harness;
 late WorkbenchController _controller;
@@ -100,5 +102,6 @@ void main() {
     _registerWorkbenchControllerNavigationTests();
     _registerWorkbenchControllerPreviewTabTests();
     _registerWorkbenchControllerTerminalCleanupTests();
+    _registerWorkbenchControllerAgentTabTests();
   });
 }

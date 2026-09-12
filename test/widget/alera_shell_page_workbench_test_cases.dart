@@ -267,6 +267,35 @@ void _registerAleraShellWorkbenchTests() {
     expect(harness.runtime.totalFocusRequests, 1);
   });
 
+  testWidgets('new-tab agent entry opens and focuses an agent session', (
+    tester,
+  ) async {
+    final harness = await _pumpShell(
+      tester,
+      state: _populatedWorkbenchState(),
+      installedAgents: <AgentType>[.claude],
+    );
+
+    // The button captures the detected list at build time; let the resolved
+    // provider rebuild it before the menu opens.
+    await tester.pump();
+
+    await tester.tap(find.byTooltip('New Tab'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('New Terminal'), findsOneWidget);
+    expect(find.text('Claude Code'), findsOneWidget);
+
+    await tester.tap(find.text('Claude Code'));
+    // First pump runs the await chain; the second pump runs the
+    // post-frame callback that requestFocus() defers to.
+    await tester.pump();
+    await tester.pump();
+
+    expect(harness.runtime.totalFocusRequests, 1);
+    expect(harness.controller.state.tabsFor('workspace-1'), hasLength(2));
+  });
+
   testWidgets('new-terminal shortcut focuses the new session', (tester) async {
     final harness = await _pumpShell(tester, state: _populatedWorkbenchState());
 

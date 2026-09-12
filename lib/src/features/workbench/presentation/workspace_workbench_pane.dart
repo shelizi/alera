@@ -12,6 +12,7 @@ class const _WorkbenchPane({
   required final WorkbenchTabCompletionAcknowledgements
   completionAcknowledgements,
   required final CreateTerminalTabCallback onCreateTab,
+  required final CreateAgentTabCallback onCreateAgentTab,
   required final OpenFileTabCallback onOpenEditorTab,
   required final OpenFileTabCallback onOpenMarkdownViewerTab,
   required final SelectWorkspaceTabCallback onSelectTab,
@@ -81,6 +82,12 @@ class const _WorkbenchPane({
                 onOpenExternalTerminal: onOpenExternalTerminal,
                 onCreateTab: () =>
                     unawaited(onCreateTab(targetGroupId: groupId)),
+                onCreateAgentTab: (agentType) => unawaited(
+                  onCreateAgentTab(
+                    agentType: agentType,
+                    targetGroupId: groupId,
+                  ),
+                ),
                 onSplitGroup: (zone) =>
                     unawaited(onSplitGroup(groupId: groupId, zone: zone)),
                 onMergeGroup: () => unawaited(onMergeGroup(groupId: groupId)),

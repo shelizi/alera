@@ -16,6 +16,7 @@ class const _WorkspaceTabStrip({
   required final RenameWorkspaceTabCallback onRenameTab,
   final OpenExternalTerminalCallback? onOpenExternalTerminal,
   required final VoidCallback onCreateTab,
+  required final ValueChanged<AgentType> onCreateAgentTab,
   required final ValueChanged<WorkbenchDropZone> onSplitGroup,
   required final VoidCallback onMergeGroup,
   required final MoveWorkspaceTabCallback onMoveTab,
@@ -144,6 +145,7 @@ class _WorkspaceTabStripState extends State<_WorkspaceTabStrip> {
     final addButton = _NewTabButton(
       groupId: widget.groupId,
       onCreateTab: widget.onCreateTab,
+      onCreateAgentTab: widget.onCreateAgentTab,
     );
     return ColoredBox(
       color: AleraTokens.surface,

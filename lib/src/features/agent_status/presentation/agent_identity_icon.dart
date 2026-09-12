@@ -42,23 +42,6 @@ class const _AgentIconAsset({
   final bool raster = false,
 });
 
-String agentDisplayName(AgentType agentType) {
-  return switch (agentType) {
-    AgentType.codex => 'Codex',
-    AgentType.claude => 'Claude Code',
-    AgentType.copilot => 'GitHub Copilot',
-    AgentType.cursor => 'Cursor',
-    AgentType.agy => 'Antigravity',
-    AgentType.opencode => 'OpenCode',
-    AgentType.opencode2 => 'OpenCode 2',
-    AgentType.pi => 'Pi',
-    AgentType.amp => 'Amp',
-    AgentType.grok => 'Grok Build',
-    AgentType.devin => 'Devin',
-    AgentType.fx => 'fx',
-  };
-}
-
 _AgentIconAsset _agentAsset(AgentType agentType) {
   return switch (agentType) {
     AgentType.codex => const _AgentIconAsset(path: 'assets/agents/codex.svg'),

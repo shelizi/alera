@@ -66,6 +66,16 @@ extension _AleraShellPageBodyContent on _AleraShellPageBodyState {
                 .sessionFor(workspace: workspace, tab: tab)
                 .requestFocus();
           },
+          onCreateAgentTab: ({required agentType, targetGroupId}) async {
+            final tab = await controller.createAgentTab(
+              workspace,
+              agentType: agentType,
+              targetGroupId: targetGroupId,
+            );
+            terminalRuntime
+                .sessionFor(workspace: workspace, tab: tab)
+                .requestFocus();
+          },
           onOpenEditorTab: ({required relativePath, targetGroupId}) async {
             await controller.openEditorTab(
               workspace: workspace,

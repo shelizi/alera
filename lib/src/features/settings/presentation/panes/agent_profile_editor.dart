@@ -12,7 +12,6 @@ import 'package:alera/src/features/agent_profiles/domain/agent_profile_adapters.
 import 'package:alera/src/features/agent_profiles/domain/agent_prompt_delivery.dart';
 import 'package:alera/src/features/agent_profiles/domain/managed_agent_profile_options.dart';
 import 'package:alera/src/features/agent_status/domain/agent_status.dart';
-import 'package:alera/src/features/agent_status/presentation/agent_identity_icon.dart';
 import 'package:alera/src/features/settings/presentation/panes/agent_profile_managed_editor.dart';
 import 'package:flutter/material.dart';
 

@@ -375,4 +375,86 @@ void _registerWorkspaceWorkbenchViewPaneTests() {
     ]);
     expect(terminalRuntime.focusRequestsByTab['tab-1'], 1);
   });
+
+  testWidgets('new tab menu lists detected agents and opens an agent tab', (
+    tester,
+  ) async {
+    final tab = _tab('tab-1', title: 'Terminal 1');
+    await _pumpWorkbenchView(
+      tester,
+      tabs: <WorkspaceTabRecord>[tab],
+      terminalRuntime: terminalRuntime,
+      layout: .single(
+        workspaceId: _workspaceId,
+        groupId: 'group-a',
+        tabIds: <String>[tab.id],
+      ),
+      createdTabs: createdTabs,
+      selectedTabs: selectedTabs,
+      closedTabs: closedTabs,
+      closedTabGroups: closedTabGroups,
+      renamedTabs: renamedTabs,
+      movedTabs: movedTabs,
+      splitGroups: splitGroups,
+      mergedGroups: mergedGroups,
+      updatedRatios: updatedRatios,
+      installedAgents: <AgentType>[.codex, .claude],
+      createdAgentTabs: createdAgentTabs,
+    );
+
+    await tester.tap(find.byTooltip('New Tab'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('New Terminal'), findsOneWidget);
+    expect(find.text('Codex'), findsOneWidget);
+    expect(find.text('Claude Code'), findsOneWidget);
+    expect(find.text('Cursor'), findsNothing);
+
+    await tester.tap(find.text('Claude Code'));
+    await tester.pumpAndSettle();
+
+    expect(createdAgentTabs, <({AgentType agentType, String? targetGroupId})>[
+      (agentType: .claude, targetGroupId: 'group-a'),
+    ]);
+    expect(createdTabs, isEmpty);
+  });
+
+  testWidgets('new tab menu stays terminal-only when no agent is detected', (
+    tester,
+  ) async {
+    final tab = _tab('tab-1', title: 'Terminal 1');
+    await _pumpWorkbenchView(
+      tester,
+      tabs: <WorkspaceTabRecord>[tab],
+      terminalRuntime: terminalRuntime,
+      layout: .single(
+        workspaceId: _workspaceId,
+        groupId: 'group-a',
+        tabIds: <String>[tab.id],
+      ),
+      createdTabs: createdTabs,
+      selectedTabs: selectedTabs,
+      closedTabs: closedTabs,
+      closedTabGroups: closedTabGroups,
+      renamedTabs: renamedTabs,
+      movedTabs: movedTabs,
+      splitGroups: splitGroups,
+      mergedGroups: mergedGroups,
+      updatedRatios: updatedRatios,
+      createdAgentTabs: createdAgentTabs,
+    );
+
+    await tester.tap(find.byTooltip('New Tab'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('New Terminal'), findsOneWidget);
+    expect(find.text('Claude Code'), findsNothing);
+    expect(find.byType(PopupMenuDivider), findsNothing);
+
+    await tester.tap(find.text('New Terminal'));
+    await tester.pumpAndSettle();
+
+    expect(createdTabs, <String?>['group-a']);
+    expect(createdAgentTabs, isEmpty);
+  });
 }
