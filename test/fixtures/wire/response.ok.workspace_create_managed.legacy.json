@@ -1,0 +1,17 @@
+{
+  "id": 22,
+  "ok": true,
+  "payload": {
+    "setupReport": {
+      "steps": []
+    },
+    "workspace": {
+      "id": "workspace-2",
+      "projectId": "project-1",
+      "name": "Feature Workspace",
+      "path": "/fixture/workspaces/feature-workspace",
+      "createdAt": "2026-07-27T12:34:56.789Z",
+      "updatedAt": "2026-07-27T12:34:56.789Z"
+    }
+  }
+}

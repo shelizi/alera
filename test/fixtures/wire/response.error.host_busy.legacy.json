@@ -1,0 +1,5 @@
+{
+  "id": 26,
+  "ok": false,
+  "error": "Runtime host has 1 active terminal session(s) and 0 active background job(s). Retry with --force to stop it."
+}

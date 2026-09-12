@@ -1,0 +1,36 @@
+{
+  "id": 21,
+  "ok": true,
+  "payload": {
+    "created": true,
+    "mainWorkspace": {
+      "branch": null,
+      "childCount": 0,
+      "createdAt": "2000-01-01T00:00:00.000Z",
+      "hostId": "local",
+      "id": "00000000-0000-4000-8000-000000000001",
+      "instanceId": "00000000-0000-4000-8000-000000000002",
+      "isPinned": false,
+      "kind": "main",
+      "name": "Fixture Project",
+      "parentWorkspaceId": null,
+      "path": "<path:3>",
+      "projectId": "00000000-0000-4000-8000-000000000004",
+      "reusesExistingBranch": false,
+      "sectionId": null,
+      "sourceBranch": null,
+      "status": "active",
+      "tagIds": [],
+      "tagNames": [],
+      "updatedAt": "2000-01-01T00:00:00.000Z"
+    },
+    "project": {
+      "createdAt": "2000-01-01T00:00:00.000Z",
+      "id": "00000000-0000-4000-8000-000000000004",
+      "kind": "folder",
+      "name": "Fixture Project",
+      "repoPath": "<repoPath:3>",
+      "updatedAt": "2000-01-01T00:00:00.000Z"
+    }
+  }
+}
