@@ -9,8 +9,6 @@ class const _WorkbenchPane({
   required final TerminalRuntime terminalRuntime,
   required final WorkbenchMobileDriverPresence? mobileDriverPresence,
   required final Map<String, AgentStatusEntry> agentStatuses,
-  required final WorkbenchTabCompletionAcknowledgements
-  completionAcknowledgements,
   required final CreateTerminalTabCallback onCreateTab,
   required final CreateAgentTabCallback onCreateAgentTab,
   required final OpenFileTabCallback onOpenEditorTab,
@@ -73,7 +71,6 @@ class const _WorkbenchPane({
                 canCloseSplit: layout.paneGroupIds.length > 1,
                 terminalRuntime: terminalRuntime,
                 agentStatuses: agentStatuses,
-                completionAcknowledgements: completionAcknowledgements,
                 onSelectTab: (tabId) =>
                     onSelectTab(groupId: groupId, tabId: tabId),
                 onCloseTab: onCloseTab,

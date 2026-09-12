@@ -2,8 +2,6 @@ part of 'alera_shell_page.dart';
 
 class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody> {
   String? _lastErrorMessage;
-  final WorkbenchTabCompletionAcknowledgements _completionAcknowledgements =
-      WorkbenchTabCompletionAcknowledgements();
 
   @override
   void initState() {
@@ -45,11 +43,25 @@ class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody> {
         );
       }),
     );
-    _completionAcknowledgements.retainTerminalSessions(<String>{
-      for (final tabs in shell.tabsByWorkspace.values)
-        for (final tab in tabs)
-          if (tab.kind == WorkspaceTabKind.terminal) tab.terminalSessionId,
-    });
+    // Prune acknowledgements whose terminal session was closed. Listening
+    // instead of mutating inside build keeps provider writes out of the
+    // widget life-cycle; the provider starts empty, so there is nothing to
+    // prune until tabs actually change.
+    ref.listen<Map<String, List<WorkspaceTabRecord>>>(
+      workbenchControllerProvider.select((state) => state.tabsByWorkspace),
+      (_, tabsByWorkspace) {
+        ref
+            .read(
+              workbenchTabCompletionAcknowledgementsControllerProvider.notifier,
+            )
+            .retainTerminalSessions(<String>{
+              for (final tabs in tabsByWorkspace.values)
+                for (final tab in tabs)
+                  if (tab.kind == WorkspaceTabKind.terminal)
+                    tab.terminalSessionId,
+            });
+      },
+    );
     final error = shell.error;
     if (error != null && error != _lastErrorMessage) {
       _lastErrorMessage = error;

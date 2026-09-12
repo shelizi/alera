@@ -17,7 +17,7 @@ import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 import 'package:alera/src/features/agent_status/presentation/agent_identity_icon.dart';
 import 'package:alera/src/design_system/feedback/alera_status_dot.dart';
 import 'package:alera/src/features/projects/domain/project.dart';
-import 'package:alera/src/features/workbench/application/workbench_tab_attention.dart';
+import 'package:alera/src/features/workbench/application/workbench_tab_acknowledgements.dart';
 import 'package:alera/src/features/workbench/domain/workbench_layout.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
@@ -191,8 +191,6 @@ class const WorkspaceWorkbenchView({
   required final TerminalRuntime terminalRuntime,
   final WorkbenchMobileDriverPresence? mobileDriverPresence,
   required final Map<String, AgentStatusEntry> agentStatuses,
-  required final WorkbenchTabCompletionAcknowledgements
-  completionAcknowledgements,
   required final CreateTerminalTabCallback onCreateTab,
   required final CreateAgentTabCallback onCreateAgentTab,
   required final OpenFileTabCallback onOpenEditorTab,
@@ -246,7 +244,6 @@ class _WorkspaceWorkbenchViewState extends State<WorkspaceWorkbenchView> {
           terminalRuntime: widget.terminalRuntime,
           mobileDriverPresence: widget.mobileDriverPresence,
           agentStatuses: widget.agentStatuses,
-          completionAcknowledgements: widget.completionAcknowledgements,
           onCreateTab: widget.onCreateTab,
           onCreateAgentTab: widget.onCreateAgentTab,
           onOpenEditorTab: widget.onOpenEditorTab,

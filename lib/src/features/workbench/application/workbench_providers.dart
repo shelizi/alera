@@ -13,6 +13,7 @@ import 'package:alera/src/features/workbench/application/workbench_controller.da
 import 'package:alera/src/features/workbench/application/workbench_listing.dart';
 import 'package:alera/src/features/workbench/application/workbench_repository.dart';
 import 'package:alera/src/features/workbench/application/workbench_state.dart';
+import 'package:alera/src/features/workbench/application/workbench_tab_acknowledgements.dart';
 import 'package:alera/src/features/workbench/application/workbench_view_prefs_repository.dart';
 import 'package:alera/src/features/workbench/application/workspace_activity_controller.dart';
 import 'package:alera/src/features/workbench/application/workspace_activity_repository.dart';
@@ -107,6 +108,9 @@ List<WorkbenchSidebarRow> workbenchSidebarRows(Ref ref) {
     ),
     agentStatuses: ref.watch(agentStatusControllerProvider),
     lastActivityByWorkspaceId: ref.watch(workspaceActivityControllerProvider),
+    acknowledgedCompletions: ref.watch(
+      workbenchTabCompletionAcknowledgementsControllerProvider,
+    ),
   );
 }
 

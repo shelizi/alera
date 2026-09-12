@@ -1,7 +1,9 @@
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/features/agent_status/domain/agent_status.dart';
+import 'package:alera/src/features/workbench/application/workbench_tab_acknowledgements.dart';
 import 'package:alera/src/features/workbench/application/workbench_tab_attention.dart';
 import 'package:alera/src/features/workbench/presentation/workbench_tab_attention_presentation.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -78,39 +80,63 @@ void main() {
     });
   });
 
-  group('WorkbenchTabCompletionAcknowledgements', () {
+  group('WorkbenchTabCompletionAcknowledgementsController', () {
+    late ProviderContainer container;
+
+    Map<String, DateTime> acknowledged() {
+      return container.read(
+        workbenchTabCompletionAcknowledgementsControllerProvider,
+      );
+    }
+
+    WorkbenchTabCompletionAcknowledgementsController controller() {
+      return container.read(
+        workbenchTabCompletionAcknowledgementsControllerProvider.notifier,
+      );
+    }
+
+    setUp(() {
+      container = ProviderContainer();
+      addTearDown(container.dispose);
+    });
+
     test('keeps a viewed completion acknowledged across tab switches', () {
-      final acknowledgements = WorkbenchTabCompletionAcknowledgements();
       final completion = entry(.done);
 
-      expect(acknowledgements.isAcknowledged(completion), isFalse);
-      acknowledgements.acknowledge(completion);
-      expect(acknowledgements.isAcknowledged(completion), isTrue);
-      expect(acknowledgements.isAcknowledged(completion), isTrue);
+      expect(isCompletionAcknowledged(acknowledged(), completion), isFalse);
+      controller().acknowledge(completion);
+      expect(isCompletionAcknowledged(acknowledged(), completion), isTrue);
+      expect(isCompletionAcknowledged(acknowledged(), completion), isTrue);
     });
 
     test('a later completion epoch requires acknowledgement again', () {
-      final acknowledgements = WorkbenchTabCompletionAcknowledgements();
       final first = entry(.done);
-      acknowledgements.acknowledge(first);
+      controller().acknowledge(first);
       final later = entry(
         .done,
         stateStartedAt: now.add(const Duration(minutes: 1)),
       );
 
-      expect(acknowledgements.isAcknowledged(later), isFalse);
+      expect(isCompletionAcknowledged(acknowledged(), later), isFalse);
+    });
+
+    test('ignores statuses that are not done', () {
+      controller().acknowledge(entry(.working));
+      controller().acknowledge(entry(.waiting));
+      controller().acknowledge(null);
+
+      expect(acknowledged(), isEmpty);
     });
 
     test('retains acknowledgements until the session is actually removed', () {
-      final acknowledgements = WorkbenchTabCompletionAcknowledgements();
       final completion = entry(.done);
-      acknowledgements.acknowledge(completion);
+      controller().acknowledge(completion);
 
-      acknowledgements.retainTerminalSessions(<String>{'s1', 's2'});
-      expect(acknowledgements.isAcknowledged(completion), isTrue);
+      controller().retainTerminalSessions(<String>{'s1', 's2'});
+      expect(isCompletionAcknowledged(acknowledged(), completion), isTrue);
 
-      acknowledgements.retainTerminalSessions(<String>{'s2'});
-      expect(acknowledgements.isAcknowledged(completion), isFalse);
+      controller().retainTerminalSessions(<String>{'s2'});
+      expect(isCompletionAcknowledged(acknowledged(), completion), isFalse);
     });
   });
 }
