@@ -458,28 +458,9 @@ class const RustGitBackend()
     final entries = result.entries.map(_toChangeEntry).toList(growable: false);
     // The native side sends the flat entries only so each change crosses the
     // bridge once; groups and tree rows are derived locally instead.
-    final groups = result.groups.isEmpty
-        ? GitChangeGroup.fromEntries(entries)
-        : result.groups.map(_toChangeGroup).toList(growable: false);
-    return GitStatusResult(entries: entries, groups: groups);
-  }
-
-  GitChangeGroup _toChangeGroup(rust.GitChangeGroup group) {
-    return GitChangeGroup(
-      area: _toArea(group.area),
-      entries: group.entries.map(_toChangeEntry).toList(growable: false),
-      treeRows: group.treeRows.map(_toTreeRow).toList(growable: false),
-    );
-  }
-
-  GitChangeTreeRow _toTreeRow(rust.GitChangeTreeRow row) {
-    return GitChangeTreeRow(
-      kind: _toTreeRowKind(row.kind),
-      name: row.name,
-      path: row.path,
-      depth: row.depth,
-      fileCount: row.fileCount,
-      entry: row.entry == null ? null : _toChangeEntry(row.entry!),
+    return GitStatusResult(
+      entries: entries,
+      groups: GitChangeGroup.fromEntries(entries),
     );
   }
 

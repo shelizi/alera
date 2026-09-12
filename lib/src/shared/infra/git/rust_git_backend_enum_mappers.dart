@@ -17,13 +17,6 @@ extension on RustGitBackend {
     };
   }
 
-  GitChangeTreeRowKind _toTreeRowKind(rust.GitChangeTreeRowKind kind) {
-    return switch (kind) {
-      rust.GitChangeTreeRowKind.directory => GitChangeTreeRowKind.directory,
-      rust.GitChangeTreeRowKind.file => GitChangeTreeRowKind.file,
-    };
-  }
-
   GitExplorerStatusSnapshot _toExplorerStatusSnapshot(
     explorer_rust.GitExplorerStatusSnapshot snapshot,
   ) {
