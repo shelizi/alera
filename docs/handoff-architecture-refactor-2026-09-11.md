@@ -352,6 +352,15 @@ actor-level test 已證明 shared I/O permit = 0 時，settings persistence / re
 
 `dart tool/quality/check_max_lines.dart` **目前仍 exit 1**。這是已知狀態，不可在交接中宣稱 CI 全綠，也不要直接 `--write-baseline` 把 debt 接受掉。
 
+### 5.2 進度更新（2026-09-13）：ratchet 已轉綠
+
+§5.1 的 14 個 offender 已在先前各批全部拆完；本輪再清掉使用者分支合入帶來的 8 個新 offender：
+
+- Dart 5 檔（`4cd24fc6`）：`settings_controller.dart` 506→377（quota 方法抽 `settings_controller_agent_quotas.dart` mixin）、`project_workbench_sidebar_body.dart` 538→246（tiles 抽 `project_workbench_sidebar_tiles.dart`）、`workspace_git_history_surface.dart` 547→460（commit row 抽出）、`create_workspace_dialog_test.dart` 694→472（branch cases part）、`workbench_view_tab_test_cases.dart` 514→295（chip cases 第二個 part）。
+- Rust 3 檔（`8b9e139f`）：`git_tests.rs` 2141→193（依 domain 拆 11 個 `#[path]` 姊妹測試檔）、`git_history_impl.rs` 512→338（refs helpers 抽 `git_history_refs.rs` `pub(super)`）、`hosted_review_retention.rs` 501→226（tests 抽 `hosted_review_retention_tests.rs`）。
+
+`check_max_lines` 現為 **ratchet ok（52 個 baseline-oversized、0 新 offender）**。`bf1166f4` 順手刪除 baseline 中 31 個 stale 條目（檔案已 ≤500，條目只會掩蓋回歸）；剩餘 52 條都是仍 >500 的既有 debt，不得再長。
+
 ---
 
 ## 6. 最近完整 commit 序列
@@ -444,6 +453,12 @@ dart run tool/quality/check_max_lines.dart
 2. 平行 Cargo 測試曾出現 Windows linker `LNK1104`，原因是另一個 test exe 被同 target graph 占用。等鎖釋放後單獨重跑 focused test 即可；不要看到 `exit 101` 就先改 Rust code。
 
 另外，早期 `cargo fmt --all --check` 曾看到 repo-wide 與本批無關的格式 debt。重構小批優先對 changed Rust files 做 rustfmt，再搭配 `git diff --check`；若要修 repo-wide format，應另開獨立批次，不要混進 correctness commit。
+
+### 7.4 已知既有失敗與外部 worker 操作註記（2026-09-13）
+
+- `test/widget/alera_shell_page_test.dart` 有 3 個失敗：`new-tab agent entry opens and focuses an agent session`、`sidebar agent rows can switch workspaces and request focus`、`workspace rows group duplicate collapsed agents by type`（"+1" badge）。已在無重構改動的 baseline 上複現，來源是 `d9fa88ab`/`fe6d7314` 等 sidebar/agent feature 合入後測試與實作未對上，**非本重構線的 regression**；待修。
+- `agy-worker`（Antigravity CLI）操作特性：預設 model 會空轉（跑完 baseline 測試就停、無產出），需 `--model claude-sonnet-4-6` 才會實作；`agy -p` 經 `agy.cmd` shim 時 prompt 只吃第一行且總長 ~8KB 上限，成功模式是單行 prompt + `--new-project --add-dir <repo>`，並要求 foreground 執行指令（否則 agent 把 build 丟背景就結束 turn）。
+- Codex（`luna-worker`）沙箱無法 commit linked worktree（`.git/objects` 在外部 repo），commit 由 parent 代行；多個 codex worker 平行時 `%TEMP%` 輸出目錄撞名，需在任務卡指定不同目錄。
 
 ---
 
@@ -977,6 +992,10 @@ Owner 之間互不直接參照，跨域呼叫經各自 `*OwnerHost` port 由 int
 - 選項取捨：採 `part of` 而非獨立 library，因 `_XtermTerminalSessionHandle` private 面過大；未來若要獨立拆需先把 handle 內部面收成窄介面。
 - 剩餘：renderer adapter、shell launch/input delivery、view resource/buffer budget 三個 owner。
 
+### 16.1 進行中（2026-09-13）
+
+- 剩三個 owner 的批次已派給 agy worker（worktree `alera-wt-p7-terminal2`、branch `refactor/p7-terminal-owners-2`）：renderer adapter、shell launch/input delivery、view resource/buffer budget，要求每抽完一個先驗證綠再繼續，session-owner 語義不得回改。
+
 `TerminalRuntime` 實際 logical library 很大，下一步按 ownership 拆：
 
 1. Session I/O / recovery owner。
@@ -1035,6 +1054,11 @@ Presentation 保留 render/input/transient UI state。
 - 七個轉移測試已補齊：`mobile/test/host_connection_transition_matrix_test.dart`（6 新測試）+ `support/direct_runtime_gateway.dart` / `support/relay_runtime_gateway.dart`（完整 direct/relay fixture，relay 支援 handshake、fragmentation、auth renewal、`delayRenewal`）。
 - 行為發現（需決策）：reconnect in-flight 時 `restartRuntime()` 拋 `UnsupportedError` 而非乾淨的 `StateError`——`AsyncLoading` 保留前值使 `_client ?? state.value` 拿到已 dispose 的舊 client。測試 pin 住實際行為；若要改語意需修 controller。
 - concrete client 拆分未做：`_openClientWithin`/`_openPairedClient` 牽涉 `ConnectionAttempt` zone 傳遞與 `_disposed` 時序，待 restart 語意定案後再拆。
+
+### 18.1 進度（2026-09-13，`d3777452`/`beebbcd8`）
+
+- Concrete client 建立已抽出：`host_connection_client_factory.dart`（`HostConnectionClientFactory.openWithin(ConnectionAttempt)`，承接 paired-host lookup、relay fallback、cancellation、stack trace 保留）；`host_connection_controller.dart` 466→393，retry/epoch/attempt lifecycle/dispose policy 留在 controller。
+- `UnsupportedError` 語意刻意不動（matrix 測試 pin 住實際行為）；是否改為乾淨 `StateError` 是獨立的行為變更決策，待使用者定案。
 
 `HostConnectionController` 已有 retry、epoch、opening attempt、dispose。先補狀態轉移測試再拆 concrete client：
 
@@ -1282,18 +1306,20 @@ max-lines 尚未全清前，第 8 步會是 repo-wide exit 1；必須確認 offe
 截至本文件建立前：
 
 - Branch：`refactor/architecture-guard-ci`
-- HEAD：`285b415e7dbd6d44b76689fd741a5b17574d62fe`
+- HEAD：`285b415e7dbd6d44b76689fd741a5b17574d62fe`（以下狀態為 2026-09-13 更新點）
 - Worktree：乾淨
 - Upstream：無
 - Push：無
 - Architecture guard：PASS
-- Max-lines：FAIL，剩 14 offender，已明列
+- Max-lines：**ratchet ok**（0 offender，52 個仍 >500 的 baseline debt 不得再長）
 - Phase 0：核心完成
 - Phase 1：shutdown uncertainty + snapshot retry policy + smoke DB ownership 完成
-- Phase 2：已完成大量 read-side/background I/O mailbox 去阻塞、8-slot active budget、sidebar single-flight、project registration prepare/commit、upload lifecycle cleanup、agent hook latest-wins reconcile
-- Phase 2 尚未完成：dispatch context install、pending task total backpressure、部分 settings/autostart/managed-workspace preflight、transaction/replay matrix、wire fixtures
-- Phase 3+：尚未正式開始 owner migration
-- 其他 worktree：有 dirty 狀態，不能清理或吸收
+- Phase 2：已完成大量 read-side/background I/O mailbox 去阻塞、8-slot active budget、sidebar single-flight、project registration prepare/commit、upload lifecycle cleanup、agent hook latest-wins reconcile、wire fixtures（59 份、Rust 41 + Dart 26 測試全綠）
+- Phase 2 尚未完成：dispatch context install、pending task total backpressure、部分 settings/autostart/managed-workspace preflight、transaction/replay matrix
+- Phase 3（P6）：Workbench facade + 4 owner（Selection / Tab-Layout / Catalog / Lifecycle）全部落地
+- Phase 4（P7）：Terminal session owner、Git loader/cache owner、Mobile transition matrix + client factory 已落地；Terminal 剩 renderer/shell-launch/buffer-budget 三個 owner 進行中
+- 已知非重構 regression：`alera_shell_page_test.dart` 3 個失敗（sidebar agent counts / new-tab agent entry 相關，見 §7.4）
+- 其他 worktree：使用者保有多個 feature worktree，不要清理或吸收
 - Merge/rebase/deploy/build release：本工作未做
 
 下一位可以直接從第 24 節 Batch A 開始，不需要重新盤點一次整個專案。
