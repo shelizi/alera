@@ -929,6 +929,20 @@ Desktop、Mobile、Rust 各自仍有 protocol parsing/DTO 宣告。已有 old-ho
 - 只有當 old Internals 實際減少 ownership 時才算完成。
 - 不要一個 state field 一個 Riverpod provider；先守住跨欄位 invariants。
 
+### 15.6 P6 盤點結論（2026-09-12）
+
+`workbenchControllerProvider.notifier` 共 54 個呼叫點，全部維持 facade 簽名。`WorkbenchState` 欄位分桶：`projects`/`workspacesByProject`/`sections` 屬 Catalog；`tabsByWorkspace`/`layoutByWorkspace` 屬 Tab/Layout；`activeProjectId`/`activeWorkspaceId`/`activeTabIdByWorkspace`/`searchQuery`/`collapsed` 屬 Selection；`viewPrefs` 為 server-shared 暫留 facade；`bootstrapped`/`error` 留 facade。
+
+執行順序（依風險由低到高）：
+
+1. Step 0：facade 內抽出 owner 共用的 `state` read/emit + `_disposed` 介面（`WorkbenchStateStore`），不動行為。
+2. Selection owner：`_navigationHistory`、`selectWorkspace`/`activateProject`/`selectWorkspaceTab`/`setActiveTab*`/`focusWorkbenchGroup`/`goBack`/`goForward`/`setSearchQuery`/`setCollapsed`。invariant：`isSelectionCurrent` 雙檢查、history record 在 applyLayout 之後。
+3. Tab/Layout owner：tab_opening/file_tabs/pull_request_diff_tabs/tabs + `_onTabsChanged` + layout load/persist 鏈 + `_tabClosingScope`/`_layoutLoading`/`_clearedLayouts`/`_fileTabMutations`。invariant：`layout.sanitize(tabs)` 在 apply 前、activeTabId 不指向不存在的 tab、watcher event 與 close 交錯時 snapshot 先行。
+4. Catalog owner：projects/sections/workspace creation/三段 `_on*Changed`/`bootstrap`。invariant：removed workspace 的 retired cleanup 在 apply 前、`ensureMainWorkspace` 只跑一次、viewPrefs 修剪跟隨 catalog 事件。
+5. Resource lifecycle owner：subscription registries + cleaners + dispose；`deleteWorkspace`/`sleepWorkspace`/`removeProject` 的清理段改走 owner port。invariant：resource 只 release 一次。
+
+已知阻礙：owner 是 plain class 不能 extends notifier（`part of` + `_$WorkbenchController` 限制）；`workbench_controller_provider_boundary_test.dart` 只掃 `workbench_controller*.dart` 前綴，新 owner 檔名需擴大掃描範圍；`focusSourceControlRoot` 實作寫在 shared `WorkbenchViewPrefs`，歸 selection 需先經 facade 寫入（可能是刻意的 contract 變更，後續再定）；跨欄位 plan（`planWorkbench*SetSync`/`applyWorkbenchSleepWorkspaceState`）留在共享 sync 層由各 owner 呼叫。
+
 ---
 
 ## 16. Phase 4：Terminal
