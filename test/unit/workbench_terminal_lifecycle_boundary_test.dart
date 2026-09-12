@@ -7,9 +7,9 @@ void main() {
     'workbench controllers depend only on terminal lifecycle operations',
     () {
       const controllerFiles = <String>[
-        'lib/src/features/workbench/application/workbench_controller_sync.dart',
+        'lib/src/features/workbench/application/workbench_catalog_owner_sync.dart',
         'lib/src/features/workbench/application/workbench_controller_tabs.dart',
-        'lib/src/features/workbench/application/workbench_controller_projects.dart',
+        'lib/src/features/workbench/application/workbench_catalog_owner_projects.dart',
       ];
 
       for (final path in controllerFiles) {
@@ -25,13 +25,13 @@ void main() {
 
   test('sync delegates retired resource cleanup to the application cleaner', () {
     final source = File(
-      'lib/src/features/workbench/application/workbench_controller_sync.dart',
+      'lib/src/features/workbench/application/workbench_catalog_owner_sync.dart',
     ).readAsStringSync();
     final ownerSource = File(
       'lib/src/features/workbench/application/workbench_tab_layout_owner.dart',
     ).readAsStringSync();
 
-    expect(source, contains('_retiredWorkspaceCleanup.cleanup'));
+    expect(source, contains('retiredWorkspaceCleanup.cleanup'));
     expect(source, isNot(contains('_retiredResourceCleaner.releaseWorkspace')));
     expect(ownerSource, contains('retiredTabsCleanup.cleanup'));
     expect(ownerSource, isNot(contains('_retiredResourceCleaner.releaseTabs')));
@@ -47,7 +47,7 @@ void main() {
     'workspace deletion delegates provider cleanup to the deletion coordinator',
     () {
       final controllerSource = File(
-        'lib/src/features/workbench/application/workbench_controller_projects.dart',
+        'lib/src/features/workbench/application/workbench_catalog_owner_projects.dart',
       ).readAsStringSync();
       final coordinatorSource = File(
         'lib/src/features/workbench/application/workbench_delete_workspace_cleanup_coordinator.dart',
