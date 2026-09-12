@@ -94,6 +94,19 @@ class _WorkspaceGitDiffPanelState extends ConsumerState<WorkspaceGitDiffPanel> {
       <String, GitCommitCompareResult>{};
   int _commitMessageGenerationId = 0;
   final _GitDiffPreviewOpening _previewOpening = _GitDiffPreviewOpening();
+  // Status objects are immutable and replaced by the controller on every
+  // load, so identity-keyed caches let collapse toggles and unrelated
+  // rebuilds skip the sort + tree rebuild.
+  GitStatusResult? _cachedStatusSource;
+  String _cachedFilterQuery = '';
+  GitStatusResult _cachedFilteredStatus = const GitStatusResult(
+    entries: <GitChangeEntry>[],
+  );
+  GitStatusResult? _cachedGroupsSource;
+  GitDiffGroupMode? _cachedGroupsMode;
+  List<GitChangeGroup> _cachedGroups = const <GitChangeGroup>[];
+  List<GitChangeGroup>? _cachedCollapsibleGroups;
+  Set<String> _cachedCollapsibleKeys = const <String>{};
 
   @override
   void initState() {
@@ -595,26 +608,39 @@ class _WorkspaceGitDiffPanelState extends ConsumerState<WorkspaceGitDiffPanel> {
 
   GitStatusResult _filteredStatus(GitStatusResult status) {
     final query = _filterController.text.trim().toLowerCase();
-    if (query.isEmpty) {
-      return status;
+    if (identical(_cachedStatusSource, status) && _cachedFilterQuery == query) {
+      return _cachedFilteredStatus;
     }
-    final entries = status.entries
-        .where((entry) {
-          return entry.path.toLowerCase().contains(query) ||
-              (entry.oldPath?.toLowerCase().contains(query) ?? false);
-        })
-        .toList(growable: false);
-    return GitStatusResult(
-      entries: entries,
-      groups: GitChangeGroup.fromEntries(entries),
-    );
+    var filtered = status;
+    if (query.isNotEmpty) {
+      final entries = status.entries
+          .where((entry) {
+            return entry.path.toLowerCase().contains(query) ||
+                (entry.oldPath?.toLowerCase().contains(query) ?? false);
+          })
+          .toList(growable: false);
+      filtered = GitStatusResult(
+        entries: entries,
+        groups: GitChangeGroup.fromEntries(entries),
+      );
+    }
+    _cachedStatusSource = status;
+    _cachedFilterQuery = query;
+    _cachedFilteredStatus = filtered;
+    return filtered;
   }
 
   List<GitChangeGroup> _groupsFor(GitStatusResult status) {
-    if (widget.groupMode == GitDiffGroupMode.unified) {
-      return GitChangeGroup.unifiedFromEntries(status.entries);
+    if (identical(_cachedGroupsSource, status) &&
+        _cachedGroupsMode == widget.groupMode) {
+      return _cachedGroups;
     }
-    return status.effectiveGroups;
+    _cachedGroupsSource = status;
+    _cachedGroupsMode = widget.groupMode;
+    _cachedGroups = widget.groupMode == GitDiffGroupMode.unified
+        ? GitChangeGroup.unifiedFromEntries(status.entries)
+        : status.effectiveGroups;
+    return _cachedGroups;
   }
 
   void _toggleSectionCollapsed(String key) {
@@ -685,9 +711,12 @@ class _WorkspaceGitDiffPanelState extends ConsumerState<WorkspaceGitDiffPanel> {
     if (state == null) {
       return const <String>{};
     }
-    final status = _filteredStatus(state.status);
+    final groups = _groupsFor(_filteredStatus(state.status));
+    if (identical(_cachedCollapsibleGroups, groups)) {
+      return _cachedCollapsibleKeys;
+    }
     final keys = <String>{};
-    for (final group in _groupsFor(status)) {
+    for (final group in groups) {
       if (group.entries.isEmpty) {
         continue;
       }
@@ -699,6 +728,8 @@ class _WorkspaceGitDiffPanelState extends ConsumerState<WorkspaceGitDiffPanel> {
         }
       }
     }
+    _cachedCollapsibleGroups = groups;
+    _cachedCollapsibleKeys = keys;
     return keys;
   }
 
