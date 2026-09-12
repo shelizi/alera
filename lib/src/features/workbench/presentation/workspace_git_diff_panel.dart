@@ -26,7 +26,9 @@ import 'package:alera/src/features/workbench/domain/workbench_view_prefs.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_source_control_scope.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
+import 'package:alera/src/features/workbench/application/workbench_controller.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_path_drop.dart';
+import 'package:alera/src/features/workbench/presentation/workspace_git_history_graph.dart';
 import 'package:alera/src/shared/infra/git/git_diff_models.dart';
 import 'package:alera/src/shared/infra/git/git_exception.dart';
 import 'package:alera/src/shared/infra/git/git_history_graph.dart';
@@ -46,7 +48,6 @@ part 'workspace_git_diff_panel_commit_message_field.dart';
 part 'workspace_git_diff_panel_tree.dart';
 part 'workspace_git_diff_panel_submodules.dart';
 part 'workspace_git_history_panel.dart';
-part 'workspace_git_history_panel_graph.dart';
 part 'workspace_git_history_panel_row.dart';
 part 'workspace_git_history_panel_files.dart';
 part 'workspace_git_diff_panel_preview_opening.dart';
@@ -269,6 +270,7 @@ class _WorkspaceGitDiffPanelState extends ConsumerState<WorkspaceGitDiffPanel> {
                 onSwitchBranch: widget.onSwitchBranch == null
                     ? null
                     : _switchBranch,
+                onOpenCommitGraph: () => unawaited(_openCommitGraph()),
               ),
             ],
           ),
@@ -908,6 +910,21 @@ class _WorkspaceGitDiffPanelState extends ConsumerState<WorkspaceGitDiffPanel> {
         subject: item.subject,
         message: item.message,
       );
+    } catch (error) {
+      if (mounted) {
+        AleraToast.show(context, message: _messageFor(error), tone: .error);
+      }
+    }
+  }
+
+  Future<void> _openCommitGraph() async {
+    try {
+      await ref
+          .read(workbenchControllerProvider.notifier)
+          .openGitHistoryTab(
+            workspace: widget.workspace,
+            gitDiffRoot: widget.sourceControlScope.relativeRoot,
+          );
     } catch (error) {
       if (mounted) {
         AleraToast.show(context, message: _messageFor(error), tone: .error);

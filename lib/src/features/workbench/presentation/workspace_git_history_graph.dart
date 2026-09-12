@@ -1,9 +1,16 @@
-part of 'workspace_git_diff_panel.dart';
+import 'package:alera/src/app/theme/alera_tokens.dart';
+import 'package:alera/src/shared/infra/git/git_diff_models.dart';
+import 'package:alera/src/shared/infra/git/git_history_graph.dart';
+import 'package:flutter/material.dart';
 
-class const _GitHistoryGraph({required final GitHistoryItemViewModel viewModel})
-    extends StatelessWidget {
+/// Swimlane rendering for one commit row, shared between the source-control
+/// history panel and the main-area commit graph tab.
+class const GitHistoryGraph({
+  super.key,
+  required final GitHistoryItemViewModel viewModel,
+}) extends StatelessWidget {
   static double widthFor(GitHistoryItemViewModel viewModel) {
-    return 11.0 *
+    return GitHistoryGraphPainter.laneWidth *
         ([
               viewModel.inputSwimlanes.length,
               viewModel.outputSwimlanes.length,
@@ -16,13 +23,13 @@ class const _GitHistoryGraph({required final GitHistoryItemViewModel viewModel})
   Widget build(BuildContext context) {
     return SizedBox(
       width: widthFor(viewModel),
-      height: 24,
-      child: CustomPaint(painter: _GitHistoryGraphPainter(viewModel)),
+      height: GitHistoryGraphPainter.laneHeight,
+      child: CustomPaint(painter: GitHistoryGraphPainter(viewModel)),
     );
   }
 }
 
-class const _GitHistoryGraphPainter(final GitHistoryItemViewModel viewModel)
+class const GitHistoryGraphPainter(final GitHistoryItemViewModel viewModel)
     extends CustomPainter {
   static const double laneHeight = 24;
   static const double laneWidth = 11;
@@ -135,7 +142,7 @@ class const _GitHistoryGraphPainter(final GitHistoryItemViewModel viewModel)
     canvas.drawPath(
       path,
       Paint()
-        ..color = _graphColor(color) ?? AleraTokens.foregroundMuted
+        ..color = gitHistoryGraphColor(color) ?? AleraTokens.foregroundMuted
         ..strokeWidth = 1
         ..strokeCap = StrokeCap.round
         ..style = PaintingStyle.stroke,
@@ -144,7 +151,8 @@ class const _GitHistoryGraphPainter(final GitHistoryItemViewModel viewModel)
 
   void _drawNode(Canvas canvas, int circleIndex, GitHistoryGraphColorId color) {
     final center = Offset(laneWidth * (circleIndex + 1), nodeY);
-    final paint = Paint()..color = _graphColor(color) ?? AleraTokens.foreground;
+    final paint = Paint()
+      ..color = gitHistoryGraphColor(color) ?? AleraTokens.foreground;
     final boundary =
         viewModel.kind == GitHistoryItemViewModelKind.incomingChanges ||
         viewModel.kind == GitHistoryItemViewModelKind.outgoingChanges;
@@ -176,12 +184,12 @@ class const _GitHistoryGraphPainter(final GitHistoryItemViewModel viewModel)
   }
 
   @override
-  bool shouldRepaint(covariant _GitHistoryGraphPainter oldDelegate) {
+  bool shouldRepaint(covariant GitHistoryGraphPainter oldDelegate) {
     return oldDelegate.viewModel != viewModel;
   }
 }
 
-Color? _graphColor(GitHistoryGraphColorId? color) {
+Color? gitHistoryGraphColor(GitHistoryGraphColorId? color) {
   return switch (color) {
     GitHistoryGraphColorId.ref => AleraTokens.success,
     GitHistoryGraphColorId.remoteRef => AleraTokens.info,
@@ -193,4 +201,48 @@ Color? _graphColor(GitHistoryGraphColorId? color) {
     GitHistoryGraphColorId.lane5 => AleraTokens.foregroundMuted,
     null => null,
   };
+}
+
+/// Pill badge for a ref attached to a commit. [onOpenActions] receives the
+/// pointer's global position so callers can anchor a context menu.
+class const GitRefBadge({
+  super.key,
+  required final GitHistoryItemRef itemRef,
+  final ValueChanged<Offset>? onOpenActions,
+}) extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    final color = gitHistoryGraphColor(itemRef.color);
+    final badge = DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(AleraTokens.radiusPill),
+        border: Border.all(color: color ?? AleraTokens.borderSubtle),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(
+          horizontal: AleraTokens.space6,
+          vertical: AleraTokens.space2,
+        ),
+        child: Text(
+          itemRef.name,
+          maxLines: 1,
+          overflow: .ellipsis,
+          style: Theme.of(context).textTheme.labelSmall?.copyWith(
+            color: color ?? AleraTokens.foregroundMuted,
+            fontSize: 10,
+          ),
+        ),
+      ),
+    );
+    final onOpenActions = this.onOpenActions;
+    if (onOpenActions == null) {
+      return badge;
+    }
+    return GestureDetector(
+      behavior: .opaque,
+      onSecondaryTapDown: (details) => onOpenActions(details.globalPosition),
+      onLongPressStart: (details) => onOpenActions(details.globalPosition),
+      child: badge,
+    );
+  }
 }

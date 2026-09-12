@@ -69,10 +69,14 @@ Future<GitHistoryResult> gitHistory({
   required String path,
   int? limit,
   String? baseRef,
+  bool? includeAllRefs,
+  int? offset,
 }) => RustLib.instance.api.crateApiGitGitHistory(
   path: path,
   limit: limit,
   baseRef: baseRef,
+  includeAllRefs: includeAllRefs,
+  offset: offset,
 );
 
 Future<GitCommitCompareResult> gitCommitCompare({

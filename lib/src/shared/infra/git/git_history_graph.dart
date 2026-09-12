@@ -75,6 +75,7 @@ List<GitHistoryItemViewModel> buildGitHistoryViewModelsFromItems(
   bool addIncomingChanges = false,
   bool addOutgoingChanges = false,
   String? mergeBase,
+  List<GitHistoryGraphNode> initialSwimlanes = const <GitHistoryGraphNode>[],
 }) {
   var colorIndex = -1;
   final viewModels = <GitHistoryItemViewModel>[];
@@ -84,8 +85,7 @@ List<GitHistoryItemViewModel> buildGitHistoryViewModelsFromItems(
         ? GitHistoryItemViewModelKind.head
         : GitHistoryItemViewModelKind.node;
     final inputSwimlanes =
-        (viewModels.lastOrNull?.outputSwimlanes ??
-                const <GitHistoryGraphNode>[])
+        (viewModels.lastOrNull?.outputSwimlanes ?? initialSwimlanes)
             .map(_cloneNode)
             .toList(growable: true);
     final outputSwimlanes = <GitHistoryGraphNode>[];

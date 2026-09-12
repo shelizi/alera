@@ -1081,11 +1081,18 @@ fn wire__crate__api__git__git_history_impl(
             let api_path = <String>::sse_decode(&mut deserializer);
             let api_limit = <Option<u32>>::sse_decode(&mut deserializer);
             let api_base_ref = <Option<String>>::sse_decode(&mut deserializer);
+            let api_include_all_refs = <Option<bool>>::sse_decode(&mut deserializer);
+            let api_offset = <Option<u32>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, crate::api::git::GitError>((move || {
-                    let output_ok =
-                        crate::api::git::git_history(api_path, api_limit, api_base_ref)?;
+                    let output_ok = crate::api::git::git_history(
+                        api_path,
+                        api_limit,
+                        api_base_ref,
+                        api_include_all_refs,
+                        api_offset,
+                    )?;
                     std::result::Result::Ok(output_ok)
                 })())
             }
@@ -4866,6 +4873,17 @@ impl SseDecode for Option<String> {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         if (<bool>::sse_decode(deserializer)) {
             return Some(<String>::sse_decode(deserializer));
+        } else {
+            return None;
+        }
+    }
+}
+
+impl SseDecode for Option<bool> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(<bool>::sse_decode(deserializer));
         } else {
             return None;
         }
@@ -8962,6 +8980,16 @@ impl SseEncode for Option<String> {
         <bool>::sse_encode(self.is_some(), serializer);
         if let Some(value) = self {
             <String>::sse_encode(value, serializer);
+        }
+    }
+}
+
+impl SseEncode for Option<bool> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <bool>::sse_encode(value, serializer);
         }
     }
 }

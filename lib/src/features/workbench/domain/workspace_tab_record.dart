@@ -9,7 +9,8 @@ enum WorkspaceTabKind(this.key) {
   editor('editor'),
   markdownViewer('markdownViewer'),
   pdf('pdf'),
-  gitDiff('gitDiff');
+  gitDiff('gitDiff'),
+  gitHistory('gitHistory');
 
   final String key;
 
@@ -67,6 +68,8 @@ const String workspaceTabGitDiffPullRequestNumberPayloadKey =
 const String workspaceTabGitDiffHostedReviewRetentionIdPayloadKey =
     'gitDiffHostedReviewRetentionId';
 const String workspaceTabGitDiffOldPathPayloadKey = 'gitDiffOldPath';
+const String workspaceTabGitHistoryAllBranchesPayloadKey =
+    'gitHistoryAllBranches';
 
 enum WorkspaceGitDiffSource(this.key) {
   workingTree('workingTree'),
@@ -187,7 +190,7 @@ class WorkspaceTabRecord({
       WorkspaceTabKind.markdownViewer ||
       WorkspaceTabKind.pdf ||
       WorkspaceTabKind.gitDiff => true,
-      WorkspaceTabKind.terminal => false,
+      WorkspaceTabKind.terminal || WorkspaceTabKind.gitHistory => false,
     };
   }
 
@@ -243,6 +246,11 @@ class WorkspaceTabRecord({
 
   String? get gitDiffOldPath =>
       _nonEmptyPayloadString(workspaceTabGitDiffOldPathPayloadKey);
+
+  /// Whether a commit-graph tab walks every branch tip. Defaults on so tabs
+  /// persisted before the toggle existed keep the all-branches view.
+  bool get gitHistoryAllBranches =>
+      payload[workspaceTabGitHistoryAllBranchesPayloadKey] != false;
 
   String? _nonEmptyPayloadString(String key) {
     final value = payload[key];

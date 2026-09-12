@@ -16,12 +16,15 @@ pub(super) fn git_history(
     path: String,
     limit: Option<u32>,
     base_ref: Option<String>,
+    include_all_refs: Option<bool>,
+    offset: Option<u32>,
 ) -> Result<GitHistoryResult, GitError> {
     let repo = open_repo(&path)?;
     let paths = GitPathContext::new(&repo, &path)?;
     let limit = limit
         .unwrap_or(DEFAULT_HISTORY_LIMIT)
         .clamp(1, MAX_HISTORY_LIMIT);
+    let offset = offset.unwrap_or(0);
     let Some(head) = current_head_commit(&repo)? else {
         return Ok(GitHistoryResult {
             items: Vec::new(),
@@ -64,9 +67,13 @@ pub(super) fn git_history(
     if let Some(remote_oid) = remote_oid.filter(|remote_oid| *remote_oid != head_oid) {
         revwalk.push(remote_oid).map_err(GitError::from_git2)?;
     }
+    if include_all_refs == Some(true) {
+        push_branch_tips(&repo, &mut revwalk, head_oid, remote_oid)?;
+    }
     revwalk
         .set_sorting(Sort::TOPOLOGICAL | Sort::TIME)
         .map_err(GitError::from_git2)?;
+    let take = offset as usize + limit as usize;
     let mut parsed = Vec::new();
     for oid in revwalk {
         let oid = oid.map_err(GitError::from_git2)?;
@@ -75,16 +82,24 @@ pub(super) fn git_history(
             continue;
         }
         parsed.push(history_item_from_commit(&commit, refs_by_oid.get(&oid)));
-        if parsed.len() > limit as usize {
+        if parsed.len() > take {
             break;
         }
     }
-    let has_more = parsed.len() > limit as usize;
-    parsed.truncate(limit as usize);
+    let has_more = parsed.len() > take;
+    parsed.truncate(take);
+    // Parent rewriting and the scoped merge-base must treat the skipped
+    // page-prefix commits as visible: a commit on this page can have its
+    // nearest visible ancestor on an earlier page, and the Dart lane builder
+    // needs that id to continue the lane across the page boundary.
     let visible_ids = parsed
         .iter()
         .filter_map(|item| Oid::from_str(&item.id).ok())
         .collect::<HashSet<_>>();
+    if offset > 0 {
+        let skip = (offset as usize).min(parsed.len());
+        parsed.drain(..skip);
+    }
     let scoped_merge_base_oid = if paths.is_workspace_root() {
         merge_base_oid
     } else {
@@ -210,6 +225,43 @@ fn resolve_named_ref(
         name,
         commit.id(),
     )))
+}
+
+/// Seeds the revwalk with every local and remote-tracking branch tip so the
+/// history covers all branches, not only HEAD and its upstream. `*/HEAD`
+/// symbolic refs and tips already pushed are skipped.
+fn push_branch_tips(
+    repo: &Repository,
+    revwalk: &mut git2::Revwalk<'_>,
+    head_oid: Oid,
+    remote_oid: Option<Oid>,
+) -> Result<(), GitError> {
+    let mut pushed: HashSet<Oid> = HashSet::from([head_oid]);
+    if let Some(remote_oid) = remote_oid {
+        pushed.insert(remote_oid);
+    }
+    let references = repo.references().map_err(GitError::from_git2)?;
+    for reference in references {
+        let reference = reference.map_err(GitError::from_git2)?;
+        let Ok(full_name) = reference.name() else {
+            continue;
+        };
+        let is_tip = full_name.starts_with("refs/heads/")
+            || (full_name.starts_with("refs/remotes/") && !full_name.ends_with("/HEAD"));
+        if !is_tip || reference.symbolic_target().ok().flatten().is_some() {
+            continue;
+        }
+        let Some(oid) = reference
+            .target()
+            .or_else(|| reference.peel_to_commit().ok().map(|commit| commit.id()))
+        else {
+            continue;
+        };
+        if pushed.insert(oid) {
+            revwalk.push(oid).map_err(GitError::from_git2)?;
+        }
+    }
+    Ok(())
 }
 
 fn refs_by_oid(repo: &Repository) -> Result<HashMap<Oid, Vec<GitHistoryItemRef>>, GitError> {

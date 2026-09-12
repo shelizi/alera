@@ -14,6 +14,50 @@ void main() {
         throwsA(isA<StateError>()),
       );
     });
+
+    test('parses the commit graph tab kind', () {
+      expect(
+        WorkspaceTabKind.fromJson('gitHistory'),
+        WorkspaceTabKind.gitHistory,
+      );
+    });
+  });
+
+  test('commit graph tabs round-trip kind and all-branches flag', () {
+    final record = WorkspaceTabRecord(
+      id: 'tab-graph',
+      workspaceId: 'workspace-1',
+      kind: .gitHistory,
+      title: 'Commit Graph',
+      createdAt: .utc(2026, 5, 25),
+      updatedAt: .utc(2026, 5, 25, 1),
+      payload: const <String, Object?>{
+        workspaceTabGitDiffRootPayloadKey: 'packages/app',
+        workspaceTabGitHistoryAllBranchesPayloadKey: false,
+      },
+    );
+
+    final restored = WorkspaceTabRecord.fromJson(
+      Map<String, Object?>.from(record.toMap()),
+    );
+
+    expect(restored, record);
+    expect(restored.kind, WorkspaceTabKind.gitHistory);
+    expect(restored.gitDiffRoot, 'packages/app');
+    expect(restored.gitHistoryAllBranches, isFalse);
+  });
+
+  test('gitHistoryAllBranches defaults on for tabs without the flag', () {
+    final record = WorkspaceTabRecord(
+      id: 'tab-graph',
+      workspaceId: 'workspace-1',
+      kind: .gitHistory,
+      title: 'Commit Graph',
+      createdAt: .utc(2026, 5, 25),
+      updatedAt: .utc(2026, 5, 25, 1),
+    );
+
+    expect(record.gitHistoryAllBranches, isTrue);
   });
 
   test('WorkspaceTabRecord round-trips through json', () {

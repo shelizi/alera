@@ -31,6 +31,7 @@ import 'package:alera/src/features/workbench/presentation/workbench_tab_attentio
 import 'package:alera/src/features/workbench/presentation/workspace_markdown_viewer_surface.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_editor_surface.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_git_diff_surface.dart';
+import 'package:alera/src/features/workbench/presentation/workspace_git_history_surface.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_image_preview_surface.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_merman_viewer_surface.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_pdf_viewer_surface.dart';

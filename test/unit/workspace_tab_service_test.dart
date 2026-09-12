@@ -530,6 +530,123 @@ void main() {
       },
     );
 
+    test(
+      'openOrCreateGitHistoryTab creates and reuses the commit graph tab',
+      () async {
+        final repository = _FakeWorkbenchRepository();
+        final service = WorkspaceTabService(
+          repository: repository,
+          now: () => DateTime.utc(2026, 5, 21, 1),
+        );
+
+        final first = await service.openOrCreateGitHistoryTab(
+          workspaceId: 'workspace-1',
+          gitDiffRoot: './packages\\app',
+        );
+        final workspaceScoped = await service.openOrCreateGitHistoryTab(
+          workspaceId: 'workspace-1',
+        );
+        final reopened = await service.openOrCreateGitHistoryTab(
+          workspaceId: 'workspace-1',
+          gitDiffRoot: 'packages/app',
+        );
+
+        expect(first.kind, WorkspaceTabKind.gitHistory);
+        expect(first.title, 'Commit Graph');
+        expect(first.gitDiffRoot, 'packages/app');
+        expect(first.gitHistoryAllBranches, isTrue);
+        expect(
+          first.payload[workspaceTabGitHistoryAllBranchesPayloadKey],
+          isTrue,
+        );
+        expect(workspaceScoped.kind, WorkspaceTabKind.gitHistory);
+        expect(workspaceScoped.gitDiffRoot, isNull);
+        expect(reopened.id, first.id);
+        expect(repository.tabs, hasLength(2));
+      },
+    );
+
+    test('setGitHistoryAllBranches persists the toggle', () async {
+      final repository = _FakeWorkbenchRepository();
+      final service = WorkspaceTabService(
+        repository: repository,
+        now: () => DateTime.utc(2026, 5, 21),
+      );
+      final tab = await service.openOrCreateGitHistoryTab(
+        workspaceId: 'workspace-1',
+      );
+      final terminal = WorkspaceTabRecord(
+        id: 'tab-terminal',
+        workspaceId: 'workspace-1',
+        title: 'Terminal 1',
+        createdAt: .utc(2026, 5, 21),
+        updatedAt: .utc(2026, 5, 21),
+      );
+      repository.tabs.add(terminal);
+
+      final updated = await service.setGitHistoryAllBranches(
+        tabId: tab.id,
+        allBranches: false,
+      );
+      final ignored = await service.setGitHistoryAllBranches(
+        tabId: terminal.id,
+        allBranches: false,
+      );
+
+      expect(updated?.gitHistoryAllBranches, isFalse);
+      expect(
+        repository.tabs.singleWhere((record) => record.id == tab.id),
+        isA<WorkspaceTabRecord>().having(
+          (record) => record.gitHistoryAllBranches,
+          'gitHistoryAllBranches',
+          isFalse,
+        ),
+      );
+      expect(ignored, isNull);
+      expect(
+        repository.tabs.singleWhere((record) => record.id == terminal.id),
+        isA<WorkspaceTabRecord>().having(
+          (record) => record.payload,
+          'payload',
+          isNot(contains(workspaceTabGitHistoryAllBranchesPayloadKey)),
+        ),
+      );
+    });
+
+    test(
+      'a folder move retargets commit graph roots without renaming',
+      () async {
+        final repository = _FakeWorkbenchRepository()
+          ..tabs.add(
+            WorkspaceTabRecord(
+              id: 'graph-tab',
+              workspaceId: 'workspace-1',
+              kind: .gitHistory,
+              title: 'Commit Graph',
+              createdAt: .utc(2026, 5, 21),
+              updatedAt: .utc(2026, 5, 21),
+              payload: const <String, Object?>{
+                workspaceTabGitDiffRootPayloadKey: 'packages/app',
+              },
+            ),
+          );
+        final service = WorkspaceTabService(
+          repository: repository,
+          now: () => DateTime.utc(2026, 5, 21, 1),
+        );
+
+        final result = await service.updateFileTabPathsAfterMove(
+          workspaceId: 'workspace-1',
+          oldRelativePath: 'packages',
+          newRelativePath: 'modules',
+        );
+
+        expect(result.updatedTabs.single.gitDiffRoot, 'modules/app');
+        expect(repository.tabs.single.gitDiffRoot, 'modules/app');
+        expect(repository.tabs.single.title, 'Commit Graph');
+      },
+    );
+
     test('updates git diff roots after a folder move', () async {
       final repository = _FakeWorkbenchRepository()
         ..tabs.add(

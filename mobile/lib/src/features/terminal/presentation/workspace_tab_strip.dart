@@ -174,7 +174,8 @@ double _tabTitleMaxWidth(String kind) {
     'editor' ||
     'markdownViewer' ||
     'pdf' ||
-    'gitDiff' => AleraTokens.tabTitleMaxWidthEditor,
+    'gitDiff' ||
+    'gitHistory' => AleraTokens.tabTitleMaxWidthEditor,
     'terminal' || 'browser' => AleraTokens.tabTitleMaxWidthTerminal,
     _ => AleraTokens.tabTitleMaxWidthTerminal,
   };

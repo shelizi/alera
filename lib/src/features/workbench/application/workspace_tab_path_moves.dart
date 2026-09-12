@@ -31,7 +31,10 @@ extension WorkspaceTabPathMoves on WorkspaceTabService {
     }
 
     for (final tab in tabs) {
-      if (tab.kind != WorkspaceTabKind.gitDiff || tab.gitDiffRoot == null) {
+      final isRootScoped =
+          tab.kind == WorkspaceTabKind.gitDiff ||
+          tab.kind == WorkspaceTabKind.gitHistory;
+      if (!isRootScoped || tab.gitDiffRoot == null) {
         continue;
       }
       final root = tab.gitDiffRoot!;
@@ -44,7 +47,9 @@ extension WorkspaceTabPathMoves on WorkspaceTabService {
         continue;
       }
       final next = tab.copyWith(
-        title: _isCommitBackedGitDiff(tab)
+        title:
+            tab.kind == WorkspaceTabKind.gitHistory ||
+                _isCommitBackedGitDiff(tab)
             ? tab.title
             : _titleForGitDiff(
                 scope: tab.gitDiffScope ?? WorkspaceGitDiffScope.file,
@@ -175,7 +180,7 @@ extension WorkspaceTabPathMoves on WorkspaceTabService {
     WorkspaceTabKind.markdownViewer ||
     WorkspaceTabKind.pdf ||
     WorkspaceTabKind.gitDiff => true,
-    WorkspaceTabKind.terminal => false,
+    WorkspaceTabKind.terminal || WorkspaceTabKind.gitHistory => false,
   };
 
   bool _isRetargetableFileBackedTab(WorkspaceTabRecord tab) {
@@ -207,6 +212,8 @@ extension WorkspaceTabPathMoves on WorkspaceTabService {
           ? WorkspaceTabKind.pdf
           : WorkspaceTabKind.editor,
     WorkspaceTabKind.terminal => null,
+    // Unreachable: gitHistory is not file-backed, so the caller skips it.
+    WorkspaceTabKind.gitHistory => WorkspaceTabKind.gitHistory,
   };
 
   String? _replacePathPrefix({

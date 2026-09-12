@@ -453,6 +453,57 @@ void _registerWorkspaceWorkbenchViewTabTests() {
     expect(_tabTitleMaxWidth(tester, editorTab.title), 180);
     expect(_tabTitleMaxWidth(tester, gitDiffTab.title), 180);
   });
+
+  testWidgets('commit graph tabs render the history surface', (tester) async {
+    final backend = FakeGitBackend()
+      ..gitHistoryResult = const GitHistoryResult(
+        items: <GitHistoryItem>[
+          GitHistoryItem(
+            id: 'c1',
+            parentIds: <String>[],
+            subject: 'Initial Commit',
+            message: 'Initial Commit',
+          ),
+        ],
+        hasIncomingChanges: false,
+        hasOutgoingChanges: false,
+        hasMore: false,
+        limit: 200,
+      );
+    final graphTab = _tab(
+      'tab-graph',
+      title: 'Commit Graph',
+      kind: .gitHistory,
+    );
+
+    await _pumpWorkbenchView(
+      tester,
+      tabs: <WorkspaceTabRecord>[graphTab],
+      terminalRuntime: terminalRuntime,
+      layout: .single(
+        workspaceId: _workspaceId,
+        groupId: 'group-a',
+        tabIds: <String>[graphTab.id],
+      ),
+      createdTabs: createdTabs,
+      selectedTabs: selectedTabs,
+      closedTabs: closedTabs,
+      closedTabGroups: closedTabGroups,
+      renamedTabs: renamedTabs,
+      movedTabs: movedTabs,
+      splitGroups: splitGroups,
+      mergedGroups: mergedGroups,
+      updatedRatios: updatedRatios,
+      gitBackend: backend,
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byIcon(AleraIcons.gitGraph), findsWidgets);
+    expect(find.text('Commits'), findsOneWidget);
+    expect(find.text('All Branches'), findsOneWidget);
+    expect(find.text('Initial Commit'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 }
 
 double _tabTitleMaxWidth(WidgetTester tester, String title) {

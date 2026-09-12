@@ -139,6 +139,8 @@ class const E2eGitBackend() implements GitBackend {
     String path, {
     int? limit,
     String? baseRef,
+    bool includeAllRefs = false,
+    int? offset,
   }) async => GitHistoryResult(
     items: const <GitHistoryItem>[],
     hasIncomingChanges: false,

@@ -14,11 +14,15 @@ import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/application/terminal_runtime_lifecycle.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_runtime.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_workbench_view.dart';
+import 'package:alera/src/shared/infra/git/git_diff_models.dart';
+import 'package:alera/src/shared/infra/git/git_providers.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import '../unit/fake_git_backend.dart';
 
 part 'workspace_workbench_view_helper_test_cases.dart';
 part 'workspace_workbench_view_pane_test_cases.dart';

@@ -169,5 +169,94 @@ void main() {
         ),
       );
     });
+
+    test('initialSwimlanes seed the first row of a paged continuation', () {
+      const firstPage = <GitHistoryItem>[
+        GitHistoryItem(
+          id: 'c2',
+          parentIds: <String>['c1'],
+          subject: 'Second Commit',
+          message: 'Second Commit',
+        ),
+      ];
+      const secondPage = <GitHistoryItem>[
+        GitHistoryItem(
+          id: 'c1',
+          parentIds: <String>['c0'],
+          subject: 'First Commit',
+          message: 'First Commit',
+        ),
+        GitHistoryItem(
+          id: 'c0',
+          parentIds: <String>[],
+          subject: 'Root Commit',
+          message: 'Root Commit',
+        ),
+      ];
+
+      final firstPageViewModels = buildGitHistoryViewModelsFromItems(firstPage);
+      final continued = buildGitHistoryViewModelsFromItems(
+        secondPage,
+        initialSwimlanes: firstPageViewModels.last.outputSwimlanes,
+      );
+      final fresh = buildGitHistoryViewModelsFromItems(secondPage);
+
+      // The continued page's first row consumes the lane left open by the
+      // previous page instead of starting from an empty lane set.
+      expect(
+        continued.first.inputSwimlanes.map(
+          (node) => (id: node.id, color: node.color),
+        ),
+        firstPageViewModels.last.outputSwimlanes.map(
+          (node) => (id: node.id, color: node.color),
+        ),
+      );
+      expect(gitHistoryItemLaneIndex(continued.first), 0);
+      // The parent commit stays on the same lane the previous page opened.
+      expect(continued.first.outputSwimlanes.single.id, 'c0');
+      expect(
+        continued.first.outputSwimlanes.single.color,
+        firstPageViewModels.last.outputSwimlanes.single.color,
+      );
+      // Without the seed the same items still render, starting on new lanes.
+      expect(fresh.first.inputSwimlanes, isEmpty);
+    });
+
+    test('initialSwimlanes only affect the first row, not later rows', () {
+      const items = <GitHistoryItem>[
+        GitHistoryItem(
+          id: 'b',
+          parentIds: <String>['a'],
+          subject: 'B',
+          message: 'B',
+        ),
+        GitHistoryItem(
+          id: 'a',
+          parentIds: <String>[],
+          subject: 'A',
+          message: 'A',
+        ),
+      ];
+
+      final viewModels = buildGitHistoryViewModelsFromItems(
+        items,
+        initialSwimlanes: const <GitHistoryGraphNode>[
+          GitHistoryGraphNode(id: 'b', color: GitHistoryGraphColorId.lane3),
+        ],
+      );
+
+      expect(
+        viewModels.first.inputSwimlanes.single.color,
+        GitHistoryGraphColorId.lane3,
+      );
+      expect(
+        viewModels.last.inputSwimlanes.map(
+          (node) => (id: node.id, color: node.color),
+        ),
+        viewModels.first.outputSwimlanes.map(
+          (node) => (id: node.id, color: node.color),
+        ),
+      );
+    });
   });
 }

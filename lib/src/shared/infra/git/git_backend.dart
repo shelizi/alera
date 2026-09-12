@@ -158,7 +158,18 @@ abstract interface class GitBackend {
   });
 
   /// Loads commit history for the repository containing [path].
-  Future<GitHistoryResult> history(String path, {int? limit, String? baseRef});
+  ///
+  /// [includeAllRefs] walks every local and remote-tracking branch tip instead
+  /// of only HEAD and its upstream. [offset] skips that many visible commits
+  /// before taking [limit], which drives paged loading; `hasMore` reports
+  /// whether further pages remain.
+  Future<GitHistoryResult> history(
+    String path, {
+    int? limit,
+    String? baseRef,
+    bool includeAllRefs = false,
+    int? offset,
+  });
 
   /// Lists files changed by [commitId] compared with its first parent.
   Future<GitCommitCompareResult> commitCompare({

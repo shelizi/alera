@@ -253,11 +253,15 @@ class const RustGitBackend()
     String path, {
     int? limit,
     String? baseRef,
+    bool includeAllRefs = false,
+    int? offset,
   }) => _guard(() async {
     final result = await rust.gitHistory(
       path: path,
       limit: limit,
       baseRef: baseRef,
+      includeAllRefs: includeAllRefs,
+      offset: offset,
     );
     return _toHistoryResult(result);
   });

@@ -62,6 +62,7 @@ part 'workbench_controller_watcher_recovery_test_cases.dart';
 part 'workbench_controller_worktree_auto_refresh_test_cases.dart';
 part 'workbench_controller_navigation_test_cases.dart';
 part 'workbench_controller_preview_tab_test_cases.dart';
+part 'workbench_controller_git_history_tab_test_cases.dart';
 part 'workbench_controller_view_prefs_test_repository.dart';
 part 'workbench_controller_fake_workbench_repository.dart';
 part 'workbench_controller_test_harness.dart';
@@ -101,6 +102,7 @@ void main() {
     _registerWorkbenchControllerWorktreeAutoRefreshTests();
     _registerWorkbenchControllerNavigationTests();
     _registerWorkbenchControllerPreviewTabTests();
+    _registerWorkbenchControllerGitHistoryTabTests();
     _registerWorkbenchControllerTerminalCleanupTests();
     _registerWorkbenchControllerAgentTabTests();
   });
