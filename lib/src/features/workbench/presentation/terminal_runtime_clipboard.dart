@@ -59,38 +59,3 @@ void _publishTerminalInteraction(
 }) {
   handle._launchInputOwner.notifyInteraction(message, error: error);
 }
-
-xterm.Terminal _createSessionTerminal(_XtermTerminalSessionHandle handle) {
-  return xterm.Terminal(
-    reflowWithHiddenCursor: false,
-    preserveOrphanCombiningMarks: true,
-    allowITerm2ClipboardCapture: false,
-    allowKittyClipboard: false,
-    // An unset callback lets TerminalView install its system clipboard reader.
-    onClipboardQuery: (_) => null,
-    clipboardDecoder: decodeTerminalOsc52Payload,
-    maxLines: handle._settings.scrollbackLines,
-    platform: _xtermTargetPlatform,
-    wordSeparators: _wordSeparatorsFromSettings(
-      handle._settings.wordSeparators,
-    ),
-  );
-}
-
-void _attachSessionTerminal(
-  _XtermTerminalSessionHandle handle,
-  xterm.Terminal terminal,
-) {
-  terminal.onTitleChange = handle._handleTitleChanged;
-  terminal.onOutput = handle._handleTerminalInput;
-  terminal.onResize = handle._handleTerminalResize;
-  terminal.onClipboardStore = (_, text) =>
-      _storeTerminalClipboard(handle, text);
-}
-
-void _detachSessionTerminal(xterm.Terminal terminal) {
-  terminal.onTitleChange = null;
-  terminal.onOutput = null;
-  terminal.onResize = null;
-  terminal.onClipboardStore = null;
-}

@@ -3,7 +3,7 @@ part of 'terminal_runtime.dart';
 class XtermTerminalRuntime._(
   final TerminalPtySessionFactory _ptySessionFactory,
   var TerminalSettings _settings,
-  final ExternalUriLauncher _externalUriLauncher,
+  final TerminalRuntimeRendererAdapterOwner _rendererAdapterOwner,
   final TerminalRuntimeLaunchInputOwner _launchInputOwner,
   final TerminalSessionCleanup? _terminalSessionCleanup,
 ) implements TerminalRuntime, TerminalRuntimeSessionOwnerHost {
@@ -19,6 +19,7 @@ class XtermTerminalRuntime._(
     TerminalClipboard? terminalClipboard,
     void Function(String message, {bool error})? interactionNotice,
     TerminalRuntimeLaunchInputOwner? launchInputOwner,
+    TerminalRuntimeRendererAdapterOwner? rendererAdapterOwner,
   }) {
     var osc52BlockedNoticeShown = false;
     void notifyOsc52Blocked() {
@@ -43,10 +44,17 @@ class XtermTerminalRuntime._(
           onOsc52Blocked: notifyOsc52Blocked,
         );
 
+    final resolvedRendererAdapterOwner =
+        rendererAdapterOwner ??
+        TerminalRuntimeRendererAdapterOwner(
+          externalUriLauncher:
+              externalUriLauncher ?? UrlLauncherExternalUriLauncher(),
+        );
+
     return XtermTerminalRuntime._(
       ptySessionFactory ?? const DefaultTerminalPtySessionFactory(),
       initialSettings ?? TerminalSettings.defaults,
-      externalUriLauncher ?? UrlLauncherExternalUriLauncher(),
+      resolvedRendererAdapterOwner,
       resolvedLaunchInputOwner,
       terminalSessionCleanup,
     );
@@ -56,6 +64,9 @@ class XtermTerminalRuntime._(
       StreamController<TerminalRuntimeExitEvent>.broadcast();
   late final TerminalRuntimeSessionOwner _sessionOwner =
       TerminalRuntimeSessionOwner(this);
+
+  TerminalRuntimeRendererAdapterOwner get rendererAdapterOwner =>
+      _rendererAdapterOwner;
 
   @override
   Stream<TerminalRuntimeExitEvent> get exits => _exitController.stream;
@@ -107,7 +118,7 @@ class XtermTerminalRuntime._(
       tab,
       _ptySessionFactory,
       _settings,
-      _externalUriLauncher,
+      _rendererAdapterOwner,
       _launchInputOwner,
       owner._handleSessionExit,
       owner._handleVisibilityChanged,

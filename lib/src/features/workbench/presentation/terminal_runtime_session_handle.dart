@@ -6,7 +6,7 @@ class _XtermTerminalSessionHandle(
   this._tab,
   final TerminalPtySessionFactory _ptySessionFactory,
   var TerminalSettings _settings,
-  final ExternalUriLauncher _externalUriLauncher,
+  final TerminalRuntimeRendererAdapterOwner _rendererAdapterOwner,
   final TerminalRuntimeLaunchInputOwner _launchInputOwner,
   final void Function(TerminalRuntimeExitEvent event) _onExit,
   this._onVisibilityChanged,
@@ -202,7 +202,7 @@ class _XtermTerminalSessionHandle(
     bool autofocus = false,
     FocusOnKeyEventCallback? onKeyEvent,
   }) {
-    return _InteractiveTerminalView(
+    return _rendererAdapterOwner._buildInteractiveView(
       key: key,
       session: this,
       autofocus: autofocus,
@@ -216,48 +216,28 @@ class _XtermTerminalSessionHandle(
     required MouseCursor mouseCursor,
     void Function(TapUpDetails details, xterm.CellOffset offset)? onTapUp,
   }) {
-    return xterm.TerminalView(
-      _terminal,
-      key: _terminalViewKey,
-      shortcuts: xterm.clipboardTerminalShortcuts,
-      shiftOverridesMouseReporting: true,
+    return _rendererAdapterOwner.buildTerminalView(
+      terminal: _terminal,
+      terminalViewKey: _terminalViewKey,
       controller: _terminalController,
       scrollController: _scrollController,
       focusNode: _focusNode,
+      settings: _settings,
       autofocus: autofocus,
-      onTapUp: onTapUp,
       onKeyEvent: onKeyEvent,
       mouseCursor: mouseCursor,
-      theme: _resolveXtermTheme(_settings),
-      textStyle: xterm.TerminalStyle(
-        fontSize: _settings.fontSize,
-        fontWeight: _settings.fontWeight,
-        height: _settings.lineHeight,
-        fontFamily: _resolveTerminalFontFamily(_settings.fontFamily),
-        fontFamilyFallback: _terminalFontFallback,
-      ),
-      padding: .fromLTRB(
-        _settings.paddingX,
-        _settings.paddingY,
-        _settings.paddingX,
-        _settings.paddingY,
-      ),
-      cursorType: _settings.cursorShape.toXtermCursorType(),
-      cursorBlink: _settings.cursorBlink,
-      backgroundOpacity: _settings.backgroundOpacity,
-      hardwareKeyboardOnly: _terminalHardwareKeyboardOnly,
-      mouseWheelSensitivity: _settings.tuiScrollSensitivity.clamp(1, 10),
+      onTapUp: onTapUp,
       onPaste: _pasteFromClipboard,
       onCopy: _launchInputOwner.clipboard.writeText,
     );
   }
 
   TerminalLinkRange? _linkAt(xterm.CellOffset offset) {
-    return resolveTerminalLinkAt(terminal: _terminal, offset: offset);
+    return _rendererAdapterOwner.linkAt(terminal: _terminal, offset: offset);
   }
 
   Future<void> _openLink(Uri uri) {
-    return _externalUriLauncher.open(uri);
+    return _rendererAdapterOwner.openLink(uri);
   }
 
   void _handleTitleChanged(String title) {
@@ -304,38 +284,13 @@ class _XtermTerminalSessionHandle(
   }
 
   @override
-  Future<void> refreshRendering() async {
-    if (_disposed) {
-      return;
-    }
-    final session = _ptySession;
-    if (session == null) {
-      return;
-    }
-    final viewState = _terminalViewKey.currentState;
-    if (viewState == null) {
-      return;
-    }
-    final renderTerminal = viewState.renderTerminal;
-    if (!renderTerminal.attached ||
-        !renderTerminal.hasSize ||
-        renderTerminal.size.isEmpty) {
-      return;
-    }
-    final cellSize = renderTerminal.cellSize;
-    await session.refreshViewport(
-      _terminal.viewWidth,
-      _terminal.viewHeight,
-      cellSize.width.round(),
-      cellSize.height.round(),
+  Future<void> refreshRendering() {
+    return _rendererAdapterOwner.refreshRendering(
+      terminalViewKey: _terminalViewKey,
+      terminal: _terminal,
+      ptySession: _ptySession,
+      isDisposed: _disposed,
     );
-    if (_disposed ||
-        !identical(_terminalViewKey.currentState, viewState) ||
-        !renderTerminal.attached) {
-      return;
-    }
-    renderTerminal.markNeedsLayout();
-    renderTerminal.markNeedsPaint();
   }
 
   Future<void> _pasteFromClipboard() => _pasteTerminalClipboard(this);
@@ -350,15 +305,22 @@ class _XtermTerminalSessionHandle(
     _publishTerminalInteraction(this, message, error: error);
   }
 
-  xterm.Terminal _createTerminal() => _createSessionTerminal(this);
+  xterm.Terminal _createTerminal() =>
+      _rendererAdapterOwner.createTerminal(settings: _settings);
 
   void _attachTerminal(xterm.Terminal terminal) {
-    _attachSessionTerminal(this, terminal);
+    _rendererAdapterOwner.attachTerminal(
+      terminal,
+      onTitleChange: _handleTitleChanged,
+      onOutput: _handleTerminalInput,
+      onResize: _handleTerminalResize,
+      onClipboardStore: (text) => _storeTerminalClipboard(this, text),
+    );
   }
 
   @override
   void _detachTerminal(xterm.Terminal terminal) {
-    _detachSessionTerminal(terminal);
+    _rendererAdapterOwner.detachTerminal(terminal);
   }
 
   void _handleTerminalOutput(String data) => _queueTerminalOutput(data);
@@ -440,9 +402,7 @@ class _XtermTerminalSessionHandle(
 
   @override
   void requestFocus() {
-    // Defer to the next frame so the terminal view is mounted (e.g. after
-    // switching workspaces) before we ask the FocusNode to claim focus.
-    WidgetsBinding.instance.addPostFrameCallback((_) => _requestFocusNow());
+    _rendererAdapterOwner.requestFocus(_focusNode, isDisposed: _disposed);
   }
 
   @override
@@ -461,9 +421,6 @@ class _XtermTerminalSessionHandle(
   }
 
   void _requestFocusNow() {
-    if (_disposed || !_focusNode.canRequestFocus) {
-      return;
-    }
-    _focusNode.requestFocus();
+    _rendererAdapterOwner.requestFocusNow(_focusNode, isDisposed: _disposed);
   }
 }
