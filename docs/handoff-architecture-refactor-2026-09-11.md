@@ -1301,7 +1301,7 @@ max-lines 尚未全清前，第 8 步會是 repo-wide exit 1；必須確認 offe
 
 - `gitStatus()` 仍一次回傳完整 entry list：單次 decode 已減半以上，但幾萬筆時 Dart 端 `fromEntries` 的 sort+tree build 仍是 UI isolate 上的 O(n log n) 單次工作。方向：payload 分頁（先傳前 N + 計數）或 status 摘要化；會動 wire contract，P5 fixture 已落地可在此基礎上加。
 - `WorkspaceSourceControlState` 每次 reload 全表重建；可考慮結構共享或 entry-level diffing。
-- 驗證方式：以 `E:\Dropbox\work\coding-tools-mcp` 之類的大異動 repo 實測，觀察 decode/分組是否仍是卡點。
+- 已量化（`tool/bench/git_status_grouping_bench.dart`，`a4a0823a`）：`fromEntries`（per-area filter + sort + tree build）在 UI isolate 的中位數為 1k≈4ms / 5k≈16.4ms（已貼 16ms frame 邊界）/ 20k≈77ms（約 4.6 幀）/ 50k≈242ms（約 15 幀）。安全上限約 5k 筆；超過應移 background isolate 或改演算法。熱點已定位：`_treeRows` 的 `directoryChild` 對 children linear scan、`parts.take(index+1).join('/')` 每層重組字串。
 
 ---
 
