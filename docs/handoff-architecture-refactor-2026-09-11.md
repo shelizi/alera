@@ -967,6 +967,14 @@ Owner 之間互不直接參照，跨域呼叫經各自 `*OwnerHost` port 由 int
 
 ## 16. Phase 4：Terminal
 
+### 16.0 進度（2026-09-12，`e10d4764`/`13d774b2`）
+
+- Session I/O / recovery owner 已抽出：`terminal_runtime_session_owner.dart`（`TerminalRuntimeSessionOwner` + `TerminalRuntimeSessionOwnerHost` 窄 port，`part of terminal_runtime.dart`），持有 `_sessions` registry、release-vs-close 語義（evict 不 terminate、close 才 terminate）、buffer-budget eviction、generation-guarded start/reconnect/restart/recover。
+- `terminal_runtime_session_handle.dart` 658→475；PTY start/event/exit 拆到 `terminal_runtime_session_pty.dart`。
+- 七項必測全覆蓋（`terminal_runtime_session_owner_cases.dart` 為 `terminal_runtime_native_test.dart` 的 part，不能單獨跑）。
+- 選項取捨：採 `part of` 而非獨立 library，因 `_XtermTerminalSessionHandle` private 面過大；未來若要獨立拆需先把 handle 內部面收成窄介面。
+- 剩餘：renderer adapter、shell launch/input delivery、view resource/buffer budget 三個 owner。
+
 `TerminalRuntime` 實際 logical library 很大，下一步按 ownership 拆：
 
 1. Session I/O / recovery owner。
@@ -990,6 +998,14 @@ Owner 之間互不直接參照，跨域呼叫經各自 `*OwnerHost` port 由 int
 
 ## 17. Phase 4：Git/editor
 
+### 17.0 進度（2026-09-12，`b2f85163`/`33c54b69`）
+
+- Loader/cache 已移到 application 層：`workspace_git_history_loader.dart`（in-flight coalesce + generation/scopePath 雙重 staleness guard + `markStale`/`rebind`/`detach`）與 `workspace_git_commit_compare_cache.dart`（scope 綁定 + per-commit coalescing + non-ready→`GitInternalException` mapping）。
+- `workspace_git_diff_panel.dart` 966→463；inline actions/commit message field 移到既有 part 檔；identity-keyed memoize 保留。
+- 五案全覆蓋：跨 repo late history 丟棄、compare cache 不跨 scope、duplicate refresh coalesce、nested git root、兩個獨立 preference（既有）。
+- 已知微小語意差異：history load 失敗後 `markStale()` 使重新展開 section 自動重試（舊碼 `_historyDirty` 維持 false）；行為更合理，已記錄。
+- 整合註記：`feat/commit-graph-mainview`（`bb6c460f`）的 `gitHistory` 新增 `includeAllRefs`/`offset` 參數，`fake_git_backend` 記錄的 call args map 多了兩個 key——whole-map 期望需帶上（`302e7822` 補齊）。
+
 `WorkspaceGitDiffPanel` logical library 仍很大。已有 generation/cancellation 防護，下一步是把 loader/cache 從 presentation 移到 application owner。
 
 先做 TDD：
@@ -1011,6 +1027,12 @@ Presentation 保留 render/input/transient UI state。
 ---
 
 ## 18. Phase 4：Mobile runtime transition matrix
+
+### 18.0 進度（2026-09-12，`4733a6ff`/`e3bd4f37`）
+
+- 七個轉移測試已補齊：`mobile/test/host_connection_transition_matrix_test.dart`（6 新測試）+ `support/direct_runtime_gateway.dart` / `support/relay_runtime_gateway.dart`（完整 direct/relay fixture，relay 支援 handshake、fragmentation、auth renewal、`delayRenewal`）。
+- 行為發現（需決策）：reconnect in-flight 時 `restartRuntime()` 拋 `UnsupportedError` 而非乾淨的 `StateError`——`AsyncLoading` 保留前值使 `_client ?? state.value` 拿到已 dispose 的舊 client。測試 pin 住實際行為；若要改語意需修 controller。
+- concrete client 拆分未做：`_openClientWithin`/`_openPairedClient` 牽涉 `ConnectionAttempt` zone 傳遞與 `_disposed` 時序，待 restart 語意定案後再拆。
 
 `HostConnectionController` 已有 retry、epoch、opening attempt、dispose。先補狀態轉移測試再拆 concrete client：
 
