@@ -14,39 +14,15 @@ mixin _WorkbenchControllerTabOpening
     bool spawnOnCreate = false,
     bool initialCommandOnce = false,
     bool autoCloseOnSuccess = false,
-  }) async {
-    try {
-      final previousTabs = state.tabsFor(workspace.id);
-      final layout = _layoutForMutation(workspace.id, previousTabs);
-      final tab = await WorkbenchTabPlacementCoordinator(
-        openTab: () => _workspaceTabService.createTerminalTab(
-          workspace.id,
-          title: title,
-          initialCommand: initialCommand,
-          spawnOnCreate: spawnOnCreate,
-          initialCommandOnce: initialCommandOnce,
-          autoCloseOnSuccess: autoCloseOnSuccess,
-        ),
-        planPlacement: (tab) => planWorkbenchTabAddedToGroup(
-          previousTabs: previousTabs,
-          layout: layout,
-          tab: tab,
-          targetGroupId: targetGroupId,
-        ),
-        applyTabs: (tabs) => _setTabsForWorkspace(workspace.id, tabs),
-        applyLayout: (layout) => _applyLayout(layout, persist: true),
-        afterPlaced: (_) => _workspaceActivityRecorder.recordActivity(
-          workspace.id,
-          DateTime.now().toUtc(),
-        ),
-      ).run();
-      state = state.copyWith(error: null);
-      return tab;
-    } catch (error) {
-      state = state.copyWith(error: error.toString());
-      rethrow;
-    }
-  }
+  }) => _tabLayoutOwner.createTerminalTab(
+    workspace,
+    targetGroupId: targetGroupId,
+    title: title,
+    initialCommand: initialCommand,
+    spawnOnCreate: spawnOnCreate,
+    initialCommandOnce: initialCommandOnce,
+    autoCloseOnSuccess: autoCloseOnSuccess,
+  );
 
   /// A terminal tab that launches a locally installed agent CLI. The command
   /// stays on the record so a transparent PTY remint re-enters the agent,
@@ -55,19 +31,11 @@ mixin _WorkbenchControllerTabOpening
     Workspace workspace, {
     required AgentType agentType,
     String? targetGroupId,
-  }) {
-    final command = agentProfileDefaultCommands[agentType];
-    if (command == null) {
-      throw StateError('No default launch command for agent ${agentType.key}.');
-    }
-    return createTerminalTab(
-      workspace,
-      targetGroupId: targetGroupId,
-      title: agentDisplayName(agentType),
-      initialCommand: command,
-      spawnOnCreate: true,
-    );
-  }
+  }) => _tabLayoutOwner.createAgentTab(
+    workspace,
+    agentType: agentType,
+    targetGroupId: targetGroupId,
+  );
 
   /// Opens the "Setup" terminal for a workspace whose worktree setup the host
   /// prepared instead of running, so a long `pnpm install` is visible work
@@ -76,52 +44,16 @@ mixin _WorkbenchControllerTabOpening
   /// A failure here does not fail the creation: the workspace exists and the
   /// setup can be run by hand, so it is reported as an error on the state
   /// instead of unwinding the flow.
-  Future<void> _openDeferredSetupTab(WorkspaceCreationResult result) async {
-    final command = result.deferredSetupCommand?.trim();
-    if (command == null || command.isEmpty) {
-      return;
-    }
-    try {
-      await createTerminalTab(
-        result.workspace,
-        title: 'Setup',
-        initialCommand: command,
-        spawnOnCreate: true,
-        initialCommandOnce: true,
-        autoCloseOnSuccess: true,
-      );
-    } catch (error) {
-      state = state.copyWith(error: error.toString());
-    }
-  }
+  Future<void> _openDeferredSetupTab(WorkspaceCreationResult result) =>
+      _tabLayoutOwner.openDeferredSetupTab(result);
 
   Future<WorkspaceTabRecord> openMermanPreviewTab({
     required Workspace workspace,
     required String relativePath,
     String? targetGroupId,
-  }) async {
-    try {
-      final previousTabs = state.tabsFor(workspace.id);
-      final layout = _layoutForMutation(workspace.id, previousTabs);
-      final tab = await WorkbenchTabPlacementCoordinator(
-        openTab: () => _workspaceTabService.openOrCreateMermanPreviewTab(
-          workspaceId: workspace.id,
-          relativePath: relativePath,
-        ),
-        planPlacement: (tab) => planWorkbenchReusableTabToGroup(
-          previousTabs: previousTabs,
-          layout: layout,
-          tab: tab,
-          targetGroupId: targetGroupId,
-        ),
-        applyTabs: (tabs) => _setTabsForWorkspace(workspace.id, tabs),
-        applyLayout: (layout) => _applyLayout(layout, persist: true),
-      ).run();
-      state = state.copyWith(error: null);
-      return tab;
-    } catch (error) {
-      state = state.copyWith(error: error.toString());
-      rethrow;
-    }
-  }
+  }) => _tabLayoutOwner.openMermanPreviewTab(
+    workspace: workspace,
+    relativePath: relativePath,
+    targetGroupId: targetGroupId,
+  );
 }

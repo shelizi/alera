@@ -73,14 +73,14 @@ mixin _WorkbenchControllerProjects
   }
 
   Future<void> sleepWorkspace(Workspace workspace) async {
-    await _tabClosingScope.run(workspace.id, () async {
+    await _tabLayoutOwner.tabClosingScope.run(workspace.id, () async {
       try {
         final workspaceTabs = state.tabsFor(workspace.id);
         await WorkbenchSleepWorkspaceCoordinator(
           tabRemoval: _repository,
           hostedReviewRetention: _hostedReviewRetention,
-          clearedLayouts: _clearedLayouts,
-          tabFocusHistory: _tabFocusHistory,
+          clearedLayouts: _tabLayoutOwner.clearedLayouts,
+          tabFocusHistory: _tabLayoutOwner.tabFocusHistory,
         ).sleep(workspace: workspace, tabs: workspaceTabs);
         _explicitResourceCleaner.closeWorkspaceLocalResources(
           workspace.id,
@@ -110,7 +110,7 @@ mixin _WorkbenchControllerProjects
       await WorkbenchRemoveProjectCleanupCoordinator(
         closeLocalWorkspace: _closeRemovedProjectWorkspace,
         hostedReviewRetention: _hostedReviewRetention,
-        tabFocusHistory: _tabFocusHistory,
+        tabFocusHistory: _tabLayoutOwner.tabFocusHistory,
       ).remove(
         removeProject: () => _projectsService.removeProject(projectId),
         removedWorkspaces: removedWorkspaces,
@@ -145,7 +145,7 @@ mixin _WorkbenchControllerProjects
       await WorkbenchDeleteWorkspaceCleanupCoordinator(
         resourceCleaner: _explicitResourceCleaner,
         hostedReviewRetention: _hostedReviewRetention,
-        tabFocusHistory: _tabFocusHistory,
+        tabFocusHistory: _tabLayoutOwner.tabFocusHistory,
       ).cleanup(
         workspace: workspace,
         tabs: workspaceTabs,
