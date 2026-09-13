@@ -1,5 +1,9 @@
 use super::*;
+use crate::terminal_host::orchestration::message_waiters::WaitKind;
 use crate::terminal_host::protocol::PROTOCOL_VERSION;
+
+use super::orchestration_message_requests::take_ask_receipt_context;
+use super::requests::idempotency_receipts::settle_receipt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum LocalClientRole {
@@ -203,7 +207,39 @@ impl ServerActor {
         else {
             return;
         };
-        let waiters_removed = self.orchestration_waiters.remove_client(client_id);
+        let removed_waiters = self.orchestration_waiters.remove_client(client_id);
+        let waiters_removed = removed_waiters.len();
+        for waiter in removed_waiters {
+            let WaitKind::Ask { thread_id, .. } = waiter.kind else {
+                continue;
+            };
+            let Some(context) = take_ask_receipt_context(&thread_id) else {
+                continue;
+            };
+            // A disconnect is terminal but is not a timeout. Keep the explicit
+            // `timedOut` field for schema parity, without timeout-only timings.
+            let payload = json!({
+                "answered": false,
+                "disconnected": true,
+                "timedOut": false,
+                "outcome": "disconnected",
+            });
+            if let Err(error) = settle_receipt(
+                &self.runtime_store,
+                "orchestration.ask",
+                &context.caller_scope,
+                &context.client_mutation_id,
+                &context.payload_digest,
+                &payload,
+            )
+            .await
+            {
+                tracing::error!(
+                    client_mutation_id = %context.client_mutation_id,
+                    "failed to settle orchestration.ask disconnect receipt: {error}"
+                );
+            }
+        }
         self.cancel_queued_runtime_mutations(client_id);
         self.release_mobile_driver_for_client(client_id);
         self.deferred_admission.disconnect_client(client_id);

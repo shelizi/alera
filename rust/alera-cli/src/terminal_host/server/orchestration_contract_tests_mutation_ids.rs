@@ -12,6 +12,8 @@ use serde_json::json;
 use super::actor_test_harness::{local_client, test_actor};
 use super::orchestration_contract_tests::{read_response, ready_task, wire_call};
 use crate::terminal_host::client::ClientHandle;
+use crate::terminal_host::orchestration::message_waiters::WaitKind;
+use crate::terminal_host::server::DisconnectReason;
 
 #[tokio::test]
 async fn send_client_mutation_id_replays_without_duplicate_and_conflicts_on_payload_change() {
@@ -300,4 +302,105 @@ async fn ask_timeout_settles_client_mutation_id_for_replay() {
             .len(),
         1
     );
+}
+
+#[tokio::test]
+async fn ask_disconnect_settles_client_mutation_id_for_replay() {
+    let dir = tempfile::tempdir().unwrap();
+    let (handle, _responses) = ClientHandle::test_channels();
+    let mut actor = test_actor(
+        &dir,
+        HashMap::from([(1, local_client(handle))]),
+        HashMap::new(),
+    )
+    .await;
+    let payload = json!({
+        "from": "worker",
+        "to": "coordinator",
+        "question": "Which path?",
+        "timeoutMs": 10_000,
+        "clientMutationId": "ask-disconnect-1",
+    });
+
+    wire_call(&mut actor, 1, 120, "orchestration.ask", payload.clone()).await;
+    actor
+        .dispose_client_with_reason(1, DisconnectReason::PeerClosed)
+        .await;
+
+    let (retry_handle, mut retry_responses) = ClientHandle::test_channels();
+    actor.clients.insert(2, local_client(retry_handle));
+    wire_call(&mut actor, 2, 121, "orchestration.ask", payload).await;
+    let replay = read_response(&mut retry_responses, 121).await;
+    assert_eq!(
+        replay["payload"],
+        json!({
+            "answered": false,
+            "disconnected": true,
+            "timedOut": false,
+            "outcome": "disconnected",
+        })
+    );
+}
+
+#[tokio::test]
+async fn disconnect_without_ask_waiters_keeps_drop_only_cleanup() {
+    let dir = tempfile::tempdir().unwrap();
+    let (handle, _responses) = ClientHandle::test_channels();
+    let mut actor = test_actor(
+        &dir,
+        HashMap::from([(1, local_client(handle))]),
+        HashMap::new(),
+    )
+    .await;
+    actor.orchestration_waiters.register(
+        1,
+        1,
+        "worker".to_string(),
+        WaitKind::Check {
+            type_filter: vec![],
+            inject: false,
+        },
+    );
+
+    actor
+        .dispose_client_with_reason(1, DisconnectReason::PeerClosed)
+        .await;
+
+    assert!(!actor.clients.contains_key(&1));
+    assert!(actor.orchestration_waiters.is_empty());
+}
+
+#[tokio::test]
+async fn repeated_disconnect_keeps_ask_receipt_settled_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let (handle, _responses) = ClientHandle::test_channels();
+    let mut actor = test_actor(
+        &dir,
+        HashMap::from([(1, local_client(handle))]),
+        HashMap::new(),
+    )
+    .await;
+    let payload = json!({
+        "from": "worker",
+        "to": "coordinator",
+        "question": "Which path?",
+        "timeoutMs": 10_000,
+        "clientMutationId": "ask-disconnect-2",
+    });
+
+    wire_call(&mut actor, 1, 130, "orchestration.ask", payload.clone()).await;
+    actor
+        .dispose_client_with_reason(1, DisconnectReason::PeerClosed)
+        .await;
+    actor
+        .dispose_client_with_reason(1, DisconnectReason::PeerClosed)
+        .await;
+
+    let (retry_handle, mut retry_responses) = ClientHandle::test_channels();
+    actor.clients.insert(2, local_client(retry_handle));
+    wire_call(&mut actor, 2, 131, "orchestration.ask", payload).await;
+    let replay = read_response(&mut retry_responses, 131).await;
+    assert_eq!(replay["payload"]["answered"], false);
+    assert_eq!(replay["payload"]["disconnected"], true);
+    assert_eq!(replay["payload"]["outcome"], "disconnected");
 }

@@ -104,10 +104,13 @@ impl MessageWaiterRegistry {
         Some(self.waiters.remove(index))
     }
 
-    pub fn remove_client(&mut self, client_id: u64) -> usize {
-        let before = self.waiters.len();
-        self.waiters.retain(|waiter| waiter.client_id != client_id);
-        before - self.waiters.len()
+    /// Removes and returns all waiters owned by `client_id`.
+    pub fn remove_client(&mut self, client_id: u64) -> Vec<MessageWaiter> {
+        let (removed, retained): (Vec<_>, Vec<_>) = std::mem::take(&mut self.waiters)
+            .into_iter()
+            .partition(|waiter| waiter.client_id == client_id);
+        self.waiters = retained;
+        removed
     }
 
     #[cfg(test)]
@@ -223,7 +226,7 @@ mod tests {
                 inject: false,
             },
         );
-        assert_eq!(registry.remove_client(1), 1);
+        assert_eq!(registry.remove_client(1).len(), 1);
         let woken = registry.take_matching("a", OrchestrationMessageType::Status);
         assert_eq!(woken.len(), 1);
         assert_eq!(woken[0].client_id, 2);
