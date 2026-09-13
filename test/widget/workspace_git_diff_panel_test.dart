@@ -1154,7 +1154,7 @@ void main() {
       service: service,
       workspace: _workspace(id: 'workspace-b', path: '/tmp/project-b'),
     );
-    await tester.pump();
+    await tester.pumpAndSettle();
     await tester.tap(find.byTooltip('Generate commit message with AI'));
     await tester.pump();
     expect(service.requests.last.workspacePath, '/tmp/project-b');
