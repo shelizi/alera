@@ -1528,12 +1528,13 @@ max-lines 尚未全清前，第 8 步會是 repo-wide exit 1；必須確認 offe
 
 | 缺口 | 建議 disposition |
 | --- | --- |
-| orchestration `send`/`reply`/`ask`/`escalate` 無 idempotency key，retry 寫重複列 | 修：加 `clientMutationId`（`agentProfile.launchIdempotent` 有先例） |
-| `terminal.write` 無 op id，lost reply retry 重複送輸入 | 評估：使用者輸入重複的實際風險需定調後決定 |
+| orchestration `send`/`reply`/`ask`/`escalate` 無 idempotency key，retry 寫重複列 | P1 in-flight（`feat/orchestration-mutation-ids`，wt-preflight-stalls）：四 verb 加 `clientMutationId` |
+| `terminal.write` 無 op id，lost reply retry 重複送輸入 | **Dispositioned（P2，`30bd5ffd`）：accept 不加 key**。`deferred_requests.rs:417` arm 才排 PTY queue、`requests.rs:282` sync arm 僅為 empty-write no-op；Dart 端三路 retry 都不重送 bytes，keystroke stream 無法安全 content dedupe，lost reply 即連線死亡需 reattach。理由已寫回 `docs/terminal-operation-contract.md` |
 | `terminal.terminate` 非冪等，retry 回 `not attached` 與從未 attach 無法區分 | **已修（E4，`f28f1d6c` merge `62e4fd32`）**：optional `clientMutationId` + receipt 表，retry replay `{}` |
 | `agentQuota.consumeCodexResetCredit` 無 idempotency key | **已修（E4，同上）**：receipt 在 admission 前建 pending，成功才 settle；replay 走正常 deferred 路徑回 stored result |
-| `createManaged` retry 是 fail-closed 而非回傳首次建立的 workspace | 產品決策：accept 或改回傳首次 workspace |
-| `terminal_input_backpressure` 是字串前綴非 typed error | 修：升級 typed error code |
+| `createManaged` retry 是 fail-closed 而非回傳首次建立的 workspace | **Dispositioned（P4，`d7b6f687`）：accept fail-closed**。Request 無 mutation id、create dispatch 不走 receipt flow；改回傳首次結果需先補 mutation identity + receipt lifecycle + 重啟/partial-worktree 政策。contract 段落已貼回 `docs/workspace-operation-contract.md` 並調和 retry cell 措辭 |
+| `terminal_input_backpressure` 是字串前綴非 typed error | **已修（P2，`30bd5ffd`）**：`TrySendError::Full` → `HostError::conflict(TERMINAL_INPUT_BACKPRESSURE_CODE, ...)`；message 前綴逐字保留；`orchestration_delivery`/`terminal_pulse_delivery` 的 contains 比對升級為 typed code 比對 |
+| Dart client 未送 `clientMutationId`（E4 follow-up） | **已修（P3，`32432c3d`）**：desktop terminate per-sessionId、quota per-offerRevision 共用 id 至成功；mobile 同構（`Random.secure` 手刻 v4，未加 uuid 依賴）。回歸測試 desktop 72+19、mobile 4 全過 |
 
 會動 wire contract 的項目（idempotency key、typed error）在本批定案，讓 Batch R 的 codegen 評估有真實 contract 變更案例可走完整流程。
 
@@ -1549,6 +1550,7 @@ max-lines 尚未全清前，第 8 步會是 repo-wide exit 1；必須確認 offe
 - 評估「維持手寫 + golden fixture」vs「shared schema/codegen」。
 - 評估輸入：Batch P 的 contract 變更實作經驗、三側 fixture 維護成本、mobile/desktop/Rust producer-consumer 形狀差異、unknown/missing field 與 capability downgrade 需求。
 - 產出：書面決策與理由。不引入框架、不改 RPC 層。
+- **已完成（P4，`d7b6f687` → `docs/wire-schema-codegen-evaluation-2026-09-13.md`）**：維持手寫 wire types + golden fixtures——無真實 drift 事故紀錄，59+ fixtures 涵蓋 codegen 無法 cover 的行為面（binary frame ordering、capability downgrade、unknown-field tolerance、mobile allowlist）；建議低成本硬化：集中 method-name/capability/errorCode 常數 + 新 public method 必附 fixture。
 
 ### 27.7 Batch S：observability 補齊（排在 release matrix 前）
 
@@ -1561,5 +1563,6 @@ max-lines 尚未全清前，第 8 步會是 repo-wide exit 1；必須確認 offe
 
 - 每次 merge feature branch 進本分支後，必須重跑 `check_max_lines` 與 `runtime_architecture_guard`，結果寫回 §25。本輪 ratchet 轉紅即是 merge 後無人重驗證造成。
 - §25 是唯一 living queue 與狀態欄位；各節內的「已完成」註記保留追溯，但不再作為下一批依據。
-- 需求驅動項目不進 queue：Batch L 的 20k+ UI 阻塞已由 E3 處理（`6c76f3d4`：entry translate 每 16 筆 `Future.pause()` + `fromEntriesChunked` 分段分組，50k 最長連續同步段 115ms→中位數 8ms；`_loadGeneration` 防 stale watcher 覆蓋 mutation；`rebindEntryInstancesChunked` 保住 C2 identity）；殘留：`workspace_git_diff_panel` 的 unified 視圖路徑仍同步（`unifiedFromEntriesChunked` 已備無呼叫方）、20k+ wire 分頁未做（改 schema 才需要）。§21 release matrix 待 correctness 收尾；§26 parity backlog 依功能優先級獨立排程。
-- Dart client 尚未主動送 `clientMutationId`（E4 已讓 `terminal.terminate`/`consumeCodexResetCredit` wire 端就緒，Batch P follow-up）。
+- 需求驅動項目不進 queue：Batch L 的 20k+ UI 阻塞已由 E3 處理（`6c76f3d4`：entry translate 每 16 筆 `Future.pause()` + `fromEntriesChunked` 分段分組，50k 最長連續同步段 115ms→中位數 8ms；`_loadGeneration` 防 stale watcher 覆蓋 mutation；`rebindEntryInstancesChunked` 保住 C2 identity）；unified 視圖路徑已由 `68dcd9c8` 接上（`workspace_git_diff_panel_grouping_cache.dart`：>4000 entries 走 `unifiedFromEntriesChunked`，舊 groups 顯示至 projection 落地，generation+mounted 雙重丟棄 stale 完成）；殘留 20k+ wire 分頁未做（改 schema 才需要）。§21 release matrix 待 correctness 收尾；§26 parity backlog 依功能優先級獨立排程。
+- Dart client `clientMutationId` 已由 P3（`32432c3d`）送出：desktop/mobile 的 `terminal.terminate` 與 `agentQuota.consumeCodexResetCredit` 皆帶穩定 id，同 sessionId/offerRevision 重試共用、成功後清除。
+- Widget 測試回歸處理（2026-09-13）：`refresh stays available after initial load failure` 是 E3 `_disposed` 旗標誤用造成的真回歸——`ref.onDispose` 在 `build()` reject 時也會跑，初始 load 失敗後 `_disposed` 卡在 true，`_run` 的 publish gate 把之後每次成功結果都靜默丟棄；`60d41f5c` 已修（publish gate 只看 generation，`_disposed` 保留給 watcher 路徑）。`generated commit message is ignored after workspace changes` 在 clean base 即失敗，歸類為既有失敗，與本批無關，不阻塞驗收但值得獨立追查（第二個 AI 請求帶到舊 workspace path）。
