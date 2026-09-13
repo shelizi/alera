@@ -176,7 +176,9 @@ void main() {
 
     await tester.tap(find.text('Only Commit'), buttons: kSecondaryMouseButton);
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Reset Current Branch Here (Hard)'));
+    final resetHard = find.text('Reset Current Branch Here (Hard)');
+    await tester.ensureVisible(resetHard);
+    await tester.tap(resetHard);
     await tester.pumpAndSettle();
 
     expect(find.text('Reset Current Branch?'), findsOneWidget);

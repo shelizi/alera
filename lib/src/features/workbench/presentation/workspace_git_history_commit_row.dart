@@ -3,6 +3,7 @@ part of 'workspace_git_history_surface.dart';
 class const _CommitGraphRow({
   required final GitHistoryItemViewModel viewModel,
   required final double graphWidth,
+  required final bool isCompareAnchor,
   required final VoidCallback onTap,
   final ValueChanged<Offset>? onOpenActions,
   final void Function(GitHistoryItemRef itemRef, Offset position)?
@@ -23,75 +24,81 @@ class const _CommitGraphRow({
             ? null
             : (details) => onOpenActions!(details.globalPosition),
         mouseCursor: SystemMouseCursors.click,
-        child: SizedBox(
-          height: 28,
-          child: Padding(
-            padding: const EdgeInsets.only(
-              left: AleraTokens.space8,
-              right: AleraTokens.space12,
-            ),
-            child: Row(
-              children: <Widget>[
-                SizedBox(
-                  width: graphWidth,
-                  child: Align(
-                    alignment: .centerLeft,
-                    child: GitHistoryGraph(viewModel: viewModel),
-                  ),
-                ),
-                const SizedBox(width: AleraTokens.space4),
-                Expanded(
-                  child: Text(
-                    item.subject,
-                    maxLines: 1,
-                    overflow: .ellipsis,
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: AleraTokens.foreground,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: isCompareAnchor ? AleraTokens.surfaceVariant : null,
+          ),
+          child: SizedBox(
+            height: 28,
+            child: Padding(
+              padding: const EdgeInsets.only(
+                left: AleraTokens.space8,
+                right: AleraTokens.space12,
+              ),
+              child: Row(
+                children: <Widget>[
+                  SizedBox(
+                    width: graphWidth,
+                    child: Align(
+                      alignment: .centerLeft,
+                      child: GitHistoryGraph(viewModel: viewModel),
                     ),
                   ),
-                ),
-                for (final itemRef in item.references) ...<Widget>[
                   const SizedBox(width: AleraTokens.space4),
-                  ConstrainedBox(
-                    constraints: const BoxConstraints(
-                      maxWidth: _refBadgeMaxWidth,
+                  Expanded(
+                    child: Text(
+                      item.subject,
+                      maxLines: 1,
+                      overflow: .ellipsis,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: AleraTokens.foreground,
+                      ),
                     ),
-                    child: GitRefBadge(
-                      itemRef: itemRef,
-                      onOpenActions: onOpenRefActions == null
-                          ? null
-                          : (position) => onOpenRefActions!(itemRef, position),
+                  ),
+                  for (final itemRef in item.references) ...<Widget>[
+                    const SizedBox(width: AleraTokens.space4),
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(
+                        maxWidth: _refBadgeMaxWidth,
+                      ),
+                      child: GitRefBadge(
+                        itemRef: itemRef,
+                        onOpenActions: onOpenRefActions == null
+                            ? null
+                            : (position) =>
+                                  onOpenRefActions!(itemRef, position),
+                      ),
+                    ),
+                  ],
+                  const SizedBox(width: AleraTokens.space8),
+                  SizedBox(
+                    width: 140,
+                    child: Text(
+                      item.author ?? '',
+                      maxLines: 1,
+                      overflow: .ellipsis,
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: AleraTokens.foregroundMuted,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: AleraTokens.space8),
+                  SizedBox(
+                    width: _metaWidth,
+                    child: Text(
+                      _WorkspaceGitHistorySurfaceState._relativeTime(
+                        item.timestamp,
+                      ),
+                      maxLines: 1,
+                      overflow: .ellipsis,
+                      textAlign: .end,
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: AleraTokens.foregroundFaint,
+                      ),
                     ),
                   ),
                 ],
-                const SizedBox(width: AleraTokens.space8),
-                SizedBox(
-                  width: 140,
-                  child: Text(
-                    item.author ?? '',
-                    maxLines: 1,
-                    overflow: .ellipsis,
-                    style: theme.textTheme.labelSmall?.copyWith(
-                      color: AleraTokens.foregroundMuted,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: AleraTokens.space8),
-                SizedBox(
-                  width: _metaWidth,
-                  child: Text(
-                    _WorkspaceGitHistorySurfaceState._relativeTime(
-                      item.timestamp,
-                    ),
-                    maxLines: 1,
-                    overflow: .ellipsis,
-                    textAlign: .end,
-                    style: theme.textTheme.labelSmall?.copyWith(
-                      color: AleraTokens.foregroundFaint,
-                    ),
-                  ),
-                ),
-              ],
+              ),
             ),
           ),
         ),

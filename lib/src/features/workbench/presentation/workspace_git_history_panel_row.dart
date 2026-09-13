@@ -1,5 +1,27 @@
 part of 'workspace_git_diff_panel.dart';
 
+extension _WorkspaceGitHistoryPanelOwnerActions on _WorkspaceGitDiffPanelState {
+  Future<void> _refreshAfterGitHistoryMutation() async {
+    _commitCompareCache.clear();
+    _historyLoader.markStale();
+    if (!_historyCollapsed) {
+      await _loadGitHistory();
+    }
+    if (!mounted) {
+      return;
+    }
+    final provider = workspaceSourceControlControllerProvider(
+      widget.sourceControlScope.path,
+    );
+    final subscription = ref.listenManual(provider, (_, _) {});
+    try {
+      await ref.read(provider.notifier).refresh();
+    } finally {
+      subscription.close();
+    }
+  }
+}
+
 class const _GitHistoryCommitRow({
   required final GitHistoryItemViewModel viewModel,
   required final bool expanded,

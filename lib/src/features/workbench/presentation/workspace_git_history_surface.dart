@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:alera/src/app/theme/alera_tokens.dart';
@@ -47,6 +48,7 @@ class _WorkspaceGitHistorySurfaceState
   final ScrollController _horizontalController = ScrollController();
   final Map<String, GitCommitCompareResult> _compareCache =
       <String, GitCommitCompareResult>{};
+  String? _compareAnchorId;
 
   List<GitHistoryItem> _items = const <GitHistoryItem>[];
   List<GitHistoryItemViewModel> _viewModels = const <GitHistoryItemViewModel>[];
@@ -62,6 +64,8 @@ class _WorkspaceGitHistorySurfaceState
   bool _pageFailed = false;
   String? _error;
   int _generation = 0;
+
+  void _setSurfaceState(VoidCallback fn) => setState(fn);
 
   @override
   void initState() {
@@ -117,6 +121,7 @@ class _WorkspaceGitHistorySurfaceState
     setState(() {
       _items = const <GitHistoryItem>[];
       _viewModels = const <GitHistoryItemViewModel>[];
+      _compareAnchorId = null;
       _hasMore = false;
       _pageFailed = false;
       _error = null;
@@ -240,41 +245,6 @@ class _WorkspaceGitHistorySurfaceState
     }
   }
 
-  Future<void> _openCommit(GitHistoryItem item) async {
-    try {
-      final compare =
-          _compareCache[item.id] ??
-          await ref
-              .read(gitBackendProvider)
-              .commitCompare(path: _sourceControlScope.path, commitId: item.id);
-      if (!mounted) {
-        return;
-      }
-      if (compare.summary.status != GitCommitCompareStatus.ready) {
-        throw GitInternalException(
-          compare.summary.errorMessage ?? 'Failed to load commit diff.',
-        );
-      }
-      _compareCache[item.id] = compare;
-      await ref
-          .read(workbenchControllerProvider.notifier)
-          .openGitCommitDiffTab(
-            workspace: widget.workspace,
-            scope: .all,
-            gitDiffRoot: _sourceControlScope.relativeRoot,
-            commitOid: compare.summary.commitOid,
-            parentOid: compare.summary.parentOid,
-            compareRef: compare.summary.compareRef,
-            subject: item.subject,
-            message: item.message,
-          );
-    } catch (error) {
-      if (mounted) {
-        AleraToast.show(context, message: error.toString(), tone: .error);
-      }
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     return DecoratedBox(
@@ -395,8 +365,10 @@ class _WorkspaceGitHistorySurfaceState
                     return _CommitGraphRow(
                       viewModel: _viewModels[index],
                       graphWidth: graphWidth,
+                      isCompareAnchor:
+                          _compareAnchorId == _viewModels[index].historyItem.id,
                       onTap: () => unawaited(
-                        _openCommit(_viewModels[index].historyItem),
+                        _handleCommitTap(_viewModels[index].historyItem),
                       ),
                       onOpenActions: _isBoundary(_viewModels[index])
                           ? null

@@ -1,3 +1,8 @@
+export 'workspace_git_history_commit_menus.dart';
+export 'workspace_git_history_input_dialogs.dart';
+
+import 'workspace_git_history_commit_menus.dart';
+
 import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:alera/src/design_system/layout/alera_confirm_dialog.dart';
 import 'package:alera/src/design_system/menus/alera_dropdown_entry.dart';
@@ -6,16 +11,6 @@ import 'package:alera/src/shared/infra/git/git_diff_models.dart';
 import 'package:flutter/material.dart';
 
 enum GitHistoryRefMenuAction { switchBranch, copyName }
-
-enum GitHistoryCommitMenuAction {
-  copyHash,
-  copySubject,
-  checkoutCommit,
-  revertCommit,
-  resetSoft,
-  resetMixed,
-  resetHard,
-}
 
 /// Shows the actions available for a history reference at a global pointer
 /// position. Unsupported reference kinds do not open an empty menu.
@@ -56,12 +51,13 @@ Future<GitHistoryRefMenuAction?> showGitHistoryRefMenu(
   );
 }
 
-/// Shows the copy actions available for a non-boundary history item.
+/// Shows the actions available for a non-boundary history item.
 Future<GitHistoryCommitMenuAction?> showGitHistoryCommitMenu(
   BuildContext context,
   GitHistoryItem item,
-  Offset globalPosition,
-) async {
+  Offset globalPosition, {
+  String? currentBranchName,
+}) async {
   final position = _gitHistoryMenuPosition(context, globalPosition);
   if (position == null) {
     return null;
@@ -69,58 +65,99 @@ Future<GitHistoryCommitMenuAction?> showGitHistoryCommitMenu(
   return showMenu<GitHistoryCommitMenuAction>(
     context: context,
     position: position,
-    items: const <PopupMenuEntry<GitHistoryCommitMenuAction>>[
-      AleraDropdownEntry<GitHistoryCommitMenuAction>(
+    items: <PopupMenuEntry<GitHistoryCommitMenuAction>>[
+      const AleraDropdownEntry<GitHistoryCommitMenuAction>(
         value: .copyHash,
         label: 'Copy Commit Hash',
         localizeLabel: false,
         leading: Icon(AleraIcons.gitBranch, size: 16),
       ),
-      AleraDropdownEntry<GitHistoryCommitMenuAction>(
+      const AleraDropdownEntry<GitHistoryCommitMenuAction>(
         value: .copySubject,
         label: 'Copy Commit Subject',
         localizeLabel: false,
         leading: Icon(AleraIcons.copy, size: 16),
       ),
-      PopupMenuDivider(),
-      AleraDropdownEntry<GitHistoryCommitMenuAction>(
+      const PopupMenuDivider(),
+      const AleraDropdownEntry<GitHistoryCommitMenuAction>(
+        value: .addTag,
+        label: 'Add Tag…',
+        localizeLabel: false,
+        leading: Icon(AleraIcons.tag, size: 16),
+      ),
+      const AleraDropdownEntry<GitHistoryCommitMenuAction>(
+        value: .createBranch,
+        label: 'Create Branch Here…',
+        localizeLabel: false,
+        leading: Icon(AleraIcons.gitBranch, size: 16),
+      ),
+      const AleraDropdownEntry<GitHistoryCommitMenuAction>(
         value: .checkoutCommit,
         label: 'Checkout Commit',
         localizeLabel: false,
         leading: Icon(AleraIcons.forward, size: 16),
       ),
-      AleraDropdownEntry<GitHistoryCommitMenuAction>(
+      const AleraDropdownEntry<GitHistoryCommitMenuAction>(
+        value: .cherryPick,
+        label: 'Cherry Pick',
+        localizeLabel: false,
+        leading: Icon(AleraIcons.gitCommit, size: 16),
+      ),
+      const AleraDropdownEntry<GitHistoryCommitMenuAction>(
         value: .revertCommit,
         label: 'Revert Commit',
         localizeLabel: false,
         leading: Icon(AleraIcons.restore, size: 16),
       ),
-      PopupMenuDivider(),
       AleraDropdownEntry<GitHistoryCommitMenuAction>(
+        value: .dropCommit,
+        label: 'Drop Commit',
+        localizeLabel: false,
+        enabled: item.parentIds.isNotEmpty,
+        leading: const Icon(AleraIcons.delete, size: 16),
+      ),
+      AleraDropdownEntry<GitHistoryCommitMenuAction>(
+        value: .mergeIntoCurrentBranch,
+        label: 'Merge Into Current Branch',
+        localizeLabel: false,
+        enabled: currentBranchName?.trim().isNotEmpty ?? false,
+        leading: const Icon(AleraIcons.gitMerge, size: 16),
+      ),
+      AleraDropdownEntry<GitHistoryCommitMenuAction>(
+        value: .rebaseCurrentBranch,
+        label: 'Rebase Current Branch Onto This Commit',
+        localizeLabel: false,
+        enabled: currentBranchName?.trim().isNotEmpty ?? false,
+        leading: const Icon(AleraIcons.gitFork, size: 16),
+      ),
+      const PopupMenuDivider(),
+      const AleraDropdownEntry<GitHistoryCommitMenuAction>(
         value: .resetSoft,
         label: 'Reset Current Branch Here (Soft)',
         localizeLabel: false,
         leading: Icon(AleraIcons.restart, size: 16),
       ),
-      AleraDropdownEntry<GitHistoryCommitMenuAction>(
+      const AleraDropdownEntry<GitHistoryCommitMenuAction>(
         value: .resetMixed,
         label: 'Reset Current Branch Here (Mixed)',
         localizeLabel: false,
         leading: Icon(AleraIcons.restart, size: 16),
       ),
-      AleraDropdownEntry<GitHistoryCommitMenuAction>(
+      const AleraDropdownEntry<GitHistoryCommitMenuAction>(
         value: .resetHard,
         label: 'Reset Current Branch Here (Hard)',
         localizeLabel: false,
         leading: Icon(AleraIcons.restart, size: 16),
       ),
+      const AleraDropdownEntry<GitHistoryCommitMenuAction>(
+        value: .createArchive,
+        label: 'Create Archive…',
+        localizeLabel: false,
+        leading: Icon(AleraIcons.archive, size: 16),
+      ),
     ],
   );
 }
-
-/// Short commit id used in confirmation copy and toasts.
-String gitHistoryItemShortId(GitHistoryItem item) =>
-    item.id.length > 7 ? item.id.substring(0, 7) : item.id;
 
 /// Asks the user to confirm detaching HEAD at [item]. The copy calls out the
 /// detached state because commits made there do not move any branch.

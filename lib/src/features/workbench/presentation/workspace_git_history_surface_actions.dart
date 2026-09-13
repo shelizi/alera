@@ -10,18 +10,28 @@ extension _WorkspaceGitHistorySurfaceActions
       context,
       item,
       globalPosition,
+      currentBranchName: _currentRef?.name,
     );
     if (!mounted || action == null) {
+      return;
+    }
+    final handled = await runGitHistoryCommitMenuAction(
+      context: context,
+      action: action,
+      item: item,
+      backend: ref.read(gitBackendProvider),
+      path: _sourceControlScope.path,
+      currentBranchName: _currentRef?.name,
+      onMutationSuccess: _refreshAfterGitHistoryMutation,
+    );
+    if (handled || !mounted) {
       return;
     }
     switch (action) {
       case GitHistoryCommitMenuAction.copyHash:
         await _copyCommitText(item.id, 'Commit Hash');
       case GitHistoryCommitMenuAction.copySubject:
-        await _copyCommitText(
-          item.message.trim().isEmpty ? item.subject : item.message,
-          'Commit Subject',
-        );
+        await _copyCommitText(item.subject, 'Commit Subject');
       case GitHistoryCommitMenuAction.checkoutCommit:
         await _checkoutCommit(item);
       case GitHistoryCommitMenuAction.revertCommit:
@@ -32,7 +42,117 @@ extension _WorkspaceGitHistorySurfaceActions
         await _resetToCommit(item, GitResetMode.mixed);
       case GitHistoryCommitMenuAction.resetHard:
         await _resetToCommit(item, GitResetMode.hard);
+      case GitHistoryCommitMenuAction.addTag:
+      case GitHistoryCommitMenuAction.createBranch:
+      case GitHistoryCommitMenuAction.cherryPick:
+      case GitHistoryCommitMenuAction.dropCommit:
+      case GitHistoryCommitMenuAction.mergeIntoCurrentBranch:
+      case GitHistoryCommitMenuAction.rebaseCurrentBranch:
+      case GitHistoryCommitMenuAction.createArchive:
+        break;
     }
+  }
+
+  Future<void> _handleCommitTap(GitHistoryItem item) async {
+    if (_isCompareModifierPressed) {
+      final anchor = _compareAnchorId;
+      if (anchor == null) {
+        _setSurfaceState(() => _compareAnchorId = item.id);
+        return;
+      }
+      if (anchor == item.id) {
+        return;
+      }
+      _setSurfaceState(() => _compareAnchorId = null);
+      await _openCommitRange(anchor, item);
+      return;
+    }
+    if (_compareAnchorId != null) {
+      _setSurfaceState(() => _compareAnchorId = null);
+    }
+    await _openCommit(item);
+  }
+
+  bool get _isCompareModifierPressed {
+    final keyboard = HardwareKeyboard.instance;
+    return Platform.isMacOS
+        ? keyboard.isMetaPressed
+        : keyboard.isControlPressed;
+  }
+
+  Future<void> _openCommit(GitHistoryItem item) {
+    return _openCommitComparison(
+      item: item,
+      cacheKey: item.id,
+      load: () => ref
+          .read(gitBackendProvider)
+          .commitCompare(path: _sourceControlScope.path, commitId: item.id),
+    );
+  }
+
+  Future<void> _openCommitRange(String anchorId, GitHistoryItem item) {
+    return _openCommitComparison(
+      item: item,
+      cacheKey: _rangeCompareCacheKey(anchorId, item.id),
+      load: () => ref
+          .read(gitBackendProvider)
+          .compareRange(
+            path: _sourceControlScope.path,
+            baseRef: anchorId,
+            headRef: item.id,
+          ),
+    );
+  }
+
+  Future<void> _openCommitComparison({
+    required GitHistoryItem item,
+    required String cacheKey,
+    required Future<GitCommitCompareResult> Function() load,
+  }) async {
+    try {
+      final compare = _compareCache[cacheKey] ?? await load();
+      if (!mounted) {
+        return;
+      }
+      if (compare.summary.status != GitCommitCompareStatus.ready) {
+        throw GitInternalException(
+          compare.summary.errorMessage ?? 'Failed to load commit diff.',
+        );
+      }
+      _compareCache[cacheKey] = compare;
+      await ref
+          .read(workbenchControllerProvider.notifier)
+          .openGitCommitDiffTab(
+            workspace: widget.workspace,
+            scope: .all,
+            gitDiffRoot: _sourceControlScope.relativeRoot,
+            commitOid: compare.summary.commitOid,
+            parentOid: compare.summary.parentOid,
+            compareRef: compare.summary.compareRef,
+            subject: item.subject,
+            message: item.message,
+          );
+    } catch (error) {
+      if (mounted) {
+        AleraToast.show(
+          context,
+          message: gitHistoryErrorMessage(error),
+          tone: .error,
+        );
+      }
+    }
+  }
+
+  String _rangeCompareCacheKey(String anchorId, String headId) =>
+      '\u0000git-history-range\u0000$anchorId\u0000$headId';
+
+  Future<void> _refreshAfterGitHistoryMutation() async {
+    _compareCache.clear();
+    await _reload();
+    if (!mounted) {
+      return;
+    }
+    await _withSourceControl((notifier) => notifier.refresh());
   }
 
   Future<void> _checkoutCommit(GitHistoryItem item) async {
@@ -104,7 +224,7 @@ extension _WorkspaceGitHistorySurfaceActions
     final provider = workspaceSourceControlControllerProvider(
       _sourceControlScope.path,
     );
-    final subscription = ref.listenManual(provider, (_, __) {});
+    final subscription = ref.listenManual(provider, (_, _) {});
     try {
       return await action(ref.read(provider.notifier));
     } finally {
