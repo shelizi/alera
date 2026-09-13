@@ -181,6 +181,9 @@ impl ServerActor {
         token: &str,
         continuation: DispatchContextContinuation,
     ) -> HostResult<()> {
+        if self.pending_dispatch_installs.contains_key(dispatch_id) {
+            return Ok(());
+        }
         let path = self.dispatch_context_path(handle);
         let gate = dispatch_context_gate(&path)?;
         let generation = {
@@ -292,7 +295,7 @@ impl ServerActor {
         generation: u64,
         result: HostResult<()>,
     ) {
-        let Some(pending) = self.pending_dispatch_installs.remove(&dispatch_id) else {
+        let Some(pending) = self.pending_dispatch_installs.get(&dispatch_id) else {
             return;
         };
         let still_current = pending
@@ -303,6 +306,10 @@ impl ServerActor {
         if pending.generation != generation || !still_current {
             return;
         }
+        let pending = self
+            .pending_dispatch_installs
+            .remove(&dispatch_id)
+            .expect("dispatch context install is still pending");
         if let Err(error) = result {
             let _ = self
                 .runtime_store

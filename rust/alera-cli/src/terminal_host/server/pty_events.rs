@@ -2,6 +2,74 @@ use super::terminal_startup_commands::auto_closes_on_success;
 use super::*;
 use crate::terminal_host::session::PtyEvent;
 
+struct OutputPersistenceState {
+    key: (std::path::PathBuf, String),
+    pending: std::sync::atomic::AtomicUsize,
+    notify: tokio::sync::Notify,
+}
+
+struct OutputPersistenceCompletion(std::sync::Arc<OutputPersistenceState>);
+
+impl Drop for OutputPersistenceCompletion {
+    fn drop(&mut self) {
+        complete_output_persistence(&self.0);
+    }
+}
+
+impl Drop for OutputPersistenceState {
+    fn drop(&mut self) {
+        let Some(states) = OUTPUT_PERSISTENCE_STATES.get() else {
+            return;
+        };
+        let mut states = states.lock().unwrap_or_else(|error| error.into_inner());
+        if states
+            .get(&self.key)
+            .is_some_and(|state| state.upgrade().is_none())
+        {
+            states.remove(&self.key);
+        }
+    }
+}
+
+static OUTPUT_PERSISTENCE_STATES: std::sync::OnceLock<
+    std::sync::Mutex<
+        std::collections::HashMap<
+            (std::path::PathBuf, String),
+            std::sync::Weak<OutputPersistenceState>,
+        >,
+    >,
+> = std::sync::OnceLock::new();
+
+fn output_persistence_state(
+    runtime_dir: &std::path::Path,
+    session_id: &str,
+) -> std::sync::Arc<OutputPersistenceState> {
+    let states = OUTPUT_PERSISTENCE_STATES.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
+    let mut states = states.lock().unwrap_or_else(|error| error.into_inner());
+    states.retain(|_, state| state.strong_count() > 0);
+    let key = (runtime_dir.to_path_buf(), session_id.to_string());
+    if let Some(state) = states.get(&key).and_then(std::sync::Weak::upgrade) {
+        return state;
+    }
+    let state = std::sync::Arc::new(OutputPersistenceState {
+        key: key.clone(),
+        pending: std::sync::atomic::AtomicUsize::new(0),
+        notify: tokio::sync::Notify::new(),
+    });
+    states.insert(key, std::sync::Arc::downgrade(&state));
+    state
+}
+
+fn complete_output_persistence(state: &OutputPersistenceState) {
+    state
+        .pending
+        .fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+    state.notify.notify_waiters();
+    // `notified()` registers its waiter when it is polled, so keep a permit
+    // for the case where completion lands between the barrier's check and await.
+    state.notify.notify_one();
+}
+
 impl ServerActor {
     pub(super) async fn handle_pty_event(&mut self, session_id: String, pty_event: PtyEvent) {
         match pty_event {
@@ -251,7 +319,11 @@ impl ServerActor {
                     self.broadcast_terminal_error(&session_id, message);
                     return;
                 }
-                self.schedule_terminal_startup_submit(session_id, session_instance_id);
+                if let Err(error) =
+                    self.schedule_terminal_startup_submit(session_id.clone(), session_instance_id)
+                {
+                    self.broadcast_terminal_error(&session_id, error.wire_message());
+                }
             }
         }
     }
@@ -443,23 +515,40 @@ impl ServerActor {
 
     fn persist_output_batch(&mut self, session_id: String, sequence: i64, data: Vec<u8>) {
         let store = self.store.clone();
+        let state = output_persistence_state(&self.runtime_dir, &session_id);
+        state
+            .pending
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         let task_session_id = session_id.clone();
-        let handle = tokio::spawn(async move {
+        let completion = OutputPersistenceCompletion(std::sync::Arc::clone(&state));
+        let task = async move {
+            let _completion = completion;
             let _ = store.append_output(&task_session_id, sequence, &data).await;
-        });
-        let pending = self.pending_output_writes.entry(session_id).or_default();
-        pending.retain(|existing| !existing.is_finished());
-        pending.push(handle);
+        };
+        if let Err(error) = self.deferred_admission.schedule(
+            super::deferred_admission::DeferredRequestClass::Maintenance,
+            "terminal.output.persist",
+            None,
+            task,
+        ) {
+            tracing::warn!(
+                "terminal output persistence was not admitted for {session_id}: {}",
+                error.wire_message()
+            );
+        }
     }
 
     pub(super) async fn await_output_writes(&mut self, session_id: &str) {
-        let Some(handles) = self.pending_output_writes.remove(session_id) else {
-            return;
-        };
-        if tokio::time::timeout(
-            OUTPUT_PERSISTENCE_BARRIER_TIMEOUT,
-            futures_util::future::join_all(handles),
-        )
+        let state = output_persistence_state(&self.runtime_dir, session_id);
+        if tokio::time::timeout(OUTPUT_PERSISTENCE_BARRIER_TIMEOUT, async {
+            loop {
+                let notified = state.notify.notified();
+                if state.pending.load(std::sync::atomic::Ordering::Acquire) == 0 {
+                    break;
+                }
+                notified.await;
+            }
+        })
         .await
         .is_err()
         {

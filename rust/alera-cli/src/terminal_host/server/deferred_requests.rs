@@ -475,7 +475,7 @@ impl ServerActor {
                     client_id,
                     request_id,
                     request_type.ends_with("install"),
-                );
+                )?;
                 Ok(true)
             }
             "agentSkill.install" => {

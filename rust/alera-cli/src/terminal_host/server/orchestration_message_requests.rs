@@ -161,7 +161,11 @@ impl ServerActor {
                 inject,
             },
         );
-        self.spawn_wait_timeout(waiter_id, wait_timeout_ms(payload));
+        if let Err(error) = self.spawn_wait_timeout(waiter_id, wait_timeout_ms(payload), client_id)
+        {
+            self.orchestration_waiters.take_by_id(waiter_id);
+            return Err(error);
+        }
         Ok(None)
     }
 
@@ -351,7 +355,11 @@ impl ServerActor {
                 after_sequence: message.sequence,
             },
         );
-        self.spawn_wait_timeout(waiter_id, wait_timeout_ms(payload));
+        if let Err(error) = self.spawn_wait_timeout(waiter_id, wait_timeout_ms(payload), client_id)
+        {
+            self.orchestration_waiters.take_by_id(waiter_id);
+            return Err(error);
+        }
         Ok(None)
     }
 }
