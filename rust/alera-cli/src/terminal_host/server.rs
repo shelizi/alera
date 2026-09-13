@@ -59,6 +59,8 @@ mod agent_profile_launch_requests;
 mod agent_prompt_composition;
 #[cfg(test)]
 mod agent_settings_contract_tests;
+#[cfg(test)]
+mod agent_settings_contract_tests_runtime_settings;
 mod agent_spawn_install;
 mod agent_title_context;
 mod agent_title_events;
@@ -112,6 +114,8 @@ mod deferred_admission_metrics;
 #[cfg(test)]
 mod deferred_admission_tests;
 #[cfg(test)]
+mod deferred_admission_tests_delayed_timers;
+#[cfg(test)]
 mod deferred_project_requests_tests;
 mod deferred_requests;
 #[cfg(test)]
@@ -120,6 +124,8 @@ mod dispatch_context_continuations;
 mod dispatch_context_install;
 #[cfg(test)]
 mod dispatch_context_install_tests;
+#[cfg(test)]
+mod dispatch_context_install_tests_startup_recovery;
 mod host_service_agent_integrations;
 mod host_service_agent_quota;
 #[cfg(test)]

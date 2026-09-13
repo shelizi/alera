@@ -11,14 +11,14 @@ use chrono::Utc;
 use serde_json::{json, Value};
 use tokio::sync::mpsc::UnboundedReceiver;
 
-use super::actor_test_harness::{local_client, mobile_client, test_actor};
+use super::actor_test_harness::{local_client, test_actor};
 use super::requests::idempotency_receipts::{
     payload_digest, prepare_receipt, settle_receipt, ReceiptPrepareOutcome,
 };
 use super::{ServerActor, ServerCommand};
 use crate::terminal_host::client::{ClientFrame, ClientHandle};
 
-async fn wire_call(
+pub(super) async fn wire_call(
     actor: &mut ServerActor,
     client_id: u64,
     request_id: i64,
@@ -38,7 +38,10 @@ async fn wire_call(
         .await
 }
 
-async fn read_response(responses: &mut UnboundedReceiver<ClientFrame>, request_id: i64) -> Value {
+pub(super) async fn read_response(
+    responses: &mut UnboundedReceiver<ClientFrame>,
+    request_id: i64,
+) -> Value {
     for _ in 0..8 {
         let response = tokio::time::timeout(std::time::Duration::from_secs(1), responses.recv())
             .await
@@ -53,7 +56,7 @@ async fn read_response(responses: &mut UnboundedReceiver<ClientFrame>, request_i
     panic!("no response for request {request_id}");
 }
 
-async fn deferred_request(
+pub(super) async fn deferred_request(
     actor: &mut ServerActor,
     client_id: u64,
     request_id: i64,
@@ -212,38 +215,6 @@ async fn agent_profile_remove_distinguishes_typed_conflicts_from_plain_errors() 
         assert_eq!(removed["ok"], true, "{removed}");
         assert_eq!(removed["payload"]["removed"], request_id == 23);
     }
-}
-
-#[tokio::test]
-async fn runtime_settings_update_reapplies_the_same_values_idempotently() {
-    let dir = tempfile::tempdir().unwrap();
-    let (handle, mut responses) = ClientHandle::test_channels();
-    let mut actor = test_actor(
-        &dir,
-        HashMap::from([(1, local_client(handle))]),
-        HashMap::new(),
-    )
-    .await;
-
-    for request_id in [30, 31] {
-        wire_call(
-            &mut actor,
-            1,
-            request_id,
-            "runtimeSettings.update",
-            json!({ "confirmProjectRemoval": false }),
-        )
-        .await;
-        let response = read_response(&mut responses, request_id).await;
-        assert_eq!(response["ok"], true, "{response}");
-        // The reply is the re-assembled settings, not an acknowledgement.
-        assert_eq!(response["payload"]["confirmProjectRemoval"], false);
-        assert!(response["payload"]["automation"].is_object(), "{response}");
-    }
-    assert_eq!(
-        actor.runtime_store.confirm_project_removal().await.unwrap(),
-        false
-    );
 }
 
 #[tokio::test]
@@ -449,162 +420,6 @@ async fn agent_quota_consume_without_a_client_mutation_id_keeps_legacy_validatio
     assert_eq!(
         response["error"],
         "offerRevision must be a non-empty string"
-    );
-}
-
-#[tokio::test]
-async fn runtime_settings_update_validates_the_full_payload_before_writing() {
-    let dir = tempfile::tempdir().unwrap();
-    let (handle, mut responses) = ClientHandle::test_channels();
-    let mut actor = test_actor(
-        &dir,
-        HashMap::from([(1, local_client(handle))]),
-        HashMap::new(),
-    )
-    .await;
-
-    wire_call(
-        &mut actor,
-        1,
-        60,
-        "runtimeSettings.update",
-        json!({ "confirmProjectRemoval": false }),
-    )
-    .await;
-    let initial = read_response(&mut responses, 60).await;
-    assert_eq!(initial["ok"], true, "{initial}");
-    assert_eq!(initial["payload"]["revision"], 1);
-
-    // The valid key must not be committed when the same payload contains an
-    // unsupported key.
-    wire_call(
-        &mut actor,
-        1,
-        61,
-        "runtimeSettings.update",
-        json!({ "confirmProjectRemoval": true, "notASetting": false }),
-    )
-    .await;
-    let rejected = read_response(&mut responses, 61).await;
-    assert_eq!(rejected["ok"], false, "{rejected}");
-    assert!(
-        rejected["error"]
-            .as_str()
-            .is_some_and(|error| error.contains("Unsupported runtime setting")),
-        "{rejected}"
-    );
-    assert_eq!(
-        actor.runtime_store.confirm_project_removal().await.unwrap(),
-        false,
-        "an invalid later key must not partially commit the valid key"
-    );
-    assert_eq!(
-        actor.runtime_settings_snapshot().await.unwrap()["revision"],
-        1
-    );
-}
-
-#[tokio::test]
-async fn runtime_settings_update_checks_expected_revision_and_preserves_lww_without_it() {
-    let dir = tempfile::tempdir().unwrap();
-    let (handle, mut responses) = ClientHandle::test_channels();
-    let mut actor = test_actor(
-        &dir,
-        HashMap::from([(1, mobile_client(handle, "phone"))]),
-        HashMap::new(),
-    )
-    .await;
-
-    wire_call(
-        &mut actor,
-        1,
-        70,
-        "mobile.runtimeSettings.update",
-        json!({ "confirmProjectRemoval": false }),
-    )
-    .await;
-    let initial = read_response(&mut responses, 70).await;
-    assert_eq!(initial["ok"], true, "{initial}");
-    assert_eq!(initial["payload"]["revision"], 1);
-
-    wire_call(
-        &mut actor,
-        1,
-        71,
-        "mobile.runtimeSettings.update",
-        json!({ "confirmProjectRemoval": true, "expectedRevision": 0 }),
-    )
-    .await;
-    let conflict = read_response(&mut responses, 71).await;
-    assert_eq!(conflict["ok"], false, "{conflict}");
-    assert_eq!(conflict["errorCode"], "runtime_settings_revision_conflict");
-    assert_eq!(conflict["errorDetails"]["expectedRevision"], 0);
-    assert_eq!(conflict["errorDetails"]["actualRevision"], 1);
-    assert_eq!(
-        actor.runtime_store.confirm_project_removal().await.unwrap(),
-        false,
-        "a stale revision must not write any keys"
-    );
-
-    wire_call(
-        &mut actor,
-        1,
-        72,
-        "mobile.runtimeSettings.update",
-        json!({ "confirmProjectRemoval": true, "expectedRevision": 1 }),
-    )
-    .await;
-    let committed = read_response(&mut responses, 72).await;
-    assert_eq!(committed["ok"], true, "{committed}");
-    assert_eq!(committed["payload"]["confirmProjectRemoval"], true);
-    assert_eq!(committed["payload"]["revision"], 2);
-
-    // Omitting the additive field retains the legacy last-write-wins path.
-    wire_call(
-        &mut actor,
-        1,
-        73,
-        "mobile.runtimeSettings.update",
-        json!({ "confirmProjectRemoval": false }),
-    )
-    .await;
-    let lww = read_response(&mut responses, 73).await;
-    assert_eq!(lww["ok"], true, "{lww}");
-    assert_eq!(lww["payload"]["confirmProjectRemoval"], false);
-    assert_eq!(lww["payload"]["revision"], 3);
-}
-
-#[tokio::test]
-async fn mobile_runtime_settings_update_rejects_desktop_only_keys() {
-    let dir = tempfile::tempdir().unwrap();
-    let (handle, mut responses) = ClientHandle::test_channels();
-    let mut actor = test_actor(
-        &dir,
-        HashMap::from([(1, mobile_client(handle, "phone"))]),
-        HashMap::new(),
-    )
-    .await;
-
-    wire_call(
-        &mut actor,
-        1,
-        40,
-        "mobile.runtimeSettings.update",
-        json!({ "aiTextGeneration": { "enabled": true }, "confirmProjectRemoval": false }),
-    )
-    .await;
-    let response = read_response(&mut responses, 40).await;
-    assert_eq!(response["ok"], false, "{response}");
-    assert!(
-        response["error"]
-            .as_str()
-            .is_some_and(|error| error.contains("Unsupported mobile setting")),
-        "{response}"
-    );
-    // The allowlist rejects the payload before any key is applied.
-    assert_eq!(
-        actor.runtime_store.confirm_project_removal().await.unwrap(),
-        true
     );
 }
 
