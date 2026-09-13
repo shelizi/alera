@@ -1,15 +1,15 @@
-use std::sync::Arc;
-
 use serde_json::{json, Value};
 use tokio::sync::oneshot;
 
-use crate::mobile_access::host_name;
-use crate::terminal_host::alera_account::{
-    bind_callback_listener, wait_for_callback, AleraAccountService, AuthProvider, Pkce,
-};
+use crate::terminal_host::alera_account::{wait_for_callback, AuthProvider};
 use crate::terminal_host::host_error::{HostError, HostResult};
 use crate::terminal_host::protocol::{error_response, event, ok_response};
 
+use super::account_push_state::{
+    account_error, async_account_delete, async_account_sign_out, async_account_transfer,
+    async_mobile_enrollment, prepare_sign_in,
+};
+use super::deferred_admission::DeferredRequestClass;
 use super::request_payloads::parse_payload;
 use super::requests::require_string_key;
 use super::{ServerActor, ServerCommand};
@@ -21,6 +21,18 @@ pub(crate) enum AccountOperation {
     Delete,
     Transfer,
     MobileEnrollment,
+}
+
+impl AccountOperation {
+    fn request_type(self) -> &'static str {
+        match self {
+            Self::Configuration => "configuration.cloud",
+            Self::SignOut => "account.signOut",
+            Self::Delete => "account.delete",
+            Self::Transfer => "account.transfer.confirm",
+            Self::MobileEnrollment => "mobile.cloudEnrollment.create",
+        }
+    }
 }
 
 pub(crate) enum AccountCommand {
@@ -93,18 +105,13 @@ impl ServerActor {
             "account.signIn.start" | "account.link.start" => {
                 self.require_auth(client_id)?;
                 self.require_request_allowed(client_id, request_type)?;
-                if self.account_push.sign_in_cancel.is_some() {
-                    return Err(HostError::state(
-                        "An Alera account sign-in is already in progress.",
-                    ));
-                }
                 let request: SignInRequest = parse_payload(payload)?;
                 self.start_account_sign_in(
                     client_id,
                     request_id,
                     request.provider,
                     request_type == "account.link.start",
-                );
+                )?;
                 Ok(true)
             }
             "account.signOut" => {
@@ -204,20 +211,27 @@ impl ServerActor {
         self.require_request_allowed(client_id, request_type)
     }
 
-    fn start_account_sign_in(
+    pub(super) fn start_account_sign_in(
         &mut self,
         client_id: u64,
         request_id: i64,
         provider: AuthProvider,
         linking: bool,
-    ) {
+    ) -> HostResult<()> {
+        if self.account_push.sign_in_cancel.is_some() {
+            return Err(HostError::state(
+                "An Alera account sign-in is already in progress.",
+            ));
+        }
         let (cancel_tx, cancel_rx) = oneshot::channel();
-        self.account_push.sign_in_cancel = Some(cancel_tx);
-        self.account_push.cloud_jobs += 1;
-        self.cancel_shutdown_timer();
         let inbox = self.inbox.clone();
         let service = self.account_push.service.clone();
-        tokio::spawn(async move {
+        let request_type = if linking {
+            "account.link.start"
+        } else {
+            "account.signIn.start"
+        };
+        self.admit_cloud_job(request_type, None, async move {
             let preparation = prepare_sign_in(&service, provider, linking).await;
             let (listener, redirect_uri, pkce, transaction) = match preparation {
                 Ok(value) => value,
@@ -257,7 +271,9 @@ impl ServerActor {
             let _ = inbox.send(ServerCommand::Account(AccountCommand::SignInCompleted {
                 result,
             }));
-        });
+        })?;
+        self.account_push.sign_in_cancel = Some(cancel_tx);
+        Ok(())
     }
 
     pub(super) fn start_account_operation<F>(
@@ -269,10 +285,8 @@ impl ServerActor {
     ) where
         F: std::future::Future<Output = HostResult<Value>> + Send + 'static,
     {
-        self.account_push.cloud_jobs += 1;
-        self.cancel_shutdown_timer();
         let inbox = self.inbox.clone();
-        tokio::spawn(async move {
+        let task = async move {
             let result = future.await;
             let _ = inbox.send(ServerCommand::Account(AccountCommand::OperationFinished {
                 client_id,
@@ -280,7 +294,10 @@ impl ServerActor {
                 operation,
                 result,
             }));
-        });
+        };
+        if let Err(error) = self.admit_cloud_job(operation.request_type(), Some(client_id), task) {
+            self.client_write(client_id, error_response(request_id, &error));
+        }
     }
 
     pub(super) fn handle_account_sign_in_prepared(
@@ -330,11 +347,9 @@ impl ServerActor {
             return;
         }
         self.account_push.subscription_sync_in_flight = true;
-        self.account_push.cloud_jobs += 1;
-        self.cancel_shutdown_timer();
         let inbox = self.inbox.clone();
         let service = self.account_push.service.clone();
-        tokio::spawn(async move {
+        let task = async move {
             let result = service
                 .refresh_push_subscriptions()
                 .await
@@ -342,7 +357,14 @@ impl ServerActor {
             let _ = inbox.send(ServerCommand::Account(
                 AccountCommand::SubscriptionSyncFinished { result },
             ));
-        });
+        };
+        if let Err(error) = self.admit_cloud_job("mobile.cloudSubscriptions.refresh", None, task) {
+            self.account_push.subscription_sync_in_flight = false;
+            let waiters = std::mem::take(&mut self.account_push.subscription_sync_waiters);
+            for (client_id, request_id) in waiters {
+                self.client_write(client_id, error_response(request_id, &error));
+            }
+        }
     }
 
     pub(super) fn handle_push_subscription_sync_finished(&mut self, result: HostResult<usize>) {
@@ -415,68 +437,24 @@ impl ServerActor {
         }
         self.schedule_shutdown_if_idle();
     }
-}
 
-async fn prepare_sign_in(
-    service: &AleraAccountService,
-    provider: AuthProvider,
-    linking: bool,
-) -> anyhow::Result<(
-    tokio::net::TcpListener,
-    String,
-    Pkce,
-    crate::terminal_host::alera_account::AuthTransaction,
-)> {
-    let (listener, redirect_uri) = bind_callback_listener().await?;
-    let pkce = Pkce::generate();
-    let transaction = if linking {
-        service
-            .create_link_transaction(provider, &redirect_uri, &pkce.challenge)
-            .await?
-    } else {
-        service
-            .create_auth_transaction(provider, &redirect_uri, &pkce.challenge, &host_name())
-            .await?
-    };
-    Ok((listener, redirect_uri, pkce, transaction))
-}
-
-async fn async_account_sign_out(service: Arc<AleraAccountService>) -> HostResult<Value> {
-    service.sign_out().await.map_err(account_error)?;
-    Ok(json!({ "connected": false }))
-}
-
-async fn async_account_delete(service: Arc<AleraAccountService>) -> HostResult<Value> {
-    service.delete_account().await.map_err(account_error)?;
-    Ok(json!({ "deleted": true }))
-}
-
-async fn async_account_transfer(
-    service: Arc<AleraAccountService>,
-    target_account_id: String,
-) -> HostResult<Value> {
-    service
-        .transfer_runtime(&target_account_id)
-        .await
-        .map_err(account_error)?;
-    Ok(json!({
-        "transferred": true,
-        "reauthenticationRequired": true,
-    }))
-}
-
-async fn async_mobile_enrollment(
-    service: Arc<AleraAccountService>,
-    device_id: String,
-    device_name: String,
-) -> HostResult<Value> {
-    service
-        .create_mobile_enrollment(&device_id, &device_name)
-        .await
-        .map(|enrollment| json!(enrollment))
-        .map_err(account_error)
-}
-
-fn account_error(error: impl std::fmt::Display) -> HostError {
-    HostError::state(error.to_string())
+    fn admit_cloud_job<F>(
+        &mut self,
+        request_type: &str,
+        client_id: Option<u64>,
+        task: F,
+    ) -> HostResult<()>
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
+        self.deferred_admission.schedule(
+            DeferredRequestClass::Bulk,
+            request_type,
+            client_id,
+            task,
+        )?;
+        self.account_push.cloud_jobs += 1;
+        self.cancel_shutdown_timer();
+        Ok(())
+    }
 }

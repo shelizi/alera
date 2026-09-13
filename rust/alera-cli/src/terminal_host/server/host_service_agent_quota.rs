@@ -10,6 +10,7 @@ use crate::agent_quota::{
 use crate::terminal_host::host_error::{HostError, HostResult};
 use crate::terminal_host::protocol::{error_response, event, ok_response};
 
+use super::deferred_admission::DeferredRequestClass;
 use super::host_service_requests::required_non_blank;
 use super::{ServerActor, ServerCommand};
 
@@ -27,32 +28,37 @@ impl ServerActor {
         let include_grok = payload.get("includeGrok").and_then(Value::as_bool) == Some(true);
         let store = self.runtime_store.clone();
         let inbox = self.inbox.clone();
-        tokio::spawn(async move {
-            let result = async {
-                let settings = store
-                    .agent_quota_settings()
+        self.deferred_admission.schedule(
+            DeferredRequestClass::Bulk,
+            "agentUsage.snapshot",
+            Some(client_id),
+            async move {
+                let result = async {
+                    let settings = store
+                        .agent_quota_settings()
+                        .await
+                        .map_err(|error| HostError::state(error.to_string()))?;
+                    let claude_profiles = settings.claude_profiles_for_usage();
+                    fetch_agent_usage(json!({
+                        "sinceDay": since_day,
+                        "untilDay": until_day,
+                        "includeGrok": include_grok,
+                        "claudeDefaultEnabled": settings.claude_default_show_in_usage,
+                        "claudeProfiles": claude_profiles,
+                    }))
                     .await
-                    .map_err(|error| HostError::state(error.to_string()))?;
-                let claude_profiles = settings.claude_profiles_for_usage();
-                fetch_agent_usage(json!({
-                    "sinceDay": since_day,
-                    "untilDay": until_day,
-                    "includeGrok": include_grok,
-                    "claudeDefaultEnabled": settings.claude_default_show_in_usage,
-                    "claudeProfiles": claude_profiles,
-                }))
-                .await
-                .map_err(|error| HostError::state(error.to_string()))
-            }
-            .await;
-            let _ = inbox.send(ServerCommand::HostToolFinished {
-                client_id,
-                request_id,
-                result,
-                operation_id: None,
-                skill: None,
-            });
-        });
+                    .map_err(|error| HostError::state(error.to_string()))
+                }
+                .await;
+                let _ = inbox.send(ServerCommand::HostToolFinished {
+                    client_id,
+                    request_id,
+                    result,
+                    operation_id: None,
+                    skill: None,
+                });
+            },
+        )?;
         Ok(())
     }
 
@@ -83,37 +89,42 @@ impl ServerActor {
         }
         let store = self.runtime_store.clone();
         let inbox = self.inbox.clone();
-        tokio::spawn(async move {
-            let result = async {
-                let settings = store
-                    .agent_quota_settings()
-                    .await
-                    .map_err(|error| HostError::state(error.to_string()))?;
-                let providers = if settings.enabled_providers.is_empty() {
-                    vec!["__none__".to_string()]
-                } else {
-                    settings.enabled_providers
-                };
-                let quota_payload = json!({
-                    "providers": providers,
-                    "claudeDefaultEnabled": settings.claude_default_enabled,
-                    "claudeProfiles": settings.claude_profiles,
-                    "environmentNames": settings.environment,
-                    "environmentValues": environment_values,
-                    "allowCliFallback": false,
+        self.deferred_admission.schedule(
+            DeferredRequestClass::Bulk,
+            "agentQuota.snapshot",
+            Some(client_id),
+            async move {
+                let result = async {
+                    let settings = store
+                        .agent_quota_settings()
+                        .await
+                        .map_err(|error| HostError::state(error.to_string()))?;
+                    let providers = if settings.enabled_providers.is_empty() {
+                        vec!["__none__".to_string()]
+                    } else {
+                        settings.enabled_providers
+                    };
+                    let quota_payload = json!({
+                        "providers": providers,
+                        "claudeDefaultEnabled": settings.claude_default_enabled,
+                        "claudeProfiles": settings.claude_profiles,
+                        "environmentNames": settings.environment,
+                        "environmentValues": environment_values,
+                        "allowCliFallback": false,
+                    });
+                    fetch_agent_quotas(quota_payload)
+                        .await
+                        .map_err(|error| HostError::state(error.to_string()))
+                }
+                .await;
+                let _ = inbox.send(ServerCommand::AgentQuotaFinished {
+                    client_id,
+                    request_id,
+                    environment_signature,
+                    result,
                 });
-                fetch_agent_quotas(quota_payload)
-                    .await
-                    .map_err(|error| HostError::state(error.to_string()))
-            }
-            .await;
-            let _ = inbox.send(ServerCommand::AgentQuotaFinished {
-                client_id,
-                request_id,
-                environment_signature,
-                result,
-            });
-        });
+            },
+        )?;
         Ok(())
     }
 
@@ -131,37 +142,42 @@ impl ServerActor {
             .unwrap_or(0);
         let store = self.runtime_store.clone();
         let inbox = self.inbox.clone();
-        tokio::spawn(async move {
-            let result = async {
-                let settings = store
-                    .agent_quota_settings()
-                    .await
-                    .map_err(|error| HostError::state(error.to_string()))?;
-                let display_name = if account_id == "default" {
-                    "Default".to_string()
-                } else {
-                    settings
-                        .claude_profiles
-                        .iter()
-                        .find(|profile| profile.profile == account_id)
-                        .map(|profile| profile.alias.clone())
-                        .unwrap_or_else(|| account_id.clone())
-                };
-                let snapshot_value = fetch_claude_tui(&account_id, &display_name).await;
-                Ok(json!({
-                    "snapshot": snapshot_value.clone(),
-                    "snapshots": [snapshot_value],
-                    "environment": {},
-                }))
-            }
-            .await;
-            let _ = inbox.send(ServerCommand::AgentQuotaClaudeTuiFinished {
-                client_id,
-                request_id,
-                environment_signature,
-                result,
-            });
-        });
+        self.deferred_admission.schedule(
+            DeferredRequestClass::Bulk,
+            "agentQuota.fetchClaudeTui",
+            Some(client_id),
+            async move {
+                let result = async {
+                    let settings = store
+                        .agent_quota_settings()
+                        .await
+                        .map_err(|error| HostError::state(error.to_string()))?;
+                    let display_name = if account_id == "default" {
+                        "Default".to_string()
+                    } else {
+                        settings
+                            .claude_profiles
+                            .iter()
+                            .find(|profile| profile.profile == account_id)
+                            .map(|profile| profile.alias.clone())
+                            .unwrap_or_else(|| account_id.clone())
+                    };
+                    let snapshot_value = fetch_claude_tui(&account_id, &display_name).await;
+                    Ok(json!({
+                        "snapshot": snapshot_value.clone(),
+                        "snapshots": [snapshot_value],
+                        "environment": {},
+                    }))
+                }
+                .await;
+                let _ = inbox.send(ServerCommand::AgentQuotaClaudeTuiFinished {
+                    client_id,
+                    request_id,
+                    environment_signature,
+                    result,
+                });
+            },
+        )?;
         Ok(())
     }
 
@@ -170,7 +186,7 @@ impl ServerActor {
         client_id: u64,
         request_id: i64,
         payload: &Value,
-    ) {
+    ) -> HostResult<()> {
         let environment_signature = self
             .agent_quota_cache
             .as_ref()
@@ -179,17 +195,23 @@ impl ServerActor {
         let store = self.runtime_store.clone();
         let payload = payload.clone();
         let inbox = self.inbox.clone();
-        tokio::spawn(async move {
-            let result = consume_codex_reset_credit(&store, payload)
-                .await
-                .map_err(|error| HostError::state(error.to_string()));
-            let _ = inbox.send(ServerCommand::AgentQuotaCodexResetFinished {
-                client_id,
-                request_id,
-                environment_signature,
-                result,
-            });
-        });
+        self.deferred_admission.schedule(
+            DeferredRequestClass::Bulk,
+            "agentQuota.consumeCodexResetCredit",
+            Some(client_id),
+            async move {
+                let result = consume_codex_reset_credit(&store, payload)
+                    .await
+                    .map_err(|error| HostError::state(error.to_string()));
+                let _ = inbox.send(ServerCommand::AgentQuotaCodexResetFinished {
+                    client_id,
+                    request_id,
+                    environment_signature,
+                    result,
+                });
+            },
+        )?;
+        Ok(())
     }
 
     pub(super) fn handle_agent_quota_claude_tui_finished(

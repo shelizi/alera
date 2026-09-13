@@ -169,17 +169,29 @@ impl ServerActor {
             active.insert(request_id.clone(), cancel_tx);
         }
         let inbox = self.inbox.clone();
-        tokio::spawn(async move {
-            let result = job.run(&request_id, cancel_rx).await;
+        let task_request_id = request_id.clone();
+        let task = async move {
+            let result = job.run(&task_request_id, cancel_rx).await;
             if let Ok(mut active) = active_requests().lock() {
-                active.remove(&request_id);
+                active.remove(&task_request_id);
             }
             let _ = inbox.send(ServerCommand::AiDictationFinished {
                 client_id,
                 request_id: response_id,
                 result,
             });
-        });
+        };
+        if let Err(error) = self.deferred_admission.schedule(
+            super::deferred_admission::DeferredRequestClass::Bulk,
+            "aiDictation.transcribe",
+            Some(client_id),
+            task,
+        ) {
+            if let Ok(mut active) = active_requests().lock() {
+                active.remove(&request_id);
+            }
+            return Err(error);
+        }
         Ok(())
     }
 

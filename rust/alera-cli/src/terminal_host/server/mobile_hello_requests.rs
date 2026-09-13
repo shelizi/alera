@@ -81,17 +81,22 @@ impl ServerActor {
             .await?;
         let inbox = self.inbox.clone();
         // Desktop presence refreshes must not block the actor behind overlay CLIs.
-        tokio::spawn(async move {
-            let (tailscale, netbird) =
-                tokio::join!(crate::tailscale::detect(), crate::netbird::detect());
-            payload["tailscale"] = json!(tailscale);
-            payload["netbird"] = json!(netbird);
-            let _ = inbox.send(ServerCommand::MobileStatusFinished {
-                client_id,
-                request_id,
-                payload,
-            });
-        });
+        self.deferred_admission.schedule(
+            super::deferred_admission::DeferredRequestClass::Bulk,
+            "mobile.status.get",
+            Some(client_id),
+            async move {
+                let (tailscale, netbird) =
+                    tokio::join!(crate::tailscale::detect(), crate::netbird::detect());
+                payload["tailscale"] = json!(tailscale);
+                payload["netbird"] = json!(netbird);
+                let _ = inbox.send(ServerCommand::MobileStatusFinished {
+                    client_id,
+                    request_id,
+                    payload,
+                });
+            },
+        )?;
         Ok(())
     }
 
