@@ -138,3 +138,76 @@ async fn sleep_reports_committed_effect_when_activity_recording_fails() {
         .unwrap()
         .is_none());
 }
+
+#[tokio::test]
+async fn feature_retirement_migration_resumes_after_midway_failure_and_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = RuntimeStore::open(dir.path()).await.unwrap();
+    for statement in [
+        "CREATE TABLE codexChatState (threadId TEXT PRIMARY KEY, tabId TEXT NOT NULL, revision INTEGER NOT NULL, stateJson TEXT NOT NULL)",
+        "CREATE INDEX codexChatStateTab ON codexChatState(tabId)",
+        "CREATE TRIGGER codexChatStateDeleteTab AFTER DELETE ON workspaceTabs BEGIN DELETE FROM codexChatState WHERE tabId = OLD.id; END",
+    ] {
+        sqlx::query(statement).execute(store.pool()).await.unwrap();
+    }
+    sqlx::query("INSERT INTO codexChatState VALUES ('thread-1', 'legacy-codex', 1, '{}')")
+        .execute(store.pool())
+        .await
+        .unwrap();
+    let now = Utc::now();
+    store
+        .upsert_workspace_tab(WorkspaceTabRecord {
+            id: "legacy-codex".into(),
+            workspace_id: "workspace-1".into(),
+            kind: "codex".into(),
+            title: "Pending Chat".into(),
+            created_at: now,
+            updated_at: now,
+            payload: json!({"threadId": "thread-1"}),
+        })
+        .await
+        .unwrap();
+    sqlx::query(
+        "CREATE TRIGGER failFeatureRetirement BEFORE DELETE ON workspaceTabs BEGIN SELECT RAISE(ABORT, 'blocked retirement'); END",
+    )
+    .execute(store.pool())
+    .await
+    .unwrap();
+
+    let error = store.retire_removed_features().await.unwrap_err();
+    assert!(error.to_string().contains("blocked retirement"));
+    let objects: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM sqlite_master WHERE name IN ('codexChatState', 'codexChatStateTab', 'codexChatStateDeleteTab')",
+    )
+    .fetch_one(store.pool())
+    .await
+    .unwrap();
+    assert_eq!(objects, 3, "the failed migration must roll back its DDL");
+    assert!(store
+        .find_workspace_tab("legacy-codex")
+        .await
+        .unwrap()
+        .is_some());
+
+    sqlx::query("DROP TRIGGER failFeatureRetirement")
+        .execute(store.pool())
+        .await
+        .unwrap();
+    drop(store);
+
+    let restarted = RuntimeStore::open(dir.path()).await.unwrap();
+    restarted.retire_removed_features().await.unwrap();
+    restarted.retire_removed_features().await.unwrap();
+    assert!(restarted
+        .find_workspace_tab("legacy-codex")
+        .await
+        .unwrap()
+        .is_none());
+    let remaining_objects: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM sqlite_master WHERE name IN ('codexChatState', 'codexChatStateTab', 'codexChatStateDeleteTab')",
+    )
+    .fetch_one(restarted.pool())
+    .await
+    .unwrap();
+    assert_eq!(remaining_objects, 0);
+}
