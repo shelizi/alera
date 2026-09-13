@@ -7,6 +7,7 @@ import 'package:alera/src/shared/infra/git/git_commit_ops_models.dart';
 import 'package:alera/src/shared/infra/git/git_diff_models.dart';
 import 'package:alera/src/shared/infra/git/git_exception.dart';
 import 'package:alera/src/shared/infra/git/git_providers.dart';
+import 'package:flutter/foundation.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 part 'workspace_source_control_controller.g.dart';
@@ -85,6 +86,9 @@ class WorkspaceSourceControlController
   bool _watcherReloadQueued = false;
   int _queuedWatcherReloads = 0;
   int _loadGeneration = 0;
+  int _staleCompletionCount = 0;
+  @visibleForTesting
+  int get staleCompletionCount => _staleCompletionCount;
   bool _disposed = false;
 
   @override
@@ -347,6 +351,8 @@ class WorkspaceSourceControlController
       // when `build()` rejects, so a failed initial load leaves the flag set
       // while the element stays alive. Checking it here would brick refresh.
       if (loadGeneration != _loadGeneration) {
+        _staleCompletionCount += 1;
+        debugPrint('[stale-completion] sc generation=$loadGeneration');
         return;
       }
       state = AsyncData(next);
@@ -437,6 +443,8 @@ class WorkspaceSourceControlController
       if (_disposed ||
           loadGeneration != _loadGeneration ||
           (state.asData?.value.isBusy ?? false)) {
+        _staleCompletionCount += 1;
+        debugPrint('[stale-completion] watcher generation=$loadGeneration');
         return;
       }
       state = AsyncData(next);

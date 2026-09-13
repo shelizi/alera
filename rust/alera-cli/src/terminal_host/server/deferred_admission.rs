@@ -437,6 +437,17 @@ impl AdmissionInner {
             let mut state = self.lock_state();
             if let Some(job) = state.active.remove(&job_id) {
                 state.metrics.completed(&job.request_type, job.class);
+                if job.disconnected {
+                    state.metrics.stale_completion();
+                    tracing::debug!(
+                        request_id = ?job.request_id,
+                        client_id = ?job.client_id,
+                        request_type = %job.request_type,
+                        request_class = job.class.as_str(),
+                        stale = true,
+                        "stale-completion"
+                    );
+                }
                 #[cfg(test)]
                 if state.gated {
                     state.test_permits = state.test_permits.saturating_add(1);

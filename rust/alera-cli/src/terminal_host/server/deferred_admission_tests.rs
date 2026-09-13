@@ -350,6 +350,7 @@ async fn disconnect_drops_queued_owner_jobs_while_active_jobs_finish() {
         .await
         .expect("the active job should still finish after its owner disconnected")
         .unwrap();
+    assert_eq!(admission.snapshot()["staleCompletions"], 1);
     tokio::time::timeout(Duration::from_secs(1), other_finished_rx)
         .await
         .expect("another client's queued job should run once the slot frees")

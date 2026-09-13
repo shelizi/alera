@@ -22,6 +22,7 @@ pub(super) struct AdmissionMetrics {
     request_types: BTreeMap<(String, DeferredRequestClass), RequestTypeMetrics>,
     rejected: u64,
     disconnected: u64,
+    stale_completions: u64,
 }
 
 impl AdmissionMetrics {
@@ -83,6 +84,10 @@ impl AdmissionMetrics {
         self.disconnected += 1;
     }
 
+    pub(super) fn stale_completion(&mut self) {
+        self.stale_completions += 1;
+    }
+
     pub(super) fn snapshot(
         &self,
         active: usize,
@@ -116,6 +121,7 @@ impl AdmissionMetrics {
             "capacity": capacity,
             "rejected": self.rejected,
             "disconnected": self.disconnected,
+            "staleCompletions": self.stale_completions,
             "requestTypes": request_types,
         })
     }

@@ -57,6 +57,9 @@ extension on _WorkspaceGitDiffPanelState {
     final generation = ++_unifiedGroupsGeneration;
     GitChangeGroup.unifiedFromEntriesChunked(status.entries).then((groups) {
       if (!mounted || generation != _unifiedGroupsGeneration) {
+        debugPrint(
+          '[stale-completion] request_type=workspace_git_diff_unified_groups generation=$generation current_generation=$_unifiedGroupsGeneration mounted=$mounted',
+        );
         return;
       }
       _applyUnifiedGroups(status, groups);

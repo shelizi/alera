@@ -81,6 +81,11 @@ impl ServerActor {
 
     pub(super) async fn handle_orchestration_state_wait_poll(&mut self, waiter_id: u64) {
         let Some(waiter) = self.orchestration_waiters.take_by_id(waiter_id) else {
+            tracing::debug!(
+                request_type = "orchestration.wait.poll",
+                waiter_id,
+                "stale-completion"
+            );
             return;
         };
         match self.state_wait_result(&waiter).await {
@@ -248,6 +253,7 @@ impl ServerActor {
                 let filter = type_filter.clone();
                 match self.consume_unread_messages(&waiter.handle, &filter).await {
                     Ok(messages) if messages.is_empty() => {
+                        tracing::debug!(waiter_id = waiter.waiter_id, "stale-completion");
                         // Raced with another consumer: re-park with the same
                         // waiter id so the original timeout still expires it.
                         self.orchestration_waiters.repark(waiter);
@@ -276,6 +282,7 @@ impl ServerActor {
                     .await
                 {
                     Ok(replies) if replies.is_empty() => {
+                        tracing::debug!(waiter_id = waiter.waiter_id, "stale-completion");
                         // The wake was for an unrelated message; keep waiting
                         // under the original waiter id so its timeout remains
                         // authoritative.
@@ -349,6 +356,12 @@ impl ServerActor {
         effective_timeout_ms: u64,
     ) {
         let Some(waiter) = self.orchestration_waiters.take_by_id(waiter_id) else {
+            tracing::debug!(
+                request_type = "orchestration.wait.timeout",
+                waiter_id,
+                effective_timeout_ms,
+                "stale-completion"
+            );
             return;
         };
         if matches!(
