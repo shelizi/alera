@@ -87,7 +87,7 @@ void main() {
   });
 
   test(
-    'identical watcher reload preserves the complete state instance',
+    'identical watcher reload preserves status and entry instances',
     () async {
       final backend = FakeGitBackend()
         ..gitStatusResult = _statusWith(_initialEntries())
@@ -133,7 +133,10 @@ void main() {
       await _reloadFromWatcher(watcher);
 
       final after = container.read(provider).requireValue;
-      expect(identical(after, before), isTrue);
+      // The wrapper gets a fresh revision so listeners still fire; the
+      // expensive payloads keep their instances.
+      expect(identical(after, before), isFalse);
+      expect(after.revision, before.revision + 1);
       expect(identical(after.status, before.status), isTrue);
       for (var index = 0; index < before.status.entries.length; index += 1) {
         expect(

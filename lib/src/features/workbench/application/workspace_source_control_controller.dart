@@ -16,6 +16,10 @@ class const WorkspaceSourceControlState({
   required final GitRepositoryState repositoryState,
   required final List<GitStashEntry> stashes,
   final WorkspaceSourceControlAction? action,
+  // Bumps on every completed load so listeners still observe a state change
+  // when all payloads reconcile to identical instances. Derived caches key on
+  // `identical(status)`/`identical(groups)` and stay hot.
+  final int revision = 0,
 }) {
   bool get isBusy => action != null;
 
@@ -307,17 +311,12 @@ class WorkspaceSourceControlController
         : stashes;
     const nextAction = null;
 
-    if (identical(reconciledStatus, previous.status) &&
-        identical(reconciledRepositoryState, previous.repositoryState) &&
-        identical(reconciledStashes, previous.stashes) &&
-        previous.action == nextAction) {
-      return previous;
-    }
     return WorkspaceSourceControlState(
       status: reconciledStatus,
       repositoryState: reconciledRepositoryState,
       stashes: reconciledStashes,
       action: nextAction,
+      revision: previous.revision + 1,
     );
   }
 
@@ -337,13 +336,17 @@ class WorkspaceSourceControlController
           repositoryState: previous.repositoryState,
           stashes: previous.stashes,
           action: action,
+          revision: previous.revision,
         ),
       );
     }
     try {
       await operation(ref.read(gitBackendProvider));
       final next = await _load();
-      if (_disposed || loadGeneration != _loadGeneration) {
+      // `_disposed` only gates watcher callbacks: `ref.onDispose` also runs
+      // when `build()` rejects, so a failed initial load leaves the flag set
+      // while the element stays alive. Checking it here would brick refresh.
+      if (loadGeneration != _loadGeneration) {
         return;
       }
       state = AsyncData(next);
