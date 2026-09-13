@@ -9,6 +9,8 @@ use serde_json::{json, Value};
 use super::deferred_admission_metrics::AdmissionMetrics;
 use crate::terminal_host::host_error::{HostError, HostResult};
 
+mod delayed;
+
 // Bounds active read-side work without making the actor mailbox wait for capacity.
 pub(super) const DEFERRED_REQUEST_CONCURRENCY: usize = 8;
 const DEFERRED_REQUEST_CAPACITY: usize = 64;
@@ -65,8 +67,10 @@ struct PendingSpawn {
 #[derive(Default)]
 struct AdmissionState {
     active: BTreeMap<u64, ActiveJob>,
+    delayed: BTreeMap<u64, delayed::DelayedJob>,
     queued: [VecDeque<QueuedJob>; 3],
     next_job_id: u64,
+    next_timer_id: u64,
     metrics: AdmissionMetrics,
     #[cfg(test)]
     gated: bool,
@@ -79,6 +83,10 @@ impl AdmissionState {
         self.queued.iter().map(VecDeque::len).sum()
     }
 
+    fn occupied_count(&self) -> usize {
+        self.active.len() + self.pending_count() + self.delayed.len()
+    }
+
     fn noncritical_count(&self) -> usize {
         self.active
             .values()
@@ -86,6 +94,11 @@ impl AdmissionState {
             .count()
             + self.queued[DeferredRequestClass::Maintenance as usize].len()
             + self.queued[DeferredRequestClass::Bulk as usize].len()
+            + self
+                .delayed
+                .values()
+                .filter(|job| job.class != DeferredRequestClass::DispatchCritical)
+                .count()
     }
 }
 
@@ -185,7 +198,7 @@ impl DeferredAdmission {
             let mut state = self.inner.lock_state();
             let active = state.active.len();
             let pending = state.pending_count();
-            let over_total = active + pending >= self.inner.total_limit;
+            let over_total = state.occupied_count() >= self.inner.total_limit;
             let over_reserve = class != DeferredRequestClass::DispatchCritical
                 && state.noncritical_count() >= self.inner.noncritical_limit();
             if over_total || over_reserve {
@@ -244,6 +257,17 @@ impl DeferredAdmission {
                 if job.client_id == Some(client_id) && !job.disconnected {
                     job.disconnected = true;
                     affected.push((job.request_type.clone(), job.class, false));
+                }
+            }
+            for job in state.delayed.values_mut() {
+                if job.client_id == Some(client_id) && !job.disconnected {
+                    job.disconnected = true;
+                    tracing::debug!(
+                        client_id,
+                        request_type = %job.request_type,
+                        request_class = job.class.as_str(),
+                        "deferred timer owner disconnected; timer remains armed"
+                    );
                 }
             }
             for (request_type, class, was_pending) in affected {
@@ -384,6 +408,7 @@ impl AdmissionInner {
         }
         self.spawn_all(to_start);
     }
+
 }
 
 fn queue_wait_ms(queued_at: Instant) -> u64 {

@@ -30,12 +30,12 @@ impl ServerActor {
             let session_id = schedule.session_id.clone();
             let session_instance_id = schedule.session_instance_id;
             let generation = schedule.generation;
-            if let Err(error) = self.deferred_admission.schedule(
+            if let Err(error) = self.deferred_admission.schedule_delayed(
+                schedule.delay,
                 DeferredRequestClass::Maintenance,
                 "terminalPulse.due",
                 None,
                 async move {
-                    tokio::time::sleep(schedule.delay).await;
                     let _ = inbox.send(ServerCommand::TerminalPulseDue {
                         session_id: schedule.session_id,
                         session_instance_id: schedule.session_instance_id,
@@ -132,12 +132,12 @@ impl ServerActor {
                     {
                         let inbox = self.inbox.clone();
                         let task_session_id = session_id.clone();
-                        if let Err(error) = self.deferred_admission.schedule(
+                        if let Err(error) = self.deferred_admission.schedule_delayed(
+                            RETRY_DELAY,
                             DeferredRequestClass::Maintenance,
                             "terminalPulse.retry",
                             None,
                             async move {
-                                tokio::time::sleep(RETRY_DELAY).await;
                                 let _ = inbox.send(ServerCommand::TerminalPulseDue {
                                     session_id,
                                     session_instance_id,

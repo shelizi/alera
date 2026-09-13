@@ -211,12 +211,12 @@ impl ServerActor {
 
     fn spawn_state_wait_poll(&self, waiter_id: u64, client_id: u64) -> HostResult<()> {
         let inbox = self.inbox.clone();
-        self.deferred_admission.schedule(
+        self.deferred_admission.schedule_delayed(
+            Duration::from_millis(STATE_WAIT_POLL_MS),
             DeferredRequestClass::Maintenance,
             "orchestration.wait.poll",
             Some(client_id),
             async move {
-                tokio::time::sleep(Duration::from_millis(STATE_WAIT_POLL_MS)).await;
                 let _ = inbox.send(ServerCommand::OrchestrationStateWaitPoll(waiter_id));
             },
         )
@@ -349,12 +349,12 @@ impl ServerActor {
         client_id: u64,
     ) -> HostResult<()> {
         let inbox = self.inbox.clone();
-        self.deferred_admission.schedule(
+        self.deferred_admission.schedule_delayed(
+            Duration::from_millis(effective_timeout_ms),
             DeferredRequestClass::Maintenance,
             "orchestration.wait.timeout",
             Some(client_id),
             async move {
-                tokio::time::sleep(Duration::from_millis(effective_timeout_ms)).await;
                 let _ = inbox.send(ServerCommand::OrchestrationWaitTimeout {
                     waiter_id,
                     effective_timeout_ms,

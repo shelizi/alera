@@ -202,12 +202,12 @@ impl ServerActor {
             .unwrap_or_default();
         let delay = PUSH_GROUP_DELAY.min(PUSH_GROUP_MAX_DELAY.saturating_sub(elapsed));
         let inbox = self.inbox.clone();
-        if let Err(error) = self.deferred_admission.schedule(
+        if let Err(error) = self.deferred_admission.schedule_delayed(
+            delay,
             DeferredRequestClass::Maintenance,
             "mobile.push.flush",
             None,
             async move {
-                tokio::time::sleep(delay).await;
                 let _ = inbox.send(ServerCommand::Push(PushCommand::Flush { generation }));
             },
         ) {
