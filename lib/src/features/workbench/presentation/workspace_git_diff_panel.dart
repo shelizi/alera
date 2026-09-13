@@ -44,6 +44,7 @@ import 'package:flutter/services.dart';
 
 part 'workspace_git_diff_panel_types.dart';
 part 'workspace_git_diff_panel_groups.dart';
+part 'workspace_git_diff_panel_grouping_cache.dart';
 part 'workspace_git_diff_panel_rows.dart';
 part 'workspace_git_diff_panel_amend_dialog.dart';
 part 'workspace_git_diff_panel_stash_dialog.dart';
@@ -105,8 +106,22 @@ class _WorkspaceGitDiffPanelState extends ConsumerState<WorkspaceGitDiffPanel> {
   GitStatusResult? _cachedGroupsSource;
   GitDiffGroupMode? _cachedGroupsMode;
   List<GitChangeGroup> _cachedGroups = const <GitChangeGroup>[];
+  int _unifiedGroupsGeneration = 0;
+  GitStatusResult? _pendingUnifiedSource;
   List<GitChangeGroup>? _cachedCollapsibleGroups;
   Set<String> _cachedCollapsibleKeys = const <String>{};
+
+  void _applyUnifiedGroups(
+    GitStatusResult status,
+    List<GitChangeGroup> groups,
+  ) {
+    setState(() {
+      _pendingUnifiedSource = null;
+      _cachedGroupsSource = status;
+      _cachedGroupsMode = GitDiffGroupMode.unified;
+      _cachedGroups = groups;
+    });
+  }
 
   @override
   void initState() {
@@ -288,69 +303,6 @@ class _WorkspaceGitDiffPanelState extends ConsumerState<WorkspaceGitDiffPanel> {
         ),
       ],
     );
-  }
-
-  GitStatusResult _filteredStatus(GitStatusResult status) {
-    final query = _filterController.text.trim().toLowerCase();
-    if (identical(_cachedStatusSource, status) && _cachedFilterQuery == query) {
-      return _cachedFilteredStatus;
-    }
-    var filtered = status;
-    if (query.isNotEmpty) {
-      final entries = status.entries
-          .where((entry) {
-            return entry.path.toLowerCase().contains(query) ||
-                (entry.oldPath?.toLowerCase().contains(query) ?? false);
-          })
-          .toList(growable: false);
-      filtered = GitStatusResult(
-        entries: entries,
-        groups: GitChangeGroup.fromEntries(entries),
-      );
-    }
-    _cachedStatusSource = status;
-    _cachedFilterQuery = query;
-    _cachedFilteredStatus = filtered;
-    return filtered;
-  }
-
-  List<GitChangeGroup> _groupsFor(GitStatusResult status) {
-    if (identical(_cachedGroupsSource, status) &&
-        _cachedGroupsMode == widget.groupMode) {
-      return _cachedGroups;
-    }
-    _cachedGroupsSource = status;
-    _cachedGroupsMode = widget.groupMode;
-    _cachedGroups = widget.groupMode == GitDiffGroupMode.unified
-        ? GitChangeGroup.unifiedFromEntries(status.entries)
-        : status.effectiveGroups;
-    return _cachedGroups;
-  }
-
-  Set<String> _visibleCollapsibleKeys(WorkspaceSourceControlState? state) {
-    if (state == null) {
-      return const <String>{};
-    }
-    final groups = _groupsFor(_filteredStatus(state.status));
-    if (identical(_cachedCollapsibleGroups, groups)) {
-      return _cachedCollapsibleKeys;
-    }
-    final keys = <String>{};
-    for (final group in groups) {
-      if (group.entries.isEmpty) {
-        continue;
-      }
-      keys.add(_sectionKeyForGroup(group));
-      final folderAreaKey = group.unified ? 'unified' : group.area.key;
-      for (final row in group.treeRows) {
-        if (row.kind == GitChangeTreeRowKind.directory) {
-          keys.add('folder:$folderAreaKey:${row.path}');
-        }
-      }
-    }
-    _cachedCollapsibleGroups = groups;
-    _cachedCollapsibleKeys = keys;
-    return keys;
   }
 
   _GitHistoryPanelLoadState get _historyPanelState {
