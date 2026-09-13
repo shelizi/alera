@@ -85,14 +85,14 @@ class const AgentsSettingsPane({
               SettingsSwitchRow(
                 title: 'Codex Hooks',
                 description: 'Use an Alera-managed Codex runtime home with status hooks.',
-                value: agents.agentStatusHooks.codex,
+                value: agents.agentStatusHooks.isEnabled('codex'),
                 onChanged: (value) =>
                     controller.setAgentStatusHookEnabled(.codex, value),
               ),
               SettingsSwitchRow(
                 title: 'Claude Code Hooks',
                 description: 'Use an Alera-managed Claude Code config with status hooks.',
-                value: agents.agentStatusHooks.claude,
+                value: agents.agentStatusHooks.isEnabled('claude'),
                 onChanged: (value) =>
                     controller.setAgentStatusHookEnabled(.claude, value),
               ),
@@ -100,7 +100,7 @@ class const AgentsSettingsPane({
                 title: 'GitHub Copilot Hooks',
                 description:
                     'Use an Alera-managed GitHub Copilot home overlay.',
-                value: agents.agentStatusHooks.copilot,
+                value: agents.agentStatusHooks.isEnabled('copilot'),
                 onChanged: (value) =>
                     controller.setAgentStatusHookEnabled(.copilot, value),
               ),
@@ -108,63 +108,63 @@ class const AgentsSettingsPane({
                 title: 'Cursor Hooks',
                 description:
                     'Use an Alera-managed Cursor agent plugin wrapper.',
-                value: agents.agentStatusHooks.cursor,
+                value: agents.agentStatusHooks.isEnabled('cursor'),
                 onChanged: (value) =>
                     controller.setAgentStatusHookEnabled(.cursor, value),
               ),
               SettingsSwitchRow(
                 title: 'Antigravity Hooks',
                 description: 'Install Alera-managed Antigravity hooks for the agy CLI. Disable to remove only Alera-managed hook entries.',
-                value: agents.agentStatusHooks.agy,
+                value: agents.agentStatusHooks.isEnabled('agy'),
                 onChanged: (value) =>
                     controller.setAgentStatusHookEnabled(.agy, value),
               ),
               SettingsSwitchRow(
                 title: 'OpenCode Hooks',
                 description: 'Use an Alera-managed OpenCode config overlay with status plugin.',
-                value: agents.agentStatusHooks.opencode,
+                value: agents.agentStatusHooks.isEnabled('opencode'),
                 onChanged: (value) =>
                     controller.setAgentStatusHookEnabled(.opencode, value),
               ),
               SettingsSwitchRow(
                 title: 'OpenCode 2 Hooks',
                 description: 'Use an Alera-managed OpenCode 2 config overlay with the v2 status plugin.',
-                value: agents.agentStatusHooks.opencode2,
+                value: agents.agentStatusHooks.isEnabled('opencode2'),
                 onChanged: (value) =>
                     controller.setAgentStatusHookEnabled(.opencode2, value),
               ),
               SettingsSwitchRow(
                 title: 'Pi Hooks',
                 description: 'Use an Alera-managed Pi agent overlay with status extension.',
-                value: agents.agentStatusHooks.pi,
+                value: agents.agentStatusHooks.isEnabled('pi'),
                 onChanged: (value) =>
                     controller.setAgentStatusHookEnabled(.pi, value),
               ),
               SettingsSwitchRow(
                 title: 'Amp Hooks',
                 description: 'Use an Alera-managed Amp config overlay.',
-                value: agents.agentStatusHooks.amp,
+                value: agents.agentStatusHooks.isEnabled('amp'),
                 onChanged: (value) =>
                     controller.setAgentStatusHookEnabled(.amp, value),
               ),
               SettingsSwitchRow(
                 title: 'Grok Build Hooks',
                 description: 'Install Alera-managed Grok build hooks in a dedicated global file.',
-                value: agents.agentStatusHooks.grok,
+                value: agents.agentStatusHooks.isEnabled('grok'),
                 onChanged: (value) =>
                     controller.setAgentStatusHookEnabled(.grok, value),
               ),
               SettingsSwitchRow(
                 title: 'Devin Hooks',
                 description: 'Install Alera-managed Devin lifecycle hooks in the global Devin config.',
-                value: agents.agentStatusHooks.devin,
+                value: agents.agentStatusHooks.isEnabled('devin'),
                 onChanged: (value) =>
                     controller.setAgentStatusHookEnabled(.devin, value),
               ),
               SettingsSwitchRow(
                 title: 'fx Status',
                 description: 'Receive fx lifecycle state through its built-in local Herdr integration on macOS and Linux.',
-                value: agents.agentStatusHooks.fx,
+                value: agents.agentStatusHooks.isEnabled('fx'),
                 onChanged: (value) =>
                     controller.setAgentStatusHookEnabled(.fx, value),
               ),

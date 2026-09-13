@@ -58,60 +58,6 @@ extension AppLanguageMapperExtension on AppLanguage {
   }
 }
 
-class DiagnosticsLogLevelMapper extends EnumMapper<DiagnosticsLogLevel> {
-  DiagnosticsLogLevelMapper._();
-
-  static DiagnosticsLogLevelMapper? _instance;
-  static DiagnosticsLogLevelMapper ensureInitialized() {
-    if (_instance == null) {
-      MapperContainer.globals.use(_instance = DiagnosticsLogLevelMapper._());
-    }
-    return _instance!;
-  }
-
-  static DiagnosticsLogLevel fromValue(dynamic value) {
-    ensureInitialized();
-    return MapperContainer.globals.fromValue(value);
-  }
-
-  @override
-  DiagnosticsLogLevel decode(dynamic value) {
-    switch (value) {
-      case r'error':
-        return DiagnosticsLogLevel.error;
-      case r'warning':
-        return DiagnosticsLogLevel.warning;
-      case r'info':
-        return DiagnosticsLogLevel.info;
-      case r'debug':
-        return DiagnosticsLogLevel.debug;
-      default:
-        throw MapperException.unknownEnumValue(value);
-    }
-  }
-
-  @override
-  dynamic encode(DiagnosticsLogLevel self) {
-    switch (self) {
-      case DiagnosticsLogLevel.error:
-        return r'error';
-      case DiagnosticsLogLevel.warning:
-        return r'warning';
-      case DiagnosticsLogLevel.info:
-        return r'info';
-      case DiagnosticsLogLevel.debug:
-        return r'debug';
-    }
-  }
-}
-
-extension DiagnosticsLogLevelMapperExtension on DiagnosticsLogLevel {
-  String toValue() {
-    DiagnosticsLogLevelMapper.ensureInitialized();
-    return MapperContainer.globals.toValue<DiagnosticsLogLevel>(this) as String;
-  }
-}
-
 class AgentQuotaProviderIdMapper extends EnumMapper<AgentQuotaProviderId> {
   AgentQuotaProviderIdMapper._();
 
@@ -296,566 +242,58 @@ extension TerminalToolbarCornerMapperExtension on TerminalToolbarCorner {
   }
 }
 
-class AgentStatusHookSettingsMapper
-    extends ClassMapperBase<AgentStatusHookSettings> {
-  AgentStatusHookSettingsMapper._();
+class DiagnosticsLogLevelMapper extends EnumMapper<DiagnosticsLogLevel> {
+  DiagnosticsLogLevelMapper._();
 
-  static AgentStatusHookSettingsMapper? _instance;
-  static AgentStatusHookSettingsMapper ensureInitialized() {
+  static DiagnosticsLogLevelMapper? _instance;
+  static DiagnosticsLogLevelMapper ensureInitialized() {
     if (_instance == null) {
-      MapperContainer.globals.use(
-        _instance = AgentStatusHookSettingsMapper._(),
-      );
+      MapperContainer.globals.use(_instance = DiagnosticsLogLevelMapper._());
     }
     return _instance!;
   }
 
-  @override
-  final String id = 'AgentStatusHookSettings';
-
-  static bool _$codex(AgentStatusHookSettings v) => v.codex;
-  static const Field<AgentStatusHookSettings, bool> _f$codex = Field(
-    'codex',
-    _$codex,
-    opt: true,
-    def: false,
-  );
-  static bool _$claude(AgentStatusHookSettings v) => v.claude;
-  static const Field<AgentStatusHookSettings, bool> _f$claude = Field(
-    'claude',
-    _$claude,
-    opt: true,
-    def: false,
-  );
-  static bool _$copilot(AgentStatusHookSettings v) => v.copilot;
-  static const Field<AgentStatusHookSettings, bool> _f$copilot = Field(
-    'copilot',
-    _$copilot,
-    opt: true,
-    def: false,
-  );
-  static bool _$cursor(AgentStatusHookSettings v) => v.cursor;
-  static const Field<AgentStatusHookSettings, bool> _f$cursor = Field(
-    'cursor',
-    _$cursor,
-    opt: true,
-    def: false,
-  );
-  static bool _$agy(AgentStatusHookSettings v) => v.agy;
-  static const Field<AgentStatusHookSettings, bool> _f$agy = Field(
-    'agy',
-    _$agy,
-    opt: true,
-    def: false,
-  );
-  static bool _$opencode(AgentStatusHookSettings v) => v.opencode;
-  static const Field<AgentStatusHookSettings, bool> _f$opencode = Field(
-    'opencode',
-    _$opencode,
-    opt: true,
-    def: false,
-  );
-  static bool _$opencode2(AgentStatusHookSettings v) => v.opencode2;
-  static const Field<AgentStatusHookSettings, bool> _f$opencode2 = Field(
-    'opencode2',
-    _$opencode2,
-    opt: true,
-    def: false,
-  );
-  static bool _$pi(AgentStatusHookSettings v) => v.pi;
-  static const Field<AgentStatusHookSettings, bool> _f$pi = Field(
-    'pi',
-    _$pi,
-    opt: true,
-    def: false,
-  );
-  static bool _$amp(AgentStatusHookSettings v) => v.amp;
-  static const Field<AgentStatusHookSettings, bool> _f$amp = Field(
-    'amp',
-    _$amp,
-    opt: true,
-    def: false,
-  );
-  static bool _$grok(AgentStatusHookSettings v) => v.grok;
-  static const Field<AgentStatusHookSettings, bool> _f$grok = Field(
-    'grok',
-    _$grok,
-    opt: true,
-    def: false,
-  );
-  static bool _$devin(AgentStatusHookSettings v) => v.devin;
-  static const Field<AgentStatusHookSettings, bool> _f$devin = Field(
-    'devin',
-    _$devin,
-    opt: true,
-    def: false,
-  );
-  static bool _$fx(AgentStatusHookSettings v) => v.fx;
-  static const Field<AgentStatusHookSettings, bool> _f$fx = Field(
-    'fx',
-    _$fx,
-    opt: true,
-    def: false,
-  );
-
-  @override
-  final MappableFields<AgentStatusHookSettings> fields = const {
-    #codex: _f$codex,
-    #claude: _f$claude,
-    #copilot: _f$copilot,
-    #cursor: _f$cursor,
-    #agy: _f$agy,
-    #opencode: _f$opencode,
-    #opencode2: _f$opencode2,
-    #pi: _f$pi,
-    #amp: _f$amp,
-    #grok: _f$grok,
-    #devin: _f$devin,
-    #fx: _f$fx,
-  };
-
-  static AgentStatusHookSettings _instantiate(DecodingData data) {
-    return AgentStatusHookSettings(
-      codex: data.dec(_f$codex),
-      claude: data.dec(_f$claude),
-      copilot: data.dec(_f$copilot),
-      cursor: data.dec(_f$cursor),
-      agy: data.dec(_f$agy),
-      opencode: data.dec(_f$opencode),
-      opencode2: data.dec(_f$opencode2),
-      pi: data.dec(_f$pi),
-      amp: data.dec(_f$amp),
-      grok: data.dec(_f$grok),
-      devin: data.dec(_f$devin),
-      fx: data.dec(_f$fx),
-    );
+  static DiagnosticsLogLevel fromValue(dynamic value) {
+    ensureInitialized();
+    return MapperContainer.globals.fromValue(value);
   }
 
   @override
-  final Function instantiate = _instantiate;
-
-  static AgentStatusHookSettings fromMap(Map<String, dynamic> map) {
-    return ensureInitialized().decodeMap<AgentStatusHookSettings>(map);
-  }
-
-  static AgentStatusHookSettings fromJson(String json) {
-    return ensureInitialized().decodeJson<AgentStatusHookSettings>(json);
-  }
-}
-
-mixin AgentStatusHookSettingsMappable {
-  String toJson() {
-    return AgentStatusHookSettingsMapper.ensureInitialized()
-        .encodeJson<AgentStatusHookSettings>(this as AgentStatusHookSettings);
-  }
-
-  Map<String, dynamic> toMap() {
-    return AgentStatusHookSettingsMapper.ensureInitialized()
-        .encodeMap<AgentStatusHookSettings>(this as AgentStatusHookSettings);
-  }
-
-  AgentStatusHookSettingsCopyWith<
-    AgentStatusHookSettings,
-    AgentStatusHookSettings,
-    AgentStatusHookSettings
-  >
-  get copyWith =>
-      _AgentStatusHookSettingsCopyWithImpl<
-        AgentStatusHookSettings,
-        AgentStatusHookSettings
-      >(this as AgentStatusHookSettings, $identity, $identity);
-  @override
-  String toString() {
-    return AgentStatusHookSettingsMapper.ensureInitialized().stringifyValue(
-      this as AgentStatusHookSettings,
-    );
-  }
-
-  @override
-  bool operator ==(Object other) {
-    return AgentStatusHookSettingsMapper.ensureInitialized().equalsValue(
-      this as AgentStatusHookSettings,
-      other,
-    );
-  }
-
-  @override
-  int get hashCode {
-    return AgentStatusHookSettingsMapper.ensureInitialized().hashValue(
-      this as AgentStatusHookSettings,
-    );
-  }
-}
-
-extension AgentStatusHookSettingsValueCopy<$R, $Out>
-    on ObjectCopyWith<$R, AgentStatusHookSettings, $Out> {
-  AgentStatusHookSettingsCopyWith<$R, AgentStatusHookSettings, $Out>
-  get $asAgentStatusHookSettings => $base.as(
-    (v, t, t2) => _AgentStatusHookSettingsCopyWithImpl<$R, $Out>(v, t, t2),
-  );
-}
-
-abstract class AgentStatusHookSettingsCopyWith<
-  $R,
-  $In extends AgentStatusHookSettings,
-  $Out
->
-    implements ClassCopyWith<$R, $In, $Out> {
-  $R call({
-    bool? codex,
-    bool? claude,
-    bool? copilot,
-    bool? cursor,
-    bool? agy,
-    bool? opencode,
-    bool? opencode2,
-    bool? pi,
-    bool? amp,
-    bool? grok,
-    bool? devin,
-    bool? fx,
-  });
-  AgentStatusHookSettingsCopyWith<$R2, $In, $Out2> $chain<$R2, $Out2>(
-    Then<$Out2, $R2> t,
-  );
-}
-
-class _AgentStatusHookSettingsCopyWithImpl<$R, $Out>
-    extends ClassCopyWithBase<$R, AgentStatusHookSettings, $Out>
-    implements
-        AgentStatusHookSettingsCopyWith<$R, AgentStatusHookSettings, $Out> {
-  _AgentStatusHookSettingsCopyWithImpl(super.value, super.then, super.then2);
-
-  @override
-  late final ClassMapperBase<AgentStatusHookSettings> $mapper =
-      AgentStatusHookSettingsMapper.ensureInitialized();
-  @override
-  $R call({
-    bool? codex,
-    bool? claude,
-    bool? copilot,
-    bool? cursor,
-    bool? agy,
-    bool? opencode,
-    bool? opencode2,
-    bool? pi,
-    bool? amp,
-    bool? grok,
-    bool? devin,
-    bool? fx,
-  }) => $apply(
-    FieldCopyWithData({
-      if (codex != null) #codex: codex,
-      if (claude != null) #claude: claude,
-      if (copilot != null) #copilot: copilot,
-      if (cursor != null) #cursor: cursor,
-      if (agy != null) #agy: agy,
-      if (opencode != null) #opencode: opencode,
-      if (opencode2 != null) #opencode2: opencode2,
-      if (pi != null) #pi: pi,
-      if (amp != null) #amp: amp,
-      if (grok != null) #grok: grok,
-      if (devin != null) #devin: devin,
-      if (fx != null) #fx: fx,
-    }),
-  );
-  @override
-  AgentStatusHookSettings $make(CopyWithData data) => AgentStatusHookSettings(
-    codex: data.get(#codex, or: $value.codex),
-    claude: data.get(#claude, or: $value.claude),
-    copilot: data.get(#copilot, or: $value.copilot),
-    cursor: data.get(#cursor, or: $value.cursor),
-    agy: data.get(#agy, or: $value.agy),
-    opencode: data.get(#opencode, or: $value.opencode),
-    opencode2: data.get(#opencode2, or: $value.opencode2),
-    pi: data.get(#pi, or: $value.pi),
-    amp: data.get(#amp, or: $value.amp),
-    grok: data.get(#grok, or: $value.grok),
-    devin: data.get(#devin, or: $value.devin),
-    fx: data.get(#fx, or: $value.fx),
-  );
-
-  @override
-  AgentStatusHookSettingsCopyWith<$R2, AgentStatusHookSettings, $Out2>
-  $chain<$R2, $Out2>(Then<$Out2, $R2> t) =>
-      _AgentStatusHookSettingsCopyWithImpl<$R2, $Out2>($value, $cast, t);
-}
-
-class EditorSettingsMapper extends ClassMapperBase<EditorSettings> {
-  EditorSettingsMapper._();
-
-  static EditorSettingsMapper? _instance;
-  static EditorSettingsMapper ensureInitialized() {
-    if (_instance == null) {
-      MapperContainer.globals.use(_instance = EditorSettingsMapper._());
-      ExternalEditorKindMapper.ensureInitialized();
-      CodeOpenTargetMapper.ensureInitialized();
-      ExternalEditorExecutableModeMapper.ensureInitialized();
-      ExternalEditorWorkspaceModeMapper.ensureInitialized();
+  DiagnosticsLogLevel decode(dynamic value) {
+    switch (value) {
+      case r'error':
+        return DiagnosticsLogLevel.error;
+      case r'warning':
+        return DiagnosticsLogLevel.warning;
+      case r'info':
+        return DiagnosticsLogLevel.info;
+      case r'debug':
+        return DiagnosticsLogLevel.debug;
+      default:
+        throw MapperException.unknownEnumValue(value);
     }
-    return _instance!;
   }
 
   @override
-  final String id = 'EditorSettings';
-
-  static int _$tabSize(EditorSettings v) => v.tabSize;
-  static const Field<EditorSettings, int> _f$tabSize = Field(
-    'tabSize',
-    _$tabSize,
-    opt: true,
-    def: 4,
-  );
-  static String _$themeName(EditorSettings v) => v.themeName;
-  static const Field<EditorSettings, String> _f$themeName = Field(
-    'themeName',
-    _$themeName,
-    opt: true,
-    def: EditorSyntaxThemeNames.alera,
-  );
-  static bool _$autosaveEnabled(EditorSettings v) => v.autosaveEnabled;
-  static const Field<EditorSettings, bool> _f$autosaveEnabled = Field(
-    'autosaveEnabled',
-    _$autosaveEnabled,
-    opt: true,
-    def: false,
-  );
-  static int _$autosaveDelaySeconds(EditorSettings v) => v.autosaveDelaySeconds;
-  static const Field<EditorSettings, int> _f$autosaveDelaySeconds = Field(
-    'autosaveDelaySeconds',
-    _$autosaveDelaySeconds,
-    opt: true,
-    def: EditorSettings.defaultAutosaveDelaySeconds,
-  );
-  static ExternalEditorKind _$externalEditor(EditorSettings v) =>
-      v.externalEditor;
-  static const Field<EditorSettings, ExternalEditorKind> _f$externalEditor =
-      Field(
-        'externalEditor',
-        _$externalEditor,
-        opt: true,
-        def: ExternalEditorKind.zed,
-      );
-  static CodeOpenTarget _$codeOpenTarget(EditorSettings v) => v.codeOpenTarget;
-  static const Field<EditorSettings, CodeOpenTarget> _f$codeOpenTarget = Field(
-    'codeOpenTarget',
-    _$codeOpenTarget,
-    opt: true,
-    def: CodeOpenTarget.alera,
-  );
-  static ExternalEditorExecutableMode _$zedExecutableMode(EditorSettings v) =>
-      v.zedExecutableMode;
-  static const Field<EditorSettings, ExternalEditorExecutableMode>
-  _f$zedExecutableMode = Field(
-    'zedExecutableMode',
-    _$zedExecutableMode,
-    opt: true,
-    def: ExternalEditorExecutableMode.automatic,
-  );
-  static String? _$zedExecutablePath(EditorSettings v) => v.zedExecutablePath;
-  static const Field<EditorSettings, String> _f$zedExecutablePath = Field(
-    'zedExecutablePath',
-    _$zedExecutablePath,
-    opt: true,
-  );
-  static ExternalEditorWorkspaceMode _$externalEditorWorkspaceMode(
-    EditorSettings v,
-  ) => v.externalEditorWorkspaceMode;
-  static const Field<EditorSettings, ExternalEditorWorkspaceMode>
-  _f$externalEditorWorkspaceMode = Field(
-    'externalEditorWorkspaceMode',
-    _$externalEditorWorkspaceMode,
-    opt: true,
-    def: ExternalEditorWorkspaceMode.newWindow,
-  );
-  static bool _$autoOpenNewWorkspacesInZed(EditorSettings v) =>
-      v.autoOpenNewWorkspacesInZed;
-  static const Field<EditorSettings, bool> _f$autoOpenNewWorkspacesInZed =
-      Field(
-        'autoOpenNewWorkspacesInZed',
-        _$autoOpenNewWorkspacesInZed,
-        opt: true,
-        def: false,
-      );
-
-  @override
-  final MappableFields<EditorSettings> fields = const {
-    #tabSize: _f$tabSize,
-    #themeName: _f$themeName,
-    #autosaveEnabled: _f$autosaveEnabled,
-    #autosaveDelaySeconds: _f$autosaveDelaySeconds,
-    #externalEditor: _f$externalEditor,
-    #codeOpenTarget: _f$codeOpenTarget,
-    #zedExecutableMode: _f$zedExecutableMode,
-    #zedExecutablePath: _f$zedExecutablePath,
-    #externalEditorWorkspaceMode: _f$externalEditorWorkspaceMode,
-    #autoOpenNewWorkspacesInZed: _f$autoOpenNewWorkspacesInZed,
-  };
-
-  static EditorSettings _instantiate(DecodingData data) {
-    return EditorSettings(
-      tabSize: data.dec(_f$tabSize),
-      themeName: data.dec(_f$themeName),
-      autosaveEnabled: data.dec(_f$autosaveEnabled),
-      autosaveDelaySeconds: data.dec(_f$autosaveDelaySeconds),
-      externalEditor: data.dec(_f$externalEditor),
-      codeOpenTarget: data.dec(_f$codeOpenTarget),
-      zedExecutableMode: data.dec(_f$zedExecutableMode),
-      zedExecutablePath: data.dec(_f$zedExecutablePath),
-      externalEditorWorkspaceMode: data.dec(_f$externalEditorWorkspaceMode),
-      autoOpenNewWorkspacesInZed: data.dec(_f$autoOpenNewWorkspacesInZed),
-    );
-  }
-
-  @override
-  final Function instantiate = _instantiate;
-
-  static EditorSettings fromMap(Map<String, dynamic> map) {
-    return ensureInitialized().decodeMap<EditorSettings>(map);
-  }
-
-  static EditorSettings fromJson(String json) {
-    return ensureInitialized().decodeJson<EditorSettings>(json);
+  dynamic encode(DiagnosticsLogLevel self) {
+    switch (self) {
+      case DiagnosticsLogLevel.error:
+        return r'error';
+      case DiagnosticsLogLevel.warning:
+        return r'warning';
+      case DiagnosticsLogLevel.info:
+        return r'info';
+      case DiagnosticsLogLevel.debug:
+        return r'debug';
+    }
   }
 }
 
-mixin EditorSettingsMappable {
-  String toJson() {
-    return EditorSettingsMapper.ensureInitialized().encodeJson<EditorSettings>(
-      this as EditorSettings,
-    );
+extension DiagnosticsLogLevelMapperExtension on DiagnosticsLogLevel {
+  String toValue() {
+    DiagnosticsLogLevelMapper.ensureInitialized();
+    return MapperContainer.globals.toValue<DiagnosticsLogLevel>(this) as String;
   }
-
-  Map<String, dynamic> toMap() {
-    return EditorSettingsMapper.ensureInitialized().encodeMap<EditorSettings>(
-      this as EditorSettings,
-    );
-  }
-
-  EditorSettingsCopyWith<EditorSettings, EditorSettings, EditorSettings>
-  get copyWith => _EditorSettingsCopyWithImpl<EditorSettings, EditorSettings>(
-    this as EditorSettings,
-    $identity,
-    $identity,
-  );
-  @override
-  String toString() {
-    return EditorSettingsMapper.ensureInitialized().stringifyValue(
-      this as EditorSettings,
-    );
-  }
-
-  @override
-  bool operator ==(Object other) {
-    return EditorSettingsMapper.ensureInitialized().equalsValue(
-      this as EditorSettings,
-      other,
-    );
-  }
-
-  @override
-  int get hashCode {
-    return EditorSettingsMapper.ensureInitialized().hashValue(
-      this as EditorSettings,
-    );
-  }
-}
-
-extension EditorSettingsValueCopy<$R, $Out>
-    on ObjectCopyWith<$R, EditorSettings, $Out> {
-  EditorSettingsCopyWith<$R, EditorSettings, $Out> get $asEditorSettings =>
-      $base.as((v, t, t2) => _EditorSettingsCopyWithImpl<$R, $Out>(v, t, t2));
-}
-
-abstract class EditorSettingsCopyWith<$R, $In extends EditorSettings, $Out>
-    implements ClassCopyWith<$R, $In, $Out> {
-  $R call({
-    int? tabSize,
-    String? themeName,
-    bool? autosaveEnabled,
-    int? autosaveDelaySeconds,
-    ExternalEditorKind? externalEditor,
-    CodeOpenTarget? codeOpenTarget,
-    ExternalEditorExecutableMode? zedExecutableMode,
-    String? zedExecutablePath,
-    ExternalEditorWorkspaceMode? externalEditorWorkspaceMode,
-    bool? autoOpenNewWorkspacesInZed,
-  });
-  EditorSettingsCopyWith<$R2, $In, $Out2> $chain<$R2, $Out2>(
-    Then<$Out2, $R2> t,
-  );
-}
-
-class _EditorSettingsCopyWithImpl<$R, $Out>
-    extends ClassCopyWithBase<$R, EditorSettings, $Out>
-    implements EditorSettingsCopyWith<$R, EditorSettings, $Out> {
-  _EditorSettingsCopyWithImpl(super.value, super.then, super.then2);
-
-  @override
-  late final ClassMapperBase<EditorSettings> $mapper =
-      EditorSettingsMapper.ensureInitialized();
-  @override
-  $R call({
-    int? tabSize,
-    String? themeName,
-    bool? autosaveEnabled,
-    int? autosaveDelaySeconds,
-    ExternalEditorKind? externalEditor,
-    CodeOpenTarget? codeOpenTarget,
-    ExternalEditorExecutableMode? zedExecutableMode,
-    Object? zedExecutablePath = $none,
-    ExternalEditorWorkspaceMode? externalEditorWorkspaceMode,
-    bool? autoOpenNewWorkspacesInZed,
-  }) => $apply(
-    FieldCopyWithData({
-      if (tabSize != null) #tabSize: tabSize,
-      if (themeName != null) #themeName: themeName,
-      if (autosaveEnabled != null) #autosaveEnabled: autosaveEnabled,
-      if (autosaveDelaySeconds != null)
-        #autosaveDelaySeconds: autosaveDelaySeconds,
-      if (externalEditor != null) #externalEditor: externalEditor,
-      if (codeOpenTarget != null) #codeOpenTarget: codeOpenTarget,
-      if (zedExecutableMode != null) #zedExecutableMode: zedExecutableMode,
-      if (zedExecutablePath != $none) #zedExecutablePath: zedExecutablePath,
-      if (externalEditorWorkspaceMode != null)
-        #externalEditorWorkspaceMode: externalEditorWorkspaceMode,
-      if (autoOpenNewWorkspacesInZed != null)
-        #autoOpenNewWorkspacesInZed: autoOpenNewWorkspacesInZed,
-    }),
-  );
-  @override
-  EditorSettings $make(CopyWithData data) => EditorSettings(
-    tabSize: data.get(#tabSize, or: $value.tabSize),
-    themeName: data.get(#themeName, or: $value.themeName),
-    autosaveEnabled: data.get(#autosaveEnabled, or: $value.autosaveEnabled),
-    autosaveDelaySeconds: data.get(
-      #autosaveDelaySeconds,
-      or: $value.autosaveDelaySeconds,
-    ),
-    externalEditor: data.get(#externalEditor, or: $value.externalEditor),
-    codeOpenTarget: data.get(#codeOpenTarget, or: $value.codeOpenTarget),
-    zedExecutableMode: data.get(
-      #zedExecutableMode,
-      or: $value.zedExecutableMode,
-    ),
-    zedExecutablePath: data.get(
-      #zedExecutablePath,
-      or: $value.zedExecutablePath,
-    ),
-    externalEditorWorkspaceMode: data.get(
-      #externalEditorWorkspaceMode,
-      or: $value.externalEditorWorkspaceMode,
-    ),
-    autoOpenNewWorkspacesInZed: data.get(
-      #autoOpenNewWorkspacesInZed,
-      or: $value.autoOpenNewWorkspacesInZed,
-    ),
-  );
-
-  @override
-  EditorSettingsCopyWith<$R2, EditorSettings, $Out2> $chain<$R2, $Out2>(
-    Then<$Out2, $R2> t,
-  ) => _EditorSettingsCopyWithImpl<$R2, $Out2>($value, $cast, t);
 }
 
 class GeneralSettingsMapper extends ClassMapperBase<GeneralSettings> {
@@ -1433,6 +871,144 @@ class _AgentSettingsCopyWithImpl<$R, $Out>
   AgentSettingsCopyWith<$R2, AgentSettings, $Out2> $chain<$R2, $Out2>(
     Then<$Out2, $R2> t,
   ) => _AgentSettingsCopyWithImpl<$R2, $Out2>($value, $cast, t);
+}
+
+class AgentStatusHookSettingsMapper
+    extends ClassMapperBase<AgentStatusHookSettings> {
+  AgentStatusHookSettingsMapper._();
+
+  static AgentStatusHookSettingsMapper? _instance;
+  static AgentStatusHookSettingsMapper ensureInitialized() {
+    if (_instance == null) {
+      MapperContainer.globals.use(
+        _instance = AgentStatusHookSettingsMapper._(),
+      );
+    }
+    return _instance!;
+  }
+
+  @override
+  final String id = 'AgentStatusHookSettings';
+
+  static Map<String, bool> _$values(AgentStatusHookSettings v) => v.values;
+  static const Field<AgentStatusHookSettings, Map<String, bool>> _f$values =
+      Field('values', _$values, opt: true, def: const <String, bool>{});
+
+  @override
+  final MappableFields<AgentStatusHookSettings> fields = const {
+    #values: _f$values,
+  };
+
+  @override
+  final MappingHook hook = const _AgentStatusHookSettingsMappingHook();
+  static AgentStatusHookSettings _instantiate(DecodingData data) {
+    return AgentStatusHookSettings(values: data.dec(_f$values));
+  }
+
+  @override
+  final Function instantiate = _instantiate;
+
+  static AgentStatusHookSettings fromMap(Map<String, dynamic> map) {
+    return ensureInitialized().decodeMap<AgentStatusHookSettings>(map);
+  }
+
+  static AgentStatusHookSettings fromJson(String json) {
+    return ensureInitialized().decodeJson<AgentStatusHookSettings>(json);
+  }
+}
+
+mixin AgentStatusHookSettingsMappable {
+  String toJson() {
+    return AgentStatusHookSettingsMapper.ensureInitialized()
+        .encodeJson<AgentStatusHookSettings>(this as AgentStatusHookSettings);
+  }
+
+  Map<String, dynamic> toMap() {
+    return AgentStatusHookSettingsMapper.ensureInitialized()
+        .encodeMap<AgentStatusHookSettings>(this as AgentStatusHookSettings);
+  }
+
+  AgentStatusHookSettingsCopyWith<
+    AgentStatusHookSettings,
+    AgentStatusHookSettings,
+    AgentStatusHookSettings
+  >
+  get copyWith =>
+      _AgentStatusHookSettingsCopyWithImpl<
+        AgentStatusHookSettings,
+        AgentStatusHookSettings
+      >(this as AgentStatusHookSettings, $identity, $identity);
+  @override
+  String toString() {
+    return AgentStatusHookSettingsMapper.ensureInitialized().stringifyValue(
+      this as AgentStatusHookSettings,
+    );
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return AgentStatusHookSettingsMapper.ensureInitialized().equalsValue(
+      this as AgentStatusHookSettings,
+      other,
+    );
+  }
+
+  @override
+  int get hashCode {
+    return AgentStatusHookSettingsMapper.ensureInitialized().hashValue(
+      this as AgentStatusHookSettings,
+    );
+  }
+}
+
+extension AgentStatusHookSettingsValueCopy<$R, $Out>
+    on ObjectCopyWith<$R, AgentStatusHookSettings, $Out> {
+  AgentStatusHookSettingsCopyWith<$R, AgentStatusHookSettings, $Out>
+  get $asAgentStatusHookSettings => $base.as(
+    (v, t, t2) => _AgentStatusHookSettingsCopyWithImpl<$R, $Out>(v, t, t2),
+  );
+}
+
+abstract class AgentStatusHookSettingsCopyWith<
+  $R,
+  $In extends AgentStatusHookSettings,
+  $Out
+>
+    implements ClassCopyWith<$R, $In, $Out> {
+  MapCopyWith<$R, String, bool, ObjectCopyWith<$R, bool, bool>> get values;
+  $R call({Map<String, bool>? values});
+  AgentStatusHookSettingsCopyWith<$R2, $In, $Out2> $chain<$R2, $Out2>(
+    Then<$Out2, $R2> t,
+  );
+}
+
+class _AgentStatusHookSettingsCopyWithImpl<$R, $Out>
+    extends ClassCopyWithBase<$R, AgentStatusHookSettings, $Out>
+    implements
+        AgentStatusHookSettingsCopyWith<$R, AgentStatusHookSettings, $Out> {
+  _AgentStatusHookSettingsCopyWithImpl(super.value, super.then, super.then2);
+
+  @override
+  late final ClassMapperBase<AgentStatusHookSettings> $mapper =
+      AgentStatusHookSettingsMapper.ensureInitialized();
+  @override
+  MapCopyWith<$R, String, bool, ObjectCopyWith<$R, bool, bool>> get values =>
+      MapCopyWith(
+        $value.values,
+        (v, t) => ObjectCopyWith(v, $identity, t),
+        (v) => call(values: v),
+      );
+  @override
+  $R call({Map<String, bool>? values}) =>
+      $apply(FieldCopyWithData({if (values != null) #values: values}));
+  @override
+  AgentStatusHookSettings $make(CopyWithData data) =>
+      AgentStatusHookSettings(values: data.get(#values, or: $value.values));
+
+  @override
+  AgentStatusHookSettingsCopyWith<$R2, AgentStatusHookSettings, $Out2>
+  $chain<$R2, $Out2>(Then<$Out2, $R2> t) =>
+      _AgentStatusHookSettingsCopyWithImpl<$R2, $Out2>($value, $cast, t);
 }
 
 class AgentQuotaSettingsMapper extends ClassMapperBase<AgentQuotaSettings> {
@@ -2318,155 +1894,6 @@ class _AgentQuotaEnvironmentSettingsCopyWithImpl<$R, $Out>
       _AgentQuotaEnvironmentSettingsCopyWithImpl<$R2, $Out2>($value, $cast, t);
 }
 
-class DiagnosticsSettingsMapper extends ClassMapperBase<DiagnosticsSettings> {
-  DiagnosticsSettingsMapper._();
-
-  static DiagnosticsSettingsMapper? _instance;
-  static DiagnosticsSettingsMapper ensureInitialized() {
-    if (_instance == null) {
-      MapperContainer.globals.use(_instance = DiagnosticsSettingsMapper._());
-      DiagnosticsLogLevelMapper.ensureInitialized();
-    }
-    return _instance!;
-  }
-
-  @override
-  final String id = 'DiagnosticsSettings';
-
-  static DiagnosticsLogLevel _$logLevel(DiagnosticsSettings v) => v.logLevel;
-  static const Field<DiagnosticsSettings, DiagnosticsLogLevel> _f$logLevel =
-      Field('logLevel', _$logLevel, opt: true, def: DiagnosticsLogLevel.info);
-  static bool _$crashReportingEnabled(DiagnosticsSettings v) =>
-      v.crashReportingEnabled;
-  static const Field<DiagnosticsSettings, bool> _f$crashReportingEnabled =
-      Field(
-        'crashReportingEnabled',
-        _$crashReportingEnabled,
-        opt: true,
-        def: false,
-      );
-
-  @override
-  final MappableFields<DiagnosticsSettings> fields = const {
-    #logLevel: _f$logLevel,
-    #crashReportingEnabled: _f$crashReportingEnabled,
-  };
-
-  static DiagnosticsSettings _instantiate(DecodingData data) {
-    return DiagnosticsSettings(
-      logLevel: data.dec(_f$logLevel),
-      crashReportingEnabled: data.dec(_f$crashReportingEnabled),
-    );
-  }
-
-  @override
-  final Function instantiate = _instantiate;
-
-  static DiagnosticsSettings fromMap(Map<String, dynamic> map) {
-    return ensureInitialized().decodeMap<DiagnosticsSettings>(map);
-  }
-
-  static DiagnosticsSettings fromJson(String json) {
-    return ensureInitialized().decodeJson<DiagnosticsSettings>(json);
-  }
-}
-
-mixin DiagnosticsSettingsMappable {
-  String toJson() {
-    return DiagnosticsSettingsMapper.ensureInitialized()
-        .encodeJson<DiagnosticsSettings>(this as DiagnosticsSettings);
-  }
-
-  Map<String, dynamic> toMap() {
-    return DiagnosticsSettingsMapper.ensureInitialized()
-        .encodeMap<DiagnosticsSettings>(this as DiagnosticsSettings);
-  }
-
-  DiagnosticsSettingsCopyWith<
-    DiagnosticsSettings,
-    DiagnosticsSettings,
-    DiagnosticsSettings
-  >
-  get copyWith =>
-      _DiagnosticsSettingsCopyWithImpl<
-        DiagnosticsSettings,
-        DiagnosticsSettings
-      >(this as DiagnosticsSettings, $identity, $identity);
-  @override
-  String toString() {
-    return DiagnosticsSettingsMapper.ensureInitialized().stringifyValue(
-      this as DiagnosticsSettings,
-    );
-  }
-
-  @override
-  bool operator ==(Object other) {
-    return DiagnosticsSettingsMapper.ensureInitialized().equalsValue(
-      this as DiagnosticsSettings,
-      other,
-    );
-  }
-
-  @override
-  int get hashCode {
-    return DiagnosticsSettingsMapper.ensureInitialized().hashValue(
-      this as DiagnosticsSettings,
-    );
-  }
-}
-
-extension DiagnosticsSettingsValueCopy<$R, $Out>
-    on ObjectCopyWith<$R, DiagnosticsSettings, $Out> {
-  DiagnosticsSettingsCopyWith<$R, DiagnosticsSettings, $Out>
-  get $asDiagnosticsSettings => $base.as(
-    (v, t, t2) => _DiagnosticsSettingsCopyWithImpl<$R, $Out>(v, t, t2),
-  );
-}
-
-abstract class DiagnosticsSettingsCopyWith<
-  $R,
-  $In extends DiagnosticsSettings,
-  $Out
->
-    implements ClassCopyWith<$R, $In, $Out> {
-  $R call({DiagnosticsLogLevel? logLevel, bool? crashReportingEnabled});
-  DiagnosticsSettingsCopyWith<$R2, $In, $Out2> $chain<$R2, $Out2>(
-    Then<$Out2, $R2> t,
-  );
-}
-
-class _DiagnosticsSettingsCopyWithImpl<$R, $Out>
-    extends ClassCopyWithBase<$R, DiagnosticsSettings, $Out>
-    implements DiagnosticsSettingsCopyWith<$R, DiagnosticsSettings, $Out> {
-  _DiagnosticsSettingsCopyWithImpl(super.value, super.then, super.then2);
-
-  @override
-  late final ClassMapperBase<DiagnosticsSettings> $mapper =
-      DiagnosticsSettingsMapper.ensureInitialized();
-  @override
-  $R call({DiagnosticsLogLevel? logLevel, bool? crashReportingEnabled}) =>
-      $apply(
-        FieldCopyWithData({
-          if (logLevel != null) #logLevel: logLevel,
-          if (crashReportingEnabled != null)
-            #crashReportingEnabled: crashReportingEnabled,
-        }),
-      );
-  @override
-  DiagnosticsSettings $make(CopyWithData data) => DiagnosticsSettings(
-    logLevel: data.get(#logLevel, or: $value.logLevel),
-    crashReportingEnabled: data.get(
-      #crashReportingEnabled,
-      or: $value.crashReportingEnabled,
-    ),
-  );
-
-  @override
-  DiagnosticsSettingsCopyWith<$R2, DiagnosticsSettings, $Out2>
-  $chain<$R2, $Out2>(Then<$Out2, $R2> t) =>
-      _DiagnosticsSettingsCopyWithImpl<$R2, $Out2>($value, $cast, t);
-}
-
 class AleraSettingsMapper extends ClassMapperBase<AleraSettings> {
   AleraSettingsMapper._();
 
@@ -2752,6 +2179,432 @@ class _AleraSettingsCopyWithImpl<$R, $Out>
   AleraSettingsCopyWith<$R2, AleraSettings, $Out2> $chain<$R2, $Out2>(
     Then<$Out2, $R2> t,
   ) => _AleraSettingsCopyWithImpl<$R2, $Out2>($value, $cast, t);
+}
+
+class EditorSettingsMapper extends ClassMapperBase<EditorSettings> {
+  EditorSettingsMapper._();
+
+  static EditorSettingsMapper? _instance;
+  static EditorSettingsMapper ensureInitialized() {
+    if (_instance == null) {
+      MapperContainer.globals.use(_instance = EditorSettingsMapper._());
+      ExternalEditorKindMapper.ensureInitialized();
+      CodeOpenTargetMapper.ensureInitialized();
+      ExternalEditorExecutableModeMapper.ensureInitialized();
+      ExternalEditorWorkspaceModeMapper.ensureInitialized();
+    }
+    return _instance!;
+  }
+
+  @override
+  final String id = 'EditorSettings';
+
+  static int _$tabSize(EditorSettings v) => v.tabSize;
+  static const Field<EditorSettings, int> _f$tabSize = Field(
+    'tabSize',
+    _$tabSize,
+    opt: true,
+    def: 4,
+  );
+  static String _$themeName(EditorSettings v) => v.themeName;
+  static const Field<EditorSettings, String> _f$themeName = Field(
+    'themeName',
+    _$themeName,
+    opt: true,
+    def: EditorSyntaxThemeNames.alera,
+  );
+  static bool _$autosaveEnabled(EditorSettings v) => v.autosaveEnabled;
+  static const Field<EditorSettings, bool> _f$autosaveEnabled = Field(
+    'autosaveEnabled',
+    _$autosaveEnabled,
+    opt: true,
+    def: false,
+  );
+  static int _$autosaveDelaySeconds(EditorSettings v) => v.autosaveDelaySeconds;
+  static const Field<EditorSettings, int> _f$autosaveDelaySeconds = Field(
+    'autosaveDelaySeconds',
+    _$autosaveDelaySeconds,
+    opt: true,
+    def: EditorSettings.defaultAutosaveDelaySeconds,
+  );
+  static ExternalEditorKind _$externalEditor(EditorSettings v) =>
+      v.externalEditor;
+  static const Field<EditorSettings, ExternalEditorKind> _f$externalEditor =
+      Field(
+        'externalEditor',
+        _$externalEditor,
+        opt: true,
+        def: ExternalEditorKind.zed,
+      );
+  static CodeOpenTarget _$codeOpenTarget(EditorSettings v) => v.codeOpenTarget;
+  static const Field<EditorSettings, CodeOpenTarget> _f$codeOpenTarget = Field(
+    'codeOpenTarget',
+    _$codeOpenTarget,
+    opt: true,
+    def: CodeOpenTarget.alera,
+  );
+  static ExternalEditorExecutableMode _$zedExecutableMode(EditorSettings v) =>
+      v.zedExecutableMode;
+  static const Field<EditorSettings, ExternalEditorExecutableMode>
+  _f$zedExecutableMode = Field(
+    'zedExecutableMode',
+    _$zedExecutableMode,
+    opt: true,
+    def: ExternalEditorExecutableMode.automatic,
+  );
+  static String? _$zedExecutablePath(EditorSettings v) => v.zedExecutablePath;
+  static const Field<EditorSettings, String> _f$zedExecutablePath = Field(
+    'zedExecutablePath',
+    _$zedExecutablePath,
+    opt: true,
+  );
+  static ExternalEditorWorkspaceMode _$externalEditorWorkspaceMode(
+    EditorSettings v,
+  ) => v.externalEditorWorkspaceMode;
+  static const Field<EditorSettings, ExternalEditorWorkspaceMode>
+  _f$externalEditorWorkspaceMode = Field(
+    'externalEditorWorkspaceMode',
+    _$externalEditorWorkspaceMode,
+    opt: true,
+    def: ExternalEditorWorkspaceMode.newWindow,
+  );
+  static bool _$autoOpenNewWorkspacesInZed(EditorSettings v) =>
+      v.autoOpenNewWorkspacesInZed;
+  static const Field<EditorSettings, bool> _f$autoOpenNewWorkspacesInZed =
+      Field(
+        'autoOpenNewWorkspacesInZed',
+        _$autoOpenNewWorkspacesInZed,
+        opt: true,
+        def: false,
+      );
+
+  @override
+  final MappableFields<EditorSettings> fields = const {
+    #tabSize: _f$tabSize,
+    #themeName: _f$themeName,
+    #autosaveEnabled: _f$autosaveEnabled,
+    #autosaveDelaySeconds: _f$autosaveDelaySeconds,
+    #externalEditor: _f$externalEditor,
+    #codeOpenTarget: _f$codeOpenTarget,
+    #zedExecutableMode: _f$zedExecutableMode,
+    #zedExecutablePath: _f$zedExecutablePath,
+    #externalEditorWorkspaceMode: _f$externalEditorWorkspaceMode,
+    #autoOpenNewWorkspacesInZed: _f$autoOpenNewWorkspacesInZed,
+  };
+
+  static EditorSettings _instantiate(DecodingData data) {
+    return EditorSettings(
+      tabSize: data.dec(_f$tabSize),
+      themeName: data.dec(_f$themeName),
+      autosaveEnabled: data.dec(_f$autosaveEnabled),
+      autosaveDelaySeconds: data.dec(_f$autosaveDelaySeconds),
+      externalEditor: data.dec(_f$externalEditor),
+      codeOpenTarget: data.dec(_f$codeOpenTarget),
+      zedExecutableMode: data.dec(_f$zedExecutableMode),
+      zedExecutablePath: data.dec(_f$zedExecutablePath),
+      externalEditorWorkspaceMode: data.dec(_f$externalEditorWorkspaceMode),
+      autoOpenNewWorkspacesInZed: data.dec(_f$autoOpenNewWorkspacesInZed),
+    );
+  }
+
+  @override
+  final Function instantiate = _instantiate;
+
+  static EditorSettings fromMap(Map<String, dynamic> map) {
+    return ensureInitialized().decodeMap<EditorSettings>(map);
+  }
+
+  static EditorSettings fromJson(String json) {
+    return ensureInitialized().decodeJson<EditorSettings>(json);
+  }
+}
+
+mixin EditorSettingsMappable {
+  String toJson() {
+    return EditorSettingsMapper.ensureInitialized().encodeJson<EditorSettings>(
+      this as EditorSettings,
+    );
+  }
+
+  Map<String, dynamic> toMap() {
+    return EditorSettingsMapper.ensureInitialized().encodeMap<EditorSettings>(
+      this as EditorSettings,
+    );
+  }
+
+  EditorSettingsCopyWith<EditorSettings, EditorSettings, EditorSettings>
+  get copyWith => _EditorSettingsCopyWithImpl<EditorSettings, EditorSettings>(
+    this as EditorSettings,
+    $identity,
+    $identity,
+  );
+  @override
+  String toString() {
+    return EditorSettingsMapper.ensureInitialized().stringifyValue(
+      this as EditorSettings,
+    );
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return EditorSettingsMapper.ensureInitialized().equalsValue(
+      this as EditorSettings,
+      other,
+    );
+  }
+
+  @override
+  int get hashCode {
+    return EditorSettingsMapper.ensureInitialized().hashValue(
+      this as EditorSettings,
+    );
+  }
+}
+
+extension EditorSettingsValueCopy<$R, $Out>
+    on ObjectCopyWith<$R, EditorSettings, $Out> {
+  EditorSettingsCopyWith<$R, EditorSettings, $Out> get $asEditorSettings =>
+      $base.as((v, t, t2) => _EditorSettingsCopyWithImpl<$R, $Out>(v, t, t2));
+}
+
+abstract class EditorSettingsCopyWith<$R, $In extends EditorSettings, $Out>
+    implements ClassCopyWith<$R, $In, $Out> {
+  $R call({
+    int? tabSize,
+    String? themeName,
+    bool? autosaveEnabled,
+    int? autosaveDelaySeconds,
+    ExternalEditorKind? externalEditor,
+    CodeOpenTarget? codeOpenTarget,
+    ExternalEditorExecutableMode? zedExecutableMode,
+    String? zedExecutablePath,
+    ExternalEditorWorkspaceMode? externalEditorWorkspaceMode,
+    bool? autoOpenNewWorkspacesInZed,
+  });
+  EditorSettingsCopyWith<$R2, $In, $Out2> $chain<$R2, $Out2>(
+    Then<$Out2, $R2> t,
+  );
+}
+
+class _EditorSettingsCopyWithImpl<$R, $Out>
+    extends ClassCopyWithBase<$R, EditorSettings, $Out>
+    implements EditorSettingsCopyWith<$R, EditorSettings, $Out> {
+  _EditorSettingsCopyWithImpl(super.value, super.then, super.then2);
+
+  @override
+  late final ClassMapperBase<EditorSettings> $mapper =
+      EditorSettingsMapper.ensureInitialized();
+  @override
+  $R call({
+    int? tabSize,
+    String? themeName,
+    bool? autosaveEnabled,
+    int? autosaveDelaySeconds,
+    ExternalEditorKind? externalEditor,
+    CodeOpenTarget? codeOpenTarget,
+    ExternalEditorExecutableMode? zedExecutableMode,
+    Object? zedExecutablePath = $none,
+    ExternalEditorWorkspaceMode? externalEditorWorkspaceMode,
+    bool? autoOpenNewWorkspacesInZed,
+  }) => $apply(
+    FieldCopyWithData({
+      if (tabSize != null) #tabSize: tabSize,
+      if (themeName != null) #themeName: themeName,
+      if (autosaveEnabled != null) #autosaveEnabled: autosaveEnabled,
+      if (autosaveDelaySeconds != null)
+        #autosaveDelaySeconds: autosaveDelaySeconds,
+      if (externalEditor != null) #externalEditor: externalEditor,
+      if (codeOpenTarget != null) #codeOpenTarget: codeOpenTarget,
+      if (zedExecutableMode != null) #zedExecutableMode: zedExecutableMode,
+      if (zedExecutablePath != $none) #zedExecutablePath: zedExecutablePath,
+      if (externalEditorWorkspaceMode != null)
+        #externalEditorWorkspaceMode: externalEditorWorkspaceMode,
+      if (autoOpenNewWorkspacesInZed != null)
+        #autoOpenNewWorkspacesInZed: autoOpenNewWorkspacesInZed,
+    }),
+  );
+  @override
+  EditorSettings $make(CopyWithData data) => EditorSettings(
+    tabSize: data.get(#tabSize, or: $value.tabSize),
+    themeName: data.get(#themeName, or: $value.themeName),
+    autosaveEnabled: data.get(#autosaveEnabled, or: $value.autosaveEnabled),
+    autosaveDelaySeconds: data.get(
+      #autosaveDelaySeconds,
+      or: $value.autosaveDelaySeconds,
+    ),
+    externalEditor: data.get(#externalEditor, or: $value.externalEditor),
+    codeOpenTarget: data.get(#codeOpenTarget, or: $value.codeOpenTarget),
+    zedExecutableMode: data.get(
+      #zedExecutableMode,
+      or: $value.zedExecutableMode,
+    ),
+    zedExecutablePath: data.get(
+      #zedExecutablePath,
+      or: $value.zedExecutablePath,
+    ),
+    externalEditorWorkspaceMode: data.get(
+      #externalEditorWorkspaceMode,
+      or: $value.externalEditorWorkspaceMode,
+    ),
+    autoOpenNewWorkspacesInZed: data.get(
+      #autoOpenNewWorkspacesInZed,
+      or: $value.autoOpenNewWorkspacesInZed,
+    ),
+  );
+
+  @override
+  EditorSettingsCopyWith<$R2, EditorSettings, $Out2> $chain<$R2, $Out2>(
+    Then<$Out2, $R2> t,
+  ) => _EditorSettingsCopyWithImpl<$R2, $Out2>($value, $cast, t);
+}
+
+class DiagnosticsSettingsMapper extends ClassMapperBase<DiagnosticsSettings> {
+  DiagnosticsSettingsMapper._();
+
+  static DiagnosticsSettingsMapper? _instance;
+  static DiagnosticsSettingsMapper ensureInitialized() {
+    if (_instance == null) {
+      MapperContainer.globals.use(_instance = DiagnosticsSettingsMapper._());
+      DiagnosticsLogLevelMapper.ensureInitialized();
+    }
+    return _instance!;
+  }
+
+  @override
+  final String id = 'DiagnosticsSettings';
+
+  static DiagnosticsLogLevel _$logLevel(DiagnosticsSettings v) => v.logLevel;
+  static const Field<DiagnosticsSettings, DiagnosticsLogLevel> _f$logLevel =
+      Field('logLevel', _$logLevel, opt: true, def: DiagnosticsLogLevel.info);
+  static bool _$crashReportingEnabled(DiagnosticsSettings v) =>
+      v.crashReportingEnabled;
+  static const Field<DiagnosticsSettings, bool> _f$crashReportingEnabled =
+      Field(
+        'crashReportingEnabled',
+        _$crashReportingEnabled,
+        opt: true,
+        def: false,
+      );
+
+  @override
+  final MappableFields<DiagnosticsSettings> fields = const {
+    #logLevel: _f$logLevel,
+    #crashReportingEnabled: _f$crashReportingEnabled,
+  };
+
+  static DiagnosticsSettings _instantiate(DecodingData data) {
+    return DiagnosticsSettings(
+      logLevel: data.dec(_f$logLevel),
+      crashReportingEnabled: data.dec(_f$crashReportingEnabled),
+    );
+  }
+
+  @override
+  final Function instantiate = _instantiate;
+
+  static DiagnosticsSettings fromMap(Map<String, dynamic> map) {
+    return ensureInitialized().decodeMap<DiagnosticsSettings>(map);
+  }
+
+  static DiagnosticsSettings fromJson(String json) {
+    return ensureInitialized().decodeJson<DiagnosticsSettings>(json);
+  }
+}
+
+mixin DiagnosticsSettingsMappable {
+  String toJson() {
+    return DiagnosticsSettingsMapper.ensureInitialized()
+        .encodeJson<DiagnosticsSettings>(this as DiagnosticsSettings);
+  }
+
+  Map<String, dynamic> toMap() {
+    return DiagnosticsSettingsMapper.ensureInitialized()
+        .encodeMap<DiagnosticsSettings>(this as DiagnosticsSettings);
+  }
+
+  DiagnosticsSettingsCopyWith<
+    DiagnosticsSettings,
+    DiagnosticsSettings,
+    DiagnosticsSettings
+  >
+  get copyWith =>
+      _DiagnosticsSettingsCopyWithImpl<
+        DiagnosticsSettings,
+        DiagnosticsSettings
+      >(this as DiagnosticsSettings, $identity, $identity);
+  @override
+  String toString() {
+    return DiagnosticsSettingsMapper.ensureInitialized().stringifyValue(
+      this as DiagnosticsSettings,
+    );
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return DiagnosticsSettingsMapper.ensureInitialized().equalsValue(
+      this as DiagnosticsSettings,
+      other,
+    );
+  }
+
+  @override
+  int get hashCode {
+    return DiagnosticsSettingsMapper.ensureInitialized().hashValue(
+      this as DiagnosticsSettings,
+    );
+  }
+}
+
+extension DiagnosticsSettingsValueCopy<$R, $Out>
+    on ObjectCopyWith<$R, DiagnosticsSettings, $Out> {
+  DiagnosticsSettingsCopyWith<$R, DiagnosticsSettings, $Out>
+  get $asDiagnosticsSettings => $base.as(
+    (v, t, t2) => _DiagnosticsSettingsCopyWithImpl<$R, $Out>(v, t, t2),
+  );
+}
+
+abstract class DiagnosticsSettingsCopyWith<
+  $R,
+  $In extends DiagnosticsSettings,
+  $Out
+>
+    implements ClassCopyWith<$R, $In, $Out> {
+  $R call({DiagnosticsLogLevel? logLevel, bool? crashReportingEnabled});
+  DiagnosticsSettingsCopyWith<$R2, $In, $Out2> $chain<$R2, $Out2>(
+    Then<$Out2, $R2> t,
+  );
+}
+
+class _DiagnosticsSettingsCopyWithImpl<$R, $Out>
+    extends ClassCopyWithBase<$R, DiagnosticsSettings, $Out>
+    implements DiagnosticsSettingsCopyWith<$R, DiagnosticsSettings, $Out> {
+  _DiagnosticsSettingsCopyWithImpl(super.value, super.then, super.then2);
+
+  @override
+  late final ClassMapperBase<DiagnosticsSettings> $mapper =
+      DiagnosticsSettingsMapper.ensureInitialized();
+  @override
+  $R call({DiagnosticsLogLevel? logLevel, bool? crashReportingEnabled}) =>
+      $apply(
+        FieldCopyWithData({
+          if (logLevel != null) #logLevel: logLevel,
+          if (crashReportingEnabled != null)
+            #crashReportingEnabled: crashReportingEnabled,
+        }),
+      );
+  @override
+  DiagnosticsSettings $make(CopyWithData data) => DiagnosticsSettings(
+    logLevel: data.get(#logLevel, or: $value.logLevel),
+    crashReportingEnabled: data.get(
+      #crashReportingEnabled,
+      or: $value.crashReportingEnabled,
+    ),
+  );
+
+  @override
+  DiagnosticsSettingsCopyWith<$R2, DiagnosticsSettings, $Out2>
+  $chain<$R2, $Out2>(Then<$Out2, $R2> t) =>
+      _DiagnosticsSettingsCopyWithImpl<$R2, $Out2>($value, $cast, t);
 }
 
 class TerminalSettingsMapper extends ClassMapperBase<TerminalSettings> {
