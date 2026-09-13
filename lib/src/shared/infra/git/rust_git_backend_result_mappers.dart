@@ -1,0 +1,131 @@
+part of 'rust_git_backend.dart';
+
+extension on RustGitBackend {
+  GitChangeEntry _toChangeEntry(rust.GitChangeEntry entry) {
+    return GitChangeEntry(
+      path: entry.path,
+      oldPath: entry.oldPath,
+      area: _toArea(entry.area),
+      status: _toStatus(entry.status),
+      added: entry.added,
+      removed: entry.removed,
+      isBinary: entry.isBinary,
+      isLarge: entry.isLarge,
+      submodule: entry.submodule == null
+          ? null
+          : GitSubmoduleStatus(
+              commitChanged: entry.submodule!.commitChanged,
+              trackedChanges: entry.submodule!.trackedChanges,
+              untrackedChanges: entry.submodule!.untrackedChanges,
+              inspectable: entry.submodule!.inspectable,
+            ),
+    );
+  }
+
+  Future<GitStatusResult> _toStatusResult(rust.GitStatusResult result) async {
+    final entries = <GitChangeEntry>[];
+    for (var index = 0; index < result.entries.length; index += 1) {
+      entries.add(_toChangeEntry(result.entries[index]));
+      if ((index + 1) % gitStatusWorkChunkSize == 0) {
+        await Future.pause();
+      }
+    }
+    if (result.entries.isNotEmpty) {
+      await Future.pause();
+    }
+    final projectedEntries = List<GitChangeEntry>.unmodifiableOf(entries);
+    if (projectedEntries.isNotEmpty) {
+      await Future.pause();
+    }
+    // The native side sends the flat entries only so each change crosses the
+    // bridge once; groups and tree rows are derived locally instead. Both
+    // projection stages yield so a large status cannot monopolize a frame.
+    return GitStatusResult(
+      entries: projectedEntries,
+      groups: await GitChangeGroup.fromEntriesChunked(projectedEntries),
+    );
+  }
+
+  GitHistoryResult _toHistoryResult(rust.GitHistoryResult result) {
+    return GitHistoryResult(
+      items: result.items.map(_toHistoryItem).toList(growable: false),
+      currentRef: result.currentRef == null
+          ? null
+          : _toHistoryItemRef(result.currentRef!),
+      remoteRef: result.remoteRef == null
+          ? null
+          : _toHistoryItemRef(result.remoteRef!),
+      baseRef: result.baseRef == null
+          ? null
+          : _toHistoryItemRef(result.baseRef!),
+      mergeBase: result.mergeBase,
+      hasIncomingChanges: result.hasIncomingChanges,
+      hasOutgoingChanges: result.hasOutgoingChanges,
+      hasMore: result.hasMore,
+      limit: result.limit,
+    );
+  }
+
+  GitHistoryItem _toHistoryItem(rust.GitHistoryItem item) {
+    final timestamp = item.timestamp;
+    return GitHistoryItem(
+      id: item.id,
+      parentIds: item.parentIds,
+      subject: item.subject,
+      message: item.message,
+      displayId: item.displayId,
+      author: item.author,
+      authorEmail: item.authorEmail,
+      timestamp: timestamp == null
+          ? null
+          : DateTime.fromMillisecondsSinceEpoch(timestamp, isUtc: true),
+      references: item.references
+          .map(_toHistoryItemRef)
+          .toList(growable: false),
+    );
+  }
+
+  GitHistoryItemRef _toHistoryItemRef(rust.GitHistoryItemRef itemRef) {
+    return GitHistoryItemRef(
+      id: itemRef.id,
+      name: itemRef.name,
+      revision: itemRef.revision,
+      category: itemRef.category == null
+          ? null
+          : _toHistoryRefCategory(itemRef.category!),
+    );
+  }
+
+  GitCommitCompareResult _toCommitCompareResult(
+    rust.GitCommitCompareResult result,
+  ) {
+    return GitCommitCompareResult(
+      summary: _toCommitCompareSummary(result.summary),
+      entries: result.entries.map(_toCommitChangeEntry).toList(growable: false),
+    );
+  }
+
+  GitCommitCompareSummary _toCommitCompareSummary(
+    rust.GitCommitCompareSummary summary,
+  ) {
+    return GitCommitCompareSummary(
+      commitOid: summary.commitOid,
+      parentOid: summary.parentOid,
+      compareRef: summary.compareRef,
+      baseRef: summary.baseRef,
+      changedFiles: summary.changedFiles,
+      status: _toCommitCompareStatus(summary.status),
+      errorMessage: summary.errorMessage,
+    );
+  }
+
+  GitCommitChangeEntry _toCommitChangeEntry(rust.GitCommitChangeEntry entry) {
+    return GitCommitChangeEntry(
+      path: entry.path,
+      oldPath: entry.oldPath,
+      status: _toStatus(entry.status),
+      added: entry.added,
+      removed: entry.removed,
+    );
+  }
+}
