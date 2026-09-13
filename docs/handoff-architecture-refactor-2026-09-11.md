@@ -1379,7 +1379,7 @@ max-lines 尚未全清前，第 8 步會是 repo-wide exit 1；必須確認 offe
 - Phase 4（P7）：Terminal 四 owner + session handle 再拆到 329 行、Git loader/cache owner、Mobile transition matrix + client factory 全部落地
 - Phase 5：agent capability matrix（docs-only，`0e88a2f0`）、settings 三類歸屬（`215893ee`）已落地。Release matrix（§21）仍不要跟 correctness 重構同時做
 - Batch L：grouping 熱點已修（真實 7.5k → 6.27ms）+ reload 後 entry identity 保留（`9cd9384a`，下游 `identical()` memo 命中）；20k+ / payload 分頁 / isolate 仍是後續
-- Commit Graph 右鍵操作：已實作 M1-M3（commit `d2c071f4` / `969498bb` / `7d1ce394`）——branch badge 右鍵 Switch to Branch 走 `switchWorkspaceBranch` facade、commit 右鍵 Copy Hash/Subject + Revert Commit + Reset（Soft/Mixed/Hard）走 `WorkspaceSourceControlController`；backend `revert_commit`/`reset_to_commit` 落 alera-core + FRB + FakeGitBackend。細節與偏差見 §26；parity backlog（cherry-pick、tag ops、detached checkout 等）仍未做
+- Commit Graph 右鍵操作：已實作 M1-M3 + Checkout Commit（commit `d2c071f4` / `969498bb` / `7d1ce394` / `3bd1fe58`）——branch badge 右鍵 Switch to Branch 走 `switchWorkspaceBranch` facade、commit 右鍵 Copy Hash/Subject + Checkout Commit（detached HEAD，confirm 提示）+ Revert Commit + Reset（Soft/Mixed/Hard）走 `WorkspaceSourceControlController`；backend `checkout_commit`/`revert_commit`/`reset_to_commit` 落 alera-core + FRB + FakeGitBackend。細節與偏差見 §26；parity backlog（cherry-pick、tag ops、create branch at commit 等）仍未做
 - 已知非重構 regression：`alera_shell_page_test.dart` 3 個失敗已修（`db5e8cd4`，見 §7.4）
 - 其他 worktree：使用者保有多個 feature worktree，不要清理或吸收
 - Merge/rebase/deploy/build release：本工作未做
@@ -1397,7 +1397,8 @@ max-lines 尚未全清前，第 8 步會是 repo-wide exit 1；必須確認 offe
 - Surface 的 source-control mutation 需 `ref.listenManual` 包住：`workspaceSourceControlControllerProvider` 是 autoDispose，panel 未掛載時裸 `ref.read(provider.notifier)` 的 ref 會在 await 途中被 dispose（`_runCommitMutation` 內 `_withSourceControl`）。
 - Panel 的 `_GitHistoryCommitRow` 也補上 secondary-tap 右鍵 menu（原本只有 ⋯ 按鈕），與 surface row 對齊。
 - 新增 widget harness `test/widget/workspace_git_history_surface_test_harness.dart` 並拆出 `workspace_git_history_surface_actions_test.dart`，避免原測試檔破 500 行觸發 max-lines ratchet。
-- max-lines baseline 只調整本批成長的三檔（`rust_git_backend.dart` 566→581、`rust/src/api/git.rs` 1391→1392、`test/unit/fake_git_backend.dart` 650→658）；另有 7 個既有 over-500 檔（`git_diff_models.dart`、`terminal_host/server/*`、`tool/bench/git_status_real_repo_bench.dart`）為先前批次遺留，未動。
+- max-lines baseline 只調整本批成長的檔案（`rust_git_backend.dart` 566→589、`rust/src/api/git.rs` 1391→1392、`test/unit/fake_git_backend.dart` 650→660、新增 `git_commit_ops_tests.rs` 603）；另有數個既有 over-500 檔（`git_diff_models.dart`、`terminal_host/server*`、`tool/bench/git_status_real_repo_bench.dart`）為先前批次遺留，未動。
+- Checkout Commit（commit `3bd1fe58`）：`alera-core` `checkout_commit` 先 `checkout_tree(safe)` 再 `set_head_detached`——checkout 失敗時 HEAD 完全不動，不需要 branch checkout 那種 set_head 後 rollback；先跑 `ensure_pending_changes_compatible`（複用 branch_operations 提為 `pub(super)`）+ `RepositoryState::Clean` 檢查；已在同一 commit detached 時 no-op。menu 項目「Checkout Commit」+ 非破壞性 confirm（提示 detached HEAD 下的 commit 不屬於任何 branch），可走回既有 branch badge 的 Switch to Branch。
 
 以下為原規劃內容（spec/design/tasks/tests/assumptions 保留供 parity backlog 參考）。
 
@@ -1454,7 +1455,7 @@ max-lines 尚未全清前，第 8 步會是 repo-wide exit 1；必須確認 offe
 1. **M1（純 Dart，不需 backend 新 op）**：抽 `workspace_git_history_actions.dart` 共用 menu builders，panel 改用共用檔（行為不變）；surface 加 row secondary tap → commit menu（Copy Hash/Subject）+ badge `onOpenActions` → ref menu（Switch to Branch / Copy Branch Name）；switch 走 facade，成功後 `_reload()` + source control refresh。
 2. **M2（revert）**：alera-core `revert_commit` + FRB + `RustGitBackend` + `FakeGitBackend`；menu 項目與 merge commit mainline 策略。
 3. **M3（reset）**：alera-core `reset_to_commit(mode)` + FRB + Dart + fake；Reset 子選單，Hard 走 destructive confirm dialog。
-4. **Parity backlog（先不做）**：Create Branch at Commit、Checkout Commit（detached）、Cherry Pick、Drop Commit、Merge into current branch、Rebase onto、Tag add/delete/push、Remote branch tracking checkout / pull / delete、Rename Branch、Delete Branch（非 force 或 merge-check 變體）、Create Archive、uncommitted-changes row 操作、Ctrl/Cmd+click 兩 commit compare。
+4. **Parity backlog（先不做）**：Create Branch at Commit、Cherry Pick、Drop Commit、Merge into current branch、Rebase onto、Tag add/delete/push、Remote branch tracking checkout / pull / delete、Rename Branch、Delete Branch（非 force 或 merge-check 變體）、Create Archive、uncommitted-changes row 操作、Ctrl/Cmd+click 兩 commit compare。（Checkout Commit 已於 `3bd1fe58` 實作）
 
 ### 26.5 Tests
 
