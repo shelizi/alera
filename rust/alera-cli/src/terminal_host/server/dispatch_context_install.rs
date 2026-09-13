@@ -273,6 +273,13 @@ impl ServerActor {
                         return;
                     };
                     if *generation != cleanup_generation {
+                        tracing::debug!(
+                            request_type = "orchestration.dispatchContext.cleanup",
+                            path = %path.display(),
+                            generation = cleanup_generation,
+                            current_generation = *generation,
+                            "stale-completion"
+                        );
                         return;
                     }
                     let _ = std::fs::remove_file(path);
@@ -296,6 +303,12 @@ impl ServerActor {
         result: HostResult<()>,
     ) {
         let Some(pending) = self.pending_dispatch_installs.get(&dispatch_id) else {
+            tracing::debug!(
+                request_type = "orchestration.dispatchContext.install",
+                dispatch_id = %dispatch_id,
+                generation,
+                "stale-completion"
+            );
             return;
         };
         let still_current = pending
@@ -304,6 +317,14 @@ impl ServerActor {
             .map(|current| *current == generation)
             .unwrap_or(false);
         if pending.generation != generation || !still_current {
+            tracing::debug!(
+                request_type = "orchestration.dispatchContext.install",
+                dispatch_id = %dispatch_id,
+                generation,
+                pending_generation = pending.generation,
+                still_current,
+                "stale-completion"
+            );
             return;
         }
         let pending = self
@@ -325,6 +346,13 @@ impl ServerActor {
             Ok(Some(dispatch)) if dispatch.status == OrchestrationDispatchStatus::AwaitingAcceptance
         );
         if !live {
+            tracing::debug!(
+                request_type = "orchestration.dispatchContext.install",
+                dispatch_id = %dispatch_id,
+                generation,
+                handle = %pending.handle,
+                "stale-completion"
+            );
             // The owner was invalidated while the write ran; the context file
             // belongs to nobody now.
             self.remove_dispatch_context(&pending.handle);

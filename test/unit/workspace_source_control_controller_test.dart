@@ -157,6 +157,7 @@ void main() {
     staleGate.complete();
     await Future.pause(const Duration(milliseconds: 20));
     expect(container.read(provider).requireValue.status.entries, hasLength(2));
+    expect(controller.staleCompletionCount, 1);
   });
 
   test(
