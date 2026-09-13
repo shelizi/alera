@@ -6,6 +6,7 @@
 // Static analysis wrongly picks the IO variant, thus ignore this
 // ignore_for_file: argument_type_not_assignable
 
+import 'api/agent_descriptors.dart';
 import 'api/agent_hooks.dart';
 import 'api/ai_dictation.dart';
 import 'api/clipboard.dart';
@@ -68,6 +69,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   String dco_decode_String(dynamic raw);
 
   @protected
+  AgentDescriptorDto dco_decode_agent_descriptor_dto(dynamic raw);
+
+  @protected
   AgentHookEndpointDto dco_decode_agent_hook_endpoint_dto(dynamic raw);
 
   @protected
@@ -75,6 +79,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   AgentHookEventDto dco_decode_agent_hook_event_dto(dynamic raw);
+
+  @protected
+  AgentRiskRuleDto dco_decode_agent_risk_rule_dto(dynamic raw);
 
   @protected
   AiDictationError dco_decode_ai_dictation_error(dynamic raw);
@@ -289,7 +296,13 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<String> dco_decode_list_String(dynamic raw);
 
   @protected
+  List<AgentDescriptorDto> dco_decode_list_agent_descriptor_dto(dynamic raw);
+
+  @protected
   List<AgentHookEventDto> dco_decode_list_agent_hook_event_dto(dynamic raw);
+
+  @protected
+  List<AgentRiskRuleDto> dco_decode_list_agent_risk_rule_dto(dynamic raw);
 
   @protected
   List<CodexSavedPrompt> dco_decode_list_codex_saved_prompt(dynamic raw);
@@ -396,6 +409,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<WorkspaceSearchMatch> dco_decode_list_workspace_search_match(
     dynamic raw,
   );
+
+  @protected
+  ManagedAgentLaunchDto dco_decode_managed_agent_launch_dto(dynamic raw);
 
   @protected
   MermanViewerError dco_decode_merman_viewer_error(dynamic raw);
@@ -645,6 +661,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   String sse_decode_String(SseDeserializer deserializer);
 
   @protected
+  AgentDescriptorDto sse_decode_agent_descriptor_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   AgentHookEndpointDto sse_decode_agent_hook_endpoint_dto(
     SseDeserializer deserializer,
   );
@@ -658,6 +679,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   AgentHookEventDto sse_decode_agent_hook_event_dto(
     SseDeserializer deserializer,
   );
+
+  @protected
+  AgentRiskRuleDto sse_decode_agent_risk_rule_dto(SseDeserializer deserializer);
 
   @protected
   AiDictationError sse_decode_ai_dictation_error(SseDeserializer deserializer);
@@ -922,7 +946,17 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<String> sse_decode_list_String(SseDeserializer deserializer);
 
   @protected
+  List<AgentDescriptorDto> sse_decode_list_agent_descriptor_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   List<AgentHookEventDto> sse_decode_list_agent_hook_event_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<AgentRiskRuleDto> sse_decode_list_agent_risk_rule_dto(
     SseDeserializer deserializer,
   );
 
@@ -1061,6 +1095,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<WorkspaceSearchMatch> sse_decode_list_workspace_search_match(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  ManagedAgentLaunchDto sse_decode_managed_agent_launch_dto(
     SseDeserializer deserializer,
   );
 
@@ -1379,6 +1418,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_String(String self, SseSerializer serializer);
 
   @protected
+  void sse_encode_agent_descriptor_dto(
+    AgentDescriptorDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_agent_hook_endpoint_dto(
     AgentHookEndpointDto self,
     SseSerializer serializer,
@@ -1393,6 +1438,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_agent_hook_event_dto(
     AgentHookEventDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_agent_risk_rule_dto(
+    AgentRiskRuleDto self,
     SseSerializer serializer,
   );
 
@@ -1733,8 +1784,20 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_list_String(List<String> self, SseSerializer serializer);
 
   @protected
+  void sse_encode_list_agent_descriptor_dto(
+    List<AgentDescriptorDto> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_list_agent_hook_event_dto(
     List<AgentHookEventDto> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_agent_risk_rule_dto(
+    List<AgentRiskRuleDto> self,
     SseSerializer serializer,
   );
 
@@ -1906,6 +1969,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_list_workspace_search_match(
     List<WorkspaceSearchMatch> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_managed_agent_launch_dto(
+    ManagedAgentLaunchDto self,
     SseSerializer serializer,
   );
 
