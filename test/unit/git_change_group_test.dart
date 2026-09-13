@@ -226,6 +226,87 @@ void main() {
       );
       expect(rootDirs.fold<int>(0, (sum, row) => sum + row.fileCount), 7475);
     });
+
+    test(
+      'chunked grouping preserves sync output and yields between chunks',
+      () async {
+        final entries = _randomEntries(180, 23)
+          ..add(
+            const GitChangeEntry(
+              path: 'lib/duplicate.dart',
+              area: .staged,
+              status: .modified,
+              added: 1,
+            ),
+          )
+          ..add(
+            const GitChangeEntry(
+              path: 'lib/duplicate.dart',
+              area: .unstaged,
+              status: .modified,
+              removed: 2,
+            ),
+          );
+        var yieldCount = 0;
+
+        final chunked = await GitChangeGroup.fromEntriesChunked(
+          entries,
+          chunkSize: 3,
+          onChunk: (_) => yieldCount += 1,
+        );
+        final expected = GitChangeGroup.fromEntries(entries);
+
+        expect(yieldCount, greaterThan(0));
+        _expectGroupsEquivalent(chunked, expected);
+
+        final unifiedChunked = await GitChangeGroup.unifiedFromEntriesChunked(
+          entries,
+          chunkSize: 3,
+        );
+        _expectGroupsEquivalent(
+          unifiedChunked,
+          GitChangeGroup.unifiedFromEntries(entries),
+        );
+      },
+    );
+
+    test(
+      'chunked rebind preserves reconciled entry identity in rows',
+      () async {
+        final previous = <GitChangeEntry>[
+          _entry('lib/alpha.dart', area: .unstaged),
+          _entry('lib/beta.dart', area: .unstaged),
+        ];
+        final inserted = _entry('lib/inserted.dart', area: .unstaged);
+        final next = <GitChangeEntry>[inserted, ...previous.map(_copyEntry)];
+        final reconciled = await reconcileGitChangeEntryInstancesChunked(
+          previous,
+          next,
+          chunkSize: 1,
+        );
+        final rebound = await GitChangeGroup.rebindEntryInstancesChunked(
+          GitChangeGroup.fromEntries(next),
+          sourceEntries: next,
+          reboundEntries: reconciled,
+          chunkSize: 1,
+        );
+
+        expect(identical(reconciled[0], inserted), isTrue);
+        expect(identical(reconciled[1], previous[0]), isTrue);
+        expect(identical(reconciled[2], previous[1]), isTrue);
+        final rows = rebound.single.treeRows
+            .where((row) => row.entry != null)
+            .toList(growable: false);
+        expect(rows.map((row) => row.entry!.path).toList(), <String>[
+          'lib/alpha.dart',
+          'lib/beta.dart',
+          'lib/inserted.dart',
+        ]);
+        expect(identical(rows[0].entry, previous[0]), isTrue);
+        expect(identical(rows[1].entry, previous[1]), isTrue);
+        expect(identical(rows[2].entry, inserted), isTrue);
+      },
+    );
   });
 }
 
@@ -237,6 +318,21 @@ GitChangeEntry _entry(
     path: path,
     area: area,
     status: area == GitChangeArea.untracked ? .untracked : .modified,
+  );
+}
+
+GitChangeEntry _copyEntry(GitChangeEntry entry) {
+  return GitChangeEntry(
+    path: entry.path,
+    oldPath: entry.oldPath,
+    area: entry.area,
+    status: entry.status,
+    added: entry.added,
+    removed: entry.removed,
+    isBinary: entry.isBinary,
+    isLarge: entry.isLarge,
+    submodule: entry.submodule,
+    submoduleRoot: entry.submoduleRoot,
   );
 }
 
@@ -291,6 +387,37 @@ void _expectRowsMatch(
     );
     expect(_rowLabels(group.treeRows), _rowLabels(_referenceTreeRows(sorted)));
   }
+}
+
+void _expectGroupsEquivalent(
+  List<GitChangeGroup> actual,
+  List<GitChangeGroup> expected,
+) {
+  expect(actual, hasLength(expected.length));
+  for (var index = 0; index < expected.length; index += 1) {
+    final actualGroup = actual[index];
+    final expectedGroup = expected[index];
+    expect(actualGroup.area, expectedGroup.area);
+    expect(actualGroup.unified, expectedGroup.unified);
+    expect(
+      actualGroup.entries.map(_entryKey).toList(),
+      expectedGroup.entries.map(_entryKey).toList(),
+    );
+    expect(_rowKeys(actualGroup.treeRows), _rowKeys(expectedGroup.treeRows));
+  }
+}
+
+String _entryKey(GitChangeEntry entry) =>
+    '${entry.area.key}:${entry.status.badge}:${entry.path}:'
+    '${entry.oldPath}:${entry.added}:${entry.removed}:${entry.isBinary}:'
+    '${entry.isLarge}:${entry.submoduleRoot}';
+
+List<String> _rowKeys(List<GitChangeTreeRow> rows) {
+  return <String>[
+    for (final row in rows)
+      '${row.kind}:${row.name}:${row.path}:${row.depth}:${row.fileCount}:'
+          '${row.entry == null ? '' : _entryKey(row.entry!)}',
+  ];
 }
 
 List<GitChangeEntry> _sortedUnified(List<GitChangeEntry> entries) {

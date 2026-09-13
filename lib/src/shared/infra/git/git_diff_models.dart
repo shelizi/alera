@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 part 'git_range_models.dart';
 part 'git_history_graph_models.dart';
 part 'git_history_models.dart';
@@ -26,6 +28,55 @@ enum GitChangeStatus(final String badge) {
 enum GitChangeTreeRowKind { directory, file }
 
 enum GitDiffLineKind { addition, deletion, hunk, header, context }
+
+/// Bounds the synchronous work between event-loop yields while projecting a
+/// large status result.
+const gitStatusWorkChunkSize = 16;
+
+class _GitStatusChunker {
+  _GitStatusChunker(this._onChunk, this._chunkSize) {
+    if (_onChunk != null) {
+      _stopwatch = Stopwatch()..start();
+    }
+  }
+
+  final void Function(double milliseconds)? _onChunk;
+  final int _chunkSize;
+  int _operationCount = 0;
+  Stopwatch? _stopwatch;
+
+  Future<void> checkpoint() async {
+    _operationCount += 1;
+    if (_operationCount % _chunkSize == 0) {
+      await pause();
+    }
+  }
+
+  Future<void> pause() async {
+    _record();
+    await Future.pause();
+    final stopwatch = _stopwatch;
+    if (stopwatch != null) {
+      stopwatch
+        ..reset()
+        ..start();
+    }
+  }
+
+  void finish() {
+    _record();
+  }
+
+  void _record() {
+    final stopwatch = _stopwatch;
+    final onChunk = _onChunk;
+    if (stopwatch == null || onChunk == null) {
+      return;
+    }
+    stopwatch.stop();
+    onChunk(stopwatch.elapsedMicroseconds / 1000.0);
+  }
+}
 
 class const GitStatusResult({
   required final List<GitChangeEntry> entries,
@@ -119,6 +170,184 @@ class const GitChangeGroup({
         unified: true,
       ),
     ];
+  }
+
+  static Future<List<GitChangeGroup>> fromEntriesChunked(
+    List<GitChangeEntry> entries, {
+    int chunkSize = gitStatusWorkChunkSize,
+    void Function(double milliseconds)? onChunk,
+  }) async {
+    _validateGitStatusChunkSize(chunkSize);
+    if (entries.isEmpty) {
+      return const <GitChangeGroup>[];
+    }
+
+    final chunker = _GitStatusChunker(onChunk, chunkSize);
+    try {
+      final staged = <GitChangeEntry>[];
+      final unstaged = <GitChangeEntry>[];
+      final untracked = <GitChangeEntry>[];
+      for (var index = 0; index < entries.length; index += 1) {
+        final entry = entries[index];
+        switch (entry.area) {
+          case GitChangeArea.staged:
+            staged.add(entry);
+          case GitChangeArea.unstaged:
+            unstaged.add(entry);
+          case GitChangeArea.untracked:
+            untracked.add(entry);
+        }
+        if ((index + 1) % chunkSize == 0) {
+          await chunker.pause();
+        }
+      }
+
+      final groups = <GitChangeGroup>[];
+      for (final (area, areaEntries) in <(GitChangeArea, List<GitChangeEntry>)>[
+        (.staged, staged),
+        (.unstaged, unstaged),
+        (.untracked, untracked),
+      ]) {
+        if (areaEntries.isEmpty) {
+          continue;
+        }
+        await _sortListChunked(
+          areaEntries,
+          _compareEntryPath,
+          chunkSize,
+          chunker,
+        );
+        final treeRows = await _treeRowsChunked(
+          areaEntries,
+          chunkSize,
+          chunker,
+        );
+        groups.add(
+          GitChangeGroup(area: area, entries: areaEntries, treeRows: treeRows),
+        );
+        await chunker.pause();
+      }
+      return groups;
+    } finally {
+      chunker.finish();
+    }
+  }
+
+  static Future<List<GitChangeGroup>> unifiedFromEntriesChunked(
+    List<GitChangeEntry> entries, {
+    int chunkSize = gitStatusWorkChunkSize,
+    void Function(double milliseconds)? onChunk,
+  }) async {
+    _validateGitStatusChunkSize(chunkSize);
+    if (entries.isEmpty) {
+      return const <GitChangeGroup>[];
+    }
+
+    final chunker = _GitStatusChunker(onChunk, chunkSize);
+    try {
+      final sorted = <GitChangeEntry>[];
+      for (var index = 0; index < entries.length; index += 1) {
+        sorted.add(entries[index]);
+        if ((index + 1) % chunkSize == 0) {
+          await chunker.pause();
+        }
+      }
+      await _sortListChunked(
+        sorted,
+        _compareUnifiedEntries,
+        chunkSize,
+        chunker,
+      );
+      final treeRows = await _treeRowsChunked(sorted, chunkSize, chunker);
+      return <GitChangeGroup>[
+        GitChangeGroup(
+          area: .unstaged,
+          entries: sorted,
+          treeRows: treeRows,
+          unified: true,
+        ),
+      ];
+    } finally {
+      chunker.finish();
+    }
+  }
+
+  static Future<List<GitChangeGroup>> rebindEntryInstancesChunked(
+    List<GitChangeGroup> groups, {
+    required List<GitChangeEntry> sourceEntries,
+    required List<GitChangeEntry> reboundEntries,
+    int chunkSize = gitStatusWorkChunkSize,
+    void Function(double milliseconds)? onChunk,
+  }) async {
+    _validateGitStatusChunkSize(chunkSize);
+    if (identical(sourceEntries, reboundEntries)) {
+      return groups;
+    }
+    if (groups.isEmpty) {
+      return fromEntriesChunked(
+        reboundEntries,
+        chunkSize: chunkSize,
+        onChunk: onChunk,
+      );
+    }
+
+    final chunker = _GitStatusChunker(onChunk, chunkSize);
+    try {
+      final reboundBySource = <GitChangeEntry, GitChangeEntry>{};
+      final entryCount = sourceEntries.length < reboundEntries.length
+          ? sourceEntries.length
+          : reboundEntries.length;
+      for (var index = 0; index < entryCount; index += 1) {
+        reboundBySource[sourceEntries[index]] = reboundEntries[index];
+        if ((index + 1) % chunkSize == 0) {
+          await chunker.pause();
+        }
+      }
+
+      final reboundGroups = <GitChangeGroup>[];
+      for (final group in groups) {
+        final groupEntries = <GitChangeEntry>[];
+        for (var index = 0; index < group.entries.length; index += 1) {
+          final entry = group.entries[index];
+          groupEntries.add(reboundBySource[entry] ?? entry);
+          if ((index + 1) % chunkSize == 0) {
+            await chunker.pause();
+          }
+        }
+
+        final treeRows = <GitChangeTreeRow>[];
+        for (var index = 0; index < group.treeRows.length; index += 1) {
+          final row = group.treeRows[index];
+          final entry = row.entry;
+          treeRows.add(
+            GitChangeTreeRow(
+              kind: row.kind,
+              name: row.name,
+              path: row.path,
+              depth: row.depth,
+              fileCount: row.fileCount,
+              entry: entry == null ? null : reboundBySource[entry] ?? entry,
+            ),
+          );
+          if ((index + 1) % chunkSize == 0) {
+            await chunker.pause();
+          }
+        }
+
+        reboundGroups.add(
+          GitChangeGroup(
+            area: group.area,
+            entries: groupEntries,
+            treeRows: treeRows,
+            unified: group.unified,
+          ),
+        );
+        await chunker.pause();
+      }
+      return reboundGroups;
+    } finally {
+      chunker.finish();
+    }
   }
 
   static GitChangeGroup _groupFor(
@@ -240,6 +469,103 @@ class const GitChangeGroup({
     return rows;
   }
 
+  static Future<List<GitChangeTreeRow>> _treeRowsChunked(
+    List<GitChangeEntry> entries,
+    int chunkSize,
+    _GitStatusChunker chunker,
+  ) async {
+    if (entries.isEmpty) {
+      return const <GitChangeTreeRow>[];
+    }
+
+    final root = _GitChangeTreeNode(name: '', path: '', depth: 0);
+    final dirMap = <String, _GitChangeTreeNode>{'': root};
+
+    _GitChangeTreeNode? lastParent;
+    String? lastDirPath;
+
+    for (var index = 0; index < entries.length; index += 1) {
+      final entry = entries[index];
+      final path = entry.path;
+      final lastSlash = path.lastIndexOf('/');
+
+      if (lastSlash == -1) {
+        if (path.isNotEmpty) {
+          root.addFileRow(
+            GitChangeTreeRow(
+              kind: GitChangeTreeRowKind.file,
+              name: path,
+              path: path,
+              depth: 0,
+              fileCount: 1,
+              entry: entry,
+            ),
+          );
+        }
+      } else {
+        final fileName = path.substring(lastSlash + 1);
+        if (fileName.isNotEmpty) {
+          // Path-sorted input usually repeats the same parent; skip the map.
+          final _GitChangeTreeNode parent;
+          if (lastDirPath != null &&
+              lastDirPath.length == lastSlash &&
+              path.startsWith(lastDirPath)) {
+            parent = lastParent!;
+          } else {
+            final dirPath = path.substring(0, lastSlash);
+            parent = dirMap[dirPath] ?? _ensureDir(dirPath, dirMap, root);
+            lastDirPath = dirPath;
+            lastParent = parent;
+          }
+
+          parent.addFileRow(
+            GitChangeTreeRow(
+              kind: GitChangeTreeRowKind.file,
+              name: fileName,
+              path: path,
+              depth: parent.depth + 1,
+              fileCount: 1,
+              entry: entry,
+            ),
+          );
+        }
+      }
+
+      await chunker.checkpoint();
+    }
+
+    final rootSubs = root.subdirectories;
+    if (rootSubs != null) {
+      for (var index = 0; index < rootSubs.length; index += 1) {
+        await rootSubs[index].finalizeTreeChunked(chunkSize, chunker);
+        await chunker.checkpoint();
+      }
+      if (rootSubs.length > 1) {
+        await _sortListChunked(
+          rootSubs,
+          (a, b) => a.name.compareTo(b.name),
+          chunkSize,
+          chunker,
+        );
+      }
+    }
+
+    final rows = <GitChangeTreeRow>[];
+    if (rootSubs != null) {
+      for (final rootSub in rootSubs) {
+        await rootSub.appendRowsChunked(rows, chunkSize, chunker);
+      }
+    }
+    final rootFiles = root.fileRows;
+    if (rootFiles != null) {
+      for (var index = 0; index < rootFiles.length; index += 1) {
+        rows.add(rootFiles[index]);
+        await chunker.checkpoint();
+      }
+    }
+    return rows;
+  }
+
   static _GitChangeTreeNode _ensureDir(
     String dirPath,
     Map<String, _GitChangeTreeNode> dirMap,
@@ -265,6 +591,88 @@ class const GitChangeGroup({
     dirMap[dirPath] = node;
     parent.addSubdirectory(node);
     return node;
+  }
+}
+
+void _validateGitStatusChunkSize(int chunkSize) {
+  if (chunkSize < 1) {
+    throw ArgumentError.value(chunkSize, 'chunkSize', 'must be positive');
+  }
+}
+
+Future<void> _sortListChunked<T>(
+  List<T> values,
+  int Function(T left, T right) compare,
+  int chunkSize,
+  _GitStatusChunker chunker,
+) async {
+  if (values.length < 2) {
+    return;
+  }
+
+  final runSize = math.min(chunkSize, values.length);
+  for (var start = 0; start < values.length; start += runSize) {
+    final end = math.min(start + runSize, values.length);
+    final run = values.sublist(start, end)..sort(compare);
+    values.setRange(start, end, run);
+    if (end < values.length) {
+      await chunker.pause();
+    }
+  }
+  if (runSize == values.length) {
+    return;
+  }
+
+  var source = values;
+  var target = List<T>.filled(values.length, values.first);
+  for (var width = runSize; width < values.length; width *= 2) {
+    for (var start = 0; start < values.length; start += width * 2) {
+      final middle = math.min(start + width, values.length);
+      final end = math.min(start + width * 2, values.length);
+      var left = start;
+      var right = middle;
+      var destination = start;
+
+      while (left < middle && right < end) {
+        final leftValue = source[left];
+        final rightValue = source[right];
+        if (compare(leftValue, rightValue) <= 0) {
+          target[destination] = leftValue;
+          left += 1;
+        } else {
+          target[destination] = rightValue;
+          right += 1;
+        }
+        destination += 1;
+        await chunker.checkpoint();
+      }
+      while (left < middle) {
+        target[destination] = source[left];
+        left += 1;
+        destination += 1;
+        await chunker.checkpoint();
+      }
+      while (right < end) {
+        target[destination] = source[right];
+        right += 1;
+        destination += 1;
+        await chunker.checkpoint();
+      }
+    }
+
+    final previousSource = source;
+    source = target;
+    target = previousSource;
+    if (width > values.length ~/ 2) {
+      break;
+    }
+  }
+
+  if (!identical(source, values)) {
+    for (var index = 0; index < values.length; index += 1) {
+      values[index] = source[index];
+      await chunker.checkpoint();
+    }
   }
 }
 
@@ -301,6 +709,31 @@ class _GitChangeTreeNode({
     fileCount = count;
   }
 
+  Future<void> finalizeTreeChunked(
+    int chunkSize,
+    _GitStatusChunker chunker,
+  ) async {
+    final subs = subdirectories;
+    if (subs != null && subs.length > 1) {
+      await _sortListChunked(
+        subs,
+        (a, b) => a.name.compareTo(b.name),
+        chunkSize,
+        chunker,
+      );
+    }
+    var count = fileRows?.length ?? 0;
+    if (subs != null) {
+      for (var index = 0; index < subs.length; index += 1) {
+        final sub = subs[index];
+        await sub.finalizeTreeChunked(chunkSize, chunker);
+        count += sub.fileCount;
+        await chunker.checkpoint();
+      }
+    }
+    fileCount = count;
+  }
+
   void appendRows(List<GitChangeTreeRow> rows) {
     rows.add(
       GitChangeTreeRow(
@@ -322,6 +755,38 @@ class _GitChangeTreeNode({
     if (files != null) {
       for (var i = 0; i < files.length; i++) {
         rows.add(files[i]);
+      }
+    }
+  }
+
+  Future<void> appendRowsChunked(
+    List<GitChangeTreeRow> rows,
+    int chunkSize,
+    _GitStatusChunker chunker,
+  ) async {
+    rows.add(
+      GitChangeTreeRow(
+        kind: GitChangeTreeRowKind.directory,
+        name: name,
+        path: path,
+        depth: depth,
+        fileCount: fileCount,
+        entry: null,
+      ),
+    );
+    await chunker.checkpoint();
+
+    final subs = subdirectories;
+    if (subs != null) {
+      for (final sub in subs) {
+        await sub.appendRowsChunked(rows, chunkSize, chunker);
+      }
+    }
+    final files = fileRows;
+    if (files != null) {
+      for (final file in files) {
+        rows.add(file);
+        await chunker.checkpoint();
       }
     }
   }
@@ -486,6 +951,74 @@ List<GitChangeEntry> reconcileGitChangeEntryInstances(
   }
 
   return List<GitChangeEntry>.unmodifiableOf(merged);
+}
+
+Future<List<GitChangeEntry>> reconcileGitChangeEntryInstancesChunked(
+  List<GitChangeEntry> previous,
+  List<GitChangeEntry> next, {
+  int chunkSize = gitStatusWorkChunkSize,
+  void Function(double milliseconds)? onChunk,
+}) async {
+  _validateGitStatusChunkSize(chunkSize);
+  if (identical(previous, next)) {
+    return previous;
+  }
+
+  final chunker = _GitStatusChunker(onChunk, chunkSize);
+  try {
+    final merged = List<GitChangeEntry>.of(next);
+    final reusedPrevious = List<bool>.filled(previous.length, false);
+    final reusedNext = List<bool>.filled(next.length, false);
+
+    // Positional matching is the common case and avoids building an index.
+    if (previous.length == next.length) {
+      var allMatches = true;
+      for (var index = 0; index < next.length; index += 1) {
+        if (gitChangeEntryValuesEqual(previous[index], next[index])) {
+          merged[index] = previous[index];
+          reusedPrevious[index] = true;
+          reusedNext[index] = true;
+        } else {
+          allMatches = false;
+        }
+        if ((index + 1) % chunkSize == 0) {
+          await chunker.pause();
+        }
+      }
+      if (allMatches) {
+        return previous;
+      }
+    }
+
+    final previousByValue = <_GitChangeEntryValueKey, List<GitChangeEntry>>{};
+    for (var index = 0; index < previous.length; index += 1) {
+      if (!reusedPrevious[index]) {
+        final entry = previous[index];
+        (previousByValue[_gitChangeEntryValueKey(entry)] ??= <GitChangeEntry>[])
+            .add(entry);
+      }
+      if ((index + 1) % chunkSize == 0) {
+        await chunker.pause();
+      }
+    }
+
+    for (var index = 0; index < next.length; index += 1) {
+      if (!reusedNext[index]) {
+        final candidates =
+            previousByValue[_gitChangeEntryValueKey(next[index])];
+        if (candidates != null && candidates.isNotEmpty) {
+          merged[index] = candidates.removeLast();
+        }
+      }
+      if ((index + 1) % chunkSize == 0) {
+        await chunker.pause();
+      }
+    }
+
+    return List<GitChangeEntry>.unmodifiableOf(merged);
+  } finally {
+    chunker.finish();
+  }
 }
 
 bool gitRepositoryStateValuesEqual(
