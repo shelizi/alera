@@ -267,6 +267,98 @@ abstract interface class GitBackend {
     required GitResetMode mode,
   });
 
+  /// Creates [branch] pointing at [commitId] without switching to it. When
+  /// [checkout] is true the new branch also becomes the active branch.
+  Future<void> createBranchAtCommit({
+    required String path,
+    required String commitId,
+    required String branch,
+    bool checkout = false,
+  });
+
+  /// Cherry-picks [commitId] onto the current branch and commits the result,
+  /// returning the new commit oid. [mainlineParent] is the 1-based parent
+  /// number required when [commitId] is a merge commit; it must be null for
+  /// non-merge commits. A conflicted pick aborts and throws
+  /// [GitConflictException] rather than leaving a half-finished state.
+  Future<String> cherryPickCommit({
+    required String path,
+    required String commitId,
+    int? mainlineParent,
+  });
+
+  /// Removes [commitId] from the current branch by replaying its descendants
+  /// on top of its parent. Root commits and conflicted replays are rejected.
+  Future<void> dropCommit({required String path, required String commitId});
+
+  /// Merges [ref] into the current branch. Returns the merge commit oid, or
+  /// null for a fast-forward or already-up-to-date merge. When the merge
+  /// produces conflicts the in-progress merge state is left for the user to
+  /// resolve and [GitConflictException] is thrown.
+  Future<String?> mergeRef({required String path, required String ref});
+
+  /// Rebases the current branch onto [ontoRef]. A conflicted replay aborts
+  /// the rebase and throws [GitConflictException].
+  Future<void> rebaseOnto({required String path, required String ontoRef});
+
+  /// Creates tag [name] at [commitId]. A non-null [message] produces an
+  /// annotated tag; otherwise a lightweight tag is created.
+  Future<void> createTag({
+    required String path,
+    required String commitId,
+    required String name,
+    String? message,
+  });
+
+  /// Deletes the local tag [name].
+  Future<void> deleteTag({required String path, required String name});
+
+  /// Pushes tag [name] to [remote] (defaults to `origin`) through the system
+  /// git CLI so the credential helper authenticates the push.
+  Future<void> pushTag({
+    required String path,
+    required String name,
+    String? remote,
+  });
+
+  /// Creates a local branch tracking [remoteBranch] (for example
+  /// `origin/feature`) and checks it out. Returns the local branch name.
+  Future<String> checkoutRemoteBranch({
+    required String path,
+    required String remoteBranch,
+  });
+
+  /// Deletes [branch] on [remote] through `push --delete`.
+  Future<void> deleteRemoteBranch({
+    required String path,
+    required String remote,
+    required String branch,
+  });
+
+  /// Renames the local branch [oldName] to [newName].
+  Future<void> renameBranch({
+    required String path,
+    required String oldName,
+    required String newName,
+  });
+
+  /// Exports [ref] as an archive at [outputPath]. Uses the git CLI because
+  /// libgit2 has no archive support.
+  Future<void> createArchive({
+    required String path,
+    required String ref,
+    required String outputPath,
+    GitArchiveFormat format = GitArchiveFormat.zip,
+  });
+
+  /// Lists files changed between [baseRef] and [headRef], like
+  /// [commitCompare] but for an arbitrary range.
+  Future<GitCommitCompareResult> compareRange({
+    required String path,
+    required String baseRef,
+    required String headRef,
+  });
+
   Future<void> fetch(String path);
 
   /// Fetches the exact base and head objects for a hosted review and returns

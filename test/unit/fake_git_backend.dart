@@ -142,6 +142,50 @@ class FakeGitBackend
   GitException? resetToCommitError;
   @override
   String revertCommitResult = 'reverted123';
+  @override
+  GitException? createBranchAtCommitError;
+  @override
+  GitException? cherryPickCommitError;
+  @override
+  String cherryPickCommitResult = 'cherrypicked123';
+  @override
+  GitException? dropCommitError;
+  @override
+  GitException? mergeRefError;
+  @override
+  String? mergeRefResult = 'merge123';
+  @override
+  GitException? rebaseOntoError;
+  @override
+  GitException? createTagError;
+  @override
+  GitException? deleteTagError;
+  @override
+  GitException? pushTagError;
+  @override
+  GitException? checkoutRemoteBranchError;
+  @override
+  String checkoutRemoteBranchResult = 'feature';
+  @override
+  GitException? deleteRemoteBranchError;
+  @override
+  GitException? renameBranchError;
+  @override
+  GitException? createArchiveError;
+  @override
+  GitException? compareRangeError;
+  @override
+  GitCommitCompareResult compareRangeResult = const GitCommitCompareResult(
+    summary: GitCommitCompareSummary(
+      commitOid: 'head1',
+      parentOid: 'base1',
+      compareRef: 'head1',
+      baseRef: 'base1',
+      changedFiles: 0,
+      status: GitCommitCompareStatus.ready,
+    ),
+    entries: <GitCommitChangeEntry>[],
+  );
   GitException? fetchError;
   void Function()? onFetch;
   GitException? pullError;
