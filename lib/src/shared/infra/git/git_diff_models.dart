@@ -77,26 +77,30 @@ class const GitChangeGroup({
   String get label => unified ? 'Changes' : area.label;
 
   static List<GitChangeGroup> fromEntries(List<GitChangeEntry> entries) {
-    const orderedAreas = <GitChangeArea>[
-      GitChangeArea.staged,
-      GitChangeArea.unstaged,
-      GitChangeArea.untracked,
-    ];
+    if (entries.isEmpty) {
+      return const <GitChangeGroup>[];
+    }
+    final staged = <GitChangeEntry>[];
+    final unstaged = <GitChangeEntry>[];
+    final untracked = <GitChangeEntry>[];
+
+    for (var i = 0; i < entries.length; i++) {
+      final entry = entries[i];
+      switch (entry.area) {
+        case GitChangeArea.staged:
+          staged.add(entry);
+        case GitChangeArea.unstaged:
+          unstaged.add(entry);
+        case GitChangeArea.untracked:
+          untracked.add(entry);
+      }
+    }
+
     return <GitChangeGroup>[
-      for (final area in orderedAreas)
-        GitChangeGroup(
-          area: area,
-          entries:
-              entries
-                  .where((entry) => entry.area == area)
-                  .toList(growable: false)
-                ..sort((a, b) => a.path.compareTo(b.path)),
-          treeRows: _treeRows(
-            entries.where((entry) => entry.area == area).toList(growable: false)
-              ..sort((a, b) => a.path.compareTo(b.path)),
-          ),
-        ),
-    ].where((group) => group.entries.isNotEmpty).toList(growable: false);
+      if (staged.isNotEmpty) _groupFor(.staged, staged),
+      if (unstaged.isNotEmpty) _groupFor(.unstaged, unstaged),
+      if (untracked.isNotEmpty) _groupFor(.untracked, untracked),
+    ];
   }
 
   /// Single Changes section with every entry sorted by path, then area so a
@@ -106,13 +110,7 @@ class const GitChangeGroup({
       return const <GitChangeGroup>[];
     }
     final sorted = List<GitChangeEntry>.of(entries)
-      ..sort((a, b) {
-        final byPath = a.path.compareTo(b.path);
-        if (byPath != 0) {
-          return byPath;
-        }
-        return _areaSortIndex(a.area).compareTo(_areaSortIndex(b.area));
-      });
+      ..sort(_compareUnifiedEntries);
     return <GitChangeGroup>[
       GitChangeGroup(
         area: .unstaged,
@@ -121,6 +119,29 @@ class const GitChangeGroup({
         unified: true,
       ),
     ];
+  }
+
+  static GitChangeGroup _groupFor(
+    GitChangeArea area,
+    List<GitChangeEntry> entries,
+  ) {
+    entries.sort(_compareEntryPath);
+    return GitChangeGroup(
+      area: area,
+      entries: entries,
+      treeRows: _treeRows(entries),
+    );
+  }
+
+  static int _compareEntryPath(GitChangeEntry a, GitChangeEntry b) =>
+      a.path.compareTo(b.path);
+
+  static int _compareUnifiedEntries(GitChangeEntry a, GitChangeEntry b) {
+    final byPath = a.path.compareTo(b.path);
+    if (byPath != 0) {
+      return byPath;
+    }
+    return _areaSortIndex(a.area).compareTo(_areaSortIndex(b.area));
   }
 
   static int _areaSortIndex(GitChangeArea area) {
@@ -132,113 +153,177 @@ class const GitChangeGroup({
   }
 
   static List<GitChangeTreeRow> _treeRows(List<GitChangeEntry> entries) {
-    final root = _GitChangeTreeNode.directory(name: '', path: '', depth: 0);
-    for (final entry in entries) {
-      final parts = entry.path
-          .split('/')
-          .where((part) => part.isNotEmpty)
-          .toList(growable: false);
-      if (parts.isEmpty) {
+    if (entries.isEmpty) {
+      return const <GitChangeTreeRow>[];
+    }
+
+    final root = _GitChangeTreeNode(name: '', path: '', depth: 0);
+    final dirMap = <String, _GitChangeTreeNode>{'': root};
+
+    _GitChangeTreeNode? lastParent;
+    String? lastDirPath;
+
+    for (var i = 0; i < entries.length; i++) {
+      final entry = entries[i];
+      final path = entry.path;
+      final lastSlash = path.lastIndexOf('/');
+
+      if (lastSlash == -1) {
+        if (path.isEmpty) {
+          continue;
+        }
+        root.addFileRow(
+          GitChangeTreeRow(
+            kind: GitChangeTreeRowKind.file,
+            name: path,
+            path: path,
+            depth: 0,
+            fileCount: 1,
+            entry: entry,
+          ),
+        );
         continue;
       }
-      var parent = root;
-      for (var index = 0; index < parts.length - 1; index += 1) {
-        final path = parts.take(index + 1).join('/');
-        parent = parent.directoryChild(parts[index], path, index);
+
+      final fileName = path.substring(lastSlash + 1);
+      if (fileName.isEmpty) {
+        continue;
       }
-      parent.children.add(
-        .file(
-          name: parts.last,
-          path: entry.path,
-          depth: parts.length - 1,
+
+      // Path-sorted input usually repeats the same parent; skip the map.
+      final _GitChangeTreeNode parent;
+      if (lastDirPath != null &&
+          lastDirPath.length == lastSlash &&
+          path.startsWith(lastDirPath)) {
+        parent = lastParent!;
+      } else {
+        final dirPath = path.substring(0, lastSlash);
+        parent = dirMap[dirPath] ?? _ensureDir(dirPath, dirMap, root);
+        lastDirPath = dirPath;
+        lastParent = parent;
+      }
+
+      parent.addFileRow(
+        GitChangeTreeRow(
+          kind: GitChangeTreeRowKind.file,
+          name: fileName,
+          path: path,
+          depth: parent.depth + 1,
+          fileCount: 1,
           entry: entry,
         ),
       );
     }
-    root.sortRecursively();
+
+    final rootSubs = root.subdirectories;
+    if (rootSubs != null) {
+      for (var i = 0; i < rootSubs.length; i++) {
+        rootSubs[i].finalizeTree();
+      }
+      if (rootSubs.length > 1) {
+        rootSubs.sort((a, b) => a.name.compareTo(b.name));
+      }
+    }
+
     final rows = <GitChangeTreeRow>[];
-    for (final child in root.children) {
-      child.appendRows(rows);
+    if (rootSubs != null) {
+      for (var i = 0; i < rootSubs.length; i++) {
+        rootSubs[i].appendRows(rows);
+      }
+    }
+    final rootFiles = root.fileRows;
+    if (rootFiles != null) {
+      for (var i = 0; i < rootFiles.length; i++) {
+        rows.add(rootFiles[i]);
+      }
     }
     return rows;
   }
+
+  static _GitChangeTreeNode _ensureDir(
+    String dirPath,
+    Map<String, _GitChangeTreeNode> dirMap,
+    _GitChangeTreeNode root,
+  ) {
+    final lastSlash = dirPath.lastIndexOf('/');
+    final _GitChangeTreeNode parent;
+    final String name;
+    final int depth;
+
+    if (lastSlash == -1) {
+      parent = root;
+      name = dirPath;
+      depth = 0;
+    } else {
+      final parentPath = dirPath.substring(0, lastSlash);
+      parent = dirMap[parentPath] ?? _ensureDir(parentPath, dirMap, root);
+      name = dirPath.substring(lastSlash + 1);
+      depth = parent.depth + 1;
+    }
+
+    final node = _GitChangeTreeNode(name: name, path: dirPath, depth: depth);
+    dirMap[dirPath] = node;
+    parent.addSubdirectory(node);
+    return node;
+  }
 }
 
-class _GitChangeTreeNode._({
+class _GitChangeTreeNode({
   required final String name,
   required final String path,
   required final int depth,
-  final GitChangeEntry? entry,
 }) {
-  factory directory({
-    required String name,
-    required String path,
-    required int depth,
-  }) => _GitChangeTreeNode._(name: name, path: path, depth: depth);
+  List<_GitChangeTreeNode>? subdirectories;
+  List<GitChangeTreeRow>? fileRows;
+  int fileCount = 0;
 
-  factory file({
-    required String name,
-    required String path,
-    required int depth,
-    required GitChangeEntry entry,
-  }) =>
-      _GitChangeTreeNode._(name: name, path: path, depth: depth, entry: entry);
-
-  final List<_GitChangeTreeNode> children = <_GitChangeTreeNode>[];
-
-  _GitChangeTreeNode directoryChild(String name, String path, int depth) {
-    for (final child in children) {
-      if (child.entry == null && child.name == name) {
-        return child;
-      }
-    }
-    final child = _GitChangeTreeNode.directory(
-      name: name,
-      path: path,
-      depth: depth,
-    );
-    children.add(child);
-    return child;
+  void addSubdirectory(_GitChangeTreeNode node) {
+    (subdirectories ??= <_GitChangeTreeNode>[]).add(node);
   }
 
-  void sortRecursively() {
-    children.sort((a, b) {
-      if (a.entry == null && b.entry != null) {
-        return -1;
-      }
-      if (a.entry != null && b.entry == null) {
-        return 1;
-      }
-      return a.name.compareTo(b.name);
-    });
-    for (final child in children) {
-      child.sortRecursively();
+  void addFileRow(GitChangeTreeRow row) {
+    (fileRows ??= <GitChangeTreeRow>[]).add(row);
+  }
+
+  void finalizeTree() {
+    final subs = subdirectories;
+    if (subs != null && subs.length > 1) {
+      subs.sort((a, b) => a.name.compareTo(b.name));
     }
+    var count = fileRows?.length ?? 0;
+    if (subs != null) {
+      for (var i = 0; i < subs.length; i++) {
+        final sub = subs[i];
+        sub.finalizeTree();
+        count += sub.fileCount;
+      }
+    }
+    fileCount = count;
   }
 
   void appendRows(List<GitChangeTreeRow> rows) {
     rows.add(
       GitChangeTreeRow(
-        kind: entry == null
-            ? GitChangeTreeRowKind.directory
-            : GitChangeTreeRowKind.file,
+        kind: GitChangeTreeRowKind.directory,
         name: name,
         path: path,
         depth: depth,
         fileCount: fileCount,
-        entry: entry,
+        entry: null,
       ),
     );
-    for (final child in children) {
-      child.appendRows(rows);
+    final subs = subdirectories;
+    if (subs != null) {
+      for (var i = 0; i < subs.length; i++) {
+        subs[i].appendRows(rows);
+      }
     }
-  }
-
-  int get fileCount {
-    if (entry != null) {
-      return 1;
+    final files = fileRows;
+    if (files != null) {
+      for (var i = 0; i < files.length; i++) {
+        rows.add(files[i]);
+      }
     }
-    return children.fold<int>(0, (count, child) => count + child.fileCount);
   }
 }
 
