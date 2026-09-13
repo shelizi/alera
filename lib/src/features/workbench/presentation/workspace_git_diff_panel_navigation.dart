@@ -10,14 +10,18 @@ extension _WorkspaceGitDiffPanelNavigation on _WorkspaceGitDiffPanelState {
     widget.onOpenFile?.call(workspaceRelativePath);
   }
 
-  Future<void> _openWorkspaceFileInZed(String sourceRelativePath) async {
+  Future<void> _openWorkspaceFileExternally(
+    String sourceRelativePath,
+    ExternalEditorKind kind,
+  ) async {
     final workspaceRelativePath = widget.sourceControlScope
         .toWorkspaceRelativePath(sourceRelativePath);
     if (workspaceRelativePath == null) {
       return;
     }
+    final spec = externalEditorSpecs[kind];
     final result = await ref
-        .read(externalEditorLauncherProvider)
+        .read(externalEditorLauncherForProvider(kind))
         .openFile(
           ExternalEditorOpenRequest(
             workspacePath: widget.workspace.path,
@@ -30,7 +34,9 @@ extension _WorkspaceGitDiffPanelNavigation on _WorkspaceGitDiffPanelState {
     if (!result.ok && mounted) {
       AleraToast.show(
         context,
-        message: result.message ?? 'Could not open file in Zed.',
+        message:
+            result.message ??
+            'Could not open file in ${spec?.displayName ?? 'the external editor'}.',
         tone: .error,
       );
     }
@@ -48,7 +54,10 @@ extension _WorkspaceGitDiffPanelNavigation on _WorkspaceGitDiffPanelState {
     ];
   }
 
-  Future<void> _openChangesInZed(WorkspaceSourceControlState? state) async {
+  Future<void> _openChangesExternally(
+    WorkspaceSourceControlState? state,
+    ExternalEditorKind kind,
+  ) async {
     final absolutePaths = <String>[];
     for (final sourceRelativePath in _openableChangedSourcePaths(state)) {
       final workspaceRelativePath = widget.sourceControlScope
@@ -62,8 +71,9 @@ extension _WorkspaceGitDiffPanelNavigation on _WorkspaceGitDiffPanelState {
       );
     }
     if (absolutePaths.isEmpty) return;
+    final spec = externalEditorSpecs[kind];
     final result = await ref
-        .read(externalEditorLauncherProvider)
+        .read(externalEditorLauncherForProvider(kind))
         .openFiles(
           ExternalEditorOpenFilesRequest(
             workspacePath: widget.workspace.path,
@@ -73,7 +83,9 @@ extension _WorkspaceGitDiffPanelNavigation on _WorkspaceGitDiffPanelState {
     if (!result.ok && mounted) {
       AleraToast.show(
         context,
-        message: result.message ?? 'Could not open changed files in Zed.',
+        message:
+            result.message ??
+            'Could not open changed files in ${spec?.displayName ?? 'the external editor'}.',
         tone: .error,
       );
     }

@@ -141,11 +141,12 @@ void main() {
         'editor': {
           'tabSize': 2,
           'externalEditor': 'zed',
-          'codeOpenTarget': 'zed',
-          'zedExecutableMode': 'custom',
-          'zedExecutablePath': r'C:\private\Zed\zed.exe',
+          'codeOpenTarget': 'external',
+          'externalEditorExecutablePaths': <String, String>{
+            'zed': r'C:\private\Zed\zed.exe',
+          },
           'externalEditorWorkspaceMode': 'defaultWindow',
-          'autoOpenNewWorkspacesInZed': true,
+          'autoOpenNewWorkspacesExternally': true,
         },
         'agents': {
           'agentStatusHooks': {'codex': true},

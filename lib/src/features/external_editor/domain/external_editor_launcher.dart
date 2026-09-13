@@ -4,13 +4,10 @@ import 'package:dart_mappable/dart_mappable.dart';
 part 'external_editor_launcher.mapper.dart';
 
 @MappableEnum()
-enum ExternalEditorKind { zed }
+enum ExternalEditorKind { zed, vscode }
 
 @MappableEnum()
-enum CodeOpenTarget { alera, zed }
-
-@MappableEnum()
-enum ExternalEditorExecutableMode { automatic, custom }
+enum CodeOpenTarget { alera, external }
 
 @MappableEnum()
 enum ExternalEditorWorkspaceMode { newWindow, defaultWindow }
@@ -37,6 +34,10 @@ abstract interface class ExternalEditorLauncher {
   Future<ExternalEditorLaunchResult> openFiles(
     ExternalEditorOpenFilesRequest request,
   );
+
+  /// Fast resolution-only probe used to gate menus. Unlike
+  /// [checkAvailability] this never spawns the editor binary.
+  Future<bool> isInstalled();
 
   Future<ExternalEditorAvailability> checkAvailability();
 }

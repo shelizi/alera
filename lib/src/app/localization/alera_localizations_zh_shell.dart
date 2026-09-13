@@ -136,7 +136,8 @@ const Map<String, String> _traditionalChineseShell = <String, String>{
   'Collapse or expand the project sidebar.': '收合或展開專案側邊欄。',
   'Create a linked workspace for the active Git project.':
       '為目前的 Git 專案建立連結工作區。',
-  'Open the active workspace in Zed.': '在 Zed 中開啟目前工作區。',
+  'Open the active workspace in the configured external editor.':
+      '在已設定的外部編輯器中開啟目前工作區。',
   'Go to the previously selected workspace.': '前往先前選取的工作區。',
   'Go to the next workspace in navigation history.': '前往導覽紀錄中的下一個工作區。',
   'Open workspace search.': '開啟工作區搜尋。',
@@ -167,7 +168,7 @@ const Map<String, String> _traditionalChineseShell = <String, String>{
   'Tabs': '分頁',
   'Panes': '窗格',
   'Open Automations': '開啟自動化',
-  'Open Workspace in Zed': '在 Zed 中開啟工作區',
+  'Open Workspace in External Editor': '在外部編輯器中開啟工作區',
   'Toggle Sidebar': '切換側邊欄',
   'Go Back': '返回',
   'Go Forward': '前進',
@@ -236,6 +237,8 @@ const Map<String, String> _traditionalChineseShell = <String, String>{
   'PATH entries': '個 PATH 項目',
   'Could not reload shell environment': '無法重新載入 Shell 環境',
   'Could not open link': '無法開啟連結',
+  'No external editor is installed.': '未安裝支援的外部編輯器。',
+  'Could not open file in the external editor.': '無法在外部編輯器中開啟檔案。',
   'Existing Branch *': '現有分支 *',
   'New Branch Name *': '新分支名稱 *',
   'Workspace Name (Optional)': '工作區名稱（選填）',

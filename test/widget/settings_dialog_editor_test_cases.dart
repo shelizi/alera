@@ -99,13 +99,16 @@ void _registerSettingsDialogEditorTests() {
     expect(find.text('主題預設'), findsOneWidget);
     expect(find.text('縮排'), findsOneWidget);
     expect(find.text('自動儲存'), findsWidgets);
-    await tester.ensureVisible(find.text('外部編輯器'));
+    await tester.ensureVisible(find.text('外部編輯器').first);
     await tester.pump();
-    expect(find.text('外部編輯器'), findsOneWidget);
+    expect(find.text('外部編輯器'), findsWidgets);
     expect(find.text('預設程式碼開啟目標'), findsOneWidget);
     expect(find.text('自訂 Zed 執行檔'), findsOneWidget);
-    expect(find.text('自動在 Zed 開啟新工作區'), findsOneWidget);
+    expect(find.text('自動在外部編輯器開啟新工作區'), findsOneWidget);
     expect(find.text('檢查 Zed'), findsWidgets);
-    expect(find.textContaining('zed --version'), findsOneWidget);
+    expect(
+      find.textContaining('本機命令環境中的 zed 指令'),
+      findsOneWidget,
+    );
   });
 }

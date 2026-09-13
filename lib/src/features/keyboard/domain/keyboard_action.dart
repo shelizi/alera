@@ -205,11 +205,11 @@ const List<KeybindingDefinition> keybindingDefinitions = <KeybindingDefinition>[
   ),
   KeybindingDefinition(
     id: .openWorkspaceInZed,
-    label: 'Open Workspace in Zed',
+    label: 'Open Workspace in External Editor',
     group: .workspace,
-    description: 'Open the active workspace in Zed.',
+    description: 'Open the active workspace in the configured external editor.',
     defaultBindings: .uniform(<String>[]),
-    searchKeywords: <String>['external editor', 'zed', 'worktree'],
+    searchKeywords: <String>['external editor', 'zed', 'vs code', 'worktree'],
   ),
   KeybindingDefinition(
     id: .navigateBack,

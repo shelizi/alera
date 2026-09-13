@@ -232,6 +232,9 @@ class const _ExplorerMenuDelegate({
   required final bool canFocusSourceControlFolders,
   required final bool Function(tree.VisibleNode node)
   isFocusedSourceControlRoot,
+  required final ExternalEditorSpec? externalEditor,
+  required final List<ExternalEditorSpec> installedExternalEditors,
+  required final ValueChanged<ExternalEditorKind> onExternalEditorPicked,
   required final VoidCallback onMenuOpening,
   required final Future<void> Function(
     BuildContext context,
@@ -301,11 +304,18 @@ class const _ExplorerMenuDelegate({
             label: 'Reveal in $fileManagerLabel',
             leading: const Icon(AleraIcons.external, size: 16),
           ),
-          const AleraDropdownEntry<_ExplorerAction>(
-            value: .openInZed,
-            label: 'Open in Zed',
-            leading: Icon(AleraIcons.external, size: 16),
-          ),
+          if (externalEditor case final editor?)
+            AleraDropdownSubmenuEntry<_ExplorerAction, ExternalEditorKind>(
+              primaryValue: .openExternally,
+              label: 'Open in ${editor.shortName}',
+              leading: const Icon(AleraIcons.external, size: 16),
+              childResult: (_) => .openExternally,
+              onChildResult: onExternalEditorPicked,
+              children: externalEditorMenuChildren(
+                resolved: editor,
+                installed: installedExternalEditors,
+              ),
+            ),
           if (canOpenInAlera && node.type == tree.NodeType.file)
             const AleraDropdownEntry<_ExplorerAction>(
               value: .openInAlera,
@@ -445,7 +455,7 @@ enum _ExplorerAction {
   copyRelativePath,
   duplicate,
   reveal,
-  openInZed,
+  openExternally,
   openInAlera,
   delete,
   refresh,

@@ -8,6 +8,7 @@ import 'package:alera/src/features/agent_profiles/domain/agent_profile.dart';
 import 'package:alera/src/features/external_editor/application/external_editor_providers.dart';
 import 'package:alera/src/features/external_editor/domain/external_editor_launch_result.dart';
 import 'package:alera/src/features/external_editor/domain/external_editor_launcher.dart';
+import 'package:alera/src/features/external_editor/domain/external_editor_spec.dart';
 import 'package:alera/src/features/projects/domain/project.dart';
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
 import 'package:alera/src/features/workbench/application/workbench_state.dart';
@@ -38,10 +39,26 @@ Future<void> pumpFlowHarness(
         settingsControllerProvider.overrideWith(
           () => DialogLaunchersSettingsController(settings),
         ),
-        if (externalEditorLauncher != null)
+        installedExternalEditorsProvider.overrideWith(
+          (ref) async => externalEditorLauncher == null
+              ? const <ExternalEditorSpec>[]
+              : <ExternalEditorSpec>[
+                  externalEditorSpecs[ExternalEditorKind.zed]!,
+                ],
+        ),
+        resolvedExternalEditorProvider.overrideWith(
+          (ref) async => externalEditorLauncher == null
+              ? null
+              : externalEditorSpecs[ExternalEditorKind.zed],
+        ),
+        if (externalEditorLauncher != null) ...[
           externalEditorLauncherProvider.overrideWithValue(
             externalEditorLauncher,
           ),
+          externalEditorLauncherForProvider.overrideWith(
+            (ref, kind) => externalEditorLauncher,
+          ),
+        ],
       ],
       child: MaterialApp(
         home: Scaffold(
@@ -213,6 +230,9 @@ class RecordingExternalEditorLauncher implements ExternalEditorLauncher {
   @override
   Future<ExternalEditorAvailability> checkAvailability() async =>
       const ExternalEditorAvailability(available: true);
+
+  @override
+  Future<bool> isInstalled() async => true;
 
   @override
   Future<ExternalEditorLaunchResult> openFile(

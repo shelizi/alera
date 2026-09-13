@@ -83,13 +83,12 @@ void main() {
       expect(editor.autosaveDebounce, const Duration(seconds: 1));
       expect(editor.externalEditor, ExternalEditorKind.zed);
       expect(editor.codeOpenTarget, CodeOpenTarget.alera);
-      expect(editor.zedExecutableMode, ExternalEditorExecutableMode.automatic);
-      expect(editor.zedExecutablePath, isNull);
+      expect(editor.externalEditorExecutablePaths, isEmpty);
       expect(
         editor.externalEditorWorkspaceMode,
         ExternalEditorWorkspaceMode.newWindow,
       );
-      expect(editor.autoOpenNewWorkspacesInZed, isFalse);
+      expect(editor.autoOpenNewWorkspacesExternally, isFalse);
     });
 
     test('backward-compatible editor settings use autosave defaults', () {
@@ -104,13 +103,31 @@ void main() {
       expect(editor.autosaveDelaySeconds, 1);
       expect(editor.externalEditor, ExternalEditorKind.zed);
       expect(editor.codeOpenTarget, CodeOpenTarget.alera);
-      expect(editor.zedExecutableMode, ExternalEditorExecutableMode.automatic);
-      expect(editor.zedExecutablePath, isNull);
+      expect(editor.externalEditorExecutablePaths, isEmpty);
       expect(
         editor.externalEditorWorkspaceMode,
         ExternalEditorWorkspaceMode.newWindow,
       );
-      expect(editor.autoOpenNewWorkspacesInZed, isFalse);
+      expect(editor.autoOpenNewWorkspacesExternally, isFalse);
+    });
+
+    test('legacy Zed-only editor settings migrate to the generic shape', () {
+      final editor = EditorSettings.fromJson(<String, Object?>{
+        'externalEditor': 'zed',
+        'codeOpenTarget': 'zed',
+        'zedExecutableMode': 'custom',
+        'zedExecutablePath': r'C:\Tools\zed.exe',
+        'autoOpenNewWorkspacesInZed': true,
+      });
+
+      expect(editor.externalEditor, ExternalEditorKind.zed);
+      expect(editor.codeOpenTarget, CodeOpenTarget.external);
+      expect(editor.externalEditorExecutablePaths, <String, String>{
+        'zed': r'C:\Tools\zed.exe',
+      });
+      expect(editor.executablePathFor(.zed), r'C:\Tools\zed.exe');
+      expect(editor.executablePathFor(.vscode), isNull);
+      expect(editor.autoOpenNewWorkspacesExternally, isTrue);
     });
 
     test('bounds persisted autosave delay before scheduling', () {

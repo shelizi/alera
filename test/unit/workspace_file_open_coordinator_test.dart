@@ -47,8 +47,8 @@ void main() {
     expect(launcher.files, isEmpty);
   });
 
-  test('Zed default routes ordinary editable files externally', () async {
-    defaultTarget = CodeOpenTarget.zed;
+  test('external default routes ordinary editable files externally', () async {
+    defaultTarget = CodeOpenTarget.external;
 
     final result = await coordinator().open<String>(
       workspace: _workspace,
@@ -59,7 +59,7 @@ void main() {
     );
 
     expect(result.status, WorkspaceFileOpenStatus.opened);
-    expect(result.destination, WorkspaceFileOpenDestination.zed);
+    expect(result.destination, WorkspaceFileOpenDestination.external);
     expect(internalOpens, isEmpty);
     expect(launcher.files.single.filePath, endsWith('lib\\main.dart'));
     expect(launcher.files.single.line, 12);
@@ -67,7 +67,7 @@ void main() {
   });
 
   test('dedicated Alera preview file types stay internal', () async {
-    defaultTarget = CodeOpenTarget.zed;
+    defaultTarget = CodeOpenTarget.external;
     final service = coordinator();
 
     for (final path in <String>[
@@ -92,7 +92,7 @@ void main() {
   test(
     'explicit target override beats the default and preview routing',
     () async {
-      defaultTarget = CodeOpenTarget.zed;
+      defaultTarget = CodeOpenTarget.external;
       final service = coordinator();
 
       await service.open<String>(
@@ -104,7 +104,7 @@ void main() {
       await service.open<String>(
         workspace: _workspace,
         relativePath: 'README.md',
-        targetOverride: CodeOpenTarget.zed,
+        targetOverride: CodeOpenTarget.external,
         openInAlera: openInternal,
       );
 
@@ -113,37 +113,43 @@ void main() {
     },
   );
 
-  test('implicit Zed failure falls back to Alera and notifies once', () async {
-    defaultTarget = CodeOpenTarget.zed;
-    launcher.nextResult = externalEditorLaunchFailure(
-      ExternalEditorLaunchFailureKind.unavailable,
-      'Zed is unavailable.',
-    );
-    final service = coordinator();
+  test(
+    'implicit external failure falls back to Alera and notifies once',
+    () async {
+      defaultTarget = CodeOpenTarget.external;
+      launcher.nextResult = externalEditorLaunchFailure(
+        ExternalEditorLaunchFailureKind.unavailable,
+        'Zed is unavailable.',
+      );
+      final service = coordinator();
 
-    final first = await service.open<String>(
-      workspace: _workspace,
-      relativePath: 'lib/one.dart',
-      openInAlera: openInternal,
-    );
-    final second = await service.open<String>(
-      workspace: _workspace,
-      relativePath: 'lib/two.dart',
-      openInAlera: openInternal,
-    );
+      final first = await service.open<String>(
+        workspace: _workspace,
+        relativePath: 'lib/one.dart',
+        openInAlera: openInternal,
+      );
+      final second = await service.open<String>(
+        workspace: _workspace,
+        relativePath: 'lib/two.dart',
+        openInAlera: openInternal,
+      );
 
-    expect(first.status, WorkspaceFileOpenStatus.fellBack);
-    expect(second.status, WorkspaceFileOpenStatus.fellBack);
-    expect(first.ok, isTrue);
-    expect(first.fellBack, isTrue);
-    expect(second.fellBack, isTrue);
-    expect(first.destination, WorkspaceFileOpenDestination.alera);
-    expect(internalOpens, <String>['lib/one.dart:false', 'lib/two.dart:false']);
-    expect(notices, hasLength(1));
-    expect(notices.single, contains('Opened in Alera instead'));
-  });
+      expect(first.status, WorkspaceFileOpenStatus.fellBack);
+      expect(second.status, WorkspaceFileOpenStatus.fellBack);
+      expect(first.ok, isTrue);
+      expect(first.fellBack, isTrue);
+      expect(second.fellBack, isTrue);
+      expect(first.destination, WorkspaceFileOpenDestination.alera);
+      expect(internalOpens, <String>[
+        'lib/one.dart:false',
+        'lib/two.dart:false',
+      ]);
+      expect(notices, hasLength(1));
+      expect(notices.single, contains('Opened in Alera instead'));
+    },
+  );
 
-  test('explicit Zed failure never falls back to Alera', () async {
+  test('explicit external failure never falls back to Alera', () async {
     launcher.nextResult = externalEditorLaunchFailure(
       ExternalEditorLaunchFailureKind.unavailable,
       'Zed is unavailable.',
@@ -152,7 +158,7 @@ void main() {
     final result = await coordinator().open<String>(
       workspace: _workspace,
       relativePath: 'lib/main.dart',
-      targetOverride: CodeOpenTarget.zed,
+      targetOverride: CodeOpenTarget.external,
       openInAlera: openInternal,
     );
 
@@ -168,7 +174,7 @@ void main() {
   test(
     'a successful implicit launch resets the one-shot failure notice',
     () async {
-      defaultTarget = CodeOpenTarget.zed;
+      defaultTarget = CodeOpenTarget.external;
       launcher.nextResult = externalEditorLaunchFailure(
         ExternalEditorLaunchFailureKind.unavailable,
         'Zed is unavailable.',
@@ -220,6 +226,9 @@ class _FakeExternalEditorLauncher implements ExternalEditorLauncher {
   @override
   Future<ExternalEditorAvailability> checkAvailability() async =>
       const ExternalEditorAvailability(available: true);
+
+  @override
+  Future<bool> isInstalled() async => true;
 
   @override
   Future<ExternalEditorLaunchResult> openFile(

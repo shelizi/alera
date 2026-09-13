@@ -127,7 +127,8 @@ class _ProjectWorkbenchSidebarState
                                 rows: rows,
                                 onOpenWorkspace: _openWorkspace,
                                 onOpenWorkspaceFolder: openWorkspaceFolder,
-                                onOpenWorkspaceInZed: openWorkspaceInZed,
+                                onOpenWorkspaceExternally:
+                                    openWorkspaceExternally,
                                 onCopyWorkspacePath: copyWorkspacePath,
                                 onOpenWorkspaceInBrowser:
                                     openWorkspaceInBrowser,

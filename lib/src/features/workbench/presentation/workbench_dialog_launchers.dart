@@ -11,6 +11,7 @@ import 'package:alera/src/features/agent_profiles/application/agent_profile_prov
 import 'package:alera/src/features/automations/presentation/automations_dialog.dart';
 import 'package:alera/src/features/agent_profiles/domain/agent_profile.dart';
 import 'package:alera/src/features/external_editor/application/external_editor_providers.dart';
+import 'package:alera/src/features/external_editor/domain/external_editor_spec.dart';
 import 'package:alera/src/features/projects/domain/project.dart';
 import 'package:alera/src/features/projects/presentation/add_project_dialog.dart';
 import 'package:alera/src/features/settings/presentation/settings_dialog.dart';
@@ -300,7 +301,11 @@ Future<void> showCreateWorkspaceFlow(
           agentTabId: agentTabId,
         );
         if (context.mounted) {
-          await _maybeAutoOpenCreatedWorkspaceInZed(context, ref, creation);
+          await _maybeAutoOpenCreatedWorkspaceExternally(
+            context,
+            ref,
+            creation,
+          );
           if (context.mounted) {
             _showWorkspaceCreationToast(context, creation);
           }
@@ -391,29 +396,34 @@ Future<void> showCreateWorkspaceFlow(
   }
 
   if (result != null && context.mounted) {
-    await _maybeAutoOpenCreatedWorkspaceInZed(context, ref, result);
+    await _maybeAutoOpenCreatedWorkspaceExternally(context, ref, result);
     if (context.mounted) {
       _showWorkspaceCreationToast(context, result);
     }
   }
 }
 
-Future<void> _maybeAutoOpenCreatedWorkspaceInZed(
+Future<void> _maybeAutoOpenCreatedWorkspaceExternally(
   BuildContext context,
   WidgetRef ref,
   WorkspaceCreationResult creation,
 ) async {
-  if (!ref.read(settingsControllerProvider).editor.autoOpenNewWorkspacesInZed) {
+  final editor = ref.read(settingsControllerProvider).editor;
+  if (!editor.autoOpenNewWorkspacesExternally) {
     return;
   }
   final launch = await ref
       .read(externalEditorLauncherProvider)
       .openWorkspace(creation.workspace.path);
   if (!launch.ok && context.mounted) {
+    final editorName =
+        externalEditorSpecs[editor.externalEditor]?.displayName ??
+        'the external editor';
     AleraToast.show(
       context,
       message:
-          launch.message ?? 'Workspace created, but Zed could not be opened.',
+          launch.message ??
+          'Workspace created, but $editorName could not be opened.',
       tone: .error,
     );
   }

@@ -327,11 +327,144 @@ String? _translateDynamicTraditionalChinese(String source) {
     return '文字操作失敗：${textActionFailed.group(1)}';
   }
 
-  final zedAvailable = RegExp(r'^Zed is available(?:: (.+))?\.?$')
+  final editorAvailable = RegExp(
+    r'^(Zed|VS Code|Visual Studio Code) is available(?:: (.+))?\.?$',
+  ).firstMatch(source);
+  if (editorAvailable != null) {
+    final version = editorAvailable.group(2);
+    return version == null
+        ? '${editorAvailable.group(1)} 可使用。'
+        : '${editorAvailable.group(1)} 可使用：$version';
+  }
+  final editorUnavailable = RegExp(
+    r'^(Zed|VS Code|Visual Studio Code) is not available\.$',
+  ).firstMatch(source);
+  if (editorUnavailable != null) {
+    return '${editorUnavailable.group(1)} 無法使用。';
+  }
+  final editorNotFound = RegExp(
+    r'^(.+) was not found\. Check Settings > Editor\.$',
+  ).firstMatch(source);
+  if (editorNotFound != null) {
+    return '找不到 ${editorNotFound.group(1)}。請檢查設定 > 編輯器。';
+  }
+  final editorVersionFailed = RegExp(
+    r'^(.+) was found but its version check failed\.$',
+  ).firstMatch(source);
+  if (editorVersionFailed != null) {
+    return '找到 ${editorVersionFailed.group(1)}，但版本檢查失敗。';
+  }
+  final editorNotStartable = RegExp(
+    r'^(.+) could not be started\. Check Settings > Editor\.$',
+  ).firstMatch(source);
+  if (editorNotStartable != null) {
+    return '無法啟動 ${editorNotStartable.group(1)}。請檢查設定 > 編輯器。';
+  }
+  final editorStartFailed = RegExp(
+    r'^Could not start (.+)\. Configure the executable in Settings > Editor\.$',
+  ).firstMatch(source);
+  if (editorStartFailed != null) {
+    return '無法啟動 ${editorStartFailed.group(1)}。請在設定 > 編輯器中設定執行檔。';
+  }
+  final openPathFailed = RegExp(
+    r'^Could not open the requested path in (.+)\. Check Settings > Editor and try again\.$',
+  ).firstMatch(source);
+  if (openPathFailed != null) {
+    return '無法在 ${openPathFailed.group(1)} 中開啟要求的路徑。請檢查設定 > 編輯器後再試。';
+  }
+  final openTargetMissing = RegExp(
+    r'^The requested (.+) file target does not exist\.$',
+  ).firstMatch(source);
+  if (openTargetMissing != null) {
+    return '要求的 ${openTargetMissing.group(1)} 檔案目標不存在。';
+  }
+  final openTargetOutside = RegExp(
+    r'^The requested (.+) file target is outside the active Alera workspace\.$',
+  ).firstMatch(source);
+  if (openTargetOutside != null) {
+    return '要求的 ${openTargetOutside.group(1)} 檔案目標不在使用中的 Alera 工作區內。';
+  }
+  final openTargetsInvalid = RegExp(
+    r'^(?:The|A) requested (.+) file targets? (?:are invalid|is missing or outside the active Alera workspace)\.$',
+  ).firstMatch(source);
+  if (openTargetsInvalid != null) {
+    return '要求的 ${openTargetsInvalid.group(1)} 檔案目標無效或不在使用中的 Alera 工作區內。';
+  }
+  final editorPositionInvalid = RegExp(
+    r'^(.+) line and column values must be positive\.$',
+  ).firstMatch(source);
+  if (editorPositionInvalid != null) {
+    return '${editorPositionInvalid.group(1)} 的行與欄值必須為正數。';
+  }
+  final openInEditor = RegExp(r'^Open in (.+)$').firstMatch(source);
+  if (openInEditor != null) {
+    return '在 ${openInEditor.group(1)} 中開啟';
+  }
+  final openChangesInEditor = RegExp(r'^Open Changes in (.+)$')
       .firstMatch(source);
-  if (zedAvailable != null) {
-    final version = zedAvailable.group(1);
-    return version == null ? 'Zed 可使用。' : 'Zed 可使用：$version';
+  if (openChangesInEditor != null) {
+    return '在 ${openChangesInEditor.group(1)} 中開啟變更';
+  }
+  final couldNotOpenIn = RegExp(
+    r'^Could not open (file|item|changed files|workspace) in (.+)\.$',
+  ).firstMatch(source);
+  if (couldNotOpenIn != null) {
+    final noun = switch (couldNotOpenIn.group(1)) {
+      'file' => '檔案',
+      'item' => '項目',
+      'changed files' => '變更檔案',
+      _ => '工作區',
+    };
+    return '無法在 ${couldNotOpenIn.group(2)} 中開啟$noun。';
+  }
+  final workspaceCreatedNoEditor = RegExp(
+    r'^Workspace created, but (.+) could not be opened\.$',
+  ).firstMatch(source);
+  if (workspaceCreatedNoEditor != null) {
+    return '工作區已建立，但無法開啟 ${workspaceCreatedNoEditor.group(1)}。';
+  }
+  final customExecutable = RegExp(r'^Custom (.+) Executable$')
+      .firstMatch(source);
+  if (customExecutable != null) {
+    return '自訂 ${customExecutable.group(1)} 執行檔';
+  }
+  final commandEnvironment = RegExp(
+    r'^Off uses the (.+) command from the local command environment\.$',
+  ).firstMatch(source);
+  if (commandEnvironment != null) {
+    return '關閉時會使用本機命令環境中的 ${commandEnvironment.group(1)} 指令。';
+  }
+  final executableTitle = RegExp(r'^(Zed|VS Code) Executable$')
+      .firstMatch(source);
+  if (executableTitle != null) {
+    return '${executableTitle.group(1)} 執行檔';
+  }
+  final executablePathDescription = RegExp(
+    r'^Full path to the (.+) executable on this machine\.$',
+  ).firstMatch(source);
+  if (executablePathDescription != null) {
+    return '此機器上 ${executablePathDescription.group(1)} 執行檔的完整路徑。';
+  }
+  final executablePathHint = RegExp(r'^Path to (.+) or its executable$')
+      .firstMatch(source);
+  if (executablePathHint != null) {
+    return '${executablePathHint.group(1)} 或其執行檔的路徑';
+  }
+  final newWindowPerWorktree = RegExp(
+    r'^Open each Alera worktree as a separate (.+) window instead of reusing the last one\.$',
+  ).firstMatch(source);
+  if (newWindowPerWorktree != null) {
+    return '將每個 Alera worktree 開啟為獨立的 ${newWindowPerWorktree.group(1)} 視窗，而非沿用上一個視窗。';
+  }
+  final autoOpenInEditor = RegExp(
+    r'^After Alera creates a linked workspace, open that workspace in (.+) automatically\.$',
+  ).firstMatch(source);
+  if (autoOpenInEditor != null) {
+    return 'Alera 建立連結工作區後，自動在 ${autoOpenInEditor.group(1)} 中開啟該工作區。';
+  }
+  final checkEditor = RegExp(r'^Check (Zed|VS Code)$').firstMatch(source);
+  if (checkEditor != null) {
+    return '檢查 ${checkEditor.group(1)}';
   }
 
   final selectedValue = RegExp(r'^Selected: (.+)$').firstMatch(source);

@@ -5,6 +5,7 @@ import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:alera/src/features/external_editor/application/external_editor_providers.dart';
 import 'package:alera/src/features/external_editor/domain/external_editor_launch_result.dart';
 import 'package:alera/src/features/external_editor/domain/external_editor_launcher.dart';
+import 'package:alera/src/features/external_editor/domain/external_editor_spec.dart';
 import 'package:alera/src/features/ai_assist/application/ai_assist_providers.dart';
 import 'package:alera/src/features/ai_assist/application/ai_assist_service.dart';
 import 'package:alera/src/features/ai_assist/domain/ai_assist_settings.dart';
@@ -60,6 +61,10 @@ void main() {
           settingsControllerProvider.overrideWith(
             () => _PanelSettingsController(.defaults),
           ),
+          installedExternalEditorsProvider.overrideWith(
+            (ref) async => const <ExternalEditorSpec>[],
+          ),
+          resolvedExternalEditorProvider.overrideWith((ref) async => null),
         ],
         child: MaterialApp(
           home: Scaffold(
@@ -201,6 +206,10 @@ void main() {
           settingsControllerProvider.overrideWith(
             () => _PanelSettingsController(.defaults),
           ),
+          installedExternalEditorsProvider.overrideWith(
+            (ref) async => const <ExternalEditorSpec>[],
+          ),
+          resolvedExternalEditorProvider.overrideWith((ref) async => null),
         ],
         child: MaterialApp(
           home: Scaffold(
@@ -1554,10 +1563,26 @@ Future<void> _pumpPanel(
           () => _PanelSettingsController(settings),
         ),
         if (service != null) aiAssistServiceProvider.overrideWithValue(service),
-        if (externalEditorLauncher != null)
+        installedExternalEditorsProvider.overrideWith(
+          (ref) async => externalEditorLauncher == null
+              ? const <ExternalEditorSpec>[]
+              : <ExternalEditorSpec>[
+                  externalEditorSpecs[ExternalEditorKind.zed]!,
+                ],
+        ),
+        resolvedExternalEditorProvider.overrideWith(
+          (ref) async => externalEditorLauncher == null
+              ? null
+              : externalEditorSpecs[ExternalEditorKind.zed],
+        ),
+        if (externalEditorLauncher != null) ...[
           externalEditorLauncherProvider.overrideWithValue(
             externalEditorLauncher,
           ),
+          externalEditorLauncherForProvider.overrideWith(
+            (ref, kind) => externalEditorLauncher,
+          ),
+        ],
       ],
       child: MaterialApp(
         home: Scaffold(
@@ -1630,6 +1655,9 @@ class _RecordingExternalEditorLauncher implements ExternalEditorLauncher {
   @override
   Future<ExternalEditorAvailability> checkAvailability() async =>
       const ExternalEditorAvailability(available: true);
+
+  @override
+  Future<bool> isInstalled() async => true;
 
   @override
   Future<ExternalEditorLaunchResult> openFile(

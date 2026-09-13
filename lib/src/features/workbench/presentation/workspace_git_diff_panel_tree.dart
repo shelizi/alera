@@ -11,7 +11,9 @@ class const _GitDiffTree({
   required final ValueChanged<GitChangeEntry> onToggleSubmodule,
   required final OpenGitDiffTabCallback onOpenGitDiff,
   final ValueChanged<String>? onOpenFile,
-  final ValueChanged<String>? onOpenInZed,
+  final void Function(String path, ExternalEditorKind kind)? onOpenExternally,
+  required final ExternalEditorSpec? externalEditor,
+  required final List<ExternalEditorSpec> installedExternalEditors,
   required final ValueChanged<String> onRevealInExplorer,
   required final ValueChanged<GitChangeEntry> onStage,
   required final ValueChanged<GitChangeEntry> onUnstage,
@@ -117,9 +119,11 @@ class _GitDiffTreeState extends State<_GitDiffTree> {
           onOpenFile: widget.onOpenFile == null
               ? null
               : () => widget.onOpenFile!(entry.path),
-          onOpenInZed: widget.onOpenInZed == null
+          onOpenExternally: widget.onOpenExternally == null
               ? null
-              : () => widget.onOpenInZed!(entry.path),
+              : (kind) => widget.onOpenExternally!(entry.path, kind),
+          externalEditor: widget.externalEditor,
+          installedExternalEditors: widget.installedExternalEditors,
           onRevealInExplorer: () => widget.onRevealInExplorer(entry.path),
           onStage: widget.onStage,
           onUnstage: widget.onUnstage,
@@ -146,7 +150,9 @@ class _GitDiffTreeState extends State<_GitDiffTree> {
             busy: widget.busy,
             onOpenGitDiff: widget.onOpenGitDiff,
             onOpenFile: widget.onOpenFile,
-            onOpenInZed: widget.onOpenInZed,
+            onOpenExternally: widget.onOpenExternally,
+            externalEditor: widget.externalEditor,
+            installedExternalEditors: widget.installedExternalEditors,
             onRevealInExplorer: widget.onRevealInExplorer,
           ),
       ];
@@ -166,7 +172,6 @@ class _GitDiffTreeState extends State<_GitDiffTree> {
         canDiscard: capabilities?.canDiscard ?? false,
         onTap: () => widget.onToggleTreeNode(_treeNodeKey(row.path)),
         onOpenFile: null,
-        onOpenInZed: null,
         onRevealInExplorer: () => widget.onRevealInExplorer(row.path),
         onStage: () {
           if (widget.unified) {
@@ -225,7 +230,6 @@ class const _GitDiffDirectoryRow({
   required final bool canDiscard,
   required final VoidCallback onTap,
   final VoidCallback? onOpenFile,
-  final VoidCallback? onOpenInZed,
   required final VoidCallback onRevealInExplorer,
   required final VoidCallback onStage,
   required final VoidCallback onUnstage,
@@ -300,13 +304,14 @@ class const _GitDiffDirectoryRow({
       context,
       position,
       canOpenFile: onOpenFile != null,
-      canOpenInZed: false,
       canStage: canStage,
       canUnstage: canUnstage,
       canDiscard: canDiscard,
       busy: busy,
       onOpenFile: onOpenFile,
-      onOpenInZed: onOpenInZed,
+      externalEditor: null,
+      installedExternalEditors: const <ExternalEditorSpec>[],
+      onOpenExternally: null,
       onRevealInExplorer: onRevealInExplorer,
       onStage: onStage,
       onUnstage: onUnstage,
@@ -322,7 +327,9 @@ class const _GitDiffFileRow({
   required final VoidCallback onTap,
   required final bool busy,
   final VoidCallback? onOpenFile,
-  final VoidCallback? onOpenInZed,
+  final ValueChanged<ExternalEditorKind>? onOpenExternally,
+  required final ExternalEditorSpec? externalEditor,
+  required final List<ExternalEditorSpec> installedExternalEditors,
   required final VoidCallback onRevealInExplorer,
   required final ValueChanged<GitChangeEntry> onStage,
   required final ValueChanged<GitChangeEntry> onUnstage,
@@ -421,14 +428,17 @@ class const _GitDiffFileRow({
       position,
       canOpenFile:
           onOpenFile != null && entry.status != GitChangeStatus.deleted,
-      canOpenInZed:
-          onOpenInZed != null && entry.status != GitChangeStatus.deleted,
       canStage: entry.canStageFromParent,
       canUnstage: entry.canUnstageFromParent,
       canDiscard: entry.canDiscardFromParent,
       busy: busy,
       onOpenFile: onOpenFile,
-      onOpenInZed: onOpenInZed,
+      externalEditor:
+          onOpenExternally != null && entry.status != GitChangeStatus.deleted
+          ? externalEditor
+          : null,
+      installedExternalEditors: installedExternalEditors,
+      onOpenExternally: onOpenExternally,
       onRevealInExplorer: onRevealInExplorer,
       onStage: () => onStage(entry),
       onUnstage: () => onUnstage(entry),

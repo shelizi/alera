@@ -1,3 +1,4 @@
+import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:alera/src/design_system/menus/alera_dropdown_entry.dart';
 import 'package:alera/src/design_system/feedback/alera_toast.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_git_history_actions.dart';
@@ -36,11 +37,33 @@ void main() {
       'Drop Commit',
       'Merge Into Current Branch',
       'Rebase Current Branch Onto This Commit',
-      'Reset Current Branch Here (Soft)',
-      'Reset Current Branch Here (Mixed)',
-      'Reset Current Branch Here (Hard)',
+      'Reset Current Branch Here',
       'Create Archive…',
     ]) {
+      expect(find.text(label), findsOneWidget, reason: label);
+    }
+  });
+
+  testWidgets('reset submenu lists soft, mixed, and hard modes', (
+    tester,
+  ) async {
+    final item = gitHistoryCommit(
+      'commit123456',
+      parents: <String>['parent123'],
+      subject: 'Parity Commit',
+    );
+    final backend = _historyBackend(item);
+
+    await _pumpSurface(tester, backend);
+    await _openMenu(tester, item.subject);
+    await tester.tap(
+      find.byWidgetPredicate(
+        (widget) => widget is Icon && widget.icon == AleraIcons.chevronRight,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    for (final label in <String>['Soft', 'Mixed', 'Hard']) {
       expect(find.text(label), findsOneWidget, reason: label);
     }
   });

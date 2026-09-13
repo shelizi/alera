@@ -185,10 +185,9 @@ const _classifiedFieldPaths = <String>{
   'editor.autosaveDelaySeconds',
   'editor.externalEditor',
   'editor.codeOpenTarget',
-  'editor.zedExecutableMode',
-  'editor.zedExecutablePath',
+  'editor.externalEditorExecutablePaths',
   'editor.externalEditorWorkspaceMode',
-  'editor.autoOpenNewWorkspacesInZed',
+  'editor.autoOpenNewWorkspacesExternally',
   'diagnostics.logLevel',
   'diagnostics.crashReportingEnabled',
   'terminal.fontFamily',
@@ -291,7 +290,7 @@ AleraSettings _populatedSettings() {
     ),
     editor: AleraSettings.defaults.editor.copyWith(
       tabSize: 2,
-      zedExecutablePath: '/usr/bin/zed',
+      externalEditorExecutablePaths: <String, String>{'zed': '/usr/bin/zed'},
     ),
     terminal: AleraSettings.defaults.terminal.copyWith(
       fontSize: 16,

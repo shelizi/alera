@@ -2,7 +2,7 @@ part of 'workspace_git_diff_panel.dart';
 
 enum _GitChangeContextAction {
   openFile,
-  openInZed,
+  openExternally,
   revealInExplorer,
   stage,
   unstage,
@@ -13,18 +13,20 @@ Future<void> _showGitChangeContextMenu(
   BuildContext context,
   Offset position, {
   required bool canOpenFile,
-  required bool canOpenInZed,
   required bool canStage,
   required bool canUnstage,
   required bool canDiscard,
   required bool busy,
   required VoidCallback? onOpenFile,
-  required VoidCallback? onOpenInZed,
+  required ExternalEditorSpec? externalEditor,
+  required List<ExternalEditorSpec> installedExternalEditors,
+  required ValueChanged<ExternalEditorKind>? onOpenExternally,
   required VoidCallback onRevealInExplorer,
   required VoidCallback onStage,
   required VoidCallback onUnstage,
   required VoidCallback onDiscard,
 }) async {
+  ExternalEditorKind? pickedKind;
   final selected = await showMenu<_GitChangeContextAction>(
     context: context,
     position: .fromLTRB(position.dx, position.dy, position.dx, position.dy),
@@ -35,11 +37,17 @@ Future<void> _showGitChangeContextMenu(
           label: 'Open File',
           leading: Icon(AleraIcons.file, size: 16),
         ),
-      if (canOpenInZed)
-        const AleraDropdownEntry<_GitChangeContextAction>(
-          value: .openInZed,
-          label: 'Open in Zed',
-          leading: Icon(AleraIcons.external, size: 16),
+      if (externalEditor case final editor?)
+        AleraDropdownSubmenuEntry<_GitChangeContextAction, ExternalEditorKind>(
+          primaryValue: .openExternally,
+          label: 'Open in ${editor.shortName}',
+          leading: const Icon(AleraIcons.external, size: 16),
+          childResult: (_) => .openExternally,
+          onChildResult: (kind) => pickedKind = kind,
+          children: externalEditorMenuChildren(
+            resolved: editor,
+            installed: installedExternalEditors,
+          ),
         ),
       const AleraDropdownEntry<_GitChangeContextAction>(
         value: .revealInExplorer,
@@ -77,8 +85,11 @@ Future<void> _showGitChangeContextMenu(
   switch (selected) {
     case _GitChangeContextAction.openFile:
       onOpenFile?.call();
-    case _GitChangeContextAction.openInZed:
-      onOpenInZed?.call();
+    case _GitChangeContextAction.openExternally:
+      final kind = pickedKind ?? externalEditor?.kind;
+      if (kind != null) {
+        onOpenExternally?.call(kind);
+      }
     case _GitChangeContextAction.revealInExplorer:
       onRevealInExplorer();
     case _GitChangeContextAction.stage:

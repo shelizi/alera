@@ -51,9 +51,13 @@ extension _WorkspaceExplorerActions on _WorkspaceExplorerState {
         if (entry != null) {
           await _reveal(entry);
         }
-      case _ExplorerAction.openInZed:
-        if (entry != null) {
-          await _openInZed(entry);
+      case _ExplorerAction.openExternally:
+        final kind =
+            _pickedExternalEditorKind ??
+            (await ref.read(resolvedExternalEditorProvider.future))?.kind;
+        _pickedExternalEditorKind = null;
+        if (entry != null && kind != null) {
+          await _openExternally(entry, kind);
         }
       case _ExplorerAction.openInAlera:
         if (entry != null && !_isDirectoryEntry(entry)) {
@@ -267,8 +271,11 @@ extension _WorkspaceExplorerActions on _WorkspaceExplorerState {
     }
   }
 
-  Future<void> _openInZed(native.WorkspaceFileEntry entry) async {
-    final launcher = ref.read(externalEditorLauncherProvider);
+  Future<void> _openExternally(
+    native.WorkspaceFileEntry entry,
+    ExternalEditorKind kind,
+  ) async {
+    final launcher = ref.read(externalEditorLauncherForProvider(kind));
     final absolutePath = _absolutePath(entry.relativePath);
     final result = _isDirectoryEntry(entry)
         ? await launcher.openWorkspace(absolutePath)
@@ -281,7 +288,9 @@ extension _WorkspaceExplorerActions on _WorkspaceExplorerState {
     if (!result.ok && mounted) {
       AleraToast.show(
         context,
-        message: result.message ?? 'Could not open item in Zed.',
+        message:
+            result.message ??
+            'Could not open item in ${externalEditorSpecs[kind]?.displayName ?? 'the external editor'}.',
         tone: .error,
       );
     }

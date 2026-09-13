@@ -8,8 +8,11 @@ class const _SidebarBody({
   onOpenWorkspace,
   required final Future<void> Function(Workspace workspace)
   onOpenWorkspaceFolder,
-  required final Future<void> Function(Workspace workspace)
-  onOpenWorkspaceInZed,
+  required final Future<void> Function(
+    Workspace workspace,
+    ExternalEditorKind kind,
+  )
+  onOpenWorkspaceExternally,
   required final Future<void> Function(Workspace workspace) onCopyWorkspacePath,
   required final Future<void> Function(Workspace workspace)
   onOpenWorkspaceInBrowser,
@@ -47,6 +50,10 @@ class const _SidebarBody({
     final archivedCollapsedKeys = ref.watch(
       workbenchArchivedSectionsCollapseProvider,
     );
+    final resolvedEditor = ref.watch(resolvedExternalEditorProvider).value;
+    final installedEditors =
+        ref.watch(installedExternalEditorsProvider).value ??
+        const <ExternalEditorSpec>[];
     final visibleRows = collapseArchivedSidebarRows(
       rows,
       archivedCollapsedKeys,
@@ -66,6 +73,8 @@ class const _SidebarBody({
             visibleRows,
             index,
             archivedCollapsedKeys,
+            resolvedEditor,
+            installedEditors,
           ),
         );
       },
@@ -78,6 +87,8 @@ class const _SidebarBody({
     List<WorkbenchSidebarRow> rows,
     int index,
     Set<String> archivedCollapsedKeys,
+    ExternalEditorSpec? resolvedEditor,
+    List<ExternalEditorSpec> installedEditors,
   ) {
     final row = rows[index];
     if (row is WorkbenchSectionHeaderRow) {
@@ -172,7 +183,10 @@ class const _SidebarBody({
               ? unawaited(onRestoreWorkspace(row.workspace))
               : unawaited(onOpenWorkspace(row.project, row.workspace)),
           onOpenFolder: () => unawaited(onOpenWorkspaceFolder(row.workspace)),
-          onOpenInZed: () => unawaited(onOpenWorkspaceInZed(row.workspace)),
+          onOpenExternally: (kind) =>
+              unawaited(onOpenWorkspaceExternally(row.workspace, kind)),
+          externalEditor: resolvedEditor,
+          installedExternalEditors: installedEditors,
           onCopyPath: () => unawaited(onCopyWorkspacePath(row.workspace)),
           onOpenInBrowser: () =>
               unawaited(onOpenWorkspaceInBrowser(row.workspace)),

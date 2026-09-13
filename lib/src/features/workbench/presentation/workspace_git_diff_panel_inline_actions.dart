@@ -139,8 +139,15 @@ extension _WorkspaceGitDiffPanelActions on _WorkspaceGitDiffPanelState {
           () => _notifier.stashPop(stash.index),
           successMessage: 'Stash popped',
         );
-      case _SourceControlMenuAction.openChangesInZed:
-        await _openChangesInZed(
+      case _SourceControlMenuAction.openChangesExternally:
+        final kind =
+            _pickedExternalEditorKind ??
+            (await ref.read(resolvedExternalEditorProvider.future))?.kind;
+        _pickedExternalEditorKind = null;
+        if (kind == null) {
+          return;
+        }
+        await _openChangesExternally(
           ref
               .read(
                 workspaceSourceControlControllerProvider(
@@ -149,6 +156,7 @@ extension _WorkspaceGitDiffPanelActions on _WorkspaceGitDiffPanelState {
               )
               .asData
               ?.value,
+          kind,
         );
     }
   }

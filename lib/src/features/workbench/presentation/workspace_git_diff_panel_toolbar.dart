@@ -20,7 +20,10 @@ class const _SourceControlToolbar({
   required final VoidCallback onRefresh,
   required final VoidCallback? onClearSourceControlRoot,
   required final VoidCallback onToggleCollapseAll,
-  required final bool canOpenChangesInZed,
+  required final bool canOpenChangesExternally,
+  required final ExternalEditorSpec? externalEditor,
+  required final List<ExternalEditorSpec> installedExternalEditors,
+  required final ValueChanged<ExternalEditorKind> onExternalEditorPicked,
   required final ValueChanged<GitDiffViewMode> onViewModeChanged,
   required final ValueChanged<GitDiffGroupMode> onGroupModeChanged,
   required final VoidCallback onOpenAll,
@@ -171,7 +174,10 @@ class const _SourceControlToolbar({
                   action: primaryAction,
                   state: data,
                   busy: busy,
-                  canOpenChangesInZed: canOpenChangesInZed,
+                  canOpenChangesExternally: canOpenChangesExternally,
+                  externalEditor: externalEditor,
+                  installedExternalEditors: installedExternalEditors,
+                  onExternalEditorPicked: onExternalEditorPicked,
                   onPressed: primaryAction == null
                       ? null
                       : () => onPrimaryAction(primaryAction),
@@ -301,7 +307,7 @@ enum _SourceControlMenuAction {
   publishBranch,
   stash,
   stashPop,
-  openChangesInZed,
+  openChangesExternally,
 }
 
 class const _AiCommitMessageButton({
@@ -388,7 +394,10 @@ class const _PrimaryActionButton({
   required final _SourceControlMenuAction? action,
   required final bool busy,
   required final WorkspaceSourceControlState? state,
-  required final bool canOpenChangesInZed,
+  required final bool canOpenChangesExternally,
+  required final ExternalEditorSpec? externalEditor,
+  required final List<ExternalEditorSpec> installedExternalEditors,
+  required final ValueChanged<ExternalEditorKind> onExternalEditorPicked,
   required final VoidCallback? onPressed,
   required final ValueChanged<_SourceControlMenuAction> onSelected,
 }) extends StatelessWidget {
@@ -558,13 +567,22 @@ class const _PrimaryActionButton({
         enabled: hasDiscardable,
         leading: const Icon(AleraIcons.gitDiscard, size: 16),
       ),
-      const PopupMenuDivider(height: AleraTokens.space8),
-      AleraDropdownEntry<_SourceControlMenuAction>(
-        value: .openChangesInZed,
-        label: 'Open Changes in Zed',
-        enabled: canOpenChangesInZed,
-        leading: const Icon(AleraIcons.external, size: 16),
-      ),
+      if (externalEditor
+          case final editor?) ...<PopupMenuEntry<_SourceControlMenuAction>>[
+        const PopupMenuDivider(height: AleraTokens.space8),
+        AleraDropdownSubmenuEntry<_SourceControlMenuAction, ExternalEditorKind>(
+          primaryValue: .openChangesExternally,
+          label: 'Open Changes in ${editor.shortName}',
+          enabled: canOpenChangesExternally,
+          leading: const Icon(AleraIcons.external, size: 16),
+          childResult: (_) => .openChangesExternally,
+          onChildResult: onExternalEditorPicked,
+          children: externalEditorMenuChildren(
+            resolved: editor,
+            installed: installedExternalEditors,
+          ),
+        ),
+      ],
       const PopupMenuDivider(height: AleraTokens.space8),
       AleraDropdownEntry<_SourceControlMenuAction>(
         value: .fetch,
@@ -629,7 +647,8 @@ class const _PrimaryActionButton({
       _SourceControlMenuAction.stash => 'Stash',
       _SourceControlMenuAction.stashPop => 'Stash Pop',
       _SourceControlMenuAction.refresh => 'Refresh',
-      _SourceControlMenuAction.openChangesInZed => 'Open Changes in Zed',
+      _SourceControlMenuAction.openChangesExternally =>
+        'Open Changes in ${externalEditor?.shortName ?? 'External Editor'}',
     };
   }
 
@@ -650,7 +669,7 @@ class const _PrimaryActionButton({
       _SourceControlMenuAction.stash => AleraIcons.gitStash,
       _SourceControlMenuAction.stashPop => AleraIcons.gitStashPop,
       _SourceControlMenuAction.refresh => AleraIcons.gitRefresh,
-      _SourceControlMenuAction.openChangesInZed => AleraIcons.external,
+      _SourceControlMenuAction.openChangesExternally => AleraIcons.external,
     };
   }
 }

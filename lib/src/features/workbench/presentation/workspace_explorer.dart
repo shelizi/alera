@@ -10,8 +10,11 @@ import 'package:alera/src/design_system/icons/alera_file_icon.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:alera/src/design_system/layout/alera_confirm_dialog.dart';
 import 'package:alera/src/design_system/menus/alera_dropdown_entry.dart';
+import 'package:alera/src/design_system/menus/alera_dropdown_submenu_entry.dart';
 import 'package:alera/src/features/external_editor/application/external_editor_providers.dart';
 import 'package:alera/src/features/external_editor/domain/external_editor_launcher.dart';
+import 'package:alera/src/features/external_editor/domain/external_editor_spec.dart';
+import 'package:alera/src/features/external_editor/presentation/external_editor_menu_entries.dart';
 import 'package:alera/src/features/workbench/application/workspace_explorer_reveal.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_service.dart';
 import 'package:alera/src/features/workbench/application/workspace_folder_opener.dart';
@@ -84,6 +87,7 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
   bool _suppressNextBackgroundMenu = false;
   String? _lastOpenedFilePath;
   DateTime? _lastOpenedFileAt;
+  ExternalEditorKind? _pickedExternalEditorKind;
 
   @override
   void initState() {
@@ -128,6 +132,10 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
   @override
   Widget build(BuildContext context) {
     _listenForRevealRequest();
+    final resolvedEditor = ref.watch(resolvedExternalEditorProvider).value;
+    final installedEditors =
+        ref.watch(installedExternalEditorsProvider).value ??
+        const <ExternalEditorSpec>[];
     return Column(
       crossAxisAlignment: .stretch,
       children: <Widget>[
@@ -169,6 +177,10 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
                         canOpenInAlera: widget.onOpenFileInAlera != null,
                         canFocusSourceControlFolders:
                             widget.onFocusSourceControlFolder != null,
+                        externalEditor: resolvedEditor,
+                        installedExternalEditors: installedEditors,
+                        onExternalEditorPicked: (kind) =>
+                            _pickedExternalEditorKind = kind,
                         isFocusedSourceControlRoot: (node) {
                           return _entryByNodeId[node.id]?.relativePath ==
                               widget.focusedSourceControlRoot;

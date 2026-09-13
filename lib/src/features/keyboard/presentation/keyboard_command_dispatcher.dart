@@ -47,7 +47,7 @@ class const KeyboardCommandDispatcher({
           showCreateWorkspaceFlow(context, ref, initialProject: project),
         );
       case KeyboardActionId.openWorkspaceInZed:
-        _openWorkspaceInZed();
+        _openWorkspaceExternally();
       case KeyboardActionId.navigateBack:
         unawaited(ref.read(workbenchControllerProvider.notifier).goBack());
       case KeyboardActionId.navigateForward:
@@ -90,17 +90,30 @@ class const KeyboardCommandDispatcher({
     }
   }
 
-  void _openWorkspaceInZed() {
+  void _openWorkspaceExternally() {
     final workspace = ref.read(workbenchControllerProvider).activeWorkspace;
     if (workspace == null) return;
     unawaited(() async {
+      final spec = await ref.read(resolvedExternalEditorProvider.future);
+      if (spec == null) {
+        if (context.mounted) {
+          AleraToast.show(
+            context,
+            message: 'No external editor is installed.',
+            tone: .error,
+          );
+        }
+        return;
+      }
       final result = await ref
-          .read(externalEditorLauncherProvider)
+          .read(externalEditorLauncherForProvider(spec.kind))
           .openWorkspace(workspace.path);
       if (!result.ok && context.mounted) {
         AleraToast.show(
           context,
-          message: result.message ?? 'Could not open workspace in Zed.',
+          message:
+              result.message ??
+              'Could not open workspace in ${spec.displayName}.',
           tone: .error,
         );
       }

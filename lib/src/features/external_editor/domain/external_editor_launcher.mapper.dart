@@ -29,6 +29,8 @@ class ExternalEditorKindMapper extends EnumMapper<ExternalEditorKind> {
     switch (value) {
       case r'zed':
         return ExternalEditorKind.zed;
+      case r'vscode':
+        return ExternalEditorKind.vscode;
       default:
         throw MapperException.unknownEnumValue(value);
     }
@@ -39,6 +41,8 @@ class ExternalEditorKindMapper extends EnumMapper<ExternalEditorKind> {
     switch (self) {
       case ExternalEditorKind.zed:
         return r'zed';
+      case ExternalEditorKind.vscode:
+        return r'vscode';
     }
   }
 }
@@ -71,8 +75,8 @@ class CodeOpenTargetMapper extends EnumMapper<CodeOpenTarget> {
     switch (value) {
       case r'alera':
         return CodeOpenTarget.alera;
-      case r'zed':
-        return CodeOpenTarget.zed;
+      case r'external':
+        return CodeOpenTarget.external;
       default:
         throw MapperException.unknownEnumValue(value);
     }
@@ -83,8 +87,8 @@ class CodeOpenTargetMapper extends EnumMapper<CodeOpenTarget> {
     switch (self) {
       case CodeOpenTarget.alera:
         return r'alera';
-      case CodeOpenTarget.zed:
-        return r'zed';
+      case CodeOpenTarget.external:
+        return r'external';
     }
   }
 }
@@ -93,57 +97,6 @@ extension CodeOpenTargetMapperExtension on CodeOpenTarget {
   String toValue() {
     CodeOpenTargetMapper.ensureInitialized();
     return MapperContainer.globals.toValue<CodeOpenTarget>(this) as String;
-  }
-}
-
-class ExternalEditorExecutableModeMapper
-    extends EnumMapper<ExternalEditorExecutableMode> {
-  ExternalEditorExecutableModeMapper._();
-
-  static ExternalEditorExecutableModeMapper? _instance;
-  static ExternalEditorExecutableModeMapper ensureInitialized() {
-    if (_instance == null) {
-      MapperContainer.globals.use(
-        _instance = ExternalEditorExecutableModeMapper._(),
-      );
-    }
-    return _instance!;
-  }
-
-  static ExternalEditorExecutableMode fromValue(dynamic value) {
-    ensureInitialized();
-    return MapperContainer.globals.fromValue(value);
-  }
-
-  @override
-  ExternalEditorExecutableMode decode(dynamic value) {
-    switch (value) {
-      case r'automatic':
-        return ExternalEditorExecutableMode.automatic;
-      case r'custom':
-        return ExternalEditorExecutableMode.custom;
-      default:
-        throw MapperException.unknownEnumValue(value);
-    }
-  }
-
-  @override
-  dynamic encode(ExternalEditorExecutableMode self) {
-    switch (self) {
-      case ExternalEditorExecutableMode.automatic:
-        return r'automatic';
-      case ExternalEditorExecutableMode.custom:
-        return r'custom';
-    }
-  }
-}
-
-extension ExternalEditorExecutableModeMapperExtension
-    on ExternalEditorExecutableMode {
-  String toValue() {
-    ExternalEditorExecutableModeMapper.ensureInitialized();
-    return MapperContainer.globals.toValue<ExternalEditorExecutableMode>(this)
-        as String;
   }
 }
 

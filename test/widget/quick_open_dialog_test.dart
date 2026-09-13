@@ -48,35 +48,36 @@ void main() {
     expect(controller.openedFiles, <String>['lib/main_test.dart']);
   });
 
-  testWidgets('routes editable files to Zed when it is the default target', (
-    tester,
-  ) async {
-    final workspace = _workspace('workspace-1', 'Main', r'C:\repo\main');
-    final controller = _QuickOpenTestController(_state(workspace));
-    final launcher = _QuickOpenExternalEditorLauncher();
-    final coordinator = WorkspaceFileOpenCoordinator(
-      externalEditorLauncher: launcher,
-      defaultTargetReader: () => CodeOpenTarget.zed,
-    );
-    await _pumpQuickOpen(
-      tester,
-      controller: controller,
-      service: _QuickOpenFileService(entries: <String>['lib/main.dart']),
-      coordinator: coordinator,
-    );
+  testWidgets(
+    'routes editable files externally when it is the default target',
+    (tester) async {
+      final workspace = _workspace('workspace-1', 'Main', r'C:\repo\main');
+      final controller = _QuickOpenTestController(_state(workspace));
+      final launcher = _QuickOpenExternalEditorLauncher();
+      final coordinator = WorkspaceFileOpenCoordinator(
+        externalEditorLauncher: launcher,
+        defaultTargetReader: () => CodeOpenTarget.external,
+      );
+      await _pumpQuickOpen(
+        tester,
+        controller: controller,
+        service: _QuickOpenFileService(entries: <String>['lib/main.dart']),
+        coordinator: coordinator,
+      );
 
-    await tester.tap(find.text('Open Quick Open'));
-    await tester.pumpAndSettle();
-    await tester.sendKeyEvent(.enter);
-    await tester.pumpAndSettle();
+      await tester.tap(find.text('Open Quick Open'));
+      await tester.pumpAndSettle();
+      await tester.sendKeyEvent(.enter);
+      await tester.pumpAndSettle();
 
-    expect(controller.openedFiles, isEmpty);
-    expect(launcher.fileRequests, hasLength(1));
-    expect(
-      launcher.fileRequests.single.filePath,
-      r'C:\repo\main\lib\main.dart',
-    );
-  });
+      expect(controller.openedFiles, isEmpty);
+      expect(launcher.fileRequests, hasLength(1));
+      expect(
+        launcher.fileRequests.single.filePath,
+        r'C:\repo\main\lib\main.dart',
+      );
+    },
+  );
 
   testWidgets('ignores stale searches', (tester) async {
     final workspace = _workspace('workspace-1', 'Main', '/repo/main');
@@ -421,6 +422,9 @@ class _QuickOpenExternalEditorLauncher implements ExternalEditorLauncher {
   @override
   Future<ExternalEditorAvailability> checkAvailability() async =>
       const ExternalEditorAvailability(available: true);
+
+  @override
+  Future<bool> isInstalled() async => true;
 
   @override
   Future<ExternalEditorLaunchResult> openFile(

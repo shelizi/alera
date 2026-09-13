@@ -180,7 +180,7 @@ class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody> {
                               );
                             },
                             onOpenFileInAlera:
-                                defaultCodeOpenTarget == CodeOpenTarget.zed
+                                defaultCodeOpenTarget == CodeOpenTarget.external
                                 ? (relativePath) {
                                     unawaited(
                                       _openWorkspaceFile(

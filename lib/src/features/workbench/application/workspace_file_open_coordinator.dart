@@ -10,7 +10,7 @@ typedef WorkspaceFileInternalOpener<T> = Future<T> Function({
   required bool preview,
 });
 
-enum WorkspaceFileOpenDestination { alera, zed }
+enum WorkspaceFileOpenDestination { alera, external }
 
 enum WorkspaceFileOpenStatus { opened, fellBack, failed }
 
@@ -75,7 +75,7 @@ class WorkspaceFileOpenCoordinator {
       _implicitFailureNotified = false;
       return WorkspaceFileOpenResult<T>(
         status: WorkspaceFileOpenStatus.opened,
-        destination: WorkspaceFileOpenDestination.zed,
+        destination: WorkspaceFileOpenDestination.external,
       );
     }
     if (explicitTarget != null) {
@@ -85,7 +85,8 @@ class WorkspaceFileOpenCoordinator {
       );
     }
 
-    final message = result.message ?? 'Could not open file in Zed.';
+    final message =
+        result.message ?? 'Could not open file in the external editor.';
     if (!_implicitFailureNotified) {
       _implicitFailureNotified = true;
       _implicitFailureNotice?.call('$message Opened in Alera instead.');

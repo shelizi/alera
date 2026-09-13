@@ -48,7 +48,7 @@ void main() {
       );
 
       await controller.updateEditor(
-        (editor) => editor.copyWith(codeOpenTarget: CodeOpenTarget.zed),
+        (editor) => editor.copyWith(codeOpenTarget: CodeOpenTarget.external),
       );
       final targetChangedCoordinator = container.read(
         workspaceFileOpenCoordinatorProvider,
@@ -65,8 +65,9 @@ void main() {
 
       await controller.updateEditor(
         (editor) => editor.copyWith(
-          zedExecutableMode: ExternalEditorExecutableMode.custom,
-          zedExecutablePath: r'C:\Tools\zed.exe',
+          externalEditorExecutablePaths: <String, String>{
+            'zed': r'C:\Tools\zed.exe',
+          },
         ),
       );
 

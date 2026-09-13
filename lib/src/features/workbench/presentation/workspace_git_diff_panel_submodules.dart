@@ -7,7 +7,9 @@ class const _SubmoduleChanges({
   required final bool busy,
   required final OpenGitDiffTabCallback onOpenGitDiff,
   final ValueChanged<String>? onOpenFile,
-  final ValueChanged<String>? onOpenInZed,
+  final void Function(String path, ExternalEditorKind kind)? onOpenExternally,
+  required final ExternalEditorSpec? externalEditor,
+  required final List<ExternalEditorSpec> installedExternalEditors,
   required final ValueChanged<String> onRevealInExplorer,
 }) extends ConsumerWidget {
   @override
@@ -52,9 +54,11 @@ class const _SubmoduleChanges({
                 onOpenFile: onOpenFile == null
                     ? null
                     : () => onOpenFile!(child.path),
-                onOpenInZed: onOpenInZed == null
+                onOpenExternally: onOpenExternally == null
                     ? null
-                    : () => onOpenInZed!(child.path),
+                    : (kind) => onOpenExternally!(child.path, kind),
+                externalEditor: externalEditor,
+                installedExternalEditors: installedExternalEditors,
                 onRevealInExplorer: () => onRevealInExplorer(child.path),
                 onStage: (_) {},
                 onUnstage: (_) {},

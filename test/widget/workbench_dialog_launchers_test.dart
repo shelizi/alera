@@ -272,7 +272,7 @@ void main() {
     );
 
     testWidgets(
-      'showCreateWorkspaceFlow auto-opens the created workspace in Zed once when enabled',
+      'showCreateWorkspaceFlow auto-opens the created workspace externally once when enabled',
       (tester) async {
         final project = buildProject('project-1', 'Alera');
         final controller = DialogLaunchersTestController(
@@ -280,7 +280,7 @@ void main() {
         )..sourceBranches = <String>['main'];
         final launcher = RecordingExternalEditorLauncher();
         final settings = AleraSettings.defaults.copyWith(
-          editor: const EditorSettings(autoOpenNewWorkspacesInZed: true),
+          editor: const EditorSettings(autoOpenNewWorkspacesExternally: true),
         );
 
         await pumpFlowHarness(
@@ -298,7 +298,7 @@ void main() {
         await tester.pumpAndSettle();
         await tester.enterText(
           find.widgetWithText(TextField, 'New Branch Name *'),
-          'feature/zed-auto-open',
+          'feature/external-auto-open',
         );
         await tester.pumpAndSettle();
         await tester.tap(find.text('Create Workspace'));

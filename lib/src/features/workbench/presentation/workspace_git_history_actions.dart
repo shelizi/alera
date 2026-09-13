@@ -6,6 +6,7 @@ import 'workspace_git_history_commit_menus.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:alera/src/design_system/layout/alera_confirm_dialog.dart';
 import 'package:alera/src/design_system/menus/alera_dropdown_entry.dart';
+import 'package:alera/src/design_system/menus/alera_dropdown_submenu_entry.dart';
 import 'package:alera/src/shared/infra/git/git_commit_ops_models.dart';
 import 'package:alera/src/shared/infra/git/git_diff_models.dart';
 import 'package:flutter/material.dart';
@@ -126,23 +127,33 @@ Future<GitHistoryCommitMenuAction?> showGitHistoryCommitMenu(
         leading: const Icon(AleraIcons.gitFork, size: 16),
       ),
       const PopupMenuDivider(),
-      const AleraDropdownEntry<GitHistoryCommitMenuAction>(
-        value: .resetSoft,
-        label: 'Reset Current Branch Here (Soft)',
+      const AleraDropdownSubmenuEntry<
+        GitHistoryCommitMenuAction,
+        GitHistoryCommitMenuAction
+      >(
+        primaryValue: .resetMixed,
+        label: 'Reset Current Branch Here',
         localizeLabel: false,
         leading: Icon(AleraIcons.restart, size: 16),
-      ),
-      const AleraDropdownEntry<GitHistoryCommitMenuAction>(
-        value: .resetMixed,
-        label: 'Reset Current Branch Here (Mixed)',
-        localizeLabel: false,
-        leading: Icon(AleraIcons.restart, size: 16),
-      ),
-      const AleraDropdownEntry<GitHistoryCommitMenuAction>(
-        value: .resetHard,
-        label: 'Reset Current Branch Here (Hard)',
-        localizeLabel: false,
-        leading: Icon(AleraIcons.restart, size: 16),
+        childResult: _resetModeResult,
+        children: <PopupMenuEntry<GitHistoryCommitMenuAction>>[
+          AleraDropdownEntry<GitHistoryCommitMenuAction>(
+            value: .resetSoft,
+            label: 'Soft',
+            localizeLabel: false,
+          ),
+          AleraDropdownEntry<GitHistoryCommitMenuAction>(
+            value: .resetMixed,
+            label: 'Mixed',
+            localizeLabel: false,
+            selected: true,
+          ),
+          AleraDropdownEntry<GitHistoryCommitMenuAction>(
+            value: .resetHard,
+            label: 'Hard',
+            localizeLabel: false,
+          ),
+        ],
       ),
       const AleraDropdownEntry<GitHistoryCommitMenuAction>(
         value: .createArchive,
@@ -153,6 +164,9 @@ Future<GitHistoryCommitMenuAction?> showGitHistoryCommitMenu(
     ],
   );
 }
+
+GitHistoryCommitMenuAction _resetModeResult(GitHistoryCommitMenuAction value) =>
+    value;
 
 /// Asks the user to confirm detaching HEAD at [item]. The copy calls out the
 /// detached state because commits made there do not move any branch.

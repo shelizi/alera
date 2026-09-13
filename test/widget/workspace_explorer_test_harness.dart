@@ -82,10 +82,26 @@ Widget _withWorkspaceFiles(
       gitBackendProvider.overrideWithValue(gitBackend ?? FakeGitBackend()),
       if (folderOpener != null)
         workspaceFolderOpenerProvider.overrideWithValue(folderOpener),
-      if (externalEditorLauncher != null)
+      installedExternalEditorsProvider.overrideWith(
+        (ref) async => externalEditorLauncher == null
+            ? const <ExternalEditorSpec>[]
+            : <ExternalEditorSpec>[
+                externalEditorSpecs[ExternalEditorKind.zed]!,
+              ],
+      ),
+      resolvedExternalEditorProvider.overrideWith(
+        (ref) async => externalEditorLauncher == null
+            ? null
+            : externalEditorSpecs[ExternalEditorKind.zed],
+      ),
+      if (externalEditorLauncher != null) ...[
         externalEditorLauncherProvider.overrideWithValue(
           externalEditorLauncher,
         ),
+        externalEditorLauncherForProvider.overrideWith(
+          (ref, kind) => externalEditorLauncher,
+        ),
+      ],
       if (registry != null)
         editorSessionRegistryProvider.overrideWithValue(registry),
     ],
@@ -148,6 +164,9 @@ class _FakeExternalEditorLauncher implements ExternalEditorLauncher {
   @override
   Future<ExternalEditorAvailability> checkAvailability() async =>
       const ExternalEditorAvailability(available: true);
+
+  @override
+  Future<bool> isInstalled() async => true;
 
   @override
   Future<ExternalEditorLaunchResult> openFile(

@@ -4,6 +4,7 @@ import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:alera/src/features/external_editor/application/external_editor_providers.dart';
 import 'package:alera/src/features/external_editor/domain/external_editor_launch_result.dart';
 import 'package:alera/src/features/external_editor/domain/external_editor_launcher.dart';
+import 'package:alera/src/features/external_editor/domain/external_editor_spec.dart';
 import 'package:alera/src/features/projects/application/project_providers.dart';
 import 'package:alera/src/features/workbench/application/workbench_providers.dart';
 import 'package:alera/src/features/workbench/application/workspace_explorer_reveal.dart';

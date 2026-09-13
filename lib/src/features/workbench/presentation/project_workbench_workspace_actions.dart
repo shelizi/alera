@@ -8,7 +8,7 @@ part of 'project_workbench_sidebar.dart';
 const String _renameAction = 'rename';
 const String _openProjectSettingsAction = 'open-project-settings';
 const String _openFolderAction = 'open-folder';
-const String _openInZedAction = 'open-in-zed';
+const String _openExternalEditorAction = 'open-external-editor';
 const String _copyPathAction = 'copy-path';
 const String _openInBrowserAction = 'open-in-browser';
 const String _sleepAction = 'sleep';
@@ -38,6 +38,10 @@ List<PopupMenuEntry<String>> workspaceContextMenuEntries({
   required bool isPinned,
   required bool isArchived,
   bool hasDescendants = false,
+  ExternalEditorSpec? externalEditor,
+  List<ExternalEditorSpec> installedExternalEditors =
+      const <ExternalEditorSpec>[],
+  ValueChanged<ExternalEditorKind>? onExternalEditorPicked,
 }) {
   return <PopupMenuEntry<String>>[
     const AleraDropdownEntry<String>(
@@ -109,11 +113,18 @@ List<PopupMenuEntry<String>> workspaceContextMenuEntries({
       ),
       label: 'Open in $fileManagerLabel',
     ),
-    const AleraDropdownEntry<String>(
-      value: _openInZedAction,
-      leading: Icon(AleraIcons.external, size: 16),
-      label: 'Open in Zed',
-    ),
+    if (externalEditor case final editor?)
+      AleraDropdownSubmenuEntry<String, ExternalEditorKind>(
+        primaryValue: _openExternalEditorAction,
+        leading: const Icon(AleraIcons.external, size: 16),
+        label: 'Open in ${editor.shortName}',
+        childResult: (_) => _openExternalEditorAction,
+        onChildResult: onExternalEditorPicked,
+        children: externalEditorMenuChildren(
+          resolved: editor,
+          installed: installedExternalEditors,
+        ),
+      ),
     const AleraDropdownEntry<String>(
       value: _openProjectSettingsAction,
       leading: Icon(AleraIcons.settings, size: 16),
@@ -172,14 +183,19 @@ List<PopupMenuEntry<String>> workspaceContextMenuEntries({
 /// the sidebar state so they share its [ref], [context], and [mounted] guard
 /// without carrying a [BuildContext] across async gaps.
 mixin _WorkspaceSidebarActions on ConsumerState<ProjectWorkbenchSidebar> {
-  Future<void> openWorkspaceInZed(Workspace workspace) async {
+  Future<void> openWorkspaceExternally(
+    Workspace workspace,
+    ExternalEditorKind kind,
+  ) async {
     final result = await ref
-        .read(externalEditorLauncherProvider)
+        .read(externalEditorLauncherForProvider(kind))
         .openWorkspace(workspace.path);
     if (!result.ok && mounted) {
       AleraToast.show(
         context,
-        message: result.message ?? 'Could not open workspace in Zed.',
+        message:
+            result.message ??
+            'Could not open workspace in ${externalEditorSpecs[kind]?.displayName ?? 'the external editor'}.',
         tone: .error,
       );
     }

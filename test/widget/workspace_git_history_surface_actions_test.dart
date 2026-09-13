@@ -1,8 +1,10 @@
 import 'package:alera/src/design_system/feedback/alera_toast.dart';
+import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:alera/src/shared/infra/git/git_commit_ops_models.dart';
 import 'package:alera/src/shared/infra/git/git_diff_models.dart';
 import 'package:alera/src/shared/infra/git/git_exception.dart';
 import 'package:flutter/gestures.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'workspace_git_history_surface_test_harness.dart';
@@ -176,9 +178,15 @@ void main() {
 
     await tester.tap(find.text('Only Commit'), buttons: kSecondaryMouseButton);
     await tester.pumpAndSettle();
-    final resetHard = find.text('Reset Current Branch Here (Hard)');
-    await tester.ensureVisible(resetHard);
-    await tester.tap(resetHard);
+    final resetEntry = find.text('Reset Current Branch Here');
+    await tester.ensureVisible(resetEntry);
+    await tester.tap(
+      find.byWidgetPredicate(
+        (widget) => widget is Icon && widget.icon == AleraIcons.chevronRight,
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Hard'));
     await tester.pumpAndSettle();
 
     expect(find.text('Reset Current Branch?'), findsOneWidget);

@@ -332,10 +332,26 @@ Future<_DispatcherPumpHarness> _pumpDispatcherHarness(
       agentProfilesProvider.overrideWith(() => _DispatcherAgentProfiles()),
       terminalRuntimeProvider.overrideWith((ref) => runtime),
       terminalRuntimeBindingOverride(),
-      if (externalEditorLauncher != null)
+      installedExternalEditorsProvider.overrideWith(
+        (ref) async => externalEditorLauncher == null
+            ? const <ExternalEditorSpec>[]
+            : <ExternalEditorSpec>[
+                externalEditorSpecs[ExternalEditorKind.zed]!,
+              ],
+      ),
+      resolvedExternalEditorProvider.overrideWith(
+        (ref) async => externalEditorLauncher == null
+            ? null
+            : externalEditorSpecs[ExternalEditorKind.zed],
+      ),
+      if (externalEditorLauncher != null) ...[
         externalEditorLauncherProvider.overrideWithValue(
           externalEditorLauncher,
         ),
+        externalEditorLauncherForProvider.overrideWith(
+          (ref, kind) => externalEditorLauncher,
+        ),
+      ],
       settingsControllerProvider.overrideWith(
         () => _DispatcherSettingsController(
           AleraSettings.defaults.copyWith(
@@ -381,6 +397,9 @@ class _DispatcherExternalEditorLauncher implements ExternalEditorLauncher {
   @override
   Future<ExternalEditorAvailability> checkAvailability() async =>
       const ExternalEditorAvailability(available: true);
+
+  @override
+  Future<bool> isInstalled() async => true;
 
   @override
   Future<ExternalEditorLaunchResult> openFile(

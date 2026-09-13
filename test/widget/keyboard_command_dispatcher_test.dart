@@ -6,6 +6,7 @@ import 'package:alera/src/features/agent_profiles/domain/agent_profile.dart';
 import 'package:alera/src/features/external_editor/application/external_editor_providers.dart';
 import 'package:alera/src/features/external_editor/domain/external_editor_launch_result.dart';
 import 'package:alera/src/features/external_editor/domain/external_editor_launcher.dart';
+import 'package:alera/src/features/external_editor/domain/external_editor_spec.dart';
 import 'package:alera/src/features/keyboard/presentation/keyboard_command_dispatcher.dart';
 import 'package:alera/src/features/keyboard/presentation/keyboard_command_palette_dialog.dart';
 import 'package:alera/src/features/projects/domain/project.dart';

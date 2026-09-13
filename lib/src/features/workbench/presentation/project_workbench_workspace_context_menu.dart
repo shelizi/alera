@@ -7,6 +7,7 @@ extension _WorkspaceContextMenu on _WorkspaceRowState {
   ) async {
     final overlay =
         Navigator.of(context).overlay!.context.findRenderObject()! as RenderBox;
+    ExternalEditorKind? pickedKind;
     final selected = await showMenu<String>(
       context: context,
       position: RelativeRect.fromRect(
@@ -22,6 +23,9 @@ extension _WorkspaceContextMenu on _WorkspaceRowState {
         isPinned: widget.workspace.isPinned,
         isArchived: widget.workspace.isArchived,
         hasDescendants: widget.onPinWorkspaceTree != null,
+        externalEditor: widget.externalEditor,
+        installedExternalEditors: widget.installedExternalEditors,
+        onExternalEditorPicked: (kind) => pickedKind = kind,
       ),
     );
 
@@ -47,8 +51,11 @@ extension _WorkspaceContextMenu on _WorkspaceRowState {
       widget.onClearParent?.call();
     } else if (selected == _openFolderAction) {
       widget.onOpenFolder();
-    } else if (selected == _openInZedAction) {
-      widget.onOpenInZed();
+    } else if (selected == _openExternalEditorAction) {
+      final kind = pickedKind ?? widget.externalEditor?.kind;
+      if (kind != null) {
+        widget.onOpenExternally(kind);
+      }
     } else if (selected == _copyPathAction) {
       widget.onCopyPath();
     } else if (selected == _openInBrowserAction) {
