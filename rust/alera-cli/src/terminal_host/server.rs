@@ -1,12 +1,15 @@
 use std::collections::{HashMap, HashSet};
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
-use std::sync::{atomic::AtomicU64, Arc};
+use std::sync::{
+    atomic::{AtomicBool, AtomicU64, Ordering},
+    Arc,
+};
 use std::time::{Duration, Instant};
 
 use alera_core::runtime::{
     prepare_private_runtime_directory, MobileAccessSettings, RuntimeStore, SshAuthKind,
-    SshBootstrapStatus, SshTarget,
+    SshBootstrapStatus, SshTarget, SshTargetBootstrapStateUpdate,
 };
 use anyhow::Result;
 use serde_json::{json, Value};
@@ -257,7 +260,17 @@ struct SshBootstrapJobState {
     job_id: String,
     target_id: String,
     status: SshBootstrapStatus,
-    handle: JoinHandle<()>,
+    cancel: Arc<AtomicBool>,
+    cancel_notify: Arc<Notify>,
+}
+
+async fn wait_for_ssh_bootstrap_cancellation(cancel: Arc<AtomicBool>, cancel_notify: Arc<Notify>) {
+    loop {
+        if cancel.load(Ordering::Acquire) {
+            return;
+        }
+        cancel_notify.notified().await;
+    }
 }
 
 pub use server_runner::{run_terminal_host_server, TerminalHostExit};
@@ -976,6 +989,7 @@ impl ServerActor {
 
     async fn start_ssh_bootstrap_job(
         &mut self,
+        client_id: u64,
         request: SshTargetBootstrapRequest,
     ) -> HostResult<Value> {
         if let Some(existing) = self.ssh_bootstrap_jobs.get(&request.target_id) {
@@ -1020,30 +1034,96 @@ impl ServerActor {
         let inbox = self.inbox.clone();
         let task_job_id = job_id.clone();
         let task_target_id = target_id.clone();
-        let handle = tokio::spawn(async move {
-            let result =
-                run_ssh_bootstrap(store, cache_dir, request, task_job_id.clone(), |progress| {
-                    let _ = inbox.send(ServerCommand::SshBootstrapProgress { progress });
-                })
-                .await;
-            let status = if result.is_ok() {
-                SshBootstrapStatus::Installed
-            } else {
-                SshBootstrapStatus::Failed
-            };
-            let _ = inbox.send(ServerCommand::SshBootstrapFinished {
-                target_id: task_target_id,
-                job_id: task_job_id,
-                status,
-            });
-        });
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel_notify = Arc::new(Notify::new());
+        let task_cancel = Arc::clone(&cancel);
+        let task_cancel_notify = Arc::clone(&cancel_notify);
+        let progress_cancel = Arc::clone(&cancel);
+        let progress_inbox = inbox.clone();
         let job = SshBootstrapJobState {
             job_id: job_id.clone(),
             target_id: target_id.clone(),
             status: SshBootstrapStatus::Installing,
-            handle,
+            cancel,
+            cancel_notify,
         };
         self.ssh_bootstrap_jobs.insert(target_id.clone(), job);
+        if let Err(error) = self.deferred_admission.schedule(
+            deferred_admission::DeferredRequestClass::Bulk,
+            "sshTarget.bootstrap",
+            Some(client_id),
+            async move {
+                if task_cancel.load(Ordering::Acquire) {
+                    return;
+                }
+                // Dropping this future is the cancellation path owned by DeferredAdmission;
+                // the SSH/SFTP child processes use kill_on_drop.
+                let result = tokio::select! {
+                    result = run_ssh_bootstrap(
+                        store,
+                        cache_dir,
+                        request,
+                        task_job_id.clone(),
+                        move |progress| {
+                            if !progress_cancel.load(Ordering::Acquire) {
+                                let _ = progress_inbox.send(ServerCommand::SshBootstrapProgress { progress });
+                            }
+                        },
+                    ) => result,
+                    _ = wait_for_ssh_bootstrap_cancellation(
+                        Arc::clone(&task_cancel),
+                        Arc::clone(&task_cancel_notify),
+                    ) => return,
+                };
+                if task_cancel.load(Ordering::Acquire) {
+                    return;
+                }
+                let status = if result.is_ok() {
+                    SshBootstrapStatus::Installed
+                } else {
+                    SshBootstrapStatus::Failed
+                };
+                if task_cancel.load(Ordering::Acquire) {
+                    return;
+                }
+                let _ = inbox.send(ServerCommand::SshBootstrapFinished {
+                    target_id: task_target_id,
+                    job_id: task_job_id,
+                    status,
+                });
+            },
+        ) {
+            self.ssh_bootstrap_jobs.remove(&target_id);
+            let error_message = error.wire_message();
+            let _ = self
+                .runtime_store
+                .update_ssh_target_bootstrap_state(
+                    &target_id,
+                    SshTargetBootstrapStateUpdate {
+                        status: SshBootstrapStatus::Failed,
+                        install_dir: None,
+                        runtime_version: None,
+                        runtime_platform: None,
+                        runtime_arch: None,
+                        last_error: Some(&error_message),
+                    },
+                )
+                .await;
+            self.broadcast_authenticated(event(
+                "sshTargetBootstrapProgress",
+                json!(SshTargetBootstrapProgress {
+                    job_id: job_id.clone(),
+                    target_id: target_id.clone(),
+                    status: SshBootstrapStatus::Failed,
+                    stage: "failed".to_string(),
+                    message: "Remote Runtime Install Failed".to_string(),
+                    error: Some(error_message),
+                }),
+            ));
+            self.broadcast_authenticated(event("sshTargetsChanged", json!({})));
+            self.schedule_shutdown_if_idle();
+            return Err(error);
+        }
         self.cancel_shutdown_timer();
         Ok(json!(SshTargetBootstrapJob {
             job_id,
@@ -1098,7 +1178,8 @@ impl ServerActor {
         let Some(job) = self.ssh_bootstrap_jobs.remove(target_id) else {
             return Ok(None);
         };
-        job.handle.abort();
+        job.cancel.store(true, Ordering::Release);
+        job.cancel_notify.notify_one();
         self.mark_ssh_bootstrap_cancelled(target_id, job.job_id, message)
             .await
             .map(Some)
@@ -1241,7 +1322,8 @@ mod tests {
                     job_id: "active-job".to_string(),
                     target_id: "remote".to_string(),
                     status: SshBootstrapStatus::Installing,
-                    handle: tokio::spawn(async {}),
+                    cancel: Arc::new(AtomicBool::new(false)),
+                    cancel_notify: Arc::new(Notify::new()),
                 },
             )]),
             project_clone_jobs: HashMap::new(),
@@ -1289,6 +1371,87 @@ mod tests {
             actor.ssh_bootstrap_jobs["remote"].status,
             SshBootstrapStatus::Installing
         );
+    }
+
+    #[tokio::test]
+    async fn saturated_admission_rejects_ssh_bootstrap_without_job_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut actor = actor_test_harness::test_actor(&dir, HashMap::new(), HashMap::new()).await;
+        actor
+            .ssh_target_upsert(&json!({
+                "id": "remote-saturated",
+                "alias": "Saturated Remote",
+                "host": "example.invalid",
+                "port": 22,
+                "username": "tester",
+                "platform": "linux",
+                "arch": "x64",
+                "authKind": "agent",
+                "createdAt": "2026-01-01T00:00:00Z",
+                "updatedAt": "2026-01-01T00:00:00Z",
+                "lastStatus": null,
+                "installDir": null,
+                "runtimeVersion": null,
+                "runtimePlatform": null,
+                "runtimeArch": null,
+                "bootstrapStatus": "notInstalled",
+                "lastBootstrapAt": null,
+                "lastCheckedAt": null,
+                "lastError": null,
+            }))
+            .await
+            .unwrap();
+        actor.deferred_admission = Arc::new(
+            deferred_admission::DeferredAdmission::paused_with_limits(1, 2, 0),
+        );
+        actor.deferred_admission.add_test_permits(1);
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+        actor
+            .deferred_admission
+            .schedule(
+                deferred_admission::DeferredRequestClass::Bulk,
+                "test.fill",
+                Some(1),
+                async move {
+                    let _ = release_rx.await;
+                },
+            )
+            .unwrap();
+        actor
+            .deferred_admission
+            .schedule(
+                deferred_admission::DeferredRequestClass::Bulk,
+                "test.queued",
+                Some(1),
+                async {},
+            )
+            .unwrap();
+
+        let request = serde_json::from_value(json!({
+            "targetId": "remote-saturated",
+        }))
+        .unwrap();
+        let error = actor
+            .start_ssh_bootstrap_job(1, request)
+            .await
+            .expect_err("a saturated admission budget must reject SSH bootstrap");
+        let HostError::Conflict { code, details, .. } = error else {
+            panic!("expected a typed backpressure conflict");
+        };
+        assert_eq!(code, deferred_admission::DEFERRED_REQUEST_BACKPRESSURE_CODE);
+        assert_eq!(details["requestType"], "sshTarget.bootstrap");
+        assert_eq!(details["requestClass"], "bulk");
+        assert!(actor.ssh_bootstrap_jobs.is_empty());
+        let target = actor
+            .runtime_store
+            .find_ssh_target("remote-saturated")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(target.bootstrap_status, SshBootstrapStatus::Failed);
+        assert!(actor.shutdown_gen > 0);
+
+        release_tx.send(()).unwrap();
     }
 
     #[tokio::test]
