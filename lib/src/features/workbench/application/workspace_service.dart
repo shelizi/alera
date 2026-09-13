@@ -192,6 +192,13 @@ class WorkspaceService._(
         continue;
       }
       if (_canonicalPath(workspace.path) == projectPath) {
+        // A same-path record is the same checkout; move its tabs to the
+        // surviving workspace instead of cascade-deleting them.
+        for (final tab in await _repository.listWorkspaceTabs(workspace.id)) {
+          await _repository.upsertWorkspaceTab(
+            tab.copyWith(workspaceId: next.id, updatedAt: now),
+          );
+        }
         await _repository.removeWorkspace(workspace.id, cascadeTabs: true);
         continue;
       }
@@ -361,10 +368,25 @@ class WorkspaceService._(
   /// compare consistently. Falls back to canonical string normalization when
   /// the path no longer exists.
   String _canonicalPath(String path) {
+    String resolved;
     try {
-      return p.canonicalize(Directory(path).resolveSymbolicLinksSync());
+      resolved = Directory(path).resolveSymbolicLinksSync();
     } catch (_) {
-      return p.canonicalize(path);
+      resolved = path;
     }
+    var canonical = p.canonicalize(resolved);
+    if (Platform.isWindows) {
+      // Stored project paths can carry the verbatim `\\?\` prefix while
+      // libgit2 reports plain `E:\...` workdir paths. Without stripping, the
+      // same directory compares as two distinct paths and reconciliation
+      // adopts the main worktree as a duplicate linked workspace.
+      if (canonical.startsWith(r'\\?\UNC\')) {
+        canonical = '\\${canonical.substring(r'\\?\UNC\'.length)}';
+      } else if (canonical.startsWith(r'\\?\') ||
+          canonical.startsWith(r'\\.\')) {
+        canonical = canonical.substring(4);
+      }
+    }
+    return canonical;
   }
 }

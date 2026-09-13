@@ -330,4 +330,88 @@ void _reconciliationTests() {
       expect(linked.reusesExistingBranch, isTrue);
     },
   );
+
+  test('reconcile does not adopt the main worktree when the project path uses a verbatim prefix', () async {
+    // libgit2 reports plain `E:\...` workdir paths while a stored project
+    // path may carry the verbatim `\\?\` prefix; both must compare equal.
+    final verbatimProject = project.copyWith(
+      repoPath: '\\\\?\\${project.repoPath}',
+    );
+    gitBackend.headBranch = 'main';
+    final mainWorkspace = await service.ensureMainWorkspace(verbatimProject);
+    gitBackend.liveBranchByPath = <String, String>{project.repoPath: 'main'};
+
+    final workspaces = await service.reconcile(verbatimProject);
+
+    expect(workspaces, hasLength(1));
+    expect(workspaces.single.id, mainWorkspace.id);
+    expect(workspaces.single.isMain, isTrue);
+  }, skip: !Platform.isWindows);
+
+  test('reconcile removes a phantom linked record that points at the main checkout via a plain path', () async {
+    final verbatimProject = project.copyWith(
+      repoPath: '\\\\?\\${project.repoPath}',
+    );
+    gitBackend.headBranch = 'main';
+    final mainWorkspace = await service.ensureMainWorkspace(verbatimProject);
+    final phantom = Workspace(
+      id: 'workspace-phantom-main',
+      projectId: verbatimProject.id,
+      name: 'main',
+      branch: 'main',
+      path: project.repoPath,
+      createdAt: .utc(2026, 5, 20),
+      updatedAt: .utc(2026, 5, 20),
+      kind: .linked,
+      status: .active,
+      reusesExistingBranch: true,
+    );
+    await repository.upsertWorkspace(phantom);
+    gitBackend.liveBranchByPath = <String, String>{project.repoPath: 'main'};
+
+    final workspaces = await service.reconcile(verbatimProject);
+
+    expect(workspaces, hasLength(1));
+    expect(workspaces.single.id, mainWorkspace.id);
+  }, skip: !Platform.isWindows);
+
+  test('reconcile moves tabs from a same-path duplicate record onto the main workspace', () async {
+    final verbatimProject = project.copyWith(
+      repoPath: '\\\\?\\${project.repoPath}',
+    );
+    gitBackend.headBranch = 'main';
+    final mainWorkspace = await service.ensureMainWorkspace(verbatimProject);
+    final phantom = Workspace(
+      id: 'workspace-phantom-tabs',
+      projectId: verbatimProject.id,
+      name: 'main',
+      branch: 'main',
+      path: project.repoPath,
+      createdAt: .utc(2026, 5, 20),
+      updatedAt: .utc(2026, 5, 20),
+      kind: .linked,
+      status: .active,
+      reusesExistingBranch: true,
+    );
+    await repository.upsertWorkspace(phantom);
+    await repository.upsertWorkspaceTab(
+      WorkspaceTabRecord(
+        id: 'tab-phantom',
+        workspaceId: phantom.id,
+        title: 'phantom terminal',
+        createdAt: .utc(2026, 5, 20),
+        updatedAt: .utc(2026, 5, 20),
+      ),
+    );
+    gitBackend.liveBranchByPath = <String, String>{project.repoPath: 'main'};
+
+    await service.reconcile(verbatimProject);
+
+    final tabs = await repository.listWorkspaceTabs(mainWorkspace.id);
+    expect(tabs.map((tab) => tab.id), contains('tab-phantom'));
+    expect(
+      repository.workspaces.any((workspace) => workspace.id == phantom.id),
+      isFalse,
+    );
+  }, skip: !Platform.isWindows);
 }
