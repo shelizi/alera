@@ -10,6 +10,8 @@ use super::deferred_admission_metrics::AdmissionMetrics;
 use crate::terminal_host::host_error::{HostError, HostResult};
 
 mod delayed;
+#[cfg(test)]
+mod request_id_test_support;
 
 // Bounds active read-side work without making the actor mailbox wait for capacity.
 pub(super) const DEFERRED_REQUEST_CONCURRENCY: usize = 8;
@@ -45,6 +47,7 @@ const CLASSES: [DeferredRequestClass; 3] = [
 type BoxedTask = Pin<Box<dyn Future<Output = ()> + Send>>;
 
 struct QueuedJob {
+    request_id: Option<i64>,
     request_type: String,
     class: DeferredRequestClass,
     client_id: Option<u64>,
@@ -53,9 +56,11 @@ struct QueuedJob {
 }
 
 struct ActiveJob {
+    request_id: Option<i64>,
     request_type: String,
     class: DeferredRequestClass,
     client_id: Option<u64>,
+    queue_wait_ms: u64,
     disconnected: bool,
 }
 
@@ -185,8 +190,23 @@ impl DeferredAdmission {
     where
         F: Future<Output = ()> + Send + 'static,
     {
+        self.schedule_with_request_id(class, request_type, client_id, None, task)
+    }
+
+    pub(super) fn schedule_with_request_id<F>(
+        self: &Arc<Self>,
+        class: DeferredRequestClass,
+        request_type: impl Into<String>,
+        client_id: Option<u64>,
+        request_id: Option<i64>,
+        task: F,
+    ) -> HostResult<()>
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
         let request_type = request_type.into();
         let job = QueuedJob {
+            request_id,
             request_type,
             class,
             client_id,
@@ -204,10 +224,13 @@ impl DeferredAdmission {
             if over_total || over_reserve {
                 state.metrics.rejected(&job.request_type, class);
                 tracing::debug!(
+                    request_id = ?job.request_id,
+                    client_id = ?job.client_id,
                     request_type = %job.request_type,
                     request_class = class.as_str(),
                     active,
                     pending,
+                    queue_wait_ms = 0_u64,
                     "deferred request rejected"
                 );
                 Err(HostError::conflict(
@@ -227,6 +250,16 @@ impl DeferredAdmission {
                 Ok(())
             } else {
                 state.metrics.queued(&job.request_type, class);
+                tracing::debug!(
+                    request_id = ?job.request_id,
+                    client_id = ?job.client_id,
+                    request_type = %job.request_type,
+                    request_class = class.as_str(),
+                    active,
+                    pending = pending.saturating_add(1),
+                    queue_wait_ms = 0_u64,
+                    "deferred request enqueued"
+                );
                 state.queued[class as usize].push_back(job);
                 Ok(())
             }
@@ -239,13 +272,13 @@ impl DeferredAdmission {
         let mut dropped = Vec::new();
         {
             let mut state = self.inner.lock_state();
-            let mut affected: Vec<(String, DeferredRequestClass, bool)> = Vec::new();
+            let mut affected: Vec<(String, DeferredRequestClass, bool, Option<i64>)> = Vec::new();
             for class in CLASSES {
                 let queue = &mut state.queued[class as usize];
                 let mut kept = VecDeque::with_capacity(queue.len());
                 while let Some(job) = queue.pop_front() {
                     if job.client_id == Some(client_id) {
-                        affected.push((job.request_type.clone(), class, true));
+                        affected.push((job.request_type.clone(), class, true, job.request_id));
                         dropped.push(job);
                     } else {
                         kept.push_back(job);
@@ -256,27 +289,34 @@ impl DeferredAdmission {
             for job in state.active.values_mut() {
                 if job.client_id == Some(client_id) && !job.disconnected {
                     job.disconnected = true;
-                    affected.push((job.request_type.clone(), job.class, false));
+                    affected.push((job.request_type.clone(), job.class, false, job.request_id));
                 }
             }
             for job in state.delayed.values_mut() {
                 if job.client_id == Some(client_id) && !job.disconnected {
                     job.disconnected = true;
                     tracing::debug!(
-                        client_id,
+                        request_id = ?job.request_id,
+                        client_id = ?job.client_id,
                         request_type = %job.request_type,
                         request_class = job.class.as_str(),
+                        queue_wait_ms = 0_u64,
                         "deferred timer owner disconnected; timer remains armed"
                     );
                 }
             }
-            for (request_type, class, was_pending) in affected {
+            let request_ids = affected
+                .iter()
+                .map(|(_, _, _, request_id)| *request_id)
+                .collect::<Vec<_>>();
+            for (request_type, class, was_pending, _) in affected {
                 state
                     .metrics
                     .disconnected(&request_type, class, was_pending);
             }
             tracing::debug!(
                 client_id,
+                request_ids = ?request_ids,
                 dropped = dropped.len(),
                 "deferred client disconnect sweep"
             );
@@ -339,17 +379,22 @@ impl AdmissionInner {
         state.active.insert(
             job_id,
             ActiveJob {
+                request_id: job.request_id,
                 request_type: job.request_type.clone(),
                 class: job.class,
                 client_id: job.client_id,
+                queue_wait_ms,
                 disconnected: false,
             },
         );
         tracing::debug!(
+            request_id = ?job.request_id,
+            client_id = ?job.client_id,
             request_type = %job.request_type,
             request_class = job.class.as_str(),
             active = state.active.len(),
             pending = state.pending_count(),
+            queued = was_queued,
             queue_wait_ms,
             "deferred request started"
         );
@@ -397,10 +442,13 @@ impl AdmissionInner {
                     state.test_permits = state.test_permits.saturating_add(1);
                 }
                 tracing::debug!(
+                    request_id = ?job.request_id,
+                    client_id = ?job.client_id,
                     request_type = %job.request_type,
                     request_class = job.class.as_str(),
                     active = state.active.len(),
                     pending = state.pending_count(),
+                    queue_wait_ms = job.queue_wait_ms,
                     "deferred request finished"
                 );
             }
@@ -408,7 +456,6 @@ impl AdmissionInner {
         }
         self.spawn_all(to_start);
     }
-
 }
 
 fn queue_wait_ms(queued_at: Instant) -> u64 {
