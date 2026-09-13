@@ -80,6 +80,12 @@ fn serves_http_hook_routes() {
     let not_found = post_raw(endpoint.port, "/hook/unknown", "test-token", "{}");
     assert!(not_found.starts_with("HTTP/1.1 404"));
 
+    let alias_not_found = post_raw(endpoint.port, "/hook/antigravity", "test-token", "{}");
+    assert!(alias_not_found.starts_with("HTTP/1.1 404"));
+
+    let disabled = post_raw(endpoint.port, "/hook/claude", "test-token", "{}");
+    assert!(disabled.starts_with("HTTP/1.1 204"));
+
     let accepted = post_raw(
         endpoint.port,
         "/hook/codex",

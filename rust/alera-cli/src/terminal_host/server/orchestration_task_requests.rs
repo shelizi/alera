@@ -1,3 +1,4 @@
+use alera_core::agent_descriptor::agent_descriptor;
 use alera_core::runtime::{
     NewOrchestrationMessage, NewOrchestrationTask, OrchestrationCoordinatorStatus,
     OrchestrationMessagePriority, OrchestrationMessageType, OrchestrationTaskStatus,
@@ -5,7 +6,6 @@ use alera_core::runtime::{
 use serde_json::{json, Value};
 
 use crate::terminal_host::host_error::{HostError, HostResult};
-use crate::terminal_host::orchestration::agent_registry::adapter_for;
 
 use super::orchestration_validation::{
     optional_string, require_string, state_error, validate_result_schema_definition,
@@ -222,9 +222,9 @@ impl ServerActor {
                 if self.agent_presence.is_injection_ready(&assignee) {
                     self.deliver_pending_messages(&assignee).await;
                 } else if let Some(agent_type) = self.agent_presence.agent_type(&assignee) {
-                    if let Some(adapter) = adapter_for(agent_type) {
+                    if let Some(descriptor) = agent_descriptor(agent_type) {
                         let _ =
-                            self.queue_orchestration_control(&assignee, adapter.interrupt_bytes);
+                            self.queue_orchestration_control(&assignee, descriptor.interrupt_bytes);
                     }
                 }
                 return Ok(json!({ "task": task, "cancellationMessage": message }));

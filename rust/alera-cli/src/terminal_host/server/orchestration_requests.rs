@@ -1,8 +1,8 @@
+use alera_core::agent_descriptor::agent_descriptor;
 use serde_json::{json, Value};
 
 use crate::terminal_host::host_error::{HostError, HostResult};
 use crate::terminal_host::orchestration::agent_presence::{AgentPresence, AgentPresenceState};
-use crate::terminal_host::orchestration::agent_registry::adapter_for;
 use crate::terminal_host::orchestration::group_resolution::GroupResolutionTerminal;
 
 use super::dispatch_context_install::{DispatchContextContinuation, DispatchInstallOrigin};
@@ -258,8 +258,8 @@ impl ServerActor {
             "forceSubmit": pending
                 .get("agent")
                 .and_then(Value::as_str)
-                .and_then(adapter_for)
-                .is_some_and(|adapter| adapter.force_submit),
+                .and_then(agent_descriptor)
+                .is_some_and(|descriptor| descriptor.force_submit),
             "agentProfile": pending.get("profile").cloned(),
             "agentQuotaGroup": pending.get("quotaGroup").cloned(),
             "completionPolicy": "return-immediately",

@@ -1,7 +1,7 @@
 use serde_json::Value;
 
 use crate::terminal_host::orchestration::agent_profile_launch_snapshot::AGENT_PROFILE_LAUNCH_SNAPSHOT_KEY;
-use crate::terminal_host::orchestration::agent_registry::adapter_for;
+use alera_core::agent_descriptor::agent_descriptor;
 
 use super::ServerActor;
 
@@ -20,7 +20,7 @@ pub(super) fn is_pending_orchestration_worker(payload: &Value, agent_type: &str)
                 .and_then(Value::as_bool)
                 == Some(true))
             || payload.get("initialCommand").and_then(Value::as_str)
-                == adapter_for(agent_type).map(|adapter| adapter.default_command))
+                == agent_descriptor(agent_type).map(|descriptor| descriptor.default_command))
 }
 
 impl ServerActor {

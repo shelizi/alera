@@ -4,13 +4,13 @@
 
 use std::collections::HashMap;
 
+use alera_core::agent_descriptor::{agent_descriptor, AGENT_DESCRIPTORS};
 use alera_core::runtime::{AgentProfile, AgentProfileLaunchMode, RuntimeStoreError, SshTarget};
 use chrono::Utc;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::terminal_host::host_error::{HostError, HostResult};
-use crate::terminal_host::orchestration::agent_registry::{adapter_for, AGENT_ADAPTERS};
 use crate::terminal_host::orchestration::managed_agent_launch::build_managed_agent_launch;
 use crate::terminal_host::orchestration::managed_launch_shell_rendering::managed_launch_preview;
 use crate::terminal_host::protocol::event;
@@ -195,10 +195,10 @@ pub(super) fn profile_from_payload(payload: &Value) -> HostResult<AgentProfile> 
     // The store cannot validate this: alera-core does not know the adapter
     // registry. A profile pointing at an unknown adapter would spawn a worker
     // the host has no way to make ready.
-    if adapter_for(&agent_type).is_none() {
-        let supported = AGENT_ADAPTERS
+    if agent_descriptor(&agent_type).is_none() {
+        let supported = AGENT_DESCRIPTORS
             .iter()
-            .map(|adapter| adapter.agent_type)
+            .map(|descriptor| descriptor.id)
             .collect::<Vec<_>>()
             .join(", ");
         return Err(HostError::format(format!(

@@ -5,6 +5,7 @@
 //! is therefore always confirm, kill, then respawn. This module adds the
 //! confirmation step and the two policies that skip or defer it.
 
+use alera_core::agent_descriptor::agent_descriptor;
 use alera_core::runtime::{OrchestrationDispatchContext, OrchestrationTaskStatus};
 use serde_json::Value;
 
@@ -188,12 +189,10 @@ impl ServerActor {
             .agent_type(handle)
             .unwrap_or("codex")
             .to_string();
-        let Some(adapter) =
-            crate::terminal_host::orchestration::agent_registry::adapter_for(&agent_type)
-        else {
+        let Some(descriptor) = agent_descriptor(&agent_type) else {
             return;
         };
-        if let Err(error) = self.queue_orchestration_control(handle, adapter.interrupt_bytes) {
+        if let Err(error) = self.queue_orchestration_control(handle, descriptor.interrupt_bytes) {
             self.coordinator_log(&format!("could not interrupt worker {handle}: {error}"));
         }
     }

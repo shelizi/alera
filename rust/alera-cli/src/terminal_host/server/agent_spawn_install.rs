@@ -26,7 +26,7 @@ impl ServerActor {
         let PendingAgentSpawn {
             handle: id,
             resolved,
-            adapter,
+            descriptor,
             preflight,
             bootstrap,
             keep_on_failure,
@@ -61,10 +61,11 @@ impl ServerActor {
             if resolved.managed_launch.is_some() {
                 String::new()
             } else {
-                adapter.default_command.to_string()
+                descriptor.default_command.to_string()
             }
         });
-        let prompt_after_ready = adapter.startup_prompt == AgentStartupPrompt::TerminalAfterReady;
+        let prompt_after_ready =
+            descriptor.startup_prompt == AgentStartupPrompt::TerminalAfterReady;
         let now = chrono::Utc::now();
         let task_id = task.id.clone();
         let orchestration_preflight = preflight.as_ref().and_then(|(task_spec, base_drift)| {
@@ -87,7 +88,7 @@ impl ServerActor {
             // a ready event. Each new PTY gets a fresh pending copy.
             "initialPrompt": bootstrap.clone(),
             "pendingAgentPrompt": prompt_after_ready.then(|| json!({
-                "agent": adapter.agent_type,
+                "agent": descriptor.id,
                 "prompt": bootstrap.clone(),
             })),
             "spawnOnCreate": true,
@@ -139,7 +140,7 @@ impl ServerActor {
         }
         let mut response = json!({
             "terminalHandle": id,
-            "agentType": adapter.agent_type,
+            "agentType": descriptor.id,
             "taskId": task.id,
             "runId": task.run_id,
             "workspaceId": workspace_id,

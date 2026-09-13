@@ -1,9 +1,9 @@
+use alera_core::agent_descriptor::agent_descriptor;
 use alera_core::git::GitBaseDrift;
 use alera_core::runtime::{OrchestrationDispatchStatus, WorkspaceStatus};
 use serde_json::{json, Value};
 
 use crate::terminal_host::host_error::{HostError, HostResult};
-use crate::terminal_host::orchestration::agent_registry::adapter_for;
 use crate::terminal_host::orchestration::coordinator_loop::CoordinatorConfig;
 use crate::terminal_host::orchestration::dispatch_preamble::build_dispatch_bootstrap;
 
@@ -112,7 +112,7 @@ impl ServerActor {
             ));
             return Ok(());
         }
-        adapter_for(&config.agent_type)
+        agent_descriptor(&config.agent_type)
             .ok_or_else(|| anyhow::anyhow!("unsupported agent type: {}", config.agent_type))?;
         // Every adapter is pre-dispatched. Waiting for the agent to announce
         // itself first is not an option any more, and never was a working one:
@@ -173,7 +173,7 @@ impl ServerActor {
         // on top of them.
         let resolved = self.resolve_spawn_profile(payload).await?;
         let agent_type = resolved.agent_type.clone();
-        let adapter = adapter_for(&agent_type)
+        let descriptor = agent_descriptor(&agent_type)
             .ok_or_else(|| HostError::format(format!("unsupported agent type: {agent_type}")))?;
         let task = self
             .runtime_store
@@ -200,7 +200,7 @@ impl ServerActor {
                     "to": terminal,
                     "from": from,
                     "inject": true,
-                    "forceSubmit": adapter.force_submit,
+                    "forceSubmit": descriptor.force_submit,
                     "completionPolicy": "return-immediately",
                     "terminalPolicy": "keep-open",
                     "agentProfile": resolved.profile_name,
@@ -256,7 +256,7 @@ impl ServerActor {
         let pending = PendingAgentSpawn {
             handle: id.clone(),
             resolved,
-            adapter,
+            descriptor,
             preflight,
             bootstrap,
             keep_on_failure,
