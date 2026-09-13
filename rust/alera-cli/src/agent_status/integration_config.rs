@@ -2,13 +2,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use alera_core::runtime::RuntimeAgentStatusHookSettings;
-use serde_json::{json, Map, Value};
-
-use self::cursor_overlay::prepare_cursor;
-use super::integration_hook_scripts::write_managed_script;
-use super::integration_plugins::{
-    install_amp_plugin, install_opencode2_plugin, install_opencode_plugin, install_pi_plugin,
-};
+use serde_json::{Map, Value, json};
 
 #[path = "integration_config_ccs.rs"]
 mod ccs;
@@ -18,8 +12,12 @@ mod codex;
 mod codex_hook_trust;
 #[path = "integration_config_cursor_overlay.rs"]
 mod cursor_overlay;
+#[path = "integration_config_dispatch.rs"]
+mod dispatch;
 #[path = "integration_config_user_hooks.rs"]
 mod user_hooks;
+
+pub use dispatch::prepare_enabled_integrations;
 
 const MANAGED_MARKER: &str = "alera-runtime-agent-hook";
 const LEGACY_MANAGED_MARKERS: [&str; 9] = [
@@ -36,75 +34,6 @@ const LEGACY_MANAGED_MARKERS: [&str; 9] = [
     "alera-amp-hook.",
     "alera-grok-hook.",
 ];
-
-pub fn prepare_enabled_integrations(
-    runtime_dir: &Path,
-    session_id: Option<&str>,
-    settings: &RuntimeAgentStatusHookSettings,
-    environment: &mut BTreeMap<String, String>,
-) -> Vec<String> {
-    let mut warnings = Vec::new();
-    let script = match write_managed_script() {
-        Ok(script) => script,
-        Err(error) => {
-            warnings.push(error.to_string());
-            return warnings;
-        }
-    };
-    if settings.codex {
-        match codex::prepare_codex(runtime_dir, &script) {
-            Ok(home) => {
-                environment.insert("CODEX_HOME".to_string(), path_string(&home));
-                environment.insert("ALERA_CODEX_HOME".to_string(), path_string(&home));
-            }
-            Err(error) => warnings.push(format!("Codex: {error}")),
-        }
-    }
-    if settings.claude {
-        match prepare_claude(runtime_dir, &script, environment) {
-            Ok((home, ccs_warnings)) => {
-                environment.insert("CLAUDE_CONFIG_DIR".to_string(), path_string(&home));
-                environment.insert("ALERA_CLAUDE_CONFIG_DIR".to_string(), path_string(&home));
-                warnings.extend(
-                    ccs_warnings
-                        .into_iter()
-                        .map(|warning| format!("Claude: {warning}")),
-                );
-            }
-            Err(error) => warnings.push(format!("Claude: {error}")),
-        }
-    } else if let Err(error) = home_dir().and_then(|home| {
-        user_hooks::cleanup_claude_user_hooks(&home)?;
-        ccs::remove_ccs_claude_hooks(&home, environment)
-    }) {
-        warnings.push(format!("Claude: {error}"));
-    }
-    // The Cursor plugin is per terminal session, so it can only be built when a
-    // session is being launched. `reconcile_agent_integrations` has none.
-    if let (true, Some(session_id)) = (settings.cursor, session_id) {
-        if let Err(error) = prepare_cursor(runtime_dir, session_id, &script, environment) {
-            warnings.push(format!("Cursor: {error}"));
-        }
-    }
-    for result in [
-        settings.copilot.then(|| install_copilot(&script)),
-        settings.agy.then(|| install_agy(&script)),
-        settings.grok.then(|| install_grok(&script)),
-        settings.devin.then(|| install_devin(&script)),
-        settings.opencode.then(install_opencode_plugin),
-        settings.opencode2.then(install_opencode2_plugin),
-        settings.pi.then(install_pi_plugin),
-        settings.amp.then(install_amp_plugin),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        if let Err(error) = result {
-            warnings.push(error.to_string());
-        }
-    }
-    warnings
-}
 
 /// Host start: clear what a previous run left behind, then reconcile.
 ///
