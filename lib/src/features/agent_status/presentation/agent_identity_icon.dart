@@ -42,35 +42,33 @@ class const _AgentIconAsset({
   final bool raster = false,
 });
 
-_AgentIconAsset _agentAsset(AgentType agentType) {
-  return switch (agentType) {
-    AgentType.codex => const _AgentIconAsset(path: 'assets/agents/codex.svg'),
-    AgentType.claude => const _AgentIconAsset(
-      path: 'assets/agents/claude.svg',
-      tintable: false,
-    ),
-    AgentType.copilot => const _AgentIconAsset(
-      path: 'assets/agents/copilot.svg',
-    ),
-    AgentType.cursor => const _AgentIconAsset(
-      path: 'assets/agents/cursor.png',
-      raster: true,
-    ),
-    AgentType.agy => const _AgentIconAsset(
-      path: 'assets/agents/agy.png',
-      raster: true,
-    ),
-    AgentType.opencode || AgentType.opencode2 => const _AgentIconAsset(
-      path: 'assets/agents/opencode.png',
-      raster: true,
-    ),
-    AgentType.pi => const _AgentIconAsset(path: 'assets/agents/pi.svg'),
-    AgentType.amp => const _AgentIconAsset(
-      path: 'assets/agents/amp.png',
-      raster: true,
-    ),
-    AgentType.grok => const _AgentIconAsset(path: 'assets/agents/grok.svg'),
-    AgentType.devin => const _AgentIconAsset(path: 'assets/agents/devin.svg'),
-    AgentType.fx => const _AgentIconAsset(path: 'assets/agents/fx.svg'),
-  };
-}
+const Map<AgentType, _AgentIconAsset>
+_agentIconAssets = <AgentType, _AgentIconAsset>{
+  AgentType.codex: _AgentIconAsset(path: 'assets/agents/codex.svg'),
+  AgentType.claude: _AgentIconAsset(
+    path: 'assets/agents/claude.svg',
+    tintable: false,
+  ),
+  AgentType.copilot: _AgentIconAsset(path: 'assets/agents/copilot.svg'),
+  AgentType.cursor: _AgentIconAsset(
+    path: 'assets/agents/cursor.png',
+    raster: true,
+  ),
+  AgentType.agy: _AgentIconAsset(path: 'assets/agents/agy.png', raster: true),
+  AgentType.opencode: _AgentIconAsset(
+    path: 'assets/agents/opencode.png',
+    raster: true,
+  ),
+  AgentType.opencode2: _AgentIconAsset(
+    path: 'assets/agents/opencode.png',
+    raster: true,
+  ),
+  AgentType.pi: _AgentIconAsset(path: 'assets/agents/pi.svg'),
+  AgentType.amp: _AgentIconAsset(path: 'assets/agents/amp.png', raster: true),
+  AgentType.grok: _AgentIconAsset(path: 'assets/agents/grok.svg'),
+  AgentType.devin: _AgentIconAsset(path: 'assets/agents/devin.svg'),
+  AgentType.fx: _AgentIconAsset(path: 'assets/agents/fx.svg'),
+};
+
+_AgentIconAsset _agentAsset(AgentType agentType) =>
+    _agentIconAssets[agentType]!;

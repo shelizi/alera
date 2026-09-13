@@ -58,20 +58,14 @@ enum AiAssistAgent(this.key) {
     AiAssistAgent.custom => 'Custom Command',
   };
 
-  AgentType? get agentType => switch (this) {
-    AiAssistAgent.codex => AgentType.codex,
-    AiAssistAgent.claude => AgentType.claude,
-    AiAssistAgent.copilot => AgentType.copilot,
-    AiAssistAgent.cursor => AgentType.cursor,
-    AiAssistAgent.agy => AgentType.agy,
-    AiAssistAgent.opencode => AgentType.opencode,
-    AiAssistAgent.opencode2 => AgentType.opencode2,
-    AiAssistAgent.pi => AgentType.pi,
-    AiAssistAgent.amp => AgentType.amp,
-    AiAssistAgent.grok => AgentType.grok,
-    AiAssistAgent.fx => AgentType.fx,
-    AiAssistAgent.custom => null,
-  };
+  AgentType? get agentType {
+    for (final type in AgentType.values) {
+      if (type.name == name) {
+        return type;
+      }
+    }
+    return null;
+  }
 }
 
 @MappableClass()

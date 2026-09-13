@@ -1,3 +1,4 @@
+import 'package:alera/src/features/agent_profiles/domain/agent_descriptor_registry.dart';
 import 'package:dart_mappable/dart_mappable.dart';
 
 part 'agent_status.mapper.dart';
@@ -33,20 +34,7 @@ enum AgentType(this.key) {
 /// The display name shown wherever the app refers to an agent adapter, e.g.
 /// the new-tab menu, status dots, and settings labels.
 String agentDisplayName(AgentType agentType) {
-  return switch (agentType) {
-    AgentType.codex => 'Codex',
-    AgentType.claude => 'Claude Code',
-    AgentType.copilot => 'GitHub Copilot',
-    AgentType.cursor => 'Cursor',
-    AgentType.agy => 'Antigravity',
-    AgentType.opencode => 'OpenCode',
-    AgentType.opencode2 => 'OpenCode 2',
-    AgentType.pi => 'Pi',
-    AgentType.amp => 'Amp',
-    AgentType.grok => 'Grok Build',
-    AgentType.devin => 'Devin',
-    AgentType.fx => 'fx',
-  };
+  return agentDescriptorFor(agentType).displayName;
 }
 
 class const AgentHookEvent({
