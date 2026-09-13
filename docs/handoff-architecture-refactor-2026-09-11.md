@@ -1386,7 +1386,7 @@ max-lines 尚未全清前，第 8 步會是 repo-wide exit 1；必須確認 offe
 - 其他 worktree：使用者保有多個 feature worktree，不要清理或吸收
 - Merge/rebase/deploy/build release：本工作未做
 
-下一批不必重盤：§27 排序的 Batch N/O/P/Q/R/S/T 已全部落地（Batch T 見 §27.7 末）。剩餘 queue：T3 Unauthorized/Timeout 字串判別改 dedicated `HostError` variant、release matrix 集中化實作（§5 六步遷移）、orchestration ask disconnect hook、§26 Commit Graph parity backlog（獨立排程）、Batch L 20k+ wire 分頁（需求驅動，改 schema 才做）。
+下一批不必重盤：§27 排序的 Batch N/O/P/Q/R/S/T 已全部落地（Batch T 見 §27.7 末），其後 T3（dedicated `HostError` variant）與 U1（ask disconnect settle）亦完成。剩餘 queue：release matrix 集中化實作（§5 六步遷移，需授權）、§26 Commit Graph parity backlog（獨立排程）、Batch L 20k+ wire 分頁（需求驅動，改 schema 才做）。
 
 ---
 
@@ -1571,7 +1571,8 @@ max-lines 尚未全清前，第 8 步會是 repo-wide exit 1；必須確認 offe
 - T5 `441379de`:Windows `terminal_pulse` git-ignore 兩個長期失敗修復(test-only)。根因是測試手刻 git config 把 `C:\...` 反斜線寫入 `excludesFile`,libgit2 視為非法 escape;helper 改寫 `/` 分隔 + `Config::get_path` 正向斷言 + `no_system_config` 隔離本機 global gitconfig。repo 已知測試失敗歸零。
 - T4 `5716759c`:`docs/release-matrix-2026-09-13.md` 落地——六平台 artifact/簽章/hash/metadata 矩陣 + 散落點盤點(release identity 7 個邏輯落點、hash/descriptor 7 類 metadata family、package-manager publish 失敗無回滾)+ SSOT 集中化六步遷移建議;僅盤點文件,未動 CI/release workflow,實作待後續排程。
 - 驗收:`cargo check --all-targets` 0 error、`check_max_lines` ok、`runtime_architecture_guard` passed、deferred+dispatch_context 42+3ignored、controller 10/10、git-ignore 14/14 全綠。
-- 仍掛著的 follow-up:T3 Unauthorized/Timeout 字串判別改 dedicated `HostError` variant(producer 調查面廣,單獨開卡);release matrix 集中化實作(§5 六步);orchestration ask 的 disconnect hook 清 pending receipt。
+- 後續批次(同日完成):T3 `5975107b` — `HostError::Unauthorized`/`Timeout` dedicated variant 取代四個字串 list(全部刪除),wire message byte-identical、不加 `errorCode`;U1 `77fcd7e2` — `remove_client` 回傳被移除的 waiter,`dispose_client_with_reason` 對 parked ask settle `{"answered": false, "disconnected": true, "timedOut": false, "outcome": "disconnected"}` receipt,同 key retry 可 replay 不再卡 pending;`7b8a4286` — 兩卡疊加把 `client_delivery.rs` 推過 500,dispose 整簇拆進 `client_dispose.rs`(518→330/188)。
+- 仍掛著的 follow-up:release matrix 集中化實作(§5 六步,需明確授權才動 release 腳本/CI);T1 的 watcher counter 對 `_disposed`/`isBusy` 丟棄也 +1(語意略寬,可選收窄);orchestration ask 的 receipt settle 不帶 `waitedMs`(與 timeout schema 平行)。
 
 ### 27.8 新增工作規則
 
