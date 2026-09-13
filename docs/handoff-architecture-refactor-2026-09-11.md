@@ -1528,7 +1528,7 @@ max-lines 尚未全清前，第 8 步會是 repo-wide exit 1；必須確認 offe
 
 | 缺口 | 建議 disposition |
 | --- | --- |
-| orchestration `send`/`reply`/`ask`/`escalate` 無 idempotency key，retry 寫重複列 | P1 in-flight（`feat/orchestration-mutation-ids`，wt-preflight-stalls）：四 verb 加 `clientMutationId` |
+| orchestration `send`/`reply`/`ask`/`escalate` 無 idempotency key，retry 寫重複列 | **已修（P1，`596bbb4f`）**：四 verb 走 receipt flow；`ask` 用 `ASK_RECEIPT_CONTEXTS` side-channel 跨 waiter 生命週期，answered/timeout 各 settle 一次，同 key retry replay 結果；disconnect 殘留 pending receipt 至 7-day prune 屬預期取捨，已寫回 contract 文件 |
 | `terminal.write` 無 op id，lost reply retry 重複送輸入 | **Dispositioned（P2，`30bd5ffd`）：accept 不加 key**。`deferred_requests.rs:417` arm 才排 PTY queue、`requests.rs:282` sync arm 僅為 empty-write no-op；Dart 端三路 retry 都不重送 bytes，keystroke stream 無法安全 content dedupe，lost reply 即連線死亡需 reattach。理由已寫回 `docs/terminal-operation-contract.md` |
 | `terminal.terminate` 非冪等，retry 回 `not attached` 與從未 attach 無法區分 | **已修（E4，`f28f1d6c` merge `62e4fd32`）**：optional `clientMutationId` + receipt 表，retry replay `{}` |
 | `agentQuota.consumeCodexResetCredit` 無 idempotency key | **已修（E4，同上）**：receipt 在 admission 前建 pending，成功才 settle；replay 走正常 deferred 路徑回 stored result |
