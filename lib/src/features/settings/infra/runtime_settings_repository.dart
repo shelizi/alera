@@ -1,4 +1,5 @@
 import 'package:alera/src/features/settings/application/settings_repository.dart';
+import 'package:alera/src/features/settings/domain/settings_ownership.dart';
 import 'package:alera_configuration/alera_configuration.dart';
 import 'package:alera/src/features/ai_assist/domain/ai_assist_settings.dart';
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
@@ -18,7 +19,7 @@ class RuntimeSettingsRepository({
       await beforeAccess?.call();
       if (await _supportsConfiguration()) {
         await client.runtimeRequest('configuration.settings.seed', {
-          'settings': portableDesktopSettings(legacy.toMap()),
+          'settings': legacy.toPortableConfigurationMap(),
         });
         final portable = jsonMap(
           await client.runtimeRequest('configuration.settings.get'),
@@ -102,24 +103,16 @@ class RuntimeSettingsRepository({
     await beforeAccess?.call();
     if (await _supportsConfiguration()) {
       await client.runtimeRequest('configuration.settings.update', {
-        'settings': portableDesktopSettings(settings.toMap()),
+        'settings': settings.toPortableConfigurationMap(),
         'supportedKeyboardActionIds': KeyboardActionId.values
             .map((id) => id.name)
             .toList(),
       });
     }
-    await client.runtimeRequest('runtimeSettings.update', <String, Object?>{
-      'workspaceDirectory': settings.general.workspaceDirectory,
-      'confirmProjectRemoval': settings.general.confirmProjectRemoval,
-      'confirmWorkspaceRemoval': settings.general.confirmWorkspaceRemoval,
-      'autoArchiveWorkspacesAfterDays':
-          settings.general.autoArchiveWorkspacesAfterDays,
-      'defaultAgentProfileId': settings.agents.defaultAgentProfileId,
-      'agentStatusHooks': settings.agents.agentStatusHooks.toMap(),
-      'agentQuotas': settings.agents.quotas.forHost('local').toMap(),
-      'aiTextGeneration': _runtimeAiAssistSettings(settings.aiAssist),
-      'textActions': settings.textActions.toMap(),
-    });
+    await client.runtimeRequest(
+      'runtimeSettings.update',
+      settings.toRuntimeOperationalMap(),
+    );
     await legacyRepository.save(settings);
   }
 
@@ -129,37 +122,6 @@ class RuntimeSettingsRepository({
         await (capabilityClient as RuntimeHostCapabilityClient)
             .supportsRuntimeCapability('configurationSyncV1');
   }
-}
-
-Map<String, Object?> _runtimeAiAssistSettings(AiAssistSettings settings) {
-  return <String, Object?>{
-    'enabled': settings.enabled,
-    'autoGenerateAgentTitles': settings.autoGenerateAgentTitles,
-    'agent': settings.agent.key,
-    'selectedModelByAgent': <String, String>{
-      for (final entry in settings.selectedModelByAgent.entries)
-        entry.key.key: entry.value,
-    },
-    'selectedThinkingByModel': settings.selectedThinkingByModel,
-    'selectedThinkingByOperation': <String, Map<String, String>>{
-      for (final entry in settings.selectedThinkingByOperation.entries)
-        entry.key.key: entry.value,
-    },
-    'customCommand': settings.customCommand,
-    'instructionsByOperation': <String, String>{
-      for (final entry in settings.instructionsByOperation.entries)
-        entry.key.key: entry.value,
-    },
-    'promptSettingsByOperation': <String, Map<String, Object?>>{
-      for (final entry in settings.promptSettingsByOperation.entries)
-        entry.key.key: <String, Object?>{
-          if (entry.value.agent != null) 'agent': entry.value.agent!.key,
-          if (entry.value.model?.trim().isNotEmpty == true)
-            'model': entry.value.model!.trim(),
-        },
-    },
-    'timeoutSeconds': settings.timeoutSeconds,
-  };
 }
 
 Map<String, Object?> _asMap(Object? value) {
