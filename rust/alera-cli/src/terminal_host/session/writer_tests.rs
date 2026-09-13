@@ -1,6 +1,8 @@
 use std::sync::mpsc::TrySendError;
 
 use super::*;
+use crate::terminal_host::host_error::HostError;
+use crate::terminal_host::server::TERMINAL_INPUT_BACKPRESSURE_CODE;
 
 #[test]
 fn blocked_writer_applies_local_backpressure_without_blocking_sender() {
@@ -189,4 +191,35 @@ fn exited_session_rejects_input_instead_of_leaving_request_pending() {
         )
         .expect_err("exited session should reject input");
     assert!(error.wire_message().contains("not running"));
+}
+
+#[test]
+fn full_input_queue_returns_typed_backpressure_error() {
+    let (input_tx, _input_rx) = sync_channel(0);
+    let mut session = test_session();
+    session.input_tx = Some(input_tx);
+
+    let error = session
+        .queue_write(
+            PtyWriteCompletion::ClientRequest {
+                client_id: 1,
+                request_id: 10,
+            },
+            b"input",
+        )
+        .expect_err("a zero-capacity input queue should report backpressure");
+
+    assert!(matches!(
+        &error,
+        HostError::Conflict { code, .. }
+            if code == TERMINAL_INPUT_BACKPRESSURE_CODE
+    ));
+    let message = error.wire_message();
+    assert!(message.starts_with("terminal_input_backpressure:"));
+    assert!(message.contains(TERMINAL_INPUT_BACKPRESSURE_CODE));
+    let response = error.wire_response(10);
+    assert_eq!(
+        response["errorCode"].as_str(),
+        Some(TERMINAL_INPUT_BACKPRESSURE_CODE)
+    );
 }

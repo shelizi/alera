@@ -1,7 +1,10 @@
 use std::sync::mpsc::TrySendError;
 use std::time::Duration;
 
+use serde_json::json;
+
 use crate::terminal_host::host_error::{HostError, HostResult};
+use crate::terminal_host::server::TERMINAL_INPUT_BACKPRESSURE_CODE;
 
 use super::{PtyWriteCompletion, Session};
 
@@ -62,9 +65,14 @@ impl Session {
                 deferred,
             })
             .map_err(|error| match error {
-                TrySendError::Full(_) => {
-                    HostError::state("terminal_input_backpressure: terminal input queue is full")
-                }
+                TrySendError::Full(_) => HostError::conflict(
+                    TERMINAL_INPUT_BACKPRESSURE_CODE,
+                    format!("{TERMINAL_INPUT_BACKPRESSURE_CODE}: terminal input queue is full"),
+                    json!({
+                        "capacity": super::INPUT_QUEUE_CAPACITY,
+                        "retryable": true,
+                    }),
+                ),
                 TrySendError::Disconnected(_) => {
                     HostError::state("terminal input writer is unavailable")
                 }

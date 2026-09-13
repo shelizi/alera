@@ -241,7 +241,7 @@ const OUTPUT_BATCH_DELAY: Duration = Duration::from_millis(8);
 const OUTPUT_RESYNC_RETRY_DELAY: Duration = Duration::from_millis(16);
 const DURABLE_OUTPUT_BATCH_DELAY: Duration = Duration::from_millis(100);
 const OUTPUT_PERSISTENCE_BARRIER_TIMEOUT: Duration = Duration::from_secs(2);
-const TERMINAL_INPUT_BACKPRESSURE_CODE: &str = "terminal_input_backpressure";
+pub(crate) const TERMINAL_INPUT_BACKPRESSURE_CODE: &str = "terminal_input_backpressure";
 /// Cap coalesced PTY→client batches so a verbose agent/build cannot grow an
 /// unbounded `output_batch` between timer flushes (early flush when exceeded).
 const OUTPUT_BATCH_MAX_BYTES: usize = 64 * 1024;

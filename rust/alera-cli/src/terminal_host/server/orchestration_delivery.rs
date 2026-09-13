@@ -50,12 +50,15 @@ impl ServerActor {
             },
             &paste,
         ) {
-            let message = error.wire_message();
-            if message.contains(TERMINAL_INPUT_BACKPRESSURE_CODE) {
+            if matches!(
+                &error,
+                HostError::Conflict { code, .. }
+                    if code == TERMINAL_INPUT_BACKPRESSURE_CODE
+            ) {
                 self.orchestration_delivery_backpressured
                     .insert(handle.to_string());
             } else {
-                self.broadcast_terminal_error(handle, message);
+                self.broadcast_terminal_error(handle, error.wire_message());
             }
             return;
         }
@@ -123,8 +126,11 @@ impl ServerActor {
             },
             prompt_injection::AGENT_PROMPT_SUBMIT,
         ) {
-            let message = error.wire_message();
-            if message.contains(TERMINAL_INPUT_BACKPRESSURE_CODE) {
+            if matches!(
+                &error,
+                HostError::Conflict { code, .. }
+                    if code == TERMINAL_INPUT_BACKPRESSURE_CODE
+            ) {
                 self.schedule_orchestration_enter(
                     session_id,
                     session_instance_id,
@@ -134,7 +140,7 @@ impl ServerActor {
                 return;
             }
             self.orchestration_delivery_in_flight.remove(&session_id);
-            self.broadcast_terminal_error(&session_id, message);
+            self.broadcast_terminal_error(&session_id, error.wire_message());
         }
     }
 
