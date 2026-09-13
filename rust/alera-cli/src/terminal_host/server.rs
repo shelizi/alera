@@ -84,6 +84,7 @@ mod automation_scheduler;
 mod checkpoint_timer;
 mod client_accept_loop;
 mod client_delivery;
+mod client_dispose;
 mod codex_app_server;
 mod codex_app_server_session_state;
 mod codex_dictation;
