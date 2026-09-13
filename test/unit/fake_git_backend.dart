@@ -134,8 +134,11 @@ class FakeGitBackend
   GitException? discardAreaError;
   GitException? commitError;
   GitException? amendCommitError;
+  @override
   GitException? revertCommitError;
+  @override
   GitException? resetToCommitError;
+  @override
   String revertCommitResult = 'reverted123';
   GitException? fetchError;
   void Function()? onFetch;

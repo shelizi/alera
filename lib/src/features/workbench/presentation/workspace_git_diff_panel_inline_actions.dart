@@ -271,6 +271,36 @@ extension _WorkspaceGitDiffPanelActions on _WorkspaceGitDiffPanelState {
     }
   }
 
+  Future<void> _revertCommit(GitHistoryItem item) async {
+    final confirmed = await showGitRevertCommitConfirmation(context, item);
+    if (!confirmed || !mounted) {
+      return;
+    }
+    // First parent is the mainline convention for merge reverts.
+    await _run(
+      () => _notifier.revertCommit(
+        item.id,
+        mainlineParent: item.parentIds.length > 1 ? 1 : null,
+      ),
+      successMessage: 'Reverted ${gitHistoryItemShortId(item)}',
+    );
+  }
+
+  Future<void> _resetToCommit(GitHistoryItem item, GitResetMode mode) async {
+    final confirmed = await showGitResetToCommitConfirmation(
+      context,
+      item,
+      mode,
+    );
+    if (!confirmed || !mounted) {
+      return;
+    }
+    await _run(
+      () => _notifier.resetToCommit(item.id, mode: mode),
+      successMessage: 'Reset to ${gitHistoryItemShortId(item)}',
+    );
+  }
+
   Future<void> _switchBranch(String branch) async {
     final callback = widget.onSwitchBranch;
     if (callback == null) {

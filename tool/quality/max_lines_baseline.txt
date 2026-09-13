@@ -6,7 +6,7 @@
 1202	test/unit/workspace_tab_service_test.dart
 1235	test/unit/terminal_host_client_test.dart
 1410	rust/alera-cli/src/terminal_host/server/requests.rs
-1391	rust/src/api/git.rs
+1392	rust/src/api/git.rs
 1396	rust/src/api/workspace_files.rs
 1724	test/widget/workspace_git_diff_panel_test.dart
 1810	rust/alera-cli/src/terminal_host/server.rs
@@ -21,12 +21,12 @@
 556	test/unit/terminal_runtime_helper_group.dart
 562	lib/src/features/ai_assist/application/ai_assist_registry.dart
 620	rust/alera-cli/src/cli.rs
-566	lib/src/shared/infra/git/rust_git_backend.dart
+581	lib/src/shared/infra/git/rust_git_backend.dart
 579	test/unit/workspace_service_core_test_cases.dart
 580	test/unit/desktop_update_service_test.dart
 591	rust/alera-cli/src/terminal_host/orchestration/lifecycle_reconciliation.rs
 587	lib/src/features/workbench/presentation/workspace_git_history_panel.dart
-650	test/unit/fake_git_backend.dart
+658	test/unit/fake_git_backend.dart
 653	test/unit/runtime_repositories_test.dart
 655	rust/alera-cli/src/mobile_access.rs
 661	test/unit/agent_hook_event_normalizer_test.dart

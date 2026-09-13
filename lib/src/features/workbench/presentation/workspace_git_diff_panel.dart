@@ -32,6 +32,7 @@ import 'package:alera/src/features/workbench/application/workbench_controller.da
 import 'package:alera/src/features/workbench/presentation/terminal_path_drop.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_git_history_actions.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_git_history_graph.dart';
+import 'package:alera/src/shared/infra/git/git_commit_ops_models.dart';
 import 'package:alera/src/shared/infra/git/git_diff_models.dart';
 import 'package:alera/src/shared/infra/git/git_exception.dart';
 import 'package:alera/src/shared/infra/git/git_history_graph.dart';
@@ -274,6 +275,8 @@ class _WorkspaceGitDiffPanelState extends ConsumerState<WorkspaceGitDiffPanel> {
                 onOpenCommit: _openCommitDiff,
                 onOpenCommitFile: _openCommitFile,
                 onCopyCommitText: _copyCommitText,
+                onRevertCommit: _revertCommit,
+                onResetToCommit: _resetToCommit,
                 onSwitchBranch: widget.onSwitchBranch == null
                     ? null
                     : _switchBranch,

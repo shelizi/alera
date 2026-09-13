@@ -8,6 +8,7 @@ import 'api/ai_dictation.dart';
 import 'api/clipboard.dart';
 import 'api/git.dart';
 import 'api/git/git_branch.dart';
+import 'api/git/git_commit_ops.dart';
 import 'api/git/git_hosted_review.dart';
 import 'api/git_diff_blob.dart';
 import 'api/git_explorer_status.dart';
@@ -250,6 +251,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   GitRepositoryState dco_decode_git_repository_state(dynamic raw);
+
+  @protected
+  GitResetMode dco_decode_git_reset_mode(dynamic raw);
 
   @protected
   GitStashEntry dco_decode_git_stash_entry(dynamic raw);
@@ -873,6 +877,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   GitRepositoryState sse_decode_git_repository_state(
     SseDeserializer deserializer,
   );
+
+  @protected
+  GitResetMode sse_decode_git_reset_mode(SseDeserializer deserializer);
 
   @protected
   GitStashEntry sse_decode_git_stash_entry(SseDeserializer deserializer);
@@ -1667,6 +1674,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
     GitRepositoryState self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_git_reset_mode(GitResetMode self, SseSerializer serializer);
 
   @protected
   void sse_encode_git_stash_entry(GitStashEntry self, SseSerializer serializer);

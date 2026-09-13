@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:alera/src/features/workbench/application/source_control_watcher.dart';
 import 'package:alera/src/rust/api/workspace_files.dart' as native;
 import 'package:alera/src/shared/infra/git/git_backend.dart';
+import 'package:alera/src/shared/infra/git/git_commit_ops_models.dart';
 import 'package:alera/src/shared/infra/git/git_diff_models.dart';
 import 'package:alera/src/shared/infra/git/git_exception.dart';
 import 'package:alera/src/shared/infra/git/git_providers.dart';
@@ -61,6 +62,8 @@ enum WorkspaceSourceControlAction {
   sync,
   stash,
   stashPop,
+  revert,
+  reset,
 }
 
 @riverpod
@@ -190,6 +193,25 @@ class WorkspaceSourceControlController
     (backend) =>
         backend.amendCommit(path: workspacePath, message: message.trim()),
   );
+
+  Future<void> revertCommit(String commitId, {int? mainlineParent}) =>
+      _run(.revert, (backend) async {
+        await backend.revertCommit(
+          path: workspacePath,
+          commitId: commitId,
+          mainlineParent: mainlineParent,
+        );
+      });
+
+  Future<void> resetToCommit(String commitId, {required GitResetMode mode}) =>
+      _run(
+        .reset,
+        (backend) => backend.resetToCommit(
+          path: workspacePath,
+          commitId: commitId,
+          mode: mode,
+        ),
+      );
 
   Future<void> fetch() =>
       _run(.fetch, (backend) => backend.fetch(workspacePath));

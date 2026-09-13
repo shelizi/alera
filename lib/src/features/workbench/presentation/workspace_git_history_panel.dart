@@ -47,6 +47,9 @@ class const _GitHistoryPanel({
   onOpenCommitFile,
   required final Future<void> Function(String text, String label)
   onCopyCommitText,
+  final Future<void> Function(GitHistoryItem item)? onRevertCommit,
+  final Future<void> Function(GitHistoryItem item, GitResetMode mode)?
+  onResetToCommit,
   final Future<void> Function(String branch)? onSwitchBranch,
   final VoidCallback? onOpenCommitGraph,
 }) extends StatefulWidget {
@@ -166,7 +169,7 @@ class _GitHistoryPanelState extends State<_GitHistoryPanel> {
                   onTap: boundary ? null : () => _toggleCommit(item),
                   onOpenActions: boundary
                       ? null
-                      : (context) => _openActions(context, item),
+                      : (position) => _openActions(position, item),
                   onOpenRefActions: widget.onSwitchBranch == null
                       ? null
                       : _openRefActions,
@@ -267,16 +270,8 @@ class _GitHistoryPanelState extends State<_GitHistoryPanel> {
     }
   }
 
-  Future<void> _openActions(BuildContext context, GitHistoryItem item) async {
-    final renderBox = context.findRenderObject() as RenderBox?;
-    if (renderBox == null) {
-      return;
-    }
-    final action = await showGitHistoryCommitMenu(
-      context,
-      item,
-      renderBox.localToGlobal(.zero),
-    );
+  Future<void> _openActions(Offset position, GitHistoryItem item) async {
+    final action = await showGitHistoryCommitMenu(context, item, position);
     if (!mounted || action == null) {
       return;
     }
@@ -288,6 +283,14 @@ class _GitHistoryPanelState extends State<_GitHistoryPanel> {
           item.message.trim().isEmpty ? item.subject : item.message,
           'Commit Subject',
         );
+      case GitHistoryCommitMenuAction.revertCommit:
+        await widget.onRevertCommit?.call(item);
+      case GitHistoryCommitMenuAction.resetSoft:
+        await widget.onResetToCommit?.call(item, GitResetMode.soft);
+      case GitHistoryCommitMenuAction.resetMixed:
+        await widget.onResetToCommit?.call(item, GitResetMode.mixed);
+      case GitHistoryCommitMenuAction.resetHard:
+        await widget.onResetToCommit?.call(item, GitResetMode.hard);
     }
   }
 }

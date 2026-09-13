@@ -1,11 +1,20 @@
 import 'package:alera/src/design_system/icons/alera_icons.dart';
+import 'package:alera/src/design_system/layout/alera_confirm_dialog.dart';
 import 'package:alera/src/design_system/menus/alera_dropdown_entry.dart';
+import 'package:alera/src/shared/infra/git/git_commit_ops_models.dart';
 import 'package:alera/src/shared/infra/git/git_diff_models.dart';
 import 'package:flutter/material.dart';
 
 enum GitHistoryRefMenuAction { switchBranch, copyName }
 
-enum GitHistoryCommitMenuAction { copyHash, copySubject }
+enum GitHistoryCommitMenuAction {
+  copyHash,
+  copySubject,
+  revertCommit,
+  resetSoft,
+  resetMixed,
+  resetHard,
+}
 
 /// Shows the actions available for a history reference at a global pointer
 /// position. Unsupported reference kinds do not open an empty menu.
@@ -72,8 +81,88 @@ Future<GitHistoryCommitMenuAction?> showGitHistoryCommitMenu(
         localizeLabel: false,
         leading: Icon(AleraIcons.copy, size: 16),
       ),
+      PopupMenuDivider(),
+      AleraDropdownEntry<GitHistoryCommitMenuAction>(
+        value: .revertCommit,
+        label: 'Revert Commit',
+        localizeLabel: false,
+        leading: Icon(AleraIcons.restore, size: 16),
+      ),
+      PopupMenuDivider(),
+      AleraDropdownEntry<GitHistoryCommitMenuAction>(
+        value: .resetSoft,
+        label: 'Reset Current Branch Here (Soft)',
+        localizeLabel: false,
+        leading: Icon(AleraIcons.restart, size: 16),
+      ),
+      AleraDropdownEntry<GitHistoryCommitMenuAction>(
+        value: .resetMixed,
+        label: 'Reset Current Branch Here (Mixed)',
+        localizeLabel: false,
+        leading: Icon(AleraIcons.restart, size: 16),
+      ),
+      AleraDropdownEntry<GitHistoryCommitMenuAction>(
+        value: .resetHard,
+        label: 'Reset Current Branch Here (Hard)',
+        localizeLabel: false,
+        leading: Icon(AleraIcons.restart, size: 16),
+      ),
     ],
   );
+}
+
+/// Short commit id used in confirmation copy and toasts.
+String gitHistoryItemShortId(GitHistoryItem item) =>
+    item.id.length > 7 ? item.id.substring(0, 7) : item.id;
+
+/// Asks the user to confirm reverting [item] on the current branch.
+Future<bool> showGitRevertCommitConfirmation(
+  BuildContext context,
+  GitHistoryItem item,
+) async {
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (_) => AleraConfirmDialog(
+      title: 'Revert Commit?',
+      message:
+          'Creates a new commit that reverts the changes in '
+          '${gitHistoryItemShortId(item)} "${item.subject}".',
+      confirmLabel: 'Revert',
+    ),
+  );
+  return confirmed ?? false;
+}
+
+/// Asks the user to confirm moving the current branch to [item]. A hard reset
+/// is marked destructive because it discards working tree changes.
+Future<bool> showGitResetToCommitConfirmation(
+  BuildContext context,
+  GitHistoryItem item,
+  GitResetMode mode,
+) async {
+  final shortId = gitHistoryItemShortId(item);
+  final subject = item.subject;
+  final message = switch (mode) {
+    GitResetMode.soft =>
+      'Moves the current branch to $shortId "$subject". Staged and working '
+          'tree changes are kept.',
+    GitResetMode.mixed =>
+      'Moves the current branch to $shortId "$subject". Working tree '
+          'changes are kept but become unstaged.',
+    GitResetMode.hard =>
+      'Moves the current branch to $shortId "$subject" and discards all '
+          'working tree changes. This cannot be undone.',
+  };
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (_) => AleraConfirmDialog(
+      title: 'Reset Current Branch?',
+      message: message,
+      confirmLabel: 'Reset',
+      destructive: mode == GitResetMode.hard,
+    ),
+  );
+  return confirmed ?? false;
 }
 
 RelativeRect? _gitHistoryMenuPosition(

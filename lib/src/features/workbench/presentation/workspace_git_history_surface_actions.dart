@@ -22,6 +22,80 @@ extension _WorkspaceGitHistorySurfaceActions
           item.message.trim().isEmpty ? item.subject : item.message,
           'Commit Subject',
         );
+      case GitHistoryCommitMenuAction.revertCommit:
+        await _revertCommit(item);
+      case GitHistoryCommitMenuAction.resetSoft:
+        await _resetToCommit(item, GitResetMode.soft);
+      case GitHistoryCommitMenuAction.resetMixed:
+        await _resetToCommit(item, GitResetMode.mixed);
+      case GitHistoryCommitMenuAction.resetHard:
+        await _resetToCommit(item, GitResetMode.hard);
+    }
+  }
+
+  Future<void> _revertCommit(GitHistoryItem item) async {
+    final confirmed = await showGitRevertCommitConfirmation(context, item);
+    if (!confirmed || !mounted) {
+      return;
+    }
+    // First parent is the mainline convention for merge reverts.
+    await _runCommitMutation(
+      (notifier) => notifier.revertCommit(
+        item.id,
+        mainlineParent: item.parentIds.length > 1 ? 1 : null,
+      ),
+      'Reverted ${gitHistoryItemShortId(item)}',
+    );
+  }
+
+  Future<void> _resetToCommit(GitHistoryItem item, GitResetMode mode) async {
+    final confirmed = await showGitResetToCommitConfirmation(
+      context,
+      item,
+      mode,
+    );
+    if (!confirmed || !mounted) {
+      return;
+    }
+    await _runCommitMutation(
+      (notifier) => notifier.resetToCommit(item.id, mode: mode),
+      'Reset to ${gitHistoryItemShortId(item)}',
+    );
+  }
+
+  Future<void> _runCommitMutation(
+    Future<void> Function(WorkspaceSourceControlController notifier) action,
+    String successMessage,
+  ) async {
+    try {
+      await _withSourceControl(action);
+      if (!mounted) {
+        return;
+      }
+      AleraToast.show(context, message: successMessage, tone: .success);
+      _compareCache.clear();
+      await _reload();
+    } catch (error) {
+      if (mounted) {
+        AleraToast.show(context, message: error.toString(), tone: .error);
+      }
+    }
+  }
+
+  // The source-control controller is auto-disposed when nobody listens, and
+  // this tab may run without the source-control panel mounted. A manual
+  // subscription keeps the notifier alive for the duration of the call.
+  Future<T> _withSourceControl<T>(
+    Future<T> Function(WorkspaceSourceControlController notifier) action,
+  ) async {
+    final provider = workspaceSourceControlControllerProvider(
+      _sourceControlScope.path,
+    );
+    final subscription = ref.listenManual(provider, (_, __) {});
+    try {
+      return await action(ref.read(provider.notifier));
+    } finally {
+      subscription.close();
     }
   }
 
@@ -83,12 +157,7 @@ extension _WorkspaceGitHistorySurfaceActions
       if (!mounted) {
         return;
       }
-      await ref
-          .read(
-            workspaceSourceControlControllerProvider(_sourceControlScope.path)
-                .notifier,
-          )
-          .refresh();
+      await _withSourceControl((notifier) => notifier.refresh());
     } catch (error) {
       if (mounted) {
         AleraToast.show(context, message: error.toString(), tone: .error);

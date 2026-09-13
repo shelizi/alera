@@ -14,6 +14,7 @@ import 'package:alera/src/features/workbench/domain/workspace_source_control_sco
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_git_history_actions.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_git_history_graph.dart';
+import 'package:alera/src/shared/infra/git/git_commit_ops_models.dart';
 import 'package:alera/src/shared/infra/git/git_diff_models.dart';
 import 'package:alera/src/shared/infra/git/git_exception.dart';
 import 'package:alera/src/shared/infra/git/git_history_graph.dart';

@@ -278,6 +278,8 @@ class const _SourceControlToolbar({
       WorkspaceSourceControlAction.sync => 'syncing',
       WorkspaceSourceControlAction.stash => 'stashing',
       WorkspaceSourceControlAction.stashPop => 'popping stash',
+      WorkspaceSourceControlAction.revert => 'reverting',
+      WorkspaceSourceControlAction.reset => 'resetting',
     };
   }
 }

@@ -4,7 +4,7 @@ class const _GitHistoryCommitRow({
   required final GitHistoryItemViewModel viewModel,
   required final bool expanded,
   required final VoidCallback? onTap,
-  required final void Function(BuildContext context)? onOpenActions,
+  required final void Function(Offset position)? onOpenActions,
   required final void Function(GitHistoryItemRef itemRef, Offset position)?
   onOpenRefActions,
 }) extends StatelessWidget {
@@ -62,6 +62,9 @@ class const _GitHistoryCommitRow({
           : SystemMouseCursors.basic,
       child: InkWell(
         onTap: onTap,
+        onSecondaryTapDown: onOpenActions == null
+            ? null
+            : (details) => onOpenActions!(details.globalPosition),
         mouseCursor: onTap != null
             ? SystemMouseCursors.click
             : SystemMouseCursors.basic,
@@ -137,7 +140,16 @@ class const _GitHistoryCommitRow({
                         builder: (context) => AleraIconButton(
                           tooltip: 'Commit Actions',
                           icon: AleraIcons.more,
-                          onPressed: () => onOpenActions!(context),
+                          onPressed: () {
+                            final box =
+                                context.findRenderObject() as RenderBox?;
+                            if (box == null) {
+                              return;
+                            }
+                            onOpenActions!(
+                              box.localToGlobal(box.size.bottomLeft(.zero)),
+                            );
+                          },
                         ),
                       ),
                   ],
