@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
+use crate::terminal_host::host_error::HostError;
 use crate::terminal_host::protocol::error_response;
 use crate::terminal_host::protocol::event;
 use crate::terminal_host::session::{PtyWriteCompletion, Session};
@@ -122,9 +123,11 @@ impl ServerActor {
                         .complete_due(&session_id, session_instance_id, generation)
                 }
                 Err(error)
-                    if error
-                        .wire_message()
-                        .starts_with(TERMINAL_INPUT_BACKPRESSURE_CODE) =>
+                    if matches!(
+                        &error,
+                        HostError::Conflict { code, .. }
+                            if code == TERMINAL_INPUT_BACKPRESSURE_CODE
+                    ) =>
                 {
                     if let Some(generation) =
                         self.terminal_pulses
