@@ -736,6 +736,8 @@ Actor validates dispatch mutation + reserves generation/owner
 - **12.3**：`workspace.removeManaged` preflight 已在 mutation worker 內，不擋 mailbox；`managed_workspace_preflight_tests.rs` 綠，本輪只驗收。
 - **12.4**：`DeferredAdmission` 總 pending（active + queued）有上限，超限回 typed `deferred_request_backpressure`；snapshot 含 pending/active/capacity/rejected/disconnected、request type、`queueWaitMs`。本輪把 quota/storage/AI assist/dictation/account/mobile file 等 call site 接上。控制面 `status.get` / `host.shutdown` 在飽和時仍能回答。
 
+已定義語義邊界（review 確認）：reconcile 失敗時 settings **已 persist** 但回 error 且不 broadcast `runtimeSettingsChanged`（其他 client 不會得知已生效的變更）；fire-and-forget 的 `schedule_autostart_reconcile` 在 admission 飽和時可被丟棄（僅 warn log），autostart 檔案可能漂移到下次 update。行動端 whitelist 在 `deferred_requests.rs` early-claim 與 `requests.rs` 各有一份，新增 mobile 允許 key 需同步兩處。
+
 殘留：其他 `tokio::spawn` 路徑（project clone、CLI registration、orchestration waiter 等）仍無界；sign-in 佔一格直到 OAuth 結束（single-flight，刻意為之）。
 
 以下為當時的分析記錄，保留供追溯。
