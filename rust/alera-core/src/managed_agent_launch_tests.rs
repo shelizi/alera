@@ -1,3 +1,5 @@
+use std::{fs, path::Path};
+
 use serde_json::json;
 
 use super::*;
@@ -259,4 +261,24 @@ fn grok_builds_interactive_session_flags_and_rejects_unknown_options() {
         "an unsupported grok sandbox was accepted"
     );
     assert!(build_managed_agent_launch("grok", &json!({"webSearch": true})).is_err());
+}
+
+#[test]
+fn agent_descriptor_snapshot_is_fresh() {
+    let snapshot_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../lib/src/features/agent_profiles/domain/agent_descriptor_snapshot.dart");
+    let checked_in = fs::read_to_string(&snapshot_path)
+        .unwrap_or_else(|error| panic!("failed to read {}: {error}", snapshot_path.display()));
+    let normalize = |contents: &str| {
+        contents
+            .replace("\r\n", "\n")
+            .trim_end_matches('\n')
+            .to_string()
+    };
+
+    assert_eq!(
+        normalize(&crate::agent_descriptor::snapshot_dart::emit()),
+        normalize(&checked_in),
+        "agent descriptor snapshot is stale; regenerate with cargo run -p alera-cli -- export-agent-descriptors"
+    );
 }

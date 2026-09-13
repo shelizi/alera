@@ -22,6 +22,25 @@ pub(super) fn push_string(
     Ok(())
 }
 
+pub(super) fn push_string_option(
+    values: &Map<String, Value>,
+    key: &str,
+    flag: &str,
+    arguments: &mut Vec<String>,
+) -> Result<(), String> {
+    let Some(value) = values.get(key) else {
+        return Ok(());
+    };
+    let value = value
+        .as_str()
+        .ok_or_else(|| format!("{key} must be a string."))?
+        .trim();
+    if !value.is_empty() {
+        arguments.extend([flag.to_string(), value.to_string()]);
+    }
+    Ok(())
+}
+
 pub(super) fn push_enum(
     values: &Map<String, Value>,
     key: &str,

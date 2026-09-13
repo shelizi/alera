@@ -80,6 +80,168 @@ pub enum AgentModelOverride {
     ProfileOnly,
 }
 
+/// One declarative rule that maps managed profile configuration to launch
+/// arguments.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentLaunchRuleKind {
+    /// `--flag <trimmed string>`; an empty string is skipped.
+    StringOption { flag: &'static str },
+    /// `--flag <value>`; the value must be in `allowed`.
+    EnumOption {
+        flag: &'static str,
+        allowed: &'static [&'static str],
+    },
+    /// A true configuration value pushes the flag.
+    BoolFlag { flag: &'static str },
+    /// A numeric configuration value pushes the flag and value.
+    NumberOption {
+        flag: &'static str,
+        positive_only: bool,
+    },
+    /// An allowed string pushes `--config` and `<rust_key>=<value>`.
+    ConfigKv {
+        rust_key: &'static str,
+        allowed: &'static [&'static str],
+    },
+    /// An allowed string pushes the bare flag mapped in `flags`.
+    EnumToFlag {
+        allowed: &'static [&'static str],
+        flags: &'static [(&'static str, &'static str)],
+    },
+    /// A true configuration value is exclusive with any present conflict key.
+    ExclusiveToggle {
+        flag: &'static str,
+        conflicts: &'static [&'static str],
+    },
+}
+
+/// One ordered managed-agent launch rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AgentLaunchRule {
+    pub key: &'static str,
+    /// The rule is skipped when this configuration key is true.
+    pub suppressed_by: Option<&'static str>,
+    pub kind: AgentLaunchRuleKind,
+}
+
+impl AgentLaunchRule {
+    pub const fn string(key: &'static str, flag: &'static str) -> Self {
+        Self {
+            key,
+            suppressed_by: None,
+            kind: AgentLaunchRuleKind::StringOption { flag },
+        }
+    }
+
+    pub const fn enumeration(
+        key: &'static str,
+        flag: &'static str,
+        allowed: &'static [&'static str],
+    ) -> Self {
+        Self {
+            key,
+            suppressed_by: None,
+            kind: AgentLaunchRuleKind::EnumOption { flag, allowed },
+        }
+    }
+
+    pub const fn boolean(key: &'static str, flag: &'static str) -> Self {
+        Self {
+            key,
+            suppressed_by: None,
+            kind: AgentLaunchRuleKind::BoolFlag { flag },
+        }
+    }
+
+    pub const fn number(key: &'static str, flag: &'static str, positive_only: bool) -> Self {
+        Self {
+            key,
+            suppressed_by: None,
+            kind: AgentLaunchRuleKind::NumberOption {
+                flag,
+                positive_only,
+            },
+        }
+    }
+
+    pub const fn config_kv(
+        key: &'static str,
+        rust_key: &'static str,
+        allowed: &'static [&'static str],
+    ) -> Self {
+        Self {
+            key,
+            suppressed_by: None,
+            kind: AgentLaunchRuleKind::ConfigKv { rust_key, allowed },
+        }
+    }
+
+    pub const fn enum_to_flag(
+        key: &'static str,
+        allowed: &'static [&'static str],
+        flags: &'static [(&'static str, &'static str)],
+    ) -> Self {
+        Self {
+            key,
+            suppressed_by: None,
+            kind: AgentLaunchRuleKind::EnumToFlag { allowed, flags },
+        }
+    }
+
+    pub const fn exclusive(
+        key: &'static str,
+        flag: &'static str,
+        conflicts: &'static [&'static str],
+    ) -> Self {
+        Self {
+            key,
+            suppressed_by: None,
+            kind: AgentLaunchRuleKind::ExclusiveToggle { flag, conflicts },
+        }
+    }
+
+    pub const fn suppressed_by(mut self, key: &'static str) -> Self {
+        self.suppressed_by = Some(key);
+        self
+    }
+}
+
+/// A profile launcher that swaps the executable and prepends one positional
+/// argument when its configuration value is present.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AgentProfileLauncher {
+    pub key: &'static str,
+    pub executable: &'static str,
+}
+
+impl AgentProfileLauncher {
+    pub const fn new(key: &'static str, executable: &'static str) -> Self {
+        Self { key, executable }
+    }
+}
+
+/// Declarative managed-agent launch behavior carried by a descriptor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AgentLaunchSpec {
+    pub allowed_keys: &'static [&'static str],
+    pub profile_launcher: Option<AgentProfileLauncher>,
+    pub rules: &'static [AgentLaunchRule],
+}
+
+impl AgentLaunchSpec {
+    pub const fn new(
+        allowed_keys: &'static [&'static str],
+        profile_launcher: Option<AgentProfileLauncher>,
+        rules: &'static [AgentLaunchRule],
+    ) -> Self {
+        Self {
+            allowed_keys,
+            profile_launcher,
+            rules,
+        }
+    }
+}
+
 /// One declarative risk rule evaluated against a managed profile's config map.
 /// Exactly one of `expected_bool` / `expected_str` is set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,6 +286,7 @@ pub struct AgentDescriptor {
     /// grok).
     pub transcript_usage: bool,
     pub model_override: AgentModelOverride,
+    pub launch_spec: AgentLaunchSpec,
     /// Whether managed profiles support the persona field for this agent.
     pub supports_persona: bool,
     /// Whether the profile may launch through a `ccs`-style profile switcher
@@ -138,8 +301,10 @@ pub struct AgentDescriptor {
     pub risk_rules: &'static [AgentRiskRule],
 }
 
-
+mod launch_specs;
 mod table;
+
+pub mod snapshot_dart;
 
 pub use table::AGENT_DESCRIPTORS;
 
@@ -205,7 +370,10 @@ mod tests {
     fn severe_risk_warning_only_where_a_rule_scores_100() {
         for descriptor in AGENT_DESCRIPTORS {
             let has_full_score = descriptor.risk_rules.iter().any(|r| r.score >= 100);
-            assert_eq!(descriptor.risk_warning_severe.is_some(), descriptor.id == "codex" && has_full_score);
+            assert_eq!(
+                descriptor.risk_warning_severe.is_some(),
+                descriptor.id == "codex" && has_full_score
+            );
         }
     }
 }
