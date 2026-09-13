@@ -22,6 +22,7 @@ void main() {
 
     test('derives stable pin keys per provider and claude account', () {
       expect(AgentQuotaHostSettings.quotaPinKey(.codex), 'codex');
+      expect(AgentQuotaHostSettings.quotaPinKey(.agy), 'agy');
       expect(AgentQuotaHostSettings.quotaPinKey(.devin), 'devin');
       expect(AgentQuotaHostSettings.quotaPinKey(.claude), 'claude:default');
       expect(
@@ -45,6 +46,28 @@ void main() {
       );
       expect(host.isQuotaPinned(.claude), isTrue);
       expect(host.isQuotaPinned(.kimi), isTrue);
+    });
+
+    test('decodes legacy provider ids to canonical values and pin keys', () {
+      final host = AgentQuotaHostSettings.fromJson(<String, Object?>{
+        'enabledProviders': <String>['antigravity'],
+        'unpinnedQuotaKeys': <String>['antigravity'],
+      });
+
+      expect(host.enabledProviders, <AgentQuotaProviderId>[.agy]);
+      expect(host.unpinnedQuotaKeys, <String>['agy']);
+      expect(host.isQuotaPinned(.agy), isFalse);
+      expect(host.toMap()['enabledProviders'], <String>['agy']);
+      expect(host.toMap()['unpinnedQuotaKeys'], <String>['agy']);
+    });
+
+    test('pin checks accept legacy keys from direct settings construction', () {
+      const host = AgentQuotaHostSettings(
+        enabledProviders: <AgentQuotaProviderId>[.agy],
+        unpinnedQuotaKeys: <String>['antigravity'],
+      );
+
+      expect(host.isQuotaPinned(.agy), isFalse);
     });
 
     test('parses host-specific quota configuration', () {

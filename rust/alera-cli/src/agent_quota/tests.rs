@@ -38,14 +38,18 @@ fn parses_tui_used_and_remaining_percentages() {
     );
     assert_eq!(snapshot.status, "ok");
     assert_eq!(snapshot.windows.len(), 2);
-    assert!(snapshot
-        .windows
-        .iter()
-        .any(|window| window.used_percent == 20.0));
-    assert!(snapshot
-        .windows
-        .iter()
-        .any(|window| window.used_percent == 65.0));
+    assert!(
+        snapshot
+            .windows
+            .iter()
+            .any(|window| window.used_percent == 20.0)
+    );
+    assert!(
+        snapshot
+            .windows
+            .iter()
+            .any(|window| window.used_percent == 65.0)
+    );
 }
 
 #[test]
@@ -194,9 +198,11 @@ fn each_available_credential_gap_says_something_different() {
 #[cfg(target_os = "macos")]
 #[test]
 fn unreadable_credential_gap_explains_keychain_access() {
-    assert!(ClaudeCredentialGap::Unreadable
-        .message()
-        .contains("keychain"));
+    assert!(
+        ClaudeCredentialGap::Unreadable
+            .message()
+            .contains("keychain")
+    );
 }
 
 #[test]
@@ -236,7 +242,7 @@ fn a_quota_command_inherits_when_the_shell_cannot_be_probed() {
 #[test]
 fn preserves_gpt_acronym_and_uses_normal_hyphens() {
     let snapshot = parse_tui_snapshot(
-        "antigravity",
+        "agy",
         "default",
         "Antigravity",
         "claude and gpt models\nWeekly limit\n75% left",
@@ -246,7 +252,7 @@ fn preserves_gpt_acronym_and_uses_normal_hyphens() {
 }
 
 #[test]
-fn parses_decorated_antigravity_groups_and_split_reset_descriptions() {
+fn parses_decorated_agy_groups_and_split_reset_descriptions() {
     let output = [
         "│ GEMINI MODELS │",
         "│ Weekly Limit │",
@@ -265,9 +271,9 @@ fn parses_decorated_antigravity_groups_and_split_reset_descriptions() {
     ]
     .join("\n");
 
-    let snapshot = parse_tui_snapshot("antigravity", "default", "Antigravity", &output);
+    let snapshot = parse_tui_snapshot("agy", "default", "Antigravity", &output);
 
-    assert!(antigravity_usage_complete(&output));
+    assert!(agy_usage_complete(&output));
     assert_eq!(snapshot.buckets.len(), 4);
     assert_eq!(
         snapshot
@@ -293,10 +299,12 @@ fn parses_decorated_antigravity_groups_and_split_reset_descriptions() {
         .find(|bucket| bucket.name == "Claude And GPT Models - Weekly")
         .expect("Claude and GPT weekly quota");
     assert_eq!(claude_weekly.used_percent, 93.0);
-    assert!(claude_weekly
-        .reset_description
-        .as_deref()
-        .is_some_and(|description| description.contains("2d 20h")));
+    assert!(
+        claude_weekly
+            .reset_description
+            .as_deref()
+            .is_some_and(|description| description.contains("2d 20h"))
+    );
     assert_eq!(
         snapshot
             .buckets
@@ -309,7 +317,7 @@ fn parses_decorated_antigravity_groups_and_split_reset_descriptions() {
 }
 
 #[test]
-fn detects_complete_antigravity_usage_without_fixed_delay() {
+fn detects_complete_agy_usage_without_fixed_delay() {
     let complete = [
         "Gemini Models",
         "Weekly limit",
@@ -323,10 +331,20 @@ fn detects_complete_antigravity_usage_without_fixed_delay() {
         "100% left",
     ]
     .join("\n");
-    assert!(antigravity_usage_complete(&complete));
-    assert!(!antigravity_usage_complete(
-        "Gemini Models\nWeekly limit\n99% left"
-    ));
+    assert!(agy_usage_complete(&complete));
+    assert!(!agy_usage_complete("Gemini Models\nWeekly limit\n99% left"));
+}
+
+#[test]
+fn canonicalizes_legacy_quota_provider_ids_at_the_wire_boundary() {
+    assert_eq!(
+        canonicalize_quota_provider_ids(vec![
+            "antigravity".to_string(),
+            "agy".to_string(),
+            "kimi".to_string(),
+        ]),
+        vec!["agy".to_string(), "kimi".to_string()]
+    );
 }
 
 #[test]

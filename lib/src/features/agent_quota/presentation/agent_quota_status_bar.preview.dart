@@ -38,7 +38,7 @@ Widget agentQuotaStatusBarUnpinnedPreview() => SizedBox(
         'kimi',
         'grok',
         'cursor',
-        'antigravity',
+        'agy',
         'minimax',
         'zai',
       ],
@@ -119,7 +119,7 @@ AgentQuotaSnapshot _claudeProfileSnapshot(
 
 AgentQuotaSnapshot _antigravitySnapshot() {
   return AgentQuotaSnapshot(
-    provider: .antigravity,
+    provider: .agy,
     accountId: 'default',
     displayName: 'Antigravity',
     status: .ok,

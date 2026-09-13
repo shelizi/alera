@@ -106,7 +106,8 @@ class const AgentQuotaSnapshot({
     return AgentQuotaSnapshot._fromJson(
       json,
       AgentQuotaProviderId.values.firstWhere(
-        (provider) => provider.name == json['provider'],
+        (provider) =>
+            provider.name == canonicalAgentQuotaProviderId(json['provider']),
       ),
     );
   }
@@ -150,8 +151,9 @@ class const AgentQuotaSnapshot({
   /// the single unknown entry instead of failing the whole quota refresh.
   static AgentQuotaSnapshot? tryFromJson(Map<String, Object?> json) {
     AgentQuotaProviderId? provider;
+    final providerId = canonicalAgentQuotaProviderId(json['provider']);
     for (final candidate in AgentQuotaProviderId.values) {
-      if (candidate.name == json['provider']) {
+      if (candidate.name == providerId) {
         provider = candidate;
         break;
       }

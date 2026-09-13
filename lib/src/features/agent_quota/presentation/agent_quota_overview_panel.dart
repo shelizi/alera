@@ -99,8 +99,9 @@ class const _AgentQuotaOverviewPanel({
                     hostId: hostId,
                     actions: actions,
                     profileLabel: profileLabels[snapshot.key],
-                    pinned: !settings.unpinnedQuotaKeys.contains(
-                      snapshot.pinKey,
+                    pinned: settings.isQuotaPinned(
+                      snapshot.provider,
+                      claudeAccountId: snapshot.accountId,
                     ),
                     onTogglePinned: onTogglePinned,
                   ),

@@ -1,3 +1,4 @@
+use crate::agent_descriptor::canonical_agent_id;
 use serde::{Deserialize, Serialize};
 
 const CURRENT_PROVIDER_DEFAULTS_VERSION: u32 = 2;
@@ -35,17 +36,24 @@ impl Default for RuntimeAgentQuotaSettings {
 impl RuntimeAgentQuotaSettings {
     pub fn normalized(mut self) -> Self {
         const SUPPORTED: [&str; 10] = [
-            "claude",
-            "codex",
-            "kimi",
-            "grok",
-            "cursor",
-            "antigravity",
-            "minimax",
-            "zai",
-            "devin",
+            "claude", "codex", "kimi", "grok", "cursor", "agy", "minimax", "zai", "devin",
             "opencode",
         ];
+        let mut seen = std::collections::HashSet::new();
+        self.enabled_providers = self
+            .enabled_providers
+            .into_iter()
+            .filter_map(|provider| {
+                let canonical = canonical_agent_id(&provider)
+                    .map(str::to_owned)
+                    .unwrap_or(provider);
+                if SUPPORTED.contains(&canonical.as_str()) && seen.insert(canonical.clone()) {
+                    Some(canonical)
+                } else {
+                    None
+                }
+            })
+            .collect();
         if self.provider_defaults_version < CURRENT_PROVIDER_DEFAULTS_VERSION {
             if !self.enabled_providers.is_empty()
                 && !self
@@ -57,10 +65,6 @@ impl RuntimeAgentQuotaSettings {
             }
             self.provider_defaults_version = CURRENT_PROVIDER_DEFAULTS_VERSION;
         }
-        let mut seen = std::collections::HashSet::new();
-        self.enabled_providers.retain(|provider| {
-            SUPPORTED.contains(&provider.as_str()) && seen.insert(provider.clone())
-        });
         for profile in &mut self.claude_profiles {
             profile.alias = profile.alias.trim().to_string();
             profile.profile = profile.profile.trim().to_string();
@@ -145,16 +149,7 @@ impl RuntimeAgentQuotaEnvironment {
 
 fn default_quota_providers() -> Vec<String> {
     [
-        "claude",
-        "codex",
-        "kimi",
-        "grok",
-        "cursor",
-        "antigravity",
-        "minimax",
-        "zai",
-        "devin",
-        "opencode",
+        "claude", "codex", "kimi", "grok", "cursor", "agy", "minimax", "zai", "devin", "opencode",
     ]
     .into_iter()
     .map(str::to_string)
@@ -232,10 +227,12 @@ mod tests {
             migrated.provider_defaults_version,
             CURRENT_PROVIDER_DEFAULTS_VERSION
         );
-        assert!(migrated
-            .enabled_providers
-            .iter()
-            .any(|provider| provider == "devin"));
+        assert!(
+            migrated
+                .enabled_providers
+                .iter()
+                .any(|provider| provider == "devin")
+        );
     }
 
     #[test]
@@ -247,10 +244,12 @@ mod tests {
         .expect("current settings");
         let normalized = settings.normalized();
 
-        assert!(!normalized
-            .enabled_providers
-            .iter()
-            .any(|provider| provider == "devin"));
+        assert!(
+            !normalized
+                .enabled_providers
+                .iter()
+                .any(|provider| provider == "devin")
+        );
     }
 
     #[test]
@@ -265,6 +264,34 @@ mod tests {
         assert_eq!(
             migrated.provider_defaults_version,
             CURRENT_PROVIDER_DEFAULTS_VERSION
+        );
+    }
+
+    #[test]
+    fn legacy_antigravity_provider_is_canonicalized_and_deduplicated() {
+        let settings: RuntimeAgentQuotaSettings = serde_json::from_value(serde_json::json!({
+            "enabledProviders": ["antigravity", "agy", "kimi"],
+            "providerDefaultsVersion": CURRENT_PROVIDER_DEFAULTS_VERSION
+        }))
+        .expect("legacy settings");
+
+        assert_eq!(
+            settings.normalized().enabled_providers,
+            vec!["agy".to_string(), "kimi".to_string()]
+        );
+    }
+
+    #[test]
+    fn default_quota_providers_use_canonical_agy_id() {
+        assert!(
+            RuntimeAgentQuotaSettings::default()
+                .enabled_providers
+                .contains(&"agy".to_string())
+        );
+        assert!(
+            !RuntimeAgentQuotaSettings::default()
+                .enabled_providers
+                .contains(&"antigravity".to_string())
         );
     }
 

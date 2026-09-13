@@ -100,7 +100,7 @@ String _bucketReadingLabel(
   if (provider == AgentQuotaProviderId.claude && lower.contains('fable')) {
     return 'F';
   }
-  if (provider == AgentQuotaProviderId.antigravity) {
+  if (provider == AgentQuotaProviderId.agy) {
     final group = lower.contains('gemini') ? 'G' : 'C/G';
     return '$group·${_shortWindowLabel(bucket.name)}';
   }
@@ -171,7 +171,7 @@ int _readingOrder(AgentQuotaProviderId provider, String label) {
       return 1;
     }
   }
-  if (provider == AgentQuotaProviderId.antigravity) {
+  if (provider == AgentQuotaProviderId.agy) {
     final group = lower.contains('gemini') ? 0 : 10;
     final window = lower.contains('5 hour') || lower.contains('5h') ? 0 : 1;
     return group + window;
