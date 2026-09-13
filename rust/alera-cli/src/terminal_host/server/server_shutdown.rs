@@ -1,3 +1,4 @@
+use super::disconnect_reason::DisconnectReason;
 use super::{control_file, ServerActor};
 
 impl ServerActor {
@@ -15,8 +16,11 @@ impl ServerActor {
         if let Some(handle) = self.mobile_gateway.take() {
             handle.abort();
         }
-        // Closing client handles ends their connection loops.
-        self.clients.clear();
+        let client_ids = self.clients.keys().copied().collect::<Vec<_>>();
+        for client_id in client_ids {
+            self.dispose_client_with_reason(client_id, DisconnectReason::HostShutdown)
+                .await;
+        }
         let store = self.store.clone();
         let session_ids: Vec<String> = self.sessions.keys().cloned().collect();
         for session_id in session_ids {

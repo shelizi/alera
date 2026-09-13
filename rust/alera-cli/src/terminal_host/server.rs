@@ -191,6 +191,8 @@ mod server_orchestration_tests;
 mod server_runner;
 mod server_shutdown;
 #[cfg(test)]
+mod server_shutdown_tests;
+#[cfg(test)]
 mod server_ssh_bootstrap_tests;
 #[cfg(test)]
 mod server_test_support;
