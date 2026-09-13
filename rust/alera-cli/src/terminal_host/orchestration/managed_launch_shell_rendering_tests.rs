@@ -1,9 +1,9 @@
 use serde_json::json;
 
-use super::super::agent_registry::adapter_for;
 use super::super::agent_startup_command::append_initial_prompt_argument;
 use super::super::managed_agent_launch::build_managed_agent_launch;
 use super::*;
+use alera_core::agent_descriptor::agent_descriptor;
 
 #[test]
 fn rendering_quotes_each_token_for_supported_shell_families() {
@@ -33,7 +33,7 @@ fn rendering_quotes_each_token_for_supported_shell_families() {
 fn codex_managed_prompt_follows_the_option_terminator_on_every_shell() {
     let mut launch = build_managed_agent_launch("codex", &json!({"webSearch": true})).unwrap();
     append_initial_prompt_argument(
-        adapter_for("codex").unwrap(),
+        agent_descriptor("codex").unwrap(),
         &mut launch.arguments,
         "- Review why it's pending\n- Implement memory",
     );
@@ -55,7 +55,7 @@ fn codex_managed_prompt_follows_the_option_terminator_on_every_shell() {
 fn a_long_option_managed_prompt_stays_one_argument_on_every_shell() {
     let mut launch = build_managed_agent_launch("opencode", &json!({"agent": "build"})).unwrap();
     append_initial_prompt_argument(
-        adapter_for("opencode").unwrap(),
+        agent_descriptor("opencode").unwrap(),
         &mut launch.arguments,
         "- Review why it's pending",
     );
@@ -73,7 +73,7 @@ fn a_long_option_managed_prompt_stays_one_argument_on_every_shell() {
 fn a_managed_amp_launch_keeps_its_prompt_off_the_command_line() {
     let mut launch = build_managed_agent_launch("amp", &json!({"mode": "high"})).unwrap();
     append_initial_prompt_argument(
-        adapter_for("amp").unwrap(),
+        agent_descriptor("amp").unwrap(),
         &mut launch.arguments,
         "- Review why it's pending",
     );

@@ -1,6 +1,7 @@
 //! Resolving which agent profile runs a task, and picking the next candidate
 //! when an earlier one failed to start.
 
+use alera_core::agent_descriptor::agent_descriptor;
 use alera_core::runtime::{
     AgentProfile, AgentProfileLaunchMode, OrchestrationPolicyStatus, OrchestrationTask,
 };
@@ -10,7 +11,6 @@ use crate::terminal_host::host_error::{HostError, HostResult};
 use crate::terminal_host::orchestration::agent_profile_launch_snapshot::{
     AgentInitialDeliveryReplayV1, AgentProfileLaunchSnapshotV1,
 };
-use crate::terminal_host::orchestration::agent_registry::adapter_for;
 use crate::terminal_host::orchestration::managed_agent_launch::{
     build_managed_agent_launch, ManagedAgentLaunch,
 };
@@ -60,12 +60,12 @@ impl ServerActor {
                 ))
             })?;
         let (command, managed_launch) = launch_for_profile(&profile).map_err(HostError::format)?;
-        let adapter = adapter_for(&profile.agent_type).ok_or_else(|| {
+        let descriptor = agent_descriptor(&profile.agent_type).ok_or_else(|| {
             HostError::format(format!("unsupported agent type: {}", profile.agent_type))
         })?;
         let launch_snapshot = AgentProfileLaunchSnapshotV1::new(
             &profile,
-            adapter,
+            descriptor,
             command.clone(),
             managed_launch.clone(),
             AgentInitialDeliveryReplayV1::OnRestart,

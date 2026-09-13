@@ -1,9 +1,9 @@
+use alera_core::agent_descriptor::agent_descriptor;
 use alera_core::runtime::{OrchestrationDispatchContext, OrchestrationDispatchStatus};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use crate::terminal_host::host_error::{HostError, HostResult};
-use crate::terminal_host::orchestration::agent_registry::adapter_for;
 use crate::terminal_host::orchestration::dispatch_preamble::{
     build_dispatch_bootstrap, build_dispatch_preamble, build_worker_contract,
     parse_allow_stale_base_from_spec, PreambleParams, WorkerKind,
@@ -138,10 +138,10 @@ impl ServerActor {
             .and_then(Value::as_bool)
             .unwrap_or(false);
         let assume_agent = optional_string(payload, "assumeAgent");
-        let assumed_adapter = assume_agent
+        let assumed_descriptor = assume_agent
             .as_deref()
             .map(|agent| {
-                adapter_for(agent)
+                agent_descriptor(agent)
                     .ok_or_else(|| HostError::format(format!("unsupported agent type: {agent}")))
             })
             .transpose()?;
@@ -213,12 +213,12 @@ impl ServerActor {
                     session.workspace_id, task.workspace_id
                 )));
             }
-            if self.agent_presence.get(&to).is_none() && assumed_adapter.is_none() {
+            if self.agent_presence.get(&to).is_none() && assumed_descriptor.is_none() {
                 return Err(HostError::state(format!(
                     "no agent detected in terminal {to}; use --assume-agent <agent> for an audited injection override or dispatch without --inject and submit the returned bootstrap manually"
                 )));
             }
-            if !self.agent_presence.is_injection_ready(&to) && assumed_adapter.is_none() {
+            if !self.agent_presence.is_injection_ready(&to) && assumed_descriptor.is_none() {
                 return Err(HostError::state(format!(
                     "agent in terminal {to} is not idle; cannot inject"
                 )));
@@ -260,7 +260,7 @@ impl ServerActor {
             )
             .await
             .map_err(state_error)?;
-        if let Some(adapter) = assumed_adapter {
+        if let Some(descriptor) = assumed_descriptor {
             self.runtime_store
                 .insert_orchestration_audit_event(
                     Some(&from),
@@ -268,7 +268,7 @@ impl ServerActor {
                     &dispatch.id,
                     &format!(
                         "agent readiness bypassed with explicit adapter {}",
-                        adapter.agent_type
+                        descriptor.id
                     ),
                 )
                 .await
@@ -288,8 +288,8 @@ impl ServerActor {
             .get("forceSubmit")
             .and_then(Value::as_bool)
             .unwrap_or_else(|| {
-                assumed_adapter
-                    .map(|adapter| adapter.force_submit)
+                assumed_descriptor
+                    .map(|descriptor| descriptor.force_submit)
                     .unwrap_or(false)
             });
         let dispatch_id = dispatch.id.clone();
@@ -450,9 +450,9 @@ impl ServerActor {
             .clone()
             .ok_or_else(|| HostError::state("dispatch has no assignee"))?;
         let agent_type = self.agent_presence.agent_type(&handle).unwrap_or("codex");
-        let adapter = adapter_for(agent_type)
+        let descriptor = agent_descriptor(agent_type)
             .ok_or_else(|| HostError::state(format!("no interrupt adapter for {agent_type}")))?;
-        self.queue_orchestration_control(&handle, adapter.interrupt_bytes)?;
+        self.queue_orchestration_control(&handle, descriptor.interrupt_bytes)?;
         self.runtime_store
             .insert_orchestration_audit_event(
                 actor.as_deref(),

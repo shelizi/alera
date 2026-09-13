@@ -3,10 +3,10 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
+use alera_core::agent_descriptor::{AgentHookStrategy, AGENT_DESCRIPTORS};
 use axum::body::{to_bytes, Body};
-use axum::extract::State;
+use axum::extract::{Path as AxumPath, State};
 use axum::http::{HeaderMap, Request, StatusCode};
-use axum::response::IntoResponse;
 use axum::routing::post;
 use axum::Router;
 use serde_json::Value;
@@ -101,17 +101,7 @@ pub fn start_agent_hook_receiver(
             return;
         };
         let app = Router::new()
-            .route("/hook/codex", post(handle_codex))
-            .route("/hook/claude", post(handle_claude))
-            .route("/hook/copilot", post(handle_copilot))
-            .route("/hook/cursor", post(handle_cursor))
-            .route("/hook/agy", post(handle_agy))
-            .route("/hook/opencode", post(handle_opencode))
-            .route("/hook/opencode2", post(handle_opencode2))
-            .route("/hook/pi", post(handle_pi))
-            .route("/hook/amp", post(handle_amp))
-            .route("/hook/grok", post(handle_grok))
-            .route("/hook/devin", post(handle_devin))
+            .route("/hook/{agent}", post(handle_hook))
             .with_state(state);
         let _ = axum::serve(
             listener,
@@ -159,62 +149,33 @@ pub fn watch_agent_hook_event_batches(sink: StreamSink<AgentHookEventBatchDto>) 
     }
 }
 
-async fn handle_codex(State(state): State<AppState>, request: Request<Body>) -> impl IntoResponse {
-    handle_hook_request(state, request, "codex").await
-}
-
-async fn handle_claude(State(state): State<AppState>, request: Request<Body>) -> impl IntoResponse {
-    handle_hook_request(state, request, "claude").await
-}
-
-async fn handle_copilot(
+async fn handle_hook(
+    AxumPath(agent): AxumPath<String>,
     State(state): State<AppState>,
     request: Request<Body>,
-) -> impl IntoResponse {
-    handle_hook_request(state, request, "copilot").await
+) -> StatusCode {
+    let Some(descriptor) = AGENT_DESCRIPTORS.iter().find(|descriptor| {
+        descriptor.id == agent.as_str() && is_http_hook_strategy(descriptor.hook_strategy)
+    }) else {
+        return StatusCode::NOT_FOUND;
+    };
+    handle_hook_request(state, request, descriptor.id).await
 }
 
-async fn handle_cursor(State(state): State<AppState>, request: Request<Body>) -> impl IntoResponse {
-    handle_hook_request(state, request, "cursor").await
-}
-
-async fn handle_agy(State(state): State<AppState>, request: Request<Body>) -> impl IntoResponse {
-    handle_hook_request(state, request, "agy").await
-}
-
-async fn handle_opencode(
-    State(state): State<AppState>,
-    request: Request<Body>,
-) -> impl IntoResponse {
-    handle_hook_request(state, request, "opencode").await
-}
-
-async fn handle_opencode2(
-    State(state): State<AppState>,
-    request: Request<Body>,
-) -> impl IntoResponse {
-    handle_hook_request(state, request, "opencode2").await
-}
-
-async fn handle_pi(State(state): State<AppState>, request: Request<Body>) -> impl IntoResponse {
-    handle_hook_request(state, request, "pi").await
-}
-
-async fn handle_amp(State(state): State<AppState>, request: Request<Body>) -> impl IntoResponse {
-    handle_hook_request(state, request, "amp").await
-}
-
-async fn handle_grok(State(state): State<AppState>, request: Request<Body>) -> impl IntoResponse {
-    handle_hook_request(state, request, "grok").await
-}
-async fn handle_devin(State(state): State<AppState>, request: Request<Body>) -> impl IntoResponse {
-    handle_hook_request(state, request, "devin").await
+fn is_http_hook_strategy(strategy: AgentHookStrategy) -> bool {
+    matches!(
+        strategy,
+        AgentHookStrategy::ConfigJson
+            | AgentHookStrategy::PluginScript
+            | AgentHookStrategy::RuntimeHome
+            | AgentHookStrategy::SessionOverlay
+    )
 }
 
 async fn handle_hook_request(
     state: AppState,
     request: Request<Body>,
-    agent_type: &'static str,
+    agent_type: &str,
 ) -> StatusCode {
     if !valid_token(request.headers(), &state.token) {
         return StatusCode::FORBIDDEN;

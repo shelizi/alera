@@ -1,10 +1,10 @@
+use alera_core::agent_descriptor::agent_descriptor;
 use alera_core::runtime::{WorkspaceStatus, WorkspaceTabRecord};
 use serde_json::Value;
 
 use crate::agent_status::prepare_launch_environment;
 use crate::terminal_host::host_error::{HostError, HostResult};
 use crate::terminal_host::orchestration::agent_profile_launch_snapshot::AgentInitialDeliveryMechanismV1;
-use crate::terminal_host::orchestration::agent_registry::adapter_for;
 use crate::terminal_host::orchestration::agent_startup_command::{
     append_initial_prompt_argument_for, command_with_initial_prompt_for,
 };
@@ -131,9 +131,10 @@ impl ServerActor {
         .await?;
         let managed_launch = initial_managed_agent_launch(tab)?;
         let prompt = initial_prompt(tab);
-        // The snapshot, or the adapter for a legacy tab, owns prompt shape.
-        let adapter = tab_agent_type(tab).and_then(adapter_for);
-        let delivery = mechanism(tab)?.or_else(|| adapter.map(|item| item.startup_prompt.into()));
+        // The snapshot, or the descriptor for a legacy tab, owns prompt shape.
+        let descriptor = tab_agent_type(tab).and_then(agent_descriptor);
+        let delivery =
+            mechanism(tab)?.or_else(|| descriptor.map(|item| item.startup_prompt.into()));
         let prompt_arguments = delivery.as_ref().zip(prompt.as_deref());
         let command = if let Some(mut launch) = managed_launch {
             if let Some((mechanism, prompt)) = prompt_arguments {

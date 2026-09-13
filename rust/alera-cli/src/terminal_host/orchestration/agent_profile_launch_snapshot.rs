@@ -1,7 +1,7 @@
+use alera_core::agent_descriptor::{AgentDescriptor, AgentStartupPrompt};
 use alera_core::runtime::{AgentProfile, AgentProfileLaunchMode};
 use serde::{Deserialize, Serialize};
 
-use super::agent_registry::{AgentAdapter, AgentStartupPrompt};
 use super::managed_agent_launch::ManagedAgentLaunch;
 
 pub const AGENT_PROFILE_LAUNCH_SNAPSHOT_KEY: &str = "agentProfileLaunchV1";
@@ -84,7 +84,7 @@ pub enum AgentInitialDeliveryReplayV1 {
 impl AgentProfileLaunchSnapshotV1 {
     pub fn new(
         profile: &AgentProfile,
-        adapter: &AgentAdapter,
+        descriptor: &AgentDescriptor,
         command: Option<String>,
         managed_launch: Option<ManagedAgentLaunch>,
         replay: AgentInitialDeliveryReplayV1,
@@ -112,7 +112,7 @@ impl AgentProfileLaunchSnapshotV1 {
                 name: profile.name.clone(),
                 revision: profile.revision,
             },
-            agent_type: adapter.agent_type.to_string(),
+            agent_type: descriptor.id.to_string(),
             launch_mode: profile.launch_mode,
             launch,
             target: AgentProfileLaunchTargetV1 {
@@ -120,7 +120,7 @@ impl AgentProfileLaunchSnapshotV1 {
                 platform: std::env::consts::OS.to_string(),
             },
             initial_delivery: AgentInitialDeliveryV1 {
-                mechanism: AgentInitialDeliveryMechanismV1::from(adapter.startup_prompt),
+                mechanism: AgentInitialDeliveryMechanismV1::from(descriptor.startup_prompt),
                 replay,
             },
         })
@@ -166,7 +166,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::terminal_host::orchestration::agent_registry::adapter_for;
+    use alera_core::agent_descriptor::agent_descriptor;
 
     fn profile(mode: AgentProfileLaunchMode) -> AgentProfile {
         let now = Utc::now();
@@ -191,7 +191,7 @@ mod tests {
     fn managed_snapshot_round_trips_effective_argv_without_configuration_or_environment() {
         let snapshot = AgentProfileLaunchSnapshotV1::new(
             &profile(AgentProfileLaunchMode::Managed),
-            adapter_for("codex").unwrap(),
+            agent_descriptor("codex").unwrap(),
             None,
             Some(ManagedAgentLaunch {
                 executable: "codex".to_string(),
@@ -219,7 +219,7 @@ mod tests {
         profile.revision = 7;
         let snapshot = AgentProfileLaunchSnapshotV1::new(
             &profile,
-            adapter_for("codex").unwrap(),
+            agent_descriptor("codex").unwrap(),
             Some("codex".to_string()),
             None,
             AgentInitialDeliveryReplayV1::Once,
@@ -236,7 +236,7 @@ mod tests {
         let profile = profile(AgentProfileLaunchMode::Command);
         let snapshot = AgentProfileLaunchSnapshotV1::new(
             &profile,
-            adapter_for("codex").unwrap(),
+            agent_descriptor("codex").unwrap(),
             Some(profile.command.clone()),
             None,
             AgentInitialDeliveryReplayV1::OnRestart,
@@ -251,7 +251,7 @@ mod tests {
         let mut profile = profile(AgentProfileLaunchMode::Command);
         let snapshot = AgentProfileLaunchSnapshotV1::new(
             &profile,
-            adapter_for("codex").unwrap(),
+            agent_descriptor("codex").unwrap(),
             Some(profile.command.clone()),
             None,
             AgentInitialDeliveryReplayV1::OnRestart,

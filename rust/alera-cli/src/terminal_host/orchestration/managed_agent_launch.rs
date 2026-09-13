@@ -1,7 +1,6 @@
+use alera_core::agent_descriptor::{agent_descriptor, AgentDescriptor, AgentModelOverride};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-
-use super::agent_registry::adapter_for;
 
 #[path = "managed_agent_launch_args.rs"]
 mod managed_agent_launch_args;
@@ -26,33 +25,44 @@ const CCS_EXECUTABLE: &str = "ccs";
 /// One reasoning-effort enum serves both of Codex's effort settings.
 const CODEX_EFFORTS: &[&str] = &["minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
 
+fn push_model(
+    descriptor: &AgentDescriptor,
+    values: &Map<String, Value>,
+    arguments: &mut Vec<String>,
+) -> Result<(), String> {
+    match descriptor.model_override {
+        AgentModelOverride::Supported => push_string(values, "model", "--model", arguments),
+        AgentModelOverride::ProfileOnly | AgentModelOverride::Unsupported => Ok(()),
+    }
+}
+
 pub fn build_managed_agent_launch(
     agent_type: &str,
     config: &Value,
 ) -> Result<ManagedAgentLaunch, String> {
-    let adapter =
-        adapter_for(agent_type).ok_or_else(|| format!("unsupported agent type: {agent_type}"))?;
+    let descriptor = agent_descriptor(agent_type)
+        .ok_or_else(|| format!("unsupported agent type: {agent_type}"))?;
     let values = config
         .as_object()
         .ok_or_else(|| "managedConfig must be an object.".to_string())?;
-    let mut executable = adapter.default_command.to_string();
+    let mut executable = descriptor.default_command.to_string();
     let mut arguments = Vec::new();
     match agent_type {
-        "codex" => build_codex(values, &mut arguments)?,
+        "codex" => build_codex(descriptor, values, &mut arguments)?,
         "claude" => {
-            if let Some(launcher) = build_claude(values, &mut arguments)? {
+            if let Some(launcher) = build_claude(descriptor, values, &mut arguments)? {
                 executable = launcher;
             }
         }
-        "copilot" => build_copilot(values, &mut arguments)?,
-        "cursor" => build_cursor(values, &mut arguments)?,
-        "agy" => build_agy(values, &mut arguments)?,
-        "opencode" => build_opencode(values, &mut arguments)?,
-        "opencode2" => build_opencode2(values, &mut arguments)?,
-        "pi" => build_pi(values, &mut arguments)?,
+        "copilot" => build_copilot(descriptor, values, &mut arguments)?,
+        "cursor" => build_cursor(descriptor, values, &mut arguments)?,
+        "agy" => build_agy(descriptor, values, &mut arguments)?,
+        "opencode" => build_opencode(descriptor, values, &mut arguments)?,
+        "opencode2" => build_opencode2(descriptor, values, &mut arguments)?,
+        "pi" => build_pi(descriptor, values, &mut arguments)?,
         "amp" => build_amp(values, &mut arguments)?,
-        "grok" => build_grok(values, &mut arguments)?,
-        "devin" => build_devin(values, &mut arguments)?,
+        "grok" => build_grok(descriptor, values, &mut arguments)?,
+        "devin" => build_devin(descriptor, values, &mut arguments)?,
         "fx" => build_fx(values, &mut arguments)?,
         _ => return Err(format!("unsupported managed agent type: {agent_type}")),
     }
@@ -62,9 +72,13 @@ pub fn build_managed_agent_launch(
     })
 }
 
-fn build_devin(values: &Map<String, Value>, arguments: &mut Vec<String>) -> Result<(), String> {
+fn build_devin(
+    descriptor: &AgentDescriptor,
+    values: &Map<String, Value>,
+    arguments: &mut Vec<String>,
+) -> Result<(), String> {
     require_known_keys(values, &["model", "permissionMode", "sandbox"])?;
-    push_string(values, "model", "--model", arguments)?;
+    push_model(descriptor, values, arguments)?;
     push_enum(
         values,
         "permissionMode",
@@ -76,7 +90,11 @@ fn build_devin(values: &Map<String, Value>, arguments: &mut Vec<String>) -> Resu
     Ok(())
 }
 
-fn build_codex(values: &Map<String, Value>, arguments: &mut Vec<String>) -> Result<(), String> {
+fn build_codex(
+    descriptor: &AgentDescriptor,
+    values: &Map<String, Value>,
+    arguments: &mut Vec<String>,
+) -> Result<(), String> {
     require_known_keys(
         values,
         &[
@@ -89,7 +107,7 @@ fn build_codex(values: &Map<String, Value>, arguments: &mut Vec<String>) -> Resu
             "bypassApprovalsAndSandbox",
         ],
     )?;
-    push_string(values, "model", "--model", arguments)?;
+    push_model(descriptor, values, arguments)?;
     if let Some(effort) = enum_value(values, "effort", CODEX_EFFORTS)? {
         arguments.extend([
             "--config".to_string(),
@@ -136,6 +154,7 @@ fn build_codex(values: &Map<String, Value>, arguments: &mut Vec<String>) -> Resu
 /// Returns the executable to launch instead of `claude`, if the profile routes
 /// through a CCS profile.
 fn build_claude(
+    descriptor: &AgentDescriptor,
     values: &Map<String, Value>,
     arguments: &mut Vec<String>,
 ) -> Result<Option<String>, String> {
@@ -165,7 +184,7 @@ fn build_claude(
             Some(CCS_EXECUTABLE.to_string())
         }
     };
-    push_string(values, "model", "--model", arguments)?;
+    push_model(descriptor, values, arguments)?;
     push_enum(
         values,
         "effort",
@@ -199,7 +218,11 @@ fn build_claude(
     Ok(launcher)
 }
 
-fn build_copilot(values: &Map<String, Value>, arguments: &mut Vec<String>) -> Result<(), String> {
+fn build_copilot(
+    descriptor: &AgentDescriptor,
+    values: &Map<String, Value>,
+    arguments: &mut Vec<String>,
+) -> Result<(), String> {
     require_known_keys(
         values,
         &[
@@ -214,7 +237,7 @@ fn build_copilot(values: &Map<String, Value>, arguments: &mut Vec<String>) -> Re
             "noAskUser",
         ],
     )?;
-    push_string(values, "model", "--model", arguments)?;
+    push_model(descriptor, values, arguments)?;
     push_enum(
         values,
         "effort",
@@ -248,7 +271,11 @@ fn build_copilot(values: &Map<String, Value>, arguments: &mut Vec<String>) -> Re
     push_flag(values, "noAskUser", "--no-ask-user", arguments)
 }
 
-fn build_cursor(values: &Map<String, Value>, arguments: &mut Vec<String>) -> Result<(), String> {
+fn build_cursor(
+    descriptor: &AgentDescriptor,
+    values: &Map<String, Value>,
+    arguments: &mut Vec<String>,
+) -> Result<(), String> {
     require_known_keys(
         values,
         &[
@@ -259,7 +286,7 @@ fn build_cursor(values: &Map<String, Value>, arguments: &mut Vec<String>) -> Res
             "trustWorkspace",
         ],
     )?;
-    push_string(values, "model", "--model", arguments)?;
+    push_model(descriptor, values, arguments)?;
     push_enum(values, "mode", "--mode", &["plan", "ask"], arguments)?;
     if let Some(mode) = enum_value(values, "permissionMode", &["autoReview", "force"])? {
         arguments.push(
@@ -281,7 +308,11 @@ fn build_cursor(values: &Map<String, Value>, arguments: &mut Vec<String>) -> Res
     push_flag(values, "trustWorkspace", "--trust", arguments)
 }
 
-fn build_agy(values: &Map<String, Value>, arguments: &mut Vec<String>) -> Result<(), String> {
+fn build_agy(
+    descriptor: &AgentDescriptor,
+    values: &Map<String, Value>,
+    arguments: &mut Vec<String>,
+) -> Result<(), String> {
     require_known_keys(
         values,
         &[
@@ -293,7 +324,7 @@ fn build_agy(values: &Map<String, Value>, arguments: &mut Vec<String>) -> Result
             "sandbox",
         ],
     )?;
-    push_string(values, "model", "--model", arguments)?;
+    push_model(descriptor, values, arguments)?;
     push_enum(
         values,
         "effort",
@@ -318,9 +349,13 @@ fn build_agy(values: &Map<String, Value>, arguments: &mut Vec<String>) -> Result
     push_flag(values, "sandbox", "--sandbox", arguments)
 }
 
-fn build_opencode(values: &Map<String, Value>, arguments: &mut Vec<String>) -> Result<(), String> {
+fn build_opencode(
+    descriptor: &AgentDescriptor,
+    values: &Map<String, Value>,
+    arguments: &mut Vec<String>,
+) -> Result<(), String> {
     require_known_keys(values, &["model", "agent", "autoApprove"])?;
-    push_string(values, "model", "--model", arguments)?;
+    push_model(descriptor, values, arguments)?;
     push_string(values, "agent", "--agent", arguments)?;
     push_flag(values, "autoApprove", "--auto", arguments)
 }
@@ -328,14 +363,23 @@ fn build_opencode(values: &Map<String, Value>, arguments: &mut Vec<String>) -> R
 // Interactive opencode2 only accepts --auto on the default TUI command.
 // Model/agent remain accepted in profile config for UI parity and run-mode
 // consumers, but they are not emitted on the interactive launch line.
-fn build_opencode2(values: &Map<String, Value>, arguments: &mut Vec<String>) -> Result<(), String> {
+fn build_opencode2(
+    descriptor: &AgentDescriptor,
+    values: &Map<String, Value>,
+    arguments: &mut Vec<String>,
+) -> Result<(), String> {
     require_known_keys(values, &["model", "agent", "autoApprove"])?;
+    push_model(descriptor, values, arguments)?;
     push_flag(values, "autoApprove", "--auto", arguments)
 }
 
-fn build_pi(values: &Map<String, Value>, arguments: &mut Vec<String>) -> Result<(), String> {
+fn build_pi(
+    descriptor: &AgentDescriptor,
+    values: &Map<String, Value>,
+    arguments: &mut Vec<String>,
+) -> Result<(), String> {
     require_known_keys(values, &["model", "thinking", "projectTrust"])?;
-    push_string(values, "model", "--model", arguments)?;
+    push_model(descriptor, values, arguments)?;
     push_enum(
         values,
         "thinking",
@@ -368,7 +412,11 @@ fn build_amp(values: &Map<String, Value>, arguments: &mut Vec<String>) -> Result
     push_flag(values, "fast", "--fast", arguments)
 }
 
-fn build_grok(values: &Map<String, Value>, arguments: &mut Vec<String>) -> Result<(), String> {
+fn build_grok(
+    descriptor: &AgentDescriptor,
+    values: &Map<String, Value>,
+    arguments: &mut Vec<String>,
+) -> Result<(), String> {
     require_known_keys(
         values,
         &[
@@ -380,7 +428,7 @@ fn build_grok(values: &Map<String, Value>, arguments: &mut Vec<String>) -> Resul
             "disableWebSearch",
         ],
     )?;
-    push_string(values, "model", "--model", arguments)?;
+    push_model(descriptor, values, arguments)?;
     push_enum(
         values,
         "effort",

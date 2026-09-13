@@ -1,3 +1,4 @@
+use alera_core::agent_descriptor::agent_descriptor;
 use alera_core::runtime::{AgentProfileLaunchReceiptOutcome, WorkspaceStatus, WorkspaceTabRecord};
 use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
@@ -7,8 +8,6 @@ use crate::terminal_host::orchestration::agent_profile_launch_snapshot::{
     AgentInitialDeliveryMechanismV1, AgentInitialDeliveryReplayV1, AgentProfileLaunchSnapshotV1,
     AGENT_PROFILE_LAUNCH_SNAPSHOT_KEY,
 };
-use crate::terminal_host::orchestration::agent_registry::adapter_for;
-
 use super::agent_prompt_composition::compose_agent_prompt;
 use super::client_delivery::LocalClientRole;
 use super::host_service_requests::required_non_blank;
@@ -131,13 +130,13 @@ impl ServerActor {
             &profile.custom_prompt,
             &effective_config.config.new_workspace.prompt_append,
         );
-        let adapter = adapter_for(&profile.agent_type).ok_or_else(|| {
+        let descriptor = agent_descriptor(&profile.agent_type).ok_or_else(|| {
             HostError::format(format!("Unsupported agent type: {}", profile.agent_type))
         })?;
         let (command, managed_launch) = launch_for_profile(&profile).map_err(HostError::format)?;
         let launch_snapshot = AgentProfileLaunchSnapshotV1::new(
             &profile,
-            adapter,
+            descriptor,
             command,
             managed_launch,
             AgentInitialDeliveryReplayV1::Once,
@@ -153,7 +152,7 @@ impl ServerActor {
             // after its built-in lifecycle reports that the TUI is ready.
             "initialPrompt": (!prompt_after_ready).then(|| prompt.clone()),
             "pendingAgentPrompt": prompt_after_ready.then(|| json!({
-                "agent": adapter.agent_type,
+                "agent": descriptor.id,
                 "prompt": prompt,
             })),
             "spawnOnCreate": true,
@@ -180,17 +179,17 @@ impl ServerActor {
         redact_private_tab_payload(&mut projected_tab);
         let result = json!({
             "tab": projected_tab,
-            "agentType": adapter.agent_type,
+            "agentType": descriptor.id,
             "profileId": profile.id,
         });
         let Some(mutation_id) = client_mutation_id.as_deref() else {
             let mut saved = self.upsert_workspace_tab_and_spawn(tab).await?;
-            self.observe_agent_title(&saved.id, adapter.agent_type, None, &title_prompt, true)
+            self.observe_agent_title(&saved.id, descriptor.id, None, &title_prompt, true)
                 .await;
             redact_private_tab_payload(&mut saved);
             return Ok(json!({
                 "tab": saved,
-                "agentType": adapter.agent_type,
+                "agentType": descriptor.id,
                 "profileId": profile.id,
             }));
         };
@@ -222,7 +221,7 @@ impl ServerActor {
             self.terminate_sessions_for_tab(&tab.id).await;
             return Err(error);
         }
-        self.observe_agent_title(&tab.id, adapter.agent_type, None, &title_prompt, true)
+        self.observe_agent_title(&tab.id, descriptor.id, None, &title_prompt, true)
             .await;
         self.broadcast_workspace_tabs_changed(Some(&workspace_id));
         Ok(result)

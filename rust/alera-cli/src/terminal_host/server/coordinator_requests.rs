@@ -1,3 +1,4 @@
+use alera_core::agent_descriptor::agent_descriptor;
 use alera_core::runtime::{
     OrchestrationCoordinatorStatus, OrchestrationGateStatus, OrchestrationMessageType,
     OrchestrationTaskStatus,
@@ -5,7 +6,6 @@ use alera_core::runtime::{
 use serde_json::{json, Value};
 
 use crate::terminal_host::host_error::{HostError, HostResult};
-use crate::terminal_host::orchestration::agent_registry::adapter_for;
 use crate::terminal_host::orchestration::coordinator_loop::{
     acceptance_timeout_threshold_iso, hung_dispatch_threshold_iso, CoordinatorConfig,
     CoordinatorHandle, COORDINATOR_DEFAULT_POLL_MS, COORDINATOR_MAX_CONCURRENT_DEFAULT,
@@ -75,7 +75,7 @@ impl ServerActor {
             .and_then(Value::as_str)
             .unwrap_or("claude")
             .to_string();
-        if adapter_for(&agent_type).is_none() {
+        if agent_descriptor(&agent_type).is_none() {
             return Err(HostError::format(format!(
                 "unsupported agent type: {agent_type}"
             )));

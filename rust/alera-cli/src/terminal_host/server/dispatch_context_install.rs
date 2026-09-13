@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
+use alera_core::agent_descriptor::AgentDescriptor;
 use alera_core::git::GitBaseDrift;
 use alera_core::runtime::{
     OrchestrationDispatchStatus, OrchestrationTask, WorkspaceTabRecord,
@@ -20,7 +21,6 @@ use alera_core::runtime::{
 use serde_json::{json, Value};
 
 use crate::terminal_host::host_error::{HostError, HostResult};
-use crate::terminal_host::orchestration::agent_registry::AgentAdapter;
 
 use super::orchestration_profile_spawn::ResolvedSpawnProfile;
 use super::{ServerActor, ServerCommand};
@@ -96,7 +96,7 @@ pub(super) enum DispatchContextContinuation {
 pub(super) struct PendingAgentSpawn {
     pub handle: String,
     pub resolved: ResolvedSpawnProfile,
-    pub adapter: &'static AgentAdapter,
+    pub descriptor: &'static AgentDescriptor,
     pub preflight: Option<(String, Option<GitBaseDrift>)>,
     pub bootstrap: String,
     pub keep_on_failure: bool,

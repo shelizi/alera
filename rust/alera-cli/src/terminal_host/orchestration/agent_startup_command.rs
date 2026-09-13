@@ -6,7 +6,7 @@
 
 use super::agent_profile_launch_snapshot::AgentInitialDeliveryMechanismV1;
 #[cfg(test)]
-use super::agent_registry::AgentAdapter;
+use alera_core::agent_descriptor::AgentDescriptor;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ShellFamily {
@@ -23,9 +23,9 @@ const OPTION_TERMINATOR: &str = "--";
 ///
 /// Empty when the prompt never reaches the command line at launch.
 #[cfg(test)]
-pub fn initial_prompt_arguments(adapter: &AgentAdapter, prompt: &str) -> Vec<String> {
+pub fn initial_prompt_arguments(descriptor: &AgentDescriptor, prompt: &str) -> Vec<String> {
     initial_prompt_arguments_for(
-        &AgentInitialDeliveryMechanismV1::from(adapter.startup_prompt),
+        &AgentInitialDeliveryMechanismV1::from(descriptor.startup_prompt),
         prompt,
     )
 }
@@ -49,11 +49,11 @@ pub fn initial_prompt_arguments_for(
 
 #[cfg(test)]
 pub fn append_initial_prompt_argument(
-    adapter: &AgentAdapter,
+    descriptor: &AgentDescriptor,
     arguments: &mut Vec<String>,
     prompt: &str,
 ) {
-    arguments.extend(initial_prompt_arguments(adapter, prompt));
+    arguments.extend(initial_prompt_arguments(descriptor, prompt));
 }
 
 pub fn append_initial_prompt_argument_for(
@@ -66,13 +66,13 @@ pub fn append_initial_prompt_argument_for(
 
 #[cfg(test)]
 pub fn command_with_initial_prompt(
-    adapter: &AgentAdapter,
+    descriptor: &AgentDescriptor,
     command: &str,
     prompt: &str,
     shell: &str,
 ) -> String {
     command_with_initial_prompt_for(
-        &AgentInitialDeliveryMechanismV1::from(adapter.startup_prompt),
+        &AgentInitialDeliveryMechanismV1::from(descriptor.startup_prompt),
         command,
         prompt,
         shell,
@@ -141,18 +141,19 @@ fn quote_argument(value: &str, family: ShellFamily) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::super::agent_registry::adapter_for;
+    use alera_core::agent_descriptor::{agent_descriptor, AgentDescriptor};
+
     use super::*;
 
-    fn adapter(agent_type: &str) -> &'static AgentAdapter {
-        adapter_for(agent_type).expect("known agent")
+    fn descriptor(agent_type: &str) -> &'static AgentDescriptor {
+        agent_descriptor(agent_type).expect("known agent")
     }
 
     #[test]
     fn terminates_posix_options_before_a_dash_prefixed_prompt() {
         assert_eq!(
             command_with_initial_prompt(
-                adapter("codex"),
+                descriptor("codex"),
                 "codex --search",
                 "- Review $HOME\n- It's ready",
                 "/bin/zsh"
@@ -165,7 +166,7 @@ mod tests {
     fn terminates_powershell_options_before_a_dash_prefixed_prompt() {
         assert_eq!(
             command_with_initial_prompt(
-                adapter("codex"),
+                descriptor("codex"),
                 "codex --search",
                 "- Review memory\n- It's ready",
                 "pwsh.exe"
@@ -178,7 +179,7 @@ mod tests {
     fn terminates_cmd_options_before_a_dash_prefixed_prompt() {
         assert_eq!(
             command_with_initial_prompt(
-                adapter("codex"),
+                descriptor("codex"),
                 "codex --search",
                 "- Review \"context\"\n- Implement memory",
                 "C:\\Windows\\cmd.exe"
@@ -191,7 +192,7 @@ mod tests {
     fn appends_the_option_terminator_before_a_managed_prompt() {
         let mut arguments = vec!["--search".to_string()];
         append_initial_prompt_argument(
-            adapter("codex"),
+            descriptor("codex"),
             &mut arguments,
             "- Review memory\n- Implement it",
         );
@@ -205,7 +206,7 @@ mod tests {
     fn claude_and_cursor_take_the_same_terminated_positional() {
         for agent_type in ["claude", "cursor", "grok", "devin"] {
             assert_eq!(
-                initial_prompt_arguments(adapter(agent_type), "- Ship it"),
+                initial_prompt_arguments(descriptor(agent_type), "- Ship it"),
                 ["--", "- Ship it"],
                 "{agent_type}"
             );
@@ -215,15 +216,15 @@ mod tests {
     #[test]
     fn long_option_agents_carry_the_prompt_in_one_token() {
         assert_eq!(
-            initial_prompt_arguments(adapter("copilot"), "- Ship it"),
+            initial_prompt_arguments(descriptor("copilot"), "- Ship it"),
             ["--interactive=- Ship it"]
         );
         assert_eq!(
-            initial_prompt_arguments(adapter("agy"), "- Ship it"),
+            initial_prompt_arguments(descriptor("agy"), "- Ship it"),
             ["--prompt-interactive=- Ship it"]
         );
         assert_eq!(
-            initial_prompt_arguments(adapter("opencode"), "- Ship it"),
+            initial_prompt_arguments(descriptor("opencode"), "- Ship it"),
             ["--prompt=- Ship it"]
         );
     }
@@ -232,7 +233,7 @@ mod tests {
     fn a_long_option_prompt_is_quoted_whole_so_it_stays_one_argument() {
         assert_eq!(
             command_with_initial_prompt(
-                adapter("opencode"),
+                descriptor("opencode"),
                 "opencode --agent build",
                 "- Review it\n- It's ready",
                 "/bin/zsh"
@@ -244,16 +245,16 @@ mod tests {
     #[test]
     fn pi_gets_a_bare_positional_with_a_dash_prefix_defused() {
         assert_eq!(
-            initial_prompt_arguments(adapter("pi"), "Ship it"),
+            initial_prompt_arguments(descriptor("pi"), "Ship it"),
             ["Ship it"]
         );
         assert_eq!(
-            initial_prompt_arguments(adapter("pi"), "- Ship it"),
+            initial_prompt_arguments(descriptor("pi"), "- Ship it"),
             [" - Ship it"]
         );
         assert_eq!(
             command_with_initial_prompt(
-                adapter("pi"),
+                descriptor("pi"),
                 "pi --thinking high",
                 "- Ship it",
                 "/bin/zsh"
@@ -264,18 +265,23 @@ mod tests {
 
     #[test]
     fn amp_contributes_no_arguments_because_its_prompt_goes_to_stdin() {
-        assert!(initial_prompt_arguments(adapter("amp"), "- Ship it").is_empty());
+        assert!(initial_prompt_arguments(descriptor("amp"), "- Ship it").is_empty());
         assert_eq!(
-            command_with_initial_prompt(adapter("amp"), "amp --mode high", "- Ship it", "/bin/zsh"),
+            command_with_initial_prompt(
+                descriptor("amp"),
+                "amp --mode high",
+                "- Ship it",
+                "/bin/zsh",
+            ),
             "amp --mode high"
         );
     }
 
     #[test]
     fn fx_contributes_no_arguments_until_its_ready_event() {
-        assert!(initial_prompt_arguments(adapter("fx"), "- Ship it").is_empty());
+        assert!(initial_prompt_arguments(descriptor("fx"), "- Ship it").is_empty());
         assert_eq!(
-            command_with_initial_prompt(adapter("fx"), "fx", "- Ship it", "/bin/zsh"),
+            command_with_initial_prompt(descriptor("fx"), "fx", "- Ship it", "/bin/zsh"),
             "fx"
         );
     }

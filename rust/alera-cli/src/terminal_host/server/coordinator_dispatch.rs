@@ -1,10 +1,10 @@
+use alera_core::agent_descriptor::agent_descriptor;
 use alera_core::git::GitBaseDrift;
 use alera_core::runtime::{OrchestrationGateStatus, OrchestrationTask, OrchestrationTaskStatus};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::terminal_host::orchestration::agent_presence::AgentPresenceState;
-use crate::terminal_host::orchestration::agent_registry::adapter_for;
 use crate::terminal_host::orchestration::coordinator_loop::{
     CoordinatorConfig, COORDINATOR_DISPATCH_STALE_THRESHOLD,
 };
@@ -427,7 +427,7 @@ impl ServerActor {
             return Ok(false);
         }
         let force_submit =
-            adapter_for(&config.agent_type).is_some_and(|adapter| adapter.force_submit);
+            agent_descriptor(&config.agent_type).is_some_and(|descriptor| descriptor.force_submit);
         // The context write runs off the actor; the CoordinatorPaste
         // continuation re-validates the run and session before injecting.
         if let Err(error) = self.start_dispatch_context_install(

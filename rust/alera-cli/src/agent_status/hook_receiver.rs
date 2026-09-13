@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::Path;
 
+use alera_core::agent_descriptor::{AgentHookStrategy, AGENT_DESCRIPTORS};
 use axum::body::{to_bytes, Body};
 use axum::extract::{Path as AxumPath, State};
 use axum::http::{HeaderMap, Request, StatusCode};
@@ -16,20 +17,6 @@ use crate::terminal_host::server::ServerCommand;
 
 const TOKEN_HEADER: &str = "X-Alera-Agent-Hook-Token";
 const REQUEST_MAX_BYTES: usize = 1_000_000;
-const SUPPORTED_AGENTS: [&str; 12] = [
-    "codex",
-    "claude",
-    "copilot",
-    "cursor",
-    "agy",
-    "opencode",
-    "opencode2",
-    "pi",
-    "amp",
-    "grok",
-    "devin",
-    "fx",
-];
 
 #[derive(Debug, Clone)]
 pub struct AgentHookEvent {
@@ -74,8 +61,7 @@ async fn handle_hook(
     State(state): State<HookState>,
     request: Request<Body>,
 ) -> StatusCode {
-    if !SUPPORTED_AGENTS.contains(&agent.as_str()) || !valid_token(request.headers(), &state.token)
-    {
+    if !http_hook_supported(&agent) || !valid_token(request.headers(), &state.token) {
         return StatusCode::FORBIDDEN;
     }
     let content_type = request
@@ -93,6 +79,19 @@ async fn handle_hook(
     };
     let _ = state.inbox.send(ServerCommand::AgentHookEvent { event });
     StatusCode::NO_CONTENT
+}
+
+fn http_hook_supported(agent: &str) -> bool {
+    AGENT_DESCRIPTORS.iter().any(|descriptor| {
+        descriptor.id == agent
+            && matches!(
+                descriptor.hook_strategy,
+                AgentHookStrategy::ConfigJson
+                    | AgentHookStrategy::PluginScript
+                    | AgentHookStrategy::RuntimeHome
+                    | AgentHookStrategy::SessionOverlay
+            )
+    })
 }
 
 fn valid_token(headers: &HeaderMap, expected: &str) -> bool {
@@ -168,4 +167,31 @@ fn write_endpoint_file(runtime_dir: &Path, port: u16, token: &str) -> anyhow::Re
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::http_hook_supported;
+
+    #[test]
+    fn http_hook_support_uses_canonical_http_strategies() {
+        for agent in [
+            "codex",
+            "claude",
+            "copilot",
+            "cursor",
+            "agy",
+            "opencode",
+            "opencode2",
+            "pi",
+            "amp",
+            "grok",
+            "devin",
+        ] {
+            assert!(http_hook_supported(agent), "{agent}");
+        }
+        assert!(!http_hook_supported("fx"));
+        assert!(!http_hook_supported("antigravity"));
+        assert!(!http_hook_supported("unknown"));
+    }
 }
