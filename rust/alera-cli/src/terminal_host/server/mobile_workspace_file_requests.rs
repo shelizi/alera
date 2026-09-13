@@ -28,25 +28,30 @@ impl ServerActor {
     ) -> HostResult<()> {
         let runtime_store = self.runtime_store.clone();
         let runtime_dir = self.runtime_dir.clone();
-        let request_type = request_type.to_string();
+        let request_type_str = request_type.to_string();
         let payload = payload.clone();
         let inbox = self.inbox.clone();
-        tokio::spawn(async move {
-            let operation = request_type.clone();
-            let result = handle_mobile_workspace_file_request(
-                runtime_store,
-                runtime_dir,
-                &request_type,
-                &payload,
-            )
-            .await;
-            let _ = inbox.send(ServerCommand::MobileWorkspaceFileFinished {
-                client_id,
-                request_id,
-                request_type: operation,
-                result,
-            });
-        });
+        self.deferred_admission.schedule(
+            super::deferred_admission::DeferredRequestClass::Bulk,
+            request_type,
+            Some(client_id),
+            async move {
+                let operation = request_type_str.clone();
+                let result = handle_mobile_workspace_file_request(
+                    runtime_store,
+                    runtime_dir,
+                    &request_type_str,
+                    &payload,
+                )
+                .await;
+                let _ = inbox.send(ServerCommand::MobileWorkspaceFileFinished {
+                    client_id,
+                    request_id,
+                    request_type: operation,
+                    result,
+                });
+            },
+        )?;
         Ok(())
     }
 

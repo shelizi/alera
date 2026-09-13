@@ -39,11 +39,9 @@ impl ServerActor {
         {
             blockers.push("Workspace has a live terminal session or process".to_string());
         }
-        self.managed_workspace_jobs += 1;
-        self.cancel_shutdown_timer();
         let store = self.runtime_store.clone();
         let inbox = self.inbox.clone();
-        tokio::spawn(async move {
+        let task = async move {
             match workspace_has_active_automation_owner(&store, &workspace_id).await {
                 Ok(true) => blockers.push("Workspace is owned by an active automation".to_string()),
                 Err(error) => blockers.push(format!("Could not verify automations: {error}")),
@@ -56,7 +54,21 @@ impl ServerActor {
                 request_id,
                 result,
             });
-        });
+        };
+        match self.deferred_admission.schedule(
+            super::deferred_admission::DeferredRequestClass::Bulk,
+            "workspace.storageImpact",
+            Some(client_id),
+            task,
+        ) {
+            Ok(()) => {
+                self.managed_workspace_jobs += 1;
+                self.cancel_shutdown_timer();
+            }
+            Err(error) => {
+                self.client_write(client_id, error_response(request_id, &error));
+            }
+        }
     }
 
     pub(super) fn handle_workspace_storage_measured(
@@ -88,20 +100,32 @@ impl ServerActor {
         workspace_id: String,
         copies_only: bool,
     ) {
-        self.managed_workspace_jobs += 1;
-        self.cancel_shutdown_timer();
         let store = self.runtime_store.clone();
         let inbox = self.inbox.clone();
         // The copy rules are synchronous filesystem work and a rule may name a
         // large directory, so they stay off the actor loop.
-        tokio::spawn(async move {
+        let task = async move {
             let result = json_result(run_workspace_setup(&store, &workspace_id, copies_only).await);
             let _ = inbox.send(ServerCommand::WorkspaceSetupFinished {
                 client_id,
                 request_id,
                 result,
             });
-        });
+        };
+        match self.deferred_admission.schedule(
+            super::deferred_admission::DeferredRequestClass::Bulk,
+            "workspace.runSetup",
+            Some(client_id),
+            task,
+        ) {
+            Ok(()) => {
+                self.managed_workspace_jobs += 1;
+                self.cancel_shutdown_timer();
+            }
+            Err(error) => {
+                self.client_write(client_id, error_response(request_id, &error));
+            }
+        }
     }
 
     pub(super) fn start_managed_workspace_create(
@@ -110,18 +134,30 @@ impl ServerActor {
         request_id: i64,
         request: ManagedWorkspaceCreateRequest,
     ) {
-        self.managed_workspace_jobs += 1;
-        self.cancel_shutdown_timer();
         let store = self.runtime_store.clone();
         let inbox = self.inbox.clone();
-        tokio::spawn(async move {
+        let task = async move {
             let result = json_result(create_managed_workspace(&store, request).await);
             let _ = inbox.send(ServerCommand::ManagedWorkspaceCreated {
                 client_id,
                 request_id,
                 result,
             });
-        });
+        };
+        match self.deferred_admission.schedule(
+            super::deferred_admission::DeferredRequestClass::Bulk,
+            "workspace.createManaged",
+            Some(client_id),
+            task,
+        ) {
+            Ok(()) => {
+                self.managed_workspace_jobs += 1;
+                self.cancel_shutdown_timer();
+            }
+            Err(error) => {
+                self.client_write(client_id, error_response(request_id, &error));
+            }
+        }
     }
 
     /// Copy rules only touch the filesystem, so nothing in the runtime store

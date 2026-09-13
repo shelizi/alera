@@ -1,8 +1,14 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
+use serde_json::json;
+
+use crate::terminal_host::alera_account::AuthProvider;
 use crate::terminal_host::client::ClientHandle;
+use crate::terminal_host::host_error::HostError;
 
-use super::actor_test_harness::{mobile_client, test_actor};
+use super::actor_test_harness::{local_client, mobile_client, test_actor};
+use super::deferred_admission::{DeferredAdmission, DEFERRED_REQUEST_BACKPRESSURE_CODE};
 
 #[tokio::test]
 async fn authoritative_subscription_sync_updates_lifecycle_and_waiter() {
@@ -251,4 +257,134 @@ async fn configuration_import_validates_adapters_and_managed_launches_before_wri
                 .is_none());
         }
     }
+}
+
+fn request_type_entry<'a>(
+    snapshot: &'a serde_json::Value,
+    request_type: &str,
+) -> &'a serde_json::Value {
+    snapshot["requestTypes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["requestType"] == request_type)
+        .unwrap_or_else(|| panic!("missing requestType entry for {request_type}"))
+}
+
+#[tokio::test]
+async fn push_subscription_sync_rejection_clears_in_flight_and_answers_waiters() {
+    let dir = tempfile::tempdir().unwrap();
+    let (handle, mut responses) = ClientHandle::test_channels();
+    let mut actor = test_actor(
+        &dir,
+        HashMap::from([(1, local_client(handle))]),
+        HashMap::new(),
+    )
+    .await;
+    actor.deferred_admission = Arc::new(DeferredAdmission::paused_with_limits(1, 2, 0));
+    actor.deferred_admission.add_test_permits(1);
+    let (inbox, _commands) = tokio::sync::mpsc::unbounded_channel();
+    actor.inbox = inbox;
+
+    let (blocker_release_tx, blocker_release_rx) = tokio::sync::oneshot::channel::<()>();
+    actor
+        .start_deferred_request(1, 60, "test.fill", async move {
+            let _ = blocker_release_rx.await;
+            Ok(json!({}))
+        })
+        .unwrap();
+    actor
+        .start_deferred_request(1, 61, "test.fill", async { Ok(json!({})) })
+        .unwrap();
+
+    actor.start_push_subscription_sync(Some((1, 80)));
+
+    assert!(!actor.account_push.subscription_sync_in_flight);
+    assert_eq!(actor.account_push.cloud_jobs, 0);
+    assert!(actor.account_push.subscription_sync_waiters.is_empty());
+
+    let sync_rejected = tokio::time::timeout(std::time::Duration::from_secs(1), responses.recv())
+        .await
+        .expect("waiter should receive rejection response")
+        .unwrap()
+        .as_json()
+        .unwrap();
+    assert_eq!(sync_rejected["id"], 80);
+    assert_eq!(sync_rejected["ok"], false);
+    assert_eq!(
+        sync_rejected["errorCode"],
+        DEFERRED_REQUEST_BACKPRESSURE_CODE
+    );
+    assert_eq!(
+        sync_rejected["errorDetails"]["requestType"],
+        "mobile.cloudSubscriptions.refresh"
+    );
+
+    let snapshot = actor.deferred_admission.snapshot();
+    assert_eq!(snapshot["rejected"], 1);
+    let sync_entry = request_type_entry(&snapshot, "mobile.cloudSubscriptions.refresh");
+    assert_eq!(sync_entry["rejected"], 1);
+    assert_eq!(sync_entry["pending"], 0);
+
+    blocker_release_tx.send(()).unwrap();
+}
+
+#[tokio::test]
+async fn account_sign_in_rejects_under_saturation_without_starting() {
+    let dir = tempfile::tempdir().unwrap();
+    let (handle, _responses) = ClientHandle::test_channels();
+    let mut actor = test_actor(
+        &dir,
+        HashMap::from([(1, local_client(handle))]),
+        HashMap::new(),
+    )
+    .await;
+    actor.deferred_admission = Arc::new(DeferredAdmission::paused_with_limits(1, 2, 0));
+    actor.deferred_admission.add_test_permits(1);
+    let (inbox, _commands) = tokio::sync::mpsc::unbounded_channel();
+    actor.inbox = inbox;
+
+    let (blocker_release_tx, blocker_release_rx) = tokio::sync::oneshot::channel::<()>();
+    actor
+        .start_deferred_request(1, 60, "test.fill", async move {
+            let _ = blocker_release_rx.await;
+            Ok(json!({}))
+        })
+        .unwrap();
+    actor
+        .start_deferred_request(1, 61, "test.fill", async { Ok(json!({})) })
+        .unwrap();
+
+    let error = actor
+        .start_account_sign_in(1, 90, AuthProvider::Google, false)
+        .expect_err("saturated admission must reject sign-in");
+    let HostError::Conflict { code, details, .. } = &error else {
+        panic!("expected a typed conflict, got {error:?}");
+    };
+    assert_eq!(code, DEFERRED_REQUEST_BACKPRESSURE_CODE);
+    assert_eq!(details["requestType"], "account.signIn.start");
+    assert!(actor.account_push.sign_in_cancel.is_none());
+    assert_eq!(actor.account_push.cloud_jobs, 0);
+
+    blocker_release_tx.send(()).unwrap();
+}
+
+#[tokio::test]
+async fn account_sign_in_stays_single_flight() {
+    let dir = tempfile::tempdir().unwrap();
+    let (handle, _responses) = ClientHandle::test_channels();
+    let mut actor = test_actor(
+        &dir,
+        HashMap::from([(1, local_client(handle))]),
+        HashMap::new(),
+    )
+    .await;
+    let (cancel_tx, _cancel_rx) = tokio::sync::oneshot::channel::<()>();
+    actor.account_push.sign_in_cancel = Some(cancel_tx);
+
+    let error = actor
+        .start_account_sign_in(1, 91, AuthProvider::Google, false)
+        .expect_err("a second sign-in must stay single-flight");
+    assert!(error.wire_message().contains("already in progress"));
+    assert!(actor.account_push.sign_in_cancel.is_some());
 }

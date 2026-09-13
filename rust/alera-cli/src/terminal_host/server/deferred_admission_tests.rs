@@ -330,3 +330,127 @@ async fn disconnect_drops_queued_owner_jobs_while_active_jobs_finish() {
         .expect("another client's queued job should run once the slot frees")
         .unwrap();
 }
+
+#[tokio::test]
+async fn newly_routed_requests_are_rejected_under_saturation_while_status_answers() {
+    let dir = tempfile::tempdir().unwrap();
+    let (handle, mut responses) = ClientHandle::test_channels();
+    let mut actor = test_actor(
+        &dir,
+        HashMap::from([(1, local_client(handle))]),
+        HashMap::new(),
+    )
+    .await;
+    actor.deferred_admission = Arc::new(DeferredAdmission::paused_with_limits(1, 2, 0));
+    actor.deferred_admission.add_test_permits(1);
+    let (inbox, _commands) = tokio::sync::mpsc::unbounded_channel();
+    actor.inbox = inbox;
+
+    // Fill admission: 1 active slot, 1 pending slot (total capacity = 2).
+    let (blocker_release_tx, blocker_release_rx) = tokio::sync::oneshot::channel::<()>();
+    actor
+        .start_deferred_request(1, 60, "test.fill", async move {
+            let _ = blocker_release_rx.await;
+            Ok(json!({}))
+        })
+        .unwrap();
+    actor
+        .start_deferred_request(1, 61, "test.fill", async { Ok(json!({})) })
+        .unwrap();
+
+    // 1. Newly routed agentQuota.snapshot with forceRefresh: true must be rejected
+    actor
+        .handle_line(
+            1,
+            json!({
+                "id": 70,
+                "type": "agentQuota.snapshot",
+                "payload": {"forceRefresh": true},
+            })
+            .to_string(),
+        )
+        .await;
+
+    let quota_rejected = tokio::time::timeout(Duration::from_secs(1), responses.recv())
+        .await
+        .expect("saturated admission must answer agentQuota.snapshot with backpressure")
+        .unwrap()
+        .as_json()
+        .unwrap();
+    assert_eq!(quota_rejected["id"], 70);
+    assert_eq!(quota_rejected["ok"], false);
+    assert_eq!(
+        quota_rejected["errorCode"],
+        DEFERRED_REQUEST_BACKPRESSURE_CODE
+    );
+    assert_eq!(
+        quota_rejected["errorDetails"]["requestType"],
+        "agentQuota.snapshot"
+    );
+    assert_eq!(quota_rejected["errorDetails"]["requestClass"], "bulk");
+
+    // 2. Newly routed workspace.storageImpact must be rejected and not leak managed_workspace_jobs
+    actor
+        .handle_line(
+            1,
+            json!({
+                "id": 71,
+                "type": "workspace.storageImpact",
+                "payload": {"id": "ws-test"},
+            })
+            .to_string(),
+        )
+        .await;
+
+    let storage_rejected = tokio::time::timeout(Duration::from_secs(1), responses.recv())
+        .await
+        .expect("saturated admission must answer workspace.storageImpact with backpressure")
+        .unwrap()
+        .as_json()
+        .unwrap();
+    assert_eq!(storage_rejected["id"], 71);
+    assert_eq!(storage_rejected["ok"], false);
+    assert_eq!(
+        storage_rejected["errorCode"],
+        DEFERRED_REQUEST_BACKPRESSURE_CODE
+    );
+    assert_eq!(
+        storage_rejected["errorDetails"]["requestType"],
+        "workspace.storageImpact"
+    );
+    assert_eq!(actor.managed_workspace_jobs, 0);
+
+    // 3. status.get still answers promptly while saturated
+    actor
+        .handle_line(
+            1,
+            json!({"id": 72, "type": "status.get", "payload": {}}).to_string(),
+        )
+        .await;
+
+    let status = tokio::time::timeout(Duration::from_secs(1), responses.recv())
+        .await
+        .expect("status.get must answer while admission is saturated")
+        .unwrap()
+        .as_json()
+        .unwrap();
+    assert_eq!(status["id"], 72);
+    assert_eq!(status["ok"], true);
+
+    let admission_snapshot = &status["payload"]["deferredAdmission"];
+    assert_eq!(admission_snapshot["active"], 1);
+    assert_eq!(admission_snapshot["pending"], 1);
+    assert_eq!(admission_snapshot["rejected"], 2);
+
+    let quota_entry = request_type_entry(admission_snapshot, "agentQuota.snapshot");
+    assert_eq!(quota_entry["rejected"], 1);
+    assert_eq!(quota_entry["pending"], 0);
+    assert_eq!(quota_entry["queued"], 0);
+
+    let storage_entry = request_type_entry(admission_snapshot, "workspace.storageImpact");
+    assert_eq!(storage_entry["rejected"], 1);
+    assert_eq!(storage_entry["pending"], 0);
+    assert_eq!(storage_entry["queued"], 0);
+
+    blocker_release_tx.send(()).unwrap();
+}

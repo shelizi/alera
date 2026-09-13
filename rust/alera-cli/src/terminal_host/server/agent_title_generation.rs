@@ -170,12 +170,13 @@ impl ServerActor {
         let tab_id = tab_id.to_string();
         let id = id.to_string();
         let directory = self.runtime_dir.join("agent-title-jobs").join(&id);
+        let reply_client = job.reply.as_ref().map(|(client_id, _)| *client_id);
         let (cancel_tx, cancel_rx) = oneshot::channel();
         self.agent_title_jobs
             .get_mut(&tab_id)
             .expect("job exists")
             .cancel = Some(cancel_tx);
-        tokio::spawn(async move {
+        let task = async move {
             let result = async {
                 // Bounded parsing and command preparation stay off the server actor.
                 let recent = if automatic && !initial.is_empty() { String::new() } else { clean_terminal(&recent) };
@@ -188,7 +189,13 @@ impl ServerActor {
             }.await;
             let _ = tokio::fs::remove_dir_all(&directory).await;
             let _ = inbox.send(ServerCommand::AgentTitleFinished { tab_id, id, result });
-        });
+        };
+        self.deferred_admission.schedule(
+            super::deferred_admission::DeferredRequestClass::Bulk,
+            "aiText.agentTitle.generate",
+            reply_client,
+            task,
+        )?;
         Ok(())
     }
 

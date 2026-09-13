@@ -40,7 +40,8 @@ impl ServerActor {
         }
         active.insert(operation_id.clone(), cancel_tx);
         drop(active);
-        tokio::spawn(async move {
+        let task_operation_id = operation_id.clone();
+        let task = async move {
             let result = async {
                 let resolved_workspace_id = if let Some(workspace_id) = workspace_id {
                     workspace_id
@@ -70,14 +71,25 @@ impl ServerActor {
             }
             .await;
             if let Ok(mut active) = active_generations().lock() {
-                active.remove(&operation_id);
+                active.remove(&task_operation_id);
             }
             let _ = inbox.send(ServerCommand::AiAssistFinished {
                 client_id,
                 request_id,
                 result,
             });
-        });
+        };
+        if let Err(error) = self.deferred_admission.schedule(
+            super::deferred_admission::DeferredRequestClass::Bulk,
+            "aiText.speechMessage.generate",
+            Some(client_id),
+            task,
+        ) {
+            if let Ok(mut active) = active_generations().lock() {
+                active.remove(&operation_id);
+            }
+            return Err(error);
+        }
         Ok(())
     }
 }
