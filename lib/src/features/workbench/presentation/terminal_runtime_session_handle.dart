@@ -12,7 +12,8 @@ class _XtermTerminalSessionHandle(
   this._onVisibilityChanged,
 ) extends TerminalSessionHandle
     with _TerminalSearchSessionSupport, _TerminalSessionCapabilitiesSupport
-    implements TerminalRuntimeLaunchInputOwnerHost,
+    implements
+        TerminalRuntimeLaunchInputOwnerHost,
         _TerminalSessionVisibilityHost,
         _TerminalSessionOutputHost {
   this {
@@ -53,8 +54,9 @@ class _XtermTerminalSessionHandle(
   @override
   late final StreamSubscription<String> _decodedOutputSub;
 
-  late final _TerminalSessionOutputPump _pump =
-      _TerminalSessionOutputPump(this);
+  late final _TerminalSessionOutputPump _pump = _TerminalSessionOutputPump(
+    this,
+  );
   @override
   TerminalPtySession? _ptySession;
   StreamSubscription<TerminalPtySessionEvent>? _ptySessionSub;
@@ -166,43 +168,6 @@ class _XtermTerminalSessionHandle(
   @override
   String? get errorMessage => _errorMessage;
 
-  _XtermTerminalSessionHandle sync({
-    required Workspace workspace,
-    required WorkspaceTabRecord tab,
-  }) {
-    final metadataChanged =
-        _workspace.id != workspace.id ||
-        _workspace.path != workspace.path ||
-        _tab.id != tab.id ||
-        _tab.title != tab.title ||
-        _tab.hasManualTitle != tab.hasManualTitle;
-    _workspace = workspace;
-    _tab = tab;
-    _syncTerminalPulseConfiguration(tab);
-    _titleNotifier.value = displayTitle;
-    if (metadataChanged) {
-      // sync() is invoked from build(); defer the notification so listening
-      // AnimatedBuilders are not marked dirty during the build phase.
-      scheduleMicrotask(() {
-        if (!_disposed) {
-          notifyListeners();
-        }
-      });
-    }
-    return this;
-  }
-
-  void applySettings(TerminalSettings settings) {
-    _settings = settings;
-    if (!settings.clipboardOnSelect) {
-      _selectionCopyTimer?.cancel();
-      _selectionCopyTimer = null;
-    } else {
-      _handleSelectionChanged();
-    }
-    notifyListeners();
-  }
-
   @override
   Future<void> ensureStarted() =>
       _sessionOwner._ensureTerminalSessionStarted(this);
@@ -232,79 +197,6 @@ class _XtermTerminalSessionHandle(
     );
   }
 
-  xterm.TerminalView _buildTerminalView({
-    required bool autofocus,
-    FocusOnKeyEventCallback? onKeyEvent,
-    required MouseCursor mouseCursor,
-    void Function(TapUpDetails details, xterm.CellOffset offset)? onTapUp,
-  }) {
-    return _rendererAdapterOwner.buildTerminalView(
-      terminal: _terminal,
-      terminalViewKey: _terminalViewKey,
-      controller: _terminalController,
-      scrollController: _scrollController,
-      focusNode: _focusNode,
-      settings: _settings,
-      autofocus: autofocus,
-      onKeyEvent: onKeyEvent,
-      mouseCursor: mouseCursor,
-      onTapUp: onTapUp,
-      onPaste: _pasteFromClipboard,
-      onCopy: _launchInputOwner.clipboard.writeText,
-    );
-  }
-
-  TerminalLinkRange? _linkAt(xterm.CellOffset offset) {
-    return _rendererAdapterOwner.linkAt(terminal: _terminal, offset: offset);
-  }
-
-  Future<void> _openLink(Uri uri) {
-    return _rendererAdapterOwner.openLink(uri);
-  }
-
-  void _handleTitleChanged(String title) {
-    _title = title;
-    _titleNotifier.value = displayTitle;
-  }
-
-  void _handleTerminalInput(String data) {
-    _ptySession?.writeBytes(utf8.encode(data));
-  }
-
-  void _handleTerminalResize(
-    int width,
-    int height,
-    int pixelWidth,
-    int pixelHeight,
-  ) {
-    _pendingPtySize = _TerminalPtySize(
-      cols: width,
-      rows: height,
-      cellWidthPx: pixelWidth,
-      cellHeightPx: pixelHeight,
-    );
-    _pendingPtyResizeTimer ??= Timer(
-      _ptyResizeDebounceDuration,
-      _flushPendingPtyResize,
-    );
-  }
-
-  void _flushPendingPtyResize() {
-    _pendingPtyResizeTimer?.cancel();
-    _pendingPtyResizeTimer = null;
-    final size = _pendingPtySize;
-    final session = _ptySession;
-    if (_disposed || size == null) {
-      _pendingPtySize = null;
-      return;
-    }
-    if (session == null) {
-      return;
-    }
-    _pendingPtySize = null;
-    session.resize(size.cols, size.rows, size.cellWidthPx, size.cellHeightPx);
-  }
-
   @override
   Future<void> refreshRendering() {
     return _rendererAdapterOwner.refreshRendering(
@@ -314,8 +206,6 @@ class _XtermTerminalSessionHandle(
       isDisposed: _disposed,
     );
   }
-
-  Future<void> _pasteFromClipboard() => _pasteTerminalClipboard(this);
 
   @override
   void _handleSelectionChanged() {
@@ -327,25 +217,10 @@ class _XtermTerminalSessionHandle(
     _publishTerminalInteraction(this, message, error: error);
   }
 
-  xterm.Terminal _createTerminal() =>
-      _rendererAdapterOwner.createTerminal(settings: _settings);
-
-  void _attachTerminal(xterm.Terminal terminal) {
-    _rendererAdapterOwner.attachTerminal(
-      terminal,
-      onTitleChange: _handleTitleChanged,
-      onOutput: _handleTerminalInput,
-      onResize: _handleTerminalResize,
-      onClipboardStore: (text) => _storeTerminalClipboard(this, text),
-    );
-  }
-
   @override
   void _detachTerminal(xterm.Terminal terminal) {
     _rendererAdapterOwner.detachTerminal(terminal);
   }
-
-  void _handleTerminalOutput(String data) => _queueTerminalOutput(data);
 
   // _TerminalSessionOutputHost implementation.
   @override
@@ -370,10 +245,8 @@ class _XtermTerminalSessionHandle(
       _advancePointerInputCatchUp(chars);
 
   @override
-  void discardPointerInputCatchUp({
-    required int offset,
-    required int chars,
-  }) => _discardPointerInputCatchUp(offset: offset, chars: chars);
+  void discardPointerInputCatchUp({required int offset, required int chars}) =>
+      _discardPointerInputCatchUp(offset: offset, chars: chars);
 
   void _writeToTerminal(String data) => writeToTerminal(data);
 
@@ -403,48 +276,14 @@ class _XtermTerminalSessionHandle(
     _pump.clearPending();
   }
 
-  Future<void> _stopPtySession({required bool suppressExit}) async {
-    await _stopPtySessionWithMode(suppressExit: suppressExit, terminate: true);
-  }
-
   @override
   Future<void> _stopPtySessionWithMode({
     required bool suppressExit,
     required bool terminate,
-  }) async {
-    _pendingPtyResizeTimer?.cancel();
-    _pendingPtyResizeTimer = null;
-    _pendingPtySize = null;
-    _selectionCopyTimer?.cancel();
-    _selectionCopyTimer = null;
-    _launchInputOwner.cancelDeferredSubmitEnter(this);
-    final generation = _activePtyGeneration;
-    if (suppressExit && generation != null) {
-      _suppressedExitPtyGenerations.add(generation);
-    }
-    if (_activePtyGeneration == generation) {
-      _activePtyGeneration = null;
-    }
-    final sub = _ptySessionSub;
-    _ptySessionSub = null;
-    await sub?.cancel();
-    final session = _ptySession;
-    _ptySession = null;
-    if (terminate) {
-      session?.terminate();
-    } else {
-      session?.dispose();
-    }
-    _prunePtyGenerationState();
-  }
-
-  void _prunePtyGenerationState() {
-    final active = _activePtyGeneration;
-    _exitedPtyGenerations.removeWhere((generation) => generation != active);
-    _suppressedExitPtyGenerations.removeWhere(
-      (generation) => generation != active,
-    );
-  }
+  }) => _performStopPtySessionWithMode(
+    suppressExit: suppressExit,
+    terminate: terminate,
+  );
 
   @override
   void requestFocus() {
@@ -487,8 +326,4 @@ class _XtermTerminalSessionHandle(
   @override
   set deferredSubmitEnterTimer(Timer? timer) =>
       _deferredSubmitEnterTimer = timer;
-
-  void _requestFocusNow() {
-    _rendererAdapterOwner.requestFocusNow(_focusNode, isDisposed: _disposed);
-  }
 }

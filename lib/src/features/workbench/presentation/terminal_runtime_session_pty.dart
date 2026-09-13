@@ -1,14 +1,15 @@
 part of 'terminal_runtime.dart';
 
-/// PTY creation and generation filtering for a session handle.
+/// PTY lifecycle, creation, generation filtering, and teardown for a
+/// session handle.
 extension _XtermTerminalSessionPty on _XtermTerminalSessionHandle {
   Future<bool> _startPtySession() async {
     final launches = _launchInputOwner.candidateLaunches();
     if (launches.isEmpty) {
       throw StateError(_noTerminalShellCandidatesMessage());
     }
-    final agentHookEnvironment =
-        await _launchInputOwner.buildAgentHookEnvironment(
+    final agentHookEnvironment = await _launchInputOwner
+        .buildAgentHookEnvironment(
           terminalSessionId: _tab.terminalSessionId,
           workspaceId: _workspace.id,
           tabId: _tab.id,
@@ -43,8 +44,7 @@ extension _XtermTerminalSessionPty on _XtermTerminalSessionHandle {
             workspaceLaunch: prepared.workspaceLaunch,
             interactiveShell: prepared.interactiveShell,
             initialCommand: _tab.initialCommand,
-            isCurrent: () =>
-                !_disposed && _activePtyGeneration == generation,
+            isCurrent: () => !_disposed && _activePtyGeneration == generation,
           ),
         );
         if (_disposed || _activePtyGeneration != generation) {
@@ -167,5 +167,47 @@ extension _XtermTerminalSessionPty on _XtermTerminalSessionHandle {
       );
     }
     unawaited(_stopPtySessionWithMode(suppressExit: true, terminate: false));
+  }
+
+  Future<void> _stopPtySession({required bool suppressExit}) async {
+    await _stopPtySessionWithMode(suppressExit: suppressExit, terminate: true);
+  }
+
+  Future<void> _performStopPtySessionWithMode({
+    required bool suppressExit,
+    required bool terminate,
+  }) async {
+    _pendingPtyResizeTimer?.cancel();
+    _pendingPtyResizeTimer = null;
+    _pendingPtySize = null;
+    _selectionCopyTimer?.cancel();
+    _selectionCopyTimer = null;
+    _launchInputOwner.cancelDeferredSubmitEnter(this);
+    final generation = _activePtyGeneration;
+    if (suppressExit && generation != null) {
+      _suppressedExitPtyGenerations.add(generation);
+    }
+    if (_activePtyGeneration == generation) {
+      _activePtyGeneration = null;
+    }
+    final sub = _ptySessionSub;
+    _ptySessionSub = null;
+    await sub?.cancel();
+    final session = _ptySession;
+    _ptySession = null;
+    if (terminate) {
+      session?.terminate();
+    } else {
+      session?.dispose();
+    }
+    _prunePtyGenerationState();
+  }
+
+  void _prunePtyGenerationState() {
+    final active = _activePtyGeneration;
+    _exitedPtyGenerations.removeWhere((generation) => generation != active);
+    _suppressedExitPtyGenerations.removeWhere(
+      (generation) => generation != active,
+    );
   }
 }
