@@ -31,10 +31,11 @@ impl ServerActor {
         F: Future<Output = HostResult<Value>> + Send + 'static,
     {
         let inbox = self.inbox.clone();
-        self.deferred_admission.schedule(
+        self.deferred_admission.schedule_with_request_id(
             DeferredRequestClass::Bulk,
             request_type,
             Some(client_id),
+            Some(request_id),
             async move {
                 let result = task.await;
                 let _ = inbox.send(ServerCommand::DeferredRequestFinished {

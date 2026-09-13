@@ -165,6 +165,31 @@ async fn dispatch_critical_jobs_start_before_queued_bulk_work() {
 }
 
 #[tokio::test]
+async fn request_id_follows_a_job_from_queue_to_active_state() {
+    let admission = Arc::new(DeferredAdmission::paused_with_limits(1, 4, 0));
+    admission
+        .schedule_with_request_id(
+            DeferredRequestClass::Bulk,
+            "test.request-id",
+            Some(7),
+            Some(42),
+            std::future::pending::<()>(),
+        )
+        .unwrap();
+
+    assert_eq!(
+        admission.request_ids_for_test("test.request-id"),
+        vec![Some(42)]
+    );
+
+    admission.add_test_permits(1);
+    assert_eq!(
+        admission.request_ids_for_test("test.request-id"),
+        vec![Some(42)]
+    );
+}
+
+#[tokio::test]
 async fn backpressured_bulk_requests_do_not_stall_control_requests() {
     let dir = tempfile::tempdir().unwrap();
     let (handle, mut responses) = ClientHandle::test_channels();

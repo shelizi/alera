@@ -10,12 +10,12 @@ use serde_json::json;
 use crate::terminal_host::host_error::{HostError, HostResult};
 
 use super::{
-    AdmissionInner, DeferredAdmission, DeferredRequestClass,
-    DEFERRED_REQUEST_BACKPRESSURE_CODE, DEFERRED_REQUEST_BUSY_MESSAGE,
+    AdmissionInner, DeferredAdmission, DeferredRequestClass, DEFERRED_REQUEST_BACKPRESSURE_CODE,
+    DEFERRED_REQUEST_BUSY_MESSAGE,
 };
 
-
 pub(super) struct DelayedJob {
+    pub(super) request_id: Option<i64>,
     pub(super) request_type: String,
     pub(super) class: DeferredRequestClass,
     pub(super) client_id: Option<u64>,
@@ -66,11 +66,14 @@ impl DeferredAdmission {
                 && state.noncritical_count() >= self.inner.noncritical_limit();
             if over_total || over_reserve {
                 tracing::debug!(
+                    request_id = ?None::<i64>,
+                    client_id = ?client_id,
                     request_type = %request_type,
                     request_class = class.as_str(),
                     active,
                     pending,
                     delayed,
+                    queue_wait_ms = 0_u64,
                     "deferred timer rejected"
                 );
                 return Err(HostError::conflict(
@@ -90,6 +93,7 @@ impl DeferredAdmission {
             state.delayed.insert(
                 timer_id,
                 DelayedJob {
+                    request_id: None,
                     request_type: request_type.clone(),
                     class,
                     client_id,
@@ -97,11 +101,14 @@ impl DeferredAdmission {
                 },
             );
             tracing::debug!(
+                request_id = ?None::<i64>,
+                client_id = ?client_id,
                 request_type = %request_type,
                 request_class = class.as_str(),
                 active,
                 pending,
                 delayed = state.delayed.len(),
+                queue_wait_ms = 0_u64,
                 "deferred timer armed"
             );
             timer_id
@@ -123,10 +130,13 @@ impl AdmissionInner {
         let mut state = self.lock_state();
         if let Some(job) = state.delayed.remove(&timer_id) {
             tracing::debug!(
+                request_id = ?job.request_id,
+                client_id = ?job.client_id,
                 request_type = %job.request_type,
                 request_class = job.class.as_str(),
                 disconnected = job.disconnected,
                 delayed = state.delayed.len(),
+                queue_wait_ms = 0_u64,
                 "deferred timer released"
             );
         }
