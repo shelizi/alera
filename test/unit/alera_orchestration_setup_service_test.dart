@@ -21,7 +21,7 @@ void main() {
         skillService: skillService,
         hookReconciliationService: reconciler,
       );
-      const hooks = AgentStatusHookSettings(codex: true);
+      const hooks = AgentStatusHookSettings(values: {'codex': true});
 
       final result = await service.installOrUpdate(hooks: hooks, runner: .bunx);
 
@@ -45,7 +45,7 @@ void main() {
     );
 
     final result = await service.installOrUpdate(
-      hooks: const AgentStatusHookSettings(codex: true),
+      hooks: const AgentStatusHookSettings(values: {'codex': true}),
     );
 
     expect(reconciler.settings, isNull);
@@ -67,7 +67,9 @@ void main() {
       );
 
       final result = await service.installOrUpdate(
-        hooks: const AgentStatusHookSettings(codex: true, claude: true),
+        hooks: const AgentStatusHookSettings(
+          values: {'codex': true, 'claude': true},
+        ),
       );
 
       expect(result.succeeded, isTrue);

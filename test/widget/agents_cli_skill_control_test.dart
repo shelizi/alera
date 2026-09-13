@@ -110,7 +110,9 @@ void main() {
     final reconciler = _FakeHookReconciler();
     final settings = AleraSettings.defaults.copyWith(
       agents: AleraSettings.defaults.agents.copyWith(
-        agentStatusHooks: const AgentStatusHookSettings(codex: true),
+        agentStatusHooks: const AgentStatusHookSettings(
+          values: {'codex': true},
+        ),
       ),
     );
     await tester.pumpWidget(
@@ -180,7 +182,9 @@ void main() {
     final reconciler = _FakeHookReconciler();
     final settings = AleraSettings.defaults.copyWith(
       agents: AleraSettings.defaults.agents.copyWith(
-        agentStatusHooks: const AgentStatusHookSettings(codex: true),
+        agentStatusHooks: const AgentStatusHookSettings(
+          values: {'codex': true},
+        ),
       ),
     );
     await tester.pumpWidget(

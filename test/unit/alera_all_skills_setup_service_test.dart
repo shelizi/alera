@@ -11,7 +11,7 @@ void main() {
   test('installs every Alera skill and reapplies selected hooks', () async {
     final skillService = _RecordingSkillService();
     final hookReconciler = _RecordingHookReconciler();
-    const hooks = AgentStatusHookSettings(codex: true);
+    const hooks = AgentStatusHookSettings(values: {'codex': true});
     final result = await AleraAllSkillsSetupService(
       skillService: skillService,
       hookReconciliationService: hookReconciler,

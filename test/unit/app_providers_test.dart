@@ -223,7 +223,9 @@ void main() {
 
         final settings = AleraSettings.defaults.copyWith(
           agents: AleraSettings.defaults.agents.copyWith(
-            agentStatusHooks: const AgentStatusHookSettings(copilot: true),
+            agentStatusHooks: const AgentStatusHookSettings(
+              values: {'copilot': true},
+            ),
           ),
         );
         final container = ProviderContainer(
@@ -310,7 +312,9 @@ void main() {
       final assertion = _FakeAwakeAssertion();
       final settings = AleraSettings.defaults.copyWith(
         agents: AleraSettings.defaults.agents.copyWith(
-          agentStatusHooks: const AgentStatusHookSettings(codex: true),
+          agentStatusHooks: const AgentStatusHookSettings(
+            values: {'codex': true},
+          ),
           keepComputerAwakeWhileAgentsWork: true,
         ),
       );
@@ -369,7 +373,9 @@ void main() {
       final settingsController = _TestSettingsController(
         AleraSettings.defaults.copyWith(
           agents: AleraSettings.defaults.agents.copyWith(
-            agentStatusHooks: const AgentStatusHookSettings(codex: true),
+            agentStatusHooks: const AgentStatusHookSettings(
+              values: {'codex': true},
+            ),
           ),
         ),
       );
@@ -506,7 +512,9 @@ void main() {
       addTearDown(() => PathProviderPlatform.instance = previousPlatform);
       final settings = AleraSettings.defaults.copyWith(
         agents: AleraSettings.defaults.agents.copyWith(
-          agentStatusHooks: const AgentStatusHookSettings(codex: true),
+          agentStatusHooks: const AgentStatusHookSettings(
+            values: {'codex': true},
+          ),
         ),
       );
       final container = ProviderContainer(
@@ -577,7 +585,9 @@ void main() {
         addTearDown(receiver.dispose);
         final settings = AleraSettings.defaults.copyWith(
           agents: AleraSettings.defaults.agents.copyWith(
-            agentStatusHooks: const AgentStatusHookSettings(codex: true),
+            agentStatusHooks: const AgentStatusHookSettings(
+              values: {'codex': true},
+            ),
           ),
         );
         final container = ProviderContainer(
@@ -652,9 +662,7 @@ void main() {
         settingsController.state.copyWith(
           agents: settingsController.state.agents.copyWith(
             agentStatusHooks: const AgentStatusHookSettings(
-              codex: true,
-              claude: true,
-              agy: true,
+              values: {'codex': true, 'claude': true, 'agy': true},
             ),
           ),
         ),
@@ -700,17 +708,19 @@ void main() {
 
     test('agent hook settings map every agent type', () {
       const allEnabled = AgentStatusHookSettings(
-        codex: true,
-        claude: true,
-        copilot: true,
-        cursor: true,
-        agy: true,
-        opencode: true,
-        opencode2: true,
-        pi: true,
-        amp: true,
-        grok: true,
-        fx: true,
+        values: {
+          'codex': true,
+          'claude': true,
+          'copilot': true,
+          'cursor': true,
+          'agy': true,
+          'opencode': true,
+          'opencode2': true,
+          'pi': true,
+          'amp': true,
+          'grok': true,
+          'fx': true,
+        },
       );
       for (final agentType in AgentType.values) {
         expect(isAgentStatusHookEnabled(allEnabled, agentType), isTrue);
@@ -718,7 +728,7 @@ void main() {
       expect(
         AgentType.values.where(
           (agentType) => isAgentStatusHookEnabled(
-            const AgentStatusHookSettings(codex: true, amp: true),
+            const AgentStatusHookSettings(values: {'codex': true, 'amp': true}),
             agentType,
           ),
         ),
@@ -774,13 +784,15 @@ void main() {
             applicationSupportDirectory: () async => support,
           ),
           hooks: const AgentStatusHookSettings(
-            codex: true,
-            claude: true,
-            copilot: true,
-            cursor: true,
-            opencode: true,
-            pi: true,
-            amp: true,
+            values: {
+              'codex': true,
+              'claude': true,
+              'copilot': true,
+              'cursor': true,
+              'opencode': true,
+              'pi': true,
+              'amp': true,
+            },
           ),
           terminalSessionId: 'session-1',
           workspaceId: 'workspace-1',
@@ -849,10 +861,10 @@ void main() {
         );
 
         for (final hooks in const <AgentStatusHookSettings>[
-          AgentStatusHookSettings(copilot: true),
-          AgentStatusHookSettings(opencode: true),
-          AgentStatusHookSettings(pi: true),
-          AgentStatusHookSettings(amp: true),
+          AgentStatusHookSettings(values: {'copilot': true}),
+          AgentStatusHookSettings(values: {'opencode': true}),
+          AgentStatusHookSettings(values: {'pi': true}),
+          AgentStatusHookSettings(values: {'amp': true}),
         ]) {
           final environment = await terminalLaunchEnvironmentFor(
             agentHookReceiver: receiver,
@@ -916,13 +928,15 @@ void main() {
             applicationSupportDirectory: failingSupport,
           ),
           hooks: const AgentStatusHookSettings(
-            codex: true,
-            claude: true,
-            copilot: true,
-            cursor: true,
-            opencode: true,
-            pi: true,
-            amp: true,
+            values: {
+              'codex': true,
+              'claude': true,
+              'copilot': true,
+              'cursor': true,
+              'opencode': true,
+              'pi': true,
+              'amp': true,
+            },
           ),
           terminalSessionId: 'session-1',
           workspaceId: 'workspace-1',

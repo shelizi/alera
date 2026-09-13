@@ -19,15 +19,17 @@ void main() {
           showTrayBadge: false,
         ),
         agents: AgentSettings(
-          agentStatusHooks: AgentStatusHookSettings(
-            codex: true,
-            claude: true,
-            cursor: true,
-            agy: true,
-            pi: true,
-            amp: true,
-            grok: true,
-            fx: true,
+          agentStatusHooks: const AgentStatusHookSettings(
+            values: {
+              'codex': true,
+              'claude': true,
+              'cursor': true,
+              'agy': true,
+              'pi': true,
+              'amp': true,
+              'grok': true,
+              'fx': true,
+            },
           ),
           agentStatusNotificationsEnabled: true,
           keepComputerAwakeWhileAgentsWork: true,

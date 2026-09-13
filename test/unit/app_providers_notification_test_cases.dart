@@ -10,7 +10,9 @@ void _registerAgentNotificationCoordinatorTests() {
         final presenter = _FakeNotificationPresenter();
         final settings = AleraSettings.defaults.copyWith(
           agents: AleraSettings.defaults.agents.copyWith(
-            agentStatusHooks: const AgentStatusHookSettings(codex: true),
+            agentStatusHooks: const AgentStatusHookSettings(
+              values: {'codex': true},
+            ),
             agentStatusNotificationsEnabled: true,
             agentStatusFinishedNotificationsEnabled: true,
           ),
@@ -55,7 +57,9 @@ void _registerAgentNotificationCoordinatorTests() {
         final presenter = _FakeNotificationPresenter();
         final settings = AleraSettings.defaults.copyWith(
           agents: AleraSettings.defaults.agents.copyWith(
-            agentStatusHooks: const AgentStatusHookSettings(codex: true),
+            agentStatusHooks: const AgentStatusHookSettings(
+              values: {'codex': true},
+            ),
             agentStatusNotificationsEnabled: true,
           ),
         );
@@ -112,7 +116,9 @@ void _registerAgentNotificationCoordinatorTests() {
         final settings = _TestSettingsController(
           AleraSettings.defaults.copyWith(
             agents: AleraSettings.defaults.agents.copyWith(
-              agentStatusHooks: const AgentStatusHookSettings(codex: true),
+              agentStatusHooks: const AgentStatusHookSettings(
+                values: {'codex': true},
+              ),
               agentStatusNotificationsEnabled: true,
             ),
           ),
@@ -154,8 +160,7 @@ void _registerAgentNotificationCoordinatorTests() {
           settings.state.copyWith(
             agents: settings.state.agents.copyWith(
               agentStatusHooks: const AgentStatusHookSettings(
-                codex: true,
-                claude: true,
+                values: {'codex': true, 'claude': true},
               ),
             ),
           ),
@@ -216,7 +221,9 @@ void _registerAgentNotificationCoordinatorTests() {
       final runtime = _FocusableTerminalRuntime();
       final settings = AleraSettings.defaults.copyWith(
         agents: AleraSettings.defaults.agents.copyWith(
-          agentStatusHooks: const AgentStatusHookSettings(codex: true),
+          agentStatusHooks: const AgentStatusHookSettings(
+            values: {'codex': true},
+          ),
           agentStatusNotificationsEnabled: true,
         ),
       );
