@@ -1,3 +1,4 @@
+pub mod agent_descriptor;
 pub mod child_process;
 pub mod git;
 pub mod git_cli;

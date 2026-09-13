@@ -8,34 +8,9 @@ pub struct AgentAdapter {
 }
 
 /// How a freshly launched agent receives the prompt it is supposed to start
-/// working on.
-///
-/// Most spawnable agents get their prompt at launch. `fx` is the exception: it
-/// has no interactive initial-prompt argument and its built-in Herdr integration
-/// emits an idle event after the TUI is ready, so the host can paste safely then.
-/// Print/execute flags (`-p`, `--print`, `-x`) are deliberately unused, since
-/// they answer once and exit instead of leaving an agent in the tab.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AgentStartupPrompt {
-    /// Positional, preceded by the standard option terminator so a prompt
-    /// starting with a dash is not read as another option.
-    PositionalAfterTerminator,
-    /// Positional, with no terminator available. `pi` rejects `--` outright
-    /// (`Error: Unknown option: --`), so the terminator cannot be used, and a
-    /// dash-prefixed prompt has to be defused another way.
-    Positional,
-    /// A long option carrying the prompt as a single `--flag=<prompt>` token,
-    /// which keeps a dash-prefixed prompt out of the parser's way without a
-    /// terminator.
-    LongOption(&'static str),
-    /// The CLI has no interactive initial-prompt argument at all. `amp` only
-    /// accepts an opening message on stdin, so the prompt is fed from a file
-    /// through a generated launcher script.
-    StdinScript,
-    /// The CLI starts only without a prompt. A semantic ready event tells the
-    /// host when it is safe to paste and submit the opening prompt in the PTY.
-    TerminalAfterReady,
-}
+/// working on. Defined in `alera_core::agent_descriptor` so the same strategy
+/// table is visible to `alera_native` over FRB.
+pub use alera_core::agent_descriptor::AgentStartupPrompt;
 
 const CTRL_C: &[u8] = b"\x03";
 
