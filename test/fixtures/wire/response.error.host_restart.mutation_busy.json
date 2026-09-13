@@ -1,0 +1,5 @@
+{
+  "id": 45,
+  "ok": false,
+  "error": "Runtime host has 0 active agent(s), 0 active terminal session(s), 1 active background job(s), and 0 active push subscription(s). Retry with --force to stop it."
+}

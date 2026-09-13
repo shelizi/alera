@@ -1,0 +1,12 @@
+{
+  "id": 2,
+  "ok": true,
+  "payload": {
+    "delta": false,
+    "resetInteractionModes": true,
+    "sessionId": "s1",
+    "snapshotBase64": "ZWZnaA==",
+    "snapshotCols": 80,
+    "snapshotRows": 24
+  }
+}

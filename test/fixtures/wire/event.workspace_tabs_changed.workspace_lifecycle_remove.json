@@ -1,0 +1,6 @@
+{
+  "event": "workspaceTabsChanged",
+  "payload": {
+    "workspaceId": "workspace-lifecycle"
+  }
+}

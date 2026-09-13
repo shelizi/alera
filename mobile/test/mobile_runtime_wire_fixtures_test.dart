@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:alera_mobile/src/features/diagnostics/infra/crash_reporting.dart';
 import 'package:alera_mobile/src/features/runtime/infra/mobile_runtime_client.dart';
@@ -29,6 +30,7 @@ final class _WireFixtureServer {
       <String, Map<String, Object?>>{};
   final List<WebSocket> _sockets = <WebSocket>[];
   final List<Map<String, Object?>> requests = <Map<String, Object?>>[];
+  bool _grantBinaryFrames = false;
   StreamSubscription<HttpRequest>? _subscription;
 
   static Future<_WireFixtureServer> start() async {
@@ -50,6 +52,10 @@ final class _WireFixtureServer {
     _responses[type] = _wireFixture(fixtureName);
   }
 
+  void grantBinaryFrames() {
+    _grantBinaryFrames = true;
+  }
+
   Map<String, Object?>? requestFor(String type) {
     for (final request in requests.reversed) {
       if (request['type'] == type) {
@@ -63,19 +69,29 @@ final class _WireFixtureServer {
     _sockets.last.add(jsonEncode(_wireFixture(fixtureName)));
   }
 
+  void sendBinaryOutput(String fixtureName) {
+    final fixture = _wireFixture(fixtureName);
+    _sockets.last.add(
+      Uint8List.fromList(base64Decode(fixture['payloadBase64']! as String)),
+    );
+  }
+
   void _handle(WebSocket socket, Object? raw) {
     final request = Map<String, Object?>.from(jsonDecode(raw as String) as Map);
     request['payload'] = Map<String, Object?>.from(request['payload'] as Map);
     requests.add(request);
     if (request['type'] == 'mobile.hello') {
+      final fixture = _grantBinaryFrames
+          ? _wireFixture('response.ok.mobile_hello.json')
+          : <String, Object?>{
+              'id': request['id'],
+              'ok': true,
+              'payload': <String, Object?>{
+                'runtimeCapabilities': <String>['workspaceSectionsV1'],
+              },
+            };
       socket.add(
-        jsonEncode(<String, Object?>{
-          'id': request['id'],
-          'ok': true,
-          'payload': <String, Object?>{
-            'runtimeCapabilities': <String>['workspaceSectionsV1'],
-          },
-        }),
+        jsonEncode(<String, Object?>{...fixture, 'id': request['id']}),
       );
       return;
     }
@@ -105,9 +121,12 @@ final class _WireFixtureServer {
 }
 
 Future<({MobileRuntimeClient client, _WireFixtureServer server})>
-_connectFixtureClient() async {
+_connectFixtureClient({bool grantBinaryFrames = false}) async {
   final server = await _WireFixtureServer.start();
   addTearDown(server.dispose);
+  if (grantBinaryFrames) {
+    server.grantBinaryFrames();
+  }
   final client = await MobileRuntimeClient.connect(
     'ws://${server.address.address}:${server.port}',
   );
@@ -216,4 +235,41 @@ void main() {
       expect(events[3].payload, <String, Object?>{});
     },
   );
+
+  test('a legacy host keeps the output fixture in base64 JSON', () async {
+    final harness = await _connectFixtureClient();
+    final output = harness.client.terminalOutput.first;
+    final fixture = _wireFixture('event.output.legacy.json');
+
+    harness.server.send('event.output.legacy.json');
+
+    final event = await output;
+    expect(event.sessionId, 's1');
+    expect(
+      event.data,
+      base64Decode((fixture['payload']! as Map)['dataBase64']! as String),
+    );
+    expect(harness.client.runtimeCapabilities, <String>{'workspaceSectionsV1'});
+  });
+
+  test('a binary WebSocket host uses the output payload fixture', () async {
+    final harness = await _connectFixtureClient(grantBinaryFrames: true);
+    final output = harness.client.terminalOutput.first;
+    final fixture = _wireFixture('terminal.output.binary.resync.json');
+
+    harness.server.sendBinaryOutput('terminal.output.binary.resync.json');
+
+    final event = await output;
+    expect(event.sessionId, 's1');
+    expect(
+      event.data,
+      orderedEquals(base64Decode(fixture['dataBase64']! as String)),
+    );
+    final helloFixture = _wireFixture('response.ok.mobile_hello.json');
+    final expectedCapabilities =
+        ((helloFixture['payload']! as Map)['runtimeCapabilities']! as List)
+            .cast<String>()
+            .toSet();
+    expect(harness.client.runtimeCapabilities, expectedCapabilities);
+  });
 }

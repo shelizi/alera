@@ -1,0 +1,8 @@
+{
+  "id": 2,
+  "type": "workspace.rename",
+  "payload": {
+    "workspaceId": "workspace-lifecycle",
+    "name": "Renamed Lifecycle Workspace"
+  }
+}
