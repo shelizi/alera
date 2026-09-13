@@ -1,10 +1,11 @@
+import 'package:alera/src/features/agent_profiles/domain/agent_descriptor_registry.dart';
+import 'package:alera/src/features/agent_profiles/domain/agent_descriptor_snapshot.dart';
 import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 
 /// How the host hands a dispatched task prompt to a freshly launched agent.
 ///
-/// The source of truth is `startup_prompt` in
-/// `rust/alera-cli/src/terminal_host/orchestration/agent_registry.rs`. Every
-/// Most agents receive their prompt at launch. Agents without an initial-prompt
+/// The source of truth is `startupPrompt` in the checked-in descriptor
+/// snapshot. Most agents receive their prompt at launch. Agents without an initial-prompt
 /// option can receive it in the terminal after reporting that they are ready.
 enum AgentPromptDelivery {
   /// Appended as a positional argument after the option terminator.
@@ -27,23 +28,22 @@ enum AgentPromptDelivery {
 const String agentPromptOptionTerminator = '--';
 
 /// The long option each flag-carrying agent takes its initial prompt in.
-const Map<AgentType, String> agentPromptDeliveryOptions = <AgentType, String>{
-  AgentType.copilot: '--interactive',
-  AgentType.agy: '--prompt-interactive',
-  AgentType.opencode: '--prompt',
-  AgentType.opencode2: '--prompt',
+final Map<AgentType, String> agentPromptDeliveryOptions = <AgentType, String>{
+  for (final adapter in AgentType.values)
+    if (agentDescriptorFor(adapter).startupPrompt.option case final option?)
+      adapter: option,
 };
 
 AgentPromptDelivery agentPromptDeliveryFor(AgentType adapter) {
-  if (agentPromptDeliveryOptions.containsKey(adapter)) {
-    return AgentPromptDelivery.longOption;
-  }
-  return switch (adapter) {
-    AgentType.fx => AgentPromptDelivery.terminalAfterReady,
-    AgentType.amp => AgentPromptDelivery.stdinScript,
-    // pi rejects the option terminator outright, so its prompt goes in bare.
-    AgentType.pi => AgentPromptDelivery.positional,
-    _ => AgentPromptDelivery.positionalAfterTerminator,
+  return switch (agentDescriptorFor(adapter).startupPrompt.kind) {
+    AgentStartupPromptKindSnapshot.positionalAfterTerminator =>
+      AgentPromptDelivery.positionalAfterTerminator,
+    AgentStartupPromptKindSnapshot.positional => AgentPromptDelivery.positional,
+    AgentStartupPromptKindSnapshot.longOption => AgentPromptDelivery.longOption,
+    AgentStartupPromptKindSnapshot.stdinScript =>
+      AgentPromptDelivery.stdinScript,
+    AgentStartupPromptKindSnapshot.terminalAfterReady =>
+      AgentPromptDelivery.terminalAfterReady,
   };
 }
 

@@ -140,6 +140,7 @@ void main() {
           'pi',
           'amp',
           'grok',
+          'devin',
           'fx',
         ],
       );

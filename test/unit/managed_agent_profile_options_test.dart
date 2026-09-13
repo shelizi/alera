@@ -55,6 +55,7 @@ void main() {
           AgentType.pi: true,
           AgentType.amp: false,
           AgentType.grok: true,
+          AgentType.devin: true,
           AgentType.fx: false,
         },
       );
@@ -74,6 +75,7 @@ void main() {
           AgentType.pi: false,
           AgentType.amp: false,
           AgentType.grok: true,
+          AgentType.devin: false,
           AgentType.fx: false,
         },
       );
@@ -269,6 +271,7 @@ void main() {
           AgentType.pi: 'This profile pre-approves project trust for Pi.',
           AgentType.amp: '',
           AgentType.grok: 'This profile lets Grok Build continue with reduced permission prompts.',
+          AgentType.devin: 'This profile lets Devin take broader actions with less supervision.',
           AgentType.fx: '',
         },
       );
@@ -373,6 +376,7 @@ void main() {
           AgentType.pi: false,
           AgentType.amp: false,
           AgentType.grok: false,
+          AgentType.devin: false,
           AgentType.fx: false,
         },
       );

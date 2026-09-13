@@ -1,48 +1,28 @@
+import 'package:alera/src/features/agent_profiles/domain/agent_descriptor_registry.dart';
+import 'package:alera/src/features/agent_profiles/domain/agent_descriptor_snapshot.dart';
 import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 
 /// The agent adapters a profile may target.
 ///
-/// The source of truth is `AGENT_ADAPTERS` in
-/// `rust/alera-cli/src/terminal_host/orchestration/agent_registry.rs`: an
-/// adapter defines how the host detects readiness, injects the dispatch
-/// preamble, and forces submission, so a profile pointing anywhere else could
-/// never be made ready. The host rejects an unknown adapter, so drift here
-/// surfaces as a refused save rather than a broken worker.
-const List<AgentType> spawnableAgentProfileAdapters = <AgentType>[
-  AgentType.codex,
-  AgentType.claude,
-  AgentType.copilot,
-  AgentType.cursor,
-  AgentType.agy,
-  AgentType.opencode,
-  AgentType.opencode2,
-  AgentType.pi,
-  AgentType.amp,
-  AgentType.grok,
-  AgentType.devin,
-  AgentType.fx,
+/// The checked-in descriptor snapshot is generated from the Rust registry and
+/// preserves its order.
+final List<AgentType> spawnableAgentProfileAdapters = <AgentType>[
+  for (final descriptor in agentDescriptorSnapshots)
+    AgentType.values.firstWhere((adapter) => adapter.key == descriptor.id),
 ];
 
 /// The default launch command each adapter uses when a profile does not
-/// override it. Mirrors `default_command` in the Rust registry.
-const Map<AgentType, String> agentProfileDefaultCommands = <AgentType, String>{
-  AgentType.codex: 'codex',
-  AgentType.claude: 'claude',
-  AgentType.copilot: 'copilot',
-  AgentType.cursor: 'cursor-agent',
-  AgentType.agy: 'agy',
-  AgentType.opencode: 'opencode',
-  AgentType.opencode2: 'opencode2',
-  AgentType.pi: 'pi',
-  AgentType.amp: 'amp',
-  AgentType.grok: 'grok',
-  AgentType.devin: 'devin',
-  AgentType.fx: 'fx',
+/// override it. Reads `defaultCommand` from the checked-in descriptor
+/// snapshot.
+final Map<AgentType, String> agentProfileDefaultCommands = <AgentType, String>{
+  for (final adapter in AgentType.values)
+    adapter: agentDescriptorFor(adapter).defaultCommand,
 };
 
 AgentType? agentProfileAdapterFromKey(String key) {
+  final canonical = canonicalAgentKey(key);
   for (final adapter in spawnableAgentProfileAdapters) {
-    if (adapter.key == key) {
+    if (adapter.key == canonical) {
       return adapter;
     }
   }
