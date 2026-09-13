@@ -61,3 +61,7 @@ test/golden/failures/
 !**/.widget_preview/pubspec_overrides.yaml
 # Prebuilt native libraries
 /.prebuilt/
+
+# Agent worktree pool local state
+.agent-worktree-pool.md
+.agent-task.md
