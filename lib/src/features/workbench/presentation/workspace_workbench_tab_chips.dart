@@ -117,6 +117,8 @@ class const _WorkspaceTabChip({
     return GestureDetector(
       onSecondaryTapDown: (details) =>
           unawaited(_openContextMenu(context, details.globalPosition, ref)),
+      // Middle-click release closes the tab, same as the X affordance.
+      onTertiaryTapUp: (_) => onClose(),
       child: Material(
         color: active ? AleraTokens.surfaceElevated : AleraTokens.surface,
         borderRadius: BorderRadius.circular(AleraTokens.radiusMd),

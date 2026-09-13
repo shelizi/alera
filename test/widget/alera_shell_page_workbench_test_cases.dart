@@ -164,6 +164,25 @@ void _registerAleraShellWorkbenchTests() {
     );
   });
 
+  testWidgets('middle-click on a tab closes it like the close button', (
+    tester,
+  ) async {
+    final harness = await _pumpShell(tester, state: _stackedWorkbenchState());
+
+    final tabs = find.byWidgetPredicate((widget) => widget is Draggable);
+    await tester.tapAt(
+      tester.getCenter(tabs.first),
+      buttons: kMiddleMouseButton,
+    );
+    await tester.pumpAndSettle();
+
+    expect(harness.runtime.closedTabIds, <String>['tab-1']);
+    expect(
+      harness.controller.state.tabsFor('workspace-1').map((tab) => tab.id),
+      <String>['tab-2'],
+    );
+  });
+
   testWidgets('shell shows the empty state when there are no projects', (
     tester,
   ) async {
