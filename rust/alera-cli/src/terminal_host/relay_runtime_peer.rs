@@ -1,6 +1,7 @@
 use super::client_budget::{ClientBudget, FrameReservation};
 use super::relay_runtime_auth::{decode_fixed, decode_nonce, GrantClaims, GrantVerifier};
 use super::*;
+use crate::terminal_host::server::DisconnectReason;
 use std::sync::atomic::AtomicBool;
 use tokio::sync::mpsc::Receiver;
 
@@ -40,14 +41,16 @@ struct ConnectedGuard {
     id: u64,
     inbox: UnboundedSender<ServerCommand>,
     writer: JoinHandle<()>,
+    reason: DisconnectReason,
 }
 
 impl Drop for ConnectedGuard {
     fn drop(&mut self) {
         self.writer.abort();
-        let _ = self
-            .inbox
-            .send(ServerCommand::ClientDisconnected { id: self.id });
+        let _ = self.inbox.send(ServerCommand::ClientDisconnected {
+            id: self.id,
+            reason: self.reason,
+        });
     }
 }
 
@@ -171,6 +174,7 @@ impl PeerContext {
             id: self.numeric_id,
             inbox: self.inbox.clone(),
             writer: tokio::spawn(writer.run(control_rx, terminal_rx)),
+            reason: DisconnectReason::PeerClosed,
         };
         self.inbox.send(ServerCommand::RelayClientConnected {
             id: self.numeric_id,
@@ -182,9 +186,21 @@ impl PeerContext {
         let mut assembly_reservation = None;
         loop {
             let packet = tokio::select! {
-                _ = &mut connected.writer => anyhow::bail!("relay peer writer stopped"),
-                packet = incoming.recv() => packet.ok_or_else(|| anyhow::anyhow!("relay peer disconnected"))?,
-                _ = tokio::time::sleep_until(partial_since.map(|at| at + Duration::from_secs(10)).unwrap_or_else(|| tokio::time::Instant::now() + Duration::from_secs(86400))), if partial_since.is_some() => anyhow::bail!("relay fragments expired"),
+                _ = &mut connected.writer => {
+                    connected.reason = DisconnectReason::TransportWriteFailed;
+                    anyhow::bail!("relay peer writer stopped");
+                }
+                packet = incoming.recv() => match packet {
+                    Some(packet) => packet,
+                    None => {
+                        connected.reason = DisconnectReason::PeerClosed;
+                        anyhow::bail!("relay peer disconnected");
+                    }
+                },
+                _ = tokio::time::sleep_until(partial_since.map(|at| at + Duration::from_secs(10)).unwrap_or_else(|| tokio::time::Instant::now() + Duration::from_secs(86400))), if partial_since.is_some() => {
+                    connected.reason = DisconnectReason::ProtocolViolation;
+                    anyhow::bail!("relay fragments expired");
+                }
             };
             if !lifetime.valid() {
                 anyhow::bail!("relay authorization expired");
@@ -278,11 +294,15 @@ mod tests {
             id: 42,
             inbox,
             writer,
+            reason: DisconnectReason::PeerClosed,
         };
         drop(guard);
         assert!(matches!(
             receiver.recv().await,
-            Some(ServerCommand::ClientDisconnected { id: 42 })
+            Some(ServerCommand::ClientDisconnected {
+                id: 42,
+                reason: DisconnectReason::PeerClosed,
+            })
         ));
         tokio::task::yield_now().await;
         assert!(abort.is_finished());

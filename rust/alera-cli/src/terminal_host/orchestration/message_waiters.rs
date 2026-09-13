@@ -104,8 +104,10 @@ impl MessageWaiterRegistry {
         Some(self.waiters.remove(index))
     }
 
-    pub fn remove_client(&mut self, client_id: u64) {
+    pub fn remove_client(&mut self, client_id: u64) -> usize {
+        let before = self.waiters.len();
         self.waiters.retain(|waiter| waiter.client_id != client_id);
+        before - self.waiters.len()
     }
 
     #[cfg(test)]
@@ -221,7 +223,7 @@ mod tests {
                 inject: false,
             },
         );
-        registry.remove_client(1);
+        assert_eq!(registry.remove_client(1), 1);
         let woken = registry.take_matching("a", OrchestrationMessageType::Status);
         assert_eq!(woken.len(), 1);
         assert_eq!(woken[0].client_id, 2);

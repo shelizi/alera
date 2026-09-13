@@ -62,7 +62,7 @@ impl ServerActor {
                 }
             }
             Some(Err(TrySendError::Closed(_))) | None => {
-                self.disconnect_client_soon(client_id);
+                self.disconnect_client_soon(client_id, DisconnectReason::TransportWriteFailed);
             }
         }
         false
@@ -165,7 +165,7 @@ impl ServerActor {
                 if let Some(session) = self.sessions.get_mut(&session_id) {
                     session.mark_output_resync_sent(client_id);
                 }
-                self.disconnect_client_soon(client_id);
+                self.disconnect_client_soon(client_id, DisconnectReason::TransportWriteFailed);
             }
         }
     }

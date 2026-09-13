@@ -8,7 +8,7 @@ use crate::terminal_host::session::PtyEvent;
 use alera_core::git::GitBaseDrift;
 use alera_core::runtime::SshBootstrapStatus;
 
-use super::{account_requests, push_delivery, runtime_mutations, ClientKind};
+use super::{account_requests, push_delivery, runtime_mutations, ClientKind, DisconnectReason};
 
 /// Messages processed serially by the single server actor. Every state mutation
 /// happens here, which keeps session/client transitions deterministic.
@@ -43,6 +43,7 @@ pub enum ServerCommand {
     },
     ClientDisconnected {
         id: u64,
+        reason: DisconnectReason,
     },
     MobileStatusFinished {
         client_id: u64,

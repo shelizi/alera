@@ -109,6 +109,7 @@ mod deferred_project_requests_tests;
 mod deferred_requests;
 #[cfg(test)]
 mod deferred_requests_tests;
+mod disconnect_reason;
 mod dispatch_context_continuations;
 mod dispatch_context_install;
 #[cfg(test)]
@@ -237,6 +238,7 @@ mod workspace_sidebar_requests;
 #[cfg(test)]
 mod workspace_sidebar_requests_tests;
 
+pub(crate) use disconnect_reason::DisconnectReason;
 pub use server_command::ServerCommand;
 
 /// Delay before a debounced checkpoint write fires.
@@ -357,9 +359,9 @@ impl ServerActor {
                 );
             }
             ServerCommand::ClientLine { id, line } => self.handle_line(id, line).await,
-            ServerCommand::ClientDisconnected { id } => {
+            ServerCommand::ClientDisconnected { id, reason } => {
                 self.account_push.relay_presence.remove(&id);
-                self.dispose_client(id).await;
+                self.dispose_client_with_reason(id, reason).await;
             }
             ServerCommand::MobileStatusFinished {
                 client_id,

@@ -7,7 +7,7 @@ use tokio::sync::mpsc::{error::TryRecvError, Receiver, UnboundedReceiver, Unboun
 
 use crate::terminal_host::frame_codec::{encode_json_frame, encode_output_frame};
 use crate::terminal_host::protocol::BINARY_FRAMES_ENABLED_EVENT;
-use crate::terminal_host::server::ServerCommand;
+use crate::terminal_host::server::{DisconnectReason, ServerCommand};
 
 /// One outbound item on a client's lane.
 ///
@@ -198,7 +198,10 @@ pub async fn connection_loop(
                     .await
                     .is_err()
                     {
-                        let _ = inbox.send(ServerCommand::ClientDisconnected { id });
+                        let _ = inbox.send(ServerCommand::ClientDisconnected {
+                            id,
+                            reason: DisconnectReason::TransportWriteFailed,
+                        });
                         break;
                     }
                     continue;
@@ -211,7 +214,10 @@ pub async fn connection_loop(
                         .await
                         .is_err()
                     {
-                        let _ = inbox.send(ServerCommand::ClientDisconnected { id });
+                        let _ = inbox.send(ServerCommand::ClientDisconnected {
+                            id,
+                            reason: DisconnectReason::TransportWriteFailed,
+                        });
                         break;
                     }
                     continue;
@@ -229,7 +235,10 @@ pub async fn connection_loop(
                     }
                     // EOF or read error: the client is gone.
                     _ => {
-                        let _ = inbox.send(ServerCommand::ClientDisconnected { id });
+                        let _ = inbox.send(ServerCommand::ClientDisconnected {
+                            id,
+                            reason: DisconnectReason::PeerClosed,
+                        });
                         break;
                     }
                 }
@@ -247,7 +256,10 @@ pub async fn connection_loop(
                         .await
                         .is_err()
                         {
-                            let _ = inbox.send(ServerCommand::ClientDisconnected { id });
+                            let _ = inbox.send(ServerCommand::ClientDisconnected {
+                                id,
+                                reason: DisconnectReason::TransportWriteFailed,
+                            });
                             break;
                         }
                     }
@@ -279,7 +291,10 @@ pub async fn connection_loop(
                             Err(TryRecvError::Disconnected) => break,
                         };
                         if result.is_err() {
-                            let _ = inbox.send(ServerCommand::ClientDisconnected { id });
+                            let _ = inbox.send(ServerCommand::ClientDisconnected {
+                                id,
+                                reason: DisconnectReason::TransportWriteFailed,
+                            });
                             break;
                         }
                     }
