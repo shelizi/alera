@@ -264,6 +264,23 @@ impl ServerActor {
         if name.is_empty() {
             return Err(HostError::format("Tag name cannot be empty."));
         }
+        if let Some(existing) = self
+            .runtime_store
+            .list_tags()
+            .await
+            .map_err(state_error)?
+            .into_iter()
+            .find(|tag| tag.name.eq_ignore_ascii_case(name))
+        {
+            return Err(HostError::conflict(
+                "workspace_tag_name_conflict",
+                format!("A tag named '{name}' already exists."),
+                json!({
+                    "name": name,
+                    "existingTagId": existing.id,
+                }),
+            ));
+        }
         let color = payload
             .get("color")
             .and_then(Value::as_str)

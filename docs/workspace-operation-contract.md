@@ -36,7 +36,7 @@ Authority is `ServerActor` on the terminal-host mailbox, persisting through `Run
 | Operation | Instance check | Replay | Same id + different payload | Commit vs publish | Lost reply retry | Restart recovery | Stale owner / wrong actor |
 |---|---|---|---|---|---|---|---|
 | `workspaceTag.list` | none | Read | n/a | Read only | Safe | Persisted | n/a |
-| `workspaceTag.create` | Name must be non-empty | Not deduplicated: each call mints a new id | n/a | Upsert, then `workspaceTagsChanged` + `workspacesChanged` | A retried create produces a second tag with the same name | Persisted | n/a |
+| `workspaceTag.create` | Name must be non-empty and globally unique case-insensitively | Duplicate names are rejected with typed conflict `workspace_tag_name_conflict` | n/a | Upsert, then `workspaceTagsChanged` + `workspacesChanged` | A retry with the same name is rejected with typed conflict `workspace_tag_name_conflict`, including the existing tag id | Persisted | n/a |
 | `workspaceTag.upsert` / `workspaceTag.remove` | Tag id | Value write / delete of a missing row is a no-op | Last write wins | Commit, then `workspaceTagsChanged` + `workspacesChanged` | Safe | Persisted | n/a |
 | `workspaceTag.assign` / `workspaceTag.unassign` / `workspaceTag.setForWorkspace` | Workspace and tag ids | Assignment ops are idempotent set writes | Last write wins | Commit, then `workspacesChanged` | Safe | Persisted | n/a |
 | `workspaceRelation.list` / `link` / `unlink` | Parent/child workspace ids | Link is idempotent; unlink of a missing edge is a no-op | n/a | Commit, then `workspaceRelationsChanged` + `workspacesChanged` | Safe | Persisted | n/a |
@@ -48,5 +48,5 @@ Authority is `ServerActor` on the terminal-host mailbox, persisting through `Run
 
 Known gaps:
 
-- `workspaceTag.create` has no name-uniqueness check, so a retried or double-submitted create yields duplicate names with different ids.
+- Closed: `workspaceTag.create` enforces globally unique tag names case-insensitively; a duplicate name is rejected with typed conflict `workspace_tag_name_conflict`, including the existing tag id.
 - `workspace.createManaged` fails closed on retry rather than returning the workspace the first attempt created; the client must translate the duplicate-id/path error.

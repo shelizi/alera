@@ -8,8 +8,10 @@ use std::collections::HashMap;
 use alera_core::runtime::WorkbenchLayoutRecord;
 use serde_json::json;
 
-use super::actor_test_harness::test_actor;
+use super::actor_test_harness::{local_client, test_actor};
 use super::runtime_mutations::{run_runtime_mutation, RuntimeMutationRequest};
+use crate::terminal_host::client::ClientHandle;
+use crate::terminal_host::host_error::HostError;
 
 #[tokio::test]
 async fn workspace_remove_is_idempotent_for_retries() {
@@ -102,4 +104,51 @@ async fn layout_upsert_last_write_wins_for_the_same_workspace() {
         .unwrap()
         .unwrap();
     assert_eq!(layout.data["marker"], "second");
+}
+
+#[tokio::test]
+async fn workspace_tag_create_rejects_case_insensitive_duplicate_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let (handle, _responses) = ClientHandle::test_channels();
+    let mut actor = test_actor(
+        &dir,
+        HashMap::from([(1, local_client(handle))]),
+        HashMap::new(),
+    )
+    .await;
+
+    let first = actor
+        .create_workspace_tag(1, &json!({ "name": "Urgent" }))
+        .await
+        .unwrap();
+    let first_id = first["id"].as_str().unwrap().to_string();
+
+    let duplicate = actor
+        .create_workspace_tag(1, &json!({ "name": "Urgent" }))
+        .await;
+    match duplicate {
+        Err(HostError::Conflict { code, details, .. }) => {
+            assert_eq!(code, "workspace_tag_name_conflict");
+            assert_eq!(details["name"], "Urgent");
+            assert_eq!(details["existingTagId"].as_str(), Some(first_id.as_str()));
+        }
+        other => panic!("expected a typed tag-name conflict, got {other:?}"),
+    }
+
+    let different_case = actor
+        .create_workspace_tag(1, &json!({ "name": "urgent" }))
+        .await;
+    match different_case {
+        Err(HostError::Conflict { code, .. }) => {
+            assert_eq!(code, "workspace_tag_name_conflict");
+        }
+        other => panic!("expected a case-insensitive tag-name conflict, got {other:?}"),
+    }
+
+    let other = actor
+        .create_workspace_tag(1, &json!({ "name": "Review" }))
+        .await
+        .unwrap();
+    assert_eq!(other["name"], "Review");
+    assert_eq!(actor.runtime_store.list_tags().await.unwrap().len(), 2);
 }
