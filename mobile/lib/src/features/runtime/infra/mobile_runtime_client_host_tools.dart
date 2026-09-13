@@ -7,6 +7,8 @@ mixin MobileRuntimeClientHostTools {
   bool get isConnectionUsable;
   int _nextHostToolOperationId = 1;
   int? _runtimeSettingsRevision;
+  final Map<String, String> _pendingCodexResetCreditMutationIds =
+      <String, String>{};
 
   Future<Map<String, Object?>> requestMap(
     String type, [
@@ -102,12 +104,21 @@ mixin MobileRuntimeClientHostTools {
   Future<CodexResetConsumeResult> consumeCodexResetCredit(
     String offerRevision,
   ) async {
+    final clientMutationId = _pendingCodexResetCreditMutationIds.putIfAbsent(
+      offerRevision,
+      _newClientMutationId,
+    );
     final payload = await requestMap(
       'agentQuota.consumeCodexResetCredit',
-      <String, Object?>{'offerRevision': offerRevision},
+      <String, Object?>{
+        'offerRevision': offerRevision,
+        'clientMutationId': clientMutationId,
+      },
       const Duration(seconds: 45),
     );
-    return CodexResetConsumeResult.fromJson(payload);
+    final result = CodexResetConsumeResult.fromJson(payload);
+    _pendingCodexResetCreditMutationIds.remove(offerRevision);
+    return result;
   }
 
   Future<CliRegistrationStatus> cliRegistrationStatus() async {
@@ -143,4 +154,17 @@ mixin MobileRuntimeClientHostTools {
     }, const Duration(minutes: 10));
     return SkillInstallResult.fromJson(payload);
   }
+}
+
+String _newClientMutationId() {
+  final random = Random.secure();
+  final bytes = List<int>.generate(16, (_) => random.nextInt(256));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  final hex = bytes
+      .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+      .join();
+  return '${hex.substring(0, 8)}-${hex.substring(8, 12)}-'
+      '${hex.substring(12, 16)}-${hex.substring(16, 20)}-'
+      '${hex.substring(20)}';
 }

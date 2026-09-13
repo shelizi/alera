@@ -205,6 +205,58 @@ void main() {
     client.dispose();
   });
 
+  test(
+    'reuses terminate mutation ids for retries and rotates after success',
+    () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'alera-host-client-terminate-mutation-',
+      );
+      addTearDown(() async {
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      });
+      var terminateAttempts = 0;
+      final server = await _TerminalHostTestServer.start(
+        responseForType: (type, _) {
+          if (type != 'terminate') {
+            return null;
+          }
+          if (terminateAttempts++ == 0) {
+            return <String, Object?>{
+              'ok': false,
+              'error': 'temporary terminate failure',
+            };
+          }
+          return <String, Object?>{'ok': true, 'payload': <String, Object?>{}};
+        },
+      );
+      addTearDown(server.dispose);
+      final client = SocketTerminalHostClient(
+        launcher: _FakeTerminalHostLauncher(server: server),
+        applicationSupportDirectory: () async => tempDir,
+      );
+      addTearDown(client.dispose);
+
+      await expectLater(
+        client.terminate('session-1'),
+        throwsA(isA<StateError>()),
+      );
+      await client.terminate('session-1');
+      await client.terminate('session-1');
+
+      final payloads = server.payloadsFor('terminate');
+      expect(payloads, hasLength(3));
+      expect(payloads[0]['sessionId'], 'session-1');
+      expect(payloads[0]['clientMutationId'], isA<String>());
+      expect(payloads[1]['clientMutationId'], payloads[0]['clientMutationId']);
+      expect(
+        payloads[2]['clientMutationId'],
+        isNot(payloads[1]['clientMutationId']),
+      );
+    },
+  );
+
   test('ensureStarted launches the host and sends initial config', () async {
     final tempDir = await Directory.systemTemp.createTemp(
       'alera-host-client-warmup-',
