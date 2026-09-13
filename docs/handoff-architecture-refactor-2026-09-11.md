@@ -1381,18 +1381,18 @@ max-lines 尚未全清前，第 8 步會是 repo-wide exit 1；必須確認 offe
 - Phase 4（P7）：Terminal 四 owner + session handle 再拆到 329 行、Git loader/cache owner、Mobile transition matrix + client factory 全部落地
 - Phase 5：agent capability matrix（docs-only，`0e88a2f0`）、settings 三類歸屬（`215893ee`）已落地；observability 已由 Batch S + Batch T 補齊（request-id 貫穿、disconnect/outcome taxonomy、stale-completion、shutdown cleanup、bench harness），release matrix 盤點文件落地（`docs/release-matrix-2026-09-13.md`，集中化實作待排程）
 - Batch L：grouping 熱點已修（真實 7.5k → 6.27ms）+ reload 後 entry identity 保留（`9cd9384a`，下游 `identical()` memo 命中）；20k+ / payload 分頁 / isolate 仍是後續
-- Commit Graph 右鍵操作：已實作 M1-M3 + Checkout Commit（commit `d2c071f4` / `969498bb` / `7d1ce394` / `3bd1fe58`） - branch badge 右鍵 Switch to Branch 走 `switchWorkspaceBranch` facade、commit 右鍵 Copy Hash/Subject + Checkout Commit（detached HEAD，confirm 提示）+ Revert Commit + Reset（Soft/Mixed/Hard）走 `WorkspaceSourceControlController`；backend `checkout_commit`/`revert_commit`/`reset_to_commit` 落 alera-core + FRB + FakeGitBackend。細節與偏差見 §26；parity backlog（cherry-pick、tag ops、create branch at commit 等）仍未做
+- Commit Graph 右鍵操作：M1-M3 + Checkout Commit（`d2c071f4` / `969498bb` / `7d1ce394` / `3bd1fe58`）已落地，**parity backlog 11 項亦已全部實作**（contract `28a6be26`、backend `496eddcf`/merge `539d8244`、commit-row UI `8f1cd0b1`/merge `c1ef5ecb`、ref-menu UI `0185c61d`/merge `80032bb7`、拆檔 `0c589501`）。範圍：cherry-pick、tag ops（create/delete/push）、create branch at commit、drop、merge、rebase、remote ops（tracking checkout/delete/pull upstream）、rename/delete branch、archive（zip/tar）、uncommitted row（stash/discard/commit）、Ctrl/Cmd+click range compare。細節與偏差見 §26
 - 已知非重構 regression：`alera_shell_page_test.dart` 3 個失敗已修（`db5e8cd4`，見 §7.4）
 - 其他 worktree：使用者保有多個 feature worktree，不要清理或吸收
 - Merge/rebase/deploy/build release：本工作未做
 
-下一批不必重盤：§27 排序的 Batch N/O/P/Q/R/S/T 已全部落地（Batch T 見 §27.7 末），其後 T3（dedicated `HostError` variant）與 U1（ask disconnect settle）亦完成。剩餘 queue：release matrix 集中化實作（§5 六步遷移，需授權）、§26 Commit Graph parity backlog（獨立排程）、Batch L 20k+ wire 分頁（需求驅動，改 schema 才做）。
+下一批不必重盤：§27 排序的 Batch N/O/P/Q/R/S/T 已全部落地（Batch T 見 §27.7 末），其後 T3（dedicated `HostError` variant）與 U1（ask disconnect settle）亦完成，§26 Commit Graph parity backlog 11 項已全數實作（見 §26 末段）。剩餘 queue：release matrix 集中化實作（§5 六步遷移，需授權）、Batch L 20k+ wire 分頁（需求驅動，改 schema 才做）、全 repo suite 未跑過。
 
 ---
 
 ## 26. Commit Graph 右鍵操作（對齊 VS Code Git Graph）
 
-規劃日期：2026-09-13；實作完成：2026-09-13。M1-M3 已落地（UI commit `d2c071f4`、backend commit `969498bb`、整合 `7d1ce394`），parity backlog 未做。與原設計的偏差：
+規劃日期：2026-09-13；實作完成：2026-09-13（M1-M3 + Checkout Commit）與 2026-09-13（parity backlog 11 項全數）。與原設計的偏差：
 
 - Reset 沒有做子選單（`showMenu` 不便內嵌），改為三個明確項目「Reset Current Branch Here (Soft|Mixed|Hard)」，各自先出 `AleraConfirmDialog`（hard 為 destructive）。
 - Revert merge commit 第一版直接採 `mainlineParent = 1`（first parent 慣例），不做 mainline 選擇 UI；`mainlineParent` 參數仍在 backend 保留給後續選擇器。
@@ -1472,6 +1472,19 @@ max-lines 尚未全清前，第 8 步會是 repo-wide exit 1；必須確認 offe
 - Paged history：mutation 後 `_reload()` 只載回第一頁，已展開的 offset paging 重新累積是接受行為（與既有 refresh 一致）。
 - FRB generated bindings（`lib/src/rust/`）是 committed surface：改 `rust/src/api` 後必須 `make frb-generate` 並把 generated 檔一起提交。
 - Context menu 不做進 design_system；menu builders 留 feature presentation 層，design-system 元件維持 presentational。
+
+### 26.7 Parity backlog 實作記錄（2026-09-13 完成，三線平行）
+
+排程方式：parent 先落 contract（`28a6be26`，`GitBackend` +13 方法簽名 + `GitArchiveFormat` enum + `FakeGitBackend` call 記錄/error 注入 + `RustGitBackend` 暫時 stub），之後 backend 與兩線 UI 平行實作，parent 統一整合。
+
+- **Backend**（`496eddcf`，merge `539d8244`）：13 op 的 alera-core git2 實作 + FRB surface + codegen + `RustGitBackend` 真接線。衝突語義：cherry-pick/drop/rebase 衝突即 abort 回 `GitConflictException`；merge 留 `MERGE_HEAD` 讓使用者在 Source Control 解。`pushTag`/`deleteRemoteBranch`/`createArchive` 走 `git_in_dir`（libgit2 無 archive、網路操作需 credential helper，為 AGENTS 規則下唯一合法管道）。Rust API 依 Batch N 慣例拆 sibling：`git_archive_ops.rs`/`git_merge_ops.rs`/`git_remote_ops.rs`/`git_tag_ops.rs`/`git_head_helpers.rs`。
+- **Commit-row UI**（`8f1cd0b1`，merge `c1ef5ecb`）：Add Tag / Create Branch Here / Cherry Pick / Drop（root commit 停用、destructive confirm）/ Merge into Current Branch / Rebase Current Branch onto / Create Archive（.zip/.tar 由路徑副檔名推斷）。Ctrl（macOS Cmd）+click 兩段式 range compare：第一擊設 anchor 並高亮、第二擊走 `compareRange` 開既有 commitCompare diff 路徑、普通 click 清 anchor。成功 mutation 後清 compare cache + reload history + refresh source control；衝突錯誤各操作有專屬 toast。
+- **Ref-menu UI**（`0185c61d`，merge `80032bb7`）：local branch（Switch / Rename / Delete 兩段式 - 先非 force，失敗才出 destructive force confirm / Merge / Rebase onto / Archive / Copy Name）；remote branch（tracking checkout / delete remote / Pull 僅在 ref 為 repository upstream 時啟用 / Copy Name）；tag（Push Tag to origin / Delete Tag / Archive / Copy Name）。Boundary/uncommitted row：Stash Changes / Discard All Changes（含 staged）/ Commit Changes（聚焦 commit message 或開 source-control tab）。
+- **整合衝突**：兩線 UI 在 `workspace_git_history_surface.dart`（compare anchor vs ref/boundary menu 回呼）與 `workspace_git_history_panel.dart`（`_openRefActions` 內聯 vs part-file）交疊，parent 手解保留雙邊行為。
+- **Max-lines 維持**：parity 新增推過線的三檔依慣例拆 part（`0c589501`）：`rust_git_backend_parity_ops.dart`（mixin + 抽象 `_guard` 契約）、`fake_git_backend_commit_ops.dart`、`git_head_helpers.rs`。
+- **驗收**：UI-A 35 widget tests、UI-B 28 widget tests、merged tree 焦點測試全綠、`check_max_lines` exit 0、`runtime_architecture_guard` passed、`cargo check -p alera-cli --all-targets` 0 error。
+- **與 §26 spec 的偏差**：Revert 已於 M 批落地不在本批；tag 無「view details」項（menu 規格無此 action）；remote pull 採保守策略只對 upstream ref 啟用；archive 走 git CLI（`git archive`），非 libgit2。
+- **檔案版圖**：commit 動作集中在 `workspace_git_history_commit_menus.dart`/`workspace_git_history_input_dialogs.dart`；ref 動作在 `workspace_git_history_ref_menus.dart`/`_ref_dialogs.dart`/`_ref_actions.dart`/`workspace_git_history_surface_ref_actions.dart`/`workspace_git_history_panel_actions.dart`；panel/surface 各保留薄 callback 接線。
 
 ---
 
