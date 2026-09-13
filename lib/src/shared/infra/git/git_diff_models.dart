@@ -397,6 +397,159 @@ class const GitSubmoduleStatus({
   required final bool inspectable,
 });
 
+typedef _GitChangeEntryValueKey = ({
+  String path,
+  String? oldPath,
+  GitChangeArea area,
+  GitChangeStatus status,
+  int? added,
+  int? removed,
+  bool isBinary,
+  bool isLarge,
+  bool? submoduleCommitChanged,
+  bool? submoduleTrackedChanges,
+  bool? submoduleUntrackedChanges,
+  bool? submoduleInspectable,
+  String? submoduleRoot,
+});
+
+bool gitSubmoduleStatusValuesEqual(
+  GitSubmoduleStatus? left,
+  GitSubmoduleStatus? right,
+) {
+  if (identical(left, right)) {
+    return true;
+  }
+  if (left == null || right == null) {
+    return false;
+  }
+  return left.commitChanged == right.commitChanged &&
+      left.trackedChanges == right.trackedChanges &&
+      left.untrackedChanges == right.untrackedChanges &&
+      left.inspectable == right.inspectable;
+}
+
+bool gitChangeEntryValuesEqual(GitChangeEntry left, GitChangeEntry right) {
+  if (identical(left, right)) {
+    return true;
+  }
+  return _gitChangeEntryValueKey(left) == _gitChangeEntryValueKey(right);
+}
+
+List<GitChangeEntry> reconcileGitChangeEntryInstances(
+  List<GitChangeEntry> previous,
+  List<GitChangeEntry> next,
+) {
+  if (identical(previous, next)) {
+    return previous;
+  }
+
+  final merged = List<GitChangeEntry>.of(next);
+  final reusedPrevious = List<bool>.filled(previous.length, false);
+  final reusedNext = List<bool>.filled(next.length, false);
+
+  // Positional matching is the common case and avoids building an index.
+  if (previous.length == next.length) {
+    var allMatches = true;
+    for (var index = 0; index < next.length; index += 1) {
+      if (gitChangeEntryValuesEqual(previous[index], next[index])) {
+        merged[index] = previous[index];
+        reusedPrevious[index] = true;
+        reusedNext[index] = true;
+      } else {
+        allMatches = false;
+      }
+    }
+    if (allMatches) {
+      return previous;
+    }
+  }
+
+  final previousByValue = <_GitChangeEntryValueKey, List<GitChangeEntry>>{};
+  for (var index = 0; index < previous.length; index += 1) {
+    if (reusedPrevious[index]) {
+      continue;
+    }
+    final entry = previous[index];
+    (previousByValue[_gitChangeEntryValueKey(entry)] ??= <GitChangeEntry>[])
+        .add(entry);
+  }
+
+  for (var index = 0; index < next.length; index += 1) {
+    if (reusedNext[index]) {
+      continue;
+    }
+    final candidates = previousByValue[_gitChangeEntryValueKey(next[index])];
+    if (candidates != null && candidates.isNotEmpty) {
+      merged[index] = candidates.removeLast();
+    }
+  }
+
+  return List<GitChangeEntry>.unmodifiableOf(merged);
+}
+
+bool gitRepositoryStateValuesEqual(
+  GitRepositoryState left,
+  GitRepositoryState right,
+) {
+  if (identical(left, right)) {
+    return true;
+  }
+  return left.branch == right.branch &&
+      left.upstream == right.upstream &&
+      left.ahead == right.ahead &&
+      left.behind == right.behind &&
+      left.hasConflicts == right.hasConflicts &&
+      left.headMessage == right.headMessage;
+}
+
+bool gitStashEntryValuesEqual(GitStashEntry left, GitStashEntry right) {
+  if (identical(left, right)) {
+    return true;
+  }
+  return left.index == right.index &&
+      left.reference == right.reference &&
+      left.message == right.message &&
+      left.oid == right.oid;
+}
+
+bool gitStashEntriesValuesEqual(
+  List<GitStashEntry> left,
+  List<GitStashEntry> right,
+) {
+  if (identical(left, right)) {
+    return true;
+  }
+  if (left.length != right.length) {
+    return false;
+  }
+  for (var index = 0; index < left.length; index += 1) {
+    if (!gitStashEntryValuesEqual(left[index], right[index])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+_GitChangeEntryValueKey _gitChangeEntryValueKey(GitChangeEntry entry) {
+  final submodule = entry.submodule;
+  return (
+    path: entry.path,
+    oldPath: entry.oldPath,
+    area: entry.area,
+    status: entry.status,
+    added: entry.added,
+    removed: entry.removed,
+    isBinary: entry.isBinary,
+    isLarge: entry.isLarge,
+    submoduleCommitChanged: submodule?.commitChanged,
+    submoduleTrackedChanges: submodule?.trackedChanges,
+    submoduleUntrackedChanges: submodule?.untrackedChanges,
+    submoduleInspectable: submodule?.inspectable,
+    submoduleRoot: entry.submoduleRoot,
+  );
+}
+
 class const GitChangeTreeRow({
   required final GitChangeTreeRowKind kind,
   required final String name,
