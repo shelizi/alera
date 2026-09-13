@@ -221,10 +221,62 @@ class WorkspaceSourceControlController
       backend.repositoryState(workspacePath),
       backend.listStashes(workspacePath),
     ]);
-    return WorkspaceSourceControlState(
+    return _reconcileLoadedState(
+      previous: state.asData?.value,
       status: results[0] as GitStatusResult,
       repositoryState: results[1] as GitRepositoryState,
       stashes: results[2] as List<GitStashEntry>,
+    );
+  }
+
+  WorkspaceSourceControlState _reconcileLoadedState({
+    required WorkspaceSourceControlState? previous,
+    required GitStatusResult status,
+    required GitRepositoryState repositoryState,
+    required List<GitStashEntry> stashes,
+  }) {
+    if (previous == null) {
+      return WorkspaceSourceControlState(
+        status: status,
+        repositoryState: repositoryState,
+        stashes: stashes,
+      );
+    }
+
+    final entries = reconcileGitChangeEntryInstances(
+      previous.status.entries,
+      status.entries,
+    );
+    // GitStatusResult.groups is derived by GitChangeGroup.fromEntries, so
+    // preserving the old status is safe when those entry instances are all
+    // unchanged.
+    final reconciledStatus = identical(entries, previous.status.entries)
+        ? previous.status
+        : GitStatusResult(
+            entries: entries,
+            groups: GitChangeGroup.fromEntries(entries),
+          );
+    final reconciledRepositoryState =
+        gitRepositoryStateValuesEqual(previous.repositoryState, repositoryState)
+        ? previous.repositoryState
+        : repositoryState;
+    final reconciledStashes =
+        gitStashEntriesValuesEqual(previous.stashes, stashes)
+        ? previous.stashes
+        : stashes;
+    const nextAction = null;
+
+    if (identical(reconciledStatus, previous.status) &&
+        identical(reconciledRepositoryState, previous.repositoryState) &&
+        identical(reconciledStashes, previous.stashes) &&
+        previous.action == nextAction) {
+      return previous;
+    }
+    return WorkspaceSourceControlState(
+      status: reconciledStatus,
+      repositoryState: reconciledRepositoryState,
+      stashes: reconciledStashes,
+      action: nextAction,
     );
   }
 
