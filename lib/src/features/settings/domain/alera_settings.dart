@@ -10,110 +10,20 @@ import 'package:dart_mappable/dart_mappable.dart';
 import 'package:flutter/foundation.dart';
 
 part 'agent_quota_settings.dart';
+part 'agent_status_hook_settings.dart';
 part 'alera_settings.mapper.dart';
 part 'alera_terminal_settings.dart';
+part 'diagnostics_settings.dart';
+part 'editor_settings.dart';
 
 @MappableEnum()
 enum AppLanguage { system, english, traditionalChinese }
 
-@MappableClass()
-class const AgentStatusHookSettings({
-  this.codex = false,
-  this.claude = false,
-  this.copilot = false,
-  this.cursor = false,
-  this.agy = false,
-  this.opencode = false,
-  this.opencode2 = false,
-  this.pi = false,
-  this.amp = false,
-  this.grok = false,
-  this.devin = false,
-  this.fx = false,
-}) with AgentStatusHookSettingsMappable {
-  final bool codex;
-  final bool claude;
-  final bool copilot;
-  final bool cursor;
-  final bool agy;
-  final bool opencode;
-  final bool opencode2;
-  final bool pi;
-  final bool amp;
-  final bool grok;
-  final bool devin;
-  final bool fx;
-
-  bool get anyEnabled =>
-      codex ||
-      claude ||
-      copilot ||
-      cursor ||
-      agy ||
-      opencode ||
-      opencode2 ||
-      pi ||
-      amp ||
-      grok ||
-      devin ||
-      fx;
-
-  static const AgentStatusHookSettings defaults = AgentStatusHookSettings();
-
-  factory fromJson(Map<String, Object?> json) =>
-      AgentStatusHookSettingsMapper.fromMap(Map<String, dynamic>.from(json));
-}
-
-@MappableClass()
-class const EditorSettings({
-  this.tabSize = 4,
-  this.themeName = EditorSyntaxThemeNames.alera,
-  this.autosaveEnabled = false,
-  this.autosaveDelaySeconds = defaultAutosaveDelaySeconds,
-  this.externalEditor = ExternalEditorKind.zed,
-  this.codeOpenTarget = CodeOpenTarget.alera,
-  this.zedExecutableMode = ExternalEditorExecutableMode.automatic,
-  this.zedExecutablePath,
-  this.externalEditorWorkspaceMode = ExternalEditorWorkspaceMode.newWindow,
-  this.autoOpenNewWorkspacesInZed = false,
-}) with EditorSettingsMappable {
-  static const int minAutosaveDelaySeconds = 1;
-  static const int maxAutosaveDelaySeconds = 60;
-  static const int defaultAutosaveDelaySeconds = 1;
-
-  /// Number of spaces inserted when the editor handles a Tab key press.
-  final int tabSize;
-
-  /// Syntax highlighting theme used by editor tabs.
-  final String themeName;
-
-  /// Save dirty editor tabs after they have been idle for the configured delay.
-  final bool autosaveEnabled;
-
-  /// Number of idle seconds before an automatic editor save.
-  final int autosaveDelaySeconds;
-
-  final ExternalEditorKind externalEditor;
-  final CodeOpenTarget codeOpenTarget;
-  final ExternalEditorExecutableMode zedExecutableMode;
-  final String? zedExecutablePath;
-  final ExternalEditorWorkspaceMode externalEditorWorkspaceMode;
-  final bool autoOpenNewWorkspacesInZed;
-
-  /// Clamps persisted values before they are used to construct a timer.
-  int get effectiveAutosaveDelaySeconds => autosaveDelaySeconds
-      .clamp(minAutosaveDelaySeconds, maxAutosaveDelaySeconds)
-      .toInt();
-
-  Duration get autosaveDebounce =>
-      Duration(seconds: effectiveAutosaveDelaySeconds);
-
-  static const EditorSettings defaults = EditorSettings();
-
-  factory fromJson(Map<String, Object?> json) =>
-      EditorSettingsMapper.fromMap(Map<String, dynamic>.from(json));
-}
-
+/// Mixed ownership: `confirmProjectRemoval`, `confirmWorkspaceRemoval`, and
+/// `autoArchiveWorkspacesAfterDays` are both portable-cloud configuration and
+/// runtime operational settings; `showTrayIcon`, `showDockBadge`, and
+/// `showTrayBadge` are portable only; `workspaceDirectory` is runtime
+/// operational only; the rest are local-only UI prefs.
 @MappableClass()
 class const GeneralSettings({
   this.language = AppLanguage.system,
@@ -174,6 +84,10 @@ class const GeneralSettings({
       GeneralSettingsMapper.fromMap(Map<String, dynamic>.from(json));
 }
 
+/// Mixed ownership: `defaultAgentProfileId` is both portable-cloud and
+/// runtime operational; `agentStatusHooks` and `quotas` (local host) are
+/// runtime operational; the notification and sidebar flags are portable;
+/// `keepComputerAwakeWhileAgentsWork` is a local-only UI pref.
 @MappableClass()
 class const AgentSettings({
   this.agentStatusHooks = AgentStatusHookSettings.defaults,
@@ -249,29 +163,6 @@ class const _LegacyAgentSettingsHook() extends MappingHook {
       'agents': agents,
     };
   }
-}
-
-/// Log levels offered in Settings, kept as a closed set so the stored value
-/// cannot drift into something `package:logging` will not accept.
-@MappableEnum()
-enum DiagnosticsLogLevel { error, warning, info, debug }
-
-@MappableClass()
-class const DiagnosticsSettings({
-  this.logLevel = DiagnosticsLogLevel.info,
-  this.crashReportingEnabled = false,
-}) with DiagnosticsSettingsMappable {
-  /// Detail written to the app and runtime log files.
-  final DiagnosticsLogLevel logLevel;
-
-  /// Send crashes to Sentry. Default-off because it leaves the machine; the
-  /// local log file is what makes diagnosis possible without it.
-  final bool crashReportingEnabled;
-
-  static const DiagnosticsSettings defaults = DiagnosticsSettings();
-
-  factory fromJson(Map<String, Object?> json) =>
-      DiagnosticsSettingsMapper.fromMap(Map<String, dynamic>.from(json));
 }
 
 @MappableClass(hook: _LegacyAgentSettingsHook())

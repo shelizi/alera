@@ -54,6 +54,11 @@ class const TerminalColorOverrides({
       TerminalColorOverridesMapper.fromMap(Map<String, dynamic>.from(json));
 }
 
+/// Mixed ownership: the appearance fields are portable-cloud configuration;
+/// the `host*` fields, `bufferBudgetMegabytes`, `keepRuntimeOpenOnAppQuit`,
+/// and `loginShell` are runtime operational settings delivered through the
+/// runtime-host `configure` request; `scrollbackLines` and
+/// `confirmCloseRunningProcesses` are local-only UI prefs.
 @MappableClass(hook: _LegacyKeepRuntimeOpenHook())
 class const TerminalSettings({
   required this.fontFamily,

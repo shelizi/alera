@@ -1,5 +1,10 @@
 part of 'alera_settings.dart';
 
+// Ownership: the per-host quota fields the runtime host needs are pushed as
+// `agentQuotas` in `runtimeSettings.update` (runtime operational), while
+// `selectedClaudeProfile` and `unpinnedQuotaKeys` stay local-only UI prefs and
+// are merged back from the local repository on every load.
+
 @MappableEnum()
 enum AgentQuotaProviderId {
   claude,
