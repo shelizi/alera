@@ -9,10 +9,14 @@ use std::collections::HashMap;
 use alera_core::runtime::WorkspaceTabRecord;
 use chrono::Utc;
 use serde_json::{json, Value};
+use tokio::sync::mpsc::UnboundedReceiver;
 
 use super::actor_test_harness::{local_client, mobile_client, test_actor};
-use super::ServerActor;
-use crate::terminal_host::client::ClientHandle;
+use super::requests::idempotency_receipts::{
+    payload_digest, prepare_receipt, settle_receipt, ReceiptPrepareOutcome,
+};
+use super::{ServerActor, ServerCommand};
+use crate::terminal_host::client::{ClientFrame, ClientHandle};
 
 async fn wire_call(
     actor: &mut ServerActor,
@@ -34,10 +38,7 @@ async fn wire_call(
         .await
 }
 
-async fn read_response(
-    responses: &mut tokio::sync::mpsc::UnboundedReceiver<crate::terminal_host::client::ClientFrame>,
-    request_id: i64,
-) -> Value {
+async fn read_response(responses: &mut UnboundedReceiver<ClientFrame>, request_id: i64) -> Value {
     for _ in 0..8 {
         let response = tokio::time::timeout(std::time::Duration::from_secs(1), responses.recv())
             .await
@@ -50,6 +51,34 @@ async fn read_response(
         }
     }
     panic!("no response for request {request_id}");
+}
+
+async fn deferred_request(
+    actor: &mut ServerActor,
+    client_id: u64,
+    request_id: i64,
+    request_type: &str,
+    payload: Value,
+    responses: &mut UnboundedReceiver<ClientFrame>,
+    inbox: &mut UnboundedReceiver<ServerCommand>,
+) -> Value {
+    wire_call(actor, client_id, request_id, request_type, payload).await;
+    loop {
+        tokio::select! {
+            command = inbox.recv() => {
+                actor.handle(command.expect("the command should be delivered")).await;
+            }
+            frame = responses.recv() => {
+                let response = frame
+                    .expect("the response should be delivered")
+                    .as_json()
+                    .expect("the response should be JSON");
+                if response["id"] == request_id {
+                    return response;
+                }
+            }
+        }
+    }
 }
 
 #[tokio::test]
@@ -280,6 +309,147 @@ async fn agent_profile_launch_rejects_same_mutation_id_with_an_altered_payload()
         .await
         .unwrap()
         .is_some());
+}
+
+#[tokio::test]
+async fn agent_quota_consume_replays_a_settled_client_mutation_receipt() {
+    let dir = tempfile::tempdir().unwrap();
+    let (handle, mut responses) = ClientHandle::test_channels();
+    let mut actor = test_actor(
+        &dir,
+        HashMap::from([(1, local_client(handle))]),
+        HashMap::new(),
+    )
+    .await;
+    let (inbox, mut inbox_receiver) = tokio::sync::mpsc::unbounded_channel();
+    actor.inbox = inbox;
+
+    let payload = json!({
+        "offerRevision": "offer-1",
+        "clientMutationId": "quota-consume-1",
+    });
+    let digest = payload_digest(&payload).unwrap();
+    let stored_result = json!({
+        "status": "consumed",
+        "outcome": "reset",
+        "snapshot": {
+            "provider": "codex",
+            "accountId": "default",
+            "status": "ok",
+            "windows": [],
+        },
+    });
+    assert_eq!(
+        prepare_receipt(
+            &actor.runtime_store,
+            "agentQuota.consumeCodexResetCredit",
+            "local:cli",
+            "quota-consume-1",
+            &digest,
+            None,
+        )
+        .await
+        .unwrap(),
+        ReceiptPrepareOutcome::Created
+    );
+    settle_receipt(
+        &actor.runtime_store,
+        "agentQuota.consumeCodexResetCredit",
+        "local:cli",
+        "quota-consume-1",
+        &digest,
+        &stored_result,
+    )
+    .await
+    .unwrap();
+
+    let first = deferred_request(
+        &mut actor,
+        1,
+        50,
+        "agentQuota.consumeCodexResetCredit",
+        payload.clone(),
+        &mut responses,
+        &mut inbox_receiver,
+    )
+    .await;
+    let retry = deferred_request(
+        &mut actor,
+        1,
+        51,
+        "agentQuota.consumeCodexResetCredit",
+        payload,
+        &mut responses,
+        &mut inbox_receiver,
+    )
+    .await;
+    assert_eq!(first["ok"], true, "{first}");
+    assert_eq!(retry["ok"], true, "{retry}");
+    assert_eq!(retry["payload"], first["payload"]);
+    assert_eq!(retry["payload"]["status"], "consumed");
+    assert_eq!(retry["payload"]["outcome"], "reset");
+
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM terminalHostIdempotencyReceipts
+         WHERE operation = 'agentQuota.consumeCodexResetCredit'
+           AND callerScope = 'local:cli' AND clientMutationId = 'quota-consume-1'",
+    )
+    .fetch_one(actor.runtime_store.pool())
+    .await
+    .unwrap();
+    assert_eq!(count, 1, "a replay must not create a second receipt");
+
+    let conflict = deferred_request(
+        &mut actor,
+        1,
+        52,
+        "agentQuota.consumeCodexResetCredit",
+        json!({
+            "offerRevision": "offer-2",
+            "clientMutationId": "quota-consume-1",
+        }),
+        &mut responses,
+        &mut inbox_receiver,
+    )
+    .await;
+    assert_eq!(conflict["ok"], false, "{conflict}");
+    assert!(
+        conflict["error"].as_str().is_some_and(|error| {
+            error.contains("different agentQuota.consumeCodexResetCredit payload")
+        }),
+        "{conflict}"
+    );
+    assert!(conflict.get("errorCode").is_none(), "{conflict}");
+}
+
+#[tokio::test]
+async fn agent_quota_consume_without_a_client_mutation_id_keeps_legacy_validation() {
+    let dir = tempfile::tempdir().unwrap();
+    let (handle, mut responses) = ClientHandle::test_channels();
+    let mut actor = test_actor(
+        &dir,
+        HashMap::from([(1, local_client(handle))]),
+        HashMap::new(),
+    )
+    .await;
+    let (inbox, mut inbox_receiver) = tokio::sync::mpsc::unbounded_channel();
+    actor.inbox = inbox;
+
+    let response = deferred_request(
+        &mut actor,
+        1,
+        53,
+        "agentQuota.consumeCodexResetCredit",
+        json!({}),
+        &mut responses,
+        &mut inbox_receiver,
+    )
+    .await;
+    assert_eq!(response["ok"], false, "{response}");
+    assert_eq!(
+        response["error"],
+        "offerRevision must be a non-empty string"
+    );
 }
 
 #[tokio::test]

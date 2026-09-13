@@ -4,7 +4,7 @@ This table answers the eight transaction/replay questions from the architecture 
 
 Scope: orchestration-agent operations (`orchestration.*` dispatch/spawn/status writes) are covered by `docs/orchestration-operation-contract.md`; this doc covers the agent profile/presence/quota surface only. Account (`account.*`), host-tool installs (`cliRegistration.*`, `agentSkill.install`), `resources.snapshot`, `shellEnvironment.reload`, and `runtimeMetadata.*` are out of scope here.
 
-Authority is `ServerActor` on the terminal-host mailbox. Profiles persist in the `agentProfiles` table and runtime settings in `runtimeMetadata`, both through `RuntimeStore`; agent presence and the quota cache are in-memory only. Three execution surfaces exist:
+Authority is `ServerActor` on the terminal-host mailbox. Profiles persist in the `agentProfiles` table and runtime settings in `runtimeMetadata`, both through `RuntimeStore`; agent presence and the quota cache are in-memory only. The keyed `agentQuota.consumeCodexResetCredit` receipt is persisted in the same runtime SQLite database, separately from the in-memory quota cache. Three execution surfaces exist:
 
 - Mailbox ops: profile CRUD, settings get/update, presence/status reads, lifecycle verbs run inline on the actor.
 - Spawned jobs: `agentQuota.*`/`agentUsage.*`, `aiText.*` generations, and `aiDictation.*` transcriptions run on `tokio` tasks and answer later through `ServerCommand` completions (`AgentQuotaFinished`, `AiAssistFinished`, `AiDictationFinished`, `HostToolFinished`); the reply targets the requesting client connection and drops silently if it is gone.
@@ -34,14 +34,14 @@ Presence is a read model fed by `orchestration.agentStatus` hook forwarding (see
 
 ## Quota and usage snapshots
 
-The quota cache is `agent_quota_cache: (Instant, environment_signature, payload)` with a 15-minute TTL, where the signature hashes the caller-supplied `environmentValues`. Nothing here persists.
+The quota cache is `agent_quota_cache: (Instant, environment_signature, payload)` with a 15-minute TTL, where the signature hashes the caller-supplied `environmentValues`. The cache itself is still in-memory only. Keyed `agentQuota.consumeCodexResetCredit` requests use the `terminalHostIdempotencyReceipts` table in `RuntimeStore` and persist their deduction result across host restarts. Receipts are scoped by operation, authenticated caller scope, and `clientMutationId`; a same-key different-payload request fails with the same plain state error style as `agentProfile.launchIdempotent`. Receipts persist for seven days. Cleanup is lazy on the next keyed reservation, which deletes expired rows and trims the oldest rows above 256 per operation and caller scope or 4096 globally. A failed external consume removes its pending receipt; a retry received while the original job is still pending returns `clientMutationId is already in progress.`
 
 | Operation | Instance check | Replay | Same id + different payload | Commit vs publish | Lost reply retry | Restart recovery | Stale owner / wrong actor |
 |---|---|---|---|---|---|---|---|
 | `agentQuota.snapshot` | none | Served from the in-memory cache when the environment signature matches and the entry is under 15 minutes old; `forceRefresh` bypasses | A different `environmentValues` map is a different cache signature, not a conflict | The spawned fetch merges into the cache, then the reply, then `agentQuotasChanged` | A retry with the same env and no `forceRefresh` is a cache hit | Not persisted; the cache dies with the host | A failed refetch with a matching-signature cache answers the cached payload marked `stale` instead of an error; a per-provider failure keeps the previous ok snapshot as `stale` |
 | `agentUsage.snapshot` | `sinceDay`/`untilDay` required | Not cached; each call re-reads the persisted quota settings and re-runs the collector | n/a | Spawned job replies via `HostToolFinished`; no broadcast | Re-runs the query | n/a | n/a |
 | `agentQuota.fetchClaudeTui` | `accountId` required | Not deduplicated; each call refetches the one account | n/a | The fetched snapshot upserts into the cache by `(provider, accountId)`, then the reply, then `agentQuotasChanged` | Refetches the account | In-memory cache | An unknown `accountId` falls back to the raw id as the display name instead of erroring |
-| `agentQuota.consumeCodexResetCredit` | none | Not deduplicated: a retry consumes another reset credit | n/a | The external consume runs, then the returned snapshot merges into the cache, then the reply + `agentQuotasChanged` | Consumes again; the only non-replay-safe operation in this doc | In-memory cache | n/a |
+| `agentQuota.consumeCodexResetCredit` | `offerRevision` is required; a keyed request additionally requires a non-blank `clientMutationId` of at most 128 bytes | Without a key, legacy behavior is unchanged. With a key, the receipt is reserved before the external consume, settled with the deduction result before the reply, and a retry replays that result without another consume | The same key with a different payload digest fails `clientMutationId was already used with a different agentQuota.consumeCodexResetCredit payload.` | The keyed receipt reservation commits before the spawned job calls the external consume. On success the receipt stores the result, then the returned snapshot merges into the in-memory cache, then the reply + `agentQuotasChanged`; a failed consume removes the pending receipt | A keyed retry after a successful consume replays the stored result; an unkeyed retry consumes again, preserving legacy behavior | The receipt persists in `RuntimeStore` across host restarts for seven days; the quota cache remains in-memory only | n/a |
 
 ## Runtime settings
 
@@ -90,6 +90,5 @@ Deferred side effects of a settings update:
 
 Known gaps:
 
-- `agentQuota.consumeCodexResetCredit` has no idempotency key; a retry after a lost reply spends another reset credit.
 - `agentProfile.upsert` name-uniqueness failures and `aiText.agentTitle.generate` stale-expectation failures are plain `state` errors, not typed conflicts, so clients cannot machine-distinguish them from other state errors.
 - Agent presence and the quota cache are in-memory, so a host restart silently empties both; clients rediscover presence through `agentPresenceChanged` and quota through a fresh `agentQuota.snapshot`.

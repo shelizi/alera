@@ -354,6 +354,89 @@ async fn detach_keeps_the_session_and_terminate_deletes_tab_and_history() {
 }
 
 #[tokio::test]
+async fn terminate_replays_a_client_mutation_receipt_after_teardown() {
+    let dir = tempfile::tempdir().unwrap();
+    let (handle, mut receiver) = ClientHandle::test_channels();
+    let mut session = Session::driver_test_stub("s1", 120, 40);
+    session.attach(1);
+    let mut actor = test_actor(
+        &dir,
+        HashMap::from([(1, local_client(handle))]),
+        HashMap::from([("s1".to_string(), session)]),
+    )
+    .await;
+    actor
+        .runtime_store
+        .upsert_workspace_tab(terminal_tab("tab-s1", "workspace"))
+        .await
+        .unwrap();
+    let (inbox, mut inbox_receiver) = tokio::sync::mpsc::unbounded_channel();
+    actor.inbox = inbox;
+
+    let payload = json!({
+        "sessionId": "s1",
+        "clientMutationId": "terminate-1",
+    });
+    let first = request(
+        &mut actor,
+        1,
+        10,
+        "terminate",
+        payload.clone(),
+        &mut receiver,
+        &mut inbox_receiver,
+    )
+    .await;
+    assert_eq!(first["ok"], true, "{first}");
+    assert_eq!(first["payload"], json!({}));
+    assert!(!actor.sessions.contains_key("s1"));
+    let receipt_state: String = sqlx::query_scalar(
+        "SELECT state FROM terminalHostIdempotencyReceipts
+         WHERE operation = 'terminal.terminate'
+           AND callerScope = 'local:cli' AND clientMutationId = 'terminate-1'",
+    )
+    .fetch_one(actor.runtime_store.pool())
+    .await
+    .unwrap();
+    assert_eq!(receipt_state, "settled");
+
+    let retry = request(
+        &mut actor,
+        1,
+        11,
+        "terminate",
+        payload,
+        &mut receiver,
+        &mut inbox_receiver,
+    )
+    .await;
+    assert_eq!(retry["ok"], true, "{retry}");
+    assert_eq!(retry["payload"], first["payload"]);
+
+    let conflict = request(
+        &mut actor,
+        1,
+        12,
+        "terminate",
+        json!({
+            "sessionId": "different-session",
+            "clientMutationId": "terminate-1",
+        }),
+        &mut receiver,
+        &mut inbox_receiver,
+    )
+    .await;
+    assert_eq!(conflict["ok"], false, "{conflict}");
+    assert!(
+        conflict["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("different terminal.terminate payload")),
+        "{conflict}"
+    );
+    assert!(conflict.get("errorCode").is_none(), "{conflict}");
+}
+
+#[tokio::test]
 async fn disconnect_detaches_without_killing_the_pty_and_idle_shutdown_preserves_history() {
     let dir = tempfile::tempdir().unwrap();
     let (handle, _receiver) = ClientHandle::test_channels();
