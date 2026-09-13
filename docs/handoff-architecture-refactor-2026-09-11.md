@@ -1369,7 +1369,7 @@ max-lines 尚未全清前，第 8 步會是 repo-wide exit 1；必須確認 offe
 - Upstream：無
 - Push：無
 - Architecture guard：PASS（2026-09-13 重驗）
-- Max-lines：**ratchet FAIL**（8 個 offender，清單與處理方式見 §27.2；52 個仍 >500 的 baseline debt 不得再長）
+- Max-lines：**ratchet ok**（Batch N 四卡落地後回綠，50 個仍 >500 的 baseline debt 不得再長；每次 merge 後須重驗，見 §27.8）
 - Phase 0：核心完成
 - Phase 1：shutdown uncertainty + snapshot retry policy + smoke DB ownership 完成
 - Phase 2：mailbox 去阻塞、8-slot active + 總 pending backpressure、sidebar single-flight、project registration prepare/commit、upload lifecycle cleanup、agent hook latest-wins、dispatch context install 兩階段、autostart reconcile 契約 C、skill-install 獨立 budget、removeManaged preflight 離 mailbox、wire fixtures、server spawn sweep（`183936e7`：request-driven `tokio::spawn` 全走 `DeferredAdmission` 含 reject 清理；lost-reply re-entry 真 bug 已修 - 入口 `contains_key` 早退 + completion 先 `get` 驗證再 `remove`；`pending_output_writes` 改 `OutputPersistenceState`（atomic pending + Notify barrier + RAII guard）並刪除死欄位）、tag 唯一性 + clone destination dedupe/admission（`0c9c3183`）、wire fixture 補齊 workspace lifecycle / binary resync / legacy capability / shutdown 變體（`c68b06f2`，29 個新 fixture 全錄製）
@@ -1379,14 +1379,14 @@ max-lines 尚未全清前，第 8 步會是 repo-wide exit 1；必須確認 offe
 - autostart reconcile 已定義語義：reconcile 失敗時 settings 已 persist 但回 error_response 且不 broadcast `runtimeSettingsChanged`；無 automation key 的 fire-and-forget reconcile 在 admission 飽和時可丟棄只剩 warn log
 - Phase 3（P6）：Workbench facade + 4 owner（Selection / Tab-Layout / Catalog / Lifecycle）全部落地
 - Phase 4（P7）：Terminal 四 owner + session handle 再拆到 329 行、Git loader/cache owner、Mobile transition matrix + client factory 全部落地
-- Phase 5：agent capability matrix（docs-only，`0e88a2f0`）、settings 三類歸屬（`215893ee`）已落地。Release matrix（§21）仍不要跟 correctness 重構同時做
+- Phase 5：agent capability matrix（docs-only，`0e88a2f0`）、settings 三類歸屬（`215893ee`）已落地；observability 已由 Batch S + Batch T 補齊（request-id 貫穿、disconnect/outcome taxonomy、stale-completion、shutdown cleanup、bench harness），release matrix 盤點文件落地（`docs/release-matrix-2026-09-13.md`，集中化實作待排程）
 - Batch L：grouping 熱點已修（真實 7.5k → 6.27ms）+ reload 後 entry identity 保留（`9cd9384a`，下游 `identical()` memo 命中）；20k+ / payload 分頁 / isolate 仍是後續
 - Commit Graph 右鍵操作：已實作 M1-M3 + Checkout Commit（commit `d2c071f4` / `969498bb` / `7d1ce394` / `3bd1fe58`） - branch badge 右鍵 Switch to Branch 走 `switchWorkspaceBranch` facade、commit 右鍵 Copy Hash/Subject + Checkout Commit（detached HEAD，confirm 提示）+ Revert Commit + Reset（Soft/Mixed/Hard）走 `WorkspaceSourceControlController`；backend `checkout_commit`/`revert_commit`/`reset_to_commit` 落 alera-core + FRB + FakeGitBackend。細節與偏差見 §26；parity backlog（cherry-pick、tag ops、create branch at commit 等）仍未做
 - 已知非重構 regression：`alera_shell_page_test.dart` 3 個失敗已修（`db5e8cd4`，見 §7.4）
 - 其他 worktree：使用者保有多個 feature worktree，不要清理或吸收
 - Merge/rebase/deploy/build release：本工作未做
 
-下一批不必重盤：現行排序以 §27 為準（Batch N ratchet 回綠 → Batch O spawn 收尾 → Batch P contract gap disposition → Batch Q Dart expectedRevision → Batch R codegen 評估 → Batch S observability）。Batch L 20k+/分頁維持需求驅動；§21 release matrix 待 correctness 收尾後再做；§26 Commit Graph parity backlog 可獨立排程。
+下一批不必重盤：§27 排序的 Batch N/O/P/Q/R/S/T 已全部落地（Batch T 見 §27.7 末）。剩餘 queue：T3 Unauthorized/Timeout 字串判別改 dedicated `HostError` variant、release matrix 集中化實作（§5 六步遷移）、orchestration ask disconnect hook、§26 Commit Graph parity backlog（獨立排程）、Batch L 20k+ wire 分頁（需求驅動，改 schema 才做）。
 
 ---
 
@@ -1563,6 +1563,15 @@ max-lines 尚未全清前，第 8 步會是 repo-wide exit 1；必須確認 offe
   - S2 `4bd25c44`:`DisconnectReason` 7 variants(全為真實觸發點)穿進 `ClientDisconnected{id,reason}` 全鏈路;`dispose_client` 掃尾輸出 cleanup-completion(waiters 移除數、sessions detached、receipts left-pending-by-design 等);文件 `docs/observability-disconnect-taxonomy.md`。已知缺口:shutdown path 直清 local handles 不經 dispose_client,無 cleanup 事件(待補)。
   - S3 `404d28c3`:`HostError::outcome_class()` + `OutcomeClass` 六值分類(Ok/StateError/TypedConflict/Backpressure/Unauthorized/Timeout),`error_response` 唯一建構點發 `tracing::debug!` outcome/error_code;文件 `docs/observability-outcome-taxonomy.md`。脆弱面:Unauthorized/Timeout 靠 closed message list 判別,新增 producer 需同步(長遠改 dedicated variant/errorCode)。
   - S4 `de9e0aa3`:`deferred_admission_load_bench.rs` 三支 `#[ignore]` release bench——150-job 飽和 queue-wait 分佈(critical median 20.7ms / bulk 102.8ms,符合 class 優先預期)、三 class 公平性順序斷言、delayed timer 不佔 slot 驗證;文件 `docs/bench-admission-load.md` 含基準數字。
+
+**Batch T 收尾(2026-09-13,四卡全 merged)**:
+
+- T1 `1420c693`:stale-completion observability 補齊。Dart `_run`/watcher reload/unified grouping 三個 generation guard 記 `staleCompletionCount` + `debugPrint`;Rust finish-after-disconnect 進 `staleCompletions` metrics 欄位 + structured `stale-completion` debug 事件;`dispatch_context_install` 4 處丟棄點與 `orchestration_wait_requests` 4 處 late-completion 全部記錄。已知語義:watcher 路徑 counter 對 `_disposed`/`isBusy` 丟棄也 +1(條件 OR 合併),略寬於純 generation 過期。
+- T2 `bdb96776`:S2 缺口關閉——`dispose()` 不再直清 `self.clients`,改逐 client 走 `dispose_client_with_reason(HostShutdown)`,shutdown path 每個殘存 client 各發一筆 cleanup-completion;重複 dispose 與 shutdown 後遲到的 `ClientDisconnected` 皆冪等。
+- T5 `441379de`:Windows `terminal_pulse` git-ignore 兩個長期失敗修復(test-only)。根因是測試手刻 git config 把 `C:\...` 反斜線寫入 `excludesFile`,libgit2 視為非法 escape;helper 改寫 `/` 分隔 + `Config::get_path` 正向斷言 + `no_system_config` 隔離本機 global gitconfig。repo 已知測試失敗歸零。
+- T4 `5716759c`:`docs/release-matrix-2026-09-13.md` 落地——六平台 artifact/簽章/hash/metadata 矩陣 + 散落點盤點(release identity 7 個邏輯落點、hash/descriptor 7 類 metadata family、package-manager publish 失敗無回滾)+ SSOT 集中化六步遷移建議;僅盤點文件,未動 CI/release workflow,實作待後續排程。
+- 驗收:`cargo check --all-targets` 0 error、`check_max_lines` ok、`runtime_architecture_guard` passed、deferred+dispatch_context 42+3ignored、controller 10/10、git-ignore 14/14 全綠。
+- 仍掛著的 follow-up:T3 Unauthorized/Timeout 字串判別改 dedicated `HostError` variant(producer 調查面廣,單獨開卡);release matrix 集中化實作(§5 六步);orchestration ask 的 disconnect hook 清 pending receipt。
 
 ### 27.8 新增工作規則
 
