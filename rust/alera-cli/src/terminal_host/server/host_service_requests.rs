@@ -1,8 +1,3 @@
-use alera_core::runtime::{
-    RuntimeAgentQuotaSettings, RuntimeAiAssistSettings, RuntimeAutomationSettings,
-    RuntimeMobilePushSettings, RuntimeTextActionsSettings,
-};
-use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::agent_status::reconcile_agent_integrations;
@@ -16,163 +11,9 @@ use super::deferred_admission::DeferredRequestClass;
 use super::{ServerActor, ServerCommand};
 
 impl ServerActor {
-    pub(super) async fn persist_mobile_runtime_settings(
-        &mut self,
-        payload: &Value,
-    ) -> HostResult<Value> {
-        let mut refresh_push_subscriptions = false;
-        if let Some(value) = payload.get("workspaceDirectory") {
-            let directory = match value {
-                Value::String(value) => Some(value.as_str()),
-                Value::Null => None,
-                _ => {
-                    return Err(HostError::format(
-                        "workspaceDirectory must be a string or null.",
-                    ))
-                }
-            };
-            runtime_value(self.runtime_store.set_workspace_directory(directory).await)?;
-        }
-        if let Some(value) = payload.get("confirmProjectRemoval") {
-            let enabled = value
-                .as_bool()
-                .ok_or_else(|| HostError::format("confirmProjectRemoval must be a boolean."))?;
-            runtime_value(
-                self.runtime_store
-                    .set_confirm_project_removal(enabled)
-                    .await,
-            )?;
-        }
-        if let Some(value) = payload.get("confirmWorkspaceRemoval") {
-            let enabled = value
-                .as_bool()
-                .ok_or_else(|| HostError::format("confirmWorkspaceRemoval must be a boolean."))?;
-            runtime_value(
-                self.runtime_store
-                    .set_confirm_workspace_removal(enabled)
-                    .await,
-            )?;
-        }
-        if let Some(value) = payload.get("autoArchiveWorkspacesAfterDays") {
-            let days = value.as_i64().ok_or_else(|| {
-                HostError::format("autoArchiveWorkspacesAfterDays must be an integer.")
-            })?;
-            if days < 0 {
-                return Err(HostError::format(
-                    "autoArchiveWorkspacesAfterDays must be zero or greater.",
-                ));
-            }
-            runtime_value(
-                self.runtime_store
-                    .set_auto_archive_workspaces_after_days(days)
-                    .await,
-            )?;
-        }
-        if let Some(value) = payload.get("defaultAgentProfileId") {
-            let profile_id = match value {
-                Value::String(value) => Some(value.as_str()),
-                Value::Null => None,
-                _ => {
-                    return Err(HostError::format(
-                        "defaultAgentProfileId must be a string or null.",
-                    ))
-                }
-            };
-            runtime_value(
-                self.runtime_store
-                    .set_default_agent_profile_id(profile_id)
-                    .await,
-            )?;
-        }
-        if let Some(value) = payload.get("agentStatusHooks") {
-            let settings = serde_json::from_value(value.clone()).map_err(|_| {
-                HostError::format("agentStatusHooks must contain boolean agent switches.")
-            })?;
-            runtime_value(
-                self.runtime_store
-                    .set_agent_status_hook_settings(&settings)
-                    .await,
-            )?;
-            self.agent_presence
-                .retain_enabled(&settings.enabled_agents());
-            self.schedule_agent_integration_reconcile(settings);
-            self.broadcast_agent_presence_changed();
-        }
-        if let Some(value) = payload.get("agentQuotas") {
-            let settings: RuntimeAgentQuotaSettings = serde_json::from_value(value.clone())
-                .map_err(|_| HostError::format("agentQuotas is invalid."))?;
-            validate_agent_quota_settings(&settings)?;
-            runtime_value(self.runtime_store.set_agent_quota_settings(settings).await)?;
-            self.agent_quota_cache = None;
-        }
-        if let Some(value) = payload.get("mobilePushNotifications") {
-            let mut settings: RuntimeMobilePushSettings = serde_json::from_value(value.clone())
-                .map_err(|_| HostError::format("mobilePushNotifications is invalid."))?;
-            // Privacy portable build: preserve the local setting shape but never
-            // allow cloud push to become active.
-            settings.enabled = false;
-            runtime_value(self.runtime_store.set_mobile_push_settings(&settings).await)?;
-            self.account_push.push_enabled = false;
-            self.account_push.active_subscriptions = 0;
-            refresh_push_subscriptions = false;
-        }
-        if let Some(value) = payload.get("automation") {
-            let settings: RuntimeAutomationSettings = serde_json::from_value(value.clone())
-                .map_err(|_| HostError::format("automation settings are invalid."))?;
-            runtime_value(self.runtime_store.set_automation_settings(settings).await)?;
-        }
-        if refresh_push_subscriptions {
-            self.start_push_subscription_sync(None);
-        }
-        if let Some(value) = payload.get("aiTextGeneration") {
-            let settings: RuntimeAiAssistSettings = serde_json::from_value(value.clone())
-                .map_err(|_| HostError::format("AI Assist settings are invalid."))?;
-            validate_ai_assist_settings(&settings)?;
-            let cancel_titles = self
-                .agent_title_jobs
-                .iter()
-                .filter(|(_, job)| {
-                    !settings.enabled || (job.automatic && !settings.auto_generate_agent_titles)
-                })
-                .map(|(tab, _)| tab.clone())
-                .collect::<Vec<_>>();
-            runtime_value(self.runtime_store.set_ai_assist_settings(settings).await)?;
-            let titles_canceled = !cancel_titles.is_empty();
-            for tab_id in cancel_titles {
-                self.cancel_agent_title_job(&tab_id);
-                if let Ok(Some(mut tab)) = self.runtime_store.find_workspace_tab(&tab_id).await {
-                    tab.payload["agentTitleStatus"] = json!("idle");
-                    let _ = self.runtime_store.upsert_workspace_tab(tab).await;
-                }
-            }
-            if titles_canceled {
-                self.broadcast_workspace_tabs_changed(None);
-            }
-        }
-        if let Some(value) = payload.get("textActions") {
-            let settings: RuntimeTextActionsSettings = serde_json::from_value(value.clone())
-                .map_err(|_| HostError::format("textActions is invalid."))?;
-            validate_text_actions_settings(&settings)?;
-            runtime_value(self.runtime_store.set_text_actions_settings(settings).await)?;
-        }
-        runtime_value(self.runtime_store.runtime_settings().await)
-    }
-
-    pub(super) async fn apply_mobile_runtime_settings(
-        &mut self,
-        payload: &Value,
-    ) -> HostResult<Value> {
-        let value = self.persist_mobile_runtime_settings(payload).await?;
-        if payload.get("automation").is_some() {
-            self.schedule_autostart_reconcile();
-        }
-        self.broadcast_authenticated(event("runtimeSettingsChanged", json!({})));
-        Ok(value)
-    }
-
     /// Fire-and-forget login-item reconcile for no-id updates. Identified
     /// `runtimeSettings.update` calls wait on `AutostartReconcileFinished`.
-    fn schedule_autostart_reconcile(&self) {
+    pub(super) fn schedule_autostart_reconcile(&self) {
         let store = self.runtime_store.clone();
         let runtime_dir = self.runtime_dir.clone();
         if let Err(error) = self.deferred_admission.schedule(
@@ -197,7 +38,7 @@ impl ServerActor {
         request_id: i64,
         payload: &Value,
     ) -> HostResult<()> {
-        let value = self.persist_mobile_runtime_settings(payload).await?;
+        let value = self.persist_runtime_settings_update(payload).await?;
         let store = self.runtime_store.clone();
         let runtime_dir = self.runtime_dir.clone();
         let inbox = self.inbox.clone();
@@ -383,68 +224,6 @@ impl ServerActor {
     }
 }
 
-fn validate_ai_assist_settings(settings: &RuntimeAiAssistSettings) -> HostResult<()> {
-    alera_core::runtime::validate_ai_assist_settings(settings)
-        .map_err(|error| HostError::format(error.to_string()))
-}
-
-fn validate_text_actions_settings(settings: &RuntimeTextActionsSettings) -> HostResult<()> {
-    alera_core::runtime::validate_text_actions_settings(settings)
-        .map_err(|error| HostError::format(error.to_string()))
-}
-
-pub(super) fn validate_agent_quota_settings(
-    settings: &RuntimeAgentQuotaSettings,
-) -> HostResult<()> {
-    let mut aliases = std::collections::HashSet::new();
-    let mut profiles = std::collections::HashSet::new();
-    for profile in &settings.claude_profiles {
-        let alias = profile.alias.trim();
-        let profile_name = profile.profile.trim();
-        if alias.is_empty() || profile_name.is_empty() {
-            return Err(HostError::format(
-                "Claude aliases and profiles are required.",
-            ));
-        }
-        if !aliases.insert(alias) || !profiles.insert(profile_name) {
-            return Err(HostError::format(
-                "Claude aliases and profiles must be unique.",
-            ));
-        }
-    }
-    for name in [
-        &settings.environment.kimi_api_key,
-        &settings.environment.zai_api_key,
-        &settings.environment.zai_base_url,
-        &settings.environment.minimax_api_key,
-        &settings.environment.minimax_api_host,
-    ] {
-        if !valid_environment_name(name) {
-            return Err(HostError::format(format!(
-                "Invalid environment variable name: {name}."
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn valid_environment_name(value: &str) -> bool {
-    let mut chars = value.chars();
-    chars
-        .next()
-        .is_some_and(|first| first == '_' || first.is_ascii_alphabetic())
-        && chars.all(|char| char == '_' || char.is_ascii_alphanumeric())
-}
-
-fn runtime_value<T, E>(result: Result<T, E>) -> HostResult<Value>
-where
-    T: Serialize,
-    E: std::fmt::Display,
-{
-    let value = result.map_err(|error| HostError::state(error.to_string()))?;
-    serde_json::to_value(value).map_err(|error| HostError::state(error.to_string()))
-}
-
 pub(super) fn required_non_blank(payload: &Value, key: &str) -> HostResult<String> {
     payload
         .get(key)
@@ -457,7 +236,7 @@ pub(super) fn required_non_blank(payload: &Value, key: &str) -> HostResult<Strin
 
 #[cfg(test)]
 mod tests {
-    use super::validate_text_actions_settings;
+    use crate::terminal_host::server::requests::validate_text_actions_settings;
     use alera_core::runtime::{RuntimeTextAction, RuntimeTextActionsSettings};
     use std::collections::HashMap;
     use std::sync::Arc;

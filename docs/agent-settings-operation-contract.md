@@ -45,13 +45,15 @@ The quota cache is `agent_quota_cache: (Instant, environment_signature, payload)
 
 ## Runtime settings
 
-`RuntimeSettings` assembles ten `runtimeMetadata`-backed sections; `runtimeSettings.update` applies only the keys present in the payload and answers with the post-write assembly. There is no settings revision: writes are last-write-wins per key.
+`RuntimeSettings` assembles the `runtimeMetadata`-backed sections; settings snapshots and successful updates add a persisted top-level `revision` to the assembled payload. An update validates the complete payload before committing its supplied keys and increments the revision once for the update.
 
 | Operation | Instance check | Replay | Same id + different payload | Commit vs publish | Lost reply retry | Restart recovery | Stale owner / wrong actor |
 |---|---|---|---|---|---|---|---|
-| `runtimeSettings.get` / `mobile.runtimeSettings.get` | none | Read of the assembled `RuntimeSettings` | n/a | Read only | Safe | Persisted | n/a |
-| `runtimeSettings.update` | Per-key validation before each write (bad types are `FormatException`s; `agentQuotas`, `aiTextGeneration`, and `textActions` have semantic validators) | Value write per key: re-applying the same payload rewrites the same values | Last write wins per key | Each section setter commits to `runtimeMetadata`, then the reply carries the re-assembled settings, then `runtimeSettingsChanged` | Safe: the retry rewrites the same values | Persisted | No OCC, so a stale client silently overwrites a newer value; not on the mobile allowlist |
-| `mobile.runtimeSettings.update` | Same validation plus a key allowlist | Same as `runtimeSettings.update` | Same | Same; unlike the desktop route, an unsupported key fails before any write | Safe | Persisted | Keys outside `workspaceDirectory`, `confirmProjectRemoval`, `confirmWorkspaceRemoval`, `defaultAgentProfileId`, `agentStatusHooks`, `agentQuotas`, `mobilePushNotifications`, `automation` fail `Unsupported mobile setting` |
+| `runtimeSettings.get` / `mobile.runtimeSettings.get` | none | Read of the assembled `RuntimeSettings` plus its persisted `revision` | n/a | Read only | Safe | Persisted | n/a |
+| `runtimeSettings.update` | The complete payload is validated before a single transaction (bad types are `FormatException`s; `agentQuotas`, `aiTextGeneration`, and `textActions` have semantic validators). Optional `expectedRevision` is checked against the stored revision before commit | A successful retry without `expectedRevision` rewrites the values and advances the revision; a retry with a stale expected revision fails closed | `expectedRevision` is optional. When omitted, last-write-wins is preserved; when present, a mismatch returns `runtime_settings_revision_conflict` with `errorDetails.expectedRevision` and `errorDetails.actualRevision` and writes no keys | All supplied sections and the revision commit together, then the reply carries the re-assembled settings and `runtimeSettingsChanged` | Without `expectedRevision`, safe: the retry rewrites the same values. With it, a stale retry is a typed conflict | Persisted | Desktop and CLI writers can use OCC; omitting the field preserves legacy LWW behavior |
+| `mobile.runtimeSettings.update` | Same full-payload validation plus a key allowlist; an unsupported desktop-only key fails before any write | Same as `runtimeSettings.update` | Same | Same transaction and revision behavior; `runtimeSettingsChanged` is sent only after the commit and any Contract C autostart reconcile | Without `expectedRevision`, safe. With it, a stale retry is a typed conflict | Persisted | Keys outside `workspaceDirectory`, `confirmProjectRemoval`, `confirmWorkspaceRemoval`, `autoArchiveWorkspacesAfterDays`, `defaultAgentProfileId`, `agentStatusHooks`, `agentQuotas`, `mobilePushNotifications`, `automation`, and optional `expectedRevision` fail `Unsupported mobile setting` |
+
+The additive wire shape is optional `expectedRevision?: <non-negative integer>` in the update payload. The response payload remains the assembled settings object and adds `"revision": <integer>`, for example `{ "confirmProjectRemoval": false, "revision": 4 }`. A stale conditional update returns `{ "ok": false, "errorCode": "runtime_settings_revision_conflict", "errorDetails": { "expectedRevision": 3, "actualRevision": 4 } }`; the legacy `error` message remains present for older clients. A missing or `null` `expectedRevision` keeps last-write-wins behavior.
 
 Deferred side effects of a settings update:
 
@@ -88,7 +90,6 @@ Deferred side effects of a settings update:
 
 Known gaps:
 
-- `runtimeSettings.update` validates and writes keys in payload order rather than validating the whole payload first, so a payload mixing a valid early key with an invalid later one leaves the early keys committed. There is also no settings revision, so two writers race last-write-wins with no conflict signal.
 - `agentQuota.consumeCodexResetCredit` has no idempotency key; a retry after a lost reply spends another reset credit.
 - `agentProfile.upsert` name-uniqueness failures and `aiText.agentTitle.generate` stale-expectation failures are plain `state` errors, not typed conflicts, so clients cannot machine-distinguish them from other state errors.
 - Agent presence and the quota cache are in-memory, so a host restart silently empties both; clients rediscover presence through `agentPresenceChanged` and quota through a fresh `agentQuota.snapshot`.
