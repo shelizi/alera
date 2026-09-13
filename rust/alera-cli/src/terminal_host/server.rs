@@ -138,10 +138,13 @@ mod orchestration_agent_spawn_requests;
 mod orchestration_completion_requests;
 #[cfg(test)]
 mod orchestration_contract_tests;
+#[cfg(test)]
+mod orchestration_contract_tests_mutation_ids;
 mod orchestration_delivery;
 mod orchestration_dispatch_requests;
 mod orchestration_gate_requests;
 mod orchestration_message_requests;
+mod orchestration_mutation_requests;
 mod orchestration_owned_spawn;
 mod orchestration_policy_requests;
 mod orchestration_profile_spawn;
