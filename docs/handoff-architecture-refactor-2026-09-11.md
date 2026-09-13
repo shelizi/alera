@@ -1308,6 +1308,7 @@ max-lines 尚未全清前，第 8 步會是 repo-wide exit 1；必須確認 offe
 - `gitStatus()` 仍一次回傳完整 entry list：單次 decode 已減半以上，但幾萬筆時 Dart 端 `fromEntries` 的 sort+tree build 仍是 UI isolate 上的 O(n log n) 單次工作。方向：payload 分頁（先傳前 N + 計數）或 status 摘要化；會動 wire contract，P5 fixture 已落地可在此基礎上加。
 - `WorkspaceSourceControlState` 每次 reload 全表重建；可考慮結構共享或 entry-level diffing。
 - 已量化（`tool/bench/git_status_grouping_bench.dart`，`a4a0823a`）：`fromEntries`（per-area filter + sort + tree build）在 UI isolate 的中位數為 1k≈4ms / 5k≈16.4ms（已貼 16ms frame 邊界）/ 20k≈77ms（約 4.6 幀）/ 50k≈242ms（約 15 幀）。安全上限約 5k 筆；超過應移 background isolate 或改演算法。熱點已定位：`_treeRows` 的 `directoryChild` 對 children linear scan、`parts.take(index+1).join('/')` 每層重組字串。
+- 真實 repo 驗證（`tool/bench/git_status_real_repo_bench.dart`，`de34235c`）：`coding-tools-mcp` 實際 7475 筆（99.99% untracked、深層路徑）跑 `fromEntries` 已要 **30.9ms**（約 2 幀）；依真實分佈放大到 20k→139ms、50k→367ms，比同量級合成數據慢 1.5~1.8 倍（真實路徑更深且集中單一 area）。`unifiedFromEntries` 比 `fromEntries` 快（50k：291 vs 367ms）——`fromEntries` 對每個 area 各 sort+tree build 一次，99.99% 單一 area 時等於整份清單做兩輪。結論：真實 repo 7.5k 已超 16ms frame budget，優化/isolate 化是必修不是備選。
 
 ---
 
