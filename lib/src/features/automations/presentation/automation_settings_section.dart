@@ -5,9 +5,13 @@ import 'dart:async';
 import 'package:alera/src/design_system/feedback/alera_empty_state.dart';
 import 'package:alera/src/design_system/layout/alera_settings_group.dart';
 import 'package:alera/src/features/settings/presentation/rows/settings_rows.dart';
+import 'package:alera/src/platform/runtime_host/protocol/terminal_host_protocol.dart';
 import 'package:alera/src/shared/infra/runtime/runtime_host_providers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+const String _runtimeSettingsRevisionConflictCode =
+    'runtime_settings_revision_conflict';
 
 class const AutomationSettingsSection({super.key})
     extends ConsumerStatefulWidget {
@@ -47,7 +51,21 @@ class _AutomationSettingsSectionState
         _auditRetentionDays = _intOr(automation['auditRetentionDays'], 90);
         _trashRetentionDays = _intOr(automation['trashRetentionDays'], 30);
         _loading = false;
+        _error = null;
       });
+    } on TerminalHostConflictException catch (error) {
+      if (error.code == _runtimeSettingsRevisionConflictCode) {
+        await _load();
+        if (mounted) {
+          setState(
+            () => _error = 'Automation settings changed elsewhere. Your change was not saved. Review the latest values and try again.',
+          );
+        }
+        return;
+      }
+      if (mounted) {
+        setState(() => _error = error.toString());
+      }
     } on Object catch (error) {
       if (!mounted) {
         return;

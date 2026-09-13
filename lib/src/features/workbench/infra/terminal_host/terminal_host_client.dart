@@ -15,6 +15,7 @@ import 'package:alera/src/platform/runtime_host/protocol/terminal_host_protocol.
 import 'package:alera/src/shared/infra/logging/app_logger.dart';
 import 'package:alera/src/shared/infra/logging/log_redaction.dart';
 import 'package:ghostty_vte_flutter/ghostty_vte_flutter.dart';
+import 'package:logging/logging.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
@@ -33,6 +34,9 @@ part 'terminal_host_client_session_events.dart';
 part 'terminal_host_client_terminal_pulse.dart';
 part 'terminal_host_client_socket_reader.dart';
 part 'terminal_host_control_file.dart';
+
+const String _runtimeSettingsRevisionConflictCode =
+    'runtime_settings_revision_conflict';
 
 final class SocketTerminalHostClient._(
   final TerminalHostProcessLauncher _launcher,
@@ -88,6 +92,7 @@ final class SocketTerminalHostClient._(
   _TerminalHostConnection? _runtimeConnection;
   StreamSubscription<Object?>? _runtimeLineSub;
   int _nextRequestId = 1;
+  int? _runtimeSettingsRevision;
   @override
   bool _disposed = false;
   bool _appQuitInProgress = false;
@@ -339,7 +344,71 @@ final class SocketTerminalHostClient._(
       requireOrchestration: type.startsWith('orchestration.'),
     );
     _throwIfAppQuitInProgress();
-    return _requestOnConnection(connection, type, payload, timeout: timeout);
+    final requestPayload =
+        type == 'runtimeSettings.update' &&
+            _runtimeSettingsRevision != null &&
+            !payload.containsKey('expectedRevision')
+        ? <String, Object?>{
+            ...payload,
+            'expectedRevision': _runtimeSettingsRevision,
+          }
+        : payload;
+    try {
+      final response = await _requestOnConnection(
+        connection,
+        type,
+        requestPayload,
+        timeout: timeout,
+      );
+      if (type == 'runtimeSettings.get' || type == 'runtimeSettings.update') {
+        _rememberRuntimeSettingsRevision(response);
+      }
+      return response;
+    } on TerminalHostConflictException catch (error, stackTrace) {
+      if (type == 'runtimeSettings.update' &&
+          error.code == _runtimeSettingsRevisionConflictCode) {
+        await _refreshRuntimeSettingsRevision(
+          connection,
+          timeout: timeout,
+          conflict: error,
+          conflictStackTrace: stackTrace,
+        );
+      }
+      rethrow;
+    }
+  }
+
+  void _rememberRuntimeSettingsRevision(Object? response) {
+    final revision = response is Map ? response['revision'] : null;
+    _runtimeSettingsRevision = revision is num ? revision.toInt() : null;
+  }
+
+  Future<void> _refreshRuntimeSettingsRevision(
+    _TerminalHostConnection connection, {
+    required Duration? timeout,
+    required TerminalHostConflictException conflict,
+    required StackTrace conflictStackTrace,
+  }) async {
+    try {
+      final response = await _requestOnConnection(
+        connection,
+        'runtimeSettings.get',
+        const <String, Object?>{},
+        timeout: timeout,
+      );
+      _rememberRuntimeSettingsRevision(response);
+    } on Object catch (error, stackTrace) {
+      Logger('SocketTerminalHostClient').warning(
+        'could not refresh runtime settings after a revision conflict',
+        error,
+        stackTrace,
+      );
+      Logger('SocketTerminalHostClient').fine(
+        'the original runtime settings conflict remains authoritative',
+        conflict,
+        conflictStackTrace,
+      );
+    }
   }
 
   Future<Object?> _requestOnConnection(
@@ -562,6 +631,7 @@ final class SocketTerminalHostClient._(
       CrashReporting.clearRuntimeContext();
       _runtimeConnection = null;
       _runtimeConnectionFuture = null;
+      _runtimeSettingsRevision = null;
       unawaited(_runtimeLineSub?.cancel());
       _runtimeLineSub = null;
     }

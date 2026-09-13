@@ -9,6 +9,11 @@ final class _TerminalHostTestServer._(
   final String? closeForType,
   final String? closeAfterResponseForType,
   final Future<void> Function(String type)? beforeResponse,
+  final FutureOr<Map<String, Object?>?> Function(
+    String type,
+    Map<String, Object?> payload,
+  )?
+  responseForType,
   final Map<String, Object?>? statusPayload,
   final bool negotiateBinaryFrames = false,
   final String? _runtimeMutationBusyForType,
@@ -21,6 +26,11 @@ final class _TerminalHostTestServer._(
     String? closeForType,
     String? closeAfterResponseForType,
     Future<void> Function(String type)? beforeResponse,
+    FutureOr<Map<String, Object?>?> Function(
+      String type,
+      Map<String, Object?> payload,
+    )?
+    responseForType,
     Map<String, Object?>? statusPayload,
     bool negotiateBinaryFrames = false,
     String? runtimeMutationBusyForType,
@@ -33,6 +43,7 @@ final class _TerminalHostTestServer._(
       closeForType: closeForType,
       closeAfterResponseForType: closeAfterResponseForType,
       beforeResponse: beforeResponse,
+      responseForType: responseForType,
       statusPayload: statusPayload,
       negotiateBinaryFrames: negotiateBinaryFrames,
       runtimeMutationBusyForType: runtimeMutationBusyForType,
@@ -147,6 +158,11 @@ final class _TerminalHostTestServer._(
         'ok': false,
         'error': '$type failed',
       });
+      return;
+    }
+    final customResponse = await responseForType?.call(type, payload);
+    if (customResponse != null) {
+      _respond(socket, <String, Object?>{...customResponse, 'id': id});
       return;
     }
     if (type == 'status.get' && statusPayload != null) {

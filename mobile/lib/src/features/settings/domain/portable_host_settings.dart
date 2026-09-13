@@ -35,6 +35,7 @@ class const PortableHostSettings({
   required final bool confirmWorkspaceRemoval,
   required final Map<String, bool> agentStatusHooks,
   required final QuotaSettings agentQuotas,
+  final int? revision,
 }) {
   factory fromJson(Map<String, Object?> json) {
     final hooks = json.mapValue('agentStatusHooks');
@@ -46,6 +47,7 @@ class const PortableHostSettings({
         for (final agent in supportedAgentHooks) agent: hooks[agent] == true,
       },
       agentQuotas: .fromJson(json.mapValue('agentQuotas')),
+      revision: (json['revision'] as num?)?.toInt(),
     );
   }
 
@@ -56,6 +58,7 @@ class const PortableHostSettings({
     bool? confirmWorkspaceRemoval,
     Map<String, bool>? agentStatusHooks,
     QuotaSettings? agentQuotas,
+    int? revision,
   }) {
     return PortableHostSettings(
       workspaceDirectory: clearWorkspaceDirectory
@@ -67,6 +70,7 @@ class const PortableHostSettings({
           confirmWorkspaceRemoval ?? this.confirmWorkspaceRemoval,
       agentStatusHooks: agentStatusHooks ?? this.agentStatusHooks,
       agentQuotas: agentQuotas ?? this.agentQuotas,
+      revision: revision ?? this.revision,
     );
   }
 }

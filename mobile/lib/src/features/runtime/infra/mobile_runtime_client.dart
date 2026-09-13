@@ -43,6 +43,15 @@ part 'mobile_runtime_terminal_requests.dart';
 part 'mobile_terminal_output_resync.dart';
 part 'mobile_runtime_codex_workspace_requests.dart';
 
+final class const MobileRuntimeConflictException({
+  required final String code,
+  required final String message,
+  final Map<String, Object?> details = const <String, Object?>{},
+}) implements Exception {
+  @override
+  String toString() => message;
+}
+
 class MobileRuntimeClient._(
   this._channel, {
   this._requestTimeout = _defaultRequestTimeout,
@@ -414,9 +423,23 @@ class MobileRuntimeClient._(
     if (message['ok'] == true) {
       completer.complete(message['payload']);
     } else {
-      completer.completeError(
-        StateError((message['error'] as String?) ?? 'Mobile runtime error.'),
-      );
+      final errorMessage =
+          (message['error'] as String?) ?? 'Mobile runtime error.';
+      final errorCode = message['errorCode'];
+      if (errorCode is String) {
+        final rawDetails = message['errorDetails'];
+        completer.completeError(
+          MobileRuntimeConflictException(
+            code: errorCode,
+            message: errorMessage,
+            details: rawDetails is Map
+                ? Map<String, Object?>.from(rawDetails)
+                : const <String, Object?>{},
+          ),
+        );
+      } else {
+        completer.completeError(StateError(errorMessage));
+      }
     }
   }
 
