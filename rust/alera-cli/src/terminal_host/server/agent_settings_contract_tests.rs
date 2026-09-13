@@ -6,6 +6,8 @@
 
 use std::collections::HashMap;
 
+use alera_core::runtime::WorkspaceTabRecord;
+use chrono::Utc;
 use serde_json::{json, Value};
 
 use super::actor_test_harness::{local_client, mobile_client, test_actor};
@@ -213,6 +215,71 @@ async fn runtime_settings_update_reapplies_the_same_values_idempotently() {
         actor.runtime_store.confirm_project_removal().await.unwrap(),
         false
     );
+}
+
+#[tokio::test]
+async fn agent_profile_launch_rejects_same_mutation_id_with_an_altered_payload() {
+    let dir = tempfile::tempdir().unwrap();
+    let (handle, mut responses) = ClientHandle::test_channels();
+    let mut actor = test_actor(
+        &dir,
+        HashMap::from([(1, local_client(handle))]),
+        HashMap::new(),
+    )
+    .await;
+    let now = Utc::now();
+    let tab = WorkspaceTabRecord {
+        id: "recorded-launch-tab".to_string(),
+        workspace_id: "workspace-1".to_string(),
+        kind: "terminal".to_string(),
+        title: "Recorded launch".to_string(),
+        created_at: now,
+        updated_at: now,
+        payload: json!({"spawnOnCreate": true}),
+    };
+    actor
+        .runtime_store
+        .record_agent_profile_launch(
+            "local:cli",
+            "workspace-1",
+            "mutation-1",
+            "original-payload-digest",
+            &json!({"tab": {"id": tab.id.clone()}}),
+            &tab,
+        )
+        .await
+        .unwrap();
+
+    wire_call(
+        &mut actor,
+        1,
+        50,
+        "agentProfile.launchIdempotent",
+        json!({
+            "workspaceId": "workspace-1",
+            "profileId": "profile-1",
+            "prompt": "changed prompt",
+            "clientMutationId": "mutation-1"
+        }),
+    )
+    .await;
+    let conflict = read_response(&mut responses, 50).await;
+    assert_eq!(conflict["ok"], false, "{conflict}");
+    assert!(
+        conflict["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("different agentProfile.launch payload")),
+        "{conflict}"
+    );
+    // This operation's contract deliberately exposes a plain state error,
+    // unlike OCC conflicts that carry an errorCode and errorDetails.
+    assert!(conflict.get("errorCode").is_none(), "{conflict}");
+    assert!(actor
+        .runtime_store
+        .find_workspace_tab("recorded-launch-tab")
+        .await
+        .unwrap()
+        .is_some());
 }
 
 #[tokio::test]

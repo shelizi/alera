@@ -73,6 +73,59 @@ async fn workspace_sleep_is_idempotent_for_retries() {
 }
 
 #[tokio::test]
+async fn workspace_rename_persists_when_change_broadcast_fails_then_restart_resyncs() {
+    let dir = tempfile::tempdir().unwrap();
+    let project_dir = tempfile::tempdir().unwrap();
+    let (handle, responses) = ClientHandle::test_channels();
+    // The disconnected control receiver makes the post-commit broadcast fail.
+    drop(responses);
+    let mut actor = test_actor(
+        &dir,
+        HashMap::from([(1, local_client(handle))]),
+        HashMap::new(),
+    )
+    .await;
+    let registration = crate::project_management::register_project(
+        &actor.runtime_store,
+        project_dir.path().to_str().unwrap(),
+        Some("Demo"),
+    )
+    .await
+    .unwrap();
+    let workspace_id = registration.main_workspace.id.clone();
+
+    actor
+        .handle_line(
+            1,
+            json!({
+                "id": 1,
+                "type": "workspace.rename",
+                "payload": {"workspaceId": workspace_id, "name": "Renamed"}
+            })
+            .to_string(),
+        )
+        .await;
+
+    let committed = actor
+        .runtime_store
+        .find_workspace(&workspace_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(committed.name, "Renamed");
+
+    drop(actor);
+    let restarted = test_actor(&dir, HashMap::new(), HashMap::new()).await;
+    let resynced = restarted
+        .runtime_store
+        .find_workspace(&workspace_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(resynced.name, "Renamed");
+}
+
+#[tokio::test]
 async fn layout_upsert_last_write_wins_for_the_same_workspace() {
     let dir = tempfile::tempdir().unwrap();
     let project_dir = tempfile::tempdir().unwrap();
