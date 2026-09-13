@@ -1,6 +1,28 @@
 part of 'managed_agent_hook_installer.dart';
 
 extension _ManagedAgentHookDescriptors on ManagedAgentHookInstallService {
+  ManagedAgentHookInstallStatus _runtimeOnlyStatus(AgentType agentType) {
+    return switch (agentType) {
+      AgentType.codex => _codexRuntimeOnlyStatus(),
+      AgentType.claude => _claudeRuntimeOnlyStatus(),
+      AgentType.cursor => _cursorRuntimeOnlyStatus(),
+      AgentType.fx => _fxRuntimeOnlyStatus(),
+      _ => _unsupportedStrategyStatus(agentType),
+    };
+  }
+
+  ManagedAgentHookInstallStatus _unsupportedStrategyStatus(
+    AgentType agentType,
+  ) {
+    return ManagedAgentHookInstallStatus(
+      agentType: agentType,
+      state: .error,
+      configPath: p.join(_homeDirectory, '.alera', 'agent-hooks'),
+      managedHooksPresent: false,
+      detail: '${agentDisplayName(agentType)} has no managed hook strategy.',
+    );
+  }
+
   ManagedAgentHookInstallStatus _codexRuntimeOnlyStatus() {
     return ManagedAgentHookInstallStatus(
       agentType: .codex,

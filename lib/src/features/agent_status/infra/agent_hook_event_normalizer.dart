@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:alera/src/features/agent_status/domain/agent_status.dart';
+import 'package:alera/src/features/agent_status/infra/agent_descriptor_strategies.dart';
 
 part 'normalizers/agy_agent_hook_normalizer.dart';
 part 'normalizers/amp_agent_hook_normalizer.dart';
@@ -35,40 +36,21 @@ NormalizedAgentStatus? normalizeAgentHookEvent(
     return null;
   }
   final toolSnapshot = _extractToolSnapshot(event, eventName: eventName);
-  final state = switch (event.agentType) {
-    AgentType.codex => _normalizeCodexState(eventName, toolSnapshot.toolName),
-    AgentType.claude => _normalizeClaudeState(eventName, toolSnapshot.toolName),
-    AgentType.copilot => _normalizeCopilotState(
-      eventName,
-      event.payload,
-      toolSnapshot.toolName,
-    ),
-    AgentType.cursor => _normalizeCursorState(eventName, previous),
-    AgentType.agy => _normalizeAgyState(
-      eventName,
-      toolSnapshot.toolName,
-      event.payload,
-    ),
-    AgentType.opencode ||
-    AgentType.opencode2 => _normalizeOpenCodeState(eventName),
-    AgentType.pi => _normalizePiState(eventName),
-    AgentType.amp => _normalizeAmpState(eventName),
-    AgentType.grok => _normalizeGrokState(eventName, event.payload),
-    AgentType.devin => switch (eventName) {
-      'SessionStart' ||
-      'UserPromptSubmit' ||
-      'PreToolUse' ||
-      'PostToolUse' => AgentStatusState.working,
-      'PermissionRequest' => AgentStatusState.blocked,
-      'Stop' || 'SessionEnd' => AgentStatusState.done,
-      _ => null,
-    },
-    AgentType.fx => switch (eventName) {
+  final state = switch (event.agentType.statusStrategy) {
+    AgentStatusStrategy.herdrSocket => switch (eventName) {
       'Working' => AgentStatusState.working,
       'Blocked' => AgentStatusState.blocked,
       'Idle' => AgentStatusState.done,
       _ => null,
     },
+    AgentStatusStrategy.hookEvents ||
+    AgentStatusStrategy.hookEventsWithTranscriptWatch =>
+      _normalizeHookEventState(
+        event,
+        eventName,
+        toolSnapshot.toolName,
+        previous,
+      ),
   };
   if (state == null) {
     return null;
@@ -97,6 +79,40 @@ NormalizedAgentStatus? normalizeAgentHookEvent(
         toolSnapshot.lastAssistantMessage ?? previous?.lastAssistantMessage,
     interrupted: interrupted,
   );
+}
+
+AgentStatusState? _normalizeHookEventState(
+  AgentHookEvent event,
+  String eventName,
+  String? toolName,
+  AgentStatusEntry? previous,
+) {
+  return switch (event.agentType) {
+    AgentType.codex => _normalizeCodexState(eventName, toolName),
+    AgentType.claude => _normalizeClaudeState(eventName, toolName),
+    AgentType.copilot => _normalizeCopilotState(
+      eventName,
+      event.payload,
+      toolName,
+    ),
+    AgentType.cursor => _normalizeCursorState(eventName, previous),
+    AgentType.agy => _normalizeAgyState(eventName, toolName, event.payload),
+    AgentType.opencode ||
+    AgentType.opencode2 => _normalizeOpenCodeState(eventName),
+    AgentType.pi => _normalizePiState(eventName),
+    AgentType.amp => _normalizeAmpState(eventName),
+    AgentType.grok => _normalizeGrokState(eventName, event.payload),
+    AgentType.devin => switch (eventName) {
+      'SessionStart' ||
+      'UserPromptSubmit' ||
+      'PreToolUse' ||
+      'PostToolUse' => AgentStatusState.working,
+      'PermissionRequest' => AgentStatusState.blocked,
+      'Stop' || 'SessionEnd' => AgentStatusState.done,
+      _ => null,
+    },
+    AgentType.fx => null,
+  };
 }
 
 bool isAgentSessionCloseHookEvent(AgentHookEvent event) {

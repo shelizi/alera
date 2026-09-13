@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 import 'package:alera/src/features/agent_status/infra/agent_hook_endpoint_file.dart';
+import 'package:alera/src/features/agent_status/infra/agent_descriptor_strategies.dart';
 import 'package:alera/src/shared/infra/files/posix_file_mode.dart';
 import 'package:path/path.dart' as p;
 
@@ -68,22 +69,25 @@ class ManagedAgentHookInstallService({
   final ManagedAgentHookPlatform _platform;
 
   ManagedAgentHookInstallStatus status(AgentType agentType) {
-    if (agentType == AgentType.codex) {
-      return _codexRuntimeOnlyStatus();
-    }
-    if (agentType == AgentType.claude) {
-      return _claudeRuntimeOnlyStatus();
-    }
-    if (agentType == AgentType.cursor) {
-      return _cursorRuntimeOnlyStatus();
-    }
-    if (agentType == AgentType.fx) {
-      return _fxRuntimeOnlyStatus();
-    }
+    return switch (agentType.hookStrategy) {
+      AgentHookStrategy.runtimeHome ||
+      AgentHookStrategy.sessionOverlay ||
+      AgentHookStrategy.herdrSocket => _runtimeOnlyStatus(agentType),
+      AgentHookStrategy.pluginScript => _statusForManagedArtifact(agentType),
+      AgentHookStrategy.configJson => _statusForJsonDescriptor(agentType),
+      AgentHookStrategy.none => _unsupportedStrategyStatus(agentType),
+    };
+  }
+
+  ManagedAgentHookInstallStatus _statusForManagedArtifact(AgentType agentType) {
     final artifact = _managedArtifact(agentType);
-    if (artifact != null) {
-      return _managedArtifactStatus(artifact);
+    if (artifact == null) {
+      return _unsupportedStrategyStatus(agentType);
     }
+    return _managedArtifactStatus(artifact);
+  }
+
+  ManagedAgentHookInstallStatus _statusForJsonDescriptor(AgentType agentType) {
     final descriptor = _descriptor(agentType);
     final config = _readJsonObject(descriptor.configPath);
     if (config == null) {
@@ -161,27 +165,30 @@ class ManagedAgentHookInstallService({
   }
 
   ManagedAgentHookInstallStatus install(AgentType agentType) {
-    if (agentType == AgentType.codex) {
-      return _codexRuntimeOnlyStatus();
-    }
-    if (agentType == AgentType.claude) {
-      return _claudeRuntimeOnlyStatus();
-    }
-    if (agentType == AgentType.cursor) {
-      return _cursorRuntimeOnlyStatus();
-    }
-    if (agentType == AgentType.fx) {
-      return _fxRuntimeOnlyStatus();
-    }
+    return switch (agentType.hookStrategy) {
+      AgentHookStrategy.runtimeHome ||
+      AgentHookStrategy.sessionOverlay ||
+      AgentHookStrategy.herdrSocket => _runtimeOnlyStatus(agentType),
+      AgentHookStrategy.pluginScript => _installManagedArtifact(agentType),
+      AgentHookStrategy.configJson => _installJsonDescriptor(agentType),
+      AgentHookStrategy.none => _unsupportedStrategyStatus(agentType),
+    };
+  }
+
+  ManagedAgentHookInstallStatus _installManagedArtifact(AgentType agentType) {
     final artifact = _managedArtifact(agentType);
-    if (artifact != null) {
-      final current = _managedArtifactStatus(artifact);
-      if (current.state == ManagedAgentHookInstallState.error) {
-        return current;
-      }
-      _writeManagedArtifact(artifact);
-      return _managedArtifactStatus(artifact);
+    if (artifact == null) {
+      return _unsupportedStrategyStatus(agentType);
     }
+    final current = _managedArtifactStatus(artifact);
+    if (current.state == ManagedAgentHookInstallState.error) {
+      return current;
+    }
+    _writeManagedArtifact(artifact);
+    return _managedArtifactStatus(artifact);
+  }
+
+  ManagedAgentHookInstallStatus _installJsonDescriptor(AgentType agentType) {
     final descriptor = _descriptor(agentType);
     final config = _readJsonObject(descriptor.configPath);
     if (config == null) {
@@ -248,22 +255,25 @@ class ManagedAgentHookInstallService({
   }
 
   ManagedAgentHookInstallStatus remove(AgentType agentType) {
-    if (agentType == AgentType.codex) {
-      return _codexRuntimeOnlyStatus();
-    }
-    if (agentType == AgentType.claude) {
-      return _claudeRuntimeOnlyStatus();
-    }
-    if (agentType == AgentType.cursor) {
-      return _cursorRuntimeOnlyStatus();
-    }
-    if (agentType == AgentType.fx) {
-      return _fxRuntimeOnlyStatus();
-    }
+    return switch (agentType.hookStrategy) {
+      AgentHookStrategy.runtimeHome ||
+      AgentHookStrategy.sessionOverlay ||
+      AgentHookStrategy.herdrSocket => _runtimeOnlyStatus(agentType),
+      AgentHookStrategy.pluginScript => _removeManagedArtifactFor(agentType),
+      AgentHookStrategy.configJson => _removeJsonDescriptor(agentType),
+      AgentHookStrategy.none => _unsupportedStrategyStatus(agentType),
+    };
+  }
+
+  ManagedAgentHookInstallStatus _removeManagedArtifactFor(AgentType agentType) {
     final artifact = _managedArtifact(agentType);
-    if (artifact != null) {
-      return _removeManagedArtifact(artifact);
+    if (artifact == null) {
+      return _unsupportedStrategyStatus(agentType);
     }
+    return _removeManagedArtifact(artifact);
+  }
+
+  ManagedAgentHookInstallStatus _removeJsonDescriptor(AgentType agentType) {
     final descriptor = _descriptor(agentType);
     final config = _readJsonObject(descriptor.configPath);
     if (config == null) {

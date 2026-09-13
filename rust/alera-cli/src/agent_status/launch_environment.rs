@@ -3,8 +3,11 @@ use std::path::Path;
 
 use alera_core::runtime::RuntimeAgentStatusHookSettings;
 
+#[cfg(unix)]
 use super::fx_herdr_receiver::fx_herdr_socket_path;
 use super::integration_config::prepare_enabled_integrations;
+#[cfg(unix)]
+use alera_core::agent_descriptor::{AGENT_DESCRIPTORS, AgentHookStrategy};
 
 pub fn prepare_launch_environment(
     runtime_dir: &Path,
@@ -65,7 +68,10 @@ pub fn prepare_launch_environment(
     environment.insert("GROK_CURSOR_HOOKS_ENABLED".to_string(), "false".to_string());
     prepend_sidecar_directory(environment);
     #[cfg(unix)]
-    if settings.fx {
+    if AGENT_DESCRIPTORS.iter().any(|descriptor| {
+        descriptor.hook_strategy == AgentHookStrategy::HerdrSocket
+            && settings.is_enabled(descriptor.id)
+    }) {
         install_fx_herdr_environment(runtime_dir, session_id, environment);
     }
     if settings.enabled_agents().is_empty() {
