@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:alera/src/shared/infra/git/git_worktree_entry.dart';
+import 'package:alera/src/shared/infra/git/git_commit_ops_models.dart';
 import 'package:alera/src/shared/infra/git/git_diff_models.dart';
 import 'package:alera/src/shared/infra/git/git_explorer_status.dart';
 import 'package:alera/src/shared/infra/git/git_remote.dart';
@@ -243,6 +244,24 @@ abstract interface class GitBackend {
 
   /// Amends the current HEAD commit using the currently staged index.
   Future<String> amendCommit({required String path, required String message});
+
+  /// Reverts [commitId] on the current branch, creating a new commit.
+  /// [mainlineParent] is the 1-based parent number required when [commitId]
+  /// is a merge commit; it must be null for non-merge commits.
+  /// Returns the new commit oid.
+  Future<String> revertCommit({
+    required String path,
+    required String commitId,
+    int? mainlineParent,
+  });
+
+  /// Moves the current branch tip (or detached HEAD) to [commitId].
+  /// [mode] mirrors `git reset --soft|--mixed|--hard`.
+  Future<void> resetToCommit({
+    required String path,
+    required String commitId,
+    required GitResetMode mode,
+  });
 
   Future<void> fetch(String path);
 

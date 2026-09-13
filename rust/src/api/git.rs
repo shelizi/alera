@@ -12,6 +12,8 @@ use git2::{
 mod git_ancestry_impl;
 #[path = "git_branch.rs"]
 pub mod git_branch;
+#[path = "git_commit_ops.rs"]
+pub mod git_commit_ops;
 #[path = "git_commit_state_impl.rs"]
 mod git_commit_state_impl;
 #[path = "git_diff_impl.rs"]
