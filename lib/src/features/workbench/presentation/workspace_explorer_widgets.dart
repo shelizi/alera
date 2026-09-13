@@ -19,11 +19,14 @@ class const _ExplorerToolbar({
         padding: const EdgeInsets.symmetric(horizontal: AleraTokens.space8),
         child: Row(
           children: <Widget>[
-            Text(
-              context.tr(title),
-              style: Theme.of(context).textTheme.titleSmall,
+            Expanded(
+              child: Text(
+                context.tr(title),
+                maxLines: 1,
+                overflow: .ellipsis,
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
             ),
-            const Spacer(),
             AleraIconButton(
               tooltip: 'New file',
               icon: AleraIcons.newFile,
