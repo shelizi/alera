@@ -56,30 +56,20 @@ mixin _SettingsControllerRuntimeOperationalSettings on _$SettingsController {
         );
       });
 
-  Future<void> setAgentStatusHookEnabled(AgentType agentType, bool value) =>
-      _controller._serialize(() async {
-        final current = state.agents.agentStatusHooks;
-        final next = switch (agentType) {
-          AgentType.codex => current.copyWith(codex: value),
-          AgentType.claude => current.copyWith(claude: value),
-          AgentType.copilot => current.copyWith(copilot: value),
-          AgentType.cursor => current.copyWith(cursor: value),
-          AgentType.agy => current.copyWith(agy: value),
-          AgentType.opencode => current.copyWith(opencode: value),
-          AgentType.opencode2 => current.copyWith(opencode2: value),
-          AgentType.pi => current.copyWith(pi: value),
-          AgentType.amp => current.copyWith(amp: value),
-          AgentType.grok => current.copyWith(grok: value),
-          AgentType.devin => current.copyWith(devin: value),
-          AgentType.fx => current.copyWith(fx: value),
-        };
-        if (current == next) {
-          return;
-        }
-        await _controller._save(
-          state.copyWith(agents: state.agents.copyWith(agentStatusHooks: next)),
-        );
-      });
+  Future<void> setAgentStatusHookEnabled(
+    AgentType agentType,
+    bool value,
+  ) => _controller._serialize(() async {
+    final current = state.agents.agentStatusHooks;
+    final next = <String, Object?>{...current.toMap(), agentType.key: value};
+    final updated = AgentStatusHookSettings.fromJson(next);
+    if (current == updated) {
+      return;
+    }
+    await _controller._save(
+      state.copyWith(agents: state.agents.copyWith(agentStatusHooks: updated)),
+    );
+  });
 
   Future<void> setDefaultAgentProfile(String? profileId) =>
       _controller._serialize(() async {

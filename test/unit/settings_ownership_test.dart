@@ -253,7 +253,9 @@ AleraSettings _populatedSettings() {
       autoArchiveWorkspacesAfterDays: 7,
     ),
     agents: AleraSettings.defaults.agents.copyWith(
-      agentStatusHooks: const AgentStatusHookSettings(codex: true),
+      agentStatusHooks: const AgentStatusHookSettings(
+        values: <String, bool>{'codex': true},
+      ),
       agentStatusNotificationsEnabled: true,
       defaultAgentProfileId: 'prof_1',
       quotas: AgentQuotaSettings.defaults.withHost(

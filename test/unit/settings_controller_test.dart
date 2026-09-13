@@ -14,6 +14,20 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('SettingsController', () {
+    test('round-trips flat and unknown agent status hook keys', () {
+      final hooks = AgentStatusHookSettings.fromJson({
+        'codex': true,
+        'future-agent': false,
+      });
+
+      expect(hooks.isEnabled('codex'), isTrue);
+      expect(hooks.isEnabled('future-agent'), isFalse);
+      expect(hooks.toMap(), <String, dynamic>{
+        'codex': true,
+        'future-agent': false,
+      });
+    });
+
     test(
       'refreshes and reports a runtime settings revision conflict',
       () async {
@@ -304,16 +318,16 @@ void main() {
         );
         expect(restored.general.confirmProjectRemoval, isFalse);
         expect(restored.general.confirmWorkspaceRemoval, isFalse);
-        expect(restored.agents.agentStatusHooks.codex, isTrue);
-        expect(restored.agents.agentStatusHooks.claude, isFalse);
-        expect(restored.agents.agentStatusHooks.copilot, isFalse);
-        expect(restored.agents.agentStatusHooks.cursor, isTrue);
-        expect(restored.agents.agentStatusHooks.agy, isTrue);
-        expect(restored.agents.agentStatusHooks.opencode, isTrue);
-        expect(restored.agents.agentStatusHooks.pi, isTrue);
-        expect(restored.agents.agentStatusHooks.amp, isTrue);
-        expect(restored.agents.agentStatusHooks.grok, isTrue);
-        expect(restored.agents.agentStatusHooks.fx, isTrue);
+        expect(restored.agents.agentStatusHooks.isEnabled('codex'), isTrue);
+        expect(restored.agents.agentStatusHooks.isEnabled('claude'), isFalse);
+        expect(restored.agents.agentStatusHooks.isEnabled('copilot'), isFalse);
+        expect(restored.agents.agentStatusHooks.isEnabled('cursor'), isTrue);
+        expect(restored.agents.agentStatusHooks.isEnabled('agy'), isTrue);
+        expect(restored.agents.agentStatusHooks.isEnabled('opencode'), isTrue);
+        expect(restored.agents.agentStatusHooks.isEnabled('pi'), isTrue);
+        expect(restored.agents.agentStatusHooks.isEnabled('amp'), isTrue);
+        expect(restored.agents.agentStatusHooks.isEnabled('grok'), isTrue);
+        expect(restored.agents.agentStatusHooks.isEnabled('fx'), isTrue);
         expect(restored.agents.agentStatusNotificationsEnabled, isTrue);
         expect(restored.agents.keepComputerAwakeWhileAgentsWork, isTrue);
         expect(restored.agents.showTabTitlesInSidebar, isTrue);

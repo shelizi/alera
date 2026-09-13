@@ -87,8 +87,8 @@ class AgentQuotaProviderIdMapper extends EnumMapper<AgentQuotaProviderId> {
         return AgentQuotaProviderId.grok;
       case r'cursor':
         return AgentQuotaProviderId.cursor;
-      case 'agy':
-        return AgentQuotaProviderId.agy;
+      case r'antigravity':
+        return AgentQuotaProviderId.antigravity;
       case r'minimax':
         return AgentQuotaProviderId.minimax;
       case r'zai':
@@ -115,8 +115,8 @@ class AgentQuotaProviderIdMapper extends EnumMapper<AgentQuotaProviderId> {
         return r'grok';
       case AgentQuotaProviderId.cursor:
         return r'cursor';
-      case AgentQuotaProviderId.agy:
-        return 'agy';
+      case AgentQuotaProviderId.antigravity:
+        return r'antigravity';
       case AgentQuotaProviderId.minimax:
         return r'minimax';
       case AgentQuotaProviderId.zai:
@@ -130,9 +130,10 @@ class AgentQuotaProviderIdMapper extends EnumMapper<AgentQuotaProviderId> {
 }
 
 extension AgentQuotaProviderIdMapperExtension on AgentQuotaProviderId {
-  dynamic toValue() {
+  String toValue() {
     AgentQuotaProviderIdMapper.ensureInitialized();
-    return MapperContainer.globals.toValue<AgentQuotaProviderId>(this);
+    return MapperContainer.globals.toValue<AgentQuotaProviderId>(this)
+        as String;
   }
 }
 
@@ -889,122 +890,19 @@ class AgentStatusHookSettingsMapper
   @override
   final String id = 'AgentStatusHookSettings';
 
-  static bool _$codex(AgentStatusHookSettings v) => v.codex;
-  static const Field<AgentStatusHookSettings, bool> _f$codex = Field(
-    'codex',
-    _$codex,
-    opt: true,
-    def: false,
-  );
-  static bool _$claude(AgentStatusHookSettings v) => v.claude;
-  static const Field<AgentStatusHookSettings, bool> _f$claude = Field(
-    'claude',
-    _$claude,
-    opt: true,
-    def: false,
-  );
-  static bool _$copilot(AgentStatusHookSettings v) => v.copilot;
-  static const Field<AgentStatusHookSettings, bool> _f$copilot = Field(
-    'copilot',
-    _$copilot,
-    opt: true,
-    def: false,
-  );
-  static bool _$cursor(AgentStatusHookSettings v) => v.cursor;
-  static const Field<AgentStatusHookSettings, bool> _f$cursor = Field(
-    'cursor',
-    _$cursor,
-    opt: true,
-    def: false,
-  );
-  static bool _$agy(AgentStatusHookSettings v) => v.agy;
-  static const Field<AgentStatusHookSettings, bool> _f$agy = Field(
-    'agy',
-    _$agy,
-    opt: true,
-    def: false,
-  );
-  static bool _$opencode(AgentStatusHookSettings v) => v.opencode;
-  static const Field<AgentStatusHookSettings, bool> _f$opencode = Field(
-    'opencode',
-    _$opencode,
-    opt: true,
-    def: false,
-  );
-  static bool _$opencode2(AgentStatusHookSettings v) => v.opencode2;
-  static const Field<AgentStatusHookSettings, bool> _f$opencode2 = Field(
-    'opencode2',
-    _$opencode2,
-    opt: true,
-    def: false,
-  );
-  static bool _$pi(AgentStatusHookSettings v) => v.pi;
-  static const Field<AgentStatusHookSettings, bool> _f$pi = Field(
-    'pi',
-    _$pi,
-    opt: true,
-    def: false,
-  );
-  static bool _$amp(AgentStatusHookSettings v) => v.amp;
-  static const Field<AgentStatusHookSettings, bool> _f$amp = Field(
-    'amp',
-    _$amp,
-    opt: true,
-    def: false,
-  );
-  static bool _$grok(AgentStatusHookSettings v) => v.grok;
-  static const Field<AgentStatusHookSettings, bool> _f$grok = Field(
-    'grok',
-    _$grok,
-    opt: true,
-    def: false,
-  );
-  static bool _$devin(AgentStatusHookSettings v) => v.devin;
-  static const Field<AgentStatusHookSettings, bool> _f$devin = Field(
-    'devin',
-    _$devin,
-    opt: true,
-    def: false,
-  );
-  static bool _$fx(AgentStatusHookSettings v) => v.fx;
-  static const Field<AgentStatusHookSettings, bool> _f$fx = Field(
-    'fx',
-    _$fx,
-    opt: true,
-    def: false,
-  );
+  static Map<String, bool> _$values(AgentStatusHookSettings v) => v.values;
+  static const Field<AgentStatusHookSettings, Map<String, bool>> _f$values =
+      Field('values', _$values, opt: true, def: const <String, bool>{});
 
   @override
   final MappableFields<AgentStatusHookSettings> fields = const {
-    #codex: _f$codex,
-    #claude: _f$claude,
-    #copilot: _f$copilot,
-    #cursor: _f$cursor,
-    #agy: _f$agy,
-    #opencode: _f$opencode,
-    #opencode2: _f$opencode2,
-    #pi: _f$pi,
-    #amp: _f$amp,
-    #grok: _f$grok,
-    #devin: _f$devin,
-    #fx: _f$fx,
+    #values: _f$values,
   };
 
+  @override
+  final MappingHook hook = const _AgentStatusHookSettingsMappingHook();
   static AgentStatusHookSettings _instantiate(DecodingData data) {
-    return AgentStatusHookSettings(
-      codex: data.dec(_f$codex),
-      claude: data.dec(_f$claude),
-      copilot: data.dec(_f$copilot),
-      cursor: data.dec(_f$cursor),
-      agy: data.dec(_f$agy),
-      opencode: data.dec(_f$opencode),
-      opencode2: data.dec(_f$opencode2),
-      pi: data.dec(_f$pi),
-      amp: data.dec(_f$amp),
-      grok: data.dec(_f$grok),
-      devin: data.dec(_f$devin),
-      fx: data.dec(_f$fx),
-    );
+    return AgentStatusHookSettings(values: data.dec(_f$values));
   }
 
   @override
@@ -1077,20 +975,8 @@ abstract class AgentStatusHookSettingsCopyWith<
   $Out
 >
     implements ClassCopyWith<$R, $In, $Out> {
-  $R call({
-    bool? codex,
-    bool? claude,
-    bool? copilot,
-    bool? cursor,
-    bool? agy,
-    bool? opencode,
-    bool? opencode2,
-    bool? pi,
-    bool? amp,
-    bool? grok,
-    bool? devin,
-    bool? fx,
-  });
+  MapCopyWith<$R, String, bool, ObjectCopyWith<$R, bool, bool>> get values;
+  $R call({Map<String, bool>? values});
   AgentStatusHookSettingsCopyWith<$R2, $In, $Out2> $chain<$R2, $Out2>(
     Then<$Out2, $R2> t,
   );
@@ -1106,50 +992,18 @@ class _AgentStatusHookSettingsCopyWithImpl<$R, $Out>
   late final ClassMapperBase<AgentStatusHookSettings> $mapper =
       AgentStatusHookSettingsMapper.ensureInitialized();
   @override
-  $R call({
-    bool? codex,
-    bool? claude,
-    bool? copilot,
-    bool? cursor,
-    bool? agy,
-    bool? opencode,
-    bool? opencode2,
-    bool? pi,
-    bool? amp,
-    bool? grok,
-    bool? devin,
-    bool? fx,
-  }) => $apply(
-    FieldCopyWithData({
-      if (codex != null) #codex: codex,
-      if (claude != null) #claude: claude,
-      if (copilot != null) #copilot: copilot,
-      if (cursor != null) #cursor: cursor,
-      if (agy != null) #agy: agy,
-      if (opencode != null) #opencode: opencode,
-      if (opencode2 != null) #opencode2: opencode2,
-      if (pi != null) #pi: pi,
-      if (amp != null) #amp: amp,
-      if (grok != null) #grok: grok,
-      if (devin != null) #devin: devin,
-      if (fx != null) #fx: fx,
-    }),
-  );
+  MapCopyWith<$R, String, bool, ObjectCopyWith<$R, bool, bool>> get values =>
+      MapCopyWith(
+        $value.values,
+        (v, t) => ObjectCopyWith(v, $identity, t),
+        (v) => call(values: v),
+      );
   @override
-  AgentStatusHookSettings $make(CopyWithData data) => AgentStatusHookSettings(
-    codex: data.get(#codex, or: $value.codex),
-    claude: data.get(#claude, or: $value.claude),
-    copilot: data.get(#copilot, or: $value.copilot),
-    cursor: data.get(#cursor, or: $value.cursor),
-    agy: data.get(#agy, or: $value.agy),
-    opencode: data.get(#opencode, or: $value.opencode),
-    opencode2: data.get(#opencode2, or: $value.opencode2),
-    pi: data.get(#pi, or: $value.pi),
-    amp: data.get(#amp, or: $value.amp),
-    grok: data.get(#grok, or: $value.grok),
-    devin: data.get(#devin, or: $value.devin),
-    fx: data.get(#fx, or: $value.fx),
-  );
+  $R call({Map<String, bool>? values}) =>
+      $apply(FieldCopyWithData({if (values != null) #values: values}));
+  @override
+  AgentStatusHookSettings $make(CopyWithData data) =>
+      AgentStatusHookSettings(values: data.get(#values, or: $value.values));
 
   @override
   AgentStatusHookSettingsCopyWith<$R2, AgentStatusHookSettings, $Out2>
@@ -1341,7 +1195,6 @@ class AgentQuotaHostSettingsMapper
     _$enabledProviders,
     opt: true,
     def: AgentQuotaProviderId.values,
-    hook: _CanonicalAgentQuotaProviderListHook(),
   );
   static int _$providerDefaultsVersion(AgentQuotaHostSettings v) =>
       v.providerDefaultsVersion;
@@ -1407,7 +1260,6 @@ class AgentQuotaHostSettingsMapper
     _$unpinnedQuotaKeys,
     opt: true,
     def: const <String>[],
-    hook: _CanonicalAgentQuotaProviderListHook(),
   );
 
   @override
