@@ -24,6 +24,12 @@ pub(super) use super::request_payloads::{json_result, parse_payload};
 use super::runtime_mutation_barrier::conflicts_with_runtime_mutation;
 use super::{ClientKind, ServerActor, ServerCommand};
 
+use self::idempotency_receipts::{
+    optional_client_mutation_id, payload_digest, prepare_receipt, remove_receipt, settle_receipt,
+    ReceiptPrepareOutcome,
+};
+
+pub(super) mod idempotency_receipts;
 mod runtime_settings;
 mod runtime_settings_validation;
 pub(super) use runtime_settings_validation::validate_mobile_runtime_settings_payload;
@@ -383,23 +389,98 @@ impl ServerActor {
             }
             "terminate" => {
                 self.require_auth(client_id)?;
-                let session_id = self.require_session(payload)?;
-                self.queue_terminal_exit_push(&session_id, None).await;
-                self.cleanup_orchestration_for_closed_session(
-                    &session_id,
-                    "terminal was explicitly terminated",
-                )
+                let session_id = self.require_session_id(payload)?;
+                let client_mutation_id = optional_client_mutation_id(payload)?;
+                let receipt_context = if let Some(client_mutation_id) = client_mutation_id {
+                    let caller_scope = self.agent_profile_launch_caller_scope(client_id)?;
+                    let digest = payload_digest(payload)
+                        .map_err(|error| HostError::state(error.to_string()))?;
+                    match prepare_receipt(
+                        &self.runtime_store,
+                        "terminal.terminate",
+                        &caller_scope,
+                        &client_mutation_id,
+                        &digest,
+                        None,
+                    )
+                    .await
+                    .map_err(|error| HostError::state(error.to_string()))?
+                    {
+                        ReceiptPrepareOutcome::Created => {
+                            Some((caller_scope, client_mutation_id, digest))
+                        }
+                        ReceiptPrepareOutcome::Replay(result) => return Ok(result),
+                        ReceiptPrepareOutcome::Conflict => {
+                            return Err(HostError::state(
+                                "clientMutationId was already used with a different terminal.terminate payload.",
+                            ));
+                        }
+                        ReceiptPrepareOutcome::InProgress => {
+                            return Err(HostError::state(
+                                "clientMutationId is already in progress.",
+                            ));
+                        }
+                    }
+                } else {
+                    None
+                };
+
+                let termination = async {
+                    self.require_session(payload)?;
+                    self.queue_terminal_exit_push(&session_id, None).await;
+                    self.cleanup_orchestration_for_closed_session(
+                        &session_id,
+                        "terminal was explicitly terminated",
+                    )
+                    .await;
+                    if !self.remove_terminal_session_tab(&session_id).await? {
+                        self.flush_all_output(&session_id);
+                        self.await_output_writes(&session_id).await;
+                        let store = self.store.clone();
+                        if let Some(mut session) = self.sessions.remove(&session_id) {
+                            session.terminate(true, &store).await;
+                        }
+                    }
+                    self.schedule_shutdown_if_idle();
+                    Ok::<Value, HostError>(json!({}))
+                }
                 .await;
-                if !self.remove_terminal_session_tab(&session_id).await? {
-                    self.flush_all_output(&session_id);
-                    self.await_output_writes(&session_id).await;
-                    let store = self.store.clone();
-                    if let Some(mut session) = self.sessions.remove(&session_id) {
-                        session.terminate(true, &store).await;
+                match termination {
+                    Ok(result) => {
+                        if let Some((caller_scope, client_mutation_id, digest)) = receipt_context {
+                            settle_receipt(
+                                &self.runtime_store,
+                                "terminal.terminate",
+                                &caller_scope,
+                                &client_mutation_id,
+                                &digest,
+                                &result,
+                            )
+                            .await
+                            .map_err(|error| HostError::state(error.to_string()))?;
+                        }
+                        Ok(result)
+                    }
+                    Err(error) => {
+                        if let Some((caller_scope, client_mutation_id, digest)) = receipt_context {
+                            if let Err(cleanup_error) = remove_receipt(
+                                &self.runtime_store,
+                                "terminal.terminate",
+                                &caller_scope,
+                                &client_mutation_id,
+                                &digest,
+                            )
+                            .await
+                            {
+                                tracing::error!(
+                                    client_mutation_id = %client_mutation_id,
+                                    "failed to roll back terminal termination receipt: {cleanup_error}"
+                                );
+                            }
+                        }
+                        Err(error)
                     }
                 }
-                self.schedule_shutdown_if_idle();
-                Ok(json!({}))
             }
             "terminal.create" => {
                 self.require_auth(client_id)?;

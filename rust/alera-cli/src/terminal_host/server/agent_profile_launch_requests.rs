@@ -228,7 +228,10 @@ impl ServerActor {
         Ok(result)
     }
 
-    fn agent_profile_launch_caller_scope(&self, client_id: u64) -> HostResult<String> {
+    pub(in crate::terminal_host::server) fn agent_profile_launch_caller_scope(
+        &self,
+        client_id: u64,
+    ) -> HostResult<String> {
         let client = self
             .clients
             .get(&client_id)
