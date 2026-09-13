@@ -10,6 +10,10 @@ use crate::terminal_host::orchestration::dispatch_preamble::{build_worker_contra
 use super::orchestration_validation::{
     optional_string, require_string, state_error, validate_result_schema,
 };
+use super::requests::idempotency_receipts::{
+    optional_client_mutation_id, payload_digest, prepare_receipt, remove_receipt, settle_receipt,
+    ReceiptPrepareOutcome,
+};
 use super::ServerActor;
 
 impl ServerActor {
@@ -100,46 +104,120 @@ impl ServerActor {
         )
     }
 
-    pub(super) async fn orchestration_escalate(&mut self, payload: &Value) -> HostResult<Value> {
-        let dispatch = self.active_worker_dispatch(payload).await?;
-        let assignee = dispatch.assignee_handle.clone().unwrap_or_default();
-        let message = self
-            .runtime_store
-            .insert_orchestration_message(NewOrchestrationMessage {
-                from_handle: assignee,
-                to_handle: dispatch.coordinator_handle.clone(),
-                subject: require_string(payload, "subject")?,
-                body: optional_string(payload, "body").unwrap_or_default(),
-                message_type: OrchestrationMessageType::Escalation,
-                priority: OrchestrationMessagePriority::High,
-                thread_id: None,
-                payload: Some(
-                    json!({
-                        "taskId": dispatch.task_id,
-                        "dispatchId": dispatch.id,
-                    })
-                    .to_string(),
-                ),
-                run_id: dispatch.run_id.clone(),
-                workspace_id: Some(dispatch.workspace_id.clone()),
-                task_id: Some(dispatch.task_id.clone()),
-                dispatch_id: Some(dispatch.id.clone()),
-                expires_at: None,
-            })
+    pub(super) async fn orchestration_escalate(
+        &mut self,
+        client_id: u64,
+        payload: &Value,
+    ) -> HostResult<Value> {
+        let client_mutation_id = optional_client_mutation_id(payload)?;
+        let receipt_context = if let Some(client_mutation_id) = client_mutation_id {
+            let caller_scope = self.agent_profile_launch_caller_scope(client_id)?;
+            let digest =
+                payload_digest(payload).map_err(|error| HostError::state(error.to_string()))?;
+            match prepare_receipt(
+                &self.runtime_store,
+                "orchestration.escalate",
+                &caller_scope,
+                &client_mutation_id,
+                &digest,
+                None,
+            )
             .await
-            .map_err(state_error)?;
-        self.runtime_store
-            .record_orchestration_activity(&dispatch.id)
-            .await
-            .map_err(state_error)?;
-        self.queue_escalation_push(&dispatch.task_id, &message.subject)
+            .map_err(|error| HostError::state(error.to_string()))?
+            {
+                ReceiptPrepareOutcome::Created => Some((caller_scope, client_mutation_id, digest)),
+                ReceiptPrepareOutcome::Replay(result) => return Ok(result),
+                ReceiptPrepareOutcome::Conflict => {
+                    return Err(HostError::state(
+                        "clientMutationId was already used with a different orchestration.escalate payload.",
+                    ));
+                }
+                ReceiptPrepareOutcome::InProgress => {
+                    return Err(HostError::state("clientMutationId is already in progress."));
+                }
+            }
+        } else {
+            None
+        };
+
+        let result: HostResult<Value> = async {
+            let dispatch = self.active_worker_dispatch(payload).await?;
+            let assignee = dispatch.assignee_handle.clone().unwrap_or_default();
+            let message = self
+                .runtime_store
+                .insert_orchestration_message(NewOrchestrationMessage {
+                    from_handle: assignee,
+                    to_handle: dispatch.coordinator_handle.clone(),
+                    subject: require_string(payload, "subject")?,
+                    body: optional_string(payload, "body").unwrap_or_default(),
+                    message_type: OrchestrationMessageType::Escalation,
+                    priority: OrchestrationMessagePriority::High,
+                    thread_id: None,
+                    payload: Some(
+                        json!({
+                            "taskId": dispatch.task_id,
+                            "dispatchId": dispatch.id,
+                        })
+                        .to_string(),
+                    ),
+                    run_id: dispatch.run_id.clone(),
+                    workspace_id: Some(dispatch.workspace_id.clone()),
+                    task_id: Some(dispatch.task_id.clone()),
+                    dispatch_id: Some(dispatch.id.clone()),
+                    expires_at: None,
+                })
+                .await
+                .map_err(state_error)?;
+            self.runtime_store
+                .record_orchestration_activity(&dispatch.id)
+                .await
+                .map_err(state_error)?;
+            self.queue_escalation_push(&dispatch.task_id, &message.subject)
+                .await;
+            self.notify_message_arrived(
+                &dispatch.coordinator_handle,
+                OrchestrationMessageType::Escalation,
+            )
             .await;
-        self.notify_message_arrived(
-            &dispatch.coordinator_handle,
-            OrchestrationMessageType::Escalation,
-        )
+            Ok(json!({ "lifecycleAccepted": true, "message": message }))
+        }
         .await;
-        Ok(json!({ "lifecycleAccepted": true, "message": message }))
+        match result {
+            Ok(result) => {
+                if let Some((caller_scope, client_mutation_id, digest)) = receipt_context {
+                    settle_receipt(
+                        &self.runtime_store,
+                        "orchestration.escalate",
+                        &caller_scope,
+                        &client_mutation_id,
+                        &digest,
+                        &result,
+                    )
+                    .await
+                    .map_err(|error| HostError::state(error.to_string()))?;
+                }
+                Ok(result)
+            }
+            Err(error) => {
+                if let Some((caller_scope, client_mutation_id, digest)) = receipt_context {
+                    if let Err(cleanup_error) = remove_receipt(
+                        &self.runtime_store,
+                        "orchestration.escalate",
+                        &caller_scope,
+                        &client_mutation_id,
+                        &digest,
+                    )
+                    .await
+                    {
+                        tracing::error!(
+                            client_mutation_id = %client_mutation_id,
+                            "failed to roll back orchestration.escalate receipt: {cleanup_error}"
+                        );
+                    }
+                }
+                Err(error)
+            }
+        }
     }
 
     pub(super) async fn orchestration_complete(&mut self, payload: &Value) -> HostResult<Value> {

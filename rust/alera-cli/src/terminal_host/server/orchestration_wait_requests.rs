@@ -8,8 +8,9 @@ use crate::terminal_host::orchestration::message_waiters::{MessageWaiter, WaitKi
 use crate::terminal_host::protocol::{error_response, ok_response};
 
 use super::deferred_admission::DeferredRequestClass;
-use super::orchestration_message_requests::check_response;
+use super::orchestration_message_requests::{check_response, take_ask_receipt_context};
 use super::orchestration_validation::{require_string, state_error, state_wait_timeout_ms};
+use super::requests::idempotency_receipts::{remove_receipt, settle_receipt};
 use super::{ServerActor, ServerCommand};
 
 const STATE_WAIT_POLL_MS: u64 = 100;
@@ -288,18 +289,50 @@ impl ServerActor {
                             .mark_orchestration_messages_read(&ids)
                             .await;
                         let reply = replies.remove(0);
+                        let payload = json!({ "answered": true, "reply": reply });
+                        if let Some(context) = take_ask_receipt_context(&thread_id) {
+                            if let Err(error) = settle_receipt(
+                                &self.runtime_store,
+                                "orchestration.ask",
+                                &context.caller_scope,
+                                &context.client_mutation_id,
+                                &context.payload_digest,
+                                &payload,
+                            )
+                            .await
+                            {
+                                tracing::error!(
+                                    client_mutation_id = %context.client_mutation_id,
+                                    "failed to settle orchestration.ask receipt: {error}"
+                                );
+                            }
+                        }
                         self.client_write(
                             waiter.client_id,
-                            ok_response(
-                                waiter.request_id,
-                                json!({ "answered": true, "reply": reply }),
-                            ),
+                            ok_response(waiter.request_id, payload),
                         );
                     }
                     Err(error) => {
+                        let host_error = HostError::state(error.to_string());
+                        if let Some(context) = take_ask_receipt_context(&thread_id) {
+                            if let Err(cleanup_error) = remove_receipt(
+                                &self.runtime_store,
+                                "orchestration.ask",
+                                &context.caller_scope,
+                                &context.client_mutation_id,
+                                &context.payload_digest,
+                            )
+                            .await
+                            {
+                                tracing::error!(
+                                    client_mutation_id = %context.client_mutation_id,
+                                    "failed to roll back orchestration.ask receipt: {cleanup_error}"
+                                );
+                            }
+                        }
                         self.client_write(
                             waiter.client_id,
-                            error_response(waiter.request_id, &HostError::state(error.to_string())),
+                            error_response(waiter.request_id, &host_error),
                         );
                     }
                 }
@@ -326,9 +359,9 @@ impl ServerActor {
                 .await;
             return;
         }
-        let mut payload = match waiter.kind {
-            WaitKind::Check { inject, .. } => check_response(&[], inject),
-            WaitKind::Ask { .. } => json!({ "answered": false }),
+        let (mut payload, ask_thread_id) = match waiter.kind {
+            WaitKind::Check { inject, .. } => (check_response(&[], inject), None),
+            WaitKind::Ask { thread_id, .. } => (json!({ "answered": false }), Some(thread_id)),
             WaitKind::TerminalState { .. } | WaitKind::TaskState { .. } => unreachable!(),
         };
         payload["timedOut"] = Value::Bool(true);
@@ -339,6 +372,25 @@ impl ServerActor {
         // how the elapsed time is measured.
         payload["waitedMs"] = json!(effective_timeout_ms);
         payload["effectiveTimeoutMs"] = json!(effective_timeout_ms);
+        if let Some(thread_id) = ask_thread_id {
+            if let Some(context) = take_ask_receipt_context(&thread_id) {
+                if let Err(error) = settle_receipt(
+                    &self.runtime_store,
+                    "orchestration.ask",
+                    &context.caller_scope,
+                    &context.client_mutation_id,
+                    &context.payload_digest,
+                    &payload,
+                )
+                .await
+                {
+                    tracing::error!(
+                        client_mutation_id = %context.client_mutation_id,
+                        "failed to settle orchestration.ask timeout receipt: {error}"
+                    );
+                }
+            }
+        }
         self.client_write(waiter.client_id, ok_response(waiter.request_id, payload));
     }
 

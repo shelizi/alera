@@ -43,12 +43,12 @@ impl ServerActor {
                 .orchestration_run_policy_resolve(payload, false)
                 .await
                 .map(Some),
-            "orchestration.send" => self.orchestration_send(payload).await.map(Some),
+            "orchestration.send" => self.orchestration_send(client_id, payload).await.map(Some),
             "orchestration.check" => {
                 self.orchestration_check(client_id, request_id, payload)
                     .await
             }
-            "orchestration.reply" => self.orchestration_reply(payload).await.map(Some),
+            "orchestration.reply" => self.orchestration_reply(client_id, payload).await.map(Some),
             "orchestration.inbox" => self.orchestration_inbox(payload).await.map(Some),
             "orchestration.ask" => self.orchestration_ask(client_id, request_id, payload).await,
             "orchestration.agentStatus" => self.orchestration_agent_status(payload).await.map(Some),
@@ -92,7 +92,10 @@ impl ServerActor {
                 .map(Some),
             "orchestration.context" => self.orchestration_context(payload).await.map(Some),
             "orchestration.heartbeat" => self.orchestration_heartbeat(payload).await.map(Some),
-            "orchestration.escalate" => self.orchestration_escalate(payload).await.map(Some),
+            "orchestration.escalate" => self
+                .orchestration_escalate(client_id, payload)
+                .await
+                .map(Some),
             "orchestration.complete" => self.orchestration_complete(payload).await.map(Some),
             "orchestration.workerDone" => self.orchestration_worker_done(payload).await.map(Some),
             "orchestration.workerHelp" => Ok(Some(self.orchestration_worker_help())),
