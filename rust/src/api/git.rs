@@ -22,6 +22,8 @@ mod git_commit_state_impl;
 pub(in crate::api) mod git_diff_impl;
 #[path = "git_diff_paths.rs"]
 pub(in crate::api) mod git_diff_paths;
+#[path = "git_head_helpers.rs"]
+mod git_head_helpers;
 #[path = "git_history_impl.rs"]
 mod git_history_impl;
 #[path = "git_hosted_review.rs"]
@@ -364,34 +366,7 @@ pub(in crate::api) fn open_repo(path: &str) -> Result<Repository, GitError> {
     })
 }
 
-fn head_branch_name(repo: &Repository) -> String {
-    match repo.head() {
-        Ok(head) => {
-            if repo.head_detached().unwrap_or(false) {
-                "HEAD".to_string()
-            } else {
-                match head.shorthand() {
-                    Ok(name) => name.to_string(),
-                    Err(_) => "HEAD".to_string(),
-                }
-            }
-        }
-        Err(error) if error.code() == ErrorCode::UnbornBranch => unborn_branch_name(repo),
-        Err(_) => "HEAD".to_string(),
-    }
-}
-
-fn unborn_branch_name(repo: &Repository) -> String {
-    if let Ok(reference) = repo.find_reference("HEAD") {
-        if let Ok(Some(target)) = reference.symbolic_target() {
-            return target
-                .strip_prefix("refs/heads/")
-                .unwrap_or(target)
-                .to_string();
-        }
-    }
-    "HEAD".to_string()
-}
+use git_head_helpers::head_branch_name;
 
 pub fn is_git_repository(path: String) -> Result<bool, GitError> {
     match Repository::discover(&path) {

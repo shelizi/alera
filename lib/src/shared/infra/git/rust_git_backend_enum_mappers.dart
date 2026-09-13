@@ -25,15 +25,6 @@ extension on RustGitBackend {
     };
   }
 
-  rust_archive_ops.GitArchiveFormat _toRustArchiveFormat(
-    GitArchiveFormat format,
-  ) {
-    return switch (format) {
-      GitArchiveFormat.zip => rust_archive_ops.GitArchiveFormat.zip,
-      GitArchiveFormat.tar => rust_archive_ops.GitArchiveFormat.tar,
-    };
-  }
-
   GitExplorerStatusSnapshot _toExplorerStatusSnapshot(
     explorer_rust.GitExplorerStatusSnapshot snapshot,
   ) {
@@ -135,4 +126,11 @@ extension on RustGitBackend {
       sourceLabel: sourceLabel,
     );
   }
+}
+
+rust_archive_ops.GitArchiveFormat _toRustArchiveFormat(GitArchiveFormat format) {
+  return switch (format) {
+    GitArchiveFormat.zip => rust_archive_ops.GitArchiveFormat.zip,
+    GitArchiveFormat.tar => rust_archive_ops.GitArchiveFormat.tar,
+  };
 }

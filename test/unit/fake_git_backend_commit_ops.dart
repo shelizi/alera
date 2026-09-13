@@ -2,27 +2,37 @@ part of 'fake_git_backend.dart';
 
 mixin _FakeGitBackendCommitOps {
   List<GitBackendCall> get calls;
-  GitException? get checkoutCommitError;
-  GitException? get revertCommitError;
-  GitException? get resetToCommitError;
-  String get revertCommitResult;
-  GitException? get createBranchAtCommitError;
-  GitException? get cherryPickCommitError;
-  String get cherryPickCommitResult;
-  GitException? get dropCommitError;
-  GitException? get mergeRefError;
-  String? get mergeRefResult;
-  GitException? get rebaseOntoError;
-  GitException? get createTagError;
-  GitException? get deleteTagError;
-  GitException? get pushTagError;
-  GitException? get checkoutRemoteBranchError;
-  String get checkoutRemoteBranchResult;
-  GitException? get deleteRemoteBranchError;
-  GitException? get renameBranchError;
-  GitException? get createArchiveError;
-  GitException? get compareRangeError;
-  GitCommitCompareResult get compareRangeResult;
+  GitException? checkoutCommitError;
+  GitException? revertCommitError;
+  GitException? resetToCommitError;
+  String revertCommitResult = 'reverted123';
+  GitException? createBranchAtCommitError;
+  GitException? cherryPickCommitError;
+  String cherryPickCommitResult = 'cherrypicked123';
+  GitException? dropCommitError;
+  GitException? mergeRefError;
+  String? mergeRefResult = 'merge123';
+  GitException? rebaseOntoError;
+  GitException? createTagError;
+  GitException? deleteTagError;
+  GitException? pushTagError;
+  GitException? checkoutRemoteBranchError;
+  String checkoutRemoteBranchResult = 'feature';
+  GitException? deleteRemoteBranchError;
+  GitException? renameBranchError;
+  GitException? createArchiveError;
+  GitException? compareRangeError;
+  GitCommitCompareResult compareRangeResult = const GitCommitCompareResult(
+    summary: GitCommitCompareSummary(
+      commitOid: 'head1',
+      parentOid: 'base1',
+      compareRef: 'head1',
+      baseRef: 'base1',
+      changedFiles: 0,
+      status: GitCommitCompareStatus.ready,
+    ),
+    entries: <GitCommitChangeEntry>[],
+  );
 
   Future<void> checkoutCommit({
     required String path,
