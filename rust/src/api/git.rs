@@ -10,6 +10,8 @@ use git2::{
 
 #[path = "git_ancestry_impl.rs"]
 mod git_ancestry_impl;
+#[path = "git_archive_ops.rs"]
+pub mod git_archive_ops;
 #[path = "git_branch.rs"]
 pub mod git_branch;
 #[path = "git_commit_ops.rs"]
@@ -24,8 +26,14 @@ pub(in crate::api) mod git_diff_paths;
 mod git_history_impl;
 #[path = "git_hosted_review.rs"]
 pub mod git_hosted_review;
+#[path = "git_merge_ops.rs"]
+pub mod git_merge_ops;
 #[path = "git_range_impl.rs"]
 mod git_range_impl;
+#[path = "git_remote_ops.rs"]
+pub mod git_remote_ops;
+#[path = "git_tag_ops.rs"]
+pub mod git_tag_ops;
 
 #[cfg(test)]
 use git_branch::{
@@ -459,6 +467,14 @@ pub fn git_commit_compare(
     commit_id: String,
 ) -> Result<GitCommitCompareResult, GitError> {
     git_diff_impl::git_commit_compare(path, commit_id)
+}
+
+pub fn git_compare_range(
+    path: String,
+    base_ref: String,
+    head_ref: String,
+) -> Result<GitCommitCompareResult, GitError> {
+    git_diff_impl::git_compare_range(path, base_ref, head_ref)
 }
 
 pub fn git_commit_diff(

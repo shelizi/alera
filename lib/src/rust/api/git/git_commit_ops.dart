@@ -38,4 +38,26 @@ Future<void> gitResetToCommit({
   mode: mode,
 );
 
+Future<String> gitCherryPickCommit({
+  required String path,
+  required String commitId,
+  int? mainlineParent,
+}) => RustLib.instance.api.crateApiGitGitCommitOpsGitCherryPickCommit(
+  path: path,
+  commitId: commitId,
+  mainlineParent: mainlineParent,
+);
+
+Future<void> gitDropCommit({required String path, required String commitId}) =>
+    RustLib.instance.api.crateApiGitGitCommitOpsGitDropCommit(
+      path: path,
+      commitId: commitId,
+    );
+
+Future<void> gitRebaseOnto({required String path, required String ontoRef}) =>
+    RustLib.instance.api.crateApiGitGitCommitOpsGitRebaseOnto(
+      path: path,
+      ontoRef: ontoRef,
+    );
+
 enum GitResetMode { soft, mixed, hard }

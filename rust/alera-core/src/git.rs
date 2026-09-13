@@ -4,6 +4,8 @@ use std::path::Path;
 use git2::{BranchType, ErrorCode, Repository, WorktreeAddOptions, WorktreePruneOptions};
 
 use crate::git_cli::git_in_dir;
+mod archive_operations;
+mod branch_extended_operations;
 mod branch_operations;
 #[cfg(test)]
 #[path = "git_branch_tests.rs"]
@@ -12,14 +14,29 @@ mod commit_operations;
 #[cfg(test)]
 #[path = "git_commit_ops_tests.rs"]
 mod commit_ops_tests;
+mod commit_replay_operations;
 pub mod hosted_review;
+mod merge_operations;
+#[cfg(test)]
+#[path = "git_parity_tests.rs"]
+mod parity_tests;
+mod remote_operations;
 mod repository_metadata;
+mod tag_operations;
+pub use archive_operations::{create_archive, GitArchiveFormat};
+pub use branch_extended_operations::{
+    checkout_remote_branch, create_branch_at_commit, rename_branch,
+};
 pub use branch_operations::{
     branch_exists, checkout_branch, create_and_checkout_branch, delete_branch,
     is_valid_branch_name, list_branches,
 };
 pub use commit_operations::{checkout_commit, reset_to_commit, revert_commit, GitResetMode};
+pub use commit_replay_operations::{cherry_pick_commit, drop_commit, rebase_onto};
+pub use merge_operations::merge_ref;
+pub use remote_operations::{delete_remote_branch, push_tag};
 pub use repository_metadata::{current_branch, is_worktree_clean, repository_remote_url};
+pub use tag_operations::{create_tag, delete_tag};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GitWorktreeEntry {

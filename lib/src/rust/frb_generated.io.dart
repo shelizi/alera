@@ -7,9 +7,13 @@ import 'api/agent_hooks.dart';
 import 'api/ai_dictation.dart';
 import 'api/clipboard.dart';
 import 'api/git.dart';
+import 'api/git/git_archive_ops.dart';
 import 'api/git/git_branch.dart';
 import 'api/git/git_commit_ops.dart';
 import 'api/git/git_hosted_review.dart';
+import 'api/git/git_merge_ops.dart';
+import 'api/git/git_remote_ops.dart';
+import 'api/git/git_tag_ops.dart';
 import 'api/git_diff_blob.dart';
 import 'api/git_explorer_status.dart';
 import 'api/keep_alive.dart';
@@ -159,6 +163,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   CodexSavedPromptScope dco_decode_codex_saved_prompt_scope(dynamic raw);
+
+  @protected
+  GitArchiveFormat dco_decode_git_archive_format(dynamic raw);
 
   @protected
   GitChangeArea dco_decode_git_change_area(dynamic raw);
@@ -763,6 +770,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   CodexSavedPromptScope sse_decode_codex_saved_prompt_scope(
     SseDeserializer deserializer,
   );
+
+  @protected
+  GitArchiveFormat sse_decode_git_archive_format(SseDeserializer deserializer);
 
   @protected
   GitChangeArea sse_decode_git_change_area(SseDeserializer deserializer);
@@ -1519,6 +1529,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_codex_saved_prompt_scope(
     CodexSavedPromptScope self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_git_archive_format(
+    GitArchiveFormat self,
     SseSerializer serializer,
   );
 
