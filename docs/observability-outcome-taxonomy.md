@@ -18,16 +18,12 @@ The canonical machine values are returned by `OutcomeClass::as_str()`.
 | `state_error` | An untyped host state failure, including legacy format failures. | `ok: false` with `error`; no `errorCode`. |
 | `typed_conflict` | A typed conflict whose code is not a known backpressure code. | `ok: false` with `error`, `errorCode`, and `errorDetails`. |
 | `backpressure` | Admission or terminal-input capacity rejected the request. | `ok: false` with `error`, `errorCode`, and `errorDetails`. |
-| `unauthorized` | A current terminal-host authentication failure identified by one of the exact host messages listed below. | `ok: false` with the legacy untyped `error`; no new wire field. |
-| `timeout` | A current host operation reached one of the explicit timeout message forms listed below. | `ok: false` with the legacy untyped `error`; no new wire field. |
+| `unauthorized` | An authentication or access-policy failure represented by `HostError::Unauthorized`. | `ok: false` with the legacy untyped `error`; no new wire field. |
+| `timeout` | A host operation timeout represented by `HostError::Timeout`. | `ok: false` with the legacy untyped `error`; no new wire field. |
 
-`Unauthorized` and `Timeout` are observability classes even though `HostError` has no dedicated variants for them yet. The current producer messages are stable enough to identify these two response outcomes, so the classifier uses closed lists of exact messages and prefixes. Other state messages are not classified by an unconstrained keyword search.
+`Unauthorized` and `Timeout` are dedicated `HostError` variants. Their constructors retain the producer's message verbatim, while `outcome_class()` maps the variants directly to the corresponding observability class. A `HostError::State` with the same text remains `state_error`, so ordinary state errors cannot be reclassified by message content.
 
 `BACKPRESSURE_ERROR_CODES` currently contains `deferred_request_backpressure` and `terminal_input_backpressure`.
-
-The unauthorized closed list contains the exact messages `Terminal host client is not authenticated.`, `Terminal host authentication failed.`, `clientMutationId requires an authenticated client identity.`, `Authenticated mobile device identity is missing.`, and `Mobile clients cannot stop the runtime host.`, plus the prefix `Mobile clients cannot call terminal host request: `.
-
-The timeout closed list contains the exact messages `Codex app-server startup timed out.`, `Codex subscription dictation timed out`, and `Terminal Pulse watcher setup timed out before it could be armed.`, plus the prefixes `AI Assist timed out after ` and `Codex app-server request timed out: `.
 
 ## Classification rules
 
@@ -36,9 +32,9 @@ Classification is evaluated in this order:
 1. `OutcomeClass::from_result` returns `ok` for `Ok(_)`; this is how the success class is represented because no `HostError` value can represent success.
 2. A `HostError::Conflict` whose code is in `BACKPRESSURE_ERROR_CODES` returns `backpressure`.
 3. Any other `HostError::Conflict` returns `typed_conflict`, including unknown or newly introduced conflict codes. An unknown code must never be treated as backpressure.
-4. `HostError::State` with a listed authentication, identity, or mobile access-denial message or prefix returns `unauthorized`.
-5. `HostError::State` with one of the known timeout prefixes or exact timeout messages returns `timeout`.
-6. All remaining `HostError::State` values and every `HostError::Format` value return `state_error`.
+4. `HostError::Unauthorized(_)` returns `unauthorized`.
+5. `HostError::Timeout(_)` returns `timeout`.
+6. All `HostError::State` values and every `HostError::Format` value return `state_error`.
 
 `HostError::Format` is deliberately grouped into `state_error`. Its wire text still keeps the existing `FormatException: ` prefix, but the envelope has no separate format code and older clients already consume it as an untyped error. This preserves one stable class for all untyped error envelopes while retaining the exact wire message.
 
@@ -56,8 +52,8 @@ The relay-only error `Relay authorization renewal requires an encrypted relay co
 | `state_error` | `rust/alera-cli/src/terminal_host/server/request_payloads.rs:18` maps ordinary operation failures to `HostError::State`; `rust/alera-cli/src/terminal_host/server/request_payloads.rs:9,20` are the parse and serialization `Format` sources that collapse to this class. |
 | `typed_conflict` | Representative non-backpressure conflicts: `rust/alera-cli/src/terminal_host/server/requests/runtime_settings.rs:114`, `rust/alera-cli/src/terminal_host/server/project_clone_requests.rs:57`, `rust/alera-cli/src/terminal_host/server/workspace_sidebar_requests.rs:275`, and `rust/alera-cli/src/terminal_host/server/declared_catalog_requests.rs:266`. |
 | `backpressure` | `rust/alera-cli/src/terminal_host/server/deferred_admission.rs:18,213`, `rust/alera-cli/src/terminal_host/server/deferred_admission/delayed.rs:76`, and `rust/alera-cli/src/terminal_host/server.rs:247` with `rust/alera-cli/src/terminal_host/session/input_queue.rs:68-70`. |
-| `unauthorized` | Fixed authentication messages from the sources listed in the classification rules. |
-| `timeout` | Fixed host timeout messages from the sources listed in the classification rules. |
+| `unauthorized` | `HostError::Unauthorized` constructions from the authentication and access-policy sources listed above. |
+| `timeout` | `HostError::Timeout` constructions from the timeout sources listed above. |
 
 The `request_payloads.rs` mapping is important to the taxonomy: ordinary operation errors are `State`, while JSON parsing and serialization failures are `Format`; both produce the untyped `state_error` class under the rules above.
 
@@ -72,7 +68,9 @@ The tracing event does not include payloads, error messages, details, credential
 | Result | Class | Wire fields |
 | --- | --- | --- |
 | `Ok(payload)` | `ok` | `id`, `ok: true`, `payload` |
-| `Err(HostError::State(_))` | `state_error`, `unauthorized`, or `timeout` according to the closed message rules | `id`, `ok: false`, `error` |
+| `Err(HostError::State(_))` | `state_error` | `id`, `ok: false`, `error` |
+| `Err(HostError::Unauthorized(_))` | `unauthorized` | `id`, `ok: false`, `error` |
+| `Err(HostError::Timeout(_))` | `timeout` | `id`, `ok: false`, `error` |
 | `Err(HostError::Format(_))` | `state_error` | `id`, `ok: false`, `error` with the existing `FormatException: ` text |
 | `Err(HostError::Conflict { code, details, .. })` | `backpressure` or `typed_conflict` according to `code` | `id`, `ok: false`, `error`, `errorCode`, `errorDetails` |
 
@@ -80,4 +78,4 @@ The timeout returned by an orchestration wait can also be a successful domain re
 
 ## Non-goals
 
-This change does not add a wire field, bump a protocol version, change `errorCode` or `errorDetails` behavior, or alter client-side error handling. A future dedicated `HostError` variant or stable error code can replace a closed message rule without changing the envelope contract.
+This change does not add a wire field, bump a protocol version, change `errorCode` or `errorDetails` behavior, or alter client-side error handling. A future stable error code can be added without changing the envelope contract.

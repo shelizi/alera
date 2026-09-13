@@ -51,7 +51,7 @@ impl ServerActor {
             .map(|_| {
                 client_id
                     .ok_or_else(|| {
-                        HostError::state(
+                        HostError::unauthorized(
                             "clientMutationId requires an authenticated client identity.",
                         )
                     })
@@ -235,14 +235,14 @@ impl ServerActor {
         let client = self
             .clients
             .get(&client_id)
-            .ok_or_else(|| HostError::state("Terminal host client is not authenticated."))?;
+            .ok_or_else(|| HostError::unauthorized("Terminal host client is not authenticated."))?;
         match client.kind {
             ClientKind::Mobile => client
                 .mobile_device_id
                 .as_ref()
                 .map(|device_id| format!("mobile:{device_id}"))
                 .ok_or_else(|| {
-                    HostError::state("Authenticated mobile device identity is missing.")
+                    HostError::unauthorized("Authenticated mobile device identity is missing.")
                 }),
             ClientKind::Local => Ok(match client.local_role {
                 LocalClientRole::App => "local:app",
@@ -352,7 +352,12 @@ fn agent_profile_launch_payload_digest(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
+    use crate::terminal_host::client::ClientHandle;
+    use crate::terminal_host::host_error::{HostError, OutcomeClass};
+    use crate::terminal_host::server::actor_test_harness::{mobile_client, test_actor};
 
     #[test]
     fn payload_digest_uses_the_effective_launch_payload() {
@@ -382,6 +387,47 @@ mod tests {
                 None,
                 false,
             )
+        );
+    }
+
+    fn assert_unauthorized(error: HostError, expected_message: &str) {
+        assert_eq!(error.outcome_class(), OutcomeClass::Unauthorized);
+        assert_eq!(error.wire_message(), expected_message);
+    }
+
+    #[tokio::test]
+    async fn authentication_errors_are_unauthorized_with_legacy_messages() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut actor = test_actor(&dir, HashMap::new(), HashMap::new()).await;
+
+        assert_unauthorized(
+            actor.agent_profile_launch_caller_scope(1).unwrap_err(),
+            "Terminal host client is not authenticated.",
+        );
+        assert_unauthorized(
+            actor
+                .launch_agent_profile(
+                    None,
+                    &json!({
+                        "workspaceId": "workspace-1",
+                        "profileId": "profile-1",
+                        "prompt": "Build it",
+                        "clientMutationId": "mutation-1",
+                    }),
+                )
+                .await
+                .unwrap_err(),
+            "clientMutationId requires an authenticated client identity.",
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let (handle, _receiver) = ClientHandle::test_channels();
+        let mut client = mobile_client(handle, "phone");
+        client.mobile_device_id = None;
+        let actor = test_actor(&dir, HashMap::from([(1, client)]), HashMap::new()).await;
+        assert_unauthorized(
+            actor.agent_profile_launch_caller_scope(1).unwrap_err(),
+            "Authenticated mobile device identity is missing.",
         );
     }
 }

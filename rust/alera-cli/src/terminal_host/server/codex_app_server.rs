@@ -30,6 +30,10 @@ type PendingRequests = Arc<Mutex<HashMap<i64, oneshot::Sender<HostResult<Value>>
 #[cfg(test)]
 type TestResponder = Arc<dyn Fn(&str, Value) -> HostResult<Value> + Send + Sync>;
 
+fn codex_request_timeout_error(method: &str) -> HostError {
+    HostError::timeout(format!("Codex app-server request timed out: {method}"))
+}
+
 fn same_codex_app_server_instance(current: &Arc<()>, expected: &Arc<()>) -> bool {
     Arc::ptr_eq(current, expected)
 }
@@ -165,9 +169,7 @@ impl CodexAppServer {
             )),
             Err(_) => {
                 self.pending.lock().await.remove(&id);
-                Err(HostError::state(format!(
-                    "Codex app-server request timed out: {method}"
-                )))
+                Err(codex_request_timeout_error(method))
             }
         }
     }
@@ -329,9 +331,9 @@ mod tests {
     use std::sync::Arc;
 
     use super::{
-        codex_error_message, codex_overload_delay, initialize_params, is_codex_overloaded,
-        read_codex_messages, same_codex_app_server_instance, CodexAppServerSessionState,
-        PendingRequests,
+        codex_error_message, codex_overload_delay, codex_request_timeout_error, initialize_params,
+        is_codex_overloaded, read_codex_messages, same_codex_app_server_instance,
+        CodexAppServerSessionState, PendingRequests,
     };
     use crate::terminal_host::host_error::HostError;
     use serde_json::json;
@@ -369,6 +371,20 @@ mod tests {
         assert_eq!(
             codex_overload_delay(20),
             std::time::Duration::from_millis(200)
+        );
+    }
+
+    #[test]
+    fn request_timeout_is_classified_without_changing_its_wire_message() {
+        let error = codex_request_timeout_error("thread/start");
+
+        assert_eq!(
+            error.outcome_class(),
+            crate::terminal_host::host_error::OutcomeClass::Timeout
+        );
+        assert_eq!(
+            error.wire_message(),
+            "Codex app-server request timed out: thread/start"
         );
     }
 

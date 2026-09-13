@@ -8,6 +8,10 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::oneshot;
 const MAX_OUTPUT_BYTES: usize = 1024 * 1024;
 
+fn ai_assist_timeout_error(timeout_seconds: u64) -> HostError {
+    HostError::timeout(format!("AI Assist timed out after {timeout_seconds}s."))
+}
+
 pub(super) async fn run_command(
     plan: AiAssistCommandPlan,
     working_directory: &str,
@@ -73,7 +77,7 @@ pub(super) async fn run_command(
     let result = tokio::select! {
         _ = cancel_rx => Err(HostError::state("AI Assist was canceled.")),
         _ = tokio::time::sleep(Duration::from_secs(timeout_seconds)) => {
-            Err(HostError::state(format!("AI Assist timed out after {timeout_seconds}s.")))
+            Err(ai_assist_timeout_error(timeout_seconds))
         }
         output = &mut output_future => {
             let output = output.map_err(|error| HostError::state(error.to_string()))?;
@@ -99,4 +103,18 @@ pub(super) async fn run_command(
         let _ = std::fs::remove_dir_all(directory);
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ai_assist_timeout_error;
+    use crate::terminal_host::host_error::OutcomeClass;
+
+    #[test]
+    fn timeout_error_is_classified_without_changing_its_wire_message() {
+        let error = ai_assist_timeout_error(30);
+
+        assert_eq!(error.outcome_class(), OutcomeClass::Timeout);
+        assert_eq!(error.wire_message(), "AI Assist timed out after 30s.");
+    }
 }

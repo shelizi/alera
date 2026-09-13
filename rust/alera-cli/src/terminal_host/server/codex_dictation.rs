@@ -11,6 +11,10 @@ use super::codex_app_server::CodexAppServer;
 
 const AUDIO_CHUNK_SAMPLES: usize = 16_000;
 
+fn codex_dictation_timeout_error() -> HostError {
+    HostError::timeout("Codex subscription dictation timed out")
+}
+
 pub(super) struct CodexDictationResult {
     pub(super) text: String,
     pub(super) duration_millis: i64,
@@ -28,7 +32,7 @@ pub(super) async fn transcribe(
     let chunks = tokio::select! {
         _ = &mut cancel => return Err(HostError::state("dictation was cancelled")),
         _ = tokio::time::sleep_until(deadline) => {
-            return Err(HostError::state("Codex subscription dictation timed out"));
+            return Err(codex_dictation_timeout_error());
         }
         result = read_audio_chunks(audio_path) => result?,
     };
@@ -43,7 +47,7 @@ pub(super) async fn transcribe(
     let thread = tokio::select! {
         _ = &mut cancel => return Err(HostError::state("dictation was cancelled")),
         _ = tokio::time::sleep_until(deadline) => {
-            return Err(HostError::state("Codex subscription dictation timed out"));
+            return Err(codex_dictation_timeout_error());
         }
         result = server.request("thread/start", thread_params) => result?,
     };
@@ -62,7 +66,7 @@ pub(super) async fn transcribe(
     let result = tokio::select! {
         _ = &mut cancel => Err(HostError::state("dictation was cancelled")),
         _ = tokio::time::sleep_until(deadline) => {
-            Err(HostError::state("Codex subscription dictation timed out"))
+            Err(codex_dictation_timeout_error())
         }
         result = operation => result,
     };
@@ -194,7 +198,8 @@ fn normalized(value: Option<&str>) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{read_audio_chunks, realtime_start_params};
+    use super::{codex_dictation_timeout_error, read_audio_chunks, realtime_start_params};
+    use crate::terminal_host::host_error::OutcomeClass;
 
     #[tokio::test]
     async fn wav_audio_is_encoded_as_little_endian_pcm() {
@@ -227,5 +232,16 @@ mod tests {
         assert_eq!(params["model"], "realtime-model");
         assert_eq!(params["clientManagedHandoffs"], true);
         assert_eq!(params["includeStartupContext"], false);
+    }
+
+    #[test]
+    fn timeout_error_is_classified_without_changing_its_wire_message() {
+        let error = codex_dictation_timeout_error();
+
+        assert_eq!(error.outcome_class(), OutcomeClass::Timeout);
+        assert_eq!(
+            error.wire_message(),
+            "Codex subscription dictation timed out"
+        );
     }
 }

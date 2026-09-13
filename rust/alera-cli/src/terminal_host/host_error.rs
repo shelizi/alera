@@ -43,36 +43,18 @@ pub const BACKPRESSURE_ERROR_CODES: &[&str] = &[
     "terminal_input_backpressure",
 ];
 
-const UNAUTHORIZED_MESSAGES: &[&str] = &[
-    "Terminal host client is not authenticated.",
-    "Terminal host authentication failed.",
-    "clientMutationId requires an authenticated client identity.",
-    "Authenticated mobile device identity is missing.",
-    "Mobile clients cannot stop the runtime host.",
-];
-
-const UNAUTHORIZED_MESSAGE_PREFIXES: &[&str] =
-    &["Mobile clients cannot call terminal host request: "];
-
-const TIMEOUT_MESSAGE_PREFIXES: &[&str] = &[
-    "AI Assist timed out after ",
-    "Codex app-server request timed out: ",
-];
-
-const TIMEOUT_MESSAGES: &[&str] = &[
-    "Codex app-server startup timed out.",
-    "Codex subscription dictation timed out",
-    "Terminal Pulse watcher setup timed out before it could be armed.",
-];
-
-/// Errors surfaced to clients over the wire. [`HostError::State`] renders its
-/// message as-is because some client recovery paths pattern-match exact text,
+/// Errors surfaced to clients over the wire. The untyped variants render their
+/// messages as-is because some client recovery paths pattern-match exact text,
 /// and [`HostError::Format`] renders like Dart's `FormatException`.
 #[derive(Debug, Clone)]
 pub enum HostError {
     /// The message is sent verbatim. Some of these strings are pattern-matched
     /// by the app client, so keep them exact.
     State(String),
+    /// An authentication failure rendered as the legacy untyped error.
+    Unauthorized(String),
+    /// A timeout rendered as the legacy untyped error.
+    Timeout(String),
     /// Equivalent to Dart's `FormatException`; rendered as `FormatException: <msg>`.
     Format(String),
     /// A typed, recoverable conflict. The message remains available for older
@@ -87,6 +69,14 @@ pub enum HostError {
 impl HostError {
     pub fn state(message: impl Into<String>) -> Self {
         HostError::State(message.into())
+    }
+
+    pub fn unauthorized(message: impl Into<String>) -> Self {
+        HostError::Unauthorized(message.into())
+    }
+
+    pub fn timeout(message: impl Into<String>) -> Self {
+        HostError::Timeout(message.into())
     }
 
     pub fn format(message: impl Into<String>) -> Self {
@@ -104,22 +94,8 @@ impl HostError {
     /// Classify this error without changing its legacy wire representation.
     pub fn outcome_class(&self) -> OutcomeClass {
         match self {
-            HostError::State(message)
-                if UNAUTHORIZED_MESSAGES.contains(&message.as_str())
-                    || UNAUTHORIZED_MESSAGE_PREFIXES
-                        .iter()
-                        .any(|prefix| message.starts_with(prefix)) =>
-            {
-                OutcomeClass::Unauthorized
-            }
-            HostError::State(message)
-                if TIMEOUT_MESSAGE_PREFIXES
-                    .iter()
-                    .any(|prefix| message.starts_with(prefix))
-                    || TIMEOUT_MESSAGES.contains(&message.as_str()) =>
-            {
-                OutcomeClass::Timeout
-            }
+            HostError::Unauthorized(_) => OutcomeClass::Unauthorized,
+            HostError::Timeout(_) => OutcomeClass::Timeout,
             HostError::State(_) | HostError::Format(_) => OutcomeClass::StateError,
             HostError::Conflict { code, .. }
                 if BACKPRESSURE_ERROR_CODES.contains(&code.as_str()) =>
@@ -134,14 +110,19 @@ impl HostError {
     pub fn error_code(&self) -> Option<&str> {
         match self {
             HostError::Conflict { code, .. } => Some(code),
-            HostError::State(_) | HostError::Format(_) => None,
+            HostError::State(_)
+            | HostError::Unauthorized(_)
+            | HostError::Timeout(_)
+            | HostError::Format(_) => None,
         }
     }
 
     /// The string placed in the `error` field of an error response.
     pub fn wire_message(&self) -> String {
         match self {
-            HostError::State(message) => message.clone(),
+            HostError::State(message)
+            | HostError::Unauthorized(message)
+            | HostError::Timeout(message) => message.clone(),
             HostError::Format(message) => format!("FormatException: {message}"),
             HostError::Conflict { message, .. } => message.clone(),
         }
@@ -225,33 +206,47 @@ mod outcome_taxonomy_tests {
     }
 
     #[test]
-    fn unauthorized_messages_are_unauthorized() {
-        for message in UNAUTHORIZED_MESSAGES {
-            assert_eq!(
-                HostError::state(*message).outcome_class(),
-                OutcomeClass::Unauthorized
-            );
-        }
-        for prefix in UNAUTHORIZED_MESSAGE_PREFIXES {
-            assert_eq!(
-                HostError::state(format!("{prefix}workspace.list")).outcome_class(),
-                OutcomeClass::Unauthorized
-            );
+    fn dedicated_variants_preserve_legacy_wire_shape_and_message() {
+        let cases = [
+            (
+                HostError::unauthorized("Terminal host client is not authenticated."),
+                OutcomeClass::Unauthorized,
+                "Terminal host client is not authenticated.",
+            ),
+            (
+                HostError::timeout("AI Assist timed out after 30s."),
+                OutcomeClass::Timeout,
+                "AI Assist timed out after 30s.",
+            ),
+        ];
+        for (error, expected_class, expected_message) in cases {
+            assert_eq!(error.outcome_class(), expected_class);
+            assert_eq!(error.wire_message(), expected_message);
+            assert_eq!(error.error_code(), None);
+            assert_eq!(error.to_string(), expected_message);
+
+            let response = error.wire_response(7);
+            assert_eq!(response["id"], 7);
+            assert_eq!(response["ok"], false);
+            assert_eq!(response["error"], expected_message);
+            let object = response.as_object().unwrap();
+            assert!(!object.contains_key("errorCode"));
+            assert!(!object.contains_key("errorDetails"));
         }
     }
 
     #[test]
-    fn known_timeout_messages_are_timeout() {
-        for message in TIMEOUT_MESSAGES {
+    fn state_messages_resembling_dedicated_variants_remain_state_errors() {
+        for message in [
+            "Terminal host client is not authenticated.",
+            "Mobile clients cannot call terminal host request: workspace.list",
+            "AI Assist timed out after 30s.",
+            "Codex app-server request timed out: thread/start",
+            "Codex app-server startup timed out.",
+        ] {
             assert_eq!(
-                HostError::state(*message).outcome_class(),
-                OutcomeClass::Timeout
-            );
-        }
-        for prefix in TIMEOUT_MESSAGE_PREFIXES {
-            assert_eq!(
-                HostError::state(format!("{prefix}30s.")).outcome_class(),
-                OutcomeClass::Timeout
+                HostError::state(message).outcome_class(),
+                OutcomeClass::StateError
             );
         }
     }

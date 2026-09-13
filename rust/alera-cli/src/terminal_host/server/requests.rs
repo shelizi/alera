@@ -204,7 +204,7 @@ impl ServerActor {
             "host.promotePersistent" => self.promote_persistent(),
             "host.shutdown" => {
                 if self.is_mobile_client(client_id) {
-                    return Err(HostError::state(
+                    return Err(HostError::unauthorized(
                         "Mobile clients cannot stop the runtime host.",
                     ));
                 }
@@ -1278,3 +1278,33 @@ mod access_cases;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod dedicated_host_error_tests {
+    use crate::terminal_host::host_error::OutcomeClass;
+    use crate::terminal_host::server::actor_test_harness::{mobile_client, test_actor};
+    use serde_json::json;
+    use std::collections::HashMap;
+
+    #[tokio::test]
+    async fn mobile_shutdown_is_unauthorized_with_legacy_message() {
+        let dir = tempfile::tempdir().unwrap();
+        let (handle, _receiver) = crate::terminal_host::client::ClientHandle::test_channels();
+        let mut actor = test_actor(
+            &dir,
+            HashMap::from([(1, mobile_client(handle, "phone"))]),
+            HashMap::new(),
+        )
+        .await;
+
+        let error = actor
+            .handle_authenticated_request(1, "host.shutdown", &json!({}))
+            .await
+            .unwrap_err();
+        assert_eq!(error.outcome_class(), OutcomeClass::Unauthorized);
+        assert_eq!(
+            error.wire_message(),
+            "Mobile clients cannot stop the runtime host."
+        );
+    }
+}
