@@ -21,7 +21,7 @@ void main() {
     const first = AgentQuotaHostSettings(
       enabledProviders: <AgentQuotaProviderId>[
         AgentQuotaProviderId.claude,
-        AgentQuotaProviderId.antigravity,
+        AgentQuotaProviderId.agy,
       ],
       claudeProfiles: <ClaudeQuotaProfileSettings>[
         ClaudeQuotaProfileSettings(alias: 'cc41', profile: 'leynier41'),
@@ -30,7 +30,7 @@ void main() {
     );
     const reordered = AgentQuotaHostSettings(
       enabledProviders: <AgentQuotaProviderId>[
-        AgentQuotaProviderId.antigravity,
+        AgentQuotaProviderId.agy,
         AgentQuotaProviderId.claude,
       ],
       claudeProfiles: <ClaudeQuotaProfileSettings>[
@@ -309,6 +309,23 @@ void main() {
     });
 
     expect(snapshot, isNull);
+  });
+
+  test('fromJson and tryFromJson canonicalize legacy provider payloads', () {
+    final payload = <String, Object?>{
+      'provider': 'antigravity',
+      'accountId': 'default',
+      'displayName': 'Antigravity',
+      'status': 'ok',
+    };
+
+    final strict = AgentQuotaSnapshot.fromJson(payload);
+    final tolerant = AgentQuotaSnapshot.tryFromJson(payload);
+
+    expect(strict.provider, AgentQuotaProviderId.agy);
+    expect(strict.key, 'agy:default');
+    expect(strict.pinKey, 'agy');
+    expect(tolerant?.provider, AgentQuotaProviderId.agy);
   });
 
   test('tryFromJson parses known payloads like fromJson', () {

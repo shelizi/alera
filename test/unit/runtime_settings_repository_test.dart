@@ -104,7 +104,7 @@ void main() {
           'kimi',
           'grok',
           'cursor',
-          'antigravity',
+          'agy',
           'minimax',
           'zai',
           'devin',

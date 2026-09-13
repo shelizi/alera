@@ -16,7 +16,7 @@ void main() {
         settings: const AgentQuotaHostSettings(
           enabledProviders: <AgentQuotaProviderId>[
             AgentQuotaProviderId.claude,
-            AgentQuotaProviderId.antigravity,
+            AgentQuotaProviderId.agy,
           ],
           claudeProfiles: <ClaudeQuotaProfileSettings>[
             ClaudeQuotaProfileSettings(alias: 'ccdev', profile: 'dev'),
@@ -35,7 +35,7 @@ void main() {
             windows: <AgentQuotaWindow>[_window('Weekly', 20)],
           ),
           _snapshot(
-            provider: .antigravity,
+            provider: .agy,
             buckets: <AgentQuotaBucket>[_bucket('Gemini Models - Weekly', 15)],
           ),
         ],
@@ -56,7 +56,7 @@ void main() {
         settings: const AgentQuotaHostSettings(
           enabledProviders: <AgentQuotaProviderId>[
             AgentQuotaProviderId.claude,
-            AgentQuotaProviderId.antigravity,
+            AgentQuotaProviderId.agy,
           ],
           claudeProfiles: <ClaudeQuotaProfileSettings>[
             ClaudeQuotaProfileSettings(alias: 'ccdev', profile: 'dev'),
@@ -75,7 +75,7 @@ void main() {
             windows: <AgentQuotaWindow>[_window('Weekly', 20)],
           ),
           _snapshot(
-            provider: .antigravity,
+            provider: .agy,
             buckets: <AgentQuotaBucket>[_bucket('Gemini Models - Weekly', 15)],
           ),
         ],
@@ -142,7 +142,7 @@ void main() {
         settings: const AgentQuotaHostSettings(
           enabledProviders: <AgentQuotaProviderId>[
             AgentQuotaProviderId.claude,
-            AgentQuotaProviderId.antigravity,
+            AgentQuotaProviderId.agy,
           ],
           unpinnedQuotaKeys: <String>['antigravity'],
         ),
@@ -152,7 +152,7 @@ void main() {
             windows: <AgentQuotaWindow>[_window('Weekly', 40)],
           ),
           _snapshot(
-            provider: .antigravity,
+            provider: .agy,
             buckets: <AgentQuotaBucket>[_bucket('Gemini Models - Weekly', 15)],
           ),
         ],
@@ -168,10 +168,7 @@ void main() {
     await tester.tap(find.byTooltip('Pin To Status Bar'));
     await tester.pumpAndSettle();
 
-    expect(toggles, <(String, bool)>[
-      ('claude:default', false),
-      ('antigravity', true),
-    ]);
+    expect(toggles, <(String, bool)>[('claude:default', false), ('agy', true)]);
   });
 
   testWidgets('opens usage from the quota overview action', (tester) async {
@@ -229,7 +226,7 @@ void main() {
     var settings = const AgentQuotaHostSettings(
       enabledProviders: <AgentQuotaProviderId>[
         AgentQuotaProviderId.claude,
-        AgentQuotaProviderId.antigravity,
+        AgentQuotaProviderId.agy,
       ],
     );
     final snapshots = <AgentQuotaSnapshot>[
@@ -238,7 +235,7 @@ void main() {
         windows: <AgentQuotaWindow>[_window('Weekly', 40)],
       ),
       _snapshot(
-        provider: .antigravity,
+        provider: .agy,
         buckets: <AgentQuotaBucket>[_bucket('Gemini Models - Weekly', 15)],
       ),
     ];
@@ -301,7 +298,7 @@ void main() {
         settings: const AgentQuotaHostSettings(
           enabledProviders: <AgentQuotaProviderId>[
             AgentQuotaProviderId.claude,
-            AgentQuotaProviderId.antigravity,
+            AgentQuotaProviderId.agy,
           ],
           unpinnedQuotaKeys: <String>['antigravity'],
         ),
@@ -311,7 +308,7 @@ void main() {
             windows: <AgentQuotaWindow>[_window('Weekly', 40)],
           ),
           _snapshot(
-            provider: .antigravity,
+            provider: .agy,
             buckets: <AgentQuotaBucket>[_bucket('Gemini Models - Weekly', 15)],
           ),
         ],

@@ -6,7 +6,7 @@ Widget _wrap({
   AgentQuotaHostSettings settings = const AgentQuotaHostSettings(
     enabledProviders: <AgentQuotaProviderId>[
       AgentQuotaProviderId.claude,
-      AgentQuotaProviderId.antigravity,
+      AgentQuotaProviderId.agy,
     ],
   ),
   AgentQuotaPinToggle? onTogglePinned,

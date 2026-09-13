@@ -1,18 +1,19 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::sync::{mpsc, Arc};
+use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use alera_core::agent_descriptor::canonical_agent_id;
 use alera_core::process_shell::windowless_async_shell_command;
 use alera_core::runtime::RuntimeStore;
-use anyhow::{anyhow, Context, Result};
-use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+use anyhow::{Context, Result, anyhow};
+use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use regex::Regex;
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader as AsyncBufReader};
 use tokio::sync::Semaphore;
@@ -27,6 +28,19 @@ const PTY_TIMEOUT: Duration = Duration::from_secs(18);
 const SESSION_WINDOW_MINUTES: i64 = 300;
 const WEEKLY_WINDOW_MINUTES: i64 = 10_080;
 const AGENT_QUOTA_CLI_CONCURRENCY: usize = 2;
+
+fn canonical_quota_provider_id(provider: &str) -> &str {
+    canonical_agent_id(provider).unwrap_or(provider)
+}
+
+fn canonicalize_quota_provider_ids(providers: Vec<String>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    providers
+        .into_iter()
+        .map(|provider| canonical_quota_provider_id(&provider).to_string())
+        .filter(|provider| seen.insert(provider.clone()))
+        .collect()
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -253,14 +267,14 @@ pub(crate) async fn fetch_agent_quotas(payload: Value) -> Result<Value> {
             "kimi".to_string(),
             "grok".to_string(),
             "cursor".to_string(),
-            "antigravity".to_string(),
+            "agy".to_string(),
             "minimax".to_string(),
             "zai".to_string(),
             "devin".to_string(),
             "opencode".to_string(),
         ]
     } else {
-        request.providers.clone()
+        canonicalize_quota_provider_ids(request.providers)
     };
 
     let cli_permits = Arc::new(Semaphore::new(AGENT_QUOTA_CLI_CONCURRENCY));
@@ -294,11 +308,11 @@ pub(crate) async fn fetch_agent_quotas(payload: Value) -> Result<Value> {
             "cursor" => {
                 tasks.spawn(fetch_cursor());
             }
-            "antigravity" => {
+            "agy" => {
                 let permits = Arc::clone(&cli_permits);
                 tasks.spawn(async move {
                     let _permit = permits.acquire_owned().await.ok();
-                    fetch_tui_provider("antigravity", "Antigravity", "agy", "/usage").await
+                    fetch_tui_provider("agy", "Antigravity", "agy", "/usage").await
                 });
             }
             "minimax" => {

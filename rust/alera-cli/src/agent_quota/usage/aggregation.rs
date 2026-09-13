@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashSet};
 
 use chrono::{Local, TimeZone};
 
-use super::pricing::{price_usage, RateTable};
+use super::pricing::{RateTable, price_usage};
 use super::transcripts::UsageRecord;
 use super::{UsageBucket, UsageCostSource, UsageProvider, UsageTokenTotals};
 

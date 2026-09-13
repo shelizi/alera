@@ -19,7 +19,7 @@ class const AgentQuotaProviderIcon({
       AgentQuotaProviderId.grok => AgentType.grok,
       AgentQuotaProviderId.cursor => AgentType.cursor,
       AgentQuotaProviderId.devin => AgentType.devin,
-      AgentQuotaProviderId.antigravity => AgentType.agy,
+      AgentQuotaProviderId.agy => AgentType.agy,
       AgentQuotaProviderId.opencode => AgentType.opencode,
       _ => null,
     };

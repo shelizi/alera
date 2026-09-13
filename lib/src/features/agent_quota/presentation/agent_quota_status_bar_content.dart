@@ -139,7 +139,11 @@ class const AgentQuotaStatusBarContent({
   List<AgentQuotaSnapshot> _pinnedSnapshots(List<AgentQuotaSnapshot> enabled) {
     return <AgentQuotaSnapshot>[
       for (final snapshot in enabled)
-        if (!settings.unpinnedQuotaKeys.contains(snapshot.pinKey)) snapshot,
+        if (settings.isQuotaPinned(
+          snapshot.provider,
+          claudeAccountId: snapshot.accountId,
+        ))
+          snapshot,
     ];
   }
 

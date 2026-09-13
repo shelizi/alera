@@ -4,20 +4,12 @@ async fn fetch_tui_provider(
     command: &str,
     slash_command: &str,
 ) -> QuotaSnapshot {
-    let completion = if provider == "antigravity" {
-        TuiCompletion::Antigravity
+    let completion = if provider == "agy" {
+        TuiCompletion::Agy
     } else {
         TuiCompletion::Generic
     };
-    match run_tui_command(
-        command,
-        &[],
-        slash_command,
-        BTreeMap::new(),
-        completion,
-    )
-    .await
-    {
+    match run_tui_command(command, &[], slash_command, BTreeMap::new(), completion).await {
         Ok(output) => parse_tui_snapshot(provider, "default", display_name, &output),
         Err(error) => command_error_snapshot(provider, "default", display_name, error),
     }
@@ -40,7 +32,7 @@ fn command_error_snapshot(
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum TuiCompletion {
     Generic,
-    Antigravity,
+    Agy,
 }
 
 /// How long to wait for the TUI's prompt before sending the slash command.
@@ -220,8 +212,7 @@ async fn run_tui_command(
                         output.drain(..output.len() - 200_000);
                     }
                     if !trust_confirmed {
-                        let clean =
-                            strip_terminal_sequences(&String::from_utf8_lossy(&output));
+                        let clean = strip_terminal_sequences(&String::from_utf8_lossy(&output));
                         if tui_requests_folder_trust(&clean) {
                             let _ = writer.write_all(b"\r");
                             let _ = writer.flush();
@@ -236,9 +227,9 @@ async fn run_tui_command(
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     let settled = match completion {
-                        TuiCompletion::Antigravity => {
+                        TuiCompletion::Agy => {
                             last_data.elapsed() > Duration::from_millis(300)
-                                && antigravity_usage_complete(&String::from_utf8_lossy(&output))
+                                && agy_usage_complete(&String::from_utf8_lossy(&output))
                         }
                         TuiCompletion::Generic => {
                             started.elapsed() > Duration::from_secs(4)
@@ -262,14 +253,14 @@ async fn run_tui_command(
     .context("Quota PTY task failed")?
 }
 
-fn antigravity_usage_complete(output: &str) -> bool {
+fn agy_usage_complete(output: &str) -> bool {
     const EXPECTED_BUCKETS: [&str; 4] = [
         "Gemini Models - Weekly",
         "Gemini Models - 5 Hour",
         "Claude And GPT Models - Weekly",
         "Claude And GPT Models - 5 Hour",
     ];
-    let snapshot = parse_tui_snapshot("antigravity", "default", "Antigravity", output);
+    let snapshot = parse_tui_snapshot("agy", "default", "Antigravity", output);
     snapshot.status == "ok"
         && EXPECTED_BUCKETS.iter().all(|expected| {
             snapshot
@@ -303,15 +294,15 @@ fn parse_tui_snapshot(
         } else if lower.contains("weekly limit") {
             current_label = Some("Weekly".to_string());
         }
-        if provider == "antigravity" {
-            if let Some(group) = antigravity_group_name(&line) {
+        if provider == "agy" {
+            if let Some(group) = agy_group_name(&line) {
                 current_group = Some(group);
                 last_bucket_name = None;
                 continue;
             }
         }
         let Some(captures) = percent_re.captures(&line) else {
-            if provider == "antigravity" {
+            if provider == "agy" {
                 if let (Some(name), Some(description)) = (
                     last_bucket_name.as_deref(),
                     extract_reset_description(&line),
@@ -333,7 +324,7 @@ fn parse_tui_snapshot(
             .unwrap_or_default();
         let used_percent = if suffix == "used" {
             raw_percent
-        } else if suffix == "left" || suffix == "remaining" || provider == "antigravity" {
+        } else if suffix == "left" || suffix == "remaining" || provider == "agy" {
             100.0 - raw_percent
         } else {
             raw_percent
@@ -354,7 +345,7 @@ fn parse_tui_snapshot(
             None
         };
         let reset_description = extract_reset_description(&line);
-        if provider == "antigravity" {
+        if provider == "agy" {
             let label = current_label.clone().unwrap_or_else(|| "Quota".to_string());
             let name = current_group
                 .as_ref()
@@ -408,19 +399,20 @@ fn parse_tui_snapshot(
     QuotaSnapshot::ok(provider, account_id, display_name, windows, buckets)
 }
 
-fn antigravity_group_name(line: &str) -> Option<String> {
+fn agy_group_name(line: &str) -> Option<String> {
     let words = line
         .split(|value: char| !value.is_ascii_alphanumeric())
         .filter(|value| !value.is_empty())
         .collect::<Vec<_>>();
-    if words.last().is_none_or(|word| !word.eq_ignore_ascii_case("models")) {
+    if words
+        .last()
+        .is_none_or(|word| !word.eq_ignore_ascii_case("models"))
+    {
         return None;
     }
     let normalized = words.join(" ");
     let lower = normalized.to_lowercase();
-    if lower == "gemini models"
-        || lower == "claude and gpt models"
-        || lower == "claude gpt models"
+    if lower == "gemini models" || lower == "claude and gpt models" || lower == "claude gpt models"
     {
         return Some(title_case_words(&normalized));
     }

@@ -20,7 +20,7 @@ void main() {
         settings: const AgentQuotaHostSettings(
           enabledProviders: <AgentQuotaProviderId>[
             AgentQuotaProviderId.claude,
-            AgentQuotaProviderId.antigravity,
+            AgentQuotaProviderId.agy,
           ],
           claudeProfiles: <ClaudeQuotaProfileSettings>[
             ClaudeQuotaProfileSettings(alias: 'cc41', profile: 'sonnet41'),
@@ -49,7 +49,7 @@ void main() {
             windows: <AgentQuotaWindow>[_window('Weekly', 50)],
           ),
           _snapshot(
-            provider: .antigravity,
+            provider: .agy,
             buckets: <AgentQuotaBucket>[
               _bucket('Gemini Models - 5 Hour', 10),
               _bucket(
@@ -205,7 +205,7 @@ void main() {
       _wrap(
         settings: const AgentQuotaHostSettings(
           enabledProviders: <AgentQuotaProviderId>[
-            AgentQuotaProviderId.antigravity,
+            AgentQuotaProviderId.agy,
             AgentQuotaProviderId.claude,
           ],
         ),
@@ -215,7 +215,7 @@ void main() {
             windows: <AgentQuotaWindow>[_window('Weekly', 40)],
           ),
           _snapshot(
-            provider: .antigravity,
+            provider: .agy,
             buckets: <AgentQuotaBucket>[_bucket('Gemini Models - Weekly', 15)],
           ),
         ],
@@ -236,7 +236,7 @@ void main() {
         settings: const AgentQuotaHostSettings(
           enabledProviders: <AgentQuotaProviderId>[
             AgentQuotaProviderId.claude,
-            AgentQuotaProviderId.antigravity,
+            AgentQuotaProviderId.agy,
           ],
           claudeProfiles: <ClaudeQuotaProfileSettings>[
             ClaudeQuotaProfileSettings(alias: 'ccdev', profile: 'dev'),
@@ -255,7 +255,7 @@ void main() {
             error: 'OAuth Unavailable',
           ),
           _snapshot(
-            provider: .antigravity,
+            provider: .agy,
             status: .error,
             error: 'TUI Failed',
             buckets: <AgentQuotaBucket>[_bucket('Gemini Models - Weekly', 15)],
@@ -357,7 +357,7 @@ void main() {
         settings: const AgentQuotaHostSettings(
           enabledProviders: <AgentQuotaProviderId>[
             AgentQuotaProviderId.claude,
-            AgentQuotaProviderId.antigravity,
+            AgentQuotaProviderId.agy,
           ],
         ),
         snapshots: <AgentQuotaSnapshot>[
@@ -366,7 +366,7 @@ void main() {
             windows: <AgentQuotaWindow>[_window('Weekly', 40)],
           ),
           _snapshot(
-            provider: .antigravity,
+            provider: .agy,
             buckets: <AgentQuotaBucket>[_bucket('Gemini Models - Weekly', 15)],
           ),
         ],
@@ -404,13 +404,11 @@ void main() {
     await tester.pumpWidget(
       _wrap(
         settings: const AgentQuotaHostSettings(
-          enabledProviders: <AgentQuotaProviderId>[
-            AgentQuotaProviderId.antigravity,
-          ],
+          enabledProviders: <AgentQuotaProviderId>[AgentQuotaProviderId.agy],
         ),
         snapshots: <AgentQuotaSnapshot>[
           _snapshot(
-            provider: .antigravity,
+            provider: .agy,
             buckets: <AgentQuotaBucket>[_bucket('Gemini Models - Weekly', 15)],
           ),
         ],
