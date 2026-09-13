@@ -2,19 +2,19 @@
 
 This table answers the eight transaction/replay questions from the architecture refactor handoff (section 13) for every `orchestration.*` request handled by `ServerActor`. It is the contract surface that dispatch, replay, and recovery tests pin down; when an operation's behavior changes, update the table and the tests together.
 
-Authority for all rows is `ServerActor` on the terminal-host mailbox, persisting through `RuntimeStore`. No operation currently accepts a client-supplied idempotency key; replay safety comes from state-transition guards and the stored `contextToken` hash, not from dedupe tables.
+Authority for all rows is `ServerActor` on the terminal-host mailbox, persisting through `RuntimeStore`. `send`, `reply`, `ask`, and `escalate` accept an optional client-supplied `clientMutationId`; other operations rely on state-transition guards and the stored `contextToken` hash for replay safety.
 
 ## Messages
 
 | Operation | Instance check | Replay | Same id + different payload | Commit vs publish | Lost reply retry | Restart recovery | Stale owner / wrong actor |
 |---|---|---|---|---|---|---|---|
-| `send` | Recipients must resolve; lifecycle types rejected | Not deduplicated; each call inserts a new row | n/a (no op id) | Insert, then deliver + wake waiters + broadcast | Duplicates the message | Persisted rows survive; waiters are in-memory | Group fan-out shares one thread id |
-| `reply` | `id` must name an existing message | Marks original read, inserts a new row each call | n/a | Mark read + insert reply, then deliver + wake | Duplicates the reply | Persisted | Reply direction fixed to the original sender |
-| `ask` | Single handle required; group addresses rejected | Not deduplicated | n/a | Insert question, then park waiter | Duplicates the question | Waiter lost; message persists | `from` rerouted to the active dispatch's coordinator when one exists |
+| `send` | Recipients must resolve; lifecycle types rejected | Without a key, each call inserts a row; with the same key and payload, replay returns the stored result | Typed state conflict for the same key with a different payload | Insert, then deliver + wake waiters + broadcast, then settle the receipt | Replays without duplicating the message | Persisted rows and receipts survive; waiters are in-memory | Group fan-out shares one thread id |
+| `reply` | `id` must name an existing message | Without a key, each call inserts a reply; with the same key and payload, replay returns the stored result | Typed state conflict for the same key with a different payload | Mark read + insert reply, then deliver + wake, then settle the receipt | Replays without duplicating the reply | Persisted message and receipt rows | Reply direction fixed to the original sender |
+| `ask` | Single handle required; group addresses rejected | Receipt is pending while parked; after answer or timeout, the same key and payload replays the stored result | Typed state conflict for the same key with a different payload; a duplicate while pending returns an in-progress state error | Insert question, park waiter, then settle the receipt on answer or timeout | Replays the answer or timeout without duplicating the question | Message and receipt are persisted; waiter is in-memory and restart loses the waiter | `from` rerouted to the active dispatch's coordinator when one exists |
 | `check` | `terminal` required | Read; `--all` never mutates | n/a | Consume marks read inside the read path | Safe; read side effect is monotonic | Persisted read state | Waiter wakes only for the registered handle |
 | `inbox` | none | Read | n/a | Read only | Safe | Persisted | n/a |
 
-Gap: `send`, `reply`, `ask`, and `escalate` have no idempotency key, so a retry after a lost reply writes a duplicate row. This is accepted for now (humans and agents tolerate duplicate mail) but is the first candidate if a client op id is ever added.
+Gap: fixed for `send`, `reply`, `ask`, and `escalate` with optional `clientMutationId` receipts. No key preserves the existing behavior. The same key and payload replay the stored result, a different payload returns a typed state conflict, and a duplicate while the first call is active returns an in-progress state error. Ask keeps its receipt pending across the long-poll, settles it with the exact answer or timeout payload, removes it on setup or resolution failure, and leaves it pending until retention expiry if client disconnect drops the waiter.
 
 ## Tasks
 
@@ -43,7 +43,7 @@ Gap: `dispatch` has no client op id, so a retry after a lost prepare-phase error
 |---|---|---|---|---|---|---|---|
 | `context` | Active dispatch + valid token | Read | Wrong token rejected | Read only (may compose the task prompt) | Safe | Persisted | Token guard + active dispatch lookup |
 | `heartbeat` | Active dispatch + valid token; store only records activity while `dispatched` | Rejected once the dispatch is inactive | Wrong token rejected | Single UPDATE | Typed `heartbeat rejected for inactive dispatch` | Inactive after restart sweep | Token guard + `dispatched` status check |
-| `escalate` | Active dispatch + valid token | Inserts a new escalation row per call | n/a | Insert message + record activity, then push + wake coordinator | Duplicates the escalation | Persisted | Assignee fixed to the dispatch owner; `from` is rewritten to the assignee |
+| `escalate` | Active dispatch + valid token | Without a key, each call inserts a row; with the same key and payload, replay returns the stored result | Typed state conflict for the same key with a different payload | Insert message + record activity, then push + wake coordinator, then settle the receipt | Replays without duplicating the escalation | Persisted message and receipt rows | Assignee fixed to the dispatch owner; `from` is rewritten to the assignee |
 | `complete` | Active dispatch, or the latest completed dispatch for replay; valid token; result must match the task's result schema | Idempotent: replay on a completed dispatch returns the stored outcome without re-running the terminal policy | A replayed `failure` after a success, or a replay under a newer dispatch's token, is rejected | Completion + task transition in one store transaction; terminal policy applied after | Safe; replay returns the committed dispatch id | Persisted | `dispatch completion rejected: inactive context or wrong assignee`; stale token rejected |
 | `workerDone` | Dispatch id + task id + terminal must all match the stored dispatch | Idempotent through the same store transition | n/a | Same transition as `complete` | Safe | Persisted | `worker-done authority rejected` when any of the three ids disagree |
 
@@ -61,4 +61,4 @@ Gap: `dispatch` has no client op id, so a retry after a lost prepare-phase error
 
 | Mechanism | Contract |
 |---|---|
-| `check --wait` / `ask` / `terminalWait` / `taskWait` | Parked as `MessageWaiter` entries keyed by `(client_id, request_id)`; each gets a spawned timeout that posts `OrchestrationWaitTimeout` back to the actor. A wake that races another consumer re-parks the same waiter id so the original deadline still expires it. Client disconnect drops its waiters. Waiters are in-memory only: a host restart silently drops them, and the client must retry. |
+| `check --wait` / `ask` / `terminalWait` / `taskWait` | Parked as `MessageWaiter` entries keyed by `(client_id, request_id)`; each gets a spawned timeout that posts `OrchestrationWaitTimeout` back to the actor. A wake that races another consumer re-parks the same waiter id so the original deadline still expires it. Client disconnect drops its waiters; a keyed ask's external pending receipt association remains until retention expiry because disconnect has no resolution hook. Waiters are in-memory only: a host restart silently drops them, and the client must retry. |
