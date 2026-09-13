@@ -413,12 +413,12 @@ impl ServerActor {
         command: String,
     ) -> HostResult<()> {
         let inbox = self.inbox.clone();
-        self.deferred_admission.schedule(
+        self.deferred_admission.schedule_delayed(
+            std::time::Duration::from_millis(STARTUP_INPUT_DELAY_MS),
             DeferredRequestClass::Maintenance,
             "terminal.startup.input",
             None,
             async move {
-                tokio::time::sleep(std::time::Duration::from_millis(STARTUP_INPUT_DELAY_MS)).await;
                 let _ = inbox.send(ServerCommand::TerminalStartupInput {
                     session_id,
                     session_instance_id,
@@ -469,12 +469,12 @@ impl ServerActor {
         session_instance_id: u64,
     ) -> HostResult<()> {
         let inbox = self.inbox.clone();
-        self.deferred_admission.schedule(
+        self.deferred_admission.schedule_delayed(
+            std::time::Duration::from_millis(STARTUP_SUBMIT_DELAY_MS),
             DeferredRequestClass::Maintenance,
             "terminal.startup.submit",
             None,
             async move {
-                tokio::time::sleep(std::time::Duration::from_millis(STARTUP_SUBMIT_DELAY_MS)).await;
                 let _ = inbox.send(ServerCommand::TerminalStartupSubmit {
                     session_id,
                     session_instance_id,
