@@ -57,7 +57,7 @@ mod worktree_include;
 mod worktree_setup;
 mod worktree_setup_script;
 use std::future::Future;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use alera_core::runtime::{
@@ -111,6 +111,10 @@ fn main() {
             });
         }
     };
+    if matches!(&cli.command, Command::ExportAgentDescriptors) {
+        print_agent_descriptor_snapshot();
+        return;
+    }
     let runtime = match cli_async_runtime::build(&cli.command) {
         Ok(runtime) => runtime,
         Err(error) => {
@@ -125,6 +129,10 @@ async fn run(cli: Cli) -> i32 {
     match cli.command {
         Command::RuntimeHost(args) => runtime_host_command::run(args).await,
         Command::AutomationHost(args) => runtime_host_command::run_automation_host(args).await,
+        Command::ExportAgentDescriptors => {
+            print_agent_descriptor_snapshot();
+            0
+        }
         Command::RuntimeProxy => agent_quota::run_runtime_proxy().await,
         Command::Version(command) => run_version_command(command).await,
         Command::TerminalHost(args) => runtime_host_command::run(args).await,
@@ -143,6 +151,13 @@ async fn run(cli: Cli) -> i32 {
             orchestration_commands::run_orchestration_command(command).await
         }
     }
+}
+
+fn print_agent_descriptor_snapshot() {
+    let snapshot = alera_core::agent_descriptor::snapshot_dart::emit();
+    std::io::stdout()
+        .write_all(snapshot.as_bytes())
+        .expect("failed to write agent descriptor snapshot");
 }
 
 async fn run_terminal_command(command: TerminalCommand) -> i32 {

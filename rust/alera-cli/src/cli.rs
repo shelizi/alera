@@ -38,6 +38,9 @@ pub enum Command {
     /// Start the automation host from a native user-login entry.
     #[command(name = "automation-host", hide = true)]
     AutomationHost(AutomationHostArgs),
+    /// Export the Rust agent descriptor table for Dart consumers.
+    #[command(name = "export-agent-descriptors", hide = true)]
+    ExportAgentDescriptors,
     RuntimeProxy,
     /// Run the persistent terminal host sidecar.
     #[command(name = TERMINAL_HOST_COMMAND)]

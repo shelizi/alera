@@ -1,5 +1,12 @@
-use super::{AgentDescriptor, AgentHookStrategy, AgentModelOverride, AgentRiskRule,
-    AgentStartupPrompt, AgentStatusStrategy};
+use super::launch_specs::{
+    AGY_LAUNCH_SPEC, AMP_LAUNCH_SPEC, CLAUDE_LAUNCH_SPEC, CODEX_LAUNCH_SPEC, COPILOT_LAUNCH_SPEC,
+    CURSOR_LAUNCH_SPEC, DEVIN_LAUNCH_SPEC, FX_LAUNCH_SPEC, GROK_LAUNCH_SPEC, OPENCODE2_LAUNCH_SPEC,
+    OPENCODE_LAUNCH_SPEC, PI_LAUNCH_SPEC,
+};
+use super::{
+    AgentDescriptor, AgentHookStrategy, AgentModelOverride, AgentRiskRule, AgentStartupPrompt,
+    AgentStatusStrategy,
+};
 
 const CTRL_C: &[u8] = b"\x03";
 
@@ -182,6 +189,7 @@ pub const AGENT_DESCRIPTORS: &[AgentDescriptor] = &[
             "This profile will bypass Codex approvals and sandbox protections.",
         ),
         risk_rules: CODEX_RISK_RULES,
+        launch_spec: CODEX_LAUNCH_SPEC,
     },
     AgentDescriptor {
         id: "claude",
@@ -201,6 +209,7 @@ pub const AGENT_DESCRIPTORS: &[AgentDescriptor] = &[
         risk_warning: "This profile lets Claude continue with reduced permission prompts.",
         risk_warning_severe: None,
         risk_rules: CLAUDE_RISK_RULES,
+        launch_spec: CLAUDE_LAUNCH_SPEC,
     },
     AgentDescriptor {
         id: "copilot",
@@ -217,10 +226,10 @@ pub const AGENT_DESCRIPTORS: &[AgentDescriptor] = &[
         model_override: AgentModelOverride::Supported,
         supports_persona: true,
         supports_ccs_profile: false,
-        risk_warning:
-            "This profile lets Copilot take broader actions with less supervision.",
+        risk_warning: "This profile lets Copilot take broader actions with less supervision.",
         risk_warning_severe: None,
         risk_rules: COPILOT_RISK_RULES,
+        launch_spec: COPILOT_LAUNCH_SPEC,
     },
     AgentDescriptor {
         id: "cursor",
@@ -237,10 +246,10 @@ pub const AGENT_DESCRIPTORS: &[AgentDescriptor] = &[
         model_override: AgentModelOverride::Supported,
         supports_persona: false,
         supports_ccs_profile: false,
-        risk_warning:
-            "This profile reduces Cursor review, sandbox, or trust protections.",
+        risk_warning: "This profile reduces Cursor review, sandbox, or trust protections.",
         risk_warning_severe: None,
         risk_rules: CURSOR_RISK_RULES,
+        launch_spec: CURSOR_LAUNCH_SPEC,
     },
     AgentDescriptor {
         id: "agy",
@@ -260,6 +269,7 @@ pub const AGENT_DESCRIPTORS: &[AgentDescriptor] = &[
         risk_warning: "This profile lets Antigravity skip permission checks.",
         risk_warning_severe: None,
         risk_rules: AGY_RISK_RULES,
+        launch_spec: AGY_LAUNCH_SPEC,
     },
     AgentDescriptor {
         id: "opencode",
@@ -279,6 +289,7 @@ pub const AGENT_DESCRIPTORS: &[AgentDescriptor] = &[
         risk_warning: "This profile lets OpenCode approve actions automatically.",
         risk_warning_severe: None,
         risk_rules: OPENCODE_RISK_RULES,
+        launch_spec: OPENCODE_LAUNCH_SPEC,
     },
     AgentDescriptor {
         // OpenCode 2 installs as `opencode2` beside v1's `opencode`.
@@ -299,6 +310,7 @@ pub const AGENT_DESCRIPTORS: &[AgentDescriptor] = &[
         risk_warning: "This profile lets OpenCode approve actions automatically.",
         risk_warning_severe: None,
         risk_rules: OPENCODE_RISK_RULES,
+        launch_spec: OPENCODE2_LAUNCH_SPEC,
     },
     AgentDescriptor {
         id: "pi",
@@ -318,6 +330,7 @@ pub const AGENT_DESCRIPTORS: &[AgentDescriptor] = &[
         risk_warning: "This profile pre-approves project trust for Pi.",
         risk_warning_severe: None,
         risk_rules: PI_RISK_RULES,
+        launch_spec: PI_LAUNCH_SPEC,
     },
     AgentDescriptor {
         id: "amp",
@@ -337,6 +350,7 @@ pub const AGENT_DESCRIPTORS: &[AgentDescriptor] = &[
         risk_warning: "",
         risk_warning_severe: None,
         risk_rules: NO_RISK_RULES,
+        launch_spec: AMP_LAUNCH_SPEC,
     },
     AgentDescriptor {
         id: "grok",
@@ -353,10 +367,10 @@ pub const AGENT_DESCRIPTORS: &[AgentDescriptor] = &[
         model_override: AgentModelOverride::Supported,
         supports_persona: true,
         supports_ccs_profile: false,
-        risk_warning:
-            "This profile lets Grok Build continue with reduced permission prompts.",
+        risk_warning: "This profile lets Grok Build continue with reduced permission prompts.",
         risk_warning_severe: None,
         risk_rules: GROK_RISK_RULES,
+        launch_spec: GROK_LAUNCH_SPEC,
     },
     AgentDescriptor {
         id: "devin",
@@ -373,10 +387,10 @@ pub const AGENT_DESCRIPTORS: &[AgentDescriptor] = &[
         model_override: AgentModelOverride::Supported,
         supports_persona: false,
         supports_ccs_profile: false,
-        risk_warning:
-            "This profile lets Devin take broader actions with less supervision.",
+        risk_warning: "This profile lets Devin take broader actions with less supervision.",
         risk_warning_severe: None,
         risk_rules: DEVIN_RISK_RULES,
+        launch_spec: DEVIN_LAUNCH_SPEC,
     },
     AgentDescriptor {
         id: "fx",
@@ -396,5 +410,6 @@ pub const AGENT_DESCRIPTORS: &[AgentDescriptor] = &[
         risk_warning: "",
         risk_warning_severe: None,
         risk_rules: NO_RISK_RULES,
+        launch_spec: FX_LAUNCH_SPEC,
     },
 ];
