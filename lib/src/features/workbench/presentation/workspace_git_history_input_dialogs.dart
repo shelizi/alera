@@ -26,6 +26,23 @@ Future<GitHistoryTagInput?> showGitHistoryTagInputDialog(BuildContext context) {
   );
 }
 
+/// Asks for the local branch a new linked worktree should check out.
+/// [initialValue] prefills remote-branch and tag sources; commits start empty.
+Future<String?> showGitHistoryWorktreeInputDialog(
+  BuildContext context, {
+  String initialValue = '',
+}) {
+  return showDialog<String>(
+    context: context,
+    builder: (_) => _GitHistorySingleInputDialog(
+      title: 'Create Worktree',
+      labelText: 'Branch Name',
+      confirmLabel: 'Create Worktree',
+      initialValue: initialValue,
+    ),
+  );
+}
+
 Future<String?> showGitHistoryArchiveInputDialog(
   BuildContext context, {
   required String initialPath,

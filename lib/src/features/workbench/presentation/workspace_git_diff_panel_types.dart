@@ -19,6 +19,9 @@ String _messageFor(Object? error) {
   if (error is AiAssistException) {
     return error.message;
   }
+  if (error is WorkspaceException) {
+    return error.toString();
+  }
   if (error is GitException && error.context.trim().isNotEmpty) {
     return error.context;
   }

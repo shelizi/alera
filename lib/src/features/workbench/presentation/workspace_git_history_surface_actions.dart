@@ -23,6 +23,7 @@ extension _WorkspaceGitHistorySurfaceActions
       path: _sourceControlScope.path,
       currentBranchName: _currentRef?.name,
       onMutationSuccess: _refreshAfterGitHistoryMutation,
+      onCreateWorktree: _createWorktreeFromHistory,
     );
     if (handled || !mounted) {
       return;
@@ -44,6 +45,7 @@ extension _WorkspaceGitHistorySurfaceActions
         await _resetToCommit(item, GitResetMode.hard);
       case GitHistoryCommitMenuAction.addTag:
       case GitHistoryCommitMenuAction.createBranch:
+      case GitHistoryCommitMenuAction.openInWorktree:
       case GitHistoryCommitMenuAction.cherryPick:
       case GitHistoryCommitMenuAction.dropCommit:
       case GitHistoryCommitMenuAction.mergeIntoCurrentBranch:
@@ -264,7 +266,50 @@ extension _WorkspaceGitHistorySurfaceActions
       onCopyName: _copyCommitText,
       onPull: () => _withSourceControl((notifier) => notifier.pull()),
       onMutationSuccess: _refreshAfterHistoryMutation,
+      onCreateWorktree: _createWorktreeFromHistory,
       errorMessage: (error) => error.toString(),
+    );
+  }
+
+  /// Creates a linked-worktree workspace through the catalog owner so the
+  /// result lands in the workspace graph and is selected like any workspace
+  /// created from the sidebar flow.
+  Future<void> _createWorktreeFromHistory({
+    required String sourceBranch,
+    required String newBranchName,
+    required bool reuseExistingBranch,
+  }) async {
+    final project = ref
+        .read(workbenchControllerProvider)
+        .projects
+        .where((candidate) => candidate.id == widget.workspace.projectId)
+        .firstOrNull;
+    if (project == null) {
+      if (mounted) {
+        AleraToast.show(
+          context,
+          message: 'Could not create a worktree: project not found',
+          tone: .error,
+        );
+      }
+      return;
+    }
+    await ref
+        .read(workbenchControllerProvider.notifier)
+        .createWorkspace(
+          project: project,
+          sourceBranch: sourceBranch,
+          newBranchName: newBranchName,
+          reuseExistingBranch: reuseExistingBranch,
+          name: newBranchName,
+        );
+    if (!mounted) {
+      return;
+    }
+    AleraToast.show(
+      context,
+      message: 'Created workspace $newBranchName',
+      tone: .success,
     );
   }
 

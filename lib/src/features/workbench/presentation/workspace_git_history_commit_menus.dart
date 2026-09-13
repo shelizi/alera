@@ -1,4 +1,6 @@
 import 'package:alera/src/features/ai_assist/application/ai_assist_errors.dart';
+import 'package:alera/src/features/workbench/application/workspace_service.dart';
+import 'package:alera/src/features/workbench/presentation/workspace_git_history_ref_actions.dart';
 import 'package:alera/src/design_system/feedback/alera_toast.dart';
 import 'package:alera/src/design_system/layout/alera_confirm_dialog.dart';
 import 'package:alera/src/shared/infra/git/git_backend.dart';
@@ -16,6 +18,7 @@ enum GitHistoryCommitMenuAction {
   copySubject,
   addTag,
   createBranch,
+  openInWorktree,
   checkoutCommit,
   cherryPick,
   revertCommit,
@@ -38,6 +41,7 @@ Future<bool> runGitHistoryCommitMenuAction({
   required String path,
   required String? currentBranchName,
   required Future<void> Function() onMutationSuccess,
+  required GitHistoryCreateWorktree onCreateWorktree,
 }) async {
   switch (action) {
     case GitHistoryCommitMenuAction.addTag:
@@ -71,6 +75,18 @@ Future<bool> runGitHistoryCommitMenuAction({
         successMessage: () =>
             'Created branch $branch at ${gitHistoryItemShortId(item)}',
         onMutationSuccess: onMutationSuccess,
+      );
+    case GitHistoryCommitMenuAction.openInWorktree:
+      await runGitHistoryOpenInWorktree(
+        context: context,
+        backend: backend,
+        path: path,
+        sourceRef: item.id,
+        promptForBranch: true,
+        createBranchAtRef: true,
+        onCreateWorktree: onCreateWorktree,
+        onMutationSuccess: onMutationSuccess,
+        errorMessage: gitHistoryErrorMessage,
       );
     case GitHistoryCommitMenuAction.cherryPick:
       await _runGitHistoryMutation(
@@ -233,6 +249,9 @@ String gitHistoryErrorMessage(Object error) {
   }
   if (error is GitConflictException) {
     return 'Resolve conflicts before continuing.';
+  }
+  if (error is WorkspaceException) {
+    return error.toString();
   }
   if (error is AiAssistException) {
     return error.message;

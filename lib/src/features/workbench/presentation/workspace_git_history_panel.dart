@@ -1,4 +1,5 @@
 part of 'workspace_git_diff_panel.dart';
+
 extension _WorkspaceGitHistoryPanelOwnerBinding on _WorkspaceGitDiffPanelState {
   void _onGitHistoryChanged() {
     if (mounted) {
@@ -6,7 +7,9 @@ extension _WorkspaceGitHistoryPanelOwnerBinding on _WorkspaceGitDiffPanelState {
     }
   }
 }
+
 enum _GitHistoryPanelStatus { idle, loading, ready, error }
+
 class const _GitHistoryPanelLoadState._({
   required final _GitHistoryPanelStatus status,
   final GitHistoryResult? result,
@@ -21,8 +24,9 @@ class const _GitHistoryPanelLoadState._({
     required String error,
     GitHistoryResult? result,
     bool loading = false,
-}) : this._(status: .error, result: result, error: error, loading: loading);
+  }) : this._(status: .error, result: result, error: error, loading: loading);
 }
+
 class const _GitHistoryPanel({
   required final _GitHistoryPanelLoadState state,
   required final bool collapsed,
@@ -53,6 +57,7 @@ class const _GitHistoryPanel({
   @override
   State<_GitHistoryPanel> createState() => _GitHistoryPanelState();
 }
+
 class _GitHistoryPanelState extends State<_GitHistoryPanel> {
   static const double _defaultHeight = 256;
   static const double _minHeight = 96;
@@ -74,6 +79,7 @@ class _GitHistoryPanelState extends State<_GitHistoryPanel> {
       );
     }
   }
+
   @override
   Widget build(BuildContext context) {
     final result = widget.state.result;
@@ -127,6 +133,7 @@ class _GitHistoryPanelState extends State<_GitHistoryPanel> {
       ),
     );
   }
+
   Widget _buildBody(BuildContext context) {
     final state = widget.state;
     final result = state.result;
@@ -192,11 +199,13 @@ class _GitHistoryPanelState extends State<_GitHistoryPanel> {
       ],
     );
   }
+
   void _resize(double delta) {
     setState(() {
       _height = (_height - delta).clamp(_minHeight, _maxHeight);
     });
   }
+
   void _toggleCommit(GitHistoryItem item) {
     final expanding = !_expandedCommitIds.contains(item.id);
     setState(() {
@@ -257,6 +266,7 @@ class _GitHistoryPanelState extends State<_GitHistoryPanel> {
         path: owner.widget.sourceControlScope.path,
         currentBranchName: widget.state.result?.currentRef?.name,
         onMutationSuccess: owner._refreshAfterGitHistoryMutation,
+        onCreateWorktree: owner._createWorktreeFromHistory,
       );
       if (handled || !mounted) {
         return;
@@ -279,6 +289,7 @@ class _GitHistoryPanelState extends State<_GitHistoryPanel> {
         await widget.onResetToCommit?.call(item, GitResetMode.hard);
       case GitHistoryCommitMenuAction.addTag:
       case GitHistoryCommitMenuAction.createBranch:
+      case GitHistoryCommitMenuAction.openInWorktree:
       case GitHistoryCommitMenuAction.cherryPick:
       case GitHistoryCommitMenuAction.dropCommit:
       case GitHistoryCommitMenuAction.mergeIntoCurrentBranch:
@@ -288,6 +299,7 @@ class _GitHistoryPanelState extends State<_GitHistoryPanel> {
     }
   }
 }
+
 class const _HistoryHeaderLabel({
   required final bool collapsed,
   required final int count,
@@ -326,6 +338,7 @@ class const _HistoryHeaderLabel({
     );
   }
 }
+
 class const _OpenCommitGraphButton({required final VoidCallback? onPressed})
     extends StatelessWidget {
   @override

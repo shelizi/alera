@@ -343,7 +343,49 @@ extension _WorkspaceGitDiffPanelActions on _WorkspaceGitDiffPanelState {
       onCopyName: _copyCommitText,
       onPull: () => _notifier.pull(),
       onMutationSuccess: _refreshAfterHistoryMutation,
+      onCreateWorktree: _createWorktreeFromHistory,
       errorMessage: _messageFor,
+    );
+  }
+
+  /// Creates a linked-worktree workspace through the catalog owner so the
+  /// history panel follows the same provisioning path as the sidebar flow.
+  Future<void> _createWorktreeFromHistory({
+    required String sourceBranch,
+    required String newBranchName,
+    required bool reuseExistingBranch,
+  }) async {
+    final project = ref
+        .read(workbenchControllerProvider)
+        .projects
+        .where((candidate) => candidate.id == widget.workspace.projectId)
+        .firstOrNull;
+    if (project == null) {
+      if (mounted) {
+        AleraToast.show(
+          context,
+          message: 'Could not create a worktree: project not found',
+          tone: .error,
+        );
+      }
+      return;
+    }
+    await ref
+        .read(workbenchControllerProvider.notifier)
+        .createWorkspace(
+          project: project,
+          sourceBranch: sourceBranch,
+          newBranchName: newBranchName,
+          reuseExistingBranch: reuseExistingBranch,
+          name: newBranchName,
+        );
+    if (!mounted) {
+      return;
+    }
+    AleraToast.show(
+      context,
+      message: 'Created workspace $newBranchName',
+      tone: .success,
     );
   }
 

@@ -7,6 +7,7 @@ import 'package:alera/src/features/workbench/application/workbench_repository.da
 import 'package:alera/src/features/workbench/application/workbench_state.dart';
 import 'package:alera/src/features/workbench/domain/workbench_layout.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
+import 'package:alera/src/features/workbench/domain/workspace_creation_result.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_git_history_surface.dart';
 import 'package:alera/src/shared/infra/git/git_diff_models.dart';
@@ -179,10 +180,30 @@ class GitHistorySurfaceTestWorkbenchController extends WorkbenchController {
 
   final WorkbenchState _initialState;
   Object? _switchError;
+  Object? _worktreeError;
   final List<({Project project, Workspace workspace, String branch})> switches =
       <({Project project, Workspace workspace, String branch})>[];
+  final List<
+    ({
+      Project project,
+      String sourceBranch,
+      String newBranchName,
+      bool reuseExistingBranch,
+    })
+  >
+  worktrees =
+      <
+        ({
+          Project project,
+          String sourceBranch,
+          String newBranchName,
+          bool reuseExistingBranch,
+        })
+      >[];
 
   void failSwitchesWith(Object error) => _switchError = error;
+
+  void failWorktreesWith(Object error) => _worktreeError = error;
 
   @override
   WorkbenchState build() => _initialState;
@@ -198,6 +219,40 @@ class GitHistorySurfaceTestWorkbenchController extends WorkbenchController {
       throw error;
     }
     return workspace.copyWith(branch: branch);
+  }
+
+  @override
+  Future<WorkspaceCreationResult> createWorkspace({
+    required Project project,
+    required String sourceBranch,
+    required String newBranchName,
+    bool reuseExistingBranch = false,
+    String? name,
+    String? parentWorkspaceId,
+  }) async {
+    worktrees.add((
+      project: project,
+      sourceBranch: sourceBranch,
+      newBranchName: newBranchName,
+      reuseExistingBranch: reuseExistingBranch,
+    ));
+    if (_worktreeError case final Object error) {
+      throw error;
+    }
+    return WorkspaceCreationResult(
+      workspace: Workspace(
+        id: 'workspace-$newBranchName',
+        projectId: project.id,
+        name: name ?? newBranchName,
+        branch: newBranchName,
+        path: '/tmp/$newBranchName',
+        createdAt: .utc(2026, 8, 10),
+        updatedAt: .utc(2026, 8, 10),
+        kind: .linked,
+        status: .active,
+      ),
+      setupReport: WorktreeSetupReport.empty,
+    );
   }
 }
 

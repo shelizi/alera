@@ -15,6 +15,7 @@ enum GitHistoryRefMenuAction {
   pullIntoCurrentBranch,
   pushTag,
   deleteTag,
+  openInWorktree,
   copyName,
 }
 
@@ -123,6 +124,13 @@ Future<GitHistoryRefMenuAction?> showGitHistoryRefMenuForKind(
           localizeLabel: false,
           leading: Icon(AleraIcons.archive, size: 16),
         ),
+        AleraDropdownEntry<GitHistoryRefMenuAction>(
+          value: .openInWorktree,
+          label: 'Open in New Worktree',
+          localizeLabel: false,
+          enabled: !isCurrentBranch,
+          leading: const Icon(AleraIcons.folderSpecial, size: 16),
+        ),
         const PopupMenuDivider(),
       ] else if (kind == GitHistoryRefMenuKind.remoteBranch) ...<
         PopupMenuEntry<GitHistoryRefMenuAction>
@@ -146,6 +154,12 @@ Future<GitHistoryRefMenuAction?> showGitHistoryRefMenuForKind(
           enabled: canPullIntoCurrentBranch,
           leading: const Icon(AleraIcons.gitPull, size: 16),
         ),
+        const AleraDropdownEntry<GitHistoryRefMenuAction>(
+          value: .openInWorktree,
+          label: 'Open in New Worktree...',
+          localizeLabel: false,
+          leading: Icon(AleraIcons.folderSpecial, size: 16),
+        ),
         const PopupMenuDivider(),
       ] else ...<PopupMenuEntry<GitHistoryRefMenuAction>>[
         const AleraDropdownEntry<GitHistoryRefMenuAction>(
@@ -165,6 +179,12 @@ Future<GitHistoryRefMenuAction?> showGitHistoryRefMenuForKind(
           label: 'Create Archive...',
           localizeLabel: false,
           leading: Icon(AleraIcons.archive, size: 16),
+        ),
+        const AleraDropdownEntry<GitHistoryRefMenuAction>(
+          value: .openInWorktree,
+          label: 'Open in New Worktree...',
+          localizeLabel: false,
+          leading: Icon(AleraIcons.folderSpecial, size: 16),
         ),
         const PopupMenuDivider(),
       ],

@@ -1,4 +1,5 @@
 import 'package:alera/src/design_system/feedback/alera_toast.dart';
+import 'package:alera/src/features/workbench/presentation/workspace_git_history_input_dialogs.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_git_history_ref_dialogs.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_git_history_ref_menus.dart';
 import 'package:alera/src/shared/infra/git/git_backend.dart';
@@ -20,6 +21,15 @@ typedef GitHistoryBoundaryMenuCallback = Future<void> Function(
   GitHistoryBoundaryMenuAction action,
 );
 
+/// Host-side linked-worktree creation. The arguments map onto
+/// `WorkbenchController.createWorkspace`; [sourceBranch] is ignored when
+/// [reuseExistingBranch] is set.
+typedef GitHistoryCreateWorktree = Future<void> Function({
+  required String sourceBranch,
+  required String newBranchName,
+  required bool reuseExistingBranch,
+});
+
 Future<void> runGitHistoryRefMenuAction({
   required BuildContext context,
   required GitBackend backend,
@@ -33,6 +43,7 @@ Future<void> runGitHistoryRefMenuAction({
   required Future<void> Function(String text, String label) onCopyName,
   required Future<void> Function() onPull,
   required Future<void> Function() onMutationSuccess,
+  required GitHistoryCreateWorktree onCreateWorktree,
   required String Function(Object error) errorMessage,
 }) async {
   switch (action) {
@@ -155,6 +166,22 @@ Future<void> runGitHistoryRefMenuAction({
         onMutationSuccess: onMutationSuccess,
         errorMessage: errorMessage,
       );
+    case GitHistoryRefMenuAction.openInWorktree:
+      final kind = classifyGitHistoryRef(itemRef);
+      await runGitHistoryOpenInWorktree(
+        context: context,
+        backend: backend,
+        path: path,
+        sourceRef: itemRef.name,
+        promptForBranch: kind != GitHistoryRefMenuKind.localBranch,
+        createBranchAtRef: kind == GitHistoryRefMenuKind.tag,
+        initialBranchName: kind == GitHistoryRefMenuKind.remoteBranch
+            ? itemRef.name.substring(itemRef.name.indexOf('/') + 1)
+            : itemRef.name,
+        onCreateWorktree: onCreateWorktree,
+        onMutationSuccess: onMutationSuccess,
+        errorMessage: errorMessage,
+      );
     case GitHistoryRefMenuAction.pullIntoCurrentBranch:
       if (!isCurrentUpstream) {
         return;
@@ -227,6 +254,57 @@ Future<void> runGitHistoryBoundaryMenuAction({
       );
     case GitHistoryBoundaryMenuAction.commitChanges:
       onCommitChanges();
+  }
+}
+
+/// Opens a linked worktree for [sourceRef]. Local branches reuse the ref
+/// directly; remote-tracking refs let `createWorkspace` create the tracking
+/// branch (preserving upstream); commits and tags get a local branch created
+/// at [sourceRef] first because the worktree checkout needs a branch.
+Future<void> runGitHistoryOpenInWorktree({
+  required BuildContext context,
+  required GitBackend backend,
+  required String path,
+  required String sourceRef,
+  required bool promptForBranch,
+  required bool createBranchAtRef,
+  String? initialBranchName,
+  required GitHistoryCreateWorktree onCreateWorktree,
+  required Future<void> Function() onMutationSuccess,
+  required String Function(Object error) errorMessage,
+}) async {
+  var branch = sourceRef;
+  if (promptForBranch) {
+    final input = await showGitHistoryWorktreeInputDialog(
+      context,
+      initialValue: initialBranchName ?? '',
+    );
+    if (input == null || !context.mounted) {
+      return;
+    }
+    branch = input;
+  }
+  try {
+    if (createBranchAtRef) {
+      await backend.createBranchAtCommit(
+        path: path,
+        commitId: sourceRef,
+        branch: branch,
+      );
+      if (!context.mounted) {
+        return;
+      }
+    }
+    await onCreateWorktree(
+      sourceBranch: createBranchAtRef ? branch : sourceRef,
+      newBranchName: branch,
+      reuseExistingBranch: !promptForBranch || createBranchAtRef,
+    );
+    await onMutationSuccess();
+  } catch (error) {
+    if (context.mounted) {
+      AleraToast.show(context, message: errorMessage(error), tone: .error);
+    }
   }
 }
 

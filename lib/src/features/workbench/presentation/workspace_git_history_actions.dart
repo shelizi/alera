@@ -81,6 +81,12 @@ Future<GitHistoryCommitMenuAction?> showGitHistoryCommitMenu(
         leading: Icon(AleraIcons.gitBranch, size: 16),
       ),
       const AleraDropdownEntry<GitHistoryCommitMenuAction>(
+        value: .openInWorktree,
+        label: 'Create Worktree Here…',
+        localizeLabel: false,
+        leading: Icon(AleraIcons.folderSpecial, size: 16),
+      ),
+      const AleraDropdownEntry<GitHistoryCommitMenuAction>(
         value: .checkoutCommit,
         label: 'Checkout Commit',
         localizeLabel: false,

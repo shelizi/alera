@@ -22,6 +22,7 @@ import 'package:alera/src/features/settings/application/settings_controller.dart
 import 'package:alera/src/features/workbench/application/workspace_explorer_reveal.dart';
 import 'package:alera/src/features/workbench/application/workspace_git_commit_compare_cache.dart';
 import 'package:alera/src/features/workbench/application/workspace_git_history_loader.dart';
+import 'package:alera/src/features/workbench/application/workspace_service.dart';
 import 'package:alera/src/features/workbench/application/workspace_source_control_controller.dart';
 import 'package:alera/src/features/workbench/application/workspace_submodule_status_provider.dart';
 import 'package:alera/src/features/workbench/domain/workbench_view_prefs.dart';
