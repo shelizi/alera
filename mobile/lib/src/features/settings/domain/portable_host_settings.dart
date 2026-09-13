@@ -1,3 +1,4 @@
+import 'package:alera_mobile/src/core/agent_descriptors.dart';
 import 'package:alera_mobile/src/core/json_payload_fields.dart';
 import 'package:alera_mobile/src/features/quotas/domain/quota_settings.dart';
 
@@ -15,19 +16,10 @@ const List<String> supportedAgentHooks = <String>[
   'fx',
 ];
 
-const Map<String, String> agentHookLabels = <String, String>{
-  'codex': 'Codex',
-  'claude': 'Claude Code',
-  'copilot': 'GitHub Copilot',
-  'cursor': 'Cursor',
-  'agy': 'Antigravity',
-  'opencode': 'OpenCode',
-  'opencode2': 'OpenCode 2',
-  'pi': 'Pi',
-  'amp': 'Amp',
-  'grok': 'Grok Build',
-  'fx': 'fx',
-};
+final Map<String, String> agentHookLabels = Map.unmodifiable(<String, String>{
+  for (final agent in supportedAgentHooks)
+    agent: canonicalAgentDisplayNames[agent]!,
+});
 
 class const PortableHostSettings({
   required final String? workspaceDirectory,

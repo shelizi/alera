@@ -1,4 +1,5 @@
 import 'package:alera_mobile/src/app/theme/alera_tokens.dart';
+import 'package:alera_mobile/src/core/agent_descriptors.dart';
 import 'package:alera_mobile/src/features/quotas/presentation/quota_display_labels.dart';
 import 'package:alera_mobile/src/features/workbench/presentation/agent_identity_icon.dart';
 import 'package:flutter/material.dart';
@@ -14,15 +15,8 @@ class const AgentQuotaProviderIcon({
   @override
   Widget build(BuildContext context) {
     final label = quotaProviderDisplayLabel(provider);
-    final agentType = switch (provider) {
-      'claude' => 'claude',
-      'codex' => 'codex',
-      'grok' => 'grok',
-      'cursor' => 'cursor',
-      'antigravity' => 'agy',
-      'opencode' => 'opencode',
-      _ => null,
-    };
+    final id = canonicalAgentId(provider);
+    final agentType = canonicalAgentDisplayNames.containsKey(id) ? id : null;
     if (agentType != null) {
       return AgentIdentityIcon(agentType: agentType, size: size);
     }
