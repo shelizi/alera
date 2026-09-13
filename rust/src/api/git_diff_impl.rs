@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use git2::{
-    Delta, Diff, DiffFindOptions, DiffFormat, DiffLineType, DiffOptions, Oid, Repository, Status,
-    StatusEntry, StatusOptions,
+    Delta, Diff, DiffFindOptions, DiffFormat, DiffLineType, DiffOptions, ErrorCode, Oid,
+    Repository, Status, StatusEntry, StatusOptions,
 };
 
 use super::{
@@ -247,6 +247,80 @@ pub(super) fn git_commit_compare(
             entries: Vec::new(),
         }),
     }
+}
+
+pub(super) fn git_compare_range(
+    path: String,
+    base_ref: String,
+    head_ref: String,
+) -> Result<GitCommitCompareResult, GitError> {
+    let repo = open_repo(&path)?;
+    let base_name = base_ref.trim();
+    let head_name = head_ref.trim();
+    if base_name.is_empty() || head_name.is_empty() {
+        return Err(GitError::new(
+            GitErrorKind::InvalidBranchName,
+            "base and head refs cannot be empty",
+        ));
+    }
+    let base_oid = resolve_compare_ref_oid(&repo, base_name, "base")?;
+    let head_oid = resolve_compare_ref_oid(&repo, head_name, "head")?;
+    let merge_base_oid = repo
+        .merge_base(base_oid, head_oid)
+        .map_err(GitError::from_git2)?;
+    let summary = GitCommitCompareSummary {
+        commit_oid: head_oid.to_string(),
+        parent_oid: Some(merge_base_oid.to_string()),
+        compare_ref: head_name.to_string(),
+        base_ref: base_name.to_string(),
+        changed_files: 0,
+        status: GitCommitCompareStatus::Ready,
+        error_message: None,
+    };
+    match commit_change_entries(&repo, &path, Some(merge_base_oid), head_oid) {
+        Ok(entries) => Ok(GitCommitCompareResult {
+            summary: GitCommitCompareSummary {
+                changed_files: entries.len() as u32,
+                ..summary
+            },
+            entries,
+        }),
+        Err(error) => Ok(GitCommitCompareResult {
+            summary: GitCommitCompareSummary {
+                status: GitCommitCompareStatus::Error,
+                error_message: Some(error.context),
+                ..summary
+            },
+            entries: Vec::new(),
+        }),
+    }
+}
+
+fn resolve_compare_ref_oid(repo: &Repository, name: &str, role: &str) -> Result<Oid, GitError> {
+    if name.starts_with('-') {
+        return Err(GitError::new(
+            GitErrorKind::InvalidBranchName,
+            format!("invalid {role} ref '{name}'"),
+        ));
+    }
+    let object = repo
+        .revparse_single(name)
+        .map_err(|error| match error.code() {
+            ErrorCode::NotFound | ErrorCode::Ambiguous | ErrorCode::InvalidSpec => GitError::new(
+                GitErrorKind::BranchNotFound,
+                format!("{role} ref '{name}' was not found"),
+            ),
+            _ => GitError::from_git2(error),
+        })?;
+    object
+        .peel_to_commit()
+        .map(|commit| commit.id())
+        .map_err(|_| {
+            GitError::new(
+                GitErrorKind::BranchNotFound,
+                format!("{role} ref '{name}' does not name a commit"),
+            )
+        })
 }
 
 pub(super) fn git_commit_diff(

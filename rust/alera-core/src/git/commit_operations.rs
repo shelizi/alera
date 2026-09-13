@@ -183,7 +183,7 @@ pub fn reset_to_commit(path: &str, commit_id: &str, mode: GitResetMode) -> Resul
         .map_err(GitError::from_git2)
 }
 
-fn ensure_clean_state(repo: &Repository, operation: &str) -> Result<(), GitError> {
+pub(super) fn ensure_clean_state(repo: &Repository, operation: &str) -> Result<(), GitError> {
     if repo.state() != RepositoryState::Clean {
         return Err(GitError::new(
             GitErrorKind::Conflict,
@@ -193,7 +193,7 @@ fn ensure_clean_state(repo: &Repository, operation: &str) -> Result<(), GitError
     Ok(())
 }
 
-fn resolve_commit<'repo>(
+pub(super) fn resolve_commit<'repo>(
     repo: &'repo Repository,
     commit_id: &str,
 ) -> Result<git2::Commit<'repo>, GitError> {
@@ -212,14 +212,14 @@ fn invalid_commit(commit_id: &str) -> GitError {
     )
 }
 
-fn current_head_commit(repo: &Repository) -> Result<git2::Commit<'_>, GitError> {
+pub(super) fn current_head_commit(repo: &Repository) -> Result<git2::Commit<'_>, GitError> {
     repo.head()
         .map_err(GitError::from_git2)?
         .peel_to_commit()
         .map_err(GitError::from_git2)
 }
 
-fn validate_mainline_parent(
+pub(super) fn validate_mainline_parent(
     commit: &git2::Commit<'_>,
     mainline_parent: Option<u32>,
 ) -> Result<Option<u32>, GitError> {

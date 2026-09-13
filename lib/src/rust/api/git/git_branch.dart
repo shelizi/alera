@@ -44,3 +44,33 @@ Future<void> refreshSourceBranch({
   repoPath: repoPath,
   sourceBranch: sourceBranch,
 );
+
+Future<void> createBranchAtCommit({
+  required String path,
+  required String commitId,
+  required String branch,
+  required bool checkout,
+}) => RustLib.instance.api.crateApiGitGitBranchCreateBranchAtCommit(
+  path: path,
+  commitId: commitId,
+  branch: branch,
+  checkout: checkout,
+);
+
+Future<String> checkoutRemoteBranch({
+  required String path,
+  required String remoteBranch,
+}) => RustLib.instance.api.crateApiGitGitBranchCheckoutRemoteBranch(
+  path: path,
+  remoteBranch: remoteBranch,
+);
+
+Future<void> renameBranch({
+  required String path,
+  required String oldName,
+  required String newName,
+}) => RustLib.instance.api.crateApiGitGitBranchRenameBranch(
+  path: path,
+  oldName: oldName,
+  newName: newName,
+);

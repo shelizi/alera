@@ -29,3 +29,20 @@ pub fn is_valid_branch_name(name: String) -> Result<bool, GitError> {
 pub fn refresh_source_branch(repo_path: String, source_branch: String) -> Result<(), GitError> {
     core_git::refresh_source_branch(&repo_path, &source_branch).map_err(Into::into)
 }
+
+pub fn create_branch_at_commit(
+    path: String,
+    commit_id: String,
+    branch: String,
+    checkout: bool,
+) -> Result<(), GitError> {
+    core_git::create_branch_at_commit(&path, &commit_id, &branch, checkout).map_err(Into::into)
+}
+
+pub fn checkout_remote_branch(path: String, remote_branch: String) -> Result<String, GitError> {
+    core_git::checkout_remote_branch(&path, &remote_branch).map_err(Into::into)
+}
+
+pub fn rename_branch(path: String, old_name: String, new_name: String) -> Result<(), GitError> {
+    core_git::rename_branch(&path, &old_name, &new_name).map_err(Into::into)
+}

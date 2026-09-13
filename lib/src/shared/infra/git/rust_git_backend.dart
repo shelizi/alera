@@ -1,10 +1,15 @@
 import 'dart:typed_data';
 
 import 'package:alera/src/rust/api/git.dart' as rust;
+import 'package:alera/src/rust/api/git/git_archive_ops.dart'
+    as rust_archive_ops;
 import 'package:alera/src/rust/api/git/git_branch.dart' as rust_branch;
 import 'package:alera/src/rust/api/git/git_commit_ops.dart' as rust_commit_ops;
 import 'package:alera/src/rust/api/git/git_hosted_review.dart'
     as hosted_review_rust;
+import 'package:alera/src/rust/api/git/git_merge_ops.dart' as rust_merge_ops;
+import 'package:alera/src/rust/api/git/git_remote_ops.dart' as rust_remote_ops;
+import 'package:alera/src/rust/api/git/git_tag_ops.dart' as rust_tag_ops;
 import 'package:alera/src/rust/api/git_diff_blob.dart' as rust_blob;
 import 'package:alera/src/rust/api/git_explorer_status.dart' as explorer_rust;
 import 'package:alera/src/rust/api/reading_diff.dart' as rust_reading_diff;
@@ -449,26 +454,41 @@ class const RustGitBackend()
     required String commitId,
     required String branch,
     bool checkout = false,
-  }) => throw const GitInternalException('createBranchAtCommit is not wired');
+  }) => _guard(
+    () => rust_branch.createBranchAtCommit(
+      path: path,
+      commitId: commitId,
+      branch: branch,
+      checkout: checkout,
+    ),
+  );
 
   @override
   Future<String> cherryPickCommit({
     required String path,
     required String commitId,
     int? mainlineParent,
-  }) => throw const GitInternalException('cherryPickCommit is not wired');
+  }) => _guard(
+    () => rust_commit_ops.gitCherryPickCommit(
+      path: path,
+      commitId: commitId,
+      mainlineParent: mainlineParent,
+    ),
+  );
 
   @override
   Future<void> dropCommit({required String path, required String commitId}) =>
-      throw const GitInternalException('dropCommit is not wired');
+      _guard(
+        () => rust_commit_ops.gitDropCommit(path: path, commitId: commitId),
+      );
 
   @override
   Future<String?> mergeRef({required String path, required String ref}) =>
-      throw const GitInternalException('mergeRef is not wired');
+      _guard(() => rust_merge_ops.mergeRef(path: path, reference: ref));
 
   @override
   Future<void> rebaseOnto({required String path, required String ontoRef}) =>
-      throw const GitInternalException('rebaseOnto is not wired');
+      _guard(() => rust_commit_ops.gitRebaseOnto(path: path, ontoRef: ontoRef));
 
   @override
   Future<void> createTag({
@@ -476,38 +496,64 @@ class const RustGitBackend()
     required String commitId,
     required String name,
     String? message,
-  }) => throw const GitInternalException('createTag is not wired');
+  }) => _guard(
+    () => rust_tag_ops.createTag(
+      path: path,
+      commitId: commitId,
+      name: name,
+      message: message,
+    ),
+  );
 
   @override
   Future<void> deleteTag({required String path, required String name}) =>
-      throw const GitInternalException('deleteTag is not wired');
+      _guard(() => rust_tag_ops.deleteTag(path: path, name: name));
 
   @override
   Future<void> pushTag({
     required String path,
     required String name,
     String? remote,
-  }) => throw const GitInternalException('pushTag is not wired');
+  }) => _guard(
+    () => rust_remote_ops.pushTag(path: path, name: name, remote: remote),
+  );
 
   @override
   Future<String> checkoutRemoteBranch({
     required String path,
     required String remoteBranch,
-  }) => throw const GitInternalException('checkoutRemoteBranch is not wired');
+  }) => _guard(
+    () => rust_branch.checkoutRemoteBranch(
+      path: path,
+      remoteBranch: remoteBranch,
+    ),
+  );
 
   @override
   Future<void> deleteRemoteBranch({
     required String path,
     required String remote,
     required String branch,
-  }) => throw const GitInternalException('deleteRemoteBranch is not wired');
+  }) => _guard(
+    () => rust_remote_ops.deleteRemoteBranch(
+      path: path,
+      remote: remote,
+      branch: branch,
+    ),
+  );
 
   @override
   Future<void> renameBranch({
     required String path,
     required String oldName,
     required String newName,
-  }) => throw const GitInternalException('renameBranch is not wired');
+  }) => _guard(
+    () => rust_branch.renameBranch(
+      path: path,
+      oldName: oldName,
+      newName: newName,
+    ),
+  );
 
   @override
   Future<void> createArchive({
@@ -515,14 +561,25 @@ class const RustGitBackend()
     required String ref,
     required String outputPath,
     GitArchiveFormat format = GitArchiveFormat.zip,
-  }) => throw const GitInternalException('createArchive is not wired');
+  }) => _guard(
+    () => rust_archive_ops.createArchive(
+      path: path,
+      reference: ref,
+      outputPath: outputPath,
+      format: _toRustArchiveFormat(format),
+    ),
+  );
 
   @override
   Future<GitCommitCompareResult> compareRange({
     required String path,
     required String baseRef,
     required String headRef,
-  }) => throw const GitInternalException('compareRange is not wired');
+  }) => _guard(
+    () => rust
+        .gitCompareRange(path: path, baseRef: baseRef, headRef: headRef)
+        .then(_toCommitCompareResult),
+  );
 
   @override
   Future<void> fetch(String path) => _guard(() => rust.gitFetch(path: path));

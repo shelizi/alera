@@ -7,9 +7,13 @@ import 'api/agent_hooks.dart';
 import 'api/ai_dictation.dart';
 import 'api/clipboard.dart';
 import 'api/git.dart';
+import 'api/git/git_archive_ops.dart';
 import 'api/git/git_branch.dart';
 import 'api/git/git_commit_ops.dart';
 import 'api/git/git_hosted_review.dart';
+import 'api/git/git_merge_ops.dart';
+import 'api/git/git_remote_ops.dart';
+import 'api/git/git_tag_ops.dart';
 import 'api/git_diff_blob.dart';
 import 'api/git_explorer_status.dart';
 import 'api/keep_alive.dart';
@@ -83,7 +87,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.13.0';
 
   @override
-  int get rustContentHash => 1824244851;
+  int get rustContentHash => 271600429;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -111,6 +115,11 @@ abstract class RustLibApi extends BaseApi {
     required String branch,
   });
 
+  Future<String> crateApiGitGitBranchCheckoutRemoteBranch({
+    required String path,
+    required String remoteBranch,
+  });
+
   Future<void> crateApiGitCloneRepository({
     required String url,
     required String destinationPath,
@@ -131,6 +140,27 @@ abstract class RustLibApi extends BaseApi {
   Future<void> crateApiGitGitBranchCreateAndCheckoutBranch({
     required String path,
     required String branch,
+  });
+
+  Future<void> crateApiGitGitArchiveOpsCreateArchive({
+    required String path,
+    required String reference,
+    required String outputPath,
+    required GitArchiveFormat format,
+  });
+
+  Future<void> crateApiGitGitBranchCreateBranchAtCommit({
+    required String path,
+    required String commitId,
+    required String branch,
+    required bool checkout,
+  });
+
+  Future<void> crateApiGitGitTagOpsCreateTag({
+    required String path,
+    required String commitId,
+    required String name,
+    String? message,
   });
 
   Future<WorkspaceFileEntry> crateApiWorkspaceFilesCreateWorkspaceDirectory({
@@ -161,6 +191,17 @@ abstract class RustLibApi extends BaseApi {
     required bool force,
   });
 
+  Future<void> crateApiGitGitRemoteOpsDeleteRemoteBranch({
+    required String path,
+    required String remote,
+    required String branch,
+  });
+
+  Future<void> crateApiGitGitTagOpsDeleteTag({
+    required String path,
+    required String name,
+  });
+
   Future<void> crateApiWorkspaceFilesDeleteWorkspaceEntry({
     required String workspacePath,
     required String relativePath,
@@ -170,6 +211,12 @@ abstract class RustLibApi extends BaseApi {
   Future<void> crateApiGitGitCommitOpsGitCheckoutCommit({
     required String path,
     required String commitId,
+  });
+
+  Future<String> crateApiGitGitCommitOpsGitCherryPickCommit({
+    required String path,
+    required String commitId,
+    int? mainlineParent,
   });
 
   Future<String> crateApiGitGitCommit({
@@ -193,6 +240,12 @@ abstract class RustLibApi extends BaseApi {
     String? parentOid,
     String? filePath,
     String? oldPath,
+  });
+
+  Future<GitCommitCompareResult> crateApiGitGitCompareRange({
+    required String path,
+    required String baseRef,
+    required String headRef,
   });
 
   Future<GitDiffResult> crateApiGitGitDiff({
@@ -227,6 +280,11 @@ abstract class RustLibApi extends BaseApi {
     required String path,
     required GitChangeArea area,
     String? filePath,
+  });
+
+  Future<void> crateApiGitGitCommitOpsGitDropCommit({
+    required String path,
+    required String commitId,
   });
 
   Future<GitExplorerStatusSnapshot>
@@ -280,6 +338,11 @@ abstract class RustLibApi extends BaseApi {
     String? commitOid,
     String? parentOid,
     String? baseRef,
+  });
+
+  Future<void> crateApiGitGitCommitOpsGitRebaseOnto({
+    required String path,
+    required String ontoRef,
   });
 
   Future<void> crateApiGitGitHostedReviewGitReleaseHostedReviewRange({
@@ -376,6 +439,11 @@ abstract class RustLibApi extends BaseApi {
     required List<int> sourceDiff,
   });
 
+  Future<String?> crateApiGitGitMergeOpsMergeRef({
+    required String path,
+    required String reference,
+  });
+
   Future<WorkspaceFileEntry> crateApiWorkspaceFilesMoveWorkspaceEntry({
     required String workspacePath,
     required String relativePath,
@@ -430,6 +498,12 @@ abstract class RustLibApi extends BaseApi {
     WorkspaceExplorerDirectoryChildren? replacement,
   });
 
+  Future<void> crateApiGitGitRemoteOpsPushTag({
+    required String path,
+    required String name,
+    String? remote,
+  });
+
   Future<WorkspaceEditorTextFile>
   crateApiWorkspaceFilesReadWorkspaceEditorTextFile({
     required String workspacePath,
@@ -451,6 +525,12 @@ abstract class RustLibApi extends BaseApi {
     required String repoPath,
     required String path,
     required bool force,
+  });
+
+  Future<void> crateApiGitGitBranchRenameBranch({
+    required String path,
+    required String oldName,
+    required String newName,
   });
 
   Future<WorkspaceFileEntry> crateApiWorkspaceFilesRenameWorkspaceEntry({
@@ -712,6 +792,41 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<String> crateApiGitGitBranchCheckoutRemoteBranch({
+    required String path,
+    required String remoteBranch,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(path, serializer);
+          sse_encode_String(remoteBranch, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 5,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_git_error,
+        ),
+        constMeta: kCrateApiGitGitBranchCheckoutRemoteBranchConstMeta,
+        argValues: [path, remoteBranch],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiGitGitBranchCheckoutRemoteBranchConstMeta =>
+      const TaskConstMeta(
+        debugName: "checkout_remote_branch",
+        argNames: ["path", "remoteBranch"],
+      );
+
+  @override
   Future<void> crateApiGitCloneRepository({
     required String url,
     required String destinationPath,
@@ -725,7 +840,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 5,
+            funcId: 6,
             port: port_,
           );
         },
@@ -761,7 +876,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 6,
+            funcId: 7,
             port: port_,
           );
         },
@@ -798,7 +913,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 7,
+            funcId: 8,
             port: port_,
           );
         },
@@ -833,7 +948,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 8,
+            funcId: 9,
             port: port_,
           );
         },
@@ -855,6 +970,123 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<void> crateApiGitGitArchiveOpsCreateArchive({
+    required String path,
+    required String reference,
+    required String outputPath,
+    required GitArchiveFormat format,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(path, serializer);
+          sse_encode_String(reference, serializer);
+          sse_encode_String(outputPath, serializer);
+          sse_encode_git_archive_format(format, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 10,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_git_error,
+        ),
+        constMeta: kCrateApiGitGitArchiveOpsCreateArchiveConstMeta,
+        argValues: [path, reference, outputPath, format],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiGitGitArchiveOpsCreateArchiveConstMeta =>
+      const TaskConstMeta(
+        debugName: "create_archive",
+        argNames: ["path", "reference", "outputPath", "format"],
+      );
+
+  @override
+  Future<void> crateApiGitGitBranchCreateBranchAtCommit({
+    required String path,
+    required String commitId,
+    required String branch,
+    required bool checkout,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(path, serializer);
+          sse_encode_String(commitId, serializer);
+          sse_encode_String(branch, serializer);
+          sse_encode_bool(checkout, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 11,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_git_error,
+        ),
+        constMeta: kCrateApiGitGitBranchCreateBranchAtCommitConstMeta,
+        argValues: [path, commitId, branch, checkout],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiGitGitBranchCreateBranchAtCommitConstMeta =>
+      const TaskConstMeta(
+        debugName: "create_branch_at_commit",
+        argNames: ["path", "commitId", "branch", "checkout"],
+      );
+
+  @override
+  Future<void> crateApiGitGitTagOpsCreateTag({
+    required String path,
+    required String commitId,
+    required String name,
+    String? message,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(path, serializer);
+          sse_encode_String(commitId, serializer);
+          sse_encode_String(name, serializer);
+          sse_encode_opt_String(message, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 12,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_git_error,
+        ),
+        constMeta: kCrateApiGitGitTagOpsCreateTagConstMeta,
+        argValues: [path, commitId, name, message],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiGitGitTagOpsCreateTagConstMeta =>
+      const TaskConstMeta(
+        debugName: "create_tag",
+        argNames: ["path", "commitId", "name", "message"],
+      );
+
+  @override
   Future<WorkspaceFileEntry> crateApiWorkspaceFilesCreateWorkspaceDirectory({
     required String workspacePath,
     required String parentRelativePath,
@@ -870,7 +1102,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 9,
+            funcId: 13,
             port: port_,
           );
         },
@@ -907,7 +1139,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 10,
+            funcId: 14,
             port: port_,
           );
         },
@@ -948,7 +1180,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 11,
+            funcId: 15,
             port: port_,
           );
         },
@@ -990,7 +1222,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 12,
+            funcId: 16,
             port: port_,
           );
         },
@@ -1024,7 +1256,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 13,
+            funcId: 17,
             port: port_,
           );
         },
@@ -1045,6 +1277,75 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   );
 
   @override
+  Future<void> crateApiGitGitRemoteOpsDeleteRemoteBranch({
+    required String path,
+    required String remote,
+    required String branch,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(path, serializer);
+          sse_encode_String(remote, serializer);
+          sse_encode_String(branch, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 18,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_git_error,
+        ),
+        constMeta: kCrateApiGitGitRemoteOpsDeleteRemoteBranchConstMeta,
+        argValues: [path, remote, branch],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiGitGitRemoteOpsDeleteRemoteBranchConstMeta =>
+      const TaskConstMeta(
+        debugName: "delete_remote_branch",
+        argNames: ["path", "remote", "branch"],
+      );
+
+  @override
+  Future<void> crateApiGitGitTagOpsDeleteTag({
+    required String path,
+    required String name,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(path, serializer);
+          sse_encode_String(name, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 19,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_git_error,
+        ),
+        constMeta: kCrateApiGitGitTagOpsDeleteTagConstMeta,
+        argValues: [path, name],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiGitGitTagOpsDeleteTagConstMeta =>
+      const TaskConstMeta(debugName: "delete_tag", argNames: ["path", "name"]);
+
+  @override
   Future<void> crateApiWorkspaceFilesDeleteWorkspaceEntry({
     required String workspacePath,
     required String relativePath,
@@ -1060,7 +1361,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 14,
+            funcId: 20,
             port: port_,
           );
         },
@@ -1095,7 +1396,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 15,
+            funcId: 21,
             port: port_,
           );
         },
@@ -1117,6 +1418,43 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<String> crateApiGitGitCommitOpsGitCherryPickCommit({
+    required String path,
+    required String commitId,
+    int? mainlineParent,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(path, serializer);
+          sse_encode_String(commitId, serializer);
+          sse_encode_opt_box_autoadd_u_32(mainlineParent, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 22,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_git_error,
+        ),
+        constMeta: kCrateApiGitGitCommitOpsGitCherryPickCommitConstMeta,
+        argValues: [path, commitId, mainlineParent],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiGitGitCommitOpsGitCherryPickCommitConstMeta =>
+      const TaskConstMeta(
+        debugName: "git_cherry_pick_commit",
+        argNames: ["path", "commitId", "mainlineParent"],
+      );
+
+  @override
   Future<String> crateApiGitGitCommit({
     required String path,
     required String message,
@@ -1130,7 +1468,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 16,
+            funcId: 23,
             port: port_,
           );
         },
@@ -1164,7 +1502,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 17,
+            funcId: 24,
             port: port_,
           );
         },
@@ -1198,7 +1536,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 18,
+            funcId: 25,
             port: port_,
           );
         },
@@ -1239,7 +1577,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 19,
+            funcId: 26,
             port: port_,
           );
         },
@@ -1260,6 +1598,42 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   );
 
   @override
+  Future<GitCommitCompareResult> crateApiGitGitCompareRange({
+    required String path,
+    required String baseRef,
+    required String headRef,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(path, serializer);
+          sse_encode_String(baseRef, serializer);
+          sse_encode_String(headRef, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 27,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_git_commit_compare_result,
+          decodeErrorData: sse_decode_git_error,
+        ),
+        constMeta: kCrateApiGitGitCompareRangeConstMeta,
+        argValues: [path, baseRef, headRef],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiGitGitCompareRangeConstMeta => const TaskConstMeta(
+    debugName: "git_compare_range",
+    argNames: ["path", "baseRef", "headRef"],
+  );
+
+  @override
   Future<GitDiffResult> crateApiGitGitDiff({
     required String path,
     required String filePath,
@@ -1275,7 +1649,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 20,
+            funcId: 28,
             port: port_,
           );
         },
@@ -1309,7 +1683,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 21,
+            funcId: 29,
             port: port_,
           );
         },
@@ -1343,7 +1717,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 22,
+            funcId: 30,
             port: port_,
           );
         },
@@ -1387,7 +1761,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 23,
+            funcId: 31,
             port: port_,
           );
         },
@@ -1435,7 +1809,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 24,
+            funcId: 32,
             port: port_,
           );
         },
@@ -1471,7 +1845,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 25,
+            funcId: 33,
             port: port_,
           );
         },
@@ -1492,6 +1866,41 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   );
 
   @override
+  Future<void> crateApiGitGitCommitOpsGitDropCommit({
+    required String path,
+    required String commitId,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(path, serializer);
+          sse_encode_String(commitId, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 34,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_git_error,
+        ),
+        constMeta: kCrateApiGitGitCommitOpsGitDropCommitConstMeta,
+        argValues: [path, commitId],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiGitGitCommitOpsGitDropCommitConstMeta =>
+      const TaskConstMeta(
+        debugName: "git_drop_commit",
+        argNames: ["path", "commitId"],
+      );
+
+  @override
   Future<GitExplorerStatusSnapshot>
   crateApiGitExplorerStatusGitExplorerStatusSnapshot({required String path}) {
     return handler.executeNormal(
@@ -1502,7 +1911,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 26,
+            funcId: 35,
             port: port_,
           );
         },
@@ -1534,7 +1943,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 27,
+            funcId: 36,
             port: port_,
           );
         },
@@ -1579,7 +1988,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 28,
+            funcId: 37,
             port: port_,
           );
         },
@@ -1640,7 +2049,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 29,
+            funcId: 38,
             port: port_,
           );
         },
@@ -1672,7 +2081,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 30,
+            funcId: 39,
             port: port_,
           );
         },
@@ -1704,7 +2113,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 31,
+            funcId: 40,
             port: port_,
           );
         },
@@ -1737,7 +2146,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 32,
+            funcId: 41,
             port: port_,
           );
         },
@@ -1765,7 +2174,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 33,
+            funcId: 42,
             port: port_,
           );
         },
@@ -1801,7 +2210,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 34,
+            funcId: 43,
             port: port_,
           );
         },
@@ -1845,7 +2254,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 35,
+            funcId: 44,
             port: port_,
           );
         },
@@ -1883,6 +2292,41 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<void> crateApiGitGitCommitOpsGitRebaseOnto({
+    required String path,
+    required String ontoRef,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(path, serializer);
+          sse_encode_String(ontoRef, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 45,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_git_error,
+        ),
+        constMeta: kCrateApiGitGitCommitOpsGitRebaseOntoConstMeta,
+        argValues: [path, ontoRef],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiGitGitCommitOpsGitRebaseOntoConstMeta =>
+      const TaskConstMeta(
+        debugName: "git_rebase_onto",
+        argNames: ["path", "ontoRef"],
+      );
+
+  @override
   Future<void> crateApiGitGitHostedReviewGitReleaseHostedReviewRange({
     required String path,
     required String retentionId,
@@ -1896,7 +2340,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 36,
+            funcId: 46,
             port: port_,
           );
         },
@@ -1931,7 +2375,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 37,
+            funcId: 47,
             port: port_,
           );
         },
@@ -1968,7 +2412,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 38,
+            funcId: 48,
             port: port_,
           );
         },
@@ -2005,7 +2449,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 39,
+            funcId: 49,
             port: port_,
           );
         },
@@ -2037,7 +2481,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 40,
+            funcId: 50,
             port: port_,
           );
         },
@@ -2073,7 +2517,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 41,
+            funcId: 51,
             port: port_,
           );
         },
@@ -2103,7 +2547,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 42,
+            funcId: 52,
             port: port_,
           );
         },
@@ -2135,7 +2579,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 43,
+            funcId: 53,
             port: port_,
           );
         },
@@ -2165,7 +2609,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 44,
+            funcId: 54,
             port: port_,
           );
         },
@@ -2197,7 +2641,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 45,
+            funcId: 55,
             port: port_,
           );
         },
@@ -2234,7 +2678,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 46,
+            funcId: 56,
             port: port_,
           );
         },
@@ -2266,7 +2710,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 47,
+            funcId: 57,
             port: port_,
           );
         },
@@ -2302,7 +2746,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 48,
+            funcId: 58,
             port: port_,
           );
         },
@@ -2331,7 +2775,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 49,
+            funcId: 59,
             port: port_,
           );
         },
@@ -2365,7 +2809,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 50,
+            funcId: 60,
             port: port_,
           );
         },
@@ -2395,7 +2839,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 51,
+            funcId: 61,
             port: port_,
           );
         },
@@ -2423,7 +2867,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 52,
+            funcId: 62,
             port: port_,
           );
         },
@@ -2453,7 +2897,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 53,
+            funcId: 63,
             port: port_,
           );
         },
@@ -2483,7 +2927,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 54,
+            funcId: 64,
             port: port_,
           );
         },
@@ -2513,7 +2957,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 55,
+            funcId: 65,
             port: port_,
           );
         },
@@ -2544,7 +2988,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 56,
+            funcId: 66,
             port: port_,
           );
         },
@@ -2578,7 +3022,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 57,
+            funcId: 67,
             port: port_,
           );
         },
@@ -2611,7 +3055,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 58,
+            funcId: 68,
             port: port_,
           );
         },
@@ -2643,7 +3087,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 59,
+            funcId: 69,
             port: port_,
           );
         },
@@ -2665,6 +3109,41 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<String?> crateApiGitGitMergeOpsMergeRef({
+    required String path,
+    required String reference,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(path, serializer);
+          sse_encode_String(reference, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 70,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_opt_String,
+          decodeErrorData: sse_decode_git_error,
+        ),
+        constMeta: kCrateApiGitGitMergeOpsMergeRefConstMeta,
+        argValues: [path, reference],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiGitGitMergeOpsMergeRefConstMeta =>
+      const TaskConstMeta(
+        debugName: "merge_ref",
+        argNames: ["path", "reference"],
+      );
+
+  @override
   Future<WorkspaceFileEntry> crateApiWorkspaceFilesMoveWorkspaceEntry({
     required String workspacePath,
     required String relativePath,
@@ -2680,7 +3159,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 60,
+            funcId: 71,
             port: port_,
           );
         },
@@ -2715,7 +3194,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 61,
+            funcId: 72,
             port: port_,
           );
         },
@@ -2749,7 +3228,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 62,
+            funcId: 73,
             port: port_,
           );
         },
@@ -2785,7 +3264,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 63,
+            funcId: 74,
             port: port_,
           );
         },
@@ -2818,7 +3297,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 64,
+            funcId: 75,
             port: port_,
           );
         },
@@ -2846,7 +3325,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 65,
+            funcId: 76,
             port: port_,
           );
         },
@@ -2882,7 +3361,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 66,
+            funcId: 77,
             port: port_,
           );
         },
@@ -2925,7 +3404,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 67,
+              funcId: 78,
               port: port_,
             );
           },
@@ -2976,7 +3455,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 68,
+            funcId: 79,
             port: port_,
           );
         },
@@ -3022,7 +3501,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 69,
+            funcId: 80,
             port: port_,
           );
         },
@@ -3050,6 +3529,43 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<void> crateApiGitGitRemoteOpsPushTag({
+    required String path,
+    required String name,
+    String? remote,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(path, serializer);
+          sse_encode_String(name, serializer);
+          sse_encode_opt_String(remote, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 81,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_git_error,
+        ),
+        constMeta: kCrateApiGitGitRemoteOpsPushTagConstMeta,
+        argValues: [path, name, remote],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiGitGitRemoteOpsPushTagConstMeta =>
+      const TaskConstMeta(
+        debugName: "push_tag",
+        argNames: ["path", "name", "remote"],
+      );
+
+  @override
   Future<WorkspaceEditorTextFile>
   crateApiWorkspaceFilesReadWorkspaceEditorTextFile({
     required String workspacePath,
@@ -3066,7 +3582,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 70,
+            funcId: 82,
             port: port_,
           );
         },
@@ -3102,7 +3618,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 71,
+            funcId: 83,
             port: port_,
           );
         },
@@ -3137,7 +3653,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 72,
+            funcId: 84,
             port: port_,
           );
         },
@@ -3174,7 +3690,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 73,
+            funcId: 85,
             port: port_,
           );
         },
@@ -3195,6 +3711,43 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   );
 
   @override
+  Future<void> crateApiGitGitBranchRenameBranch({
+    required String path,
+    required String oldName,
+    required String newName,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(path, serializer);
+          sse_encode_String(oldName, serializer);
+          sse_encode_String(newName, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 86,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_git_error,
+        ),
+        constMeta: kCrateApiGitGitBranchRenameBranchConstMeta,
+        argValues: [path, oldName, newName],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiGitGitBranchRenameBranchConstMeta =>
+      const TaskConstMeta(
+        debugName: "rename_branch",
+        argNames: ["path", "oldName", "newName"],
+      );
+
+  @override
   Future<WorkspaceFileEntry> crateApiWorkspaceFilesRenameWorkspaceEntry({
     required String workspacePath,
     required String relativePath,
@@ -3210,7 +3763,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 74,
+            funcId: 87,
             port: port_,
           );
         },
@@ -3245,7 +3798,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 75,
+            funcId: 88,
             port: port_,
           );
         },
@@ -3279,7 +3832,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 76,
+            funcId: 89,
             port: port_,
           );
         },
@@ -3309,7 +3862,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 77,
+            funcId: 90,
             port: port_,
           );
         },
@@ -3342,7 +3895,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 78,
+            funcId: 91,
             port: port_,
           );
         },
@@ -3375,7 +3928,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 79,
+            funcId: 92,
             port: port_,
           );
         },
@@ -3417,7 +3970,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 80,
+            funcId: 93,
             port: port_,
           );
         },
@@ -3452,7 +4005,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 81,
+            funcId: 94,
             port: port_,
           );
         },
@@ -3485,7 +4038,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 82,
+            funcId: 95,
             port: port_,
           );
         },
@@ -3517,7 +4070,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 83,
+            funcId: 96,
             port: port_,
           );
         },
@@ -3551,7 +4104,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 84,
+            funcId: 97,
             port: port_,
           );
         },
@@ -3585,7 +4138,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 85,
+            funcId: 98,
             port: port_,
           );
         },
@@ -3621,7 +4174,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 86,
+            funcId: 99,
             port: port_,
           );
         },
@@ -3653,7 +4206,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 87,
+            funcId: 100,
             port: port_,
           );
         },
@@ -3686,7 +4239,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 88,
+            funcId: 101,
             port: port_,
           );
         },
@@ -3722,7 +4275,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 89,
+            funcId: 102,
             port: port_,
           );
         },
@@ -3759,7 +4312,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 90,
+            funcId: 103,
             port: port_,
           );
         },
@@ -3794,7 +4347,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 91,
+            funcId: 104,
             port: port_,
           );
         },
@@ -3832,7 +4385,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 92,
+            funcId: 105,
             port: port_,
           );
         },
@@ -3871,7 +4424,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 93,
+              funcId: 106,
               port: port_,
             );
           },
@@ -3916,7 +4469,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 94,
+              funcId: 107,
               port: port_,
             );
           },
@@ -3961,7 +4514,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 95,
+              funcId: 108,
               port: port_,
             );
           },
@@ -4013,7 +4566,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 96,
+            funcId: 109,
             port: port_,
           );
         },
@@ -4073,7 +4626,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 97,
+            funcId: 110,
             port: port_,
           );
         },
@@ -4389,6 +4942,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   CodexSavedPromptScope dco_decode_codex_saved_prompt_scope(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return CodexSavedPromptScope.values[raw as int];
+  }
+
+  @protected
+  GitArchiveFormat dco_decode_git_archive_format(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return GitArchiveFormat.values[raw as int];
   }
 
   @protected
@@ -6069,6 +6628,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var inner = sse_decode_i_32(deserializer);
     return CodexSavedPromptScope.values[inner];
+  }
+
+  @protected
+  GitArchiveFormat sse_decode_git_archive_format(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var inner = sse_decode_i_32(deserializer);
+    return GitArchiveFormat.values[inner];
   }
 
   @protected
@@ -8172,6 +8738,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @protected
   void sse_encode_codex_saved_prompt_scope(
     CodexSavedPromptScope self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.index, serializer);
+  }
+
+  @protected
+  void sse_encode_git_archive_format(
+    GitArchiveFormat self,
     SseSerializer serializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs

@@ -87,6 +87,16 @@ Future<GitCommitCompareResult> gitCommitCompare({
   commitId: commitId,
 );
 
+Future<GitCommitCompareResult> gitCompareRange({
+  required String path,
+  required String baseRef,
+  required String headRef,
+}) => RustLib.instance.api.crateApiGitGitCompareRange(
+  path: path,
+  baseRef: baseRef,
+  headRef: headRef,
+);
+
 Future<GitDiffResult> gitCommitDiff({
   required String path,
   required String commitOid,
