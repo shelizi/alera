@@ -727,6 +727,19 @@ Actor validates dispatch mutation + reserves generation/owner
 
 ## 12. Phase 2 其他仍待 audit / 改善的 actor stall 與 admission
 
+### 12.0 已落地（2026-09-13）
+
+`8af85970`（merge `d0e10947`）+ `e6218379`（merge `59adc754`）收完本節四項：
+
+- **12.1 契約 C**：`runtimeSettings.update` / `mobile.runtimeSettings.update` 含 `automation` 時，actor persist 後排 `DeferredRequestClass::Maintenance`，`ServerCommand::AutostartReconcileFinished` 回 actor 再 ok/error reply；失敗不 rollback 已寫入的 setting。`status.get` 在 reconcile 期間仍能回答。測試在 `host_service_autostart_tests.rs`，inbox 必須自行 pump（`test_actor` 會丟掉 command receiver）。
+- **12.2**：skill install 後 `reconcile_agent_integrations` 走獨立一槽 `Semaphore`，不佔 read-side 8 slots；`skill_install_orchestration_hook_reconcile_uses_a_single_host_tool_slot` pin 住。
+- **12.3**：`workspace.removeManaged` preflight 已在 mutation worker 內，不擋 mailbox；`managed_workspace_preflight_tests.rs` 綠，本輪只驗收。
+- **12.4**：`DeferredAdmission` 總 pending（active + queued）有上限，超限回 typed `deferred_request_backpressure`；snapshot 含 pending/active/capacity/rejected/disconnected、request type、`queueWaitMs`。本輪把 quota/storage/AI assist/dictation/account/mobile file 等 call site 接上。控制面 `status.get` / `host.shutdown` 在飽和時仍能回答。
+
+殘留：其他 `tokio::spawn` 路徑（project clone、CLI registration、orchestration waiter 等）仍無界；sign-in 佔一格直到 OAuth 結束（single-flight，刻意為之）。
+
+以下為當時的分析記錄，保留供追溯。
+
 ### 12.1 `runtimeSettings.update` 的 automation autostart reconcile
 
 `host_service_requests.rs` 目前對 `automation` setting：
@@ -1006,9 +1019,13 @@ Owner 之間互不直接參照，跨域呼叫經各自 `*OwnerHost` port 由 int
 ### 16.2 進度（2026-09-13，`8ccdd0f0` merge）
 
 - Per-session 狀態已從 handle 收編：`_TerminalSessionVisibilityAccounting`（`terminal_runtime_visibility_accounting.dart`，leases/visible/appForeground/lastVisibleAt + `_TerminalSessionVisibilityHost` port 觸發 PTY pause/flush/owner 通知）與 `_TerminalSessionOutputPump`（`terminal_runtime_output_pump.dart`，持有 `_TerminalOutputPipeline` + queue/trim/schedule/drain/flushNow，`handle` 以 `_TerminalSessionOutputHost` port 供 write/restore/pointer-catchup 回呼）。
-- Handle 不再持有 pipeline 或 visibility 原始欄位；`buffer_accounting.dart` 60→9（只剩 foreground 委派）、`output_batching.dart` 217→48（surrogate helpers + constants）；`session_handle.dart` 494 行逼近上限，再塞東西需先拆。
+- Handle 不再持有 pipeline 或 visibility 原始欄位；`buffer_accounting.dart` 60→9（只剩 foreground 委派）、`output_batching.dart` 217→48（surrogate helpers + constants）；`session_handle.dart` 當時 494 行逼近上限，再塞東西需先拆。
 - 良性微差異：lease-release→hidden 時原本 deferred flush timer 到點自行 no-op，現在 `onOutputVisibilityChanged` 主動 cancel；輸出行為等價，僅 `flushScheduled` flag 觀察值不同。
 - 驗證：150/150 綠、analyze clean、ratchet ok。
+
+### 16.3 進度（2026-09-13，`5af0df75` merge `db652203`）
+
+零行為變更拆檔：`terminal_runtime_session_handle.dart` 494→329。抽出 `terminal_runtime_session_sync.dart`、`terminal_runtime_session_view.dart`、`terminal_runtime_terminal_attachment.dart`、`terminal_runtime_pty_resize.dart`。PTY teardown 仍在 `terminal_runtime_session_pty.dart`；mixin 要求的 `_stopPtySessionWithMode` 留在 class 上轉發。驗證：`terminal_runtime_native_test.dart` 107 passed（2 POSIX skip on Windows）。
 
 `TerminalRuntime` 實際 logical library 很大，下一步按 ownership 拆：
 
@@ -1111,6 +1128,14 @@ Agent hook reconcile 的 latest-wins scheduler 已完成，可作為 filesystem 
 ---
 
 ## 20. Phase 5：Settings ownership
+
+### 20.0 已完成（`215893ee`，merge `5311468f`）
+
+三類歸屬已對齊：`SettingsController` 是 82 行 facade；mutation 分 `_SettingsControllerLocalUiSettings` / `_SettingsControllerRuntimeOperationalSettings` / `_SettingsControllerPortableSettings`。欄位表在 `docs/settings-ownership.md`。`toRuntimeOperationalMap` / `toPortableConfigurationMap` 由 `settings_ownership.dart` 提供，`RuntimeSettingsRepository` 改送這兩個投影。`test/unit/settings_ownership_test.dart` pin 住每個 serialized field 必須歸類。application/domain 不 import settings presentation 或 app barrel。
+
+已知未清：`agentQuotas` 投影仍帶 local-only 的 `selectedClaudeProfile` / `unpinnedQuotaKeys`（sidecar 不存，load 時從 Drift overlay，與拆前相同）；`updateTerminal` / `updateEditor` / `updateAiDictation` 因跨 tier 仍放在 portable mixin，persist 仍按兩張 map 切開。
+
+以下為原任務描述，保留追溯。
 
 Settings 要區分三類：
 
@@ -1313,12 +1338,16 @@ max-lines 尚未全清前，第 8 步會是 repo-wide exit 1；必須確認 offe
 - `88ca68f3`：刪掉 Dart 側已不可達的 group/tree-row pass-through mapper。
 - `fccf6a37`：panel 派生資料 memoize——`_filteredStatus`/`_groupsFor`/`_visibleCollapsibleKeys` 依 `identical(status)` + query + groupMode 快取，collapse toggle 與一般 rebuild 不再重算 sort+tree。
 
+#### Batch L 熱點已修（`a3e18c9b`，merge `b5735ad0`）
+
+`fromEntries` / `_treeRows` 改 directory map + sibling lists，連續 path-sorted 檔案重用 parent，一次 partition 只建非空 area。真實 `coding-tools-mcp` 7475 筆 `fromEntries` 30.9ms → **6.27ms**（一幀內），故未做 isolate。合成 7.5k 因隨機目錄前綴仍約 27ms，20k/50k mixed 仍超 frame（41ms / 105ms）。wire/FRB schema 未改。
+
 #### Batch L 殘留（實測仍卡頓時接著做）
 
-- `gitStatus()` 仍一次回傳完整 entry list：單次 decode 已減半以上，但幾萬筆時 Dart 端 `fromEntries` 的 sort+tree build 仍是 UI isolate 上的 O(n log n) 單次工作。方向：payload 分頁（先傳前 N + 計數）或 status 摘要化；會動 wire contract，P5 fixture 已落地可在此基礎上加。
+- `gitStatus()` 仍一次回傳完整 entry list：單次 decode 已減半以上，但幾萬筆時 Dart 端 `fromEntries` 仍是 UI isolate 上的 O(n log n) 單次工作。7.5k 真實形狀已進 frame；20k+ 方向仍是 payload 分頁（先傳前 N + 計數）、status 摘要化、或 isolate offload。會動 wire contract，P5 fixture 已落地可在此基礎上加。
 - `WorkspaceSourceControlState` 每次 reload 全表重建；可考慮結構共享或 entry-level diffing。
-- 已量化（`tool/bench/git_status_grouping_bench.dart`，`a4a0823a`）：`fromEntries`（per-area filter + sort + tree build）在 UI isolate 的中位數為 1k≈4ms / 5k≈16.4ms（已貼 16ms frame 邊界）/ 20k≈77ms（約 4.6 幀）/ 50k≈242ms（約 15 幀）。安全上限約 5k 筆；超過應移 background isolate 或改演算法。熱點已定位：`_treeRows` 的 `directoryChild` 對 children linear scan、`parts.take(index+1).join('/')` 每層重組字串。
-- 真實 repo 驗證（`tool/bench/git_status_real_repo_bench.dart`，`de34235c`）：`coding-tools-mcp` 實際 7475 筆（99.99% untracked、深層路徑）跑 `fromEntries` 已要 **30.9ms**（約 2 幀）；依真實分佈放大到 20k→139ms、50k→367ms，比同量級合成數據慢 1.5~1.8 倍（真實路徑更深且集中單一 area）。`unifiedFromEntries` 比 `fromEntries` 快（50k：291 vs 367ms）——`fromEntries` 對每個 area 各 sort+tree build 一次，99.99% 單一 area 時等於整份清單做兩輪。結論：真實 repo 7.5k 已超 16ms frame budget，優化/isolate 化是必修不是備選。
+- 舊合成基準（`a4a0823a`，優化前）：`fromEntries` 1k≈4ms / 5k≈16.4ms / 20k≈77ms / 50k≈242ms。熱點（`directoryChild` linear scan、每層 `join('/')`）已在 `a3e18c9b` 修掉。
+- 真實 repo 優化前（`de34235c`）：`coding-tools-mcp` 7475 筆 `fromEntries` **30.9ms**；依真實分佈放大到 20k→139ms、50k→367ms，比同量級合成慢 1.5~1.8 倍。`unifiedFromEntries` 當時比 `fromEntries` 快，是因為舊 `fromEntries` 對每個 area 各 sort+tree 一次。
 
 ---
 
@@ -1327,20 +1356,22 @@ max-lines 尚未全清前，第 8 步會是 repo-wide exit 1；必須確認 offe
 截至本文件建立前：
 
 - Branch：`refactor/architecture-guard-ci`
-- HEAD：`285b415e7dbd6d44b76689fd741a5b17574d62fe`（以下狀態為 2026-09-13 更新點）
-- Worktree：乾淨
+- HEAD：`59adc754`（以下狀態為 2026-09-13 更新點；本段 handoff 提交會再往前一格）
+- Worktree：本分支乾淨；其餘 feature worktree 保留，不要清理
 - Upstream：無
 - Push：無
 - Architecture guard：PASS
-- Max-lines：**ratchet ok**（0 offender，52 個仍 >500 的 baseline debt 不得再長）
+- Max-lines：**ratchet ok**（0 offender，51 個仍 >500 的 baseline debt 不得再長）
 - Phase 0：核心完成
 - Phase 1：shutdown uncertainty + snapshot retry policy + smoke DB ownership 完成
-- Phase 2：已完成大量 read-side/background I/O mailbox 去阻塞、8-slot active budget、sidebar single-flight、project registration prepare/commit、upload lifecycle cleanup、agent hook latest-wins reconcile、wire fixtures（59 份、Rust 41 + Dart 26 測試全綠）
-- Phase 2 尚未完成：dispatch context install、pending task total backpressure、部分 settings/autostart/managed-workspace preflight、transaction/replay matrix
+- Phase 2：mailbox 去阻塞、8-slot active + 總 pending backpressure、sidebar single-flight、project registration prepare/commit、upload lifecycle cleanup、agent hook latest-wins、dispatch context install 兩階段、autostart reconcile 契約 C、skill-install 獨立 budget、removeManaged preflight 離 mailbox、wire fixtures
+- Phase 2 尚未完成：transaction/replay matrix 的後續 pin（六份 contract 表已在，§13 不重複派卡）；其餘 unbounded `tokio::spawn`（clone / CLI registration / orchestration waiter）；dispatch context 可選測試 5（lost-reply idempotency）
 - Phase 3（P6）：Workbench facade + 4 owner（Selection / Tab-Layout / Catalog / Lifecycle）全部落地
-- Phase 4（P7）：Terminal 四 owner（session / view-buffer / launch-input / renderer-adapter）、Git loader/cache owner、Mobile transition matrix + client factory 全部落地
-- 已知非重構 regression：`alera_shell_page_test.dart` 3 個失敗（sidebar agent counts / new-tab agent entry 相關，見 §7.4）
+- Phase 4（P7）：Terminal 四 owner + session handle 再拆到 329 行、Git loader/cache owner、Mobile transition matrix + client factory 全部落地
+- Phase 5：agent capability matrix（docs-only，`0e88a2f0`）、settings 三類歸屬（`215893ee`）已落地。Release matrix（§21）仍不要跟 correctness 重構同時做
+- Batch L：grouping 熱點已修（真實 7.5k → 6.27ms）；20k+ / payload 分頁 / isolate 仍是後續
+- 已知非重構 regression：`alera_shell_page_test.dart` 3 個失敗已修（`db5e8cd4`，見 §7.4）
 - 其他 worktree：使用者保有多個 feature worktree，不要清理或吸收
 - Merge/rebase/deploy/build release：本工作未做
 
-下一位可以直接從第 24 節 Batch A 開始，不需要重新盤點一次整個專案。
+下一批不必重盤：優先是 §13 後續 pin、§12.0 列出的剩餘 unbounded spawn、Batch L 20k+/分頁，以及不要跟 correctness 重疊的 §21 release matrix。
