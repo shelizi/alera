@@ -912,7 +912,7 @@ Desktop、Mobile、Rust 各自仍有 protocol parsing/DTO 宣告。已有 old-ho
 - Requests/error 線（`wire_fixture_tests_requests.rs` + `terminal_host_wire_requests_fixtures_test.dart`）：project.register round-trip、workspace createManaged（含 deferSetup payload）、tab/workspace not_found、`host_busy`（含 runningSessions 計數）、`runtime_mutation_busy`。
 - 歷史契約降為子集/decode 斷言（現行 host 不再產生、保留防回歸）：`output_resumed_snapshot.legacy`（缺 delta/resetInteractionModes/snapshot 行列數）、`host_shutdown.minimal`、`mobile_hello.legacy`、`workspace_create_managed.legacy`、`host_busy.legacy`、legacy mobile view-prefs request（server backfill 缺失欄位）。
 - 過程中 pin 住的非直覺契約：binary-capable client 的 binary output 在 socket isolate 解為 `TerminalHostOutputTextEvent`（非 `TerminalHostOutputEvent`）；`runtime_mutation_busy` 錯誤會被 client `_sendTerminalHostRequestWithMutationRetry` 重試而非立即 surface（測試改為 pin retry 行為）。
-- 後續 contract 變更：`feat/workspace-archive`（`79ea3c49`）讓 workspace payload 新增 `archivedAt` 欄位——三個含 workspace 物件的 fixture 已補上（`archivedAt: null`）；`workspace_create_managed.legacy` 維持歷史形狀不動。
+- 後續 contract 變更：`feat/workspace-archive`（`79ea3c49`）讓 workspace payload 新增 `archivedAt` 欄位 - 三個含 workspace 物件的 fixture 已補上（`archivedAt: null`）；`workspace_create_managed.legacy` 維持歷史形狀不動。
 - 檔案面維護：`wire_fixture_tests_lifecycle.rs`（679→422）與 `wire_fixture_tests_requests.rs`（584→433）超線後各拆出 `*_hello.rs`/`*_workspace.rs` 姊妹模組，helpers 以 `pub(super)` 共享。
 
 ---
@@ -1058,7 +1058,7 @@ Owner 之間互不直接參照，跨域呼叫經各自 `*OwnerHost` port 由 int
 - `workspace_git_diff_panel.dart` 966→463；inline actions/commit message field 移到既有 part 檔；identity-keyed memoize 保留。
 - 五案全覆蓋：跨 repo late history 丟棄、compare cache 不跨 scope、duplicate refresh coalesce、nested git root、兩個獨立 preference（既有）。
 - 已知微小語意差異：history load 失敗後 `markStale()` 使重新展開 section 自動重試（舊碼 `_historyDirty` 維持 false）；行為更合理，已記錄。
-- 整合註記：`feat/commit-graph-mainview`（`bb6c460f`）的 `gitHistory` 新增 `includeAllRefs`/`offset` 參數，`fake_git_backend` 記錄的 call args map 多了兩個 key——whole-map 期望需帶上（`302e7822` 補齊）。
+- 整合註記：`feat/commit-graph-mainview`（`bb6c460f`）的 `gitHistory` 新增 `includeAllRefs`/`offset` 參數，`fake_git_backend` 記錄的 call args map 多了兩個 key - whole-map 期望需帶上（`302e7822` 補齊）。
 
 `WorkspaceGitDiffPanel` logical library 仍很大。已有 generation/cancellation 防護，下一步是把 loader/cache 從 presentation 移到 application owner。
 
@@ -1085,7 +1085,7 @@ Presentation 保留 render/input/transient UI state。
 ### 18.0 進度（2026-09-12，`4733a6ff`/`e3bd4f37`）
 
 - 七個轉移測試已補齊：`mobile/test/host_connection_transition_matrix_test.dart`（6 新測試）+ `support/direct_runtime_gateway.dart` / `support/relay_runtime_gateway.dart`（完整 direct/relay fixture，relay 支援 handshake、fragmentation、auth renewal、`delayRenewal`）。
-- 行為發現（需決策）：reconnect in-flight 時 `restartRuntime()` 拋 `UnsupportedError` 而非乾淨的 `StateError`——`AsyncLoading` 保留前值使 `_client ?? state.value` 拿到已 dispose 的舊 client。測試 pin 住實際行為；若要改語意需修 controller。
+- 行為發現（需決策）：reconnect in-flight 時 `restartRuntime()` 拋 `UnsupportedError` 而非乾淨的 `StateError` - `AsyncLoading` 保留前值使 `_client ?? state.value` 拿到已 dispose 的舊 client。測試 pin 住實際行為；若要改語意需修 controller。
 - concrete client 拆分未做：`_openClientWithin`/`_openPairedClient` 牽涉 `ConnectionAttempt` zone 傳遞與 `_disposed` 時序，待 restart 語意定案後再拆。
 
 ### 18.1 進度（2026-09-13，`d3777452`/`beebbcd8`）
@@ -1111,7 +1111,7 @@ Presentation 保留 render/input/transient UI state。
 
 ### 19.0 已完成（`0e88a2f0`）
 
-`docs/agent-capability-matrix.md` 已落地：15 個識別符（12 spawnable + 3 quota-only）x 6 維度（launch/hook/status/usage/restart/model override），每格附 file:line 引證。新增 agent 現需動 ≥18-21 個檔案的完整清單在文件 §5。Top gaps：agy/antigravity 識別符分歧（quota 層靠 mapping shim）、quota-only 與 spawn-only registry 切割、fx status Unix-only。Adapter seam 建議（§6）：擴充 `AgentAdapter` 為完整 `AgentDescriptor`（hook/status/quota strategy + model override policy）、hook 安裝改 declarative `HookStrategy` enum、經 FRB 暴露 registry 給 Dart 消除 launch args 雙寫。僅分析未實作——seam 落地是獨立後續工作。
+`docs/agent-capability-matrix.md` 已落地：15 個識別符（12 spawnable + 3 quota-only）x 6 維度（launch/hook/status/usage/restart/model override），每格附 file:line 引證。新增 agent 現需動 ≥18-21 個檔案的完整清單在文件 §5。Top gaps：agy/antigravity 識別符分歧（quota 層靠 mapping shim）、quota-only 與 spawn-only registry 切割、fx status Unix-only。Adapter seam 建議（§6）：擴充 `AgentAdapter` 為完整 `AgentDescriptor`（hook/status/quota strategy + model override policy）、hook 安裝改 declarative `HookStrategy` enum、經 FRB 暴露 registry 給 Dart 消除 launch args 雙寫。僅分析未實作 - seam 落地是獨立後續工作。
 
 以下為原任務描述，保留追溯。
 
@@ -1248,6 +1248,8 @@ max-lines 尚未全清前，第 8 步會是 repo-wide exit 1；必須確認 offe
 
 ## 24. 接手後最推薦的實際順序
 
+> 2026-09-13 更新：本節 Batch A-M 多數已完成或被 §27 取代，內容保留供追溯；現行 queue 以 §27 為準。
+
 ### Batch A：先完成已分析的 Workbench test split
 
 - `_FakeWorkbenchRepository` 抽 part。
@@ -1336,9 +1338,9 @@ max-lines 尚未全清前，第 8 步會是 repo-wide exit 1；必須確認 offe
 - Source control watcher 新增 `_watcherReloadNotBefore` cooldown floor：reload 結束仍有訊號 queued 時，下一次 watcher reload 間隔 250ms→500ms→1000ms→2000ms 遞增；floor 同時限制新訊號 debounce 才不被頂替繞過；無 queued 即歸零。
 - `_syncWatchedDirectories` 集合無變化時不再重送 `updateExplorerWatcher`。
 - Source control 異動清單改 lazy：groups 走 `CustomScrollView` + 每 group `SliverList.builder`，tree mode 走 `SliverList.builder`；2500 筆清單只建 viewport 內的 row。
-- `0766fb13`：`git_status*` wire 改單次傳輸——原本每筆變更走橋三次（`entries` + `groups[].entries` + `tree_rows[].entry`），現在只傳 flat `entries`，groups/tree rows 由 Dart `GitChangeGroup.fromEntries` 重建，decode 量約降 66%；wire schema 未變、不需 FRB regen。已知可見差異：submodule 同時有 range+worktree 變更時同 area 顯示序改為 path 排序。
+- `0766fb13`：`git_status*` wire 改單次傳輸 - 原本每筆變更走橋三次（`entries` + `groups[].entries` + `tree_rows[].entry`），現在只傳 flat `entries`，groups/tree rows 由 Dart `GitChangeGroup.fromEntries` 重建，decode 量約降 66%；wire schema 未變、不需 FRB regen。已知可見差異：submodule 同時有 range+worktree 變更時同 area 顯示序改為 path 排序。
 - `88ca68f3`：刪掉 Dart 側已不可達的 group/tree-row pass-through mapper。
-- `fccf6a37`：panel 派生資料 memoize——`_filteredStatus`/`_groupsFor`/`_visibleCollapsibleKeys` 依 `identical(status)` + query + groupMode 快取，collapse toggle 與一般 rebuild 不再重算 sort+tree。
+- `fccf6a37`：panel 派生資料 memoize - `_filteredStatus`/`_groupsFor`/`_visibleCollapsibleKeys` 依 `identical(status)` + query + groupMode 快取，collapse toggle 與一般 rebuild 不再重算 sort+tree。
 
 #### Batch L 熱點已修（`a3e18c9b`，merge `b5735ad0`）
 
@@ -1362,16 +1364,16 @@ max-lines 尚未全清前，第 8 步會是 repo-wide exit 1；必須確認 offe
 截至本文件建立前：
 
 - Branch：`refactor/architecture-guard-ci`
-- HEAD：`467ba52a`（以下狀態為 2026-09-14 更新點；本段 handoff 提交會再往前一格）
+- HEAD：`2b213d6e`（2026-09-13 全系統重盤點；現行 queue 以 §27 為準）
 - Worktree：本分支乾淨；其餘 feature worktree 保留，不要清理
 - Upstream：無
 - Push：無
-- Architecture guard：PASS
-- Max-lines：**ratchet ok**（0 offender，51 個仍 >500 的 baseline debt 不得再長）
+- Architecture guard：PASS（2026-09-13 重驗）
+- Max-lines：**ratchet FAIL**（8 個 offender，清單與處理方式見 §27.2；52 個仍 >500 的 baseline debt 不得再長）
 - Phase 0：核心完成
 - Phase 1：shutdown uncertainty + snapshot retry policy + smoke DB ownership 完成
-- Phase 2：mailbox 去阻塞、8-slot active + 總 pending backpressure、sidebar single-flight、project registration prepare/commit、upload lifecycle cleanup、agent hook latest-wins、dispatch context install 兩階段、autostart reconcile 契約 C、skill-install 獨立 budget、removeManaged preflight 離 mailbox、wire fixtures、server spawn sweep（`183936e7`：request-driven `tokio::spawn` 全走 `DeferredAdmission` 含 reject 清理；lost-reply re-entry 真 bug 已修——入口 `contains_key` 早退 + completion 先 `get` 驗證再 `remove`；`pending_output_writes` 改 `OutputPersistenceState`（atomic pending + Notify barrier + RAII guard）並刪除死欄位）、tag 唯一性 + clone destination dedupe/admission（`0c9c3183`）、wire fixture 補齊 workspace lifecycle / binary resync / legacy capability / shutdown 變體（`c68b06f2`，29 個新 fixture 全錄製）
-- Phase 2 續（D 批，luna-worker）：`server.rs` SSH bootstrap → `DeferredAdmission` Bulk + cooperative cancel token（`2aab325f`）；timer lane——純 sleep timer 改走 `schedule_delayed`，armed timer 計入 capacity 但不佔 active slot、不進 metrics、滿載仍 deliver，機制拆進 `deferred_admission/delayed.rs`（`af391d99`）；§13.1 failure-injection pin（broadcast 失敗後 restart 一致、migration 中斷恢復、altered-payload typed 拒絕，`2fda52d6`）；`runtimeSettings.update` 改 `BEGIN IMMEDIATE` 單交易 + optional `expectedRevision` OCC（`63cba21c`，`runtime_settings_revision_conflict` + errorDetails，revision 進 get/update response）
+- Phase 2：mailbox 去阻塞、8-slot active + 總 pending backpressure、sidebar single-flight、project registration prepare/commit、upload lifecycle cleanup、agent hook latest-wins、dispatch context install 兩階段、autostart reconcile 契約 C、skill-install 獨立 budget、removeManaged preflight 離 mailbox、wire fixtures、server spawn sweep（`183936e7`：request-driven `tokio::spawn` 全走 `DeferredAdmission` 含 reject 清理；lost-reply re-entry 真 bug 已修 - 入口 `contains_key` 早退 + completion 先 `get` 驗證再 `remove`；`pending_output_writes` 改 `OutputPersistenceState`（atomic pending + Notify barrier + RAII guard）並刪除死欄位）、tag 唯一性 + clone destination dedupe/admission（`0c9c3183`）、wire fixture 補齊 workspace lifecycle / binary resync / legacy capability / shutdown 變體（`c68b06f2`，29 個新 fixture 全錄製）
+- Phase 2 續（D 批，luna-worker）：`server.rs` SSH bootstrap → `DeferredAdmission` Bulk + cooperative cancel token（`2aab325f`）；timer lane - 純 sleep timer 改走 `schedule_delayed`，armed timer 計入 capacity 但不佔 active slot、不進 metrics、滿載仍 deliver，機制拆進 `deferred_admission/delayed.rs`（`af391d99`）；§13.1 failure-injection pin（broadcast 失敗後 restart 一致、migration 中斷恢復、altered-payload typed 拒絕，`2fda52d6`）；`runtimeSettings.update` 改 `BEGIN IMMEDIATE` 單交易 + optional `expectedRevision` OCC（`63cba21c`，`runtime_settings_revision_conflict` + errorDetails，revision 進 get/update response）
 - Phase 2 尚未完成：transaction/replay matrix 的其餘 pin 視需要再補；殘留裸 spawn 審計待收：`server.rs` 的 `OrchestrationDeferredEnter`/`spawn_checkpoint_timer`（sleep→send 型，可用 `schedule_delayed`）、`mobile_gateway.rs:28`、`relay_runtime_peer.rs:66,173`（分類待定）；Dart client 接 `expectedRevision` 是 D4 follow-up
 - 已定義語義邊界（review 沉澱）：`schedule_delayed` 的 armed timer 以 reservation 計入容量界線但 sleep 不佔 slot；wake 時 reservation 先釋放再送 command，滿載下 timeout/due 仍能觸發；disconnect 對 armed timer 只標記不取消（handler 自重驗證）
 - autostart reconcile 已定義語義：reconcile 失敗時 settings 已 persist 但回 error_response 且不 broadcast `runtimeSettingsChanged`；無 automation key 的 fire-and-forget reconcile 在 admission 飽和時可丟棄只剩 warn log
@@ -1379,12 +1381,12 @@ max-lines 尚未全清前，第 8 步會是 repo-wide exit 1；必須確認 offe
 - Phase 4（P7）：Terminal 四 owner + session handle 再拆到 329 行、Git loader/cache owner、Mobile transition matrix + client factory 全部落地
 - Phase 5：agent capability matrix（docs-only，`0e88a2f0`）、settings 三類歸屬（`215893ee`）已落地。Release matrix（§21）仍不要跟 correctness 重構同時做
 - Batch L：grouping 熱點已修（真實 7.5k → 6.27ms）+ reload 後 entry identity 保留（`9cd9384a`，下游 `identical()` memo 命中）；20k+ / payload 分頁 / isolate 仍是後續
-- Commit Graph 右鍵操作：已實作 M1-M3 + Checkout Commit（commit `d2c071f4` / `969498bb` / `7d1ce394` / `3bd1fe58`）——branch badge 右鍵 Switch to Branch 走 `switchWorkspaceBranch` facade、commit 右鍵 Copy Hash/Subject + Checkout Commit（detached HEAD，confirm 提示）+ Revert Commit + Reset（Soft/Mixed/Hard）走 `WorkspaceSourceControlController`；backend `checkout_commit`/`revert_commit`/`reset_to_commit` 落 alera-core + FRB + FakeGitBackend。細節與偏差見 §26；parity backlog（cherry-pick、tag ops、create branch at commit 等）仍未做
+- Commit Graph 右鍵操作：已實作 M1-M3 + Checkout Commit（commit `d2c071f4` / `969498bb` / `7d1ce394` / `3bd1fe58`） - branch badge 右鍵 Switch to Branch 走 `switchWorkspaceBranch` facade、commit 右鍵 Copy Hash/Subject + Checkout Commit（detached HEAD，confirm 提示）+ Revert Commit + Reset（Soft/Mixed/Hard）走 `WorkspaceSourceControlController`；backend `checkout_commit`/`revert_commit`/`reset_to_commit` 落 alera-core + FRB + FakeGitBackend。細節與偏差見 §26；parity backlog（cherry-pick、tag ops、create branch at commit 等）仍未做
 - 已知非重構 regression：`alera_shell_page_test.dart` 3 個失敗已修（`db5e8cd4`，見 §7.4）
 - 其他 worktree：使用者保有多個 feature worktree，不要清理或吸收
 - Merge/rebase/deploy/build release：本工作未做
 
-下一批不必重盤：優先是 §13 後續 pin、§12.0 列出的剩餘 unbounded spawn、Batch L 20k+/分頁，以及不要跟 correctness 重疊的 §21 release matrix。功能面另有 §26 的 Commit Graph 右鍵操作可獨立排程。
+下一批不必重盤：現行排序以 §27 為準（Batch N ratchet 回綠 → Batch O spawn 收尾 → Batch P contract gap disposition → Batch Q Dart expectedRevision → Batch R codegen 評估 → Batch S observability）。Batch L 20k+/分頁維持需求驅動；§21 release matrix 待 correctness 收尾後再做；§26 Commit Graph parity backlog 可獨立排程。
 
 ---
 
@@ -1398,7 +1400,7 @@ max-lines 尚未全清前，第 8 步會是 repo-wide exit 1；必須確認 offe
 - Panel 的 `_GitHistoryCommitRow` 也補上 secondary-tap 右鍵 menu（原本只有 ⋯ 按鈕），與 surface row 對齊。
 - 新增 widget harness `test/widget/workspace_git_history_surface_test_harness.dart` 並拆出 `workspace_git_history_surface_actions_test.dart`，避免原測試檔破 500 行觸發 max-lines ratchet。
 - max-lines baseline 只調整本批成長的檔案（`rust_git_backend.dart` 566→589、`rust/src/api/git.rs` 1391→1392、`test/unit/fake_git_backend.dart` 650→660、新增 `git_commit_ops_tests.rs` 603）；另有數個既有 over-500 檔（`git_diff_models.dart`、`terminal_host/server*`、`tool/bench/git_status_real_repo_bench.dart`）為先前批次遺留，未動。
-- Checkout Commit（commit `3bd1fe58`）：`alera-core` `checkout_commit` 先 `checkout_tree(safe)` 再 `set_head_detached`——checkout 失敗時 HEAD 完全不動，不需要 branch checkout 那種 set_head 後 rollback；先跑 `ensure_pending_changes_compatible`（複用 branch_operations 提為 `pub(super)`）+ `RepositoryState::Clean` 檢查；已在同一 commit detached 時 no-op。menu 項目「Checkout Commit」+ 非破壞性 confirm（提示 detached HEAD 下的 commit 不屬於任何 branch），可走回既有 branch badge 的 Switch to Branch。
+- Checkout Commit（commit `3bd1fe58`）：`alera-core` `checkout_commit` 先 `checkout_tree(safe)` 再 `set_head_detached` - checkout 失敗時 HEAD 完全不動，不需要 branch checkout 那種 set_head 後 rollback；先跑 `ensure_pending_changes_compatible`（複用 branch_operations 提為 `pub(super)`）+ `RepositoryState::Clean` 檢查；已在同一 commit detached 時 no-op。menu 項目「Checkout Commit」+ 非破壞性 confirm（提示 detached HEAD 下的 commit 不屬於任何 branch），可走回既有 branch badge 的 Switch to Branch。
 
 以下為原規劃內容（spec/design/tasks/tests/assumptions 保留供 parity backlog 參考）。
 
@@ -1470,3 +1472,91 @@ max-lines 尚未全清前，第 8 步會是 repo-wide exit 1；必須確認 offe
 - Paged history：mutation 後 `_reload()` 只載回第一頁，已展開的 offset paging 重新累積是接受行為（與既有 refresh 一致）。
 - FRB generated bindings（`lib/src/rust/`）是 committed surface：改 `rust/src/api` 後必須 `make frb-generate` 並把 generated 檔一起提交。
 - Context menu 不做進 design_system；menu builders 留 feature presentation 層，design-system 元件維持 presentational。
+
+---
+
+## 27. 計畫調整：2026-09-13 全系統重盤點
+
+本節是對照 `docs/architecture-review-2026-09-11.md` 六階段路線與 HEAD `2b213d6e` 的重盤結論，取代 §24 Batch A-M 作為現行 queue。
+
+### 27.1 盤點結論
+
+- 方向不變：按 ownership 演進的路線已被結果驗證。Workbench/Terminal/Settings owner、admission/backpressure、七份 contract matrix、wire fixture 皆落地，且過程中抓到真 bug（lost-reply re-entry、tag 唯一性、clone dedupe、settings 部分提交改 `BEGIN IMMEDIATE` + OCC）。
+- Phase 0-4 實質完成；Phase 5 剩 observability 與 release matrix。
+- 文件狀態修正：原 §25「ratchet ok」已過時。D 批與 commit graph 批合入後 `check_max_lines` 目前有 8 個 offender（§27.2），merge gate 是紅的，之後每批都無法乾淨驗收，必須最先處理。
+- §14「等 fixture 穩定後評估 shared schema/codegen」的前提已達成（59+ fixtures、Rust/Desktop/Mobile 三側驗證、legacy 降為 decode 子集），評估批次正式排程（§27.6）。
+- 七份 contract matrix 產出的缺口清單原本沒有對應批次，新增 disposition 專批（§27.4）逐條決定 fix/accept。
+- 殘留 unbounded spawn 只剩兩類：兩個 sleep→send timer 與 connection-scoped lifecycle spawn（§27.3）。
+
+### 27.2 Batch N：先讓 ratchet 回綠（最高優先）
+
+`dart tool/quality/check_max_lines.dart` 目前 exit 1，8 個 offender：
+
+```text
+1961  rust/alera-cli/src/terminal_host/server.rs             (grew from baseline 1810)
+ 610  rust/alera-cli/src/terminal_host/server/deferred_admission_tests.rs
+ 601  lib/src/shared/infra/git/git_diff_models.dart
+ 560  rust/alera-cli/src/terminal_host/server/pty_events.rs
+ 530  tool/bench/git_status_real_repo_bench.dart
+ 522  rust/alera-cli/src/terminal_host/server/dispatch_context_install_tests.rs
+ 512  rust/alera-cli/src/terminal_host/server/terminal_pulse.rs
+ 511  rust/alera-cli/src/terminal_host/server/terminal_spawn.rs
+```
+
+處理方式：
+
+- 測試檔（`deferred_admission_tests.rs`、`dispatch_context_install_tests.rs`、`git_status_real_repo_bench.dart`）：按既有 `#[path]` 姊妹檔 / Dart part 模式機械拆。
+- `git_diff_models.dart`、`pty_events.rs`、`terminal_pulse.rs`、`terminal_spawn.rs`：各 500-600 行，按 domain 職責拆。
+- `server.rs`：這是 actor owner 本身還在長的訊號，不是普通 debt。比照 `orchestration_requests.rs` 先例把 impl block 按 receiver 群組拆到 `server/*_impl.rs`。若評估後判斷工作量過大，baseline-accept 必須在本節寫明理由，不得靜默掩蓋。
+
+驗收：`check_max_lines` exit 0；不新增 baseline 條目，或每個新條目附書面理由。
+
+> 2026-09-13 E 批 merge 後狀態更新：E1/E4 各推高既存 offender 並新增兩個（`agent_settings_contract_tests.rs` 649、`host_service_agent_quota.rs` 562），現 10 個 offender。Batch N 已拆三卡平行開出（N1 `server.rs` impl 拆、N2 三測試檔拆、N3 四 domain 檔拆）；`git_diff_models.dart` 與 `git_status_real_repo_bench.dart` 等 E3（gitStatus offload）落地後再動，避免撞檔。
+
+### 27.3 Batch O：spawn 收尾，關閉 Phase 2 admission 故事
+
+- `server.rs` 的 `schedule_orchestration_enter`（約 921-938）與 `spawn_checkpoint_timer`（約 1271-1280）：sleep→send 裸 spawn 改走 `deferred_admission.schedule_delayed`。先例：`terminal_spawn.rs`、`terminal_pulse_delivery.rs`、`push_delivery.rs`。語義注意：armed timer 計入容量但不佔 slot、不進 metrics；disconnect 只標記不取消，handler 自重驗證。
+- `mobile_gateway.rs` accept loop 與 `relay_runtime_peer.rs` serve/writer：分類為 connection-scoped lifecycle spawn，task 數由連線數決定而非 request-driven，不接 `DeferredAdmission`。把分類結論寫進對應 contract 文件；mobile gateway 是否要加連線上限另開決策。
+- 完成後 §12 的 unbounded spawn 審計正式關閉。
+- **已完成（E1，`35cd68fa` merge `ebb5b461`）**：兩個 sleep→send timer 轉 `schedule_delayed`；reject 時 deferred-enter 清 `orchestration_delivery_in_flight` + broadcast 錯誤、checkpoint 僅 warn（handler generation 驗證，drop 安全）。`mobile_gateway.rs`/`relay_runtime_peer.rs` 三處分類為 infra（accept loop / per-connection loop / writer loop）。
+
+### 27.4 Batch P：contract gap disposition
+
+七份 contract matrix（`docs/*-operation-contract.md`）記錄的缺口逐條決定 fix / accept，並把理由寫回各文件：
+
+| 缺口 | 建議 disposition |
+| --- | --- |
+| orchestration `send`/`reply`/`ask`/`escalate` 無 idempotency key，retry 寫重複列 | 修：加 `clientMutationId`（`agentProfile.launchIdempotent` 有先例） |
+| `terminal.write` 無 op id，lost reply retry 重複送輸入 | 評估：使用者輸入重複的實際風險需定調後決定 |
+| `terminal.terminate` 非冪等，retry 回 `not attached` 與從未 attach 無法區分 | **已修（E4，`f28f1d6c` merge `62e4fd32`）**：optional `clientMutationId` + receipt 表，retry replay `{}` |
+| `agentQuota.consumeCodexResetCredit` 無 idempotency key | **已修（E4，同上）**：receipt 在 admission 前建 pending，成功才 settle；replay 走正常 deferred 路徑回 stored result |
+| `createManaged` retry 是 fail-closed 而非回傳首次建立的 workspace | 產品決策：accept 或改回傳首次 workspace |
+| `terminal_input_backpressure` 是字串前綴非 typed error | 修：升級 typed error code |
+
+會動 wire contract 的項目（idempotency key、typed error）在本批定案，讓 Batch R 的 codegen 評估有真實 contract 變更案例可走完整流程。
+
+### 27.5 Batch Q：Dart client 接 `runtimeSettings.update` expectedRevision
+
+- `runtime_settings_repository.dart` save 路徑目前不帶 revision（`63cba21c` 已讓 server 支援 `expectedRevision` OCC）。先從 `runtimeSettings.get` response 讀 revision，update 帶上。
+- 處理 `runtime_settings_revision_conflict` typed error：定義 UI 行為（重讀合併或提示使用者），不吞錯。
+- 一併盤點其餘呼叫點是否需要 OCC：`runtime_state_migration.dart` 三處、`automation_settings_section.dart`、`runtime_alera_account_repository.dart`。
+- **已完成（E2，`bcaff3a0` merge `1682e7df`）**：revision cache 放共享 `TerminalHostClient`（settings/account/automation 全路徑自動受益）；caller 未明帶時自動附 `expectedRevision`；conflict 先 refresh revision 再 rethrow，UI 層 reload 真值 + toast/錯誤列。Mobile 同構（`PortableHostSettings.revision` + host-tools cache）。剩餘：Dart client 尚未主動送 `clientMutationId`（E4 wire 欄位已就緒，屬 Batch P follow-up）。
+
+### 27.6 Batch R：wire schema/codegen 評估（決策批，不直接實作）
+
+- 評估「維持手寫 + golden fixture」vs「shared schema/codegen」。
+- 評估輸入：Batch P 的 contract 變更實作經驗、三側 fixture 維護成本、mobile/desktop/Rust producer-consumer 形狀差異、unknown/missing field 與 capability downgrade 需求。
+- 產出：書面決策與理由。不引入框架、不改 RPC 層。
+
+### 27.7 Batch S：observability 補齊（排在 release matrix 前）
+
+- 已有：deferred admission metrics 進 status snapshot。
+- 補齊：operation/request ID 跨層貫穿、reconnect reason taxonomy、outcome taxonomy、resource owner/cleanup completion、queue wait 全鏈路。
+- 同批建立可重複 benchmark harness（承接 `tool/bench/git_status_real_repo_bench.dart` 模式），為 §21 效能 gate 鋪路；門檻先有可重複基準再定。
+- 不記錄 credentials、完整 prompt 或完整 terminal payload。
+
+### 27.8 新增工作規則
+
+- 每次 merge feature branch 進本分支後，必須重跑 `check_max_lines` 與 `runtime_architecture_guard`，結果寫回 §25。本輪 ratchet 轉紅即是 merge 後無人重驗證造成。
+- §25 是唯一 living queue 與狀態欄位；各節內的「已完成」註記保留追溯，但不再作為下一批依據。
+- 需求驅動項目不進 queue：Batch L 20k+/分頁/isolate 等實測仍卡頓再做；§21 release matrix 待 correctness 收尾；§26 parity backlog 依功能優先級獨立排程。
