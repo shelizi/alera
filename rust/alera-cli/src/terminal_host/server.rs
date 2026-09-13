@@ -919,22 +919,32 @@ impl ServerActor {
     }
 
     fn schedule_orchestration_enter(
-        &self,
+        &mut self,
         session_id: String,
         session_instance_id: u64,
         message_ids: Vec<String>,
         force_submit: bool,
     ) {
         let inbox = self.inbox.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(DEFERRED_ENTER_DELAY_MS)).await;
-            let _ = inbox.send(ServerCommand::OrchestrationDeferredEnter {
-                session_id,
-                session_instance_id,
-                message_ids,
-                force_submit,
-            });
-        });
+        let cleanup_session_id = session_id.clone();
+        if let Err(error) = self.deferred_admission.schedule_delayed(
+            Duration::from_millis(DEFERRED_ENTER_DELAY_MS),
+            deferred_admission::DeferredRequestClass::Maintenance,
+            "orchestration.deferredEnter",
+            None,
+            async move {
+                let _ = inbox.send(ServerCommand::OrchestrationDeferredEnter {
+                    session_id,
+                    session_instance_id,
+                    message_ids,
+                    force_submit,
+                });
+            },
+        ) {
+            self.orchestration_delivery_in_flight
+                .remove(&cleanup_session_id);
+            self.broadcast_terminal_error(&cleanup_session_id, error.wire_message());
+        }
     }
 
     pub(super) fn queue_orchestration_paste(
@@ -1270,13 +1280,26 @@ impl ServerActor {
 
     fn spawn_checkpoint_timer(&self, session_id: String, generation: u64) {
         let inbox = self.inbox.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(CHECKPOINT_DELAY).await;
-            let _ = inbox.send(ServerCommand::CheckpointTick {
-                session_id,
+        let log_session_id = session_id.clone();
+        if let Err(error) = self.deferred_admission.schedule_delayed(
+            CHECKPOINT_DELAY,
+            deferred_admission::DeferredRequestClass::Maintenance,
+            "terminal.checkpoint",
+            None,
+            async move {
+                let _ = inbox.send(ServerCommand::CheckpointTick {
+                    session_id,
+                    generation,
+                });
+            },
+        ) {
+            tracing::warn!(
+                session_id = %log_session_id,
                 generation,
-            });
-        });
+                error = %error.wire_message(),
+                "checkpoint timer was not admitted"
+            );
+        }
     }
 }
 
