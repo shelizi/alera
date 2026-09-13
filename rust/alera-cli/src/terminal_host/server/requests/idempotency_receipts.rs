@@ -255,6 +255,21 @@ pub(in crate::terminal_host::server) async fn remove_receipt(
     Ok(())
 }
 
+/// Returns the globally retained pending receipts. Pending rows intentionally
+/// survive client disposal so a reconnect can replay an in-flight mutation.
+pub(in crate::terminal_host::server) async fn pending_count(store: &RuntimeStore) -> Result<i64> {
+    let row = sqlx::query(
+        "SELECT COUNT(*) AS count
+         FROM terminalHostIdempotencyReceipts
+         WHERE state = 'pending'",
+    )
+    .fetch_one(store.pool())
+    .await
+    .context("Could not count pending terminal idempotency receipts")?;
+    row.try_get("count")
+        .context("Could not read pending terminal idempotency receipt count")
+}
+
 fn now_millis() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }

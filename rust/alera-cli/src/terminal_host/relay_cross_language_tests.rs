@@ -97,7 +97,7 @@ async fn relay_cross_language_fixture() {
                     if request["type"] == "mobile.hello" { handles[&id].send_control(ClientFrame::UpgradeToBinary).unwrap(); }
                     let _ = accepted.send(());
                 }
-                ServerCommand::ClientDisconnected { id } => { handles.remove(&id); }
+                ServerCommand::ClientDisconnected { id, .. } => { handles.remove(&id); }
                 _ => {}
             }
         }

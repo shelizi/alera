@@ -13,7 +13,7 @@ use crate::terminal_host::client::{
     ClientFrame, ClientFrameOrdering, ClientHandle, MOBILE_CLIENT_TERMINAL_OUT_QUEUE_CAPACITY,
 };
 use crate::terminal_host::frame_codec::encode_output_payload;
-use crate::terminal_host::server::{ClientKind, ServerCommand};
+use crate::terminal_host::server::{ClientKind, DisconnectReason, ServerCommand};
 
 pub fn spawn_mobile_gateway_accept_loop(
     listener: TcpListener,
@@ -76,7 +76,10 @@ async fn mobile_websocket_loop(
                     .await
                     .is_err()
                     {
-                        let _ = inbox.send(ServerCommand::ClientDisconnected { id });
+                        let _ = inbox.send(ServerCommand::ClientDisconnected {
+                            id,
+                            reason: DisconnectReason::TransportWriteFailed,
+                        });
                         break;
                     }
                     continue;
@@ -89,7 +92,10 @@ async fn mobile_websocket_loop(
                         .await
                         .is_err()
                     {
-                        let _ = inbox.send(ServerCommand::ClientDisconnected { id });
+                        let _ = inbox.send(ServerCommand::ClientDisconnected {
+                            id,
+                            reason: DisconnectReason::TransportWriteFailed,
+                        });
                         break;
                     }
                     continue;
@@ -114,16 +120,26 @@ async fn mobile_websocket_loop(
                     }
                     Some(Ok(Message::Ping(payload))) => {
                         if write.send(Message::Pong(payload)).await.is_err() {
+                            let _ = inbox.send(ServerCommand::ClientDisconnected {
+                                id,
+                                reason: DisconnectReason::TransportWriteFailed,
+                            });
                             break;
                         }
                     }
                     Some(Ok(Message::Close(_))) | None => {
-                        let _ = inbox.send(ServerCommand::ClientDisconnected { id });
+                        let _ = inbox.send(ServerCommand::ClientDisconnected {
+                            id,
+                            reason: DisconnectReason::PeerClosed,
+                        });
                         break;
                     }
                     Some(Ok(_)) => {}
                     Some(Err(_)) => {
-                        let _ = inbox.send(ServerCommand::ClientDisconnected { id });
+                        let _ = inbox.send(ServerCommand::ClientDisconnected {
+                            id,
+                            reason: DisconnectReason::PeerClosed,
+                        });
                         break;
                     }
                 }
@@ -140,7 +156,10 @@ async fn mobile_websocket_loop(
                         )
                         .await
                         .is_err() {
-                            let _ = inbox.send(ServerCommand::ClientDisconnected { id });
+                            let _ = inbox.send(ServerCommand::ClientDisconnected {
+                                id,
+                                reason: DisconnectReason::TransportWriteFailed,
+                            });
                             break;
                         }
                     }
@@ -171,7 +190,10 @@ async fn mobile_websocket_loop(
                             Err(TryRecvError::Disconnected) => break,
                         };
                         if result.is_err() {
-                            let _ = inbox.send(ServerCommand::ClientDisconnected { id });
+                            let _ = inbox.send(ServerCommand::ClientDisconnected {
+                                id,
+                                reason: DisconnectReason::TransportWriteFailed,
+                            });
                             break;
                         }
                     }
