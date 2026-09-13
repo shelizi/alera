@@ -1,4 +1,4 @@
-use alera_core::agent_descriptor::{agent_descriptor, AgentDescriptor, AgentModelOverride};
+use crate::agent_descriptor::{agent_descriptor, AgentDescriptor, AgentModelOverride};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 

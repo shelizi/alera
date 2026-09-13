@@ -1,3 +1,4 @@
+pub mod agent_descriptors;
 pub mod agent_hooks;
 pub mod ai_dictation;
 pub mod clipboard;

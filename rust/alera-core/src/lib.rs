@@ -2,6 +2,7 @@ pub mod agent_descriptor;
 pub mod child_process;
 pub mod git;
 pub mod git_cli;
+pub mod managed_agent_launch;
 pub mod process_shell;
 pub mod reading_diff;
 #[cfg(feature = "runtime")]
