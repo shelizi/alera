@@ -87,8 +87,8 @@ class AgentQuotaProviderIdMapper extends EnumMapper<AgentQuotaProviderId> {
         return AgentQuotaProviderId.grok;
       case r'cursor':
         return AgentQuotaProviderId.cursor;
-      case r'antigravity':
-        return AgentQuotaProviderId.antigravity;
+      case 'agy':
+        return AgentQuotaProviderId.agy;
       case r'minimax':
         return AgentQuotaProviderId.minimax;
       case r'zai':
@@ -115,8 +115,8 @@ class AgentQuotaProviderIdMapper extends EnumMapper<AgentQuotaProviderId> {
         return r'grok';
       case AgentQuotaProviderId.cursor:
         return r'cursor';
-      case AgentQuotaProviderId.antigravity:
-        return r'antigravity';
+      case AgentQuotaProviderId.agy:
+        return 'agy';
       case AgentQuotaProviderId.minimax:
         return r'minimax';
       case AgentQuotaProviderId.zai:
@@ -130,10 +130,9 @@ class AgentQuotaProviderIdMapper extends EnumMapper<AgentQuotaProviderId> {
 }
 
 extension AgentQuotaProviderIdMapperExtension on AgentQuotaProviderId {
-  String toValue() {
+  dynamic toValue() {
     AgentQuotaProviderIdMapper.ensureInitialized();
-    return MapperContainer.globals.toValue<AgentQuotaProviderId>(this)
-        as String;
+    return MapperContainer.globals.toValue<AgentQuotaProviderId>(this);
   }
 }
 
@@ -1195,6 +1194,7 @@ class AgentQuotaHostSettingsMapper
     _$enabledProviders,
     opt: true,
     def: AgentQuotaProviderId.values,
+    hook: _CanonicalAgentQuotaProviderListHook(),
   );
   static int _$providerDefaultsVersion(AgentQuotaHostSettings v) =>
       v.providerDefaultsVersion;
@@ -1260,6 +1260,7 @@ class AgentQuotaHostSettingsMapper
     _$unpinnedQuotaKeys,
     opt: true,
     def: const <String>[],
+    hook: _CanonicalAgentQuotaProviderListHook(),
   );
 
   @override
@@ -2190,7 +2191,6 @@ class EditorSettingsMapper extends ClassMapperBase<EditorSettings> {
       MapperContainer.globals.use(_instance = EditorSettingsMapper._());
       ExternalEditorKindMapper.ensureInitialized();
       CodeOpenTargetMapper.ensureInitialized();
-      ExternalEditorExecutableModeMapper.ensureInitialized();
       ExternalEditorWorkspaceModeMapper.ensureInitialized();
     }
     return _instance!;
@@ -2243,20 +2243,15 @@ class EditorSettingsMapper extends ClassMapperBase<EditorSettings> {
     opt: true,
     def: CodeOpenTarget.alera,
   );
-  static ExternalEditorExecutableMode _$zedExecutableMode(EditorSettings v) =>
-      v.zedExecutableMode;
-  static const Field<EditorSettings, ExternalEditorExecutableMode>
-  _f$zedExecutableMode = Field(
-    'zedExecutableMode',
-    _$zedExecutableMode,
+  static Map<String, String> _$externalEditorExecutablePaths(
+    EditorSettings v,
+  ) => v.externalEditorExecutablePaths;
+  static const Field<EditorSettings, Map<String, String>>
+  _f$externalEditorExecutablePaths = Field(
+    'externalEditorExecutablePaths',
+    _$externalEditorExecutablePaths,
     opt: true,
-    def: ExternalEditorExecutableMode.automatic,
-  );
-  static String? _$zedExecutablePath(EditorSettings v) => v.zedExecutablePath;
-  static const Field<EditorSettings, String> _f$zedExecutablePath = Field(
-    'zedExecutablePath',
-    _$zedExecutablePath,
-    opt: true,
+    def: const <String, String>{},
   );
   static ExternalEditorWorkspaceMode _$externalEditorWorkspaceMode(
     EditorSettings v,
@@ -2268,12 +2263,12 @@ class EditorSettingsMapper extends ClassMapperBase<EditorSettings> {
     opt: true,
     def: ExternalEditorWorkspaceMode.newWindow,
   );
-  static bool _$autoOpenNewWorkspacesInZed(EditorSettings v) =>
-      v.autoOpenNewWorkspacesInZed;
-  static const Field<EditorSettings, bool> _f$autoOpenNewWorkspacesInZed =
+  static bool _$autoOpenNewWorkspacesExternally(EditorSettings v) =>
+      v.autoOpenNewWorkspacesExternally;
+  static const Field<EditorSettings, bool> _f$autoOpenNewWorkspacesExternally =
       Field(
-        'autoOpenNewWorkspacesInZed',
-        _$autoOpenNewWorkspacesInZed,
+        'autoOpenNewWorkspacesExternally',
+        _$autoOpenNewWorkspacesExternally,
         opt: true,
         def: false,
       );
@@ -2286,12 +2281,13 @@ class EditorSettingsMapper extends ClassMapperBase<EditorSettings> {
     #autosaveDelaySeconds: _f$autosaveDelaySeconds,
     #externalEditor: _f$externalEditor,
     #codeOpenTarget: _f$codeOpenTarget,
-    #zedExecutableMode: _f$zedExecutableMode,
-    #zedExecutablePath: _f$zedExecutablePath,
+    #externalEditorExecutablePaths: _f$externalEditorExecutablePaths,
     #externalEditorWorkspaceMode: _f$externalEditorWorkspaceMode,
-    #autoOpenNewWorkspacesInZed: _f$autoOpenNewWorkspacesInZed,
+    #autoOpenNewWorkspacesExternally: _f$autoOpenNewWorkspacesExternally,
   };
 
+  @override
+  final MappingHook hook = const _LegacyEditorSettingsHook();
   static EditorSettings _instantiate(DecodingData data) {
     return EditorSettings(
       tabSize: data.dec(_f$tabSize),
@@ -2300,10 +2296,11 @@ class EditorSettingsMapper extends ClassMapperBase<EditorSettings> {
       autosaveDelaySeconds: data.dec(_f$autosaveDelaySeconds),
       externalEditor: data.dec(_f$externalEditor),
       codeOpenTarget: data.dec(_f$codeOpenTarget),
-      zedExecutableMode: data.dec(_f$zedExecutableMode),
-      zedExecutablePath: data.dec(_f$zedExecutablePath),
+      externalEditorExecutablePaths: data.dec(_f$externalEditorExecutablePaths),
       externalEditorWorkspaceMode: data.dec(_f$externalEditorWorkspaceMode),
-      autoOpenNewWorkspacesInZed: data.dec(_f$autoOpenNewWorkspacesInZed),
+      autoOpenNewWorkspacesExternally: data.dec(
+        _f$autoOpenNewWorkspacesExternally,
+      ),
     );
   }
 
@@ -2369,6 +2366,8 @@ extension EditorSettingsValueCopy<$R, $Out>
 
 abstract class EditorSettingsCopyWith<$R, $In extends EditorSettings, $Out>
     implements ClassCopyWith<$R, $In, $Out> {
+  MapCopyWith<$R, String, String, ObjectCopyWith<$R, String, String>>
+  get externalEditorExecutablePaths;
   $R call({
     int? tabSize,
     String? themeName,
@@ -2376,10 +2375,9 @@ abstract class EditorSettingsCopyWith<$R, $In extends EditorSettings, $Out>
     int? autosaveDelaySeconds,
     ExternalEditorKind? externalEditor,
     CodeOpenTarget? codeOpenTarget,
-    ExternalEditorExecutableMode? zedExecutableMode,
-    String? zedExecutablePath,
+    Map<String, String>? externalEditorExecutablePaths,
     ExternalEditorWorkspaceMode? externalEditorWorkspaceMode,
-    bool? autoOpenNewWorkspacesInZed,
+    bool? autoOpenNewWorkspacesExternally,
   });
   EditorSettingsCopyWith<$R2, $In, $Out2> $chain<$R2, $Out2>(
     Then<$Out2, $R2> t,
@@ -2395,6 +2393,13 @@ class _EditorSettingsCopyWithImpl<$R, $Out>
   late final ClassMapperBase<EditorSettings> $mapper =
       EditorSettingsMapper.ensureInitialized();
   @override
+  MapCopyWith<$R, String, String, ObjectCopyWith<$R, String, String>>
+  get externalEditorExecutablePaths => MapCopyWith(
+    $value.externalEditorExecutablePaths,
+    (v, t) => ObjectCopyWith(v, $identity, t),
+    (v) => call(externalEditorExecutablePaths: v),
+  );
+  @override
   $R call({
     int? tabSize,
     String? themeName,
@@ -2402,10 +2407,9 @@ class _EditorSettingsCopyWithImpl<$R, $Out>
     int? autosaveDelaySeconds,
     ExternalEditorKind? externalEditor,
     CodeOpenTarget? codeOpenTarget,
-    ExternalEditorExecutableMode? zedExecutableMode,
-    Object? zedExecutablePath = $none,
+    Map<String, String>? externalEditorExecutablePaths,
     ExternalEditorWorkspaceMode? externalEditorWorkspaceMode,
-    bool? autoOpenNewWorkspacesInZed,
+    bool? autoOpenNewWorkspacesExternally,
   }) => $apply(
     FieldCopyWithData({
       if (tabSize != null) #tabSize: tabSize,
@@ -2415,12 +2419,12 @@ class _EditorSettingsCopyWithImpl<$R, $Out>
         #autosaveDelaySeconds: autosaveDelaySeconds,
       if (externalEditor != null) #externalEditor: externalEditor,
       if (codeOpenTarget != null) #codeOpenTarget: codeOpenTarget,
-      if (zedExecutableMode != null) #zedExecutableMode: zedExecutableMode,
-      if (zedExecutablePath != $none) #zedExecutablePath: zedExecutablePath,
+      if (externalEditorExecutablePaths != null)
+        #externalEditorExecutablePaths: externalEditorExecutablePaths,
       if (externalEditorWorkspaceMode != null)
         #externalEditorWorkspaceMode: externalEditorWorkspaceMode,
-      if (autoOpenNewWorkspacesInZed != null)
-        #autoOpenNewWorkspacesInZed: autoOpenNewWorkspacesInZed,
+      if (autoOpenNewWorkspacesExternally != null)
+        #autoOpenNewWorkspacesExternally: autoOpenNewWorkspacesExternally,
     }),
   );
   @override
@@ -2434,21 +2438,17 @@ class _EditorSettingsCopyWithImpl<$R, $Out>
     ),
     externalEditor: data.get(#externalEditor, or: $value.externalEditor),
     codeOpenTarget: data.get(#codeOpenTarget, or: $value.codeOpenTarget),
-    zedExecutableMode: data.get(
-      #zedExecutableMode,
-      or: $value.zedExecutableMode,
-    ),
-    zedExecutablePath: data.get(
-      #zedExecutablePath,
-      or: $value.zedExecutablePath,
+    externalEditorExecutablePaths: data.get(
+      #externalEditorExecutablePaths,
+      or: $value.externalEditorExecutablePaths,
     ),
     externalEditorWorkspaceMode: data.get(
       #externalEditorWorkspaceMode,
       or: $value.externalEditorWorkspaceMode,
     ),
-    autoOpenNewWorkspacesInZed: data.get(
-      #autoOpenNewWorkspacesInZed,
-      or: $value.autoOpenNewWorkspacesInZed,
+    autoOpenNewWorkspacesExternally: data.get(
+      #autoOpenNewWorkspacesExternally,
+      or: $value.autoOpenNewWorkspacesExternally,
     ),
   );
 
@@ -3303,3 +3303,4 @@ class _TerminalColorOverridesCopyWithImpl<$R, $Out>
   $chain<$R2, $Out2>(Then<$Out2, $R2> t) =>
       _TerminalColorOverridesCopyWithImpl<$R2, $Out2>($value, $cast, t);
 }
+

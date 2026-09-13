@@ -64,7 +64,11 @@ async fn configuration_migration_is_idempotent_and_preserves_local_settings() {
     let mut next = snapshot["document"].clone();
     next["desktop"]["settings"]["terminal"]["fontSize"] = json!(18);
     apply(&store, &snapshot, &next).await.unwrap();
-    assert!(store.agent_status_hook_settings().await.unwrap().codex);
+    assert!(store
+        .agent_status_hook_settings()
+        .await
+        .unwrap()
+        .is_enabled("codex"));
     assert!(store
         .get_metadata("configuration.backup.a")
         .await
