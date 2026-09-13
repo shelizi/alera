@@ -8,12 +8,17 @@ mod branch_operations;
 #[cfg(test)]
 #[path = "git_branch_tests.rs"]
 mod branch_tests;
+mod commit_operations;
+#[cfg(test)]
+#[path = "git_commit_ops_tests.rs"]
+mod commit_ops_tests;
 pub mod hosted_review;
 mod repository_metadata;
 pub use branch_operations::{
     branch_exists, checkout_branch, create_and_checkout_branch, delete_branch,
     is_valid_branch_name, list_branches,
 };
+pub use commit_operations::{reset_to_commit, revert_commit, GitResetMode};
 pub use repository_metadata::{current_branch, is_worktree_clean, repository_remote_url};
 
 #[derive(Clone, Debug, PartialEq, Eq)]

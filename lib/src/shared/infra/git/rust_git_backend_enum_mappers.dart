@@ -17,6 +17,14 @@ extension on RustGitBackend {
     };
   }
 
+  rust_commit_ops.GitResetMode _toRustResetMode(GitResetMode mode) {
+    return switch (mode) {
+      GitResetMode.soft => rust_commit_ops.GitResetMode.soft,
+      GitResetMode.mixed => rust_commit_ops.GitResetMode.mixed,
+      GitResetMode.hard => rust_commit_ops.GitResetMode.hard,
+    };
+  }
+
   GitExplorerStatusSnapshot _toExplorerStatusSnapshot(
     explorer_rust.GitExplorerStatusSnapshot snapshot,
   ) {

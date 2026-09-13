@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:alera/src/shared/infra/git/git_backend.dart';
+import 'package:alera/src/shared/infra/git/git_commit_ops_models.dart';
 import 'package:alera/src/shared/infra/git/git_diff_models.dart';
 import 'package:alera/src/shared/infra/git/git_exception.dart';
 import 'package:alera/src/shared/infra/git/git_explorer_status.dart';
@@ -9,6 +10,7 @@ import 'package:alera/src/shared/infra/git/git_remote.dart';
 import 'package:alera/src/shared/infra/git/git_worktree_entry.dart';
 
 part 'fake_git_backend_defaults.dart';
+part 'fake_git_backend_commit_ops.dart';
 part 'fake_git_backend_diffs.dart';
 part 'fake_git_backend_hosted_review.dart';
 part 'fake_git_backend_status.dart';
@@ -19,6 +21,7 @@ part 'fake_git_backend_workspaces.dart';
 /// state and failure injection without spawning git.
 class FakeGitBackend
     with
+        _FakeGitBackendCommitOps,
         _FakeGitBackendStatus,
         _FakeGitBackendDiffs,
         _FakeGitBackendHostedReview,
@@ -131,6 +134,9 @@ class FakeGitBackend
   GitException? discardAreaError;
   GitException? commitError;
   GitException? amendCommitError;
+  GitException? revertCommitError;
+  GitException? resetToCommitError;
+  String revertCommitResult = 'reverted123';
   GitException? fetchError;
   void Function()? onFetch;
   GitException? pullError;

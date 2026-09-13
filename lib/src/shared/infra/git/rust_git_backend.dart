@@ -2,12 +2,14 @@ import 'dart:typed_data';
 
 import 'package:alera/src/rust/api/git.dart' as rust;
 import 'package:alera/src/rust/api/git/git_branch.dart' as rust_branch;
+import 'package:alera/src/rust/api/git/git_commit_ops.dart' as rust_commit_ops;
 import 'package:alera/src/rust/api/git/git_hosted_review.dart'
     as hosted_review_rust;
 import 'package:alera/src/rust/api/git_diff_blob.dart' as rust_blob;
 import 'package:alera/src/rust/api/git_explorer_status.dart' as explorer_rust;
 import 'package:alera/src/rust/api/reading_diff.dart' as rust_reading_diff;
 import 'package:alera/src/shared/infra/git/git_backend.dart';
+import 'package:alera/src/shared/infra/git/git_commit_ops_models.dart';
 import 'package:alera/src/shared/infra/git/git_diff_models.dart';
 import 'package:alera/src/shared/infra/git/git_exception.dart';
 import 'package:alera/src/shared/infra/git/git_explorer_status.dart';
@@ -405,6 +407,32 @@ class const RustGitBackend()
   @override
   Future<String> amendCommit({required String path, required String message}) =>
       _guard(() => rust.gitCommitAmend(path: path, message: message));
+
+  @override
+  Future<String> revertCommit({
+    required String path,
+    required String commitId,
+    int? mainlineParent,
+  }) => _guard(
+    () => rust_commit_ops.gitRevertCommit(
+      path: path,
+      commitId: commitId,
+      mainlineParent: mainlineParent,
+    ),
+  );
+
+  @override
+  Future<void> resetToCommit({
+    required String path,
+    required String commitId,
+    required GitResetMode mode,
+  }) => _guard(
+    () => rust_commit_ops.gitResetToCommit(
+      path: path,
+      commitId: commitId,
+      mode: _toRustResetMode(mode),
+    ),
+  );
 
   @override
   Future<void> fetch(String path) => _guard(() => rust.gitFetch(path: path));
