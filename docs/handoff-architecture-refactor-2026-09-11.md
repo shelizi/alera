@@ -1351,6 +1351,10 @@ max-lines 尚未全清前，第 8 步會是 repo-wide exit 1；必須確認 offe
 - 舊合成基準（`a4a0823a`，優化前）：`fromEntries` 1k≈4ms / 5k≈16.4ms / 20k≈77ms / 50k≈242ms。熱點（`directoryChild` linear scan、每層 `join('/')`）已在 `a3e18c9b` 修掉。
 - 真實 repo 優化前（`de34235c`）：`coding-tools-mcp` 7475 筆 `fromEntries` **30.9ms**；依真實分佈放大到 20k→139ms、50k→367ms，比同量級合成慢 1.5~1.8 倍。`unifiedFromEntries` 當時比 `fromEntries` 快，是因為舊 `fromEntries` 對每個 area 各 sort+tree 一次。
 
+### Batch M：Commit Graph 右鍵操作（Git Graph parity）
+
+這是功能批次不是重構批次：main-area commit graph tab 的 branch label 右鍵切換分支、commit 右鍵 reset/revert 等操作，對齊 VS Code Git Graph。規劃細節（現況盤點、backend 缺口、分批任務、測試、風險）見 §26。可與 correctness 批次平行排程，互不重疊。
+
 ---
 
 ## 25. 交接完成條件與目前真實狀態
@@ -1372,8 +1376,84 @@ max-lines 尚未全清前，第 8 步會是 repo-wide exit 1；必須確認 offe
 - Phase 4（P7）：Terminal 四 owner + session handle 再拆到 329 行、Git loader/cache owner、Mobile transition matrix + client factory 全部落地
 - Phase 5：agent capability matrix（docs-only，`0e88a2f0`）、settings 三類歸屬（`215893ee`）已落地。Release matrix（§21）仍不要跟 correctness 重構同時做
 - Batch L：grouping 熱點已修（真實 7.5k → 6.27ms）；20k+ / payload 分頁 / isolate 仍是後續
+- Commit Graph 右鍵操作：功能規劃已落在 §26（Batch M），尚未實作
 - 已知非重構 regression：`alera_shell_page_test.dart` 3 個失敗已修（`db5e8cd4`，見 §7.4）
 - 其他 worktree：使用者保有多個 feature worktree，不要清理或吸收
 - Merge/rebase/deploy/build release：本工作未做
 
-下一批不必重盤：優先是 §13 後續 pin、§12.0 列出的剩餘 unbounded spawn、Batch L 20k+/分頁，以及不要跟 correctness 重疊的 §21 release matrix。
+下一批不必重盤：優先是 §13 後續 pin、§12.0 列出的剩餘 unbounded spawn、Batch L 20k+/分頁，以及不要跟 correctness 重疊的 §21 release matrix。功能面另有 §26 的 Commit Graph 右鍵操作可獨立排程。
+
+---
+
+## 26. Commit Graph 右鍵操作（對齊 VS Code Git Graph）
+
+規劃日期：2026-09-13。這是功能規劃，不是重構批次；本節只記錄分析與設計，**尚未落任何程式碼**。
+
+### 26.1 Spec
+
+在 main-area commit graph tab（`WorkspaceGitHistorySurface`，`workspace_git_history_surface.dart`）上：
+
+1. 對 branch name label（`GitRefBadge`）按右鍵 → context menu 提供「Switch to Branch」切換到該分支。
+2. 對 commit row 按右鍵 → context menu 提供 reset / revert 等 git 操作。
+
+參考 mhutchie/vscode-git-graph 的 context menu 面（`docs.mhutchie.com/vscode-git-graph/general/context-menus`）：
+
+- Commit：Add Tag / Create Branch / Checkout / Cherry Pick / Revert / Drop / Merge into current branch / Rebase onto / Reset to Commit（soft|mixed|hard）/ Copy Hash / Copy Subject。
+- Local branch：Checkout / Rename / Delete / Merge / Rebase onto / Push / Create Archive / Copy Name。
+- Remote branch：Checkout（建 local tracking）/ Delete Remote / Fetch into local / Pull into current / Copy Name。
+- Tag：View Details / Delete / Push / Create Archive / Copy Name。
+
+### 26.2 現況盤點
+
+- Side panel（`_GitHistoryPanel`，`workspace_git_history_panel.dart`）已有雛形：`GitRefBadge.onOpenActions` 右鍵/long-press → `_openRefActions`，但只給 `refs/heads/` 一個「Switch to Branch」；commit row 只有 ⋯ 按鈕 → Copy Commit Hash / Copy Commit Message（`_CommitAction`）。
+- Main-area surface 的 `_CommitGraphRow`（`workspace_git_history_commit_row.dart`）**沒有任何 context menu**：badge 沒接 `onOpenActions`，row 沒有 secondary-tap。`GitRefBadge`（`workspace_git_history_graph.dart`）本身已支援 `onSecondaryTapDown`/`onLongPressStart`，只需接上。
+- 「Switch to Branch」既有語意：`alera_shell_page_body.dart` → `controller.switchWorkspaceBranch(project, workspace, branch)` → `WorkspaceService.switchWorkspaceBranch` → managed runtime `workspace.switchBranch` RPC，否則 `gitBackend.checkoutBranch` + workspace record 更新 + 失敗 rollback。**不可直接呼叫 `gitBackend.checkoutBranch`**，否則 `workspace.branch` metadata 會漂移。
+- `GitBackend` 已有：checkoutBranch / createAndCheckoutBranch / deleteBranch（恆 force）/ isAncestor / branchExists / commit / amendCommit / fetch / pull / push / stash / stashPop。
+- `GitBackend` 缺少：reset、revert、cherryPick、checkoutCommit（detached）、createBranchAtCommit、createTag/deleteTag、renameBranch、merge、rebase、deleteRemoteBranch。
+- `GitHistoryItemRef` 已帶 `id`（full ref，如 `refs/heads/foo`）/ `name` / `revision`（oid）/ `category`（branches|remoteBranches|tags|commits），menu 可按類型分流；remote badge 名形如 `origin/main`。
+- 既有元件：`AleraDropdownEntry` + `showMenu`（模式見 `workspace_git_diff_panel_context_menu.dart`）、`AleraConfirmDialog`（含 `destructive`）、`AleraToast`；`_messageFor(error)` 在 `workspace_git_diff_panel_types.dart`，抽共用或複製等價 mapping。
+- `GitWorktreeMetadataWatcher` 只 watch `.git` commondir 與 `worktrees/`；mutation 後 source control panel 靠 `WorkspaceSourceControlController.refresh()` 收斂，graph surface 自己 `_reload()`。
+
+### 26.3 Design
+
+- 共用 menu builders 抽成新檔 `workspace_git_history_actions.dart`（feature presentation 層，非 design_system；callback 驅動、可單測），panel 與 surface 共用。現有 `_openRefActions`/`_openActions`/`_GitRefAction`/`_CommitAction` 從 panel library 搬入並擴充。
+- `_CommitGraphRow`：row 加 secondary tap（`GestureDetector.onSecondaryTapDown` 或 InkWell `onSecondaryTap`）→ commit menu，anchor 用 pointer global position（同 badge 的 `onOpenActions` 模式）；badge 接上 `GitRefBadge(onOpenActions:)` → ref menu。
+- Switch to Branch：surface 用 `ref.read(workbenchControllerProvider)` 的 `state.projects` 依 `workspace.projectId` 解析 project，再走 `switchWorkspaceBranch` facade，不改 facade 簽名；找不到 project（尚未 bootstrap）時 menu 項目 disabled。失敗（`Conflict`/`BranchNotFound`/`WorktreeAlreadyExists`）→ `AleraToast` error。
+- 新增 backend ops（各自獨立批次）：
+  - `revertCommit({path, commitId, mainlineParent})`：git2 `repo.revert` + 產生 commit；merge commit（`parentIds.length > 1`）必須帶 mainline parent；non-merge 不可傳。
+  - `resetToCommit({path, commitId, mode})`：git2 `repo.reset(target, ResetType::{Soft,Mixed,Hard}, checkoutBuilder)`；`repo.state() != RepositoryState::Clean`（in-progress merge/rebase/cherry-pick）一律拒絕；hard 需要 UI destructive confirm。
+  - Rust 實作放 `alera-core/src/git/`（新 `commit_operations.rs` 或同層姊妹檔），FRB entrypoint 放 `rust/src/api/git.rs` 或 `git_branch.rs`；`rust_git_backend.dart` 轉接並把 `GitError` 翻成 `GitException` 階層；`FakeGitBackend` 補 call 記錄與 error 注入。
+- Reset 語意：只移動目前 branch 的 HEAD；branch 名不變、不動 workspace record、不走 runtime RPC，與 source control panel 的 stage/commit/stash 一致（都直接 `gitBackend`）。
+- Post-mutation refresh：成功後 `_compareCache.clear()` + `_reload()`（新 history result 帶回新 `currentRef`）+ `workspaceSourceControlControllerProvider(_sourceControlScope.path).notifier.refresh()`。
+- Menu 內容（第一版範圍）：
+  - Commit row（非 virtual）：Copy Commit Hash、Copy Commit Subject、Revert Commit…、Reset Current Branch to This Commit → Soft/Mixed/Hard 子選項；tap 仍維持開 commit diff tab。
+  - Local branch badge（`refs/heads/`）：Switch to Branch（current branch 顯示 selected 且 disabled）、Copy Branch Name。
+  - Remote branch badge（`refs/remotes/`）：Copy Branch Name；checkout remote 需新 backend op 建 local tracking branch，列後續。
+  - Tag badge（`refs/tags/`）：Copy Tag Name；add/delete/push 列後續。
+  - incoming/outgoingChanges virtual row（`viewModel.kind` boundary）：不給 menu。
+- 破壞性操作 guard：
+  - Hard reset → `AleraConfirmDialog` destructive，文案明示 uncommitted changes 會遺失；可先 `status()` 檢查 dirty 給精準警告。
+  - Revert merge commit → 需要 mainline 選擇；第一版給 parent 子選單或先 `enabled: false`，spec 定案後再實作。
+  - Revert/reset 失敗一律 error toast，不吞錯。
+- max-lines：`workspace_git_history_surface.dart` 目前 460；menu builders 與 action handlers 放 part 檔 `workspace_git_history_surface_actions.dart`，避免 surface 破 500。
+
+### 26.4 Tasks（小批 TDD）
+
+1. **M1（純 Dart，不需 backend 新 op）**：抽 `workspace_git_history_actions.dart` 共用 menu builders，panel 改用共用檔（行為不變）；surface 加 row secondary tap → commit menu（Copy Hash/Subject）+ badge `onOpenActions` → ref menu（Switch to Branch / Copy Branch Name）；switch 走 facade，成功後 `_reload()` + source control refresh。
+2. **M2（revert）**：alera-core `revert_commit` + FRB + `RustGitBackend` + `FakeGitBackend`；menu 項目與 merge commit mainline 策略。
+3. **M3（reset）**：alera-core `reset_to_commit(mode)` + FRB + Dart + fake；Reset 子選單，Hard 走 destructive confirm dialog。
+4. **Parity backlog（先不做）**：Create Branch at Commit、Checkout Commit（detached）、Cherry Pick、Drop Commit、Merge into current branch、Rebase onto、Tag add/delete/push、Remote branch tracking checkout / pull / delete、Rename Branch、Delete Branch（非 force 或 merge-check 變體）、Create Archive、uncommitted-changes row 操作、Ctrl/Cmd+click 兩 commit compare。
+
+### 26.5 Tests
+
+- Rust：新增 `git_revert_tests.rs` / `git_reset_tests.rs`（沿用 `git_*_tests.rs` 姊妹檔模式）：revert 成功產生 commit、merge 無 mainline 拒絕、conflict、detached HEAD；reset 三種 mode、dirty 下 hard 行為、unborn/detached、`RepositoryState` 非 Clean 拒絕。
+- `FakeGitBackend`：新方法 call 記錄 + error 注入欄位。
+- Widget：`workspace_git_history_surface_test.dart` 補 secondary-tap 開 commit menu、badge 右鍵開 ref menu、switch 成功 reload history、reset hard 先出 confirm 且 cancel 不動 backend、revert 失敗 toast；`workspace_git_history_panel_test.dart` 回歸（共用 menu 抽出後行為不變）。
+
+### 26.6 Assumptions / 風險
+
+- reset/revert 直接作用 `workspace.path` 的 checkout，不區分 main/managed；若 managed runtime 將來接管 git mutation，再評估 `workspace.*` RPC。
+- Automation owner 仍在跑時 reset/revert 可能與 agent 工作區衝突；既有 `_switchBranch` 也沒有 owner preflight，先跟齊現狀，若要加 `workspace_has_active_automation_owner` preflight 另行決策。
+- Paged history：mutation 後 `_reload()` 只載回第一頁，已展開的 offset paging 重新累積是接受行為（與既有 refresh 一致）。
+- FRB generated bindings（`lib/src/rust/`）是 committed surface：改 `rust/src/api` 後必須 `make frb-generate` 並把 generated 檔一起提交。
+- Context menu 不做進 design_system；menu builders 留 feature presentation 層，design-system 元件維持 presentational。
