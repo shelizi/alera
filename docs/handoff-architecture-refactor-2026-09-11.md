@@ -1362,7 +1362,7 @@ max-lines 尚未全清前，第 8 步會是 repo-wide exit 1；必須確認 offe
 截至本文件建立前：
 
 - Branch：`refactor/architecture-guard-ci`
-- HEAD：`59adc754`（以下狀態為 2026-09-13 更新點；本段 handoff 提交會再往前一格）
+- HEAD：`467ba52a`（以下狀態為 2026-09-14 更新點；本段 handoff 提交會再往前一格）
 - Worktree：本分支乾淨；其餘 feature worktree 保留，不要清理
 - Upstream：無
 - Push：無
@@ -1370,12 +1370,14 @@ max-lines 尚未全清前，第 8 步會是 repo-wide exit 1；必須確認 offe
 - Max-lines：**ratchet ok**（0 offender，51 個仍 >500 的 baseline debt 不得再長）
 - Phase 0：核心完成
 - Phase 1：shutdown uncertainty + snapshot retry policy + smoke DB ownership 完成
-- Phase 2：mailbox 去阻塞、8-slot active + 總 pending backpressure、sidebar single-flight、project registration prepare/commit、upload lifecycle cleanup、agent hook latest-wins、dispatch context install 兩階段、autostart reconcile 契約 C、skill-install 獨立 budget、removeManaged preflight 離 mailbox、wire fixtures
-- Phase 2 尚未完成：transaction/replay matrix 的後續 pin（六份 contract 表已在，§13 不重複派卡）；其餘 unbounded `tokio::spawn`（clone / CLI registration / orchestration waiter）；dispatch context 可選測試 5（lost-reply idempotency）
+- Phase 2：mailbox 去阻塞、8-slot active + 總 pending backpressure、sidebar single-flight、project registration prepare/commit、upload lifecycle cleanup、agent hook latest-wins、dispatch context install 兩階段、autostart reconcile 契約 C、skill-install 獨立 budget、removeManaged preflight 離 mailbox、wire fixtures、server spawn sweep（`183936e7`：request-driven `tokio::spawn` 全走 `DeferredAdmission` 含 reject 清理；lost-reply re-entry 真 bug 已修——入口 `contains_key` 早退 + completion 先 `get` 驗證再 `remove`；`pending_output_writes` 改 `OutputPersistenceState`（atomic pending + Notify barrier + RAII guard）並刪除死欄位）、tag 唯一性 + clone destination dedupe/admission（`0c9c3183`）、wire fixture 補齊 workspace lifecycle / binary resync / legacy capability / shutdown 變體（`c68b06f2`，29 個新 fixture 全錄製）
+- Phase 2 尚未完成：transaction/replay matrix 的後續 pin（六份 contract 表已在，§13 不重複派卡）；`server.rs:1024` SSH bootstrap request job 仍裸 spawn（在 `server/` 外、C1 範圍外，候選補收）
+- 已定義語義邊界（review 沉澱）：Maintenance class 的 sleep 型 timer（`terminalPulse.due`/`retry`、orchestration wait poll/timeout、`terminal.startup.*`、push flush delay）在整個 sleep 期間佔用一個 8-slot 額度——sustained load 下 Maintenance lane 可能被睡眠 timer 擠壓而 reject 其他維護工作；若實測出現 starvation，改走獨立 timer wheel 或調整 class 配額
+- autostart reconcile 已定義語義：reconcile 失敗時 settings 已 persist 但回 error_response 且不 broadcast `runtimeSettingsChanged`；無 automation key 的 fire-and-forget reconcile 在 admission 飽和時可丟棄只剩 warn log
 - Phase 3（P6）：Workbench facade + 4 owner（Selection / Tab-Layout / Catalog / Lifecycle）全部落地
 - Phase 4（P7）：Terminal 四 owner + session handle 再拆到 329 行、Git loader/cache owner、Mobile transition matrix + client factory 全部落地
 - Phase 5：agent capability matrix（docs-only，`0e88a2f0`）、settings 三類歸屬（`215893ee`）已落地。Release matrix（§21）仍不要跟 correctness 重構同時做
-- Batch L：grouping 熱點已修（真實 7.5k → 6.27ms）；20k+ / payload 分頁 / isolate 仍是後續
+- Batch L：grouping 熱點已修（真實 7.5k → 6.27ms）+ reload 後 entry identity 保留（`9cd9384a`，下游 `identical()` memo 命中）；20k+ / payload 分頁 / isolate 仍是後續
 - Commit Graph 右鍵操作：功能規劃已落在 §26（Batch M），尚未實作
 - 已知非重構 regression：`alera_shell_page_test.dart` 3 個失敗已修（`db5e8cd4`，見 §7.4）
 - 其他 worktree：使用者保有多個 feature worktree，不要清理或吸收
