@@ -5,7 +5,10 @@ import 'package:alera/src/shared/infra/git/git_commit_ops_models.dart';
 import 'package:alera/src/shared/infra/git/git_diff_models.dart';
 import 'package:flutter/material.dart';
 
-enum GitHistoryRefMenuAction { switchBranch, copyName }
+import 'workspace_git_history_ref_menus.dart';
+
+export 'workspace_git_history_ref_actions.dart';
+export 'workspace_git_history_ref_menus.dart';
 
 enum GitHistoryCommitMenuAction {
   copyHash,
@@ -24,35 +27,21 @@ Future<GitHistoryRefMenuAction?> showGitHistoryRefMenu(
   GitHistoryItemRef itemRef,
   Offset globalPosition, {
   required bool isCurrentBranch,
+  bool canPullIntoCurrentBranch = false,
 }) async {
   final kind = _gitHistoryRefMenuKind(itemRef);
-  if (kind == _GitHistoryRefMenuKind.unsupported) {
-    return null;
-  }
-  final position = _gitHistoryMenuPosition(context, globalPosition);
-  if (position == null) {
-    return null;
-  }
-  return showMenu<GitHistoryRefMenuAction>(
-    context: context,
-    position: position,
-    items: <PopupMenuEntry<GitHistoryRefMenuAction>>[
-      if (kind == _GitHistoryRefMenuKind.localBranch)
-        AleraDropdownEntry<GitHistoryRefMenuAction>(
-          value: .switchBranch,
-          label: isCurrentBranch ? 'Current Branch' : 'Switch to Branch',
-          localizeLabel: false,
-          selected: isCurrentBranch,
-          enabled: !isCurrentBranch,
-          leading: const Icon(AleraIcons.gitBranch, size: 16),
-        ),
-      const AleraDropdownEntry<GitHistoryRefMenuAction>(
-        value: .copyName,
-        label: 'Copy Branch Name',
-        localizeLabel: false,
-        leading: Icon(AleraIcons.copy, size: 16),
-      ),
-    ],
+  return showGitHistoryRefMenuForKind(
+    context,
+    itemRef,
+    globalPosition,
+    kind: switch (kind) {
+      _GitHistoryRefMenuKind.localBranch => .localBranch,
+      _GitHistoryRefMenuKind.remoteBranch => .remoteBranch,
+      _GitHistoryRefMenuKind.tag => .tag,
+      _GitHistoryRefMenuKind.unsupported => .unsupported,
+    },
+    isCurrentBranch: isCurrentBranch,
+    canPullIntoCurrentBranch: canPullIntoCurrentBranch,
   );
 }
 
@@ -208,7 +197,7 @@ RelativeRect? _gitHistoryMenuPosition(
   );
 }
 
-enum _GitHistoryRefMenuKind { localBranch, copyOnly, unsupported }
+enum _GitHistoryRefMenuKind { localBranch, remoteBranch, tag, unsupported }
 
 _GitHistoryRefMenuKind _gitHistoryRefMenuKind(GitHistoryItemRef itemRef) {
   final category = itemRef.category;
@@ -217,11 +206,12 @@ _GitHistoryRefMenuKind _gitHistoryRefMenuKind(GitHistoryItemRef itemRef) {
     return _GitHistoryRefMenuKind.localBranch;
   }
   if (category == GitHistoryRefCategory.remoteBranches ||
-      category == GitHistoryRefCategory.tags ||
-      (category == null &&
-          (itemRef.id.startsWith('refs/remotes/') ||
-              itemRef.id.startsWith('refs/tags/')))) {
-    return _GitHistoryRefMenuKind.copyOnly;
+      (category == null && itemRef.id.startsWith('refs/remotes/'))) {
+    return _GitHistoryRefMenuKind.remoteBranch;
+  }
+  if (category == GitHistoryRefCategory.tags ||
+      (category == null && itemRef.id.startsWith('refs/tags/'))) {
+    return _GitHistoryRefMenuKind.tag;
   }
   return _GitHistoryRefMenuKind.unsupported;
 }

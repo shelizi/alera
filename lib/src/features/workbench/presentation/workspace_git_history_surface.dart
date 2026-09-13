@@ -12,6 +12,7 @@ import 'package:alera/src/features/workbench/application/workspace_source_contro
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_source_control_scope.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
+import 'package:alera/src/features/workbench/domain/workbench_view_prefs.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_git_history_actions.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_git_history_graph.dart';
 import 'package:alera/src/shared/infra/git/git_commit_ops_models.dart';
@@ -25,6 +26,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 part 'workspace_git_history_commit_row.dart';
 part 'workspace_git_history_surface_actions.dart';
+part 'workspace_git_history_surface_ref_actions.dart';
 
 /// Main-area commit graph tab. Walks every branch tip by default and pages
 /// history in with offset pagination, keeping swimlanes continuous across
@@ -55,6 +57,9 @@ class _WorkspaceGitHistorySurfaceState
   GitHistoryItemRef? _currentRef;
   GitHistoryItemRef? _remoteRef;
   GitHistoryItemRef? _baseRef;
+  bool _hasIncomingChanges = false;
+  bool _hasOutgoingChanges = false;
+  String? _mergeBase;
   late bool _allBranches = widget.tab.gitHistoryAllBranches;
   bool _loading = false;
   bool _loadingMore = false;
@@ -121,6 +126,9 @@ class _WorkspaceGitHistorySurfaceState
       _pageFailed = false;
       _error = null;
       _loading = true;
+      _hasIncomingChanges = false;
+      _hasOutgoingChanges = false;
+      _mergeBase = null;
     });
     try {
       final result = await ref
@@ -140,6 +148,9 @@ class _WorkspaceGitHistorySurfaceState
         _currentRef = result.currentRef;
         _remoteRef = result.remoteRef;
         _baseRef = result.baseRef;
+        _hasIncomingChanges = result.hasIncomingChanges;
+        _hasOutgoingChanges = result.hasOutgoingChanges;
+        _mergeBase = result.mergeBase;
         _colorMap = buildDefaultGitHistoryColorMap(
           currentRef: result.currentRef,
           remoteRef: result.remoteRef,
@@ -218,6 +229,9 @@ class _WorkspaceGitHistorySurfaceState
       currentRef: _currentRef,
       remoteRef: _remoteRef,
       baseRef: _baseRef,
+      addIncomingChanges: _hasIncomingChanges,
+      addOutgoingChanges: _hasOutgoingChanges,
+      mergeBase: _mergeBase,
       initialSwimlanes:
           _viewModels.lastOrNull?.outputSwimlanes ??
           const <GitHistoryGraphNode>[],
@@ -392,21 +406,19 @@ class _WorkspaceGitHistorySurfaceState
                     if (index >= _viewModels.length) {
                       return _buildFooter();
                     }
+                    final viewModel = _viewModels[index];
+                    final boundary = _isBoundary(viewModel);
                     return _CommitGraphRow(
-                      viewModel: _viewModels[index],
+                      viewModel: viewModel,
                       graphWidth: graphWidth,
-                      onTap: () => unawaited(
-                        _openCommit(_viewModels[index].historyItem),
-                      ),
-                      onOpenActions: _isBoundary(_viewModels[index])
-                          ? null
+                      onTap: () =>
+                          unawaited(_openCommit(viewModel.historyItem)),
+                      onOpenActions: boundary
+                          ? (position) => unawaited(_openBoundaryMenu(position))
                           : (position) => unawaited(
-                              _openCommitMenu(
-                                _viewModels[index].historyItem,
-                                position,
-                              ),
+                              _openCommitMenu(viewModel.historyItem, position),
                             ),
-                      onOpenRefActions: _isBoundary(_viewModels[index])
+                      onOpenRefActions: boundary
                           ? null
                           : (itemRef, position) =>
                                 unawaited(_openRefMenu(itemRef, position)),

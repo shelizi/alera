@@ -51,7 +51,10 @@ class const _GitHistoryPanel({
   final Future<void> Function(GitHistoryItem item)? onRevertCommit,
   final Future<void> Function(GitHistoryItem item, GitResetMode mode)?
   onResetToCommit,
-  final Future<void> Function(String branch)? onSwitchBranch,
+  required final GitHistoryRefMenuCallback onRefAction,
+  required final GitHistoryBoundaryMenuCallback onBoundaryAction,
+  required final String? currentUpstream,
+  required final VoidCallback onCommitChanges,
   final VoidCallback? onOpenCommitGraph,
 }) extends StatefulWidget {
   @override
@@ -169,11 +172,9 @@ class _GitHistoryPanelState extends State<_GitHistoryPanel> {
                   expanded: expanded,
                   onTap: boundary ? null : () => _toggleCommit(item),
                   onOpenActions: boundary
-                      ? null
+                      ? (position) => _openBoundaryActions(position)
                       : (position) => _openActions(position, item),
-                  onOpenRefActions: widget.onSwitchBranch == null
-                      ? null
-                      : _openRefActions,
+                  onOpenRefActions: _openRefActions,
                 ),
                 if (expanded)
                   _CommitFiles(
@@ -247,28 +248,6 @@ class _GitHistoryPanelState extends State<_GitHistoryPanel> {
             });
           },
         );
-  }
-
-  Future<void> _openRefActions(
-    GitHistoryItemRef itemRef,
-    Offset globalPosition,
-  ) async {
-    final isCurrentBranch = widget.state.result?.currentRef?.id == itemRef.id;
-    final action = await showGitHistoryRefMenu(
-      context,
-      itemRef,
-      globalPosition,
-      isCurrentBranch: isCurrentBranch,
-    );
-    if (!mounted || action == null) {
-      return;
-    }
-    switch (action) {
-      case GitHistoryRefMenuAction.switchBranch:
-        await widget.onSwitchBranch?.call(itemRef.name);
-      case GitHistoryRefMenuAction.copyName:
-        await widget.onCopyCommitText(itemRef.name, 'Branch Name');
-    }
   }
 
   Future<void> _openActions(Offset position, GitHistoryItem item) async {

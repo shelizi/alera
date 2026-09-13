@@ -104,7 +104,7 @@ extension _WorkspaceGitHistorySurfaceActions
     final provider = workspaceSourceControlControllerProvider(
       _sourceControlScope.path,
     );
-    final subscription = ref.listenManual(provider, (_, __) {});
+    final subscription = ref.listenManual(provider, (_, _) {});
     try {
       return await action(ref.read(provider.notifier));
     } finally {
@@ -116,21 +116,36 @@ extension _WorkspaceGitHistorySurfaceActions
     GitHistoryItemRef itemRef,
     Offset globalPosition,
   ) async {
+    final isCurrentBranch = _currentRef?.id == itemRef.id;
+    final isCurrentUpstream = gitHistoryRefMatchesUpstream(
+      itemRef,
+      remoteRef: _remoteRef,
+    );
     final action = await showGitHistoryRefMenu(
       context,
       itemRef,
       globalPosition,
-      isCurrentBranch: _currentRef?.id == itemRef.id,
+      isCurrentBranch: isCurrentBranch,
+      canPullIntoCurrentBranch: isCurrentUpstream,
     );
     if (!mounted || action == null) {
       return;
     }
-    switch (action) {
-      case GitHistoryRefMenuAction.switchBranch:
-        await _switchToRef(itemRef);
-      case GitHistoryRefMenuAction.copyName:
-        await _copyCommitText(itemRef.name, 'Branch Name');
-    }
+    await runGitHistoryRefMenuAction(
+      context: context,
+      backend: ref.read(gitBackendProvider),
+      path: _sourceControlScope.path,
+      itemRef: itemRef,
+      action: action,
+      isCurrentBranch: isCurrentBranch,
+      isCurrentUpstream: isCurrentUpstream,
+      currentBranch: _currentRef?.name,
+      onSwitchBranch: (_) => _switchToRef(itemRef),
+      onCopyName: _copyCommitText,
+      onPull: () => _withSourceControl((notifier) => notifier.pull()),
+      onMutationSuccess: _refreshAfterHistoryMutation,
+      errorMessage: (error) => error.toString(),
+    );
   }
 
   Future<void> _switchToRef(GitHistoryItemRef itemRef) async {
