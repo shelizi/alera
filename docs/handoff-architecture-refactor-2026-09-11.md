@@ -673,7 +673,11 @@ localization/catalog_runtime.dart
 
 ## 11. Phase 2 下一個 substantive correctness：Dispatch Context install
 
-這是目前 runtime actor 重構最值得接續、但也最不能草率的一批。
+### 11.0 已落地（2026-09-13 驗收）
+
+`23434339`（`feat/workspace-agent-tabs` 合入）已完成兩階段 state machine：actor 驗證 + per-path `DispatchContextGate` generation reserve → `deferred_admission`（`DispatchCritical` class）背景寫檔 → `ServerCommand::DispatchContextInstalled` → actor re-validate generation/owner → `run_dispatch_context_continuation` 才 inject preamble/spawn。四個 call site（dispatch RPC、internal pending-dispatch replay、agentSpawn、coordinator）全走新路徑；`dispatch_context_install_tests.rs` 覆蓋：install 卡住時 status 先完成、stale generation 不覆蓋、owner 死亡時 completion 丟棄、orphan recovery。**唯一缺口**：可選測試 5（context 寫成功但 reply 丟失的重入 idempotency）未實作。
+
+以下為當時的分析記錄，保留供追溯。
 
 ### 11.1 現況
 
