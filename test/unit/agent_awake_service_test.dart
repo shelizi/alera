@@ -12,7 +12,9 @@ void main() {
       final assertion = _FakeAssertion();
       final service = _service(displayLock: displayLock, assertion: assertion);
 
-      await service.setHookSettings(const AgentStatusHookSettings(codex: true));
+      await service.setHookSettings(
+        const AgentStatusHookSettings(values: {'codex': true}),
+      );
       await service.setStatuses(<String, AgentStatusEntry>{
         'session-1': _entry(state: .working),
       });
@@ -26,7 +28,9 @@ void main() {
       final assertion = _FakeAssertion();
       final service = _service(displayLock: displayLock, assertion: assertion);
 
-      await service.setHookSettings(const AgentStatusHookSettings(codex: true));
+      await service.setHookSettings(
+        const AgentStatusHookSettings(values: {'codex': true}),
+      );
       await service.setEnabled(true);
       await service.setStatuses(<String, AgentStatusEntry>{
         'session-1': _entry(state: .working),
@@ -45,7 +49,7 @@ void main() {
 
       await service.setEnabled(true);
       await service.setHookSettings(
-        const AgentStatusHookSettings(claude: true),
+        const AgentStatusHookSettings(values: {'claude': true}),
       );
       await service.setStatuses(<String, AgentStatusEntry>{
         'session-1': _entry(state: .waiting),
@@ -69,7 +73,9 @@ void main() {
         staleAfter: staleAfter,
       );
 
-      await service.setHookSettings(const AgentStatusHookSettings(codex: true));
+      await service.setHookSettings(
+        const AgentStatusHookSettings(values: {'codex': true}),
+      );
       await service.setEnabled(true);
       await service.setStatuses(<String, AgentStatusEntry>{
         'session-1': _entry(state: .working, updatedAt: base),
@@ -88,7 +94,9 @@ void main() {
       final assertion = _FakeAssertion();
       final service = _service(displayLock: displayLock, assertion: assertion);
 
-      await service.setHookSettings(const AgentStatusHookSettings(codex: true));
+      await service.setHookSettings(
+        const AgentStatusHookSettings(values: {'codex': true}),
+      );
       await service.setEnabled(true);
       await service.setStatuses(<String, AgentStatusEntry>{
         'session-1': _entry(state: .working),
@@ -110,7 +118,7 @@ void main() {
         );
 
         await service.setHookSettings(
-          const AgentStatusHookSettings(codex: true),
+          const AgentStatusHookSettings(values: {'codex': true}),
         );
         await service.setEnabled(true);
         final working = service.setStatuses(<String, AgentStatusEntry>{
@@ -167,7 +175,7 @@ void main() {
       );
 
       await service.setHookSettings(
-        const AgentStatusHookSettings(codex: true, claude: true),
+        const AgentStatusHookSettings(values: {'codex': true, 'claude': true}),
       );
       await service.setEnabled(true);
       await service.setStatuses(<String, AgentStatusEntry>{
@@ -199,7 +207,9 @@ void main() {
         ..throwOnDispose = true;
       final service = _service(displayLock: displayLock, assertion: assertion);
 
-      await service.setHookSettings(const AgentStatusHookSettings(codex: true));
+      await service.setHookSettings(
+        const AgentStatusHookSettings(values: {'codex': true}),
+      );
       await service.setEnabled(true);
       await service.setStatuses(<String, AgentStatusEntry>{
         'session-1': _entry(),
@@ -251,18 +261,24 @@ AgentStatusEntry _entry({
 
 AgentStatusHookSettings _settingsFor(AgentType agentType) {
   return switch (agentType) {
-    AgentType.codex => const AgentStatusHookSettings(codex: true),
-    AgentType.claude => const AgentStatusHookSettings(claude: true),
-    AgentType.copilot => const AgentStatusHookSettings(copilot: true),
-    AgentType.cursor => const AgentStatusHookSettings(cursor: true),
-    AgentType.agy => const AgentStatusHookSettings(agy: true),
-    AgentType.opencode => const AgentStatusHookSettings(opencode: true),
-    AgentType.opencode2 => const AgentStatusHookSettings(opencode2: true),
-    AgentType.pi => const AgentStatusHookSettings(pi: true),
-    AgentType.amp => const AgentStatusHookSettings(amp: true),
-    AgentType.grok => const AgentStatusHookSettings(grok: true),
-    AgentType.devin => const AgentStatusHookSettings(devin: true),
-    AgentType.fx => const AgentStatusHookSettings(fx: true),
+    AgentType.codex => const AgentStatusHookSettings(values: {'codex': true}),
+    AgentType.claude => const AgentStatusHookSettings(values: {'claude': true}),
+    AgentType.copilot => const AgentStatusHookSettings(
+      values: {'copilot': true},
+    ),
+    AgentType.cursor => const AgentStatusHookSettings(values: {'cursor': true}),
+    AgentType.agy => const AgentStatusHookSettings(values: {'agy': true}),
+    AgentType.opencode => const AgentStatusHookSettings(
+      values: {'opencode': true},
+    ),
+    AgentType.opencode2 => const AgentStatusHookSettings(
+      values: {'opencode2': true},
+    ),
+    AgentType.pi => const AgentStatusHookSettings(values: {'pi': true}),
+    AgentType.amp => const AgentStatusHookSettings(values: {'amp': true}),
+    AgentType.grok => const AgentStatusHookSettings(values: {'grok': true}),
+    AgentType.devin => const AgentStatusHookSettings(values: {'devin': true}),
+    AgentType.fx => const AgentStatusHookSettings(values: {'fx': true}),
   };
 }
 

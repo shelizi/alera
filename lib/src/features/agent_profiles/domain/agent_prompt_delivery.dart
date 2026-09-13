@@ -30,8 +30,7 @@ const String agentPromptOptionTerminator = '--';
 /// The long option each flag-carrying agent takes its initial prompt in.
 final Map<AgentType, String> agentPromptDeliveryOptions = <AgentType, String>{
   for (final adapter in AgentType.values)
-    if (agentDescriptorFor(adapter).startupPrompt.option case final option?)
-      adapter: option,
+    adapter: ?agentDescriptorFor(adapter).startupPrompt.option,
 };
 
 AgentPromptDelivery agentPromptDeliveryFor(AgentType adapter) {
