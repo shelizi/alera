@@ -323,6 +323,71 @@ extension _WorkspaceGitDiffPanelActions on _WorkspaceGitDiffPanelState {
     }, successMessage: 'Switched to $branch');
   }
 
+  Future<void> _handleGitHistoryRefAction(
+    GitHistoryItemRef itemRef,
+    GitHistoryRefMenuAction action, {
+    required bool isCurrentBranch,
+    required bool isCurrentUpstream,
+    required String? currentBranch,
+  }) {
+    return runGitHistoryRefMenuAction(
+      context: context,
+      backend: ref.read(gitBackendProvider),
+      path: widget.sourceControlScope.path,
+      itemRef: itemRef,
+      action: action,
+      isCurrentBranch: isCurrentBranch,
+      isCurrentUpstream: isCurrentUpstream,
+      currentBranch: currentBranch,
+      onSwitchBranch: widget.onSwitchBranch == null ? null : _switchBranch,
+      onCopyName: _copyCommitText,
+      onPull: () => _notifier.pull(),
+      onMutationSuccess: _refreshAfterHistoryMutation,
+      errorMessage: _messageFor,
+    );
+  }
+
+  Future<void> _handleGitHistoryBoundaryAction(
+    GitHistoryBoundaryMenuAction action,
+  ) {
+    return runGitHistoryBoundaryMenuAction(
+      context: context,
+      action: action,
+      onStash: () => _notifier.stash(),
+      onDiscardAll: _discardAllHistoryChanges,
+      onCommitChanges: _focusCommitMessage,
+      onMutationSuccess: _refreshAfterHistoryMutation,
+      errorMessage: _messageFor,
+    );
+  }
+
+  Future<void> _discardAllHistoryChanges() async {
+    await _notifier.discard(null);
+    if (!mounted) {
+      return;
+    }
+    await _notifier.discardArea(GitChangeArea.staged);
+  }
+
+  Future<void> _refreshAfterHistoryMutation() async {
+    if (!mounted) {
+      return;
+    }
+    await _notifier.refresh();
+    if (!mounted) {
+      return;
+    }
+    await _refreshGitHistory();
+  }
+
+  void _focusCommitMessage() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _messageFocusNode.requestFocus();
+      }
+    });
+  }
+
   Future<GitStashEntry?> _pickStash() {
     final current = ref
         .read(

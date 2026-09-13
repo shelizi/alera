@@ -22,9 +22,11 @@ import '../unit/fake_git_backend.dart';
 import '../unit/fake_source_control_watcher.dart';
 
 part 'workspace_git_history_panel_scope_cases.dart';
+part 'workspace_git_history_panel_ref_menu_test.dart';
 
 void main() {
   _registerHistoryScopeTests();
+  _registerHistoryRefMenuTests();
 
   testWidgets('commit rows truncate ref badges instead of overflowing', (
     tester,
@@ -112,6 +114,7 @@ void main() {
     expect(find.text('Current Branch'), findsOneWidget);
     expect(switched, isEmpty);
   });
+
   testWidgets('commits header toggles from anywhere except its actions', (
     tester,
   ) async {

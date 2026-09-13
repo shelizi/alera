@@ -233,7 +233,7 @@ void main() {
     expect(toasts.last.tone, AleraToastTone.error);
     expect(toasts.last.message, contains('switch failed'));
   });
-  testWidgets('remote and tag badges only expose copy actions', (tester) async {
+  testWidgets('remote and tag badges expose their ref actions', (tester) async {
     final backend = gitHistoryBackend(<GitHistoryItem>[
       gitHistoryCommit(
         'abc123',
@@ -265,6 +265,9 @@ void main() {
 
     await tester.tap(find.text('origin/main'), buttons: kSecondaryMouseButton);
     await tester.pumpAndSettle();
+    expect(find.text('Checkout Remote Branch'), findsOneWidget);
+    expect(find.text('Delete Remote Branch'), findsOneWidget);
+    expect(find.text('Pull into Current Branch'), findsOneWidget);
     expect(find.text('Copy Branch Name'), findsOneWidget);
     expect(find.text('Switch to Branch'), findsNothing);
     await tester.tapAt(const Offset(799, 399));
@@ -272,7 +275,10 @@ void main() {
 
     await tester.tap(find.text('v1.0.0'), buttons: kSecondaryMouseButton);
     await tester.pumpAndSettle();
-    expect(find.text('Copy Branch Name'), findsOneWidget);
+    expect(find.text('Push Tag'), findsOneWidget);
+    expect(find.text('Delete Tag'), findsOneWidget);
+    expect(find.text('Create Archive...'), findsOneWidget);
+    expect(find.text('Copy Tag Name'), findsOneWidget);
     expect(find.text('Switch to Branch'), findsNothing);
   });
 }

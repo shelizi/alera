@@ -54,6 +54,7 @@ part 'workspace_git_diff_panel_tree.dart';
 part 'workspace_git_diff_panel_submodules.dart';
 part 'workspace_git_history_panel.dart';
 part 'workspace_git_history_panel_row.dart';
+part 'workspace_git_history_panel_actions.dart';
 part 'workspace_git_history_panel_files.dart';
 part 'workspace_git_diff_panel_preview_opening.dart';
 part 'workspace_git_diff_panel_context_menu.dart';
@@ -293,9 +294,10 @@ class _WorkspaceGitDiffPanelState extends ConsumerState<WorkspaceGitDiffPanel> {
                 onCheckoutCommit: _checkoutCommit,
                 onRevertCommit: _revertCommit,
                 onResetToCommit: _resetToCommit,
-                onSwitchBranch: widget.onSwitchBranch == null
-                    ? null
-                    : _switchBranch,
+                onRefAction: _handleGitHistoryRefAction,
+                onBoundaryAction: _handleGitHistoryBoundaryAction,
+                currentUpstream: state.asData?.value.repositoryState.upstream,
+                onCommitChanges: _focusCommitMessage,
                 onOpenCommitGraph: () => unawaited(_openCommitGraph()),
               ),
             ],
