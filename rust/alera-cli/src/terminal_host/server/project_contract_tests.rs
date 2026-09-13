@@ -4,15 +4,49 @@
 //! request suite does not already cover.
 
 use std::collections::HashMap;
+use std::path::Path;
+use std::sync::Arc;
 
 use alera_core::runtime::{ProjectCloneJob, ProjectCloneJobPhase, ProjectCloneJobStatus};
 use chrono::Utc;
 use serde_json::{json, Value};
 
 use super::actor_test_harness::{local_client, test_actor};
+use super::deferred_admission::DeferredAdmission;
 use super::runtime_mutations::{run_runtime_mutation, RuntimeMutationRequest};
 use crate::project_management::prepare_project_registration;
 use crate::terminal_host::client::ClientHandle;
+use crate::terminal_host::host_error::HostError;
+
+fn stored_clone_job(
+    id: &str,
+    parent_path: &str,
+    directory_name: &str,
+    status: ProjectCloneJobStatus,
+) -> ProjectCloneJob {
+    let now = Utc::now();
+    ProjectCloneJob {
+        id: id.to_string(),
+        source: "https://example.invalid/repo.git".to_string(),
+        parent_path: parent_path.to_string(),
+        directory_name: directory_name.to_string(),
+        destination_path: Path::new(parent_path)
+            .join(directory_name)
+            .to_string_lossy()
+            .to_string(),
+        project_name: None,
+        status,
+        phase: ProjectCloneJobPhase::Cloning,
+        progress_percent: None,
+        message: None,
+        error: None,
+        project_id: None,
+        workspace_id: None,
+        created_at: now,
+        updated_at: now,
+        finished_at: status.is_terminal().then_some(now),
+    }
+}
 
 async fn read_response(
     responses: &mut tokio::sync::mpsc::UnboundedReceiver<crate::terminal_host::client::ClientFrame>,
@@ -132,5 +166,125 @@ async fn clone_cancel_on_a_terminal_job_returns_the_stored_job() {
         response["id"].as_str(),
         Some(job.id.as_str()),
         "cancelling a finished clone should return the job, not error"
+    );
+}
+
+#[tokio::test]
+async fn clone_start_rejects_non_terminal_same_destination_but_allows_other_destinations() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut actor = test_actor(&dir, HashMap::new(), HashMap::new()).await;
+    actor.deferred_admission = Arc::new(DeferredAdmission::paused_with_limits(1, 4, 0));
+    let parent_path = std::fs::canonicalize(dir.path())
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+    let existing = stored_clone_job(
+        "pending-job",
+        &parent_path,
+        "repo",
+        ProjectCloneJobStatus::Queued,
+    );
+    actor
+        .runtime_store
+        .insert_project_clone_job(existing)
+        .await
+        .unwrap();
+
+    let duplicate = actor
+        .project_clone_start_request(&json!({
+            "url": "https://example.invalid/repo.git",
+            "parentPath": parent_path,
+            "directoryName": "repo",
+        }))
+        .await;
+    match duplicate {
+        Err(HostError::Conflict { code, details, .. }) => {
+            assert_eq!(code, "project_clone_destination_conflict");
+            assert_eq!(details["parentPath"], parent_path);
+            assert_eq!(details["directoryName"], "repo");
+            assert_eq!(details["existingJobId"], "pending-job");
+        }
+        other => panic!("expected a typed clone-destination conflict, got {other:?}"),
+    }
+
+    let started = actor
+        .project_clone_start_request(&json!({
+            "url": "https://example.invalid/repo.git",
+            "parentPath": parent_path,
+            "directoryName": "other-repo",
+        }))
+        .await
+        .unwrap();
+    assert_eq!(started["directoryName"], "other-repo");
+    assert_eq!(started["status"], "queued");
+}
+
+#[tokio::test]
+async fn clone_start_allows_terminal_job_for_same_destination() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut actor = test_actor(&dir, HashMap::new(), HashMap::new()).await;
+    actor.deferred_admission = Arc::new(DeferredAdmission::paused_with_limits(1, 4, 0));
+    let parent_path = std::fs::canonicalize(dir.path())
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+    actor
+        .runtime_store
+        .insert_project_clone_job(stored_clone_job(
+            "completed-job",
+            &parent_path,
+            "repo",
+            ProjectCloneJobStatus::Completed,
+        ))
+        .await
+        .unwrap();
+
+    let started = actor
+        .project_clone_start_request(&json!({
+            "url": "https://example.invalid/repo.git",
+            "parentPath": parent_path,
+            "directoryName": "repo",
+        }))
+        .await
+        .unwrap();
+    assert_eq!(started["directoryName"], "repo");
+    assert_eq!(started["status"], "queued");
+}
+
+#[tokio::test]
+async fn clone_start_marks_job_failed_when_deferred_admission_rejects() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut actor = test_actor(&dir, HashMap::new(), HashMap::new()).await;
+    actor.deferred_admission = Arc::new(DeferredAdmission::with_limits(1, 0, 0));
+    let parent_path = dir.path().to_string_lossy().to_string();
+
+    let result = actor
+        .project_clone_start_request(&json!({
+            "url": "https://example.invalid/repo.git",
+            "parentPath": parent_path,
+            "directoryName": "repo",
+        }))
+        .await;
+    match result {
+        Err(HostError::Conflict { code, .. }) => {
+            assert_eq!(code, "deferred_request_backpressure");
+        }
+        other => panic!("expected deferred-admission rejection, got {other:?}"),
+    }
+    assert!(actor.project_clone_jobs.is_empty());
+
+    let rows = actor.runtime_store.list_project_clone_jobs().await.unwrap();
+    assert_eq!(rows.len(), 1);
+    let failed = actor
+        .runtime_store
+        .find_project_clone_job(&rows[0].id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(failed.status, ProjectCloneJobStatus::Failed);
+    assert_eq!(failed.message.as_deref(), Some("Clone Rejected"));
+    assert_eq!(
+        failed.error.as_deref(),
+        Some("The runtime host is busy. Retry the request.")
     );
 }

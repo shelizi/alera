@@ -45,12 +45,31 @@ impl ServerActor {
             .to_string_lossy()
             .to_string();
         let destination_path = destination.to_string_lossy().to_string();
+        let directory_name = request.directory_name.trim().to_string();
+        if let Some(existing_job) = self
+            .runtime_store
+            .list_interrupted_project_clone_jobs()
+            .await
+            .map_err(state_error)?
+            .into_iter()
+            .find(|job| job.parent_path == parent_path && job.directory_name == directory_name)
+        {
+            return Err(HostError::conflict(
+                "project_clone_destination_conflict",
+                format!("A clone job for '{parent_path}/{directory_name}' is already in progress."),
+                json!({
+                    "parentPath": parent_path,
+                    "directoryName": directory_name,
+                    "existingJobId": existing_job.id,
+                }),
+            ));
+        }
         let now = Utc::now();
         let job = ProjectCloneJob {
             id: Uuid::new_v4().to_string(),
             source: sanitized_clone_source(url),
             parent_path,
-            directory_name: request.directory_name.trim().to_string(),
+            directory_name,
             destination_path,
             project_name: request.name.filter(|name| !name.trim().is_empty()),
             status: ProjectCloneJobStatus::Queued,
@@ -75,12 +94,36 @@ impl ServerActor {
         let inbox = self.inbox.clone();
         let raw_url = url.to_string();
         let task_job = job.clone();
-        tokio::spawn(async move {
-            run_clone_job(store, inbox.clone(), task_job.clone(), raw_url, cancel_rx).await;
-            let _ = inbox.send(ServerCommand::ProjectCloneFinished {
-                job_id: task_job.id,
-            });
-        });
+        if let Err(error) = self.deferred_admission.schedule(
+            super::deferred_admission::DeferredRequestClass::Bulk,
+            "project.clone.start",
+            None,
+            async move {
+                run_clone_job(store, inbox.clone(), task_job.clone(), raw_url, cancel_rx).await;
+                let _ = inbox.send(ServerCommand::ProjectCloneFinished {
+                    job_id: task_job.id,
+                });
+            },
+        ) {
+            self.project_clone_jobs.remove(&job.id);
+            let error_message = error.wire_message();
+            let _ = self
+                .runtime_store
+                .update_project_clone_job(
+                    &job.id,
+                    ProjectCloneJobStatus::Failed,
+                    job.phase,
+                    job.progress_percent,
+                    Some("Clone Rejected"),
+                    Some(&error_message),
+                    None,
+                    None,
+                )
+                .await;
+            self.broadcast_authenticated(event("projectCloneJobsChanged", json!({ "id": job.id })));
+            self.schedule_shutdown_if_idle();
+            return Err(error);
+        }
         self.broadcast_authenticated(event("projectCloneJobsChanged", json!({ "id": job.id })));
         serde_json::to_value(job).map_err(state_error)
     }
