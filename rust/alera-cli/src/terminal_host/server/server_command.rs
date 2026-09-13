@@ -178,6 +178,12 @@ pub enum ServerCommand {
         operation_id: Option<String>,
         skill: Option<String>,
     },
+    AutostartReconcileFinished {
+        client_id: u64,
+        request_id: i64,
+        value: Value,
+        result: HostResult<()>,
+    },
     /// A dispatch context write finished off the actor; the parked
     /// continuation commits only after generation and owner revalidation.
     DispatchContextInstalled {

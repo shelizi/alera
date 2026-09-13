@@ -95,6 +95,37 @@ impl ServerActor {
         if self.try_start_account_request(client_id, request_id, request_type, payload)? {
             return Ok(true);
         }
+        if (request_type == "runtimeSettings.update"
+            || request_type == "mobile.runtimeSettings.update")
+            && payload.get("automation").is_some()
+        {
+            self.require_auth(client_id)?;
+            self.require_request_allowed(client_id, request_type)?;
+            if request_type == "mobile.runtimeSettings.update" {
+                const ALLOWED: [&str; 9] = [
+                    "workspaceDirectory",
+                    "confirmProjectRemoval",
+                    "confirmWorkspaceRemoval",
+                    "autoArchiveWorkspacesAfterDays",
+                    "defaultAgentProfileId",
+                    "agentStatusHooks",
+                    "agentQuotas",
+                    "mobilePushNotifications",
+                    "automation",
+                ];
+                if let Some(key) = payload
+                    .as_object()
+                    .and_then(|object| object.keys().find(|key| !ALLOWED.contains(&key.as_str())))
+                {
+                    return Err(HostError::format(format!(
+                        "Unsupported mobile setting: {key}."
+                    )));
+                }
+            }
+            self.start_autostart_reconcile_update(client_id, request_id, payload)
+                .await?;
+            return Ok(true);
+        }
         match request_type {
             "automation.policy"
                 if payload

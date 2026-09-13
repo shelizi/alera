@@ -665,6 +665,12 @@ impl ServerActor {
                 operation_id,
                 skill,
             } => self.handle_host_tool_finished(client_id, request_id, result, operation_id, skill),
+            ServerCommand::AutostartReconcileFinished {
+                client_id,
+                request_id,
+                value,
+                result,
+            } => self.handle_autostart_reconcile_finished(client_id, request_id, value, result),
             ServerCommand::RuntimeMutationFinished(finished) => {
                 self.handle_runtime_mutation_finished(finished).await
             }

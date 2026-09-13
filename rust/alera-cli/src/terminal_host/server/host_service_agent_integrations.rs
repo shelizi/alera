@@ -61,6 +61,15 @@ fn agent_integration_reconcile_state(runtime_dir: &Path) -> Arc<AgentIntegration
     state
 }
 
+pub(super) const AGENT_INTEGRATION_RECONCILE_CONCURRENCY: usize = 1;
+
+static AGENT_INTEGRATION_SEMAPHORE: OnceLock<tokio::sync::Semaphore> = OnceLock::new();
+
+pub(super) fn agent_integration_semaphore() -> &'static tokio::sync::Semaphore {
+    AGENT_INTEGRATION_SEMAPHORE
+        .get_or_init(|| tokio::sync::Semaphore::new(AGENT_INTEGRATION_RECONCILE_CONCURRENCY))
+}
+
 impl ServerActor {
     pub(super) fn schedule_agent_integration_reconcile(
         &self,
@@ -106,8 +115,29 @@ impl ServerActor {
 
 #[cfg(test)]
 mod tests {
-    use super::AgentIntegrationReconcileState;
+    use super::super::deferred_admission::DEFERRED_REQUEST_CONCURRENCY;
+    use super::{
+        agent_integration_semaphore, AgentIntegrationReconcileState,
+        AGENT_INTEGRATION_RECONCILE_CONCURRENCY,
+    };
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn skill_install_orchestration_hook_reconcile_uses_a_single_host_tool_slot() {
+        assert_eq!(AGENT_INTEGRATION_RECONCILE_CONCURRENCY, 1);
+        assert_ne!(
+            AGENT_INTEGRATION_RECONCILE_CONCURRENCY, DEFERRED_REQUEST_CONCURRENCY,
+            "skill-install hook reconcile must not steal the read-side deferred slots"
+        );
+        let first = agent_integration_semaphore()
+            .try_acquire()
+            .expect("host-tool reconcile budget should have a free slot");
+        assert!(
+            agent_integration_semaphore().try_acquire().is_err(),
+            "a second hook reconcile must wait for the host-tool slot"
+        );
+        drop(first);
+    }
 
     #[tokio::test]
     async fn agent_integration_reconcile_skips_stale_work_before_it_starts() {

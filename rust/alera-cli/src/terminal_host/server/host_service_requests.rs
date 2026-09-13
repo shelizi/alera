@@ -15,7 +15,7 @@ use crate::terminal_host::protocol::{error_response, event, ok_response};
 use super::{ServerActor, ServerCommand};
 
 impl ServerActor {
-    pub(super) async fn apply_mobile_runtime_settings(
+    pub(super) async fn persist_mobile_runtime_settings(
         &mut self,
         payload: &Value,
     ) -> HostResult<Value> {
@@ -119,7 +119,6 @@ impl ServerActor {
             let settings: RuntimeAutomationSettings = serde_json::from_value(value.clone())
                 .map_err(|_| HostError::format("automation settings are invalid."))?;
             runtime_value(self.runtime_store.set_automation_settings(settings).await)?;
-            self.schedule_autostart_reconcile();
         }
         if refresh_push_subscriptions {
             self.start_push_subscription_sync(None);
@@ -155,15 +154,23 @@ impl ServerActor {
             validate_text_actions_settings(&settings)?;
             runtime_value(self.runtime_store.set_text_actions_settings(settings).await)?;
         }
-        let value = runtime_value(self.runtime_store.runtime_settings().await)?;
+        runtime_value(self.runtime_store.runtime_settings().await)
+    }
+
+    pub(super) async fn apply_mobile_runtime_settings(
+        &mut self,
+        payload: &Value,
+    ) -> HostResult<Value> {
+        let value = self.persist_mobile_runtime_settings(payload).await?;
+        if payload.get("automation").is_some() {
+            self.schedule_autostart_reconcile();
+        }
         self.broadcast_authenticated(event("runtimeSettingsChanged", json!({})));
         Ok(value)
     }
 
-    /// Login-item reconcile runs off the actor on the shared deferred budget.
-    /// The job re-reads the persisted settings when it runs, so rapid toggles
-    /// coalesce onto the latest state and a reconcile failure can never fail
-    /// the settings update that already committed.
+    /// Fire-and-forget login-item reconcile for no-id updates. Identified
+    /// `runtimeSettings.update` calls wait on `AutostartReconcileFinished`.
     fn schedule_autostart_reconcile(&self) {
         let store = self.runtime_store.clone();
         let runtime_dir = self.runtime_dir.clone();
@@ -180,6 +187,57 @@ impl ServerActor {
                 "autostart reconcile was not admitted: {}",
                 error.wire_message()
             );
+        }
+    }
+
+    pub(super) async fn start_autostart_reconcile_update(
+        &mut self,
+        client_id: u64,
+        request_id: i64,
+        payload: &Value,
+    ) -> HostResult<()> {
+        let value = self.persist_mobile_runtime_settings(payload).await?;
+        let store = self.runtime_store.clone();
+        let runtime_dir = self.runtime_dir.clone();
+        let inbox = self.inbox.clone();
+        self.deferred_admission.schedule(
+            super::deferred_admission::DeferredRequestClass::Maintenance,
+            "automation.autostart.reconcile",
+            Some(client_id),
+            async move {
+                let result = crate::automation_autostart::reconcile_runtime_autostart_result(
+                    &store,
+                    &runtime_dir,
+                )
+                .await
+                .map_err(|error| HostError::state(error.to_string()));
+                let _ = inbox.send(ServerCommand::AutostartReconcileFinished {
+                    client_id,
+                    request_id,
+                    value,
+                    result,
+                });
+            },
+        )?;
+        Ok(())
+    }
+
+    pub(super) fn handle_autostart_reconcile_finished(
+        &mut self,
+        client_id: u64,
+        request_id: i64,
+        value: Value,
+        result: HostResult<()>,
+    ) {
+        if self.require_auth(client_id).is_err() {
+            return;
+        }
+        match result {
+            Ok(()) => {
+                self.broadcast_authenticated(event("runtimeSettingsChanged", json!({})));
+                self.client_write(client_id, ok_response(request_id, value));
+            }
+            Err(error) => self.client_write(client_id, error_response(request_id, &error)),
         }
     }
 
@@ -249,6 +307,10 @@ impl ServerActor {
                     .await
                     .map_err(|error| HostError::state(error.to_string()));
                 if let Ok(settings) = settings {
+                    let _permit =
+                        super::host_service_agent_integrations::agent_integration_semaphore()
+                            .acquire()
+                            .await;
                     let warnings = tokio::task::spawn_blocking(move || {
                         reconcile_agent_integrations(&runtime_dir, &settings)
                     })
