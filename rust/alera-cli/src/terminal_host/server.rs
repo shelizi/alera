@@ -128,6 +128,7 @@ mod dispatch_context_install_tests;
 mod dispatch_context_install_tests_startup_recovery;
 mod host_service_agent_integrations;
 mod host_service_agent_quota;
+mod host_service_agent_quota_codex_reset;
 #[cfg(test)]
 mod host_service_autostart_tests;
 mod host_service_requests;
@@ -174,6 +175,7 @@ mod prompt_image_requests;
 mod prompt_image_store;
 mod pty_event_forwarder;
 mod pty_events;
+mod pty_events_session_lifecycle;
 mod push_delivery;
 mod remote_relay;
 mod request_payloads;
@@ -206,6 +208,7 @@ mod terminal_prompt_rearm;
 mod terminal_pulse;
 mod terminal_session_requests;
 mod terminal_spawn;
+mod terminal_spawn_startup_delivery;
 mod terminal_startup_commands;
 #[cfg(test)]
 mod wire_fixture_tests;
