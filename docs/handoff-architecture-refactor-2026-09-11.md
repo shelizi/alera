@@ -1512,6 +1512,8 @@ max-lines 尚未全清前，第 8 步會是 repo-wide exit 1；必須確認 offe
 驗收：`check_max_lines` exit 0；不新增 baseline 條目，或每個新條目附書面理由。
 
 > 2026-09-13 E 批 merge 後狀態更新：E1/E4 各推高既存 offender 並新增兩個（`agent_settings_contract_tests.rs` 649、`host_service_agent_quota.rs` 562），現 10 個 offender。Batch N 已拆三卡平行開出（N1 `server.rs` impl 拆、N2 三測試檔拆、N3 四 domain 檔拆）；`git_diff_models.dart` 與 `git_status_real_repo_bench.dart` 等 E3（gitStatus offload）落地後再動，避免撞檔。
+>
+> **Batch N 已完成（2026-09-13）**：四卡全 merged——N1 `server.rs` 1984→647（測試拆 4 sibling+support、mobile gateway/SSH bootstrap/orchestration delivery/checkpoint timer 拆出，`handle()`+struct+mod index 留下）、N2 三測試檔各拆一個 domain sibling、N3 四 domain 檔各拆一個 sibling（quota→codex_reset、pty→session_lifecycle、pulse→manager、spawn→startup_delivery）、N4 `git_diff_models` 1134→120+3 part 檔、`git_status_real_repo_bench` 530→148+2 part 檔。E3 遺留兩個由 parent 代收：`rust_git_backend` 603→476（result mappers part）、`git_change_group_test` 560→482（chunked cases part）。驗收：`check_max_lines` exit 0（50 個 baseline-oversized 維持）、`runtime_architecture_guard` 通過、merged tree `cargo check` 通過。
 
 ### 27.3 Batch O：spawn 收尾，關閉 Phase 2 admission 故事
 
@@ -1559,4 +1561,5 @@ max-lines 尚未全清前，第 8 步會是 repo-wide exit 1；必須確認 offe
 
 - 每次 merge feature branch 進本分支後，必須重跑 `check_max_lines` 與 `runtime_architecture_guard`，結果寫回 §25。本輪 ratchet 轉紅即是 merge 後無人重驗證造成。
 - §25 是唯一 living queue 與狀態欄位；各節內的「已完成」註記保留追溯，但不再作為下一批依據。
-- 需求驅動項目不進 queue：Batch L 20k+/分頁/isolate 等實測仍卡頓再做；§21 release matrix 待 correctness 收尾；§26 parity backlog 依功能優先級獨立排程。
+- 需求驅動項目不進 queue：Batch L 的 20k+ UI 阻塞已由 E3 處理（`6c76f3d4`：entry translate 每 16 筆 `Future.pause()` + `fromEntriesChunked` 分段分組，50k 最長連續同步段 115ms→中位數 8ms；`_loadGeneration` 防 stale watcher 覆蓋 mutation；`rebindEntryInstancesChunked` 保住 C2 identity）；殘留：`workspace_git_diff_panel` 的 unified 視圖路徑仍同步（`unifiedFromEntriesChunked` 已備無呼叫方）、20k+ wire 分頁未做（改 schema 才需要）。§21 release matrix 待 correctness 收尾；§26 parity backlog 依功能優先級獨立排程。
+- Dart client 尚未主動送 `clientMutationId`（E4 已讓 `terminal.terminate`/`consumeCodexResetCredit` wire 端就緒，Batch P follow-up）。
