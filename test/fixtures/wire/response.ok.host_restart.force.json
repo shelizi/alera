@@ -1,0 +1,12 @@
+{
+  "id": 41,
+  "ok": true,
+  "payload": {
+    "restarting": true,
+    "forced": true,
+    "activeSessions": 1,
+    "activeJobs": 0,
+    "activeAgents": 0,
+    "activePushSubscriptions": 0
+  }
+}

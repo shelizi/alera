@@ -32,6 +32,18 @@ use crate::terminal_host::session::Session;
 use super::actor_test_harness::{local_client, mobile_client, test_actor};
 use super::ServerActor;
 
+#[path = "wire_fixture_tests_workspace_lifecycle.rs"]
+mod workspace_lifecycle;
+
+#[path = "wire_fixture_tests_binary_resync.rs"]
+mod binary_resync;
+
+#[path = "wire_fixture_tests_legacy_capability.rs"]
+mod legacy_capability;
+
+#[path = "wire_fixture_tests_shutdown_variants.rs"]
+mod shutdown_variants;
+
 pub(super) const FRAME_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub(super) fn wire_fixture(name: &str) -> Value {

@@ -1,0 +1,7 @@
+{
+  "id": 43,
+  "type": "host.restart",
+  "payload": {
+    "force": false
+  }
+}

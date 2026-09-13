@@ -1,0 +1,26 @@
+{
+  "id": 1,
+  "ok": true,
+  "payload": {
+    "archivedAt": null,
+    "branch": "feature/lifecycle",
+    "childCount": 0,
+    "createdAt": "2000-01-01T00:00:01Z",
+    "hostId": "local",
+    "id": "workspace-lifecycle",
+    "instanceId": "instance-lifecycle",
+    "isPinned": false,
+    "kind": "linked",
+    "name": "Lifecycle Workspace",
+    "parentWorkspaceId": null,
+    "path": "<workspacePath:0>",
+    "projectId": "project-1",
+    "reusesExistingBranch": false,
+    "sectionId": null,
+    "sourceBranch": "main",
+    "status": "active",
+    "tagIds": [],
+    "tagNames": [],
+    "updatedAt": "2000-01-01T00:00:01Z"
+  }
+}

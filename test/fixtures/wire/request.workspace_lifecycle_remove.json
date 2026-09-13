@@ -1,0 +1,8 @@
+{
+  "id": 3,
+  "type": "workspace.remove",
+  "payload": {
+    "id": "workspace-lifecycle",
+    "cascadeTabs": true
+  }
+}

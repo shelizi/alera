@@ -1,0 +1,7 @@
+{
+  "id": 44,
+  "type": "host.shutdown",
+  "payload": {
+    "force": false
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "event": "workspacesChanged",
+  "payload": {
+    "projectId": "project-1"
+  }
+}
