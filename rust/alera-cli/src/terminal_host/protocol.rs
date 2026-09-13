@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::terminal_host::host_error::{HostError, HostResult};
+use crate::terminal_host::host_error::{HostError, HostResult, OutcomeClass};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use serde_json::{json, Map, Value};
@@ -335,12 +335,24 @@ fn positive_int(value: Option<&Value>, label: &str) -> HostResult<u64> {
 
 /// Build a success response frame `{id, ok: true, payload}`.
 pub fn ok_response(id: i64, payload: Value) -> Value {
+    trace_response_outcome(id, OutcomeClass::Ok, None);
     json!({ "id": id, "ok": true, "payload": payload })
 }
 
 /// Build an error response frame `{id, ok: false, error}`.
 pub fn error_response(id: i64, error: &HostError) -> Value {
-    error.wire_response(id)
+    let response = error.wire_response(id);
+    trace_response_outcome(id, error.outcome_class(), error.error_code());
+    response
+}
+
+fn trace_response_outcome(id: i64, outcome_class: OutcomeClass, error_code: Option<&str>) {
+    tracing::debug!(
+        id = id,
+        outcome_class = outcome_class.as_str(),
+        error_code = error_code.unwrap_or(""),
+        "terminal host response built"
+    );
 }
 
 /// Build an event frame `{event, payload}`.
@@ -456,5 +468,29 @@ mod tests {
         assert!(decode_bytes(Some(&Value::String(String::new())))
             .unwrap()
             .is_empty());
+    }
+
+    #[test]
+    fn response_outcome_tracing_does_not_change_wire_shape() {
+        assert_eq!(
+            ok_response(1, json!({"value": true})),
+            json!({"id": 1, "ok": true, "payload": {"value": true}})
+        );
+
+        let error = HostError::conflict(
+            "workspace_revision_conflict",
+            "refresh and retry",
+            json!({"expected": 1}),
+        );
+        assert_eq!(
+            error_response(2, &error),
+            json!({
+                "id": 2,
+                "ok": false,
+                "error": "refresh and retry",
+                "errorCode": "workspace_revision_conflict",
+                "errorDetails": {"expected": 1},
+            })
+        );
     }
 }
