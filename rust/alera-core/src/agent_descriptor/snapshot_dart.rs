@@ -5,7 +5,10 @@ use super::{
     AgentRiskRule, AgentStartupPrompt, AgentStatusStrategy, AGENT_DESCRIPTORS,
 };
 
-const HEADER: &str = "// GENERATED FILE. Do not edit by hand.\n// Regenerate with: cargo run -p alera-cli -- export-agent-descriptors\n\n";
+// `dart format off` keeps the emitted output byte-stable: the freshness test
+// compares this string to the committed file, which dart format would otherwise
+// rewrap and desync.
+const HEADER: &str = "// GENERATED FILE. Do not edit by hand.\n// Regenerate with: cargo run -p alera-cli -- export-agent-descriptors\n// dart format off\n\n";
 
 /// Renders the Rust descriptor table as the checked-in Dart snapshot used by
 /// Dart tests and code that cannot load the native library.

@@ -1,5 +1,6 @@
 // GENERATED FILE. Do not edit by hand.
 // Regenerate with: cargo run -p alera-cli -- export-agent-descriptors
+// dart format off
 
 enum AgentStartupPromptKindSnapshot {
   positionalAfterTerminator,
