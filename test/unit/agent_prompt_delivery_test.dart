@@ -21,6 +21,7 @@ void main() {
           AgentType.pi: AgentPromptDelivery.positional,
           AgentType.amp: AgentPromptDelivery.stdinScript,
           AgentType.grok: AgentPromptDelivery.positionalAfterTerminator,
+          AgentType.devin: AgentPromptDelivery.positionalAfterTerminator,
           AgentType.fx: AgentPromptDelivery.terminalAfterReady,
         },
       );

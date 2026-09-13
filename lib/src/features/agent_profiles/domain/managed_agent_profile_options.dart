@@ -1,3 +1,5 @@
+import 'package:alera/src/features/agent_profiles/domain/agent_descriptor_registry.dart';
+import 'package:alera/src/features/agent_profiles/domain/agent_descriptor_snapshot.dart';
 import 'package:alera/src/features/agent_profiles/domain/agent_profile_adapters.dart';
 import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 
@@ -151,66 +153,25 @@ const List<ManagedAgentOption> devinPermissionOptions = <ManagedAgentOption>[
 const String ccsExecutable = 'ccs';
 
 bool agentProfileSupportsCcsProfile(AgentType adapter) {
-  return adapter == AgentType.claude;
+  return agentDescriptorFor(adapter).supportsCcsProfile;
 }
 
 bool agentProfileSupportsModel(AgentType adapter) {
-  return adapter != AgentType.amp && adapter != AgentType.fx;
+  return agentDescriptorFor(adapter).modelOverride !=
+      AgentModelOverrideSnapshot.unsupported;
 }
 
 bool agentProfileSupportsPersona(AgentType adapter) {
-  return switch (adapter) {
-    AgentType.claude ||
-    AgentType.copilot ||
-    AgentType.agy ||
-    AgentType.opencode ||
-    AgentType.opencode2 ||
-    AgentType.grok => true,
-    _ => false,
-  };
+  return agentDescriptorFor(adapter).supportsPersona;
 }
 
 int managedAgentRiskScore(AgentType adapter, Map<String, Object?> config) {
+  final descriptor = agentDescriptorFor(adapter);
   var score = 0;
-  void addWhen(bool condition, int value) {
-    if (condition) {
-      score += value;
+  for (final rule in descriptor.riskRules) {
+    if (_managedAgentRiskRuleTriggered(rule, config)) {
+      score += rule.score;
     }
-  }
-
-  switch (adapter) {
-    case AgentType.codex:
-      addWhen(config['bypassApprovalsAndSandbox'] == true, 100);
-      addWhen(config['sandbox'] == 'danger-full-access', 40);
-      addWhen(config['approvalPolicy'] == 'never', 30);
-    case AgentType.claude:
-      addWhen(config['permissionMode'] == 'bypassPermissions', 100);
-      addWhen(config['permissionMode'] == 'dontAsk', 40);
-      addWhen(config['allowSkipPermissions'] == true, 30);
-    case AgentType.copilot:
-      addWhen(config['allowAll'] == true, 70);
-      addWhen(config['mode'] == 'autopilot', 40);
-      addWhen(config['noAskUser'] == true, 30);
-    case AgentType.cursor:
-      addWhen(config['permissionMode'] == 'force', 70);
-      addWhen(config['sandbox'] == 'disabled', 50);
-      addWhen(config['trustWorkspace'] == true, 20);
-    case AgentType.agy:
-      addWhen(config['skipPermissions'] == true, 100);
-    case AgentType.opencode:
-    case AgentType.opencode2:
-      addWhen(config['autoApprove'] == true, 60);
-    case AgentType.pi:
-      addWhen(config['projectTrust'] == 'approve', 30);
-    case AgentType.grok:
-      addWhen(config['permissionMode'] == 'bypassPermissions', 100);
-      addWhen(config['permissionMode'] == 'dontAsk', 40);
-    case AgentType.devin:
-      addWhen(config['permissionMode'] == 'dangerous', 100);
-      addWhen(config['permissionMode'] == 'smart', 30);
-    case AgentType.amp:
-    case AgentType.fx:
-      break;
   }
   return score;
 }
@@ -219,88 +180,43 @@ Set<String> managedAgentRiskMarkers(
   AgentType adapter,
   Map<String, Object?> config,
 ) {
+  final descriptor = agentDescriptorFor(adapter);
   final markers = <String>{};
-  void markWhen(bool condition, String marker) {
-    if (condition) {
-      markers.add(marker);
+  for (final rule in descriptor.riskRules) {
+    if (_managedAgentRiskRuleTriggered(rule, config)) {
+      markers.add(rule.marker);
     }
-  }
-
-  switch (adapter) {
-    case AgentType.codex:
-      markWhen(
-        config['bypassApprovalsAndSandbox'] == true,
-        'bypassApprovalsAndSandbox',
-      );
-      markWhen(config['sandbox'] == 'danger-full-access', 'dangerFullAccess');
-      markWhen(config['approvalPolicy'] == 'never', 'neverAsk');
-    case AgentType.claude:
-      markWhen(
-        config['permissionMode'] == 'bypassPermissions',
-        'bypassPermissions',
-      );
-      markWhen(config['permissionMode'] == 'dontAsk', 'dontAsk');
-      markWhen(config['allowSkipPermissions'] == true, 'allowSkipPermissions');
-    case AgentType.copilot:
-      markWhen(config['allowAll'] == true, 'allowAll');
-      markWhen(config['mode'] == 'autopilot', 'autopilot');
-      markWhen(config['noAskUser'] == true, 'noAskUser');
-    case AgentType.cursor:
-      markWhen(config['permissionMode'] == 'force', 'force');
-      markWhen(config['sandbox'] == 'disabled', 'sandboxDisabled');
-      markWhen(config['trustWorkspace'] == true, 'trustWorkspace');
-    case AgentType.agy:
-      markWhen(config['skipPermissions'] == true, 'skipPermissions');
-    case AgentType.opencode:
-    case AgentType.opencode2:
-      markWhen(config['autoApprove'] == true, 'autoApprove');
-    case AgentType.pi:
-      markWhen(config['projectTrust'] == 'approve', 'projectTrust');
-    case AgentType.grok:
-      markWhen(
-        config['permissionMode'] == 'bypassPermissions',
-        'bypassPermissions',
-      );
-      markWhen(config['permissionMode'] == 'dontAsk', 'dontAsk');
-    case AgentType.devin:
-      markWhen(config['permissionMode'] == 'dangerous', 'dangerous');
-      markWhen(config['permissionMode'] == 'smart', 'smart');
-    case AgentType.amp:
-    case AgentType.fx:
-      break;
   }
   return markers;
 }
 
 String managedAgentRiskWarning(AgentType adapter, Map<String, Object?> config) {
-  return switch (adapter) {
-    AgentType.codex when config['bypassApprovalsAndSandbox'] == true =>
-      'This profile will bypass Codex approvals and sandbox protections.',
-    AgentType.codex =>
-      'This profile reduces Codex approval or sandbox protections.',
-    AgentType.claude =>
-      'This profile lets Claude continue with reduced permission prompts.',
-    AgentType.copilot =>
-      'This profile lets Copilot take broader actions with less supervision.',
-    AgentType.cursor =>
-      'This profile reduces Cursor review, sandbox, or trust protections.',
-    AgentType.agy => 'This profile lets Antigravity skip permission checks.',
-    AgentType.opencode || AgentType.opencode2 =>
-      'This profile lets OpenCode approve actions automatically.',
-    AgentType.pi => 'This profile pre-approves project trust for Pi.',
-    AgentType.grok =>
-      'This profile lets Grok Build continue with reduced permission prompts.',
-    AgentType.devin =>
-      'This profile lets Devin take broader actions with less supervision.',
-    AgentType.amp => '',
-    AgentType.fx => '',
-  };
+  final descriptor = agentDescriptorFor(adapter);
+  final severeWarning = descriptor.riskWarningSevere;
+  if (severeWarning != null &&
+      descriptor.riskRules.any(
+        (rule) =>
+            rule.score == 100 && _managedAgentRiskRuleTriggered(rule, config),
+      )) {
+    return severeWarning;
+  }
+  return descriptor.riskWarning;
+}
+
+bool _managedAgentRiskRuleTriggered(
+  AgentRiskRuleSnapshot rule,
+  Map<String, Object?> config,
+) {
+  final value = config[rule.key];
+  return (rule.expectedBool != null && value == rule.expectedBool) ||
+      (rule.expectedString != null && value == rule.expectedString);
 }
 
 String managedAgentCommandPreview(
   AgentType adapter,
   Map<String, Object?> config,
 ) {
+  final descriptor = agentDescriptorFor(adapter);
   var executable = agentProfileDefaultCommands[adapter] ?? adapter.key;
   final arguments = <String>[];
   void stringOption(String key, String flag) {
@@ -310,114 +226,49 @@ String managedAgentCommandPreview(
     }
   }
 
-  void flag(String key, String value) {
-    if (config[key] == true) {
-      arguments.add(value);
+  final launcher = descriptor.launchSpec.profileLauncher;
+  if (launcher != null) {
+    final value = config[launcher.key];
+    if (value is String && value.trim().isNotEmpty) {
+      executable = launcher.executable;
+      arguments.add(value.trim());
     }
   }
-
-  void numberOption(String key, String flag) {
-    final value = config[key];
-    if (value is num) {
-      arguments.addAll(<String>[flag, value.toString()]);
-    }
+  if (descriptor.modelOverride == AgentModelOverrideSnapshot.supported) {
+    stringOption('model', '--model');
   }
-
-  switch (adapter) {
-    case AgentType.codex:
-      stringOption('model', '--model');
-      final effort = config['effort'];
-      if (effort is String && effort.isNotEmpty) {
-        arguments.addAll(<String>[
-          '--config',
-          'model_reasoning_effort=$effort',
-        ]);
-      }
-      final planModeEffort = config['planModeEffort'];
-      if (planModeEffort is String && planModeEffort.isNotEmpty) {
-        arguments.addAll(<String>[
-          '--config',
-          'plan_mode_reasoning_effort=$planModeEffort',
-        ]);
-      }
-      if (config['bypassApprovalsAndSandbox'] == true) {
-        arguments.add('--dangerously-bypass-approvals-and-sandbox');
-      } else {
-        stringOption('sandbox', '--sandbox');
-        stringOption('approvalPolicy', '--ask-for-approval');
-      }
-      flag('webSearch', '--search');
-    case AgentType.claude:
-      final ccsProfile = config['ccsProfile'];
-      if (ccsProfile is String && ccsProfile.trim().isNotEmpty) {
-        executable = ccsExecutable;
-        arguments.add(ccsProfile.trim());
-      }
-      stringOption('model', '--model');
-      stringOption('effort', '--effort');
-      stringOption('agent', '--agent');
-      stringOption('permissionMode', '--permission-mode');
-      flag('allowSkipPermissions', '--allow-dangerously-skip-permissions');
-    case AgentType.copilot:
-      stringOption('model', '--model');
-      stringOption('effort', '--effort');
-      stringOption('agent', '--agent');
-      stringOption('mode', '--mode');
-      stringOption('context', '--context');
-      flag('allowAll', '--allow-all');
-      numberOption('maxAiCredits', '--max-ai-credits');
-      numberOption('maxAutopilotContinues', '--max-autopilot-continues');
-      flag('noAskUser', '--no-ask-user');
-    case AgentType.cursor:
-      stringOption('model', '--model');
-      stringOption('mode', '--mode');
-      if (config['permissionMode'] == 'autoReview') {
-        arguments.add('--auto-review');
-      } else if (config['permissionMode'] == 'force') {
-        arguments.add('--force');
-      }
-      stringOption('sandbox', '--sandbox');
-      flag('trustWorkspace', '--trust');
-    case AgentType.agy:
-      stringOption('model', '--model');
-      stringOption('effort', '--effort');
-      stringOption('agent', '--agent');
-      stringOption('mode', '--mode');
-      flag('skipPermissions', '--dangerously-skip-permissions');
-      flag('sandbox', '--sandbox');
-    case AgentType.opencode:
-      stringOption('model', '--model');
-      stringOption('agent', '--agent');
-      flag('autoApprove', '--auto');
-    case AgentType.opencode2:
-      // Interactive opencode2 only accepts --auto on the default TUI command.
-      flag('autoApprove', '--auto');
-    case AgentType.pi:
-      stringOption('model', '--model');
-      stringOption('thinking', '--thinking');
-      if (config['projectTrust'] == 'approve') {
-        arguments.add('--approve');
-      } else if (config['projectTrust'] == 'ignore') {
-        arguments.add('--no-approve');
-      }
-    case AgentType.amp:
-      stringOption('mode', '--mode');
-      flag('fast', '--fast');
-    case AgentType.grok:
-      stringOption('model', '--model');
-      stringOption('effort', '--effort');
-      stringOption('agent', '--agent');
-      stringOption('permissionMode', '--permission-mode');
-      stringOption('sandbox', '--sandbox');
-      flag('disableWebSearch', '--disable-web-search');
-    case AgentType.devin:
-      stringOption('model', '--model');
-      stringOption('permissionMode', '--permission-mode');
-      flag('sandbox', '--sandbox');
-    case AgentType.fx:
-      flag('resumeLast', '--continue');
-      flag('noAdditionalDirs', '--no-additional-dirs');
-      flag('record', '--record');
+  for (final rule in descriptor.launchSpec.rules) {
+    if (rule.suppressedBy != null && config[rule.suppressedBy] == true) {
+      continue;
+    }
+    switch (rule.kind) {
+      case AgentLaunchRuleKindSnapshot.stringOption:
+      case AgentLaunchRuleKindSnapshot.enumOption:
+        final value = config[rule.key];
+        if (value is String && value.trim().isNotEmpty) {
+          arguments.addAll(<String>[rule.flag!, value.trim()]);
+        }
+      case AgentLaunchRuleKindSnapshot.numberOption:
+        final value = config[rule.key];
+        if (value is num) {
+          arguments.addAll(<String>[rule.flag!, value.toString()]);
+        }
+      case AgentLaunchRuleKindSnapshot.configKv:
+        final value = config[rule.key];
+        if (value is String && value.isNotEmpty) {
+          arguments.addAll(<String>['--config', '${rule.rustKey}=$value']);
+        }
+      case AgentLaunchRuleKindSnapshot.boolFlag:
+      case AgentLaunchRuleKindSnapshot.exclusiveToggle:
+        if (config[rule.key] == true) {
+          arguments.add(rule.flag!);
+        }
+      case AgentLaunchRuleKindSnapshot.enumToFlag:
+        final value = config[rule.key];
+        if (value is String && rule.flags.containsKey(value)) {
+          arguments.add(rule.flags[value]!);
+        }
+    }
   }
   return <String>[
     executable,
