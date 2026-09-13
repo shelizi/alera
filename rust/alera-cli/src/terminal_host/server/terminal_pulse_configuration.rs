@@ -322,7 +322,7 @@ async fn await_watcher_start<T: Send + 'static>(
                     error.wire_message()
                 );
             }
-            Err(HostError::state(
+            Err(HostError::timeout(
                 "Terminal Pulse watcher setup timed out before it could be armed.",
             ))
         }
@@ -339,6 +339,7 @@ mod tests {
 
     use super::*;
     use crate::terminal_host::client::ClientHandle;
+    use crate::terminal_host::host_error::OutcomeClass;
     use crate::terminal_host::server::actor_test_harness::{local_client, test_actor};
     use crate::terminal_host::session::Session;
 
@@ -374,7 +375,12 @@ mod tests {
         .await
         .expect("watcher timeout must not await its blocking task");
 
-        assert!(result.unwrap_err().wire_message().contains("timed out"));
+        let error = result.unwrap_err();
+        assert_eq!(error.outcome_class(), OutcomeClass::Timeout);
+        assert_eq!(
+            error.wire_message(),
+            "Terminal Pulse watcher setup timed out before it could be armed."
+        );
         assert!(cancelled.load(Ordering::Acquire));
         release_tx.send(()).unwrap();
         tokio::time::timeout(Duration::from_secs(1), async {

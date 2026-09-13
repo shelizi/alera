@@ -15,7 +15,7 @@ impl ServerActor {
     pub(super) fn require_auth(&self, client_id: u64) -> HostResult<()> {
         match self.clients.get(&client_id) {
             Some(client) if client.authenticated => Ok(()),
-            _ => Err(HostError::state(
+            _ => Err(HostError::unauthorized(
                 "Terminal host client is not authenticated.",
             )),
         }
@@ -53,7 +53,9 @@ impl ServerActor {
         let version_ok = payload.get("protocolVersion") == Some(&json!(PROTOCOL_VERSION));
         let token_ok = payload.get("token").and_then(Value::as_str) == Some(self.token.as_str());
         if !version_ok || !token_ok {
-            return Err(HostError::state("Terminal host authentication failed."));
+            return Err(HostError::unauthorized(
+                "Terminal host authentication failed.",
+            ));
         }
         let binary_frames = payload
             .get("binaryFrames")
@@ -388,6 +390,39 @@ mod tests {
             requested_local_role(&json!({"clientKind": "legacy"})),
             LocalClientRole::Cli
         );
+    }
+
+    #[tokio::test]
+    async fn authentication_failures_are_unauthorized_with_legacy_messages() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut actor = crate::terminal_host::server::actor_test_harness::test_actor(
+            &dir,
+            std::collections::HashMap::new(),
+            std::collections::HashMap::new(),
+        )
+        .await;
+
+        let error = actor.require_auth(1).unwrap_err();
+        assert_eq!(
+            error.outcome_class(),
+            crate::terminal_host::host_error::OutcomeClass::Unauthorized
+        );
+        assert_eq!(
+            error.wire_message(),
+            "Terminal host client is not authenticated."
+        );
+
+        let error = actor
+            .handle_hello(
+                1,
+                &json!({"protocolVersion": PROTOCOL_VERSION, "token": "wrong"}),
+            )
+            .unwrap_err();
+        assert_eq!(
+            error.outcome_class(),
+            crate::terminal_host::host_error::OutcomeClass::Unauthorized
+        );
+        assert_eq!(error.wire_message(), "Terminal host authentication failed.");
     }
 
     #[tokio::test]

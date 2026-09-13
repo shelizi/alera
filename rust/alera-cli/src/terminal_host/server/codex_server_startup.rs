@@ -8,6 +8,10 @@ use crate::terminal_host::protocol::event;
 
 pub(super) type CodexServerStartup = Shared<BoxFuture<'static, HostResult<CodexAppServer>>>;
 
+fn codex_server_startup_timeout_error() -> HostError {
+    HostError::timeout("Codex app-server startup timed out.")
+}
+
 impl ServerActor {
     pub(super) async fn ensure_codex_server(
         &mut self,
@@ -36,7 +40,7 @@ impl ServerActor {
                 CodexAppServer::start(inbox, cwd.as_deref()),
             )
             .await
-            .unwrap_or_else(|_| Err(HostError::state("Codex app-server startup timed out.")))
+            .unwrap_or_else(|_| Err(codex_server_startup_timeout_error()))
         }
         .boxed()
         .shared();
@@ -73,5 +77,19 @@ impl ServerActor {
         self.codex = Some(server.clone());
         self.broadcast_authenticated(event("codexServerChanged", json!({"status":"ready"})));
         Ok(server)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::codex_server_startup_timeout_error;
+    use crate::terminal_host::host_error::OutcomeClass;
+
+    #[test]
+    fn startup_timeout_is_classified_without_changing_its_wire_message() {
+        let error = codex_server_startup_timeout_error();
+
+        assert_eq!(error.outcome_class(), OutcomeClass::Timeout);
+        assert_eq!(error.wire_message(), "Codex app-server startup timed out.");
     }
 }
