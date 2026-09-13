@@ -245,6 +245,10 @@ abstract interface class GitBackend {
   /// Amends the current HEAD commit using the currently staged index.
   Future<String> amendCommit({required String path, required String message});
 
+  /// Detaches HEAD at [commitId], updating the index and working tree.
+  /// Local changes overlapping the target commit abort the checkout.
+  Future<void> checkoutCommit({required String path, required String commitId});
+
   /// Reverts [commitId] on the current branch, creating a new commit.
   /// [mainlineParent] is the 1-based parent number required when [commitId]
   /// is a merge commit; it must be null for non-merge commits.

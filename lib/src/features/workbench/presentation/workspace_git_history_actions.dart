@@ -10,6 +10,7 @@ enum GitHistoryRefMenuAction { switchBranch, copyName }
 enum GitHistoryCommitMenuAction {
   copyHash,
   copySubject,
+  checkoutCommit,
   revertCommit,
   resetSoft,
   resetMixed,
@@ -83,6 +84,12 @@ Future<GitHistoryCommitMenuAction?> showGitHistoryCommitMenu(
       ),
       PopupMenuDivider(),
       AleraDropdownEntry<GitHistoryCommitMenuAction>(
+        value: .checkoutCommit,
+        label: 'Checkout Commit',
+        localizeLabel: false,
+        leading: Icon(AleraIcons.forward, size: 16),
+      ),
+      AleraDropdownEntry<GitHistoryCommitMenuAction>(
         value: .revertCommit,
         label: 'Revert Commit',
         localizeLabel: false,
@@ -114,6 +121,25 @@ Future<GitHistoryCommitMenuAction?> showGitHistoryCommitMenu(
 /// Short commit id used in confirmation copy and toasts.
 String gitHistoryItemShortId(GitHistoryItem item) =>
     item.id.length > 7 ? item.id.substring(0, 7) : item.id;
+
+/// Asks the user to confirm detaching HEAD at [item]. The copy calls out the
+/// detached state because commits made there do not move any branch.
+Future<bool> showGitCheckoutCommitConfirmation(
+  BuildContext context,
+  GitHistoryItem item,
+) async {
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (_) => AleraConfirmDialog(
+      title: 'Checkout Commit?',
+      message:
+          'Detaches HEAD at ${gitHistoryItemShortId(item)} "${item.subject}". '
+          'Commits made in this state do not belong to a branch.',
+      confirmLabel: 'Checkout',
+    ),
+  );
+  return confirmed ?? false;
+}
 
 /// Asks the user to confirm reverting [item] on the current branch.
 Future<bool> showGitRevertCommitConfirmation(

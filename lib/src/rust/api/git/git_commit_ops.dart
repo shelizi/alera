@@ -10,6 +10,14 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `clone`, `eq`, `fmt`
 
+Future<void> gitCheckoutCommit({
+  required String path,
+  required String commitId,
+}) => RustLib.instance.api.crateApiGitGitCommitOpsGitCheckoutCommit(
+  path: path,
+  commitId: commitId,
+);
+
 Future<String> gitRevertCommit({
   required String path,
   required String commitId,

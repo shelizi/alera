@@ -64,6 +64,7 @@ enum WorkspaceSourceControlAction {
   stashPop,
   revert,
   reset,
+  checkout,
 }
 
 @riverpod
@@ -192,6 +193,12 @@ class WorkspaceSourceControlController
     .amend,
     (backend) =>
         backend.amendCommit(path: workspacePath, message: message.trim()),
+  );
+
+  Future<void> checkoutCommit(String commitId) => _run(
+    .checkout,
+    (backend) =>
+        backend.checkoutCommit(path: workspacePath, commitId: commitId),
   );
 
   Future<void> revertCommit(String commitId, {int? mainlineParent}) =>

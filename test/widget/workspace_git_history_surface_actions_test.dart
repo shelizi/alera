@@ -8,6 +8,45 @@ import 'package:flutter_test/flutter_test.dart';
 import 'workspace_git_history_surface_test_harness.dart';
 
 void main() {
+  testWidgets('checkout commit detaches HEAD after confirmation', (
+    tester,
+  ) async {
+    final toasts = captureAleraToasts();
+    final backend = gitHistoryBackend(<GitHistoryItem>[
+      gitHistoryCommit(
+        'abc123def',
+        parents: <String>['c0'],
+        subject: 'Only Commit',
+      ),
+    ]);
+    final repository = GitHistoryFakeWorkbenchRepository()
+      ..tabs.add(gitHistoryTab());
+
+    await pumpGitHistorySurface(
+      tester,
+      backend: backend,
+      repository: repository,
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Only Commit'), buttons: kSecondaryMouseButton);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Checkout Commit'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Checkout Commit?'), findsOneWidget);
+    expect(find.textContaining('do not belong to a branch'), findsOneWidget);
+    await tester.tap(find.text('Checkout'));
+    await tester.pumpAndSettle();
+
+    final checkouts = backend.calls
+        .where((call) => call.method == 'checkoutCommit')
+        .toList();
+    expect(checkouts, hasLength(1));
+    expect(checkouts.single.args['commitId'], 'abc123def');
+    expect(checkouts.single.args['path'], '/tmp/project');
+    expect(toasts.last.message, 'Checked out abc123d');
+  });
   testWidgets('revert commit confirms and runs through source control', (
     tester,
   ) async {

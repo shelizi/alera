@@ -135,6 +135,8 @@ class FakeGitBackend
   GitException? commitError;
   GitException? amendCommitError;
   @override
+  GitException? checkoutCommitError;
+  @override
   GitException? revertCommitError;
   @override
   GitException? resetToCommitError;

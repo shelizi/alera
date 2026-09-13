@@ -275,6 +275,7 @@ class _WorkspaceGitDiffPanelState extends ConsumerState<WorkspaceGitDiffPanel> {
                 onOpenCommit: _openCommitDiff,
                 onOpenCommitFile: _openCommitFile,
                 onCopyCommitText: _copyCommitText,
+                onCheckoutCommit: _checkoutCommit,
                 onRevertCommit: _revertCommit,
                 onResetToCommit: _resetToCommit,
                 onSwitchBranch: widget.onSwitchBranch == null

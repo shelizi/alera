@@ -409,6 +409,14 @@ class const RustGitBackend()
       _guard(() => rust.gitCommitAmend(path: path, message: message));
 
   @override
+  Future<void> checkoutCommit({
+    required String path,
+    required String commitId,
+  }) => _guard(
+    () => rust_commit_ops.gitCheckoutCommit(path: path, commitId: commitId),
+  );
+
+  @override
   Future<String> revertCommit({
     required String path,
     required String commitId,

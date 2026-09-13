@@ -156,7 +156,7 @@ pub fn checkout_branch(path: &str, branch: &str) -> Result<(), GitError> {
     Ok(())
 }
 
-fn ensure_pending_changes_compatible(
+pub(super) fn ensure_pending_changes_compatible(
     repo: &git2::Repository,
     target_commit: &git2::Commit<'_>,
 ) -> Result<(), GitError> {
@@ -205,7 +205,7 @@ fn ensure_pending_changes_compatible(
     Ok(())
 }
 
-fn checkout_error(error: git2::Error) -> GitError {
+pub(super) fn checkout_error(error: git2::Error) -> GitError {
     match error.code() {
         ErrorCode::Conflict => GitError::new(GitErrorKind::Conflict, error.message()),
         _ => GitError::from_git2(error),

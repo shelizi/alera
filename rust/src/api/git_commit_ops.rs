@@ -9,6 +9,10 @@ pub enum GitResetMode {
     Hard,
 }
 
+pub fn git_checkout_commit(path: String, commit_id: String) -> Result<(), GitError> {
+    core_git::checkout_commit(&path, &commit_id).map_err(Into::into)
+}
+
 pub fn git_revert_commit(
     path: String,
     commit_id: String,

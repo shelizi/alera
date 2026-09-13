@@ -6,7 +6,9 @@ use git2::{
 };
 use tempfile::TempDir;
 
-use super::{current_branch, reset_to_commit, revert_commit, GitErrorKind, GitResetMode};
+use super::{
+    checkout_commit, current_branch, reset_to_commit, revert_commit, GitErrorKind, GitResetMode,
+};
 
 #[test]
 fn revert_commit_creates_expected_commit() {
@@ -240,6 +242,129 @@ fn reset_allows_detached_head() {
         repo.head().expect("read detached target").target(),
         Some(base_oid)
     );
+}
+
+#[test]
+fn checkout_commit_detaches_head_and_updates_worktree() {
+    let (_directory, repo) = init_repo();
+    let base_oid = repo
+        .head()
+        .expect("read base HEAD")
+        .target()
+        .expect("base oid");
+    let tip_oid = commit_file(&repo, "HEAD", "README.md", "second\n", "second change");
+
+    checkout_commit(path_str(workdir(&repo)), &base_oid.to_string()).expect("checkout base commit");
+    let verification_repo = Repository::open(workdir(&repo)).expect("reopen repository");
+
+    assert!(verification_repo
+        .head_detached()
+        .expect("read detached HEAD"));
+    assert_eq!(
+        verification_repo.head().expect("read HEAD").target(),
+        Some(base_oid)
+    );
+    assert_ne!(base_oid, tip_oid);
+    assert_eq!(worktree_file(&verification_repo, "README.md"), "initial\n");
+    assert!(status_snapshot(&verification_repo).is_empty());
+    assert_eq!(verification_repo.state(), RepositoryState::Clean);
+}
+
+#[test]
+fn checkout_commit_is_noop_when_already_detached_at_target() {
+    let (_directory, repo) = init_repo();
+    let base_oid = repo
+        .head()
+        .expect("read base HEAD")
+        .target()
+        .expect("base oid");
+    repo.set_head_detached(base_oid).expect("detach HEAD");
+
+    checkout_commit(path_str(workdir(&repo)), &base_oid.to_string())
+        .expect("checkout detached target");
+
+    assert_eq!(repo.head().expect("read HEAD").target(), Some(base_oid));
+}
+
+#[test]
+fn checkout_commit_rejects_non_clean_state() {
+    let (_directory, repo) = init_repo();
+    let target_oid = repo
+        .head()
+        .expect("read HEAD")
+        .target()
+        .expect("initial oid");
+    fs::write(repo.path().join("MERGE_HEAD"), format!("{target_oid}\n"))
+        .expect("write merge state");
+
+    let error = checkout_commit(path_str(workdir(&repo)), &target_oid.to_string())
+        .expect_err("checkout must reject merge state");
+
+    assert_eq!(error.kind, GitErrorKind::Conflict);
+    assert_eq!(repo.state(), RepositoryState::Merge);
+    assert!(!repo.head_detached().expect("read detached HEAD"));
+}
+
+#[test]
+fn checkout_commit_rejects_overlapping_dirty_changes() {
+    let (_directory, repo) = init_repo();
+    let base_oid = repo
+        .head()
+        .expect("read base HEAD")
+        .target()
+        .expect("base oid");
+    let tip_oid = commit_file(&repo, "HEAD", "README.md", "second\n", "second change");
+    fs::write(workdir(&repo).join("README.md"), "local\n").expect("write local change");
+
+    let error = checkout_commit(path_str(workdir(&repo)), &base_oid.to_string())
+        .expect_err("overlapping dirty change must abort checkout");
+    let verification_repo = Repository::open(workdir(&repo)).expect("reopen repository");
+
+    assert_eq!(error.kind, GitErrorKind::Conflict);
+    assert_eq!(
+        verification_repo.head().expect("read HEAD").target(),
+        Some(tip_oid)
+    );
+    assert!(!verification_repo
+        .head_detached()
+        .expect("read detached HEAD"));
+    assert_eq!(worktree_file(&verification_repo, "README.md"), "local\n");
+}
+
+#[test]
+fn checkout_commit_preserves_non_overlapping_changes() {
+    let (_directory, repo) = init_repo();
+    let base_oid = repo
+        .head()
+        .expect("read base HEAD")
+        .target()
+        .expect("base oid");
+    commit_file(&repo, "HEAD", "README.md", "second\n", "second change");
+    fs::write(workdir(&repo).join("tracked.txt"), "local\n").expect("write local change");
+
+    checkout_commit(path_str(workdir(&repo)), &base_oid.to_string()).expect("checkout base commit");
+    let verification_repo = Repository::open(workdir(&repo)).expect("reopen repository");
+
+    assert!(verification_repo
+        .head_detached()
+        .expect("read detached HEAD"));
+    assert_eq!(worktree_file(&verification_repo, "README.md"), "initial\n");
+    assert_eq!(worktree_file(&verification_repo, "tracked.txt"), "local\n");
+    let snapshot = status_snapshot(&verification_repo);
+    assert_eq!(snapshot.len(), 1);
+    assert_eq!(snapshot[0].0, PathBuf::from("tracked.txt"));
+}
+
+#[test]
+fn checkout_commit_rejects_bad_commit_id() {
+    let (_directory, repo) = init_repo();
+
+    let error = checkout_commit(path_str(workdir(&repo)), "not-a-commit")
+        .expect_err("checkout must reject an invalid commit id");
+
+    assert_eq!(error.kind, GitErrorKind::Internal);
+    assert!(error.context.contains("not-a-commit"));
+    assert!(!repo.head_detached().expect("read detached HEAD"));
 }
 
 #[test]

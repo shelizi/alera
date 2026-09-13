@@ -4,6 +4,7 @@ use git2::{
     build::CheckoutBuilder, ErrorCode, Repository, RepositoryState, ResetType, RevertOptions,
 };
 
+use super::branch_operations::{checkout_error, ensure_pending_changes_compatible};
 use super::{open_repo, GitError, GitErrorKind};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -135,6 +136,38 @@ pub fn revert_commit(
 
     repo.cleanup_state().map_err(GitError::from_git2)?;
     Ok(new_oid.to_string())
+}
+
+/// Detaches HEAD at [commit_id], updating the index and working tree.
+/// Pending changes that overlap the target commit abort the checkout, and a
+/// checkout libgit2 cannot apply cleanly rolls HEAD back to its previous
+/// symbolic or detached target.
+pub fn checkout_commit(path: &str, commit_id: &str) -> Result<(), GitError> {
+    let repo = open_repo(path)?;
+    ensure_clean_state(&repo, "checking out a commit")?;
+    let commit = resolve_commit(&repo, commit_id)?;
+
+    let head = repo.head().map_err(GitError::from_git2)?;
+    let already_detached_at_target = head
+        .symbolic_target()
+        .map_err(GitError::from_git2)?
+        .is_none()
+        && head.target() == Some(commit.id());
+    drop(head);
+    if already_detached_at_target {
+        return Ok(());
+    }
+
+    ensure_pending_changes_compatible(&repo, &commit)?;
+
+    // Apply the target tree before moving HEAD: a rejected safe checkout then
+    // leaves HEAD untouched instead of sitting detached on an unapplied commit.
+    let mut checkout = CheckoutBuilder::new();
+    checkout.safe();
+    repo.checkout_tree(commit.as_object(), Some(&mut checkout))
+        .map_err(checkout_error)?;
+    repo.set_head_detached(commit.id())
+        .map_err(GitError::from_git2)
 }
 
 pub fn reset_to_commit(path: &str, commit_id: &str, mode: GitResetMode) -> Result<(), GitError> {

@@ -280,6 +280,7 @@ class const _SourceControlToolbar({
       WorkspaceSourceControlAction.stashPop => 'popping stash',
       WorkspaceSourceControlAction.revert => 'reverting',
       WorkspaceSourceControlAction.reset => 'resetting',
+      WorkspaceSourceControlAction.checkout => 'checking out',
     };
   }
 }

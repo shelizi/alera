@@ -47,6 +47,7 @@ class const _GitHistoryPanel({
   onOpenCommitFile,
   required final Future<void> Function(String text, String label)
   onCopyCommitText,
+  final Future<void> Function(GitHistoryItem item)? onCheckoutCommit,
   final Future<void> Function(GitHistoryItem item)? onRevertCommit,
   final Future<void> Function(GitHistoryItem item, GitResetMode mode)?
   onResetToCommit,
@@ -283,6 +284,8 @@ class _GitHistoryPanelState extends State<_GitHistoryPanel> {
           item.message.trim().isEmpty ? item.subject : item.message,
           'Commit Subject',
         );
+      case GitHistoryCommitMenuAction.checkoutCommit:
+        await widget.onCheckoutCommit?.call(item);
       case GitHistoryCommitMenuAction.revertCommit:
         await widget.onRevertCommit?.call(item);
       case GitHistoryCommitMenuAction.resetSoft:

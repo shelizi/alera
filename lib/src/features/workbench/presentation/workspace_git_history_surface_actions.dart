@@ -22,6 +22,8 @@ extension _WorkspaceGitHistorySurfaceActions
           item.message.trim().isEmpty ? item.subject : item.message,
           'Commit Subject',
         );
+      case GitHistoryCommitMenuAction.checkoutCommit:
+        await _checkoutCommit(item);
       case GitHistoryCommitMenuAction.revertCommit:
         await _revertCommit(item);
       case GitHistoryCommitMenuAction.resetSoft:
@@ -31,6 +33,17 @@ extension _WorkspaceGitHistorySurfaceActions
       case GitHistoryCommitMenuAction.resetHard:
         await _resetToCommit(item, GitResetMode.hard);
     }
+  }
+
+  Future<void> _checkoutCommit(GitHistoryItem item) async {
+    final confirmed = await showGitCheckoutCommitConfirmation(context, item);
+    if (!confirmed || !mounted) {
+      return;
+    }
+    await _runCommitMutation(
+      (notifier) => notifier.checkoutCommit(item.id),
+      'Checked out ${gitHistoryItemShortId(item)}',
+    );
   }
 
   Future<void> _revertCommit(GitHistoryItem item) async {

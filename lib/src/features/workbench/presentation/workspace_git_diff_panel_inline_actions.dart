@@ -271,6 +271,17 @@ extension _WorkspaceGitDiffPanelActions on _WorkspaceGitDiffPanelState {
     }
   }
 
+  Future<void> _checkoutCommit(GitHistoryItem item) async {
+    final confirmed = await showGitCheckoutCommitConfirmation(context, item);
+    if (!confirmed || !mounted) {
+      return;
+    }
+    await _run(
+      () => _notifier.checkoutCommit(item.id),
+      successMessage: 'Checked out ${gitHistoryItemShortId(item)}',
+    );
+  }
+
   Future<void> _revertCommit(GitHistoryItem item) async {
     final confirmed = await showGitRevertCommitConfirmation(context, item);
     if (!confirmed || !mounted) {
