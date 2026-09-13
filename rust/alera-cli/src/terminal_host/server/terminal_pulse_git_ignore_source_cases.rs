@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 use std::{sync::atomic::AtomicBool, sync::Arc};
 
-use git2::Repository;
+use git2::{Config, Repository};
 
 use super::super::{GitConfigEnvironment, WorkspacePulseWatcher};
 use super::{git_environment_boolean, xdg_source_paths};
@@ -208,17 +208,13 @@ fn shell_xdg_config_controls_ignore_discovery_and_reconciliation() {
     std::fs::create_dir_all(xdg.join("git")).unwrap();
     let exclude = root.path().join("shell-global-ignore");
     std::fs::write(&exclude, "ignored/\n").unwrap();
-    std::fs::write(
-        xdg.join("git/config"),
-        format!("[core]\n\texcludesFile = {}\n", exclude.display()),
-    )
-    .unwrap();
+    write_git_config_excludes_file(&xdg.join("git/config"), &exclude);
     let environment = GitConfigEnvironment::new(
         Some(root.path().join("shell-home")),
         Some(xdg),
         None,
         None,
-        false,
+        true,
     );
     let (inbox, mut commands) = tokio::sync::mpsc::unbounded_channel();
     let _watcher = WorkspacePulseWatcher::start_blocking_with_environment(
@@ -250,11 +246,7 @@ fn changing_an_included_config_reconciles_its_exclude_file() {
     let exclude = root.path().join("included-ignore");
     std::fs::write(&exclude, "ignored/\n").unwrap();
     let included = root.path().join("included-config");
-    std::fs::write(
-        &included,
-        format!("[core]\n\texcludesFile = {}\n", exclude.display()),
-    )
-    .unwrap();
+    write_git_config_excludes_file(&included, &exclude);
     repository
         .config()
         .unwrap()
@@ -447,6 +439,29 @@ fn assert_file_changed(
         );
         std::thread::sleep(Duration::from_millis(10));
     }
+}
+
+fn write_git_config_excludes_file(config_path: &std::path::Path, exclude_path: &std::path::Path) {
+    let config_value = exclude_path.to_string_lossy().replace('\\', "/");
+    assert!(
+        !config_value.contains('\\'),
+        "Git config paths must use forward slashes: {config_value}"
+    );
+    std::fs::write(
+        config_path,
+        format!("[core]\n\texcludesFile = {config_value}\n"),
+    )
+    .unwrap();
+
+    let configured_path = Config::open(config_path)
+        .unwrap()
+        .get_path("core.excludesFile")
+        .unwrap();
+    assert_eq!(
+        dunce::canonicalize(configured_path).unwrap(),
+        dunce::canonicalize(exclude_path).unwrap(),
+        "Git config should resolve the exclude file path"
+    );
 }
 
 fn wait_for_git_source_reconciliation() {
