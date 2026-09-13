@@ -929,7 +929,7 @@ impl ServerActor {
             "sshTarget.bootstrap.start" => {
                 self.require_auth(client_id)?;
                 let request: SshTargetBootstrapRequest = parse_payload(payload)?;
-                self.start_ssh_bootstrap_job(request).await
+                self.start_ssh_bootstrap_job(client_id, request).await
             }
             "sshTarget.bootstrap.cancel" => {
                 self.require_auth(client_id)?;
