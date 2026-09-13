@@ -97,6 +97,8 @@ mod coordinator_requests;
 mod coordinator_stall_policy;
 mod declared_catalog_requests;
 mod deferred_admission;
+#[cfg(test)]
+mod deferred_admission_load_bench;
 mod deferred_admission_metrics;
 #[cfg(test)]
 mod deferred_admission_tests;
