@@ -126,6 +126,39 @@ void main() {
     },
   );
 
+  test('a stale watcher reload cannot overwrite a newer refresh', () async {
+    final backend = _BlockingStatusGitBackend()
+      ..gitStatusResult = _statusWith(1);
+    final watcher = FakeSourceControlWatcher();
+    addTearDown(watcher.dispose);
+    final (container, controller) = await _boot(backend, watcher);
+    final provider = workspaceSourceControlControllerProvider(_workspacePath);
+    final staleGate = Completer<void>();
+    backend.statusGates.add(staleGate);
+
+    watcher.emitChange();
+    for (
+      var attempt = 0;
+      attempt < 80 &&
+          backend.calls.where((call) => call.method == 'status').length < 2;
+      attempt += 1
+    ) {
+      await Future.pause(const Duration(milliseconds: 10));
+    }
+    expect(
+      backend.calls.where((call) => call.method == 'status').length,
+      greaterThanOrEqualTo(2),
+    );
+
+    backend.gitStatusResult = _statusWith(2);
+    await controller.refresh();
+    expect(container.read(provider).requireValue.status.entries, hasLength(2));
+
+    staleGate.complete();
+    await Future.pause(const Duration(milliseconds: 20));
+    expect(container.read(provider).requireValue.status.entries, hasLength(2));
+  });
+
   test(
     'sustained watch churn backs off instead of scanning every few hundred ms',
     () async {

@@ -494,13 +494,27 @@ class const RustGitBackend()
     );
   }
 
-  GitStatusResult _toStatusResult(rust.GitStatusResult result) {
-    final entries = result.entries.map(_toChangeEntry).toList(growable: false);
+  Future<GitStatusResult> _toStatusResult(rust.GitStatusResult result) async {
+    final entries = <GitChangeEntry>[];
+    for (var index = 0; index < result.entries.length; index += 1) {
+      entries.add(_toChangeEntry(result.entries[index]));
+      if ((index + 1) % gitStatusWorkChunkSize == 0) {
+        await Future.pause();
+      }
+    }
+    if (result.entries.isNotEmpty) {
+      await Future.pause();
+    }
+    final projectedEntries = List<GitChangeEntry>.unmodifiableOf(entries);
+    if (projectedEntries.isNotEmpty) {
+      await Future.pause();
+    }
     // The native side sends the flat entries only so each change crosses the
-    // bridge once; groups and tree rows are derived locally instead.
+    // bridge once; groups and tree rows are derived locally instead. Both
+    // projection stages yield so a large status cannot monopolize a frame.
     return GitStatusResult(
-      entries: entries,
-      groups: GitChangeGroup.fromEntries(entries),
+      entries: projectedEntries,
+      groups: await GitChangeGroup.fromEntriesChunked(projectedEntries),
     );
   }
 

@@ -80,6 +80,7 @@ class WorkspaceSourceControlController
   bool _watcherReloadInFlight = false;
   bool _watcherReloadQueued = false;
   int _queuedWatcherReloads = 0;
+  int _loadGeneration = 0;
   bool _disposed = false;
 
   @override
@@ -258,32 +259,43 @@ class WorkspaceSourceControlController
     );
   }
 
-  WorkspaceSourceControlState _reconcileLoadedState({
+  Future<WorkspaceSourceControlState> _reconcileLoadedState({
     required WorkspaceSourceControlState? previous,
     required GitStatusResult status,
     required GitRepositoryState repositoryState,
     required List<GitStashEntry> stashes,
-  }) {
+  }) async {
     if (previous == null) {
+      final loadedStatus = status.groups.isNotEmpty || status.entries.isEmpty
+          ? status
+          : GitStatusResult(
+              entries: status.entries,
+              groups: await GitChangeGroup.fromEntriesChunked(status.entries),
+            );
       return WorkspaceSourceControlState(
-        status: status,
+        status: loadedStatus,
         repositoryState: repositoryState,
         stashes: stashes,
       );
     }
 
-    final entries = reconcileGitChangeEntryInstances(
+    final entries = await reconcileGitChangeEntryInstancesChunked(
       previous.status.entries,
       status.entries,
     );
-    // GitStatusResult.groups is derived by GitChangeGroup.fromEntries, so
-    // preserving the old status is safe when those entry instances are all
-    // unchanged.
+    // The backend already paid the chunked grouping cost. Rebind its rows to
+    // reconciled entry instances instead of rebuilding the trees synchronously.
     final reconciledStatus = identical(entries, previous.status.entries)
         ? previous.status
         : GitStatusResult(
             entries: entries,
-            groups: GitChangeGroup.fromEntries(entries),
+            groups: status.groups.isEmpty
+                ? await GitChangeGroup.fromEntriesChunked(entries)
+                : await GitChangeGroup.rebindEntryInstancesChunked(
+                    status.groups,
+                    sourceEntries: status.entries,
+                    reboundEntries: entries,
+                  ),
           );
     final reconciledRepositoryState =
         gitRepositoryStateValuesEqual(previous.repositoryState, repositoryState)
@@ -317,6 +329,7 @@ class WorkspaceSourceControlController
     if (previous?.isBusy ?? false) {
       return;
     }
+    final loadGeneration = ++_loadGeneration;
     if (previous != null) {
       state = AsyncData(
         WorkspaceSourceControlState(
@@ -329,7 +342,11 @@ class WorkspaceSourceControlController
     }
     try {
       await operation(ref.read(gitBackendProvider));
-      state = AsyncData(await _load());
+      final next = await _load();
+      if (_disposed || loadGeneration != _loadGeneration) {
+        return;
+      }
+      state = AsyncData(next);
     } catch (error, stackTrace) {
       final recovered = await _recoverAfterFailure(previous);
       if (recovered != null) {
@@ -411,9 +428,12 @@ class WorkspaceSourceControlController
       return;
     }
     _watcherReloadInFlight = true;
+    final loadGeneration = ++_loadGeneration;
     try {
       final next = await _load();
-      if (_disposed || (state.asData?.value.isBusy ?? false)) {
+      if (_disposed ||
+          loadGeneration != _loadGeneration ||
+          (state.asData?.value.isBusy ?? false)) {
         return;
       }
       state = AsyncData(next);
