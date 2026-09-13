@@ -1558,6 +1558,11 @@ max-lines 尚未全清前，第 8 步會是 repo-wide exit 1；必須確認 offe
 - 補齊：operation/request ID 跨層貫穿、reconnect reason taxonomy、outcome taxonomy、resource owner/cleanup completion、queue wait 全鏈路。
 - 同批建立可重複 benchmark harness（承接 `tool/bench/git_status_real_repo_bench.dart` 模式），為 §21 效能 gate 鋪路；門檻先有可重複基準再定。
 - 不記錄 credentials、完整 prompt 或完整 terminal payload。
+- **已完成（2026-09-13，四卡全 merged）**：
+  - S1 `4712afbf`：`request_id` 貫穿 `QueuedJob`/`ActiveJob`/`DelayedJob`,enqueue/start/complete/reject/timer/disconnect-sweep 各點補結構化 tracing 欄位；`schedule_with_request_id` additive API,既有呼叫點簽名不變。
+  - S2 `4bd25c44`:`DisconnectReason` 7 variants(全為真實觸發點)穿進 `ClientDisconnected{id,reason}` 全鏈路;`dispose_client` 掃尾輸出 cleanup-completion(waiters 移除數、sessions detached、receipts left-pending-by-design 等);文件 `docs/observability-disconnect-taxonomy.md`。已知缺口:shutdown path 直清 local handles 不經 dispose_client,無 cleanup 事件(待補)。
+  - S3 `404d28c3`:`HostError::outcome_class()` + `OutcomeClass` 六值分類(Ok/StateError/TypedConflict/Backpressure/Unauthorized/Timeout),`error_response` 唯一建構點發 `tracing::debug!` outcome/error_code;文件 `docs/observability-outcome-taxonomy.md`。脆弱面:Unauthorized/Timeout 靠 closed message list 判別,新增 producer 需同步(長遠改 dedicated variant/errorCode)。
+  - S4 `de9e0aa3`:`deferred_admission_load_bench.rs` 三支 `#[ignore]` release bench——150-job 飽和 queue-wait 分佈(critical median 20.7ms / bulk 102.8ms,符合 class 優先預期)、三 class 公平性順序斷言、delayed timer 不佔 slot 驗證;文件 `docs/bench-admission-load.md` 含基準數字。
 
 ### 27.8 新增工作規則
 
