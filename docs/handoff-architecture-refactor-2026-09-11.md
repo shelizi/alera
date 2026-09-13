@@ -1090,6 +1090,12 @@ Presentation 保留 render/input/transient UI state。
 
 ## 19. Phase 5：Agent capability matrix
 
+### 19.0 已完成（`0e88a2f0`）
+
+`docs/agent-capability-matrix.md` 已落地：15 個識別符（12 spawnable + 3 quota-only）x 6 維度（launch/hook/status/usage/restart/model override），每格附 file:line 引證。新增 agent 現需動 ≥18-21 個檔案的完整清單在文件 §5。Top gaps：agy/antigravity 識別符分歧（quota 層靠 mapping shim）、quota-only 與 spawn-only registry 切割、fx status Unix-only。Adapter seam 建議（§6）：擴充 `AgentAdapter` 為完整 `AgentDescriptor`（hook/status/quota strategy + model override policy）、hook 安裝改 declarative `HookStrategy` enum、經 FRB 暴露 registry 給 Dart 消除 launch args 雙寫。僅分析未實作——seam 落地是獨立後續工作。
+
+以下為原任務描述，保留追溯。
+
 Rust 已有 agent registry；不要建第二套 registry。
 
 建立表：
