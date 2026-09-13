@@ -150,7 +150,18 @@ class WorkspaceService._(
       }
     }
 
-    final preserveName = mainWorkspace?.isMain ?? false;
+    // Keep user-renamed names, but re-derive the name when the stored one was
+    // auto-produced (the previous default or the project-name fallback used
+    // while the branch was unresolvable), so a stale "HEAD" era name does not
+    // stick after the real branch is known.
+    final existingName = mainWorkspace?.name;
+    final previousDefault = mainWorkspace == null
+        ? null
+        : _defaultMainWorkspaceName(mainWorkspace.branch, project.name);
+    final preserveName =
+        (mainWorkspace?.isMain ?? false) &&
+        existingName != previousDefault &&
+        existingName != project.name;
     final next =
         (mainWorkspace ??
                 Workspace(
@@ -165,7 +176,7 @@ class WorkspaceService._(
                   status: .active,
                 ))
             .copyWith(
-              name: preserveName ? mainWorkspace!.name : defaultName,
+              name: preserveName ? existingName! : defaultName,
               branch: branch,
               path: project.repoPath,
               updatedAt: now,

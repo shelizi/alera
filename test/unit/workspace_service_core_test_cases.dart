@@ -61,6 +61,48 @@ void _registerWorkspaceServiceCoreTests() {
     expect(workspace.path, project.repoPath);
   });
 
+  test('ensureMainWorkspace renames an auto-derived project-name fallback to the branch', () async {
+    final existing = Workspace(
+      id: 'workspace-1',
+      projectId: project.id,
+      name: project.name,
+      branch: 'HEAD',
+      path: project.repoPath,
+      createdAt: .utc(2026, 5, 19),
+      updatedAt: .utc(2026, 5, 19),
+      kind: .main,
+      status: .active,
+    );
+    await repository.upsertWorkspace(existing);
+    gitBackend.headBranch = 'main';
+
+    final workspace = await service.ensureMainWorkspace(project);
+
+    expect(workspace.name, 'main');
+    expect(workspace.branch, 'main');
+  });
+
+  test('ensureMainWorkspace re-derives the name when it matched the old branch default', () async {
+    final existing = Workspace(
+      id: 'workspace-1',
+      projectId: project.id,
+      name: 'old-main',
+      branch: 'old-main',
+      path: project.repoPath,
+      createdAt: .utc(2026, 5, 19),
+      updatedAt: .utc(2026, 5, 19),
+      kind: .main,
+      status: .active,
+    );
+    await repository.upsertWorkspace(existing);
+    gitBackend.headBranch = 'main';
+
+    final workspace = await service.ensureMainWorkspace(project);
+
+    expect(workspace.name, 'main');
+    expect(workspace.branch, 'main');
+  });
+
   test(
     'ensureMainWorkspace falls back to HEAD when git cannot resolve a branch',
     () async {
