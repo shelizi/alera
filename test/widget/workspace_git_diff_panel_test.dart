@@ -707,11 +707,13 @@ void main() {
     expect(splitButton, findsOneWidget);
     final splitButtonRect = tester.getRect(splitButton);
     final messageFieldRect = tester.getRect(_messageField());
-    final refreshRect = tester.getRect(find.byTooltip('Refresh'));
+    final lastActionRect = tester.getRect(
+      find.byTooltip('Generate commit message with AI'),
+    );
     expect(splitButtonRect.height, 28);
     expect(splitButtonRect.left, closeTo(messageFieldRect.left, 0.1));
     expect(splitButtonRect.right, closeTo(messageFieldRect.right, 0.1));
-    expect(refreshRect.right, closeTo(messageFieldRect.right, 0.1));
+    expect(lastActionRect.right, closeTo(messageFieldRect.right, 0.1));
 
     final primaryAction = find.ancestor(
       of: find.text('Stage All'),
@@ -1250,6 +1252,34 @@ void main() {
     expect(find.byTooltip('Generate commit message with AI'), findsNothing);
   });
 
+  testWidgets(
+    'AI commit message action stays visible at the default sidebar width',
+    (tester) async {
+      final backend = FakeGitBackend()
+        ..gitStatusResult = const GitStatusResult(
+          entries: <GitChangeEntry>[
+            GitChangeEntry(
+              path: 'lib/staged.dart',
+              area: .staged,
+              status: .modified,
+            ),
+          ],
+        );
+
+      await _pumpPanel(tester, backend: backend, width: 280);
+      await tester.pumpAndSettle();
+
+      final button = find.byTooltip('Generate commit message with AI');
+      expect(button, findsOneWidget);
+      final viewport = tester.getRect(
+        find.ancestor(of: button, matching: find.byType(SingleChildScrollView)),
+      );
+      final buttonRect = tester.getRect(button);
+      expect(buttonRect.left, greaterThanOrEqualTo(viewport.left - 0.5));
+      expect(buttonRect.right, lessThanOrEqualTo(viewport.right + 0.5));
+    },
+  );
+
   test('sync without upstream fails before pull or push', () async {
     final backend = FakeGitBackend()
       ..gitRepositoryStateResult = const GitRepositoryState(branch: 'feature');
@@ -1510,6 +1540,7 @@ Future<void> _pumpPanel(
   ExternalEditorLauncher? externalEditorLauncher,
   ValueChanged<String>? onRevealInExplorer,
   VoidCallback? onClearSourceControlRoot,
+  double width = 420,
 }) {
   final resolvedWorkspace = workspace ?? _workspace();
   return tester.pumpWidget(
@@ -1531,7 +1562,7 @@ Future<void> _pumpPanel(
       child: MaterialApp(
         home: Scaffold(
           body: SizedBox(
-            width: 420,
+            width: width,
             height: 520,
             child: WorkspaceGitDiffPanel(
               workspace: resolvedWorkspace,

@@ -75,16 +75,6 @@ class const _SourceControlToolbar({
                         ),
                         const SizedBox(width: AleraTokens.space2),
                       ],
-                      if (aiAssistSettings.enabled ||
-                          generatingCommitMessage) ...<Widget>[
-                        _AiCommitMessageButton(
-                          generating: generatingCommitMessage,
-                          canGenerate: canGenerateCommitMessage,
-                          onGenerate: onGenerateCommitMessage,
-                          onCancel: onCancelGenerateCommitMessage,
-                        ),
-                        const SizedBox(width: AleraTokens.space2),
-                      ],
                       AleraIconButton(
                         tooltip: 'All Changes',
                         icon: AleraIcons.diff,
@@ -144,6 +134,16 @@ class const _SourceControlToolbar({
                         icon: AleraIcons.gitRefresh,
                         onPressed: busy ? null : onRefresh,
                       ),
+                      if (aiAssistSettings.enabled ||
+                          generatingCommitMessage) ...<Widget>[
+                        const SizedBox(width: AleraTokens.space2),
+                        _AiCommitMessageButton(
+                          generating: generatingCommitMessage,
+                          canGenerate: canGenerateCommitMessage,
+                          onGenerate: onGenerateCommitMessage,
+                          onCancel: onCancelGenerateCommitMessage,
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -427,7 +427,14 @@ class const _PrimaryActionButton({
                           children: <Widget>[
                             Icon(icon, size: 15, color: AleraTokens.onAccent),
                             const SizedBox(width: AleraTokens.space8),
-                            Text(context.tr(label), style: textStyle),
+                            Flexible(
+                              child: Text(
+                                context.tr(label),
+                                maxLines: 1,
+                                overflow: .ellipsis,
+                                style: textStyle,
+                              ),
+                            ),
                           ],
                         ),
                       ),
