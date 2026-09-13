@@ -7,6 +7,7 @@ use crate::terminal_host::host_error::{HostError, HostResult};
 use crate::terminal_host::orchestration::message_waiters::{MessageWaiter, WaitKind};
 use crate::terminal_host::protocol::{error_response, ok_response};
 
+use super::deferred_admission::DeferredRequestClass;
 use super::orchestration_message_requests::check_response;
 use super::orchestration_validation::{require_string, state_error, state_wait_timeout_ms};
 use super::{ServerActor, ServerCommand};
@@ -33,8 +34,16 @@ impl ServerActor {
             handle,
             WaitKind::TerminalState { target },
         );
-        self.spawn_state_wait_poll(waiter_id);
-        self.spawn_wait_timeout(waiter_id, state_wait_timeout_ms(payload));
+        if let Err(error) = self.spawn_state_wait_poll(waiter_id, client_id) {
+            self.orchestration_waiters.take_by_id(waiter_id);
+            return Err(error);
+        }
+        if let Err(error) =
+            self.spawn_wait_timeout(waiter_id, state_wait_timeout_ms(payload), client_id)
+        {
+            self.orchestration_waiters.take_by_id(waiter_id);
+            return Err(error);
+        }
         Ok(None)
     }
 
@@ -56,8 +65,16 @@ impl ServerActor {
             task_id,
             WaitKind::TaskState { targets },
         );
-        self.spawn_state_wait_poll(waiter_id);
-        self.spawn_wait_timeout(waiter_id, state_wait_timeout_ms(payload));
+        if let Err(error) = self.spawn_state_wait_poll(waiter_id, client_id) {
+            self.orchestration_waiters.take_by_id(waiter_id);
+            return Err(error);
+        }
+        if let Err(error) =
+            self.spawn_wait_timeout(waiter_id, state_wait_timeout_ms(payload), client_id)
+        {
+            self.orchestration_waiters.take_by_id(waiter_id);
+            return Err(error);
+        }
         Ok(None)
     }
 
@@ -76,8 +93,13 @@ impl ServerActor {
                 );
             }
             Ok(None) => {
+                let client_id = waiter.client_id;
+                let request_id = waiter.request_id;
                 self.orchestration_waiters.repark(waiter);
-                self.spawn_state_wait_poll(waiter_id);
+                if let Err(error) = self.spawn_state_wait_poll(waiter_id, client_id) {
+                    self.orchestration_waiters.take_by_id(waiter_id);
+                    self.client_write(client_id, error_response(request_id, &error));
+                }
             }
             Err(error) => {
                 self.client_write(
@@ -187,12 +209,17 @@ impl ServerActor {
         }))
     }
 
-    fn spawn_state_wait_poll(&self, waiter_id: u64) {
+    fn spawn_state_wait_poll(&self, waiter_id: u64, client_id: u64) -> HostResult<()> {
         let inbox = self.inbox.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(STATE_WAIT_POLL_MS)).await;
-            let _ = inbox.send(ServerCommand::OrchestrationStateWaitPoll(waiter_id));
-        });
+        self.deferred_admission.schedule(
+            DeferredRequestClass::Maintenance,
+            "orchestration.wait.poll",
+            Some(client_id),
+            async move {
+                tokio::time::sleep(Duration::from_millis(STATE_WAIT_POLL_MS)).await;
+                let _ = inbox.send(ServerCommand::OrchestrationStateWaitPoll(waiter_id));
+            },
+        )
     }
     // --- waiter plumbing ----------------------------------------------------
 
@@ -315,15 +342,25 @@ impl ServerActor {
         self.client_write(waiter.client_id, ok_response(waiter.request_id, payload));
     }
 
-    pub(super) fn spawn_wait_timeout(&self, waiter_id: u64, effective_timeout_ms: u64) {
+    pub(super) fn spawn_wait_timeout(
+        &self,
+        waiter_id: u64,
+        effective_timeout_ms: u64,
+        client_id: u64,
+    ) -> HostResult<()> {
         let inbox = self.inbox.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(effective_timeout_ms)).await;
-            let _ = inbox.send(ServerCommand::OrchestrationWaitTimeout {
-                waiter_id,
-                effective_timeout_ms,
-            });
-        });
+        self.deferred_admission.schedule(
+            DeferredRequestClass::Maintenance,
+            "orchestration.wait.timeout",
+            Some(client_id),
+            async move {
+                tokio::time::sleep(Duration::from_millis(effective_timeout_ms)).await;
+                let _ = inbox.send(ServerCommand::OrchestrationWaitTimeout {
+                    waiter_id,
+                    effective_timeout_ms,
+                });
+            },
+        )
     }
 }
 

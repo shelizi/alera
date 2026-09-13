@@ -10,6 +10,7 @@ use crate::terminal_host::push_notifications::{
     grouped_events_by_category, PushEvent, PushLocation,
 };
 
+use super::deferred_admission::DeferredRequestClass;
 use super::{ServerActor, ServerCommand};
 
 const PUSH_GROUP_DELAY: Duration = Duration::from_secs(3);
@@ -186,10 +187,12 @@ impl ServerActor {
     }
 
     fn enqueue_push_event(&mut self, event: PushEvent) {
-        if self.account_push.pending_events.is_empty() {
+        let was_empty = self.account_push.pending_events.is_empty();
+        if was_empty {
             self.account_push.batch_started = Some(Instant::now());
         }
         self.account_push.pending_events.push(event);
+        let previous_generation = self.account_push.flush_generation;
         self.account_push.flush_generation = self.account_push.flush_generation.wrapping_add(1);
         let generation = self.account_push.flush_generation;
         let elapsed = self
@@ -199,10 +202,22 @@ impl ServerActor {
             .unwrap_or_default();
         let delay = PUSH_GROUP_DELAY.min(PUSH_GROUP_MAX_DELAY.saturating_sub(elapsed));
         let inbox = self.inbox.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(delay).await;
-            let _ = inbox.send(ServerCommand::Push(PushCommand::Flush { generation }));
-        });
+        if let Err(error) = self.deferred_admission.schedule(
+            DeferredRequestClass::Maintenance,
+            "mobile.push.flush",
+            None,
+            async move {
+                tokio::time::sleep(delay).await;
+                let _ = inbox.send(ServerCommand::Push(PushCommand::Flush { generation }));
+            },
+        ) {
+            let _ = self.account_push.pending_events.pop();
+            self.account_push.flush_generation = previous_generation;
+            if was_empty {
+                self.account_push.batch_started = None;
+            }
+            tracing::warn!("push flush was not admitted: {}", error.wire_message());
+        }
     }
 
     pub(super) fn handle_push_flush(&mut self, generation: u64) {
@@ -220,36 +235,45 @@ impl ServerActor {
             let event = event.into_request(self.account_push.service.runtime_id());
             let service = self.account_push.service.clone();
             let inbox = self.inbox.clone();
-            tokio::spawn(async move {
-                let mut result = Ok(0);
-                for (attempt, delay) in [
-                    Duration::ZERO,
-                    Duration::from_secs(1),
-                    Duration::from_secs(3),
-                ]
-                .into_iter()
-                .enumerate()
-                {
-                    if !delay.is_zero() {
-                        tokio::time::sleep(delay).await;
-                    }
-                    match service.send_event(&event).await {
-                        Ok(active_subscriptions) => {
-                            result = Ok(active_subscriptions);
-                            break;
+            if let Err(error) = self.deferred_admission.schedule(
+                DeferredRequestClass::Bulk,
+                "mobile.push.delivery",
+                None,
+                async move {
+                    let mut result = Ok(0);
+                    for (attempt, delay) in [
+                        Duration::ZERO,
+                        Duration::from_secs(1),
+                        Duration::from_secs(3),
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    {
+                        if !delay.is_zero() {
+                            tokio::time::sleep(delay).await;
                         }
-                        Err(error) => {
-                            result = Err(error);
-                            if attempt == 2 {
+                        match service.send_event(&event).await {
+                            Ok(active_subscriptions) => {
+                                result = Ok(active_subscriptions);
                                 break;
+                            }
+                            Err(error) => {
+                                result = Err(error);
+                                if attempt == 2 {
+                                    break;
+                                }
                             }
                         }
                     }
-                }
-                let _ = inbox.send(ServerCommand::Push(PushCommand::DeliveryFinished {
-                    result: result.map_err(|error| error.to_string()),
-                }));
-            });
+                    let _ = inbox.send(ServerCommand::Push(PushCommand::DeliveryFinished {
+                        result: result.map_err(|error| error.to_string()),
+                    }));
+                },
+            ) {
+                self.account_push.cloud_jobs = self.account_push.cloud_jobs.saturating_sub(1);
+                tracing::warn!("push delivery was not admitted: {}", error.wire_message());
+                self.schedule_shutdown_if_idle();
+            }
         }
     }
 

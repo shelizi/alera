@@ -115,12 +115,32 @@ impl ServerActor {
         self.agent_title_jobs.insert(tab_id.clone(), job);
         self.broadcast_workspace_tabs_changed(Some(&workspace_id));
         let inbox = self.inbox.clone();
-        tokio::spawn(async move {
-            if automatic {
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        let task_tab_id = tab_id.clone();
+        let task_id = id.clone();
+        let result = self.deferred_admission.schedule(
+            super::deferred_admission::DeferredRequestClass::Bulk,
+            "aiText.agentTitle.ready",
+            reply.map(|(client_id, _)| client_id),
+            async move {
+                if automatic {
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                }
+                let _ = inbox.send(ServerCommand::AgentTitleReady {
+                    tab_id: task_tab_id,
+                    id: task_id,
+                });
+            },
+        );
+        if let Err(error) = result {
+            self.agent_title_jobs.remove(&tab_id);
+            if let Ok(Some(mut tab)) = self.runtime_store.find_workspace_tab(&tab_id).await {
+                tab.payload["agentTitleStatus"] = json!("failed");
+                let workspace_id = tab.workspace_id.clone();
+                let _ = self.runtime_store.upsert_workspace_tab(tab).await;
+                self.broadcast_workspace_tabs_changed(Some(&workspace_id));
             }
-            let _ = inbox.send(ServerCommand::AgentTitleReady { tab_id, id });
-        });
+            return Err(error);
+        }
         Ok(())
     }
 

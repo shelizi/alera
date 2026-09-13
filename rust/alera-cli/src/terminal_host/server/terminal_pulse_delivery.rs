@@ -6,6 +6,7 @@ use crate::terminal_host::protocol::error_response;
 use crate::terminal_host::protocol::event;
 use crate::terminal_host::session::{PtyWriteCompletion, Session};
 
+use super::super::deferred_admission::DeferredRequestClass;
 use super::{terminal_pulse_state, ServerActor, ServerCommand, TerminalPulseConfiguration};
 use crate::terminal_host::server::TERMINAL_INPUT_BACKPRESSURE_CODE;
 
@@ -26,14 +27,26 @@ impl ServerActor {
         }
         for schedule in self.terminal_pulses.schedule(workspace_id, event_sequence) {
             let inbox = self.inbox.clone();
-            tokio::spawn(async move {
-                tokio::time::sleep(schedule.delay).await;
-                let _ = inbox.send(ServerCommand::TerminalPulseDue {
-                    session_id: schedule.session_id,
-                    session_instance_id: schedule.session_instance_id,
-                    generation: schedule.generation,
-                });
-            });
+            let session_id = schedule.session_id.clone();
+            let session_instance_id = schedule.session_instance_id;
+            let generation = schedule.generation;
+            if let Err(error) = self.deferred_admission.schedule(
+                DeferredRequestClass::Maintenance,
+                "terminalPulse.due",
+                None,
+                async move {
+                    tokio::time::sleep(schedule.delay).await;
+                    let _ = inbox.send(ServerCommand::TerminalPulseDue {
+                        session_id: schedule.session_id,
+                        session_instance_id: schedule.session_instance_id,
+                        generation: schedule.generation,
+                    });
+                },
+            ) {
+                self.terminal_pulses
+                    .cancel_due(&session_id, session_instance_id, generation);
+                self.broadcast_terminal_error(&session_id, error.wire_message());
+            }
         }
     }
 
@@ -118,14 +131,27 @@ impl ServerActor {
                             .retry_due(&session_id, session_instance_id, generation)
                     {
                         let inbox = self.inbox.clone();
-                        tokio::spawn(async move {
-                            tokio::time::sleep(RETRY_DELAY).await;
-                            let _ = inbox.send(ServerCommand::TerminalPulseDue {
-                                session_id,
+                        let task_session_id = session_id.clone();
+                        if let Err(error) = self.deferred_admission.schedule(
+                            DeferredRequestClass::Maintenance,
+                            "terminalPulse.retry",
+                            None,
+                            async move {
+                                tokio::time::sleep(RETRY_DELAY).await;
+                                let _ = inbox.send(ServerCommand::TerminalPulseDue {
+                                    session_id,
+                                    session_instance_id,
+                                    generation,
+                                });
+                            },
+                        ) {
+                            self.terminal_pulses.cancel_due(
+                                &task_session_id,
                                 session_instance_id,
                                 generation,
-                            });
-                        });
+                            );
+                            self.broadcast_terminal_error(&task_session_id, error.wire_message());
+                        }
                     }
                 }
                 Err(error) => {

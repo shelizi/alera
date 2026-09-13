@@ -403,6 +403,18 @@ impl TerminalPulseManager {
             .generation = next_generation;
         Some(next_generation)
     }
+
+    fn cancel_due(&mut self, session_id: &str, session_instance_id: u64, generation: u64) {
+        let Some(rule) = self.rules.get_mut(session_id) else {
+            return;
+        };
+        if rule.pending
+            && rule.session_instance_id == session_instance_id
+            && rule.generation == generation
+        {
+            rule.pending = false;
+        }
+    }
 }
 
 struct TerminalPulseStateChange {

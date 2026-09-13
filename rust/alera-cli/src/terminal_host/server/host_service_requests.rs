@@ -12,6 +12,7 @@ use crate::host_tools::{
 use crate::terminal_host::host_error::{HostError, HostResult};
 use crate::terminal_host::protocol::{error_response, event, ok_response};
 
+use super::deferred_admission::DeferredRequestClass;
 use super::{ServerActor, ServerCommand};
 
 impl ServerActor {
@@ -246,28 +247,37 @@ impl ServerActor {
         client_id: u64,
         request_id: i64,
         install: bool,
-    ) {
+    ) -> HostResult<()> {
         let runtime_dir = self.runtime_dir.clone();
         let inbox = self.inbox.clone();
-        tokio::spawn(async move {
-            let result = if install {
-                install_cli_registration(&runtime_dir)
-                    .await
-                    .map_err(|error| HostError::state(error.to_string()))
+        self.deferred_admission.schedule(
+            DeferredRequestClass::Bulk,
+            if install {
+                "cliRegistration.install"
             } else {
-                Ok(cli_registration_status(&runtime_dir).await)
-            }
-            .and_then(|value| {
-                serde_json::to_value(value).map_err(|error| HostError::state(error.to_string()))
-            });
-            let _ = inbox.send(ServerCommand::HostToolFinished {
-                client_id,
-                request_id,
-                result,
-                operation_id: None,
-                skill: None,
-            });
-        });
+                "cliRegistration.status"
+            },
+            Some(client_id),
+            async move {
+                let result = if install {
+                    install_cli_registration(&runtime_dir)
+                        .await
+                        .map_err(|error| HostError::state(error.to_string()))
+                } else {
+                    Ok(cli_registration_status(&runtime_dir).await)
+                }
+                .and_then(|value| {
+                    serde_json::to_value(value).map_err(|error| HostError::state(error.to_string()))
+                });
+                let _ = inbox.send(ServerCommand::HostToolFinished {
+                    client_id,
+                    request_id,
+                    result,
+                    operation_id: None,
+                    skill: None,
+                });
+            },
+        )
     }
 
     pub(super) fn start_skill_install_request(
@@ -297,39 +307,43 @@ impl ServerActor {
         let inbox = self.inbox.clone();
         let operation_for_task = operation_id.clone();
         let skill_for_task = skill_name.clone();
-        tokio::spawn(async move {
-            let install_result = install_skill(skill, runner).await;
-            let mut value = serde_json::to_value(&install_result)
-                .map_err(|error| HostError::state(error.to_string()));
-            if install_result.succeeded && matches!(skill, SkillKind::Orchestration) {
-                let settings = store
-                    .agent_status_hook_settings()
-                    .await
+        self.deferred_admission.schedule(
+            DeferredRequestClass::Bulk,
+            "agentSkill.install",
+            Some(client_id),
+            async move {
+                let install_result = install_skill(skill, runner).await;
+                let mut value = serde_json::to_value(&install_result)
                     .map_err(|error| HostError::state(error.to_string()));
-                if let Ok(settings) = settings {
-                    let _permit =
-                        super::host_service_agent_integrations::agent_integration_semaphore()
-                            .acquire()
-                            .await;
-                    let warnings = tokio::task::spawn_blocking(move || {
-                        reconcile_agent_integrations(&runtime_dir, &settings)
-                    })
-                    .await
-                    .unwrap_or_else(|error| vec![error.to_string()]);
-                    if let Ok(Value::Object(object)) = &mut value {
-                        object.insert("hookWarnings".to_string(), json!(warnings));
+                if install_result.succeeded && matches!(skill, SkillKind::Orchestration) {
+                    let settings = store
+                        .agent_status_hook_settings()
+                        .await
+                        .map_err(|error| HostError::state(error.to_string()));
+                    if let Ok(settings) = settings {
+                        let _permit =
+                            super::host_service_agent_integrations::agent_integration_semaphore()
+                                .acquire()
+                                .await;
+                        let warnings = tokio::task::spawn_blocking(move || {
+                            reconcile_agent_integrations(&runtime_dir, &settings)
+                        })
+                        .await
+                        .unwrap_or_else(|error| vec![error.to_string()]);
+                        if let Ok(Value::Object(object)) = &mut value {
+                            object.insert("hookWarnings".to_string(), json!(warnings));
+                        }
                     }
                 }
-            }
-            let _ = inbox.send(ServerCommand::HostToolFinished {
-                client_id,
-                request_id,
-                result: value,
-                operation_id: Some(operation_for_task),
-                skill: Some(skill_for_task),
-            });
-        });
-        Ok(())
+                let _ = inbox.send(ServerCommand::HostToolFinished {
+                    client_id,
+                    request_id,
+                    result: value,
+                    operation_id: Some(operation_for_task),
+                    skill: Some(skill_for_task),
+                });
+            },
+        )
     }
 
     pub(super) fn handle_host_tool_finished(

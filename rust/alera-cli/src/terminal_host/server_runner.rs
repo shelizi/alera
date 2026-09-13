@@ -81,7 +81,6 @@ pub async fn run_terminal_host_server(
         clients: HashMap::new(),
         mobile_prompt_file_uploads: HashMap::new(),
         mobile_prompt_image_uploads: HashMap::new(),
-        pending_output_writes: HashMap::new(),
         agent_presence: AgentPresenceRegistry::default(),
         orchestration_waiters: MessageWaiterRegistry::default(),
         orchestration_delivery_in_flight: HashSet::new(),

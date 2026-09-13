@@ -8,6 +8,7 @@ use serde_json::Value;
 use crate::terminal_host::host_error::{HostError, HostResult};
 use crate::terminal_host::protocol::{error_response, ok_response};
 
+use super::super::deferred_admission::{DeferredAdmission, DeferredRequestClass};
 use super::watcher::GitConfigEnvironment;
 use super::{
     terminal_pulse_state, PendingTerminalPulseConfiguration, ServerActor, ServerCommand,
@@ -98,46 +99,73 @@ impl ServerActor {
         }
         if let Some(generation) = self.terminal_pulses.reserve_watcher_start(&workspace_id) {
             let inbox = self.inbox.clone();
-            tokio::spawn(async move {
-                let environment =
-                    crate::login_shell_environment::login_shell_variables_with_process_overrides()
-                        .await;
-                let git_config_environment =
-                    match GitConfigEnvironment::from_variables(&environment) {
-                        Ok(environment) => environment,
-                        Err(error) => {
-                            let _ = inbox.send(ServerCommand::TerminalPulseWatcherStarted {
-                                workspace_id,
+            let task_workspace_id = workspace_id.clone();
+            let task_workspace_root = workspace_root.clone();
+            let deferred_admission = Arc::clone(&self.deferred_admission);
+            let reaper_admission = Arc::clone(&deferred_admission);
+            let schedule_result = deferred_admission.schedule(
+                DeferredRequestClass::Maintenance,
+                "terminalPulse.watcher.start",
+                None,
+                async move {
+                    let environment = crate::login_shell_environment::login_shell_variables_with_process_overrides().await;
+                    let git_config_environment =
+                        match GitConfigEnvironment::from_variables(&environment) {
+                            Ok(environment) => environment,
+                            Err(error) => {
+                                let _ = inbox.send(ServerCommand::TerminalPulseWatcherStarted {
+                                    workspace_id: task_workspace_id.clone(),
+                                    generation,
+                                    result: Err(error),
+                                });
+                                return;
+                            }
+                        };
+                    let setup_cancelled = Arc::new(AtomicBool::new(false));
+                    let watcher_task = tokio::task::spawn_blocking({
+                        let watcher_inbox = inbox.clone();
+                        let watcher_workspace_id = task_workspace_id.clone();
+                        let setup_cancelled = Arc::clone(&setup_cancelled);
+                        move || {
+                            WorkspacePulseWatcher::start_blocking_with_environment(
+                                watcher_workspace_id,
+                                task_workspace_root
+                                    .expect("armed configuration has a workspace root"),
                                 generation,
-                                result: Err(error),
-                            });
-                            return;
+                                watcher_inbox,
+                                git_config_environment,
+                                setup_cancelled,
+                            )
                         }
-                    };
-                let setup_cancelled = Arc::new(AtomicBool::new(false));
-                let watcher_task = tokio::task::spawn_blocking({
-                    let watcher_inbox = inbox.clone();
-                    let watcher_workspace_id = workspace_id.clone();
-                    let setup_cancelled = Arc::clone(&setup_cancelled);
-                    move || {
-                        WorkspacePulseWatcher::start_blocking_with_environment(
-                            watcher_workspace_id,
-                            workspace_root.expect("armed configuration has a workspace root"),
-                            generation,
-                            watcher_inbox,
-                            git_config_environment,
-                            setup_cancelled,
-                        )
-                    }
-                });
-                let result =
-                    await_watcher_start(watcher_task, setup_cancelled, WATCHER_START_TIMEOUT).await;
-                let _ = inbox.send(ServerCommand::TerminalPulseWatcherStarted {
-                    workspace_id,
-                    generation,
-                    result,
-                });
-            });
+                    });
+                    let result = await_watcher_start(
+                        watcher_task,
+                        setup_cancelled,
+                        WATCHER_START_TIMEOUT,
+                        reaper_admission,
+                    )
+                    .await;
+                    let _ = inbox.send(ServerCommand::TerminalPulseWatcherStarted {
+                        workspace_id: task_workspace_id,
+                        generation,
+                        result,
+                    });
+                },
+            );
+            if let Err(error) = schedule_result {
+                let Some(pending) = self
+                    .terminal_pulses
+                    .fail_watcher_start(&workspace_id, generation)
+                else {
+                    return Err(error);
+                };
+                for configuration in pending {
+                    self.client_write(
+                        configuration.client_id,
+                        error_response(configuration.request_id, &error),
+                    );
+                }
+            }
         }
         Ok(())
     }
@@ -275,13 +303,25 @@ async fn await_watcher_start<T: Send + 'static>(
     mut watcher_task: tokio::task::JoinHandle<HostResult<T>>,
     setup_cancelled: Arc<AtomicBool>,
     start_timeout: Duration,
+    deferred_admission: Arc<DeferredAdmission>,
 ) -> HostResult<T> {
     match tokio::time::timeout(start_timeout, &mut watcher_task).await {
         Err(_) => {
             setup_cancelled.store(true, Ordering::Release);
-            tokio::spawn(async move {
+            let reap = async move {
                 let _ = watcher_task.await;
-            });
+            };
+            if let Err(error) = deferred_admission.schedule(
+                DeferredRequestClass::Maintenance,
+                "terminalPulse.watcher.reap",
+                None,
+                reap,
+            ) {
+                tracing::warn!(
+                    "terminal Pulse watcher reaper was not admitted: {}",
+                    error.wire_message()
+                );
+            }
             Err(HostError::state(
                 "Terminal Pulse watcher setup timed out before it could be armed.",
             ))
@@ -324,7 +364,12 @@ mod tests {
 
         let result = tokio::time::timeout(
             Duration::from_millis(200),
-            await_watcher_start(task, Arc::clone(&cancelled), Duration::from_millis(10)),
+            await_watcher_start(
+                task,
+                Arc::clone(&cancelled),
+                Duration::from_millis(10),
+                Arc::new(DeferredAdmission::default()),
+            ),
         )
         .await
         .expect("watcher timeout must not await its blocking task");
@@ -346,8 +391,13 @@ mod tests {
         let cancelled = Arc::new(AtomicBool::new(false));
         let task = tokio::task::spawn_blocking(|| Ok::<_, HostError>("watching"));
 
-        let result =
-            await_watcher_start(task, Arc::clone(&cancelled), Duration::from_secs(1)).await;
+        let result = await_watcher_start(
+            task,
+            Arc::clone(&cancelled),
+            Duration::from_secs(1),
+            Arc::new(DeferredAdmission::default()),
+        )
+        .await;
 
         assert_eq!(result.unwrap(), "watching");
         assert!(!cancelled.load(Ordering::Acquire));

@@ -11,6 +11,7 @@ use crate::terminal_host::orchestration::agent_startup_command::{
 use crate::terminal_host::protocol::TerminalHostLaunch;
 use crate::terminal_host::session::{PtyWriteCompletion, Session};
 
+use super::deferred_admission::DeferredRequestClass;
 use super::pty_event_forwarder::forward_pty_event;
 use super::terminal_launch_defaults::default_terminal_launch;
 use super::terminal_startup_commands::{
@@ -54,6 +55,7 @@ impl ServerActor {
                         error.wire_message()
                     );
                     let _ = self.runtime_store.remove_workspace_tab(&tab.id).await;
+                    self.terminate_sessions_for_tab(&tab.id).await;
                 }
             }
         }
@@ -182,7 +184,7 @@ impl ServerActor {
                 instance_id,
                 default_launch.interactive_shell,
                 command,
-            );
+            )?;
             // A one-shot command is spent as soon as it is on its way. Agent
             // tabs deliberately do not set the flag: they re-mint their command
             // on every new PTY, including after host recovery.
@@ -409,17 +411,22 @@ impl ServerActor {
         session_instance_id: u64,
         interactive_shell: String,
         command: String,
-    ) {
+    ) -> HostResult<()> {
         let inbox = self.inbox.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(STARTUP_INPUT_DELAY_MS)).await;
-            let _ = inbox.send(ServerCommand::TerminalStartupInput {
-                session_id,
-                session_instance_id,
-                interactive_shell,
-                command,
-            });
-        });
+        self.deferred_admission.schedule(
+            DeferredRequestClass::Maintenance,
+            "terminal.startup.input",
+            None,
+            async move {
+                tokio::time::sleep(std::time::Duration::from_millis(STARTUP_INPUT_DELAY_MS)).await;
+                let _ = inbox.send(ServerCommand::TerminalStartupInput {
+                    session_id,
+                    session_instance_id,
+                    interactive_shell,
+                    command,
+                });
+            },
+        )
     }
 
     pub(super) fn handle_terminal_startup_input(
@@ -460,15 +467,20 @@ impl ServerActor {
         &self,
         session_id: String,
         session_instance_id: u64,
-    ) {
+    ) -> HostResult<()> {
         let inbox = self.inbox.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(STARTUP_SUBMIT_DELAY_MS)).await;
-            let _ = inbox.send(ServerCommand::TerminalStartupSubmit {
-                session_id,
-                session_instance_id,
-            });
-        });
+        self.deferred_admission.schedule(
+            DeferredRequestClass::Maintenance,
+            "terminal.startup.submit",
+            None,
+            async move {
+                tokio::time::sleep(std::time::Duration::from_millis(STARTUP_SUBMIT_DELAY_MS)).await;
+                let _ = inbox.send(ServerCommand::TerminalStartupSubmit {
+                    session_id,
+                    session_instance_id,
+                });
+            },
+        )
     }
 
     pub(super) fn handle_terminal_startup_submit(

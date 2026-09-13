@@ -6,7 +6,7 @@ use serde_json::json;
 
 use super::actor_test_harness::{local_client, test_actor};
 use super::deferred_admission::DeferredAdmission;
-use super::dispatch_context_install::DispatchContextContinuation;
+use super::dispatch_context_install::{DispatchContextContinuation, DispatchInstallOrigin};
 use crate::terminal_host::client::ClientHandle;
 
 async fn ready_task(actor: &super::ServerActor, workspace_id: &str) -> String {
@@ -193,6 +193,102 @@ async fn stale_dispatch_context_install_cannot_overwrite_a_newer_one() {
         serde_json::from_slice(&std::fs::read(&context_path).unwrap()).unwrap();
     assert_eq!(context["dispatchId"], "new-dispatch");
     assert_eq!(context["token"], "new-token");
+}
+
+#[tokio::test]
+async fn dispatch_context_install_reentry_after_lost_completion_is_idempotent() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut actor = test_actor(&dir, HashMap::new(), HashMap::new()).await;
+    actor.deferred_admission = std::sync::Arc::new(DeferredAdmission::paused_with_limits(
+        usize::MAX,
+        usize::MAX,
+        0,
+    ));
+    let (inbox, mut commands) = tokio::sync::mpsc::unbounded_channel();
+    actor.inbox = inbox;
+
+    let old_continuation = || DispatchContextContinuation::DispatchRequest {
+        origin: DispatchInstallOrigin::Request {
+            client_id: 1,
+            request_id: 50,
+        },
+        to: "reused".to_string(),
+        inject: false,
+        force_submit: false,
+        preamble: String::new(),
+        response: json!({}),
+        consumed_tab: None,
+    };
+    actor
+        .start_dispatch_context_install("reused", "old-dispatch", "old-token", old_continuation())
+        .unwrap();
+    actor.deferred_admission.add_test_permits(1);
+    let _lost_completion = tokio::time::timeout(Duration::from_secs(1), commands.recv())
+        .await
+        .expect("the first install should report its completion")
+        .unwrap();
+
+    let context_path = actor
+        .runtime_dir
+        .join("orchestration-contexts")
+        .join("reused.json");
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while !context_path.exists() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the first context write should succeed before its completion is re-entered");
+    let old_generation = actor.pending_dispatch_installs["old-dispatch"].generation;
+
+    actor
+        .start_dispatch_context_install(
+            "reused",
+            "new-dispatch",
+            "new-token",
+            DispatchContextContinuation::Detached,
+        )
+        .unwrap();
+    actor.deferred_admission.add_test_permits(1);
+    let _new_completion = tokio::time::timeout(Duration::from_secs(1), commands.recv())
+        .await
+        .expect("the newer install should report its completion")
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if let Ok(bytes) = std::fs::read(&context_path) {
+                let context: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                if context["dispatchId"] == "new-dispatch" {
+                    break;
+                }
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the newer context write should succeed");
+
+    actor
+        .start_dispatch_context_install("reused", "old-dispatch", "old-token", old_continuation())
+        .unwrap();
+    actor.deferred_admission.add_test_permits(1);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    assert_eq!(
+        actor.pending_dispatch_installs["old-dispatch"].generation, old_generation,
+        "re-entering a pending install must not reserve a new generation"
+    );
+    let context: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&context_path).unwrap()).unwrap();
+    assert_eq!(context["dispatchId"], "new-dispatch");
+    let snapshot = actor.deferred_admission.snapshot();
+    let old_entry = snapshot["requestTypes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["requestType"] == "orchestration.dispatchContext.install")
+        .unwrap();
+    assert_eq!(old_entry["started"], 2);
 }
 
 #[tokio::test]
