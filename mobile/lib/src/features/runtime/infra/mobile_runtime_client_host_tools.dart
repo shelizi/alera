@@ -1,8 +1,12 @@
 part of 'mobile_runtime_client.dart';
 
+const String _runtimeSettingsRevisionConflictCode =
+    'runtime_settings_revision_conflict';
+
 mixin MobileRuntimeClientHostTools {
   bool get isConnectionUsable;
   int _nextHostToolOperationId = 1;
+  int? _runtimeSettingsRevision;
 
   Future<Map<String, Object?>> requestMap(
     String type, [
@@ -22,14 +26,48 @@ mixin MobileRuntimeClientHostTools {
 
   Future<PortableHostSettings> loadPortableSettings() async {
     final payload = await requestMap('mobile.runtimeSettings.get');
+    _rememberRuntimeSettingsRevision(payload);
     return PortableHostSettings.fromJson(payload);
   }
 
   Future<PortableHostSettings> updatePortableSettings(
     Map<String, Object?> patch,
   ) async {
-    final payload = await requestMap('mobile.runtimeSettings.update', patch);
-    return PortableHostSettings.fromJson(payload);
+    final requestPayload =
+        _runtimeSettingsRevision == null ||
+            patch.containsKey('expectedRevision')
+        ? patch
+        : <String, Object?>{
+            ...patch,
+            'expectedRevision': _runtimeSettingsRevision,
+          };
+    try {
+      final payload = await requestMap(
+        'mobile.runtimeSettings.update',
+        requestPayload,
+      );
+      _rememberRuntimeSettingsRevision(payload);
+      return PortableHostSettings.fromJson(payload);
+    } on MobileRuntimeConflictException catch (error) {
+      if (error.code == _runtimeSettingsRevisionConflictCode) {
+        try {
+          final refreshed = await requestMap('mobile.runtimeSettings.get');
+          _rememberRuntimeSettingsRevision(refreshed);
+        } on Object catch (refreshError, refreshStackTrace) {
+          Logger('MobileRuntimeClient').warning(
+            'could not refresh portable settings after a revision conflict',
+            refreshError,
+            refreshStackTrace,
+          );
+        }
+      }
+      rethrow;
+    }
+  }
+
+  void _rememberRuntimeSettingsRevision(Map<String, Object?> payload) {
+    final revision = payload['revision'];
+    _runtimeSettingsRevision = revision is num ? revision.toInt() : null;
   }
 
   Future<QuotaSnapshotState> fetchAgentQuotas({

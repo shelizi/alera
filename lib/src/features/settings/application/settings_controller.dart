@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:alera/src/design_system/feedback/alera_toast.dart';
 import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 import 'package:alera/src/features/ai_assist/domain/ai_assist_settings.dart';
 import 'package:alera/src/features/ai_dictation/domain/ai_dictation_settings.dart';
@@ -9,6 +10,7 @@ import 'package:alera/src/features/settings/application/settings_providers.dart'
 import 'package:alera/src/features/settings/application/settings_repository.dart';
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
 import 'package:alera/src/features/text_actions/domain/text_actions_settings.dart';
+import 'package:alera/src/platform/runtime_host/protocol/terminal_host_protocol.dart';
 import 'package:logging/logging.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
@@ -16,6 +18,9 @@ part 'settings_controller.g.dart';
 part 'settings_controller_local_ui.dart';
 part 'settings_controller_runtime_operational.dart';
 part 'settings_controller_portable.dart';
+
+const String _runtimeSettingsRevisionConflictCode =
+    'runtime_settings_revision_conflict';
 
 @Riverpod(keepAlive: true)
 class SettingsController extends _$SettingsController
@@ -76,7 +81,32 @@ class SettingsController extends _$SettingsController
   }
 
   Future<void> _save(AleraSettings settings) async {
-    await _repository.save(settings);
-    state = settings;
+    try {
+      await _repository.save(settings);
+      state = settings;
+    } on TerminalHostConflictException catch (error, stackTrace) {
+      if (error.code != _runtimeSettingsRevisionConflictCode) {
+        rethrow;
+      }
+      try {
+        state = await _repository.load();
+      } on Object catch (refreshError, refreshStackTrace) {
+        Logger('SettingsController').warning(
+          'failed to refresh settings after a runtime revision conflict',
+          refreshError,
+          refreshStackTrace,
+        );
+      }
+      Logger('SettingsController').warning(
+        'runtime settings changed elsewhere; the requested change was not saved',
+        error,
+        stackTrace,
+      );
+      AleraToast.publish(
+        message: 'Settings changed elsewhere. Your change was not saved. Review the latest values and try again.',
+        tone: AleraToastTone.error,
+      );
+      rethrow;
+    }
   }
 }

@@ -1,9 +1,12 @@
 import 'package:alera/src/app/dependencies.dart';
+import 'package:alera/src/design_system/feedback/alera_toast.dart';
 import 'package:alera/src/features/keyboard/domain/keyboard_action.dart';
 import 'package:alera/src/features/settings/application/settings_controller.dart';
+import 'package:alera/src/features/settings/application/settings_repository.dart';
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
 import 'package:alera/src/features/settings/domain/editor_syntax_theme_catalog.dart';
 import 'package:alera/src/features/settings/infra/drift_settings_repository.dart';
+import 'package:alera/src/platform/runtime_host/protocol/terminal_host_protocol.dart';
 import 'package:alera/src/shared/infra/storage/drift_database.dart';
 import 'package:drift/native.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -11,6 +14,44 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('SettingsController', () {
+    test(
+      'refreshes and reports a runtime settings revision conflict',
+      () async {
+        final repository = _ConflictSettingsRepository();
+        final container = ProviderContainer(
+          overrides: [settingsRepositoryProvider.overrideWithValue(repository)],
+        );
+        addTearDown(container.dispose);
+        final controller = container.read(settingsControllerProvider.notifier);
+        await controller.load();
+
+        repository.current = AleraSettings.defaults.copyWith(
+          general: AleraSettings.defaults.general.copyWith(
+            workspaceDirectory: '/changed-elsewhere',
+          ),
+        );
+        repository.conflictOnSave = true;
+        final toast = AleraToast.stream.first;
+
+        await expectLater(
+          controller.setConfirmProjectRemoval(false),
+          throwsA(
+            isA<TerminalHostConflictException>().having(
+              (error) => error.code,
+              'code',
+              'runtime_settings_revision_conflict',
+            ),
+          ),
+        );
+
+        expect(
+          container.read(settingsControllerProvider).general.workspaceDirectory,
+          '/changed-elsewhere',
+        );
+        expect((await toast).message, contains('not saved'));
+      },
+    );
+
     test('autosaves terminal updates', () async {
       final db = AleraDatabase(executor: NativeDatabase.memory());
       addTearDown(db.close);
@@ -357,4 +398,23 @@ void main() {
       },
     );
   });
+}
+
+final class _ConflictSettingsRepository implements SettingsRepository {
+  AleraSettings current = .defaults;
+  bool conflictOnSave = false;
+
+  @override
+  Future<AleraSettings> load() async => current;
+
+  @override
+  Future<void> save(AleraSettings settings) async {
+    if (conflictOnSave) {
+      throw const TerminalHostConflictException(
+        code: 'runtime_settings_revision_conflict',
+        message: 'Runtime settings revision conflict.',
+      );
+    }
+    current = settings;
+  }
 }
