@@ -1386,7 +1386,7 @@ max-lines 尚未全清前，第 8 步會是 repo-wide exit 1；必須確認 offe
 - 其他 worktree：使用者保有多個 feature worktree，不要清理或吸收
 - Merge/rebase/deploy/build release：本工作未做
 
-下一批不必重盤：§27 排序的 Batch N/O/P/Q/R/S/T 已全部落地（Batch T 見 §27.7 末），其後 T3（dedicated `HostError` variant）與 U1（ask disconnect settle）亦完成，§26 Commit Graph parity backlog 11 項已全數實作（見 §26 末段）。剩餘 queue：release matrix 集中化實作（§5 六步遷移，需授權）、Batch L 20k+ wire 分頁（需求驅動，改 schema 才做）、全 repo suite 未跑過。
+下一批不必重盤：§27 排序的 Batch N/O/P/Q/R/S/T 已全部落地（Batch T 見 §27.7 末），其後 T3（dedicated `HostError` variant）與 U1（ask disconnect settle）亦完成，§26 Commit Graph parity backlog 11 項已全數實作（見 §26 末段）。剩餘 queue：Batch V agent descriptor 收斂（§27.9，七步一次做完整）、release matrix 集中化實作（§5 六步遷移，需授權）、Batch L 20k+ wire 分頁（需求驅動，改 schema 才做）、全 repo suite 未跑過。
 
 ---
 
@@ -1485,6 +1485,7 @@ max-lines 尚未全清前，第 8 步會是 repo-wide exit 1；必須確認 offe
 - **驗收**：UI-A 35 widget tests、UI-B 28 widget tests、merged tree 焦點測試全綠、`check_max_lines` exit 0、`runtime_architecture_guard` passed、`cargo check -p alera-cli --all-targets` 0 error。
 - **與 §26 spec 的偏差**：Revert 已於 M 批落地不在本批；tag 無「view details」項（menu 規格無此 action）；remote pull 採保守策略只對 upstream ref 啟用；archive 走 git CLI（`git archive`），非 libgit2。
 - **檔案版圖**：commit 動作集中在 `workspace_git_history_commit_menus.dart`/`workspace_git_history_input_dialogs.dart`；ref 動作在 `workspace_git_history_ref_menus.dart`/`_ref_dialogs.dart`/`_ref_actions.dart`/`workspace_git_history_surface_ref_actions.dart`/`workspace_git_history_panel_actions.dart`；panel/surface 各保留薄 callback 接線。
+- **Worktree 後續**（`128fa49b`）：commit/ref menu 新增「Create Worktree Here…」/「Open in New Worktree」，走既有 `WorkbenchCatalogOwner.createWorkspace` → `createLinkedWorkspace` 路徑（無新 backend op）。語義：local branch 直接 `reuseExistingBranch`（current branch 停用）；remote ref 以 `sourceBranch: origin/x` + `reuse:false` 建立（保住 upstream tracking）；commit/tag 先 `createBranchAtCommit` 建 local branch 再 reuse（worktree checkout 需要 branch）。共享 runner `runGitHistoryOpenInWorktree` 在 `ref_actions.dart`；`GitHistoryCreateWorktree` typedef 把 host 的 project 查找 + `createWorkspace` 呼叫注入兩側。測試 `workspace_git_history_worktree_test.dart` 5 項；harness 的 fake controller 補 `createWorkspace` 記錄。
 
 ---
 
@@ -1594,3 +1595,17 @@ max-lines 尚未全清前，第 8 步會是 repo-wide exit 1；必須確認 offe
 - 需求驅動項目不進 queue：Batch L 的 20k+ UI 阻塞已由 E3 處理（`6c76f3d4`：entry translate 每 16 筆 `Future.pause()` + `fromEntriesChunked` 分段分組，50k 最長連續同步段 115ms→中位數 8ms；`_loadGeneration` 防 stale watcher 覆蓋 mutation；`rebindEntryInstancesChunked` 保住 C2 identity）；unified 視圖路徑已由 `68dcd9c8` 接上（`workspace_git_diff_panel_grouping_cache.dart`：>4000 entries 走 `unifiedFromEntriesChunked`，舊 groups 顯示至 projection 落地，generation+mounted 雙重丟棄 stale 完成）；殘留 20k+ wire 分頁未做（改 schema 才需要）。§21 release matrix 待 correctness 收尾；§26 parity backlog 依功能優先級獨立排程。
 - Dart client `clientMutationId` 已由 P3（`32432c3d`）送出：desktop/mobile 的 `terminal.terminate` 與 `agentQuota.consumeCodexResetCredit` 皆帶穩定 id，同 sessionId/offerRevision 重試共用、成功後清除。
 - Widget 測試回歸處理（2026-09-13）：`refresh stays available after initial load failure` 是 E3 `_disposed` 旗標誤用造成的真回歸——`ref.onDispose` 在 `build()` reject 時也會跑，初始 load 失敗後 `_disposed` 卡在 true，`_run` 的 publish gate 把之後每次成功結果都靜默丟棄；`60d41f5c` 已修（publish gate 只看 generation，`_disposed` 保留給 watcher 路徑）。`generated commit message is ignored after workspace changes` 追查後確認是測試時序問題而非產品 bug：第二次 `_pumpPanel` 後新 workspace 的 controller 需要 async load 完成，單次 `pump()` 讓 tap 落在無 state 的早退路徑，`requests.last` 仍是 project-a——`f7865b08` 已修（改 `pumpAndSettle`）。目前 `workspace_git_diff_panel_test.dart` 38/38 全綠。
+
+### 27.9 Batch V：agent descriptor 收斂（§19 / `docs/agent-capability-matrix.md` §5-§7 的實作批，一次做完整）
+
+- 目標：新增一個 agent 的 touchpoints 從 ~18-21 檔降到 ~5 檔；消掉平行 enum 與 launch args 雙實作兩個已知 drift 風險。原定觸發條件「下次新增 agent 前」改為正式排程。
+- 現況（2026-09-13 驗證）：`AGENT_ADAPTERS`（`rust/alera-cli/src/terminal_host/orchestration/agent_registry.rs`）與 `aiAssistAgentSpecs`（`lib/src/features/ai_assist/application/ai_assist_registry.dart`）已是 descriptor 雛形；缺口在 hook install、normalize、launch args、quota、settings schema、icon/editor 仍走 per-agent switch。
+- V1 Rust descriptor 擴充：`AgentAdapter` 擴成完整 `AgentDescriptor`（aliases、display_name、hook_strategy、status_strategy、quota_strategy、usage_strategy、model_override、risk_evaluation、spawnable/quota-only capability flag）。hook 安裝收斂成 `HookStrategy` enum（`ConfigJson` / `PluginScript` / `RuntimeHomeOverlay` / `HerdrSocket` / `None`）由 installer 引擎執行，取代 `integration_config.rs`/`integration_plugins.rs` 的 per-agent 分支。
+- V2 Launch args 單一實作：Rust `build_managed_agent_launch` 為唯一產生器；Dart `managedAgentCommandPreview`（`managed_agent_profile_options.dart`）改經 FRB 查詢同一產生器或消費 descriptor 宣告，刪除雙實作 drift 面。
+- V3 FRB expose registry + enum 收斂：`AgentDescriptor` list 經 FRB 給 Dart；`spawnableAgentProfileAdapters`/`agentProfileDefaultCommands` 改由 registry 驅動；`AgentType`/`AiAssistAgent`/`AgentQuotaProviderId` 三個平行 enum 收斂（`AiAssistAgent.agentType` 映射改由 descriptor 攜帶）；mobile 的 string-keyed `agentDisplayName`/`_agentAsset` 改吃同一來源。
+- V4 命名 canonicalize：`agy`/`antigravity` 統一為單一 id + descriptor `aliases` 欄位，刪除 `agent_quota_provider_icon.dart` 的轉換 shim。
+- V5 Normalization table-driven：per-agent normalizer 收進 descriptor 的 event mapping；非標準 payload 才留 custom closure（codex transcript watcher、fx herdr socket 保留專屬路徑）。
+- V6 Settings schema：`agentStatusHooks` 的 per-agent bool struct 改 key-driven map，`RuntimeAgentStatusHookSettings` 同步改 `is_enabled(key)`/`set_enabled(key)`；新 agent 不再動 schema/migration，舊設定檔相容遷移。
+- V7 UI 面收斂資料源：icon asset key 與 risk warning copy 進 descriptor；`agent_profile_managed_editor.dart` 的 per-agent 欄位由 descriptor 宣告驅動（`ManagedAgentOption` 已有雛形）。
+- 驗收：新增 agent 實際 touchpoints ≤ ~5 檔（可用 test agent 驗證）；既有 12 個 agent 行為不變（全部 wire fixture + agent 相關測試綠）；`check_max_lines` 與 `runtime_architecture_guard` 重跑寫回 §25。
+- 邊界與風險：Batch R 結論為維持手寫 wire + fixture，新 FRB surface 必附 fixture；settings schema 遷移需相容舊檔；quota-only provider（kimi/minimax/zai）不進 spawnable registry，以 capability flag 區分；fx 的 Unix-socket status 在 Windows 本就停用，收斂時保留 platform gate。
