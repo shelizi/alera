@@ -14,7 +14,7 @@ use super::automation_policy_requests::load_automation_policy_show;
 use super::deferred_admission::DeferredRequestClass;
 use super::project_requests::{load_effective_project_config, load_project_branches};
 use super::request_payloads::parse_payload;
-use super::requests::require_string_key;
+use super::requests::{require_string_key, validate_mobile_runtime_settings_payload};
 use super::runtime_mutations::RuntimeMutationRequest;
 use super::workspace_sidebar_requests::load_workspace_repository_web_url;
 use super::{ServerActor, ServerCommand};
@@ -102,25 +102,7 @@ impl ServerActor {
             self.require_auth(client_id)?;
             self.require_request_allowed(client_id, request_type)?;
             if request_type == "mobile.runtimeSettings.update" {
-                const ALLOWED: [&str; 9] = [
-                    "workspaceDirectory",
-                    "confirmProjectRemoval",
-                    "confirmWorkspaceRemoval",
-                    "autoArchiveWorkspacesAfterDays",
-                    "defaultAgentProfileId",
-                    "agentStatusHooks",
-                    "agentQuotas",
-                    "mobilePushNotifications",
-                    "automation",
-                ];
-                if let Some(key) = payload
-                    .as_object()
-                    .and_then(|object| object.keys().find(|key| !ALLOWED.contains(&key.as_str())))
-                {
-                    return Err(HostError::format(format!(
-                        "Unsupported mobile setting: {key}."
-                    )));
-                }
+                validate_mobile_runtime_settings_payload(payload)?;
             }
             self.start_autostart_reconcile_update(client_id, request_id, payload)
                 .await?;

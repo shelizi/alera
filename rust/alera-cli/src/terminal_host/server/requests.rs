@@ -24,6 +24,12 @@ pub(super) use super::request_payloads::{json_result, parse_payload};
 use super::runtime_mutation_barrier::conflicts_with_runtime_mutation;
 use super::{ClientKind, ServerActor, ServerCommand};
 
+mod runtime_settings;
+mod runtime_settings_validation;
+pub(super) use runtime_settings_validation::validate_mobile_runtime_settings_payload;
+#[cfg(test)]
+pub(super) use runtime_settings_validation::validate_text_actions_settings;
+
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ProjectConfigUpsertRequest {
@@ -452,11 +458,11 @@ impl ServerActor {
             }
             "runtimeSettings.get" => {
                 self.require_auth(client_id)?;
-                json_result(self.runtime_store.runtime_settings().await)
+                self.runtime_settings_snapshot().await
             }
             "mobile.runtimeSettings.get" => {
                 self.require_auth(client_id)?;
-                json_result(self.runtime_store.runtime_settings().await)
+                self.runtime_settings_snapshot().await
             }
             "runtimeSettings.update" => {
                 self.require_auth(client_id)?;
@@ -464,25 +470,7 @@ impl ServerActor {
             }
             "mobile.runtimeSettings.update" => {
                 self.require_auth(client_id)?;
-                const ALLOWED: [&str; 9] = [
-                    "workspaceDirectory",
-                    "confirmProjectRemoval",
-                    "confirmWorkspaceRemoval",
-                    "autoArchiveWorkspacesAfterDays",
-                    "defaultAgentProfileId",
-                    "agentStatusHooks",
-                    "agentQuotas",
-                    "mobilePushNotifications",
-                    "automation",
-                ];
-                if let Some(key) = payload
-                    .as_object()
-                    .and_then(|object| object.keys().find(|key| !ALLOWED.contains(&key.as_str())))
-                {
-                    return Err(HostError::format(format!(
-                        "Unsupported mobile setting: {key}."
-                    )));
-                }
+                validate_mobile_runtime_settings_payload(payload)?;
                 self.apply_mobile_runtime_settings(payload).await
             }
             "workspaceSection.list"
