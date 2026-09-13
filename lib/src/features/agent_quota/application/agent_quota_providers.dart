@@ -13,6 +13,7 @@ import 'package:alera/src/shared/infra/process/process_providers.dart';
 import 'package:alera/src/shared/infra/runtime/runtime_host_providers.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
+import 'package:uuid/uuid.dart';
 
 part 'agent_quota_providers.g.dart';
 
@@ -104,6 +105,8 @@ class AgentQuotaService(
 ]) {
   final Map<String, AgentQuotaState> _cache = <String, AgentQuotaState>{};
   final Set<String> _forceRefreshHosts = <String>{};
+  final Map<String, String> _pendingCodexResetCreditMutationIds =
+      <String, String>{};
 
   void requestForceRefresh(String hostId) {
     _forceRefreshHosts.add(hostId);
@@ -288,11 +291,19 @@ class AgentQuotaService(
     required SshTarget? target,
     required String offerRevision,
   }) async {
+    final clientMutationId = _pendingCodexResetCreditMutationIds.putIfAbsent(
+      offerRevision,
+      () => const Uuid().v4(),
+    );
+    final requestPayload = <String, Object?>{
+      'offerRevision': offerRevision,
+      'clientMutationId': clientMutationId,
+    };
     final payload = hostId == 'local' && _runtimeClient != null
         ? _mapValue(
             await _runtimeClient.runtimeRequest(
               'agentQuota.consumeCodexResetCredit',
-              <String, Object?>{'offerRevision': offerRevision},
+              requestPayload,
               const Duration(seconds: 45),
             ),
           )
@@ -300,7 +311,7 @@ class AgentQuotaService(
             hostId: hostId,
             target: target,
             type: 'agentQuota.consumeCodexResetCredit',
-            payload: <String, Object?>{'offerRevision': offerRevision},
+            payload: requestPayload,
             timeout: const Duration(seconds: 45),
           );
     final result = CodexResetConsumeResult.fromJson(payload);
@@ -319,6 +330,7 @@ class AgentQuotaService(
       environment: previous?.environment ?? const <String, bool>{},
       fetchedAt: DateTime.now().toUtc(),
     );
+    _pendingCodexResetCreditMutationIds.remove(offerRevision);
     return result;
   }
 }

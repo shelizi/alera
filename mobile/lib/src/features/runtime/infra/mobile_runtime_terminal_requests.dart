@@ -4,6 +4,7 @@ part of 'mobile_runtime_client.dart';
 /// minting and attaching sessions, and the input/viewport RPCs.
 mixin MobileRuntimeTerminalRequests {
   Future<void>? _probeAttempt;
+  final Map<String, String> _pendingTerminateMutationIds = <String, String>{};
   Future<Object?> request(
     String type, [
     Map<String, Object?> payload,
@@ -131,6 +132,14 @@ mixin MobileRuntimeTerminalRequests {
   }
 
   Future<void> terminateSession(String sessionId) async {
-    await request('terminate', <String, Object?>{'sessionId': sessionId});
+    final clientMutationId = _pendingTerminateMutationIds.putIfAbsent(
+      sessionId,
+      _newClientMutationId,
+    );
+    await request('terminate', <String, Object?>{
+      'sessionId': sessionId,
+      'clientMutationId': clientMutationId,
+    });
+    _pendingTerminateMutationIds.remove(sessionId);
   }
 }

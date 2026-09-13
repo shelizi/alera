@@ -18,6 +18,7 @@ import 'package:ghostty_vte_flutter/ghostty_vte_flutter.dart';
 import 'package:logging/logging.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import 'package:uuid/uuid.dart';
 
 export 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_client_models.dart';
 export 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_process_launcher.dart';
@@ -82,6 +83,7 @@ final class SocketTerminalHostClient._(
   final StreamController<RuntimeHostEvent> _runtimeEvents =
       StreamController<RuntimeHostEvent>.broadcast();
   final Map<int, _PendingHostRequest> _pending = <int, _PendingHostRequest>{};
+  final Map<String, String> _pendingTerminateMutationIds = <String, String>{};
 
   Future<_TerminalHostConnection>? _terminalConnectionFuture;
   @override
@@ -300,9 +302,15 @@ final class SocketTerminalHostClient._(
 
   @override
   Future<void> terminate(String sessionId) async {
+    final clientMutationId = _pendingTerminateMutationIds.putIfAbsent(
+      sessionId,
+      () => const Uuid().v4(),
+    );
     await _terminalRequest('terminate', <String, Object?>{
       'sessionId': sessionId,
+      'clientMutationId': clientMutationId,
     });
+    _pendingTerminateMutationIds.remove(sessionId);
   }
 
   @override
@@ -679,6 +687,7 @@ final class SocketTerminalHostClient._(
     }
     _disposed = true;
     _appQuitInProgress = true;
+    _pendingTerminateMutationIds.clear();
     _stopHeartbeat();
     _closeSessionEvents();
     _failPendingRequests(const TerminalHostConnectionClosedException());
