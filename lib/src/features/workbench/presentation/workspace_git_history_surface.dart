@@ -8,18 +8,22 @@ import 'package:alera/src/design_system/feedback/alera_toast.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:alera/src/design_system/forms/alera_checkbox.dart';
 import 'package:alera/src/features/workbench/application/workbench_controller.dart';
+import 'package:alera/src/features/workbench/application/workspace_source_control_controller.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_source_control_scope.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
+import 'package:alera/src/features/workbench/presentation/workspace_git_history_actions.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_git_history_graph.dart';
 import 'package:alera/src/shared/infra/git/git_diff_models.dart';
 import 'package:alera/src/shared/infra/git/git_exception.dart';
 import 'package:alera/src/shared/infra/git/git_history_graph.dart';
 import 'package:alera/src/shared/infra/git/git_providers.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 part 'workspace_git_history_commit_row.dart';
+part 'workspace_git_history_surface_actions.dart';
 
 /// Main-area commit graph tab. Walks every branch tip by default and pages
 /// history in with offset pagination, keeping swimlanes continuous across
@@ -393,6 +397,18 @@ class _WorkspaceGitHistorySurfaceState
                       onTap: () => unawaited(
                         _openCommit(_viewModels[index].historyItem),
                       ),
+                      onOpenActions: _isBoundary(_viewModels[index])
+                          ? null
+                          : (position) => unawaited(
+                              _openCommitMenu(
+                                _viewModels[index].historyItem,
+                                position,
+                              ),
+                            ),
+                      onOpenRefActions: _isBoundary(_viewModels[index])
+                          ? null
+                          : (itemRef, position) =>
+                                unawaited(_openRefMenu(itemRef, position)),
                     );
                   },
                 ),
@@ -402,6 +418,11 @@ class _WorkspaceGitHistorySurfaceState
         );
       },
     );
+  }
+
+  static bool _isBoundary(GitHistoryItemViewModel viewModel) {
+    return viewModel.kind == GitHistoryItemViewModelKind.incomingChanges ||
+        viewModel.kind == GitHistoryItemViewModelKind.outgoingChanges;
   }
 
   Widget _buildFooter() {

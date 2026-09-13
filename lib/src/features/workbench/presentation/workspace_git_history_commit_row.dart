@@ -4,6 +4,9 @@ class const _CommitGraphRow({
   required final GitHistoryItemViewModel viewModel,
   required final double graphWidth,
   required final VoidCallback onTap,
+  final ValueChanged<Offset>? onOpenActions,
+  final void Function(GitHistoryItemRef itemRef, Offset position)?
+  onOpenRefActions,
 }) extends StatelessWidget {
   static const double _refBadgeMaxWidth = 160;
   static const double _metaWidth = 88;
@@ -16,6 +19,9 @@ class const _CommitGraphRow({
       cursor: SystemMouseCursors.click,
       child: InkWell(
         onTap: onTap,
+        onSecondaryTapDown: onOpenActions == null
+            ? null
+            : (details) => onOpenActions!(details.globalPosition),
         mouseCursor: SystemMouseCursors.click,
         child: SizedBox(
           height: 28,
@@ -50,7 +56,12 @@ class const _CommitGraphRow({
                     constraints: const BoxConstraints(
                       maxWidth: _refBadgeMaxWidth,
                     ),
-                    child: GitRefBadge(itemRef: itemRef),
+                    child: GitRefBadge(
+                      itemRef: itemRef,
+                      onOpenActions: onOpenRefActions == null
+                          ? null
+                          : (position) => onOpenRefActions!(itemRef, position),
+                    ),
                   ),
                 ],
                 const SizedBox(width: AleraTokens.space8),

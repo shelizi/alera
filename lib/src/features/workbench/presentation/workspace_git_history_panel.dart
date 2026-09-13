@@ -249,80 +249,44 @@ class _GitHistoryPanelState extends State<_GitHistoryPanel> {
     GitHistoryItemRef itemRef,
     Offset globalPosition,
   ) async {
-    final switchBranch = widget.onSwitchBranch;
-    if (switchBranch == null || !itemRef.id.startsWith('refs/heads/')) {
-      return;
-    }
     final isCurrentBranch = widget.state.result?.currentRef?.id == itemRef.id;
-    final overlay = Navigator.of(context).overlay?.context.findRenderObject();
-    if (overlay is! RenderBox) {
+    final action = await showGitHistoryRefMenu(
+      context,
+      itemRef,
+      globalPosition,
+      isCurrentBranch: isCurrentBranch,
+    );
+    if (!mounted || action == null) {
       return;
     }
-    final position = overlay.globalToLocal(globalPosition);
-    final action = await showMenu<_GitRefAction>(
-      context: context,
-      position: .fromLTRB(
-        position.dx,
-        position.dy,
-        overlay.size.width - position.dx,
-        overlay.size.height - position.dy,
-      ),
-      items: <PopupMenuEntry<_GitRefAction>>[
-        AleraDropdownEntry<_GitRefAction>(
-          value: .switchBranch,
-          label: isCurrentBranch ? 'Current Branch' : 'Switch to Branch',
-          localizeLabel: false,
-          selected: isCurrentBranch,
-          enabled: !isCurrentBranch,
-          leading: const Icon(AleraIcons.gitBranch, size: 16),
-        ),
-      ],
-    );
-    if (action == _GitRefAction.switchBranch) {
-      await switchBranch(itemRef.name);
+    switch (action) {
+      case GitHistoryRefMenuAction.switchBranch:
+        await widget.onSwitchBranch?.call(itemRef.name);
+      case GitHistoryRefMenuAction.copyName:
+        await widget.onCopyCommitText(itemRef.name, 'Branch Name');
     }
   }
 
   Future<void> _openActions(BuildContext context, GitHistoryItem item) async {
     final renderBox = context.findRenderObject() as RenderBox?;
-    final overlay = Navigator.of(context).overlay?.context.findRenderObject();
-    if (renderBox == null || overlay is! RenderBox) {
+    if (renderBox == null) {
       return;
     }
-    final topLeft = renderBox.localToGlobal(.zero, ancestor: overlay);
-    final bottomRight = renderBox.localToGlobal(
-      renderBox.size.bottomRight(.zero),
-      ancestor: overlay,
+    final action = await showGitHistoryCommitMenu(
+      context,
+      item,
+      renderBox.localToGlobal(.zero),
     );
-    final action = await showMenu<_CommitAction>(
-      context: context,
-      position: .fromRect(
-        .fromPoints(topLeft, bottomRight),
-        Offset.zero & overlay.size,
-      ),
-      items: const <PopupMenuEntry<_CommitAction>>[
-        AleraDropdownEntry<_CommitAction>(
-          value: .copyHash,
-          label: 'Copy Commit Hash',
-          leading: Icon(AleraIcons.gitBranch, size: 16),
-        ),
-        AleraDropdownEntry<_CommitAction>(
-          value: .copyMessage,
-          label: 'Copy Commit Message',
-          leading: Icon(AleraIcons.copy, size: 16),
-        ),
-      ],
-    );
-    if (action == null) {
+    if (!mounted || action == null) {
       return;
     }
     switch (action) {
-      case _CommitAction.copyHash:
+      case GitHistoryCommitMenuAction.copyHash:
         await widget.onCopyCommitText(item.id, 'Commit Hash');
-      case _CommitAction.copyMessage:
+      case GitHistoryCommitMenuAction.copySubject:
         await widget.onCopyCommitText(
           item.message.trim().isEmpty ? item.subject : item.message,
-          'Commit Message',
+          'Commit Subject',
         );
     }
   }
@@ -466,10 +430,6 @@ class _RefreshCommitsButtonState extends State<_RefreshCommitsButton>
     );
   }
 }
-
-enum _CommitAction { copyHash, copyMessage }
-
-enum _GitRefAction { switchBranch }
 
 class const _HistoryResizeHandle({required final ValueChanged<double> onResize})
     extends StatefulWidget {
