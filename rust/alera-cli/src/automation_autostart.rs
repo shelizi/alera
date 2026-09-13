@@ -30,21 +30,21 @@ pub(crate) fn current_platform() -> AutostartPlatform {
 /// Best-effort reconcile that reads the persisted settings at run time, so
 /// jobs coalesce onto the latest state no matter when they were enqueued.
 pub(crate) async fn reconcile_runtime_autostart(runtime_store: &RuntimeStore, runtime_dir: &Path) {
-    let Ok(settings) = runtime_store.automation_settings().await else {
-        return;
-    };
-    let Some(paths) = autostart_paths(runtime_dir) else {
-        return;
-    };
-    match tokio::task::spawn_blocking(move || reconcile_autostart(&settings, &paths)).await {
-        Ok(Ok(())) => {}
-        Ok(Err(error)) => {
-            tracing::warn!("automation autostart reconciliation failed: {error}")
-        }
-        Err(error) => {
-            tracing::warn!("automation autostart reconciliation failed: {error}")
-        }
+    if let Err(error) = reconcile_runtime_autostart_result(runtime_store, runtime_dir).await {
+        tracing::warn!("automation autostart reconciliation failed: {error}");
     }
+}
+
+pub(crate) async fn reconcile_runtime_autostart_result(
+    runtime_store: &RuntimeStore,
+    runtime_dir: &Path,
+) -> Result<()> {
+    let settings = runtime_store.automation_settings().await?;
+    let paths = autostart_paths(runtime_dir)
+        .ok_or_else(|| anyhow::anyhow!("could not resolve autostart paths"))?;
+    tokio::task::spawn_blocking(move || reconcile_autostart(&settings, &paths))
+        .await
+        .map_err(|error| anyhow::anyhow!("autostart reconcile task join error: {error}"))?
 }
 
 pub(crate) fn autostart_paths(runtime_dir: &Path) -> Option<AutostartPaths> {
