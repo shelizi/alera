@@ -3,16 +3,18 @@ part of 'terminal_runtime_native_test.dart';
 void _registerXtermRuntimeRemintTests() {
   test('interaction reset leaves every alternate-screen dialect', () {
     final cursorTerminal = xterm.Terminal()
-      ..write('\x1b[?1h\x1b[?25l\x1b[?1004h\x1b=');
+      ..write('\x1b[?1h\x1b[?25l\x1b[?1004h\x1b=\x1b[=8u');
     expect(cursorTerminal.cursorKeysMode, isTrue);
     expect(cursorTerminal.cursorVisibleMode, isFalse);
     expect(cursorTerminal.reportFocusMode, isTrue);
     expect(cursorTerminal.appKeypadMode, isTrue);
+    expect(cursorTerminal.kittyKeyboardMode, 8);
     cursorTerminal.write(terminalInteractionModeReset);
     expect(cursorTerminal.cursorKeysMode, isFalse);
     expect(cursorTerminal.cursorVisibleMode, isTrue);
     expect(cursorTerminal.reportFocusMode, isFalse);
     expect(cursorTerminal.appKeypadMode, isFalse);
+    expect(cursorTerminal.kittyKeyboardMode, 0);
 
     for (final encodingMode in <int>[1005, 1015]) {
       final terminal = xterm.Terminal()..write('\x1b[?${encodingMode}h');
