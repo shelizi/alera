@@ -6,6 +6,8 @@ import 'package:alera/src/design_system/forms/alera_setting_row.dart';
 import 'package:alera/src/design_system/forms/alera_text_field.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:alera/src/design_system/layout/alera_settings_group.dart';
+import 'package:alera/src/features/agent_profiles/domain/agent_descriptor_registry.dart';
+import 'package:alera/src/features/agent_profiles/domain/agent_descriptor_snapshot.dart';
 import 'package:alera/src/features/agent_profiles/domain/managed_agent_profile_options.dart';
 import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 import 'package:flutter/material.dart';
@@ -27,8 +29,10 @@ class const AgentProfileManagedEditor({
 }) extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
+    final descriptor = agentDescriptorFor(adapter);
     final controls = <Widget>[
-      if (agentProfileSupportsCcsProfile(adapter))
+      if (descriptor.supportsCcsProfile &&
+          descriptor.launchSpec.profileLauncher != null)
         _textRow(
           title: 'CCS Profile',
           description:
@@ -37,14 +41,16 @@ class const AgentProfileManagedEditor({
               'CLAUDE_CONFIG_DIR at its instance directory. Alera writes Claude '
               'status hooks into that instance settings.local.json.',
           keyName: 'ccsProfile',
+          managedControlKey: false,
         ),
-      if (agentProfileSupportsModel(adapter)) ...<Widget>[
+      if (descriptor.modelOverride != AgentModelOverrideSnapshot.unsupported) ...<Widget>[
         _choiceRow(
           title: 'Model',
           description: 'Leave as default to use the agent configuration.',
           keyName: 'model',
           options: models,
           filterable: true,
+          managedControlKey: false,
           trailing: onRefreshModels == null
               ? null
               : AleraIconButton(
@@ -57,15 +63,17 @@ class const AgentProfileManagedEditor({
           title: 'Exact Model ID',
           description: 'Use a model ID that is not in the discovered list.',
           keyName: 'model',
+          managedControlKey: false,
         ),
       ],
-      if (agentProfileSupportsPersona(adapter)) ...<Widget>[
+      if (descriptor.supportsPersona) ...<Widget>[
         _choiceRow(
           title: 'Persona',
           description: 'Select a known agent persona or enter an exact name.',
           keyName: 'agent',
           options: personas,
           filterable: true,
+          managedControlKey: false,
           trailing: onRefreshPersonas == null
               ? null
               : AleraIconButton(
@@ -82,6 +90,7 @@ class const AgentProfileManagedEditor({
           title: 'Exact Persona',
           description: 'Use a persona name that is not in the discovered list.',
           keyName: 'agent',
+          managedControlKey: false,
         ),
       ],
       ..._adapterControls(),
@@ -105,205 +114,60 @@ class const AgentProfileManagedEditor({
   }
 
   List<Widget> _adapterControls() {
-    return switch (adapter) {
-      AgentType.codex => <Widget>[
-        _choiceRow(
-          title: 'Reasoning Effort',
-          keyName: 'effort',
-          options: codexEffortOptions,
-        ),
-        _choiceRow(
-          title: 'Plan Mode Reasoning Effort',
-          description:
-              'Applies only while Codex is in plan mode, which is entered with '
-              'Shift+Tab or /plan. Codex has no way to start there.',
-          keyName: 'planModeEffort',
-          options: codexEffortOptions,
-        ),
-        _choiceRow(
-          title: 'Sandbox',
-          keyName: 'sandbox',
-          options: codexSandboxOptions,
-        ),
-        _choiceRow(
-          title: 'Approval Policy',
-          keyName: 'approvalPolicy',
-          options: codexApprovalOptions,
-        ),
-        _boolRow(
-          title: 'Web Search',
-          description: 'Allow Codex to search the web.',
-          keyName: 'webSearch',
-        ),
-        _boolRow(
-          title: 'Bypass All Protections',
-          description: 'Bypass both approval prompts and sandbox isolation.',
-          keyName: 'bypassApprovalsAndSandbox',
-        ),
-      ],
-      AgentType.claude => <Widget>[
-        _choiceRow(
-          title: 'Reasoning Effort',
-          keyName: 'effort',
-          options: claudeEffortOptions,
-        ),
-        _choiceRow(
-          title: 'Permission Mode',
-          keyName: 'permissionMode',
-          options: claudePermissionOptions,
-        ),
-        _boolRow(
-          title: 'Allow Skip Permissions',
-          description:
-              'Make bypass available during the session without starting in '
-              'it. Use the Bypass Permissions mode above to start in it.',
-          keyName: 'allowSkipPermissions',
-        ),
-      ],
-      AgentType.copilot => <Widget>[
-        _choiceRow(
-          title: 'Reasoning Effort',
-          keyName: 'effort',
-          options: copilotEffortOptions,
-        ),
-        _choiceRow(title: 'Mode', keyName: 'mode', options: copilotModeOptions),
-        _choiceRow(
-          title: 'Context',
-          keyName: 'context',
-          options: copilotContextOptions,
-        ),
-        _boolRow(
-          title: 'Allow All',
-          description: 'Allow tools and paths without individual prompts.',
-          keyName: 'allowAll',
-        ),
-        _numberRow(
-          title: 'Maximum AI Credits',
-          keyName: 'maxAiCredits',
-          decimal: true,
-        ),
-        _numberRow(
-          title: 'Maximum Autopilot Continues',
-          keyName: 'maxAutopilotContinues',
-        ),
-        _boolRow(
-          title: 'Do Not Ask User',
-          description: 'Continue without asking the user for input.',
-          keyName: 'noAskUser',
-        ),
-      ],
-      AgentType.cursor => <Widget>[
-        _choiceRow(title: 'Mode', keyName: 'mode', options: cursorModeOptions),
-        _choiceRow(
-          title: 'Review Mode',
-          keyName: 'permissionMode',
-          options: cursorPermissionOptions,
-        ),
-        _choiceRow(
-          title: 'Sandbox',
-          keyName: 'sandbox',
-          options: cursorSandboxOptions,
-        ),
-        _boolRow(
-          title: 'Trust Workspace',
-          description: 'Trust the workspace without an interactive prompt.',
-          keyName: 'trustWorkspace',
-        ),
-      ],
-      AgentType.agy => <Widget>[
-        _choiceRow(
-          title: 'Reasoning Effort',
-          keyName: 'effort',
-          options: basicEffortOptions,
-        ),
-        _choiceRow(title: 'Mode', keyName: 'mode', options: agyModeOptions),
-        _boolRow(
-          title: 'Skip Permissions',
-          description: 'Run without Antigravity permission checks.',
-          keyName: 'skipPermissions',
-        ),
-        _boolRow(
-          title: 'Sandbox',
-          description: 'Enable the Antigravity sandbox.',
-          keyName: 'sandbox',
-        ),
-      ],
-      AgentType.opencode || AgentType.opencode2 => <Widget>[
-        _boolRow(
-          title: 'Auto Approve',
-          description: 'Approve OpenCode actions automatically.',
-          keyName: 'autoApprove',
-        ),
-      ],
-      AgentType.pi => <Widget>[
-        _choiceRow(
-          title: 'Thinking',
-          keyName: 'thinking',
-          options: piThinkingOptions,
-        ),
-        _choiceRow(
-          title: 'Project Trust',
-          keyName: 'projectTrust',
-          options: piTrustOptions,
-        ),
-      ],
-      AgentType.amp => <Widget>[
-        _choiceRow(
-          title: 'Mode',
-          description: 'Amp permission rules continue to come from the global Amp configuration.',
-          keyName: 'mode',
-          options: ampModeOptions,
-        ),
-        _boolRow(
-          title: 'Fast Mode',
-          description: 'Prefer lower latency responses.',
-          keyName: 'fast',
-        ),
-      ],
-      AgentType.devin => <Widget>[
-        _choiceRow(
-          title: 'Permission Mode',
-          keyName: 'permissionMode',
-          options: devinPermissionOptions,
-        ),
-        _boolRow(
-          title: 'Sandbox',
-          description: 'Sandbox Devin exec-tool processes where supported.',
-          keyName: 'sandbox',
-        ),
-      ],
-      AgentType.grok => <Widget>[
-        _choiceRow(
-          title: 'Reasoning Effort',
-          keyName: 'effort',
-          options: grokEffortOptions,
-        ),
-        _choiceRow(
-          title: 'Permission Mode',
-          keyName: 'permissionMode',
-          options: grokPermissionOptions,
-        ),
-        _choiceRow(
-          title: 'Sandbox',
-          keyName: 'sandbox',
-          options: grokSandboxOptions,
-        ),
-        _boolRow(
-          title: 'Disable Web Search',
-          description: 'Disable Grok Build web search and web fetch tools.',
-          keyName: 'disableWebSearch',
-        ),
-      ],
-      AgentType.fx => <Widget>[
-        _boolRow(title: 'Resume Latest Session', keyName: 'resumeLast'),
-        _boolRow(
-          title: 'Ignore Additional Directories',
-          description: 'Do not load additional directories configured by fx.',
-          keyName: 'noAdditionalDirs',
-        ),
-        _boolRow(title: 'Record Session', keyName: 'record'),
-      ],
-    };
+    final descriptor = agentDescriptorFor(adapter);
+    return <Widget>[
+      for (final rule in descriptor.launchSpec.rules)
+        if (rule.key != 'agent' &&
+            rule.key != 'model' &&
+            !(rule.suppressedBy != null &&
+                config[rule.suppressedBy] == true))
+          _controlForRule(rule),
+    ];
+  }
+
+  Widget _controlForRule(AgentLaunchRuleSpec rule) {
+    final metadata = _managedControlMetadata(adapter.key, rule.key);
+    final title = metadata.title ?? _titleForKey(rule.key);
+    switch (rule.kind) {
+      case AgentLaunchRuleKindSnapshot.stringOption:
+        return _textRow(
+          title: title,
+          description: metadata.description,
+          keyName: rule.key,
+        );
+      case AgentLaunchRuleKindSnapshot.enumOption:
+      case AgentLaunchRuleKindSnapshot.configKv:
+      case AgentLaunchRuleKindSnapshot.enumToFlag:
+        return _choiceRow(
+          title: title,
+          description: metadata.description,
+          keyName: rule.key,
+          options: _optionsForRule(rule, metadata),
+        );
+      case AgentLaunchRuleKindSnapshot.boolFlag:
+      case AgentLaunchRuleKindSnapshot.exclusiveToggle:
+        return _boolRow(
+          title: title,
+          description: metadata.description,
+          keyName: rule.key,
+        );
+      case AgentLaunchRuleKindSnapshot.numberOption:
+        return _numberRow(
+          title: title,
+          keyName: rule.key,
+          decimal: metadata.decimal,
+        );
+    }
+  }
+
+  List<ManagedAgentOption> _optionsForRule(
+    AgentLaunchRuleSpec rule,
+    _ManagedControlMetadata metadata,
+  ) {
+    return <ManagedAgentOption>[
+      for (final value in rule.allowed)
+        ManagedAgentOption(value, metadata.valueLabels[value] ?? _titleForKey(value)),
+    ];
   }
 
   Widget _choiceRow({
@@ -313,6 +177,7 @@ class const AgentProfileManagedEditor({
     String? description,
     bool filterable = false,
     Widget? trailing,
+    bool managedControlKey = true,
   }) {
     final selected = config[keyName] is String ? config[keyName] as String : '';
     final entries = <ManagedAgentOption>[
@@ -324,6 +189,9 @@ class const AgentProfileManagedEditor({
       entries.add(ManagedAgentOption(selected, 'Custom: $selected'));
     }
     return AleraSettingRow(
+      key: managedControlKey
+          ? ValueKey<String>('ManagedControl:$keyName')
+          : null,
       title: title,
       description: description,
       child: Row(
@@ -356,10 +224,14 @@ class const AgentProfileManagedEditor({
 
   Widget _textRow({
     required String title,
-    required String description,
+    required String? description,
     required String keyName,
+    bool managedControlKey = true,
   }) {
     return AleraSettingRow(
+      key: managedControlKey
+          ? ValueKey<String>('ManagedControl:$keyName')
+          : null,
       title: title,
       description: description,
       child: _ManagedTextField(
@@ -377,6 +249,7 @@ class const AgentProfileManagedEditor({
     bool decimal = false,
   }) {
     return AleraSettingRow(
+      key: ValueKey<String>('ManagedControl:$keyName'),
       title: title,
       description: 'Leave empty to use the agent default.',
       child: _ManagedTextField(
@@ -411,6 +284,7 @@ class const AgentProfileManagedEditor({
     String? description,
   }) {
     return AleraSettingRow(
+      key: ValueKey<String>('ManagedControl:$keyName'),
       title: title,
       description: description,
       child: Align(
@@ -433,6 +307,147 @@ class const AgentProfileManagedEditor({
     }
     onChanged(next);
   }
+}
+
+class _ManagedControlMetadata {
+  const _ManagedControlMetadata({
+    this.title,
+    this.description,
+    this.valueLabels = const <String, String>{},
+    this.decimal = false,
+  });
+
+  final String? title;
+  final String? description;
+  final Map<String, String> valueLabels;
+  final bool decimal;
+}
+
+const Map<String, _ManagedControlMetadata> _managedControlMetadataMap =
+    <String, _ManagedControlMetadata>{
+      'effort': _ManagedControlMetadata(
+        title: 'Reasoning Effort',
+        valueLabels: <String, String>{'xhigh': 'Extra High'},
+      ),
+      'planModeEffort': _ManagedControlMetadata(
+        title: 'Plan Mode Reasoning Effort',
+        description:
+            'Applies only while Codex is in plan mode, which is entered with Shift+Tab or /plan. Codex has no way to start there.',
+        valueLabels: <String, String>{'xhigh': 'Extra High'},
+      ),
+      'sandbox': _ManagedControlMetadata(
+        title: 'Sandbox',
+        valueLabels: <String, String>{
+          'danger-full-access': 'Full Access',
+          'workspace-write': 'Workspace Write',
+        },
+      ),
+      'approvalPolicy': _ManagedControlMetadata(
+        title: 'Approval Policy',
+        valueLabels: <String, String>{'on-request': 'On Request', 'never': 'Never Ask'},
+      ),
+      'webSearch': _ManagedControlMetadata(
+        title: 'Web Search',
+        description: 'Allow Codex to search the web.',
+      ),
+      'bypassApprovalsAndSandbox': _ManagedControlMetadata(
+        title: 'Bypass All Protections',
+        description: 'Bypass both approval prompts and sandbox isolation.',
+      ),
+      'allowSkipPermissions': _ManagedControlMetadata(
+        title: 'Allow Skip Permissions',
+        description:
+            'Make bypass available during the session without starting in it. Use the Bypass Permissions mode above to start in it.',
+      ),
+      'mode': _ManagedControlMetadata(title: 'Mode'),
+      'context': _ManagedControlMetadata(
+        title: 'Context',
+        valueLabels: <String, String>{
+          'default': 'Default Context',
+          'long_context': 'Long Context',
+        },
+      ),
+      'allowAll': _ManagedControlMetadata(
+        title: 'Allow All',
+        description: 'Allow tools and paths without individual prompts.',
+      ),
+      'maxAiCredits': _ManagedControlMetadata(
+        title: 'Maximum AI Credits',
+        decimal: true,
+      ),
+      'maxAutopilotContinues': _ManagedControlMetadata(
+        title: 'Maximum Autopilot Continues',
+      ),
+      'noAskUser': _ManagedControlMetadata(
+        title: 'Do Not Ask User',
+        description: 'Continue without asking the user for input.',
+      ),
+      'permissionMode': _ManagedControlMetadata(
+        title: 'Permission Mode',
+        valueLabels: <String, String>{'dontAsk': 'Do Not Ask'},
+      ),
+      'cursor:permissionMode': _ManagedControlMetadata(title: 'Review Mode'),
+      'trustWorkspace': _ManagedControlMetadata(
+        title: 'Trust Workspace',
+        description: 'Trust the workspace without an interactive prompt.',
+      ),
+      'skipPermissions': _ManagedControlMetadata(
+        title: 'Skip Permissions',
+        description: 'Run without Antigravity permission checks.',
+      ),
+      'agy:sandbox': _ManagedControlMetadata(
+        title: 'Sandbox',
+        description: 'Enable the Antigravity sandbox.',
+      ),
+      'autoApprove': _ManagedControlMetadata(
+        title: 'Auto Approve',
+        description: 'Approve OpenCode actions automatically.',
+      ),
+      'thinking': _ManagedControlMetadata(title: 'Thinking'),
+      'projectTrust': _ManagedControlMetadata(title: 'Project Trust'),
+      'amp:mode': _ManagedControlMetadata(
+        title: 'Mode',
+        description:
+            'Amp permission rules continue to come from the global Amp configuration.',
+      ),
+      'fast': _ManagedControlMetadata(
+        title: 'Fast Mode',
+        description: 'Prefer lower latency responses.',
+      ),
+      'grok:permissionMode': _ManagedControlMetadata(
+        title: 'Permission Mode',
+      ),
+      'devin:sandbox': _ManagedControlMetadata(
+        title: 'Sandbox',
+        description: 'Sandbox Devin exec-tool processes where supported.',
+      ),
+      'disableWebSearch': _ManagedControlMetadata(
+        title: 'Disable Web Search',
+        description: 'Disable Grok Build web search and web fetch tools.',
+      ),
+      'resumeLast': _ManagedControlMetadata(title: 'Resume Latest Session'),
+      'noAdditionalDirs': _ManagedControlMetadata(
+        title: 'Ignore Additional Directories',
+        description: 'Do not load additional directories configured by fx.',
+      ),
+      'record': _ManagedControlMetadata(title: 'Record Session'),
+    };
+
+_ManagedControlMetadata _managedControlMetadata(String agentId, String key) {
+  return _managedControlMetadataMap['$agentId:$key'] ??
+      _managedControlMetadataMap[key] ??
+      const _ManagedControlMetadata();
+}
+
+String _titleForKey(String key) {
+  final words = key
+      .replaceAll(RegExp(r'([a-z])([A-Z])'), r'$1 $2')
+      .replaceAll('_', ' ')
+      .replaceAll('-', ' ')
+      .split(' ')
+      .where((word) => word.isNotEmpty)
+      .map((word) => '${word[0].toUpperCase()}${word.substring(1)}');
+  return words.join(' ');
 }
 
 class const _ManagedTextField({
