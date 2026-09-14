@@ -11,6 +11,7 @@ mixin _WorkbenchControllerTabOpening
     String? targetGroupId,
     String? title,
     String? initialCommand,
+    Map<String, Object?>? initialManagedAgentLaunch,
     bool spawnOnCreate = false,
     bool initialCommandOnce = false,
     bool autoCloseOnSuccess = false,
@@ -19,6 +20,7 @@ mixin _WorkbenchControllerTabOpening
     targetGroupId: targetGroupId,
     title: title,
     initialCommand: initialCommand,
+    initialManagedAgentLaunch: initialManagedAgentLaunch,
     spawnOnCreate: spawnOnCreate,
     initialCommandOnce: initialCommandOnce,
     autoCloseOnSuccess: autoCloseOnSuccess,
@@ -31,10 +33,12 @@ mixin _WorkbenchControllerTabOpening
     Workspace workspace, {
     required AgentType agentType,
     String? targetGroupId,
+    String? executablePath,
   }) => _tabLayoutOwner.createAgentTab(
     workspace,
     agentType: agentType,
     targetGroupId: targetGroupId,
+    executablePath: executablePath,
   );
 
   Future<WorkspaceTabRecord> openMermanPreviewTab({

@@ -11,6 +11,7 @@ import 'package:alera/src/features/settings/application/settings_repository.dart
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
 import 'package:alera/src/features/text_actions/domain/text_actions_settings.dart';
 import 'package:alera/src/platform/runtime_host/protocol/terminal_host_protocol.dart';
+import 'package:flutter/foundation.dart';
 import 'package:logging/logging.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 

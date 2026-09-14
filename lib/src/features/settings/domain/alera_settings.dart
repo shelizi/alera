@@ -96,6 +96,7 @@ class const AgentSettings({
   this.keepComputerAwakeWhileAgentsWork = false,
   this.showTabTitlesInSidebar = false,
   this.defaultAgentProfileId,
+  this.agentExecutablePaths = const <String, String>{},
   this.quotas = AgentQuotaSettings.defaults,
 }) with AgentSettingsMappable {
   /// Install managed agent hooks for terminal status. Each agent is
@@ -119,6 +120,15 @@ class const AgentSettings({
 
   /// Runtime profile selected for flows that need an initial agent choice.
   final String? defaultAgentProfileId;
+
+  /// Per-device executable overrides for supported agent CLIs. Empty or
+  /// missing entries use the descriptor's default command from PATH.
+  final Map<String, String> agentExecutablePaths;
+
+  String? executablePathFor(String agentKey) {
+    final value = agentExecutablePaths[agentKey]?.trim();
+    return value == null || value.isEmpty ? null : value;
+  }
 
   /// Per-host quota providers, Claude CCS profiles, and environment names.
   final AgentQuotaSettings quotas;

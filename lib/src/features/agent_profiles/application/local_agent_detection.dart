@@ -11,6 +11,7 @@ import 'package:alera/src/shared/infra/process/command_path_probe.dart';
 /// resolves when it is typed into a workspace shell.
 class const LocalAgentDetection({
   required final CommandEnvironmentResolver commandEnvironmentResolver,
+  final Map<String, String> executablePaths = const <String, String>{},
   final bool? isWindows,
   final bool Function(String path)? executableExists,
 }) {
@@ -23,6 +24,14 @@ class const LocalAgentDetection({
   }
 
   bool _commandResolves(AgentType agentType, Map<String, String> environment) {
+    final configuredPath = executablePaths[agentType.key]?.trim();
+    if (configuredPath != null && configuredPath.isNotEmpty) {
+      return executablePathExists(
+        configuredPath,
+        isWindows: isWindows,
+        executableExists: executableExists,
+      );
+    }
     final command = agentProfileDefaultCommands[agentType];
     if (command == null) {
       return false;

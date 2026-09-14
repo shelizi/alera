@@ -2,6 +2,8 @@ import 'package:alera/src/app/providers.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/forms/alera_setting_row.dart';
 import 'package:alera/src/design_system/layout/alera_settings_group.dart';
+import 'package:alera/src/features/agent_profiles/domain/agent_profile_adapters.dart';
+import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
 import 'package:alera/src/features/settings/presentation/panes/alera_agent_profiles_skill_control.dart';
 import 'package:alera/src/features/settings/presentation/panes/alera_all_skills_control.dart';
@@ -74,6 +76,25 @@ class const AgentsSettingsPane({
               ),
             ],
           ),
+        ),
+        const SizedBox(height: AleraTokens.space16),
+        AleraSettingsGroup(
+          title: 'Agent Executables',
+          description: 'Override a supported agent CLI executable on this device. Leave a path blank to use the default command from PATH.',
+          children: <Widget>[
+            for (final agentType in spawnableAgentProfileAdapters)
+              SettingsTextRow(
+                key: ValueKey<String>('agent-executable-path-${agentType.key}'),
+                title: '${agentDisplayName(agentType)} Executable',
+                description:
+                    'Full path to the ${agentDisplayName(agentType)} executable. Default: ${agentProfileDefaultCommands[agentType] ?? agentType.key}',
+                value: agents.executablePathFor(agentType.key) ?? '',
+                hintText:
+                    agentProfileDefaultCommands[agentType] ?? agentType.key,
+                onChanged: (value) =>
+                    controller.setAgentExecutablePath(agentType.key, value),
+              ),
+          ],
         ),
         const SizedBox(height: AleraTokens.space16),
         KeyedSubtree(

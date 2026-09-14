@@ -100,6 +100,22 @@ List<String> _candidateNames(
   ];
 }
 
+bool executablePathExists(
+  String path, {
+  bool? isWindows,
+  bool Function(String path)? executableExists,
+}) {
+  final normalized = path.trim();
+  if (normalized.isEmpty) {
+    return false;
+  }
+  final windows = isWindows ?? Platform.isWindows;
+  final exists =
+      executableExists ??
+      (windows ? _windowsExecutableExists : _posixExecutableExists);
+  return exists(normalized);
+}
+
 bool _windowsExecutableExists(String path) => File(path).existsSync();
 
 bool _posixExecutableExists(String path) {

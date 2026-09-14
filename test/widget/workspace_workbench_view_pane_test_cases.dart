@@ -398,7 +398,7 @@ void _registerWorkspaceWorkbenchViewPaneTests() {
       splitGroups: splitGroups,
       mergedGroups: mergedGroups,
       updatedRatios: updatedRatios,
-      installedAgents: <AgentType>[.codex, .claude],
+      installedAgents: <AgentType>[.codex, .claude, .devin],
       createdAgentTabs: createdAgentTabs,
     );
 
@@ -408,13 +408,14 @@ void _registerWorkspaceWorkbenchViewPaneTests() {
     expect(find.text('New Terminal'), findsOneWidget);
     expect(find.text('Codex'), findsOneWidget);
     expect(find.text('Claude Code'), findsOneWidget);
+    expect(find.text('Devin'), findsOneWidget);
     expect(find.text('Cursor'), findsNothing);
 
-    await tester.tap(find.text('Claude Code'));
+    await tester.tap(find.text('Devin'));
     await tester.pumpAndSettle();
 
     expect(createdAgentTabs, <({AgentType agentType, String? targetGroupId})>[
-      (agentType: .claude, targetGroupId: 'group-a'),
+      (agentType: .devin, targetGroupId: 'group-a'),
     ]);
     expect(createdTabs, isEmpty);
   });

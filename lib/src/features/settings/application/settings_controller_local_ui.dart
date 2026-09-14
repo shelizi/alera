@@ -77,6 +77,26 @@ mixin _SettingsControllerLocalUiSettings on _$SettingsController {
         );
       });
 
+  Future<void> setAgentExecutablePath(String agentKey, String? path) =>
+      _controller._serialize(() async {
+        final normalizedKey = agentKey.trim().toLowerCase();
+        final normalizedPath = path?.trim();
+        final next = Map<String, String>.of(state.agents.agentExecutablePaths);
+        if (normalizedPath == null || normalizedPath.isEmpty) {
+          next.remove(normalizedKey);
+        } else {
+          next[normalizedKey] = normalizedPath;
+        }
+        if (mapEquals(next, state.agents.agentExecutablePaths)) {
+          return;
+        }
+        await _controller._save(
+          state.copyWith(
+            agents: state.agents.copyWith(agentExecutablePaths: next),
+          ),
+        );
+      });
+
   Future<void> setShowPullRequestStatusInSidebar(bool value) =>
       _controller._serialize(() async {
         if (state.general.showPullRequestStatusInSidebar == value) {

@@ -150,6 +150,7 @@ const _classifiedFieldPaths = <String>{
   'agents.keepComputerAwakeWhileAgentsWork',
   'agents.showTabTitlesInSidebar',
   'agents.defaultAgentProfileId',
+  'agents.agentExecutablePaths',
   'agents.quotas',
   'aiTextGeneration.enabled',
   'aiTextGeneration.autoGenerateAgentTitles',
@@ -257,6 +258,9 @@ AleraSettings _populatedSettings() {
       ),
       agentStatusNotificationsEnabled: true,
       defaultAgentProfileId: 'prof_1',
+      agentExecutablePaths: const <String, String>{
+        'devin': r'C:\Tools\devin.exe',
+      },
       quotas: AgentQuotaSettings.defaults.withHost(
         'local',
         const AgentQuotaHostSettings(

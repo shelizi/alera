@@ -45,6 +45,8 @@ const String workspaceTabManualTitlePayloadKey = 'manualTitle';
 const String workspaceTabTerminalSessionIdPayloadKey = 'terminalSessionId';
 const String workspaceTabInitialCommandPayloadKey = 'initialCommand';
 const String workspaceTabInitialCommandOncePayloadKey = 'initialCommandOnce';
+const String workspaceTabInitialManagedAgentLaunchPayloadKey =
+    'initialManagedAgentLaunch';
 const String workspaceTabSpawnOnCreatePayloadKey = 'spawnOnCreate';
 const String workspaceTabAutoCloseOnSuccessPayloadKey = 'autoCloseOnSuccess';
 const String workspaceTabTerminalPulsePayloadKey = 'terminalPulse';

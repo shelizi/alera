@@ -7,6 +7,7 @@ extension WorkbenchTabLayoutOwnerOpening on WorkbenchTabLayoutOwner {
     String? targetGroupId,
     String? title,
     String? initialCommand,
+    Map<String, Object?>? initialManagedAgentLaunch,
     bool spawnOnCreate = false,
     bool initialCommandOnce = false,
     bool autoCloseOnSuccess = false,
@@ -19,6 +20,7 @@ extension WorkbenchTabLayoutOwnerOpening on WorkbenchTabLayoutOwner {
           workspace.id,
           title: title,
           initialCommand: initialCommand,
+          initialManagedAgentLaunch: initialManagedAgentLaunch,
           spawnOnCreate: spawnOnCreate,
           initialCommandOnce: initialCommandOnce,
           autoCloseOnSuccess: autoCloseOnSuccess,
@@ -51,7 +53,21 @@ extension WorkbenchTabLayoutOwnerOpening on WorkbenchTabLayoutOwner {
     Workspace workspace, {
     required AgentType agentType,
     String? targetGroupId,
+    String? executablePath,
   }) {
+    final configuredExecutable = executablePath?.trim();
+    if (configuredExecutable != null && configuredExecutable.isNotEmpty) {
+      return createTerminalTab(
+        workspace,
+        targetGroupId: targetGroupId,
+        title: agentDisplayName(agentType),
+        initialManagedAgentLaunch: <String, Object?>{
+          'executable': configuredExecutable,
+          'arguments': <String>[],
+        },
+        spawnOnCreate: true,
+      );
+    }
     final command = agentProfileDefaultCommands[agentType];
     if (command == null) {
       throw StateError('No default launch command for agent ${agentType.key}.');

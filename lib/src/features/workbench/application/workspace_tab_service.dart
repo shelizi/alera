@@ -56,6 +56,7 @@ class WorkspaceTabService._(
     String workspaceId, {
     String? title,
     String? initialCommand,
+    Map<String, Object?>? initialManagedAgentLaunch,
     bool spawnOnCreate = false,
     bool initialCommandOnce = false,
     bool autoCloseOnSuccess = false,
@@ -81,6 +82,9 @@ class WorkspaceTabService._(
           if (initialCommandOnce)
             workspaceTabInitialCommandOncePayloadKey: true,
         },
+        if (initialManagedAgentLaunch != null)
+          workspaceTabInitialManagedAgentLaunchPayloadKey:
+              Map<String, Object?>.unmodifiable(initialManagedAgentLaunch),
         if (spawnOnCreate) workspaceTabSpawnOnCreatePayloadKey: true,
         if (autoCloseOnSuccess) workspaceTabAutoCloseOnSuccessPayloadKey: true,
       },

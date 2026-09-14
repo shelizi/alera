@@ -70,6 +70,8 @@ void main() {
       expect(agents.keepComputerAwakeWhileAgentsWork, isFalse);
       expect(agents.showTabTitlesInSidebar, isFalse);
       expect(agents.defaultAgentProfileId, isNull);
+      expect(agents.agentExecutablePaths, isEmpty);
+      expect(agents.executablePathFor('devin'), isNull);
     });
 
     test('editor defaults match current editor behavior', () {

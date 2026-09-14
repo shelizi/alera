@@ -26,6 +26,24 @@ void _registerSettingsDialogAgentsTests() {
 
     expect(find.text('Extra Skills'), findsWidgets);
     expect(find.text('Agent Profiles Skill'), findsOneWidget);
+    expect(find.text('Agent Executables'), findsOneWidget);
+    expect(find.text('Devin Executable'), findsOneWidget);
+
+    final devinExecutableField = find.descendant(
+      of: find.byKey(const ValueKey<String>('agent-executable-path-devin')),
+      matching: find.byType(TextField),
+    );
+    await tester.ensureVisible(devinExecutableField);
+    await tester.enterText(devinExecutableField, r'C:\Tools\devin.exe');
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(
+      container
+          .read(settingsControllerProvider)
+          .agents
+          .executablePathFor('devin'),
+      r'C:\Tools\devin.exe',
+    );
 
     await tester.ensureVisible(find.text('Agent Status Notifications'));
     await tester.pump();

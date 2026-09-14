@@ -25,6 +25,31 @@ void _registerWorkbenchControllerAgentTabTests() {
     },
   );
 
+  test(
+    'createAgentTab uses a configured executable path without shell quoting',
+    () async {
+      await _controller.bootstrap();
+      final workspace = await _selectMainWorkspace(_controller, _harness);
+
+      final tab = await _controller.createAgentTab(
+        workspace,
+        agentType: AgentType.devin,
+        executablePath: r'C:\Program Files\Devin\devin.exe',
+      );
+
+      expect(tab.title, 'Devin');
+      expect(tab.initialCommand, isNull);
+      expect(tab.spawnOnCreate, isTrue);
+      expect(
+        tab.payload[workspaceTabInitialManagedAgentLaunchPayloadKey],
+        <String, Object?>{
+          'executable': r'C:\Program Files\Devin\devin.exe',
+          'arguments': <String>[],
+        },
+      );
+    },
+  );
+
   test('createAgentTab places the tab in the requested pane group', () async {
     await _controller.bootstrap();
     final workspace = await _selectMainWorkspace(_controller, _harness);

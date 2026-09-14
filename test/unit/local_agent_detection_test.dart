@@ -21,9 +21,11 @@ LocalAgentDetection _detection({
   required Map<String, String> environment,
   required bool isWindows,
   required Set<String> existing,
+  Map<String, String> executablePaths = const <String, String>{},
 }) {
   return LocalAgentDetection(
     commandEnvironmentResolver: _FakeEnvironmentResolver(environment),
+    executablePaths: executablePaths,
     isWindows: isWindows,
     executableExists: existing.contains,
   );
@@ -75,6 +77,39 @@ void main() {
         AgentType.cursor,
       ]);
     });
+
+    test(
+      'detects an agent from its configured executable outside PATH',
+      () async {
+        final detection = _detection(
+          environment: <String, String>{'Path': r'C:\tools'},
+          isWindows: true,
+          existing: <String>{r'D:\Agents\Devin\devin.exe'},
+          executablePaths: <String, String>{
+            'devin': r'D:\Agents\Devin\devin.exe',
+          },
+        );
+
+        expect(await detection.detectInstalled(), contains(AgentType.devin));
+      },
+    );
+
+    test(
+      'an explicit invalid executable override does not fall back to PATH',
+      () async {
+        final detection = _detection(
+          environment: <String, String>{'Path': r'C:\tools'},
+          isWindows: true,
+          existing: <String>{r'C:\tools\devin.exe'},
+          executablePaths: <String, String>{'devin': r'D:\missing\devin.exe'},
+        );
+
+        expect(
+          await detection.detectInstalled(),
+          isNot(contains(AgentType.devin)),
+        );
+      },
+    );
 
     test('reports nothing when PATH is missing', () async {
       final detection = _detection(

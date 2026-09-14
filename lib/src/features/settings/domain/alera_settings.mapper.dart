@@ -675,6 +675,15 @@ class AgentSettingsMapper extends ClassMapperBase<AgentSettings> {
     _$defaultAgentProfileId,
     opt: true,
   );
+  static Map<String, String> _$agentExecutablePaths(AgentSettings v) =>
+      v.agentExecutablePaths;
+  static const Field<AgentSettings, Map<String, String>>
+  _f$agentExecutablePaths = Field(
+    'agentExecutablePaths',
+    _$agentExecutablePaths,
+    opt: true,
+    def: const <String, String>{},
+  );
   static AgentQuotaSettings _$quotas(AgentSettings v) => v.quotas;
   static const Field<AgentSettings, AgentQuotaSettings> _f$quotas = Field(
     'quotas',
@@ -692,6 +701,7 @@ class AgentSettingsMapper extends ClassMapperBase<AgentSettings> {
     #keepComputerAwakeWhileAgentsWork: _f$keepComputerAwakeWhileAgentsWork,
     #showTabTitlesInSidebar: _f$showTabTitlesInSidebar,
     #defaultAgentProfileId: _f$defaultAgentProfileId,
+    #agentExecutablePaths: _f$agentExecutablePaths,
     #quotas: _f$quotas,
   };
 
@@ -709,6 +719,7 @@ class AgentSettingsMapper extends ClassMapperBase<AgentSettings> {
       ),
       showTabTitlesInSidebar: data.dec(_f$showTabTitlesInSidebar),
       defaultAgentProfileId: data.dec(_f$defaultAgentProfileId),
+      agentExecutablePaths: data.dec(_f$agentExecutablePaths),
       quotas: data.dec(_f$quotas),
     );
   }
@@ -781,6 +792,8 @@ abstract class AgentSettingsCopyWith<$R, $In extends AgentSettings, $Out>
     AgentStatusHookSettings
   >
   get agentStatusHooks;
+  MapCopyWith<$R, String, String, ObjectCopyWith<$R, String, String>>
+  get agentExecutablePaths;
   AgentQuotaSettingsCopyWith<$R, AgentQuotaSettings, AgentQuotaSettings>
   get quotas;
   $R call({
@@ -790,6 +803,7 @@ abstract class AgentSettingsCopyWith<$R, $In extends AgentSettings, $Out>
     bool? keepComputerAwakeWhileAgentsWork,
     bool? showTabTitlesInSidebar,
     String? defaultAgentProfileId,
+    Map<String, String>? agentExecutablePaths,
     AgentQuotaSettings? quotas,
   });
   AgentSettingsCopyWith<$R2, $In, $Out2> $chain<$R2, $Out2>(Then<$Out2, $R2> t);
@@ -812,6 +826,13 @@ class _AgentSettingsCopyWithImpl<$R, $Out>
   get agentStatusHooks =>
       $value.agentStatusHooks.copyWith.$chain((v) => call(agentStatusHooks: v));
   @override
+  MapCopyWith<$R, String, String, ObjectCopyWith<$R, String, String>>
+  get agentExecutablePaths => MapCopyWith(
+    $value.agentExecutablePaths,
+    (v, t) => ObjectCopyWith(v, $identity, t),
+    (v) => call(agentExecutablePaths: v),
+  );
+  @override
   AgentQuotaSettingsCopyWith<$R, AgentQuotaSettings, AgentQuotaSettings>
   get quotas => $value.quotas.copyWith.$chain((v) => call(quotas: v));
   @override
@@ -822,6 +843,7 @@ class _AgentSettingsCopyWithImpl<$R, $Out>
     bool? keepComputerAwakeWhileAgentsWork,
     bool? showTabTitlesInSidebar,
     Object? defaultAgentProfileId = $none,
+    Map<String, String>? agentExecutablePaths,
     AgentQuotaSettings? quotas,
   }) => $apply(
     FieldCopyWithData({
@@ -837,6 +859,8 @@ class _AgentSettingsCopyWithImpl<$R, $Out>
         #showTabTitlesInSidebar: showTabTitlesInSidebar,
       if (defaultAgentProfileId != $none)
         #defaultAgentProfileId: defaultAgentProfileId,
+      if (agentExecutablePaths != null)
+        #agentExecutablePaths: agentExecutablePaths,
       if (quotas != null) #quotas: quotas,
     }),
   );
@@ -862,6 +886,10 @@ class _AgentSettingsCopyWithImpl<$R, $Out>
     defaultAgentProfileId: data.get(
       #defaultAgentProfileId,
       or: $value.defaultAgentProfileId,
+    ),
+    agentExecutablePaths: data.get(
+      #agentExecutablePaths,
+      or: $value.agentExecutablePaths,
     ),
     quotas: data.get(#quotas, or: $value.quotas),
   );
