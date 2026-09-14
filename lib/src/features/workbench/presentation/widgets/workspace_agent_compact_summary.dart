@@ -17,15 +17,8 @@ class const WorkspaceAgentCompactSummary({
   /// Optional tooltip; defaults to Show/Hide Agent Runs.
   final String? tooltipOverride;
 
-  static const int _maxVisibleGroups = 3;
-
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final visibleGroups = groups.take(_maxVisibleGroups).toList();
-    final hiddenGroupRuns = groups
-        .skip(_maxVisibleGroups)
-        .fold<int>(0, (sum, group) => sum + group.runs.length);
     final tooltip =
         tooltipOverride ?? (expanded ? 'Hide Agent Runs' : 'Show Agent Runs');
     return Tooltip(
@@ -42,20 +35,11 @@ class const WorkspaceAgentCompactSummary({
           child: Row(
             mainAxisSize: .min,
             children: <Widget>[
-              for (final (index, group) in visibleGroups.indexed) ...<Widget>[
+              for (final (index, group) in groups.indexed) ...<Widget>[
                 if (index > 0) const SizedBox(width: AleraTokens.space6),
                 WorkspaceAgentGroupCount(
                   kind: group.kind,
                   count: group.runs.length,
-                ),
-              ],
-              if (hiddenGroupRuns > 0) ...<Widget>[
-                const SizedBox(width: AleraTokens.space4),
-                Text(
-                  '+$hiddenGroupRuns',
-                  style: theme.textTheme.labelSmall?.copyWith(
-                    color: AleraTokens.foregroundFaint,
-                  ),
                 ),
               ],
               const SizedBox(width: AleraTokens.space2),

@@ -55,24 +55,51 @@ void main() {
     expect(icon.color, AleraTokens.success);
   });
 
-  testWidgets('collapses groups beyond the visible limit into a +N count', (
-    tester,
-  ) async {
-    await _pumpSummary(
-      tester,
-      groupWorkspaceAgentRuns(<WorkspaceAgentRun>[
-        _run(.claude, tabId: 'tab-1', state: .waiting),
-        _run(.claude, tabId: 'tab-2', state: .blocked),
-        _run(.claude, tabId: 'tab-3', state: .done, interrupted: true),
-        _run(.claude, tabId: 'tab-4', state: .working),
-        _run(.cursor, tabId: 'tab-5', state: .working),
-      ]),
-    );
+  testWidgets(
+    'keeps working and completed counts visible with attention states',
+    (tester) async {
+      final acknowledgedDone = _run(.claude, tabId: 'tab-6', state: .done);
+      await _pumpSummary(
+        tester,
+        groupWorkspaceAgentRuns(
+          <WorkspaceAgentRun>[
+            _run(.claude, tabId: 'tab-1', state: .waiting),
+            _run(.claude, tabId: 'tab-2', state: .blocked),
+            _run(.claude, tabId: 'tab-3', state: .done, interrupted: true),
+            _run(.claude, tabId: 'tab-4', state: .working),
+            _run(.cursor, tabId: 'tab-5', state: .working),
+            acknowledgedDone,
+          ],
+          acknowledgedCompletions: <String, DateTime>{
+            acknowledgedDone.status.terminalSessionId:
+                acknowledgedDone.status.stateStartedAt,
+          },
+        ),
+      );
 
-    // waiting, blocked and interrupted stay visible; the two working runs
-    // collapse into the trailing overflow count.
-    expect(find.text('+2'), findsOneWidget);
-  });
+      expect(find.text('+3'), findsNothing);
+      expect(find.byType(WorkspaceAgentGroupCount), findsNWidgets(5));
+      final counts = tester
+          .widgetList<WorkspaceAgentGroupCount>(
+            find.byType(WorkspaceAgentGroupCount),
+          )
+          .toList();
+      expect(
+        counts.any(
+          (item) =>
+              item.kind == WorkspaceAgentGroupKind.working && item.count == 2,
+        ),
+        isTrue,
+      );
+      expect(
+        counts.any(
+          (item) =>
+              item.kind == WorkspaceAgentGroupKind.done && item.count == 1,
+        ),
+        isTrue,
+      );
+    },
+  );
 }
 
 Future<void> _pumpSummary(
