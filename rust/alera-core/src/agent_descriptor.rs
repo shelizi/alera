@@ -68,6 +68,71 @@ pub enum AgentStatusStrategy {
     HerdrSocket,
 }
 
+/// Canonical status states shared by agent adapters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentStatusState {
+    Working,
+    Waiting,
+    Blocked,
+    Done,
+}
+
+/// One event-to-status mapping. When present, `human_input_state` wins when
+/// the event's tool requests input from the user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AgentStatusNormalizationRule {
+    pub event: &'static str,
+    pub state: AgentStatusState,
+    pub human_input_state: Option<AgentStatusState>,
+}
+
+impl AgentStatusNormalizationRule {
+    pub const fn new(event: &'static str, state: AgentStatusState) -> Self {
+        Self {
+            event,
+            state,
+            human_input_state: None,
+        }
+    }
+
+    pub const fn with_human_input(
+        event: &'static str,
+        state: AgentStatusState,
+        human_input_state: AgentStatusState,
+    ) -> Self {
+        Self {
+            event,
+            state,
+            human_input_state: Some(human_input_state),
+        }
+    }
+}
+
+/// Compact status normalization policy for one descriptor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AgentStatusNormalizationSpec {
+    pub rules: &'static [AgentStatusNormalizationRule],
+}
+
+impl AgentStatusNormalizationSpec {
+    pub const fn new(rules: &'static [AgentStatusNormalizationRule]) -> Self {
+        Self { rules }
+    }
+
+    pub fn state_for(&self, event: &str, human_input: bool) -> Option<AgentStatusState> {
+        self.rules
+            .iter()
+            .find(|rule| rule.event == event)
+            .map(|rule| {
+                if human_input {
+                    rule.human_input_state.unwrap_or(rule.state)
+                } else {
+                    rule.state
+                }
+            })
+    }
+}
+
 /// Whether a managed profile's `model` field reaches the launch command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentModelOverride {
@@ -280,6 +345,8 @@ pub struct AgentDescriptor {
     pub startup_prompt: AgentStartupPrompt,
     pub hook_strategy: AgentHookStrategy,
     pub status_strategy: AgentStatusStrategy,
+    /// Declarative event-to-canonical-status mappings used by the terminal host.
+    pub status_normalization: AgentStatusNormalizationSpec,
     /// Canonical quota registry id when usage polling exists for this agent.
     pub quota_provider_id: Option<&'static str>,
     /// Whether JSONL transcript usage/cost aggregation exists (claude, codex,
@@ -364,6 +431,39 @@ mod tests {
         assert_eq!(canonical_agent_id("antigravity"), Some("agy"));
         assert_eq!(canonical_agent_id("agy"), Some("agy"));
         assert_eq!(canonical_agent_id("unknown-agent"), None);
+    }
+
+    #[test]
+    fn status_normalization_table_covers_each_descriptor() {
+        for descriptor in AGENT_DESCRIPTORS {
+            assert!(
+                !descriptor.status_normalization.rules.is_empty(),
+                "{} has no status normalization rules",
+                descriptor.id
+            );
+        }
+    }
+
+    #[test]
+    fn status_normalization_rules_include_alias_resolution_and_conditions() {
+        let antigravity = agent_descriptor("antigravity").expect("antigravity descriptor");
+        assert_eq!(antigravity.id, "agy");
+        assert_eq!(
+            antigravity
+                .status_normalization
+                .state_for("PostInvocation", false),
+            Some(AgentStatusState::Working)
+        );
+
+        let codex = agent_descriptor("codex").expect("codex descriptor");
+        assert_eq!(
+            codex.status_normalization.state_for("PreToolUse", false),
+            Some(AgentStatusState::Working)
+        );
+        assert_eq!(
+            codex.status_normalization.state_for("PreToolUse", true),
+            Some(AgentStatusState::Waiting)
+        );
     }
 
     #[test]

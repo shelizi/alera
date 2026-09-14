@@ -143,7 +143,6 @@ fn devin_hook_states_map_to_presence_states() {
     }
 }
 
-
 #[test]
 fn fx_herdr_states_map_to_presence_states() {
     for (event_name, expected) in [
@@ -168,4 +167,81 @@ fn copilot_can_infer_missing_event_name() {
     let status = normalize_hook_event(&event, None).expect("copilot status");
     assert_eq!(status.state, AgentPresenceState::Working);
     assert_eq!(status.prompt, "Implement the change");
+}
+
+#[test]
+fn descriptor_rules_normalize_common_events_for_each_agent() {
+    for (agent_type, event_name, expected) in [
+        ("codex", "SessionStart", AgentPresenceState::Working),
+        ("claude", "PostToolUseFailure", AgentPresenceState::Working),
+        ("copilot", "SessionEnd", AgentPresenceState::Done),
+        (
+            "cursor",
+            "beforeShellExecution",
+            AgentPresenceState::Waiting,
+        ),
+        ("antigravity", "PostInvocation", AgentPresenceState::Working),
+        ("opencode", "SessionIdle", AgentPresenceState::Done),
+        (
+            "opencode2",
+            "PermissionRequest",
+            AgentPresenceState::Waiting,
+        ),
+        ("pi", "session_shutdown", AgentPresenceState::Done),
+        ("amp", "tool.result", AgentPresenceState::Working),
+        ("grok", "StopFailure", AgentPresenceState::Done),
+        ("devin", "PermissionRequest", AgentPresenceState::Blocked),
+        ("fx", "Idle", AgentPresenceState::Done),
+    ] {
+        let status = normalize_hook_event(&event(agent_type, event_name, json!({})), None)
+            .unwrap_or_else(|| panic!("{agent_type} {event_name} was not normalized"));
+        assert_eq!(status.state, expected, "{agent_type} {event_name}");
+    }
+}
+
+#[test]
+fn payload_sensitive_custom_handlers_keep_their_irregular_behavior() {
+    let copilot = normalize_hook_event(
+        &event(
+            "copilot",
+            "Notification",
+            json!({"notification_type": "permission_prompt"}),
+        ),
+        None,
+    )
+    .expect("copilot status");
+    assert_eq!(copilot.state, AgentPresenceState::Blocked);
+
+    let cursor_previous = AgentPresence {
+        agent_type: "cursor".into(),
+        state: AgentPresenceState::Done,
+        state_started_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+        prompt: String::new(),
+        tool_name: None,
+        tool_input: None,
+        last_assistant_message: None,
+        interrupted: None,
+    };
+    let cursor = normalize_hook_event(
+        &event("cursor", "afterAgentResponse", json!({})),
+        Some(&cursor_previous),
+    )
+    .expect("cursor status");
+    assert_eq!(cursor.state, AgentPresenceState::Done);
+
+    let agy = normalize_hook_event(&event("agy", "Stop", json!({"fullyIdle": false})), None)
+        .expect("agy status");
+    assert_eq!(agy.state, AgentPresenceState::Working);
+
+    let grok = normalize_hook_event(
+        &event(
+            "grok",
+            "Notification",
+            json!({"message": "approve this action"}),
+        ),
+        None,
+    )
+    .expect("grok status");
+    assert_eq!(grok.state, AgentPresenceState::Waiting);
 }

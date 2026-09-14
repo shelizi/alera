@@ -5,6 +5,7 @@ use super::launch_specs::{
 };
 use super::{
     AgentDescriptor, AgentHookStrategy, AgentModelOverride, AgentRiskRule, AgentStartupPrompt,
+    AgentStatusNormalizationRule, AgentStatusNormalizationSpec, AgentStatusState,
     AgentStatusStrategy,
 };
 
@@ -166,6 +167,123 @@ const DEVIN_RISK_RULES: &[AgentRiskRule] = &[
 
 const NO_RISK_RULES: &[AgentRiskRule] = &[];
 
+const CODEX_STATUS: &[AgentStatusNormalizationRule] = &[
+    AgentStatusNormalizationRule::new("SessionStart", AgentStatusState::Working),
+    AgentStatusNormalizationRule::new("UserPromptSubmit", AgentStatusState::Working),
+    AgentStatusNormalizationRule::new("PostToolUse", AgentStatusState::Working),
+    AgentStatusNormalizationRule::with_human_input(
+        "PreToolUse",
+        AgentStatusState::Working,
+        AgentStatusState::Waiting,
+    ),
+    AgentStatusNormalizationRule::new("PermissionRequest", AgentStatusState::Waiting),
+    AgentStatusNormalizationRule::new("Stop", AgentStatusState::Done),
+];
+const CLAUDE_STATUS: &[AgentStatusNormalizationRule] = &[
+    AgentStatusNormalizationRule::new("UserPromptSubmit", AgentStatusState::Working),
+    AgentStatusNormalizationRule::new("PostToolUse", AgentStatusState::Working),
+    AgentStatusNormalizationRule::new("PostToolUseFailure", AgentStatusState::Working),
+    AgentStatusNormalizationRule::with_human_input(
+        "PreToolUse",
+        AgentStatusState::Working,
+        AgentStatusState::Waiting,
+    ),
+    AgentStatusNormalizationRule::new("PermissionRequest", AgentStatusState::Waiting),
+    AgentStatusNormalizationRule::new("AskUserQuestion", AgentStatusState::Waiting),
+    AgentStatusNormalizationRule::new("Stop", AgentStatusState::Done),
+];
+const COPILOT_STATUS: &[AgentStatusNormalizationRule] = &[
+    AgentStatusNormalizationRule::new("SessionStart", AgentStatusState::Working),
+    AgentStatusNormalizationRule::new("UserPromptSubmit", AgentStatusState::Working),
+    AgentStatusNormalizationRule::with_human_input(
+        "PreToolUse",
+        AgentStatusState::Working,
+        AgentStatusState::Blocked,
+    ),
+    AgentStatusNormalizationRule::new("PostToolUse", AgentStatusState::Working),
+    AgentStatusNormalizationRule::new("PostToolUseFailure", AgentStatusState::Working),
+    AgentStatusNormalizationRule::with_human_input(
+        "PermissionRequest",
+        AgentStatusState::Working,
+        AgentStatusState::Blocked,
+    ),
+    AgentStatusNormalizationRule::new("ErrorOccurred", AgentStatusState::Done),
+    AgentStatusNormalizationRule::new("Stop", AgentStatusState::Done),
+    AgentStatusNormalizationRule::new("SessionEnd", AgentStatusState::Done),
+];
+const CURSOR_STATUS: &[AgentStatusNormalizationRule] = &[
+    AgentStatusNormalizationRule::new("beforeSubmitPrompt", AgentStatusState::Working),
+    AgentStatusNormalizationRule::new("sessionStart", AgentStatusState::Working),
+    AgentStatusNormalizationRule::new("preToolUse", AgentStatusState::Working),
+    AgentStatusNormalizationRule::new("postToolUse", AgentStatusState::Working),
+    AgentStatusNormalizationRule::new("postToolUseFailure", AgentStatusState::Working),
+    AgentStatusNormalizationRule::new("beforeShellExecution", AgentStatusState::Waiting),
+    AgentStatusNormalizationRule::new("beforeMCPExecution", AgentStatusState::Waiting),
+    AgentStatusNormalizationRule::new("afterShellExecution", AgentStatusState::Working),
+    AgentStatusNormalizationRule::new("afterMCPExecution", AgentStatusState::Working),
+    AgentStatusNormalizationRule::new("afterAgentResponse", AgentStatusState::Working),
+    AgentStatusNormalizationRule::new("stop", AgentStatusState::Done),
+    AgentStatusNormalizationRule::new("sessionEnd", AgentStatusState::Done),
+];
+const AGY_STATUS: &[AgentStatusNormalizationRule] = &[
+    AgentStatusNormalizationRule::new("PreInvocation", AgentStatusState::Working),
+    AgentStatusNormalizationRule::new("PostInvocation", AgentStatusState::Working),
+    AgentStatusNormalizationRule::new("PostToolUse", AgentStatusState::Working),
+    AgentStatusNormalizationRule::with_human_input(
+        "PreToolUse",
+        AgentStatusState::Working,
+        AgentStatusState::Waiting,
+    ),
+    AgentStatusNormalizationRule::new("Stop", AgentStatusState::Done),
+];
+const OPENCODE_STATUS: &[AgentStatusNormalizationRule] = &[
+    AgentStatusNormalizationRule::new("SessionBusy", AgentStatusState::Working),
+    AgentStatusNormalizationRule::new("MessagePart", AgentStatusState::Working),
+    AgentStatusNormalizationRule::new("PermissionRequest", AgentStatusState::Waiting),
+    AgentStatusNormalizationRule::new("AskUserQuestion", AgentStatusState::Waiting),
+    AgentStatusNormalizationRule::new("SessionIdle", AgentStatusState::Done),
+];
+const PI_STATUS: &[AgentStatusNormalizationRule] = &[
+    AgentStatusNormalizationRule::new("before_agent_start", AgentStatusState::Working),
+    AgentStatusNormalizationRule::new("agent_start", AgentStatusState::Working),
+    AgentStatusNormalizationRule::new("tool_call", AgentStatusState::Working),
+    AgentStatusNormalizationRule::new("tool_execution_start", AgentStatusState::Working),
+    AgentStatusNormalizationRule::new("tool_execution_end", AgentStatusState::Working),
+    AgentStatusNormalizationRule::new("message_end", AgentStatusState::Working),
+    AgentStatusNormalizationRule::new("agent_end", AgentStatusState::Done),
+    AgentStatusNormalizationRule::new("session_shutdown", AgentStatusState::Done),
+];
+const AMP_STATUS: &[AgentStatusNormalizationRule] = &[
+    AgentStatusNormalizationRule::new("session.start", AgentStatusState::Working),
+    AgentStatusNormalizationRule::new("agent.start", AgentStatusState::Working),
+    AgentStatusNormalizationRule::new("tool.call", AgentStatusState::Working),
+    AgentStatusNormalizationRule::new("tool.result", AgentStatusState::Working),
+    AgentStatusNormalizationRule::new("agent.end", AgentStatusState::Done),
+];
+const GROK_STATUS: &[AgentStatusNormalizationRule] = &[
+    AgentStatusNormalizationRule::new("UserPromptSubmit", AgentStatusState::Working),
+    AgentStatusNormalizationRule::new("PreToolUse", AgentStatusState::Working),
+    AgentStatusNormalizationRule::new("PostToolUse", AgentStatusState::Working),
+    AgentStatusNormalizationRule::new("PostToolUseFailure", AgentStatusState::Working),
+    AgentStatusNormalizationRule::new("Stop", AgentStatusState::Done),
+    AgentStatusNormalizationRule::new("StopFailure", AgentStatusState::Done),
+    AgentStatusNormalizationRule::new("SessionEnd", AgentStatusState::Done),
+];
+const DEVIN_STATUS: &[AgentStatusNormalizationRule] = &[
+    AgentStatusNormalizationRule::new("SessionStart", AgentStatusState::Working),
+    AgentStatusNormalizationRule::new("UserPromptSubmit", AgentStatusState::Working),
+    AgentStatusNormalizationRule::new("PreToolUse", AgentStatusState::Working),
+    AgentStatusNormalizationRule::new("PostToolUse", AgentStatusState::Working),
+    AgentStatusNormalizationRule::new("PermissionRequest", AgentStatusState::Blocked),
+    AgentStatusNormalizationRule::new("Stop", AgentStatusState::Done),
+    AgentStatusNormalizationRule::new("SessionEnd", AgentStatusState::Done),
+];
+const FX_STATUS: &[AgentStatusNormalizationRule] = &[
+    AgentStatusNormalizationRule::new("Working", AgentStatusState::Working),
+    AgentStatusNormalizationRule::new("Blocked", AgentStatusState::Blocked),
+    AgentStatusNormalizationRule::new("Idle", AgentStatusState::Done),
+];
+
 /// Spawnable agent adapters, one entry per `AgentType`. Order is significant:
 /// UI lists and tests rely on it.
 pub const AGENT_DESCRIPTORS: &[AgentDescriptor] = &[
@@ -179,6 +297,7 @@ pub const AGENT_DESCRIPTORS: &[AgentDescriptor] = &[
         startup_prompt: AgentStartupPrompt::PositionalAfterTerminator,
         hook_strategy: AgentHookStrategy::RuntimeHome,
         status_strategy: AgentStatusStrategy::HookEventsWithTranscriptWatch,
+        status_normalization: AgentStatusNormalizationSpec::new(CODEX_STATUS),
         quota_provider_id: Some("codex"),
         transcript_usage: true,
         model_override: AgentModelOverride::Supported,
@@ -201,6 +320,7 @@ pub const AGENT_DESCRIPTORS: &[AgentDescriptor] = &[
         startup_prompt: AgentStartupPrompt::PositionalAfterTerminator,
         hook_strategy: AgentHookStrategy::RuntimeHome,
         status_strategy: AgentStatusStrategy::HookEvents,
+        status_normalization: AgentStatusNormalizationSpec::new(CLAUDE_STATUS),
         quota_provider_id: Some("claude"),
         transcript_usage: true,
         model_override: AgentModelOverride::Supported,
@@ -221,6 +341,7 @@ pub const AGENT_DESCRIPTORS: &[AgentDescriptor] = &[
         startup_prompt: AgentStartupPrompt::LongOption("--interactive"),
         hook_strategy: AgentHookStrategy::ConfigJson,
         status_strategy: AgentStatusStrategy::HookEvents,
+        status_normalization: AgentStatusNormalizationSpec::new(COPILOT_STATUS),
         quota_provider_id: None,
         transcript_usage: false,
         model_override: AgentModelOverride::Supported,
@@ -241,6 +362,7 @@ pub const AGENT_DESCRIPTORS: &[AgentDescriptor] = &[
         startup_prompt: AgentStartupPrompt::PositionalAfterTerminator,
         hook_strategy: AgentHookStrategy::SessionOverlay,
         status_strategy: AgentStatusStrategy::HookEvents,
+        status_normalization: AgentStatusNormalizationSpec::new(CURSOR_STATUS),
         quota_provider_id: Some("cursor"),
         transcript_usage: false,
         model_override: AgentModelOverride::Supported,
@@ -261,6 +383,7 @@ pub const AGENT_DESCRIPTORS: &[AgentDescriptor] = &[
         startup_prompt: AgentStartupPrompt::LongOption("--prompt-interactive"),
         hook_strategy: AgentHookStrategy::ConfigJson,
         status_strategy: AgentStatusStrategy::HookEvents,
+        status_normalization: AgentStatusNormalizationSpec::new(AGY_STATUS),
         quota_provider_id: Some("agy"),
         transcript_usage: false,
         model_override: AgentModelOverride::Supported,
@@ -281,6 +404,7 @@ pub const AGENT_DESCRIPTORS: &[AgentDescriptor] = &[
         startup_prompt: AgentStartupPrompt::LongOption("--prompt"),
         hook_strategy: AgentHookStrategy::PluginScript,
         status_strategy: AgentStatusStrategy::HookEvents,
+        status_normalization: AgentStatusNormalizationSpec::new(OPENCODE_STATUS),
         quota_provider_id: Some("opencode"),
         transcript_usage: false,
         model_override: AgentModelOverride::Supported,
@@ -302,6 +426,7 @@ pub const AGENT_DESCRIPTORS: &[AgentDescriptor] = &[
         startup_prompt: AgentStartupPrompt::LongOption("--prompt"),
         hook_strategy: AgentHookStrategy::PluginScript,
         status_strategy: AgentStatusStrategy::HookEvents,
+        status_normalization: AgentStatusNormalizationSpec::new(OPENCODE_STATUS),
         quota_provider_id: None,
         transcript_usage: false,
         model_override: AgentModelOverride::ProfileOnly,
@@ -322,6 +447,7 @@ pub const AGENT_DESCRIPTORS: &[AgentDescriptor] = &[
         startup_prompt: AgentStartupPrompt::Positional,
         hook_strategy: AgentHookStrategy::PluginScript,
         status_strategy: AgentStatusStrategy::HookEvents,
+        status_normalization: AgentStatusNormalizationSpec::new(PI_STATUS),
         quota_provider_id: None,
         transcript_usage: false,
         model_override: AgentModelOverride::Supported,
@@ -342,6 +468,7 @@ pub const AGENT_DESCRIPTORS: &[AgentDescriptor] = &[
         startup_prompt: AgentStartupPrompt::StdinScript,
         hook_strategy: AgentHookStrategy::PluginScript,
         status_strategy: AgentStatusStrategy::HookEvents,
+        status_normalization: AgentStatusNormalizationSpec::new(AMP_STATUS),
         quota_provider_id: None,
         transcript_usage: false,
         model_override: AgentModelOverride::Unsupported,
@@ -362,6 +489,7 @@ pub const AGENT_DESCRIPTORS: &[AgentDescriptor] = &[
         startup_prompt: AgentStartupPrompt::PositionalAfterTerminator,
         hook_strategy: AgentHookStrategy::ConfigJson,
         status_strategy: AgentStatusStrategy::HookEvents,
+        status_normalization: AgentStatusNormalizationSpec::new(GROK_STATUS),
         quota_provider_id: Some("grok"),
         transcript_usage: true,
         model_override: AgentModelOverride::Supported,
@@ -382,6 +510,7 @@ pub const AGENT_DESCRIPTORS: &[AgentDescriptor] = &[
         startup_prompt: AgentStartupPrompt::PositionalAfterTerminator,
         hook_strategy: AgentHookStrategy::ConfigJson,
         status_strategy: AgentStatusStrategy::HookEvents,
+        status_normalization: AgentStatusNormalizationSpec::new(DEVIN_STATUS),
         quota_provider_id: Some("devin"),
         transcript_usage: false,
         model_override: AgentModelOverride::Supported,
@@ -402,6 +531,7 @@ pub const AGENT_DESCRIPTORS: &[AgentDescriptor] = &[
         startup_prompt: AgentStartupPrompt::TerminalAfterReady,
         hook_strategy: AgentHookStrategy::HerdrSocket,
         status_strategy: AgentStatusStrategy::HerdrSocket,
+        status_normalization: AgentStatusNormalizationSpec::new(FX_STATUS),
         quota_provider_id: None,
         transcript_usage: false,
         model_override: AgentModelOverride::Unsupported,
