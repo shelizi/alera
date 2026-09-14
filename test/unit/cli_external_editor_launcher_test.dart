@@ -491,8 +491,79 @@ void main() {
       expect(result.available, isFalse);
       expect(result.message, contains('Zed'));
     });
+
+    test(
+      'availability uses version arguments declared by the editor spec',
+      () async {
+        final runner = _FakeProcessRunner(
+          runOutput: const ProcessRunOutput(
+            stdout: 'Custom 1.2.3\n',
+            stderr: '',
+            exitCode: 0,
+          ),
+        );
+        final launcher = _launcher(
+          runner,
+          spec: ExternalEditorSpec(
+            kind: ExternalEditorKind.zed,
+            displayName: 'Custom',
+            shortName: 'Custom',
+            commandCandidates: const <String>['custom-editor'],
+            workspaceArgs: _plainWorkspaceArgs,
+            fileArgs: _plainFileArgs,
+            filesArgs: _plainFilesArgs,
+            versionArgs: const <String>['version', '--short'],
+          ),
+          existing: const <String>{'/tools/custom-editor'},
+          environment: const <String, String>{'PATH': '/tools'},
+        );
+
+        final result = await launcher.checkAvailability();
+
+        expect(result.available, isTrue);
+        expect(runner.runs.single.arguments, <String>['version', '--short']);
+      },
+    );
+
+    test(
+      'unsupported workspace mode ignores the global new-window preference',
+      () async {
+        final runner = _FakeProcessRunner();
+        final launcher = _launcher(
+          runner,
+          spec: ExternalEditorSpec(
+            kind: ExternalEditorKind.zed,
+            displayName: 'Custom',
+            shortName: 'Custom',
+            commandCandidates: const <String>['custom-editor'],
+            workspaceArgs: _newWindowAwareWorkspaceArgs,
+            fileArgs: _plainFileArgs,
+            filesArgs: _plainFilesArgs,
+            supportsWorkspaceWindowMode: false,
+          ),
+          existing: const <String>{'/repo', '/tools/custom-editor'},
+          environment: const <String, String>{'PATH': '/tools'},
+          workspaceMode: .newWindow,
+        );
+
+        final result = await launcher.openWorkspace('/repo');
+
+        expect(result.ok, isTrue);
+        expect(runner.starts.single.arguments, <String>['/repo']);
+      },
+    );
   });
 }
+
+List<String> _plainWorkspaceArgs({required bool newWindow}) => const <String>[];
+
+List<String> _newWindowAwareWorkspaceArgs({required bool newWindow}) =>
+    newWindow ? const <String>['--new'] : const <String>[];
+
+List<String> _plainFileArgs(String filePath, {int? line, int? column}) =>
+    <String>[filePath];
+
+List<String> _plainFilesArgs(List<String> filePaths) => filePaths;
 
 CliExternalEditorLauncher _launcher(
   _FakeProcessRunner runner, {

@@ -23,8 +23,10 @@ class const ExternalEditorSpec({
   required this.workspaceArgs,
   required this.fileArgs,
   required this.filesArgs,
+  this.versionArgs = const <String>['--version'],
   this.fallbackPaths = const <String>[],
   this.parseVersion = _trimmedVersion,
+  this.supportsWorkspaceWindowMode = true,
 }) {
   /// External editor this spec launches.
   final ExternalEditorKind kind;
@@ -52,9 +54,16 @@ class const ExternalEditorSpec({
   /// Arguments for opening several files in one invocation.
   final ExternalEditorFilesArgs filesArgs;
 
-  /// Extracts a displayable version from `--version` stdout; null when the
-  /// output carries nothing worth showing.
+  /// Arguments used for the non-destructive availability/version probe.
+  final List<String> versionArgs;
+
+  /// Extracts a displayable version from the availability probe stdout; null
+  /// when the output carries nothing worth showing.
   final ExternalEditorVersionParser parseVersion;
+
+  /// Whether Alera should expose and apply its new-window/reuse-window
+  /// preference for this editor.
+  final bool supportsWorkspaceWindowMode;
 }
 
 /// Registry of every supported external editor in preference order. The first

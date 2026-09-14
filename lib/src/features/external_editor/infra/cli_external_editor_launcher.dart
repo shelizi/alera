@@ -51,8 +51,11 @@ class CliExternalEditorLauncher implements ExternalEditorLauncher {
       return _invalidTarget('The requested Alera workspace does not exist.');
     }
 
+    final newWindow =
+        _spec.supportsWorkspaceWindowMode &&
+        _workspaceModeReader() == .newWindow;
     final arguments = <String>[
-      ..._spec.workspaceArgs(newWindow: _workspaceModeReader() == .newWindow),
+      ..._spec.workspaceArgs(newWindow: newWindow),
       workspace.normalized,
     ];
     return _start(arguments, workingDirectory: workspace.normalized);
@@ -147,9 +150,7 @@ class CliExternalEditorLauncher implements ExternalEditorLauncher {
       );
     }
     try {
-      final output = await _processRunner.run(command, const <String>[
-        '--version',
-      ]);
+      final output = await _processRunner.run(command, _spec.versionArgs);
       if (output.exitCode == 0) {
         return ExternalEditorAvailability(
           available: true,

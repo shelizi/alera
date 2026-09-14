@@ -100,18 +100,21 @@ class const ExternalEditorSettingsGroup({
               ),
             ),
           ),
-        SettingsSwitchRow(
-          key: const ValueKey<String>('editor-external-new-window-row'),
-          title: 'Open Workspaces in New Window',
-          description:
-              'Open each Alera worktree as a separate ${spec.shortName} window instead of reusing the last one.',
-          value: settings.externalEditorWorkspaceMode == .newWindow,
-          onChanged: (value) => onChanged(
-            (settings) => settings.copyWith(
-              externalEditorWorkspaceMode: value ? .newWindow : .defaultWindow,
+        if (spec.supportsWorkspaceWindowMode)
+          SettingsSwitchRow(
+            key: const ValueKey<String>('editor-external-new-window-row'),
+            title: 'Open Workspaces in New Window',
+            description:
+                'Open each Alera worktree as a separate ${spec.shortName} window instead of reusing the last one.',
+            value: settings.externalEditorWorkspaceMode == .newWindow,
+            onChanged: (value) => onChanged(
+              (settings) => settings.copyWith(
+                externalEditorWorkspaceMode: value
+                    ? .newWindow
+                    : .defaultWindow,
+              ),
             ),
           ),
-        ),
         SettingsSwitchRow(
           key: const ValueKey<String>(
             'editor-external-auto-open-workspace-row',
