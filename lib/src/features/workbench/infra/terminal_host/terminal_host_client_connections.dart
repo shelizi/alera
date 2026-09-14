@@ -9,23 +9,26 @@ extension _SocketTerminalHostClientConnections on SocketTerminalHostClient {
     final control = await _readControl(runtime.controlFile);
     if (control != null) {
       try {
-        return await _connectToControl(control, .terminal);
-      } catch (_) {
-        if (_disposed) {
-          throw const TerminalHostConnectionClosedException();
-        }
-        await _deleteControlFile(runtime.controlFile);
+        return await _connectToPublishedControl(
+          control,
+          runtime.controlFile,
+          .terminal,
+        );
+      } on _PublishedHostUnavailableException {
+        // Only a control whose advertised port is no longer listening is
+        // stale enough to remove. A slow hello still owns this runtime.
       }
     }
     final runtimeControl = await _readControl(runtime.runtimeControlFile);
     if (runtimeControl?.supportsRuntime == true) {
       try {
-        return await _connectToControl(runtimeControl!, .terminal);
-      } catch (_) {
-        if (_disposed) {
-          throw const TerminalHostConnectionClosedException();
-        }
-        await _deleteControlFile(runtime.runtimeControlFile);
+        return await _connectToPublishedControl(
+          runtimeControl!,
+          runtime.runtimeControlFile,
+          .terminal,
+        );
+      } on _PublishedHostUnavailableException {
+        // The dead control was cleared by _connectToPublishedControl.
       }
     }
     final runtimeFuture = _runtimeConnectionFuture;
@@ -65,16 +68,18 @@ extension _SocketTerminalHostClientConnections on SocketTerminalHostClient {
     final control = await _readControl(runtime.controlFile);
     if (_controlSupportsRuntime(control, requireOrchestration)) {
       try {
-        return await _connectToControl(control!, .runtime);
-      } catch (_) {
-        if (_disposed) {
-          throw const TerminalHostConnectionClosedException();
-        }
-        await _deleteControlFile(runtime.controlFile);
+        return await _connectToPublishedControl(
+          control!,
+          runtime.controlFile,
+          .runtime,
+        );
+      } on _PublishedHostUnavailableException {
+        // The dead control was cleared by _connectToPublishedControl.
       }
     }
     if (requireOrchestration && control != null) {
-      if (await _controlAcceptsHello(control)) {
+      if (await _controlAcceptsHello(control) ||
+          await _portIsListening(control.port)) {
         throw StateError(_orchestrationHostRestartRequiredMessage);
       }
       await _deleteControlFile(runtime.controlFile);
@@ -82,16 +87,18 @@ extension _SocketTerminalHostClientConnections on SocketTerminalHostClient {
     final runtimeControl = await _readControl(runtime.runtimeControlFile);
     if (_controlSupportsRuntime(runtimeControl, requireOrchestration)) {
       try {
-        return await _connectToControl(runtimeControl!, .runtime);
-      } catch (_) {
-        if (_disposed) {
-          throw const TerminalHostConnectionClosedException();
-        }
-        await _deleteControlFile(runtime.runtimeControlFile);
+        return await _connectToPublishedControl(
+          runtimeControl!,
+          runtime.runtimeControlFile,
+          .runtime,
+        );
+      } on _PublishedHostUnavailableException {
+        // The dead control was cleared by _connectToPublishedControl.
       }
     }
     if (requireOrchestration && runtimeControl != null) {
-      if (await _controlAcceptsHello(runtimeControl)) {
+      if (await _controlAcceptsHello(runtimeControl) ||
+          await _portIsListening(runtimeControl.port)) {
         throw StateError(_orchestrationHostRestartRequiredMessage);
       }
       await _deleteControlFile(runtime.runtimeControlFile);
@@ -109,6 +116,38 @@ extension _SocketTerminalHostClientConnections on SocketTerminalHostClient {
           : runtime.runtimeControlFile,
       requireOrchestration: requireOrchestration,
     );
+  }
+
+  Future<_TerminalHostConnection> _connectToPublishedControl(
+    _TerminalHostControl control,
+    File controlFile,
+    _HostConnectionRole role,
+  ) async {
+    Object? lastError;
+    final deadline = DateTime.now().add(_startupTimeout);
+    while (true) {
+      try {
+        return await _connectToControl(control, role);
+      } catch (error) {
+        if (_disposed) {
+          throw const TerminalHostConnectionClosedException();
+        }
+        lastError = error;
+      }
+
+      if (!await _portIsListening(control.port)) {
+        await _deleteControlFile(controlFile);
+        throw _PublishedHostUnavailableException(lastError);
+      }
+
+      // A listening port proves that some host still owns the runtime. Keep
+      // its control identity and retry the same host instead of deleting the
+      // file and starting a second sidecar that can only lose ownership.
+      if (!DateTime.now().isBefore(deadline)) {
+        Error.throwWithStackTrace(lastError!, StackTrace.current);
+      }
+      await Future.pause(const Duration(milliseconds: 100));
+    }
   }
 
   Future<_TerminalHostConnection> _launchAndConnect(

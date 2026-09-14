@@ -313,6 +313,61 @@ void _registerTerminalHostClientResilienceTests() {
     },
   );
 
+  test(
+    'retries a live published control after hello timeout without relaunching',
+    () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'alera-host-client-slow-hello-',
+      );
+      addTearDown(() async {
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      });
+      final releaseFirstHello = Completer<void>();
+      var helloCount = 0;
+      final server = await _TerminalHostTestServer.start(
+        beforeResponse: (type) async {
+          if (type != 'hello') {
+            return;
+          }
+          helloCount += 1;
+          if (helloCount == 1) {
+            await releaseFirstHello.future;
+          }
+        },
+      );
+      addTearDown(() async {
+        if (!releaseFirstHello.isCompleted) {
+          releaseFirstHello.complete();
+        }
+        await server.dispose();
+      });
+      await _writeControlFile(
+        tempDir: tempDir,
+        port: server.port,
+        token: 'existing-token',
+      );
+      final launcher = _NoopTerminalHostLauncher();
+      final client = SocketTerminalHostClient(
+        launcher: launcher,
+        applicationSupportDirectory: () async => tempDir,
+        startupTimeout: const Duration(seconds: 4),
+      );
+      addTearDown(client.dispose);
+
+      await client.detach('session-1');
+      releaseFirstHello.complete();
+
+      expect(launcher.starts, 0);
+      expect(server.requestTypes, <String>['hello', 'hello', 'detach']);
+      expect(
+        await File(p.join(tempDir.path, 'terminal_host', 'host.json')).exists(),
+        isTrue,
+      );
+    },
+  );
+
   test('forwards agentPresenceChanged on runtimeEvents', () async {
     final tempDir = await Directory.systemTemp.createTemp(
       'alera-host-client-agent-presence-',

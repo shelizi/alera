@@ -168,6 +168,12 @@ final class _RuntimeMutationInProgressError() extends StateError {
 
 enum _HostConnectionRole { terminal, runtime }
 
+final class _PublishedHostUnavailableException implements Exception {
+  const _PublishedHostUnavailableException(this.cause);
+
+  final Object? cause;
+}
+
 const Duration _terminalHostConnectTimeout = Duration(seconds: 2);
 const Duration _terminalHostRequestTimeout = Duration(seconds: 10);
 const Duration _runtimeMutationRetryDelay = Duration(milliseconds: 50);
