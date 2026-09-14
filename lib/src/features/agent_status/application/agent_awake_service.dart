@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:alera/src/features/agent_profiles/domain/agent_descriptor_registry.dart';
 import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
 import 'package:logging/logging.dart';
@@ -120,20 +121,7 @@ class AgentAwakeService({
   }
 
   bool _isAgentHookEnabled(AgentType agentType) {
-    return switch (agentType) {
-      AgentType.codex => _hookSettings.codex,
-      AgentType.claude => _hookSettings.claude,
-      AgentType.copilot => _hookSettings.copilot,
-      AgentType.cursor => _hookSettings.cursor,
-      AgentType.agy => _hookSettings.agy,
-      AgentType.opencode => _hookSettings.opencode,
-      AgentType.opencode2 => _hookSettings.opencode2,
-      AgentType.pi => _hookSettings.pi,
-      AgentType.amp => _hookSettings.amp,
-      AgentType.grok => _hookSettings.grok,
-      AgentType.devin => _hookSettings.devin,
-      AgentType.fx => _hookSettings.fx,
-    };
+    return isAgentSettingEnabled(_hookSettings.values, agentType);
   }
 
   void _scheduleStaleTimer() {

@@ -38,3 +38,61 @@ AgentDescriptorSnapshot agentDescriptorFor(AgentType type) {
   }
   return descriptor;
 }
+
+/// Agent types whose status capability is backed by the status subsystem.
+final List<AgentType> agentTypesWithStatusHooks = List<AgentType>.unmodifiable(
+  agentDescriptorSnapshots
+      .where(
+        (descriptor) =>
+            descriptor.statusStrategy ==
+                AgentStatusStrategySnapshot.hookEvents ||
+            descriptor.statusStrategy ==
+                AgentStatusStrategySnapshot.hookEventsWithTranscriptWatch ||
+            descriptor.statusStrategy == AgentStatusStrategySnapshot.herdrSocket,
+      )
+      .map(_agentTypeForDescriptor),
+);
+
+/// Agent types that receive status through the HTTP hook receiver.
+final List<AgentType> agentTypesWithHttpHooks = List<AgentType>.unmodifiable(
+  agentDescriptorSnapshots
+      .where(
+        (descriptor) =>
+            descriptor.statusStrategy ==
+                AgentStatusStrategySnapshot.hookEvents ||
+            descriptor.statusStrategy ==
+                AgentStatusStrategySnapshot.hookEventsWithTranscriptWatch,
+      )
+      .map(_agentTypeForDescriptor),
+);
+
+/// Agent types reconciled through the shared managed-hook installer.
+/// Config-json agents whose persistent user-home hooks are owned by the shared
+/// managed-hook reconciler. Copilot uses ConfigJson too, but its lifecycle is
+/// not owned by this reconciler.
+const Set<String> _globalManagedHookAgentIds = <String>{'agy', 'grok', 'devin'};
+
+final List<AgentType> agentTypesWithGlobalManagedHooks =
+    List<AgentType>.unmodifiable(
+      agentDescriptorSnapshots
+          .where((descriptor) => _globalManagedHookAgentIds.contains(descriptor.id))
+          .map(_agentTypeForDescriptor),
+    );
+
+bool isAgentSettingEnabled(Map<String, bool> settings, AgentType agentType) {
+  final canonical = canonicalAgentKey(agentType.key);
+  if (settings.containsKey(canonical)) {
+    return settings[canonical] ?? false;
+  }
+  final descriptor = agentDescriptorFor(agentType);
+  for (final alias in descriptor.aliases) {
+    if (settings.containsKey(alias)) {
+      return settings[alias] ?? false;
+    }
+  }
+  return false;
+}
+
+AgentType _agentTypeForDescriptor(AgentDescriptorSnapshot descriptor) {
+  return AgentType.values.firstWhere((type) => type.key == descriptor.id);
+}
