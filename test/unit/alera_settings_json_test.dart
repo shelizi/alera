@@ -35,6 +35,7 @@ void main() {
           keepComputerAwakeWhileAgentsWork: true,
           showTabTitlesInSidebar: true,
           defaultAgentProfileId: 'prof_1',
+          gitBashExecutablePath: r'D:\PortableGit\git-bash.exe',
         ),
         editor: EditorSettings(
           tabSize: 2,
@@ -98,6 +99,10 @@ void main() {
       expect(restored.general.showDockBadge, isFalse);
       expect(restored.general.showTrayBadge, isFalse);
       expect(restored.agents.agentStatusHooks.codex, isTrue);
+      expect(
+        restored.agents.gitBashExecutablePath,
+        r'D:\PortableGit\git-bash.exe',
+      );
       expect(restored.agents.agentStatusHooks.claude, isTrue);
       expect(restored.agents.agentStatusHooks.copilot, isFalse);
       expect(restored.agents.agentStatusHooks.cursor, isTrue);

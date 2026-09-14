@@ -98,6 +98,91 @@ void main() {
     },
   );
 
+  test(
+    'launcher prefers configured Git Bash path after Windows Terminal fails',
+    () async {
+      final support = await Directory.systemTemp.createTemp(
+        'alera-external-terminal-test',
+      );
+      addTearDown(() => support.delete(recursive: true));
+      final runner = _FakeProcessRunner()
+        ..startFailures['wt.exe'] = const ProcessException(
+          'wt.exe',
+          <String>[],
+          'missing',
+        );
+      final launcher = NativeExternalTerminalLauncher(
+        processRunner: runner,
+        cliResolver: _FakeAleraCliResolver(
+          const AleraCliCommand(executable: r'C:\Alera\alera.exe'),
+        ),
+        applicationSupportDirectory: () async => support,
+        operatingSystemReader: () => 'windows',
+        gitBashExecutablePath: r'D:\PortableGit\git-bash.exe',
+        gitBashExecutableReader: () => r'C:\Program Files\Git\git-bash.exe',
+      );
+
+      final result = await launcher.open(
+        const ExternalTerminalOpenRequest(
+          workspacePath: r'C:\Work Trees\Alera',
+          terminalSessionId: 'session-1',
+          title: 'Agent shell',
+        ),
+      );
+
+      expect(result.ok, isTrue);
+      expect(runner.starts, hasLength(2));
+      expect(runner.starts.last.executable, r'D:\PortableGit\git-bash.exe');
+    },
+  );
+
+  test(
+    'launcher falls back to detected Git Bash when configured path fails',
+    () async {
+      final support = await Directory.systemTemp.createTemp(
+        'alera-external-terminal-test',
+      );
+      addTearDown(() => support.delete(recursive: true));
+      final runner = _FakeProcessRunner()
+        ..startFailures['wt.exe'] = const ProcessException(
+          'wt.exe',
+          <String>[],
+          'missing',
+        )
+        ..startFailures[r'D:\PortableGit\git-bash.exe'] =
+            const ProcessException(
+              r'D:\PortableGit\git-bash.exe',
+              <String>[],
+              'missing',
+            );
+      final launcher = NativeExternalTerminalLauncher(
+        processRunner: runner,
+        cliResolver: _FakeAleraCliResolver(
+          const AleraCliCommand(executable: r'C:\Alera\alera.exe'),
+        ),
+        applicationSupportDirectory: () async => support,
+        operatingSystemReader: () => 'windows',
+        gitBashExecutablePath: r'D:\PortableGit\git-bash.exe',
+        gitBashExecutableReader: () => r'C:\Program Files\Git\git-bash.exe',
+      );
+
+      final result = await launcher.open(
+        const ExternalTerminalOpenRequest(
+          workspacePath: r'C:\Work Trees\Alera',
+          terminalSessionId: 'session-1',
+          title: 'Agent shell',
+        ),
+      );
+
+      expect(result.ok, isTrue);
+      expect(runner.starts.map((invocation) => invocation.executable), <String>[
+        'wt.exe',
+        r'D:\PortableGit\git-bash.exe',
+        r'C:\Program Files\Git\git-bash.exe',
+      ]);
+    },
+  );
+
   test('launcher falls back from Windows Terminal to Git Bash', () async {
     final support = await Directory.systemTemp.createTemp(
       'alera-external-terminal-test',

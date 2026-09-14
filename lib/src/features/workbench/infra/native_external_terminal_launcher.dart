@@ -26,6 +26,7 @@ class NativeExternalTerminalLauncher implements ExternalTerminalLauncher {
     Future<Directory> Function()? applicationSupportDirectory,
     ExternalTerminalOperatingSystemReader? operatingSystemReader,
     ExternalTerminalExecutableReader? executableReader,
+    String? gitBashExecutablePath,
     GitBashExecutableReader? gitBashExecutableReader,
   }) : _processRunner = processRunner,
        _cliResolver = cliResolver,
@@ -34,6 +35,7 @@ class NativeExternalTerminalLauncher implements ExternalTerminalLauncher {
        _operatingSystemReader =
            operatingSystemReader ?? (() => Platform.operatingSystem),
        _executableReader = executableReader ?? _defaultTerminalExecutable,
+       _gitBashExecutablePath = gitBashExecutablePath?.trim(),
        _gitBashExecutableReader =
            gitBashExecutableReader ?? _defaultGitBashExecutable;
 
@@ -42,6 +44,7 @@ class NativeExternalTerminalLauncher implements ExternalTerminalLauncher {
   final Future<Directory> Function() _applicationSupportDirectory;
   final ExternalTerminalOperatingSystemReader _operatingSystemReader;
   final ExternalTerminalExecutableReader _executableReader;
+  final String? _gitBashExecutablePath;
   final GitBashExecutableReader _gitBashExecutableReader;
 
   @override
@@ -82,8 +85,20 @@ class NativeExternalTerminalLauncher implements ExternalTerminalLauncher {
         return ExternalTerminalLaunchResultFactories.opened;
       }
       if (operatingSystem == 'windows') {
-        final gitBashExecutable = _gitBashExecutableReader();
-        if (gitBashExecutable != null && gitBashExecutable.trim().isNotEmpty) {
+        final gitBashExecutables = <String>[];
+        void addGitBashExecutable(String? candidate) {
+          final normalized = candidate?.trim();
+          if (normalized == null ||
+              normalized.isEmpty ||
+              gitBashExecutables.contains(normalized)) {
+            return;
+          }
+          gitBashExecutables.add(normalized);
+        }
+
+        addGitBashExecutable(_gitBashExecutablePath);
+        addGitBashExecutable(_gitBashExecutableReader());
+        for (final gitBashExecutable in gitBashExecutables) {
           final fallback = buildGitBashExternalTerminalInvocation(
             gitBashExecutable: gitBashExecutable,
             cli: cli,

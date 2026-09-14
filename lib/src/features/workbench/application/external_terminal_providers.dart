@@ -1,3 +1,4 @@
+import 'package:alera/src/features/settings/application/settings_controller.dart';
 import 'package:alera/src/features/workbench/domain/external_terminal_launcher.dart';
 import 'package:alera/src/features/workbench/infra/native_external_terminal_launcher.dart';
 import 'package:alera/src/shared/infra/runtime/alera_cli_sidecar.dart';
@@ -11,5 +12,9 @@ ExternalTerminalLauncher externalTerminalLauncher(Ref ref) {
   return NativeExternalTerminalLauncher(
     processRunner: ref.watch(processRunnerProvider),
     cliResolver: DefaultAleraCliResolver(),
+    gitBashExecutablePath: ref
+        .watch(settingsControllerProvider)
+        .agents
+        .gitBashExecutablePath,
   );
 }

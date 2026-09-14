@@ -55,4 +55,4 @@ final class ExternalTerminalLauncherProvider
 }
 
 String _$externalTerminalLauncherHash() =>
-    r'94924b17f00f2363f053958ef04345c1f92771b4';
+    r'7d58e399669a6dd40bd6c9beb1661f88c65b4276';

@@ -97,6 +97,22 @@ mixin _SettingsControllerLocalUiSettings on _$SettingsController {
         );
       });
 
+  Future<void> setGitBashExecutablePath(String? path) =>
+      _controller._serialize(() async {
+        final normalizedPath = path?.trim();
+        final next = normalizedPath == null || normalizedPath.isEmpty
+            ? null
+            : normalizedPath;
+        if (state.agents.gitBashExecutablePath == next) {
+          return;
+        }
+        await _controller._save(
+          state.copyWith(
+            agents: state.agents.copyWith(gitBashExecutablePath: next),
+          ),
+        );
+      });
+
   Future<void> setShowPullRequestStatusInSidebar(bool value) =>
       _controller._serialize(() async {
         if (state.general.showPullRequestStatusInSidebar == value) {
