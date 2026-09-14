@@ -684,6 +684,13 @@ class AgentSettingsMapper extends ClassMapperBase<AgentSettings> {
     opt: true,
     def: const <String, String>{},
   );
+  static String? _$gitBashExecutablePath(AgentSettings v) =>
+      v.gitBashExecutablePath;
+  static const Field<AgentSettings, String> _f$gitBashExecutablePath = Field(
+    'gitBashExecutablePath',
+    _$gitBashExecutablePath,
+    opt: true,
+  );
   static AgentQuotaSettings _$quotas(AgentSettings v) => v.quotas;
   static const Field<AgentSettings, AgentQuotaSettings> _f$quotas = Field(
     'quotas',
@@ -702,6 +709,7 @@ class AgentSettingsMapper extends ClassMapperBase<AgentSettings> {
     #showTabTitlesInSidebar: _f$showTabTitlesInSidebar,
     #defaultAgentProfileId: _f$defaultAgentProfileId,
     #agentExecutablePaths: _f$agentExecutablePaths,
+    #gitBashExecutablePath: _f$gitBashExecutablePath,
     #quotas: _f$quotas,
   };
 
@@ -720,6 +728,7 @@ class AgentSettingsMapper extends ClassMapperBase<AgentSettings> {
       showTabTitlesInSidebar: data.dec(_f$showTabTitlesInSidebar),
       defaultAgentProfileId: data.dec(_f$defaultAgentProfileId),
       agentExecutablePaths: data.dec(_f$agentExecutablePaths),
+      gitBashExecutablePath: data.dec(_f$gitBashExecutablePath),
       quotas: data.dec(_f$quotas),
     );
   }
@@ -804,6 +813,7 @@ abstract class AgentSettingsCopyWith<$R, $In extends AgentSettings, $Out>
     bool? showTabTitlesInSidebar,
     String? defaultAgentProfileId,
     Map<String, String>? agentExecutablePaths,
+    String? gitBashExecutablePath,
     AgentQuotaSettings? quotas,
   });
   AgentSettingsCopyWith<$R2, $In, $Out2> $chain<$R2, $Out2>(Then<$Out2, $R2> t);
@@ -844,6 +854,7 @@ class _AgentSettingsCopyWithImpl<$R, $Out>
     bool? showTabTitlesInSidebar,
     Object? defaultAgentProfileId = $none,
     Map<String, String>? agentExecutablePaths,
+    Object? gitBashExecutablePath = $none,
     AgentQuotaSettings? quotas,
   }) => $apply(
     FieldCopyWithData({
@@ -861,6 +872,8 @@ class _AgentSettingsCopyWithImpl<$R, $Out>
         #defaultAgentProfileId: defaultAgentProfileId,
       if (agentExecutablePaths != null)
         #agentExecutablePaths: agentExecutablePaths,
+      if (gitBashExecutablePath != $none)
+        #gitBashExecutablePath: gitBashExecutablePath,
       if (quotas != null) #quotas: quotas,
     }),
   );
@@ -890,6 +903,10 @@ class _AgentSettingsCopyWithImpl<$R, $Out>
     agentExecutablePaths: data.get(
       #agentExecutablePaths,
       or: $value.agentExecutablePaths,
+    ),
+    gitBashExecutablePath: data.get(
+      #gitBashExecutablePath,
+      or: $value.gitBashExecutablePath,
     ),
     quotas: data.get(#quotas, or: $value.quotas),
   );

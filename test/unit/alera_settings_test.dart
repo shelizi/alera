@@ -72,6 +72,7 @@ void main() {
       expect(agents.defaultAgentProfileId, isNull);
       expect(agents.agentExecutablePaths, isEmpty);
       expect(agents.executablePathFor('devin'), isNull);
+      expect(agents.gitBashExecutablePath, isNull);
     });
 
     test('editor defaults match current editor behavior', () {

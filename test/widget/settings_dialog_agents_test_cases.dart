@@ -28,6 +28,7 @@ void _registerSettingsDialogAgentsTests() {
     expect(find.text('Agent Profiles Skill'), findsOneWidget);
     expect(find.text('Agent Executables'), findsOneWidget);
     expect(find.text('Devin Executable'), findsOneWidget);
+    expect(find.text('Git Bash Executable'), findsOneWidget);
 
     final devinExecutableField = find.descendant(
       of: find.byKey(const ValueKey<String>('agent-executable-path-devin')),
@@ -43,6 +44,19 @@ void _registerSettingsDialogAgentsTests() {
           .agents
           .executablePathFor('devin'),
       r'C:\Tools\devin.exe',
+    );
+
+    final gitBashField = find.descendant(
+      of: find.byKey(const ValueKey<String>('git-bash-executable-path')),
+      matching: find.byType(TextField),
+    );
+    await tester.ensureVisible(gitBashField);
+    await tester.enterText(gitBashField, r'D:\PortableGit\git-bash.exe');
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(
+      container.read(settingsControllerProvider).agents.gitBashExecutablePath,
+      r'D:\PortableGit\git-bash.exe',
     );
 
     await tester.ensureVisible(find.text('Agent Status Notifications'));

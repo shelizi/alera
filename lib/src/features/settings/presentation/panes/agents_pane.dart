@@ -94,6 +94,14 @@ class const AgentsSettingsPane({
                 onChanged: (value) =>
                     controller.setAgentExecutablePath(agentType.key, value),
               ),
+            SettingsTextRow(
+              key: const ValueKey<String>('git-bash-executable-path'),
+              title: 'Git Bash Executable',
+              description: 'Full path to git-bash.exe used when Windows Terminal is unavailable. Leave blank to auto-detect Git for Windows.',
+              value: agents.gitBashExecutablePath ?? '',
+              hintText: r'C:\Program Files\Git\git-bash.exe',
+              onChanged: controller.setGitBashExecutablePath,
+            ),
           ],
         ),
         const SizedBox(height: AleraTokens.space16),

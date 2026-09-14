@@ -97,6 +97,7 @@ class const AgentSettings({
   this.showTabTitlesInSidebar = false,
   this.defaultAgentProfileId,
   this.agentExecutablePaths = const <String, String>{},
+  this.gitBashExecutablePath,
   this.quotas = AgentQuotaSettings.defaults,
 }) with AgentSettingsMappable {
   /// Install managed agent hooks for terminal status. Each agent is
@@ -124,6 +125,10 @@ class const AgentSettings({
   /// Per-device executable overrides for supported agent CLIs. Empty or
   /// missing entries use the descriptor's default command from PATH.
   final Map<String, String> agentExecutablePaths;
+
+  /// Optional per-device Git Bash executable override used by the Windows
+  /// Devin external-terminal fallback. `null` keeps automatic detection.
+  final String? gitBashExecutablePath;
 
   String? executablePathFor(String agentKey) {
     final value = agentExecutablePaths[agentKey]?.trim();

@@ -12,6 +12,22 @@ class _ShellTestAgentStatusController(
   }
 }
 
+final class _RecordingExternalTerminalLauncher([
+  this.result = ExternalTerminalLaunchResultFactories.opened,
+]) implements ExternalTerminalLauncher {
+  final ExternalTerminalLaunchResult result;
+  final List<ExternalTerminalOpenRequest> requests =
+      <ExternalTerminalOpenRequest>[];
+
+  @override
+  Future<ExternalTerminalLaunchResult> open(
+    ExternalTerminalOpenRequest request,
+  ) async {
+    requests.add(request);
+    return result;
+  }
+}
+
 class _ShellTestWorkbenchController(
   final WorkbenchState _bootstrapState, {
   final Object? renameProjectFailure,
