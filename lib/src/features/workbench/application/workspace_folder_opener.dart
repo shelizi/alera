@@ -75,12 +75,14 @@ class WorkspaceFolderOpener({
     if (normalized.isEmpty) {
       return const WorkspaceFolderOpenResult.failure('Path is empty.');
     }
-    if (!await FileSystemEntity.type(normalized)
-        .then((type) => type != FileSystemEntityType.notFound)) {
+    final entityType = await FileSystemEntity.type(normalized);
+    if (entityType == FileSystemEntityType.notFound) {
       return const WorkspaceFolderOpenResult.failure('Path was not found.');
     }
 
-    final commands = _revealCommandsForPlatform(normalized);
+    final commands = entityType == FileSystemEntityType.directory
+        ? _commandsForPlatform(normalized)
+        : _revealCommandsForPlatform(normalized);
     for (final command in commands) {
       try {
         final result = await processRunner.run(

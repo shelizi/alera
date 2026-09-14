@@ -9,9 +9,11 @@ import 'package:alera/src/features/external_editor/domain/external_editor_spec.d
 import 'package:alera/src/features/ai_assist/application/ai_assist_providers.dart';
 import 'package:alera/src/features/ai_assist/application/ai_assist_service.dart';
 import 'package:alera/src/features/ai_assist/domain/ai_assist_settings.dart';
+import 'package:alera/src/features/projects/application/project_providers.dart';
 import 'package:alera/src/features/settings/application/settings_controller.dart';
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
 import 'package:alera/src/features/workbench/application/source_control_watcher.dart';
+import 'package:alera/src/features/workbench/application/workspace_folder_opener.dart';
 import 'package:alera/src/features/workbench/application/workspace_source_control_controller.dart';
 import 'package:alera/src/features/workbench/domain/workbench_view_prefs.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
@@ -22,6 +24,7 @@ import 'package:alera/src/features/workbench/presentation/terminal_path_drop.dar
 import 'package:alera/src/shared/infra/git/git_diff_models.dart';
 import 'package:alera/src/shared/infra/git/git_exception.dart';
 import 'package:alera/src/shared/infra/git/git_providers.dart';
+import 'package:alera/src/shared/infra/process/process_runner.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -1403,6 +1406,7 @@ Future<void> _pumpPanel(
   OpenGitCommitDiffTabCallback? onOpenGitCommitDiff,
   ValueChanged<String>? onOpenFile,
   ExternalEditorLauncher? externalEditorLauncher,
+  WorkspaceFolderOpener? workspaceFolderOpener,
   ValueChanged<String>? onRevealInExplorer,
   VoidCallback? onClearSourceControlRoot,
   double width = 420,
@@ -1412,6 +1416,10 @@ Future<void> _pumpPanel(
     ProviderScope(
       overrides: [
         gitBackendProvider.overrideWithValue(backend),
+        if (workspaceFolderOpener != null)
+          workspaceFolderOpenerProvider.overrideWithValue(
+            workspaceFolderOpener,
+          ),
         sourceControlWatcherProvider.overrideWithValue(
           watcher ?? FakeSourceControlWatcher(),
         ),
@@ -1578,6 +1586,46 @@ EditableText _messageEditable(WidgetTester tester) {
   return tester.widget<EditableText>(
     find.descendant(of: _messageField(), matching: find.byType(EditableText)),
   );
+}
+
+final class _RecordingWorkspaceFolderOpener extends WorkspaceFolderOpener {
+  _RecordingWorkspaceFolderOpener()
+    : super(
+        processRunner: _UnusedProcessRunner(),
+        platform: .windows,
+        directoryExists: (_) async => true,
+      );
+
+  final List<String> revealedPaths = <String>[];
+
+  @override
+  Future<WorkspaceFolderOpenResult> reveal(String path) async {
+    revealedPaths.add(path);
+    return const WorkspaceFolderOpenResult.success();
+  }
+}
+
+final class _UnusedProcessRunner implements ProcessRunner {
+  @override
+  Future<ProcessRunOutput> run(
+    String executable,
+    List<String> arguments, {
+    String? workingDirectory,
+    Map<String, String>? environment,
+  }) {
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<StartedProcess> start(
+    String executable,
+    List<String> arguments, {
+    String? workingDirectory,
+    Map<String, String>? environment,
+    bool includeParentEnvironment = true,
+  }) {
+    throw UnimplementedError();
+  }
 }
 
 Workspace _workspace({

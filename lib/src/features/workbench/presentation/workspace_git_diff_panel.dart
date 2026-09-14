@@ -21,8 +21,8 @@ import 'package:alera/src/features/ai_dictation/presentation/ai_dictation_field_
 import 'package:alera/src/features/ai_assist/application/ai_assist_providers.dart';
 import 'package:alera/src/features/ai_assist/application/ai_assist_service.dart';
 import 'package:alera/src/features/ai_assist/domain/ai_assist_settings.dart';
+import 'package:alera/src/features/projects/application/project_providers.dart';
 import 'package:alera/src/features/settings/application/settings_controller.dart';
-import 'package:alera/src/features/workbench/application/workspace_explorer_reveal.dart';
 import 'package:alera/src/features/workbench/application/workspace_git_commit_compare_cache.dart';
 import 'package:alera/src/features/workbench/application/workspace_git_history_loader.dart';
 import 'package:alera/src/features/workbench/application/workspace_service.dart';

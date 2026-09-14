@@ -102,11 +102,25 @@ extension _WorkspaceGitDiffPanelNavigation on _WorkspaceGitDiffPanelState {
       onRevealInExplorer(workspaceRelativePath);
       return;
     }
-    ref
-        .read(workspaceExplorerRevealControllerProvider.notifier)
+    unawaited(_revealWorkspaceItemInFileManager(workspaceRelativePath));
+  }
+
+  Future<void> _revealWorkspaceItemInFileManager(String relativePath) async {
+    final result = await ref
+        .read(workspaceFolderOpenerProvider)
         .reveal(
-          workspaceId: widget.workspace.id,
-          relativePath: workspaceRelativePath,
+          terminalAbsolutePath(
+            rootPath: widget.workspace.path,
+            relativePath: relativePath,
+          ),
         );
+    if (!mounted || result.ok) {
+      return;
+    }
+    AleraToast.show(
+      context,
+      message: result.message ?? 'Could not reveal item in file manager.',
+      tone: .error,
+    );
   }
 }

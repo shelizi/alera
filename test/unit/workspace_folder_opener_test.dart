@@ -133,6 +133,34 @@ void main() {
     ]);
   });
 
+  test(
+    'opens a directory itself when revealing it in Explorer on Windows',
+    () async {
+      final processRunner = _FakeProcessRunner();
+      final directory = await Directory.systemTemp.createTemp(
+        'alera-reveal-directory-',
+      );
+      addTearDown(() async {
+        if (await directory.exists()) {
+          await directory.delete(recursive: true);
+        }
+      });
+      final opener = WorkspaceFolderOpener(
+        processRunner: processRunner,
+        platform: .windows,
+      );
+
+      final result = await opener.reveal(directory.path);
+
+      expect(result.ok, isTrue);
+      expect(processRunner.calls, <_ProcessCall>[
+        _ProcessCall('explorer.exe', <String>[
+          directory.path.replaceAll('/', r'\'),
+        ]),
+      ]);
+    },
+  );
+
   test('normalizes Windows reveal paths that use forward slashes', () async {
     final processRunner = _FakeProcessRunner();
     final directory = await Directory.systemTemp.createTemp(

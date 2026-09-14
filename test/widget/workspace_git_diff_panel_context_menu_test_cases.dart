@@ -157,4 +157,42 @@ void _registerWorkspaceGitDiffPanelContextMenuTests() {
 
     expect(revealed, <String>['packages/app/lib/src/dirty.dart']);
   });
+
+  testWidgets(
+    'tree file context menu reveals through the native file manager by default',
+    (tester) async {
+      final backend = FakeGitBackend()
+        ..gitStatusResult = const GitStatusResult(
+          entries: <GitChangeEntry>[
+            GitChangeEntry(
+              path: 'lib/src/dirty.dart',
+              area: .unstaged,
+              status: .modified,
+            ),
+          ],
+        );
+      final opener = _RecordingWorkspaceFolderOpener();
+
+      await _pumpPanel(
+        tester,
+        backend: backend,
+        workspace: _workspace(path: r'C:\repo\alera'),
+        viewMode: .tree,
+        workspaceFolderOpener: opener,
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('dirty.dart'), buttons: kSecondaryMouseButton);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Reveal in Explorer'));
+      await tester.pumpAndSettle();
+
+      expect(opener.revealedPaths, <String>[
+        terminalAbsolutePath(
+          rootPath: r'C:\repo\alera',
+          relativePath: 'lib/src/dirty.dart',
+        ),
+      ]);
+    },
+  );
 }
