@@ -54,6 +54,78 @@ void _registerAleraShellWorkbenchTests() {
     );
   });
 
+  testWidgets('inactive tab reflects agent status changes without selection', (
+    tester,
+  ) async {
+    final harness = await _pumpShell(tester, state: _stackedWorkbenchState());
+    final inactiveTab = find.byKey(
+      const ValueKey<String>('workspace-tab-chip:tab-1'),
+    );
+
+    expect(
+      harness.controller.state.activeTabIdByWorkspace['workspace-1'],
+      'tab-2',
+    );
+    expect(
+      find.descendant(
+        of: inactiveTab,
+        matching: find.byWidgetPredicate(
+          (widget) => widget is Tooltip && widget.message == 'Codex working',
+        ),
+      ),
+      findsNothing,
+    );
+
+    harness.agentStatus.setEntries(<String, AgentStatusEntry>{
+      'tab-1': _agentStatusEntry(
+        terminalSessionId: 'tab-1',
+        workspaceId: 'workspace-1',
+        tabId: 'tab-1',
+        state: .working,
+      ),
+    });
+    await tester.pump();
+
+    expect(
+      harness.controller.state.activeTabIdByWorkspace['workspace-1'],
+      'tab-2',
+    );
+    expect(
+      find.descendant(
+        of: inactiveTab,
+        matching: find.byWidgetPredicate(
+          (widget) => widget is Tooltip && widget.message == 'Codex working',
+        ),
+      ),
+      findsOneWidget,
+    );
+
+    harness.agentStatus.setEntries(<String, AgentStatusEntry>{
+      'tab-1': _agentStatusEntry(
+        terminalSessionId: 'tab-1',
+        workspaceId: 'workspace-1',
+        tabId: 'tab-1',
+        state: .done,
+      ),
+    });
+    await tester.pump();
+
+    expect(
+      harness.controller.state.activeTabIdByWorkspace['workspace-1'],
+      'tab-2',
+    );
+    expect(
+      find.descendant(
+        of: inactiveTab,
+        matching: find.byWidgetPredicate(
+          (widget) =>
+              widget is Tooltip && widget.message == 'Codex done (unacked)',
+        ),
+      ),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('shell renders split terminal panes for one workspace', (
     tester,
   ) async {

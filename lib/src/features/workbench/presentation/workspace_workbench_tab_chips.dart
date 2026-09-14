@@ -36,6 +36,7 @@ class const _DraggableWorkspaceTabChip({
     return Padding(
       padding: const EdgeInsets.only(right: AleraTokens.space8),
       child: Draggable<_WorkspaceTabDragData>(
+        key: ValueKey<String>('workspace-tab-chip:${tab.id}'),
         onDragStarted: tabDragController.begin,
         onDragEnd: (_) => tabDragController.finishAfterLayout(),
         onDraggableCanceled: (_, _) => tabDragController.finishAfterLayout(),
