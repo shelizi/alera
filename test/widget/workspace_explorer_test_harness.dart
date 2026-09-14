@@ -3,6 +3,7 @@ part of 'workspace_explorer_test.dart';
 Future<void> _pumpExplorer(
   WidgetTester tester,
   _FakeWorkspaceFileService service, {
+  Workspace? workspace,
   ValueChanged<String>? onOpenFile,
   ValueChanged<String>? onOpenFilePermanently,
   ValueChanged<String>? onOpenFileInAlera,
@@ -27,7 +28,7 @@ Future<void> _pumpExplorer(
             width: 320,
             height: 480,
             child: WorkspaceExplorer(
-              workspace: _workspace(),
+              workspace: workspace ?? _workspace(),
               mode: .hideIgnored,
               onModeChanged: (_) {},
               onOpenFile: onOpenFile ?? (_) {},

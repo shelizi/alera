@@ -215,7 +215,9 @@ mixin _WorkspaceSidebarActions on ConsumerState<ProjectWorkbenchSidebar> {
   }
 
   Future<void> copyWorkspacePath(Workspace workspace) async {
-    await Clipboard.setData(ClipboardData(text: workspace.path));
+    await Clipboard.setData(
+      ClipboardData(text: userVisibleWorkspacePath(workspace.path)),
+    );
     if (!mounted) {
       return;
     }

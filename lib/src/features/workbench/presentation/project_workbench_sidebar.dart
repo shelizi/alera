@@ -40,6 +40,7 @@ import 'package:alera/src/features/pull_requests/presentation/workspace_pull_req
 import 'package:alera/src/shared/git_hosting/domain/git_hosting_provider.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
+import 'package:alera/src/features/workbench/domain/workspace_relative_path.dart';
 import 'package:alera/src/features/workbench/domain/workspace_storage_impact.dart';
 import 'package:alera/src/features/resource_manager/presentation/resource_value_format.dart';
 import 'package:alera/src/features/workbench/presentation/widgets/agent_run_state_indicator.dart';

@@ -34,7 +34,9 @@ extension _WorkspaceExplorerActions on _WorkspaceExplorerState {
       case _ExplorerAction.copyPath:
         if (entry != null) {
           await Clipboard.setData(
-            ClipboardData(text: _absolutePath(entry.relativePath)),
+            ClipboardData(
+              text: userVisibleWorkspacePath(_absolutePath(entry.relativePath)),
+            ),
           );
           _showInfo('Path copied');
         }

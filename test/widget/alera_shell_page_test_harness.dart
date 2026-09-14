@@ -173,6 +173,7 @@ class _ShellTestWorkbenchController(
     String? targetGroupId,
     String? title,
     String? initialCommand,
+    Map<String, Object?>? initialManagedAgentLaunch,
     bool spawnOnCreate = false,
     bool initialCommandOnce = false,
     bool autoCloseOnSuccess = false,
@@ -194,6 +195,7 @@ class _ShellTestWorkbenchController(
     Workspace workspace, {
     required AgentType agentType,
     String? targetGroupId,
+    String? executablePath,
   }) {
     final command = agentProfileDefaultCommands[agentType];
     if (command == null) {

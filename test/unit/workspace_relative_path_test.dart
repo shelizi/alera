@@ -6,6 +6,17 @@ void main() {
   final posix = p.Context(style: p.Style.posix);
   final windows = p.Context(style: p.Style.windows);
 
+  test('strips Windows verbatim prefixes from user-visible paths', () {
+    expect(userVisibleWorkspacePath(r'\\?\C:\repo\alera'), r'C:\repo\alera');
+    expect(
+      userVisibleWorkspacePath(r'\\?\UNC\server\share\repo'),
+      r'\\server\share\repo',
+    );
+    expect(userVisibleWorkspacePath(r'\\.\C:\repo\alera'), r'C:\repo\alera');
+    expect(userVisibleWorkspacePath(r'C:\repo\alera'), r'C:\repo\alera');
+    expect(userVisibleWorkspacePath('/repo/alera'), '/repo/alera');
+  });
+
   test('returns null for a non-absolute file path', () {
     expect(
       workspaceRelativePath(

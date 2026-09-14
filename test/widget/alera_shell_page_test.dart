@@ -214,12 +214,14 @@ WorkbenchState _stackedWorkbenchState() {
   );
 }
 
-WorkbenchState _populatedWorkbenchState() {
+WorkbenchState _populatedWorkbenchState({
+  String workspacePath = '/repo/alera',
+}) {
   final now = DateTime.utc(2026, 5, 22);
   final project = Project(
     id: 'project-1',
     name: 'Alera',
-    repoPath: '/repo/alera',
+    repoPath: workspacePath,
     createdAt: now,
     updatedAt: now,
   );

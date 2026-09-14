@@ -101,7 +101,10 @@ void _registerAleraShellSidebarActionTests() {
       );
     });
 
-    await _pumpShell(tester, state: _populatedWorkbenchState());
+    await _pumpShell(
+      tester,
+      state: _populatedWorkbenchState(workspacePath: r'\\?\C:\repo\alera'),
+    );
 
     await tester.tapAt(
       tester.getCenter(find.text('Main').first),
@@ -112,7 +115,7 @@ void _registerAleraShellSidebarActionTests() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
 
-    expect(copiedText, '/repo/alera');
+    expect(copiedText, r'C:\repo\alera');
   });
 
   testWidgets('workspace tags dialog deletes a tag after confirmation', (

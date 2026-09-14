@@ -68,7 +68,19 @@ void _registerWorkspaceExplorerActionTests() {
       ..childrenByDirectory[''] = <native.WorkspaceFileEntry>[
         _file('readme.md'),
       ];
-    await _pumpExplorer(tester, service);
+    await _pumpExplorer(
+      tester,
+      service,
+      workspace: _workspace(path: r'\\?\C:\repo\alera'),
+    );
+
+    await tester.tap(find.text('readme.md'), buttons: kSecondaryMouseButton);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Copy path'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(copiedText, isNot(startsWith(r'\\?\')));
+    expect(copiedText, contains('readme.md'));
 
     await tester.tap(find.text('readme.md'), buttons: kSecondaryMouseButton);
     await tester.pumpAndSettle();
