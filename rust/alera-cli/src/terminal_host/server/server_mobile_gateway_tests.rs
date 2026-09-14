@@ -13,7 +13,7 @@ async fn mobile_gateway_rebinds_same_port_after_releasing_old_listener() {
     let port = port_probe.local_addr().unwrap().port();
     drop(port_probe);
     let dir = tempfile::tempdir().unwrap();
-    let store = TerminalHostHistoryStore::open(dir.path()).await.unwrap();
+    let history = TerminalHostHistoryRepository::open(dir.path()).await.unwrap();
     let runtime_store = RuntimeStore::open(dir.path()).await.unwrap();
     let (inbox, _rx) = mpsc::unbounded_channel();
     let current = MobileAccessSettings {
@@ -33,7 +33,7 @@ async fn mobile_gateway_rebinds_same_port_after_releasing_old_listener() {
         control_file_path: dir.path().join("runtime-host.json"),
         token: "token".to_string(),
         config: TerminalHostConfig::default(),
-        store,
+        history,
         runtime_store: runtime_store.clone(),
         automation_wake: Arc::new(Notify::new()),
         automations_active: false,

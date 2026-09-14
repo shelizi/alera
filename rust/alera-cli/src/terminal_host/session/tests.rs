@@ -197,9 +197,8 @@ fn session_reports_title_changes_from_pty_output() {
 #[tokio::test]
 async fn restored_output_stream_range_keeps_absolute_cursor() {
     let dir = tempfile::tempdir().unwrap();
-    let store = TerminalHostHistoryStore::open(dir.path()).await.unwrap();
-    store
-        .upsert(TerminalHostCheckpoint {
+    let history = TerminalHostHistoryRepository::open(dir.path()).await.unwrap();
+    history.queue_checkpoint(TerminalHostCheckpoint {
             session_id: "restored".to_string(),
             workspace_id: "workspace-1".to_string(),
             tab_id: "tab-1".to_string(),
@@ -210,16 +209,14 @@ async fn restored_output_stream_range_keeps_absolute_cursor() {
             output_stream_bytes: 10,
             updated_at: Utc::now(),
             buffer: Vec::new(),
-        })
-        .await
-        .unwrap();
-    store.append_output("restored", 0, b"tail").await.unwrap();
+        }, 4);
+    history.queue_output("restored".to_string(), 0, b"tail".to_vec(), 4);
 
     let session = Session::restore_exited(
         "restored".to_string(),
         "workspace-1".to_string(),
         "tab-1".to_string(),
-        &store,
+        &history,
         4,
     )
     .await
@@ -231,9 +228,8 @@ async fn restored_output_stream_range_keeps_absolute_cursor() {
 #[tokio::test]
 async fn restored_session_recovers_the_latest_title_from_scrollback() {
     let dir = tempfile::tempdir().unwrap();
-    let store = TerminalHostHistoryStore::open(dir.path()).await.unwrap();
-    store
-        .upsert(TerminalHostCheckpoint {
+    let history = TerminalHostHistoryRepository::open(dir.path()).await.unwrap();
+    history.queue_checkpoint(TerminalHostCheckpoint {
             session_id: "restored-title".to_string(),
             workspace_id: "workspace-1".to_string(),
             tab_id: "tab-1".to_string(),
@@ -244,19 +240,19 @@ async fn restored_session_recovers_the_latest_title_from_scrollback() {
             output_stream_bytes: 0,
             updated_at: Utc::now(),
             buffer: Vec::new(),
-        })
-        .await
-        .unwrap();
-    store
-        .append_output("restored-title", 0, b"\x1b]0;Restored Task\x07")
-        .await
-        .unwrap();
+        }, 1024);
+    history.queue_output(
+        "restored-title".to_string(),
+        0,
+        b"\x1b]0;Restored Task\x07".to_vec(),
+        1024,
+    );
 
     let session = Session::restore_exited(
         "restored-title".to_string(),
         "workspace-1".to_string(),
         "tab-1".to_string(),
-        &store,
+        &history,
         1024,
     )
     .await
@@ -281,11 +277,11 @@ fn exiting_clears_the_shell() {
 #[tokio::test]
 async fn terminating_clears_the_shell() {
     let dir = tempfile::tempdir().unwrap();
-    let store = TerminalHostHistoryStore::open(dir.path()).await.unwrap();
+    let history = TerminalHostHistoryRepository::open(dir.path()).await.unwrap();
     let mut session = test_session();
     session.shell = Some(test_shell());
 
-    session.terminate(true, &store).await;
+    session.terminate(true, &history, 1024).await;
 
     assert_eq!(session.shell(), None);
 }

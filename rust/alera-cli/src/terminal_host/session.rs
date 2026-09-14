@@ -8,7 +8,9 @@ use portable_pty::{ChildKiller, MasterPty, PtySize};
 use serde_json::{json, Value};
 
 use crate::terminal_host::buffer::ScrollbackBuffer;
-use crate::terminal_host::history_store::{TerminalHostCheckpoint, TerminalHostHistoryStore};
+use crate::terminal_host::history_repository::{
+    TerminalHostCheckpoint, TerminalHostHistoryRepository,
+};
 use crate::terminal_host::host_error::{HostError, HostResult};
 use crate::terminal_host::protocol::{encode_bytes, TerminalHostLaunch};
 use crate::terminal_host::resources::ShellProcess;
@@ -195,10 +197,10 @@ impl Session {
         max_bytes: usize,
         initial_scrollback: &[u8],
         initial_output_stream_bytes: u64,
-        store: &TerminalHostHistoryStore,
+        history: &TerminalHostHistoryRepository,
         on_event: impl Fn(PtyEvent) + Send + Sync + 'static,
     ) -> HostResult<Session> {
-        let durable_output_batch_sequence = store
+        let durable_output_batch_sequence = history
             .next_output_sequence(&id)
             .await
             .map_err(|error| HostError::state(error.to_string()))?;
@@ -288,7 +290,7 @@ impl Session {
             ),
             title_tracker,
         };
-        session.write_checkpoint(store, None).await?;
+        history.queue_checkpoint(session.checkpoint(None), max_bytes);
         spawn_reader(
             reader,
             child,
@@ -507,16 +509,16 @@ impl Session {
         self.checkpoint_armed = false;
     }
 
-    /// Persist the current session state.
-    pub async fn write_checkpoint(
+    /// Capture the current session state without touching SQLite. The repository
+    /// owns persistence and keeps this snapshot in memory until it is durable.
+    pub fn checkpoint(
         &mut self,
-        store: &TerminalHostHistoryStore,
         ended_at_override: Option<DateTime<Utc>>,
-    ) -> HostResult<()> {
+    ) -> TerminalHostCheckpoint {
         if let Some(ended_at) = ended_at_override {
             self.ended_at = Some(ended_at);
         }
-        let checkpoint = TerminalHostCheckpoint {
+        TerminalHostCheckpoint {
             session_id: self.id.clone(),
             workspace_id: self.workspace_id.clone(),
             tab_id: self.tab_id.clone(),
@@ -526,11 +528,7 @@ impl Session {
             ended_at: self.ended_at,
             output_stream_bytes: self.output_stream_bytes,
             updated_at: Utc::now(),
-            buffer: Vec::new(),
-        };
-        store
-            .upsert(checkpoint)
-            .await
-            .map_err(|error| HostError::state(error.to_string()))
+            buffer: self.buffer.to_bytes(),
+        }
     }
 }

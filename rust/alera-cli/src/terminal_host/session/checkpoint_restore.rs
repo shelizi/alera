@@ -7,10 +7,10 @@ impl Session {
         session_id: String,
         workspace_id: String,
         tab_id: String,
-        store: &TerminalHostHistoryStore,
+        history: &TerminalHostHistoryRepository,
         max_bytes: usize,
     ) -> Option<Session> {
-        let checkpoint = match store.read(&session_id, max_bytes).await {
+        let checkpoint = match history.read(&session_id, max_bytes).await {
             Ok(Some(checkpoint)) => checkpoint,
             _ => return None,
         };

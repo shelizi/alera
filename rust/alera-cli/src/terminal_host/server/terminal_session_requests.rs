@@ -152,7 +152,6 @@ impl ServerActor {
         )
         .await;
         self.flush_all_output(&session_id);
-        self.await_output_writes(&session_id).await;
         let max_bytes = self.config.scrollback_bytes as usize;
         let restore_bytes = self.config.restore_snapshot_bytes as usize;
         let (initial_scrollback, initial_output_stream_bytes) = self

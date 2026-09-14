@@ -299,7 +299,6 @@ impl ServerActor {
         if session_ids.is_empty() {
             return;
         }
-        let store = self.store.clone();
         for session_id in session_ids {
             self.disarm_terminal_pulse(&session_id);
             self.queue_terminal_exit_push(&session_id, None).await;
@@ -309,9 +308,14 @@ impl ServerActor {
             )
             .await;
             self.flush_all_output(&session_id);
-            self.await_output_writes(&session_id).await;
             if let Some(mut session) = self.sessions.remove(&session_id) {
-                session.terminate(true, &store).await;
+                session
+                    .terminate(
+                        true,
+                        &self.history,
+                        self.config.scrollback_bytes as usize,
+                    )
+                    .await;
             }
         }
         self.schedule_shutdown_if_idle();

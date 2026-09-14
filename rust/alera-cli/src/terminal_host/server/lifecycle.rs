@@ -39,17 +39,12 @@ impl ServerActor {
                 session.set_max_bytes(max_bytes);
             }
         }
-        // Applying the cap to what is on disk is housekeeping, and awaiting it
-        // parked the single actor behind two write barriers and a trim per
-        // session. The app sends `configure` at startup, so every attach after
-        // it queued behind that. A write landing after this trim just leaves
-        // the session briefly over the cap; the checkpoint tick trims again.
-        let store = self.store.clone();
-        tokio::spawn(async move {
-            for session_id in session_ids {
-                let _ = store.trim_session(&session_id, max_bytes).await;
-            }
-        });
+        // Disk trimming is write-behind housekeeping. The repository updates
+        // its memory cap immediately and retries SQLite independently, so a
+        // slow database can never park the host actor here.
+        for session_id in session_ids {
+            self.history.queue_trim(session_id, max_bytes);
+        }
         self.schedule_shutdown_if_idle();
     }
 

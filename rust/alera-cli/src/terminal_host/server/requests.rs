@@ -435,10 +435,14 @@ impl ServerActor {
                     .await;
                     if !self.remove_terminal_session_tab(&session_id).await? {
                         self.flush_all_output(&session_id);
-                        self.await_output_writes(&session_id).await;
-                        let store = self.store.clone();
                         if let Some(mut session) = self.sessions.remove(&session_id) {
-                            session.terminate(true, &store).await;
+                            session
+                                .terminate(
+                                    true,
+                                    &self.history,
+                                    self.config.scrollback_bytes as usize,
+                                )
+                                .await;
                         }
                     }
                     self.schedule_shutdown_if_idle();

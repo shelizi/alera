@@ -6,7 +6,7 @@ use crate::ssh_bootstrap::SshTargetBootstrapProgress;
 #[tokio::test]
 async fn stale_ssh_bootstrap_progress_is_not_broadcast() {
     let dir = tempfile::tempdir().unwrap();
-    let store = TerminalHostHistoryStore::open(dir.path()).await.unwrap();
+    let history = TerminalHostHistoryRepository::open(dir.path()).await.unwrap();
     let runtime_store = RuntimeStore::open(dir.path()).await.unwrap();
     let (inbox, _rx) = mpsc::unbounded_channel();
     let (handle, mut out_rx) = ClientHandle::test_channels();
@@ -15,7 +15,7 @@ async fn stale_ssh_bootstrap_progress_is_not_broadcast() {
         control_file_path: dir.path().join("runtime-host.json"),
         token: "token".to_string(),
         config: TerminalHostConfig::default(),
-        store,
+        history,
         runtime_store: runtime_store.clone(),
         automation_wake: Arc::new(Notify::new()),
         automations_active: false,

@@ -5,6 +5,7 @@ use alera_core::runtime::{
 };
 use anyhow::Result;
 use chrono::{DateTime, SecondsFormat, TimeZone, Utc};
+use futures_util::TryStreamExt;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use sqlx::{Row, SqlitePool};
 
@@ -94,7 +95,6 @@ impl TerminalHostHistoryStore {
         session_id: &str,
         max_bytes: usize,
     ) -> Result<Option<TerminalHostCheckpoint>> {
-        self.trim_session(session_id, max_bytes).await?;
         let row = sqlx::query(
             "SELECT sessionId, workspaceId, tabId, workingDirectory, running, exitCode, \
              endedAt, outputStreamBytes, updatedAt FROM checkpoints WHERE sessionId = ?",
@@ -105,7 +105,7 @@ impl TerminalHostHistoryStore {
         let Some(row) = row else {
             return Ok(None);
         };
-        let buffer = self.read_buffer(session_id).await?;
+        let buffer = self.read_buffer(session_id, max_bytes).await?;
         let ended_at: Option<String> = row.try_get("endedAt")?;
         let updated_at: String = row.try_get("updatedAt")?;
         Ok(Some(TerminalHostCheckpoint {
@@ -123,6 +123,12 @@ impl TerminalHostHistoryStore {
         }))
     }
 
+    #[cfg(test)]
+    pub(crate) async fn close_for_test(&self) {
+        self.pool.close().await;
+    }
+
+    #[cfg(test)]
     pub async fn upsert(&self, checkpoint: TerminalHostCheckpoint) -> Result<()> {
         sqlx::query(
             "INSERT INTO checkpoints \
@@ -152,6 +158,7 @@ impl TerminalHostHistoryStore {
         Ok(())
     }
 
+    #[cfg(test)]
     pub async fn append_output(&self, session_id: &str, sequence: i64, data: &[u8]) -> Result<()> {
         if data.is_empty() {
             return Ok(());
@@ -167,6 +174,77 @@ impl TerminalHostHistoryStore {
         .bind(session_id)
         .execute(&self.pool)
         .await?;
+        Ok(())
+    }
+
+    pub async fn persist_session(
+        &self,
+        session_id: &str,
+        checkpoint: Option<&TerminalHostCheckpoint>,
+        outputs: &[(i64, Vec<u8>)],
+    ) -> Result<()> {
+        if checkpoint.is_none() && outputs.is_empty() {
+            return Ok(());
+        }
+
+        let mut transaction = self.pool.begin().await?;
+        if let Some(checkpoint) = checkpoint {
+            sqlx::query(
+                "INSERT INTO checkpoints \
+                 (sessionId, workspaceId, tabId, workingDirectory, running, exitCode, endedAt, outputStreamBytes, updatedAt) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) \
+                 ON CONFLICT(sessionId) DO UPDATE SET \
+                 workspaceId = excluded.workspaceId, \
+                 tabId = excluded.tabId, \
+                 workingDirectory = excluded.workingDirectory, \
+                 running = excluded.running, \
+                 exitCode = excluded.exitCode, \
+                 endedAt = excluded.endedAt, \
+                 outputStreamBytes = excluded.outputStreamBytes, \
+                 updatedAt = excluded.updatedAt",
+            )
+            .bind(&checkpoint.session_id)
+            .bind(&checkpoint.workspace_id)
+            .bind(&checkpoint.tab_id)
+            .bind(&checkpoint.working_directory)
+            .bind(if checkpoint.running { 1_i64 } else { 0_i64 })
+            .bind(checkpoint.exit_code.map(i64::from))
+            .bind(
+                checkpoint
+                    .ended_at
+                    .as_ref()
+                    .map(|value| format_timestamp(value.to_owned())),
+            )
+            .bind(i64::try_from(checkpoint.output_stream_bytes).unwrap_or(i64::MAX))
+            .bind(format_timestamp(checkpoint.updated_at.to_owned()))
+            .execute(&mut *transaction)
+            .await?;
+        }
+
+        for (sequence, data) in outputs {
+            if data.is_empty() {
+                continue;
+            }
+            // A write-behind retry can repeat a batch after an ambiguous SQLite
+            // failure. Sequence is the session-local idempotency key, so retrying
+            // never duplicates terminal bytes.
+            sqlx::query(
+                "INSERT INTO outputChunks (sessionId, sequence, createdAt, data) \
+                 SELECT ?, ?, ?, ? \
+                 WHERE EXISTS (SELECT 1 FROM checkpoints WHERE sessionId = ?) \
+                   AND NOT EXISTS (SELECT 1 FROM outputChunks WHERE sessionId = ? AND sequence = ?)",
+            )
+            .bind(session_id)
+            .bind(*sequence)
+            .bind(format_timestamp(Utc::now()))
+            .bind(data)
+            .bind(session_id)
+            .bind(session_id)
+            .bind(*sequence)
+            .execute(&mut *transaction)
+            .await?;
+        }
+        transaction.commit().await?;
         Ok(())
     }
 
@@ -259,27 +337,40 @@ impl TerminalHostHistoryStore {
         Ok(())
     }
 
-    async fn read_buffer(&self, session_id: &str) -> Result<Vec<u8>> {
-        // Size the buffer in SQL. Summing the decoded blobs first allocated
-        // every chunk twice, once to read a length and once to copy it.
-        let total_len: i64 = sqlx::query(
-            "SELECT COALESCE(SUM(length(data)), 0) AS total FROM outputChunks \
-             WHERE sessionId = ?",
+    async fn read_buffer(&self, session_id: &str, max_bytes: usize) -> Result<Vec<u8>> {
+        if max_bytes == 0 {
+            return Ok(Vec::new());
+        }
+
+        // Read newest chunks first and stop as soon as the requested scrollback
+        // tail is complete. This uses the (sessionId, sequence, id) index and
+        // avoids the expensive window-function trim on the latency-sensitive
+        // restore/read path.
+        let mut rows = sqlx::query(
+            "SELECT data FROM outputChunks WHERE sessionId = ? ORDER BY sequence DESC, id DESC",
         )
         .bind(session_id)
-        .fetch_one(&self.pool)
-        .await?
-        .try_get("total")?;
-        let rows = sqlx::query(
-            "SELECT data FROM outputChunks WHERE sessionId = ? ORDER BY sequence ASC, id ASC",
-        )
-        .bind(session_id)
-        .fetch_all(&self.pool)
-        .await?;
-        let mut buffer = Vec::with_capacity(total_len.max(0) as usize);
-        for row in rows {
+        .fetch(&self.pool);
+        let mut remaining = max_bytes;
+        let mut reverse_chunks = Vec::new();
+        while remaining > 0 {
+            let Some(row) = rows.try_next().await? else {
+                break;
+            };
             let data: Vec<u8> = row.try_get("data")?;
-            buffer.extend_from_slice(&data);
+            if data.len() > remaining {
+                reverse_chunks.push(data[data.len() - remaining..].to_vec());
+                remaining = 0;
+            } else {
+                remaining -= data.len();
+                reverse_chunks.push(data);
+            }
+        }
+        reverse_chunks.reverse();
+        let total_len = reverse_chunks.iter().map(Vec::len).sum();
+        let mut buffer = Vec::with_capacity(total_len);
+        for chunk in reverse_chunks {
+            buffer.extend_from_slice(&chunk);
         }
         Ok(buffer)
     }

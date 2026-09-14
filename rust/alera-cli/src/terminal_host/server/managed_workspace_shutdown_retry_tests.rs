@@ -199,7 +199,7 @@ async fn start_terminal(
         1024,
         &[],
         0,
-        &fixture.actor.store,
+        &fixture.actor.history,
         |_| {},
     )
     .await

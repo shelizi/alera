@@ -21,7 +21,7 @@ use crate::terminal_host::client::{
     connection_loop, ClientFrame, ClientHandle, CLIENT_TERMINAL_OUT_QUEUE_CAPACITY,
 };
 use crate::terminal_host::control_file;
-use crate::terminal_host::history_store::TerminalHostHistoryStore;
+use crate::terminal_host::history_repository::TerminalHostHistoryRepository;
 use crate::terminal_host::host_error::{HostError, HostResult};
 use crate::terminal_host::orchestration::agent_presence::AgentPresenceRegistry;
 use crate::terminal_host::orchestration::coordinator_loop::CoordinatorHandle;
@@ -250,7 +250,6 @@ const CHECKPOINT_DELAY: Duration = Duration::from_secs(5);
 const OUTPUT_BATCH_DELAY: Duration = Duration::from_millis(8);
 const OUTPUT_RESYNC_RETRY_DELAY: Duration = Duration::from_millis(16);
 const DURABLE_OUTPUT_BATCH_DELAY: Duration = Duration::from_millis(100);
-const OUTPUT_PERSISTENCE_BARRIER_TIMEOUT: Duration = Duration::from_secs(2);
 pub(crate) const TERMINAL_INPUT_BACKPRESSURE_CODE: &str = "terminal_input_backpressure";
 /// Cap coalesced PTY→client batches so a verbose agent/build cannot grow an
 /// unbounded `output_batch` between timer flushes (early flush when exceeded).
@@ -299,7 +298,7 @@ struct ServerActor {
     control_file_path: PathBuf,
     token: String,
     config: TerminalHostConfig,
-    store: TerminalHostHistoryStore,
+    history: TerminalHostHistoryRepository,
     runtime_store: RuntimeStore,
     automation_wake: Arc<Notify>,
     automations_active: bool,

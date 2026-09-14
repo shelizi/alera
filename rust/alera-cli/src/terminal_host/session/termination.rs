@@ -1,6 +1,6 @@
 use chrono::Utc;
 
-use crate::terminal_host::history_store::TerminalHostHistoryStore;
+use crate::terminal_host::history_repository::TerminalHostHistoryRepository;
 
 #[cfg(unix)]
 use super::shell_tree_termination::kill_shell_tree;
@@ -9,7 +9,12 @@ use super::Session;
 impl Session {
     /// Terminate the session: kill the shell and everything it spawned, release
     /// the PTY, and either delete or finalize the checkpoint.
-    pub async fn terminate(&mut self, remove_history: bool, store: &TerminalHostHistoryStore) {
+    pub async fn terminate(
+        &mut self,
+        remove_history: bool,
+        history: &TerminalHostHistoryRepository,
+        max_bytes: usize,
+    ) {
         self.terminated = true;
         self.running = false;
         #[cfg(unix)]
@@ -51,22 +56,10 @@ impl Session {
         self.durable_output_batch_armed = false;
         self.durable_output_batch_gen = self.durable_output_batch_gen.wrapping_add(1);
         if remove_history {
-            if let Err(error) = store.delete(&self.id).await {
-                tracing::warn!(
-                    session_id = %self.id,
-                    "failed to remove terminal history: {error}"
-                );
-            }
+            history.queue_delete(self.id.clone());
         } else {
             let ended = self.ended_at.unwrap_or_else(Utc::now);
-            // A dropped final checkpoint is what the user sees as a terminal
-            // that came back with its scrollback truncated.
-            if let Err(error) = self.write_checkpoint(store, Some(ended)).await {
-                tracing::warn!(
-                    session_id = %self.id,
-                    "failed to write the final terminal checkpoint: {error}"
-                );
-            }
+            history.queue_checkpoint(self.checkpoint(Some(ended)), max_bytes);
         }
     }
 }

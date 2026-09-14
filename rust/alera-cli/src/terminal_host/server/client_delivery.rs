@@ -244,7 +244,7 @@ mod tests {
     #[tokio::test]
     async fn control_bursts_survive_a_saturated_terminal_queue() {
         let dir = tempfile::tempdir().unwrap();
-        let store = TerminalHostHistoryStore::open(dir.path()).await.unwrap();
+        let history = TerminalHostHistoryRepository::open(dir.path()).await.unwrap();
         let runtime_store = RuntimeStore::open(dir.path()).await.unwrap();
         let account_push = super::account_push_state::AccountPushState::new(
             dir.path().to_path_buf(),
@@ -266,7 +266,7 @@ mod tests {
             control_file_path: dir.path().join("runtime-host.json"),
             token: "token".to_string(),
             config: TerminalHostConfig::default(),
-            store,
+            history,
             runtime_store,
             automation_wake: Arc::new(Notify::new()),
             automations_active: false,

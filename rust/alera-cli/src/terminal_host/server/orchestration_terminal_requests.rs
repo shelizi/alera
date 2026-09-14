@@ -191,7 +191,7 @@ impl ServerActor {
                 .remove_workspace_tab(&tab.id)
                 .await
                 .map_err(state_error)?;
-            self.store.delete(handle).await.map_err(state_error)?;
+            self.history.queue_delete(handle.to_string());
             self.remove_dispatch_context(handle);
             self.broadcast_workspace_tabs_changed(Some(&tab.workspace_id));
             return Ok(true);
@@ -204,11 +204,16 @@ impl ServerActor {
         }
 
         self.flush_all_output(handle);
-        self.await_output_writes(handle).await;
         let Some(mut session) = self.sessions.remove(handle) else {
             return Ok(false);
         };
-        session.terminate(true, &self.store).await;
+        session
+            .terminate(
+                true,
+                &self.history,
+                self.config.scrollback_bytes as usize,
+            )
+            .await;
         Ok(true)
     }
 

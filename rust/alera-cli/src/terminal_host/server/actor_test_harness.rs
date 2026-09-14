@@ -10,7 +10,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 
 use crate::terminal_host::client::ClientHandle;
-use crate::terminal_host::history_store::TerminalHostHistoryStore;
+use crate::terminal_host::history_repository::TerminalHostHistoryRepository;
 use crate::terminal_host::orchestration::agent_presence::AgentPresenceRegistry;
 use crate::terminal_host::orchestration::message_waiters::MessageWaiterRegistry;
 use crate::terminal_host::protocol::TerminalHostConfig;
@@ -76,7 +76,7 @@ pub(super) async fn test_actor(
     clients: HashMap<u64, ClientState>,
     sessions: HashMap<String, Session>,
 ) -> ServerActor {
-    let store = TerminalHostHistoryStore::open(dir.path()).await.unwrap();
+    let history = TerminalHostHistoryRepository::open(dir.path()).await.unwrap();
     let runtime_store = RuntimeStore::open(dir.path()).await.unwrap();
     let account_push = AccountPushState::new(dir.path().to_path_buf(), runtime_store.clone())
         .await
@@ -87,7 +87,7 @@ pub(super) async fn test_actor(
         control_file_path: dir.path().join("runtime-host.json"),
         token: "token".to_string(),
         config: TerminalHostConfig::default(),
-        store,
+        history,
         runtime_store,
         automation_wake: Arc::new(tokio::sync::Notify::new()),
         automations_active: false,

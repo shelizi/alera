@@ -366,7 +366,7 @@ impl ServerActor {
             self.config.scrollback_bytes as usize,
             &initial_scrollback,
             initial_output_stream_bytes,
-            &self.store,
+            &self.history,
             move |event| forward_pty_event(&inbox, &reader_session_id, event),
         ))
         .await?;
@@ -385,7 +385,7 @@ impl ServerActor {
         if let Some(mut dead) = self.sessions.remove(session_id) {
             let scrollback = dead.buffer.to_bytes();
             let output_stream_bytes = dead.output_stream_range().1;
-            dead.terminate(false, &self.store).await;
+            dead.terminate(false, &self.history, max_bytes).await;
             self.agent_presence.remove(session_id);
             return (scrollback, output_stream_bytes);
         }
@@ -393,7 +393,7 @@ impl ServerActor {
             session_id.to_string(),
             workspace_id.to_string(),
             tab_id.to_string(),
-            &self.store,
+            &self.history,
             max_bytes,
     )
     .await

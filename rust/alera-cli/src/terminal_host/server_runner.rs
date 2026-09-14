@@ -24,7 +24,7 @@ pub async fn run_terminal_host_server(
     } else {
         runtime_owner::RuntimeOwnerGuard::acquire(&runtime_dir)?
     };
-    let store = TerminalHostHistoryStore::open(&runtime_dir).await?;
+    let history = TerminalHostHistoryRepository::open(&runtime_dir).await?;
     let runtime_store = RuntimeStore::open(&runtime_dir).await?;
     runtime_store.retire_removed_features().await?;
     crate::hosted_review_retention::reconcile(&runtime_store).await;
@@ -65,7 +65,7 @@ pub async fn run_terminal_host_server(
         control_file_path,
         token,
         config,
-        store,
+        history,
         runtime_store,
         automation_wake,
         automations_active: false,

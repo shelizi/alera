@@ -1,7 +1,7 @@
 use super::server_test_support::account_push_for_test;
 use super::*;
 
-use crate::terminal_host::history_store::TerminalHostCheckpoint;
+use crate::terminal_host::history_repository::TerminalHostCheckpoint;
 use alera_core::runtime::{
     NewOrchestrationTask, OrchestrationDispatchStatus, OrchestrationTaskStatus,
 };
@@ -9,7 +9,7 @@ use alera_core::runtime::{
 #[tokio::test]
 async fn run_stop_clears_persisted_run_without_in_memory_ticker() {
     let dir = tempfile::tempdir().unwrap();
-    let store = TerminalHostHistoryStore::open(dir.path()).await.unwrap();
+    let history = TerminalHostHistoryRepository::open(dir.path()).await.unwrap();
     let runtime_store = RuntimeStore::open(dir.path()).await.unwrap();
     let run = runtime_store
         .create_orchestration_coordinator_run("coordinate", Some("coord"), 1000)
@@ -21,7 +21,7 @@ async fn run_stop_clears_persisted_run_without_in_memory_ticker() {
         control_file_path: dir.path().join("runtime-host.json"),
         token: "token".to_string(),
         config: TerminalHostConfig::default(),
-        store,
+        history,
         runtime_store: runtime_store.clone(),
         automation_wake: Arc::new(Notify::new()),
         automations_active: false,
@@ -86,7 +86,7 @@ async fn run_stop_clears_persisted_run_without_in_memory_ticker() {
 #[tokio::test]
 async fn terminal_exit_fails_active_orchestration_dispatch() {
     let dir = tempfile::tempdir().unwrap();
-    let store = TerminalHostHistoryStore::open(dir.path()).await.unwrap();
+    let history = TerminalHostHistoryRepository::open(dir.path()).await.unwrap();
     let runtime_store = RuntimeStore::open(dir.path()).await.unwrap();
     let task = runtime_store
         .create_orchestration_task(NewOrchestrationTask {
@@ -113,7 +113,7 @@ async fn terminal_exit_fails_active_orchestration_dispatch() {
         control_file_path: dir.path().join("runtime-host.json"),
         token: "token".to_string(),
         config: TerminalHostConfig::default(),
-        store,
+        history,
         runtime_store: runtime_store.clone(),
         automation_wake: Arc::new(Notify::new()),
         automations_active: false,
@@ -176,7 +176,7 @@ async fn terminal_exit_fails_active_orchestration_dispatch() {
 #[tokio::test]
 async fn host_dispose_fails_active_orchestration_dispatch() {
     let dir = tempfile::tempdir().unwrap();
-    let store = TerminalHostHistoryStore::open(dir.path()).await.unwrap();
+    let history = TerminalHostHistoryRepository::open(dir.path()).await.unwrap();
     let runtime_store = RuntimeStore::open(dir.path()).await.unwrap();
     let task = runtime_store
         .create_orchestration_task(NewOrchestrationTask {
@@ -197,8 +197,8 @@ async fn host_dispose_fails_active_orchestration_dispatch() {
         .create_orchestration_dispatch(&task.id, "term-1")
         .await
         .unwrap();
-    store
-        .upsert(TerminalHostCheckpoint {
+    history.queue_checkpoint(
+        TerminalHostCheckpoint {
             session_id: "term-1".to_string(),
             workspace_id: "workspace-1".to_string(),
             tab_id: "tab-1".to_string(),
@@ -209,14 +209,14 @@ async fn host_dispose_fails_active_orchestration_dispatch() {
             output_stream_bytes: 0,
             updated_at: chrono::Utc::now(),
             buffer: Vec::new(),
-        })
-        .await
-        .unwrap();
+        },
+        1024,
+    );
     let session = Session::restore_exited(
         "term-1".to_string(),
         "workspace-1".to_string(),
         "tab-1".to_string(),
-        &store,
+        &history,
         1024,
     )
     .await
@@ -227,7 +227,7 @@ async fn host_dispose_fails_active_orchestration_dispatch() {
         control_file_path: dir.path().join("runtime-host.json"),
         token: "token".to_string(),
         config: TerminalHostConfig::default(),
-        store,
+        history,
         runtime_store: runtime_store.clone(),
         automation_wake: Arc::new(Notify::new()),
         automations_active: false,
@@ -290,7 +290,7 @@ async fn host_dispose_fails_active_orchestration_dispatch() {
 #[tokio::test]
 async fn coordinator_does_not_spawn_worker_tab_for_cli_only_client() {
     let dir = tempfile::tempdir().unwrap();
-    let store = TerminalHostHistoryStore::open(dir.path()).await.unwrap();
+    let history = TerminalHostHistoryRepository::open(dir.path()).await.unwrap();
     let runtime_store = RuntimeStore::open(dir.path()).await.unwrap();
     runtime_store
         .create_orchestration_task(NewOrchestrationTask {
@@ -314,7 +314,7 @@ async fn coordinator_does_not_spawn_worker_tab_for_cli_only_client() {
         control_file_path: dir.path().join("runtime-host.json"),
         token: "token".to_string(),
         config: TerminalHostConfig::default(),
-        store,
+        history,
         runtime_store: runtime_store.clone(),
         automation_wake: Arc::new(Notify::new()),
         automations_active: false,

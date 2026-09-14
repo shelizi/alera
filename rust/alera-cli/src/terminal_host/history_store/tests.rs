@@ -86,6 +86,29 @@ async fn append_output_trims_oldest_bytes() {
 }
 
 #[tokio::test]
+async fn bounded_read_does_not_mutate_persisted_history() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = TerminalHostHistoryStore::open(dir.path()).await.unwrap();
+    store.upsert(sample("s1")).await.unwrap();
+    store.append_output("s1", 0, b"abc").await.unwrap();
+    store.append_output("s1", 1, b"de").await.unwrap();
+    store.append_output("s1", 2, b"fg").await.unwrap();
+
+    assert_eq!(store.read("s1", 5).await.unwrap().unwrap().buffer, b"cdefg");
+
+    let total: i64 = sqlx::query(
+        "SELECT COALESCE(SUM(length(data)), 0) AS total FROM outputChunks WHERE sessionId = ?",
+    )
+    .bind("s1")
+    .fetch_one(&store.pool)
+    .await
+    .unwrap()
+    .try_get("total")
+    .unwrap();
+    assert_eq!(total, 7);
+}
+
+#[tokio::test]
 async fn append_output_keeps_tail_of_single_oversized_chunk() {
     let dir = tempfile::tempdir().unwrap();
     let store = TerminalHostHistoryStore::open(dir.path()).await.unwrap();

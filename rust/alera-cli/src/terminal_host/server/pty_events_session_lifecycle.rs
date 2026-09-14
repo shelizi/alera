@@ -93,9 +93,14 @@ impl ServerActor {
             tracing::error!("failed to record activity for workspace {workspace_id}: {error}");
         }
         self.flush_all_output(session_id);
-        self.await_output_writes(session_id).await;
         if let Some(mut session) = self.sessions.remove(session_id) {
-            session.terminate(true, &self.store).await;
+            session
+                .terminate(
+                    true,
+                    &self.history,
+                    self.config.scrollback_bytes as usize,
+                )
+                .await;
         }
         self.broadcast_workspace_tabs_changed(Some(&workspace_id));
         self.broadcast_authenticated(event("workspaceActivityChanged", json!({})));

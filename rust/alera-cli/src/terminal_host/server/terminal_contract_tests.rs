@@ -306,7 +306,7 @@ async fn detach_keeps_the_session_and_terminate_deletes_tab_and_history() {
     assert!(session.running());
     assert!(session.clients.is_empty());
     assert_eq!(session.delivered_output_cursor(1), None);
-    let checkpoint = actor.store.read("s1", usize::MAX).await.unwrap().unwrap();
+    let checkpoint = actor.history.read("s1", usize::MAX).await.unwrap().unwrap();
     assert!(checkpoint.running);
 
     // terminate removes the tab row, the live session, and the persisted
@@ -330,7 +330,7 @@ async fn detach_keeps_the_session_and_terminate_deletes_tab_and_history() {
         .unwrap()
         .is_none());
     assert!(
-        actor.store.read("s1", usize::MAX).await.unwrap().is_none(),
+        actor.history.read("s1", usize::MAX).await.unwrap().is_none(),
         "explicit termination deletes the session's history"
     );
 
@@ -473,7 +473,7 @@ async fn disconnect_detaches_without_killing_the_pty_and_idle_shutdown_preserves
     actor.handle_shutdown_tick(generation).await;
     assert!(actor.disposed);
     assert!(actor.sessions.is_empty());
-    let checkpoint = actor.store.read("s1", usize::MAX).await.unwrap().unwrap();
+    let checkpoint = actor.history.read("s1", usize::MAX).await.unwrap().unwrap();
     assert!(!checkpoint.running);
     assert!(checkpoint.ended_at.is_some());
 }
