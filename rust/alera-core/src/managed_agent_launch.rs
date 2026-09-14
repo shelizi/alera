@@ -102,6 +102,13 @@ pub fn build_managed_agent_launch(
 ) -> Result<ManagedAgentLaunch, String> {
     let descriptor = agent_descriptor(agent_type)
         .ok_or_else(|| format!("unsupported agent type: {agent_type}"))?;
+    build_managed_agent_launch_for_descriptor(descriptor, config)
+}
+
+fn build_managed_agent_launch_for_descriptor(
+    descriptor: &AgentDescriptor,
+    config: &Value,
+) -> Result<ManagedAgentLaunch, String> {
     let values = config
         .as_object()
         .ok_or_else(|| "managedConfig must be an object.".to_string())?;

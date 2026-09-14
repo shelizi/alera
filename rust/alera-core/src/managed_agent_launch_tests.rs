@@ -3,6 +3,63 @@ use std::{fs, path::Path};
 use serde_json::json;
 
 use super::*;
+use crate::agent_descriptor::{
+    AgentHookStrategy, AgentLaunchSpec, AgentStartupPrompt, AgentStatusNormalizationRule,
+    AgentStatusNormalizationSpec, AgentStatusState, AgentStatusStrategy,
+};
+
+#[test]
+fn synthetic_agent_descriptor_uses_shared_launch_and_status_paths() {
+    const MODES: &[&str] = &["safe", "fast"];
+    const RULES: &[AgentLaunchRule] = &[
+        AgentLaunchRule::enumeration("mode", "--mode", MODES),
+        AgentLaunchRule::boolean("unsafe", "--unsafe"),
+    ];
+    const STATUS_RULES: &[AgentStatusNormalizationRule] = &[
+        AgentStatusNormalizationRule::new("Run", AgentStatusState::Working),
+        AgentStatusNormalizationRule::new("Stop", AgentStatusState::Done),
+    ];
+    let descriptor = AgentDescriptor {
+        id: "test-agent",
+        aliases: &["test-agent-alias"],
+        display_name: "Test Agent",
+        default_command: "test-agent",
+        force_submit: true,
+        interrupt_bytes: b"\x03",
+        startup_prompt: AgentStartupPrompt::PositionalAfterTerminator,
+        hook_strategy: AgentHookStrategy::PluginScript,
+        status_strategy: AgentStatusStrategy::HookEvents,
+        status_normalization: AgentStatusNormalizationSpec::new(STATUS_RULES),
+        quota_provider_id: None,
+        transcript_usage: false,
+        model_override: AgentModelOverride::Supported,
+        launch_spec: AgentLaunchSpec::new(&["model", "mode", "unsafe"], None, RULES),
+        supports_persona: false,
+        supports_ccs_profile: false,
+        risk_warning: "",
+        risk_warning_severe: None,
+        risk_rules: &[],
+    };
+
+    let launch = build_managed_agent_launch_for_descriptor(
+        &descriptor,
+        &json!({"model": "synthetic-v1", "mode": "fast", "unsafe": true}),
+    )
+    .expect("synthetic descriptor should use shared launch rules");
+    assert_eq!(launch.executable, "test-agent");
+    assert_eq!(
+        launch.arguments,
+        ["--model", "synthetic-v1", "--mode", "fast", "--unsafe"]
+    );
+    assert_eq!(
+        descriptor.status_normalization.state_for("Run", false),
+        Some(AgentStatusState::Working)
+    );
+    assert_eq!(
+        descriptor.status_normalization.state_for("Stop", false),
+        Some(AgentStatusState::Done)
+    );
+}
 
 #[test]
 fn codex_builds_structured_arguments_and_rejects_conflicting_bypass() {

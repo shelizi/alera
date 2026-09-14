@@ -1,0 +1,21 @@
+# Existing manual Dart touchpoints for agent-specific behavior.
+# The guard rejects new files and stale entries; reduce this list as the
+# descriptor/provider refactor removes coupling. Target: <= 5 manual files.
+lib/src/features/agent_profiles/application/agent_profile_persona_discovery.dart
+lib/src/features/agent_profiles/domain/agent_descriptor_registry.dart
+lib/src/features/agent_quota/presentation/agent_quota_provider_icon.dart
+lib/src/features/agent_status/application/agent_hook_lifecycle_guard.dart
+lib/src/features/agent_status/application/agent_status_identity_resolver.dart
+lib/src/features/agent_status/infra/agent_hook_event_normalizer.dart
+lib/src/features/agent_status/infra/codex_transcript_status_watcher.dart
+lib/src/features/agent_status/infra/managed_agent_hook_descriptors.dart
+lib/src/features/agent_status/infra/managed_agent_hook_installer.dart
+lib/src/features/agent_status/infra/managed_agent_hook_scripts.dart
+lib/src/features/agent_status/infra/normalizers/agent_hook_status_helpers.dart
+lib/src/features/agent_status/infra/normalizers/agent_hook_tool_preview.dart
+lib/src/features/agent_status/infra/normalizers/agent_hook_tool_snapshot.dart
+lib/src/features/agent_status/infra/normalizers/cursor_agent_hook_normalizer.dart
+lib/src/features/agent_status/presentation/agent_identity_icon.dart
+lib/src/features/settings/presentation/panes/agent_profiles_pane.dart
+lib/src/features/settings/presentation/panes/agent_profiles_pane_discovery.dart
+lib/src/features/settings/presentation/panes/agent_profiles_pane_profile_actions.dart
