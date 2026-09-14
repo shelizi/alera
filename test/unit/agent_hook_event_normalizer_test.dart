@@ -16,6 +16,72 @@ void main() {
     _registerDevinAgentHookEventNormalizerTests();
     _registerAgyAgentHookEventNormalizerTests();
 
+    test('normalizes fx Herdr socket lifecycle states', () {
+      expect(
+        normalizeAgentHookEvent(
+          _event(
+            agentType: .fx,
+            hookEventName: 'Working',
+            payload: const <String, Object?>{'prompt': 'ship fx'},
+          ),
+        )?.state,
+        AgentStatusState.working,
+      );
+      expect(
+        normalizeAgentHookEvent(
+          _event(
+            agentType: .fx,
+            hookEventName: 'Blocked',
+            payload: const <String, Object?>{},
+          ),
+        )?.state,
+        AgentStatusState.blocked,
+      );
+      expect(
+        normalizeAgentHookEvent(
+          _event(
+            agentType: .fx,
+            hookEventName: 'Idle',
+            payload: const <String, Object?>{},
+          ),
+        )?.state,
+        AgentStatusState.done,
+      );
+    });
+
+    test('OpenCode 2 shares working, waiting, and done status mapping', () {
+      expect(
+        normalizeAgentHookEvent(
+          _event(
+            agentType: .opencode2,
+            hookEventName: 'SessionBusy',
+            payload: const <String, Object?>{},
+          ),
+        )?.state,
+        AgentStatusState.working,
+      );
+      expect(
+        normalizeAgentHookEvent(
+          _event(
+            agentType: .opencode2,
+            hookEventName: 'PermissionRequest',
+            payload: const <String, Object?>{},
+          ),
+        )?.state,
+        AgentStatusState.waiting,
+      );
+      expect(
+        normalizeAgentHookEvent(
+          _event(
+            agentType: .opencode2,
+            hookEventName: 'SessionIdle',
+            payload: const <String, Object?>{},
+          ),
+        )?.state,
+        AgentStatusState.done,
+      );
+    });
+
     test('reads assistant messages from Codex transcript formats', () {
       expect(
         _normalizeStopWithTranscript(<String>[
