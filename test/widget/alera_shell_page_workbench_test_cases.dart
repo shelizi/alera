@@ -387,6 +387,71 @@ void _registerAleraShellWorkbenchTests() {
     expect(harness.controller.state.tabsFor('workspace-1'), hasLength(2));
   });
 
+  testWidgets(
+    'Windows Devin activation starts the Alera session before external attach',
+    (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      try {
+        final externalTerminal = _RecordingExternalTerminalLauncher();
+        final harness = await _pumpShell(
+          tester,
+          state: _populatedWorkbenchState(),
+          installedAgents: <AgentType>[.devin],
+          externalTerminalLauncher: externalTerminal,
+        );
+
+        await tester.pump();
+        await tester.tap(find.byTooltip('New Tab'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Devin'));
+        await tester.pump();
+        await tester.pump();
+
+        expect(externalTerminal.requests, hasLength(1));
+        expect(externalTerminal.requests.single.terminalSessionId, 'tab-2');
+        expect(harness.runtime.peekSession('tab-2')?.isRunning, isTrue);
+        expect(harness.runtime.totalFocusRequests, 1);
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+      }
+    },
+  );
+
+  testWidgets(
+    'Windows Devin keeps the embedded terminal when external launch fails',
+    (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      try {
+        final externalTerminal = _RecordingExternalTerminalLauncher(
+          externalTerminalLaunchFailure(
+            .unavailable,
+            'No native terminal available.',
+          ),
+        );
+        final harness = await _pumpShell(
+          tester,
+          state: _populatedWorkbenchState(),
+          installedAgents: <AgentType>[.devin],
+          externalTerminalLauncher: externalTerminal,
+        );
+
+        await tester.pump();
+        await tester.tap(find.byTooltip('New Tab'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Devin'));
+        await tester.pump();
+        await tester.pump();
+
+        expect(externalTerminal.requests, hasLength(1));
+        expect(harness.runtime.peekSession('tab-2')?.isRunning, isTrue);
+        expect(harness.runtime.totalFocusRequests, 1);
+        expect(harness.controller.state.tabsFor('workspace-1'), hasLength(2));
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+      }
+    },
+  );
+
   testWidgets('new-terminal shortcut focuses the new session', (tester) async {
     final harness = await _pumpShell(tester, state: _populatedWorkbenchState());
 

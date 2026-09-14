@@ -30,6 +30,8 @@ import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_creation_result.dart';
 import 'package:alera/src/features/workbench/domain/workspace_storage_impact.dart';
 import 'package:alera/src/features/workbench/application/terminal_runtime_lifecycle.dart';
+import 'package:alera/src/features/workbench/application/external_terminal_providers.dart';
+import 'package:alera/src/features/workbench/domain/external_terminal_launcher.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_runtime.dart';
 import 'package:alera/src/features/workbench/presentation/widgets/agent_run_spinner_scope.dart';
 import 'package:alera/src/features/workbench/presentation/project_workbench_sidebar.dart';
@@ -75,6 +77,7 @@ Future<_ShellPumpHarness> _pumpShell(
       const <String, AgentStatusEntry>{},
   bool agentTitlesAvailable = false,
   List<AgentType> installedAgents = const <AgentType>[],
+  ExternalTerminalLauncher? externalTerminalLauncher,
 }) async {
   final shellController = controller ?? _ShellTestWorkbenchController(state);
   final runtime = terminalRuntime ?? _FakeTerminalRuntime();
@@ -121,6 +124,10 @@ Future<_ShellPumpHarness> _pumpShell(
           (ref) async => agentTitlesAvailable,
         ),
         installedAgentClisProvider.overrideWith((ref) async => installedAgents),
+        if (externalTerminalLauncher != null)
+          externalTerminalLauncherProvider.overrideWith(
+            (ref) => externalTerminalLauncher,
+          ),
         installedExternalEditorsProvider.overrideWith(
           (ref) async => const <ExternalEditorSpec>[],
         ),

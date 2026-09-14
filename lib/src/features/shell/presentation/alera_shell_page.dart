@@ -36,6 +36,7 @@ import 'package:alera/src/features/workbench/presentation/mobile_driver_overlay.
 import 'package:alera/src/features/workbench/presentation/workbench_close_confirmation.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_workbench_view.dart';
 import 'package:alera/src/features/settings/presentation/github_star_prompt_watch.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 

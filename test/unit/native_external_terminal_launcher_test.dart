@@ -98,19 +98,70 @@ void main() {
     },
   );
 
+  test('launcher falls back from Windows Terminal to Git Bash', () async {
+    final support = await Directory.systemTemp.createTemp(
+      'alera-external-terminal-test',
+    );
+    addTearDown(() => support.delete(recursive: true));
+    final runner = _FakeProcessRunner()
+      ..startFailures['wt.exe'] = const ProcessException(
+        'wt.exe',
+        <String>[],
+        'missing',
+      );
+    final launcher = NativeExternalTerminalLauncher(
+      processRunner: runner,
+      cliResolver: _FakeAleraCliResolver(
+        const AleraCliCommand(executable: r'C:\Alera\alera.exe'),
+      ),
+      applicationSupportDirectory: () async => support,
+      operatingSystemReader: () => 'windows',
+      gitBashExecutableReader: () => r'C:\Program Files\Git\git-bash.exe',
+    );
+
+    final result = await launcher.open(
+      const ExternalTerminalOpenRequest(
+        workspacePath: r'C:\Work Trees\Alera',
+        terminalSessionId: 'session-1',
+        title: 'Agent shell',
+      ),
+    );
+
+    expect(result.ok, isTrue);
+    expect(runner.starts, hasLength(2));
+    expect(runner.starts.first.executable, 'wt.exe');
+    final gitBash = runner.starts.last;
+    expect(gitBash.executable, r'C:\Program Files\Git\git-bash.exe');
+    expect(gitBash.workingDirectory, isNull);
+    expect(gitBash.arguments, contains(r'--command=usr\bin\bash.exe'));
+    expect(gitBash.arguments, contains('--login'));
+    expect(gitBash.arguments, contains('-c'));
+    final command = gitBash.arguments.last;
+    expect(command, contains("exec 'C:/Alera/alera.exe'"));
+    expect(command, contains("'terminal'"));
+    expect(command, contains("'attach'"));
+    expect(command, contains("'session-1'"));
+  });
+
   test(
-    'launcher reports a missing native terminal without losing the session',
+    'launcher reports unavailable after Windows Terminal and Git Bash fail',
     () async {
       final support = await Directory.systemTemp.createTemp(
         'alera-external-terminal-test',
       );
       addTearDown(() => support.delete(recursive: true));
       final runner = _FakeProcessRunner()
-        ..startFailure = const ProcessException(
+        ..startFailures['wt.exe'] = const ProcessException(
           'wt.exe',
           <String>[],
           'missing',
-        );
+        )
+        ..startFailures[r'C:\Program Files\Git\git-bash.exe'] =
+            const ProcessException(
+              r'C:\Program Files\Git\git-bash.exe',
+              <String>[],
+              'missing',
+            );
       final launcher = NativeExternalTerminalLauncher(
         processRunner: runner,
         cliResolver: _FakeAleraCliResolver(
@@ -118,6 +169,7 @@ void main() {
         ),
         applicationSupportDirectory: () async => support,
         operatingSystemReader: () => 'windows',
+        gitBashExecutableReader: () => r'C:\Program Files\Git\git-bash.exe',
       );
 
       final result = await launcher.open(
@@ -130,7 +182,7 @@ void main() {
 
       expect(result.ok, isFalse);
       expect(result.failureKind, ExternalTerminalLaunchFailureKind.unavailable);
-      expect(runner.starts, hasLength(1));
+      expect(runner.starts, hasLength(2));
     },
   );
 }
@@ -147,6 +199,8 @@ final class _FakeAleraCliResolver implements AleraCliResolver {
 
 final class _FakeProcessRunner implements ProcessRunner {
   final List<_StartedInvocation> starts = <_StartedInvocation>[];
+  final Map<String, ProcessException> startFailures =
+      <String, ProcessException>{};
   ProcessException? startFailure;
 
   @override
@@ -172,7 +226,7 @@ final class _FakeProcessRunner implements ProcessRunner {
         workingDirectory: workingDirectory,
       ),
     );
-    final failure = startFailure;
+    final failure = startFailures[executable] ?? startFailure;
     if (failure != null) {
       throw failure;
     }
