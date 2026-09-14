@@ -1,6 +1,38 @@
 part of 'terminal_surface_test.dart';
 
 void _registerTerminalSurfaceInteractionTests() {
+  testWidgets(
+    'Shift+Tab is swallowed instead of writing a terminal escape sequence',
+    (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      try {
+        final factory = _FakeTerminalPtySessionFactory();
+        final runtime = XtermTerminalRuntime(
+          ptySessionFactory: factory,
+          shellLaunchesBuilder: _testShellLaunches,
+        );
+        addTearDown(runtime.dispose);
+        final session = runtime.sessionFor(
+          workspace: _workspace(),
+          tab: _tab(),
+        );
+
+        await _pumpTerminalSurface(tester, session);
+        final pty = factory.sessions.single;
+        pty.writes.clear();
+
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+        await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+        await tester.pump();
+
+        expect(pty.writes, isEmpty);
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+      }
+    },
+  );
+
   testWidgets('ctrl-click opens visible terminal urls on Windows', (
     tester,
   ) async {

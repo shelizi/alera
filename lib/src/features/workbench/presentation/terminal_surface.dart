@@ -131,6 +131,17 @@ class _TerminalSurfaceState extends ConsumerState<TerminalSurface> {
     final modifiers = KeyModifierState.fromKeyboard(.instance);
     final resolved = resolver.resolveAction(event, modifiers);
     if (resolved == null) {
+      // xterm encodes Shift+Tab as the reverse-tab escape sequence (`ESC [ Z`).
+      // Some interactive shells do not consume it and echo the bytes as visible
+      // control/special characters. Keep that unbound chord local instead of
+      // forwarding it to the PTY. Explicit Alera bindings still win above.
+      if (event.logicalKey == LogicalKeyboardKey.tab &&
+          modifiers.shift &&
+          !modifiers.control &&
+          !modifiers.alt &&
+          !modifiers.meta) {
+        return KeyEventResult.handled;
+      }
       return KeyEventResult.ignored;
     }
     // Under terminal-first, defer everything except bindings explicitly marked
