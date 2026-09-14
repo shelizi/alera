@@ -105,6 +105,12 @@ class _WorkspaceRowState extends State<_WorkspaceRow> {
               color: isActive
                   ? AleraTokens.surfaceElevated
                   : (_hovered ? AleraTokens.surface : Colors.transparent),
+              border: isActive
+                  ? Border.all(
+                      color: AleraTokens.accent,
+                      width: AleraTokens.strokeThin,
+                    )
+                  : null,
               borderRadius: BorderRadius.circular(AleraTokens.radiusLg),
             ),
             child: InkWell(

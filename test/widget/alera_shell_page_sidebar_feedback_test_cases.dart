@@ -1,6 +1,41 @@
 part of 'alera_shell_page_test.dart';
 
 void _registerAleraShellSidebarFeedbackTests() {
+  testWidgets('active workspace is visually emphasized in the sidebar', (
+    tester,
+  ) async {
+    await _pumpShell(
+      tester,
+      state: _linkedWorkbenchState(linkedExpanded: true, linkedActive: true),
+    );
+
+    final activeContainer = find
+        .ancestor(
+          of: find.text('Feature login').first,
+          matching: find.byType(AnimatedContainer),
+        )
+        .first;
+    final inactiveContainer = find
+        .ancestor(
+          of: find.text('Main').first,
+          matching: find.byType(AnimatedContainer),
+        )
+        .first;
+
+    final activeDecoration =
+        tester.widget<AnimatedContainer>(activeContainer).decoration!
+            as BoxDecoration;
+    final inactiveDecoration =
+        tester.widget<AnimatedContainer>(inactiveContainer).decoration!
+            as BoxDecoration;
+
+    expect(activeDecoration.color, AleraTokens.surfaceElevated);
+    expect(activeDecoration.border, isA<Border>());
+    final activeBorder = activeDecoration.border! as Border;
+    expect(activeBorder.top.color, AleraTokens.accent);
+    expect(activeBorder.top.width, AleraTokens.strokeThin);
+    expect(inactiveDecoration.border, isNull);
+  });
   testWidgets('project rename failures surface an error toast event', (
     tester,
   ) async {
