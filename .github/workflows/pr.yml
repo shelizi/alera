@@ -79,6 +79,11 @@ jobs:
           dart tool/quality/runtime_architecture_guard_test.dart
           dart tool/quality/runtime_architecture_guard.dart
 
+      - name: Agent extension acceptance
+        run: |
+          dart tool/quality/agent_extension_guard_test.dart
+          dart tool/quality/agent_extension_guard.dart
+
       - name: Analyze
         run: flutter analyze
 
