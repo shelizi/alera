@@ -1,5 +1,6 @@
 import 'dart:collection';
 
+import 'package:alera/src/features/agent_profiles/domain/agent_descriptor_registry.dart';
 import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 import 'package:alera/src/features/agent_status/infra/agent_hook_event_normalizer.dart';
 
@@ -17,20 +18,16 @@ final class AgentHookLifecycleGuard {
     if (eventName == null) {
       return true;
     }
-    return switch (event.agentType) {
-      AgentType.agy => _shouldApplyAgy(event, eventName),
-      AgentType.amp => _shouldApplyAmp(event, eventName),
-      AgentType.codex ||
-      AgentType.claude ||
-      AgentType.copilot ||
-      AgentType.cursor ||
-      AgentType.opencode ||
-      AgentType.opencode2 ||
-      AgentType.pi ||
-      AgentType.grok ||
-      AgentType.devin ||
-      AgentType.fx => true,
-    };
+    if (!agentTypesWithHttpHooks.contains(event.agentType)) {
+      return false;
+    }
+    if (event.agentType == AgentType.agy) {
+      return _shouldApplyAgy(event, eventName);
+    }
+    if (event.agentType == AgentType.amp) {
+      return _shouldApplyAmp(event, eventName);
+    }
+    return true;
   }
 
   void clearTerminal(String terminalSessionId) {

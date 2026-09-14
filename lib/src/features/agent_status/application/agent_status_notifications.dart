@@ -171,20 +171,7 @@ AgentStatusNotification? composeAgentStatusNotification({
 }
 
 String _agentLabel(AgentType agentType) {
-  return switch (agentType) {
-    AgentType.codex => 'Codex',
-    AgentType.claude => 'Claude',
-    AgentType.copilot => 'GitHub Copilot',
-    AgentType.cursor => 'Cursor',
-    AgentType.agy => 'Antigravity',
-    AgentType.opencode => 'OpenCode',
-    AgentType.opencode2 => 'OpenCode 2',
-    AgentType.pi => 'Pi',
-    AgentType.amp => 'Amp',
-    AgentType.grok => 'Grok Build',
-    AgentType.devin => 'Devin',
-    AgentType.fx => 'fx',
-  };
+  return agentDisplayName(agentType);
 }
 
 String _encodePayload(AgentStatusEntry entry) {

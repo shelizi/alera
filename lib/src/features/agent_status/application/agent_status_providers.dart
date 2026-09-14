@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:alera/src/features/agent_profiles/domain/agent_descriptor_registry.dart';
 import 'package:alera/src/features/agent_status/application/agent_hook_reconciliation_service.dart';
 import 'package:alera/src/features/agent_status/application/agent_awake_service.dart';
 import 'package:alera/src/features/agent_status/application/agent_status_controller.dart';
@@ -320,20 +321,8 @@ bool isAgentStatusHookEnabled(
   AgentStatusHookSettings settings,
   AgentType agentType,
 ) {
-  return switch (agentType) {
-    AgentType.codex => settings.codex,
-    AgentType.claude => settings.claude,
-    AgentType.copilot => settings.copilot,
-    AgentType.cursor => settings.cursor,
-    AgentType.agy => settings.agy,
-    AgentType.opencode => settings.opencode,
-    AgentType.opencode2 => settings.opencode2,
-    AgentType.pi => settings.pi,
-    AgentType.amp => settings.amp,
-    AgentType.grok => settings.grok,
-    AgentType.devin => settings.devin,
-    AgentType.fx => settings.fx,
-  };
+  return agentTypesWithStatusHooks.contains(agentType) &&
+      isAgentSettingEnabled(settings.values, agentType);
 }
 
 // coverage:ignore-start
