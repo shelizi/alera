@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:alera/src/shared/infra/process/process_runner.dart';
+import 'package:path/path.dart' as p;
 
 enum WorkspaceFolderPlatform { macos, windows, linux, other }
 
@@ -135,12 +136,13 @@ class WorkspaceFolderOpener({
           _WorkspaceFolderOpenCommand('open', <String>['-R', path]),
         ];
       case WorkspaceFolderPlatform.windows:
-        // Explorer's /select switch owns the path after its comma. Passing the
-        // comma and path as separate argv entries leaves /select without a
-        // target, which makes Explorer fall back to its default location.
+        // Alera's ProcessRunner reaches Windows commands through cmd.exe. When
+        // Explorer's `/select,<path>` switch is quoted as one shell argument,
+        // Explorer can return success while ignoring the target. Opening the
+        // containing directory uses the same reliable path as folder actions.
         return <_WorkspaceFolderOpenCommand>[
           _WorkspaceFolderOpenCommand('explorer.exe', <String>[
-            '/select,${_windowsExplorerPath(path)}',
+            _windowsExplorerParentPath(path),
           ]),
         ];
       case WorkspaceFolderPlatform.linux:
@@ -179,6 +181,10 @@ String _windowsExplorerPath(String path) {
     }
   }
   return normalized;
+}
+
+String _windowsExplorerParentPath(String path) {
+  return p.windows.dirname(_windowsExplorerPath(path));
 }
 
 /// FreeDesktop FileManager1.ShowItems selects the path in the session file
