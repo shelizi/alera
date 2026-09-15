@@ -51,13 +51,11 @@ pub fn prepare_enabled_integrations(
                         Err(error) => warnings.push(format!("Codex: {error}")),
                     },
                     "claude" => match prepare_claude(runtime_dir, &script, environment) {
-                        Ok((home, ccs_warnings)) => {
-                            environment
-                                .insert("CLAUDE_CONFIG_DIR".to_string(), super::path_string(&home));
-                            environment.insert(
-                                "ALERA_CLAUDE_CONFIG_DIR".to_string(),
-                                super::path_string(&home),
-                            );
+                        Ok((_home, ccs_warnings)) => {
+                            // Claude must keep using the user's real config home so its
+                            // global session/history store remains resumable. Managed
+                            // hooks are installed into the effective user settings by
+                            // `prepare_claude`, so no config-dir override is required.
                             warnings.extend(
                                 ccs_warnings
                                     .into_iter()

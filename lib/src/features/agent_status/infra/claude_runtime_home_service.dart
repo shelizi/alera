@@ -80,11 +80,19 @@ final class ClaudeRuntimeHomeService({
   Future<ClaudeRuntimeHomePreparation> prepareForTerminalLaunch() async {
     final runtimeHome = await _runtimeHomeDirectory();
     final status = await install(runtimeHome: runtimeHome);
+    final inheritedConfigDir = _environment['CLAUDE_CONFIG_DIR']?.trim();
+    final keepsInheritedConfigDir =
+        inheritedConfigDir != null &&
+        inheritedConfigDir.isNotEmpty &&
+        !_samePath(inheritedConfigDir, runtimeHome.path);
     return ClaudeRuntimeHomePreparation(
       runtimeHomePath: runtimeHome.path,
+      // Keep Claude on its real config home so `resume` sees the same
+      // sessions/history as an external Claude CLI. This also preserves
+      // explicit homes such as CCS instances instead of replacing them with
+      // Alera's runtime copy.
       environment: <String, String>{
-        'CLAUDE_CONFIG_DIR': runtimeHome.path,
-        'ALERA_CLAUDE_CONFIG_DIR': runtimeHome.path,
+        if (keepsInheritedConfigDir) 'CLAUDE_CONFIG_DIR': inheritedConfigDir,
       },
       hookStatus: status,
     );

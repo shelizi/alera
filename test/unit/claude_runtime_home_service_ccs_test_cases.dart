@@ -62,10 +62,7 @@ void _registerClaudeRuntimeCcsTests(
     expect(credentials.readAsStringSync(), '{"secret":"keep"}\n');
     final localHooks = _hooks(localSettingsPath);
     expect(_managedCommandCount(localHooks, 'alera-claude-hook.sh'), 6);
-    expect(
-      preparation.environment['CLAUDE_CONFIG_DIR'],
-      preparation.runtimeHomePath,
-    );
+    expect(preparation.environment, isEmpty);
     expect(
       _managedCommandCount(
         _hooks(p.join(preparation.runtimeHomePath, 'settings.json')),

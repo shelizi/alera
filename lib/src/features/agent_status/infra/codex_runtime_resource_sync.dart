@@ -37,12 +37,17 @@ extension _CodexRuntimeHomeServiceResourceSync on CodexRuntimeHomeService {
   }
 
   Future<void> _syncSystemSessions(Directory runtimeHome) async {
-    await _syncLinkedResource(
-      systemHomePath: _systemHomePath,
-      runtimeHomePath: runtimeHome.path,
-      entryName: 'sessions',
-      allowCopyFallback: false,
-    );
+    for (final entryName in _codexResumeResourceEntries) {
+      await _syncLinkedResource(
+        systemHomePath: _systemHomePath,
+        runtimeHomePath: runtimeHome.path,
+        entryName: entryName,
+        // A copied resume database/index immediately diverges from the user's
+        // real Codex home. If a live link cannot be made, leave it absent rather
+        // than creating a misleading fork of the history state.
+        allowCopyFallback: false,
+      );
+    }
   }
 
   Future<void> _syncLinkedResource({

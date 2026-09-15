@@ -26,6 +26,12 @@ pub(super) fn prepare_codex(runtime_dir: &Path, script: &Path) -> anyhow::Result
         "themes",
         "prompts",
         "sessions",
+        "archived_sessions",
+        "session_index.jsonl",
+        "history.jsonl",
+        "state_5.sqlite",
+        "state_5.sqlite-shm",
+        "state_5.sqlite-wal",
     ] {
         link_if_present(&source.join(entry), &runtime_home.join(entry));
     }
