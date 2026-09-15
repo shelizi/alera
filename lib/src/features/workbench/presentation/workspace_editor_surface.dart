@@ -165,6 +165,10 @@ class _WorkspaceEditorSurfaceState
     final effectiveThemeName =
         editorSyntaxThemeEntryForName(editorSettings.themeName)?.name ??
         EditorSyntaxThemeNames.alera;
+    final performanceProfile = workspaceEditorPerformanceProfile(
+      lineCount: _controller.lineCount,
+      contentLength: _document.currentText?.length ?? 0,
+    );
     Widget content;
     if (_loading) {
       content = const Center(child: CircularProgressIndicator());
@@ -188,16 +192,16 @@ class _WorkspaceEditorSurfaceState
               findController: _findController,
               focusNode: _focusNode,
               autoFocus: widget.autofocus,
-              lineWrap: true,
+              lineWrap: performanceProfile.lineWrap,
               enableLocalSuggestions: false,
-              enableGuideLines: true,
+              enableGuideLines: performanceProfile.guideLines,
               enableGutter: true,
               enableGutterDivider: false,
               editorTheme: editorTheme,
               language: _languageForPath(filePath),
               tabSize: effectiveTabSize,
               useSpaceAsTab: true,
-              scrollbarDecoration: _scrollbarDecoration(),
+              scrollbarDecoration: workspaceEditorScrollbarDecoration(),
               suggestionStyle: _editorOverlayStyle(context),
               customContextMenuItems: _editorTextActionMenuItems(context),
               textStyle: Theme.of(context).textTheme.bodyMedium?.copyWith(
@@ -444,17 +448,41 @@ class _WorkspaceEditorSurfaceState
     }
     return 'File operation failed';
   }
+}
 
-  code_forge.ScrollbarDecoration _scrollbarDecoration() {
-    return const code_forge.ScrollbarDecoration(
-      showLineNumberIndicator: false,
-      thickness: 0,
-      thumbColor: Colors.transparent,
-      trackVisibility: false,
-      trackColor: Colors.transparent,
-      trackBorderColor: Colors.transparent,
-    );
-  }
+@visibleForTesting
+const int workspaceEditorLargeFileLineThreshold = 5000;
+
+@visibleForTesting
+const int workspaceEditorLargeFileCharacterThreshold = 512 * 1024;
+
+typedef WorkspaceEditorPerformanceProfile = ({bool lineWrap, bool guideLines});
+
+@visibleForTesting
+WorkspaceEditorPerformanceProfile workspaceEditorPerformanceProfile({
+  required int lineCount,
+  required int contentLength,
+}) {
+  final largeFile =
+      lineCount >= workspaceEditorLargeFileLineThreshold ||
+      contentLength >= workspaceEditorLargeFileCharacterThreshold;
+  return (lineWrap: !largeFile, guideLines: !largeFile);
+}
+
+@visibleForTesting
+code_forge.ScrollbarDecoration workspaceEditorScrollbarDecoration() {
+  return const code_forge.ScrollbarDecoration(
+    showLineNumberIndicator: false,
+    thickness: 6,
+    thumbColor: AleraTokens.foregroundMuted,
+    interactive: true,
+    minThumbLength: 24,
+    crossAxisMargin: 2,
+    mainAxisMargin: 2,
+    trackVisibility: false,
+    trackColor: Colors.transparent,
+    trackBorderColor: Colors.transparent,
+  );
 }
 
 class const _DiffOpenChoice({

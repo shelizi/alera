@@ -1,7 +1,7 @@
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_editor_surface.dart';
 import 'package:alera/src/features/settings/domain/editor_syntax_theme_catalog.dart';
-import 'package:flutter/widgets.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 
@@ -92,6 +92,45 @@ void main() {
     );
 
     expect(aleraKey, isNot(monokaiKey));
+  });
+
+  test('shows an interactive vertical editor scrollbar', () {
+    final decoration = workspaceEditorScrollbarDecoration();
+
+    expect(decoration.thickness, greaterThan(0));
+    expect(decoration.thumbColor, isNot(Colors.transparent));
+    expect(decoration.interactive, isTrue);
+    expect(decoration.trackVisibility, isFalse);
+  });
+
+  test('keeps wrapping and guides for ordinary source files', () {
+    final profile = workspaceEditorPerformanceProfile(
+      lineCount: workspaceEditorLargeFileLineThreshold - 1,
+      contentLength: workspaceEditorLargeFileCharacterThreshold - 1,
+    );
+
+    expect(profile.lineWrap, isTrue);
+    expect(profile.guideLines, isTrue);
+  });
+
+  test('disables wrapping and guides for long files', () {
+    final profile = workspaceEditorPerformanceProfile(
+      lineCount: workspaceEditorLargeFileLineThreshold,
+      contentLength: 1,
+    );
+
+    expect(profile.lineWrap, isFalse);
+    expect(profile.guideLines, isFalse);
+  });
+
+  test('uses large-file mode for a huge single-line file', () {
+    final profile = workspaceEditorPerformanceProfile(
+      lineCount: 1,
+      contentLength: workspaceEditorLargeFileCharacterThreshold,
+    );
+
+    expect(profile.lineWrap, isFalse);
+    expect(profile.guideLines, isFalse);
   });
 
   test('offers Text Actions only for a valid editor selection', () {
