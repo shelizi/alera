@@ -103,6 +103,21 @@ class const _FullFileDiffLine({required final _FullFileLine line})
   }
 }
 
+class _FullFileForcedDiffRowSpan implements _DiffRowSpan {
+  const _FullFileForcedDiffRowSpan({required this.lines, required this.kind});
+
+  final List<String> lines;
+  final GitDiffLineKind kind;
+
+  @override
+  int get length => lines.length;
+
+  @override
+  _DiffRow rowAt(int index) => _FullFileDiffRow(
+    _FullFileLine(lineNumber: index + 1, text: lines[index], kind: kind),
+  );
+}
+
 class _FullFileContextDiffRowSpan implements _DiffRowSpan {
   const _FullFileContextDiffRowSpan({
     required this.lines,
@@ -135,7 +150,20 @@ List<_DiffRowSpan>? _buildProjectedFullFileRowSpans(
   native.WorkspaceDecodedText? decoded,
 ) {
   final lines = _decodeFullFileLines(decoded);
-  if (lines == null || file.fullFileRows.isEmpty) return null;
+  if (lines == null) return null;
+  final forceKind = switch (file.status) {
+    GitChangeStatus.deleted => GitDiffLineKind.deletion,
+    GitChangeStatus.added ||
+    GitChangeStatus.untracked => GitDiffLineKind.addition,
+    _ => null,
+  };
+  if (forceKind != null) {
+    return <_DiffRowSpan>[
+      if (lines.isNotEmpty)
+        _FullFileForcedDiffRowSpan(lines: lines, kind: forceKind),
+    ];
+  }
+  if (file.fullFileRows.isEmpty) return null;
   final spans = <_DiffRowSpan>[];
   final materialized = <_DiffRow>[];
 
@@ -291,6 +319,34 @@ List<_DiffRow>? _buildFullFileRows(
   return rows;
 }
 
+class _FullFileSideBySideForcedDiffRowSpan implements _DiffRowSpan {
+  const _FullFileSideBySideForcedDiffRowSpan({
+    required this.lines,
+    required this.kind,
+    required this.left,
+  });
+
+  final List<String> lines;
+  final GitDiffLineKind kind;
+  final bool left;
+
+  @override
+  int get length => lines.length;
+
+  @override
+  _DiffRow rowAt(int index) {
+    final line = _DiffSideLine(
+      lineNumber: index + 1,
+      text: lines[index],
+      kind: kind,
+    );
+    return _SideBySideDiffRow(
+      left: left ? line : null,
+      right: left ? null : line,
+    );
+  }
+}
+
 class _FullFileSideBySideContextDiffRowSpan implements _DiffRowSpan {
   const _FullFileSideBySideContextDiffRowSpan({
     required this.oldLines,
@@ -340,19 +396,46 @@ List<_DiffRowSpan>? _buildProjectedFullFileSideBySideRowSpans(
   GitDiffFile file,
   _FullFileContents? contents,
 ) {
-  if (contents == null || file.fullFileSideBySideRows.isEmpty) return null;
+  if (contents == null) return null;
+  final header = _MaterializedDiffRowSpan(<_DiffRow>[
+    _SideBySideHeaderRow(
+      oldTitle: _fullFileOldLabel(file),
+      newTitle: _fullFileNewLabel(file),
+    ),
+  ]);
+  if (file.status == GitChangeStatus.added ||
+      file.status == GitChangeStatus.untracked) {
+    final newLines = _decodeFullFileLines(contents.newDecoded);
+    if (newLines == null) return null;
+    return <_DiffRowSpan>[
+      header,
+      if (newLines.isNotEmpty)
+        _FullFileSideBySideForcedDiffRowSpan(
+          lines: newLines,
+          kind: GitDiffLineKind.addition,
+          left: false,
+        ),
+    ];
+  }
+  if (file.status == GitChangeStatus.deleted) {
+    final oldLines = _decodeFullFileLines(contents.oldDecoded);
+    if (oldLines == null) return null;
+    return <_DiffRowSpan>[
+      header,
+      if (oldLines.isNotEmpty)
+        _FullFileSideBySideForcedDiffRowSpan(
+          lines: oldLines,
+          kind: GitDiffLineKind.deletion,
+          left: true,
+        ),
+    ];
+  }
+  if (file.fullFileSideBySideRows.isEmpty) return null;
   final oldLines = _decodeFullFileLines(contents.oldDecoded);
   final newLines = _decodeFullFileLines(contents.newDecoded);
   if (oldLines == null || newLines == null) return null;
 
-  final spans = <_DiffRowSpan>[
-    _MaterializedDiffRowSpan(<_DiffRow>[
-      _SideBySideHeaderRow(
-        oldTitle: _fullFileOldLabel(file),
-        newTitle: _fullFileNewLabel(file),
-      ),
-    ]),
-  ];
+  final spans = <_DiffRowSpan>[header];
   final materialized = <_DiffRow>[];
 
   void flushMaterialized() {
