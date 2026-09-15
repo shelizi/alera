@@ -134,6 +134,7 @@ class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody> {
                             onResize: controller.setRightSidebarWidth,
                             onSetContextPanelTab: controller.setContextPanelTab,
                             onSetExplorerMode: controller.setExplorerMode,
+                            onSetShowHiddenFiles: controller.setShowHiddenFiles,
                             onSetGitDiffViewMode: controller.setGitDiffViewMode,
                             onSetGitDiffGroupMode:
                                 controller.setGitDiffGroupMode,

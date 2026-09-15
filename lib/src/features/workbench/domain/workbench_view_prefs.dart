@@ -89,6 +89,7 @@ class const WorkbenchViewPrefs({
   this.sidebarWidth = AleraTokens.sidebarDefaultWidth,
   this.activeContextPanelTab = WorkbenchContextPanelTab.explorer,
   this.explorerMode = WorkspaceExplorerMode.hideIgnored,
+  this.showHiddenFiles = false,
   this.gitDiffViewMode = GitDiffViewMode.tree,
   this.gitDiffGroupMode = GitDiffGroupMode.byArea,
   this.gitDiffContentMode = GitDiffContentMode.fullFile,
@@ -149,6 +150,12 @@ class const WorkbenchViewPrefs({
 
   final WorkbenchContextPanelTab activeContextPanelTab;
   final WorkspaceExplorerMode explorerMode;
+
+  /// Whether Windows Explorer listings include items carrying the Hidden
+  /// filesystem attribute. Defaults to false so hidden items stay out of the
+  /// workspace tree until the user explicitly reveals them.
+  final bool showHiddenFiles;
+
   final GitDiffViewMode gitDiffViewMode;
 
   /// Whether Source Control groups files by staged state or shows one list.
@@ -195,6 +202,7 @@ class const WorkbenchViewPrefs({
     sidebarWidth: AleraTokens.sidebarDefaultWidth,
     activeContextPanelTab: .explorer,
     explorerMode: .hideIgnored,
+    showHiddenFiles: false,
     gitDiffViewMode: .tree,
     gitDiffGroupMode: .byArea,
     gitDiffContentMode: .fullFile,

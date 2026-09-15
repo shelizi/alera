@@ -241,6 +241,13 @@ mixin _WorkbenchControllerViewPrefs
     _updateViewPrefs(state.viewPrefs.copyWith(explorerMode: mode));
   }
 
+  void setShowHiddenFiles(bool show) {
+    if (state.viewPrefs.showHiddenFiles == show) {
+      return;
+    }
+    _updateViewPrefs(state.viewPrefs.copyWith(showHiddenFiles: show));
+  }
+
   void setActiveContextPanelTab(WorkbenchContextPanelTab tab) {
     setContextPanelTab(tab);
   }

@@ -3,10 +3,13 @@ part of 'workspace_explorer.dart';
 class const _ExplorerToolbar({
   required final String title,
   required final WorkspaceExplorerMode mode,
+  required final bool showHiddenFiles,
+  required final bool showHiddenToggle,
   required final bool loading,
   required final VoidCallback onRefresh,
   required final VoidCallback onCollapseAll,
   required final VoidCallback onToggleMode,
+  required final VoidCallback onToggleHiddenFiles,
   required final VoidCallback onSaveAll,
   required final VoidCallback onNewFile,
   required final VoidCallback onNewFolder,
@@ -54,6 +57,16 @@ class const _ExplorerToolbar({
                   : AleraIcons.visible,
               onPressed: onToggleMode,
             ),
+            if (showHiddenToggle) ...<Widget>[
+              const SizedBox(width: AleraTokens.space2),
+              AleraIconButton(
+                tooltip: showHiddenFiles
+                    ? 'Hide hidden items'
+                    : 'Show hidden items',
+                icon: showHiddenFiles ? AleraIcons.visible : AleraIcons.hidden,
+                onPressed: onToggleHiddenFiles,
+              ),
+            ],
             const SizedBox(width: AleraTokens.space2),
             AleraIconButton(
               tooltip: 'Collapse All',

@@ -31,6 +31,8 @@ Future<void> _pumpExplorer(
               workspace: workspace ?? _workspace(),
               mode: .hideIgnored,
               onModeChanged: (_) {},
+              showHiddenFiles: false,
+              onShowHiddenFilesChanged: (_) {},
               onOpenFile: onOpenFile ?? (_) {},
               onOpenFilePermanently: onOpenFilePermanently,
               onOpenFileInAlera: onOpenFileInAlera,
@@ -56,6 +58,7 @@ class const _WorkspaceExplorerModeHarness() extends StatefulWidget {
 class _WorkspaceExplorerModeHarnessState
     extends State<_WorkspaceExplorerModeHarness> {
   WorkspaceExplorerMode _mode = .hideIgnored;
+  bool _showHiddenFiles = false;
 
   @override
   Widget build(BuildContext context) {
@@ -63,6 +66,9 @@ class _WorkspaceExplorerModeHarnessState
       workspace: _workspace(),
       mode: _mode,
       onModeChanged: (mode) => setState(() => _mode = mode),
+      showHiddenFiles: _showHiddenFiles,
+      onShowHiddenFilesChanged: (show) =>
+          setState(() => _showHiddenFiles = show),
       onOpenFile: (_) {},
       onPathMoved: (_, _) async {},
     );
@@ -118,6 +124,7 @@ Widget _workspaceContextSidebar(Workspace workspace) {
     onResize: (_) {},
     onSetContextPanelTab: (_) {},
     onSetExplorerMode: (_) {},
+    onSetShowHiddenFiles: (_) {},
     onSetGitDiffViewMode: (_) {},
     onSetGitDiffGroupMode: (_) {},
     onOpenFile: (_) {},
@@ -233,12 +240,14 @@ Workspace _workspace({
 native.WorkspaceFileEntry _file(
   String relativePath, {
   native.WorkspaceFileGitStatus? gitStatus,
+  bool isHidden = false,
 }) {
   return _entry(
     relativePath: relativePath,
     kind: native.WorkspaceFileKind.file,
     hasChildrenHint: false,
     gitStatus: gitStatus,
+    isHidden: isHidden,
   );
 }
 
@@ -246,12 +255,14 @@ native.WorkspaceFileEntry _directory(
   String relativePath, {
   required bool hasChildrenHint,
   native.WorkspaceFileGitStatus? gitStatus,
+  bool isHidden = false,
 }) {
   return _entry(
     relativePath: relativePath,
     kind: native.WorkspaceFileKind.directory,
     hasChildrenHint: hasChildrenHint,
     gitStatus: gitStatus,
+    isHidden: isHidden,
   );
 }
 
@@ -260,6 +271,7 @@ native.WorkspaceFileEntry _entry({
   required native.WorkspaceFileKind kind,
   required bool hasChildrenHint,
   native.WorkspaceFileGitStatus? gitStatus,
+  bool isHidden = false,
 }) {
   return native.WorkspaceFileEntry(
     relativePath: relativePath,
@@ -269,7 +281,7 @@ native.WorkspaceFileEntry _entry({
     modifiedMillis: 0,
     contentToken: '$relativePath-token',
     isIgnored: false,
-    isHidden: false,
+    isHidden: isHidden,
     isSymlink: false,
     isProtected: false,
     hasChildrenHint: hasChildrenHint,

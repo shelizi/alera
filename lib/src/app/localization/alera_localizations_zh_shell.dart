@@ -48,6 +48,8 @@ const Map<String, String> _traditionalChineseShell = <String, String>{
   'Duplicate': '建立副本',
   'Show ignored files': '顯示忽略的檔案',
   'Hide ignored files': '隱藏忽略的檔案',
+  'Show hidden items': '顯示隱藏項目',
+  'Hide hidden items': '不顯示隱藏項目',
   'Source control root': '原始碼控制根目錄',
   'Clear Source Control Root': '清除原始碼控制根目錄',
   'Use As Source Control Root': '設為原始碼控制根目錄',

@@ -43,6 +43,8 @@ void main() {
                 workspace: _workspace(),
                 mode: .hideIgnored,
                 onModeChanged: (_) {},
+                showHiddenFiles: false,
+                onShowHiddenFilesChanged: (_) {},
                 onOpenFile: (_) {},
                 onPathMoved: (_, _) async {},
               ),
@@ -254,6 +256,7 @@ class _PathDragWorkspaceFileService extends WorkspaceFileService {
     required String workspacePath,
     required String relativePath,
     required bool hideIgnored,
+    bool hideHidden = false,
   }) async {
     return relativePath.isEmpty
         ? _entries

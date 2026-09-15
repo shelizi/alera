@@ -557,6 +557,13 @@ extension _WorkspaceExplorerActions on _WorkspaceExplorerState {
     );
   }
 
+  void _toggleHiddenFiles() {
+    if (!mounted) {
+      return;
+    }
+    widget.onShowHiddenFilesChanged(!widget.showHiddenFiles);
+  }
+
   void _showInfo(String message) {
     if (!mounted) {
       return;

@@ -952,12 +952,28 @@ fn entry_for_path(
         modified_millis: modified_millis(&metadata),
         content_token: content_token(&metadata),
         is_ignored: false,
-        is_hidden: name.starts_with('.'),
+        is_hidden: is_hidden_entry(&name, &metadata),
         is_symlink,
         is_protected: false,
         has_children_hint,
         git_status: None,
     }))
+}
+
+fn is_hidden_entry(name: &str, metadata: &fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+
+        let _ = name;
+        const FILE_ATTRIBUTE_HIDDEN: u32 = 0x2;
+        metadata.file_attributes() & FILE_ATTRIBUTE_HIDDEN != 0
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = metadata;
+        name.starts_with('.')
+    }
 }
 
 fn relative_string(root: &Path, path: &Path) -> Result<String, WorkspaceFileError> {
@@ -1185,6 +1201,30 @@ mod tests {
             .any(|node| node.id == "path:src" || node.id == "path:src/main.dart"));
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn list_workspace_children_marks_windows_hidden_attribute() {
+        use std::process::Command;
+
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let hidden_path = workspace.path().join("hidden.txt");
+        fs::write(&hidden_path, "hidden").expect("write hidden file");
+        let status = Command::new("attrib")
+            .arg("+H")
+            .arg(&hidden_path)
+            .status()
+            .expect("set hidden attribute");
+        assert!(status.success());
+
+        let entries =
+            list_workspace_children(workspace_path(&workspace), String::new(), false).unwrap();
+        let hidden = entries
+            .iter()
+            .find(|entry| entry.name == "hidden.txt")
+            .expect("hidden file remains listable");
+        assert!(hidden.is_hidden);
+    }
+
     #[test]
     fn list_workspace_children_omits_git_status_outside_git_repositories() {
         let workspace = tempfile::tempdir().expect("tempdir");
@@ -1390,11 +1430,9 @@ mod tests {
         )
         .expect("save UTF-8 BOM editor file");
 
-        assert!(
-            fs::read(workspace.path().join("note.txt"))
-                .expect("read bytes")
-                .starts_with(b"\xef\xbb\xbf")
-        );
+        assert!(fs::read(workspace.path().join("note.txt"))
+            .expect("read bytes")
+            .starts_with(b"\xef\xbb\xbf"));
     }
 
     #[test]
