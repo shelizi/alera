@@ -706,6 +706,14 @@ String? _translateDynamicTraditionalChinese(String source) {
     return '${expiresSeconds.group(1)} 秒後到期';
   }
 
+  final requiredField = RegExp(r'^(.+) is required$').firstMatch(source);
+  if (requiredField != null) {
+    final field = requiredField.group(1)!;
+    final translatedField =
+        AleraLocalizations._traditionalChinese[field] ?? field;
+    return '$translatedField為必填';
+  }
+
   final selectedValue = RegExp(r'^Selected: (.+)$').firstMatch(source);
   if (selectedValue != null) {
     return '已選取：${selectedValue.group(1)}';

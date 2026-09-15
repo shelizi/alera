@@ -355,7 +355,7 @@ class const _OpenCommitGraphButton({required final VoidCallback? onPressed})
   @override
   Widget build(BuildContext context) {
     return IconButton(
-      tooltip: 'Open Commit Graph',
+      tooltip: context.tr('Open Commit Graph'),
       onPressed: onPressed,
       icon: const Icon(
         AleraIcons.maximize,
@@ -423,7 +423,7 @@ class _RefreshCommitsButtonState extends State<_RefreshCommitsButton>
   @override
   Widget build(BuildContext context) {
     return IconButton(
-      tooltip: 'Refresh Commits',
+      tooltip: context.tr('Refresh Commits'),
       onPressed: widget.loading ? null : widget.onPressed,
       icon: RotationTransition(
         turns: _controller,

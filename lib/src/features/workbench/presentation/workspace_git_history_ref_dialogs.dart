@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/forms/alera_text_field.dart';
 import 'package:alera/src/design_system/layout/alera_confirm_dialog.dart';
@@ -185,7 +186,10 @@ class _GitHistoryArchivePathDialogState
           mainAxisSize: .min,
           crossAxisAlignment: .start,
           children: <Widget>[
-            Text('Create Archive', style: theme.textTheme.titleMedium),
+            Text(
+              context.tr('Create Archive'),
+              style: theme.textTheme.titleMedium,
+            ),
             const SizedBox(height: AleraTokens.space16),
             AleraTextField(
               controller: _controller,
@@ -205,12 +209,12 @@ class _GitHistoryArchivePathDialogState
               children: <Widget>[
                 TextButton(
                   onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('Cancel'),
+                  child: Text(context.tr('Cancel')),
                 ),
                 const SizedBox(width: AleraTokens.space8),
                 FilledButton(
                   onPressed: _submit,
-                  child: const Text('Create Archive'),
+                  child: Text(context.tr('Create Archive')),
                 ),
               ],
             ),

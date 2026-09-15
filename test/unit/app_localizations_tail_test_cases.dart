@@ -503,6 +503,44 @@ void registerAppLocalizationTailTests() {
     expect(cliSource, contains('context.tr(detail)'));
   });
 
+  test('traditional Chinese localizes Git history input dialog copy', () {
+    final l10n = AleraLocalizations(const Locale('zh', 'TW'));
+    expect(l10n.translate('Create Branch Here'), '在此建立 Branch');
+    expect(l10n.translate('Branch Name'), 'Branch 名稱');
+    expect(l10n.translate('Create Branch'), '建立 Branch');
+    expect(l10n.translate('Create Worktree'), '建立 Worktree');
+    expect(l10n.translate('Create Archive'), '建立封存檔');
+    expect(l10n.translate('Archive Path'), '封存檔路徑');
+    expect(l10n.translate('Add Tag'), '新增 Tag');
+    expect(l10n.translate('Tag Name'), 'Tag 名稱');
+    expect(l10n.translate('Message (Optional)'), '訊息（選填）');
+    expect(l10n.translate('Output Path'), '輸出路徑');
+    expect(l10n.translate('Branch Name is required'), 'Branch 名稱為必填');
+    expect(l10n.translate('Tag name is required'), 'Tag 名稱為必填');
+    expect(l10n.translate('Output Path is required'), '輸出路徑為必填');
+  });
+
+  test('Git history direct text surfaces route through localization', () {
+    final inputSource = File(
+      'lib/src/features/workbench/presentation/workspace_git_history_input_dialogs.dart',
+    ).readAsStringSync();
+    final refDialogSource = File(
+      'lib/src/features/workbench/presentation/workspace_git_history_ref_dialogs.dart',
+    ).readAsStringSync();
+    final panelSource = File(
+      'lib/src/features/workbench/presentation/workspace_git_history_panel.dart',
+    ).readAsStringSync();
+
+    expect(inputSource, contains('Text(context.tr(widget.title)'));
+    expect(inputSource, contains("Text(context.tr('Cancel'))"));
+    expect(inputSource, contains('Text(context.tr(widget.confirmLabel))'));
+    expect(inputSource, contains("Text(context.tr('Add Tag')"));
+    expect(refDialogSource, contains("Text(context.tr('Create Archive')"));
+    expect(refDialogSource, contains("Text(context.tr('Cancel'))"));
+    expect(panelSource, contains("tooltip: context.tr('Open Commit Graph')"));
+    expect(panelSource, contains("tooltip: context.tr('Refresh Commits')"));
+  });
+
   test('English and unknown strings fall back to source text', () {
     final en = AleraLocalizations(const Locale('en'));
     final zh = AleraLocalizations(const Locale('zh', 'TW'));
