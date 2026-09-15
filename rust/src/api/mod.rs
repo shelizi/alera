@@ -3,6 +3,7 @@ pub mod agent_hooks;
 pub mod agent_runtime_resources;
 pub mod ai_dictation;
 pub mod clipboard;
+pub mod diagnostics;
 pub mod git;
 pub mod git_diff_blob;
 pub mod git_explorer_status;

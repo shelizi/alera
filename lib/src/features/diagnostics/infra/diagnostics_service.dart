@@ -55,15 +55,19 @@ class DiagnosticsService({
     return _openUri(.file(directory.path));
   }
 
-  /// Builds the bundle bytes for the current machine.
-  Future<List<int>> buildBundle({RuntimeDiagnosticsInfo? runtime}) async {
+  /// Streams the bundle for the current machine directly to [outputPath].
+  Future<void> writeBundleTo({
+    required String outputPath,
+    RuntimeDiagnosticsInfo? runtime,
+  }) async {
     // Pending writes must land first, or the bundle misses the very lines that
     // describe whatever the user is reporting.
     await AppLogger.flush();
     final info = await _packageInfo();
     final runtimeLogDirectory = runtime?.logDirectory;
 
-    return builder.build(
+    return builder.writeToFile(
+      outputPath: outputPath,
       metadata: DiagnosticsBundleMetadata(
         appVersion: '${info.version}+${info.buildNumber}',
         flavor: kAleraFlavor,

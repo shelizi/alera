@@ -3,7 +3,6 @@ import 'dart:io';
 
 import 'package:alera/src/features/diagnostics/domain/diagnostics_bundle_metadata.dart';
 import 'package:alera/src/features/diagnostics/infra/diagnostics_bundle_builder.dart';
-import 'package:archive/archive.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -40,97 +39,82 @@ void main() {
     );
   }
 
-  Archive decode(List<int> bytes) => ZipDecoder().decodeBytes(bytes);
+  test(
+    'forwards output, log directories, and metadata to the native writer',
+    () async {
+      String? capturedOutputPath;
+      String? capturedMetadataJson;
+      String? capturedAppLogDirectory;
+      String? capturedRuntimeLogDirectory;
+      final builder = DiagnosticsBundleBuilder(
+        nativeWriter:
+            ({
+              required outputPath,
+              required metadataJson,
+              appLogDirectory,
+              runtimeLogDirectory,
+            }) async {
+              capturedOutputPath = outputPath;
+              capturedMetadataJson = metadataJson;
+              capturedAppLogDirectory = appLogDirectory;
+              capturedRuntimeLogDirectory = runtimeLogDirectory;
+              return;
+            },
+      );
+      final outputPath = '${root.path}/bundle.zip';
 
-  String readEntry(Archive archive, String name) {
-    final file = archive.files.firstWhere((entry) => entry.name == name);
-    return utf8.decode(file.content as List<int>);
-  }
-
-  test('packs app and runtime logs under separate prefixes', () {
-    File('${appLogs.path}/alera.log').writeAsStringSync('{"msg":"app line"}');
-    File('${runtimeLogs.path}/runtime.log')
-        .writeAsStringSync('{"msg":"runtime line"}');
-
-    final archive = decode(
-      const DiagnosticsBundleBuilder().build(
-        metadata: metadata(runtimeVersion: '0.1.0'),
-        appLogDirectory: appLogs,
-        runtimeLogDirectory: runtimeLogs,
-      ),
-    );
-
-    expect(readEntry(archive, 'app/alera.log'), contains('app line'));
-    expect(readEntry(archive, 'runtime/runtime.log'), contains('runtime line'));
-  });
-
-  test('records versions and capabilities in the metadata entry', () {
-    final archive = decode(
-      const DiagnosticsBundleBuilder().build(
+      await builder.writeToFile(
+        outputPath: outputPath,
         metadata: metadata(
           runtimeVersion: '0.1.0',
           capabilities: <String>['hostDiagnosticsLogsV1'],
         ),
         appLogDirectory: appLogs,
         runtimeLogDirectory: runtimeLogs,
-      ),
+      );
+
+      expect(capturedOutputPath, outputPath);
+      expect(capturedAppLogDirectory, appLogs.path);
+      expect(capturedRuntimeLogDirectory, runtimeLogs.path);
+      final meta = jsonDecode(capturedMetadataJson!) as Map<String, Object?>;
+      expect((meta['app']! as Map<String, Object?>)['version'], '0.34.0+63');
+      expect((meta['app']! as Map<String, Object?>)['flavor'], 'dev');
+      final runtime = meta['runtime']! as Map<String, Object?>;
+      expect(runtime['reachable'], isTrue);
+      expect(runtime['version'], '0.1.0');
+      expect(runtime['protocolVersion'], 4);
+      expect(runtime['capabilities'], contains('hostDiagnosticsLogsV1'));
+    },
+  );
+
+  test('does not scan or reject missing log directories in Dart', () async {
+    final missingApp = Directory('${root.path}/does-not-exist');
+    final missingRuntime = Directory('${root.path}/also-missing');
+    String? capturedAppLogDirectory;
+    String? capturedRuntimeLogDirectory;
+    final builder = DiagnosticsBundleBuilder(
+      nativeWriter:
+          ({
+            required outputPath,
+            required metadataJson,
+            appLogDirectory,
+            runtimeLogDirectory,
+          }) async {
+            capturedAppLogDirectory = appLogDirectory;
+            capturedRuntimeLogDirectory = runtimeLogDirectory;
+            return;
+          },
     );
 
-    final meta =
-        jsonDecode(readEntry(archive, 'meta.json')) as Map<String, Object?>;
-    expect((meta['app']! as Map<String, Object?>)['version'], '0.34.0+63');
-    expect((meta['app']! as Map<String, Object?>)['flavor'], 'dev');
-    final runtime = meta['runtime']! as Map<String, Object?>;
-    expect(runtime['reachable'], isTrue);
-    expect(runtime['version'], '0.1.0');
-    expect(runtime['protocolVersion'], 4);
-    expect(runtime['capabilities'], contains('hostDiagnosticsLogsV1'));
-  });
-
-  test('marks the runtime unreachable when it could not be probed', () {
-    final archive = decode(
-      const DiagnosticsBundleBuilder().build(
-        metadata: metadata(),
-        appLogDirectory: appLogs,
-      ),
+    await builder.writeToFile(
+      outputPath: '${root.path}/bundle.zip',
+      metadata: metadata(),
+      appLogDirectory: missingApp,
+      runtimeLogDirectory: missingRuntime,
     );
 
-    final meta =
-        jsonDecode(readEntry(archive, 'meta.json')) as Map<String, Object?>;
-    expect((meta['runtime']! as Map<String, Object?>)['reachable'], isFalse);
-  });
-
-  test('skips a missing log directory rather than failing', () {
-    final archive = decode(
-      const DiagnosticsBundleBuilder().build(
-        metadata: metadata(),
-        appLogDirectory: Directory('${root.path}/does-not-exist'),
-        runtimeLogDirectory: Directory('${root.path}/also-missing'),
-      ),
-    );
-
-    expect(archive.files.map((file) => file.name), <String>['meta.json']);
-  });
-
-  test('ignores files that are not logs', () {
-    File('${appLogs.path}/alera.log').writeAsStringSync('kept');
-    File('${appLogs.path}/notes.txt').writeAsStringSync('dropped');
-
-    final archive = decode(
-      const DiagnosticsBundleBuilder().build(
-        metadata: metadata(),
-        appLogDirectory: appLogs,
-      ),
-    );
-
-    expect(
-      archive.files.map((file) => file.name),
-      containsAll(<String>['app/alera.log', 'meta.json']),
-    );
-    expect(
-      archive.files.map((file) => file.name),
-      isNot(contains('notes.txt')),
-    );
+    expect(capturedAppLogDirectory, missingApp.path);
+    expect(capturedRuntimeLogDirectory, missingRuntime.path);
   });
 
   test('suggested file name is filesystem safe', () {

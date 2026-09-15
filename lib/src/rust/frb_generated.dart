@@ -8,6 +8,7 @@ import 'api/agent_hooks.dart';
 import 'api/agent_runtime_resources.dart';
 import 'api/ai_dictation.dart';
 import 'api/clipboard.dart';
+import 'api/diagnostics.dart';
 import 'api/git.dart';
 import 'api/git/git_archive_ops.dart';
 import 'api/git/git_branch.dart';
@@ -89,7 +90,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.13.0';
 
   @override
-  int get rustContentHash => 993276628;
+  int get rustContentHash => -1790975649;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -725,6 +726,13 @@ abstract class RustLibApi extends BaseApi {
   Stream<WorkspaceExplorerWatchBatch>
   crateApiWorkspaceFilesWatchWorkspaceExplorerEvents({
     required WorkspaceExplorerWatcherHandle handle,
+  });
+
+  Future<void> crateApiDiagnosticsWriteDiagnosticsBundle({
+    required String outputPath,
+    required String metadataJson,
+    String? appLogDirectory,
+    String? runtimeLogDirectory,
   });
 
   Future<WorkspaceEditorTextFile>
@@ -5326,6 +5334,55 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<void> crateApiDiagnosticsWriteDiagnosticsBundle({
+    required String outputPath,
+    required String metadataJson,
+    String? appLogDirectory,
+    String? runtimeLogDirectory,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(outputPath, serializer);
+          sse_encode_String(metadataJson, serializer);
+          sse_encode_opt_String(appLogDirectory, serializer);
+          sse_encode_opt_String(runtimeLogDirectory, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 128,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiDiagnosticsWriteDiagnosticsBundleConstMeta,
+        argValues: [
+          outputPath,
+          metadataJson,
+          appLogDirectory,
+          runtimeLogDirectory,
+        ],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiDiagnosticsWriteDiagnosticsBundleConstMeta =>
+      const TaskConstMeta(
+        debugName: "write_diagnostics_bundle",
+        argNames: [
+          "outputPath",
+          "metadataJson",
+          "appLogDirectory",
+          "runtimeLogDirectory",
+        ],
+      );
+
+  @override
   Future<WorkspaceEditorTextFile>
   crateApiWorkspaceFilesWriteWorkspaceEditorTextFile({
     required String workspacePath,
@@ -5354,7 +5411,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 128,
+            funcId: 129,
             port: port_,
           );
         },
@@ -5416,7 +5473,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 129,
+            funcId: 130,
             port: port_,
           );
         },

@@ -97,10 +97,10 @@ class const DiagnosticsSettingsSection({
 
   Future<void> _exportBundle(BuildContext context, WidgetRef ref) async {
     final service = ref.read(diagnosticsServiceProvider);
-    // Read before the picker opens: awaiting a dialog first would leave the
-    // most recent lines out of the bundle.
+    // Capture runtime facts before the picker. The service flushes and streams
+    // logs only after a destination is chosen, so lines written while the picker
+    // is open are included without keeping the ZIP in Dart memory.
     final runtime = await ref.read(runtimeDiagnosticsInfoProvider.future);
-    final bytes = await service.buildBundle(runtime: runtime);
 
     final location = await getSaveLocation(
       suggestedName: service.suggestedFileName(),
@@ -111,10 +111,7 @@ class const DiagnosticsSettingsSection({
     if (location == null) {
       return;
     }
-    await XFile.fromData(
-      .fromList(bytes),
-      mimeType: 'application/zip',
-    ).saveTo(location.path);
+    await service.writeBundleTo(outputPath: location.path, runtime: runtime);
 
     if (!context.mounted) {
       return;

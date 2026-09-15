@@ -2,57 +2,39 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:alera/src/features/diagnostics/domain/diagnostics_bundle_metadata.dart';
-import 'package:archive/archive.dart';
-import 'package:path/path.dart' as p;
+import 'package:alera/src/rust/api/diagnostics.dart' as native;
 
-/// Packs app logs, runtime logs and build metadata into one archive.
+typedef DiagnosticsBundleNativeWriter = Future<void> Function({
+  required String outputPath,
+  required String metadataJson,
+  String? appLogDirectory,
+  String? runtimeLogDirectory,
+});
+
+/// Streams app logs, runtime logs and build metadata into one native ZIP file.
 ///
-/// A single file is what actually gets attached to a report; asking a user to
-/// find two log directories and note their versions loses most of the context
-/// that makes a log readable.
-class const DiagnosticsBundleBuilder() {
-  static const String appLogPrefix = 'app';
-  static const String runtimeLogPrefix = 'runtime';
-  static const String metadataEntryName = 'meta.json';
+/// Rust owns the archive writer so log contents never have to be materialized as
+/// one large Dart `List<int>` before the file is saved.
+class const DiagnosticsBundleBuilder({
+  this.nativeWriter = native.writeDiagnosticsBundle,
+}) {
+  final DiagnosticsBundleNativeWriter nativeWriter;
 
-  /// Builds the archive bytes. Missing directories are skipped rather than
-  /// treated as an error: a runtime that never started has no logs, and that
-  /// bundle is still worth producing.
-  List<int> build({
+  /// Writes the archive directly to [outputPath]. Missing log directories are
+  /// skipped by the native writer.
+  Future<void> writeToFile({
+    required String outputPath,
     required DiagnosticsBundleMetadata metadata,
     Directory? appLogDirectory,
     Directory? runtimeLogDirectory,
   }) {
-    final archive = Archive();
-
-    _addDirectory(archive, appLogDirectory, appLogPrefix);
-    _addDirectory(archive, runtimeLogDirectory, runtimeLogPrefix);
-
-    final meta = utf8.encode(
-      const JsonEncoder.withIndent('  ').convert(metadata.toJson()),
+    return nativeWriter(
+      outputPath: outputPath,
+      metadataJson: const JsonEncoder.withIndent('  ')
+          .convert(metadata.toJson()),
+      appLogDirectory: appLogDirectory?.path,
+      runtimeLogDirectory: runtimeLogDirectory?.path,
     );
-    archive.addFile(ArchiveFile(metadataEntryName, meta.length, meta));
-
-    return ZipEncoder().encode(archive);
-  }
-
-  void _addDirectory(Archive archive, Directory? directory, String prefix) {
-    if (directory == null || !directory.existsSync()) {
-      return;
-    }
-    final files =
-        directory
-            .listSync()
-            .whereType<File>()
-            .where((file) => p.extension(file.path) == '.log')
-            .toList()
-          ..sort((a, b) => a.path.compareTo(b.path));
-    for (final file in files) {
-      final bytes = file.readAsBytesSync();
-      archive.addFile(
-        ArchiveFile('$prefix/${p.basename(file.path)}', bytes.length, bytes),
-      );
-    }
   }
 
   /// Default file name for the saved bundle.
