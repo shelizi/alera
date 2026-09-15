@@ -7,10 +7,10 @@ use git2::{
 };
 
 use super::{
-    open_repo, GitChangeArea, GitChangeEntry, GitChangeStatus, GitCommitChangeEntry,
-    GitCommitCompareResult, GitCommitCompareStatus, GitCommitCompareSummary, GitDiffFile,
-    GitDiffLine, GitDiffLineKind, GitDiffPage, GitDiffResult, GitDiffWhitespaceMode, GitError,
-    GitErrorKind, GitStatusResult, GitSubmoduleStatus,
+    open_repo, GitChangeArea, GitChangeEntry, GitChangeGroup, GitChangeStatus,
+    GitCommitChangeEntry, GitCommitCompareResult, GitCommitCompareStatus, GitCommitCompareSummary,
+    GitDiffFile, GitDiffLine, GitDiffLineKind, GitDiffPage, GitDiffResult, GitDiffWhitespaceMode,
+    GitError, GitErrorKind, GitStatusResult, GitSubmoduleStatus,
 };
 
 #[path = "git_diff_combined.rs"]
@@ -1087,14 +1087,45 @@ fn diff_line_stats_for_paths(
 }
 
 fn status_result_from_entries(entries: Vec<GitChangeEntry>) -> GitStatusResult {
-    // The Dart side derives groups and tree rows via GitChangeGroup.fromEntries.
-    // Sending them here would serialize every entry three times over the bridge
-    // (flat list, per-group list, and per-file tree row), which stalls decoding
-    // on the UI isolate for large changesets.
-    GitStatusResult {
-        entries,
-        groups: Vec::new(),
+    let groups = status_group_projections(&entries);
+    GitStatusResult { entries, groups }
+}
+
+fn status_group_projections(entries: &[GitChangeEntry]) -> Vec<GitChangeGroup> {
+    let mut staged = Vec::new();
+    let mut unstaged = Vec::new();
+    let mut untracked = Vec::new();
+
+    for (index, entry) in entries.iter().enumerate() {
+        let index = index as u32;
+        match entry.area {
+            GitChangeArea::Staged => staged.push(index),
+            GitChangeArea::Unstaged => unstaged.push(index),
+            GitChangeArea::Untracked => untracked.push(index),
+        }
     }
+
+    let mut groups = Vec::with_capacity(3);
+    for (area, mut entry_indices) in [
+        (GitChangeArea::Staged, staged),
+        (GitChangeArea::Unstaged, unstaged),
+        (GitChangeArea::Untracked, untracked),
+    ] {
+        if entry_indices.is_empty() {
+            continue;
+        }
+        entry_indices.sort_unstable_by(|left, right| {
+            entries[*left as usize]
+                .path
+                .cmp(&entries[*right as usize].path)
+        });
+        groups.push(GitChangeGroup {
+            area,
+            entry_indices,
+            tree_rows: Vec::new(),
+        });
+    }
+    groups
 }
 
 fn delta_path(delta: &git2::DiffDelta<'_>, old: bool) -> Result<String, GitError> {

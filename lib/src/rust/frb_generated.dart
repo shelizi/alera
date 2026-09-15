@@ -5451,7 +5451,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
     return GitChangeGroup(
       area: dco_decode_git_change_area(arr[0]),
-      entries: dco_decode_list_git_change_entry(arr[1]),
+      entryIndices: dco_decode_list_prim_u_32_strict(arr[1]),
       treeRows: dco_decode_list_git_change_tree_row(arr[2]),
     );
   }
@@ -6000,6 +6000,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   List<GitWorktreeEntry> dco_decode_list_git_worktree_entry(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return (raw as List<dynamic>).map(dco_decode_git_worktree_entry).toList();
+  }
+
+  @protected
+  Uint32List dco_decode_list_prim_u_32_strict(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw as Uint32List;
   }
 
   @protected
@@ -7274,11 +7280,11 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   GitChangeGroup sse_decode_git_change_group(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_area = sse_decode_git_change_area(deserializer);
-    var var_entries = sse_decode_list_git_change_entry(deserializer);
+    var var_entryIndices = sse_decode_list_prim_u_32_strict(deserializer);
     var var_treeRows = sse_decode_list_git_change_tree_row(deserializer);
     return GitChangeGroup(
       area: var_area,
-      entries: var_entries,
+      entryIndices: var_entryIndices,
       treeRows: var_treeRows,
     );
   }
@@ -8016,6 +8022,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       ans_.add(sse_decode_git_worktree_entry(deserializer));
     }
     return ans_;
+  }
+
+  @protected
+  Uint32List sse_decode_list_prim_u_32_strict(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var len_ = sse_decode_i_32(deserializer);
+    return deserializer.buffer.getUint32List(len_);
   }
 
   @protected
@@ -9517,7 +9530,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_git_change_area(self.area, serializer);
-    sse_encode_list_git_change_entry(self.entries, serializer);
+    sse_encode_list_prim_u_32_strict(self.entryIndices, serializer);
     sse_encode_list_git_change_tree_row(self.treeRows, serializer);
   }
 
@@ -10125,6 +10138,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     for (final item in self) {
       sse_encode_git_worktree_entry(item, serializer);
     }
+  }
+
+  @protected
+  void sse_encode_list_prim_u_32_strict(
+    Uint32List self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    serializer.buffer.putUint32List(self);
   }
 
   @protected

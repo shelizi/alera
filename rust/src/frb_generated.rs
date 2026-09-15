@@ -4916,11 +4916,11 @@ impl SseDecode for crate::api::git::GitChangeGroup {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_area = <crate::api::git::GitChangeArea>::sse_decode(deserializer);
-        let mut var_entries = <Vec<crate::api::git::GitChangeEntry>>::sse_decode(deserializer);
+        let mut var_entryIndices = <Vec<u32>>::sse_decode(deserializer);
         let mut var_treeRows = <Vec<crate::api::git::GitChangeTreeRow>>::sse_decode(deserializer);
         return crate::api::git::GitChangeGroup {
             area: var_area,
-            entries: var_entries,
+            entry_indices: var_entryIndices,
             tree_rows: var_treeRows,
         };
     }
@@ -5738,6 +5738,18 @@ impl SseDecode for Vec<crate::api::git::GitWorktreeEntry> {
             ans_.push(<crate::api::git::GitWorktreeEntry>::sse_decode(
                 deserializer,
             ));
+        }
+        return ans_;
+    }
+}
+
+impl SseDecode for Vec<u32> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = Vec::with_capacity(len_ as usize);
+        for idx_ in 0..len_ {
+            ans_.push(<u32>::sse_decode(deserializer));
         }
         return ans_;
     }
@@ -7697,7 +7709,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::git::GitChangeGroup {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
             self.area.into_into_dart().into_dart(),
-            self.entries.into_into_dart().into_dart(),
+            self.entry_indices.into_into_dart().into_dart(),
             self.tree_rows.into_into_dart().into_dart(),
         ]
         .into_dart()
@@ -9761,7 +9773,7 @@ impl SseEncode for crate::api::git::GitChangeGroup {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <crate::api::git::GitChangeArea>::sse_encode(self.area, serializer);
-        <Vec<crate::api::git::GitChangeEntry>>::sse_encode(self.entries, serializer);
+        <Vec<u32>>::sse_encode(self.entry_indices, serializer);
         <Vec<crate::api::git::GitChangeTreeRow>>::sse_encode(self.tree_rows, serializer);
     }
 }
@@ -10398,6 +10410,16 @@ impl SseEncode for Vec<crate::api::git::GitWorktreeEntry> {
         <i32>::sse_encode(self.len() as _, serializer);
         for item in self {
             <crate::api::git::GitWorktreeEntry>::sse_encode(item, serializer);
+        }
+    }
+}
+
+impl SseEncode for Vec<u32> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <u32>::sse_encode(item, serializer);
         }
     }
 }

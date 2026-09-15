@@ -143,7 +143,11 @@ pub struct GitChangeTreeRow {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GitChangeGroup {
     pub area: GitChangeArea,
-    pub entries: Vec<GitChangeEntry>,
+    /// Indices into `GitStatusResult.entries`, sorted by path for this area.
+    /// Keeping references instead of cloned entries prevents status payloads
+    /// from serializing every change a second time across FRB.
+    pub entry_indices: Vec<u32>,
+    /// Tree rows remain empty until the native tree-projection migration lands.
     pub tree_rows: Vec<GitChangeTreeRow>,
 }
 

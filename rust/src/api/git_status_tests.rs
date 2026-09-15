@@ -90,9 +90,9 @@ fn git_status_splits_untracked_unstaged_and_staged_changes() {
             && entry.added.is_none()
             && entry.removed == Some(0)
     }));
-    // Groups and tree rows are derived on the Dart side, so the wire result
-    // carries the flat entries only, ordered untracked then unstaged then staged.
-    assert!(status.groups.is_empty());
+    // Group projections reference the flat entries by index, so changes still
+    // cross the bridge only once while native code owns area grouping/sorting.
+    assert_eq!(status.groups.len(), 3);
     assert_eq!(
         status
             .entries
@@ -104,6 +104,38 @@ fn git_status_splits_untracked_unstaged_and_staged_changes() {
             GitChangeArea::Unstaged,
             GitChangeArea::Staged,
         ]
+    );
+}
+
+#[test]
+fn git_status_projects_area_groups_as_sorted_entry_indices() {
+    let repo = init_repo();
+    std::fs::write(repo.path().join("README.md"), "hello\nstaged\n").expect("write staged");
+    run_git(repo.path(), &["add", "README.md"]);
+    std::fs::write(repo.path().join("README.md"), "hello\nstaged\nunstaged\n")
+        .expect("write unstaged");
+    std::fs::write(repo.path().join("z-last.txt"), "z\n").expect("write z");
+    std::fs::write(repo.path().join("a-first.txt"), "a\n").expect("write a");
+
+    let status = git_status(path_str(repo.path())).unwrap();
+
+    assert_eq!(status.groups.len(), 3);
+    assert_eq!(status.groups[0].area, GitChangeArea::Staged);
+    assert_eq!(status.groups[1].area, GitChangeArea::Unstaged);
+    assert_eq!(status.groups[2].area, GitChangeArea::Untracked);
+
+    let paths_for = |group: &GitChangeGroup| {
+        group
+            .entry_indices
+            .iter()
+            .map(|index| status.entries[*index as usize].path.as_str())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(paths_for(&status.groups[0]), vec!["README.md"]);
+    assert_eq!(paths_for(&status.groups[1]), vec!["README.md"]);
+    assert_eq!(
+        paths_for(&status.groups[2]),
+        vec!["a-first.txt", "z-last.txt"]
     );
 }
 
@@ -160,7 +192,7 @@ fn git_status_for_path_limits_results_to_selected_file() {
 }
 
 #[test]
-fn git_status_leaves_groups_empty_for_client_side_tree_projection() {
+fn git_status_keeps_group_projection_entries_index_only() {
     let repo = init_repo();
     std::fs::create_dir_all(repo.path().join("lib/src")).expect("create lib src");
     std::fs::write(repo.path().join("lib/src/a.dart"), "a\n").expect("write a");
@@ -168,9 +200,12 @@ fn git_status_leaves_groups_empty_for_client_side_tree_projection() {
 
     let status = git_status(path_str(repo.path())).unwrap();
 
-    // The source control panel rebuilds groups and tree rows on the Dart side
-    // from these flat entries, so nested paths cross the bridge exactly once.
-    assert!(status.groups.is_empty());
+    // Native grouping must not clone entries into each group. Tree rows are
+    // intentionally deferred to the next migration slice.
+    assert_eq!(status.groups.len(), 1);
+    assert_eq!(status.groups[0].area, GitChangeArea::Untracked);
+    assert_eq!(status.groups[0].entry_indices, vec![0, 1]);
+    assert!(status.groups[0].tree_rows.is_empty());
     assert_eq!(
         status
             .entries

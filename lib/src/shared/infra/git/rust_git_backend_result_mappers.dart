@@ -37,12 +37,46 @@ extension on RustGitBackend {
     if (projectedEntries.isNotEmpty) {
       await Future.pause();
     }
-    // The native side sends the flat entries only so each change crosses the
-    // bridge once; groups and tree rows are derived locally instead. Both
-    // projection stages yield so a large status cannot monopolize a frame.
+    final nativeGroups = result.groups;
+    if (nativeGroups.isEmpty && projectedEntries.isNotEmpty) {
+      // Backward-compatible fallback for older/mock native results. Production
+      // Rust status results provide index-only groups so entries cross FRB once.
+      return GitStatusResult(
+        entries: projectedEntries,
+        groups: await GitChangeGroup.fromEntriesChunked(projectedEntries),
+      );
+    }
+
+    final groups = <GitChangeGroup>[];
+    for (final nativeGroup in nativeGroups) {
+      final areaEntries = <GitChangeEntry>[];
+      for (var index = 0; index < nativeGroup.entryIndices.length; index += 1) {
+        final entryIndex = nativeGroup.entryIndices[index];
+        if (entryIndex >= projectedEntries.length) {
+          throw StateError(
+            'Native Git status group index $entryIndex is outside the '
+            '${projectedEntries.length}-entry status result.',
+          );
+        }
+        areaEntries.add(projectedEntries[entryIndex]);
+        if ((index + 1) % gitStatusWorkChunkSize == 0) {
+          await Future.pause();
+        }
+      }
+      groups.add(
+        await GitChangeGroup.fromProjectedEntriesChunked(
+          area: _toArea(nativeGroup.area),
+          entries: List<GitChangeEntry>.unmodifiableOf(areaEntries),
+        ),
+      );
+    }
+
+    // Native code owns area grouping and path ordering. Dart only materializes
+    // the referenced entries and builds tree rows until that projection also
+    // moves to Rust in the next migration slice.
     return GitStatusResult(
       entries: projectedEntries,
-      groups: await GitChangeGroup.fromEntriesChunked(projectedEntries),
+      groups: List<GitChangeGroup>.unmodifiableOf(groups),
     );
   }
 

@@ -365,17 +365,23 @@ class GitChangeEntry {
 
 class GitChangeGroup {
   final GitChangeArea area;
-  final List<GitChangeEntry> entries;
+
+  /// Indices into `GitStatusResult.entries`, sorted by path for this area.
+  /// Keeping references instead of cloned entries prevents status payloads
+  /// from serializing every change a second time across FRB.
+  final Uint32List entryIndices;
+
+  /// Tree rows remain empty until the native tree-projection migration lands.
   final List<GitChangeTreeRow> treeRows;
 
   const GitChangeGroup({
     required this.area,
-    required this.entries,
+    required this.entryIndices,
     required this.treeRows,
   });
 
   @override
-  int get hashCode => area.hashCode ^ entries.hashCode ^ treeRows.hashCode;
+  int get hashCode => area.hashCode ^ entryIndices.hashCode ^ treeRows.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -383,7 +389,7 @@ class GitChangeGroup {
       other is GitChangeGroup &&
           runtimeType == other.runtimeType &&
           area == other.area &&
-          entries == other.entries &&
+          entryIndices == other.entryIndices &&
           treeRows == other.treeRows;
 }
 
