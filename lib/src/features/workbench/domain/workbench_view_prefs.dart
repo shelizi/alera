@@ -93,6 +93,7 @@ class const WorkbenchViewPrefs({
   this.gitDiffGroupMode = GitDiffGroupMode.byArea,
   this.gitDiffContentMode = GitDiffContentMode.fullFile,
   this.gitDiffPresentationMode = GitDiffPresentationMode.unified,
+  this.gitDiffWhitespaceMode = 'normal',
   this.pullRequestCreateAction = PullRequestCreateAction.publish,
   this.workspaceKindFilter = WorkspaceKindFilter.all,
   this.showActiveWorkspacesOnly = false,
@@ -159,6 +160,10 @@ class const WorkbenchViewPrefs({
   /// Whether git diffs are laid out in one column or split side-by-side.
   final GitDiffPresentationMode gitDiffPresentationMode;
 
+  /// Persisted Git diff whitespace comparison policy. Stored as a stable key
+  /// so the Git infrastructure enum does not leak into workbench persistence.
+  final String gitDiffWhitespaceMode;
+
   /// Sticky create-PR split-button action (publish vs draft). App-wide and
   /// persisted with the rest of the workbench view prefs.
   final PullRequestCreateAction pullRequestCreateAction;
@@ -194,6 +199,7 @@ class const WorkbenchViewPrefs({
     gitDiffGroupMode: .byArea,
     gitDiffContentMode: .fullFile,
     gitDiffPresentationMode: .unified,
+    gitDiffWhitespaceMode: 'normal',
     pullRequestCreateAction: .publish,
     workspaceKindFilter: .all,
     showActiveWorkspacesOnly: false,

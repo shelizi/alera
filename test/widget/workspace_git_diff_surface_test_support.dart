@@ -7,11 +7,15 @@ Future<void> _pumpDiffSurface(
   WorkspaceTabRecord? tab,
   ReadingDiffService? readingDiffService,
   SettingsController? settingsController,
+  WorkspaceFileService? workspaceFileService,
 }) {
   return tester.pumpWidget(
     ProviderScope(
       overrides: [
         gitBackendProvider.overrideWithValue(backend),
+        workspaceFileServiceProvider.overrideWithValue(
+          workspaceFileService ?? _DiffEncodingFileService(),
+        ),
         if (settingsController == null)
           settingsControllerProvider.overrideWithValue(.defaults)
         else
@@ -36,6 +40,97 @@ Future<void> _pumpDiffSurface(
       ),
     ),
   );
+}
+
+typedef _DiffDecodeCallback = FutureOr<native.WorkspaceDecodedText> Function(
+  List<int> bytes,
+  native.WorkspaceTextEncoding? encoding,
+);
+
+class _DiffEncodingFileService extends WorkspaceFileService {
+  _DiffEncodingFileService({this._decode});
+
+  final _DiffDecodeCallback? _decode;
+  final List<({List<int> bytes, native.WorkspaceTextEncoding? encoding})>
+  decodeCalls = <({List<int> bytes, native.WorkspaceTextEncoding? encoding})>[];
+
+  @override
+  Future<native.WorkspaceDecodedText> decodeTextBytes({
+    required List<int> bytes,
+    native.WorkspaceTextEncoding? encoding,
+  }) async {
+    decodeCalls.add((bytes: List<int>.from(bytes), encoding: encoding));
+    final decode = _decode;
+    if (decode != null) return await decode(bytes, encoding);
+    return native.WorkspaceDecodedText(
+      content: utf8.decode(bytes),
+      encoding: encoding ?? native.WorkspaceTextEncoding.utf8,
+    );
+  }
+}
+
+class _EditableDiffFileService extends _DiffEncodingFileService {
+  _EditableDiffFileService({required String content})
+    : current = native.WorkspaceEditorTextFile(
+        rawContent: content,
+        displayContent: content,
+        contentToken: 'token-1',
+        modifiedMillis: 1,
+        size: BigInt.from(content.length),
+        encoding: native.WorkspaceTextEncoding.utf8,
+      );
+
+  native.WorkspaceEditorTextFile current;
+  int readCount = 0;
+  final List<
+    ({
+      String currentDisplayContent,
+      String? expectedContentToken,
+      bool overwriteIfChanged,
+      native.WorkspaceTextEncoding encoding,
+    })
+  >
+  writes = [];
+
+  @override
+  Future<native.WorkspaceEditorTextFile> readEditorTextFile({
+    required String workspacePath,
+    required String relativePath,
+    required int tabSize,
+    native.WorkspaceTextEncoding? encoding,
+  }) async {
+    readCount += 1;
+    return current;
+  }
+
+  @override
+  Future<native.WorkspaceEditorTextFile> writeEditorTextFile({
+    required String workspacePath,
+    required String relativePath,
+    required String currentDisplayContent,
+    required String? originalRawContent,
+    required String? originalDisplayContent,
+    required String? expectedContentToken,
+    required bool overwriteIfChanged,
+    required int tabSize,
+    required native.WorkspaceTextEncoding encoding,
+  }) async {
+    writes.add((
+      currentDisplayContent: currentDisplayContent,
+      expectedContentToken: expectedContentToken,
+      overwriteIfChanged: overwriteIfChanged,
+      encoding: encoding,
+    ));
+    current = native.WorkspaceEditorTextFile(
+      rawContent: currentDisplayContent,
+      displayContent: currentDisplayContent,
+      contentToken: 'token-${writes.length + 1}',
+      modifiedMillis: writes.length + 1,
+      size: BigInt.from(currentDisplayContent.length),
+      encoding: encoding,
+    );
+    return current;
+  }
 }
 
 class _MutableSettingsController(final AleraSettings _settings)
@@ -118,10 +213,15 @@ WorkspaceTabRecord _diffTab({
 }
 
 class _GitDiffSurfaceTestController extends WorkbenchController {
+  _GitDiffSurfaceTestController({
+    this.initialViewPrefs = WorkbenchViewPrefs.defaults,
+  });
+
+  final WorkbenchViewPrefs initialViewPrefs;
   final List<String> openedRelativePaths = <String>[];
 
   @override
-  WorkbenchState build() => const WorkbenchState();
+  WorkbenchState build() => WorkbenchState(viewPrefs: initialViewPrefs);
 
   @override
   Future<WorkspaceTabRecord> openEditorTab({
@@ -185,8 +285,10 @@ class _ProgressiveAllDiffBackend extends FakeGitBackend {
   Future<GitDiffPage> diffAllPage({
     required String path,
     required List<String> filePaths,
+    GitDiffWhitespaceMode whitespaceMode = GitDiffWhitespaceMode.normal,
   }) async {
     final files = <GitDiffFile>[];
+    lastDiffWhitespaceMode = whitespaceMode;
     for (final filePath in filePaths) {
       requestedFilePaths.add(filePath);
       await gates[filePath]?.future;
@@ -197,6 +299,7 @@ class _ProgressiveAllDiffBackend extends FakeGitBackend {
       GitBackendCall('diffAllPage', <String, Object?>{
         'path': path,
         'filePaths': filePaths,
+        'whitespaceMode': whitespaceMode,
       }),
     );
     return GitDiffPage(files: files);

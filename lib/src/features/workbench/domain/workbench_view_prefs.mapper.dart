@@ -701,6 +701,15 @@ class WorkbenchViewPrefsMapper extends ClassMapperBase<WorkbenchViewPrefs> {
     opt: true,
     def: GitDiffPresentationMode.unified,
   );
+  static String _$gitDiffWhitespaceMode(WorkbenchViewPrefs v) =>
+      v.gitDiffWhitespaceMode;
+  static const Field<WorkbenchViewPrefs, String> _f$gitDiffWhitespaceMode =
+      Field(
+        'gitDiffWhitespaceMode',
+        _$gitDiffWhitespaceMode,
+        opt: true,
+        def: 'normal',
+      );
   static PullRequestCreateAction _$pullRequestCreateAction(
     WorkbenchViewPrefs v,
   ) => v.pullRequestCreateAction;
@@ -756,6 +765,7 @@ class WorkbenchViewPrefsMapper extends ClassMapperBase<WorkbenchViewPrefs> {
     #gitDiffGroupMode: _f$gitDiffGroupMode,
     #gitDiffContentMode: _f$gitDiffContentMode,
     #gitDiffPresentationMode: _f$gitDiffPresentationMode,
+    #gitDiffWhitespaceMode: _f$gitDiffWhitespaceMode,
     #pullRequestCreateAction: _f$pullRequestCreateAction,
     #workspaceKindFilter: _f$workspaceKindFilter,
     #showActiveWorkspacesOnly: _f$showActiveWorkspacesOnly,
@@ -791,6 +801,7 @@ class WorkbenchViewPrefsMapper extends ClassMapperBase<WorkbenchViewPrefs> {
       gitDiffGroupMode: data.dec(_f$gitDiffGroupMode),
       gitDiffContentMode: data.dec(_f$gitDiffContentMode),
       gitDiffPresentationMode: data.dec(_f$gitDiffPresentationMode),
+      gitDiffWhitespaceMode: data.dec(_f$gitDiffWhitespaceMode),
       pullRequestCreateAction: data.dec(_f$pullRequestCreateAction),
       workspaceKindFilter: data.dec(_f$workspaceKindFilter),
       showActiveWorkspacesOnly: data.dec(_f$showActiveWorkspacesOnly),
@@ -895,6 +906,7 @@ abstract class WorkbenchViewPrefsCopyWith<
     GitDiffGroupMode? gitDiffGroupMode,
     GitDiffContentMode? gitDiffContentMode,
     GitDiffPresentationMode? gitDiffPresentationMode,
+    String? gitDiffWhitespaceMode,
     PullRequestCreateAction? pullRequestCreateAction,
     WorkspaceKindFilter? workspaceKindFilter,
     bool? showActiveWorkspacesOnly,
@@ -945,6 +957,7 @@ class _WorkbenchViewPrefsCopyWithImpl<$R, $Out>
     GitDiffGroupMode? gitDiffGroupMode,
     GitDiffContentMode? gitDiffContentMode,
     GitDiffPresentationMode? gitDiffPresentationMode,
+    String? gitDiffWhitespaceMode,
     PullRequestCreateAction? pullRequestCreateAction,
     WorkspaceKindFilter? workspaceKindFilter,
     bool? showActiveWorkspacesOnly,
@@ -986,6 +999,8 @@ class _WorkbenchViewPrefsCopyWithImpl<$R, $Out>
       if (gitDiffContentMode != null) #gitDiffContentMode: gitDiffContentMode,
       if (gitDiffPresentationMode != null)
         #gitDiffPresentationMode: gitDiffPresentationMode,
+      if (gitDiffWhitespaceMode != null)
+        #gitDiffWhitespaceMode: gitDiffWhitespaceMode,
       if (pullRequestCreateAction != null)
         #pullRequestCreateAction: pullRequestCreateAction,
       if (workspaceKindFilter != null)
@@ -1064,6 +1079,10 @@ class _WorkbenchViewPrefsCopyWithImpl<$R, $Out>
     gitDiffPresentationMode: data.get(
       #gitDiffPresentationMode,
       or: $value.gitDiffPresentationMode,
+    ),
+    gitDiffWhitespaceMode: data.get(
+      #gitDiffWhitespaceMode,
+      or: $value.gitDiffWhitespaceMode,
     ),
     pullRequestCreateAction: data.get(
       #pullRequestCreateAction,

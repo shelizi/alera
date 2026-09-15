@@ -135,6 +135,7 @@ class _FakeWorkspaceFileService({
     required String? expectedContentToken,
     required bool overwriteIfChanged,
     required int tabSize,
+    required native.WorkspaceTextEncoding encoding,
   }) async {
     writtenFiles[relativePath] = currentDisplayContent;
     return native.WorkspaceEditorTextFile(
@@ -143,6 +144,7 @@ class _FakeWorkspaceFileService({
       contentToken: '$relativePath-saved-token',
       modifiedMillis: 1,
       size: .from(currentDisplayContent.length),
+      encoding: encoding,
     );
   }
 

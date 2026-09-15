@@ -273,6 +273,13 @@ mixin _WorkbenchControllerViewPrefs
     _updateViewPrefs(state.viewPrefs.copyWith(gitDiffPresentationMode: mode));
   }
 
+  void setGitDiffWhitespaceMode(String mode) {
+    if (state.viewPrefs.gitDiffWhitespaceMode == mode) {
+      return;
+    }
+    _updateViewPrefs(state.viewPrefs.copyWith(gitDiffWhitespaceMode: mode));
+  }
+
   void setPullRequestCreateAction(PullRequestCreateAction action) {
     if (state.viewPrefs.pullRequestCreateAction == action) {
       return;

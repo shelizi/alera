@@ -10,6 +10,10 @@ class const _DiffFileList({
   final GitDiffContentMode contentMode = GitDiffContentMode.fullFile,
   final GitDiffPresentationMode presentationMode =
       GitDiffPresentationMode.unified,
+  final GitDiffWhitespaceMode whitespaceMode = GitDiffWhitespaceMode.normal,
+  final Map<String, _EditableWorkingTreeDocument> editableDocuments = const {},
+  final void Function(GitDiffFile file, String text)? onEditableChanged,
+  final void Function(GitDiffFile file)? onEditableSave,
 }) extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
@@ -22,6 +26,10 @@ class const _DiffFileList({
       parentOid: parentOid,
       contentMode: contentMode,
       presentationMode: presentationMode,
+      whitespaceMode: whitespaceMode,
+      editableDocuments: editableDocuments,
+      onEditableChanged: onEditableChanged,
+      onEditableSave: onEditableSave,
     );
     if (presentationMode == GitDiffPresentationMode.sideBySide) {
       return LayoutBuilder(
@@ -61,6 +69,10 @@ class const _DiffRows(final List<_DiffRow> items) {
     String? parentOid,
     GitDiffContentMode contentMode = GitDiffContentMode.fullFile,
     GitDiffPresentationMode presentationMode = GitDiffPresentationMode.unified,
+    GitDiffWhitespaceMode whitespaceMode = GitDiffWhitespaceMode.normal,
+    Map<String, _EditableWorkingTreeDocument> editableDocuments = const {},
+    void Function(GitDiffFile file, String text)? onEditableChanged,
+    void Function(GitDiffFile file)? onEditableSave,
   }) {
     final items = <_DiffRow>[
       if (result.truncated) const _BannerRow('Diff truncated for preview.'),
@@ -83,21 +95,49 @@ class const _DiffRows(final List<_DiffRow> items) {
       } else {
         final sideBySide =
             presentationMode == GitDiffPresentationMode.sideBySide;
+        final editable = editableDocuments[file.path];
+        if (sideBySide &&
+            contentMode == GitDiffContentMode.fullFile &&
+            editable != null &&
+            onEditableChanged != null &&
+            onEditableSave != null) {
+          final contents = fullFileContents[file];
+          items.add(
+            _WidgetDiffRow(
+              _EditableWorkingTreeDiff(
+                file: file,
+                baseline: contents?.oldDecoded?.content ?? '',
+                document: editable,
+                whitespaceMode: whitespaceMode,
+                onChanged: (text) => onEditableChanged(file, text),
+                onSave: () => onEditableSave(file),
+              ),
+            ),
+          );
+          continue;
+        }
         List<_DiffRow>? renderedRows;
         if (contentMode == GitDiffContentMode.fullFile) {
           final contents = fullFileContents[file];
           renderedRows = sideBySide
               ? _buildFullFileSideBySideRows(file, contents)
-              : _buildFullFileRows(file, contents?.singleSideBytes(file));
+              : _buildFullFileRows(
+                  _fileWithDecodedDiffLines(file, contents),
+                  contents?.singleSideDecoded(file),
+                );
         }
         if (renderedRows != null) {
           items.addAll(renderedRows);
         } else if (file.lines.isEmpty) {
           items.add(const _BannerRow('No text diff for this file.'));
         } else if (sideBySide) {
-          items.addAll(_buildSideBySideRows(file));
+          items.addAll(
+            _buildSideBySideRows(
+              _fileWithDecodedDiffLines(file, fullFileContents[file]),
+            ),
+          );
         } else {
-          for (final line in file.lines) {
+          for (final line in _decodedDiffLines(file, fullFileContents[file])) {
             items.add(_DiffLineRow(line));
           }
         }
@@ -115,6 +155,11 @@ class const _DiffRows(final List<_DiffRow> items) {
 
 abstract class const _DiffRow() {
   Widget build(BuildContext context);
+}
+
+class const _WidgetDiffRow(final Widget child) extends _DiffRow {
+  @override
+  Widget build(BuildContext context) => child;
 }
 
 class const _FileHeaderRow(final GitDiffFile file, {final String? sourceLabel})

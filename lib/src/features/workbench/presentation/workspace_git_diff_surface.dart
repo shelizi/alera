@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
@@ -9,6 +8,7 @@ import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/buttons/alera_icon_button.dart';
 import 'package:alera/src/design_system/icons/alera_file_icon.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
+import 'package:alera/src/design_system/layout/alera_confirm_dialog.dart';
 import 'package:alera/src/features/ai_assist/application/ai_assist_errors.dart';
 import 'package:alera/src/features/reading_diff/application/reading_diff_providers.dart';
 import 'package:alera/src/features/reading_diff/application/reading_diff_generation_progress.dart';
@@ -18,23 +18,27 @@ import 'package:alera/src/features/reading_diff/presentation/reading_diff_failur
 import 'package:alera/src/features/reading_diff/presentation/reading_diff_generation_progress_view.dart';
 import 'package:alera/src/features/reading_diff/presentation/reading_diff_view.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_open_coordinator_provider.dart';
+import 'package:alera/src/features/workbench/application/workspace_text_encoding.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_preview_kind.dart';
 import 'package:alera/src/features/workbench/domain/workbench_view_prefs.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_source_control_scope.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_git_diff_image_row.dart';
+import 'package:alera/src/rust/api/workspace_files.dart' as native;
 import 'package:alera/src/shared/infra/git/git_backend.dart';
 import 'package:alera/src/shared/infra/git/git_diff_models.dart';
 import 'package:alera/src/shared/infra/git/git_providers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter/services.dart';
 
 part 'workspace_git_diff_surface_rows.dart';
 part 'workspace_git_diff_surface_bar.dart';
 part 'workspace_git_diff_surface_loading.dart';
 part 'workspace_git_diff_surface_full_file.dart';
 part 'workspace_git_diff_surface_side_by_side.dart';
+part 'workspace_git_diff_surface_editable.dart';
 
 class const WorkspaceGitDiffSurface({
   super.key,
@@ -67,6 +71,12 @@ class _WorkspaceGitDiffSurfaceState
   int _diffLoadGeneration = 0;
   GitDiffContentMode? _overrideContentMode;
   GitDiffPresentationMode? _overridePresentationMode;
+  WorkspaceTextEncodingSelection _encodingSelection =
+      WorkspaceTextEncodingSelection.auto;
+  GitDiffWhitespaceMode _whitespaceMode = GitDiffWhitespaceMode.normal;
+  int _encodingGeneration = 0;
+  final Map<String, _EditableWorkingTreeDocument> _editableDocuments =
+      <String, _EditableWorkingTreeDocument>{};
 
   GitDiffContentMode get _effectiveContentMode {
     return _overrideContentMode ??
@@ -119,11 +129,58 @@ class _WorkspaceGitDiffSurfaceState
     }
   }
 
+  void _changeWhitespaceMode(GitDiffWhitespaceMode mode) {
+    if (_whitespaceMode == mode) return;
+    setState(() {
+      _whitespaceMode = mode;
+    });
+    try {
+      ref
+          .read(workbenchControllerProvider.notifier)
+          .setGitDiffWhitespaceMode(mode.name);
+    } catch (_) {
+      // Minimal test harnesses might not provide the workbench controller.
+    }
+    _load(preserveEditableDocuments: true);
+  }
+
+  GitDiffWhitespaceMode _decodeWhitespaceMode(String value) {
+    return GitDiffWhitespaceMode.values.firstWhere(
+      (mode) => mode.name == value,
+      orElse: () => GitDiffWhitespaceMode.normal,
+    );
+  }
+
+  GitDiffWhitespaceMode _persistedWhitespaceMode() {
+    try {
+      final value = ref
+          .read(workbenchControllerProvider)
+          .viewPrefs
+          .gitDiffWhitespaceMode;
+      return _decodeWhitespaceMode(value);
+    } catch (_) {
+      return GitDiffWhitespaceMode.normal;
+    }
+  }
+
   void _updateDiffState(VoidCallback update) => setState(update);
 
   @override
   void initState() {
     super.initState();
+    _whitespaceMode = _persistedWhitespaceMode();
+    ref.listenManual<String>(
+      workbenchControllerProvider.select(
+        (state) => state.viewPrefs.gitDiffWhitespaceMode,
+      ),
+      (previous, next) {
+        if (previous == next) return;
+        final mode = _decodeWhitespaceMode(next);
+        if (!mounted || mode == _whitespaceMode) return;
+        setState(() => _whitespaceMode = mode);
+        _load(preserveEditableDocuments: true);
+      },
+    );
     _load();
   }
 
@@ -162,6 +219,7 @@ class _WorkspaceGitDiffSurfaceState
     if (activeRequest != null) {
       ref.read(readingDiffServiceProvider).cancel(activeRequest);
     }
+    _editableDocuments.clear();
     super.dispose();
   }
 
@@ -187,6 +245,12 @@ class _WorkspaceGitDiffSurfaceState
             onToggleContentMode: _toggleContentMode,
             presentationMode: presentationMode,
             onTogglePresentationMode: _togglePresentationMode,
+            encodingSelection: _encodingSelection,
+            detectedEncoding: _detectedDiffEncoding,
+            onEncodingSelected: (selection) =>
+                unawaited(_changeDiffEncoding(selection)),
+            whitespaceMode: _whitespaceMode,
+            onWhitespaceModeSelected: _changeWhitespaceMode,
             onRefresh: _load,
             onOpenFile: _canOpenFile ? () => unawaited(_openFile()) : null,
             aiAssistEnabled: aiAssistEnabled,
@@ -252,6 +316,10 @@ class _WorkspaceGitDiffSurfaceState
                       return _DiffFileList(
                         result: result,
                         fullFileContents: _fullFileContents,
+                        editableDocuments: _editableDocuments,
+                        onEditableChanged: _editWorkingTreeDocument,
+                        onEditableSave: (file) =>
+                            unawaited(_saveWorkingTreeDocument(file)),
                         sourcePath: _sourceControlScope.path,
                         sourceLabel:
                             widget.tab.gitDiffSource ==
@@ -266,6 +334,7 @@ class _WorkspaceGitDiffSurfaceState
                             : null,
                         contentMode: contentMode,
                         presentationMode: presentationMode,
+                        whitespaceMode: _whitespaceMode,
                       );
                     },
                   ),
@@ -490,6 +559,7 @@ class _WorkspaceGitDiffSurfaceState
       parentOid: widget.tab.gitDiffParentOid,
       filePath: sourceFilePath,
       oldPath: sourceOldPath,
+      whitespaceMode: _whitespaceMode,
     );
   }
 

@@ -129,6 +129,7 @@ extension _WorkspaceEditorSave on _WorkspaceEditorSurfaceState {
       expectedContentToken: _document.contentToken,
       overwriteIfChanged: overwriteIfChanged,
       tabSize: _currentEditorTabSize(),
+      encoding: _document.encoding!,
     );
   }
 

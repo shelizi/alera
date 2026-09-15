@@ -190,28 +190,42 @@ class const RustGitBackend()
     required String path,
     required String filePath,
     required GitChangeArea area,
+    GitDiffWhitespaceMode whitespaceMode = GitDiffWhitespaceMode.normal,
   }) => _guard(() async {
-    final result = await rust.gitDiff(
+    final result = await rust.gitDiffWithWhitespace(
       path: path,
       filePath: filePath,
       area: _toRustArea(area),
+      whitespaceMode: _toRustWhitespaceMode(whitespaceMode),
     );
     return _toDiffResult(result);
   });
 
   @override
-  Future<GitDiffResult> diffAll({required String path, String? filePath}) =>
-      _guard(() async {
-        final result = await rust.gitDiffAll(path: path, filePath: filePath);
-        return _toDiffResult(result);
-      });
+  Future<GitDiffResult> diffAll({
+    required String path,
+    String? filePath,
+    GitDiffWhitespaceMode whitespaceMode = GitDiffWhitespaceMode.normal,
+  }) => _guard(() async {
+    final result = await rust.gitDiffAllWithWhitespace(
+      path: path,
+      filePath: filePath,
+      whitespaceMode: _toRustWhitespaceMode(whitespaceMode),
+    );
+    return _toDiffResult(result);
+  });
 
   @override
   Future<GitDiffPage> diffAllPage({
     required String path,
     required List<String> filePaths,
+    GitDiffWhitespaceMode whitespaceMode = GitDiffWhitespaceMode.normal,
   }) => _guard(() async {
-    final result = await rust.gitDiffAllPage(path: path, filePaths: filePaths);
+    final result = await rust.gitDiffAllPageWithWhitespace(
+      path: path,
+      filePaths: filePaths,
+      whitespaceMode: _toRustWhitespaceMode(whitespaceMode),
+    );
     return _toDiffPage(result);
   });
 
@@ -291,13 +305,15 @@ class const RustGitBackend()
     String? parentOid,
     String? filePath,
     String? oldPath,
+    GitDiffWhitespaceMode whitespaceMode = GitDiffWhitespaceMode.normal,
   }) => _guard(() async {
-    final result = await rust.gitCommitDiff(
+    final result = await rust.gitCommitDiffWithWhitespace(
       path: path,
       commitOid: commitOid,
       parentOid: parentOid,
       filePath: filePath,
       oldPath: oldPath,
+      whitespaceMode: _toRustWhitespaceMode(whitespaceMode),
     );
     return _toDiffResult(result, sourceLabel: 'Commit');
   });
@@ -459,6 +475,16 @@ class const RustGitBackend()
         .gitCompareRange(path: path, baseRef: baseRef, headRef: headRef)
         .then(_toCommitCompareResult),
   );
+
+  rust.GitDiffWhitespaceMode _toRustWhitespaceMode(
+    GitDiffWhitespaceMode mode,
+  ) => switch (mode) {
+    GitDiffWhitespaceMode.normal => rust.GitDiffWhitespaceMode.normal,
+    GitDiffWhitespaceMode.ignoreEol => rust.GitDiffWhitespaceMode.ignoreEol,
+    GitDiffWhitespaceMode.ignoreChanges =>
+      rust.GitDiffWhitespaceMode.ignoreChanges,
+    GitDiffWhitespaceMode.ignoreAll => rust.GitDiffWhitespaceMode.ignoreAll,
+  };
 
   @override
   Future<void> fetch(String path) => _guard(() => rust.gitFetch(path: path));

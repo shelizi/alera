@@ -15,6 +15,7 @@ void _registerWorkspaceExplorerActionTests() {
           contentToken: 'token-1',
           modifiedMillis: 0,
           size: .from(8),
+          encoding: native.WorkspaceTextEncoding.utf8,
         ),
       )
       ..updateCurrentText('changed');

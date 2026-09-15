@@ -414,7 +414,9 @@ class FakeGitBackend
     String? parentOid,
     String? filePath,
     String? oldPath,
+    GitDiffWhitespaceMode whitespaceMode = GitDiffWhitespaceMode.normal,
   }) async {
+    lastDiffWhitespaceMode = whitespaceMode;
     calls.add(
       GitBackendCall('commitDiff', <String, Object?>{
         'path': path,
@@ -422,6 +424,7 @@ class FakeGitBackend
         'parentOid': parentOid,
         'filePath': filePath,
         'oldPath': oldPath,
+        'whitespaceMode': whitespaceMode,
       }),
     );
     final error = commitDiffError;

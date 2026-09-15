@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:alera/src/app/providers.dart'
@@ -12,9 +13,14 @@ import 'package:alera/src/features/reading_diff/application/reading_diff_provide
 import 'package:alera/src/features/reading_diff/application/reading_diff_service.dart';
 import 'package:alera/src/features/reading_diff/domain/reading_diff_models.dart';
 import 'package:alera/src/rust/api/reading_diff.dart' as rust;
+import 'package:alera/src/rust/api/workspace_files.dart' as native;
 import 'package:alera/src/features/settings/application/settings_controller.dart';
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
+import 'package:alera/src/features/workbench/application/workbench_providers.dart'
+    show workspaceFileServiceProvider;
 import 'package:alera/src/features/workbench/application/workbench_state.dart';
+import 'package:alera/src/features/workbench/domain/workbench_view_prefs.dart';
+import 'package:alera/src/features/workbench/application/workspace_file_service.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_git_diff_surface.dart';
@@ -254,6 +260,170 @@ void main() {
     );
   });
 
+  testWidgets('encoding switch re-decodes cached blobs for diff-only view', (
+    tester,
+  ) async {
+    final backend = FakeGitBackend()
+      ..gitDiffResult = const GitDiffResult(
+        files: <GitDiffFile>[
+          GitDiffFile(
+            path: 'lib/large.dart',
+            area: .unstaged,
+            status: .modified,
+            lines: <GitDiffLine>[
+              GitDiffLine.hunk('@@ -1 +1 @@'),
+              GitDiffLine.deletion('-garbled old'),
+              GitDiffLine.addition('+garbled new'),
+            ],
+          ),
+        ],
+      )
+      ..diffBlobBytesBySide[(filePath: 'lib/large.dart', oldSide: true)] =
+          Uint8List.fromList(<int>[1])
+      ..diffBlobBytesBySide[(filePath: 'lib/large.dart', oldSide: false)] =
+          Uint8List.fromList(<int>[2]);
+    final fileService = _DiffEncodingFileService(
+      decode: (bytes, encoding) {
+        final oldSide = bytes.single == 1;
+        final isBig5 = encoding == native.WorkspaceTextEncoding.big5;
+        return native.WorkspaceDecodedText(
+          content: isBig5
+              ? (oldSide ? '舊內容\n' : '新內容\n')
+              : (oldSide ? 'auto old\n' : 'auto new\n'),
+          encoding: encoding ?? native.WorkspaceTextEncoding.utf8,
+        );
+      },
+    );
+
+    await _pumpDiffSurface(
+      tester,
+      backend: backend,
+      workspaceFileService: fileService,
+    );
+    await tester.pumpAndSettle();
+    final blobReadsBeforeSwitch = backend.calls
+        .where((call) => call.method == 'diffBlobBytes')
+        .length;
+    expect(find.text('Auto (UTF-8)'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Switch to Diff Only'));
+    await tester.pump();
+    expect(find.text('-auto old'), findsOneWidget);
+    expect(find.text('+auto new'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Diff Encoding'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Big5').last);
+    await tester.pumpAndSettle();
+
+    expect(find.text('-舊內容'), findsOneWidget);
+    expect(find.text('+新內容'), findsOneWidget);
+    expect(find.text('Big5'), findsOneWidget);
+    expect(
+      backend.calls.where((call) => call.method == 'diffBlobBytes').length,
+      blobReadsBeforeSwitch,
+    );
+    expect(fileService.decodeCalls.length, 4);
+  });
+
+  testWidgets('encoding switch preserves files hydrated during re-decode', (
+    tester,
+  ) async {
+    final secondBlobGate = Completer<void>();
+    final manualDecodeGate = Completer<void>();
+    final manualDecodeStarted = Completer<void>();
+    final backend = _BlockingDiffBlobBackend()
+      ..gitDiffResult = const GitDiffResult(
+        files: <GitDiffFile>[
+          GitDiffFile(
+            path: 'lib/first.dart',
+            area: .unstaged,
+            status: .untracked,
+            lines: <GitDiffLine>[
+              GitDiffLine.hunk('@@ -0,0 +1 @@'),
+              GitDiffLine.addition('+garbled first'),
+            ],
+          ),
+          GitDiffFile(
+            path: 'lib/second.dart',
+            area: .unstaged,
+            status: .untracked,
+            lines: <GitDiffLine>[
+              GitDiffLine.hunk('@@ -0,0 +1 @@'),
+              GitDiffLine.addition('+garbled second'),
+            ],
+          ),
+        ],
+      )
+      ..diffBlobBytesBySide[(filePath: 'lib/first.dart', oldSide: false)] =
+          Uint8List.fromList(<int>[1])
+      ..diffBlobBytesBySide[(filePath: 'lib/second.dart', oldSide: false)] =
+          Uint8List.fromList(<int>[2])
+      ..gates[(filePath: 'lib/second.dart', oldSide: false)] = secondBlobGate;
+    final fileService = _DiffEncodingFileService(
+      decode: (bytes, encoding) async {
+        final isBig5 = encoding == native.WorkspaceTextEncoding.big5;
+        if (isBig5 && bytes.single == 1) {
+          if (!manualDecodeStarted.isCompleted) manualDecodeStarted.complete();
+          await manualDecodeGate.future;
+        }
+        return native.WorkspaceDecodedText(
+          content: isBig5
+              ? (bytes.single == 1 ? '第一個\n' : '第二個\n')
+              : (bytes.single == 1 ? 'auto first\n' : 'auto second\n'),
+          encoding: encoding ?? native.WorkspaceTextEncoding.utf8,
+        );
+      },
+    );
+
+    await _pumpDiffSurface(
+      tester,
+      backend: backend,
+      workspaceFileService: fileService,
+    );
+    for (var i = 0; i < 10; i += 1) {
+      await tester.pump();
+      if (backend.started.contains((
+        filePath: 'lib/second.dart',
+        oldSide: false,
+      ))) {
+        break;
+      }
+    }
+    expect(
+      backend.started,
+      contains((filePath: 'lib/second.dart', oldSide: false)),
+    );
+
+    await tester.tap(find.byTooltip('Diff Encoding'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Big5').last);
+    for (var i = 0; i < 10 && !manualDecodeStarted.isCompleted; i += 1) {
+      await tester.pump();
+    }
+    expect(manualDecodeStarted.isCompleted, isTrue);
+
+    secondBlobGate.complete();
+    for (var i = 0; i < 10; i += 1) {
+      await tester.pump();
+      if (fileService.decodeCalls.any(
+        (call) =>
+            call.bytes.single == 2 &&
+            call.encoding == native.WorkspaceTextEncoding.big5,
+      )) {
+        break;
+      }
+    }
+    manualDecodeGate.complete();
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Switch to Diff Only'));
+    await tester.pump();
+    expect(find.text('+第一個'), findsOneWidget);
+    expect(find.text('+第二個'), findsOneWidget);
+    expect(find.text('+garbled second'), findsNothing);
+  });
+
   _registerWorkspaceGitDiffSurfaceOpenPathTests();
 
   testWidgets('diff surface hides zero-valued header stats', (tester) async {
@@ -329,6 +499,7 @@ void main() {
         'parentOid': 'def987654321',
         'filePath': 'lib/main.dart',
         'oldPath': null,
+        'whitespaceMode': GitDiffWhitespaceMode.normal,
       },
     );
     expect(find.text('Commit · lib/main.dart'), findsOneWidget);
@@ -424,5 +595,202 @@ void main() {
     expect(find.text('Original'), findsNothing);
     expect(find.text('line one'), findsOneWidget);
     expect(find.text('line five'), findsOneWidget);
+  });
+  testWidgets('whitespace comparison selection is sticky and reloads diff', (
+    tester,
+  ) async {
+    final backend = FakeGitBackend()
+      ..gitDiffResult = const GitDiffResult(
+        files: <GitDiffFile>[
+          GitDiffFile(
+            path: 'lib/main.dart',
+            area: .unstaged,
+            status: .modified,
+            lines: <GitDiffLine>[
+              GitDiffLine.deletion('-old'),
+              GitDiffLine.addition('+new'),
+            ],
+          ),
+        ],
+      );
+    final controller = _GitDiffSurfaceTestController();
+
+    await _pumpDiffSurface(
+      tester,
+      backend: backend,
+      controller: controller,
+      tab: _diffTab(filePath: 'lib/main.dart', title: 'main.dart unstaged'),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Normal'), findsOneWidget);
+    await tester.tap(find.byTooltip('Whitespace Comparison'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Ignore Whitespace Changes').last);
+    await tester.pumpAndSettle();
+
+    expect(
+      controller.state.viewPrefs.gitDiffWhitespaceMode,
+      GitDiffWhitespaceMode.ignoreChanges.name,
+    );
+    expect(
+      backend.calls
+          .where((call) => call.method == 'diff')
+          .last
+          .args['whitespaceMode'],
+      GitDiffWhitespaceMode.ignoreChanges,
+    );
+    expect(find.text('Ignore Whitespace Changes'), findsOneWidget);
+  });
+
+  testWidgets('new diff surface reuses persisted whitespace comparison mode', (
+    tester,
+  ) async {
+    final backend = FakeGitBackend()
+      ..gitDiffResult = const GitDiffResult(
+        files: <GitDiffFile>[
+          GitDiffFile(
+            path: 'lib/main.dart',
+            area: .unstaged,
+            status: .modified,
+            lines: <GitDiffLine>[GitDiffLine.addition('+new')],
+          ),
+        ],
+      );
+    final controller = _GitDiffSurfaceTestController(
+      initialViewPrefs: WorkbenchViewPrefs.defaults.copyWith(
+        gitDiffWhitespaceMode: GitDiffWhitespaceMode.ignoreAll.name,
+      ),
+    );
+
+    await _pumpDiffSurface(
+      tester,
+      backend: backend,
+      controller: controller,
+      tab: _diffTab(filePath: 'lib/main.dart', title: 'main.dart unstaged'),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Ignore All Whitespace'), findsOneWidget);
+    expect(
+      backend.calls
+          .where((call) => call.method == 'diff')
+          .single
+          .args['whitespaceMode'],
+      GitDiffWhitespaceMode.ignoreAll,
+    );
+
+    controller.setGitDiffWhitespaceMode(GitDiffWhitespaceMode.ignoreEol.name);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Ignore End-of-Line Whitespace'), findsOneWidget);
+    expect(
+      backend.calls
+          .where((call) => call.method == 'diff')
+          .last
+          .args['whitespaceMode'],
+      GitDiffWhitespaceMode.ignoreEol,
+    );
+  });
+
+  testWidgets('working-tree side-by-side right pane edits and saves file', (
+    tester,
+  ) async {
+    final backend = FakeGitBackend()
+      ..gitDiffResult = const GitDiffResult(
+        files: <GitDiffFile>[
+          GitDiffFile(
+            path: 'lib/main.dart',
+            area: .unstaged,
+            status: .modified,
+            lines: <GitDiffLine>[
+              GitDiffLine.hunk('@@ -1,1 +1,1 @@'),
+              GitDiffLine.deletion('-old line'),
+              GitDiffLine.addition('+new line'),
+            ],
+          ),
+        ],
+      )
+      ..diffBlobBytesBySide[(filePath: 'lib/main.dart', oldSide: true)] =
+          Uint8List.fromList('old line\n'.codeUnits)
+      ..diffBlobBytesBySide[(filePath: 'lib/main.dart', oldSide: false)] =
+          Uint8List.fromList('new line\n'.codeUnits);
+    final files = _EditableDiffFileService(content: 'new line\n');
+
+    await _pumpDiffSurface(
+      tester,
+      backend: backend,
+      workspaceFileService: files,
+      tab: _diffTab(filePath: 'lib/main.dart', title: 'main.dart unstaged'),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Switch to Side-by-Side View'));
+    await tester.pumpAndSettle();
+
+    final editor = find.byKey(
+      const ValueKey<String>('git-diff-working-tree-editor-lib/main.dart'),
+    );
+    expect(editor, findsOneWidget);
+    expect(find.text('Workspace · Editable'), findsOneWidget);
+
+    await tester.enterText(editor, 'edited line\n');
+    await tester.pump();
+    expect(find.text('+1'), findsWidgets);
+    expect(find.text('-1'), findsWidgets);
+
+    await tester.tap(find.byTooltip('Save File'));
+    await tester.pumpAndSettle();
+
+    expect(files.writes, hasLength(1));
+    expect(files.writes.single.currentDisplayContent, 'edited line\n');
+    expect(files.writes.single.expectedContentToken, 'token-1');
+    expect(files.writes.single.overwriteIfChanged, isFalse);
+    expect(files.writes.single.encoding, native.WorkspaceTextEncoding.utf8);
+  });
+
+  testWidgets('staged side-by-side diff stays read only', (tester) async {
+    final backend = FakeGitBackend()
+      ..gitDiffResult = const GitDiffResult(
+        files: <GitDiffFile>[
+          GitDiffFile(
+            path: 'lib/main.dart',
+            area: .staged,
+            status: .modified,
+            lines: <GitDiffLine>[
+              GitDiffLine.hunk('@@ -1,1 +1,1 @@'),
+              GitDiffLine.deletion('-old line'),
+              GitDiffLine.addition('+staged line'),
+            ],
+          ),
+        ],
+      )
+      ..diffBlobBytesBySide[(filePath: 'lib/main.dart', oldSide: true)] =
+          Uint8List.fromList('old line\n'.codeUnits)
+      ..diffBlobBytesBySide[(filePath: 'lib/main.dart', oldSide: false)] =
+          Uint8List.fromList('staged line\n'.codeUnits);
+    final files = _EditableDiffFileService(content: 'workspace line\n');
+
+    await _pumpDiffSurface(
+      tester,
+      backend: backend,
+      workspaceFileService: files,
+      tab: _diffTab(
+        filePath: 'lib/main.dart',
+        title: 'main.dart staged',
+        area: .staged,
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Switch to Side-by-Side View'));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(
+        const ValueKey<String>('git-diff-working-tree-editor-lib/main.dart'),
+      ),
+      findsNothing,
+    );
+    expect(files.readCount, 0);
+    expect(find.text('Modified'), findsOneWidget);
   });
 }

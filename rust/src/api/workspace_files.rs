@@ -7,10 +7,12 @@ mod editor_text;
 mod explorer_tree;
 mod listing;
 mod source_control_watcher;
+mod text_encoding;
 mod watcher;
 
 use crate::frb_generated::StreamSink;
 use editor_text::{editor_text_file_from_raw, encode_workspace_editor_text_for_save};
+use text_encoding::{decode_workspace_text_bytes_impl, encode_workspace_text_bytes_impl};
 
 const MAX_TEXT_FILE_BYTES: u64 = 10 * 1024 * 1024;
 const COPY_SUFFIX: &str = " copy";
@@ -72,12 +74,33 @@ pub struct WorkspaceTextFile {
     pub size: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkspaceTextEncoding {
+    Utf8,
+    Utf8Bom,
+    Utf16Le,
+    Utf16Be,
+    Big5,
+    Gbk,
+    ShiftJis,
+    EucJp,
+    EucKr,
+    Windows1252,
+}
+
+#[derive(Debug, Clone)]
+pub struct WorkspaceDecodedText {
+    pub content: String,
+    pub encoding: WorkspaceTextEncoding,
+}
+
 pub struct WorkspaceEditorTextFile {
     pub raw_content: String,
     pub display_content: String,
     pub content_token: String,
     pub modified_millis: i64,
     pub size: u64,
+    pub encoding: WorkspaceTextEncoding,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -379,13 +402,39 @@ pub fn read_workspace_text_file(
     })
 }
 
+pub fn decode_workspace_text_bytes(
+    bytes: Vec<u8>,
+    encoding: Option<WorkspaceTextEncoding>,
+) -> Result<WorkspaceDecodedText, WorkspaceFileError> {
+    decode_workspace_text_bytes_impl(&bytes, encoding)
+}
+
 pub fn read_workspace_editor_text_file(
     workspace_path: String,
     relative_path: String,
     tab_size: i32,
+    encoding: Option<WorkspaceTextEncoding>,
 ) -> Result<WorkspaceEditorTextFile, WorkspaceFileError> {
-    let file = read_workspace_text_file(workspace_path, relative_path)?;
-    Ok(editor_text_file_from_raw(file, tab_size))
+    let root = workspace_root(&workspace_path)?;
+    let path = resolve_existing(&root, &relative_path)?;
+    let metadata =
+        fs::metadata(&path).map_err(|error| WorkspaceFileError::from_io(error, &relative_path))?;
+    if !metadata.is_file() || metadata.len() > MAX_TEXT_FILE_BYTES {
+        return Err(WorkspaceFileError::new(
+            WorkspaceFileErrorKind::Unsupported,
+            relative_path,
+        ));
+    }
+    let bytes =
+        fs::read(&path).map_err(|error| WorkspaceFileError::from_io(error, &relative_path))?;
+    let decoded = decode_workspace_text_bytes_impl(&bytes, encoding)?;
+    let file = WorkspaceTextFile {
+        content: decoded.content,
+        content_token: content_token(&metadata),
+        modified_millis: modified_millis(&metadata),
+        size: metadata.len(),
+    };
+    Ok(editor_text_file_from_raw(file, tab_size, decoded.encoding))
 }
 
 pub fn write_workspace_text_file(
@@ -435,20 +484,45 @@ pub fn write_workspace_editor_text_file(
     expected_content_token: Option<String>,
     overwrite_if_changed: bool,
     tab_size: i32,
+    encoding: WorkspaceTextEncoding,
 ) -> Result<WorkspaceEditorTextFile, WorkspaceFileError> {
     let content = encode_workspace_editor_text_for_save(
         &current_display_content,
         original_raw_content.as_deref(),
         original_display_content.as_deref(),
     );
-    let file = write_workspace_text_file(
+    let bytes = encode_workspace_text_bytes_impl(&content, encoding)?;
+    let root = workspace_root(&workspace_path)?;
+    reject_protected(&relative_path)?;
+    let path = resolve_existing(&root, &relative_path)?;
+    let canonical_relative_path = relative_string(&root, &path)?;
+    reject_protected(&canonical_relative_path)?;
+    let metadata =
+        fs::metadata(&path).map_err(|error| WorkspaceFileError::from_io(error, &relative_path))?;
+    if !metadata.is_file() {
+        return Err(WorkspaceFileError::new(
+            WorkspaceFileErrorKind::Unsupported,
+            relative_path,
+        ));
+    }
+    if !overwrite_if_changed {
+        if let Some(expected) = expected_content_token {
+            let current = content_token(&metadata);
+            if expected != current {
+                return Err(WorkspaceFileError::new(
+                    WorkspaceFileErrorKind::Conflict,
+                    relative_path,
+                ));
+            }
+        }
+    }
+    fs::write(&path, bytes).map_err(|error| WorkspaceFileError::from_io(error, &relative_path))?;
+    read_workspace_editor_text_file(
         workspace_path,
-        relative_path,
-        content,
-        expected_content_token,
-        overwrite_if_changed,
-    )?;
-    Ok(editor_text_file_from_raw(file, tab_size))
+        canonical_relative_path,
+        tab_size,
+        Some(encoding),
+    )
 }
 
 pub fn create_workspace_file(
@@ -1064,13 +1138,18 @@ mod tests {
         let workspace = tempfile::tempdir().expect("tempdir");
         fs::write(workspace.path().join("main.dart"), "\tvoid main() {}\n").expect("write file");
 
-        let file =
-            read_workspace_editor_text_file(workspace_path(&workspace), "main.dart".to_string(), 4)
-                .expect("read editor file");
+        let file = read_workspace_editor_text_file(
+            workspace_path(&workspace),
+            "main.dart".to_string(),
+            4,
+            None,
+        )
+        .expect("read editor file");
 
         assert_eq!(file.raw_content, "\tvoid main() {}\n");
         assert_eq!(file.display_content, "    void main() {}\n");
         assert_eq!(file.size, 16);
+        assert_eq!(file.encoding, WorkspaceTextEncoding::Utf8);
     }
 
     #[test]
@@ -1081,9 +1160,14 @@ mod tests {
             "\talpha\n\tbeta\n\tgamma\n",
         )
         .expect("write file");
-        let initial =
-            read_workspace_editor_text_file(workspace_path(&workspace), "main.dart".to_string(), 4)
-                .expect("read editor file");
+        let initial = read_workspace_editor_text_file(
+            workspace_path(&workspace),
+            "main.dart".to_string(),
+            4,
+            None,
+        )
+        .expect("read editor file");
+        let encoding = initial.encoding;
 
         let saved = write_workspace_editor_text_file(
             workspace_path(&workspace),
@@ -1094,6 +1178,7 @@ mod tests {
             Some(initial.content_token),
             false,
             4,
+            encoding,
         )
         .expect("save editor file");
 
@@ -1116,12 +1201,17 @@ mod tests {
         }
         fs::write(workspace.path().join("large.txt"), &raw).expect("write large file");
 
-        let loaded =
-            read_workspace_editor_text_file(workspace_path(&workspace), "large.txt".to_string(), 4)
-                .expect("read large editor file");
+        let loaded = read_workspace_editor_text_file(
+            workspace_path(&workspace),
+            "large.txt".to_string(),
+            4,
+            None,
+        )
+        .expect("read large editor file");
 
         assert!(loaded.raw_content.starts_with('\t'));
         assert!(loaded.display_content.starts_with("    "));
+        let encoding = loaded.encoding;
 
         let saved = write_workspace_editor_text_file(
             workspace_path(&workspace),
@@ -1132,10 +1222,85 @@ mod tests {
             Some(loaded.content_token),
             false,
             4,
+            encoding,
         )
         .expect("save large editor file");
 
         assert_eq!(saved.raw_content, raw);
+    }
+
+    #[test]
+    fn editor_auto_detects_big5_and_preserves_encoding_on_save() {
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let (bytes, _, had_errors) = encoding_rs::BIG5.encode("\t繁體中文\n");
+        assert!(!had_errors);
+        fs::write(workspace.path().join("note.txt"), bytes.as_ref()).expect("write Big5 file");
+
+        let initial = read_workspace_editor_text_file(
+            workspace_path(&workspace),
+            "note.txt".to_string(),
+            4,
+            None,
+        )
+        .expect("read Big5 editor file");
+        assert_eq!(initial.encoding, WorkspaceTextEncoding::Big5);
+        assert_eq!(initial.raw_content, "\t繁體中文\n");
+        assert_eq!(initial.display_content, "    繁體中文\n");
+        let encoding = initial.encoding;
+
+        let saved = write_workspace_editor_text_file(
+            workspace_path(&workspace),
+            "note.txt".to_string(),
+            "    繁體中文修改\n".to_string(),
+            Some(initial.raw_content),
+            Some(initial.display_content),
+            Some(initial.content_token),
+            false,
+            4,
+            encoding,
+        )
+        .expect("save Big5 editor file");
+
+        assert_eq!(saved.encoding, WorkspaceTextEncoding::Big5);
+        assert!(
+            std::str::from_utf8(&fs::read(workspace.path().join("note.txt")).unwrap()).is_err()
+        );
+    }
+
+    #[test]
+    fn editor_auto_preserves_utf8_bom_on_save() {
+        let workspace = tempfile::tempdir().expect("tempdir");
+        fs::write(workspace.path().join("note.txt"), b"\xef\xbb\xbfhello\n")
+            .expect("write UTF-8 BOM file");
+
+        let initial = read_workspace_editor_text_file(
+            workspace_path(&workspace),
+            "note.txt".to_string(),
+            4,
+            None,
+        )
+        .expect("read UTF-8 BOM editor file");
+        assert_eq!(initial.encoding, WorkspaceTextEncoding::Utf8Bom);
+        let encoding = initial.encoding;
+
+        write_workspace_editor_text_file(
+            workspace_path(&workspace),
+            "note.txt".to_string(),
+            "hello world\n".to_string(),
+            Some(initial.raw_content),
+            Some(initial.display_content),
+            Some(initial.content_token),
+            false,
+            4,
+            encoding,
+        )
+        .expect("save UTF-8 BOM editor file");
+
+        assert!(
+            fs::read(workspace.path().join("note.txt"))
+                .expect("read bytes")
+                .starts_with(b"\xef\xbb\xbf")
+        );
     }
 
     #[test]

@@ -14,6 +14,7 @@ import 'package:alera/src/features/settings/domain/editor_syntax_theme_catalog.d
 import 'package:alera/src/features/workbench/application/editor_autosave_controller.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_preview_kind.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_service.dart';
+import 'package:alera/src/features/workbench/application/workspace_text_encoding.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_source_control_scope.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
@@ -230,6 +231,13 @@ class _WorkspaceEditorSurfaceState
             ),
             dirty: _document.isDirty,
             saving: _saving,
+            encodingSelection: WorkspaceTextEncodingSelection.fromEncoding(
+              _document.requestedEncoding,
+            ),
+            detectedEncoding: _document.encoding,
+            onEncodingSelected: _loading || _saving
+                ? null
+                : (selection) => unawaited(_changeEncoding(selection)),
             onViewDiff: !_loading ? () => unawaited(_openDiffForFile()) : null,
             onSave: _document.isDirty && !_loading && !_saving
                 ? () => unawaited(_save())

@@ -168,6 +168,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  WorkspaceTextEncoding dco_decode_box_autoadd_workspace_text_encoding(
+    dynamic raw,
+  );
+
+  @protected
   CodexSavedPrompt dco_decode_codex_saved_prompt(dynamic raw);
 
   @protected
@@ -220,6 +225,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   GitDiffResult dco_decode_git_diff_result(dynamic raw);
+
+  @protected
+  GitDiffWhitespaceMode dco_decode_git_diff_whitespace_mode(dynamic raw);
 
   @protected
   GitError dco_decode_git_error(dynamic raw);
@@ -471,6 +479,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  WorkspaceTextEncoding? dco_decode_opt_box_autoadd_workspace_text_encoding(
+    dynamic raw,
+  );
+
+  @protected
   Uint8List? dco_decode_opt_list_prim_u_8_strict(dynamic raw);
 
   @protected
@@ -522,6 +535,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void dco_decode_unit(dynamic raw);
+
+  @protected
+  WorkspaceDecodedText dco_decode_workspace_decoded_text(dynamic raw);
 
   @protected
   WorkspaceEditorTextFile dco_decode_workspace_editor_text_file(dynamic raw);
@@ -622,6 +638,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   WorkspaceSearchResult dco_decode_workspace_search_result(dynamic raw);
+
+  @protected
+  WorkspaceTextEncoding dco_decode_workspace_text_encoding(dynamic raw);
 
   @protected
   WorkspaceTextFile dco_decode_workspace_text_file(dynamic raw);
@@ -790,6 +809,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  WorkspaceTextEncoding sse_decode_box_autoadd_workspace_text_encoding(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   CodexSavedPrompt sse_decode_codex_saved_prompt(SseDeserializer deserializer);
 
   @protected
@@ -854,6 +878,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   GitDiffResult sse_decode_git_diff_result(SseDeserializer deserializer);
+
+  @protected
+  GitDiffWhitespaceMode sse_decode_git_diff_whitespace_mode(
+    SseDeserializer deserializer,
+  );
 
   @protected
   GitError sse_decode_git_error(SseDeserializer deserializer);
@@ -1175,6 +1204,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  WorkspaceTextEncoding? sse_decode_opt_box_autoadd_workspace_text_encoding(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   Uint8List? sse_decode_opt_list_prim_u_8_strict(SseDeserializer deserializer);
 
   @protected
@@ -1236,6 +1270,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_decode_unit(SseDeserializer deserializer);
+
+  @protected
+  WorkspaceDecodedText sse_decode_workspace_decoded_text(
+    SseDeserializer deserializer,
+  );
 
   @protected
   WorkspaceEditorTextFile sse_decode_workspace_editor_text_file(
@@ -1370,6 +1409,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   WorkspaceSearchResult sse_decode_workspace_search_result(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  WorkspaceTextEncoding sse_decode_workspace_text_encoding(
     SseDeserializer deserializer,
   );
 
@@ -1574,6 +1618,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_box_autoadd_workspace_text_encoding(
+    WorkspaceTextEncoding self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_codex_saved_prompt(
     CodexSavedPrompt self,
     SseSerializer serializer,
@@ -1665,6 +1715,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_git_diff_result(GitDiffResult self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_git_diff_whitespace_mode(
+    GitDiffWhitespaceMode self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_git_error(GitError self, SseSerializer serializer);
@@ -2063,6 +2119,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_opt_box_autoadd_workspace_text_encoding(
+    WorkspaceTextEncoding? self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_opt_list_prim_u_8_strict(
     Uint8List? self,
     SseSerializer serializer,
@@ -2145,6 +2207,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_unit(void self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_workspace_decoded_text(
+    WorkspaceDecodedText self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_workspace_editor_text_file(
@@ -2305,6 +2373,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_workspace_search_result(
     WorkspaceSearchResult self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_workspace_text_encoding(
+    WorkspaceTextEncoding self,
     SseSerializer serializer,
   );
 

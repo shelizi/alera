@@ -518,6 +518,7 @@ native.WorkspaceEditorTextFile _editorFile({
     contentToken: 'editor-token',
     modifiedMillis: 0,
     size: .from(rawContent.length),
+    encoding: native.WorkspaceTextEncoding.utf8,
   );
 }
 

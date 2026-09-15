@@ -292,6 +292,7 @@ void main() {
         '    gamma\n',
       );
       expect(service.writes.single.tabSize, 4);
+      expect(service.writes.single.encoding, native.WorkspaceTextEncoding.utf8);
       expect(registry.isDirty('tab-1'), isFalse);
     });
 
@@ -372,6 +373,7 @@ class _FakeWorkspaceFileService extends WorkspaceFileService {
     required String? expectedContentToken,
     required bool overwriteIfChanged,
     required int tabSize,
+    required native.WorkspaceTextEncoding encoding,
   }) async {
     writes.add(
       _EditorWrite(
@@ -380,6 +382,7 @@ class _FakeWorkspaceFileService extends WorkspaceFileService {
         originalRawContent: originalRawContent,
         originalDisplayContent: originalDisplayContent,
         tabSize: tabSize,
+        encoding: encoding,
       ),
     );
     return native.WorkspaceEditorTextFile(
@@ -388,6 +391,7 @@ class _FakeWorkspaceFileService extends WorkspaceFileService {
       contentToken: '$relativePath-saved',
       modifiedMillis: 1,
       size: .from(currentDisplayContent.length),
+      encoding: encoding,
     );
   }
 }
@@ -396,6 +400,7 @@ native.WorkspaceEditorTextFile _editorFile({
   required String rawContent,
   required String displayContent,
   String contentToken = 'token-1',
+  native.WorkspaceTextEncoding encoding = native.WorkspaceTextEncoding.utf8,
 }) {
   return native.WorkspaceEditorTextFile(
     rawContent: rawContent,
@@ -403,6 +408,7 @@ native.WorkspaceEditorTextFile _editorFile({
     contentToken: contentToken,
     modifiedMillis: 0,
     size: .from(rawContent.length),
+    encoding: encoding,
   );
 }
 
@@ -412,4 +418,5 @@ class const _EditorWrite({
   required final String? originalRawContent,
   required final String? originalDisplayContent,
   required final int tabSize,
+  required final native.WorkspaceTextEncoding encoding,
 });

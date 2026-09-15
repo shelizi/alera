@@ -12,7 +12,7 @@ class _ProgressiveDiffPage {
 }
 
 extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
-  void _load() {
+  void _load({bool preserveEditableDocuments = false}) {
     final loadGeneration = ++_diffLoadGeneration;
     final readingDiffCompletion = _readingDiffCompletion;
     if (readingDiffCompletion != null && !readingDiffCompletion.isCompleted) {
@@ -20,16 +20,22 @@ extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
       unawaited(
         readingDiffCompletion.future.then((_) {
           if (mounted && loadGeneration == _diffLoadGeneration) {
-            _loadNow(loadGeneration);
+            _loadNow(
+              loadGeneration,
+              preserveEditableDocuments: preserveEditableDocuments,
+            );
           }
         }),
       );
       return;
     }
-    _loadNow(loadGeneration);
+    _loadNow(
+      loadGeneration,
+      preserveEditableDocuments: preserveEditableDocuments,
+    );
   }
 
-  void _loadNow(int loadGeneration) {
+  void _loadNow(int loadGeneration, {required bool preserveEditableDocuments}) {
     _readingDiffGeneration += 1;
     final backend = ref.read(gitBackendProvider);
     final scope = widget.tab.gitDiffScope;
@@ -71,6 +77,7 @@ extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
                   : backend.diffAll(
                       path: sourceControlScope.path,
                       filePath: sourceFilePath,
+                      whitespaceMode: _whitespaceMode,
                     ),
             WorkspaceGitDiffScope.file =>
               sourceFilePath == null || area == null
@@ -79,12 +86,16 @@ extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
                       path: sourceControlScope.path,
                       filePath: sourceFilePath,
                       area: area,
+                      whitespaceMode: _whitespaceMode,
                     ),
             null => Future<GitDiffResult>.value(const GitDiffResult(files: [])),
           };
     _updateDiffState(() {
       _loadedResult = null;
       _fullFileContents = const <GitDiffFile, _FullFileContents>{};
+      if (!preserveEditableDocuments) {
+        _editableDocuments.clear();
+      }
       _readingDiffResult = null;
       _readingDiffOriginalSnapshot = null;
       _showReadingDiff = false;
@@ -172,7 +183,10 @@ extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
     final paths = await pathsFuture;
     if (paths == null) {
       return _ProgressiveDiffPage(
-        result: await backend.diffAll(path: sourceControlPath),
+        result: await backend.diffAll(
+          path: sourceControlPath,
+          whitespaceMode: _whitespaceMode,
+        ),
         nextIndex: null,
       );
     }
@@ -187,6 +201,7 @@ extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
       filePaths: paths
           .take(_progressiveFirstDiffPageSize)
           .toList(growable: false),
+      whitespaceMode: _whitespaceMode,
     );
     return _ProgressiveDiffPage(
       result: GitDiffResult(files: page.files, truncated: page.truncated),
@@ -283,6 +298,7 @@ extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
       return await backend.diffAllPage(
         path: sourceControlPath,
         filePaths: filePaths,
+        whitespaceMode: _whitespaceMode,
       );
     } catch (_) {
       // A later page is best-effort once the first page is visible. Keep the
@@ -340,6 +356,14 @@ extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
       if (!_isCurrentDiffLoad(nextFuture, loadGeneration)) {
         return;
       }
+      await _ensureEditableDocument(
+        file: file,
+        sourceControlScope: sourceControlScope,
+        loadGeneration: loadGeneration,
+      );
+      if (!_isCurrentDiffLoad(nextFuture, loadGeneration)) {
+        return;
+      }
       if (file.isBinary || file.isLarge || file.isGitlink) {
         continue;
       }
@@ -354,10 +378,22 @@ extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
       if (!_isCurrentDiffLoad(nextFuture, loadGeneration)) {
         return;
       }
-      final contents = _FullFileContents(
-        oldBytes: sides[0],
-        newBytes: sides[1],
-      );
+      late _FullFileContents contents;
+      while (true) {
+        final encodingGeneration = _encodingGeneration;
+        final encoding = _encodingSelection.encoding;
+        contents = await _decodeFullFileContents(
+          oldBytes: sides[0],
+          newBytes: sides[1],
+          encoding: encoding,
+        );
+        if (!_isCurrentDiffLoad(nextFuture, loadGeneration)) {
+          return;
+        }
+        if (encodingGeneration == _encodingGeneration) {
+          break;
+        }
+      }
       if (contents.oldBytes == null && contents.newBytes == null) {
         continue;
       }
@@ -368,5 +404,78 @@ extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
         };
       });
     }
+  }
+
+  Future<_FullFileContents> _decodeFullFileContents({
+    required Uint8List? oldBytes,
+    required Uint8List? newBytes,
+    required native.WorkspaceTextEncoding? encoding,
+  }) async {
+    Future<native.WorkspaceDecodedText?> decode(Uint8List? bytes) async {
+      if (bytes == null) return null;
+      try {
+        return await ref
+            .read(workspaceFileServiceProvider)
+            .decodeTextBytes(bytes: bytes, encoding: encoding);
+      } catch (_) {
+        return null;
+      }
+    }
+
+    final decoded = await Future.wait<native.WorkspaceDecodedText?>(
+      <Future<native.WorkspaceDecodedText?>>[
+        decode(oldBytes),
+        decode(newBytes),
+      ],
+    );
+    return _FullFileContents(
+      oldBytes: oldBytes,
+      newBytes: newBytes,
+      oldDecoded: decoded[0],
+      newDecoded: decoded[1],
+    );
+  }
+
+  Future<void> _changeDiffEncoding(
+    WorkspaceTextEncodingSelection selection,
+  ) async {
+    if (_encodingSelection == selection) return;
+    final generation = ++_encodingGeneration;
+    final snapshot = _fullFileContents;
+    _updateDiffState(() => _encodingSelection = selection);
+    final decoded = <GitDiffFile, _FullFileContents>{};
+    for (final entry in snapshot.entries) {
+      decoded[entry.key] = await _decodeFullFileContents(
+        oldBytes: entry.value.oldBytes,
+        newBytes: entry.value.newBytes,
+        encoding: selection.encoding,
+      );
+      if (!mounted || generation != _encodingGeneration) return;
+    }
+    if (!mounted || generation != _encodingGeneration) return;
+    _updateDiffState(() {
+      _fullFileContents = <GitDiffFile, _FullFileContents>{
+        ..._fullFileContents,
+        ...decoded,
+      };
+    });
+  }
+
+  native.WorkspaceTextEncoding? get _detectedDiffEncoding {
+    native.WorkspaceTextEncoding? detected;
+    for (final contents in _fullFileContents.values) {
+      for (final encoding in <native.WorkspaceTextEncoding?>[
+        contents.oldDecoded?.encoding,
+        contents.newDecoded?.encoding,
+      ]) {
+        if (encoding == null) continue;
+        if (detected == null) {
+          detected = encoding;
+        } else if (detected != encoding) {
+          return null;
+        }
+      }
+    }
+    return detected;
   }
 }

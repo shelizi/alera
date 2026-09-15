@@ -77,6 +77,7 @@ class EditorSessionRegistry extends ChangeNotifier
         expectedContentToken: document.contentToken,
         overwriteIfChanged: false,
         tabSize: document.tabSize,
+        encoding: document.encoding!,
       );
       document.acceptSaved(saved);
       savedCount += 1;
@@ -328,11 +329,14 @@ class EditorDocumentSession({final VoidCallback? _onChanged}) {
   String? contentToken;
   Object? loadError;
   WorkspaceEditorRevealTarget? pendingReveal;
+  native.WorkspaceTextEncoding? requestedEncoding;
+  native.WorkspaceTextEncoding? encoding;
   int tabSize = 4;
 
   bool get hasSnapshot => currentText != null || loadError != null;
 
-  bool get canSave => loadedText != null && loadError == null;
+  bool get canSave =>
+      loadedText != null && loadError == null && encoding != null;
 
   bool get isDirty => loadedText != null && currentText != loadedText;
 
@@ -349,8 +353,14 @@ class EditorDocumentSession({final VoidCallback? _onChanged}) {
     _notifyChanged();
   }
 
-  void acceptLoaded(native.WorkspaceEditorTextFile file, {int tabSize = 4}) {
+  void acceptLoaded(
+    native.WorkspaceEditorTextFile file, {
+    int tabSize = 4,
+    native.WorkspaceTextEncoding? requestedEncoding,
+  }) {
     this.tabSize = tabSize;
+    this.requestedEncoding = requestedEncoding;
+    encoding = file.encoding;
     loadedRawText = file.rawContent;
     loadedText = file.displayContent;
     currentText = loadedText;
@@ -360,7 +370,11 @@ class EditorDocumentSession({final VoidCallback? _onChanged}) {
   }
 
   void acceptSaved(native.WorkspaceEditorTextFile file, {int? tabSize}) {
-    acceptLoaded(file, tabSize: tabSize ?? this.tabSize);
+    acceptLoaded(
+      file,
+      tabSize: tabSize ?? this.tabSize,
+      requestedEncoding: requestedEncoding,
+    );
   }
 
   void acceptLoadError(Object error) {
@@ -368,6 +382,7 @@ class EditorDocumentSession({final VoidCallback? _onChanged}) {
     loadedText = null;
     currentText = null;
     contentToken = null;
+    encoding = null;
     loadError = error;
     _notifyChanged();
   }
@@ -377,6 +392,8 @@ class EditorDocumentSession({final VoidCallback? _onChanged}) {
     loadedText = null;
     currentText = null;
     contentToken = null;
+    requestedEncoding = null;
+    encoding = null;
     loadError = null;
     _notifyChanged();
   }

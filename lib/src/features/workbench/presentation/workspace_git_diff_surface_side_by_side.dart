@@ -183,6 +183,89 @@ String _extractContent(String text) {
   return text;
 }
 
+List<GitDiffLine> _decodedDiffLines(
+  GitDiffFile file,
+  _FullFileContents? contents,
+) {
+  if (contents == null ||
+      (contents.oldDecoded == null && contents.newDecoded == null)) {
+    return file.lines;
+  }
+  final oldLines = contents.oldDecoded == null
+      ? const <String>[]
+      : _splitFullFileLines(contents.oldDecoded!.content);
+  final newLines = contents.newDecoded == null
+      ? const <String>[]
+      : _splitFullFileLines(contents.newDecoded!.content);
+  final result = <GitDiffLine>[];
+  int? oldLine;
+  int? newLine;
+
+  String contentAt(List<String> lines, int? lineNumber, String fallback) {
+    if (lineNumber == null || lineNumber <= 0 || lineNumber > lines.length) {
+      return fallback;
+    }
+    return lines[lineNumber - 1];
+  }
+
+  for (final line in file.lines) {
+    if (line.kind == GitDiffLineKind.hunk) {
+      final match = _hunkHeaderRegExp.firstMatch(line.text);
+      oldLine = int.tryParse(match?.group(1) ?? '');
+      newLine = int.tryParse(match?.group(3) ?? '');
+      result.add(line);
+      continue;
+    }
+    if (line.kind == GitDiffLineKind.header) {
+      result.add(line);
+      continue;
+    }
+    final fallback = _extractContent(line.text);
+    if (line.kind == GitDiffLineKind.deletion) {
+      final content = contentAt(oldLines, oldLine, fallback);
+      result.add(GitDiffLine.deletion('-$content'));
+      if (oldLine != null) oldLine += 1;
+      continue;
+    }
+    if (line.kind == GitDiffLineKind.addition) {
+      final content = contentAt(newLines, newLine, fallback);
+      result.add(GitDiffLine.addition('+$content'));
+      if (newLine != null) newLine += 1;
+      continue;
+    }
+    final content = newLines.isNotEmpty
+        ? contentAt(newLines, newLine, fallback)
+        : contentAt(oldLines, oldLine, fallback);
+    result.add(GitDiffLine.context(' $content'));
+    if (oldLine != null) oldLine += 1;
+    if (newLine != null) newLine += 1;
+  }
+  return result;
+}
+
+GitDiffFile _fileWithDecodedDiffLines(
+  GitDiffFile file,
+  _FullFileContents? contents,
+) {
+  final lines = _decodedDiffLines(file, contents);
+  if (identical(lines, file.lines)) return file;
+  return GitDiffFile(
+    path: file.path,
+    area: file.area,
+    status: file.status,
+    lines: lines,
+    oldPath: file.oldPath,
+    added: file.added,
+    removed: file.removed,
+    isBinary: file.isBinary,
+    isLarge: file.isLarge,
+    isGitlink: file.isGitlink,
+    truncated: file.truncated,
+    linePreviewTruncated: file.linePreviewTruncated,
+    sourceLabel: file.sourceLabel,
+  );
+}
+
 List<_DiffRow> _buildSideBySideRows(GitDiffFile file) {
   final items = <_DiffRow>[];
   final oldLabel = file.status == GitChangeStatus.added

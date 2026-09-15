@@ -1,8 +1,9 @@
-use super::{WorkspaceEditorTextFile, WorkspaceTextFile};
+use super::{WorkspaceEditorTextFile, WorkspaceTextEncoding, WorkspaceTextFile};
 
 pub(super) fn editor_text_file_from_raw(
     file: WorkspaceTextFile,
     tab_size: i32,
+    encoding: WorkspaceTextEncoding,
 ) -> WorkspaceEditorTextFile {
     let display_content = expand_workspace_editor_tabs(&file.content, tab_size);
     WorkspaceEditorTextFile {
@@ -11,6 +12,7 @@ pub(super) fn editor_text_file_from_raw(
         content_token: file.content_token,
         modified_millis: file.modified_millis,
         size: file.size,
+        encoding,
     }
 }
 

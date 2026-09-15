@@ -132,10 +132,16 @@ class _DelayedDiffGitBackend extends FakeGitBackend {
     required String path,
     required String filePath,
     required GitChangeArea area,
+    GitDiffWhitespaceMode whitespaceMode = GitDiffWhitespaceMode.normal,
   }) async {
     diffStarted = true;
     await _diffGate.future;
-    return super.diff(path: path, filePath: filePath, area: area);
+    return super.diff(
+      path: path,
+      filePath: filePath,
+      area: area,
+      whitespaceMode: whitespaceMode,
+    );
   }
 
   void completeDiff() {
