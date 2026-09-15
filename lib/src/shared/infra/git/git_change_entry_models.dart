@@ -106,7 +106,16 @@ bool gitChangeEntryValuesEqual(GitChangeEntry left, GitChangeEntry right) {
   if (identical(left, right)) {
     return true;
   }
-  return _gitChangeEntryValueKey(left) == _gitChangeEntryValueKey(right);
+  return left.path == right.path &&
+      left.oldPath == right.oldPath &&
+      left.area == right.area &&
+      left.status == right.status &&
+      left.added == right.added &&
+      left.removed == right.removed &&
+      left.isBinary == right.isBinary &&
+      left.isLarge == right.isLarge &&
+      gitSubmoduleStatusValuesEqual(left.submodule, right.submodule) &&
+      left.submoduleRoot == right.submoduleRoot;
 }
 
 List<GitChangeEntry> reconcileGitChangeEntryInstances(
