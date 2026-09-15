@@ -157,6 +157,16 @@ String? _translateDynamicTraditionalChinese(String source) {
     return '將保留 ${preservedAttachments.group(1)} 個附件。';
   }
 
+  final gitAreaChanges = RegExp(r'^(Staged|Unstaged|Untracked) changes$')
+      .firstMatch(source);
+  if (gitAreaChanges != null) {
+    return switch (gitAreaChanges.group(1)) {
+      'Staged' => '已暫存變更',
+      'Unstaged' => '未暫存變更',
+      _ => '未追蹤變更',
+    };
+  }
+
   final effortLabel = RegExp(r'^(.+) Effort$').firstMatch(source);
   if (effortLabel != null) {
     return '推理強度：${effortLabel.group(1)}';

@@ -888,6 +888,7 @@ class const _FileHeaderRow(final GitDiffFile file, {final String? sourceLabel})
     extends _DiffRow {
   @override
   Widget build(BuildContext context) {
+    final sourceLabelText = sourceLabel ?? file.sourceLabel ?? file.area.label;
     return SelectionContainer.disabled(
       child: DecoratedBox(
         decoration: const BoxDecoration(
@@ -905,7 +906,7 @@ class const _FileHeaderRow(final GitDiffFile file, {final String? sourceLabel})
               const SizedBox(width: AleraTokens.space8),
               Expanded(
                 child: Text(
-                  '${sourceLabel ?? file.sourceLabel ?? file.area.label} · ${file.path}',
+                  '${context.tr(sourceLabelText)} · ${file.path}',
                   maxLines: 1,
                   overflow: .ellipsis,
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(

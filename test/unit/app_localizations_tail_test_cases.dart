@@ -568,6 +568,28 @@ void registerAppLocalizationTailTests() {
     expect(source, contains("tooltip: context.tr('Expand')"));
   });
 
+  test('traditional Chinese localizes Git diff area copy', () {
+    final l10n = AleraLocalizations(const Locale('zh', 'TW'));
+    expect(l10n.translate('Staged changes'), '已暫存變更');
+    expect(l10n.translate('Unstaged changes'), '未暫存變更');
+    expect(l10n.translate('Untracked changes'), '未追蹤變更');
+  });
+
+  test('Git diff direct area labels route through localization', () {
+    final editorSource = File(
+      'lib/src/features/workbench/presentation/workspace_editor_surface.dart',
+    ).readAsStringSync();
+    final diffRowsSource = File(
+      'lib/src/features/workbench/presentation/workspace_git_diff_surface_rows.dart',
+    ).readAsStringSync();
+
+    expect(
+      editorSource,
+      contains("context.tr('\${entry.area.label} changes')"),
+    );
+    expect(diffRowsSource, contains('context.tr(sourceLabelText)'));
+  });
+
   test('English and unknown strings fall back to source text', () {
     final en = AleraLocalizations(const Locale('en'));
     final zh = AleraLocalizations(const Locale('zh', 'TW'));

@@ -567,7 +567,7 @@ class _WorkspaceEditorSurfaceState
         for (final entry in entries)
           PopupMenuItem<_DiffOpenChoice>(
             value: _DiffOpenChoice(area: entry.area),
-            child: Text('${entry.area.label} changes'),
+            child: Text(context.tr('${entry.area.label} changes')),
           ),
         const PopupMenuDivider(height: AleraTokens.space8),
         PopupMenuItem<_DiffOpenChoice>(
