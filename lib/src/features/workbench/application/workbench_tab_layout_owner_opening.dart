@@ -170,11 +170,13 @@ extension WorkbenchTabLayoutOwnerOpening on WorkbenchTabLayoutOwner {
   Future<void> setGitHistoryAllBranches({
     required String tabId,
     required bool allBranches,
+    String? selectedRef,
   }) async {
     try {
       final tab = await _host.workspaceTabService.setGitHistoryAllBranches(
         tabId: tabId,
         allBranches: allBranches,
+        selectedRef: selectedRef,
       );
       if (tab != null && !_host.isDisposed) {
         _host.emitState(

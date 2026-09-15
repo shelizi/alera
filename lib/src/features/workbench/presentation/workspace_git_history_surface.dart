@@ -7,7 +7,6 @@ import 'package:alera/src/design_system/buttons/alera_icon_button.dart';
 import 'package:alera/src/design_system/feedback/alera_empty_state.dart';
 import 'package:alera/src/design_system/feedback/alera_toast.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
-import 'package:alera/src/design_system/forms/alera_checkbox.dart';
 import 'package:alera/src/features/workbench/application/workbench_controller.dart';
 import 'package:alera/src/features/workbench/application/workspace_source_control_controller.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
@@ -27,7 +26,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 part 'workspace_git_history_commit_row.dart';
 part 'workspace_git_history_surface_actions.dart';
+part 'workspace_git_history_surface_perspective.dart';
 part 'workspace_git_history_surface_ref_actions.dart';
+
+const String _allBranchesPerspective = '__all_branches__';
 
 /// Main-area commit graph tab. Walks every branch tip by default and pages
 /// history in with offset pagination, keeping swimlanes continuous across
@@ -63,6 +65,9 @@ class _WorkspaceGitHistorySurfaceState
   bool _hasOutgoingChanges = false;
   String? _mergeBase;
   late bool _allBranches = widget.tab.gitHistoryAllBranches;
+  late String? _selectedRef = widget.tab.gitHistorySelectedRef;
+  List<String> _branches = const <String>[];
+  String? _currentBranch;
   bool _loading = false;
   bool _loadingMore = false;
   bool _hasMore = false;
@@ -76,6 +81,7 @@ class _WorkspaceGitHistorySurfaceState
   void initState() {
     super.initState();
     _verticalController.addListener(_onScroll);
+    unawaited(_loadBranchPerspectives());
     _reload();
   }
 
@@ -141,6 +147,7 @@ class _WorkspaceGitHistorySurfaceState
           .history(
             _sourceControlScope.path,
             limit: WorkspaceGitHistorySurface.pageSize,
+            baseRef: _allBranches ? null : _selectedRef,
             includeAllRefs: _allBranches,
           );
       if (!mounted || generation != _generation) {
@@ -152,14 +159,14 @@ class _WorkspaceGitHistorySurfaceState
         _loading = false;
         _currentRef = result.currentRef;
         _remoteRef = result.remoteRef;
-        _baseRef = result.baseRef;
-        _hasIncomingChanges = result.hasIncomingChanges;
-        _hasOutgoingChanges = result.hasOutgoingChanges;
+        _baseRef = _selectedRef == null ? result.baseRef : null;
+        _hasIncomingChanges = _selectedRef == null && result.hasIncomingChanges;
+        _hasOutgoingChanges = _selectedRef == null && result.hasOutgoingChanges;
         _mergeBase = result.mergeBase;
         _colorMap = buildDefaultGitHistoryColorMap(
           currentRef: result.currentRef,
           remoteRef: result.remoteRef,
-          baseRef: result.baseRef,
+          baseRef: _selectedRef == null ? result.baseRef : null,
         );
         _viewModels = _buildViewModels(result.items);
       });
@@ -196,6 +203,7 @@ class _WorkspaceGitHistorySurfaceState
           .history(
             _sourceControlScope.path,
             limit: WorkspaceGitHistorySurface.pageSize,
+            baseRef: _allBranches ? null : _selectedRef,
             includeAllRefs: _allBranches,
             offset: _items.length,
           );
@@ -243,22 +251,6 @@ class _WorkspaceGitHistorySurfaceState
     );
   }
 
-  Future<void> _setAllBranches(bool value) async {
-    if (value == _allBranches) {
-      return;
-    }
-    setState(() => _allBranches = value);
-    unawaited(_reload());
-    try {
-      await ref
-          .read(workbenchControllerProvider.notifier)
-          .setGitHistoryAllBranches(tabId: widget.tab.id, allBranches: value);
-    } catch (_) {
-      // Persistence failures only lose the saved preference; the current
-      // view already switched and stays correct for this session.
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     return DecoratedBox(
@@ -304,11 +296,7 @@ class _WorkspaceGitHistorySurfaceState
               ),
             ],
             const SizedBox(width: AleraTokens.space16),
-            AleraCheckbox(
-              value: _allBranches,
-              onChanged: (value) => unawaited(_setAllBranches(value)),
-              label: 'All Branches',
-            ),
+            _buildBranchPerspectiveMenu(theme),
             const Spacer(),
             if (_loading || _loadingMore)
               const Padding(
@@ -383,9 +371,8 @@ class _WorkspaceGitHistorySurfaceState
                       graphWidth: graphWidth,
                       isCompareAnchor:
                           _compareAnchorId == viewModel.historyItem.id,
-                      onTap: () => unawaited(
-                        _handleCommitTap(viewModel.historyItem),
-                      ),
+                      onTap: () =>
+                          unawaited(_handleCommitTap(viewModel.historyItem)),
                       onOpenActions: boundary
                           ? (position) => unawaited(_openBoundaryMenu(position))
                           : (position) => unawaited(

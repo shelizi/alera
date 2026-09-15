@@ -115,12 +115,15 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Page Two Root'), findsOneWidget);
   });
-  testWidgets('the All Branches toggle reloads scoped history and persists', (
+  testWidgets('branch perspective dropdown reloads history without checkout', (
     tester,
   ) async {
-    final backend = gitHistoryBackend(<GitHistoryItem>[
-      gitHistoryCommit('c1', parents: <String>[], subject: 'Only Commit'),
-    ]);
+    final backend =
+        gitHistoryBackend(<GitHistoryItem>[
+            gitHistoryCommit('c1', parents: <String>[], subject: 'Only Commit'),
+          ])
+          ..sourceBranches = <String>['feature', 'main', 'origin/main']
+          ..headBranch = 'main';
     final repository = GitHistoryFakeWorkbenchRepository()
       ..tabs.add(gitHistoryTab());
 
@@ -131,7 +134,13 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    expect(find.text('All Branches'), findsOneWidget);
     await tester.tap(find.text('All Branches'));
+    await tester.pumpAndSettle();
+    expect(find.text('feature'), findsOneWidget);
+    expect(find.text('main (Current)'), findsOneWidget);
+
+    await tester.tap(find.text('feature'));
     await tester.pumpAndSettle();
 
     final historyCalls = backend.calls
@@ -139,8 +148,14 @@ void main() {
         .toList();
     expect(historyCalls, hasLength(2));
     expect(historyCalls.last.args['includeAllRefs'], isFalse);
+    expect(historyCalls.last.args['baseRef'], 'feature');
     expect(historyCalls.last.args['offset'], isNull);
     expect(repository.tabs.single.gitHistoryAllBranches, isFalse);
+    expect(repository.tabs.single.gitHistorySelectedRef, 'feature');
+    expect(
+      backend.calls.where((call) => call.method == 'switchBranch'),
+      isEmpty,
+    );
   });
   testWidgets('tapping a commit opens its diff tab', (tester) async {
     final backend = gitHistoryBackend(<GitHistoryItem>[

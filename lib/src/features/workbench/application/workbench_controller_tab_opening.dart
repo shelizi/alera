@@ -62,12 +62,14 @@ mixin _WorkbenchControllerTabOpening
     targetGroupId: targetGroupId,
   );
 
-  /// Persists the commit-graph tab's All Branches toggle.
+  /// Persists the commit-graph branch perspective.
   Future<void> setGitHistoryAllBranches({
     required String tabId,
     required bool allBranches,
+    String? selectedRef,
   }) => _tabLayoutOwner.setGitHistoryAllBranches(
     tabId: tabId,
     allBranches: allBranches,
+    selectedRef: selectedRef,
   );
 }

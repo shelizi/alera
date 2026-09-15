@@ -205,6 +205,36 @@ fn git_history_include_all_refs_walks_other_branch_tips() {
 }
 
 #[test]
+fn git_history_selected_ref_walks_branch_without_checkout() {
+    let repo = init_repo();
+    run_git(repo.path(), &["checkout", "-b", "feature"]);
+    commit_file(repo.path(), "feature.txt", "feature\n", "feature change");
+    run_git(repo.path(), &["checkout", "main"]);
+    commit_file(repo.path(), "main.txt", "main\n", "main change");
+
+    let selected = git_history(
+        path_str(repo.path()),
+        Some(50),
+        Some("feature".to_string()),
+        Some(false),
+        None,
+    )
+    .unwrap();
+    let subjects = selected
+        .items
+        .iter()
+        .map(|item| item.subject.as_str())
+        .collect::<Vec<_>>();
+
+    assert!(subjects.contains(&"feature change"));
+    assert!(!subjects.contains(&"main change"));
+    assert_eq!(
+        head_branch_name(&git2::Repository::open(repo.path()).unwrap()),
+        "main"
+    );
+}
+
+#[test]
 fn git_history_offset_pages_visible_items() {
     let repo = init_repo();
     commit_file(repo.path(), "a.txt", "1\n", "commit 1");

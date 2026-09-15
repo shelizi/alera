@@ -49,13 +49,21 @@ pub(super) fn git_history(
         .as_ref()
         .and_then(|remote| remote.revision.as_deref())
         .and_then(|value| Oid::from_str(value).ok());
-    let base_ref =
-        git_history_refs::resolve_named_ref(&repo, base_ref.as_deref())?.filter(|base| {
-            base.id != current_ref.id
-                && remote_ref
-                    .as_ref()
-                    .is_none_or(|remote| remote.id != base.id)
-        });
+    let requested_ref = git_history_refs::resolve_named_ref(&repo, base_ref.as_deref())?;
+    let selected_oid = if include_all_refs == Some(true) {
+        None
+    } else {
+        requested_ref
+            .as_ref()
+            .and_then(|reference| reference.revision.as_deref())
+            .and_then(|value| Oid::from_str(value).ok())
+    };
+    let base_ref = requested_ref.filter(|base| {
+        base.id != current_ref.id
+            && remote_ref
+                .as_ref()
+                .is_none_or(|remote| remote.id != base.id)
+    });
     let merge_base_oid = if let Some(remote_oid) = remote_oid {
         if remote_oid != head_oid {
             repo.merge_base(head_oid, remote_oid).ok()
@@ -67,12 +75,16 @@ pub(super) fn git_history(
     };
     let refs_by_oid = git_history_refs::refs_by_oid(&repo)?;
     let mut revwalk = repo.revwalk().map_err(GitError::from_git2)?;
-    revwalk.push(head_oid).map_err(GitError::from_git2)?;
-    if let Some(remote_oid) = remote_oid.filter(|remote_oid| *remote_oid != head_oid) {
-        revwalk.push(remote_oid).map_err(GitError::from_git2)?;
-    }
-    if include_all_refs == Some(true) {
-        push_branch_tips(&repo, &mut revwalk, head_oid, remote_oid)?;
+    if let Some(selected_oid) = selected_oid {
+        revwalk.push(selected_oid).map_err(GitError::from_git2)?;
+    } else {
+        revwalk.push(head_oid).map_err(GitError::from_git2)?;
+        if let Some(remote_oid) = remote_oid.filter(|remote_oid| *remote_oid != head_oid) {
+            revwalk.push(remote_oid).map_err(GitError::from_git2)?;
+        }
+        if include_all_refs == Some(true) {
+            push_branch_tips(&repo, &mut revwalk, head_oid, remote_oid)?;
+        }
     }
     revwalk
         .set_sorting(Sort::TOPOLOGICAL | Sort::TIME)

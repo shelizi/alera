@@ -210,11 +210,12 @@ extension WorkspaceTabGitOpening on WorkspaceTabService {
     return tab;
   }
 
-  /// Persists the All Branches toggle of a commit-graph tab so a reopened or
-  /// remotely synced tab keeps the last selection.
+  /// Persists the commit-graph perspective so a reopened or remotely synced
+  /// tab keeps the selected branch without changing the checked-out branch.
   Future<WorkspaceTabRecord?> setGitHistoryAllBranches({
     required String tabId,
     required bool allBranches,
+    String? selectedRef,
   }) async {
     final tab = await _repository.findWorkspaceTabById(tabId);
     if (tab == null || tab.kind != WorkspaceTabKind.gitHistory) {
@@ -225,6 +226,9 @@ extension WorkspaceTabGitOpening on WorkspaceTabService {
       payload: <String, Object?>{
         ...tab.payload,
         workspaceTabGitHistoryAllBranchesPayloadKey: allBranches,
+        workspaceTabGitHistorySelectedRefPayloadKey: allBranches
+            ? null
+            : selectedRef,
       },
     );
     return _repository.upsertWorkspaceTab(next);

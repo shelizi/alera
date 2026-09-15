@@ -72,6 +72,8 @@ const String workspaceTabGitDiffHostedReviewRetentionIdPayloadKey =
 const String workspaceTabGitDiffOldPathPayloadKey = 'gitDiffOldPath';
 const String workspaceTabGitHistoryAllBranchesPayloadKey =
     'gitHistoryAllBranches';
+const String workspaceTabGitHistorySelectedRefPayloadKey =
+    'gitHistorySelectedRef';
 
 enum WorkspaceGitDiffSource(this.key) {
   workingTree('workingTree'),
@@ -253,6 +255,11 @@ class WorkspaceTabRecord({
   /// persisted before the toggle existed keep the all-branches view.
   bool get gitHistoryAllBranches =>
       payload[workspaceTabGitHistoryAllBranchesPayloadKey] != false;
+
+  /// Optional branch/ref used as the commit-graph history root without
+  /// checking that branch out. Null means use the repository's current branch.
+  String? get gitHistorySelectedRef =>
+      _nonEmptyPayloadString(workspaceTabGitHistorySelectedRefPayloadKey);
 
   String? _nonEmptyPayloadString(String key) {
     final value = payload[key];
