@@ -85,6 +85,7 @@ extension on RustGitBackend {
             depth: nativeRow.depth,
             fileCount: nativeRow.fileCount,
             entry: entry,
+            entryIndex: entryIndex,
           ),
         );
         if ((index + 1) % gitStatusWorkChunkSize == 0) {
@@ -96,6 +97,7 @@ extension on RustGitBackend {
           area: _toArea(nativeGroup.area),
           entries: List<GitChangeEntry>.unmodifiableOf(areaEntries),
           treeRows: List<GitChangeTreeRow>.unmodifiableOf(treeRows),
+          entryIndices: List<int>.unmodifiableOf(nativeGroup.entryIndices),
         ),
       );
     }

@@ -124,6 +124,7 @@ class const GitChangeTreeRow({
   required final int depth,
   required final int fileCount,
   final GitChangeEntry? entry,
+  final int? entryIndex,
 });
 
 class const GitDiffResult({

@@ -46,6 +46,63 @@ void _registerChunkedGroupTests() {
     );
 
     test(
+      'chunked rebind uses native entry indices without source object lookup',
+      () async {
+        final reboundEntries = <GitChangeEntry>[
+          _entry('lib/alpha.dart', area: .unstaged),
+          _entry('lib/beta.dart', area: .unstaged),
+        ];
+        final sourceEntries = reboundEntries.map(_copyEntry).toList();
+        final group = GitChangeGroup(
+          area: .unstaged,
+          entries: <GitChangeEntry>[
+            _copyEntry(sourceEntries[1]),
+            _copyEntry(sourceEntries[0]),
+          ],
+          entryIndices: const <int>[1, 0],
+          treeRows: <GitChangeTreeRow>[
+            GitChangeTreeRow(
+              kind: .file,
+              name: 'beta.dart',
+              path: 'lib/beta.dart',
+              depth: 1,
+              fileCount: 1,
+              entry: _copyEntry(sourceEntries[1]),
+              entryIndex: 1,
+            ),
+            GitChangeTreeRow(
+              kind: .file,
+              name: 'alpha.dart',
+              path: 'lib/alpha.dart',
+              depth: 1,
+              fileCount: 1,
+              entry: _copyEntry(sourceEntries[0]),
+              entryIndex: 0,
+            ),
+          ],
+        );
+
+        final rebound = await GitChangeGroup.rebindEntryInstancesChunked(
+          <GitChangeGroup>[group],
+          sourceEntries: sourceEntries,
+          reboundEntries: reboundEntries,
+          chunkSize: 1,
+        );
+
+        expect(identical(rebound.single.entries[0], reboundEntries[1]), isTrue);
+        expect(identical(rebound.single.entries[1], reboundEntries[0]), isTrue);
+        expect(
+          identical(rebound.single.treeRows[0].entry, reboundEntries[1]),
+          isTrue,
+        );
+        expect(
+          identical(rebound.single.treeRows[1].entry, reboundEntries[0]),
+          isTrue,
+        );
+      },
+    );
+
+    test(
       'chunked rebind preserves reconciled entry identity in rows',
       () async {
         final previous = <GitChangeEntry>[

@@ -4,8 +4,14 @@ class const GitChangeGroup({
   required final GitChangeArea area,
   required final List<GitChangeEntry> entries,
   required final List<GitChangeTreeRow> treeRows,
+  this.entryIndices,
   this.unified = false,
 }) {
+  /// Native status projections keep indices into `GitStatusResult.entries` so
+  /// refresh rebinding can skip an object-identity HashMap. Dart-built and
+  /// legacy/mock groups leave this null and use the compatibility fallback.
+  final List<int>? entryIndices;
+
   /// When true, the group holds files from every area in one list. [area] is
   /// only used as a collapse-key / bulk-action sentinel for the section.
   final bool unified;
@@ -178,6 +184,80 @@ class const GitChangeGroup({
 
     final chunker = _GitStatusChunker(onChunk, chunkSize);
     try {
+      final canRebindByIndex =
+          sourceEntries.length == reboundEntries.length &&
+          groups.every((group) {
+            final indices = group.entryIndices;
+            if (indices == null || indices.length != group.entries.length) {
+              return false;
+            }
+            return group.treeRows.every(
+              (row) => row.entry == null || row.entryIndex != null,
+            );
+          });
+      if (canRebindByIndex) {
+        final reboundGroups = <GitChangeGroup>[];
+        for (final group in groups) {
+          final indices = group.entryIndices!;
+          final groupEntries = <GitChangeEntry>[];
+          for (var index = 0; index < indices.length; index += 1) {
+            final entryIndex = indices[index];
+            if (entryIndex < 0 || entryIndex >= reboundEntries.length) {
+              throw StateError(
+                'Git status group index $entryIndex is outside the '
+                '${reboundEntries.length}-entry status result.',
+              );
+            }
+            groupEntries.add(reboundEntries[entryIndex]);
+            if ((index + 1) % chunkSize == 0) {
+              await chunker.pause();
+            }
+          }
+
+          final treeRows = <GitChangeTreeRow>[];
+          for (var index = 0; index < group.treeRows.length; index += 1) {
+            final row = group.treeRows[index];
+            final entryIndex = row.entryIndex;
+            GitChangeEntry? entry;
+            if (entryIndex != null) {
+              if (entryIndex < 0 || entryIndex >= reboundEntries.length) {
+                throw StateError(
+                  'Git status tree index $entryIndex is outside the '
+                  '${reboundEntries.length}-entry status result.',
+                );
+              }
+              entry = reboundEntries[entryIndex];
+            }
+            treeRows.add(
+              GitChangeTreeRow(
+                kind: row.kind,
+                name: row.name,
+                path: row.path,
+                depth: row.depth,
+                fileCount: row.fileCount,
+                entry: entry,
+                entryIndex: entryIndex,
+              ),
+            );
+            if ((index + 1) % chunkSize == 0) {
+              await chunker.pause();
+            }
+          }
+
+          reboundGroups.add(
+            GitChangeGroup(
+              area: group.area,
+              entries: List<GitChangeEntry>.unmodifiableOf(groupEntries),
+              treeRows: List<GitChangeTreeRow>.unmodifiableOf(treeRows),
+              entryIndices: indices,
+              unified: group.unified,
+            ),
+          );
+          await chunker.pause();
+        }
+        return List<GitChangeGroup>.unmodifiableOf(reboundGroups);
+      }
+
       final reboundBySource = <GitChangeEntry, GitChangeEntry>{};
       final entryCount = sourceEntries.length < reboundEntries.length
           ? sourceEntries.length
@@ -212,6 +292,7 @@ class const GitChangeGroup({
               depth: row.depth,
               fileCount: row.fileCount,
               entry: entry == null ? null : reboundBySource[entry] ?? entry,
+              entryIndex: row.entryIndex,
             ),
           );
           if ((index + 1) % chunkSize == 0) {
@@ -224,6 +305,7 @@ class const GitChangeGroup({
             area: group.area,
             entries: groupEntries,
             treeRows: treeRows,
+            entryIndices: group.entryIndices,
             unified: group.unified,
           ),
         );
