@@ -25,11 +25,16 @@ extension _WorkspaceEditorLoading on _WorkspaceEditorSurfaceState {
         workspacePath: workspacePath,
         relativePath: filePath,
         tabSize: tabSize,
+        encoding: _document.requestedEncoding,
       );
       if (!_isCurrentLoadRequest(requestId, workspacePath, filePath)) {
         return;
       }
-      _document.acceptLoaded(file, tabSize: tabSize);
+      _document.acceptLoaded(
+        file,
+        tabSize: tabSize,
+        requestedEncoding: _document.requestedEncoding,
+      );
       _controller.text = _document.currentText ?? '';
     } catch (error) {
       if (!_isCurrentLoadRequest(requestId, workspacePath, filePath)) {
@@ -44,6 +49,31 @@ extension _WorkspaceEditorLoading on _WorkspaceEditorSurfaceState {
         _autosave.notifyStateChanged();
       }
     }
+  }
+
+  Future<void> _changeEncoding(WorkspaceTextEncodingSelection selection) async {
+    final requested = selection.encoding;
+    if (_document.requestedEncoding == requested && _document.hasSnapshot) {
+      return;
+    }
+    if (_document.isDirty) {
+      final discard = await showDialog<bool>(
+        context: context,
+        builder: (context) => const AleraConfirmDialog(
+          title: 'Reopen File With Encoding?',
+          message:
+              'Unsaved changes will be discarded before reopening the file.',
+          confirmLabel: 'Reopen',
+          destructive: true,
+        ),
+      );
+      if (discard != true || !mounted) {
+        return;
+      }
+    }
+    _document.requestedEncoding = requested;
+    _undoController.clear();
+    await _load();
   }
 
   void _restoreDocumentOrLoad() {

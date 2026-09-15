@@ -13,6 +13,10 @@ class const _EditorFileBar({
   required final String path,
   required final bool dirty,
   required final bool saving,
+  required final WorkspaceTextEncodingSelection encodingSelection,
+  required final native.WorkspaceTextEncoding? detectedEncoding,
+  required final ValueChanged<WorkspaceTextEncodingSelection>?
+  onEncodingSelected,
   required final VoidCallback? onViewDiff,
   required final VoidCallback? onSave,
   required final VoidCallback? onDiscard,
@@ -47,6 +51,36 @@ class const _EditorFileBar({
               ),
             ),
             const SizedBox(width: AleraTokens.space8),
+            PopupMenuButton<WorkspaceTextEncodingSelection>(
+              tooltip: 'File Encoding',
+              enabled: onEncodingSelected != null,
+              onSelected: onEncodingSelected,
+              itemBuilder: (context) =>
+                  <PopupMenuEntry<WorkspaceTextEncodingSelection>>[
+                    for (final selection
+                        in WorkspaceTextEncodingSelection.values)
+                      PopupMenuItem<WorkspaceTextEncodingSelection>(
+                        value: selection,
+                        child: Text(selection.label),
+                      ),
+                  ],
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: AleraTokens.space6,
+                ),
+                child: Text(
+                  workspaceTextEncodingDisplayLabel(
+                    selection: encodingSelection,
+                    detectedEncoding: detectedEncoding,
+                  ),
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: AleraTokens.foregroundMuted,
+                    fontFamily: 'JetBrains Mono',
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: AleraTokens.space2),
             AleraIconButton(
               tooltip: 'View Diff',
               icon: AleraIcons.diff,

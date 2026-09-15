@@ -142,15 +142,24 @@ class const WorkspaceFileService() {
     );
   }
 
+  Future<native.WorkspaceDecodedText> decodeTextBytes({
+    required List<int> bytes,
+    native.WorkspaceTextEncoding? encoding,
+  }) {
+    return native.decodeWorkspaceTextBytes(bytes: bytes, encoding: encoding);
+  }
+
   Future<native.WorkspaceEditorTextFile> readEditorTextFile({
     required String workspacePath,
     required String relativePath,
     required int tabSize,
+    native.WorkspaceTextEncoding? encoding,
   }) {
     return native.readWorkspaceEditorTextFile(
       workspacePath: workspacePath,
       relativePath: relativePath,
       tabSize: tabSize,
+      encoding: encoding,
     );
   }
 
@@ -179,6 +188,7 @@ class const WorkspaceFileService() {
     required String? expectedContentToken,
     required bool overwriteIfChanged,
     required int tabSize,
+    required native.WorkspaceTextEncoding encoding,
   }) {
     return native.writeWorkspaceEditorTextFile(
       workspacePath: workspacePath,
@@ -189,6 +199,7 @@ class const WorkspaceFileService() {
       expectedContentToken: expectedContentToken,
       overwriteIfChanged: overwriteIfChanged,
       tabSize: tabSize,
+      encoding: encoding,
     );
   }
 

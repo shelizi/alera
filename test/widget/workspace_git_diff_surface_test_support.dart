@@ -7,11 +7,15 @@ Future<void> _pumpDiffSurface(
   WorkspaceTabRecord? tab,
   ReadingDiffService? readingDiffService,
   SettingsController? settingsController,
+  WorkspaceFileService? workspaceFileService,
 }) {
   return tester.pumpWidget(
     ProviderScope(
       overrides: [
         gitBackendProvider.overrideWithValue(backend),
+        workspaceFileServiceProvider.overrideWithValue(
+          workspaceFileService ?? _DiffEncodingFileService(),
+        ),
         if (settingsController == null)
           settingsControllerProvider.overrideWithValue(.defaults)
         else
@@ -36,6 +40,33 @@ Future<void> _pumpDiffSurface(
       ),
     ),
   );
+}
+
+typedef _DiffDecodeCallback = FutureOr<native.WorkspaceDecodedText> Function(
+  List<int> bytes,
+  native.WorkspaceTextEncoding? encoding,
+);
+
+class _DiffEncodingFileService extends WorkspaceFileService {
+  _DiffEncodingFileService({this._decode});
+
+  final _DiffDecodeCallback? _decode;
+  final List<({List<int> bytes, native.WorkspaceTextEncoding? encoding})>
+  decodeCalls = <({List<int> bytes, native.WorkspaceTextEncoding? encoding})>[];
+
+  @override
+  Future<native.WorkspaceDecodedText> decodeTextBytes({
+    required List<int> bytes,
+    native.WorkspaceTextEncoding? encoding,
+  }) async {
+    decodeCalls.add((bytes: List<int>.from(bytes), encoding: encoding));
+    final decode = _decode;
+    if (decode != null) return await decode(bytes, encoding);
+    return native.WorkspaceDecodedText(
+      content: utf8.decode(bytes),
+      encoding: encoding ?? native.WorkspaceTextEncoding.utf8,
+    );
+  }
 }
 
 class _MutableSettingsController(final AleraSettings _settings)

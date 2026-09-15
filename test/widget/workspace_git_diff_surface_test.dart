@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:alera/src/app/providers.dart'
@@ -12,9 +13,13 @@ import 'package:alera/src/features/reading_diff/application/reading_diff_provide
 import 'package:alera/src/features/reading_diff/application/reading_diff_service.dart';
 import 'package:alera/src/features/reading_diff/domain/reading_diff_models.dart';
 import 'package:alera/src/rust/api/reading_diff.dart' as rust;
+import 'package:alera/src/rust/api/workspace_files.dart' as native;
 import 'package:alera/src/features/settings/application/settings_controller.dart';
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
+import 'package:alera/src/features/workbench/application/workbench_providers.dart'
+    show workspaceFileServiceProvider;
 import 'package:alera/src/features/workbench/application/workbench_state.dart';
+import 'package:alera/src/features/workbench/application/workspace_file_service.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_git_diff_surface.dart';
@@ -252,6 +257,170 @@ void main() {
           .args,
       containsPair('oldSide', false),
     );
+  });
+
+  testWidgets('encoding switch re-decodes cached blobs for diff-only view', (
+    tester,
+  ) async {
+    final backend = FakeGitBackend()
+      ..gitDiffResult = const GitDiffResult(
+        files: <GitDiffFile>[
+          GitDiffFile(
+            path: 'lib/large.dart',
+            area: .unstaged,
+            status: .modified,
+            lines: <GitDiffLine>[
+              GitDiffLine.hunk('@@ -1 +1 @@'),
+              GitDiffLine.deletion('-garbled old'),
+              GitDiffLine.addition('+garbled new'),
+            ],
+          ),
+        ],
+      )
+      ..diffBlobBytesBySide[(filePath: 'lib/large.dart', oldSide: true)] =
+          Uint8List.fromList(<int>[1])
+      ..diffBlobBytesBySide[(filePath: 'lib/large.dart', oldSide: false)] =
+          Uint8List.fromList(<int>[2]);
+    final fileService = _DiffEncodingFileService(
+      decode: (bytes, encoding) {
+        final oldSide = bytes.single == 1;
+        final isBig5 = encoding == native.WorkspaceTextEncoding.big5;
+        return native.WorkspaceDecodedText(
+          content: isBig5
+              ? (oldSide ? '舊內容\n' : '新內容\n')
+              : (oldSide ? 'auto old\n' : 'auto new\n'),
+          encoding: encoding ?? native.WorkspaceTextEncoding.utf8,
+        );
+      },
+    );
+
+    await _pumpDiffSurface(
+      tester,
+      backend: backend,
+      workspaceFileService: fileService,
+    );
+    await tester.pumpAndSettle();
+    final blobReadsBeforeSwitch = backend.calls
+        .where((call) => call.method == 'diffBlobBytes')
+        .length;
+    expect(find.text('Auto (UTF-8)'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Switch to Diff Only'));
+    await tester.pump();
+    expect(find.text('-auto old'), findsOneWidget);
+    expect(find.text('+auto new'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Diff Encoding'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Big5').last);
+    await tester.pumpAndSettle();
+
+    expect(find.text('-舊內容'), findsOneWidget);
+    expect(find.text('+新內容'), findsOneWidget);
+    expect(find.text('Big5'), findsOneWidget);
+    expect(
+      backend.calls.where((call) => call.method == 'diffBlobBytes').length,
+      blobReadsBeforeSwitch,
+    );
+    expect(fileService.decodeCalls.length, 4);
+  });
+
+  testWidgets('encoding switch preserves files hydrated during re-decode', (
+    tester,
+  ) async {
+    final secondBlobGate = Completer<void>();
+    final manualDecodeGate = Completer<void>();
+    final manualDecodeStarted = Completer<void>();
+    final backend = _BlockingDiffBlobBackend()
+      ..gitDiffResult = const GitDiffResult(
+        files: <GitDiffFile>[
+          GitDiffFile(
+            path: 'lib/first.dart',
+            area: .unstaged,
+            status: .untracked,
+            lines: <GitDiffLine>[
+              GitDiffLine.hunk('@@ -0,0 +1 @@'),
+              GitDiffLine.addition('+garbled first'),
+            ],
+          ),
+          GitDiffFile(
+            path: 'lib/second.dart',
+            area: .unstaged,
+            status: .untracked,
+            lines: <GitDiffLine>[
+              GitDiffLine.hunk('@@ -0,0 +1 @@'),
+              GitDiffLine.addition('+garbled second'),
+            ],
+          ),
+        ],
+      )
+      ..diffBlobBytesBySide[(filePath: 'lib/first.dart', oldSide: false)] =
+          Uint8List.fromList(<int>[1])
+      ..diffBlobBytesBySide[(filePath: 'lib/second.dart', oldSide: false)] =
+          Uint8List.fromList(<int>[2])
+      ..gates[(filePath: 'lib/second.dart', oldSide: false)] = secondBlobGate;
+    final fileService = _DiffEncodingFileService(
+      decode: (bytes, encoding) async {
+        final isBig5 = encoding == native.WorkspaceTextEncoding.big5;
+        if (isBig5 && bytes.single == 1) {
+          if (!manualDecodeStarted.isCompleted) manualDecodeStarted.complete();
+          await manualDecodeGate.future;
+        }
+        return native.WorkspaceDecodedText(
+          content: isBig5
+              ? (bytes.single == 1 ? '第一個\n' : '第二個\n')
+              : (bytes.single == 1 ? 'auto first\n' : 'auto second\n'),
+          encoding: encoding ?? native.WorkspaceTextEncoding.utf8,
+        );
+      },
+    );
+
+    await _pumpDiffSurface(
+      tester,
+      backend: backend,
+      workspaceFileService: fileService,
+    );
+    for (var i = 0; i < 10; i += 1) {
+      await tester.pump();
+      if (backend.started.contains((
+        filePath: 'lib/second.dart',
+        oldSide: false,
+      ))) {
+        break;
+      }
+    }
+    expect(
+      backend.started,
+      contains((filePath: 'lib/second.dart', oldSide: false)),
+    );
+
+    await tester.tap(find.byTooltip('Diff Encoding'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Big5').last);
+    for (var i = 0; i < 10 && !manualDecodeStarted.isCompleted; i += 1) {
+      await tester.pump();
+    }
+    expect(manualDecodeStarted.isCompleted, isTrue);
+
+    secondBlobGate.complete();
+    for (var i = 0; i < 10; i += 1) {
+      await tester.pump();
+      if (fileService.decodeCalls.any(
+        (call) =>
+            call.bytes.single == 2 &&
+            call.encoding == native.WorkspaceTextEncoding.big5,
+      )) {
+        break;
+      }
+    }
+    manualDecodeGate.complete();
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Switch to Diff Only'));
+    await tester.pump();
+    expect(find.text('+第一個'), findsOneWidget);
+    expect(find.text('+第二個'), findsOneWidget);
+    expect(find.text('+garbled second'), findsNothing);
   });
 
   _registerWorkspaceGitDiffSurfaceOpenPathTests();

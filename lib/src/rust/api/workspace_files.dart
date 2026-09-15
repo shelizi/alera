@@ -8,7 +8,7 @@ import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // These functions are ignored because they are not marked as `pub`: `content_token`, `copy_recursively`, `ensure_inside_existing_parent`, `ensure_not_descendant`, `entry_for_path`, `from_io`, `is_protected_child_path`, `is_protected_relative_path`, `join_relative`, `modified_millis`, `new`, `reject_protected`, `relative_components`, `relative_string`, `resolve_existing_no_follow`, `resolve_existing`, `resolve_new_child`, `sanitize_name`, `shared_workspace_file_error`, `unique_copy_destination`, `workspace_root`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`
 
 Future<List<WorkspaceFileEntry>> listWorkspaceChildren({
   required String workspacePath,
@@ -113,14 +113,24 @@ Future<WorkspaceTextFile> readWorkspaceTextFile({
   relativePath: relativePath,
 );
 
+Future<WorkspaceDecodedText> decodeWorkspaceTextBytes({
+  required List<int> bytes,
+  WorkspaceTextEncoding? encoding,
+}) => RustLib.instance.api.crateApiWorkspaceFilesDecodeWorkspaceTextBytes(
+  bytes: bytes,
+  encoding: encoding,
+);
+
 Future<WorkspaceEditorTextFile> readWorkspaceEditorTextFile({
   required String workspacePath,
   required String relativePath,
   required int tabSize,
+  WorkspaceTextEncoding? encoding,
 }) => RustLib.instance.api.crateApiWorkspaceFilesReadWorkspaceEditorTextFile(
   workspacePath: workspacePath,
   relativePath: relativePath,
   tabSize: tabSize,
+  encoding: encoding,
 );
 
 Future<WorkspaceTextFile> writeWorkspaceTextFile({
@@ -146,6 +156,7 @@ Future<WorkspaceEditorTextFile> writeWorkspaceEditorTextFile({
   String? expectedContentToken,
   required bool overwriteIfChanged,
   required int tabSize,
+  required WorkspaceTextEncoding encoding,
 }) => RustLib.instance.api.crateApiWorkspaceFilesWriteWorkspaceEditorTextFile(
   workspacePath: workspacePath,
   relativePath: relativePath,
@@ -155,6 +166,7 @@ Future<WorkspaceEditorTextFile> writeWorkspaceEditorTextFile({
   expectedContentToken: expectedContentToken,
   overwriteIfChanged: overwriteIfChanged,
   tabSize: tabSize,
+  encoding: encoding,
 );
 
 Future<WorkspaceFileEntry> createWorkspaceFile({
@@ -286,12 +298,31 @@ class SourceControlWatcherHandle {
           id == other.id;
 }
 
+class WorkspaceDecodedText {
+  final String content;
+  final WorkspaceTextEncoding encoding;
+
+  const WorkspaceDecodedText({required this.content, required this.encoding});
+
+  @override
+  int get hashCode => content.hashCode ^ encoding.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is WorkspaceDecodedText &&
+          runtimeType == other.runtimeType &&
+          content == other.content &&
+          encoding == other.encoding;
+}
+
 class WorkspaceEditorTextFile {
   final String rawContent;
   final String displayContent;
   final String contentToken;
   final PlatformInt64 modifiedMillis;
   final BigInt size;
+  final WorkspaceTextEncoding encoding;
 
   const WorkspaceEditorTextFile({
     required this.rawContent,
@@ -299,6 +330,7 @@ class WorkspaceEditorTextFile {
     required this.contentToken,
     required this.modifiedMillis,
     required this.size,
+    required this.encoding,
   });
 
   @override
@@ -307,7 +339,8 @@ class WorkspaceEditorTextFile {
       displayContent.hashCode ^
       contentToken.hashCode ^
       modifiedMillis.hashCode ^
-      size.hashCode;
+      size.hashCode ^
+      encoding.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -318,7 +351,8 @@ class WorkspaceEditorTextFile {
           displayContent == other.displayContent &&
           contentToken == other.contentToken &&
           modifiedMillis == other.modifiedMillis &&
-          size == other.size;
+          size == other.size &&
+          encoding == other.encoding;
 }
 
 class WorkspaceExplorerDirectoryChildren {
@@ -624,6 +658,19 @@ class WorkspaceQuickOpenSession {
           runtimeType == other.runtimeType &&
           id == other.id &&
           indexedFileCount == other.indexedFileCount;
+}
+
+enum WorkspaceTextEncoding {
+  utf8,
+  utf8Bom,
+  utf16Le,
+  utf16Be,
+  big5,
+  gbk,
+  shiftJis,
+  eucJp,
+  eucKr,
+  windows1252,
 }
 
 class WorkspaceTextFile {

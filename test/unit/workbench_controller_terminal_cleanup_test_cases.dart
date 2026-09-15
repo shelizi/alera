@@ -32,6 +32,7 @@ void _registerWorkbenchControllerTerminalCleanupTests() {
             contentToken: 'token',
             modifiedMillis: 0,
             size: .zero,
+            encoding: native_files.WorkspaceTextEncoding.utf8,
           ),
         )
         ..updateCurrentText('unsaved');
@@ -99,6 +100,7 @@ void _registerWorkbenchControllerTerminalCleanupTests() {
           contentToken: 'token-1',
           modifiedMillis: 0,
           size: .zero,
+          encoding: native_files.WorkspaceTextEncoding.utf8,
         ),
       )
       ..updateCurrentText('edited');

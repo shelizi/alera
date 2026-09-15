@@ -88,16 +88,23 @@ class const _DiffRows(final List<_DiffRow> items) {
           final contents = fullFileContents[file];
           renderedRows = sideBySide
               ? _buildFullFileSideBySideRows(file, contents)
-              : _buildFullFileRows(file, contents?.singleSideBytes(file));
+              : _buildFullFileRows(
+                  _fileWithDecodedDiffLines(file, contents),
+                  contents?.singleSideDecoded(file),
+                );
         }
         if (renderedRows != null) {
           items.addAll(renderedRows);
         } else if (file.lines.isEmpty) {
           items.add(const _BannerRow('No text diff for this file.'));
         } else if (sideBySide) {
-          items.addAll(_buildSideBySideRows(file));
+          items.addAll(
+            _buildSideBySideRows(
+              _fileWithDecodedDiffLines(file, fullFileContents[file]),
+            ),
+          );
         } else {
-          for (final line in file.lines) {
+          for (final line in _decodedDiffLines(file, fullFileContents[file])) {
             items.add(_DiffLineRow(line));
           }
         }

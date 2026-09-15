@@ -28,6 +28,7 @@ void _registerWorkbenchControllerSleepTests() {
             contentToken: 'sleep-token',
             modifiedMillis: 0,
             size: .zero,
+            encoding: native_files.WorkspaceTextEncoding.utf8,
           ),
         )
         ..updateCurrentText('unsaved');

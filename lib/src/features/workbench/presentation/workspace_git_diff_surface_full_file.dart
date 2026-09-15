@@ -1,13 +1,20 @@
 part of 'workspace_git_diff_surface.dart';
 
 final class _FullFileContents {
-  const _FullFileContents({this.oldBytes, this.newBytes});
+  const _FullFileContents({
+    this.oldBytes,
+    this.newBytes,
+    this.oldDecoded,
+    this.newDecoded,
+  });
 
   final Uint8List? oldBytes;
   final Uint8List? newBytes;
+  final native.WorkspaceDecodedText? oldDecoded;
+  final native.WorkspaceDecodedText? newDecoded;
 
-  Uint8List? singleSideBytes(GitDiffFile file) =>
-      file.status == GitChangeStatus.deleted ? oldBytes : newBytes;
+  native.WorkspaceDecodedText? singleSideDecoded(GitDiffFile file) =>
+      file.status == GitChangeStatus.deleted ? oldDecoded : newDecoded;
 }
 
 final class _FullFileLine {
@@ -96,8 +103,11 @@ class const _FullFileDiffLine({required final _FullFileLine line})
   }
 }
 
-List<_DiffRow>? _buildFullFileRows(GitDiffFile file, Uint8List? bytes) {
-  final lines = _decodeFullFileLines(bytes);
+List<_DiffRow>? _buildFullFileRows(
+  GitDiffFile file,
+  native.WorkspaceDecodedText? decoded,
+) {
+  final lines = _decodeFullFileLines(decoded);
   if (lines == null) return null;
   final forceKind = switch (file.status) {
     GitChangeStatus.deleted => GitDiffLineKind.deletion,
@@ -198,8 +208,8 @@ List<_DiffRow>? _buildFullFileSideBySideRows(
   _FullFileContents? contents,
 ) {
   if (contents == null) return null;
-  final oldLines = _decodeFullFileLines(contents.oldBytes);
-  final newLines = _decodeFullFileLines(contents.newBytes);
+  final oldLines = _decodeFullFileLines(contents.oldDecoded);
+  final newLines = _decodeFullFileLines(contents.newDecoded);
   final oldLabel =
       file.status == GitChangeStatus.added ||
           file.status == GitChangeStatus.untracked
@@ -365,13 +375,9 @@ List<_DiffRow>? _buildFullFileSideBySideRows(
   return rows;
 }
 
-List<String>? _decodeFullFileLines(Uint8List? bytes) {
-  if (bytes == null) return null;
-  try {
-    return _splitFullFileLines(utf8.decode(bytes));
-  } on FormatException {
-    return null;
-  }
+List<String>? _decodeFullFileLines(native.WorkspaceDecodedText? decoded) {
+  if (decoded == null) return null;
+  return _splitFullFileLines(decoded.content);
 }
 
 List<String> _splitFullFileLines(String text) {

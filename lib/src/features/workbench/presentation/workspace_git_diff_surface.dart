@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
@@ -18,12 +17,14 @@ import 'package:alera/src/features/reading_diff/presentation/reading_diff_failur
 import 'package:alera/src/features/reading_diff/presentation/reading_diff_generation_progress_view.dart';
 import 'package:alera/src/features/reading_diff/presentation/reading_diff_view.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_open_coordinator_provider.dart';
+import 'package:alera/src/features/workbench/application/workspace_text_encoding.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_preview_kind.dart';
 import 'package:alera/src/features/workbench/domain/workbench_view_prefs.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_source_control_scope.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_git_diff_image_row.dart';
+import 'package:alera/src/rust/api/workspace_files.dart' as native;
 import 'package:alera/src/shared/infra/git/git_backend.dart';
 import 'package:alera/src/shared/infra/git/git_diff_models.dart';
 import 'package:alera/src/shared/infra/git/git_providers.dart';
@@ -67,6 +68,9 @@ class _WorkspaceGitDiffSurfaceState
   int _diffLoadGeneration = 0;
   GitDiffContentMode? _overrideContentMode;
   GitDiffPresentationMode? _overridePresentationMode;
+  WorkspaceTextEncodingSelection _encodingSelection =
+      WorkspaceTextEncodingSelection.auto;
+  int _encodingGeneration = 0;
 
   GitDiffContentMode get _effectiveContentMode {
     return _overrideContentMode ??
@@ -187,6 +191,10 @@ class _WorkspaceGitDiffSurfaceState
             onToggleContentMode: _toggleContentMode,
             presentationMode: presentationMode,
             onTogglePresentationMode: _togglePresentationMode,
+            encodingSelection: _encodingSelection,
+            detectedEncoding: _detectedDiffEncoding,
+            onEncodingSelected: (selection) =>
+                unawaited(_changeDiffEncoding(selection)),
             onRefresh: _load,
             onOpenFile: _canOpenFile ? () => unawaited(_openFile()) : null,
             aiAssistEnabled: aiAssistEnabled,
