@@ -257,32 +257,35 @@ pub(super) fn managed_hook_definition(matcher: Option<&str>, command: &str) -> V
 }
 
 fn claude_managed_command(script: &Path, event: &str) -> String {
-    #[cfg(windows)]
-    {
-        git_bash_windows_managed_command(script, "claude", event)
-    }
-    #[cfg(not(windows))]
-    {
-        managed_command(script, "claude", event)
-    }
+    managed_command(script, "claude", event)
 }
 
 fn devin_managed_command(script: &Path, event: &str) -> String {
-    #[cfg(windows)]
-    {
-        git_bash_windows_managed_command(script, "devin", event)
-    }
-    #[cfg(not(windows))]
-    {
-        managed_command(script, "devin", event)
+    managed_command(script, "devin", event)
+}
+
+#[cfg(windows)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WindowsHookExecutionStrategy {
+    NativeCmd,
+    GitBashToCmd,
+}
+
+#[cfg(windows)]
+fn windows_hook_execution_strategy(agent: &str) -> WindowsHookExecutionStrategy {
+    match agent {
+        // These agents launch shell-form hooks through Git Bash on Windows, so
+        // their cmd switches must be protected from MSYS argv conversion.
+        "claude" | "devin" => WindowsHookExecutionStrategy::GitBashToCmd,
+        // Codex, Grok and Antigravity use native Windows hook runners. Keep all
+        // other integrations native by default so POSIX-only bridge syntax is
+        // never injected into cmd.exe or PowerShell command parsing.
+        _ => WindowsHookExecutionStrategy::NativeCmd,
     }
 }
 
 #[cfg(windows)]
 fn git_bash_windows_managed_command(script: &Path, agent: &str, event: &str) -> String {
-    // Claude Code and Devin launch shell-form hooks through Git Bash on Windows.
-    // Disable MSYS argv conversion before entering cmd.exe so /d and /s remain
-    // cmd switches instead of being rewritten as POSIX-looking paths.
     let command = format!("call \"{}\"", script.display());
     format!(
         "MSYS2_ARG_CONV_EXCL='*' ALERA_AGENT_TYPE={} ALERA_AGENT_HOOK_EVENT={} cmd.exe /d /s /c {}",
@@ -292,13 +295,25 @@ fn git_bash_windows_managed_command(script: &Path, agent: &str, event: &str) -> 
     )
 }
 
+#[cfg(windows)]
+fn native_windows_managed_command(script: &Path, agent: &str, event: &str) -> String {
+    format!(
+        "cmd /d /s /c \"set ALERA_AGENT_TYPE={agent}&& set ALERA_AGENT_HOOK_EVENT={event}&& call \"\"{}\"\"\"",
+        script.display()
+    )
+}
+
 pub(super) fn managed_command(script: &Path, agent: &str, event: &str) -> String {
     #[cfg(windows)]
     {
-        format!(
-            "cmd /d /s /c \"set ALERA_AGENT_TYPE={agent}&& set ALERA_AGENT_HOOK_EVENT={event}&& call \"\"{}\"\"\"",
-            script.display()
-        )
+        match windows_hook_execution_strategy(agent) {
+            WindowsHookExecutionStrategy::NativeCmd => {
+                native_windows_managed_command(script, agent, event)
+            }
+            WindowsHookExecutionStrategy::GitBashToCmd => {
+                git_bash_windows_managed_command(script, agent, event)
+            }
+        }
     }
     #[cfg(not(windows))]
     {

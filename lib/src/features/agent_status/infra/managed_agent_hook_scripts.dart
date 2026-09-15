@@ -1,36 +1,54 @@
 part of 'managed_agent_hook_installer.dart';
 
+enum _WindowsHookExecutionStrategy {
+  nativeCmd,
+  powerShell,
+  gitBashToCmd,
+  cmdWrapper,
+}
+
 extension _ManagedAgentHookScripts on ManagedAgentHookInstallService {
   String _managedCommand({
     required _AgentHookDescriptor descriptor,
     required _ManagedHookEvent event,
   }) {
-    if (descriptor.agentType == AgentType.agy &&
-        _platform == ManagedAgentHookPlatform.windows) {
-      // Quoted so a profile path containing a space stays one token once AGY
-      // hands the command to cmd.
-      return '"${_agyWindowsWrapperPath(event.eventName)}"';
+    if (_platform == ManagedAgentHookPlatform.posix) {
+      return 'if [ -x ${_shQuote(descriptor.scriptPath)} ]; then '
+          '${descriptor.eventEnvVar}=${_shQuote(event.eventName)} '
+          '/bin/sh ${_shQuote(descriptor.scriptPath)}; fi';
     }
-    return switch (_platform) {
-      ManagedAgentHookPlatform.posix =>
-        'if [ -x ${_shQuote(descriptor.scriptPath)} ]; then '
+
+    return switch (_windowsHookExecutionStrategy(descriptor.agentType)) {
+      _WindowsHookExecutionStrategy.cmdWrapper =>
+        // Quoted so a profile path containing a space stays one token once AGY
+        // hands the command to cmd.
+        '"${_agyWindowsWrapperPath(event.eventName)}"',
+      _WindowsHookExecutionStrategy.powerShell =>
+        '\$env:${descriptor.eventEnvVar} = \'${_powerShellSingleQuote(event.eventName)}\'; '
+            'powershell.exe -NoProfile -ExecutionPolicy Bypass -File '
+            '${_powerShellPath(descriptor.scriptPath)}',
+      _WindowsHookExecutionStrategy.gitBashToCmd =>
+        // Devin launches hook commands through Git Bash on Windows. Disable
+        // MSYS argv conversion before entering cmd.exe so /d and /s stay cmd
+        // switches instead of being rewritten as POSIX-looking paths.
+        "MSYS2_ARG_CONV_EXCL='*' "
             '${descriptor.eventEnvVar}=${_shQuote(event.eventName)} '
-            '/bin/sh ${_shQuote(descriptor.scriptPath)}; fi',
-      ManagedAgentHookPlatform.windows =>
-        descriptor.agentType == AgentType.copilot
-            ? '\$env:${descriptor.eventEnvVar} = \'${_powerShellSingleQuote(event.eventName)}\'; '
-                  'powershell.exe -NoProfile -ExecutionPolicy Bypass -File '
-                  '${_powerShellPath(descriptor.scriptPath)}'
-            : descriptor.agentType == AgentType.devin
-            // Devin launches hook commands through Git Bash on Windows. Keep
-            // the normal cmd hook, but disable MSYS argv conversion before
-            // entering cmd.exe so /d and /s remain cmd switches.
-            ? "MSYS2_ARG_CONV_EXCL='*' "
-                  '${descriptor.eventEnvVar}=${_shQuote(event.eventName)} '
-                  'cmd.exe /d /s /c '
-                  "${_shQuote('if exist \"${descriptor.scriptPath}\" call \"${descriptor.scriptPath}\"')}"
-            : 'cmd /d /s /c "if exist ""${descriptor.scriptPath}"" '
-                  '(set ${descriptor.eventEnvVar}=${event.eventName}&& call ""${descriptor.scriptPath}"")"',
+            'cmd.exe /d /s /c '
+            "${_shQuote('if exist \"${descriptor.scriptPath}\" call \"${descriptor.scriptPath}\"')}",
+      _WindowsHookExecutionStrategy.nativeCmd =>
+        'cmd /d /s /c "if exist ""${descriptor.scriptPath}"" '
+            '(set ${descriptor.eventEnvVar}=${event.eventName}&& call ""${descriptor.scriptPath}"")"',
+    };
+  }
+
+  _WindowsHookExecutionStrategy _windowsHookExecutionStrategy(
+    AgentType agentType,
+  ) {
+    return switch (agentType) {
+      AgentType.agy => _WindowsHookExecutionStrategy.cmdWrapper,
+      AgentType.copilot => _WindowsHookExecutionStrategy.powerShell,
+      AgentType.devin => _WindowsHookExecutionStrategy.gitBashToCmd,
+      _ => _WindowsHookExecutionStrategy.nativeCmd,
     };
   }
 

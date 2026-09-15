@@ -37,6 +37,26 @@ fn keeps_the_matcher_key_for_tool_scoped_events() {
 
 #[cfg(windows)]
 #[test]
+fn windows_hook_execution_strategy_is_explicit_per_agent() {
+    assert_eq!(
+        windows_hook_execution_strategy("claude"),
+        WindowsHookExecutionStrategy::GitBashToCmd
+    );
+    assert_eq!(
+        windows_hook_execution_strategy("devin"),
+        WindowsHookExecutionStrategy::GitBashToCmd
+    );
+    for agent in ["codex", "grok", "agy"] {
+        assert_eq!(
+            windows_hook_execution_strategy(agent),
+            WindowsHookExecutionStrategy::NativeCmd,
+            "{agent} must stay on the native Windows command runner"
+        );
+    }
+}
+
+#[cfg(windows)]
+#[test]
 fn claude_windows_hooks_bridge_git_bash_into_cmd() {
     let mut config = Map::new();
     install_claude_hooks_into(

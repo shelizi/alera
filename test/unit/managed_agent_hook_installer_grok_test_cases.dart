@@ -65,10 +65,10 @@ void _registerGrokHookInstallerTests(
     final hooks = _hooks(installed.configPath);
 
     expect(installed.state, ManagedAgentHookInstallState.installed);
-    expect(
-      _commandsFor(hooks, 'SessionStart').single,
-      allOf(contains('cmd /d /s /c'), contains('ALERA_GROK_EVENT')),
-    );
+    final command = _commandsFor(hooks, 'SessionStart').single;
+    expect(command, startsWith('cmd /d /s /c'));
+    expect(command, contains('ALERA_GROK_EVENT'));
+    expect(command, isNot(contains("MSYS2_ARG_CONV_EXCL='*'")));
   });
 
   test('installs Grok Build hooks under GROK_HOME', () {

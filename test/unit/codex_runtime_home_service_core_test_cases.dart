@@ -475,6 +475,12 @@ void _registerCodexRuntimeHomeServiceCoreTests() {
       p.join(preparation.runtimeHomePath, 'hooks.json'),
     );
     expect(_managedCommandCount(runtimeHooks, 'alera-codex-hook.cmd'), 6);
+    final sessionStartCommand = _commandsFor(
+      runtimeHooks,
+      'SessionStart',
+    ).single;
+    expect(sessionStartCommand, startsWith('cmd /d /s /c'));
+    expect(sessionStartCommand, isNot(contains("MSYS2_ARG_CONV_EXCL='*'")));
     expect(
       File(p.join(home.path, '.alera', 'agent-hooks', 'alera-codex-hook.cmd'))
           .readAsStringSync(),

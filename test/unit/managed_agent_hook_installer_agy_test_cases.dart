@@ -180,6 +180,8 @@ void _registerAgyHookInstallerTests(
     // Quoted so a profile path containing a space survives cmd's tokenizer.
     expect(stopCommand.startsWith('"'), isTrue);
     expect(stopCommand.endsWith('"'), isTrue);
+    expect(stopCommand, isNot(contains('cmd /d /s /c')));
+    expect(stopCommand, isNot(contains("MSYS2_ARG_CONV_EXCL='*'")));
     expect(
       File(p.join(home.path, '.alera', 'agent-hooks', 'alera-agy-stop.cmd'))
           .readAsStringSync(),
