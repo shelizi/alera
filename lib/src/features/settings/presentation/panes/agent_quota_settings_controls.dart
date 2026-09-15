@@ -29,7 +29,7 @@ class const _ProviderOrderControl({
   Widget build(BuildContext context) {
     if (providers.isEmpty) {
       return Text(
-        'No quota providers enabled',
+        context.tr('No quota providers enabled'),
         textAlign: .right,
         style: Theme.of(context).textTheme.bodySmall
             ?.copyWith(color: AleraTokens.foregroundFaint),
@@ -104,7 +104,7 @@ class const _ClaudeProfilesControl({
       children: <Widget>[
         if (profiles.isEmpty)
           Text(
-            'No CCS profiles configured',
+            context.tr('No CCS profiles configured'),
             textAlign: .right,
             style: Theme.of(context).textTheme.bodySmall
                 ?.copyWith(color: AleraTokens.foregroundFaint),
@@ -130,9 +130,11 @@ class const _ClaudeProfilesControl({
                       ),
                     ),
                     Text(
-                      profile.showInUsage
-                          ? 'Usage: ${profile.usageLabel}'
-                          : 'Not shown in Usage',
+                      context.tr(
+                        profile.showInUsage
+                            ? 'Usage: ${profile.usageLabel}'
+                            : 'Not shown in Usage',
+                      ),
                       overflow: .ellipsis,
                       style: Theme.of(context).textTheme.bodySmall
                           ?.copyWith(color: AleraTokens.foregroundFaint),

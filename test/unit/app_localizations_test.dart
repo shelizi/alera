@@ -420,6 +420,27 @@ void main() {
       );
     });
 
+    test('traditional Chinese covers expanded settings and dynamic values', () {
+      final l10n = AleraLocalizations(const Locale('zh', 'TW'));
+      expect(l10n.translate('Workspaces'), '工作區');
+      expect(l10n.translate('Workspace Directory'), '工作區目錄');
+      expect(l10n.translate('Provider Quotas'), 'Provider 配額');
+      expect(l10n.translate('Prompt Delivery'), '提示詞傳遞方式');
+      expect(l10n.translate('Launch Mode'), '啟動模式');
+      expect(l10n.translate('Custom Command'), '自訂命令');
+      expect(l10n.translate('Support Alera'), '支持 Alera');
+      expect(l10n.translate('No quota providers enabled'), '尚未啟用任何配額 Provider');
+      expect(l10n.translate('Interface (Ethernet)'), '網路介面（Ethernet）');
+      expect(l10n.translate('Expires in 2m 5s'), '2 分 5 秒後到期');
+      expect(
+        l10n.translate('Current version 1.2.3 (build 45)'),
+        '目前版本 1.2.3（Build 45）',
+      );
+      expect(l10n.translate('Global (Claude)'), '全域（Claude）');
+      expect(l10n.translate('Move Claude Earlier'), '將 Claude 往前移');
+      expect(l10n.translate('Downloading update 1.2.3.'), '正在下載更新 1.2.3。');
+    });
+
     registerAppLocalizationTailTests();
   });
 }

@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/buttons/alera_icon_button.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
@@ -51,7 +52,7 @@ class const MobilePairingOfferRow({
                 ),
                 const SizedBox(height: AleraTokens.space4),
                 Text(
-                  _expiryLabel,
+                  context.tr(_expiryLabel),
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: AleraTokens.warning,
                   ),

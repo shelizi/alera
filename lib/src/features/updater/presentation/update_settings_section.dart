@@ -93,8 +93,9 @@ class const UpdateSettingsSection({super.key}) extends ConsumerWidget {
               if (canRunUpgrade) ...<Widget>[
                 const SizedBox(height: AleraTokens.space8),
                 Text(
-                  'Alera will close, let $managerLabel install the update, '
-                  'and open again.',
+                  context.tr(
+                    'Alera will close, let $managerLabel install the update, and open again.',
+                  ),
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: AleraTokens.foregroundMuted,
                   ),
@@ -114,9 +115,11 @@ class const UpdateSettingsSection({super.key}) extends ConsumerWidget {
                         : controller.checkForUpdates,
                     icon: const Icon(AleraIcons.refresh, size: 16),
                     label: Text(
-                      state.status == AleraUpdateStatus.checking
-                          ? 'Checking'
-                          : 'Check for Updates',
+                      context.tr(
+                        state.status == AleraUpdateStatus.checking
+                            ? 'Checking'
+                            : 'Check for Updates',
+                      ),
                     ),
                   ),
                   if (state.status == AleraUpdateStatus.manualDownloadRequired)
@@ -124,9 +127,11 @@ class const UpdateSettingsSection({super.key}) extends ConsumerWidget {
                       onPressed: controller.openDownloadPage,
                       icon: const Icon(AleraIcons.external, size: 16),
                       label: Text(
-                        upgradeCommand == null
-                            ? 'Download Manually'
-                            : 'Installation Guide',
+                        context.tr(
+                          upgradeCommand == null
+                              ? 'Download Manually'
+                              : 'Installation Guide',
+                        ),
                       ),
                     ),
                   if (canRunUpgrade)
@@ -229,7 +234,7 @@ class const _UpdateStatusCopy({required final AleraUpdateState state})
       crossAxisAlignment: .start,
       children: <Widget>[
         Text(
-          _titleForStatus(state.status),
+          context.tr(_titleForStatus(state.status)),
           style: theme.textTheme.bodyMedium?.copyWith(
             color: AleraTokens.foreground,
             fontWeight: .w500,
@@ -238,10 +243,12 @@ class const _UpdateStatusCopy({required final AleraUpdateState state})
         if (currentVersion != null && currentVersion.isNotEmpty) ...<Widget>[
           const SizedBox(height: AleraTokens.space4),
           Text(
-            _versionLabel(
-              prefix: 'Current version',
-              version: currentVersion,
-              buildNumber: currentBuildNumber,
+            context.tr(
+              _versionLabel(
+                prefix: 'Current version',
+                version: currentVersion,
+                buildNumber: currentBuildNumber,
+              ),
             ),
             style: theme.textTheme.bodySmall?.copyWith(
               color: AleraTokens.foregroundMuted,
@@ -251,12 +258,14 @@ class const _UpdateStatusCopy({required final AleraUpdateState state})
         if (latest != null) ...<Widget>[
           const SizedBox(height: AleraTokens.space4),
           Text(
-            _versionLabel(
-              prefix: 'Update version',
-              version: latest.version,
-              buildNumber: latest.shortVersion > 0
-                  ? '${latest.shortVersion}'
-                  : null,
+            context.tr(
+              _versionLabel(
+                prefix: 'Update version',
+                version: latest.version,
+                buildNumber: latest.shortVersion > 0
+                    ? '${latest.shortVersion}'
+                    : null,
+              ),
             ),
             style: theme.textTheme.bodySmall?.copyWith(
               color: AleraTokens.foregroundMuted,
@@ -266,7 +275,7 @@ class const _UpdateStatusCopy({required final AleraUpdateState state})
         if (state.message != null) ...<Widget>[
           const SizedBox(height: AleraTokens.space4),
           Text(
-            state.message!,
+            context.tr(state.message!),
             style: theme.textTheme.bodySmall?.copyWith(
               color: AleraTokens.foregroundMuted,
             ),

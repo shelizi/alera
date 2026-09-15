@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/buttons/alera_icon_button.dart';
 import 'package:alera/src/design_system/forms/alera_dropdown_field.dart';
@@ -289,7 +290,9 @@ class _InstructionSettingRowState extends State<InstructionSettingRow> {
         maxLines: 4,
         onEditingComplete: _commit,
         onSubmitted: (_) => _commit(),
-        decoration: const InputDecoration(hintText: 'Optional instructions'),
+        decoration: InputDecoration(
+          hintText: context.tr('Optional instructions'),
+        ),
       ),
     );
   }

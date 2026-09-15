@@ -114,7 +114,7 @@ class _MobilePairingDialogState extends State<MobilePairingDialog> {
                           ),
                           const SizedBox(height: AleraTokens.space12),
                           Text(
-                            'Offer expired - generate a new one',
+                            context.tr('Offer expired - generate a new one'),
                             textAlign: .center,
                             style: theme.textTheme.bodyMedium?.copyWith(
                               color: AleraTokens.foregroundMuted,
@@ -127,7 +127,7 @@ class _MobilePairingDialogState extends State<MobilePairingDialog> {
             ),
             const SizedBox(height: AleraTokens.space16),
             Text(
-              'Scan with the Alera mobile app',
+              context.tr('Scan with the Alera mobile app'),
               textAlign: .center,
               style: theme.textTheme.bodyMedium?.copyWith(
                 color: AleraTokens.foreground,
@@ -146,7 +146,7 @@ class _MobilePairingDialogState extends State<MobilePairingDialog> {
             ),
             const SizedBox(height: AleraTokens.space4),
             Text(
-              _expired ? 'Offer expired' : _countdownLabel,
+              context.tr(_expired ? 'Offer expired' : _countdownLabel),
               textAlign: .center,
               style: theme.textTheme.bodySmall?.copyWith(
                 color: _expired ? AleraTokens.error : AleraTokens.warning,
@@ -167,7 +167,9 @@ class _MobilePairingDialogState extends State<MobilePairingDialog> {
                   child: FilledButton.icon(
                     onPressed: _expired ? null : _copyPayload,
                     icon: const Icon(AleraIcons.copy, size: 16),
-                    label: Text(_copied ? 'Copied' : 'Copy Pairing JSON'),
+                    label: Text(
+                      context.tr(_copied ? 'Copied' : 'Copy Pairing JSON'),
+                    ),
                   ),
                 ),
               ],

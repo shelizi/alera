@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/providers.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/forms/alera_setting_row.dart';
@@ -32,7 +33,7 @@ class const SupportAleraSection({
             bottom: AleraTokens.space8,
           ),
           child: Text(
-            'Support Alera',
+            context.tr('Support Alera'),
             style: theme.textTheme.titleSmall?.copyWith(
               color: AleraTokens.foreground,
               fontWeight: .w600,
@@ -143,7 +144,7 @@ class const _StarButton({
                 ),
               )
             : const Icon(AleraIcons.star, size: 16),
-        label: Text(label),
+        label: Text(context.tr(label)),
       ),
     );
   }
@@ -154,7 +155,7 @@ class const _StarThanks({super.key}) extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Semantics(
-      label: 'Thanks for starring Alera',
+      label: context.tr('Thanks for starring Alera'),
       liveRegion: true,
       child: SizedBox(
         height: kSupportControlHeight,
@@ -164,7 +165,7 @@ class const _StarThanks({super.key}) extends StatelessWidget {
             const Icon(AleraIcons.star, size: 16, color: AleraTokens.warning),
             const SizedBox(width: AleraTokens.space6),
             Text(
-              'Thanks for the support!',
+              context.tr('Thanks for the support!'),
               style: theme.textTheme.bodyMedium?.copyWith(
                 color: AleraTokens.warning,
                 fontWeight: .w500,

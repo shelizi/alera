@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/badges/alera_badge.dart';
 import 'package:alera/src/design_system/buttons/alera_icon_button.dart';
@@ -67,7 +68,7 @@ class const MobileDeviceListRow({
                 ),
                 const SizedBox(height: AleraTokens.space4),
                 Text(
-                  detail,
+                  context.tr(detail),
                   maxLines: 1,
                   overflow: .ellipsis,
                   style: theme.textTheme.bodySmall?.copyWith(

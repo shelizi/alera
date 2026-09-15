@@ -325,7 +325,7 @@ class const _PromptDeliveryNote({
               ),
               const SizedBox(width: AleraTokens.space8),
               Text(
-                'Prompt Delivery',
+                context.tr('Prompt Delivery'),
                 style: theme.textTheme.bodyMedium?.copyWith(
                   color: AleraTokens.foreground,
                   fontWeight: .w500,
@@ -335,7 +335,7 @@ class const _PromptDeliveryNote({
           ),
           const SizedBox(height: AleraTokens.space4),
           Text(
-            agentPromptDeliveryDescription(adapter),
+            context.tr(agentPromptDeliveryDescription(adapter)),
             style: theme.textTheme.bodySmall?.copyWith(
               color: AleraTokens.foregroundMuted,
             ),
@@ -370,7 +370,7 @@ class const _LaunchModeDropdown({
       crossAxisAlignment: .start,
       children: <Widget>[
         Text(
-          'Launch Mode',
+          context.tr('Launch Mode'),
           style: theme.textTheme.labelSmall?.copyWith(
             color: AleraTokens.foregroundMuted,
           ),
@@ -409,7 +409,7 @@ class const _AgentProfileDropdown({
       crossAxisAlignment: .start,
       children: <Widget>[
         Text(
-          label,
+          context.tr(label),
           style: theme.textTheme.labelSmall?.copyWith(
             color: AleraTokens.foregroundMuted,
           ),

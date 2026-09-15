@@ -476,6 +476,117 @@ String? _translateDynamicTraditionalChinese(String source) {
     return '顯示 ${showingCount.group(1)} / ${showingCount.group(2)}';
   }
 
+  final interfaceLabel = RegExp(r'^Interface \((.+)\)$').firstMatch(source);
+  if (interfaceLabel != null) {
+    return '網路介面（${interfaceLabel.group(1)}）';
+  }
+  final expiresMinutesSeconds = RegExp(r'^Expires in (\d+)m (\d+)s$')
+      .firstMatch(source);
+  if (expiresMinutesSeconds != null) {
+    return '${expiresMinutesSeconds.group(1)} 分 ${expiresMinutesSeconds.group(2)} 秒後到期';
+  }
+  final expiresMinutes = RegExp(r'^Expires in (\d+)m$').firstMatch(source);
+  if (expiresMinutes != null) {
+    return '${expiresMinutes.group(1)} 分鐘後到期';
+  }
+  final expiresSeconds = RegExp(r'^Expires in (\d+)s$').firstMatch(source);
+  if (expiresSeconds != null) {
+    return '${expiresSeconds.group(1)} 秒後到期';
+  }
+  final mobileTimestamp = RegExp(r'^(Revoked|Paired|Last seen) (.+)$')
+      .firstMatch(source);
+  if (mobileTimestamp != null) {
+    final label = switch (mobileTimestamp.group(1)) {
+      'Revoked' => '已撤銷',
+      'Paired' => '已配對',
+      _ => '最後上線',
+    };
+    return '$label ${mobileTimestamp.group(2)}';
+  }
+  if (source == 'Connected through relay') {
+    return '透過 Relay 連線';
+  }
+  final versionLabel = RegExp(
+    r'^(Current version|Update version) (.+?)(?: \(build (.+)\))?$',
+  ).firstMatch(source);
+  if (versionLabel != null) {
+    final prefix = versionLabel.group(1) == 'Current version' ? '目前版本' : '更新版本';
+    final build = versionLabel.group(3);
+    return build == null
+        ? '$prefix ${versionLabel.group(2)}'
+        : '$prefix ${versionLabel.group(2)}（Build $build）';
+  }
+  final modelPassedTo = RegExp(r'^Model passed to (.+)\.$').firstMatch(source);
+  if (modelPassedTo != null) {
+    return '傳給 ${modelPassedTo.group(1)} 的模型。';
+  }
+  final globalSettingValue = RegExp(r'^Global \((.+)\)$').firstMatch(source);
+  if (globalSettingValue != null) {
+    return '全域（${globalSettingValue.group(1)}）';
+  }
+  final usageLabel = RegExp(r'^Usage: (.+)$').firstMatch(source);
+  if (usageLabel != null) {
+    return 'Usage：${usageLabel.group(1)}';
+  }
+  final moveEarlier = RegExp(r'^Move (.+) Earlier$').firstMatch(source);
+  if (moveEarlier != null) {
+    return '將 ${moveEarlier.group(1)} 往前移';
+  }
+  final moveLater = RegExp(r'^Move (.+) Later$').firstMatch(source);
+  if (moveLater != null) {
+    return '將 ${moveLater.group(1)} 往後移';
+  }
+  final downloadingUpdate = RegExp(r'^Downloading update (.+)\.$')
+      .firstMatch(source);
+  if (downloadingUpdate != null) {
+    return '正在下載更新 ${downloadingUpdate.group(1)}。';
+  }
+  final installingUpdate = RegExp(
+    r'^Installing update (.+)\. Alera will restart\.$',
+  ).firstMatch(source);
+  if (installingUpdate != null) {
+    return '正在安裝更新 ${installingUpdate.group(1)}。Alera 將重新啟動。';
+  }
+  final updateReady = RegExp(r'^Update (.+) is ready to install\.$')
+      .firstMatch(source);
+  if (updateReady != null) {
+    return '更新 ${updateReady.group(1)} 已可安裝。';
+  }
+  final upgradingThrough = RegExp(
+    r'^Upgrading through (.+)\. Alera will close and reopen\.$',
+  ).firstMatch(source);
+  if (upgradingThrough != null) {
+    return '正在透過 ${upgradingThrough.group(1)} 更新。Alera 將關閉後重新開啟。';
+  }
+  final packageManagerClose = RegExp(
+    r'^Alera will close, let (.+) install the update, and open again\.$',
+  ).firstMatch(source);
+  if (packageManagerClose != null) {
+    return 'Alera 將關閉，交由 ${packageManagerClose.group(1)} 安裝更新後再重新開啟。';
+  }
+  final updateInstallFailed = RegExp(r'^Update installation failed: (.+)$')
+      .firstMatch(source);
+  if (updateInstallFailed != null) {
+    return '更新安裝失敗：${updateInstallFailed.group(1)}';
+  }
+  final packageUpgradeFailed = RegExp(
+    r'^The (.+) upgrade could not be started: (.+)$',
+  ).firstMatch(source);
+  if (packageUpgradeFailed != null) {
+    return '無法啟動 ${packageUpgradeFailed.group(1)} 更新：${packageUpgradeFailed.group(2)}';
+  }
+  final restartFailed = RegExp(r'^Alera could not restart: (.+)$')
+      .firstMatch(source);
+  if (restartFailed != null) {
+    return 'Alera 無法重新啟動：${restartFailed.group(1)}';
+  }
+  final desktopUpdateUnavailable = RegExp(
+    r'^Desktop updates are not available on (.+)\.$',
+  ).firstMatch(source);
+  if (desktopUpdateUnavailable != null) {
+    return '${desktopUpdateUnavailable.group(1)} 目前不支援桌面版自動更新。';
+  }
+
   return null;
 }
 

@@ -5,6 +5,7 @@ import 'package:flutter/widgets.dart';
 part 'alera_localizations_dynamic.dart';
 part 'alera_localizations_zh_agents.dart';
 part 'alera_localizations_zh_settings.dart';
+part 'alera_localizations_zh_settings_extra.dart';
 part 'alera_localizations_zh_shell.dart';
 
 const List<Locale> supportedAleraLocales = <Locale>[
@@ -35,6 +36,7 @@ class AleraLocalizations {
       return source;
     }
     return _traditionalChinese[source] ??
+        _traditionalChineseSettingsExtra[source] ??
         _translateDynamicTraditionalChinese(source) ??
         source;
   }

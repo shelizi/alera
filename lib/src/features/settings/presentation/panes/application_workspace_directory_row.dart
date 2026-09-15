@@ -77,7 +77,7 @@ class _WorkspaceDirectoryRowState extends State<WorkspaceDirectoryRow> {
         crossAxisAlignment: .start,
         children: <Widget>[
           Text(
-            'Workspace Directory',
+            context.tr('Workspace Directory'),
             style: theme.textTheme.bodyMedium?.copyWith(
               color: AleraTokens.foreground,
               fontWeight: .w500,
@@ -85,9 +85,9 @@ class _WorkspaceDirectoryRowState extends State<WorkspaceDirectoryRow> {
           ),
           const SizedBox(height: AleraTokens.space4),
           Text(
-            'Where new linked workspaces are created on disk. Existing '
-            'workspaces are not moved. Leave empty to use the default '
-            '(~/.alera/workspaces).',
+            context.tr(
+              'Where new linked workspaces are created on disk. Existing workspaces are not moved. Leave empty to use the default (~/.alera/workspaces).',
+            ),
             style: theme.textTheme.bodySmall?.copyWith(
               color: AleraTokens.foregroundMuted,
             ),

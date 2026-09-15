@@ -37,12 +37,14 @@ class _AiAssistCustomCommandDialogState
           crossAxisAlignment: .stretch,
           children: <Widget>[
             Text(
-              'Custom Command',
+              context.tr('Custom Command'),
               style: Theme.of(context).textTheme.titleMedium,
             ),
             const SizedBox(height: AleraTokens.space12),
-            const Text(
-              'Enter a command before selecting this agent. Use {prompt} to pass the prompt as an argument; otherwise Alera sends it on stdin.',
+            Text(
+              context.tr(
+                'Enter a command before selecting this agent. Use {prompt} to pass the prompt as an argument; otherwise Alera sends it on stdin.',
+              ),
             ),
             const SizedBox(height: AleraTokens.space12),
             AleraTextField(

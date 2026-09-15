@@ -176,7 +176,7 @@ class const MobileGatewayGroup({
             alignment: Alignment.centerRight,
             child: FilledButton(
               onPressed: applying ? null : onApply,
-              child: Text(applying ? 'Applying…' : 'Apply'),
+              child: Text(context.tr(applying ? 'Applying…' : 'Apply')),
             ),
           ),
         ),
@@ -301,7 +301,7 @@ class const MobileGatewayGroup({
       if (netbird?.interfaceName case final String interfaceName)
         ButtonSegment<MobileNetbirdEndpoint>(
           value: .interface,
-          label: Text('Interface ($interfaceName)'),
+          label: Text(context.tr('Interface ($interfaceName)')),
         ),
       if (netbird?.interfaceName == null &&
           status.settings.netbirdEndpoint == MobileNetbirdEndpoint.interface)
