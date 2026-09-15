@@ -51,9 +51,9 @@ class const _DiffFileList({
               height: constraints.maxHeight,
               child: ListView.builder(
                 padding: const EdgeInsets.only(bottom: AleraTokens.space16),
-                itemCount: rows.items.length,
+                itemCount: rows.length,
                 itemBuilder: (context, index) =>
-                    rows.items[index].build(context),
+                    rows.rowAt(index).build(context),
               ),
             ),
           );
@@ -63,14 +63,90 @@ class const _DiffFileList({
     final rows = buildRows();
     return ListView.builder(
       padding: const EdgeInsets.only(bottom: AleraTokens.space16),
-      itemCount: rows.items.length,
-      itemBuilder: (context, index) => rows.items[index].build(context),
+      itemCount: rows.length,
+      itemBuilder: (context, index) => rows.rowAt(index).build(context),
     );
   }
 }
 
-class const _DiffRows(final List<_DiffRow> items) {
-  factory fromResult(
+abstract class _DiffRowSpan {
+  int get length;
+
+  _DiffRow rowAt(int index);
+}
+
+class _MaterializedDiffRowSpan implements _DiffRowSpan {
+  const _MaterializedDiffRowSpan(this.rows);
+
+  final List<_DiffRow> rows;
+
+  @override
+  int get length => rows.length;
+
+  @override
+  _DiffRow rowAt(int index) => rows[index];
+}
+
+class _DiffRowsBuilder {
+  final List<_DiffRowSpan> _spans = <_DiffRowSpan>[];
+  final List<_DiffRow> _pending = <_DiffRow>[];
+
+  void add(_DiffRow row) => _pending.add(row);
+
+  void addAll(Iterable<_DiffRow> rows) => _pending.addAll(rows);
+
+  void addSpans(Iterable<_DiffRowSpan> spans) {
+    _flushPending();
+    _spans.addAll(spans.where((span) => span.length > 0));
+  }
+
+  void _flushPending() {
+    if (_pending.isEmpty) return;
+    _spans.add(_MaterializedDiffRowSpan(List<_DiffRow>.unmodifiable(_pending)));
+    _pending.clear();
+  }
+
+  _DiffRows build() {
+    _flushPending();
+    return _DiffRows(_spans);
+  }
+}
+
+class _DiffRows {
+  _DiffRows(List<_DiffRowSpan> spans)
+    : _spans = List<_DiffRowSpan>.unmodifiable(spans) {
+    var total = 0;
+    _spanEnds = <int>[];
+    for (final span in _spans) {
+      total += span.length;
+      _spanEnds.add(total);
+    }
+    length = total;
+  }
+
+  final List<_DiffRowSpan> _spans;
+  late final List<int> _spanEnds;
+  late final int length;
+
+  _DiffRow rowAt(int index) {
+    if (index < 0 || index >= length) {
+      throw RangeError.index(index, this, 'index', null, length);
+    }
+    var low = 0;
+    var high = _spanEnds.length - 1;
+    while (low < high) {
+      final mid = (low + high) >> 1;
+      if (index < _spanEnds[mid]) {
+        high = mid;
+      } else {
+        low = mid + 1;
+      }
+    }
+    final start = low == 0 ? 0 : _spanEnds[low - 1];
+    return _spans[low].rowAt(index - start);
+  }
+
+  factory _DiffRows.fromResult(
     GitDiffResult result, {
     required Map<GitDiffFile, _FullFileContents> fullFileContents,
     required String sourcePath,
@@ -85,9 +161,10 @@ class const _DiffRows(final List<_DiffRow> items) {
     void Function(GitDiffFile file)? onEditableSave,
     double? editableViewportHeight,
   }) {
-    final items = <_DiffRow>[
-      if (result.truncated) const _BannerRow('Diff truncated for preview.'),
-    ];
+    final items = _DiffRowsBuilder();
+    if (result.truncated) {
+      items.add(const _BannerRow('Diff truncated for preview.'));
+    }
     for (final file in result.files) {
       items.add(_FileHeaderRow(file, sourceLabel: sourceLabel));
       if (file.isBinary && isWorkspaceImageFilePath(file.path)) {
@@ -129,16 +206,32 @@ class const _DiffRows(final List<_DiffRow> items) {
           continue;
         }
         List<_DiffRow>? renderedRows;
+        var renderedLazyRows = false;
         if (contentMode == GitDiffContentMode.fullFile) {
           final contents = fullFileContents[file];
-          renderedRows = sideBySide
-              ? _buildFullFileSideBySideRows(file, contents)
-              : _buildFullFileRows(
-                  _fileWithDecodedDiffLines(file, contents),
-                  contents?.singleSideDecoded(file),
-                );
+          final decodedFile = _fileWithDecodedDiffLines(file, contents);
+          if (sideBySide) {
+            renderedRows = _buildFullFileSideBySideRows(decodedFile, contents);
+          } else {
+            final projectedSpans = _buildProjectedFullFileRowSpans(
+              decodedFile,
+              contents?.singleSideDecoded(file),
+            );
+            if (projectedSpans != null) {
+              items.addSpans(projectedSpans);
+              renderedLazyRows = true;
+            } else {
+              renderedRows = _buildFullFileRows(
+                decodedFile,
+                contents?.singleSideDecoded(file),
+              );
+            }
+          }
         }
-        if (renderedRows != null) {
+        if (renderedLazyRows) {
+          // Native full-file projections keep unchanged ranges lazy until the
+          // ListView requests a concrete row.
+        } else if (renderedRows != null) {
           items.addAll(renderedRows);
         } else if (file.lines.isEmpty) {
           items.add(const _BannerRow('No text diff for this file.'));
@@ -161,7 +254,7 @@ class const _DiffRows(final List<_DiffRow> items) {
         items.add(const _BannerRow('File diff truncated for preview.'));
       }
     }
-    return _DiffRows(items);
+    return items.build();
   }
 }
 

@@ -103,12 +103,50 @@ class const _FullFileDiffLine({required final _FullFileLine line})
   }
 }
 
-List<_DiffRow>? _buildProjectedFullFileRows(
+class _FullFileContextDiffRowSpan implements _DiffRowSpan {
+  const _FullFileContextDiffRowSpan({
+    required this.lines,
+    required this.start,
+    required this.end,
+  });
+
+  final List<String> lines;
+  final int start;
+  final int end;
+
+  @override
+  int get length => end - start;
+
+  @override
+  _DiffRow rowAt(int index) {
+    final lineIndex = start + index;
+    return _FullFileDiffRow(
+      _FullFileLine(
+        lineNumber: lineIndex + 1,
+        text: lines[lineIndex],
+        kind: GitDiffLineKind.context,
+      ),
+    );
+  }
+}
+
+List<_DiffRowSpan>? _buildProjectedFullFileRowSpans(
   GitDiffFile file,
-  List<String> lines,
+  native.WorkspaceDecodedText? decoded,
 ) {
-  if (file.fullFileRows.isEmpty) return null;
-  final rows = <_DiffRow>[];
+  final lines = _decodeFullFileLines(decoded);
+  if (lines == null || file.fullFileRows.isEmpty) return null;
+  final spans = <_DiffRowSpan>[];
+  final materialized = <_DiffRow>[];
+
+  void flushMaterialized() {
+    if (materialized.isEmpty) return;
+    spans.add(
+      _MaterializedDiffRowSpan(List<_DiffRow>.unmodifiable(materialized)),
+    );
+    materialized.clear();
+  }
+
   for (final projection in file.fullFileRows) {
     switch (projection.kind) {
       case GitDiffFullFileRowKind.contextRange:
@@ -116,15 +154,10 @@ List<_DiffRow>? _buildProjectedFullFileRows(
         if (start == null || start < 0 || start > lines.length) return null;
         final end = projection.endIndex ?? lines.length;
         if (end < start || end > lines.length) return null;
-        for (var index = start; index < end; index++) {
-          rows.add(
-            _FullFileDiffRow(
-              _FullFileLine(
-                lineNumber: index + 1,
-                text: lines[index],
-                kind: GitDiffLineKind.context,
-              ),
-            ),
+        flushMaterialized();
+        if (end > start) {
+          spans.add(
+            _FullFileContextDiffRowSpan(lines: lines, start: start, end: end),
           );
         }
       case GitDiffFullFileRowKind.line:
@@ -143,7 +176,7 @@ List<_DiffRow>? _buildProjectedFullFileRows(
                 fullLineIndex < lines.length
             ? lines[fullLineIndex]
             : _extractContent(diffLine.text);
-        rows.add(
+        materialized.add(
           _FullFileDiffRow(
             _FullFileLine(
               lineNumber: projection.lineNumber,
@@ -154,7 +187,8 @@ List<_DiffRow>? _buildProjectedFullFileRows(
         );
     }
   }
-  return rows;
+  flushMaterialized();
+  return spans;
 }
 
 List<_DiffRow>? _buildFullFileRows(
@@ -177,9 +211,6 @@ List<_DiffRow>? _buildFullFileRows(
         ),
     ];
   }
-
-  final projectedRows = _buildProjectedFullFileRows(file, lines);
-  if (projectedRows != null) return projectedRows;
 
   final rows = <_DiffRow>[];
   var nextFullIndex = 0;
