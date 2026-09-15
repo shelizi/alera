@@ -271,6 +271,18 @@ const Map<String, String> _traditionalChineseAgents = <String, String>{
   'Open Editor': '開啟編輯器',
   'Open Check': '開啟檢查',
   'Pull Request Actions': 'Pull Request 操作',
+  'Merge Using Project Settings': '使用專案設定合併',
+  'Create Merge Commit': '建立 Merge Commit',
+  'Squash and Merge': 'Squash 並合併',
+  'Rebase and Merge': 'Rebase 並合併',
+  'Close Pull Request': '關閉 Pull Request',
+  'Unlink Pull Request': '解除連結 Pull Request',
+  'Convert To Draft': '轉為草稿',
+  'Mark Ready For Review': '標記為可供 Review',
+  'This will close the pull request without merging it.':
+      '這會關閉 Pull Request，但不會合併。',
+  'This will close the pull request without merging it and block the open stack members above it until the chain is repaired.':
+      '這會關閉 Pull Request，但不會合併；在 Stack 鏈修復前，其上仍開啟的成員會被阻擋。',
   'Checks': '檢查',
   'No checks reported': '尚未回報任何檢查結果',
   'Edit Pull Request': '編輯 Pull Request',

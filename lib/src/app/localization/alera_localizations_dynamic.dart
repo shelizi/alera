@@ -286,6 +286,77 @@ String? _translateDynamicTraditionalChinese(String source) {
     return '${checkGroup.group(1)} 個$state檢查';
   }
 
+  final reviewActionTitle = RegExp(
+    r'^(Merge Using Project Settings|Create Merge Commit|Squash and Merge|Rebase and Merge|Convert To Draft|Mark Ready For Review) PR #(\d+)\?$',
+  ).firstMatch(source);
+  if (reviewActionTitle != null) {
+    final action =
+        AleraLocalizations._traditionalChinese[reviewActionTitle.group(1)!] ??
+        reviewActionTitle.group(1)!;
+    return '$action PR #${reviewActionTitle.group(2)}？';
+  }
+  final reviewStackActionTitle = RegExp(
+    r'^(Merge Using Project Settings|Create Merge Commit|Squash and Merge|Rebase and Merge) Stack Through #(\d+)\?$',
+  ).firstMatch(source);
+  if (reviewStackActionTitle != null) {
+    final action =
+        AleraLocalizations._traditionalChinese[reviewStackActionTitle.group(
+          1,
+        )!] ??
+        reviewStackActionTitle.group(1)!;
+    return '$action Stack 至 #${reviewStackActionTitle.group(2)}？';
+  }
+  final reviewStackActionLabel = RegExp(
+    r'^(Merge Using Project Settings|Create Merge Commit|Squash and Merge|Rebase and Merge) Stack$',
+  ).firstMatch(source);
+  if (reviewStackActionLabel != null) {
+    final action =
+        AleraLocalizations._traditionalChinese[reviewStackActionLabel.group(
+          1,
+        )!] ??
+        reviewStackActionLabel.group(1)!;
+    return '$action Stack';
+  }
+  final reviewLinkActionTitle = RegExp(
+    r'^(Close|Unlink) Pull Request #(\d+)\?$',
+  ).firstMatch(source);
+  if (reviewLinkActionTitle != null) {
+    final actionSource = '${reviewLinkActionTitle.group(1)} Pull Request';
+    final action =
+        AleraLocalizations._traditionalChinese[actionSource] ?? actionSource;
+    return '$action #${reviewLinkActionTitle.group(2)}？';
+  }
+  final updatePullRequest = RegExp(
+    r'^This will update the pull request on (.+)\.$',
+  ).firstMatch(source);
+  if (updatePullRequest != null) {
+    return '這會更新 ${updatePullRequest.group(1)} 上的 Pull Request。';
+  }
+  final mergePullRequestStack = RegExp(
+    r'^This will merge (\d+) pull (?:request|requests) atomically through #(\d+)\. Pull requests above it will remain open\.$',
+  ).firstMatch(source);
+  if (mergePullRequestStack != null) {
+    return '這會以原子方式合併至 #${mergePullRequestStack.group(2)} 的 ${mergePullRequestStack.group(1)} 個 Pull Request；其上的 Pull Request 會維持開啟。';
+  }
+  final unlinkPullRequest = RegExp(
+    r'^This will remove the pull request link from this workspace\. The pull request on (.+) will not be changed\.$',
+  ).firstMatch(source);
+  if (unlinkPullRequest != null) {
+    return '這會從此工作區移除 Pull Request 連結；${unlinkPullRequest.group(1)} 上的 Pull Request 不會變更。';
+  }
+  final draftPullRequest = RegExp(
+    r'^This will convert the pull request to draft on (.+)\.$',
+  ).firstMatch(source);
+  if (draftPullRequest != null) {
+    return '這會將 ${draftPullRequest.group(1)} 上的 Pull Request 轉為草稿。';
+  }
+  final readyPullRequest = RegExp(
+    r'^This will mark the pull request as ready for review on (.+)\.$',
+  ).firstMatch(source);
+  if (readyPullRequest != null) {
+    return '這會將 ${readyPullRequest.group(1)} 上的 Pull Request 標記為可供 Review。';
+  }
+
   final installProviderCli = RegExp(
     r'^Install `(.+)` and ensure it is on your PATH\.$',
   ).firstMatch(source);

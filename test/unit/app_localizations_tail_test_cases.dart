@@ -590,6 +590,43 @@ void registerAppLocalizationTailTests() {
     expect(diffRowsSource, contains('context.tr(sourceLabelText)'));
   });
 
+  test('traditional Chinese localizes pull request review confirmations', () {
+    final l10n = AleraLocalizations(const Locale('zh', 'TW'));
+
+    expect(l10n.translate('Squash and Merge'), 'Squash 並合併');
+    expect(l10n.translate('Close Pull Request'), '關閉 Pull Request');
+    expect(l10n.translate('Convert To Draft'), '轉為草稿');
+    expect(
+      l10n.translate('Create Merge Commit PR #42?'),
+      '建立 Merge Commit PR #42？',
+    );
+    expect(
+      l10n.translate('Squash and Merge Stack Through #42?'),
+      'Squash 並合併 Stack 至 #42？',
+    );
+    expect(
+      l10n.translate('This will update the pull request on GitHub.'),
+      '這會更新 GitHub 上的 Pull Request。',
+    );
+    expect(
+      l10n.translate(
+        'This will merge 2 pull requests atomically through #42. Pull requests above it will remain open.',
+      ),
+      '這會以原子方式合併至 #42 的 2 個 Pull Request；其上的 Pull Request 會維持開啟。',
+    );
+    expect(l10n.translate('Close Pull Request #42?'), '關閉 Pull Request #42？');
+    expect(
+      l10n.translate(
+        'This will remove the pull request link from this workspace. The pull request on GitHub will not be changed.',
+      ),
+      '這會從此工作區移除 Pull Request 連結；GitHub 上的 Pull Request 不會變更。',
+    );
+    expect(
+      l10n.translate('Mark Ready For Review PR #42?'),
+      '標記為可供 Review PR #42？',
+    );
+  });
+
   test('English and unknown strings fall back to source text', () {
     final en = AleraLocalizations(const Locale('en'));
     final zh = AleraLocalizations(const Locale('zh', 'TW'));
