@@ -17,24 +17,33 @@ class const _DiffFileList({
 }) extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
-    final rows = _DiffRows.fromResult(
-      result,
-      fullFileContents: fullFileContents,
-      sourcePath: sourcePath,
-      sourceLabel: sourceLabel,
-      commitOid: commitOid,
-      parentOid: parentOid,
-      contentMode: contentMode,
-      presentationMode: presentationMode,
-      whitespaceMode: whitespaceMode,
-      editableDocuments: editableDocuments,
-      onEditableChanged: onEditableChanged,
-      onEditableSave: onEditableSave,
-    );
+    _DiffRows buildRows({double? editableViewportHeight}) {
+      return _DiffRows.fromResult(
+        result,
+        fullFileContents: fullFileContents,
+        sourcePath: sourcePath,
+        sourceLabel: sourceLabel,
+        commitOid: commitOid,
+        parentOid: parentOid,
+        contentMode: contentMode,
+        presentationMode: presentationMode,
+        whitespaceMode: whitespaceMode,
+        editableDocuments: editableDocuments,
+        onEditableChanged: onEditableChanged,
+        onEditableSave: onEditableSave,
+        editableViewportHeight: editableViewportHeight,
+      );
+    }
+
     if (presentationMode == GitDiffPresentationMode.sideBySide) {
       return LayoutBuilder(
         builder: (context, constraints) {
           final contentWidth = math.max(constraints.maxWidth, 720.0);
+          final rows = buildRows(
+            editableViewportHeight: constraints.hasBoundedHeight
+                ? constraints.maxHeight
+                : null,
+          );
           return SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: SizedBox(
@@ -51,6 +60,7 @@ class const _DiffFileList({
         },
       );
     }
+    final rows = buildRows();
     return ListView.builder(
       padding: const EdgeInsets.only(bottom: AleraTokens.space16),
       itemCount: rows.items.length,
@@ -73,6 +83,7 @@ class const _DiffRows(final List<_DiffRow> items) {
     Map<String, _EditableWorkingTreeDocument> editableDocuments = const {},
     void Function(GitDiffFile file, String text)? onEditableChanged,
     void Function(GitDiffFile file)? onEditableSave,
+    double? editableViewportHeight,
   }) {
     final items = <_DiffRow>[
       if (result.truncated) const _BannerRow('Diff truncated for preview.'),
@@ -109,6 +120,7 @@ class const _DiffRows(final List<_DiffRow> items) {
                 baseline: contents?.oldDecoded?.content ?? '',
                 document: editable,
                 whitespaceMode: whitespaceMode,
+                viewportHeight: editableViewportHeight,
                 onChanged: (text) => onEditableChanged(file, text),
                 onSave: () => onEditableSave(file),
               ),

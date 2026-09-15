@@ -235,6 +235,7 @@ class _EditableWorkingTreeDiff extends StatefulWidget {
     required this.baseline,
     required this.document,
     required this.whitespaceMode,
+    this.viewportHeight,
     required this.onChanged,
     required this.onSave,
   });
@@ -243,6 +244,7 @@ class _EditableWorkingTreeDiff extends StatefulWidget {
   final String baseline;
   final _EditableWorkingTreeDocument document;
   final GitDiffWhitespaceMode whitespaceMode;
+  final double? viewportHeight;
   final ValueChanged<String> onChanged;
   final VoidCallback onSave;
 
@@ -291,7 +293,12 @@ class _EditableWorkingTreeDiffState extends State<_EditableWorkingTreeDiff> {
       _splitFullFileLines(widget.baseline).length,
       _splitFullFileLines(widget.document.currentText).length,
     );
-    final height = (lineCount * 18.0 + 72).clamp(260.0, 620.0);
+    final fallbackHeight = (lineCount * 18.0 + 72).clamp(260.0, 620.0);
+    final viewportHeight = widget.viewportHeight;
+    final height =
+        viewportHeight != null && viewportHeight.isFinite && viewportHeight > 0
+        ? viewportHeight
+        : fallbackHeight;
     final textStyle = AleraTokens.monoStyle.copyWith(
       fontSize: 12,
       color: AleraTokens.foreground,

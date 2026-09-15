@@ -753,6 +753,7 @@ void main() {
     );
     expect(editor, findsOneWidget);
     expect(find.text('Workspace · Editable'), findsOneWidget);
+    expect(tester.getSize(editor).height, greaterThan(400));
 
     await tester.enterText(editor, 'edited line\n');
     await tester.pump();
