@@ -593,6 +593,35 @@ String? _translateDynamicTraditionalChinese(String source) {
     return '檢查 ${checkEditor.group(1)}';
   }
 
+  final workspaceArchiveFailure = RegExp(
+    r'^Could not (archive|restore) workspace: (.+)$',
+  ).firstMatch(source);
+  if (workspaceArchiveFailure != null) {
+    final action = workspaceArchiveFailure.group(1) == 'archive' ? '封存' : '還原';
+    return '無法$action工作區：${workspaceArchiveFailure.group(2)}';
+  }
+  final checkedOut = RegExp(r'^Checked out (.+)$').firstMatch(source);
+  if (checkedOut != null) {
+    return '已 Checkout ${checkedOut.group(1)}';
+  }
+  final reverted = RegExp(r'^Reverted (.+)$').firstMatch(source);
+  if (reverted != null) {
+    return '已 Revert ${reverted.group(1)}';
+  }
+  final resetTo = RegExp(r'^Reset to (.+)$').firstMatch(source);
+  if (resetTo != null) {
+    return '已重設至 ${resetTo.group(1)}';
+  }
+  final switchedTo = RegExp(r'^Switched to (.+)$').firstMatch(source);
+  if (switchedTo != null) {
+    return '已切換至 ${switchedTo.group(1)}';
+  }
+  final createdWorkspace = RegExp(r'^Created workspace (.+)$')
+      .firstMatch(source);
+  if (createdWorkspace != null) {
+    return '已建立工作區 ${createdWorkspace.group(1)}';
+  }
+
   final selectedValue = RegExp(r'^Selected: (.+)$').firstMatch(source);
   if (selectedValue != null) {
     return '已選取：${selectedValue.group(1)}';

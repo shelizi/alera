@@ -144,6 +144,62 @@ void registerAppLocalizationTailTests() {
     expect(l10n.translate('Discard All Changes'), '捨棄所有變更');
   });
 
+  test(
+    'traditional Chinese localizes workspace archive and commit graph chrome',
+    () {
+      final l10n = AleraLocalizations(const Locale('zh', 'TW'));
+      expect(l10n.translate('Commit Graph'), 'Commit 圖譜');
+      expect(l10n.translate('Open Commit Graph'), '開啟 Commit 圖譜');
+      expect(l10n.translate('All Branches'), '所有 Branch');
+      expect(l10n.translate('Archived'), '已封存');
+      expect(l10n.translate('Open Project Settings'), '開啟專案設定');
+      expect(l10n.translate('Remove Project'), '移除專案');
+      expect(l10n.translate('Archive'), '封存');
+      expect(l10n.translate('Archive Workspace?'), '封存工作區？');
+      expect(l10n.translate('Workspace archived'), '工作區已封存');
+      expect(
+        l10n.translate('Could not archive workspace: disk error'),
+        '無法封存工作區：disk error',
+      );
+      expect(
+        l10n.translate('Could not restore workspace: disk error'),
+        '無法還原工作區：disk error',
+      );
+    },
+  );
+
+  test('traditional Chinese localizes recent source control feedback', () {
+    final l10n = AleraLocalizations(const Locale('zh', 'TW'));
+    expect(l10n.translate('Committed'), '已 Commit');
+    expect(l10n.translate('Committed and pushed'), '已 Commit 並 Push');
+    expect(l10n.translate('Committed and synced'), '已 Commit 並同步');
+    expect(l10n.translate('Commit amended'), '已修訂 Commit');
+    expect(l10n.translate('Source control refreshed'), '已重新整理原始碼控制');
+    expect(l10n.translate('Staged'), '已暫存');
+    expect(l10n.translate('Unstaged'), '已取消暫存');
+    expect(l10n.translate('Fetched'), '已 Fetch');
+    expect(l10n.translate('Pulled'), '已 Pull');
+    expect(l10n.translate('Pushed'), '已 Push');
+    expect(l10n.translate('Branch published'), 'Branch 已發布');
+    expect(l10n.translate('Synced'), '已同步');
+    expect(l10n.translate('Stashed'), '已 Stash');
+    expect(l10n.translate('Stash popped'), '已套用 Stash');
+    expect(l10n.translate('Changes discarded'), '已捨棄變更');
+    expect(l10n.translate('Change discarded'), '已捨棄變更');
+    expect(l10n.translate('Discard Changes?'), '捨棄變更？');
+    expect(l10n.translate('Checkout Commit?'), 'Checkout Commit？');
+    expect(l10n.translate('Revert Commit?'), 'Revert Commit？');
+    expect(l10n.translate('Reset Current Branch?'), '重設目前 Branch？');
+    expect(l10n.translate('Checked out abc1234'), '已 Checkout abc1234');
+    expect(l10n.translate('Reverted abc1234'), '已 Revert abc1234');
+    expect(l10n.translate('Reset to abc1234'), '已重設至 abc1234');
+    expect(l10n.translate('Switched to feature/foo'), '已切換至 feature/foo');
+    expect(
+      l10n.translate('Created workspace feature/foo'),
+      '已建立工作區 feature/foo',
+    );
+  });
+
   test('traditional Chinese localizes runtime busy and ship dialogs', () {
     final l10n = AleraLocalizations(const Locale('zh', 'TW'));
     expect(l10n.translate('Ship Changes?'), '送出變更？');
