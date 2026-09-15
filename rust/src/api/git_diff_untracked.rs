@@ -3,8 +3,8 @@ use std::io::Read;
 use git2::Repository;
 
 use super::{
-    git_diff_render::diff_lines_from_patch, GitChangeArea, GitChangeStatus, GitDiffFile, GitError,
-    GitErrorKind, GitPathContext,
+    git_diff_render::diff_lines_from_patch, side_by_side_projection, GitChangeArea,
+    GitChangeStatus, GitDiffFile, GitError, GitErrorKind, GitPathContext,
 };
 
 const MAX_UNTRACKED_TEXT_BYTES: u64 = 256 * 1024;
@@ -41,12 +41,14 @@ pub(super) fn untracked_diff_file(
         })
         .unwrap_or_default();
     let (lines, line_preview_truncated) = diff_lines_from_patch(&patch);
+    let side_by_side_rows = side_by_side_projection(&lines);
     Ok(GitDiffFile {
         path: display_path,
         old_path: None,
         area: GitChangeArea::Untracked,
         status: GitChangeStatus::Untracked,
         lines,
+        side_by_side_rows,
         added: untracked.added,
         removed: Some(0),
         is_binary: untracked.is_binary,

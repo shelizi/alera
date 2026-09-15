@@ -10,7 +10,8 @@ use super::{
     open_repo, GitChangeArea, GitChangeEntry, GitChangeGroup, GitChangeStatus, GitChangeTreeRow,
     GitChangeTreeRowKind, GitCommitChangeEntry, GitCommitCompareResult, GitCommitCompareStatus,
     GitCommitCompareSummary, GitDiffFile, GitDiffLine, GitDiffLineKind, GitDiffPage, GitDiffResult,
-    GitDiffWhitespaceMode, GitError, GitErrorKind, GitStatusResult, GitSubmoduleStatus,
+    GitDiffSideBySideRow, GitDiffSideBySideRowKind, GitDiffWhitespaceMode, GitError, GitErrorKind,
+    GitStatusResult, GitSubmoduleStatus,
 };
 
 #[path = "git_diff_combined.rs"]
@@ -620,6 +621,150 @@ fn area_sort_key(area: GitChangeArea) -> u8 {
     }
 }
 
+pub(super) fn side_by_side_projection(lines: &[GitDiffLine]) -> Vec<GitDiffSideBySideRow> {
+    let mut rows = Vec::with_capacity(lines.len());
+    let mut current_old_line = None;
+    let mut current_new_line = None;
+    let mut pending_deletions = Vec::<(u32, Option<u32>)>::new();
+    let mut pending_additions = Vec::<(u32, Option<u32>)>::new();
+
+    for (line_index, line) in lines.iter().enumerate() {
+        let line_index = line_index as u32;
+        match line.kind {
+            GitDiffLineKind::Hunk => {
+                flush_side_by_side_changes(
+                    &mut rows,
+                    &mut pending_deletions,
+                    &mut pending_additions,
+                );
+                if let Some((old_line, new_line)) = parse_hunk_line_starts(&line.text) {
+                    current_old_line = old_line;
+                    current_new_line = new_line;
+                } else {
+                    current_old_line = None;
+                    current_new_line = None;
+                }
+                rows.push(passthrough_side_by_side_row(line_index));
+            }
+            GitDiffLineKind::Header => {
+                flush_side_by_side_changes(
+                    &mut rows,
+                    &mut pending_deletions,
+                    &mut pending_additions,
+                );
+                rows.push(passthrough_side_by_side_row(line_index));
+            }
+            GitDiffLineKind::Deletion => {
+                if !pending_additions.is_empty() {
+                    flush_side_by_side_changes(
+                        &mut rows,
+                        &mut pending_deletions,
+                        &mut pending_additions,
+                    );
+                }
+                let line_number = current_old_line;
+                if let Some(value) = current_old_line {
+                    current_old_line = Some(value.saturating_add(1));
+                }
+                pending_deletions.push((line_index, line_number));
+            }
+            GitDiffLineKind::Addition => {
+                let line_number =
+                    current_new_line.or_else(|| current_old_line.is_none().then_some(1));
+                if let Some(value) = current_new_line {
+                    current_new_line = Some(value.saturating_add(1));
+                } else if current_old_line.is_none() {
+                    current_new_line = Some(2);
+                }
+                pending_additions.push((line_index, line_number));
+            }
+            GitDiffLineKind::Context => {
+                flush_side_by_side_changes(
+                    &mut rows,
+                    &mut pending_deletions,
+                    &mut pending_additions,
+                );
+                let left_line_number = current_old_line;
+                if let Some(value) = current_old_line {
+                    current_old_line = Some(value.saturating_add(1));
+                }
+                let right_line_number = current_new_line;
+                if let Some(value) = current_new_line {
+                    current_new_line = Some(value.saturating_add(1));
+                }
+                rows.push(GitDiffSideBySideRow {
+                    kind: GitDiffSideBySideRowKind::Pair,
+                    line_index: None,
+                    left_line_index: Some(line_index),
+                    left_line_number,
+                    right_line_index: Some(line_index),
+                    right_line_number,
+                });
+            }
+        }
+    }
+
+    flush_side_by_side_changes(&mut rows, &mut pending_deletions, &mut pending_additions);
+    rows
+}
+
+fn passthrough_side_by_side_row(line_index: u32) -> GitDiffSideBySideRow {
+    GitDiffSideBySideRow {
+        kind: GitDiffSideBySideRowKind::Passthrough,
+        line_index: Some(line_index),
+        left_line_index: None,
+        left_line_number: None,
+        right_line_index: None,
+        right_line_number: None,
+    }
+}
+
+fn flush_side_by_side_changes(
+    rows: &mut Vec<GitDiffSideBySideRow>,
+    pending_deletions: &mut Vec<(u32, Option<u32>)>,
+    pending_additions: &mut Vec<(u32, Option<u32>)>,
+) {
+    if pending_deletions.is_empty() && pending_additions.is_empty() {
+        return;
+    }
+    let count = pending_deletions.len().max(pending_additions.len());
+    for index in 0..count {
+        let left = pending_deletions.get(index).copied();
+        let right = pending_additions.get(index).copied();
+        rows.push(GitDiffSideBySideRow {
+            kind: GitDiffSideBySideRowKind::Pair,
+            line_index: None,
+            left_line_index: left.map(|(line_index, _)| line_index),
+            left_line_number: left.and_then(|(_, line_number)| line_number),
+            right_line_index: right.map(|(line_index, _)| line_index),
+            right_line_number: right.and_then(|(_, line_number)| line_number),
+        });
+    }
+    pending_deletions.clear();
+    pending_additions.clear();
+}
+
+fn parse_hunk_line_starts(text: &str) -> Option<(Option<u32>, Option<u32>)> {
+    let mut parts = text.strip_prefix("@@")?.trim_start().split_whitespace();
+    let old_range = parts.next()?;
+    let new_range = parts.next()?;
+    Some((
+        parse_hunk_side_start(old_range, '-')?,
+        parse_hunk_side_start(new_range, '+')?,
+    ))
+}
+
+fn parse_hunk_side_start(token: &str, prefix: char) -> Option<Option<u32>> {
+    let range = token.strip_prefix(prefix)?;
+    let mut parts = range.splitn(2, ',');
+    let start = parts.next()?.parse::<u32>().ok()?;
+    let count = match parts.next() {
+        Some(value) => value.parse::<u32>().ok()?,
+        None => 1,
+    };
+    Some((count != 0).then_some(start))
+}
+
 fn diff_file_for_area(
     repo: &Repository,
     paths: &GitPathContext,
@@ -686,6 +831,7 @@ fn diff_file_for_area_with_whitespace(
             ) else {
                 return Ok(None);
             };
+            let side_by_side_rows = side_by_side_projection(&rendered.lines);
             Ok(Some(GitDiffFile {
                 path,
                 old_path: selection
@@ -695,6 +841,7 @@ fn diff_file_for_area_with_whitespace(
                 area,
                 status: selection.status,
                 lines: rendered.lines,
+                side_by_side_rows,
                 added: Some(rendered.added),
                 removed: Some(rendered.removed),
                 is_binary: rendered.is_binary,
@@ -714,6 +861,7 @@ fn untracked_placeholder_diff_file(path: String) -> GitDiffFile {
         area: GitChangeArea::Untracked,
         status: GitChangeStatus::Untracked,
         lines: Vec::new(),
+        side_by_side_rows: Vec::new(),
         added: None,
         removed: Some(0),
         is_binary: false,
@@ -819,6 +967,7 @@ fn commit_diff_file_for_path(
     ) else {
         return Ok(None);
     };
+    let side_by_side_rows = side_by_side_projection(&rendered.lines);
     Ok(Some(GitDiffFile {
         path,
         old_path: selection
@@ -828,6 +977,7 @@ fn commit_diff_file_for_path(
         area: GitChangeArea::Staged,
         status: selection.status,
         lines: rendered.lines,
+        side_by_side_rows,
         added: Some(rendered.added),
         removed: Some(rendered.removed),
         is_binary: rendered.is_binary,

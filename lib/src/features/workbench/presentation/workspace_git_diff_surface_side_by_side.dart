@@ -263,6 +263,56 @@ GitDiffFile _fileWithDecodedDiffLines(
     truncated: file.truncated,
     linePreviewTruncated: file.linePreviewTruncated,
     sourceLabel: file.sourceLabel,
+    sideBySideRows: file.sideBySideRows,
+  );
+}
+
+List<_DiffRow>? _buildProjectedSideBySideRows(GitDiffFile file) {
+  if (file.sideBySideRows.isEmpty) return null;
+  final rows = <_DiffRow>[];
+  for (final projection in file.sideBySideRows) {
+    switch (projection.kind) {
+      case GitDiffSideBySideRowKind.passthrough:
+        final lineIndex = projection.lineIndex;
+        if (lineIndex == null ||
+            lineIndex < 0 ||
+            lineIndex >= file.lines.length) {
+          return null;
+        }
+        rows.add(_DiffLineRow(file.lines[lineIndex]));
+      case GitDiffSideBySideRowKind.pair:
+        final left = _projectedSideLine(
+          file,
+          projection.leftLineIndex,
+          projection.leftLineNumber,
+        );
+        final right = _projectedSideLine(
+          file,
+          projection.rightLineIndex,
+          projection.rightLineNumber,
+        );
+        if ((projection.leftLineIndex != null && left == null) ||
+            (projection.rightLineIndex != null && right == null)) {
+          return null;
+        }
+        rows.add(_SideBySideDiffRow(left: left, right: right));
+    }
+  }
+  return rows;
+}
+
+_DiffSideLine? _projectedSideLine(
+  GitDiffFile file,
+  int? lineIndex,
+  int? lineNumber,
+) {
+  if (lineIndex == null) return null;
+  if (lineIndex < 0 || lineIndex >= file.lines.length) return null;
+  final line = file.lines[lineIndex];
+  return _DiffSideLine(
+    lineNumber: lineNumber,
+    text: _extractContent(line.text),
+    kind: line.kind,
   );
 }
 
@@ -277,6 +327,12 @@ List<_DiffRow> _buildSideBySideRows(GitDiffFile file) {
       ? 'Deleted'
       : 'Modified';
   items.add(_SideBySideHeaderRow(oldTitle: oldLabel, newTitle: newLabel));
+
+  final projectedRows = _buildProjectedSideBySideRows(file);
+  if (projectedRows != null) {
+    items.addAll(projectedRows);
+    return items;
+  }
 
   int? currentOldLine;
   int? currentNewLine;

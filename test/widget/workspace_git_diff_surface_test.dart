@@ -522,6 +522,23 @@ void main() {
               GitDiffLine.addition('+new three'),
               GitDiffLine.context(' line four'),
             ],
+            sideBySideRows: <GitDiffSideBySideRow>[
+              GitDiffSideBySideRow(kind: .passthrough, lineIndex: 0),
+              GitDiffSideBySideRow(
+                kind: .pair,
+                leftLineIndex: 1,
+                leftLineNumber: 33,
+                rightLineIndex: 2,
+                rightLineNumber: 33,
+              ),
+              GitDiffSideBySideRow(
+                kind: .pair,
+                leftLineIndex: 3,
+                leftLineNumber: 34,
+                rightLineIndex: 3,
+                rightLineNumber: 34,
+              ),
+            ],
             added: 1,
             removed: 1,
           ),
@@ -576,6 +593,10 @@ void main() {
     expect(find.text('new three'), findsOneWidget);
 
     // Full file + side-by-side.
+    // Non-default line numbers prove the native/index projection was consumed
+    // instead of rebuilding side-by-side alignment on the UI isolate.
+    expect(find.text('33'), findsNWidgets(2));
+
     await tester.tap(find.byTooltip('Switch to Full File View'));
     await tester.pump();
     expect(find.byTooltip('Switch to Diff Only'), findsOneWidget);

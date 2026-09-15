@@ -61,6 +61,16 @@ extension on RustGitBackend {
     };
   }
 
+  GitDiffSideBySideRowKind _toDiffSideBySideRowKind(
+    rust.GitDiffSideBySideRowKind kind,
+  ) {
+    return switch (kind) {
+      rust.GitDiffSideBySideRowKind.passthrough =>
+        GitDiffSideBySideRowKind.passthrough,
+      rust.GitDiffSideBySideRowKind.pair => GitDiffSideBySideRowKind.pair,
+    };
+  }
+
   GitHistoryRefCategory _toHistoryRefCategory(
     rust.GitHistoryRefCategory category,
   ) {
@@ -123,6 +133,18 @@ extension on RustGitBackend {
       area: _toArea(file.area),
       status: _toStatus(file.status),
       lines: file.lines.map(_toDiffLine).toList(growable: false),
+      sideBySideRows: file.sideBySideRows
+          .map(
+            (row) => GitDiffSideBySideRow(
+              kind: _toDiffSideBySideRowKind(row.kind),
+              lineIndex: row.lineIndex,
+              leftLineIndex: row.leftLineIndex,
+              leftLineNumber: row.leftLineNumber,
+              rightLineIndex: row.rightLineIndex,
+              rightLineNumber: row.rightLineNumber,
+            ),
+          )
+          .toList(growable: false),
       added: file.added,
       removed: file.removed,
       isBinary: file.isBinary,

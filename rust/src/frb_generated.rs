@@ -5048,6 +5048,8 @@ impl SseDecode for crate::api::git::GitDiffFile {
         let mut var_area = <crate::api::git::GitChangeArea>::sse_decode(deserializer);
         let mut var_status = <crate::api::git::GitChangeStatus>::sse_decode(deserializer);
         let mut var_lines = <Vec<crate::api::git::GitDiffLine>>::sse_decode(deserializer);
+        let mut var_sideBySideRows =
+            <Vec<crate::api::git::GitDiffSideBySideRow>>::sse_decode(deserializer);
         let mut var_added = <Option<u32>>::sse_decode(deserializer);
         let mut var_removed = <Option<u32>>::sse_decode(deserializer);
         let mut var_isBinary = <bool>::sse_decode(deserializer);
@@ -5061,6 +5063,7 @@ impl SseDecode for crate::api::git::GitDiffFile {
             area: var_area,
             status: var_status,
             lines: var_lines,
+            side_by_side_rows: var_sideBySideRows,
             added: var_added,
             removed: var_removed,
             is_binary: var_isBinary,
@@ -5119,6 +5122,38 @@ impl SseDecode for crate::api::git::GitDiffResult {
         return crate::api::git::GitDiffResult {
             files: var_files,
             truncated: var_truncated,
+        };
+    }
+}
+
+impl SseDecode for crate::api::git::GitDiffSideBySideRow {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_kind = <crate::api::git::GitDiffSideBySideRowKind>::sse_decode(deserializer);
+        let mut var_lineIndex = <Option<u32>>::sse_decode(deserializer);
+        let mut var_leftLineIndex = <Option<u32>>::sse_decode(deserializer);
+        let mut var_leftLineNumber = <Option<u32>>::sse_decode(deserializer);
+        let mut var_rightLineIndex = <Option<u32>>::sse_decode(deserializer);
+        let mut var_rightLineNumber = <Option<u32>>::sse_decode(deserializer);
+        return crate::api::git::GitDiffSideBySideRow {
+            kind: var_kind,
+            line_index: var_lineIndex,
+            left_line_index: var_leftLineIndex,
+            left_line_number: var_leftLineNumber,
+            right_line_index: var_rightLineIndex,
+            right_line_number: var_rightLineNumber,
+        };
+    }
+}
+
+impl SseDecode for crate::api::git::GitDiffSideBySideRowKind {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut inner = <i32>::sse_decode(deserializer);
+        return match inner {
+            0 => crate::api::git::GitDiffSideBySideRowKind::Passthrough,
+            1 => crate::api::git::GitDiffSideBySideRowKind::Pair,
+            _ => unreachable!("Invalid variant for GitDiffSideBySideRowKind: {}", inner),
         };
     }
 }
@@ -5636,6 +5671,20 @@ impl SseDecode for Vec<crate::api::git::GitDiffLine> {
         let mut ans_ = Vec::with_capacity(len_ as usize);
         for idx_ in 0..len_ {
             ans_.push(<crate::api::git::GitDiffLine>::sse_decode(deserializer));
+        }
+        return ans_;
+    }
+}
+
+impl SseDecode for Vec<crate::api::git::GitDiffSideBySideRow> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = Vec::with_capacity(len_ as usize);
+        for idx_ in 0..len_ {
+            ans_.push(<crate::api::git::GitDiffSideBySideRow>::sse_decode(
+                deserializer,
+            ));
         }
         return ans_;
     }
@@ -7888,6 +7937,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::git::GitDiffFile {
             self.area.into_into_dart().into_dart(),
             self.status.into_into_dart().into_dart(),
             self.lines.into_into_dart().into_dart(),
+            self.side_by_side_rows.into_into_dart().into_dart(),
             self.added.into_into_dart().into_dart(),
             self.removed.into_into_dart().into_dart(),
             self.is_binary.into_into_dart().into_dart(),
@@ -7985,6 +8035,52 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::git::GitDiffResult>
     for crate::api::git::GitDiffResult
 {
     fn into_into_dart(self) -> crate::api::git::GitDiffResult {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::git::GitDiffSideBySideRow {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.kind.into_into_dart().into_dart(),
+            self.line_index.into_into_dart().into_dart(),
+            self.left_line_index.into_into_dart().into_dart(),
+            self.left_line_number.into_into_dart().into_dart(),
+            self.right_line_index.into_into_dart().into_dart(),
+            self.right_line_number.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::git::GitDiffSideBySideRow
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::git::GitDiffSideBySideRow>
+    for crate::api::git::GitDiffSideBySideRow
+{
+    fn into_into_dart(self) -> crate::api::git::GitDiffSideBySideRow {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::git::GitDiffSideBySideRowKind {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        match self {
+            Self::Passthrough => 0.into_dart(),
+            Self::Pair => 1.into_dart(),
+            _ => unreachable!(),
+        }
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::git::GitDiffSideBySideRowKind
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::git::GitDiffSideBySideRowKind>
+    for crate::api::git::GitDiffSideBySideRowKind
+{
+    fn into_into_dart(self) -> crate::api::git::GitDiffSideBySideRowKind {
         self
     }
 }
@@ -9872,6 +9968,10 @@ impl SseEncode for crate::api::git::GitDiffFile {
         <crate::api::git::GitChangeArea>::sse_encode(self.area, serializer);
         <crate::api::git::GitChangeStatus>::sse_encode(self.status, serializer);
         <Vec<crate::api::git::GitDiffLine>>::sse_encode(self.lines, serializer);
+        <Vec<crate::api::git::GitDiffSideBySideRow>>::sse_encode(
+            self.side_by_side_rows,
+            serializer,
+        );
         <Option<u32>>::sse_encode(self.added, serializer);
         <Option<u32>>::sse_encode(self.removed, serializer);
         <bool>::sse_encode(self.is_binary, serializer);
@@ -9922,6 +10022,34 @@ impl SseEncode for crate::api::git::GitDiffResult {
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <Vec<crate::api::git::GitDiffFile>>::sse_encode(self.files, serializer);
         <bool>::sse_encode(self.truncated, serializer);
+    }
+}
+
+impl SseEncode for crate::api::git::GitDiffSideBySideRow {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <crate::api::git::GitDiffSideBySideRowKind>::sse_encode(self.kind, serializer);
+        <Option<u32>>::sse_encode(self.line_index, serializer);
+        <Option<u32>>::sse_encode(self.left_line_index, serializer);
+        <Option<u32>>::sse_encode(self.left_line_number, serializer);
+        <Option<u32>>::sse_encode(self.right_line_index, serializer);
+        <Option<u32>>::sse_encode(self.right_line_number, serializer);
+    }
+}
+
+impl SseEncode for crate::api::git::GitDiffSideBySideRowKind {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(
+            match self {
+                crate::api::git::GitDiffSideBySideRowKind::Passthrough => 0,
+                crate::api::git::GitDiffSideBySideRowKind::Pair => 1,
+                _ => {
+                    unimplemented!("");
+                }
+            },
+            serializer,
+        );
     }
 }
 
@@ -10319,6 +10447,16 @@ impl SseEncode for Vec<crate::api::git::GitDiffLine> {
         <i32>::sse_encode(self.len() as _, serializer);
         for item in self {
             <crate::api::git::GitDiffLine>::sse_encode(item, serializer);
+        }
+    }
+}
+
+impl SseEncode for Vec<crate::api::git::GitDiffSideBySideRow> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <crate::api::git::GitDiffSideBySideRow>::sse_encode(item, serializer);
         }
     }
 }

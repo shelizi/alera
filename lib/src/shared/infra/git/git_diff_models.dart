@@ -32,6 +32,17 @@ enum GitChangeTreeRowKind { directory, file }
 
 enum GitDiffLineKind { addition, deletion, hunk, header, context }
 
+enum GitDiffSideBySideRowKind { passthrough, pair }
+
+class const GitDiffSideBySideRow({
+  required final GitDiffSideBySideRowKind kind,
+  final int? lineIndex,
+  final int? leftLineIndex,
+  final int? leftLineNumber,
+  final int? rightLineIndex,
+  final int? rightLineNumber,
+});
+
 enum GitDiffWhitespaceMode {
   normal,
   ignoreEol,
@@ -107,6 +118,7 @@ class const GitDiffFile({
   required final GitChangeArea area,
   required final GitChangeStatus status,
   final List<GitDiffLine> lines = const [],
+  final List<GitDiffSideBySideRow> sideBySideRows = const [],
   final String? oldPath,
   final int? added,
   final int? removed,

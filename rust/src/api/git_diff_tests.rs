@@ -25,6 +25,80 @@ fn diff_accepts_backslash_separators_from_subdirectory_workspace() {
 }
 
 #[test]
+fn git_diff_projects_side_by_side_rows_without_duplicating_line_text() {
+    let repo = init_repo();
+    std::fs::write(
+        repo.path().join("paired.txt"),
+        "before\nold one\nold two\nafter\n",
+    )
+    .expect("write baseline");
+    run_git(repo.path(), &["add", "paired.txt"]);
+    run_git(repo.path(), &["commit", "-m", "add paired fixture"]);
+    std::fs::write(
+        repo.path().join("paired.txt"),
+        "before\nnew one\nnew two\nnew three\nafter\n",
+    )
+    .expect("write modified fixture");
+
+    let diff = git_diff(
+        path_str(repo.path()),
+        "paired.txt".to_string(),
+        GitChangeArea::Unstaged,
+    )
+    .unwrap();
+    let file = &diff.files[0];
+
+    assert!(!file.side_by_side_rows.is_empty());
+    assert!(file
+        .side_by_side_rows
+        .iter()
+        .filter(|row| row.kind == GitDiffSideBySideRowKind::Passthrough)
+        .all(|row| row.line_index.is_some()
+            && row.left_line_index.is_none()
+            && row.right_line_index.is_none()));
+
+    let pairs = file
+        .side_by_side_rows
+        .iter()
+        .filter(|row| row.kind == GitDiffSideBySideRowKind::Pair)
+        .map(|row| {
+            let left = row.left_line_index.map(|index| {
+                (
+                    row.left_line_number,
+                    file.lines[index as usize].kind,
+                    file.lines[index as usize].text.as_str(),
+                )
+            });
+            let right = row.right_line_index.map(|index| {
+                (
+                    row.right_line_number,
+                    file.lines[index as usize].kind,
+                    file.lines[index as usize].text.as_str(),
+                )
+            });
+            (left, right)
+        })
+        .collect::<Vec<_>>();
+
+    assert!(pairs.iter().any(|(left, right)| {
+        matches!(left, Some((Some(1), GitDiffLineKind::Context, text)) if *text == " before")
+            && matches!(right, Some((Some(1), GitDiffLineKind::Context, text)) if *text == " before")
+    }));
+    assert!(pairs.iter().any(|(left, right)| {
+        matches!(left, Some((Some(2), GitDiffLineKind::Deletion, text)) if *text == "-old one")
+            && matches!(right, Some((Some(2), GitDiffLineKind::Addition, text)) if *text == "+new one")
+    }));
+    assert!(pairs.iter().any(|(left, right)| {
+        matches!(left, Some((Some(3), GitDiffLineKind::Deletion, text)) if *text == "-old two")
+            && matches!(right, Some((Some(3), GitDiffLineKind::Addition, text)) if *text == "+new two")
+    }));
+    assert!(pairs.iter().any(|(left, right)| {
+        left.is_none()
+            && matches!(right, Some((Some(4), GitDiffLineKind::Addition, text)) if *text == "+new three")
+    }));
+}
+
+#[test]
 fn git_diff_loads_single_area_and_combined_results() {
     let repo = init_repo();
     std::fs::write(repo.path().join("README.md"), "hello\nstaged\n").expect("write staged");

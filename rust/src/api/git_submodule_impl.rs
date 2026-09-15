@@ -465,12 +465,14 @@ fn pointer_diff(
         (None, None) => String::new(),
     };
     let (lines, line_preview_truncated) = diff_lines_from_patch(&patch);
+    let side_by_side_rows = super::side_by_side_projection(&lines);
     GitDiffFile {
         path: workspace_path.to_string(),
         old_path: None,
         area,
         status,
         lines,
+        side_by_side_rows,
         added,
         removed,
         is_binary: false,

@@ -165,12 +165,33 @@ pub struct GitDiffLine {
     pub kind: GitDiffLineKind,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GitDiffSideBySideRowKind {
+    Passthrough,
+    Pair,
+}
+
+/// Presentation-neutral side-by-side projection into `GitDiffFile.lines`.
+/// Text remains stored only once in the flat line list.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GitDiffSideBySideRow {
+    pub kind: GitDiffSideBySideRowKind,
+    /// Header/hunk line index for passthrough rows.
+    pub line_index: Option<u32>,
+    pub left_line_index: Option<u32>,
+    pub left_line_number: Option<u32>,
+    pub right_line_index: Option<u32>,
+    pub right_line_number: Option<u32>,
+}
+
 pub struct GitDiffFile {
     pub path: String,
     pub old_path: Option<String>,
     pub area: GitChangeArea,
     pub status: GitChangeStatus,
     pub lines: Vec<GitDiffLine>,
+    /// Native alignment projection for diff-only side-by-side rendering.
+    pub side_by_side_rows: Vec<GitDiffSideBySideRow>,
     pub added: Option<u32>,
     pub removed: Option<u32>,
     pub is_binary: bool,

@@ -8,7 +8,7 @@ import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // These functions are ignored because they are not marked as `pub`: `delete_workspace_relative_path`, `discard_status_entries`, `entries_for_area_and_scope`, `from_git2`, `from_io`, `git_cli_in_path`, `git_signature`, `is_parent_discardable`, `is_submodule_worktree_only`, `new`, `open_repo`, `pathspec_string`, `reject_out_of_scope_staged_entries`, `reject_out_of_scope_stash_pop`, `reject_out_of_scope_tracked_changes`, `reject_tree_diff_out_of_scope`, `relative_path`, `remove_index_path_if_present`, `repo_path_is_in_scope`, `repo_relative_path_from_workspace`, `repo_relative_path`, `repo_workdir_path_exists`, `scoped_pathspecs`, `split_clone_destination`, `stage_selected_path`, `stage_status_entries`, `stash_oid`, `unstage_selected_path`, `unstage_status_entries`, `workspace_path_is_in_scope`, `workspace_repo_relative_path`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`
 
 Future<bool> isGitRepository({required String path}) =>
     RustLib.instance.api.crateApiGitIsGitRepository(path: path);
@@ -543,6 +543,9 @@ class GitDiffFile {
   final GitChangeArea area;
   final GitChangeStatus status;
   final List<GitDiffLine> lines;
+
+  /// Native alignment projection for diff-only side-by-side rendering.
+  final List<GitDiffSideBySideRow> sideBySideRows;
   final int? added;
   final int? removed;
   final bool isBinary;
@@ -557,6 +560,7 @@ class GitDiffFile {
     required this.area,
     required this.status,
     required this.lines,
+    required this.sideBySideRows,
     this.added,
     this.removed,
     required this.isBinary,
@@ -573,6 +577,7 @@ class GitDiffFile {
       area.hashCode ^
       status.hashCode ^
       lines.hashCode ^
+      sideBySideRows.hashCode ^
       added.hashCode ^
       removed.hashCode ^
       isBinary.hashCode ^
@@ -591,6 +596,7 @@ class GitDiffFile {
           area == other.area &&
           status == other.status &&
           lines == other.lines &&
+          sideBySideRows == other.sideBySideRows &&
           added == other.added &&
           removed == other.removed &&
           isBinary == other.isBinary &&
@@ -656,6 +662,51 @@ class GitDiffResult {
           files == other.files &&
           truncated == other.truncated;
 }
+
+/// Presentation-neutral side-by-side projection into `GitDiffFile.lines`.
+/// Text remains stored only once in the flat line list.
+class GitDiffSideBySideRow {
+  final GitDiffSideBySideRowKind kind;
+
+  /// Header/hunk line index for passthrough rows.
+  final int? lineIndex;
+  final int? leftLineIndex;
+  final int? leftLineNumber;
+  final int? rightLineIndex;
+  final int? rightLineNumber;
+
+  const GitDiffSideBySideRow({
+    required this.kind,
+    this.lineIndex,
+    this.leftLineIndex,
+    this.leftLineNumber,
+    this.rightLineIndex,
+    this.rightLineNumber,
+  });
+
+  @override
+  int get hashCode =>
+      kind.hashCode ^
+      lineIndex.hashCode ^
+      leftLineIndex.hashCode ^
+      leftLineNumber.hashCode ^
+      rightLineIndex.hashCode ^
+      rightLineNumber.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is GitDiffSideBySideRow &&
+          runtimeType == other.runtimeType &&
+          kind == other.kind &&
+          lineIndex == other.lineIndex &&
+          leftLineIndex == other.leftLineIndex &&
+          leftLineNumber == other.leftLineNumber &&
+          rightLineIndex == other.rightLineIndex &&
+          rightLineNumber == other.rightLineNumber;
+}
+
+enum GitDiffSideBySideRowKind { passthrough, pair }
 
 enum GitDiffWhitespaceMode { normal, ignoreEol, ignoreChanges, ignoreAll }
 

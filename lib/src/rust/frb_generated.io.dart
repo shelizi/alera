@@ -223,6 +223,14 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   GitDiffResult dco_decode_git_diff_result(dynamic raw);
 
   @protected
+  GitDiffSideBySideRow dco_decode_git_diff_side_by_side_row(dynamic raw);
+
+  @protected
+  GitDiffSideBySideRowKind dco_decode_git_diff_side_by_side_row_kind(
+    dynamic raw,
+  );
+
+  @protected
   GitDiffWhitespaceMode dco_decode_git_diff_whitespace_mode(dynamic raw);
 
   @protected
@@ -330,6 +338,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<GitDiffLine> dco_decode_list_git_diff_line(dynamic raw);
+
+  @protected
+  List<GitDiffSideBySideRow> dco_decode_list_git_diff_side_by_side_row(
+    dynamic raw,
+  );
 
   @protected
   List<GitExplorerStatusEntry> dco_decode_list_git_explorer_status_entry(
@@ -871,6 +884,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   GitDiffResult sse_decode_git_diff_result(SseDeserializer deserializer);
 
   @protected
+  GitDiffSideBySideRow sse_decode_git_diff_side_by_side_row(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  GitDiffSideBySideRowKind sse_decode_git_diff_side_by_side_row_kind(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   GitDiffWhitespaceMode sse_decode_git_diff_whitespace_mode(
     SseDeserializer deserializer,
   );
@@ -1010,6 +1033,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<GitDiffLine> sse_decode_list_git_diff_line(SseDeserializer deserializer);
+
+  @protected
+  List<GitDiffSideBySideRow> sse_decode_list_git_diff_side_by_side_row(
+    SseDeserializer deserializer,
+  );
 
   @protected
   List<GitExplorerStatusEntry> sse_decode_list_git_explorer_status_entry(
@@ -1700,6 +1728,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_git_diff_result(GitDiffResult self, SseSerializer serializer);
 
   @protected
+  void sse_encode_git_diff_side_by_side_row(
+    GitDiffSideBySideRow self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_git_diff_side_by_side_row_kind(
+    GitDiffSideBySideRowKind self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_git_diff_whitespace_mode(
     GitDiffWhitespaceMode self,
     SseSerializer serializer,
@@ -1879,6 +1919,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_list_git_diff_line(
     List<GitDiffLine> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_git_diff_side_by_side_row(
+    List<GitDiffSideBySideRow> self,
     SseSerializer serializer,
   );
 

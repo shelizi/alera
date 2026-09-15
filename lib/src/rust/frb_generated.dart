@@ -5532,21 +5532,22 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   GitDiffFile dco_decode_git_diff_file(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 12)
-      throw Exception('unexpected arr length: expect 12 but see ${arr.length}');
+    if (arr.length != 13)
+      throw Exception('unexpected arr length: expect 13 but see ${arr.length}');
     return GitDiffFile(
       path: dco_decode_String(arr[0]),
       oldPath: dco_decode_opt_String(arr[1]),
       area: dco_decode_git_change_area(arr[2]),
       status: dco_decode_git_change_status(arr[3]),
       lines: dco_decode_list_git_diff_line(arr[4]),
-      added: dco_decode_opt_box_autoadd_u_32(arr[5]),
-      removed: dco_decode_opt_box_autoadd_u_32(arr[6]),
-      isBinary: dco_decode_bool(arr[7]),
-      isLarge: dco_decode_bool(arr[8]),
-      isGitlink: dco_decode_bool(arr[9]),
-      truncated: dco_decode_bool(arr[10]),
-      linePreviewTruncated: dco_decode_bool(arr[11]),
+      sideBySideRows: dco_decode_list_git_diff_side_by_side_row(arr[5]),
+      added: dco_decode_opt_box_autoadd_u_32(arr[6]),
+      removed: dco_decode_opt_box_autoadd_u_32(arr[7]),
+      isBinary: dco_decode_bool(arr[8]),
+      isLarge: dco_decode_bool(arr[9]),
+      isGitlink: dco_decode_bool(arr[10]),
+      truncated: dco_decode_bool(arr[11]),
+      linePreviewTruncated: dco_decode_bool(arr[12]),
     );
   }
 
@@ -5590,6 +5591,30 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       files: dco_decode_list_git_diff_file(arr[0]),
       truncated: dco_decode_bool(arr[1]),
     );
+  }
+
+  @protected
+  GitDiffSideBySideRow dco_decode_git_diff_side_by_side_row(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 6)
+      throw Exception('unexpected arr length: expect 6 but see ${arr.length}');
+    return GitDiffSideBySideRow(
+      kind: dco_decode_git_diff_side_by_side_row_kind(arr[0]),
+      lineIndex: dco_decode_opt_box_autoadd_u_32(arr[1]),
+      leftLineIndex: dco_decode_opt_box_autoadd_u_32(arr[2]),
+      leftLineNumber: dco_decode_opt_box_autoadd_u_32(arr[3]),
+      rightLineIndex: dco_decode_opt_box_autoadd_u_32(arr[4]),
+      rightLineNumber: dco_decode_opt_box_autoadd_u_32(arr[5]),
+    );
+  }
+
+  @protected
+  GitDiffSideBySideRowKind dco_decode_git_diff_side_by_side_row_kind(
+    dynamic raw,
+  ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return GitDiffSideBySideRowKind.values[raw as int];
   }
 
   @protected
@@ -5942,6 +5967,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   List<GitDiffLine> dco_decode_list_git_diff_line(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return (raw as List<dynamic>).map(dco_decode_git_diff_line).toList();
+  }
+
+  @protected
+  List<GitDiffSideBySideRow> dco_decode_list_git_diff_side_by_side_row(
+    dynamic raw,
+  ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>)
+        .map(dco_decode_git_diff_side_by_side_row)
+        .toList();
   }
 
   @protected
@@ -7375,6 +7410,9 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_area = sse_decode_git_change_area(deserializer);
     var var_status = sse_decode_git_change_status(deserializer);
     var var_lines = sse_decode_list_git_diff_line(deserializer);
+    var var_sideBySideRows = sse_decode_list_git_diff_side_by_side_row(
+      deserializer,
+    );
     var var_added = sse_decode_opt_box_autoadd_u_32(deserializer);
     var var_removed = sse_decode_opt_box_autoadd_u_32(deserializer);
     var var_isBinary = sse_decode_bool(deserializer);
@@ -7388,6 +7426,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       area: var_area,
       status: var_status,
       lines: var_lines,
+      sideBySideRows: var_sideBySideRows,
       added: var_added,
       removed: var_removed,
       isBinary: var_isBinary,
@@ -7427,6 +7466,36 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_files = sse_decode_list_git_diff_file(deserializer);
     var var_truncated = sse_decode_bool(deserializer);
     return GitDiffResult(files: var_files, truncated: var_truncated);
+  }
+
+  @protected
+  GitDiffSideBySideRow sse_decode_git_diff_side_by_side_row(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_kind = sse_decode_git_diff_side_by_side_row_kind(deserializer);
+    var var_lineIndex = sse_decode_opt_box_autoadd_u_32(deserializer);
+    var var_leftLineIndex = sse_decode_opt_box_autoadd_u_32(deserializer);
+    var var_leftLineNumber = sse_decode_opt_box_autoadd_u_32(deserializer);
+    var var_rightLineIndex = sse_decode_opt_box_autoadd_u_32(deserializer);
+    var var_rightLineNumber = sse_decode_opt_box_autoadd_u_32(deserializer);
+    return GitDiffSideBySideRow(
+      kind: var_kind,
+      lineIndex: var_lineIndex,
+      leftLineIndex: var_leftLineIndex,
+      leftLineNumber: var_leftLineNumber,
+      rightLineIndex: var_rightLineIndex,
+      rightLineNumber: var_rightLineNumber,
+    );
+  }
+
+  @protected
+  GitDiffSideBySideRowKind sse_decode_git_diff_side_by_side_row_kind(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var inner = sse_decode_i_32(deserializer);
+    return GitDiffSideBySideRowKind.values[inner];
   }
 
   @protected
@@ -7890,6 +7959,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var ans_ = <GitDiffLine>[];
     for (var idx_ = 0; idx_ < len_; ++idx_) {
       ans_.add(sse_decode_git_diff_line(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
+  List<GitDiffSideBySideRow> sse_decode_list_git_diff_side_by_side_row(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <GitDiffSideBySideRow>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_git_diff_side_by_side_row(deserializer));
     }
     return ans_;
   }
@@ -9579,6 +9662,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_git_change_area(self.area, serializer);
     sse_encode_git_change_status(self.status, serializer);
     sse_encode_list_git_diff_line(self.lines, serializer);
+    sse_encode_list_git_diff_side_by_side_row(self.sideBySideRows, serializer);
     sse_encode_opt_box_autoadd_u_32(self.added, serializer);
     sse_encode_opt_box_autoadd_u_32(self.removed, serializer);
     sse_encode_bool(self.isBinary, serializer);
@@ -9619,6 +9703,29 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_list_git_diff_file(self.files, serializer);
     sse_encode_bool(self.truncated, serializer);
+  }
+
+  @protected
+  void sse_encode_git_diff_side_by_side_row(
+    GitDiffSideBySideRow self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_git_diff_side_by_side_row_kind(self.kind, serializer);
+    sse_encode_opt_box_autoadd_u_32(self.lineIndex, serializer);
+    sse_encode_opt_box_autoadd_u_32(self.leftLineIndex, serializer);
+    sse_encode_opt_box_autoadd_u_32(self.leftLineNumber, serializer);
+    sse_encode_opt_box_autoadd_u_32(self.rightLineIndex, serializer);
+    sse_encode_opt_box_autoadd_u_32(self.rightLineNumber, serializer);
+  }
+
+  @protected
+  void sse_encode_git_diff_side_by_side_row_kind(
+    GitDiffSideBySideRowKind self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.index, serializer);
   }
 
   @protected
@@ -9999,6 +10106,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_i_32(self.length, serializer);
     for (final item in self) {
       sse_encode_git_diff_line(item, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_list_git_diff_side_by_side_row(
+    List<GitDiffSideBySideRow> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_git_diff_side_by_side_row(item, serializer);
     }
   }
 
