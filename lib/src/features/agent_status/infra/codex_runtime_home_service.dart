@@ -330,6 +330,16 @@ const List<String> _codexSystemResourceEntries = <String>[
   'prompts',
 ];
 
+const List<String> _codexResumeResourceEntries = <String>[
+  'sessions',
+  'archived_sessions',
+  'session_index.jsonl',
+  'history.jsonl',
+  'state_5.sqlite',
+  'state_5.sqlite-shm',
+  'state_5.sqlite-wal',
+];
+
 const List<String> _codexPluginOnlyHookPlaceholders = <String>[
   r'${CLAUDE_PLUGIN_ROOT}',
   r'${CLAUDE_PLUGIN_DATA}',

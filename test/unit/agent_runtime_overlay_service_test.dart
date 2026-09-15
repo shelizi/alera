@@ -311,40 +311,27 @@ void main() {
       });
     });
 
-    test(
-      'falls back to an empty Copilot overlay when default install fails',
-      () async {
-        final supportFile = File(p.join(home.path, 'support-file'))
-          ..writeAsStringSync('not a directory');
+    test('falls back without overriding Copilot home when default hook install fails', () async {
+      File(p.join(home.path, '.copilot')).writeAsStringSync('not a directory');
 
-        final preparation =
-            await service(
-              applicationSupportDirectory: () async =>
-                  Directory(supportFile.path),
-            ).prepareCopilotForTerminalLaunch(
-              terminalSessionId: 'session-copilot-fail',
-            );
+      final preparation = await service().prepareCopilotForTerminalLaunch(
+        terminalSessionId: 'session-copilot-fail',
+      );
 
-        expect(preparation.overlayPath, isNull);
-        expect(preparation.sourcePath, isNull);
-        expect(preparation.environment, isEmpty);
-      },
-    );
+      expect(preparation.overlayPath, isNull);
+      expect(preparation.sourcePath, isNull);
+      expect(preparation.environment, isEmpty);
+    });
 
     test(
       'falls back to explicit Copilot source when managed hook install fails',
       () async {
-        final copilotHome = Directory(p.join(home.path, 'copilot-user'))
-          ..createSync(recursive: true);
-        File(p.join(copilotHome.path, 'settings.json')).writeAsStringSync('{}');
-        final supportFile = File(p.join(home.path, 'copilot-support-file'))
+        final copilotHome = File(p.join(home.path, 'copilot-user'))
           ..writeAsStringSync('not a directory');
 
         final preparation =
             await service(
               environment: <String, String>{'COPILOT_HOME': copilotHome.path},
-              applicationSupportDirectory: () async =>
-                  Directory(supportFile.path),
             ).prepareCopilotForTerminalLaunch(
               terminalSessionId: 'session-copilot-install-fail',
             );
@@ -368,89 +355,84 @@ void main() {
       expect(ampPreparation.environment, isEmpty);
     });
 
-    test('mirrors Pi agent state and installs the status extension', () async {
-      final piAgent = Directory(p.join(home.path, '.pi', 'agent'))
-        ..createSync(recursive: true);
-      File(p.join(piAgent.path, 'auth.json')).writeAsStringSync('secret token');
-      Directory(p.join(piAgent.path, 'sessions')).createSync();
-      File(p.join(piAgent.path, 'sessions', 'session.json'))
-          .writeAsStringSync('{}');
-      final extensions = Directory(p.join(piAgent.path, 'extensions'))
-        ..createSync();
-      File(p.join(extensions.path, 'user-extension.ts'))
-          .writeAsStringSync('export default function userExtension() {}\n');
-      File(p.join(extensions.path, 'alera-agent-status.ts'))
-          .writeAsStringSync('USER OWNED EXTENSION\n');
+    test(
+      'keeps Pi agent state in place and installs the status extension',
+      () async {
+        final piAgent = Directory(p.join(home.path, '.pi', 'agent'))
+          ..createSync(recursive: true);
+        File(p.join(piAgent.path, 'auth.json'))
+            .writeAsStringSync('secret token');
+        Directory(p.join(piAgent.path, 'sessions')).createSync();
+        final session = File(p.join(piAgent.path, 'sessions', 'session.json'))
+          ..writeAsStringSync('{}');
+        final extensions = Directory(p.join(piAgent.path, 'extensions'))
+          ..createSync();
+        File(p.join(extensions.path, 'user-extension.ts'))
+            .writeAsStringSync('export default function userExtension() {}\n');
 
-      final preparation = await service().preparePiForTerminalLaunch(
-        terminalSessionId: 'session-4',
-      );
+        final preparation = await service().preparePiForTerminalLaunch(
+          terminalSessionId: 'session-4',
+        );
 
-      final overlay = preparation.overlayPath!;
-      expect(
-        preparation.environment,
-        containsPair('PI_CODING_AGENT_DIR', overlay),
-      );
-      expect(
-        File(p.join(overlay, 'auth.json')).readAsStringSync(),
-        'secret token',
-      );
-      expect(
-        File(p.join(overlay, 'sessions', 'session.json')).readAsStringSync(),
-        '{}',
-      );
-      expect(
-        File(p.join(overlay, 'extensions', 'user-extension.ts'))
-            .readAsStringSync(),
-        'export default function userExtension() {}\n',
-      );
-      final statusExtension = File(
-        p.join(overlay, 'extensions', 'alera-agent-status.ts'),
-      ).readAsStringSync();
-      expect(statusExtension, contains('ALERA_AGENT_STATUS_MANAGED_FILE'));
-      expect(statusExtension, contains("pi.on('agent_start'"));
-      expect(
-        File(p.join(extensions.path, 'alera-agent-status.ts'))
-            .readAsStringSync(),
-        'USER OWNED EXTENSION\n',
-      );
-    });
+        expect(preparation.overlayPath, isNull);
+        expect(preparation.sourcePath, piAgent.path);
+        expect(preparation.environment, isEmpty);
+        expect(
+          File(p.join(piAgent.path, 'auth.json')).readAsStringSync(),
+          'secret token',
+        );
+        expect(session.readAsStringSync(), '{}');
+        expect(
+          File(p.join(extensions.path, 'user-extension.ts')).readAsStringSync(),
+          'export default function userExtension() {}\n',
+        );
+        final statusExtension = File(
+          p.join(extensions.path, 'alera-agent-status.ts'),
+        ).readAsStringSync();
+        expect(statusExtension, contains('ALERA_AGENT_STATUS_MANAGED_FILE'));
+        expect(statusExtension, contains("pi.on('agent_start'"));
+      },
+    );
 
-    test('creates a Copilot overlay with managed hooks', () async {
-      final copilotHome = Directory(p.join(home.path, '.copilot'))
-        ..createSync(recursive: true);
-      File(p.join(copilotHome.path, 'settings.json')).writeAsStringSync('{}');
-      final hooks = Directory(p.join(copilotHome.path, 'hooks'))..createSync();
-      File(p.join(hooks.path, 'alera.json')).writeAsStringSync(
-        '{"hooks":{"UserPromptSubmit":[{"command":"user-owned"}]}}\n',
-      );
+    test(
+      'keeps Copilot on its global home and installs managed hooks',
+      () async {
+        final copilotHome = Directory(p.join(home.path, '.copilot'))
+          ..createSync(recursive: true);
+        File(p.join(copilotHome.path, 'settings.json')).writeAsStringSync('{}');
+        final sessionStore = File(p.join(copilotHome.path, 'session-store.db'))
+          ..writeAsStringSync('resume-state');
+        final hooks = Directory(p.join(copilotHome.path, 'hooks'))
+          ..createSync();
+        File(p.join(hooks.path, 'alera.json')).writeAsStringSync(
+          '{"hooks":{"UserPromptSubmit":[{"command":"user-owned"}]}}\n',
+        );
 
-      final preparation = await service().prepareCopilotForTerminalLaunch(
-        terminalSessionId: 'session-copilot',
-      );
+        final preparation = await service().prepareCopilotForTerminalLaunch(
+          terminalSessionId: 'session-copilot',
+        );
 
-      final overlay = preparation.overlayPath!;
-      expect(preparation.sourcePath, copilotHome.path);
-      expect(preparation.environment, containsPair('COPILOT_HOME', overlay));
-      expect(
-        preparation.environment,
-        containsPair('ALERA_COPILOT_HOME', overlay),
-      );
-      expect(File(p.join(overlay, 'settings.json')).readAsStringSync(), '{}');
-      final overlayHooks = File(p.join(overlay, 'hooks', 'alera.json'))
-          .readAsStringSync();
-      expect(overlayHooks, contains('ALERA_COPILOT_HOOK_EVENT'));
-      expect(overlayHooks, contains('UserPromptSubmit'));
-      expect(
-        File(p.join(overlay, '.alera', 'agent-hooks', 'alera-copilot-hook.sh'))
-            .readAsStringSync(),
-        contains('/hook/copilot'),
-      );
-      expect(
-        File(p.join(hooks.path, 'alera.json')).readAsStringSync(),
-        '{"hooks":{"UserPromptSubmit":[{"command":"user-owned"}]}}\n',
-      );
-    });
+        expect(preparation.overlayPath, isNull);
+        expect(preparation.sourcePath, copilotHome.path);
+        expect(preparation.environment, isEmpty);
+        expect(sessionStore.readAsStringSync(), 'resume-state');
+        final managedHooks = File(p.join(hooks.path, 'alera.json'))
+            .readAsStringSync();
+        expect(managedHooks, contains('ALERA_COPILOT_HOOK_EVENT'));
+        expect(managedHooks, contains('UserPromptSubmit'));
+        expect(
+          File(
+            p.join(
+              copilotHome.path,
+              '.alera',
+              'agent-hooks',
+              'alera-copilot-hook.sh',
+            ),
+          ).readAsStringSync(),
+          contains('/hook/copilot'),
+        );
+      },
+    );
 
     test(
       'resolves Amp sources from explicit, public, and XDG env values',

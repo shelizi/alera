@@ -1,10 +1,51 @@
 part of 'codex_runtime_home_service_test.dart';
 
 void _registerCodexRuntimeHomeServiceAdvancedTests() {
-  test('prepares session resources only once per terminal launch', () async {
-    Directory(p.join(home.path, '.codex', 'sessions')).createSync(
-      recursive: true,
+  test('shares every resume resource with the system Codex home', () async {
+    for (final entry in <String>['sessions', 'archived_sessions']) {
+      Directory(p.join(home.path, '.codex', entry)).createSync(recursive: true);
+    }
+    for (final entry in <String>[
+      'session_index.jsonl',
+      'history.jsonl',
+      'state_5.sqlite',
+      'state_5.sqlite-shm',
+      'state_5.sqlite-wal',
+    ]) {
+      File(p.join(home.path, '.codex', entry))
+        ..createSync(recursive: true)
+        ..writeAsStringSync('{}\n');
+    }
+    final linked = <String>[];
+    final sharingService = CodexRuntimeHomeService(
+      homeDirectory: home.path,
+      applicationSupportDirectory: () async => support,
+      platform: .posix,
+      environment: <String, String>{'HOME': home.path},
+      resourceLinkCreator: ({required sourcePath, required targetPath}) {
+        linked.add(p.basename(targetPath));
+      },
     );
+
+    await sharingService.prepareForTerminalLaunch();
+
+    expect(
+      linked,
+      containsAll(<String>[
+        'sessions',
+        'archived_sessions',
+        'session_index.jsonl',
+        'history.jsonl',
+        'state_5.sqlite',
+        'state_5.sqlite-shm',
+        'state_5.sqlite-wal',
+      ]),
+    );
+  });
+
+  test('prepares session resources only once per terminal launch', () async {
+    Directory(p.join(home.path, '.codex', 'sessions'))
+        .createSync(recursive: true);
     var sessionLinkAttempts = 0;
     final countingService = CodexRuntimeHomeService(
       homeDirectory: home.path,

@@ -238,3 +238,33 @@ fn agy_bundle_drops_desktop_windows_wrapper_handlers() {
         1
     );
 }
+#[cfg(windows)]
+#[test]
+fn windows_shared_state_links_are_live() {
+    let root = tempfile::tempdir().unwrap();
+    let source_dir = root.path().join("source-dir");
+    let target_dir = root.path().join("target-dir");
+    std::fs::create_dir_all(&source_dir).unwrap();
+    std::fs::write(source_dir.join("existing.txt"), "source").unwrap();
+
+    link_if_present(&source_dir, &target_dir);
+
+    assert_eq!(
+        std::fs::read_to_string(target_dir.join("existing.txt")).unwrap(),
+        "source"
+    );
+    std::fs::write(target_dir.join("through-link.txt"), "shared").unwrap();
+    assert_eq!(
+        std::fs::read_to_string(source_dir.join("through-link.txt")).unwrap(),
+        "shared"
+    );
+
+    let source_file = root.path().join("source.jsonl");
+    let target_file = root.path().join("target.jsonl");
+    std::fs::write(&source_file, "before\n").unwrap();
+
+    link_if_present(&source_file, &target_file);
+    std::fs::write(&target_file, "after\n").unwrap();
+
+    assert_eq!(std::fs::read_to_string(&source_file).unwrap(), "after\n");
+}

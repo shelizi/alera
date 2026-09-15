@@ -84,17 +84,35 @@ final class AgentRuntimeOverlayService({
 
   Future<AgentRuntimeOverlayPreparation> preparePiForTerminalLaunch({
     required String terminalSessionId,
-  }) {
-    return _prepareOverlay(
-      agentKey: 'pi',
-      terminalSessionId: terminalSessionId,
+  }) async {
+    final source = _resolveSource(
       publicEnvKey: 'PI_CODING_AGENT_DIR',
       overlayEnvKey: 'ALERA_PI_CODING_AGENT_DIR',
       sourceEnvKey: 'ALERA_PI_SOURCE_AGENT_DIR',
       defaultSourcePath: p.join(_homeDirectory, '.pi', 'agent'),
-      managedSubdirectory: 'extensions',
-      managedFiles: <String, String>{
-        'alera-agent-status.ts': aleraPiStatusExtensionSource(),
+    );
+
+    // Pi stores mutable session state under PI_CODING_AGENT_DIR/sessions.
+    // Keep the real agent directory so resume sees the same sessions as an
+    // external Pi launch, and install only Alera's managed extension in place.
+    try {
+      _writeManagedFile(
+        p.join(source.path, 'extensions', 'alera-agent-status.ts'),
+        aleraPiStatusExtensionSource(),
+      );
+    } catch (_) {
+      return AgentRuntimeOverlayPreparation(
+        sourcePath: source.isExplicit ? source.path : null,
+        environment: <String, String>{
+          if (source.isExplicit) 'PI_CODING_AGENT_DIR': source.path,
+        },
+      );
+    }
+
+    return AgentRuntimeOverlayPreparation(
+      sourcePath: source.path,
+      environment: <String, String>{
+        if (source.isExplicit) 'PI_CODING_AGENT_DIR': source.path,
       },
     );
   }
@@ -108,65 +126,38 @@ final class AgentRuntimeOverlayService({
       sourceEnvKey: 'ALERA_COPILOT_SOURCE_HOME',
       defaultSourcePath: p.join(_homeDirectory, '.copilot'),
     );
-    if (source.isExplicit && !_sourceExists(source.path)) {
-      return AgentRuntimeOverlayPreparation(
-        sourcePath: source.path,
-        environment: <String, String>{'COPILOT_HOME': source.path},
-      );
-    }
 
-    final support = await _applicationSupportDirectory();
-    final root = _overlayRoot(support, 'copilot');
-    final overlay = _overlayDirectory(root, terminalSessionId);
+    // Copilot keeps mutable resume state in COPILOT_HOME (session-state,
+    // open-sessions-state.json and session-store.db). A per-session overlay can
+    // therefore fork or hide the user's existing sessions when a link falls
+    // back to a copy. Install the managed hook directly into the effective user
+    // home instead and leave the default COPILOT_HOME untouched.
     try {
-      _safeRemoveOverlay(overlay.path, root);
-      overlay.createSync(recursive: true);
-      if (_sourceExists(source.path)) {
-        _mirrorSourceDirectory(
-          sourcePath: source.path,
-          overlayPath: overlay.path,
-          managedSubdirectory: 'hooks',
-          managedFileNames: const <String>{'alera.json'},
-        );
-      }
       final status = ManagedAgentHookInstallService(
-        homeDirectory: overlay.path,
+        homeDirectory: source.path,
         platform: _platform,
         environment: <String, String>{
           ..._environment,
-          'HOME': overlay.path,
-          'COPILOT_HOME': overlay.path,
+          'HOME': source.path,
+          'COPILOT_HOME': source.path,
         },
       ).install(.copilot);
       if (status.state == ManagedAgentHookInstallState.error) {
-        // coverage:ignore-start
-        // The overlay is generated under a fresh runtime directory, so install
-        // status errors here are filesystem races; fallback behavior is covered
-        // through the surrounding catch path.
         throw StateError(status.detail ?? 'Could not install Copilot hooks.');
-        // coverage:ignore-end
       }
     } catch (_) {
-      _safeRemoveOverlay(overlay.path, root);
-      if (source.isExplicit) {
-        return AgentRuntimeOverlayPreparation(
-          sourcePath: source.path,
-          environment: <String, String>{'COPILOT_HOME': source.path},
-        );
-      }
-      return const AgentRuntimeOverlayPreparation(
-        environment: <String, String>{},
+      return AgentRuntimeOverlayPreparation(
+        sourcePath: source.isExplicit ? source.path : null,
+        environment: <String, String>{
+          if (source.isExplicit) 'COPILOT_HOME': source.path,
+        },
       );
     }
 
-    final sourceExists = _sourceExists(source.path);
     return AgentRuntimeOverlayPreparation(
-      overlayPath: overlay.path,
-      sourcePath: sourceExists ? source.path : null,
+      sourcePath: source.path,
       environment: <String, String>{
-        'COPILOT_HOME': overlay.path,
-        'ALERA_COPILOT_HOME': overlay.path,
-        if (sourceExists) 'ALERA_COPILOT_SOURCE_HOME': source.path,
+        if (source.isExplicit) 'COPILOT_HOME': source.path,
       },
     );
   }

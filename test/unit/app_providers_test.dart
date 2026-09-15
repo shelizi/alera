@@ -804,14 +804,14 @@ void main() {
           containsPair('ALERA_TERMINAL_SESSION_ID', 'session-1'),
         );
         expect(environment, contains('CODEX_HOME'));
-        expect(environment, contains('CLAUDE_CONFIG_DIR'));
-        expect(environment, contains('COPILOT_HOME'));
+        expect(environment, isNot(contains('CLAUDE_CONFIG_DIR')));
+        expect(environment, isNot(contains('COPILOT_HOME')));
         // Cursor is intentionally absent: the runtime host builds its
         // per-session plugin, because anything injected here is stripped again
         // by the host's launch-environment sanitisation.
         expect(environment, isNot(contains('ALERA_CURSOR_PLUGIN_DIR')));
         expect(environment, contains('OPENCODE_CONFIG_DIR'));
-        expect(environment, contains('PI_CODING_AGENT_DIR'));
+        expect(environment, isNot(contains('PI_CODING_AGENT_DIR')));
         expect(environment, contains('ALERA_AMP_CONFIG_DIR'));
       },
     );

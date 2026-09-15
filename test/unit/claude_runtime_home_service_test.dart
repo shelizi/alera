@@ -63,11 +63,7 @@ void main() {
         'home',
       );
       expect(preparation.runtimeHomePath, expectedRuntimeHome);
-      expect(preparation.environment['CLAUDE_CONFIG_DIR'], expectedRuntimeHome);
-      expect(
-        preparation.environment['ALERA_CLAUDE_CONFIG_DIR'],
-        expectedRuntimeHome,
-      );
+      expect(preparation.environment, isEmpty);
       expect(
         preparation.hookStatus.state,
         ManagedAgentHookInstallState.installed,
