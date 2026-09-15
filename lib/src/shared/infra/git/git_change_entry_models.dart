@@ -126,30 +126,43 @@ List<GitChangeEntry> reconcileGitChangeEntryInstances(
     return previous;
   }
 
-  final merged = List<GitChangeEntry>.of(next);
-  final reusedPrevious = List<bool>.filled(previous.length, false);
-  final reusedNext = List<bool>.filled(next.length, false);
+  List<GitChangeEntry> merged;
+  List<bool>? reusedPrevious;
+  List<bool>? reusedNext;
+  var reusedPrefixLength = 0;
 
-  // Positional matching is the common case and avoids building an index.
+  // An unchanged refresh is the dominant case. Scan it allocation-free and
+  // only materialize merge bookkeeping after the first positional mismatch.
   if (previous.length == next.length) {
-    var allMatches = true;
+    List<GitChangeEntry>? positionalMerged;
     for (var index = 0; index < next.length; index += 1) {
       if (gitChangeEntryValuesEqual(previous[index], next[index])) {
-        merged[index] = previous[index];
-        reusedPrevious[index] = true;
-        reusedNext[index] = true;
-      } else {
-        allMatches = false;
+        if (positionalMerged != null) {
+          positionalMerged[index] = previous[index];
+          reusedPrevious![index] = true;
+          reusedNext![index] = true;
+        }
+        continue;
+      }
+      if (positionalMerged == null) {
+        reusedPrefixLength = index;
+        positionalMerged = List<GitChangeEntry>.of(next);
+        reusedPrevious = List<bool>.filled(previous.length, false);
+        reusedNext = List<bool>.filled(next.length, false);
       }
     }
-    if (allMatches) {
+    if (positionalMerged == null) {
       return previous;
     }
+    positionalMerged.setRange(0, reusedPrefixLength, previous);
+    merged = positionalMerged;
+  } else {
+    merged = List<GitChangeEntry>.of(next);
   }
 
   final previousByValue = <_GitChangeEntryValueKey, List<GitChangeEntry>>{};
   for (var index = 0; index < previous.length; index += 1) {
-    if (reusedPrevious[index]) {
+    if (index < reusedPrefixLength || (reusedPrevious?[index] ?? false)) {
       continue;
     }
     final entry = previous[index];
@@ -158,7 +171,7 @@ List<GitChangeEntry> reconcileGitChangeEntryInstances(
   }
 
   for (var index = 0; index < next.length; index += 1) {
-    if (reusedNext[index]) {
+    if (index < reusedPrefixLength || (reusedNext?[index] ?? false)) {
       continue;
     }
     final candidates = previousByValue[_gitChangeEntryValueKey(next[index])];
@@ -183,33 +196,44 @@ Future<List<GitChangeEntry>> reconcileGitChangeEntryInstancesChunked(
 
   final chunker = _GitStatusChunker(onChunk, chunkSize);
   try {
-    final merged = List<GitChangeEntry>.of(next);
-    final reusedPrevious = List<bool>.filled(previous.length, false);
-    final reusedNext = List<bool>.filled(next.length, false);
+    List<GitChangeEntry> merged;
+    List<bool>? reusedPrevious;
+    List<bool>? reusedNext;
+    var reusedPrefixLength = 0;
 
-    // Positional matching is the common case and avoids building an index.
+    // Keep the unchanged refresh path allocation-free while preserving the
+    // existing chunk-yield cadence for large status lists.
     if (previous.length == next.length) {
-      var allMatches = true;
+      List<GitChangeEntry>? positionalMerged;
       for (var index = 0; index < next.length; index += 1) {
         if (gitChangeEntryValuesEqual(previous[index], next[index])) {
-          merged[index] = previous[index];
-          reusedPrevious[index] = true;
-          reusedNext[index] = true;
-        } else {
-          allMatches = false;
+          if (positionalMerged != null) {
+            positionalMerged[index] = previous[index];
+            reusedPrevious![index] = true;
+            reusedNext![index] = true;
+          }
+        } else if (positionalMerged == null) {
+          reusedPrefixLength = index;
+          positionalMerged = List<GitChangeEntry>.of(next);
+          reusedPrevious = List<bool>.filled(previous.length, false);
+          reusedNext = List<bool>.filled(next.length, false);
         }
         if ((index + 1) % chunkSize == 0) {
           await chunker.pause();
         }
       }
-      if (allMatches) {
+      if (positionalMerged == null) {
         return previous;
       }
+      positionalMerged.setRange(0, reusedPrefixLength, previous);
+      merged = positionalMerged;
+    } else {
+      merged = List<GitChangeEntry>.of(next);
     }
 
     final previousByValue = <_GitChangeEntryValueKey, List<GitChangeEntry>>{};
     for (var index = 0; index < previous.length; index += 1) {
-      if (!reusedPrevious[index]) {
+      if (index >= reusedPrefixLength && !(reusedPrevious?[index] ?? false)) {
         final entry = previous[index];
         (previousByValue[_gitChangeEntryValueKey(entry)] ??= <GitChangeEntry>[])
             .add(entry);
@@ -220,7 +244,7 @@ Future<List<GitChangeEntry>> reconcileGitChangeEntryInstancesChunked(
     }
 
     for (var index = 0; index < next.length; index += 1) {
-      if (!reusedNext[index]) {
+      if (index >= reusedPrefixLength && !(reusedNext?[index] ?? false)) {
         final candidates =
             previousByValue[_gitChangeEntryValueKey(next[index])];
         if (candidates != null && candidates.isNotEmpty) {
