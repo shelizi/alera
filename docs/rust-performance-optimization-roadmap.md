@@ -53,11 +53,11 @@ This can improve CPU time, GC pressure, RSS, FFI serialization cost, and UI resp
 
 ### Current implementation snapshot (2026-09-15)
 
-- Agent runtime recursive fingerprint/copy/delete and copy reconciliation have been moved into Rust on `perf/agent-runtime-copy`; that branch is validated but not yet merged into `main`.
-- Git status grouping/tree projection is native. `perf/agent-runtime-copy` additionally removes common Dart reconciliation allocations, rebinds native groups by entry index, and linearly merges already-sorted groups for Unified Changes.
-- `main` through `7b6d7220` has native full-file diff alignment/single-column projection plus lazy materialization for full-file and side-by-side rows; paging remains future work.
+- Agent runtime recursive fingerprint/copy/delete and copy reconciliation are merged into `main` through `b5630823`; small top-level ownership/link decisions intentionally remain in Dart.
+- Git status grouping/tree projection, allocation-light reconciliation, native entry-index rebinding, and linear merging of already-sorted Unified Changes groups are merged into `main` through `b5630823`.
+- `main` through `b5630823` has native full-file diff alignment/single-column projection plus lazy materialization for full-file and side-by-side rows; row-level native paging remains future work.
 - `integration_test/terminal_parser_benchmark.dart` provides a parser/model-only xterm2 baseline. Terminal-core migration has not started.
-- The diagnostics ZIP Rust prototype is intentionally kept off `main` until it writes directly to an output file and the Dart production path stops building/returning the whole archive in memory.
+- The diagnostics ZIP Rust prototype is preserved on `perf/diagnostics-streaming-zip-v2` and intentionally kept off `main` until it writes directly to an output file and the Dart production path stops building/returning the whole archive in memory.
 
 ---
 
@@ -65,7 +65,7 @@ This can improve CPU time, GC pressure, RSS, FFI serialization cost, and UI resp
 
 ### Current state
 
-The original Claude/Codex path performed recursive synchronous filesystem work in Dart. The heavy recursive fingerprint/copy/delete path has now been migrated on `perf/agent-runtime-copy`; small top-level ownership/link decisions remain in Dart until that branch is merged and revalidated against current `main`.
+The original Claude/Codex path performed recursive synchronous filesystem work in Dart. The heavy recursive fingerprint/copy/delete/reconcile path is now merged into `main` through `b5630823`; small top-level ownership/link decisions remain in Dart, and pure-Dart fallbacks remain available for compatibility/testing.
 
 Relevant code:
 
@@ -124,7 +124,7 @@ Rust should own:
 
 ### Current state
 
-Git repository work is largely native/libgit2, and native grouping/tree projection is already in place. The remaining cost is concentrated in Dart object reconciliation/rebinding and Unified Changes recomposition; the current optimization branch removes the common allocation-heavy paths without changing the FFI payload shape.
+Git repository work is largely native/libgit2, and native grouping/tree projection is already in place. `main` through `b5630823` also removes the common allocation-heavy Dart reconciliation/rebinding paths and linearly merges the already-sorted groups used by Unified Changes without enlarging the FFI payload shape.
 
 Relevant code:
 
@@ -639,7 +639,7 @@ Use at least five comparable samples for optimization decisions as required by `
 ### Batch 3 - terminal proof of concept
 
 5. Measure xterm parser/model cost against the current terminal performance guardrails.
-6. Add `alacritty_terminal` shadow-mode PoC behind a feature flag if the profile gate justifies it.
+6. Add an official `wezterm-term` shadow-mode PoC pinned to an exact upstream Git SHA and hidden behind an Alera-owned adapter/feature flag if the profile gate justifies it.
 7. Compare canonical xterm2/Rust terminal state across real Alera workloads.
 8. Move terminal search/index into Rust host ownership once terminal-state ownership is proven.
 
@@ -655,20 +655,27 @@ Use at least five comparable samples for optimization decisions as required by `
 Current recommendation for a terminal-core PoC:
 
 ```text
-alacritty_terminal
+official wezterm-term pinned to an exact Git SHA
+  + AleraTerminalCore adapter
   + Alera-owned terminal viewport/delta protocol
   + existing Flutter renderer first
+  + xterm2 retained as the authoritative shadow/rollback baseline
 ```
 
 Reasons:
 
 - avoids writing a VT emulator from scratch
+- provides the strongest feature-completeness match for Alera's current xterm2 fork, including a path to richer terminal graphics protocols
 - aligns with the existing Rust PTY/Terminal Host boundary
-- lets terminal state/search/history become host-owned
-- keeps renderer migration independent
+- lets terminal state/search/history become host-owned while keeping renderer/IME migration independent
 - supports a safe xterm2 shadow/rollback path
 
-Re-evaluate WezTerm's terminal core before implementation if Alera requires terminal image protocols or compatibility features that materially exceed the chosen Alacritty core. Revalidate crate release status/API stability at implementation time instead of pinning this roadmap to today's package version.
+Integration policy:
+
+- pin the official WezTerm repository dependency to an exact commit because `wezterm-term` is not offered as a stable external crates.io API
+- keep all upstream types behind an Alera-owned adapter so upstream API churn is localized
+- do not fork initially; fork only for a demonstrated upstream/API constraint
+- keep `alacritty_terminal` as the fallback and benchmark candidate if WezTerm maintenance cost becomes unacceptable
 
 ---
 
