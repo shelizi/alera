@@ -80,6 +80,41 @@ void main() {
     ]);
   });
 
+  test(
+    'strips a Windows extended-length prefix when opening a folder',
+    () async {
+      final processRunner = _FakeProcessRunner();
+      final opener = WorkspaceFolderOpener(
+        processRunner: processRunner,
+        platform: .windows,
+        directoryExists: (_) async => true,
+      );
+
+      final result = await opener.open(r'\\?\E:\Dropbox\work\alera');
+
+      expect(result.ok, isTrue);
+      expect(processRunner.calls, <_ProcessCall>[
+        const _ProcessCall('explorer.exe', <String>[r'E:\Dropbox\work\alera']),
+      ]);
+    },
+  );
+
+  test('converts an extended UNC path before opening a folder', () async {
+    final processRunner = _FakeProcessRunner();
+    final opener = WorkspaceFolderOpener(
+      processRunner: processRunner,
+      platform: .windows,
+      directoryExists: (_) async => true,
+    );
+
+    final result = await opener.open(r'\\?\UNC\server\share\repo');
+
+    expect(result.ok, isTrue);
+    expect(processRunner.calls, <_ProcessCall>[
+      const _ProcessCall('explorer.exe', <String>[r'\\server\share\repo']),
+    ]);
+  });
+
   test('reveals an item in Finder on macOS', () async {
     final processRunner = _FakeProcessRunner();
     final directory = await Directory.systemTemp.createTemp(
@@ -127,8 +162,7 @@ void main() {
     expect(result.ok, isTrue);
     expect(processRunner.calls, <_ProcessCall>[
       _ProcessCall('explorer.exe', <String>[
-        '/select,',
-        file.path.replaceAll('/', r'\'),
+        '/select,${file.path.replaceAll('/', r'\')}',
       ]),
     ]);
   });
@@ -161,6 +195,47 @@ void main() {
     },
   );
 
+  test(
+    'reveals an extended-length Windows file at its exact location',
+    () async {
+      final processRunner = _FakeProcessRunner();
+      final opener = WorkspaceFolderOpener(
+        processRunner: processRunner,
+        platform: .windows,
+        entityType: (_) async => FileSystemEntityType.file,
+      );
+
+      final result = await opener.reveal(
+        r'\\?\E:\Dropbox\work\alera\README.md',
+      );
+
+      expect(result.ok, isTrue);
+      expect(processRunner.calls, <_ProcessCall>[
+        const _ProcessCall('explorer.exe', <String>[
+          r'/select,E:\Dropbox\work\alera\README.md',
+        ]),
+      ]);
+    },
+  );
+
+  test('opens an extended-length Windows directory itself', () async {
+    final processRunner = _FakeProcessRunner();
+    final opener = WorkspaceFolderOpener(
+      processRunner: processRunner,
+      platform: .windows,
+      entityType: (_) async => FileSystemEntityType.directory,
+    );
+
+    final result = await opener.reveal(r'\\?\E:\Dropbox\work\alera\lib');
+
+    expect(result.ok, isTrue);
+    expect(processRunner.calls, <_ProcessCall>[
+      const _ProcessCall('explorer.exe', <String>[
+        r'E:\Dropbox\work\alera\lib',
+      ]),
+    ]);
+  });
+
   test('normalizes Windows reveal paths that use forward slashes', () async {
     final processRunner = _FakeProcessRunner();
     final directory = await Directory.systemTemp.createTemp(
@@ -183,8 +258,7 @@ void main() {
     expect(result.ok, isTrue);
     expect(processRunner.calls, <_ProcessCall>[
       _ProcessCall('explorer.exe', <String>[
-        '/select,',
-        file.path.replaceAll('/', r'\'),
+        '/select,${file.path.replaceAll('/', r'\')}',
       ]),
     ]);
   });

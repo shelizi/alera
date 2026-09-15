@@ -17,14 +17,17 @@ class WorkspaceFolderOpener({
   required final ProcessRunner processRunner,
   WorkspaceFolderPlatform? platform,
   Future<bool> Function(String path)? directoryExists,
+  Future<FileSystemEntityType> Function(String path)? entityType,
 }) {
   this
     : _platform = platform ?? currentWorkspaceFolderPlatform(),
       _directoryExists =
-          directoryExists ?? ((path) async => Directory(path).exists());
+          directoryExists ?? ((path) async => Directory(path).exists()),
+      _entityType = entityType ?? FileSystemEntity.type;
 
   final WorkspaceFolderPlatform _platform;
   final Future<bool> Function(String path) _directoryExists;
+  final Future<FileSystemEntityType> Function(String path) _entityType;
 
   String get fileManagerLabel {
     switch (_platform) {
@@ -75,7 +78,7 @@ class WorkspaceFolderOpener({
     if (normalized.isEmpty) {
       return const WorkspaceFolderOpenResult.failure('Path is empty.');
     }
-    final entityType = await FileSystemEntity.type(normalized);
+    final entityType = await _entityType(normalized);
     if (entityType == FileSystemEntityType.notFound) {
       return const WorkspaceFolderOpenResult.failure('Path was not found.');
     }
@@ -132,13 +135,12 @@ class WorkspaceFolderOpener({
           _WorkspaceFolderOpenCommand('open', <String>['-R', path]),
         ];
       case WorkspaceFolderPlatform.windows:
-        // Explorer treats `/select,C:/foo` as one token and opens Documents
-        // when the path uses `/` or contains spaces. Keep `/select,` as its
-        // own argument and pass a backslash path separately.
+        // Explorer's /select switch owns the path after its comma. Passing the
+        // comma and path as separate argv entries leaves /select without a
+        // target, which makes Explorer fall back to its default location.
         return <_WorkspaceFolderOpenCommand>[
           _WorkspaceFolderOpenCommand('explorer.exe', <String>[
-            '/select,',
-            _windowsExplorerPath(path),
+            '/select,${_windowsExplorerPath(path)}',
           ]),
         ];
       case WorkspaceFolderPlatform.linux:
@@ -164,7 +166,19 @@ class WorkspaceFolderOpener({
 }
 
 String _windowsExplorerPath(String path) {
-  return path.replaceAll('/', r'\');
+  final normalized = path.replaceAll('/', r'\');
+  const extendedUncPrefix = r'\\?\UNC\';
+  const extendedPrefix = r'\\?\';
+  if (normalized.startsWith(extendedUncPrefix)) {
+    return r'\\' + normalized.substring(extendedUncPrefix.length);
+  }
+  if (normalized.startsWith(extendedPrefix)) {
+    final unprefixed = normalized.substring(extendedPrefix.length);
+    if (RegExp(r'^[A-Za-z]:\\').hasMatch(unprefixed)) {
+      return unprefixed;
+    }
+  }
+  return normalized;
 }
 
 /// FreeDesktop FileManager1.ShowItems selects the path in the session file
