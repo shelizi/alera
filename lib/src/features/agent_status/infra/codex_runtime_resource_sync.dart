@@ -1,7 +1,7 @@
 part of 'codex_runtime_home_service.dart';
 
 extension _CodexRuntimeHomeServiceResourceSync on CodexRuntimeHomeService {
-  String get _systemHomePath => p.join(_homeDirectory, '.codex');
+  String get _systemHomePath => _codexHomePath;
 
   void _syncAuth(Directory runtimeHome) {
     final source = File(p.join(_systemHomePath, 'auth.json'));
@@ -32,20 +32,6 @@ extension _CodexRuntimeHomeServiceResourceSync on CodexRuntimeHomeService {
         runtimeHomePath: runtimeHome.path,
         entryName: entryName,
         allowCopyFallback: true,
-      );
-    }
-  }
-
-  Future<void> _syncSystemSessions(Directory runtimeHome) async {
-    for (final entryName in _codexResumeResourceEntries) {
-      await _syncLinkedResource(
-        systemHomePath: _systemHomePath,
-        runtimeHomePath: runtimeHome.path,
-        entryName: entryName,
-        // A copied resume database/index immediately diverges from the user's
-        // real Codex home. If a live link cannot be made, leave it absent rather
-        // than creating a misleading fork of the history state.
-        allowCopyFallback: false,
       );
     }
   }

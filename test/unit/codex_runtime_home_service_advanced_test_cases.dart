@@ -1,70 +1,72 @@
 part of 'codex_runtime_home_service_test.dart';
 
 void _registerCodexRuntimeHomeServiceAdvancedTests() {
-  test('shares every resume resource with the system Codex home', () async {
-    for (final entry in <String>['sessions', 'archived_sessions']) {
-      Directory(p.join(home.path, '.codex', entry)).createSync(recursive: true);
-    }
-    for (final entry in <String>[
-      'session_index.jsonl',
-      'history.jsonl',
-      'state_5.sqlite',
-      'state_5.sqlite-shm',
-      'state_5.sqlite-wal',
-    ]) {
-      File(p.join(home.path, '.codex', entry))
-        ..createSync(recursive: true)
-        ..writeAsStringSync('{}\n');
-    }
-    final linked = <String>[];
-    final sharingService = CodexRuntimeHomeService(
-      homeDirectory: home.path,
-      applicationSupportDirectory: () async => support,
-      platform: .posix,
-      environment: <String, String>{'HOME': home.path},
-      resourceLinkCreator: ({required sourcePath, required targetPath}) {
-        linked.add(p.basename(targetPath));
-      },
-    );
+  test(
+    'uses native resume state directly without creating runtime links',
+    () async {
+      final sessions = Directory(p.join(home.path, '.codex', 'sessions'))
+        ..createSync(recursive: true);
+      final history = File(p.join(home.path, '.codex', 'history.jsonl'))
+        ..writeAsStringSync('{"session":"native"}\n');
+      var linkAttempts = 0;
+      final directService = CodexRuntimeHomeService(
+        homeDirectory: home.path,
+        applicationSupportDirectory: () async => support,
+        platform: .posix,
+        environment: <String, String>{'HOME': home.path},
+        resourceLinkCreator: ({required sourcePath, required targetPath}) {
+          linkAttempts += 1;
+        },
+      );
 
-    await sharingService.prepareForTerminalLaunch();
+      final preparation = await directService.prepareForTerminalLaunch();
 
-    expect(
-      linked,
-      containsAll(<String>[
-        'sessions',
-        'archived_sessions',
-        'session_index.jsonl',
-        'history.jsonl',
-        'state_5.sqlite',
-        'state_5.sqlite-shm',
-        'state_5.sqlite-wal',
-      ]),
-    );
-  });
+      expect(preparation.runtimeHomePath, p.join(home.path, '.codex'));
+      expect(preparation.environment, isEmpty);
+      expect(linkAttempts, 0);
+      expect(sessions.existsSync(), isTrue);
+      expect(history.readAsStringSync(), '{"session":"native"}\n');
+      expect(
+        Directory(p.join(support.path, 'agent-runtime-homes', 'codex'))
+            .existsSync(),
+        isFalse,
+      );
+    },
+  );
 
-  test('prepares session resources only once per terminal launch', () async {
-    Directory(p.join(home.path, '.codex', 'sessions'))
-        .createSync(recursive: true);
-    var sessionLinkAttempts = 0;
-    final countingService = CodexRuntimeHomeService(
-      homeDirectory: home.path,
-      applicationSupportDirectory: () async => support,
-      platform: .posix,
-      environment: <String, String>{'HOME': home.path},
-      resourceLinkCreator: ({required sourcePath, required targetPath}) {
-        if (p.basename(targetPath) == 'sessions') {
-          sessionLinkAttempts += 1;
-          throw const FileSystemException('symlinks disabled');
-        }
-        Link(targetPath).createSync(sourcePath, recursive: true);
-      },
-    );
+  test(
+    'uses an explicit CODEX_HOME directly without an Alera overlay',
+    () async {
+      final customHome = Directory(p.join(root.path, 'custom-codex'))
+        ..createSync(recursive: true);
+      final customSession = File(p.join(customHome.path, 'history.jsonl'))
+        ..writeAsStringSync('{"session":"custom"}\n');
+      final customService = CodexRuntimeHomeService(
+        homeDirectory: home.path,
+        applicationSupportDirectory: () async => support,
+        platform: .posix,
+        environment: <String, String>{
+          'HOME': home.path,
+          'CODEX_HOME': customHome.path,
+        },
+        resourceLinkCreator: ({required sourcePath, required targetPath}) {
+          fail('direct custom CODEX_HOME must not create runtime links');
+        },
+      );
 
-    await countingService.prepareForTerminalLaunch();
+      final preparation = await customService.prepareForTerminalLaunch();
 
-    expect(sessionLinkAttempts, 1);
-  });
+      expect(preparation.runtimeHomePath, customHome.path);
+      expect(preparation.environment, isEmpty);
+      expect(customSession.readAsStringSync(), '{"session":"custom"}\n');
+      expect(File(p.join(customHome.path, 'hooks.json')).existsSync(), isTrue);
+      expect(File(p.join(customHome.path, 'config.toml')).existsSync(), isTrue);
+      expect(
+        File(p.join(home.path, '.codex', 'hooks.json')).existsSync(),
+        isFalse,
+      );
+    },
+  );
 
   test('removes mirrored auth when system auth disappears', () async {
     final systemAuth = File(p.join(home.path, '.codex', 'auth.json'))
@@ -162,28 +164,37 @@ trusted_hash = "sha256:escaped\n\r\t\b\f\"\\z"
     expect(status.state, ManagedAgentHookInstallState.installed);
   });
 
-  test('removes stale runtime trust entries when hooks change', () async {
-    final preparation = await service.prepareForTerminalLaunch();
-    final runtimeHooksPath = p.join(preparation.runtimeHomePath, 'hooks.json');
-    final canonicalRuntimeHooksPath = File(runtimeHooksPath)
-        .resolveSymbolicLinksSync();
-    final runtimeTomlPath = p.join(preparation.runtimeHomePath, 'config.toml');
-    File(runtimeTomlPath).writeAsStringSync(
-      _trustBlock(
-        key: '$canonicalRuntimeHooksPath:stop:99:99',
-        enabled: true,
-        trustedHash: 'sha256:stale',
-      ),
-      mode: .append,
-    );
+  test(
+    'preserves unrelated trust entries when managed hooks refresh',
+    () async {
+      final preparation = await service.prepareForTerminalLaunch();
+      final runtimeHooksPath = p.join(
+        preparation.runtimeHomePath,
+        'hooks.json',
+      );
+      final canonicalRuntimeHooksPath = File(runtimeHooksPath)
+          .resolveSymbolicLinksSync();
+      final runtimeTomlPath = p.join(
+        preparation.runtimeHomePath,
+        'config.toml',
+      );
+      File(runtimeTomlPath).writeAsStringSync(
+        _trustBlock(
+          key: '$canonicalRuntimeHooksPath:stop:99:99',
+          enabled: true,
+          trustedHash: 'sha256:stale',
+        ),
+        mode: .append,
+      );
 
-    await service.prepareForTerminalLaunch();
+      await service.prepareForTerminalLaunch();
 
-    expect(
-      File(runtimeTomlPath).readAsStringSync(),
-      isNot(contains('sha256:stale')),
-    );
-  });
+      expect(
+        File(runtimeTomlPath).readAsStringSync(),
+        contains('sha256:stale'),
+      );
+    },
+  );
 
   test('preserves hook-like text inside multiline TOML strings', () async {
     final systemConfig = File(p.join(home.path, '.codex', 'config.toml'))
@@ -197,31 +208,23 @@ trusted_hash = "sha256:escaped\n\r\t\b\f\"\\z"
         '[features]\n'
         'codex_hooks = true\n',
       );
-    final runtimeTomlPath = p.join(
-      support.path,
-      'agent-runtime-homes',
-      'codex',
-      'home',
-      'config.toml',
-    );
-    File(runtimeTomlPath)
-      ..createSync(recursive: true)
-      ..writeAsStringSync(
-        '[hooks.state."runtime-hooks:stop:0:0"]\n'
-        'enabled = true\n'
-        'trusted_hash = "sha256:runtime"\n',
-      );
-
     final preparation = await service.prepareForTerminalLaunch();
 
     final runtimeToml = File(p.join(preparation.runtimeHomePath, 'config.toml'))
         .readAsStringSync();
     expect(runtimeToml, contains('[hooks.state."fake-system"]'));
     expect(runtimeToml, contains('trusted_hash = "not-a-section"'));
-    expect(runtimeToml, contains('[hooks.state."runtime-hooks:stop:0:0"]'));
     expect(runtimeToml, contains('hooks = true'));
     expect(runtimeToml, isNot(contains('codex_hooks')));
-    expect(systemConfig.readAsStringSync(), contains('codex_hooks = true'));
+    expect(
+      systemConfig.readAsStringSync(),
+      contains('[hooks.state."fake-system"]'),
+    );
+    expect(
+      systemConfig.readAsStringSync(),
+      contains('trusted_hash = "not-a-section"'),
+    );
+    expect(systemConfig.readAsStringSync(), contains('hooks = true'));
   });
 
   test(
@@ -304,154 +307,18 @@ trusted_hash = "sha256:escaped\n\r\t\b\f\"\\z"
     final runtimeHooksPath = p.join(preparation.runtimeHomePath, 'hooks.json');
     final canonicalRuntimeHooksPath = File(runtimeHooksPath)
         .resolveSymbolicLinksSync();
-    final runtimeTrustKey = '$canonicalRuntimeHooksPath:pre_tool_use:0:0';
+    final managedTrustKey = '$canonicalRuntimeHooksPath:pre_tool_use:1:0';
     final runtimeToml = File(p.join(preparation.runtimeHomePath, 'config.toml'))
         .readAsStringSync();
     expect(
       runtimeToml,
-      isNot(contains('[hooks.state."${_escapeTomlString(runtimeTrustKey)}"]')),
+      contains('[hooks.state."${_escapeTomlString(systemTrustKey)}"]'),
+    );
+    expect(
+      runtimeToml,
+      contains('[hooks.state."${_escapeTomlString(managedTrustKey)}"]'),
     );
   });
-
-  test('links or copies Codex resources into the runtime home', () async {
-    final skillFile = File(p.join(home.path, '.codex', 'skills', 'demo.md'))
-      ..createSync(recursive: true)
-      ..writeAsStringSync('skill contents');
-
-    final preparation = await service.prepareForTerminalLaunch();
-
-    final runtimeSkillFile = File(
-      p.join(preparation.runtimeHomePath, 'skills', 'demo.md'),
-    );
-    expect(runtimeSkillFile.existsSync(), isTrue);
-    expect(runtimeSkillFile.readAsStringSync(), skillFile.readAsStringSync());
-  });
-
-  test(
-    'reuses fallback copied resources while the source is unchanged',
-    () async {
-      final skillFile = File(p.join(home.path, '.codex', 'skills', 'demo.md'))
-        ..createSync(recursive: true)
-        ..writeAsStringSync('skill contents');
-      final fallbackService = _serviceWithFailingResourceLinks(
-        home: home,
-        support: support,
-      );
-
-      final preparation = await fallbackService.prepareForTerminalLaunch();
-      final runtimeSkillFile = File(
-        p.join(preparation.runtimeHomePath, 'skills', 'demo.md'),
-      );
-      final runtimeOnlyFile = File(
-        p.join(preparation.runtimeHomePath, 'skills', 'runtime-only.md'),
-      )..writeAsStringSync('runtime-side change');
-      final marker = File(
-        p.join(preparation.runtimeHomePath, '.alera-copied-skills.json'),
-      );
-      final markerBefore = marker.readAsStringSync();
-
-      await fallbackService.prepareForTerminalLaunch();
-
-      expect(runtimeSkillFile.readAsStringSync(), skillFile.readAsStringSync());
-      expect(runtimeOnlyFile.existsSync(), isTrue);
-      expect(runtimeOnlyFile.readAsStringSync(), 'runtime-side change');
-      expect(marker.readAsStringSync(), markerBefore);
-    },
-  );
-
-  test(
-    'refreshes fallback copied resources after the source changes',
-    () async {
-      final sourceSkillsPath = p.join(home.path, '.codex', 'skills');
-      final nestedSkillsPath = p.join(sourceSkillsPath, 'nested');
-      File(p.join(nestedSkillsPath, 'demo.md'))
-        ..createSync(recursive: true)
-        ..writeAsStringSync('skill contents');
-      final fallbackService = _serviceWithFailingResourceLinks(
-        home: home,
-        support: support,
-      );
-
-      final preparation = await fallbackService.prepareForTerminalLaunch();
-      final runtimeOnlyFile = File(
-        p.join(preparation.runtimeHomePath, 'skills', 'runtime-only.md'),
-      )..writeAsStringSync('runtime-side change');
-      final marker = File(
-        p.join(preparation.runtimeHomePath, '.alera-copied-skills.json'),
-      );
-      final fingerprintBefore = _markerFingerprint(marker);
-
-      File(p.join(nestedSkillsPath, 'new.md')).writeAsStringSync('new source');
-      await fallbackService.prepareForTerminalLaunch();
-
-      expect(runtimeOnlyFile.existsSync(), isFalse);
-      expect(
-        File(p.join(preparation.runtimeHomePath, 'skills', 'nested', 'new.md'))
-            .existsSync(),
-        isTrue,
-      );
-      expect(_markerFingerprint(marker), isNot(fingerprintBefore));
-    },
-  );
-
-  test(
-    'clears markers for linked resources and removes stale owned entries',
-    () async {
-      final sourceSkills = Directory(p.join(home.path, '.codex', 'skills'))
-        ..createSync(recursive: true);
-      File(p.join(sourceSkills.path, 'demo.md')).writeAsStringSync('skill');
-      final preparation = await service.prepareForTerminalLaunch();
-      final marker = File(
-        p.join(preparation.runtimeHomePath, '.alera-copied-skills.json'),
-      )..writeAsStringSync('{}\n');
-
-      await service.prepareForTerminalLaunch();
-
-      expect(marker.existsSync(), isFalse);
-
-      final sourcePrompts = Directory(p.join(home.path, '.codex', 'prompts'))
-        ..createSync(recursive: true);
-      File(p.join(sourcePrompts.path, 'demo.md')).writeAsStringSync('prompt');
-      await service.prepareForTerminalLaunch();
-      sourcePrompts.deleteSync(recursive: true);
-      await service.prepareForTerminalLaunch();
-
-      expect(
-        FileSystemEntity.typeSync(
-          p.join(preparation.runtimeHomePath, 'prompts'),
-          followLinks: false,
-        ),
-        FileSystemEntityType.notFound,
-      );
-    },
-  );
-
-  test(
-    'accepts relative runtime links that already point to the source',
-    () async {
-      final runtimeHome = Directory(
-        p.join(support.path, 'agent-runtime-homes', 'codex', 'home'),
-      )..createSync(recursive: true);
-      final sourceSkills = Directory(p.join(home.path, '.codex', 'skills'))
-        ..createSync(recursive: true);
-      File(p.join(sourceSkills.path, 'demo.md')).writeAsStringSync('skill');
-      final relativeTarget = p.relative(
-        sourceSkills.path,
-        from: runtimeHome.path,
-      );
-      Link(p.join(runtimeHome.path, 'skills')).createSync(relativeTarget);
-      final marker = File(p.join(runtimeHome.path, '.alera-copied-skills.json'))
-        ..writeAsStringSync('{}\n');
-
-      await service.prepareForTerminalLaunch();
-
-      expect(marker.existsSync(), isFalse);
-      expect(
-        Link(p.join(runtimeHome.path, 'skills')).targetSync(),
-        relativeTarget,
-      );
-    },
-  );
 
   test(
     'resolves Codex home from USERPROFILE and current directory fallbacks',
@@ -469,37 +336,6 @@ trusted_hash = "sha256:escaped\n\r\t\b\f\"\\z"
 
       expect(profileService, isA<CodexRuntimeHomeService>());
       expect(currentFallbackService, isA<CodexRuntimeHomeService>());
-    },
-  );
-
-  test(
-    'copies linked resources and ignores malformed fallback markers',
-    () async {
-      final targetPath = p.join(home.path, 'missing-theme-target.toml');
-      final sourceThemes = Directory(p.join(home.path, '.codex', 'themes'))
-        ..createSync(recursive: true);
-      Link(p.join(sourceThemes.path, 'linked-theme.toml'))
-          .createSync(targetPath);
-      final fallbackService = _serviceWithFailingResourceLinks(
-        home: home,
-        support: support,
-      );
-
-      final preparation = await fallbackService.prepareForTerminalLaunch();
-      final marker = File(
-        p.join(preparation.runtimeHomePath, '.alera-copied-themes.json'),
-      )..writeAsStringSync('{bad');
-      sourceThemes.deleteSync(recursive: true);
-      await fallbackService.prepareForTerminalLaunch();
-
-      expect(marker.existsSync(), isTrue);
-      expect(
-        FileSystemEntity.typeSync(
-          p.join(preparation.runtimeHomePath, 'themes'),
-          followLinks: false,
-        ),
-        isNot(FileSystemEntityType.notFound),
-      );
     },
   );
 }

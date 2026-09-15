@@ -1,58 +1,65 @@
 part of 'codex_runtime_home_service_test.dart';
 
 void _registerCodexRuntimeHomeServiceCoreTests() {
-  test('prepares a runtime home without mutating user hooks', () async {
-    final systemHooksPath = p.join(home.path, '.codex', 'hooks.json');
-    _writeJson(systemHooksPath, <String, Object?>{
-      'hooks': <String, Object?>{
-        'PreToolUse': <Object?>[_userHook('echo user-hook')],
-      },
-    });
-    File(p.join(home.path, '.codex', 'config.toml'))
+  test(
+    'uses the global Codex home and installs managed hooks in place',
+    () async {
+      final systemHooksPath = p.join(home.path, '.codex', 'hooks.json');
+      _writeJson(systemHooksPath, <String, Object?>{
+        'hooks': <String, Object?>{
+          'PreToolUse': <Object?>[_userHook('echo user-hook')],
+        },
+      });
+      File(p.join(home.path, '.codex', 'config.toml'))
+        ..createSync(recursive: true)
+        ..writeAsStringSync('[features]\ncodex_hooks = true\n');
+
+      final preparation = await service.prepareForTerminalLaunch();
+
+      expect(preparation.runtimeHomePath, p.join(home.path, '.codex'));
+      expect(preparation.environment, isEmpty);
+      expect(
+        preparation.hookStatus.state,
+        ManagedAgentHookInstallState.installed,
+      );
+
+      final systemHooks = _hooks(systemHooksPath);
+      expect(
+        _commandsFor(systemHooks, 'PreToolUse'),
+        contains('echo user-hook'),
+      );
+      expect(_managedCommandCount(systemHooks, 'alera-codex-hook.sh'), 6);
+      expect(
+        File(p.join(home.path, '.alera', 'agent-hooks', 'alera-codex-hook.sh'))
+            .existsSync(),
+        isTrue,
+      );
+
+      final systemToml = File(p.join(home.path, '.codex', 'config.toml'))
+          .readAsStringSync();
+      expect(systemToml, contains('hooks = true'));
+      expect(systemToml, isNot(contains('codex_hooks')));
+      expect(systemToml, contains(':session_start:0:0"]'));
+      expect(systemToml, contains('trusted_hash = "sha256:'));
+    },
+  );
+
+  test('preserves inline comments when enabling global Codex hooks', () async {
+    final config = File(p.join(home.path, '.codex', 'config.toml'))
       ..createSync(recursive: true)
-      ..writeAsStringSync('[features]\ncodex_hooks = true\n');
+      ..writeAsStringSync(
+        '# user setting\n[features] # section note\nhooks = false # keep hook note\n',
+      );
 
-    final preparation = await service.prepareForTerminalLaunch();
+    await service.prepareForTerminalLaunch();
 
-    expect(
-      preparation.environment['CODEX_HOME'],
-      p.join(support.path, 'agent-runtime-homes', 'codex', 'home'),
-    );
-    expect(
-      preparation.environment['ALERA_CODEX_HOME'],
-      preparation.runtimeHomePath,
-    );
-    expect(
-      preparation.hookStatus.state,
-      ManagedAgentHookInstallState.installed,
-    );
-
-    final systemHooks = _hooks(systemHooksPath);
-    expect(_commandsFor(systemHooks, 'PreToolUse'), <String>['echo user-hook']);
-    expect(_managedCommandCount(systemHooks, 'alera-codex-hook.sh'), 0);
-
-    final runtimeHooksPath = p.join(preparation.runtimeHomePath, 'hooks.json');
-    final runtimeHooks = _hooks(runtimeHooksPath);
-    expect(
-      _commandsFor(runtimeHooks, 'PreToolUse'),
-      contains('echo user-hook'),
-    );
-    expect(_managedCommandCount(runtimeHooks, 'alera-codex-hook.sh'), 6);
-    expect(
-      File(p.join(home.path, '.alera', 'agent-hooks', 'alera-codex-hook.sh'))
-          .existsSync(),
-      isTrue,
-    );
-
-    final runtimeToml = File(p.join(preparation.runtimeHomePath, 'config.toml'))
-        .readAsStringSync();
-    expect(runtimeToml, contains('hooks = true'));
-    expect(runtimeToml, isNot(contains('codex_hooks')));
-    expect(runtimeToml, contains(':session_start:0:0"]'));
-    expect(runtimeToml, contains('trusted_hash = "sha256:'));
+    final updated = config.readAsStringSync();
+    expect(updated, contains('# user setting'));
+    expect(updated, contains('[features] # section note'));
+    expect(updated, contains('hooks = true # keep hook note'));
   });
 
-  test('skips plugin-only hooks when mirroring user Codex hooks', () async {
+  test('preserves plugin and user hooks in the native Codex home', () async {
     const pluginCommands = <String>[
       r'node "${CLAUDE_PLUGIN_ROOT}/scripts/on-stop.mjs"',
       r'node "${CLAUDE_PLUGIN_DATA}/scripts/on-stop.mjs"',
@@ -110,13 +117,12 @@ void _registerCodexRuntimeHomeServiceCoreTests() {
     final preparation = await service.prepareForTerminalLaunch();
 
     final runtimeHooksPath = p.join(preparation.runtimeHomePath, 'hooks.json');
-    final runtimeHooksText = File(runtimeHooksPath).readAsStringSync();
     final runtimeHooks = _hooks(runtimeHooksPath);
     expect(_commandsFor(runtimeHooks, 'Stop'), contains(userCommand));
-    expect(_commandsFor(runtimeHooks, 'PreCompact'), isEmpty);
     expect(_managedCommandCount(runtimeHooks, 'alera-codex-hook.sh'), 6);
     for (final command in pluginCommands) {
-      expect(runtimeHooksText, isNot(contains(command)));
+      expect(_commandsFor(runtimeHooks, 'Stop'), contains(command));
+      expect(_commandsFor(runtimeHooks, 'PreCompact'), contains(command));
     }
 
     final canonicalRuntimeHooksPath = File(runtimeHooksPath)
@@ -129,19 +135,8 @@ void _registerCodexRuntimeHomeServiceCoreTests() {
         '[hooks.state."${_escapeTomlString('$canonicalRuntimeHooksPath:stop:0:0')}"]',
       ),
     );
-    expect(
-      runtimeToml,
-      isNot(
-        contains(
-          '[hooks.state."${_escapeTomlString('$canonicalRuntimeHooksPath:stop:0:1')}"]',
-        ),
-      ),
-    );
-    for (final command in pluginCommands) {
-      expect(runtimeToml, isNot(contains(command)));
-    }
     for (final hash in pluginTrustedHashes) {
-      expect(runtimeToml, isNot(contains(hash)));
+      expect(runtimeToml, contains(hash));
       expect(systemConfig.readAsStringSync(), contains(hash));
     }
 
@@ -215,7 +210,7 @@ void _registerCodexRuntimeHomeServiceCoreTests() {
     expect(runtimeToml, isNot(contains('$canonicalSystemHooksPath:stop:1:0')));
   });
 
-  test('enables hooks in a fresh runtime config', () async {
+  test('enables hooks in a fresh global Codex config', () async {
     final preparation = await service.prepareForTerminalLaunch();
 
     final runtimeToml = File(p.join(preparation.runtimeHomePath, 'config.toml'))
@@ -224,7 +219,7 @@ void _registerCodexRuntimeHomeServiceCoreTests() {
     expect(runtimeToml, contains('hooks = true'));
     expect(
       File(p.join(home.path, '.codex', 'config.toml')).existsSync(),
-      isFalse,
+      isTrue,
     );
   });
 
@@ -305,26 +300,11 @@ void _registerCodexRuntimeHomeServiceCoreTests() {
 
     expect(status.state, ManagedAgentHookInstallState.notInstalled);
     expect(status.managedHooksPresent, isFalse);
-    expect(
-      status.configPath,
-      p.join(
-        support.path,
-        'agent-runtime-homes',
-        'codex',
-        'home',
-        'hooks.json',
-      ),
-    );
+    expect(status.configPath, p.join(home.path, '.codex', 'hooks.json'));
   });
 
   test('reports invalid runtime hooks as an error', () async {
-    final runtimeHooksPath = p.join(
-      support.path,
-      'agent-runtime-homes',
-      'codex',
-      'home',
-      'hooks.json',
-    );
+    final runtimeHooksPath = p.join(home.path, '.codex', 'hooks.json');
     File(runtimeHooksPath)
       ..createSync(recursive: true)
       ..writeAsStringSync('{not json');
@@ -360,22 +340,27 @@ void _registerCodexRuntimeHomeServiceCoreTests() {
     expect(_commandsFor(nextHooks, 'Stop'), <String>['echo user stop']);
   });
 
-  test('enables hooks in runtime without mutating user config', () async {
-    final systemConfig = File(p.join(home.path, '.codex', 'config.toml'))
-      ..createSync(recursive: true)
-      ..writeAsStringSync('model = "gpt-5"\n');
+  test(
+    'enables hooks in global config while preserving user settings',
+    () async {
+      final systemConfig = File(p.join(home.path, '.codex', 'config.toml'))
+        ..createSync(recursive: true)
+        ..writeAsStringSync('model = "gpt-5"\n');
 
-    final preparation = await service.prepareForTerminalLaunch();
+      final preparation = await service.prepareForTerminalLaunch();
 
-    final runtimeToml = File(p.join(preparation.runtimeHomePath, 'config.toml'))
-        .readAsStringSync();
-    expect(runtimeToml, contains('model = "gpt-5"'));
-    expect(runtimeToml, contains('[features]'));
-    expect(runtimeToml, contains('hooks = true'));
-    expect(systemConfig.readAsStringSync(), 'model = "gpt-5"\n');
-  });
+      final runtimeToml = File(
+        p.join(preparation.runtimeHomePath, 'config.toml'),
+      ).readAsStringSync();
+      expect(runtimeToml, contains('model = "gpt-5"'));
+      expect(runtimeToml, contains('[features]'));
+      expect(runtimeToml, contains('hooks = true'));
+      expect(systemConfig.readAsStringSync(), contains('model = "gpt-5"'));
+      expect(systemConfig.readAsStringSync(), contains('hooks = true'));
+    },
+  );
 
-  test('overrides disabled hooks only in runtime config', () async {
+  test('enables disabled hooks in the global Codex config', () async {
     final systemConfig = File(p.join(home.path, '.codex', 'config.toml'))
       ..createSync(recursive: true)
       ..writeAsStringSync('[features]\nhooks = false\n');
@@ -387,7 +372,8 @@ void _registerCodexRuntimeHomeServiceCoreTests() {
     expect(runtimeToml, contains('[features]'));
     expect(runtimeToml, contains('hooks = true'));
     expect(runtimeToml, isNot(contains('hooks = false')));
-    expect(systemConfig.readAsStringSync(), '[features]\nhooks = false\n');
+    expect(systemConfig.readAsStringSync(), contains('hooks = true'));
+    expect(systemConfig.readAsStringSync(), isNot(contains('hooks = false')));
   });
 
   test(
@@ -488,14 +474,8 @@ void _registerCodexRuntimeHomeServiceCoreTests() {
     );
   });
 
-  test('preserves runtime trust entries when enabling fresh hooks', () async {
-    final runtimeTomlPath = p.join(
-      support.path,
-      'agent-runtime-homes',
-      'codex',
-      'home',
-      'config.toml',
-    );
+  test('preserves user trust entries when enabling fresh hooks', () async {
+    final runtimeTomlPath = p.join(home.path, '.codex', 'config.toml');
     File(runtimeTomlPath)
       ..createSync(recursive: true)
       ..writeAsStringSync(

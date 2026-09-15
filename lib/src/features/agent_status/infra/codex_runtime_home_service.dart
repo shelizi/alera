@@ -43,6 +43,10 @@ final class CodexRuntimeHomeService({
 }) {
   this
     : _homeDirectory = homeDirectory ?? _resolveHome(environment),
+      _codexHomePath = _resolveCodexHome(
+        homeDirectory ?? _resolveHome(environment),
+        environment,
+      ),
       _applicationSupportDirectory =
           applicationSupportDirectory ?? getApplicationSupportDirectory,
       _platform =
@@ -54,20 +58,18 @@ final class CodexRuntimeHomeService({
       _resourceFingerprinter = resourceFingerprinter;
 
   final String _homeDirectory;
+  final String _codexHomePath;
   final CodexApplicationSupportDirectoryResolver _applicationSupportDirectory;
   final ManagedAgentHookPlatform _platform;
   final CodexResourceLinkCreator _resourceLinkCreator;
   final CodexRuntimeResourceFingerprinter? _resourceFingerprinter;
 
   Future<CodexRuntimeHomePreparation> prepareForTerminalLaunch() async {
-    final runtimeHome = await _runtimeHomeDirectory();
-    final status = await install(runtimeHome: runtimeHome);
+    final codexHome = Directory(_systemHomePath)..createSync(recursive: true);
+    final status = await install(runtimeHome: codexHome);
     return CodexRuntimeHomePreparation(
-      runtimeHomePath: runtimeHome.path,
-      environment: <String, String>{
-        'CODEX_HOME': runtimeHome.path,
-        'ALERA_CODEX_HOME': runtimeHome.path,
-      },
+      runtimeHomePath: codexHome.path,
+      environment: const <String, String>{},
       hookStatus: status,
     );
   }
@@ -166,11 +168,15 @@ final class CodexRuntimeHomeService({
   Future<ManagedAgentHookInstallStatus> install({
     Directory? runtimeHome,
   }) async {
-    final runtime = runtimeHome ?? await _runtimeHomeDirectory();
-    _syncAuth(runtime);
-    await _syncSystemResources(runtime);
-    _syncSystemConfig(runtime);
-    await _syncSystemSessions(runtime);
+    final runtime =
+        runtimeHome ??
+        (Directory(_systemHomePath)..createSync(recursive: true));
+    final inPlace = p.normalize(runtime.path) == p.normalize(_systemHomePath);
+    if (!inPlace) {
+      _syncAuth(runtime);
+      await _syncSystemResources(runtime);
+      _syncSystemConfig(runtime);
+    }
 
     final descriptor = await _descriptor(runtimeHome: runtime);
     final runtimeConfig = _readJsonObject(descriptor.configPath);
@@ -184,11 +190,20 @@ final class CodexRuntimeHomeService({
       );
     }
 
-    final plan = _runtimeHooksWithSystemUserHooks(descriptor);
+    final plan = inPlace
+        ? _inPlaceHookPlan(runtimeConfig, descriptor)
+        : _runtimeHooksWithSystemUserHooks(descriptor);
     final nextHooks = plan.hooks;
     final trustEntries = <_CodexHookTrustEntry>[
       for (final mirrored in plan.trustEntries) mirrored.entry,
     ];
+    final previousManagedTrustEntries = inPlace
+        ? _collectManagedTrustEntriesFromHooks(
+            descriptor.configPath,
+            _hooksMap(runtimeConfig),
+            descriptor.managedScriptFileNames,
+          )
+        : const <_CodexHookTrustEntry>[];
     for (final eventName in _codexEvents) {
       final command = _managedCommand(descriptor.scriptPath, eventName);
       final current = _definitionsFromValue(nextHooks[eventName]);
@@ -216,19 +231,37 @@ final class CodexRuntimeHomeService({
     runtimeConfig['hooks'] = nextHooks;
     _writeManagedScript(descriptor.scriptPath, _managedScript());
     _writeJsonObject(descriptor.configPath, runtimeConfig);
-    _syncSystemConfig(runtime);
-    _removeStaleRuntimeTrustEntries(
-      tomlPath: descriptor.tomlPath,
-      runtimeHooksPath: descriptor.configPath,
-      expectedEntries: trustEntries,
-    );
+    if (inPlace) {
+      final current = File(descriptor.tomlPath).existsSync()
+          ? _readTextFile(descriptor.tomlPath)
+          : '';
+      final normalized = _ensureHooksFeatureEnabled(
+        _normalizeDeprecatedHookFeatureFlag(current),
+      );
+      if (normalized != current) {
+        _writeTextAtomically(descriptor.tomlPath, normalized);
+      }
+      _removeMatchingTrustEntries(
+        descriptor.tomlPath,
+        previousManagedTrustEntries,
+      );
+    } else {
+      _syncSystemConfig(runtime);
+      _removeStaleRuntimeTrustEntries(
+        tomlPath: descriptor.tomlPath,
+        runtimeHooksPath: descriptor.configPath,
+        expectedEntries: trustEntries,
+      );
+    }
     _upsertHookTrustEntries(
       descriptor.tomlPath,
       trustEntries.map(
         (entry) => _MirroredRuntimeUserHookTrustEntry(entry, true),
       ),
     );
-    _upsertHookTrustEntries(descriptor.tomlPath, plan.trustEntries);
+    if (!inPlace) {
+      _upsertHookTrustEntries(descriptor.tomlPath, plan.trustEntries);
+    }
     return status();
   }
 
@@ -290,7 +323,9 @@ final class CodexRuntimeHomeService({
   Future<_CodexRuntimeHookDescriptor> _descriptor({
     Directory? runtimeHome,
   }) async {
-    final runtime = runtimeHome ?? await _runtimeHomeDirectory();
+    final runtime =
+        runtimeHome ??
+        (Directory(_systemHomePath)..createSync(recursive: true));
     final extension = switch (_platform) {
       ManagedAgentHookPlatform.posix => 'sh',
       ManagedAgentHookPlatform.windows => 'cmd',
@@ -328,16 +363,6 @@ const List<String> _codexSystemResourceEntries = <String>[
   'profile-v2',
   'themes',
   'prompts',
-];
-
-const List<String> _codexResumeResourceEntries = <String>[
-  'sessions',
-  'archived_sessions',
-  'session_index.jsonl',
-  'history.jsonl',
-  'state_5.sqlite',
-  'state_5.sqlite-shm',
-  'state_5.sqlite-wal',
 ];
 
 const List<String> _codexPluginOnlyHookPlaceholders = <String>[

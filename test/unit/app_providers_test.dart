@@ -803,7 +803,7 @@ void main() {
           environment,
           containsPair('ALERA_TERMINAL_SESSION_ID', 'session-1'),
         );
-        expect(environment, contains('CODEX_HOME'));
+        expect(environment, isNot(contains('CODEX_HOME')));
         expect(environment, isNot(contains('CLAUDE_CONFIG_DIR')));
         expect(environment, isNot(contains('COPILOT_HOME')));
         // Cursor is intentionally absent: the runtime host builds its

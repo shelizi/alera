@@ -1,6 +1,45 @@
 part of 'codex_runtime_home_service.dart';
 
 extension _CodexRuntimeHomeServiceHookPlanning on CodexRuntimeHomeService {
+  _RuntimeHookPlan _inPlaceHookPlan(
+    Map<String, Object?> config,
+    _CodexRuntimeHookDescriptor descriptor,
+  ) {
+    final nextHooks = <String, Object?>{};
+    for (final entry in _hooksMap(config).entries) {
+      final definitions = _removeManagedCommands(
+        _definitionsFromValue(entry.value),
+        descriptor.managedScriptFileNames,
+      );
+      if (definitions.isNotEmpty) {
+        nextHooks[entry.key] = definitions;
+      }
+    }
+    return _RuntimeHookPlan(
+      nextHooks,
+      const <_MirroredRuntimeUserHookTrustEntry>[],
+    );
+  }
+
+  List<_CodexHookTrustEntry> _collectManagedTrustEntriesFromHooks(
+    String sourcePath,
+    Map<String, Object?> hooks,
+    Set<String> managedScriptFileNames,
+  ) {
+    final entries = <_CodexHookTrustEntry>[];
+    for (final event in hooks.entries) {
+      entries.addAll(
+        _collectManagedTrustEntries(
+          sourcePath: sourcePath,
+          eventName: event.key,
+          definitions: _definitionsFromValue(event.value),
+          managedScriptFileNames: managedScriptFileNames,
+        ),
+      );
+    }
+    return entries;
+  }
+
   _RuntimeHookPlan _runtimeHooksWithSystemUserHooks(
     _CodexRuntimeHookDescriptor descriptor,
   ) {

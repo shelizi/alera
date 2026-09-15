@@ -1,24 +1,5 @@
 part of 'codex_runtime_home_service_test.dart';
 
-CodexRuntimeHomeService _serviceWithFailingResourceLinks({
-  required Directory home,
-  required Directory support,
-}) {
-  return CodexRuntimeHomeService(
-    homeDirectory: home.path,
-    applicationSupportDirectory: () async => support,
-    platform: .posix,
-    environment: <String, String>{'HOME': home.path},
-    resourceLinkCreator: ({required sourcePath, required targetPath}) =>
-        throw const FileSystemException('symlinks disabled'),
-  );
-}
-
-String _markerFingerprint(File marker) {
-  final decoded = jsonDecode(marker.readAsStringSync()) as Map;
-  return decoded['sourceFingerprint'] as String;
-}
-
 Map<String, Object?> _userHook(String command) {
   return _userHookCommands(<String>[command]);
 }

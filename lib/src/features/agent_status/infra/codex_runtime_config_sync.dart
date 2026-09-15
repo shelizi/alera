@@ -113,8 +113,8 @@ extension _CodexRuntimeHomeServiceConfigSync on CodexRuntimeHomeService {
     }
     if (hooksLineIndex >= 0) {
       lines[hooksLineIndex] = lines[hooksLineIndex].replaceFirstMapped(
-        RegExp(r'^([ \t]*)hooks[ \t]*=.*$'),
-        (match) => '${match.group(1)}hooks = true',
+        RegExp(r'^([ \t]*)hooks[ \t]*=[ \t]*(?:true|false)([ \t]*(?:#.*)?)$'),
+        (match) => '${match.group(1)}hooks = true${match.group(2) ?? ''}',
       );
       return _joinTomlBlocks(<String>[lines.join('\n')]);
     }

@@ -260,6 +260,18 @@ String _resolveHome(Map<String, String>? environment) {
   return Directory.current.path;
 }
 
+String _resolveCodexHome(
+  String homeDirectory,
+  Map<String, String>? environment,
+) {
+  final configured = (environment ?? Platform.environment)['CODEX_HOME']
+      ?.trim();
+  if (configured != null && configured.isNotEmpty) {
+    return configured;
+  }
+  return p.join(homeDirectory, '.codex');
+}
+
 void _createResourceLink({
   required String sourcePath,
   required String targetPath,

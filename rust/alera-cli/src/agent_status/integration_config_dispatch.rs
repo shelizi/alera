@@ -1,12 +1,12 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use alera_core::agent_descriptor::{AGENT_DESCRIPTORS, AgentHookStrategy};
+use alera_core::agent_descriptor::{AgentHookStrategy, AGENT_DESCRIPTORS};
 use alera_core::runtime::RuntimeAgentStatusHookSettings;
 
 use super::super::integration_hook_scripts::write_managed_script;
 use super::super::integration_plugins::{
-    install_amp_plugin, install_opencode_plugin, install_opencode2_plugin, install_pi_plugin,
+    install_amp_plugin, install_opencode2_plugin, install_opencode_plugin, install_pi_plugin,
 };
 use super::{
     ccs, codex, cursor_overlay, install_agy, install_copilot, install_devin, install_grok,
@@ -42,11 +42,11 @@ pub fn prepare_enabled_integrations(
                     continue;
                 }
                 match descriptor.id {
-                    "codex" => match codex::prepare_codex(runtime_dir, &script) {
-                        Ok(home) => {
-                            environment.insert("CODEX_HOME".to_string(), super::path_string(&home));
-                            environment
-                                .insert("ALERA_CODEX_HOME".to_string(), super::path_string(&home));
+                    "codex" => match codex::prepare_codex(&script, environment) {
+                        Ok(_home) => {
+                            // Codex keeps its effective user home. Alera installs
+                            // only the managed hook and trust records in place, so
+                            // auth, config, plugins, and resume history stay native.
                         }
                         Err(error) => warnings.push(format!("Codex: {error}")),
                     },
