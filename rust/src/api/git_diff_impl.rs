@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use git2::{
@@ -7,10 +7,10 @@ use git2::{
 };
 
 use super::{
-    open_repo, GitChangeArea, GitChangeEntry, GitChangeGroup, GitChangeStatus,
-    GitCommitChangeEntry, GitCommitCompareResult, GitCommitCompareStatus, GitCommitCompareSummary,
-    GitDiffFile, GitDiffLine, GitDiffLineKind, GitDiffPage, GitDiffResult, GitDiffWhitespaceMode,
-    GitError, GitErrorKind, GitStatusResult, GitSubmoduleStatus,
+    open_repo, GitChangeArea, GitChangeEntry, GitChangeGroup, GitChangeStatus, GitChangeTreeRow,
+    GitChangeTreeRowKind, GitCommitChangeEntry, GitCommitCompareResult, GitCommitCompareStatus,
+    GitCommitCompareSummary, GitDiffFile, GitDiffLine, GitDiffLineKind, GitDiffPage, GitDiffResult,
+    GitDiffWhitespaceMode, GitError, GitErrorKind, GitStatusResult, GitSubmoduleStatus,
 };
 
 #[path = "git_diff_combined.rs"]
@@ -1119,13 +1119,144 @@ fn status_group_projections(entries: &[GitChangeEntry]) -> Vec<GitChangeGroup> {
                 .path
                 .cmp(&entries[*right as usize].path)
         });
+        let tree_rows = status_tree_rows(entries, &entry_indices);
         groups.push(GitChangeGroup {
             area,
             entry_indices,
-            tree_rows: Vec::new(),
+            tree_rows,
         });
     }
     groups
+}
+
+#[derive(Debug)]
+struct StatusTreeNode {
+    name: String,
+    path: String,
+    depth: u32,
+    file_count: u32,
+    subdirectories: BTreeMap<String, StatusTreeNode>,
+    files: Vec<StatusTreeFile>,
+}
+
+#[derive(Debug)]
+struct StatusTreeFile {
+    entry_index: u32,
+    name: String,
+    path: String,
+    depth: u32,
+}
+
+fn status_tree_rows(entries: &[GitChangeEntry], entry_indices: &[u32]) -> Vec<GitChangeTreeRow> {
+    if entry_indices.is_empty() {
+        return Vec::new();
+    }
+
+    let mut root = StatusTreeNode {
+        name: String::new(),
+        path: String::new(),
+        depth: 0,
+        file_count: 0,
+        subdirectories: BTreeMap::new(),
+        files: Vec::new(),
+    };
+    for &entry_index in entry_indices {
+        let entry = &entries[entry_index as usize];
+        let path = entry.path.as_str();
+        if path.is_empty() {
+            continue;
+        }
+
+        let Some((dir_path, file_name)) = path.rsplit_once('/') else {
+            root.files.push(StatusTreeFile {
+                entry_index,
+                name: path.to_string(),
+                path: path.to_string(),
+                depth: 0,
+            });
+            continue;
+        };
+        if file_name.is_empty() {
+            continue;
+        }
+
+        let mut parent = &mut root;
+        let mut accumulated_path = String::new();
+        for (depth, component) in dir_path.split('/').enumerate() {
+            if depth > 0 {
+                accumulated_path.push('/');
+            }
+            accumulated_path.push_str(component);
+            let child_path = accumulated_path.clone();
+            parent = parent
+                .subdirectories
+                .entry(component.to_string())
+                .or_insert_with(|| StatusTreeNode {
+                    name: component.to_string(),
+                    path: child_path,
+                    depth: depth as u32,
+                    file_count: 0,
+                    subdirectories: BTreeMap::new(),
+                    files: Vec::new(),
+                });
+        }
+        parent.files.push(StatusTreeFile {
+            entry_index,
+            name: file_name.to_string(),
+            path: path.to_string(),
+            depth: parent.depth + 1,
+        });
+    }
+
+    for child in root.subdirectories.values_mut() {
+        finalize_status_tree(child);
+    }
+
+    let mut rows = Vec::new();
+    for child in root.subdirectories.values() {
+        append_status_tree_rows(child, &mut rows);
+    }
+    for file in &root.files {
+        rows.push(status_tree_file_row(file));
+    }
+    rows
+}
+
+fn finalize_status_tree(node: &mut StatusTreeNode) -> u32 {
+    let mut file_count = node.files.len() as u32;
+    for child in node.subdirectories.values_mut() {
+        file_count += finalize_status_tree(child);
+    }
+    node.file_count = file_count;
+    file_count
+}
+
+fn append_status_tree_rows(node: &StatusTreeNode, rows: &mut Vec<GitChangeTreeRow>) {
+    rows.push(GitChangeTreeRow {
+        kind: GitChangeTreeRowKind::Directory,
+        name: node.name.clone(),
+        path: node.path.clone(),
+        depth: node.depth,
+        file_count: node.file_count,
+        entry_index: None,
+    });
+    for child in node.subdirectories.values() {
+        append_status_tree_rows(child, rows);
+    }
+    for file in &node.files {
+        rows.push(status_tree_file_row(file));
+    }
+}
+
+fn status_tree_file_row(file: &StatusTreeFile) -> GitChangeTreeRow {
+    GitChangeTreeRow {
+        kind: GitChangeTreeRowKind::File,
+        name: file.name.clone(),
+        path: file.path.clone(),
+        depth: file.depth,
+        file_count: 1,
+        entry_index: Some(file.entry_index),
+    }
 }
 
 fn delta_path(delta: &git2::DiffDelta<'_>, old: bool) -> Result<String, GitError> {

@@ -371,7 +371,7 @@ class GitChangeGroup {
   /// from serializing every change a second time across FRB.
   final Uint32List entryIndices;
 
-  /// Tree rows remain empty until the native tree-projection migration lands.
+  /// Presentation-neutral directory/file projection using flat entry indices.
   final List<GitChangeTreeRow> treeRows;
 
   const GitChangeGroup({
@@ -401,7 +401,10 @@ class GitChangeTreeRow {
   final String path;
   final int depth;
   final int fileCount;
-  final GitChangeEntry? entry;
+
+  /// Index into `GitStatusResult.entries` for file rows. Directory rows have
+  /// no entry index, so no GitChangeEntry is duplicated across the bridge.
+  final int? entryIndex;
 
   const GitChangeTreeRow({
     required this.kind,
@@ -409,7 +412,7 @@ class GitChangeTreeRow {
     required this.path,
     required this.depth,
     required this.fileCount,
-    this.entry,
+    this.entryIndex,
   });
 
   @override
@@ -419,7 +422,7 @@ class GitChangeTreeRow {
       path.hashCode ^
       depth.hashCode ^
       fileCount.hashCode ^
-      entry.hashCode;
+      entryIndex.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -431,7 +434,7 @@ class GitChangeTreeRow {
           path == other.path &&
           depth == other.depth &&
           fileCount == other.fileCount &&
-          entry == other.entry;
+          entryIndex == other.entryIndex;
 }
 
 enum GitChangeTreeRowKind { directory, file }

@@ -45,26 +45,6 @@ void _registerChunkedGroupTests() {
       },
     );
 
-    test('projected grouping preserves native entry order', () async {
-      final projected = <GitChangeEntry>[
-        _entry('z-last.dart', area: .unstaged),
-        _entry('a-first.dart', area: .unstaged),
-      ];
-
-      final group = await GitChangeGroup.fromProjectedEntriesChunked(
-        area: .unstaged,
-        entries: projected,
-        chunkSize: 1,
-      );
-
-      expect(group.entries.map((entry) => entry.path).toList(), <String>[
-        'z-last.dart',
-        'a-first.dart',
-      ]);
-      expect(identical(group.entries[0], projected[0]), isTrue);
-      expect(identical(group.entries[1], projected[1]), isTrue);
-    });
-
     test(
       'chunked rebind preserves reconciled entry identity in rows',
       () async {

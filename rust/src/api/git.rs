@@ -137,7 +137,9 @@ pub struct GitChangeTreeRow {
     pub path: String,
     pub depth: u32,
     pub file_count: u32,
-    pub entry: Option<GitChangeEntry>,
+    /// Index into `GitStatusResult.entries` for file rows. Directory rows have
+    /// no entry index, so no GitChangeEntry is duplicated across the bridge.
+    pub entry_index: Option<u32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -147,7 +149,7 @@ pub struct GitChangeGroup {
     /// Keeping references instead of cloned entries prevents status payloads
     /// from serializing every change a second time across FRB.
     pub entry_indices: Vec<u32>,
-    /// Tree rows remain empty until the native tree-projection migration lands.
+    /// Presentation-neutral directory/file projection using flat entry indices.
     pub tree_rows: Vec<GitChangeTreeRow>,
 }
 

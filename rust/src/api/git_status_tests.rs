@@ -200,12 +200,16 @@ fn git_status_keeps_group_projection_entries_index_only() {
 
     let status = git_status(path_str(repo.path())).unwrap();
 
-    // Native grouping must not clone entries into each group. Tree rows are
-    // intentionally deferred to the next migration slice.
+    // Native grouping and tree rows reference the flat entries by index and do
+    // not clone GitChangeEntry payloads.
     assert_eq!(status.groups.len(), 1);
     assert_eq!(status.groups[0].area, GitChangeArea::Untracked);
     assert_eq!(status.groups[0].entry_indices, vec![0, 1]);
-    assert!(status.groups[0].tree_rows.is_empty());
+    assert!(status.groups[0]
+        .tree_rows
+        .iter()
+        .filter(|row| row.kind == GitChangeTreeRowKind::File)
+        .all(|row| row.entry_index.is_some()));
     assert_eq!(
         status
             .entries
@@ -218,6 +222,57 @@ fn git_status_keeps_group_projection_entries_index_only() {
         .entries
         .iter()
         .all(|entry| entry.area == GitChangeArea::Untracked));
+}
+
+#[test]
+fn git_status_projects_tree_rows_as_entry_indices() {
+    let repo = init_repo();
+    std::fs::create_dir_all(repo.path().join("lib/src/nested")).expect("create nested dirs");
+    for (path, contents) in [
+        ("z.txt", "z\n"),
+        ("a.txt", "a\n"),
+        ("lib/src/nested/c.dart", "c\n"),
+        ("lib/src/b.dart", "b\n"),
+        ("lib/a.dart", "lib a\n"),
+    ] {
+        std::fs::write(repo.path().join(path), contents).expect("write tree fixture");
+    }
+
+    let status = git_status(path_str(repo.path())).unwrap();
+    let group = status
+        .groups
+        .iter()
+        .find(|group| group.area == GitChangeArea::Untracked)
+        .expect("untracked group");
+
+    let row_labels = group
+        .tree_rows
+        .iter()
+        .map(|row| {
+            let entry_path = row
+                .entry_index
+                .map(|index| status.entries[index as usize].path.as_str())
+                .unwrap_or("-");
+            format!(
+                "{:?}:{}:{}:{}:{}:{}",
+                row.kind, row.depth, row.path, row.file_count, row.name, entry_path
+            )
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        row_labels,
+        vec![
+            "Directory:0:lib:3:lib:-",
+            "Directory:1:lib/src:2:src:-",
+            "Directory:2:lib/src/nested:1:nested:-",
+            "File:3:lib/src/nested/c.dart:1:c.dart:lib/src/nested/c.dart",
+            "File:2:lib/src/b.dart:1:b.dart:lib/src/b.dart",
+            "File:1:lib/a.dart:1:a.dart:lib/a.dart",
+            "File:0:a.txt:1:a.txt:a.txt",
+            "File:0:z.txt:1:z.txt:z.txt",
+        ]
+    );
 }
 
 #[test]

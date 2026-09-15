@@ -4950,14 +4950,14 @@ impl SseDecode for crate::api::git::GitChangeTreeRow {
         let mut var_path = <String>::sse_decode(deserializer);
         let mut var_depth = <u32>::sse_decode(deserializer);
         let mut var_fileCount = <u32>::sse_decode(deserializer);
-        let mut var_entry = <Option<crate::api::git::GitChangeEntry>>::sse_decode(deserializer);
+        let mut var_entryIndex = <Option<u32>>::sse_decode(deserializer);
         return crate::api::git::GitChangeTreeRow {
             kind: var_kind,
             name: var_name,
             path: var_path,
             depth: var_depth,
             file_count: var_fileCount,
-            entry: var_entry,
+            entry_index: var_entryIndex,
         };
     }
 }
@@ -6034,17 +6034,6 @@ impl SseDecode for Option<crate::api::git::GitChangeArea> {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         if (<bool>::sse_decode(deserializer)) {
             return Some(<crate::api::git::GitChangeArea>::sse_decode(deserializer));
-        } else {
-            return None;
-        }
-    }
-}
-
-impl SseDecode for Option<crate::api::git::GitChangeEntry> {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
-        if (<bool>::sse_decode(deserializer)) {
-            return Some(<crate::api::git::GitChangeEntry>::sse_decode(deserializer));
         } else {
             return None;
         }
@@ -7760,7 +7749,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::git::GitChangeTreeRow {
             self.path.into_into_dart().into_dart(),
             self.depth.into_into_dart().into_dart(),
             self.file_count.into_into_dart().into_dart(),
-            self.entry.into_into_dart().into_dart(),
+            self.entry_index.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -9806,7 +9795,7 @@ impl SseEncode for crate::api::git::GitChangeTreeRow {
         <String>::sse_encode(self.path, serializer);
         <u32>::sse_encode(self.depth, serializer);
         <u32>::sse_encode(self.file_count, serializer);
-        <Option<crate::api::git::GitChangeEntry>>::sse_encode(self.entry, serializer);
+        <Option<u32>>::sse_encode(self.entry_index, serializer);
     }
 }
 
@@ -10642,16 +10631,6 @@ impl SseEncode for Option<crate::api::git::GitChangeArea> {
         <bool>::sse_encode(self.is_some(), serializer);
         if let Some(value) = self {
             <crate::api::git::GitChangeArea>::sse_encode(value, serializer);
-        }
-    }
-}
-
-impl SseEncode for Option<crate::api::git::GitChangeEntry> {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
-        <bool>::sse_encode(self.is_some(), serializer);
-        if let Some(value) = self {
-            <crate::api::git::GitChangeEntry>::sse_encode(value, serializer);
         }
     }
 }

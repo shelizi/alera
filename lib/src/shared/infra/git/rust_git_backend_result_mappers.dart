@@ -63,17 +63,45 @@ extension on RustGitBackend {
           await Future.pause();
         }
       }
+      final treeRows = <GitChangeTreeRow>[];
+      for (var index = 0; index < nativeGroup.treeRows.length; index += 1) {
+        final nativeRow = nativeGroup.treeRows[index];
+        final entryIndex = nativeRow.entryIndex;
+        GitChangeEntry? entry;
+        if (entryIndex != null) {
+          if (entryIndex >= projectedEntries.length) {
+            throw StateError(
+              'Native Git status tree index $entryIndex is outside the '
+              '${projectedEntries.length}-entry status result.',
+            );
+          }
+          entry = projectedEntries[entryIndex];
+        }
+        treeRows.add(
+          GitChangeTreeRow(
+            kind: _toTreeRowKind(nativeRow.kind),
+            name: nativeRow.name,
+            path: nativeRow.path,
+            depth: nativeRow.depth,
+            fileCount: nativeRow.fileCount,
+            entry: entry,
+          ),
+        );
+        if ((index + 1) % gitStatusWorkChunkSize == 0) {
+          await Future.pause();
+        }
+      }
       groups.add(
-        await GitChangeGroup.fromProjectedEntriesChunked(
+        GitChangeGroup(
           area: _toArea(nativeGroup.area),
           entries: List<GitChangeEntry>.unmodifiableOf(areaEntries),
+          treeRows: List<GitChangeTreeRow>.unmodifiableOf(treeRows),
         ),
       );
     }
 
-    // Native code owns area grouping and path ordering. Dart only materializes
-    // the referenced entries and builds tree rows until that projection also
-    // moves to Rust in the next migration slice.
+    // Native code owns grouping, ordering and tree projection. Dart only maps
+    // flat-entry indices back to the already-converted entry instances.
     return GitStatusResult(
       entries: projectedEntries,
       groups: List<GitChangeGroup>.unmodifiableOf(groups),

@@ -5279,12 +5279,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  GitChangeEntry dco_decode_box_autoadd_git_change_entry(dynamic raw) {
-    // Codec=Dco (DartCObject based), see doc to use other codecs
-    return dco_decode_git_change_entry(raw);
-  }
-
-  @protected
   GitHistoryItemRef dco_decode_box_autoadd_git_history_item_ref(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_git_history_item_ref(raw);
@@ -5474,7 +5468,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       path: dco_decode_String(arr[2]),
       depth: dco_decode_u_32(arr[3]),
       fileCount: dco_decode_u_32(arr[4]),
-      entry: dco_decode_opt_box_autoadd_git_change_entry(arr[5]),
+      entryIndex: dco_decode_opt_box_autoadd_u_32(arr[5]),
     );
   }
 
@@ -6191,12 +6185,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   GitChangeArea? dco_decode_opt_box_autoadd_git_change_area(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null ? null : dco_decode_box_autoadd_git_change_area(raw);
-  }
-
-  @protected
-  GitChangeEntry? dco_decode_opt_box_autoadd_git_change_entry(dynamic raw) {
-    // Codec=Dco (DartCObject based), see doc to use other codecs
-    return raw == null ? null : dco_decode_box_autoadd_git_change_entry(raw);
   }
 
   @protected
@@ -7085,14 +7073,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  GitChangeEntry sse_decode_box_autoadd_git_change_entry(
-    SseDeserializer deserializer,
-  ) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    return (sse_decode_git_change_entry(deserializer));
-  }
-
-  @protected
   GitHistoryItemRef sse_decode_box_autoadd_git_history_item_ref(
     SseDeserializer deserializer,
   ) {
@@ -7306,14 +7286,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_path = sse_decode_String(deserializer);
     var var_depth = sse_decode_u_32(deserializer);
     var var_fileCount = sse_decode_u_32(deserializer);
-    var var_entry = sse_decode_opt_box_autoadd_git_change_entry(deserializer);
+    var var_entryIndex = sse_decode_opt_box_autoadd_u_32(deserializer);
     return GitChangeTreeRow(
       kind: var_kind,
       name: var_name,
       path: var_path,
       depth: var_depth,
       fileCount: var_fileCount,
-      entry: var_entry,
+      entryIndex: var_entryIndex,
     );
   }
 
@@ -8308,19 +8288,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
     if (sse_decode_bool(deserializer)) {
       return (sse_decode_box_autoadd_git_change_area(deserializer));
-    } else {
-      return null;
-    }
-  }
-
-  @protected
-  GitChangeEntry? sse_decode_opt_box_autoadd_git_change_entry(
-    SseDeserializer deserializer,
-  ) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-
-    if (sse_decode_bool(deserializer)) {
-      return (sse_decode_box_autoadd_git_change_entry(deserializer));
     } else {
       return null;
     }
@@ -9329,15 +9296,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_box_autoadd_git_change_entry(
-    GitChangeEntry self,
-    SseSerializer serializer,
-  ) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_git_change_entry(self, serializer);
-  }
-
-  @protected
   void sse_encode_box_autoadd_git_history_item_ref(
     GitHistoryItemRef self,
     SseSerializer serializer,
@@ -9554,7 +9512,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_String(self.path, serializer);
     sse_encode_u_32(self.depth, serializer);
     sse_encode_u_32(self.fileCount, serializer);
-    sse_encode_opt_box_autoadd_git_change_entry(self.entry, serializer);
+    sse_encode_opt_box_autoadd_u_32(self.entryIndex, serializer);
   }
 
   @protected
@@ -10400,19 +10358,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_bool(self != null, serializer);
     if (self != null) {
       sse_encode_box_autoadd_git_change_area(self, serializer);
-    }
-  }
-
-  @protected
-  void sse_encode_opt_box_autoadd_git_change_entry(
-    GitChangeEntry? self,
-    SseSerializer serializer,
-  ) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-
-    sse_encode_bool(self != null, serializer);
-    if (self != null) {
-      sse_encode_box_autoadd_git_change_entry(self, serializer);
     }
   }
 

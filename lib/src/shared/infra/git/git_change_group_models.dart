@@ -118,27 +118,6 @@ class const GitChangeGroup({
     }
   }
 
-  /// Builds only the tree projection for entries that are already grouped and
-  /// path-sorted by the native Git backend.
-  static Future<GitChangeGroup> fromProjectedEntriesChunked({
-    required GitChangeArea area,
-    required List<GitChangeEntry> entries,
-    int chunkSize = gitStatusWorkChunkSize,
-    void Function(double milliseconds)? onChunk,
-  }) async {
-    _validateGitStatusChunkSize(chunkSize);
-    final chunker = _GitStatusChunker(onChunk, chunkSize);
-    try {
-      return GitChangeGroup(
-        area: area,
-        entries: entries,
-        treeRows: await _treeRowsChunked(entries, chunkSize, chunker),
-      );
-    } finally {
-      chunker.finish();
-    }
-  }
-
   static Future<List<GitChangeGroup>> unifiedFromEntriesChunked(
     List<GitChangeEntry> entries, {
     int chunkSize = gitStatusWorkChunkSize,

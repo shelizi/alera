@@ -9,6 +9,13 @@ extension on RustGitBackend {
     };
   }
 
+  GitChangeTreeRowKind _toTreeRowKind(rust.GitChangeTreeRowKind kind) {
+    return switch (kind) {
+      rust.GitChangeTreeRowKind.directory => GitChangeTreeRowKind.directory,
+      rust.GitChangeTreeRowKind.file => GitChangeTreeRowKind.file,
+    };
+  }
+
   rust.GitChangeArea _toRustArea(GitChangeArea area) {
     return switch (area) {
       GitChangeArea.untracked => rust.GitChangeArea.untracked,
@@ -128,7 +135,9 @@ extension on RustGitBackend {
   }
 }
 
-rust_archive_ops.GitArchiveFormat _toRustArchiveFormat(GitArchiveFormat format) {
+rust_archive_ops.GitArchiveFormat _toRustArchiveFormat(
+  GitArchiveFormat format,
+) {
   return switch (format) {
     GitArchiveFormat.zip => rust_archive_ops.GitArchiveFormat.zip,
     GitArchiveFormat.tar => rust_archive_ops.GitArchiveFormat.tar,

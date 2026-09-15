@@ -109,9 +109,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   GitChangeArea dco_decode_box_autoadd_git_change_area(dynamic raw);
 
   @protected
-  GitChangeEntry dco_decode_box_autoadd_git_change_entry(dynamic raw);
-
-  @protected
   GitHistoryItemRef dco_decode_box_autoadd_git_history_item_ref(dynamic raw);
 
   @protected
@@ -447,9 +444,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   GitChangeArea? dco_decode_opt_box_autoadd_git_change_area(dynamic raw);
 
   @protected
-  GitChangeEntry? dco_decode_opt_box_autoadd_git_change_entry(dynamic raw);
-
-  @protected
   GitHistoryItemRef? dco_decode_opt_box_autoadd_git_history_item_ref(
     dynamic raw,
   );
@@ -737,11 +731,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   GitChangeArea sse_decode_box_autoadd_git_change_area(
-    SseDeserializer deserializer,
-  );
-
-  @protected
-  GitChangeEntry sse_decode_box_autoadd_git_change_entry(
     SseDeserializer deserializer,
   );
 
@@ -1171,11 +1160,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
-  GitChangeEntry? sse_decode_opt_box_autoadd_git_change_entry(
-    SseDeserializer deserializer,
-  );
-
-  @protected
   GitHistoryItemRef? sse_decode_opt_box_autoadd_git_history_item_ref(
     SseDeserializer deserializer,
   );
@@ -1537,12 +1521,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_box_autoadd_git_change_area(
     GitChangeArea self,
-    SseSerializer serializer,
-  );
-
-  @protected
-  void sse_encode_box_autoadd_git_change_entry(
-    GitChangeEntry self,
     SseSerializer serializer,
   );
 
@@ -2080,12 +2058,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_opt_box_autoadd_git_change_area(
     GitChangeArea? self,
-    SseSerializer serializer,
-  );
-
-  @protected
-  void sse_encode_opt_box_autoadd_git_change_entry(
-    GitChangeEntry? self,
     SseSerializer serializer,
   );
 
