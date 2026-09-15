@@ -45,6 +45,95 @@ void _registerWorkspaceExplorerActionTests() {
     expect(service.createdFiles, <String>['root.txt']);
   });
 
+  testWidgets('copy stays internal while publishing a Windows file clipboard', (
+    tester,
+  ) async {
+    if (!Platform.isWindows) return;
+    final service = _FakeWorkspaceFileService()
+      ..childrenByDirectory[''] = <native.WorkspaceFileEntry>[
+        _file('readme.md'),
+        _directory('dest', hasChildrenHint: false),
+      ];
+    await _pumpExplorer(tester, service);
+
+    await tester.tap(find.text('readme.md'), buttons: kSecondaryMouseButton);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Copy'));
+    await tester.pumpAndSettle();
+
+    expect(service.systemClipboardWrites, hasLength(1));
+    expect(
+      service.systemClipboardWrites.single.operation,
+      WorkspaceFileClipboardOperation.copy,
+    );
+    expect(
+      service.systemClipboardWrites.single.paths.single,
+      endsWith('readme.md'),
+    );
+
+    await tester.tap(find.text('dest'), buttons: kSecondaryMouseButton);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Paste'));
+    await tester.pumpAndSettle();
+
+    expect(service.copiedFiles, <String>['readme.md->dest']);
+    expect(service.importedClipboardCalls, isEmpty);
+  });
+
+  testWidgets('cut stays internal and clears the matching system clipboard', (
+    tester,
+  ) async {
+    if (!Platform.isWindows) return;
+    final service = _FakeWorkspaceFileService()
+      ..childrenByDirectory[''] = <native.WorkspaceFileEntry>[
+        _file('readme.md'),
+        _directory('dest', hasChildrenHint: false),
+      ];
+    await _pumpExplorer(tester, service);
+
+    await tester.tap(find.text('readme.md'), buttons: kSecondaryMouseButton);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Cut'));
+    await tester.pumpAndSettle();
+    final cutSequence = service.systemClipboardSequence;
+
+    await tester.tap(find.text('dest'), buttons: kSecondaryMouseButton);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Paste'));
+    await tester.pumpAndSettle();
+
+    expect(service.movedFiles, <String>['readme.md->dest']);
+    expect(service.clearedClipboardSequences, <int>[cutSequence]);
+  });
+
+  testWidgets('Explorer multi-file cut pastes into the Alera workspace root', (
+    tester,
+  ) async {
+    if (!Platform.isWindows) return;
+    final service = _FakeWorkspaceFileService()
+      ..systemClipboardSequence = 42
+      ..systemClipboard = const WorkspaceFileClipboardPayload(
+        paths: <String>[r'C:\outside\one.txt', r'C:\outside\two.txt'],
+        operation: WorkspaceFileClipboardOperation.cut,
+        sequenceNumber: 42,
+      );
+    await _pumpExplorer(tester, service);
+
+    await tester.tapAt(const Offset(250, 220), buttons: kSecondaryMouseButton);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Paste'));
+    await tester.pumpAndSettle();
+
+    expect(service.importedClipboardCalls, hasLength(1));
+    expect(service.importedClipboardCalls.single.sourcePaths, <String>[
+      r'C:\outside\one.txt',
+      r'C:\outside\two.txt',
+    ]);
+    expect(service.importedClipboardCalls.single.targetParentRelativePath, '');
+    expect(service.importedClipboardCalls.single.moveSources, isTrue);
+    expect(service.clearedClipboardSequences, <int>[42]);
+  });
+
   testWidgets('context menu copies relative paths and duplicates entries', (
     tester,
   ) async {

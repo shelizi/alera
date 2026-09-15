@@ -7,7 +7,27 @@ import '../frb_generated.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `cleanup_expired_clipboard_images`, `clipboard_error`, `is_expired_clipboard_image`, `write_clipboard_png`
+// These functions are ignored because they are not marked as `pub`: `cleanup_expired_clipboard_images`, `clipboard_error`, `dropfiles_bytes`, `is_expired_clipboard_image`, `write_clipboard_png`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `eq`, `eq`, `fmt`, `fmt`
+
+Future<int> setFileClipboard({
+  required List<String> paths,
+  required FileClipboardOperation operation,
+}) => RustLib.instance.api.crateApiClipboardSetFileClipboard(
+  paths: paths,
+  operation: operation,
+);
+
+Future<FileClipboardPayload?> readFileClipboard() =>
+    RustLib.instance.api.crateApiClipboardReadFileClipboard();
+
+Future<int> fileClipboardSequenceNumber() =>
+    RustLib.instance.api.crateApiClipboardFileClipboardSequenceNumber();
+
+Future<bool> clearFileClipboardIfSequence({required int sequenceNumber}) =>
+    RustLib.instance.api.crateApiClipboardClearFileClipboardIfSequence(
+      sequenceNumber: sequenceNumber,
+    );
 
 /// Saves an image-only clipboard payload as a private temporary PNG.
 ///
@@ -15,3 +35,30 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 /// bridge runs this synchronous function off the Flutter UI isolate.
 Future<String?> saveClipboardImageAsTempFile() =>
     RustLib.instance.api.crateApiClipboardSaveClipboardImageAsTempFile();
+
+enum FileClipboardOperation { copy, cut }
+
+class FileClipboardPayload {
+  final List<String> paths;
+  final FileClipboardOperation operation;
+  final int sequenceNumber;
+
+  const FileClipboardPayload({
+    required this.paths,
+    required this.operation,
+    required this.sequenceNumber,
+  });
+
+  @override
+  int get hashCode =>
+      paths.hashCode ^ operation.hashCode ^ sequenceNumber.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is FileClipboardPayload &&
+          runtimeType == other.runtimeType &&
+          paths == other.paths &&
+          operation == other.operation &&
+          sequenceNumber == other.sequenceNumber;
+}

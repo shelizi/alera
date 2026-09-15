@@ -651,6 +651,100 @@ pub fn move_workspace_entry(
     })
 }
 
+/// Copies or moves absolute filesystem paths into a workspace directory.
+pub fn import_workspace_entries(
+    workspace_path: String,
+    source_paths: Vec<String>,
+    target_parent_relative_path: String,
+    move_sources: bool,
+) -> Result<Vec<WorkspaceFileEntry>, WorkspaceFileError> {
+    let root = workspace_root(&workspace_path)?;
+    let target_parent = resolve_existing(&root, &target_parent_relative_path)?;
+    if source_paths.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut imported = Vec::with_capacity(source_paths.len());
+    for source_path in source_paths {
+        let source = PathBuf::from(&source_path);
+        if !source.is_absolute() {
+            return Err(WorkspaceFileError::new(
+                WorkspaceFileErrorKind::InvalidPath,
+                source_path,
+            ));
+        }
+        let metadata = fs::symlink_metadata(&source)
+            .map_err(|error| WorkspaceFileError::from_io(error, &source_path))?;
+        if metadata.file_type().is_symlink() {
+            return Err(WorkspaceFileError::new(
+                WorkspaceFileErrorKind::Unsupported,
+                source_path,
+            ));
+        }
+        if !metadata.is_file() && !metadata.is_dir() {
+            return Err(WorkspaceFileError::new(
+                WorkspaceFileErrorKind::Unsupported,
+                source_path,
+            ));
+        }
+
+        let name = source.file_name().ok_or_else(|| {
+            WorkspaceFileError::new(WorkspaceFileErrorKind::InvalidPath, source_path.clone())
+        })?;
+        let requested_destination = target_parent.join(name);
+        let destination = if move_sources {
+            if requested_destination.exists() {
+                return Err(WorkspaceFileError::new(
+                    WorkspaceFileErrorKind::AlreadyExists,
+                    requested_destination.to_string_lossy(),
+                ));
+            }
+            requested_destination
+        } else {
+            unique_copy_destination(&requested_destination)
+        };
+        ensure_not_descendant(&source, &destination)?;
+
+        if move_sources {
+            move_external_entry(&source, &destination, &source_path)?;
+        } else {
+            copy_recursively(&source, &destination)?;
+        }
+        imported.push(entry_for_path(&root, &destination, false)?.ok_or_else(|| {
+            WorkspaceFileError::new(WorkspaceFileErrorKind::NotFound, source_path.clone())
+        })?);
+    }
+    Ok(imported)
+}
+
+fn move_external_entry(
+    source: &Path,
+    destination: &Path,
+    source_context: &str,
+) -> Result<(), WorkspaceFileError> {
+    match fs::rename(source, destination) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::CrossesDevices => {
+            copy_recursively(source, destination)?;
+            let remove_result = if source.is_dir() {
+                fs::remove_dir_all(source)
+            } else {
+                fs::remove_file(source)
+            };
+            if let Err(remove_error) = remove_result {
+                let _ = if destination.is_dir() {
+                    fs::remove_dir_all(destination)
+                } else {
+                    fs::remove_file(destination)
+                };
+                return Err(WorkspaceFileError::from_io(remove_error, source_context));
+            }
+            Ok(())
+        }
+        Err(error) => Err(WorkspaceFileError::from_io(error, source_context)),
+    }
+}
+
 pub fn delete_workspace_entry(
     workspace_path: String,
     relative_path: String,
@@ -1423,5 +1517,55 @@ mod tests {
             fs::read_to_string(workspace.path().join("note copy 2.txt")).unwrap(),
             "one"
         );
+    }
+
+    #[test]
+    fn import_workspace_entries_copies_external_files_with_unique_names() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let outside = tempfile::tempdir().expect("outside");
+        let source = outside.path().join("note.txt");
+        fs::write(&source, "external").expect("write external");
+        fs::write(workspace.path().join("note.txt"), "existing").expect("write existing");
+
+        let imported = import_workspace_entries(
+            workspace_path(&workspace),
+            vec![source.to_string_lossy().into_owned()],
+            String::new(),
+            false,
+        )
+        .expect("import copy");
+
+        assert_eq!(imported.len(), 1);
+        assert_eq!(imported[0].relative_path, "note copy.txt");
+        assert_eq!(
+            fs::read_to_string(workspace.path().join("note copy.txt")).unwrap(),
+            "external"
+        );
+        assert!(source.exists());
+    }
+
+    #[test]
+    fn import_workspace_entries_moves_external_directories() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let outside = tempfile::tempdir().expect("outside");
+        let source = outside.path().join("folder");
+        fs::create_dir(&source).expect("create source");
+        fs::write(source.join("nested.txt"), "moved").expect("write source");
+
+        let imported = import_workspace_entries(
+            workspace_path(&workspace),
+            vec![source.to_string_lossy().into_owned()],
+            String::new(),
+            true,
+        )
+        .expect("import move");
+
+        assert_eq!(imported.len(), 1);
+        assert_eq!(imported[0].relative_path, "folder");
+        assert_eq!(
+            fs::read_to_string(workspace.path().join("folder/nested.txt")).unwrap(),
+            "moved"
+        );
+        assert!(!source.exists());
     }
 }

@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:alera/src/features/workbench/application/workbench_replaceable_tab_editor_sessions.dart';
+import 'package:alera/src/rust/api/clipboard.dart' as clipboard_native;
 import 'package:alera/src/rust/api/workspace_files.dart' as native;
 import 'package:alera/src/rust/api/merman_viewer.dart' as merman_native;
 import 'package:alera/src/shared/infra/git/git_explorer_status.dart';
@@ -8,6 +9,14 @@ import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 
 part 'editor_session_registry.dart';
+
+enum WorkspaceFileClipboardOperation { copy, cut }
+
+class const WorkspaceFileClipboardPayload({
+  required final List<String> paths,
+  required final WorkspaceFileClipboardOperation operation,
+  required final int sequenceNumber,
+});
 
 class const WorkspaceFileService() {
   Future<List<native.WorkspaceFileEntry>> listChildren({
@@ -260,6 +269,69 @@ class const WorkspaceFileService() {
       workspacePath: workspacePath,
       relativePath: relativePath,
       targetParentRelativePath: targetParentRelativePath,
+    );
+  }
+
+  Future<List<native.WorkspaceFileEntry>> importEntries({
+    required String workspacePath,
+    required List<String> sourcePaths,
+    required String targetParentRelativePath,
+    required bool moveSources,
+  }) {
+    return native.importWorkspaceEntries(
+      workspacePath: workspacePath,
+      sourcePaths: sourcePaths,
+      targetParentRelativePath: targetParentRelativePath,
+      moveSources: moveSources,
+    );
+  }
+
+  Future<int?> writeSystemFileClipboard({
+    required List<String> paths,
+    required WorkspaceFileClipboardOperation operation,
+  }) async {
+    if (!Platform.isWindows) {
+      return null;
+    }
+    return clipboard_native.setFileClipboard(
+      paths: paths,
+      operation: operation == WorkspaceFileClipboardOperation.cut
+          ? clipboard_native.FileClipboardOperation.cut
+          : clipboard_native.FileClipboardOperation.copy,
+    );
+  }
+
+  Future<WorkspaceFileClipboardPayload?> readSystemFileClipboard() async {
+    if (!Platform.isWindows) {
+      return null;
+    }
+    final payload = await clipboard_native.readFileClipboard();
+    if (payload == null) {
+      return null;
+    }
+    return WorkspaceFileClipboardPayload(
+      paths: List.unmodifiable(payload.paths),
+      operation:
+          payload.operation == clipboard_native.FileClipboardOperation.cut
+          ? WorkspaceFileClipboardOperation.cut
+          : WorkspaceFileClipboardOperation.copy,
+      sequenceNumber: payload.sequenceNumber,
+    );
+  }
+
+  Future<int?> systemFileClipboardSequenceNumber() async {
+    if (!Platform.isWindows) {
+      return null;
+    }
+    return clipboard_native.fileClipboardSequenceNumber();
+  }
+
+  Future<bool> clearSystemFileClipboardIfSequence(int sequenceNumber) async {
+    if (!Platform.isWindows) {
+      return false;
+    }
+    return clipboard_native.clearFileClipboardIfSequence(
+      sequenceNumber: sequenceNumber,
     );
   }
 
