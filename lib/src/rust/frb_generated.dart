@@ -498,6 +498,7 @@ abstract class RustLibApi extends BaseApi {
     required String workspacePath,
     required String relativePath,
     required bool hideIgnored,
+    required bool hideHidden,
   });
 
   Future<List<GitWorktreeEntry>> crateApiGitListWorktrees({
@@ -3613,6 +3614,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required String workspacePath,
     required String relativePath,
     required bool hideIgnored,
+    required bool hideHidden,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -3621,6 +3623,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_String(workspacePath, serializer);
           sse_encode_String(relativePath, serializer);
           sse_encode_bool(hideIgnored, serializer);
+          sse_encode_bool(hideHidden, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -3633,7 +3636,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: sse_decode_workspace_file_error,
         ),
         constMeta: kCrateApiWorkspaceFilesListWorkspaceChildrenConstMeta,
-        argValues: [workspacePath, relativePath, hideIgnored],
+        argValues: [workspacePath, relativePath, hideIgnored, hideHidden],
         apiImpl: this,
       ),
     );
@@ -3642,7 +3645,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiWorkspaceFilesListWorkspaceChildrenConstMeta =>
       const TaskConstMeta(
         debugName: "list_workspace_children",
-        argNames: ["workspacePath", "relativePath", "hideIgnored"],
+        argNames: [
+          "workspacePath",
+          "relativePath",
+          "hideIgnored",
+          "hideHidden",
+        ],
       );
 
   @override

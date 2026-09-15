@@ -216,8 +216,14 @@ pub fn list_workspace_children(
     workspace_path: String,
     relative_path: String,
     hide_ignored: bool,
+    hide_hidden: bool,
 ) -> Result<Vec<WorkspaceFileEntry>, WorkspaceFileError> {
-    listing::list_workspace_children(workspace_path, relative_path, hide_ignored)
+    listing::list_workspace_children_filtered(
+        workspace_path,
+        relative_path,
+        hide_ignored,
+        hide_hidden,
+    )
 }
 
 pub fn start_workspace_quick_open_session(
@@ -907,6 +913,15 @@ fn entry_for_path(
     path: &Path,
     hide_ignored: bool,
 ) -> Result<Option<WorkspaceFileEntry>, WorkspaceFileError> {
+    entry_for_path_filtered(root, path, hide_ignored, false)
+}
+
+fn entry_for_path_filtered(
+    root: &Path,
+    path: &Path,
+    hide_ignored: bool,
+    hide_hidden: bool,
+) -> Result<Option<WorkspaceFileEntry>, WorkspaceFileError> {
     let metadata = fs::symlink_metadata(path)
         .map_err(|error| WorkspaceFileError::from_io(error, path.to_string_lossy()))?;
     let Some(name) = path
@@ -915,6 +930,10 @@ fn entry_for_path(
     else {
         return Ok(None);
     };
+    let is_hidden = is_hidden_entry(&name, &metadata);
+    if hide_hidden && is_hidden {
+        return Ok(None);
+    }
     let relative_path = relative_string(root, path)?;
     if is_protected_relative_path(&relative_path) {
         return Ok(None);
@@ -952,7 +971,7 @@ fn entry_for_path(
         modified_millis: modified_millis(&metadata),
         content_token: content_token(&metadata),
         is_ignored: false,
-        is_hidden: is_hidden_entry(&name, &metadata),
+        is_hidden,
         is_symlink,
         is_protected: false,
         has_children_hint,
@@ -1217,7 +1236,8 @@ mod tests {
         assert!(status.success());
 
         let entries =
-            list_workspace_children(workspace_path(&workspace), String::new(), false).unwrap();
+            list_workspace_children(workspace_path(&workspace), String::new(), false, false)
+                .unwrap();
         let hidden = entries
             .iter()
             .find(|entry| entry.name == "hidden.txt")
@@ -1226,12 +1246,57 @@ mod tests {
     }
 
     #[test]
+    fn list_workspace_children_filters_hidden_entries_when_requested() {
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let hidden_name = if cfg!(windows) {
+            "hidden.txt"
+        } else {
+            ".hidden"
+        };
+        let hidden_path = workspace.path().join(hidden_name);
+        fs::write(&hidden_path, "hidden").expect("write hidden file");
+        fs::write(workspace.path().join("visible.txt"), "visible").expect("write visible file");
+
+        #[cfg(windows)]
+        {
+            use std::process::Command;
+
+            let status = Command::new("attrib")
+                .arg("+H")
+                .arg(&hidden_path)
+                .status()
+                .expect("set hidden attribute");
+            assert!(status.success());
+        }
+
+        let filtered =
+            list_workspace_children(workspace_path(&workspace), String::new(), false, true)
+                .unwrap();
+        let filtered_names = filtered
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(filtered_names, vec!["visible.txt"]);
+
+        let shown =
+            list_workspace_children(workspace_path(&workspace), String::new(), false, false)
+                .unwrap();
+        let shown_names = shown
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect::<Vec<_>>();
+        assert!(shown_names.contains(&hidden_name));
+        assert!(shown_names.contains(&"visible.txt"));
+    }
+
+    #[test]
     fn list_workspace_children_omits_git_status_outside_git_repositories() {
         let workspace = tempfile::tempdir().expect("tempdir");
         fs::write(workspace.path().join("note.txt"), "note").expect("write note");
 
         let entries =
-            list_workspace_children(workspace_path(&workspace), String::new(), false).unwrap();
+            list_workspace_children(workspace_path(&workspace), String::new(), false, false)
+                .unwrap();
 
         assert_eq!(
             entries
@@ -1249,7 +1314,8 @@ mod tests {
         fs::write(workspace.path().join("note.txt"), "one").expect("write note");
 
         let entries =
-            list_workspace_children(workspace_path(&workspace), String::new(), false).unwrap();
+            list_workspace_children(workspace_path(&workspace), String::new(), false, false)
+                .unwrap();
 
         assert_eq!(entries[0].git_status, None);
     }
@@ -1261,6 +1327,7 @@ mod tests {
         let kind = error_kind(list_workspace_children(
             workspace_path(&workspace),
             "../outside".to_string(),
+            false,
             false,
         ));
 

@@ -3024,6 +3024,7 @@ fn wire__crate__api__workspace_files__list_workspace_children_impl(
             let api_workspace_path = <String>::sse_decode(&mut deserializer);
             let api_relative_path = <String>::sse_decode(&mut deserializer);
             let api_hide_ignored = <bool>::sse_decode(&mut deserializer);
+            let api_hide_hidden = <bool>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, crate::api::workspace_files::WorkspaceFileError>(
@@ -3032,6 +3033,7 @@ fn wire__crate__api__workspace_files__list_workspace_children_impl(
                             api_workspace_path,
                             api_relative_path,
                             api_hide_ignored,
+                            api_hide_hidden,
                         )?;
                         std::result::Result::Ok(output_ok)
                     })(),

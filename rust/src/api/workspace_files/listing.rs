@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex};
 use ignore::WalkBuilder;
 
 use super::{
-    entry_for_path, is_protected_child_path, resolve_existing, workspace_root, WorkspaceFileEntry,
-    WorkspaceFileError, WorkspaceFileErrorKind, WorkspaceFileKind,
+    entry_for_path_filtered, is_protected_child_path, resolve_existing, workspace_root,
+    WorkspaceFileEntry, WorkspaceFileError, WorkspaceFileErrorKind, WorkspaceFileKind,
 };
 
 const LISTABLE_DESCENDANT_MAX_DEPTH: usize = 32;
@@ -25,6 +25,15 @@ pub(super) fn list_workspace_children(
     workspace_path: String,
     relative_path: String,
     hide_ignored: bool,
+) -> Result<Vec<WorkspaceFileEntry>, WorkspaceFileError> {
+    list_workspace_children_filtered(workspace_path, relative_path, hide_ignored, false)
+}
+
+pub(super) fn list_workspace_children_filtered(
+    workspace_path: String,
+    relative_path: String,
+    hide_ignored: bool,
+    hide_hidden: bool,
 ) -> Result<Vec<WorkspaceFileEntry>, WorkspaceFileError> {
     let root = workspace_root(&workspace_path)?;
     let directory = resolve_existing(&root, &relative_path)?;
@@ -45,7 +54,7 @@ pub(super) fn list_workspace_children(
 
     let mut entries = Vec::with_capacity(paths.len());
     for path in paths {
-        if let Some(entry) = entry_for_path(&root, &path, hide_ignored)? {
+        if let Some(entry) = entry_for_path_filtered(&root, &path, hide_ignored, hide_hidden)? {
             entries.push(entry);
         }
     }
@@ -217,6 +226,7 @@ fn directory_identity(path: &Path) -> Option<(u64, u64)> {
 mod tests {
     use super::*;
     use std::fs;
+    #[cfg(unix)]
     use std::path::PathBuf;
 
     fn workspace_path(dir: &tempfile::TempDir) -> String {
