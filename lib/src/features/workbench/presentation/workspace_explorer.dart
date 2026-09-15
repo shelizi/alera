@@ -6,6 +6,7 @@ import 'package:alera/src/app/providers.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/buttons/alera_icon_button.dart';
 import 'package:alera/src/design_system/feedback/alera_toast.dart';
+import 'package:alera/src/design_system/forms/alera_search_field.dart';
 import 'package:alera/src/design_system/forms/alera_text_field.dart';
 import 'package:alera/src/design_system/icons/alera_file_icon.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
@@ -94,6 +95,8 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
   String? _lastOpenedFilePath;
   DateTime? _lastOpenedFileAt;
   ExternalEditorKind? _pickedExternalEditorKind;
+  final TextEditingController _filterController = TextEditingController();
+  bool _filterVisible = false;
 
   @override
   void initState() {
@@ -116,6 +119,8 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
         oldWidget.workspace.path != widget.workspace.path) {
       _loading = true;
       _clipboard = null;
+      _filterController.clear();
+      _filterVisible = false;
       _resetExplorerProjection();
       _controller.dispose();
       _controller = tree.DirectoryTreeController(
@@ -132,6 +137,7 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
   @override
   void dispose() {
     unawaited(_stopNativeWatcher());
+    _filterController.dispose();
     _controller.dispose();
     super.dispose();
   }
@@ -152,6 +158,8 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
           showHiddenFiles: widget.showHiddenFiles,
           showHiddenToggle: defaultTargetPlatform == TargetPlatform.windows,
           loading: _loading,
+          filterVisible: _isFilterVisible,
+          onToggleFilter: _toggleFilterVisibility,
           onRefresh: () => unawaited(_reloadRoot()),
           onCollapseAll: _controller.expansions.collapseAll,
           onToggleMode: _toggleMode,
@@ -160,6 +168,21 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
           onNewFile: () => unawaited(_createEntry(directory: false)),
           onNewFolder: () => unawaited(_createEntry(directory: true)),
         ),
+        if (_isFilterVisible)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              AleraTokens.space8,
+              0,
+              AleraTokens.space8,
+              AleraTokens.space8,
+            ),
+            child: AleraSearchField(
+              controller: _filterController,
+              hintText: 'Filter files...',
+              dense: true,
+              onChanged: _onFilterChanged,
+            ),
+          ),
         const Divider(height: 1, color: AleraTokens.borderSubtle),
         Expanded(
           child: _ExplorerBackgroundMenu(
@@ -463,6 +486,19 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
 
   void _select(tree.VisibleNode node) {
     _controller.selection.selectOnly(node.id);
+  }
+
+  bool get _isFilterVisible =>
+      _filterVisible || _filterController.text.trim().isNotEmpty;
+
+  void _toggleFilterVisibility() {
+    setState(() {
+      _filterVisible = !_isFilterVisible;
+    });
+  }
+
+  void _onFilterChanged(String value) {
+    _controller.filterQuery = value;
   }
 
   void _setClipboard(_ExplorerClipboard? clipboard) {

@@ -47,6 +47,58 @@ void _registerWorkspaceExplorerModeTests() {
     },
   );
 
+  testWidgets('file filter toggles and filters visible explorer entries', (
+    tester,
+  ) async {
+    final service = _FakeWorkspaceFileService()
+      ..childrenByDirectory[''] = <native.WorkspaceFileEntry>[
+        _file('main.dart'),
+        _file('README.md'),
+      ];
+
+    await tester.pumpWidget(
+      _withWorkspaceFiles(
+        service,
+        child: MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 320,
+              height: 480,
+              child: const _WorkspaceExplorerModeHarness(),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('main.dart'), findsOneWidget);
+    expect(find.text('README.md'), findsOneWidget);
+    expect(find.text('Filter files...'), findsNothing);
+
+    await tester.tap(find.byTooltip('Search Files'));
+    await tester.pump();
+
+    expect(find.text('Filter files...'), findsOneWidget);
+    expect(find.byTooltip('Hide File Filter'), findsOneWidget);
+
+    await tester.enterText(find.byType(TextField).last, 'main');
+    await tester.pump();
+
+    expect(find.text('main.dart'), findsOneWidget);
+    expect(find.text('README.md'), findsNothing);
+
+    await tester.enterText(find.byType(TextField).last, '');
+    await tester.pump();
+
+    expect(find.text('main.dart'), findsOneWidget);
+    expect(find.text('README.md'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Hide File Filter'));
+    await tester.pump();
+    expect(find.text('Filter files...'), findsNothing);
+  });
+
   testWidgets(
     'ignored files toggle refreshes the listing without manual refresh',
     (tester) async {
