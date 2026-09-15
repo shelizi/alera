@@ -70,22 +70,6 @@ class const GitSubmoduleStatus({
   required final bool inspectable,
 });
 
-typedef _GitChangeEntryValueKey = ({
-  String path,
-  String? oldPath,
-  GitChangeArea area,
-  GitChangeStatus status,
-  int? added,
-  int? removed,
-  bool isBinary,
-  bool isLarge,
-  bool? submoduleCommitChanged,
-  bool? submoduleTrackedChanges,
-  bool? submoduleUntrackedChanges,
-  bool? submoduleInspectable,
-  String? submoduleRoot,
-});
-
 bool gitSubmoduleStatusValuesEqual(
   GitSubmoduleStatus? left,
   GitSubmoduleStatus? right,
@@ -160,23 +144,25 @@ List<GitChangeEntry> reconcileGitChangeEntryInstances(
     merged = List<GitChangeEntry>.of(next);
   }
 
-  final previousByValue = <_GitChangeEntryValueKey, List<GitChangeEntry>>{};
+  final previousByPath = <String, List<GitChangeEntry>>{};
   for (var index = 0; index < previous.length; index += 1) {
     if (index < reusedPrefixLength || (reusedPrevious?[index] ?? false)) {
       continue;
     }
     final entry = previous[index];
-    (previousByValue[_gitChangeEntryValueKey(entry)] ??= <GitChangeEntry>[])
-        .add(entry);
+    (previousByPath[entry.path] ??= <GitChangeEntry>[]).add(entry);
   }
 
   for (var index = 0; index < next.length; index += 1) {
     if (index < reusedPrefixLength || (reusedNext?[index] ?? false)) {
       continue;
     }
-    final candidates = previousByValue[_gitChangeEntryValueKey(next[index])];
-    if (candidates != null && candidates.isNotEmpty) {
-      merged[index] = candidates.removeLast();
+    final replacement = _takeMatchingGitChangeEntry(
+      previousByPath[next[index].path],
+      next[index],
+    );
+    if (replacement != null) {
+      merged[index] = replacement;
     }
   }
 
@@ -231,12 +217,11 @@ Future<List<GitChangeEntry>> reconcileGitChangeEntryInstancesChunked(
       merged = List<GitChangeEntry>.of(next);
     }
 
-    final previousByValue = <_GitChangeEntryValueKey, List<GitChangeEntry>>{};
+    final previousByPath = <String, List<GitChangeEntry>>{};
     for (var index = 0; index < previous.length; index += 1) {
       if (index >= reusedPrefixLength && !(reusedPrevious?[index] ?? false)) {
         final entry = previous[index];
-        (previousByValue[_gitChangeEntryValueKey(entry)] ??= <GitChangeEntry>[])
-            .add(entry);
+        (previousByPath[entry.path] ??= <GitChangeEntry>[]).add(entry);
       }
       if ((index + 1) % chunkSize == 0) {
         await chunker.pause();
@@ -245,10 +230,12 @@ Future<List<GitChangeEntry>> reconcileGitChangeEntryInstancesChunked(
 
     for (var index = 0; index < next.length; index += 1) {
       if (index >= reusedPrefixLength && !(reusedNext?[index] ?? false)) {
-        final candidates =
-            previousByValue[_gitChangeEntryValueKey(next[index])];
-        if (candidates != null && candidates.isNotEmpty) {
-          merged[index] = candidates.removeLast();
+        final replacement = _takeMatchingGitChangeEntry(
+          previousByPath[next[index].path],
+          next[index],
+        );
+        if (replacement != null) {
+          merged[index] = replacement;
         }
       }
       if ((index + 1) % chunkSize == 0) {
@@ -305,21 +292,20 @@ bool gitStashEntriesValuesEqual(
   return true;
 }
 
-_GitChangeEntryValueKey _gitChangeEntryValueKey(GitChangeEntry entry) {
-  final submodule = entry.submodule;
-  return (
-    path: entry.path,
-    oldPath: entry.oldPath,
-    area: entry.area,
-    status: entry.status,
-    added: entry.added,
-    removed: entry.removed,
-    isBinary: entry.isBinary,
-    isLarge: entry.isLarge,
-    submoduleCommitChanged: submodule?.commitChanged,
-    submoduleTrackedChanges: submodule?.trackedChanges,
-    submoduleUntrackedChanges: submodule?.untrackedChanges,
-    submoduleInspectable: submodule?.inspectable,
-    submoduleRoot: entry.submoduleRoot,
-  );
+GitChangeEntry? _takeMatchingGitChangeEntry(
+  List<GitChangeEntry>? candidates,
+  GitChangeEntry next,
+) {
+  if (candidates == null) {
+    return null;
+  }
+  for (var index = candidates.length - 1; index >= 0; index -= 1) {
+    final candidate = candidates[index];
+    if (!gitChangeEntryValuesEqual(candidate, next)) {
+      continue;
+    }
+    candidates.removeAt(index);
+    return candidate;
+  }
+  return null;
 }

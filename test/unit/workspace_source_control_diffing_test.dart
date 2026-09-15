@@ -339,6 +339,72 @@ void main() {
     }
   });
 
+  test(
+    'entry reconciliation disambiguates same-path candidates by full value',
+    () {
+      const staged = GitChangeEntry(
+        path: 'lib/shared.dart',
+        area: .staged,
+        status: .modified,
+        added: 4,
+        removed: 1,
+      );
+      const unstaged = GitChangeEntry(
+        path: 'lib/shared.dart',
+        area: .unstaged,
+        status: .modified,
+        added: 2,
+        removed: 3,
+      );
+      final previous = <GitChangeEntry>[staged, unstaged];
+      final reordered = reconcileGitChangeEntryInstances(
+        previous,
+        const <GitChangeEntry>[
+          GitChangeEntry(
+            path: 'lib/shared.dart',
+            area: .unstaged,
+            status: .modified,
+            added: 2,
+            removed: 3,
+          ),
+          GitChangeEntry(
+            path: 'lib/shared.dart',
+            area: .staged,
+            status: .modified,
+            added: 4,
+            removed: 1,
+          ),
+        ],
+      );
+
+      expect(identical(reordered[0], unstaged), isTrue);
+      expect(identical(reordered[1], staged), isTrue);
+
+      final changed = reconcileGitChangeEntryInstances(
+        previous,
+        const <GitChangeEntry>[
+          GitChangeEntry(
+            path: 'lib/shared.dart',
+            area: .staged,
+            status: .modified,
+            added: 5,
+            removed: 1,
+          ),
+          GitChangeEntry(
+            path: 'lib/shared.dart',
+            area: .unstaged,
+            status: .modified,
+            added: 2,
+            removed: 3,
+          ),
+        ],
+      );
+
+      expect(identical(changed[0], staged), isFalse);
+      expect(identical(changed[1], unstaged), isTrue);
+    },
+  );
+
   test('entry reconciliation preserves shifted entries by full value', () {
     final previous = _initialEntries();
     final inserted = GitChangeEntry(
