@@ -121,7 +121,7 @@ class const MobileGatewayGroup({
           ),
         ),
         if (mode == MobileEndpointMode.tailscale) ...<Widget>[
-          _tailscaleStatusRow(),
+          _tailscaleStatusRow(context),
           if (defaultTargetPlatform == TargetPlatform.windows)
             const AleraSettingRow(
               title: 'Windows Firewall',
@@ -132,7 +132,7 @@ class const MobileGatewayGroup({
             ),
         ],
         if (mode == MobileEndpointMode.netbird) ...<Widget>[
-          _netbirdStatusRow(),
+          _netbirdStatusRow(context),
           _netbirdEndpointRow(context),
           if (defaultTargetPlatform == TargetPlatform.windows)
             const AleraSettingRow(
@@ -191,7 +191,7 @@ class const MobileGatewayGroup({
     );
   }
 
-  Widget _tailscaleStatusRow() {
+  Widget _tailscaleStatusRow(BuildContext context) {
     final tailscale = status.tailscale;
     final (bool active, String label, String description) = switch (tailscale) {
       null => (
@@ -230,14 +230,14 @@ class const MobileGatewayGroup({
           children: <Widget>[
             AleraStatusDot(active: active),
             const SizedBox(width: AleraTokens.space6),
-            Flexible(child: AleraBadge(label: label)),
+            Flexible(child: AleraBadge(label: context.tr(label))),
           ],
         ),
       ),
     );
   }
 
-  Widget _netbirdStatusRow() {
+  Widget _netbirdStatusRow(BuildContext context) {
     final netbird = status.netbird;
     final (bool active, String label, String description) = switch (netbird) {
       null => (
@@ -278,7 +278,7 @@ class const MobileGatewayGroup({
           children: <Widget>[
             AleraStatusDot(active: active),
             const SizedBox(width: AleraTokens.space6),
-            Flexible(child: AleraBadge(label: label)),
+            Flexible(child: AleraBadge(label: context.tr(label))),
           ],
         ),
       ),

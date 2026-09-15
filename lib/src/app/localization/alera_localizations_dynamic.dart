@@ -167,6 +167,27 @@ String? _translateDynamicTraditionalChinese(String source) {
     };
   }
 
+  final mobileGatewayRunning = RegExp(r'^Running · (.+)$').firstMatch(source);
+  if (mobileGatewayRunning != null) {
+    return '執行中 · ${mobileGatewayRunning.group(1)}';
+  }
+  final mobileGatewayConnected = RegExp(r'^Connected - (.+)$')
+      .firstMatch(source);
+  if (mobileGatewayConnected != null) {
+    return '已連線 - ${mobileGatewayConnected.group(1)}';
+  }
+  final mobileGatewayInterface = RegExp(r'^Interface \((.+)\)$')
+      .firstMatch(source);
+  if (mobileGatewayInterface != null) {
+    return '介面（${mobileGatewayInterface.group(1)}）';
+  }
+  final netbirdConnection = RegExp(
+    r'^Devices connected to the same NetBird network can pair and connect\. DNS: (.+); interface: (.+)\.$',
+  ).firstMatch(source);
+  if (netbirdConnection != null) {
+    return '連線到相同 NetBird 網路的裝置可以配對並連線。DNS：${netbirdConnection.group(1)}；介面：${netbirdConnection.group(2)}。';
+  }
+
   final effortLabel = RegExp(r'^(.+) Effort$').firstMatch(source);
   if (effortLabel != null) {
     return '推理強度：${effortLabel.group(1)}';

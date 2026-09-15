@@ -503,6 +503,44 @@ void registerAppLocalizationTailTests() {
     expect(cliSource, contains('context.tr(detail)'));
   });
 
+  test('traditional Chinese localizes Mobile Gateway runtime copy', () {
+    final l10n = AleraLocalizations(const Locale('zh', 'TW'));
+
+    expect(l10n.translate('Applying…'), '正在套用…');
+    expect(l10n.translate('Unknown'), '未知');
+    expect(l10n.translate('Not detected'), '未偵測到');
+    expect(l10n.translate('Not running'), '未執行');
+    expect(l10n.translate('Running · 100.64.0.1'), '執行中 · 100.64.0.1');
+    expect(l10n.translate('No Tailnet IP'), '沒有 Tailnet IP');
+    expect(l10n.translate('Not Detected'), '未偵測到');
+    expect(l10n.translate('Not Connected'), '未連線');
+    expect(l10n.translate('Connected - 100.64.0.2'), '已連線 - 100.64.0.2');
+    expect(l10n.translate('No NetBird IP'), '沒有 NetBird IP');
+    expect(l10n.translate('Interface (wt0)'), '介面（wt0）');
+    expect(
+      l10n.translate(
+        'Devices connected to the same NetBird network can pair and connect. DNS: host.example; interface: wt0.',
+      ),
+      '連線到相同 NetBird 網路的裝置可以配對並連線。DNS：host.example；介面：wt0。',
+    );
+  });
+
+  test('Mobile Gateway runtime text routes through localization', () {
+    final source = File(
+      'lib/src/features/settings/presentation/panes/mobile_gateway_group.dart',
+    ).readAsStringSync();
+
+    expect(
+      source,
+      contains("Text(context.tr(applying ? 'Applying…' : 'Apply'))"),
+    );
+    expect(
+      source,
+      contains('Flexible(child: AleraBadge(label: context.tr(label)))'),
+    );
+    expect(source, contains("context.tr('Interface (\$interfaceName)')"));
+  });
+
   test('traditional Chinese localizes Git history input dialog copy', () {
     final l10n = AleraLocalizations(const Locale('zh', 'TW'));
     expect(l10n.translate('Create Branch Here'), '在此建立 Branch');
