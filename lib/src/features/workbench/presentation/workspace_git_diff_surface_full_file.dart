@@ -291,17 +291,77 @@ List<_DiffRow>? _buildFullFileRows(
   return rows;
 }
 
-List<_DiffRow>? _buildProjectedFullFileSideBySideRows(
+class _FullFileSideBySideContextDiffRowSpan implements _DiffRowSpan {
+  const _FullFileSideBySideContextDiffRowSpan({
+    required this.oldLines,
+    required this.newLines,
+    required this.oldStart,
+    required this.oldEnd,
+    required this.newStart,
+    required this.newEnd,
+  });
+
+  final List<String> oldLines;
+  final List<String> newLines;
+  final int oldStart;
+  final int oldEnd;
+  final int newStart;
+  final int newEnd;
+
+  @override
+  int get length => math.max(oldEnd - oldStart, newEnd - newStart);
+
+  @override
+  _DiffRow rowAt(int index) {
+    final oldIndex = oldStart + index;
+    final newIndex = newStart + index;
+    final hasOld = oldIndex < oldEnd;
+    final hasNew = newIndex < newEnd;
+    return _SideBySideDiffRow(
+      left: hasOld
+          ? _DiffSideLine(
+              lineNumber: oldIndex + 1,
+              text: oldLines[oldIndex],
+              kind: GitDiffLineKind.context,
+            )
+          : null,
+      right: hasNew
+          ? _DiffSideLine(
+              lineNumber: newIndex + 1,
+              text: newLines[newIndex],
+              kind: GitDiffLineKind.context,
+            )
+          : null,
+    );
+  }
+}
+
+List<_DiffRowSpan>? _buildProjectedFullFileSideBySideRowSpans(
   GitDiffFile file,
-  List<String> oldLines,
-  List<String> newLines, {
-  required String oldLabel,
-  required String newLabel,
-}) {
-  if (file.fullFileSideBySideRows.isEmpty) return null;
-  final rows = <_DiffRow>[
-    _SideBySideHeaderRow(oldTitle: oldLabel, newTitle: newLabel),
+  _FullFileContents? contents,
+) {
+  if (contents == null || file.fullFileSideBySideRows.isEmpty) return null;
+  final oldLines = _decodeFullFileLines(contents.oldDecoded);
+  final newLines = _decodeFullFileLines(contents.newDecoded);
+  if (oldLines == null || newLines == null) return null;
+
+  final spans = <_DiffRowSpan>[
+    _MaterializedDiffRowSpan(<_DiffRow>[
+      _SideBySideHeaderRow(
+        oldTitle: _fullFileOldLabel(file),
+        newTitle: _fullFileNewLabel(file),
+      ),
+    ]),
   ];
+  final materialized = <_DiffRow>[];
+
+  void flushMaterialized() {
+    if (materialized.isEmpty) return;
+    spans.add(
+      _MaterializedDiffRowSpan(List<_DiffRow>.unmodifiable(materialized)),
+    );
+    materialized.clear();
+  }
 
   for (final projection in file.fullFileSideBySideRows) {
     switch (projection.kind) {
@@ -317,32 +377,26 @@ List<_DiffRow>? _buildProjectedFullFileSideBySideRows(
           projection.newEndIndex ?? newLines.length,
           newLines.length,
         );
-        if (oldEnd < oldStart || newEnd < newStart) return null;
-        var oldIndex = math.min(oldStart, oldLines.length);
-        var newIndex = math.min(newStart, newLines.length);
-        while (oldIndex < oldEnd || newIndex < newEnd) {
-          final hasOld = oldIndex < oldEnd;
-          final hasNew = newIndex < newEnd;
-          rows.add(
-            _SideBySideDiffRow(
-              left: hasOld
-                  ? _DiffSideLine(
-                      lineNumber: oldIndex + 1,
-                      text: oldLines[oldIndex],
-                      kind: GitDiffLineKind.context,
-                    )
-                  : null,
-              right: hasNew
-                  ? _DiffSideLine(
-                      lineNumber: newIndex + 1,
-                      text: newLines[newIndex],
-                      kind: GitDiffLineKind.context,
-                    )
-                  : null,
+        if (oldStart < 0 ||
+            newStart < 0 ||
+            oldEnd < oldStart ||
+            newEnd < newStart ||
+            oldStart > oldLines.length ||
+            newStart > newLines.length) {
+          return null;
+        }
+        flushMaterialized();
+        if (oldEnd > oldStart || newEnd > newStart) {
+          spans.add(
+            _FullFileSideBySideContextDiffRowSpan(
+              oldLines: oldLines,
+              newLines: newLines,
+              oldStart: oldStart,
+              oldEnd: oldEnd,
+              newStart: newStart,
+              newEnd: newEnd,
             ),
           );
-          if (hasOld) oldIndex += 1;
-          if (hasNew) newIndex += 1;
         }
       case GitDiffFullFileSideBySideRowKind.pair:
         final left = _projectedFullFileSideLine(
@@ -367,10 +421,11 @@ List<_DiffRow>? _buildProjectedFullFileSideBySideRows(
             right == null) {
           return null;
         }
-        rows.add(_SideBySideDiffRow(left: left, right: right));
+        materialized.add(_SideBySideDiffRow(left: left, right: right));
     }
   }
-  return rows;
+  flushMaterialized();
+  return spans;
 }
 
 _DiffSideLine? _projectedFullFileSideLine({
@@ -400,6 +455,17 @@ _DiffSideLine? _projectedFullFileSideLine({
   );
 }
 
+String _fullFileOldLabel(GitDiffFile file) =>
+    file.status == GitChangeStatus.added ||
+        file.status == GitChangeStatus.untracked
+    ? 'Empty'
+    : (file.oldPath != null && file.oldPath != file.path
+          ? 'Original (${file.oldPath})'
+          : 'Original');
+
+String _fullFileNewLabel(GitDiffFile file) =>
+    file.status == GitChangeStatus.deleted ? 'Deleted' : 'Modified';
+
 List<_DiffRow>? _buildFullFileSideBySideRows(
   GitDiffFile file,
   _FullFileContents? contents,
@@ -407,16 +473,8 @@ List<_DiffRow>? _buildFullFileSideBySideRows(
   if (contents == null) return null;
   final oldLines = _decodeFullFileLines(contents.oldDecoded);
   final newLines = _decodeFullFileLines(contents.newDecoded);
-  final oldLabel =
-      file.status == GitChangeStatus.added ||
-          file.status == GitChangeStatus.untracked
-      ? 'Empty'
-      : (file.oldPath != null && file.oldPath != file.path
-            ? 'Original (${file.oldPath})'
-            : 'Original');
-  final newLabel = file.status == GitChangeStatus.deleted
-      ? 'Deleted'
-      : 'Modified';
+  final oldLabel = _fullFileOldLabel(file);
+  final newLabel = _fullFileNewLabel(file);
 
   if (file.status == GitChangeStatus.added ||
       file.status == GitChangeStatus.untracked) {
@@ -450,14 +508,6 @@ List<_DiffRow>? _buildFullFileSideBySideRows(
     ];
   }
   if (oldLines == null || newLines == null) return null;
-  final projectedRows = _buildProjectedFullFileSideBySideRows(
-    file,
-    oldLines,
-    newLines,
-    oldLabel: oldLabel,
-    newLabel: newLabel,
-  );
-  if (projectedRows != null) return projectedRows;
 
   final rows = <_DiffRow>[
     _SideBySideHeaderRow(oldTitle: oldLabel, newTitle: newLabel),

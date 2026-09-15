@@ -211,7 +211,19 @@ class _DiffRows {
           final contents = fullFileContents[file];
           final decodedFile = _fileWithDecodedDiffLines(file, contents);
           if (sideBySide) {
-            renderedRows = _buildFullFileSideBySideRows(decodedFile, contents);
+            final projectedSpans = _buildProjectedFullFileSideBySideRowSpans(
+              decodedFile,
+              contents,
+            );
+            if (projectedSpans != null) {
+              items.addSpans(projectedSpans);
+              renderedLazyRows = true;
+            } else {
+              renderedRows = _buildFullFileSideBySideRows(
+                decodedFile,
+                contents,
+              );
+            }
           } else {
             final projectedSpans = _buildProjectedFullFileRowSpans(
               decodedFile,
@@ -229,8 +241,8 @@ class _DiffRows {
           }
         }
         if (renderedLazyRows) {
-          // Native full-file projections keep unchanged ranges lazy until the
-          // ListView requests a concrete row.
+          // Native full-file projections keep unchanged ranges lazy in both
+          // presentation modes until the ListView requests a concrete row.
         } else if (renderedRows != null) {
           items.addAll(renderedRows);
         } else if (file.lines.isEmpty) {
