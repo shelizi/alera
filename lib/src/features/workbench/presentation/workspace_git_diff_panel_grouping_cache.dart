@@ -48,14 +48,30 @@ extension on _WorkspaceGitDiffPanelState {
     _cachedGroupsSource = status;
     _cachedGroupsMode = widget.groupMode;
     _cachedGroups = widget.groupMode == GitDiffGroupMode.unified
-        ? GitChangeGroup.unifiedFromEntries(status.entries)
+        ? _unifiedGroupsFor(status)
         : status.effectiveGroups;
     return _cachedGroups;
   }
 
+  List<GitChangeGroup> _unifiedGroupsFor(GitStatusResult status) {
+    final groups = status.groups;
+    return groups.isNotEmpty
+        ? GitChangeGroup.unifiedFromGroups(groups)
+        : GitChangeGroup.unifiedFromEntries(status.entries);
+  }
+
+  Future<List<GitChangeGroup>> _unifiedGroupsForChunked(
+    GitStatusResult status,
+  ) {
+    final groups = status.groups;
+    return groups.isNotEmpty
+        ? GitChangeGroup.unifiedFromGroupsChunked(groups)
+        : GitChangeGroup.unifiedFromEntriesChunked(status.entries);
+  }
+
   void _scheduleUnifiedGroups(GitStatusResult status) {
     final generation = ++_unifiedGroupsGeneration;
-    GitChangeGroup.unifiedFromEntriesChunked(status.entries).then((groups) {
+    _unifiedGroupsForChunked(status).then((groups) {
       if (!mounted || generation != _unifiedGroupsGeneration) {
         debugPrint(
           '[stale-completion] request_type=workspace_git_diff_unified_groups generation=$generation current_generation=$_unifiedGroupsGeneration mounted=$mounted',

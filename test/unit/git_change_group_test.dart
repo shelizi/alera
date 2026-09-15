@@ -111,6 +111,18 @@ void main() {
       );
     });
 
+    test('unifiedFromGroups matches entry-sort projection', () {
+      final entries = _randomEntries(240, 37)
+        ..add(_entry('lib/shared.dart', area: .staged))
+        ..add(_entry('lib/shared.dart', area: .unstaged));
+      final areaGroups = GitChangeGroup.fromEntries(entries);
+
+      _expectGroupsEquivalent(
+        GitChangeGroup.unifiedFromGroups(areaGroups),
+        GitChangeGroup.unifiedFromEntries(entries),
+      );
+    });
+
     test('tree rows put directories before files and keep nested counts', () {
       final groups = GitChangeGroup.fromEntries(<GitChangeEntry>[
         _entry('z.txt'),

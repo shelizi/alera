@@ -55,30 +55,32 @@ void main() {
   testWidgets(
     'unified group mode shows one changes section with area markers',
     (tester) async {
+      const entries = <GitChangeEntry>[
+        GitChangeEntry(
+          path: 'lib/new.dart',
+          area: .untracked,
+          status: .untracked,
+        ),
+        GitChangeEntry(
+          path: 'lib/dirty.dart',
+          area: .unstaged,
+          status: .modified,
+        ),
+        GitChangeEntry(
+          path: 'lib/staged.dart',
+          area: .staged,
+          status: .modified,
+        ),
+        GitChangeEntry(
+          path: 'lib/dirty.dart',
+          area: .staged,
+          status: .modified,
+        ),
+      ];
       final backend = FakeGitBackend()
-        ..gitStatusResult = const GitStatusResult(
-          entries: <GitChangeEntry>[
-            GitChangeEntry(
-              path: 'lib/new.dart',
-              area: .untracked,
-              status: .untracked,
-            ),
-            GitChangeEntry(
-              path: 'lib/dirty.dart',
-              area: .unstaged,
-              status: .modified,
-            ),
-            GitChangeEntry(
-              path: 'lib/staged.dart',
-              area: .staged,
-              status: .modified,
-            ),
-            GitChangeEntry(
-              path: 'lib/dirty.dart',
-              area: .staged,
-              status: .modified,
-            ),
-          ],
+        ..gitStatusResult = GitStatusResult(
+          entries: entries,
+          groups: GitChangeGroup.fromEntries(entries),
         );
 
       await _pumpPanel(tester, backend: backend, groupMode: .unified);

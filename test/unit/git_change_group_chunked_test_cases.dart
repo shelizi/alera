@@ -45,6 +45,26 @@ void _registerChunkedGroupTests() {
       },
     );
 
+    test('chunked unified group merge matches entry-sort projection', () async {
+      final entries = _randomEntries(240, 41)
+        ..add(_entry('lib/shared.dart', area: .staged))
+        ..add(_entry('lib/shared.dart', area: .unstaged));
+      final areaGroups = GitChangeGroup.fromEntries(entries);
+      var yieldCount = 0;
+
+      final merged = await GitChangeGroup.unifiedFromGroupsChunked(
+        areaGroups,
+        chunkSize: 3,
+        onChunk: (_) => yieldCount += 1,
+      );
+
+      expect(yieldCount, greaterThan(0));
+      _expectGroupsEquivalent(
+        merged,
+        GitChangeGroup.unifiedFromEntries(entries),
+      );
+    });
+
     test(
       'chunked rebind uses native entry indices without source object lookup',
       () async {

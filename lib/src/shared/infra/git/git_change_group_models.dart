@@ -63,6 +63,26 @@ class const GitChangeGroup({
     ];
   }
 
+  /// Builds the unified projection by merging groups whose entries are already
+  /// path-sorted, as produced by native status projection or [fromEntries].
+  static List<GitChangeGroup> unifiedFromGroups(List<GitChangeGroup> groups) {
+    if (groups.isEmpty) {
+      return const <GitChangeGroup>[];
+    }
+    final sorted = _mergeUnifiedGroupEntries(groups);
+    if (sorted.isEmpty) {
+      return const <GitChangeGroup>[];
+    }
+    return <GitChangeGroup>[
+      GitChangeGroup(
+        area: .unstaged,
+        entries: sorted,
+        treeRows: _treeRows(sorted),
+        unified: true,
+      ),
+    ];
+  }
+
   static Future<List<GitChangeGroup>> fromEntriesChunked(
     List<GitChangeEntry> entries, {
     int chunkSize = gitStatusWorkChunkSize,
@@ -149,6 +169,42 @@ class const GitChangeGroup({
         chunkSize,
         chunker,
       );
+      final treeRows = await _treeRowsChunked(sorted, chunkSize, chunker);
+      return <GitChangeGroup>[
+        GitChangeGroup(
+          area: .unstaged,
+          entries: sorted,
+          treeRows: treeRows,
+          unified: true,
+        ),
+      ];
+    } finally {
+      chunker.finish();
+    }
+  }
+
+  /// Chunked counterpart of [unifiedFromGroups]. It avoids re-sorting the
+  /// whole status list and yields while merging and projecting the tree.
+  static Future<List<GitChangeGroup>> unifiedFromGroupsChunked(
+    List<GitChangeGroup> groups, {
+    int chunkSize = gitStatusWorkChunkSize,
+    void Function(double milliseconds)? onChunk,
+  }) async {
+    _validateGitStatusChunkSize(chunkSize);
+    if (groups.isEmpty) {
+      return const <GitChangeGroup>[];
+    }
+
+    final chunker = _GitStatusChunker(onChunk, chunkSize);
+    try {
+      final sorted = await _mergeUnifiedGroupEntriesChunked(
+        groups,
+        chunkSize,
+        chunker,
+      );
+      if (sorted.isEmpty) {
+        return const <GitChangeGroup>[];
+      }
       final treeRows = await _treeRowsChunked(sorted, chunkSize, chunker);
       return <GitChangeGroup>[
         GitChangeGroup(
@@ -327,6 +383,83 @@ class const GitChangeGroup({
       entries: entries,
       treeRows: _treeRows(entries),
     );
+  }
+
+  static List<GitChangeEntry> _mergeUnifiedGroupEntries(
+    List<GitChangeGroup> groups,
+  ) {
+    final positions = List<int>.filled(groups.length, 0);
+    var totalLength = 0;
+    for (final group in groups) {
+      totalLength += group.entries.length;
+    }
+    final merged = <GitChangeEntry>[];
+    if (totalLength == 0) {
+      return merged;
+    }
+    merged.length = 0;
+
+    while (merged.length < totalLength) {
+      var selectedGroup = -1;
+      GitChangeEntry? selectedEntry;
+      for (var groupIndex = 0; groupIndex < groups.length; groupIndex += 1) {
+        final entries = groups[groupIndex].entries;
+        final position = positions[groupIndex];
+        if (position >= entries.length) {
+          continue;
+        }
+        final candidate = entries[position];
+        if (selectedEntry == null ||
+            _compareUnifiedEntries(candidate, selectedEntry) < 0) {
+          selectedGroup = groupIndex;
+          selectedEntry = candidate;
+        }
+      }
+      if (selectedGroup < 0 || selectedEntry == null) {
+        break;
+      }
+      merged.add(selectedEntry);
+      positions[selectedGroup] += 1;
+    }
+    return merged;
+  }
+
+  static Future<List<GitChangeEntry>> _mergeUnifiedGroupEntriesChunked(
+    List<GitChangeGroup> groups,
+    int chunkSize,
+    _GitStatusChunker chunker,
+  ) async {
+    final positions = List<int>.filled(groups.length, 0);
+    var totalLength = 0;
+    for (final group in groups) {
+      totalLength += group.entries.length;
+    }
+    final merged = <GitChangeEntry>[];
+
+    while (merged.length < totalLength) {
+      var selectedGroup = -1;
+      GitChangeEntry? selectedEntry;
+      for (var groupIndex = 0; groupIndex < groups.length; groupIndex += 1) {
+        final entries = groups[groupIndex].entries;
+        final position = positions[groupIndex];
+        if (position >= entries.length) {
+          continue;
+        }
+        final candidate = entries[position];
+        if (selectedEntry == null ||
+            _compareUnifiedEntries(candidate, selectedEntry) < 0) {
+          selectedGroup = groupIndex;
+          selectedEntry = candidate;
+        }
+      }
+      if (selectedGroup < 0 || selectedEntry == null) {
+        break;
+      }
+      merged.add(selectedEntry);
+      positions[selectedGroup] += 1;
+      await chunker.checkpoint();
+    }
+    return merged;
   }
 
   static int _compareEntryPath(GitChangeEntry a, GitChangeEntry b) =>
