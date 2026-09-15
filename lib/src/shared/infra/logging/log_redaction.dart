@@ -47,12 +47,16 @@ String redactLogText(String input) {
       output = output.replaceAll(secret, kRedactedPlaceholder);
     }
   }
+  // Mask bearer credentials before generic keyed values. For a header such as
+  // `Authorization: Bearer <credential>`, the keyed matcher otherwise sees
+  // only `Bearer` as the value and can leave the actual credential behind.
+  output = output.replaceAllMapped(
+    _bearerPattern,
+    (_) => 'Bearer $kRedactedPlaceholder',
+  );
   output = output.replaceAllMapped(
     _keyedSecretPattern,
     (match) => '${match.group(1)}=$kRedactedPlaceholder',
   );
-  return output.replaceAllMapped(
-    _bearerPattern,
-    (_) => 'Bearer $kRedactedPlaceholder',
-  );
+  return output;
 }

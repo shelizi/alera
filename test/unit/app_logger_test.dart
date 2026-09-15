@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:alera/src/shared/infra/logging/app_logger.dart';
 import 'package:alera/src/shared/infra/logging/log_record_formatter.dart';
 import 'package:alera/src/shared/infra/logging/log_redaction.dart';
+import 'package:archive/archive.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:logging/logging.dart';
 
@@ -208,6 +209,35 @@ void main() {
       final contents = AppLogger.sink!.fileFor(0).readAsStringSync();
       expect(contents, isNot(contains('runtime-host-token-abc123')));
       expect(contents, contains(kRedactedPlaceholder));
+    });
+
+    test('redacted secrets stay absent after the log is packaged', () async {
+      const registeredSecret = 'runtime-control-synthetic-12345';
+      const authorizationSecret = 'bearer-synthetic-67890';
+      const keyedSecret = 'api-key-synthetic-24680';
+      await AppLogger.configure(directory: root);
+      registerLogSecret(registeredSecret);
+
+      Logger('Diagnostics').info(
+        'attach=$registeredSecret '
+        'Authorization: Bearer $authorizationSecret '
+        'api_key=$keyedSecret',
+      );
+      await AppLogger.flush();
+
+      final logBytes = AppLogger.sink!.fileFor(0).readAsBytesSync();
+      final archive = Archive()
+        ..addFile(ArchiveFile('app/alera.log', logBytes.length, logBytes));
+      final zipBytes = ZipEncoder().encode(archive);
+      final packaged = ZipDecoder().decodeBytes(zipBytes);
+      final bundledLog = utf8.decode(
+        packaged.findFile('app/alera.log')!.content as List<int>,
+      );
+
+      expect(bundledLog, isNot(contains(registeredSecret)));
+      expect(bundledLog, isNot(contains(authorizationSecret)));
+      expect(bundledLog, isNot(contains(keyedSecret)));
+      expect(bundledLog, contains(kRedactedPlaceholder));
     });
   });
 }
