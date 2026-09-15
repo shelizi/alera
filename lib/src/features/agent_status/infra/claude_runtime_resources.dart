@@ -200,7 +200,7 @@ extension _ClaudeRuntimeResources on ClaudeRuntimeHomeService {
         sourcePath: entry.value,
       );
     }
-    _removeStaleRuntimeResources(runtimeHome, expected);
+    await _removeStaleRuntimeResources(runtimeHome, expected);
   }
 
   Future<void> _syncKeychainCredentials(Directory runtimeHome) async {
@@ -231,7 +231,7 @@ extension _ClaudeRuntimeResources on ClaudeRuntimeHomeService {
     // Source entries come from a just-read directory listing. This handles the
     // filesystem race where an entry disappears before it can be linked.
     if (!_sourceExists(sourcePath)) {
-      _removeOwnedRuntimeResource(targetPath, runtimeHomePath, entryName);
+      await _removeOwnedRuntimeResource(targetPath, runtimeHomePath, entryName);
       return;
     }
     // coverage:ignore-end
@@ -256,7 +256,7 @@ extension _ClaudeRuntimeResources on ClaudeRuntimeHomeService {
           marker?.sourceFingerprint == sourceFingerprint) {
         return;
       }
-      _deleteEntity(targetPath);
+      await _deleteRuntimeResource(targetPath);
     }
 
     try {
@@ -266,7 +266,7 @@ extension _ClaudeRuntimeResources on ClaudeRuntimeHomeService {
     } catch (_) {}
 
     try {
-      _deleteEntity(targetPath);
+      await _deleteRuntimeResource(targetPath);
       await _copyRuntimeResource(sourcePath, targetPath);
       _markCopiedResource(
         runtimeHomePath,
@@ -275,6 +275,15 @@ extension _ClaudeRuntimeResources on ClaudeRuntimeHomeService {
         sourceFingerprint ?? await _fingerprintRuntimeResource(sourcePath),
       );
     } catch (_) {}
+  }
+
+  Future<void> _deleteRuntimeResource(String path) async {
+    final deleter = _resourceDeleter;
+    if (deleter != null) {
+      await deleter(path);
+      return;
+    }
+    _deleteEntity(path);
   }
 
   Future<void> _copyRuntimeResource(
@@ -297,10 +306,10 @@ extension _ClaudeRuntimeResources on ClaudeRuntimeHomeService {
     return _resourceFingerprint(sourcePath);
   }
 
-  void _removeStaleRuntimeResources(
+  Future<void> _removeStaleRuntimeResources(
     Directory runtimeHome,
     Map<String, String> expected,
-  ) {
+  ) async {
     for (final entity in runtimeHome.listSync(followLinks: false)) {
       final entryName = p.basename(entity.path);
       if (entryName == 'settings.json' ||
@@ -309,7 +318,11 @@ extension _ClaudeRuntimeResources on ClaudeRuntimeHomeService {
       }
       final sourcePath = expected[entryName];
       if (sourcePath == null) {
-        _removeOwnedRuntimeResource(entity.path, runtimeHome.path, entryName);
+        await _removeOwnedRuntimeResource(
+          entity.path,
+          runtimeHome.path,
+          entryName,
+        );
         continue;
       }
       if (_targetAlreadyPointsToSource(entity.path, sourcePath) ||
@@ -321,18 +334,18 @@ extension _ClaudeRuntimeResources on ClaudeRuntimeHomeService {
       // Keep this as a defensive cleanup if that ordering changes.
       if (FileSystemEntity.typeSync(entity.path, followLinks: false) ==
           FileSystemEntityType.link) {
-        _deleteEntity(entity.path);
+        await _deleteRuntimeResource(entity.path);
         _clearCopiedResourceMarker(runtimeHome.path, entryName);
       }
       // coverage:ignore-end
     }
   }
 
-  void _removeOwnedRuntimeResource(
+  Future<void> _removeOwnedRuntimeResource(
     String targetPath,
     String runtimeHomePath,
     String entryName,
-  ) {
+  ) async {
     final type = FileSystemEntity.typeSync(targetPath, followLinks: false);
     // coverage:ignore-start
     // Paired with the disappeared-source race above: clear any stale marker even
@@ -344,7 +357,7 @@ extension _ClaudeRuntimeResources on ClaudeRuntimeHomeService {
     // coverage:ignore-end
     if (type == FileSystemEntityType.link ||
         _copiedResourceMarker(runtimeHomePath, entryName) != null) {
-      _deleteEntity(targetPath);
+      await _deleteRuntimeResource(targetPath);
       _clearCopiedResourceMarker(runtimeHomePath, entryName);
     }
   }

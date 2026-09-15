@@ -127,6 +127,36 @@ void main() {
           'plugin contents',
         );
       });
+
+      test('uses an injected asynchronous resource deleter', () async {
+        final runtimeHome = await prepare();
+        final targetPath = p.join(runtimeHome, 'plugins');
+        final deletedPaths = <String>[];
+        source.deleteSync();
+
+        await _prepareRuntime(
+          agent,
+          home,
+          support,
+          resourceDeleter: (path) async {
+            deletedPaths.add(path);
+            final type = FileSystemEntity.typeSync(path, followLinks: false);
+            if (type == FileSystemEntityType.directory) {
+              Directory(path).deleteSync(recursive: true);
+            } else if (type == FileSystemEntityType.link) {
+              Link(path).deleteSync();
+            } else if (type != FileSystemEntityType.notFound) {
+              File(path).deleteSync();
+            }
+          },
+        );
+
+        expect(deletedPaths, contains(targetPath));
+        expect(
+          FileSystemEntity.typeSync(targetPath),
+          FileSystemEntityType.notFound,
+        );
+      });
     });
   }
 }
@@ -141,6 +171,7 @@ Future<String> _prepareRuntime(
     required String targetPath,
   })?
   resourceCopier,
+  Future<void> Function(String path)? resourceDeleter,
 }) async {
   void failLinks({required String sourcePath, required String targetPath}) {
     throw const FileSystemException('symlinks disabled');
@@ -157,6 +188,7 @@ Future<String> _prepareRuntime(
       resourceLinkCreator: failLinks,
       resourceFingerprinter: resourceFingerprinter,
       resourceCopier: resourceCopier,
+      resourceDeleter: resourceDeleter,
     );
     await service.install(runtimeHome: runtimeHome);
     return runtimeHome.path;
@@ -169,6 +201,7 @@ Future<String> _prepareRuntime(
     resourceLinkCreator: failLinks,
     resourceFingerprinter: resourceFingerprinter,
     resourceCopier: resourceCopier,
+    resourceDeleter: resourceDeleter,
     syncMacOSKeychainCredentials: false,
   ).prepareForTerminalLaunch();
   return preparation.runtimeHomePath;

@@ -47,7 +47,7 @@ extension _CodexRuntimeHomeServiceResourceSync on CodexRuntimeHomeService {
     if (!FileSystemEntity.isDirectorySync(sourcePath) &&
         !FileSystemEntity.isFileSync(sourcePath) &&
         !Link(sourcePath).existsSync()) {
-      _removeOwnedRuntimeResource(
+      await _removeOwnedRuntimeResource(
         targetPath,
         runtimeHomePath,
         entryName,
@@ -73,7 +73,7 @@ extension _CodexRuntimeHomeServiceResourceSync on CodexRuntimeHomeService {
       if (marker?.sourceFingerprint == sourceFingerprint) {
         return;
       }
-      _deleteEntity(targetPath);
+      await _deleteRuntimeResource(targetPath);
     }
     try {
       _resourceLinkCreator(sourcePath: sourcePath, targetPath: targetPath);
@@ -85,7 +85,7 @@ extension _CodexRuntimeHomeServiceResourceSync on CodexRuntimeHomeService {
       }
     }
     try {
-      _deleteEntity(targetPath);
+      await _deleteRuntimeResource(targetPath);
       await _copyRuntimeResource(sourcePath, targetPath);
       _markCopiedResource(
         runtimeHomePath,
@@ -94,6 +94,15 @@ extension _CodexRuntimeHomeServiceResourceSync on CodexRuntimeHomeService {
         sourceFingerprint ?? await _fingerprintRuntimeResource(sourcePath),
       );
     } catch (_) {}
+  }
+
+  Future<void> _deleteRuntimeResource(String path) async {
+    final deleter = _resourceDeleter;
+    if (deleter != null) {
+      await deleter(path);
+      return;
+    }
+    _deleteEntity(path);
   }
 
   Future<void> _copyRuntimeResource(
@@ -116,12 +125,12 @@ extension _CodexRuntimeHomeServiceResourceSync on CodexRuntimeHomeService {
     return _resourceFingerprint(sourcePath);
   }
 
-  void _removeOwnedRuntimeResource(
+  Future<void> _removeOwnedRuntimeResource(
     String targetPath,
     String runtimeHomePath,
     String entryName,
     String sourcePath,
-  ) {
+  ) async {
     if (_targetAlreadyPointsToSource(targetPath, sourcePath) ||
         _targetIsOwnedFallbackCopy(
           targetPath,
@@ -129,7 +138,7 @@ extension _CodexRuntimeHomeServiceResourceSync on CodexRuntimeHomeService {
           entryName,
           sourcePath,
         )) {
-      _deleteEntity(targetPath);
+      await _deleteRuntimeResource(targetPath);
       _clearCopiedResourceMarker(runtimeHomePath, entryName);
     }
   }

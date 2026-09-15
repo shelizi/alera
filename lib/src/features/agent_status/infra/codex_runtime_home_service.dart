@@ -30,6 +30,7 @@ typedef CodexRuntimeResourceCopier = Future<void> Function({
   required String sourcePath,
   required String targetPath,
 });
+typedef CodexRuntimeResourceDeleter = Future<void> Function(String path);
 
 final class const CodexRuntimeHomePreparation({
   required final String runtimeHomePath,
@@ -45,6 +46,7 @@ final class CodexRuntimeHomeService({
   @visibleForTesting CodexResourceLinkCreator? resourceLinkCreator,
   CodexRuntimeResourceFingerprinter? resourceFingerprinter,
   CodexRuntimeResourceCopier? resourceCopier,
+  CodexRuntimeResourceDeleter? resourceDeleter,
 }) {
   this
     : _homeDirectory = homeDirectory ?? _resolveHome(environment),
@@ -64,7 +66,9 @@ final class CodexRuntimeHomeService({
       // ignore: prefer_initializing_formals
       _resourceFingerprinter = resourceFingerprinter,
       // ignore: prefer_initializing_formals
-      _resourceCopier = resourceCopier;
+      _resourceCopier = resourceCopier,
+      // ignore: prefer_initializing_formals
+      _resourceDeleter = resourceDeleter;
 
   final String _homeDirectory;
   final String _codexHomePath;
@@ -73,6 +77,7 @@ final class CodexRuntimeHomeService({
   final CodexResourceLinkCreator _resourceLinkCreator;
   final CodexRuntimeResourceFingerprinter? _resourceFingerprinter;
   final CodexRuntimeResourceCopier? _resourceCopier;
+  final CodexRuntimeResourceDeleter? _resourceDeleter;
 
   Future<CodexRuntimeHomePreparation> prepareForTerminalLaunch() async {
     final codexHome = Directory(_systemHomePath)..createSync(recursive: true);

@@ -79,6 +79,8 @@ CodexRuntimeHomeService codexRuntimeHomeService(Ref ref) {
           sourcePath: sourcePath,
           targetPath: targetPath,
         ),
+    resourceDeleter: (path) =>
+        native_runtime_resources.deleteRuntimeResource(path: path),
   );
 }
 
@@ -92,6 +94,8 @@ ClaudeRuntimeHomeService claudeRuntimeHomeService(Ref ref) {
           sourcePath: sourcePath,
           targetPath: targetPath,
         ),
+    resourceDeleter: (path) =>
+        native_runtime_resources.deleteRuntimeResource(path: path),
   );
 }
 

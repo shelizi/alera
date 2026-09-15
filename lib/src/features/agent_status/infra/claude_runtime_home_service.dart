@@ -27,6 +27,7 @@ typedef ClaudeRuntimeResourceCopier = Future<void> Function({
   required String sourcePath,
   required String targetPath,
 });
+typedef ClaudeRuntimeResourceDeleter = Future<void> Function(String path);
 
 abstract interface class ClaudeKeychainCredentialsStore {
   Future<String?> readLegacyCredentials();
@@ -55,6 +56,7 @@ final class ClaudeRuntimeHomeService({
   @visibleForTesting ClaudeResourceLinkCreator? resourceLinkCreator,
   ClaudeRuntimeResourceFingerprinter? resourceFingerprinter,
   ClaudeRuntimeResourceCopier? resourceCopier,
+  ClaudeRuntimeResourceDeleter? resourceDeleter,
 }) {
   this
     : _environment = environment ?? Platform.environment,
@@ -76,7 +78,9 @@ final class ClaudeRuntimeHomeService({
       // ignore: prefer_initializing_formals
       _resourceFingerprinter = resourceFingerprinter,
       // ignore: prefer_initializing_formals
-      _resourceCopier = resourceCopier;
+      _resourceCopier = resourceCopier,
+      // ignore: prefer_initializing_formals
+      _resourceDeleter = resourceDeleter;
 
   final Map<String, String> _environment;
   final String _homeDirectory;
@@ -86,6 +90,7 @@ final class ClaudeRuntimeHomeService({
   final ClaudeResourceLinkCreator _resourceLinkCreator;
   final ClaudeRuntimeResourceFingerprinter? _resourceFingerprinter;
   final ClaudeRuntimeResourceCopier? _resourceCopier;
+  final ClaudeRuntimeResourceDeleter? _resourceDeleter;
 
   Future<ClaudeRuntimeHomePreparation> prepareForTerminalLaunch() async {
     final runtimeHome = await _runtimeHomeDirectory();

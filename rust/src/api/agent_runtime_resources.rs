@@ -42,6 +42,34 @@ pub fn copy_runtime_resource(source_path: String, target_path: String) -> Result
     copy_runtime_resource_path(Path::new(&source_path), Path::new(&target_path))
 }
 
+pub fn delete_runtime_resource(path: String) -> Result<(), String> {
+    delete_runtime_resource_path(Path::new(&path))
+}
+
+fn delete_runtime_resource_path(path: &Path) -> Result<(), String> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(format!("failed to stat {}: {error}", path.display()));
+        }
+    };
+    let file_type = metadata.file_type();
+    if file_type.is_symlink() {
+        if fs::remove_file(path).is_ok() {
+            return Ok(());
+        }
+        return fs::remove_dir(path)
+            .map_err(|error| format!("failed to remove link {}: {error}", path.display()));
+    }
+    if file_type.is_dir() {
+        return fs::remove_dir_all(path)
+            .map_err(|error| format!("failed to remove directory {}: {error}", path.display()));
+    }
+    fs::remove_file(path)
+        .map_err(|error| format!("failed to remove file {}: {error}", path.display()))
+}
+
 fn copy_runtime_resource_path(source_path: &Path, target_path: &Path) -> Result<(), String> {
     let metadata = match fs::metadata(source_path) {
         Ok(metadata) => metadata,
@@ -321,6 +349,29 @@ mod tests {
             target.to_string_lossy().into_owned(),
         )
         .unwrap();
+
+        assert!(!target.exists());
+    }
+
+    #[test]
+    fn deletes_runtime_resource_directory_recursively() {
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("target");
+        let nested = target.join("nested");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(nested.join("child.txt"), b"child").unwrap();
+
+        delete_runtime_resource(target.to_string_lossy().into_owned()).unwrap();
+
+        assert!(!target.exists());
+    }
+
+    #[test]
+    fn ignores_missing_runtime_resource_delete() {
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("missing");
+
+        delete_runtime_resource(target.to_string_lossy().into_owned()).unwrap();
 
         assert!(!target.exists());
     }
