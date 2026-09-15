@@ -19,6 +19,7 @@ import 'package:alera/src/features/settings/domain/alera_settings.dart';
 import 'package:alera/src/features/workbench/application/workbench_providers.dart'
     show workspaceFileServiceProvider;
 import 'package:alera/src/features/workbench/application/workbench_state.dart';
+import 'package:alera/src/features/workbench/domain/workbench_view_prefs.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_service.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
@@ -498,6 +499,7 @@ void main() {
         'parentOid': 'def987654321',
         'filePath': 'lib/main.dart',
         'oldPath': null,
+        'whitespaceMode': GitDiffWhitespaceMode.normal,
       },
     );
     expect(find.text('Commit · lib/main.dart'), findsOneWidget);
@@ -594,6 +596,103 @@ void main() {
     expect(find.text('line one'), findsOneWidget);
     expect(find.text('line five'), findsOneWidget);
   });
+  testWidgets('whitespace comparison selection is sticky and reloads diff', (
+    tester,
+  ) async {
+    final backend = FakeGitBackend()
+      ..gitDiffResult = const GitDiffResult(
+        files: <GitDiffFile>[
+          GitDiffFile(
+            path: 'lib/main.dart',
+            area: .unstaged,
+            status: .modified,
+            lines: <GitDiffLine>[
+              GitDiffLine.deletion('-old'),
+              GitDiffLine.addition('+new'),
+            ],
+          ),
+        ],
+      );
+    final controller = _GitDiffSurfaceTestController();
+
+    await _pumpDiffSurface(
+      tester,
+      backend: backend,
+      controller: controller,
+      tab: _diffTab(filePath: 'lib/main.dart', title: 'main.dart unstaged'),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Normal'), findsOneWidget);
+    await tester.tap(find.byTooltip('Whitespace Comparison'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Ignore Whitespace Changes').last);
+    await tester.pumpAndSettle();
+
+    expect(
+      controller.state.viewPrefs.gitDiffWhitespaceMode,
+      GitDiffWhitespaceMode.ignoreChanges.name,
+    );
+    expect(
+      backend.calls
+          .where((call) => call.method == 'diff')
+          .last
+          .args['whitespaceMode'],
+      GitDiffWhitespaceMode.ignoreChanges,
+    );
+    expect(find.text('Ignore Whitespace Changes'), findsOneWidget);
+  });
+
+  testWidgets('new diff surface reuses persisted whitespace comparison mode', (
+    tester,
+  ) async {
+    final backend = FakeGitBackend()
+      ..gitDiffResult = const GitDiffResult(
+        files: <GitDiffFile>[
+          GitDiffFile(
+            path: 'lib/main.dart',
+            area: .unstaged,
+            status: .modified,
+            lines: <GitDiffLine>[GitDiffLine.addition('+new')],
+          ),
+        ],
+      );
+    final controller = _GitDiffSurfaceTestController(
+      initialViewPrefs: WorkbenchViewPrefs.defaults.copyWith(
+        gitDiffWhitespaceMode: GitDiffWhitespaceMode.ignoreAll.name,
+      ),
+    );
+
+    await _pumpDiffSurface(
+      tester,
+      backend: backend,
+      controller: controller,
+      tab: _diffTab(filePath: 'lib/main.dart', title: 'main.dart unstaged'),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Ignore All Whitespace'), findsOneWidget);
+    expect(
+      backend.calls
+          .where((call) => call.method == 'diff')
+          .single
+          .args['whitespaceMode'],
+      GitDiffWhitespaceMode.ignoreAll,
+    );
+
+    controller.setGitDiffWhitespaceMode(GitDiffWhitespaceMode.ignoreEol.name);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Ignore End-of-Line Whitespace'), findsOneWidget);
+    expect(
+      backend.calls
+          .where((call) => call.method == 'diff')
+          .last
+          .args['whitespaceMode'],
+      GitDiffWhitespaceMode.ignoreEol,
+    );
+  });
+
   testWidgets('working-tree side-by-side right pane edits and saves file', (
     tester,
   ) async {

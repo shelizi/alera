@@ -32,6 +32,20 @@ enum GitChangeTreeRowKind { directory, file }
 
 enum GitDiffLineKind { addition, deletion, hunk, header, context }
 
+enum GitDiffWhitespaceMode {
+  normal,
+  ignoreEol,
+  ignoreChanges,
+  ignoreAll;
+
+  String get label => switch (this) {
+    GitDiffWhitespaceMode.normal => 'Normal',
+    GitDiffWhitespaceMode.ignoreEol => 'Ignore End-of-Line Whitespace',
+    GitDiffWhitespaceMode.ignoreChanges => 'Ignore Whitespace Changes',
+    GitDiffWhitespaceMode.ignoreAll => 'Ignore All Whitespace',
+  };
+}
+
 class const GitStatusResult({
   required final List<GitChangeEntry> entries,
   final List<GitChangeGroup> groups = const [],

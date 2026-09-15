@@ -73,6 +73,7 @@ class _WorkspaceGitDiffSurfaceState
   GitDiffPresentationMode? _overridePresentationMode;
   WorkspaceTextEncodingSelection _encodingSelection =
       WorkspaceTextEncodingSelection.auto;
+  GitDiffWhitespaceMode _whitespaceMode = GitDiffWhitespaceMode.normal;
   int _encodingGeneration = 0;
   final Map<String, _EditableWorkingTreeDocument> _editableDocuments =
       <String, _EditableWorkingTreeDocument>{};
@@ -128,11 +129,58 @@ class _WorkspaceGitDiffSurfaceState
     }
   }
 
+  void _changeWhitespaceMode(GitDiffWhitespaceMode mode) {
+    if (_whitespaceMode == mode) return;
+    setState(() {
+      _whitespaceMode = mode;
+    });
+    try {
+      ref
+          .read(workbenchControllerProvider.notifier)
+          .setGitDiffWhitespaceMode(mode.name);
+    } catch (_) {
+      // Minimal test harnesses might not provide the workbench controller.
+    }
+    _load(preserveEditableDocuments: true);
+  }
+
+  GitDiffWhitespaceMode _decodeWhitespaceMode(String value) {
+    return GitDiffWhitespaceMode.values.firstWhere(
+      (mode) => mode.name == value,
+      orElse: () => GitDiffWhitespaceMode.normal,
+    );
+  }
+
+  GitDiffWhitespaceMode _persistedWhitespaceMode() {
+    try {
+      final value = ref
+          .read(workbenchControllerProvider)
+          .viewPrefs
+          .gitDiffWhitespaceMode;
+      return _decodeWhitespaceMode(value);
+    } catch (_) {
+      return GitDiffWhitespaceMode.normal;
+    }
+  }
+
   void _updateDiffState(VoidCallback update) => setState(update);
 
   @override
   void initState() {
     super.initState();
+    _whitespaceMode = _persistedWhitespaceMode();
+    ref.listenManual<String>(
+      workbenchControllerProvider.select(
+        (state) => state.viewPrefs.gitDiffWhitespaceMode,
+      ),
+      (previous, next) {
+        if (previous == next) return;
+        final mode = _decodeWhitespaceMode(next);
+        if (!mounted || mode == _whitespaceMode) return;
+        setState(() => _whitespaceMode = mode);
+        _load(preserveEditableDocuments: true);
+      },
+    );
     _load();
   }
 
@@ -201,6 +249,8 @@ class _WorkspaceGitDiffSurfaceState
             detectedEncoding: _detectedDiffEncoding,
             onEncodingSelected: (selection) =>
                 unawaited(_changeDiffEncoding(selection)),
+            whitespaceMode: _whitespaceMode,
+            onWhitespaceModeSelected: _changeWhitespaceMode,
             onRefresh: _load,
             onOpenFile: _canOpenFile ? () => unawaited(_openFile()) : null,
             aiAssistEnabled: aiAssistEnabled,
@@ -284,6 +334,7 @@ class _WorkspaceGitDiffSurfaceState
                             : null,
                         contentMode: contentMode,
                         presentationMode: presentationMode,
+                        whitespaceMode: _whitespaceMode,
                       );
                     },
                   ),
@@ -508,6 +559,7 @@ class _WorkspaceGitDiffSurfaceState
       parentOid: widget.tab.gitDiffParentOid,
       filePath: sourceFilePath,
       oldPath: sourceOldPath,
+      whitespaceMode: _whitespaceMode,
     );
   }
 

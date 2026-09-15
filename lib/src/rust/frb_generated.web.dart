@@ -227,6 +227,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   GitDiffResult dco_decode_git_diff_result(dynamic raw);
 
   @protected
+  GitDiffWhitespaceMode dco_decode_git_diff_whitespace_mode(dynamic raw);
+
+  @protected
   GitError dco_decode_git_error(dynamic raw);
 
   @protected
@@ -875,6 +878,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   GitDiffResult sse_decode_git_diff_result(SseDeserializer deserializer);
+
+  @protected
+  GitDiffWhitespaceMode sse_decode_git_diff_whitespace_mode(
+    SseDeserializer deserializer,
+  );
 
   @protected
   GitError sse_decode_git_error(SseDeserializer deserializer);
@@ -1707,6 +1715,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_git_diff_result(GitDiffResult self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_git_diff_whitespace_mode(
+    GitDiffWhitespaceMode self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_git_error(GitError self, SseSerializer serializer);

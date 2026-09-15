@@ -12,7 +12,7 @@ class _ProgressiveDiffPage {
 }
 
 extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
-  void _load() {
+  void _load({bool preserveEditableDocuments = false}) {
     final loadGeneration = ++_diffLoadGeneration;
     final readingDiffCompletion = _readingDiffCompletion;
     if (readingDiffCompletion != null && !readingDiffCompletion.isCompleted) {
@@ -20,16 +20,22 @@ extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
       unawaited(
         readingDiffCompletion.future.then((_) {
           if (mounted && loadGeneration == _diffLoadGeneration) {
-            _loadNow(loadGeneration);
+            _loadNow(
+              loadGeneration,
+              preserveEditableDocuments: preserveEditableDocuments,
+            );
           }
         }),
       );
       return;
     }
-    _loadNow(loadGeneration);
+    _loadNow(
+      loadGeneration,
+      preserveEditableDocuments: preserveEditableDocuments,
+    );
   }
 
-  void _loadNow(int loadGeneration) {
+  void _loadNow(int loadGeneration, {required bool preserveEditableDocuments}) {
     _readingDiffGeneration += 1;
     final backend = ref.read(gitBackendProvider);
     final scope = widget.tab.gitDiffScope;
@@ -71,6 +77,7 @@ extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
                   : backend.diffAll(
                       path: sourceControlScope.path,
                       filePath: sourceFilePath,
+                      whitespaceMode: _whitespaceMode,
                     ),
             WorkspaceGitDiffScope.file =>
               sourceFilePath == null || area == null
@@ -79,13 +86,16 @@ extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
                       path: sourceControlScope.path,
                       filePath: sourceFilePath,
                       area: area,
+                      whitespaceMode: _whitespaceMode,
                     ),
             null => Future<GitDiffResult>.value(const GitDiffResult(files: [])),
           };
     _updateDiffState(() {
       _loadedResult = null;
       _fullFileContents = const <GitDiffFile, _FullFileContents>{};
-      _editableDocuments.clear();
+      if (!preserveEditableDocuments) {
+        _editableDocuments.clear();
+      }
       _readingDiffResult = null;
       _readingDiffOriginalSnapshot = null;
       _showReadingDiff = false;
@@ -173,7 +183,10 @@ extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
     final paths = await pathsFuture;
     if (paths == null) {
       return _ProgressiveDiffPage(
-        result: await backend.diffAll(path: sourceControlPath),
+        result: await backend.diffAll(
+          path: sourceControlPath,
+          whitespaceMode: _whitespaceMode,
+        ),
         nextIndex: null,
       );
     }
@@ -188,6 +201,7 @@ extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
       filePaths: paths
           .take(_progressiveFirstDiffPageSize)
           .toList(growable: false),
+      whitespaceMode: _whitespaceMode,
     );
     return _ProgressiveDiffPage(
       result: GitDiffResult(files: page.files, truncated: page.truncated),
@@ -284,6 +298,7 @@ extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
       return await backend.diffAllPage(
         path: sourceControlPath,
         filePaths: filePaths,
+        whitespaceMode: _whitespaceMode,
       );
     } catch (_) {
       // A later page is best-effort once the first page is visible. Keep the

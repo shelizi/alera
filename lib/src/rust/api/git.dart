@@ -8,7 +8,7 @@ import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // These functions are ignored because they are not marked as `pub`: `delete_workspace_relative_path`, `discard_status_entries`, `entries_for_area_and_scope`, `from_git2`, `from_io`, `git_cli_in_path`, `git_signature`, `is_parent_discardable`, `is_submodule_worktree_only`, `new`, `open_repo`, `pathspec_string`, `reject_out_of_scope_staged_entries`, `reject_out_of_scope_stash_pop`, `reject_out_of_scope_tracked_changes`, `reject_tree_diff_out_of_scope`, `relative_path`, `remove_index_path_if_present`, `repo_path_is_in_scope`, `repo_relative_path_from_workspace`, `repo_relative_path`, `repo_workdir_path_exists`, `scoped_pathspecs`, `split_clone_destination`, `stage_selected_path`, `stage_status_entries`, `stash_oid`, `unstage_selected_path`, `unstage_status_entries`, `workspace_path_is_in_scope`, `workspace_repo_relative_path`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`
 
 Future<bool> isGitRepository({required String path}) =>
     RustLib.instance.api.crateApiGitIsGitRepository(path: path);
@@ -65,6 +65,38 @@ Future<GitDiffPage> gitDiffAllPage({
   filePaths: filePaths,
 );
 
+Future<GitDiffResult> gitDiffWithWhitespace({
+  required String path,
+  required String filePath,
+  required GitChangeArea area,
+  required GitDiffWhitespaceMode whitespaceMode,
+}) => RustLib.instance.api.crateApiGitGitDiffWithWhitespace(
+  path: path,
+  filePath: filePath,
+  area: area,
+  whitespaceMode: whitespaceMode,
+);
+
+Future<GitDiffResult> gitDiffAllWithWhitespace({
+  required String path,
+  String? filePath,
+  required GitDiffWhitespaceMode whitespaceMode,
+}) => RustLib.instance.api.crateApiGitGitDiffAllWithWhitespace(
+  path: path,
+  filePath: filePath,
+  whitespaceMode: whitespaceMode,
+);
+
+Future<GitDiffPage> gitDiffAllPageWithWhitespace({
+  required String path,
+  required List<String> filePaths,
+  required GitDiffWhitespaceMode whitespaceMode,
+}) => RustLib.instance.api.crateApiGitGitDiffAllPageWithWhitespace(
+  path: path,
+  filePaths: filePaths,
+  whitespaceMode: whitespaceMode,
+);
+
 Future<GitHistoryResult> gitHistory({
   required String path,
   int? limit,
@@ -109,6 +141,22 @@ Future<GitDiffResult> gitCommitDiff({
   parentOid: parentOid,
   filePath: filePath,
   oldPath: oldPath,
+);
+
+Future<GitDiffResult> gitCommitDiffWithWhitespace({
+  required String path,
+  required String commitOid,
+  String? parentOid,
+  String? filePath,
+  String? oldPath,
+  required GitDiffWhitespaceMode whitespaceMode,
+}) => RustLib.instance.api.crateApiGitGitCommitDiffWithWhitespace(
+  path: path,
+  commitOid: commitOid,
+  parentOid: parentOid,
+  filePath: filePath,
+  oldPath: oldPath,
+  whitespaceMode: whitespaceMode,
 );
 
 /// Summarizes commits and the tree-to-tree patch from merge-base([base_ref],
@@ -599,6 +647,8 @@ class GitDiffResult {
           files == other.files &&
           truncated == other.truncated;
 }
+
+enum GitDiffWhitespaceMode { normal, ignoreEol, ignoreChanges, ignoreAll }
 
 class GitError implements FrbException {
   final GitErrorKind kind;

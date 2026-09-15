@@ -104,12 +104,14 @@ class const E2eGitBackend() implements GitBackend {
     required String path,
     required String filePath,
     required GitChangeArea area,
+    GitDiffWhitespaceMode whitespaceMode = GitDiffWhitespaceMode.normal,
   }) async => const GitDiffResult(files: <GitDiffFile>[]);
 
   @override
   Future<GitDiffResult> diffAll({
     required String path,
     String? filePath,
+    GitDiffWhitespaceMode whitespaceMode = GitDiffWhitespaceMode.normal,
   }) async => const GitDiffResult(files: <GitDiffFile>[]);
 
   @override
@@ -173,6 +175,7 @@ class const E2eGitBackend() implements GitBackend {
     String? parentOid,
     String? filePath,
     String? oldPath,
+    GitDiffWhitespaceMode whitespaceMode = GitDiffWhitespaceMode.normal,
   }) async => const GitDiffResult(files: <GitDiffFile>[]);
 
   @override

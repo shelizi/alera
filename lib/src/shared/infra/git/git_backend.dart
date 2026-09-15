@@ -118,17 +118,23 @@ abstract interface class GitBackend {
     required String path,
     required String filePath,
     required GitChangeArea area,
+    GitDiffWhitespaceMode whitespaceMode = GitDiffWhitespaceMode.normal,
   });
 
   /// Loads a combined read-only diff for all changed files, or a single file
   /// when [filePath] is provided.
-  Future<GitDiffResult> diffAll({required String path, String? filePath});
+  Future<GitDiffResult> diffAll({
+    required String path,
+    String? filePath,
+    GitDiffWhitespaceMode whitespaceMode = GitDiffWhitespaceMode.normal,
+  });
 
   /// Loads one bounded page of a combined working-tree diff. [filePaths] is
   /// the current page from a stable snapshot returned by [status].
   Future<GitDiffPage> diffAllPage({
     required String path,
     required List<String> filePaths,
+    GitDiffWhitespaceMode whitespaceMode = GitDiffWhitespaceMode.normal,
   });
 
   /// Immutable unified patch used as the source for a reading diff. Passing a
@@ -187,6 +193,7 @@ abstract interface class GitBackend {
     String? parentOid,
     String? filePath,
     String? oldPath,
+    GitDiffWhitespaceMode whitespaceMode = GitDiffWhitespaceMode.normal,
   });
 
   /// Commits and tree-to-tree patch from merge-base([baseRef], [headRef]) to

@@ -213,10 +213,15 @@ WorkspaceTabRecord _diffTab({
 }
 
 class _GitDiffSurfaceTestController extends WorkbenchController {
+  _GitDiffSurfaceTestController({
+    this.initialViewPrefs = WorkbenchViewPrefs.defaults,
+  });
+
+  final WorkbenchViewPrefs initialViewPrefs;
   final List<String> openedRelativePaths = <String>[];
 
   @override
-  WorkbenchState build() => const WorkbenchState();
+  WorkbenchState build() => WorkbenchState(viewPrefs: initialViewPrefs);
 
   @override
   Future<WorkspaceTabRecord> openEditorTab({
@@ -280,8 +285,10 @@ class _ProgressiveAllDiffBackend extends FakeGitBackend {
   Future<GitDiffPage> diffAllPage({
     required String path,
     required List<String> filePaths,
+    GitDiffWhitespaceMode whitespaceMode = GitDiffWhitespaceMode.normal,
   }) async {
     final files = <GitDiffFile>[];
+    lastDiffWhitespaceMode = whitespaceMode;
     for (final filePath in filePaths) {
       requestedFilePaths.add(filePath);
       await gates[filePath]?.future;
@@ -292,6 +299,7 @@ class _ProgressiveAllDiffBackend extends FakeGitBackend {
       GitBackendCall('diffAllPage', <String, Object?>{
         'path': path,
         'filePaths': filePaths,
+        'whitespaceMode': whitespaceMode,
       }),
     );
     return GitDiffPage(files: files);

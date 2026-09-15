@@ -21,6 +21,8 @@ class const _GitDiffBar({
   required final native.WorkspaceTextEncoding? detectedEncoding,
   required final ValueChanged<WorkspaceTextEncodingSelection>
   onEncodingSelected,
+  required final GitDiffWhitespaceMode whitespaceMode,
+  required final ValueChanged<GitDiffWhitespaceMode> onWhitespaceModeSelected,
 }) extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
@@ -98,6 +100,30 @@ class const _GitDiffBar({
                     selection: encodingSelection,
                     detectedEncoding: detectedEncoding,
                   ),
+                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                    color: AleraTokens.foregroundMuted,
+                    fontFamily: 'JetBrains Mono',
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: AleraTokens.space2),
+            PopupMenuButton<GitDiffWhitespaceMode>(
+              tooltip: 'Whitespace Comparison',
+              onSelected: onWhitespaceModeSelected,
+              itemBuilder: (context) => <PopupMenuEntry<GitDiffWhitespaceMode>>[
+                for (final mode in GitDiffWhitespaceMode.values)
+                  PopupMenuItem<GitDiffWhitespaceMode>(
+                    value: mode,
+                    child: Text(mode.label),
+                  ),
+              ],
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: AleraTokens.space6,
+                ),
+                child: Text(
+                  whitespaceMode.label,
                   style: Theme.of(context).textTheme.labelSmall?.copyWith(
                     color: AleraTokens.foregroundMuted,
                     fontFamily: 'JetBrains Mono',

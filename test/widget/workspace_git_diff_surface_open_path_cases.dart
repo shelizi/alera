@@ -228,6 +228,7 @@ void _registerWorkspaceGitDiffSurfaceOpenPathTests() {
         'path': p.join('/tmp/project', 'packages', 'app'),
         'filePath': 'lib/main.dart',
         'area': GitChangeArea.unstaged,
+        'whitespaceMode': GitDiffWhitespaceMode.normal,
       },
     );
 

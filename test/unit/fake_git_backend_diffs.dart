@@ -5,6 +5,7 @@ mixin _FakeGitBackendDiffs {
 
   GitDiffResult gitDiffResult = const GitDiffResult(files: []);
   GitDiffResult gitDiffAllResult = const GitDiffResult(files: []);
+  GitDiffWhitespaceMode lastDiffWhitespaceMode = GitDiffWhitespaceMode.normal;
   Uint8List readingDiffPatchResult = Uint8List(0);
   GitException? readingDiffPatchError;
 
@@ -16,12 +17,15 @@ mixin _FakeGitBackendDiffs {
     required String path,
     required String filePath,
     required GitChangeArea area,
+    GitDiffWhitespaceMode whitespaceMode = GitDiffWhitespaceMode.normal,
   }) async {
+    lastDiffWhitespaceMode = whitespaceMode;
     calls.add(
       GitBackendCall('diff', <String, Object?>{
         'path': path,
         'filePath': filePath,
         'area': area,
+        'whitespaceMode': whitespaceMode,
       }),
     );
     return gitDiffResult;
@@ -30,11 +34,14 @@ mixin _FakeGitBackendDiffs {
   Future<GitDiffResult> diffAll({
     required String path,
     String? filePath,
+    GitDiffWhitespaceMode whitespaceMode = GitDiffWhitespaceMode.normal,
   }) async {
+    lastDiffWhitespaceMode = whitespaceMode;
     calls.add(
       GitBackendCall('diffAll', <String, Object?>{
         'path': path,
         'filePath': filePath,
+        'whitespaceMode': whitespaceMode,
       }),
     );
     return gitDiffAllResult;
@@ -45,11 +52,14 @@ mixin _FakeGitBackendDiffs {
   Future<GitDiffPage> diffAllPage({
     required String path,
     required List<String> filePaths,
+    GitDiffWhitespaceMode whitespaceMode = GitDiffWhitespaceMode.normal,
   }) async {
+    lastDiffWhitespaceMode = whitespaceMode;
     calls.add(
       GitBackendCall('diffAllPage', <String, Object?>{
         'path': path,
         'filePaths': filePaths,
+        'whitespaceMode': whitespaceMode,
       }),
     );
     return gitDiffAllPageResult;

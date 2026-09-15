@@ -77,6 +77,14 @@ pub enum GitChangeArea {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GitDiffWhitespaceMode {
+    Normal,
+    IgnoreEol,
+    IgnoreChanges,
+    IgnoreAll,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GitChangeStatus {
     Modified,
     Added,
@@ -427,6 +435,31 @@ pub fn git_diff_all_page(path: String, file_paths: Vec<String>) -> Result<GitDif
     git_diff_impl::git_diff_all_page(path, file_paths)
 }
 
+pub fn git_diff_with_whitespace(
+    path: String,
+    file_path: String,
+    area: GitChangeArea,
+    whitespace_mode: GitDiffWhitespaceMode,
+) -> Result<GitDiffResult, GitError> {
+    git_diff_impl::git_diff_with_whitespace(path, file_path, area, whitespace_mode)
+}
+
+pub fn git_diff_all_with_whitespace(
+    path: String,
+    file_path: Option<String>,
+    whitespace_mode: GitDiffWhitespaceMode,
+) -> Result<GitDiffResult, GitError> {
+    git_diff_impl::git_diff_all_with_whitespace(path, file_path, whitespace_mode)
+}
+
+pub fn git_diff_all_page_with_whitespace(
+    path: String,
+    file_paths: Vec<String>,
+    whitespace_mode: GitDiffWhitespaceMode,
+) -> Result<GitDiffPage, GitError> {
+    git_diff_impl::git_diff_all_page_with_whitespace(path, file_paths, whitespace_mode)
+}
+
 pub fn git_history(
     path: String,
     limit: Option<u32>,
@@ -460,6 +493,24 @@ pub fn git_commit_diff(
     old_path: Option<String>,
 ) -> Result<GitDiffResult, GitError> {
     git_diff_impl::git_commit_diff(path, commit_oid, parent_oid, file_path, old_path)
+}
+
+pub fn git_commit_diff_with_whitespace(
+    path: String,
+    commit_oid: String,
+    parent_oid: Option<String>,
+    file_path: Option<String>,
+    old_path: Option<String>,
+    whitespace_mode: GitDiffWhitespaceMode,
+) -> Result<GitDiffResult, GitError> {
+    git_diff_impl::git_commit_diff_with_whitespace(
+        path,
+        commit_oid,
+        parent_oid,
+        file_path,
+        old_path,
+        whitespace_mode,
+    )
 }
 
 /// Summarizes commits and the tree-to-tree patch from merge-base([base_ref],

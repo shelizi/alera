@@ -245,6 +245,7 @@ void _registerWorkbenchControllerViewPrefsTests() {
     _controller.setCollapsed(true);
     _controller.setGitDiffContentMode(.diffOnly);
     _controller.setGitDiffPresentationMode(.sideBySide);
+    _controller.setGitDiffWhitespaceMode('ignoreChanges');
     _controller.setSidebarWidth(AleraTokens.sidebarMaxWidth + 400);
     await _flush();
 
@@ -256,6 +257,7 @@ void _registerWorkbenchControllerViewPrefsTests() {
       _controller.state.viewPrefs.gitDiffPresentationMode,
       GitDiffPresentationMode.sideBySide,
     );
+    expect(_controller.state.viewPrefs.gitDiffWhitespaceMode, 'ignoreChanges');
     expect(_controller.state.viewPrefs.groupBy, WorkbenchGroupBy.none);
     expect(_controller.state.viewPrefs.projectSort, WorkbenchSortBy.recent);
     expect(_controller.state.viewPrefs.workspaceSort, WorkbenchSortBy.recent);
@@ -273,6 +275,10 @@ void _registerWorkbenchControllerViewPrefsTests() {
     expect(
       _harness.viewPrefsRepository.prefs.workspaceSort,
       WorkbenchSortBy.recent,
+    );
+    expect(
+      _harness.viewPrefsRepository.prefs.gitDiffWhitespaceMode,
+      'ignoreChanges',
     );
     expect(_harness.viewPrefsRepository.saveCount, greaterThan(0));
   });

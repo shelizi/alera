@@ -22,9 +22,17 @@ final class _LiveDiffStats {
   final int removed;
 }
 
-_LiveDiffStats _liveDiffStats(String baseline, String current) {
-  final oldLines = _splitFullFileLines(baseline);
-  final newLines = _splitFullFileLines(current);
+_LiveDiffStats _liveDiffStats(
+  String baseline,
+  String current,
+  GitDiffWhitespaceMode whitespaceMode,
+) {
+  final oldLines = _splitFullFileLines(baseline)
+      .map((line) => _normalizeLiveDiffLine(line, whitespaceMode))
+      .toList(growable: false);
+  final newLines = _splitFullFileLines(current)
+      .map((line) => _normalizeLiveDiffLine(line, whitespaceMode))
+      .toList(growable: false);
   var prefix = 0;
   while (prefix < oldLines.length &&
       prefix < newLines.length &&
@@ -40,6 +48,19 @@ _LiveDiffStats _liveDiffStats(String baseline, String current) {
     newSuffix -= 1;
   }
   return _LiveDiffStats(added: newSuffix - prefix, removed: oldSuffix - prefix);
+}
+
+String _normalizeLiveDiffLine(String line, GitDiffWhitespaceMode mode) {
+  return switch (mode) {
+    GitDiffWhitespaceMode.normal => line,
+    GitDiffWhitespaceMode.ignoreEol => line.replaceFirst(
+      RegExp(r'[ \t]+$'),
+      '',
+    ),
+    GitDiffWhitespaceMode.ignoreChanges =>
+      line.replaceAll(RegExp(r'[ \t]+'), ' ').replaceFirst(RegExp(r' $'), ''),
+    GitDiffWhitespaceMode.ignoreAll => line.replaceAll(RegExp(r'[ \t]+'), ''),
+  };
 }
 
 extension _WorkspaceGitDiffEditable on _WorkspaceGitDiffSurfaceState {
@@ -213,6 +234,7 @@ class _EditableWorkingTreeDiff extends StatefulWidget {
     required this.file,
     required this.baseline,
     required this.document,
+    required this.whitespaceMode,
     required this.onChanged,
     required this.onSave,
   });
@@ -220,6 +242,7 @@ class _EditableWorkingTreeDiff extends StatefulWidget {
   final GitDiffFile file;
   final String baseline;
   final _EditableWorkingTreeDocument document;
+  final GitDiffWhitespaceMode whitespaceMode;
   final ValueChanged<String> onChanged;
   final VoidCallback onSave;
 
@@ -259,7 +282,11 @@ class _EditableWorkingTreeDiffState extends State<_EditableWorkingTreeDiff> {
 
   @override
   Widget build(BuildContext context) {
-    final stats = _liveDiffStats(widget.baseline, widget.document.currentText);
+    final stats = _liveDiffStats(
+      widget.baseline,
+      widget.document.currentText,
+      widget.whitespaceMode,
+    );
     final lineCount = math.max(
       _splitFullFileLines(widget.baseline).length,
       _splitFullFileLines(widget.document.currentText).length,

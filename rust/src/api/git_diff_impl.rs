@@ -9,8 +9,8 @@ use git2::{
 use super::{
     open_repo, GitChangeArea, GitChangeEntry, GitChangeStatus, GitCommitChangeEntry,
     GitCommitCompareResult, GitCommitCompareStatus, GitCommitCompareSummary, GitDiffFile,
-    GitDiffLine, GitDiffLineKind, GitDiffPage, GitDiffResult, GitError, GitErrorKind,
-    GitStatusResult, GitSubmoduleStatus,
+    GitDiffLine, GitDiffLineKind, GitDiffPage, GitDiffResult, GitDiffWhitespaceMode, GitError,
+    GitErrorKind, GitStatusResult, GitSubmoduleStatus,
 };
 
 #[path = "git_diff_combined.rs"]
@@ -23,7 +23,8 @@ mod git_diff_untracked;
 pub(in crate::api) mod git_reading_diff_patch;
 
 use git_diff_combined::{
-    append_combined_diff_file, append_combined_diff_for_path, git_diff_all_for_file,
+    append_combined_diff_file, append_combined_diff_for_path_with_whitespace,
+    git_diff_all_for_file_with_whitespace,
 };
 use git_diff_render::render_diff_for_path;
 use git_diff_untracked::{build_untracked_patch, read_untracked_text_up_to, untracked_diff_file};
@@ -116,11 +117,21 @@ pub(super) fn git_diff(
     file_path: String,
     area: GitChangeArea,
 ) -> Result<GitDiffResult, GitError> {
+    git_diff_with_whitespace(path, file_path, area, GitDiffWhitespaceMode::Normal)
+}
+
+pub(super) fn git_diff_with_whitespace(
+    path: String,
+    file_path: String,
+    area: GitChangeArea,
+    whitespace_mode: GitDiffWhitespaceMode,
+) -> Result<GitDiffResult, GitError> {
     let repo = open_repo(&path)?;
     let paths = GitPathContext::new(&repo, &path)?;
-    let files = diff_file_for_area(&repo, &paths, &file_path, area)?
-        .into_iter()
-        .collect::<Vec<_>>();
+    let files =
+        diff_file_for_area_with_whitespace(&repo, &paths, &file_path, area, whitespace_mode)?
+            .into_iter()
+            .collect::<Vec<_>>();
     let truncated = files.iter().any(|file| file.truncated);
     Ok(GitDiffResult { files, truncated })
 }
@@ -129,10 +140,18 @@ pub(super) fn git_diff_all(
     path: String,
     file_path: Option<String>,
 ) -> Result<GitDiffResult, GitError> {
+    git_diff_all_with_whitespace(path, file_path, GitDiffWhitespaceMode::Normal)
+}
+
+pub(super) fn git_diff_all_with_whitespace(
+    path: String,
+    file_path: Option<String>,
+    whitespace_mode: GitDiffWhitespaceMode,
+) -> Result<GitDiffResult, GitError> {
     let repo = open_repo(&path)?;
     let paths = GitPathContext::new(&repo, &path)?;
     if let Some(file_path) = file_path {
-        return git_diff_all_for_file(&repo, &paths, &file_path);
+        return git_diff_all_for_file_with_whitespace(&repo, &paths, &file_path, whitespace_mode);
     }
     let status = git_status(path.clone())?;
     let mut files = Vec::new();
@@ -142,7 +161,13 @@ pub(super) fn git_diff_all(
     'changes: for entry in status.entries {
         if let Some(submodule) = &entry.submodule {
             if submodule.commit_changed {
-                if let Some(file) = diff_file_for_area(&repo, &paths, &entry.path, entry.area)? {
+                if let Some(file) = diff_file_for_area_with_whitespace(
+                    &repo,
+                    &paths,
+                    &entry.path,
+                    entry.area,
+                    whitespace_mode,
+                )? {
                     if append_combined_diff_file(&mut files, &mut total_bytes, &mut truncated, file)
                     {
                         break;
@@ -156,9 +181,13 @@ pub(super) fn git_diff_all(
                 let inner = git_submodule_worktree_status(path.clone(), entry.path.clone())?;
                 for inner_entry in inner.entries {
                     let inner_path = format!("{}/{}", entry.path, inner_entry.path);
-                    if let Some(file) =
-                        diff_file_for_area(&repo, &paths, &inner_path, inner_entry.area)?
-                    {
+                    if let Some(file) = diff_file_for_area_with_whitespace(
+                        &repo,
+                        &paths,
+                        &inner_path,
+                        inner_entry.area,
+                        whitespace_mode,
+                    )? {
                         if append_combined_diff_file(
                             &mut files,
                             &mut total_bytes,
@@ -172,7 +201,13 @@ pub(super) fn git_diff_all(
             }
             continue;
         }
-        if let Some(file) = diff_file_for_area(&repo, &paths, &entry.path, entry.area)? {
+        if let Some(file) = diff_file_for_area_with_whitespace(
+            &repo,
+            &paths,
+            &entry.path,
+            entry.area,
+            whitespace_mode,
+        )? {
             if append_combined_diff_file(&mut files, &mut total_bytes, &mut truncated, file) {
                 break;
             }
@@ -186,6 +221,14 @@ pub(super) fn git_diff_all_page(
     path: String,
     file_paths: Vec<String>,
 ) -> Result<GitDiffPage, GitError> {
+    git_diff_all_page_with_whitespace(path, file_paths, GitDiffWhitespaceMode::Normal)
+}
+
+pub(super) fn git_diff_all_page_with_whitespace(
+    path: String,
+    file_paths: Vec<String>,
+    whitespace_mode: GitDiffWhitespaceMode,
+) -> Result<GitDiffPage, GitError> {
     let repo = open_repo(&path)?;
     let paths = GitPathContext::new(&repo, &path)?;
     let mut files = Vec::new();
@@ -193,10 +236,11 @@ pub(super) fn git_diff_all_page(
     let mut truncated = false;
 
     for file_path in file_paths {
-        if append_combined_diff_for_path(
+        if append_combined_diff_for_path_with_whitespace(
             &repo,
             &paths,
             &file_path,
+            whitespace_mode,
             &mut files,
             &mut total_bytes,
             &mut truncated,
@@ -330,6 +374,24 @@ pub(super) fn git_commit_diff(
     file_path: Option<String>,
     old_path: Option<String>,
 ) -> Result<GitDiffResult, GitError> {
+    git_commit_diff_with_whitespace(
+        path,
+        commit_oid,
+        parent_oid,
+        file_path,
+        old_path,
+        GitDiffWhitespaceMode::Normal,
+    )
+}
+
+pub(super) fn git_commit_diff_with_whitespace(
+    path: String,
+    commit_oid: String,
+    parent_oid: Option<String>,
+    file_path: Option<String>,
+    old_path: Option<String>,
+    whitespace_mode: GitDiffWhitespaceMode,
+) -> Result<GitDiffResult, GitError> {
     let repo = open_repo(&path)?;
     let paths = GitPathContext::new(&repo, &path)?;
     let commit_oid = Oid::from_str(&commit_oid).map_err(GitError::from_git2)?;
@@ -343,11 +405,12 @@ pub(super) fn git_commit_diff(
         let old_repo_path = old_path
             .as_deref()
             .map(|old_path| paths.to_repo_path(old_path));
-        let mut diff = diff_for_commit_range(
+        let mut diff = diff_for_commit_range_with_whitespace(
             &repo,
             parent_oid,
             commit_oid,
             &[repo_path.as_str(), old_repo_path.as_deref().unwrap_or("")],
+            whitespace_mode,
         )?;
         let file = commit_diff_file_for_path(
             &repo,
@@ -362,7 +425,8 @@ pub(super) fn git_commit_diff(
         });
     }
 
-    let mut diff = diff_for_commit_range(&repo, parent_oid, commit_oid, &[])?;
+    let mut diff =
+        diff_for_commit_range_with_whitespace(&repo, parent_oid, commit_oid, &[], whitespace_mode)?;
     let mut files = Vec::new();
     let mut total_bytes = 0usize;
     let mut truncated = false;
@@ -562,6 +626,22 @@ fn diff_file_for_area(
     workspace_file_path: &str,
     area: GitChangeArea,
 ) -> Result<Option<GitDiffFile>, GitError> {
+    diff_file_for_area_with_whitespace(
+        repo,
+        paths,
+        workspace_file_path,
+        area,
+        GitDiffWhitespaceMode::Normal,
+    )
+}
+
+fn diff_file_for_area_with_whitespace(
+    repo: &Repository,
+    paths: &GitPathContext,
+    workspace_file_path: &str,
+    area: GitChangeArea,
+    whitespace_mode: GitDiffWhitespaceMode,
+) -> Result<Option<GitDiffFile>, GitError> {
     match git_submodule_impl::diff_file_for_submodule(repo, paths, workspace_file_path, area)? {
         git_submodule_impl::SubmoduleDiff::NotSubmodule => {}
         git_submodule_impl::SubmoduleDiff::NoDiff => return Ok(None),
@@ -584,14 +664,16 @@ fn diff_file_for_area(
             }
         }
         GitChangeArea::Staged | GitChangeArea::Unstaged => {
-            let Some(selection) = selected_delta_for_area(repo, &file_path, area)? else {
+            let Some(selection) =
+                selected_delta_for_area_with_whitespace(repo, &file_path, area, whitespace_mode)?
+            else {
                 return Ok(None);
             };
             let mut pathspecs = vec![selection.path.as_str()];
             if let Some(old_path) = selection.old_path.as_deref() {
                 pathspecs.push(old_path);
             }
-            let mut diff = diff_for_area(repo, &pathspecs, area)?;
+            let mut diff = diff_for_area_with_whitespace(repo, &pathspecs, area, whitespace_mode)?;
             let rendered = render_diff_for_path(&mut diff, &selection.path)?;
             if rendered.lines.is_empty() {
                 return Ok(None);
@@ -726,6 +808,9 @@ fn commit_diff_file_for_path(
         return Ok(None);
     };
     let rendered = render_diff_for_path(diff, &selection.path)?;
+    if rendered.lines.is_empty() {
+        return Ok(None);
+    }
     let Some(path) = visible_workspace_path(
         paths,
         &selection.path,
@@ -759,6 +844,22 @@ fn diff_for_commit_range<'repo>(
     commit_oid: Oid,
     pathspecs: &[&str],
 ) -> Result<Diff<'repo>, GitError> {
+    diff_for_commit_range_with_whitespace(
+        repo,
+        parent_oid,
+        commit_oid,
+        pathspecs,
+        GitDiffWhitespaceMode::Normal,
+    )
+}
+
+fn diff_for_commit_range_with_whitespace<'repo>(
+    repo: &'repo Repository,
+    parent_oid: Option<Oid>,
+    commit_oid: Oid,
+    pathspecs: &[&str],
+    whitespace_mode: GitDiffWhitespaceMode,
+) -> Result<Diff<'repo>, GitError> {
     let commit = repo.find_commit(commit_oid).map_err(GitError::from_git2)?;
     let commit_tree = commit.tree().map_err(GitError::from_git2)?;
     let parent_tree = parent_oid
@@ -769,6 +870,7 @@ fn diff_for_commit_range<'repo>(
         })
         .transpose()?;
     let mut options = DiffOptions::new();
+    apply_whitespace_mode(&mut options, whitespace_mode);
     let mut has_pathspec = false;
     for pathspec in pathspecs.iter().filter(|pathspec| !pathspec.is_empty()) {
         options.pathspec(pathspec);
@@ -850,12 +952,13 @@ struct DiffSelection {
     status: GitChangeStatus,
 }
 
-fn selected_delta_for_area(
+fn selected_delta_for_area_with_whitespace(
     repo: &Repository,
     file_path: &str,
     area: GitChangeArea,
+    whitespace_mode: GitDiffWhitespaceMode,
 ) -> Result<Option<DiffSelection>, GitError> {
-    let diff = diff_for_area(repo, &[], area)?;
+    let diff = diff_for_area_with_whitespace(repo, &[], area, whitespace_mode)?;
     for delta in diff.deltas() {
         let new_path = delta_path(&delta, false)?;
         let old_path = old_path_for_delta(&delta)?;
@@ -900,7 +1003,17 @@ fn diff_for_area<'repo>(
     pathspecs: &[&str],
     area: GitChangeArea,
 ) -> Result<Diff<'repo>, GitError> {
+    diff_for_area_with_whitespace(repo, pathspecs, area, GitDiffWhitespaceMode::Normal)
+}
+
+fn diff_for_area_with_whitespace<'repo>(
+    repo: &'repo Repository,
+    pathspecs: &[&str],
+    area: GitChangeArea,
+    whitespace_mode: GitDiffWhitespaceMode,
+) -> Result<Diff<'repo>, GitError> {
     let mut options = DiffOptions::new();
+    apply_whitespace_mode(&mut options, whitespace_mode);
     if !pathspecs.is_empty() {
         options.disable_pathspec_match(true);
     }
@@ -924,6 +1037,21 @@ fn diff_for_area<'repo>(
     diff.find_similar(Some(&mut find_options))
         .map_err(GitError::from_git2)?;
     Ok(diff)
+}
+
+fn apply_whitespace_mode(options: &mut DiffOptions, mode: GitDiffWhitespaceMode) {
+    match mode {
+        GitDiffWhitespaceMode::Normal => {}
+        GitDiffWhitespaceMode::IgnoreEol => {
+            options.ignore_whitespace_eol(true);
+        }
+        GitDiffWhitespaceMode::IgnoreChanges => {
+            options.ignore_whitespace_change(true);
+        }
+        GitDiffWhitespaceMode::IgnoreAll => {
+            options.ignore_whitespace(true);
+        }
+    }
 }
 
 fn is_untracked_file(repo: &Repository, file_path: &str) -> Result<bool, GitError> {

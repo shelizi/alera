@@ -41,6 +41,7 @@ void _registerWorkspaceGitDiffSurfacePullRequestTests() {
         'parentOid': 'base123',
         'filePath': null,
         'oldPath': null,
+        'whitespaceMode': GitDiffWhitespaceMode.normal,
       },
     );
     expect(find.byTooltip('Generate Reading Diff'), findsOneWidget);

@@ -135,6 +135,7 @@ void main() {
       expect(restored.gitDiffGroupMode, GitDiffGroupMode.byArea);
       expect(restored.gitDiffContentMode, GitDiffContentMode.fullFile);
       expect(restored.gitDiffPresentationMode, GitDiffPresentationMode.unified);
+      expect(restored.gitDiffWhitespaceMode, 'normal');
     });
 
     test('migrates legacy side-by-side prefs to diff-only content', () {
@@ -166,6 +167,7 @@ void main() {
 
       expect(restored.gitDiffContentMode, GitDiffContentMode.diffOnly);
       expect(restored.gitDiffPresentationMode, GitDiffPresentationMode.unified);
+      expect(restored.gitDiffWhitespaceMode, 'normal');
     });
     test('round-trips the git diff presentation mode', () {
       final prefs = WorkbenchViewPrefs.defaults.copyWith(
@@ -178,6 +180,16 @@ void main() {
         restored.gitDiffPresentationMode,
         GitDiffPresentationMode.sideBySide,
       );
+    });
+
+    test('round-trips the git diff whitespace mode', () {
+      final prefs = WorkbenchViewPrefs.defaults.copyWith(
+        gitDiffWhitespaceMode: 'ignoreChanges',
+      );
+      final restored = WorkbenchViewPrefs.fromJson(
+        Map<String, Object?>.from(prefs.toMap()),
+      );
+      expect(restored.gitDiffWhitespaceMode, 'ignoreChanges');
     });
 
     test('round-trips the git diff group mode', () {

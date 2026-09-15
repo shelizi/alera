@@ -64,6 +64,127 @@ fn git_diff_loads_single_area_and_combined_results() {
     assert_eq!(untracked.added, Some(1));
 }
 
+#[test]
+fn git_diff_whitespace_modes_filter_worktree_and_staged_changes() {
+    let repo = init_repo();
+    std::fs::write(repo.path().join("README.md"), "alpha beta\ntrail\n").expect("write baseline");
+    run_git(repo.path(), &["add", "README.md"]);
+    run_git(repo.path(), &["commit", "-m", "whitespace baseline"]);
+    std::fs::write(repo.path().join("README.md"), "alpha    beta\ntrail   \n")
+        .expect("write whitespace changes");
+
+    let normal = git_diff_with_whitespace(
+        path_str(repo.path()),
+        "README.md".to_string(),
+        GitChangeArea::Unstaged,
+        GitDiffWhitespaceMode::Normal,
+    )
+    .unwrap();
+    assert_eq!(normal.files.len(), 1);
+
+    let ignore_eol = git_diff_with_whitespace(
+        path_str(repo.path()),
+        "README.md".to_string(),
+        GitChangeArea::Unstaged,
+        GitDiffWhitespaceMode::IgnoreEol,
+    )
+    .unwrap();
+    assert_eq!(ignore_eol.files.len(), 1);
+
+    let ignore_changes = git_diff_with_whitespace(
+        path_str(repo.path()),
+        "README.md".to_string(),
+        GitChangeArea::Unstaged,
+        GitDiffWhitespaceMode::IgnoreChanges,
+    )
+    .unwrap();
+    assert!(ignore_changes.files.is_empty());
+
+    let ignore_all = git_diff_with_whitespace(
+        path_str(repo.path()),
+        "README.md".to_string(),
+        GitChangeArea::Unstaged,
+        GitDiffWhitespaceMode::IgnoreAll,
+    )
+    .unwrap();
+    assert!(ignore_all.files.is_empty());
+
+    let combined = git_diff_all_with_whitespace(
+        path_str(repo.path()),
+        None,
+        GitDiffWhitespaceMode::IgnoreChanges,
+    )
+    .unwrap();
+    assert!(combined.files.is_empty());
+
+    let page = git_diff_all_page_with_whitespace(
+        path_str(repo.path()),
+        vec!["README.md".to_string()],
+        GitDiffWhitespaceMode::IgnoreChanges,
+    )
+    .unwrap();
+    assert!(page.files.is_empty());
+
+    run_git(repo.path(), &["add", "README.md"]);
+    let staged = git_diff_with_whitespace(
+        path_str(repo.path()),
+        "README.md".to_string(),
+        GitChangeArea::Staged,
+        GitDiffWhitespaceMode::IgnoreChanges,
+    )
+    .unwrap();
+    assert!(staged.files.is_empty());
+}
+
+#[test]
+fn git_commit_diff_applies_whitespace_mode() {
+    let repo = init_repo();
+    std::fs::write(repo.path().join("README.md"), "alpha beta\n").expect("write baseline");
+    run_git(repo.path(), &["add", "README.md"]);
+    run_git(repo.path(), &["commit", "-m", "commit whitespace baseline"]);
+    let parent_oid = git2::Repository::open(repo.path())
+        .unwrap()
+        .head()
+        .unwrap()
+        .peel_to_commit()
+        .unwrap()
+        .id();
+
+    std::fs::write(repo.path().join("README.md"), "alpha    beta\n")
+        .expect("write whitespace change");
+    run_git(repo.path(), &["add", "README.md"]);
+    run_git(repo.path(), &["commit", "-m", "commit whitespace change"]);
+    let commit_oid = git2::Repository::open(repo.path())
+        .unwrap()
+        .head()
+        .unwrap()
+        .peel_to_commit()
+        .unwrap()
+        .id();
+
+    let normal = git_commit_diff_with_whitespace(
+        path_str(repo.path()),
+        commit_oid.to_string(),
+        Some(parent_oid.to_string()),
+        Some("README.md".to_string()),
+        None,
+        GitDiffWhitespaceMode::Normal,
+    )
+    .unwrap();
+    assert_eq!(normal.files.len(), 1);
+
+    let ignored = git_commit_diff_with_whitespace(
+        path_str(repo.path()),
+        commit_oid.to_string(),
+        Some(parent_oid.to_string()),
+        Some("README.md".to_string()),
+        None,
+        GitDiffWhitespaceMode::IgnoreChanges,
+    )
+    .unwrap();
+    assert!(ignored.files.is_empty());
+}
+
 #[cfg(unix)]
 #[test]
 fn git_untracked_symlink_diff_does_not_read_target_contents() {
