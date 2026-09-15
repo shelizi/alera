@@ -770,6 +770,92 @@ void main() {
     expect(files.writes.single.encoding, native.WorkspaceTextEncoding.utf8);
   });
 
+  testWidgets('editable side-by-side shows x scrollbars and syncs x/y scroll', (
+    tester,
+  ) async {
+    final longLine = List<String>.filled(180, 'x').join();
+    final oldContent = List<String>.generate(
+      80,
+      (index) => 'old $index $longLine',
+    ).join('\n');
+    final newContent = List<String>.generate(
+      80,
+      (index) => 'new $index $longLine',
+    ).join('\n');
+    final backend = FakeGitBackend()
+      ..gitDiffResult = const GitDiffResult(
+        files: <GitDiffFile>[
+          GitDiffFile(
+            path: 'lib/main.dart',
+            area: .unstaged,
+            status: .modified,
+            lines: <GitDiffLine>[
+              GitDiffLine.hunk('@@ -1,1 +1,1 @@'),
+              GitDiffLine.deletion('-old line'),
+              GitDiffLine.addition('+new line'),
+            ],
+          ),
+        ],
+      )
+      ..diffBlobBytesBySide[(filePath: 'lib/main.dart', oldSide: true)] =
+          Uint8List.fromList('$oldContent\n'.codeUnits)
+      ..diffBlobBytesBySide[(filePath: 'lib/main.dart', oldSide: false)] =
+          Uint8List.fromList('$newContent\n'.codeUnits);
+    final files = _EditableDiffFileService(content: '$newContent\n');
+
+    await _pumpDiffSurface(
+      tester,
+      backend: backend,
+      workspaceFileService: files,
+      tab: _diffTab(filePath: 'lib/main.dart', title: 'main.dart unstaged'),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Switch to Side-by-Side View'));
+    await tester.pumpAndSettle();
+
+    final leftXFinder = find.byKey(
+      const ValueKey<String>(
+        'git-diff-working-tree-original-x-scrollbar-lib/main.dart',
+      ),
+    );
+    final rightXFinder = find.byKey(
+      const ValueKey<String>(
+        'git-diff-working-tree-editor-x-scrollbar-lib/main.dart',
+      ),
+    );
+    final leftYFinder = find.byKey(
+      const ValueKey<String>(
+        'git-diff-working-tree-original-y-scrollbar-lib/main.dart',
+      ),
+    );
+    final rightYFinder = find.byKey(
+      const ValueKey<String>(
+        'git-diff-working-tree-editor-y-scrollbar-lib/main.dart',
+      ),
+    );
+
+    expect(leftXFinder, findsOneWidget);
+    expect(rightXFinder, findsOneWidget);
+    expect(leftYFinder, findsOneWidget);
+    expect(rightYFinder, findsOneWidget);
+
+    final leftX = tester.widget<Scrollbar>(leftXFinder).controller!;
+    final rightX = tester.widget<Scrollbar>(rightXFinder).controller!;
+    final leftY = tester.widget<Scrollbar>(leftYFinder).controller!;
+    final rightY = tester.widget<Scrollbar>(rightYFinder).controller!;
+
+    expect(tester.widget<Scrollbar>(leftXFinder).thumbVisibility, isTrue);
+    expect(tester.widget<Scrollbar>(rightXFinder).thumbVisibility, isTrue);
+
+    leftX.jumpTo(120);
+    await tester.pump();
+    expect(rightX.offset, closeTo(leftX.offset, 0.5));
+
+    leftY.jumpTo(180);
+    await tester.pump();
+    expect(rightY.offset, closeTo(leftY.offset, 0.5));
+  });
+
   testWidgets('staged side-by-side diff stays read only', (tester) async {
     final backend = FakeGitBackend()
       ..gitDiffResult = const GitDiffResult(

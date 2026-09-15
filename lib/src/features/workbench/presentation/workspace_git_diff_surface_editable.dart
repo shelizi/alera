@@ -255,11 +255,25 @@ class _EditableWorkingTreeDiff extends StatefulWidget {
 
 class _EditableWorkingTreeDiffState extends State<_EditableWorkingTreeDiff> {
   late final TextEditingController _controller;
+  late final ScrollController _leftHorizontalController;
+  late final ScrollController _rightHorizontalController;
+  late final ScrollController _leftVerticalController;
+  late final ScrollController _rightVerticalController;
+  var _syncingHorizontal = false;
+  var _syncingVertical = false;
 
   @override
   void initState() {
     super.initState();
     _controller = TextEditingController(text: widget.document.currentText);
+    _leftHorizontalController = ScrollController();
+    _rightHorizontalController = ScrollController();
+    _leftVerticalController = ScrollController();
+    _rightVerticalController = ScrollController();
+    _leftHorizontalController.addListener(_syncHorizontalFromLeft);
+    _rightHorizontalController.addListener(_syncHorizontalFromRight);
+    _leftVerticalController.addListener(_syncVerticalFromLeft);
+    _rightVerticalController.addListener(_syncVerticalFromRight);
   }
 
   @override
@@ -278,8 +292,87 @@ class _EditableWorkingTreeDiffState extends State<_EditableWorkingTreeDiff> {
 
   @override
   void dispose() {
+    _leftHorizontalController.dispose();
+    _rightHorizontalController.dispose();
+    _leftVerticalController.dispose();
+    _rightVerticalController.dispose();
     _controller.dispose();
     super.dispose();
+  }
+
+  void _syncHorizontalFromLeft() => _syncScrollOffset(
+    _leftHorizontalController,
+    _rightHorizontalController,
+    horizontal: true,
+  );
+
+  void _syncHorizontalFromRight() => _syncScrollOffset(
+    _rightHorizontalController,
+    _leftHorizontalController,
+    horizontal: true,
+  );
+
+  void _syncVerticalFromLeft() => _syncScrollOffset(
+    _leftVerticalController,
+    _rightVerticalController,
+    horizontal: false,
+  );
+
+  void _syncVerticalFromRight() => _syncScrollOffset(
+    _rightVerticalController,
+    _leftVerticalController,
+    horizontal: false,
+  );
+
+  void _syncScrollOffset(
+    ScrollController source,
+    ScrollController target, {
+    required bool horizontal,
+  }) {
+    if (!source.hasClients || !target.hasClients) return;
+    if (horizontal ? _syncingHorizontal : _syncingVertical) return;
+    final targetPosition = target.position;
+    final nextOffset = source.offset.clamp(
+      targetPosition.minScrollExtent,
+      targetPosition.maxScrollExtent,
+    );
+    if ((target.offset - nextOffset).abs() < 0.5) return;
+    if (horizontal) {
+      _syncingHorizontal = true;
+    } else {
+      _syncingVertical = true;
+    }
+    try {
+      target.jumpTo(nextOffset);
+    } finally {
+      if (horizontal) {
+        _syncingHorizontal = false;
+      } else {
+        _syncingVertical = false;
+      }
+    }
+  }
+
+  double _sharedContentWidth(BuildContext context, TextStyle textStyle) {
+    final painter = TextPainter(
+      textDirection: Directionality.of(context),
+      maxLines: 1,
+    );
+    var maxWidth = 0.0;
+    for (final content in <String>[
+      widget.baseline,
+      widget.document.currentText,
+    ]) {
+      for (final line in _splitFullFileLines(content)) {
+        painter.text = TextSpan(
+          text: line.isEmpty ? ' ' : line,
+          style: textStyle,
+        );
+        painter.layout();
+        maxWidth = math.max(maxWidth, painter.width);
+      }
+    }
+    return maxWidth + AleraTokens.space24;
   }
 
   @override
@@ -304,6 +397,7 @@ class _EditableWorkingTreeDiffState extends State<_EditableWorkingTreeDiff> {
       color: AleraTokens.foreground,
       height: 1.5,
     );
+    final sharedContentWidth = _sharedContentWidth(context, textStyle);
     return CallbackShortcuts(
       bindings: <ShortcutActivator, VoidCallback>{
         const SingleActivator(LogicalKeyboardKey.keyS, control: true):
@@ -333,8 +427,13 @@ class _EditableWorkingTreeDiffState extends State<_EditableWorkingTreeDiff> {
                   Expanded(
                     child: Row(
                       children: <Widget>[
-                        const Text('Workspace · Editable'),
-                        const Spacer(),
+                        const Expanded(
+                          child: Text(
+                            'Workspace · Editable',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
                         if (stats.added > 0)
                           Text(
                             '+${stats.added}',
@@ -373,37 +472,116 @@ class _EditableWorkingTreeDiffState extends State<_EditableWorkingTreeDiff> {
                 crossAxisAlignment: .stretch,
                 children: <Widget>[
                   Expanded(
-                    child: DecoratedBox(
-                      decoration: const BoxDecoration(
-                        border: Border(
-                          right: BorderSide(color: AleraTokens.borderSubtle),
-                        ),
-                      ),
-                      child: SingleChildScrollView(
-                        padding: const EdgeInsets.all(AleraTokens.space8),
-                        child: SelectableText(
-                          widget.baseline,
-                          style: textStyle,
-                        ),
-                      ),
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        final contentWidth = math.max(
+                          constraints.maxWidth,
+                          sharedContentWidth,
+                        );
+                        return DecoratedBox(
+                          decoration: const BoxDecoration(
+                            border: Border(
+                              right: BorderSide(
+                                color: AleraTokens.borderSubtle,
+                              ),
+                            ),
+                          ),
+                          child: Scrollbar(
+                            key: ValueKey<String>(
+                              'git-diff-working-tree-original-x-scrollbar-${widget.file.path}',
+                            ),
+                            controller: _leftHorizontalController,
+                            thumbVisibility: true,
+                            scrollbarOrientation: ScrollbarOrientation.bottom,
+                            notificationPredicate: (notification) =>
+                                notification.metrics.axis == Axis.horizontal,
+                            child: SingleChildScrollView(
+                              controller: _leftHorizontalController,
+                              scrollDirection: Axis.horizontal,
+                              child: SizedBox(
+                                width: contentWidth,
+                                height: constraints.maxHeight,
+                                child: Scrollbar(
+                                  key: ValueKey<String>(
+                                    'git-diff-working-tree-original-y-scrollbar-${widget.file.path}',
+                                  ),
+                                  controller: _leftVerticalController,
+                                  thumbVisibility: true,
+                                  notificationPredicate: (notification) =>
+                                      notification.metrics.axis ==
+                                      Axis.vertical,
+                                  child: SingleChildScrollView(
+                                    controller: _leftVerticalController,
+                                    padding: const EdgeInsets.all(
+                                      AleraTokens.space8,
+                                    ),
+                                    child: SelectableText(
+                                      widget.baseline,
+                                      style: textStyle,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        );
+                      },
                     ),
                   ),
                   Expanded(
-                    child: TextField(
-                      key: ValueKey<String>(
-                        'git-diff-working-tree-editor-${widget.file.path}',
-                      ),
-                      controller: _controller,
-                      expands: true,
-                      maxLines: null,
-                      minLines: null,
-                      keyboardType: TextInputType.multiline,
-                      style: textStyle,
-                      decoration: const InputDecoration(
-                        border: InputBorder.none,
-                        contentPadding: EdgeInsets.all(AleraTokens.space8),
-                      ),
-                      onChanged: widget.onChanged,
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        final contentWidth = math.max(
+                          constraints.maxWidth,
+                          sharedContentWidth,
+                        );
+                        return Scrollbar(
+                          key: ValueKey<String>(
+                            'git-diff-working-tree-editor-x-scrollbar-${widget.file.path}',
+                          ),
+                          controller: _rightHorizontalController,
+                          thumbVisibility: true,
+                          scrollbarOrientation: ScrollbarOrientation.bottom,
+                          notificationPredicate: (notification) =>
+                              notification.metrics.axis == Axis.horizontal,
+                          child: SingleChildScrollView(
+                            controller: _rightHorizontalController,
+                            scrollDirection: Axis.horizontal,
+                            child: SizedBox(
+                              width: contentWidth,
+                              height: constraints.maxHeight,
+                              child: Scrollbar(
+                                key: ValueKey<String>(
+                                  'git-diff-working-tree-editor-y-scrollbar-${widget.file.path}',
+                                ),
+                                controller: _rightVerticalController,
+                                thumbVisibility: true,
+                                notificationPredicate: (notification) =>
+                                    notification.metrics.axis == Axis.vertical,
+                                child: TextField(
+                                  key: ValueKey<String>(
+                                    'git-diff-working-tree-editor-${widget.file.path}',
+                                  ),
+                                  controller: _controller,
+                                  scrollController: _rightVerticalController,
+                                  expands: true,
+                                  maxLines: null,
+                                  minLines: null,
+                                  keyboardType: TextInputType.multiline,
+                                  style: textStyle,
+                                  decoration: const InputDecoration(
+                                    border: InputBorder.none,
+                                    contentPadding: EdgeInsets.all(
+                                      AleraTokens.space8,
+                                    ),
+                                  ),
+                                  onChanged: widget.onChanged,
+                                ),
+                              ),
+                            ),
+                          ),
+                        );
+                      },
                     ),
                   ),
                 ],
