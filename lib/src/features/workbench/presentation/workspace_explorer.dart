@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/providers.dart';
@@ -32,6 +33,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_directory_tree/flutter_directory_tree.dart' as tree;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path/path.dart' as p;
 
 part 'workspace_explorer_actions.dart';
 part 'workspace_explorer_refresh.dart';

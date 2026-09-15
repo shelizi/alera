@@ -7,7 +7,7 @@ import '../frb_generated.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `content_token`, `copy_recursively`, `ensure_inside_existing_parent`, `ensure_not_descendant`, `entry_for_path`, `from_io`, `is_protected_child_path`, `is_protected_relative_path`, `join_relative`, `modified_millis`, `new`, `reject_protected`, `relative_components`, `relative_string`, `resolve_existing_no_follow`, `resolve_existing`, `resolve_new_child`, `sanitize_name`, `shared_workspace_file_error`, `unique_copy_destination`, `workspace_root`
+// These functions are ignored because they are not marked as `pub`: `content_token`, `copy_recursively`, `ensure_inside_existing_parent`, `ensure_not_descendant`, `entry_for_path`, `from_io`, `is_protected_child_path`, `is_protected_relative_path`, `join_relative`, `modified_millis`, `move_external_entry`, `new`, `reject_protected`, `relative_components`, `relative_string`, `resolve_existing_no_follow`, `resolve_existing`, `resolve_new_child`, `sanitize_name`, `shared_workspace_file_error`, `unique_copy_destination`, `workspace_root`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`
 
 Future<List<WorkspaceFileEntry>> listWorkspaceChildren({
@@ -217,6 +217,19 @@ Future<WorkspaceFileEntry> moveWorkspaceEntry({
   workspacePath: workspacePath,
   relativePath: relativePath,
   targetParentRelativePath: targetParentRelativePath,
+);
+
+/// Copies or moves absolute filesystem paths into a workspace directory.
+Future<List<WorkspaceFileEntry>> importWorkspaceEntries({
+  required String workspacePath,
+  required List<String> sourcePaths,
+  required String targetParentRelativePath,
+  required bool moveSources,
+}) => RustLib.instance.api.crateApiWorkspaceFilesImportWorkspaceEntries(
+  workspacePath: workspacePath,
+  sourcePaths: sourcePaths,
+  targetParentRelativePath: targetParentRelativePath,
+  moveSources: moveSources,
 );
 
 Future<void> deleteWorkspaceEntry({

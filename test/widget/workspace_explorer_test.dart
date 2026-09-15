@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:alera/src/features/external_editor/application/external_editor_providers.dart';

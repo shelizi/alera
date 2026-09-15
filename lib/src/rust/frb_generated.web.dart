@@ -106,6 +106,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   bool dco_decode_box_autoadd_bool(dynamic raw);
 
   @protected
+  FileClipboardPayload dco_decode_box_autoadd_file_clipboard_payload(
+    dynamic raw,
+  );
+
+  @protected
   GitChangeArea dco_decode_box_autoadd_git_change_area(dynamic raw);
 
   @protected
@@ -175,6 +180,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   CodexSavedPromptScope dco_decode_codex_saved_prompt_scope(dynamic raw);
+
+  @protected
+  FileClipboardOperation dco_decode_file_clipboard_operation(dynamic raw);
+
+  @protected
+  FileClipboardPayload dco_decode_file_clipboard_payload(dynamic raw);
 
   @protected
   GitArchiveFormat dco_decode_git_archive_format(dynamic raw);
@@ -452,6 +463,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   bool? dco_decode_opt_box_autoadd_bool(dynamic raw);
+
+  @protected
+  FileClipboardPayload? dco_decode_opt_box_autoadd_file_clipboard_payload(
+    dynamic raw,
+  );
 
   @protected
   GitChangeArea? dco_decode_opt_box_autoadd_git_change_area(dynamic raw);
@@ -743,6 +759,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   bool sse_decode_box_autoadd_bool(SseDeserializer deserializer);
 
   @protected
+  FileClipboardPayload sse_decode_box_autoadd_file_clipboard_payload(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   GitChangeArea sse_decode_box_autoadd_git_change_area(
     SseDeserializer deserializer,
   );
@@ -824,6 +845,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   CodexSavedPromptScope sse_decode_codex_saved_prompt_scope(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  FileClipboardOperation sse_decode_file_clipboard_operation(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  FileClipboardPayload sse_decode_file_clipboard_payload(
     SseDeserializer deserializer,
   );
 
@@ -1181,6 +1212,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   bool? sse_decode_opt_box_autoadd_bool(SseDeserializer deserializer);
+
+  @protected
+  FileClipboardPayload? sse_decode_opt_box_autoadd_file_clipboard_payload(
+    SseDeserializer deserializer,
+  );
 
   @protected
   GitChangeArea? sse_decode_opt_box_autoadd_git_change_area(
@@ -1547,6 +1583,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_box_autoadd_bool(bool self, SseSerializer serializer);
 
   @protected
+  void sse_encode_box_autoadd_file_clipboard_payload(
+    FileClipboardPayload self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_box_autoadd_git_change_area(
     GitChangeArea self,
     SseSerializer serializer,
@@ -1645,6 +1687,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_codex_saved_prompt_scope(
     CodexSavedPromptScope self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_file_clipboard_operation(
+    FileClipboardOperation self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_file_clipboard_payload(
+    FileClipboardPayload self,
     SseSerializer serializer,
   );
 
@@ -2100,6 +2154,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_opt_box_autoadd_bool(bool? self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_opt_box_autoadd_file_clipboard_payload(
+    FileClipboardPayload? self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_opt_box_autoadd_git_change_area(

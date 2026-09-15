@@ -23,11 +23,11 @@ extension _WorkspaceExplorerActions on _WorkspaceExplorerState {
         }
       case _ExplorerAction.copy:
         if (entry != null) {
-          _setClipboard(_ExplorerClipboard(entry.relativePath, false));
+          await _copyToClipboard(entry, cut: false);
         }
       case _ExplorerAction.cut:
         if (entry != null) {
-          _setClipboard(_ExplorerClipboard(entry.relativePath, true));
+          await _copyToClipboard(entry, cut: true);
         }
       case _ExplorerAction.paste:
         await _paste(targetDir);
@@ -89,6 +89,8 @@ extension _WorkspaceExplorerActions on _WorkspaceExplorerState {
         await _createEntry(directory: false);
       case _ExplorerAction.newFolder:
         await _createEntry(directory: true);
+      case _ExplorerAction.paste:
+        await _paste('');
       case _:
         break;
     }
@@ -162,34 +164,151 @@ extension _WorkspaceExplorerActions on _WorkspaceExplorerState {
     }
   }
 
+  Future<void> _copyToClipboard(
+    native.WorkspaceFileEntry entry, {
+    required bool cut,
+  }) async {
+    int? systemSequenceNumber;
+    try {
+      systemSequenceNumber = await _workspaceFiles.writeSystemFileClipboard(
+        paths: <String>[_absolutePath(entry.relativePath)],
+        operation: cut
+            ? WorkspaceFileClipboardOperation.cut
+            : WorkspaceFileClipboardOperation.copy,
+      );
+    } catch (error) {
+      if (mounted) {
+        _showError(error);
+      }
+    }
+    if (!mounted) {
+      return;
+    }
+    _setClipboard(
+      _ExplorerClipboard(
+        entry.relativePath,
+        cut,
+        systemSequenceNumber: systemSequenceNumber,
+      ),
+    );
+  }
+
   Future<void> _paste(String targetDir) async {
+    try {
+      if (Platform.isWindows) {
+        final systemClipboard = await _workspaceFiles.readSystemFileClipboard();
+        if (systemClipboard != null) {
+          if (_isInternalSystemClipboard(systemClipboard)) {
+            await _pasteInternal(targetDir);
+          } else {
+            await _pasteExternal(systemClipboard, targetDir);
+          }
+          return;
+        }
+
+        final clipboard = _clipboard;
+        if (clipboard == null) {
+          return;
+        }
+        final expectedSequence = clipboard.systemSequenceNumber;
+        if (expectedSequence != null) {
+          final currentSequence = await _workspaceFiles
+              .systemFileClipboardSequenceNumber();
+          if (currentSequence != expectedSequence) {
+            return;
+          }
+        }
+      }
+      await _pasteInternal(targetDir);
+    } catch (error) {
+      _showError(error);
+    }
+  }
+
+  bool _isInternalSystemClipboard(WorkspaceFileClipboardPayload payload) {
+    final clipboard = _clipboard;
+    if (clipboard == null ||
+        clipboard.systemSequenceNumber != payload.sequenceNumber ||
+        payload.paths.length != 1 ||
+        clipboard.cut !=
+            (payload.operation == WorkspaceFileClipboardOperation.cut)) {
+      return false;
+    }
+    return p.equals(
+      p.normalize(payload.paths.single),
+      p.normalize(_absolutePath(clipboard.relativePath)),
+    );
+  }
+
+  Future<void> _pasteInternal(String targetDir) async {
     final clipboard = _clipboard;
     if (clipboard == null) {
       return;
     }
-    try {
-      if (clipboard.cut) {
-        await _moveEntry(clipboard.relativePath, targetDir);
-      } else {
-        await _workspaceFiles.copyEntry(
-          workspacePath: widget.workspace.path,
-          relativePath: clipboard.relativePath,
-          targetParentRelativePath: targetDir,
-        );
+    if (clipboard.cut) {
+      final moved = await _moveEntry(clipboard.relativePath, targetDir);
+      if (!moved || !mounted) {
+        return;
+      }
+      final sequence = clipboard.systemSequenceNumber;
+      if (sequence != null) {
+        await _workspaceFiles.clearSystemFileClipboardIfSequence(sequence);
+      }
+      if (mounted) {
+        _setClipboard(null);
+      }
+      return;
+    }
+
+    await _workspaceFiles.copyEntry(
+      workspacePath: widget.workspace.path,
+      relativePath: clipboard.relativePath,
+      targetParentRelativePath: targetDir,
+    );
+    if (!mounted) {
+      return;
+    }
+    await _refreshDirectory(targetDir);
+  }
+
+  Future<void> _pasteExternal(
+    WorkspaceFileClipboardPayload clipboard,
+    String targetDir,
+  ) async {
+    final moveSources =
+        clipboard.operation == WorkspaceFileClipboardOperation.cut;
+    final imported = await _workspaceFiles.importEntries(
+      workspacePath: widget.workspace.path,
+      sourcePaths: clipboard.paths,
+      targetParentRelativePath: targetDir,
+      moveSources: moveSources,
+    );
+    if (moveSources) {
+      await _workspaceFiles.clearSystemFileClipboardIfSequence(
+        clipboard.sequenceNumber,
+      );
+    }
+    if (!mounted) {
+      return;
+    }
+
+    if (moveSources) {
+      for (var index = 0; index < clipboard.paths.length; index++) {
+        final source = p.normalize(clipboard.paths[index]);
+        final workspace = p.normalize(widget.workspace.path);
+        if (!p.isWithin(workspace, source)) {
+          continue;
+        }
+        final oldRelativePath = p
+            .relative(source, from: workspace)
+            .replaceAll('\\', '/');
+        await widget.onPathMoved(oldRelativePath, imported[index].relativePath);
         if (!mounted) {
           return;
         }
-        await _refreshDirectory(targetDir);
       }
-      if (!mounted) {
-        return;
-      }
-      if (clipboard.cut) {
-        _setClipboard(null);
-      }
-    } catch (error) {
-      _showError(error);
     }
+    await _refreshDirectory(targetDir);
   }
 
   Future<void> _duplicate(native.WorkspaceFileEntry entry) async {
@@ -298,7 +417,7 @@ extension _WorkspaceExplorerActions on _WorkspaceExplorerState {
     }
   }
 
-  Future<void> _moveEntry(String relativePath, String targetDir) async {
+  Future<bool> _moveEntry(String relativePath, String targetDir) async {
     try {
       final sourceParent = _parentPath(relativePath);
       final moved = await _workspaceFiles.moveEntry(
@@ -307,21 +426,23 @@ extension _WorkspaceExplorerActions on _WorkspaceExplorerState {
         targetParentRelativePath: targetDir,
       );
       if (!mounted) {
-        return;
+        return false;
       }
       await widget.onPathMoved(relativePath, moved.relativePath);
       if (!mounted) {
-        return;
+        return false;
       }
       await _refreshDirectory(sourceParent);
       if (!mounted) {
-        return;
+        return false;
       }
       if (sourceParent != targetDir) {
         await _refreshDirectory(targetDir);
       }
+      return true;
     } catch (error) {
       _showError(error);
+      return false;
     }
   }
 

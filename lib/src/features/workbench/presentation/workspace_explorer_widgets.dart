@@ -407,6 +407,11 @@ class const _ExplorerBackgroundMenu({
             label: 'New folder',
             leading: Icon(AleraIcons.newFolder, size: 16),
           ),
+          AleraDropdownEntry<_ExplorerAction>(
+            value: .paste,
+            label: 'Paste',
+            leading: Icon(AleraIcons.paste, size: 16),
+          ),
         ],
       );
       if (selected != null && context.mounted) {
@@ -433,7 +438,11 @@ class const _ExplorerBackgroundMenu({
   }
 }
 
-class const _ExplorerClipboard(final String relativePath, final bool cut);
+class const _ExplorerClipboard(
+  final String relativePath,
+  final bool cut, {
+  final int? systemSequenceNumber,
+});
 
 class const _ExplorerDragData({
   required final String relativePath,

@@ -19,6 +19,14 @@ class _FakeWorkspaceFileService({
   final Set<_ListChildrenCall> failingListChildrenCalls = <_ListChildrenCall>{};
   final List<String> createdFiles = <String>[];
   final List<String> copiedFiles = <String>[];
+  final List<String> movedFiles = <String>[];
+  final List<_SystemClipboardWrite> systemClipboardWrites =
+      <_SystemClipboardWrite>[];
+  final List<_ImportedClipboardCall> importedClipboardCalls =
+      <_ImportedClipboardCall>[];
+  final List<int> clearedClipboardSequences = <int>[];
+  WorkspaceFileClipboardPayload? systemClipboard;
+  int systemClipboardSequence = 0;
   final List<_ListChildrenCall> listChildrenCalls = <_ListChildrenCall>[];
   final List<List<String>> watchedPathUpdates = <List<String>>[];
   final Map<String, String> writtenFiles = <String, String>{};
@@ -166,7 +174,95 @@ class _FakeWorkspaceFileService({
     ];
     return entry;
   }
+
+  @override
+  Future<native.WorkspaceFileEntry> moveEntry({
+    required String workspacePath,
+    required String relativePath,
+    required String targetParentRelativePath,
+  }) async {
+    movedFiles.add('$relativePath->$targetParentRelativePath');
+    final name = relativePath.split('/').last;
+    final movedPath = targetParentRelativePath.isEmpty
+        ? name
+        : '$targetParentRelativePath/$name';
+    return _file(movedPath);
+  }
+
+  @override
+  Future<int?> writeSystemFileClipboard({
+    required List<String> paths,
+    required WorkspaceFileClipboardOperation operation,
+  }) async {
+    systemClipboardSequence += 1;
+    systemClipboard = WorkspaceFileClipboardPayload(
+      paths: List<String>.unmodifiable(paths),
+      operation: operation,
+      sequenceNumber: systemClipboardSequence,
+    );
+    systemClipboardWrites.add(
+      _SystemClipboardWrite(
+        paths: List<String>.unmodifiable(paths),
+        operation: operation,
+      ),
+    );
+    return systemClipboardSequence;
+  }
+
+  @override
+  Future<WorkspaceFileClipboardPayload?> readSystemFileClipboard() async =>
+      systemClipboard;
+
+  @override
+  Future<int?> systemFileClipboardSequenceNumber() async =>
+      systemClipboardSequence;
+
+  @override
+  Future<bool> clearSystemFileClipboardIfSequence(int sequenceNumber) async {
+    if (sequenceNumber != systemClipboardSequence) {
+      return false;
+    }
+    clearedClipboardSequences.add(sequenceNumber);
+    systemClipboard = null;
+    systemClipboardSequence += 1;
+    return true;
+  }
+
+  @override
+  Future<List<native.WorkspaceFileEntry>> importEntries({
+    required String workspacePath,
+    required List<String> sourcePaths,
+    required String targetParentRelativePath,
+    required bool moveSources,
+  }) async {
+    importedClipboardCalls.add(
+      _ImportedClipboardCall(
+        sourcePaths: List<String>.unmodifiable(sourcePaths),
+        targetParentRelativePath: targetParentRelativePath,
+        moveSources: moveSources,
+      ),
+    );
+    return <native.WorkspaceFileEntry>[
+      for (final sourcePath in sourcePaths)
+        _file(
+          targetParentRelativePath.isEmpty
+              ? p.basename(sourcePath)
+              : '$targetParentRelativePath/${p.basename(sourcePath)}',
+        ),
+    ];
+  }
 }
+
+class const _SystemClipboardWrite({
+  required final List<String> paths,
+  required final WorkspaceFileClipboardOperation operation,
+});
+
+class const _ImportedClipboardCall({
+  required final List<String> sourcePaths,
+  required final String targetParentRelativePath,
+  required final bool moveSources,
+});
 
 class const _ListChildrenCall({
   required final String relativePath,
