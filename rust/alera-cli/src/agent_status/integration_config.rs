@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use alera_core::runtime::RuntimeAgentStatusHookSettings;
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 
 #[path = "integration_config_ccs.rs"]
 mod ccs;
@@ -20,7 +20,7 @@ mod user_hooks;
 pub use dispatch::prepare_enabled_integrations;
 
 const MANAGED_MARKER: &str = "alera-runtime-agent-hook";
-const LEGACY_MANAGED_MARKERS: [&str; 9] = [
+const LEGACY_MANAGED_MARKERS: [&str; 10] = [
     "alera-codex-hook.",
     "alera-claude-hook.",
     "alera-copilot-hook.",
@@ -29,6 +29,7 @@ const LEGACY_MANAGED_MARKERS: [&str; 9] = [
     // Windows wrappers (`alera-agy-stop.cmd` and friends), so the marker has to
     // cover the whole `alera-agy-*` family rather than just the core script.
     "alera-agy-",
+    "alera-devin-hook.",
     "alera-opencode-hook.",
     "alera-pi-hook.",
     "alera-amp-hook.",
@@ -258,9 +259,15 @@ pub(super) fn managed_hook_definition(matcher: Option<&str>, command: &str) -> V
 fn devin_managed_command(script: &Path, event: &str) -> String {
     #[cfg(windows)]
     {
+        // Devin launches hook commands through Git Bash on Windows. Keep the
+        // shared Windows cmd hook, but disable MSYS argv conversion before
+        // entering cmd.exe so /d and /s remain cmd switches.
+        let command = format!("call \"{}\"", script.display());
         format!(
-            "set \"ALERA_AGENT_TYPE=devin\"&& set \"ALERA_AGENT_HOOK_EVENT={event}\"&& call \"{}\"",
-            script.display()
+            "MSYS2_ARG_CONV_EXCL='*' ALERA_AGENT_TYPE={} ALERA_AGENT_HOOK_EVENT={} cmd.exe /d /s /c {}",
+            sh_quote("devin"),
+            sh_quote(event),
+            sh_quote(&command),
         )
     }
     #[cfg(not(windows))]
@@ -383,7 +390,6 @@ fn path_string(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
-#[cfg(not(windows))]
 fn sh_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }

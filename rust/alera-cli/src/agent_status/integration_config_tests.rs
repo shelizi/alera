@@ -6,6 +6,7 @@ fn removes_current_and_legacy_alera_definitions_only() {
         json!({"command": "/home/user/custom-hook.sh"}),
         json!({"command": "/home/user/.alera/agent-hooks/alera-claude-hook.sh"}),
         json!({"command": "/home/user/.alera/agent-hooks/alera-runtime-agent-hook.sh"}),
+        json!({"command": "/home/user/.alera/agent-hooks/alera-devin-hook.cmd"}),
         json!({"command": "/home/user/.orca/agent-hooks/claude-hook.sh"}),
     ];
 
@@ -93,7 +94,7 @@ fn devin_hooks_preserve_user_definitions_and_omit_matchers() {
 
 #[cfg(windows)]
 #[test]
-fn devin_windows_hooks_avoid_nested_cmd_quoting() {
+fn devin_windows_hooks_bridge_git_bash_into_cmd() {
     let mut config = Map::new();
     apply_devin_hooks(
         &mut config,
@@ -104,11 +105,14 @@ fn devin_windows_hooks_avoid_nested_cmd_quoting() {
         .as_str()
         .expect("managed Devin command");
 
+    // Devin executes hook commands through Git Bash on Windows. Keep the shared
+    // Windows cmd hook and explicitly bridge into cmd.exe; MSYS argv conversion
+    // must be disabled or /d and /s are rewritten as POSIX-looking paths.
     assert_eq!(
         command,
-        r#"set "ALERA_AGENT_TYPE=devin"&& set "ALERA_AGENT_HOOK_EVENT=SessionStart"&& call "C:\Users\u\Alera Hooks\alera-runtime-agent-hook.cmd""#
+        "MSYS2_ARG_CONV_EXCL='*' ALERA_AGENT_TYPE='devin' ALERA_AGENT_HOOK_EVENT='SessionStart' cmd.exe /d /s /c 'call \"C:\\Users\\u\\Alera Hooks\\alera-runtime-agent-hook.cmd\"'"
     );
-    assert!(!command.contains("cmd /d /s /c"));
+    assert!(!command.contains("alera-runtime-agent-hook.sh"));
 }
 
 fn agy_bundle(config: &Map<String, Value>) -> &Map<String, Value> {

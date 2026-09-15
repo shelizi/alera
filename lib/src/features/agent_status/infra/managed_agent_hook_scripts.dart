@@ -21,6 +21,14 @@ extension _ManagedAgentHookScripts on ManagedAgentHookInstallService {
             ? '\$env:${descriptor.eventEnvVar} = \'${_powerShellSingleQuote(event.eventName)}\'; '
                   'powershell.exe -NoProfile -ExecutionPolicy Bypass -File '
                   '${_powerShellPath(descriptor.scriptPath)}'
+            : descriptor.agentType == AgentType.devin
+            // Devin launches hook commands through Git Bash on Windows. Keep
+            // the normal cmd hook, but disable MSYS argv conversion before
+            // entering cmd.exe so /d and /s remain cmd switches.
+            ? "MSYS2_ARG_CONV_EXCL='*' "
+                  '${descriptor.eventEnvVar}=${_shQuote(event.eventName)} '
+                  'cmd.exe /d /s /c '
+                  "${_shQuote('if exist \"${descriptor.scriptPath}\" call \"${descriptor.scriptPath}\"')}"
             : 'cmd /d /s /c "if exist ""${descriptor.scriptPath}"" '
                   '(set ${descriptor.eventEnvVar}=${event.eventName}&& call ""${descriptor.scriptPath}"")"',
     };
