@@ -6,7 +6,9 @@ class const _ExplorerToolbar({
   required final bool showHiddenFiles,
   required final bool showHiddenToggle,
   required final bool loading,
+  required final bool filterVisible,
   required final VoidCallback onRefresh,
+  required final VoidCallback onToggleFilter,
   required final VoidCallback onCollapseAll,
   required final VoidCallback onToggleMode,
   required final VoidCallback onToggleHiddenFiles,
@@ -67,6 +69,12 @@ class const _ExplorerToolbar({
                 onPressed: onToggleHiddenFiles,
               ),
             ],
+            const SizedBox(width: AleraTokens.space2),
+            AleraIconButton(
+              tooltip: filterVisible ? 'Hide File Filter' : 'Search Files',
+              icon: AleraIcons.search,
+              onPressed: loading ? null : onToggleFilter,
+            ),
             const SizedBox(width: AleraTokens.space2),
             AleraIconButton(
               tooltip: 'Collapse All',
