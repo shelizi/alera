@@ -293,6 +293,74 @@ void registerAppLocalizationTailTests() {
     );
   });
 
+  test('traditional Chinese covers Settings user-facing static literals', () {
+    final l10n = AleraLocalizations(const Locale('zh', 'TW'));
+    final settingsRoot = Directory('lib/src/features/settings/presentation');
+    final fieldPattern = RegExp(
+      r'''(?:title|description|label|tooltip|hintText|buttonLabel|placeholder)\s*:\s*'((?:\\'|[^'\r\n])*)' ''',
+    );
+    final catalogTitlePattern = RegExp(
+      r'''^\s*'((?:\\'|[^'\r\n])*)'\s*:\s*SettingsSearchEntryDetails\(''',
+      multiLine: true,
+    );
+    const intentionallyEnglish = <String>{
+      'Alera',
+      'Claude',
+      'macOS',
+      'Linux',
+      'Windows',
+      'x64',
+      'arm64',
+      'en-US',
+      'SF Mono',
+      '127.0.0.1',
+      r'~/.alera/workspaces',
+      '.env',
+      'make bootstrap',
+      'llm --system commit-message',
+      'ccwork',
+      'work',
+      'KIMI_API_KEY',
+      'ZAI_API_KEY',
+      'ZAI_BASE_URL',
+      'MINIMAX_API_KEY',
+      'MINIMAX_API_HOST',
+      'px',
+      'MB',
+      's',
+    };
+
+    final missing = <String>{};
+    for (final entity in settingsRoot.listSync(recursive: true)) {
+      if (entity is! File || !entity.path.endsWith('.dart')) continue;
+      final source = entity.readAsStringSync();
+      final values = <String>{
+        ...fieldPattern.allMatches(source).map((match) => match.group(1)!),
+        ...catalogTitlePattern
+            .allMatches(source)
+            .map((match) => match.group(1)!),
+      };
+      for (final escaped in values) {
+        final value = escaped.replaceAll(r"\'", "'");
+        if (value.isEmpty ||
+            intentionallyEnglish.contains(value) ||
+            value.contains(r'${') ||
+            value.startsWith('http://') ||
+            value.startsWith('https://') ||
+            RegExp(r'^[A-Za-z]:\\').hasMatch(value)) {
+          continue;
+        }
+        if (l10n.translate(value) == value) missing.add(value);
+      }
+    }
+
+    expect(
+      missing,
+      isEmpty,
+      reason: 'Untranslated Settings literals:\n${missing.toList()..sort()}',
+    );
+  });
+
   test('English and unknown strings fall back to source text', () {
     final en = AleraLocalizations(const Locale('en'));
     final zh = AleraLocalizations(const Locale('zh', 'TW'));
