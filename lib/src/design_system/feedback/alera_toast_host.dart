@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:collection';
 
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/feedback/alera_toast.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
@@ -173,7 +174,7 @@ class const _ToastCard({required final _ToastEntry entry})
                   const SizedBox(width: AleraTokens.space8),
                   Flexible(
                     child: Text(
-                      entry.data.message,
+                      context.tr(entry.data.message),
                       style: textStyle,
                       softWrap: true,
                     ),

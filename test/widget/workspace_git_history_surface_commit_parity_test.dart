@@ -42,6 +42,12 @@ void main() {
     ]) {
       expect(find.text(label), findsOneWidget, reason: label);
     }
+    final actions = tester
+        .widgetList<AleraDropdownEntry<GitHistoryCommitMenuAction>>(
+          find.byType(AleraDropdownEntry<GitHistoryCommitMenuAction>),
+        );
+    expect(actions, isNotEmpty);
+    expect(actions.every((entry) => entry.localizeLabel), isTrue);
   });
 
   testWidgets('reset submenu lists soft, mixed, and hard modes', (

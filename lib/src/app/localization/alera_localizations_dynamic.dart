@@ -540,16 +540,30 @@ String? _translateDynamicTraditionalChinese(String source) {
   if (customExecutable != null) {
     return '自訂 ${customExecutable.group(1)} 執行檔';
   }
+  final customValue = RegExp(r'^Custom: (.+)$').firstMatch(source);
+  if (customValue != null) {
+    return '自訂：${customValue.group(1)}';
+  }
+  final rebaseCurrentBranch = RegExp(r'^Rebase Current Branch onto (.+)$')
+      .firstMatch(source);
+  if (rebaseCurrentBranch != null) {
+    return '將目前 Branch Rebase 到 ${rebaseCurrentBranch.group(1)}';
+  }
   final commandEnvironment = RegExp(
     r'^Off uses the (.+) command from the local command environment\.$',
   ).firstMatch(source);
   if (commandEnvironment != null) {
     return '關閉時會使用本機命令環境中的 ${commandEnvironment.group(1)} 指令。';
   }
-  final executableTitle = RegExp(r'^(Zed|VS Code) Executable$')
-      .firstMatch(source);
+  final executableTitle = RegExp(r'^(.+) Executable$').firstMatch(source);
   if (executableTitle != null) {
     return '${executableTitle.group(1)} 執行檔';
+  }
+  final executablePathDefault = RegExp(
+    r'^Full path to the (.+) executable\. Default: (.+)$',
+  ).firstMatch(source);
+  if (executablePathDefault != null) {
+    return '${executablePathDefault.group(1)} 執行檔完整路徑。預設：${executablePathDefault.group(2)}';
   }
   final executablePathDescription = RegExp(
     r'^Full path to the (.+) executable on this machine\.$',

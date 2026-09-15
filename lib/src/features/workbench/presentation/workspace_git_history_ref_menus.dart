@@ -109,6 +109,7 @@ Future<GitHistoryRefMenuAction?> showGitHistoryRefMenuForKind(
         AleraDropdownEntry<GitHistoryRefMenuAction>(
           value: .switchBranch,
           label: isCurrentBranch ? 'Current Branch' : 'Switch to Branch',
+          localizeLabel: true,
           selected: isCurrentBranch,
           enabled: !isCurrentBranch,
           leading: const Icon(AleraIcons.gitBranch, size: 16),
@@ -116,11 +117,13 @@ Future<GitHistoryRefMenuAction?> showGitHistoryRefMenuForKind(
         const AleraDropdownEntry<GitHistoryRefMenuAction>(
           value: .renameBranch,
           label: 'Rename Branch...',
+          localizeLabel: true,
           leading: Icon(AleraIcons.edit, size: 16),
         ),
         AleraDropdownEntry<GitHistoryRefMenuAction>(
           value: .deleteBranch,
           label: 'Delete Branch',
+          localizeLabel: true,
           enabled: !isCurrentBranch,
           leading: const Icon(AleraIcons.delete, size: 16),
         ),
@@ -128,21 +131,25 @@ Future<GitHistoryRefMenuAction?> showGitHistoryRefMenuForKind(
         const AleraDropdownEntry<GitHistoryRefMenuAction>(
           value: .mergeIntoCurrentBranch,
           label: 'Merge into Current Branch',
+          localizeLabel: true,
           leading: Icon(AleraIcons.gitMerge, size: 16),
         ),
         AleraDropdownEntry<GitHistoryRefMenuAction>(
           value: .rebaseOntoCurrentBranch,
           label: 'Rebase Current Branch onto ${itemRef.name}',
+          localizeLabel: true,
           leading: const Icon(AleraIcons.gitFork, size: 16),
         ),
         const AleraDropdownEntry<GitHistoryRefMenuAction>(
           value: .createArchive,
           label: 'Create Archive...',
+          localizeLabel: true,
           leading: Icon(AleraIcons.archive, size: 16),
         ),
         AleraDropdownEntry<GitHistoryRefMenuAction>(
           value: .openInWorktree,
           label: 'Open in New Worktree',
+          localizeLabel: true,
           enabled: !isCurrentBranch,
           leading: const Icon(AleraIcons.folderSpecial, size: 16),
         ),
@@ -153,22 +160,26 @@ Future<GitHistoryRefMenuAction?> showGitHistoryRefMenuForKind(
         const AleraDropdownEntry<GitHistoryRefMenuAction>(
           value: .checkoutRemoteBranch,
           label: 'Checkout Remote Branch',
+          localizeLabel: true,
           leading: Icon(AleraIcons.gitBranch, size: 16),
         ),
         const AleraDropdownEntry<GitHistoryRefMenuAction>(
           value: .deleteRemoteBranch,
           label: 'Delete Remote Branch',
+          localizeLabel: true,
           leading: Icon(AleraIcons.delete, size: 16),
         ),
         AleraDropdownEntry<GitHistoryRefMenuAction>(
           value: .pullIntoCurrentBranch,
           label: 'Pull into Current Branch',
+          localizeLabel: true,
           enabled: canPullIntoCurrentBranch,
           leading: const Icon(AleraIcons.gitPull, size: 16),
         ),
         const AleraDropdownEntry<GitHistoryRefMenuAction>(
           value: .openInWorktree,
           label: 'Open in New Worktree...',
+          localizeLabel: true,
           leading: Icon(AleraIcons.folderSpecial, size: 16),
         ),
         const PopupMenuDivider(),
@@ -176,21 +187,25 @@ Future<GitHistoryRefMenuAction?> showGitHistoryRefMenuForKind(
         const AleraDropdownEntry<GitHistoryRefMenuAction>(
           value: .pushTag,
           label: 'Push Tag',
+          localizeLabel: true,
           leading: Icon(AleraIcons.gitPush, size: 16),
         ),
         const AleraDropdownEntry<GitHistoryRefMenuAction>(
           value: .deleteTag,
           label: 'Delete Tag',
+          localizeLabel: true,
           leading: Icon(AleraIcons.delete, size: 16),
         ),
         const AleraDropdownEntry<GitHistoryRefMenuAction>(
           value: .createArchive,
           label: 'Create Archive...',
+          localizeLabel: true,
           leading: Icon(AleraIcons.archive, size: 16),
         ),
         const AleraDropdownEntry<GitHistoryRefMenuAction>(
           value: .openInWorktree,
           label: 'Open in New Worktree...',
+          localizeLabel: true,
           leading: Icon(AleraIcons.folderSpecial, size: 16),
         ),
         const PopupMenuDivider(),
@@ -198,6 +213,7 @@ Future<GitHistoryRefMenuAction?> showGitHistoryRefMenuForKind(
       AleraDropdownEntry<GitHistoryRefMenuAction>(
         value: .copyName,
         label: copyLabel,
+        localizeLabel: true,
         leading: const Icon(AleraIcons.copy, size: 16),
       ),
     ],
@@ -219,17 +235,20 @@ Future<GitHistoryBoundaryMenuAction?> showGitHistoryBoundaryMenu(
       AleraDropdownEntry<GitHistoryBoundaryMenuAction>(
         value: .stashChanges,
         label: 'Stash Changes',
+        localizeLabel: true,
         leading: Icon(AleraIcons.gitStash, size: 16),
       ),
       AleraDropdownEntry<GitHistoryBoundaryMenuAction>(
         value: .discardAllChanges,
         label: 'Discard All Changes',
+        localizeLabel: true,
         leading: Icon(AleraIcons.gitDiscard, size: 16),
       ),
       PopupMenuDivider(),
       AleraDropdownEntry<GitHistoryBoundaryMenuAction>(
         value: .commitChanges,
         label: 'Commit Changes...',
+        localizeLabel: true,
         leading: Icon(AleraIcons.gitCommit, size: 16),
       ),
     ],

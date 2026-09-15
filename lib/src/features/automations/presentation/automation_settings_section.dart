@@ -119,7 +119,7 @@ class _AutomationSettingsSectionState
     if (_error != null && !_saving) {
       return AleraEmptyState(
         title: context.tr('Automation Settings Unavailable'),
-        message: _error!,
+        message: context.tr(_error!),
         action: OutlinedButton(
           onPressed: _load,
           child: Text(context.tr('Retry')),

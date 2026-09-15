@@ -1,8 +1,10 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/feedback/alera_toast.dart';
 import 'package:alera/src/design_system/feedback/alera_toast_host.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -88,14 +90,41 @@ void main() {
       expect(find.text('Toast 4'), findsOneWidget);
     },
   );
+
+  testWidgets('localizes messages published without a BuildContext', (
+    tester,
+  ) async {
+    await _pumpToastHarness(
+      tester,
+      locale: const Locale('zh', 'TW'),
+      onPressed: (_) {
+        AleraToast.publish(
+          message: 'Settings changed elsewhere. Your change was not saved. Review the latest values and try again.',
+          duration: const Duration(seconds: 1),
+        );
+      },
+    );
+
+    await tester.tap(find.text('Show'));
+    await tester.pump();
+
+    expect(find.text('設定已在其他位置變更。你的變更未儲存。請檢查最新值後再試一次。'), findsOneWidget);
+  });
 }
 
 Future<void> _pumpToastHarness(
   WidgetTester tester, {
   required void Function(BuildContext context) onPressed,
+  Locale? locale,
 }) async {
   await tester.pumpWidget(
     MaterialApp(
+      locale: locale,
+      supportedLocales: supportedAleraLocales,
+      localizationsDelegates: const <LocalizationsDelegate<dynamic>>[
+        AleraLocalizationsDelegate(),
+        ...GlobalMaterialLocalizations.delegates,
+      ],
       home: Scaffold(
         body: Stack(
           children: <Widget>[

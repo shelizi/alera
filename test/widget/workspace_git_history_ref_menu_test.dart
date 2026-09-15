@@ -1,4 +1,6 @@
 import 'package:alera/src/design_system/feedback/alera_toast.dart';
+import 'package:alera/src/design_system/menus/alera_dropdown_entry.dart';
+import 'package:alera/src/features/workbench/presentation/workspace_git_history_ref_menus.dart';
 import 'package:alera/src/shared/infra/git/git_diff_models.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -21,6 +23,12 @@ void main() {
     expect(find.text('Rebase Current Branch onto feature'), findsOneWidget);
     expect(find.text('Create Archive...'), findsOneWidget);
     expect(find.text('Copy Branch Name'), findsOneWidget);
+    final actions = tester
+        .widgetList<AleraDropdownEntry<GitHistoryRefMenuAction>>(
+          find.byType(AleraDropdownEntry<GitHistoryRefMenuAction>),
+        );
+    expect(actions, isNotEmpty);
+    expect(actions.every((entry) => entry.localizeLabel), isTrue);
   });
 
   testWidgets('current branch disables switch and delete', (tester) async {

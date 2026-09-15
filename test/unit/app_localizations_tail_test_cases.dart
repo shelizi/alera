@@ -69,6 +69,81 @@ void registerAppLocalizationTailTests() {
     expect(l10n.translate('Runtime Host'), 'Runtime Host');
   });
 
+  test('traditional Chinese localizes recent workspace and agent settings', () {
+    final l10n = AleraLocalizations(const Locale('zh', 'TW'));
+    expect(l10n.translate('Workspaces'), '工作區');
+    expect(
+      l10n.translate('Automatic archiving for inactive workspaces.'),
+      '自動封存閒置的工作區。',
+    );
+    expect(l10n.translate('Auto-Archive After Inactivity'), '閒置後自動封存');
+    expect(
+      l10n.translate(
+        'Days without activity before a workspace moves to the Archived section. Set to 0 to keep workspaces listed.',
+      ),
+      '工作區連續未活動達指定天數後移至「已封存」區段。設為 0 可讓工作區持續顯示。',
+    );
+    expect(
+      l10n.translate('Move inactive workspaces into the Archived section.'),
+      '將閒置工作區移至「已封存」區段。',
+    );
+    expect(l10n.translate('Agent Executables'), 'Agent 執行檔');
+    expect(l10n.translate('Git Bash Executable'), 'Git Bash 執行檔');
+    expect(l10n.translate('Codex Executable'), 'Codex 執行檔');
+    expect(
+      l10n.translate('Full path to the Codex executable. Default: codex'),
+      'Codex 執行檔完整路徑。預設：codex',
+    );
+    expect(l10n.translate('Managed Options'), '受管理選項');
+    expect(l10n.translate('Reasoning Effort'), '推理強度');
+    expect(l10n.translate('Plan Mode Reasoning Effort'), 'Plan 模式推理強度');
+    expect(l10n.translate('Extra High'), '極高');
+    expect(l10n.translate('Workspace Write'), '工作區寫入');
+    expect(l10n.translate('Approval Policy'), '核准政策');
+    expect(l10n.translate('On Request'), '依要求');
+    expect(l10n.translate('Accept Edits'), '接受編輯');
+    expect(l10n.translate('Bypass Permissions'), '略過權限');
+    expect(l10n.translate('Auto Review'), '自動審查');
+    expect(l10n.translate('Dangerous'), '危險');
+    expect(l10n.translate('Strict'), '嚴格');
+    expect(l10n.translate('Custom: custom-model'), '自訂：custom-model');
+  });
+
+  test('traditional Chinese localizes concurrent settings conflicts', () {
+    final l10n = AleraLocalizations(const Locale('zh', 'TW'));
+    expect(
+      l10n.translate(
+        'Settings changed elsewhere. Your change was not saved. Review the latest values and try again.',
+      ),
+      '設定已在其他位置變更。你的變更未儲存。請檢查最新值後再試一次。',
+    );
+    expect(
+      l10n.translate(
+        'Automation settings changed elsewhere. Your change was not saved. Review the latest values and try again.',
+      ),
+      '自動化設定已在其他位置變更。你的變更未儲存。請檢查最新值後再試一次。',
+    );
+  });
+
+  test('traditional Chinese localizes Git history actions', () {
+    final l10n = AleraLocalizations(const Locale('zh', 'TW'));
+    expect(l10n.translate('Copy Commit Hash'), '複製 Commit Hash');
+    expect(l10n.translate('Create Branch Here…'), '在此建立 Branch…');
+    expect(l10n.translate('Checkout Commit'), 'Checkout 此 Commit');
+    expect(l10n.translate('Cherry Pick'), 'Cherry-pick');
+    expect(l10n.translate('Revert Commit'), 'Revert 此 Commit');
+    expect(l10n.translate('Drop Commit'), '移除 Commit');
+    expect(l10n.translate('Reset Current Branch Here'), '在此重設目前 Branch');
+    expect(l10n.translate('Current Branch'), '目前 Branch');
+    expect(l10n.translate('Switch to Branch'), '切換到 Branch');
+    expect(
+      l10n.translate('Rebase Current Branch onto feature'),
+      '將目前 Branch Rebase 到 feature',
+    );
+    expect(l10n.translate('Stash Changes'), 'Stash 變更');
+    expect(l10n.translate('Discard All Changes'), '捨棄所有變更');
+  });
+
   test('traditional Chinese localizes runtime busy and ship dialogs', () {
     final l10n = AleraLocalizations(const Locale('zh', 'TW'));
     expect(l10n.translate('Ship Changes?'), '送出變更？');
