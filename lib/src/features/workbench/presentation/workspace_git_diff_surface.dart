@@ -8,6 +8,7 @@ import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/buttons/alera_icon_button.dart';
 import 'package:alera/src/design_system/icons/alera_file_icon.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
+import 'package:alera/src/design_system/layout/alera_confirm_dialog.dart';
 import 'package:alera/src/features/ai_assist/application/ai_assist_errors.dart';
 import 'package:alera/src/features/reading_diff/application/reading_diff_providers.dart';
 import 'package:alera/src/features/reading_diff/application/reading_diff_generation_progress.dart';
@@ -30,12 +31,14 @@ import 'package:alera/src/shared/infra/git/git_diff_models.dart';
 import 'package:alera/src/shared/infra/git/git_providers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter/services.dart';
 
 part 'workspace_git_diff_surface_rows.dart';
 part 'workspace_git_diff_surface_bar.dart';
 part 'workspace_git_diff_surface_loading.dart';
 part 'workspace_git_diff_surface_full_file.dart';
 part 'workspace_git_diff_surface_side_by_side.dart';
+part 'workspace_git_diff_surface_editable.dart';
 
 class const WorkspaceGitDiffSurface({
   super.key,
@@ -71,6 +74,8 @@ class _WorkspaceGitDiffSurfaceState
   WorkspaceTextEncodingSelection _encodingSelection =
       WorkspaceTextEncodingSelection.auto;
   int _encodingGeneration = 0;
+  final Map<String, _EditableWorkingTreeDocument> _editableDocuments =
+      <String, _EditableWorkingTreeDocument>{};
 
   GitDiffContentMode get _effectiveContentMode {
     return _overrideContentMode ??
@@ -166,6 +171,7 @@ class _WorkspaceGitDiffSurfaceState
     if (activeRequest != null) {
       ref.read(readingDiffServiceProvider).cancel(activeRequest);
     }
+    _editableDocuments.clear();
     super.dispose();
   }
 
@@ -260,6 +266,10 @@ class _WorkspaceGitDiffSurfaceState
                       return _DiffFileList(
                         result: result,
                         fullFileContents: _fullFileContents,
+                        editableDocuments: _editableDocuments,
+                        onEditableChanged: _editWorkingTreeDocument,
+                        onEditableSave: (file) =>
+                            unawaited(_saveWorkingTreeDocument(file)),
                         sourcePath: _sourceControlScope.path,
                         sourceLabel:
                             widget.tab.gitDiffSource ==

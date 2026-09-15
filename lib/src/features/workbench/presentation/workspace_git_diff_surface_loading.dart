@@ -85,6 +85,7 @@ extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
     _updateDiffState(() {
       _loadedResult = null;
       _fullFileContents = const <GitDiffFile, _FullFileContents>{};
+      _editableDocuments.clear();
       _readingDiffResult = null;
       _readingDiffOriginalSnapshot = null;
       _showReadingDiff = false;
@@ -337,6 +338,14 @@ extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
     // both blobs for every changed file in parallel can create a large native
     // read burst and keeps the first frame waiting for unrelated files.
     for (final file in result.files) {
+      if (!_isCurrentDiffLoad(nextFuture, loadGeneration)) {
+        return;
+      }
+      await _ensureEditableDocument(
+        file: file,
+        sourceControlScope: sourceControlScope,
+        loadGeneration: loadGeneration,
+      );
       if (!_isCurrentDiffLoad(nextFuture, loadGeneration)) {
         return;
       }

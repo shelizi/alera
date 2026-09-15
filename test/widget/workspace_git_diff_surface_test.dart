@@ -594,4 +594,104 @@ void main() {
     expect(find.text('line one'), findsOneWidget);
     expect(find.text('line five'), findsOneWidget);
   });
+  testWidgets('working-tree side-by-side right pane edits and saves file', (
+    tester,
+  ) async {
+    final backend = FakeGitBackend()
+      ..gitDiffResult = const GitDiffResult(
+        files: <GitDiffFile>[
+          GitDiffFile(
+            path: 'lib/main.dart',
+            area: .unstaged,
+            status: .modified,
+            lines: <GitDiffLine>[
+              GitDiffLine.hunk('@@ -1,1 +1,1 @@'),
+              GitDiffLine.deletion('-old line'),
+              GitDiffLine.addition('+new line'),
+            ],
+          ),
+        ],
+      )
+      ..diffBlobBytesBySide[(filePath: 'lib/main.dart', oldSide: true)] =
+          Uint8List.fromList('old line\n'.codeUnits)
+      ..diffBlobBytesBySide[(filePath: 'lib/main.dart', oldSide: false)] =
+          Uint8List.fromList('new line\n'.codeUnits);
+    final files = _EditableDiffFileService(content: 'new line\n');
+
+    await _pumpDiffSurface(
+      tester,
+      backend: backend,
+      workspaceFileService: files,
+      tab: _diffTab(filePath: 'lib/main.dart', title: 'main.dart unstaged'),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Switch to Side-by-Side View'));
+    await tester.pumpAndSettle();
+
+    final editor = find.byKey(
+      const ValueKey<String>('git-diff-working-tree-editor-lib/main.dart'),
+    );
+    expect(editor, findsOneWidget);
+    expect(find.text('Workspace · Editable'), findsOneWidget);
+
+    await tester.enterText(editor, 'edited line\n');
+    await tester.pump();
+    expect(find.text('+1'), findsWidgets);
+    expect(find.text('-1'), findsWidgets);
+
+    await tester.tap(find.byTooltip('Save File'));
+    await tester.pumpAndSettle();
+
+    expect(files.writes, hasLength(1));
+    expect(files.writes.single.currentDisplayContent, 'edited line\n');
+    expect(files.writes.single.expectedContentToken, 'token-1');
+    expect(files.writes.single.overwriteIfChanged, isFalse);
+    expect(files.writes.single.encoding, native.WorkspaceTextEncoding.utf8);
+  });
+
+  testWidgets('staged side-by-side diff stays read only', (tester) async {
+    final backend = FakeGitBackend()
+      ..gitDiffResult = const GitDiffResult(
+        files: <GitDiffFile>[
+          GitDiffFile(
+            path: 'lib/main.dart',
+            area: .staged,
+            status: .modified,
+            lines: <GitDiffLine>[
+              GitDiffLine.hunk('@@ -1,1 +1,1 @@'),
+              GitDiffLine.deletion('-old line'),
+              GitDiffLine.addition('+staged line'),
+            ],
+          ),
+        ],
+      )
+      ..diffBlobBytesBySide[(filePath: 'lib/main.dart', oldSide: true)] =
+          Uint8List.fromList('old line\n'.codeUnits)
+      ..diffBlobBytesBySide[(filePath: 'lib/main.dart', oldSide: false)] =
+          Uint8List.fromList('staged line\n'.codeUnits);
+    final files = _EditableDiffFileService(content: 'workspace line\n');
+
+    await _pumpDiffSurface(
+      tester,
+      backend: backend,
+      workspaceFileService: files,
+      tab: _diffTab(
+        filePath: 'lib/main.dart',
+        title: 'main.dart staged',
+        area: .staged,
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Switch to Side-by-Side View'));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(
+        const ValueKey<String>('git-diff-working-tree-editor-lib/main.dart'),
+      ),
+      findsNothing,
+    );
+    expect(files.readCount, 0);
+    expect(find.text('Modified'), findsOneWidget);
+  });
 }

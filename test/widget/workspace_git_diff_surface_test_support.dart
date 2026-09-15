@@ -69,6 +69,70 @@ class _DiffEncodingFileService extends WorkspaceFileService {
   }
 }
 
+class _EditableDiffFileService extends _DiffEncodingFileService {
+  _EditableDiffFileService({required String content})
+    : current = native.WorkspaceEditorTextFile(
+        rawContent: content,
+        displayContent: content,
+        contentToken: 'token-1',
+        modifiedMillis: 1,
+        size: BigInt.from(content.length),
+        encoding: native.WorkspaceTextEncoding.utf8,
+      );
+
+  native.WorkspaceEditorTextFile current;
+  int readCount = 0;
+  final List<
+    ({
+      String currentDisplayContent,
+      String? expectedContentToken,
+      bool overwriteIfChanged,
+      native.WorkspaceTextEncoding encoding,
+    })
+  >
+  writes = [];
+
+  @override
+  Future<native.WorkspaceEditorTextFile> readEditorTextFile({
+    required String workspacePath,
+    required String relativePath,
+    required int tabSize,
+    native.WorkspaceTextEncoding? encoding,
+  }) async {
+    readCount += 1;
+    return current;
+  }
+
+  @override
+  Future<native.WorkspaceEditorTextFile> writeEditorTextFile({
+    required String workspacePath,
+    required String relativePath,
+    required String currentDisplayContent,
+    required String? originalRawContent,
+    required String? originalDisplayContent,
+    required String? expectedContentToken,
+    required bool overwriteIfChanged,
+    required int tabSize,
+    required native.WorkspaceTextEncoding encoding,
+  }) async {
+    writes.add((
+      currentDisplayContent: currentDisplayContent,
+      expectedContentToken: expectedContentToken,
+      overwriteIfChanged: overwriteIfChanged,
+      encoding: encoding,
+    ));
+    current = native.WorkspaceEditorTextFile(
+      rawContent: currentDisplayContent,
+      displayContent: currentDisplayContent,
+      contentToken: 'token-${writes.length + 1}',
+      modifiedMillis: writes.length + 1,
+      size: BigInt.from(currentDisplayContent.length),
+      encoding: encoding,
+    );
+    return current;
+  }
+}
+
 class _MutableSettingsController(final AleraSettings _settings)
     extends SettingsController {
   @override

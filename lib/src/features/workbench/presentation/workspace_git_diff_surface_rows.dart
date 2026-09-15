@@ -10,6 +10,9 @@ class const _DiffFileList({
   final GitDiffContentMode contentMode = GitDiffContentMode.fullFile,
   final GitDiffPresentationMode presentationMode =
       GitDiffPresentationMode.unified,
+  final Map<String, _EditableWorkingTreeDocument> editableDocuments = const {},
+  final void Function(GitDiffFile file, String text)? onEditableChanged,
+  final void Function(GitDiffFile file)? onEditableSave,
 }) extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
@@ -22,6 +25,9 @@ class const _DiffFileList({
       parentOid: parentOid,
       contentMode: contentMode,
       presentationMode: presentationMode,
+      editableDocuments: editableDocuments,
+      onEditableChanged: onEditableChanged,
+      onEditableSave: onEditableSave,
     );
     if (presentationMode == GitDiffPresentationMode.sideBySide) {
       return LayoutBuilder(
@@ -61,6 +67,9 @@ class const _DiffRows(final List<_DiffRow> items) {
     String? parentOid,
     GitDiffContentMode contentMode = GitDiffContentMode.fullFile,
     GitDiffPresentationMode presentationMode = GitDiffPresentationMode.unified,
+    Map<String, _EditableWorkingTreeDocument> editableDocuments = const {},
+    void Function(GitDiffFile file, String text)? onEditableChanged,
+    void Function(GitDiffFile file)? onEditableSave,
   }) {
     final items = <_DiffRow>[
       if (result.truncated) const _BannerRow('Diff truncated for preview.'),
@@ -83,6 +92,26 @@ class const _DiffRows(final List<_DiffRow> items) {
       } else {
         final sideBySide =
             presentationMode == GitDiffPresentationMode.sideBySide;
+        final editable = editableDocuments[file.path];
+        if (sideBySide &&
+            contentMode == GitDiffContentMode.fullFile &&
+            editable != null &&
+            onEditableChanged != null &&
+            onEditableSave != null) {
+          final contents = fullFileContents[file];
+          items.add(
+            _WidgetDiffRow(
+              _EditableWorkingTreeDiff(
+                file: file,
+                baseline: contents?.oldDecoded?.content ?? '',
+                document: editable,
+                onChanged: (text) => onEditableChanged(file, text),
+                onSave: () => onEditableSave(file),
+              ),
+            ),
+          );
+          continue;
+        }
         List<_DiffRow>? renderedRows;
         if (contentMode == GitDiffContentMode.fullFile) {
           final contents = fullFileContents[file];
@@ -122,6 +151,11 @@ class const _DiffRows(final List<_DiffRow> items) {
 
 abstract class const _DiffRow() {
   Widget build(BuildContext context);
+}
+
+class const _WidgetDiffRow(final Widget child) extends _DiffRow {
+  @override
+  Widget build(BuildContext context) => child;
 }
 
 class const _FileHeaderRow(final GitDiffFile file, {final String? sourceLabel})
