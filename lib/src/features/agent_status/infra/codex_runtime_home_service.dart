@@ -55,11 +55,7 @@ final class CodexRuntimeHomeService({
 
   Future<CodexRuntimeHomePreparation> prepareForTerminalLaunch() async {
     final runtimeHome = await _runtimeHomeDirectory();
-    _syncAuth(runtimeHome);
-    _syncSystemResources(runtimeHome);
-    _syncSystemConfig(runtimeHome);
-    _syncSystemSessions(runtimeHome);
-    final status = await install();
+    final status = await install(runtimeHome: runtimeHome);
     return CodexRuntimeHomePreparation(
       runtimeHomePath: runtimeHome.path,
       environment: <String, String>{
@@ -161,14 +157,16 @@ final class CodexRuntimeHomeService({
     );
   }
 
-  Future<ManagedAgentHookInstallStatus> install() async {
-    final runtimeHome = await _runtimeHomeDirectory();
-    _syncAuth(runtimeHome);
-    _syncSystemResources(runtimeHome);
-    _syncSystemConfig(runtimeHome);
-    _syncSystemSessions(runtimeHome);
+  Future<ManagedAgentHookInstallStatus> install({
+    Directory? runtimeHome,
+  }) async {
+    final runtime = runtimeHome ?? await _runtimeHomeDirectory();
+    _syncAuth(runtime);
+    _syncSystemResources(runtime);
+    _syncSystemConfig(runtime);
+    _syncSystemSessions(runtime);
 
-    final descriptor = await _descriptor(runtimeHome: runtimeHome);
+    final descriptor = await _descriptor(runtimeHome: runtime);
     final runtimeConfig = _readJsonObject(descriptor.configPath);
     if (runtimeConfig == null) {
       return ManagedAgentHookInstallStatus(
@@ -212,7 +210,7 @@ final class CodexRuntimeHomeService({
     runtimeConfig['hooks'] = nextHooks;
     _writeManagedScript(descriptor.scriptPath, _managedScript());
     _writeJsonObject(descriptor.configPath, runtimeConfig);
-    _syncSystemConfig(runtimeHome);
+    _syncSystemConfig(runtime);
     _removeStaleRuntimeTrustEntries(
       tomlPath: descriptor.tomlPath,
       runtimeHooksPath: descriptor.configPath,

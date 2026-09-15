@@ -1,6 +1,30 @@
 part of 'codex_runtime_home_service_test.dart';
 
 void _registerCodexRuntimeHomeServiceAdvancedTests() {
+  test('prepares session resources only once per terminal launch', () async {
+    Directory(p.join(home.path, '.codex', 'sessions')).createSync(
+      recursive: true,
+    );
+    var sessionLinkAttempts = 0;
+    final countingService = CodexRuntimeHomeService(
+      homeDirectory: home.path,
+      applicationSupportDirectory: () async => support,
+      platform: .posix,
+      environment: <String, String>{'HOME': home.path},
+      resourceLinkCreator: ({required sourcePath, required targetPath}) {
+        if (p.basename(targetPath) == 'sessions') {
+          sessionLinkAttempts += 1;
+          throw const FileSystemException('symlinks disabled');
+        }
+        Link(targetPath).createSync(sourcePath, recursive: true);
+      },
+    );
+
+    await countingService.prepareForTerminalLaunch();
+
+    expect(sessionLinkAttempts, 1);
+  });
+
   test('removes mirrored auth when system auth disappears', () async {
     final systemAuth = File(p.join(home.path, '.codex', 'auth.json'))
       ..createSync(recursive: true)
