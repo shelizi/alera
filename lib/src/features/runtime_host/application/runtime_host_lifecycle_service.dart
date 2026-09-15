@@ -125,6 +125,30 @@ final class RuntimeHostLifecycleService({
     await _client.ensureStarted(config: _readConfig());
   }
 
+  /// Replaces a stale runtime host only when a normal soft shutdown is safe.
+  ///
+  /// Startup uses this after it has attached/configured the existing host. If
+  /// the host is busy, automatic update is skipped and user work is preserved;
+  /// this path never force-stops sessions, agents, jobs, or push subscriptions.
+  Future<bool> updateIfIdle() async {
+    final status = await loadStatus();
+    if (!status.updateAvailable) {
+      return false;
+    }
+    try {
+      final stopped = await stop();
+      if (!stopped) {
+        return false;
+      }
+    } on RuntimeHostBusyException {
+      // The host raced from idle to busy, or the status snapshot did not expose
+      // every active job. Keep the existing host alive and defer the update.
+      return false;
+    }
+    await start();
+    return true;
+  }
+
   Future<bool> stop({
     bool force = false,
     RuntimeHostForceConfirm? confirmForce,

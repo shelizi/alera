@@ -67,6 +67,72 @@ void main() {
       expect(client.ensureStartedCalls, 1);
     });
 
+    test('updateIfIdle replaces an idle stale host', () async {
+      final client = FakeRuntimeHostLifecycleClient(
+        status: <String, Object?>{
+          'runtimeHostVersion': '1.2.0',
+          'runtimeHostCommit': 'old',
+        },
+      );
+      final service = RuntimeHostLifecycleService(
+        client: client,
+        bundledVersionProbe: FakeBundledSidecarVersionProbe(
+          const BundledSidecarVersion(version: '1.3.0', commit: 'new'),
+        ),
+        readConfig: () => TerminalHostConfig.defaults,
+        shutdownSettleTimeout: const Duration(milliseconds: 50),
+      );
+
+      expect(await service.updateIfIdle(), isTrue);
+
+      expect(client.shutdownCalls, <bool>[false]);
+      expect(client.ensureStartedCalls, 1);
+    });
+
+    test('updateIfIdle keeps a busy stale host without forcing it', () async {
+      final client = FakeRuntimeHostLifecycleClient(
+        status: <String, Object?>{
+          'runtimeHostVersion': '1.2.0',
+          'runtimeHostCommit': 'old',
+        },
+        busyOnSoftStop: true,
+      );
+      final service = RuntimeHostLifecycleService(
+        client: client,
+        bundledVersionProbe: FakeBundledSidecarVersionProbe(
+          const BundledSidecarVersion(version: '1.3.0', commit: 'new'),
+        ),
+        readConfig: () => TerminalHostConfig.defaults,
+      );
+
+      expect(await service.updateIfIdle(), isFalse);
+
+      expect(client.shutdownCalls, <bool>[false]);
+      expect(client.ensureStartedCalls, 0);
+      expect(await client.probeRuntimeStatus(), isNotNull);
+    });
+
+    test('updateIfIdle does nothing when host is current', () async {
+      final client = FakeRuntimeHostLifecycleClient(
+        status: <String, Object?>{
+          'runtimeHostVersion': '1.3.0',
+          'runtimeHostCommit': 'same',
+        },
+      );
+      final service = RuntimeHostLifecycleService(
+        client: client,
+        bundledVersionProbe: FakeBundledSidecarVersionProbe(
+          const BundledSidecarVersion(version: '1.3.0', commit: 'same'),
+        ),
+        readConfig: () => TerminalHostConfig.defaults,
+      );
+
+      expect(await service.updateIfIdle(), isFalse);
+
+      expect(client.shutdownCalls, isEmpty);
+      expect(client.ensureStartedCalls, 0);
+    });
+
     test('updateIfAvailable stops and starts when bundled is newer', () async {
       final client = FakeRuntimeHostLifecycleClient(
         status: <String, Object?>{'runtimeHostVersion': '1.2.0'},

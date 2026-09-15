@@ -1,12 +1,12 @@
 import 'dart:async';
 
 import 'package:alera/src/features/agent_status/application/agent_status_controller.dart';
-import 'package:alera/src/features/agent_status/application/agent_status_providers.dart';
 import 'package:alera/src/features/command_terminal/domain/command_terminal_request.dart';
 import 'package:alera/src/features/projects/application/project_providers.dart';
 import 'package:alera/src/features/projects/domain/project.dart';
 import 'package:alera/src/features/settings/application/settings_controller.dart';
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
+import 'package:alera/src/features/runtime_host/application/runtime_host_lifecycle_providers.dart';
 import 'package:alera/src/features/runtime_host/application/runtime_host_settings_config.dart';
 import 'package:alera/src/features/workbench/application/terminal_runtime_bindings.dart';
 import 'package:alera/src/features/workbench/application/workbench_controller.dart';
@@ -240,6 +240,7 @@ TerminalHostClient terminalHostClient(Ref ref) {
 @Riverpod(keepAlive: true)
 void terminalHostWarmupCoordinator(Ref ref) {
   final client = ref.watch(terminalHostClientProvider);
+  final lifecycle = ref.watch(runtimeHostLifecycleServiceProvider);
   final runtimeClient = ref.watch(socketTerminalHostClientProvider);
   unawaited(
     client
@@ -253,6 +254,9 @@ void terminalHostWarmupCoordinator(Ref ref) {
           ),
         )
         .then<void>((_) async {
+          // A detached host can outlive the desktop app. Once attached, replace
+          // a stale build only if a normal soft shutdown reports it is idle.
+          await lifecycle.updateIfIdle();
           await runtimeClient.probeRuntimeStatus();
         })
         .catchError(_ignoreProviderAsyncError),
