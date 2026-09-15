@@ -20,6 +20,7 @@ class _FakeWorkspaceFileService({
   final List<String> createdFiles = <String>[];
   final List<String> copiedFiles = <String>[];
   final List<_ListChildrenCall> listChildrenCalls = <_ListChildrenCall>[];
+  final List<bool> hideHiddenCalls = <bool>[];
   final List<List<String>> watchedPathUpdates = <List<String>>[];
   final Map<String, String> writtenFiles = <String, String>{};
 
@@ -38,12 +39,14 @@ class _FakeWorkspaceFileService({
     required String workspacePath,
     required String relativePath,
     required bool hideIgnored,
+    bool hideHidden = false,
   }) async {
     final call = _ListChildrenCall(
       relativePath: relativePath,
       hideIgnored: hideIgnored,
     );
     listChildrenCalls.add(call);
+    hideHiddenCalls.add(hideHidden);
     if (failingListChildrenCalls.contains(call)) {
       throw StateError('Failed to list $relativePath');
     }
@@ -53,13 +56,18 @@ class _FakeWorkspaceFileService({
     final workspaceModeChildren = hideIgnored
         ? workspaceChildren
         : workspaceShowAllChildren;
-    return workspaceModeChildren?[relativePath] ??
+    final entries =
+        workspaceModeChildren?[relativePath] ??
         workspaceChildren?[relativePath] ??
         (hideIgnored
             ? childrenByDirectory[relativePath]
             : showAllChildrenByDirectory[relativePath]) ??
         childrenByDirectory[relativePath] ??
         const <native.WorkspaceFileEntry>[];
+    if (!hideHidden) {
+      return entries;
+    }
+    return entries.where((entry) => !entry.isHidden).toList(growable: false);
   }
 
   @override

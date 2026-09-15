@@ -19,6 +19,7 @@ import 'package:alera/src/shared/infra/process/process_runner.dart';
 import 'package:alera/src/shared/infra/git/git_backend.dart';
 import 'package:alera/src/shared/infra/git/git_explorer_status.dart';
 import 'package:alera/src/shared/infra/git/git_providers.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';

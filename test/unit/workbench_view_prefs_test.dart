@@ -34,6 +34,7 @@ void main() {
         WorkbenchViewPrefs.defaults.explorerMode,
         WorkspaceExplorerMode.hideIgnored,
       );
+      expect(WorkbenchViewPrefs.defaults.showHiddenFiles, isFalse);
     });
 
     test('round-trips through json', () {
@@ -56,6 +57,7 @@ void main() {
         sidebarWidth: 360,
         activeContextPanelTab: .explorer,
         explorerMode: .showAll,
+        showHiddenFiles: true,
       );
       final restored = WorkbenchViewPrefs.fromJson(
         Map<String, Object?>.from(prefs.toMap()),
@@ -78,6 +80,7 @@ void main() {
       expect(restored.sidebarWidth, 360);
       expect(restored.activeContextPanelTab, WorkbenchContextPanelTab.explorer);
       expect(restored.explorerMode, WorkspaceExplorerMode.showAll);
+      expect(restored.showHiddenFiles, isTrue);
     });
 
     test('fromJson requires the current schema', () {

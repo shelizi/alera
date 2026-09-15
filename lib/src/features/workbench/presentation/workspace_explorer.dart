@@ -27,6 +27,7 @@ import 'package:alera/src/rust/api/workspace_files.dart' as native;
 import 'package:alera/src/shared/infra/git/git_backend.dart';
 import 'package:alera/src/shared/infra/git/git_explorer_status.dart';
 import 'package:alera/src/shared/infra/git/git_providers.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -45,6 +46,8 @@ class const WorkspaceExplorer({
   required final Workspace workspace,
   required final WorkspaceExplorerMode mode,
   required final ValueChanged<WorkspaceExplorerMode> onModeChanged,
+  required final bool showHiddenFiles,
+  required final ValueChanged<bool> onShowHiddenFilesChanged,
   required final ValueChanged<String> onOpenFile,
   final ValueChanged<String>? onOpenFilePermanently,
   final ValueChanged<String>? onOpenFileInAlera,
@@ -118,7 +121,8 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
         flattenStrategy: const _AleraFlattenStrategy(),
       );
       unawaited(_restartExplorer());
-    } else if (oldWidget.mode != widget.mode) {
+    } else if (oldWidget.mode != widget.mode ||
+        oldWidget.showHiddenFiles != widget.showHiddenFiles) {
       unawaited(_reloadForModeChange());
     }
   }
@@ -143,10 +147,13 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
         _ExplorerToolbar(
           title: widget.workspace.name,
           mode: widget.mode,
+          showHiddenFiles: widget.showHiddenFiles,
+          showHiddenToggle: defaultTargetPlatform == TargetPlatform.windows,
           loading: _loading,
           onRefresh: () => unawaited(_reloadRoot()),
           onCollapseAll: _controller.expansions.collapseAll,
           onToggleMode: _toggleMode,
+          onToggleHiddenFiles: _toggleHiddenFiles,
           onSaveAll: () => unawaited(_saveAllEditors()),
           onNewFile: () => unawaited(_createEntry(directory: false)),
           onNewFolder: () => unawaited(_createEntry(directory: true)),
@@ -321,6 +328,9 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
       workspacePath: widget.workspace.path,
       relativePath: relativePath,
       hideIgnored: widget.mode == WorkspaceExplorerMode.hideIgnored,
+      hideHidden:
+          defaultTargetPlatform == TargetPlatform.windows &&
+          !widget.showHiddenFiles,
     );
     final children = _workspaceFiles.applyGitStatusSnapshot(
       rawChildren,

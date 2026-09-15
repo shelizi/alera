@@ -27,6 +27,8 @@ void _registerWorkspaceExplorerRevealTests() {
                     workspace: _workspace(),
                     mode: .hideIgnored,
                     onModeChanged: (_) {},
+                    showHiddenFiles: false,
+                    onShowHiddenFilesChanged: (_) {},
                     onOpenFile: (_) {},
                     onPathMoved: (_, _) async {},
                   );

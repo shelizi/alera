@@ -2,6 +2,52 @@ part of 'workspace_explorer_test.dart';
 
 void _registerWorkspaceExplorerModeTests() {
   testWidgets(
+    'Windows hidden items toggle reloads and reveals hidden entries',
+    (tester) async {
+      final previousPlatform = debugDefaultTargetPlatformOverride;
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      addTearDown(() => debugDefaultTargetPlatformOverride = previousPlatform);
+
+      final service = _FakeWorkspaceFileService()
+        ..childrenByDirectory[''] = <native.WorkspaceFileEntry>[
+          _file('visible.txt'),
+          _file('hidden.txt', isHidden: true),
+          _directory('hidden-dir', hasChildrenHint: false, isHidden: true),
+        ];
+
+      await tester.pumpWidget(
+        _withWorkspaceFiles(
+          service,
+          child: MaterialApp(
+            home: Scaffold(
+              body: SizedBox(
+                width: 320,
+                height: 480,
+                child: const _WorkspaceExplorerModeHarness(),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('visible.txt'), findsOneWidget);
+      expect(find.text('hidden.txt'), findsNothing);
+      expect(find.text('hidden-dir'), findsNothing);
+      expect(service.hideHiddenCalls.last, isTrue);
+
+      await tester.tap(find.byTooltip('Show hidden items'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('hidden.txt'), findsOneWidget);
+      expect(find.text('hidden-dir'), findsOneWidget);
+      expect(service.hideHiddenCalls.last, isFalse);
+      expect(find.byTooltip('Hide hidden items'), findsOneWidget);
+      debugDefaultTargetPlatformOverride = previousPlatform;
+    },
+  );
+
+  testWidgets(
     'ignored files toggle refreshes the listing without manual refresh',
     (tester) async {
       final service = _FakeWorkspaceFileService()

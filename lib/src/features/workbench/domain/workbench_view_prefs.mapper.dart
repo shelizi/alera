@@ -664,6 +664,13 @@ class WorkbenchViewPrefsMapper extends ClassMapperBase<WorkbenchViewPrefs> {
     opt: true,
     def: WorkspaceExplorerMode.hideIgnored,
   );
+  static bool _$showHiddenFiles(WorkbenchViewPrefs v) => v.showHiddenFiles;
+  static const Field<WorkbenchViewPrefs, bool> _f$showHiddenFiles = Field(
+    'showHiddenFiles',
+    _$showHiddenFiles,
+    opt: true,
+    def: false,
+  );
   static GitDiffViewMode _$gitDiffViewMode(WorkbenchViewPrefs v) =>
       v.gitDiffViewMode;
   static const Field<WorkbenchViewPrefs, GitDiffViewMode> _f$gitDiffViewMode =
@@ -761,6 +768,7 @@ class WorkbenchViewPrefsMapper extends ClassMapperBase<WorkbenchViewPrefs> {
     #sidebarWidth: _f$sidebarWidth,
     #activeContextPanelTab: _f$activeContextPanelTab,
     #explorerMode: _f$explorerMode,
+    #showHiddenFiles: _f$showHiddenFiles,
     #gitDiffViewMode: _f$gitDiffViewMode,
     #gitDiffGroupMode: _f$gitDiffGroupMode,
     #gitDiffContentMode: _f$gitDiffContentMode,
@@ -797,6 +805,7 @@ class WorkbenchViewPrefsMapper extends ClassMapperBase<WorkbenchViewPrefs> {
       sidebarWidth: data.dec(_f$sidebarWidth),
       activeContextPanelTab: data.dec(_f$activeContextPanelTab),
       explorerMode: data.dec(_f$explorerMode),
+      showHiddenFiles: data.dec(_f$showHiddenFiles),
       gitDiffViewMode: data.dec(_f$gitDiffViewMode),
       gitDiffGroupMode: data.dec(_f$gitDiffGroupMode),
       gitDiffContentMode: data.dec(_f$gitDiffContentMode),
@@ -902,6 +911,7 @@ abstract class WorkbenchViewPrefsCopyWith<
     double? sidebarWidth,
     WorkbenchContextPanelTab? activeContextPanelTab,
     WorkspaceExplorerMode? explorerMode,
+    bool? showHiddenFiles,
     GitDiffViewMode? gitDiffViewMode,
     GitDiffGroupMode? gitDiffGroupMode,
     GitDiffContentMode? gitDiffContentMode,
@@ -953,6 +963,7 @@ class _WorkbenchViewPrefsCopyWithImpl<$R, $Out>
     double? sidebarWidth,
     WorkbenchContextPanelTab? activeContextPanelTab,
     WorkspaceExplorerMode? explorerMode,
+    bool? showHiddenFiles,
     GitDiffViewMode? gitDiffViewMode,
     GitDiffGroupMode? gitDiffGroupMode,
     GitDiffContentMode? gitDiffContentMode,
@@ -994,6 +1005,7 @@ class _WorkbenchViewPrefsCopyWithImpl<$R, $Out>
       if (activeContextPanelTab != null)
         #activeContextPanelTab: activeContextPanelTab,
       if (explorerMode != null) #explorerMode: explorerMode,
+      if (showHiddenFiles != null) #showHiddenFiles: showHiddenFiles,
       if (gitDiffViewMode != null) #gitDiffViewMode: gitDiffViewMode,
       if (gitDiffGroupMode != null) #gitDiffGroupMode: gitDiffGroupMode,
       if (gitDiffContentMode != null) #gitDiffContentMode: gitDiffContentMode,
@@ -1070,6 +1082,7 @@ class _WorkbenchViewPrefsCopyWithImpl<$R, $Out>
       or: $value.activeContextPanelTab,
     ),
     explorerMode: data.get(#explorerMode, or: $value.explorerMode),
+    showHiddenFiles: data.get(#showHiddenFiles, or: $value.showHiddenFiles),
     gitDiffViewMode: data.get(#gitDiffViewMode, or: $value.gitDiffViewMode),
     gitDiffGroupMode: data.get(#gitDiffGroupMode, or: $value.gitDiffGroupMode),
     gitDiffContentMode: data.get(

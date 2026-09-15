@@ -14,12 +14,17 @@ class const WorkspaceFileService() {
     required String workspacePath,
     required String relativePath,
     required bool hideIgnored,
-  }) {
-    return native.listWorkspaceChildren(
+    bool hideHidden = false,
+  }) async {
+    final entries = await native.listWorkspaceChildren(
       workspacePath: workspacePath,
       relativePath: relativePath,
       hideIgnored: hideIgnored,
     );
+    if (!hideHidden) {
+      return entries;
+    }
+    return entries.where((entry) => !entry.isHidden).toList(growable: false);
   }
 
   Future<native.WorkspaceQuickOpenSession> startQuickOpenSession({
