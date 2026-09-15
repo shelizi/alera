@@ -622,6 +622,90 @@ String? _translateDynamicTraditionalChinese(String source) {
     return '已建立工作區 ${createdWorkspace.group(1)}';
   }
 
+  final revokeNamedItem = RegExp(r'^Revoke (.+)$').firstMatch(source);
+  if (revokeNamedItem != null) {
+    return '撤銷「${revokeNamedItem.group(1)}」';
+  }
+  final deleteNamedItem = RegExp(r'^Delete (.+)$').firstMatch(source);
+  if (deleteNamedItem != null) {
+    return '刪除「${deleteNamedItem.group(1)}」';
+  }
+
+  final profileNoReferences = RegExp(
+    r'^(.+) has no references\. Deleting it cannot be undone\.$',
+  ).firstMatch(source);
+  if (profileNoReferences != null) {
+    return '「${profileNoReferences.group(1)}」沒有任何參照。刪除後無法復原。';
+  }
+  final profileBlockingReferences = RegExp(
+    r'^(.+) is referenced by (.+)\. Remove its automation and tab references before deleting it\.$',
+  ).firstMatch(source);
+  if (profileBlockingReferences != null) {
+    return '「${profileBlockingReferences.group(1)}」正被 ${_translateAgentProfileReferences(profileBlockingReferences.group(2)!)}參照。請先移除相關的自動化與分頁參照再刪除。';
+  }
+  final profileClearedReferences = RegExp(
+    r'^(.+) is referenced by (.+)\. These references will be cleared atomically when the profile is deleted\.$',
+  ).firstMatch(source);
+  if (profileClearedReferences != null) {
+    return '「${profileClearedReferences.group(1)}」正被 ${_translateAgentProfileReferences(profileClearedReferences.group(2)!)}參照。刪除 Profile 時會以原子方式一併清除這些參照。';
+  }
+
+  final moveEarlier = RegExp(r'^Move (.+) Earlier$').firstMatch(source);
+  if (moveEarlier != null) {
+    return '將 ${moveEarlier.group(1)} 往前移';
+  }
+  final moveLater = RegExp(r'^Move (.+) Later$').firstMatch(source);
+  if (moveLater != null) {
+    return '將 ${moveLater.group(1)} 往後移';
+  }
+  final usageLabel = RegExp(r'^Usage: (.+)$').firstMatch(source);
+  if (usageLabel != null) {
+    return '用量：${usageLabel.group(1)}';
+  }
+  final quotaLabel = RegExp(r'^(.+) Quotas$').firstMatch(source);
+  if (quotaLabel != null) {
+    return '${quotaLabel.group(1)} 配額';
+  }
+  final registrationCheckFailed = RegExp(r'^Registration check failed: (.+)$')
+      .firstMatch(source);
+  if (registrationCheckFailed != null) {
+    return '註冊狀態檢查失敗：${registrationCheckFailed.group(1)}';
+  }
+  final registrationFailed = RegExp(r'^Registration failed: (.+)$')
+      .firstMatch(source);
+  if (registrationFailed != null) {
+    return '註冊失敗：${registrationFailed.group(1)}';
+  }
+  final modelPassedTo = RegExp(r'^Model passed to (.+)\.$').firstMatch(source);
+  if (modelPassedTo != null) {
+    return '傳給 ${modelPassedTo.group(1)} 的模型。';
+  }
+  final revokedAt = RegExp(r'^Revoked (.+)$').firstMatch(source);
+  if (revokedAt != null) {
+    return '已撤銷：${revokedAt.group(1)}';
+  }
+  final pairedAt = RegExp(r'^Paired (.+)$').firstMatch(source);
+  if (pairedAt != null) {
+    return '已配對：${pairedAt.group(1)}';
+  }
+  final lastSeenAt = RegExp(r'^Last seen (.+)$').firstMatch(source);
+  if (lastSeenAt != null) {
+    return '最後出現：${lastSeenAt.group(1)}';
+  }
+  final expiresMinutesSeconds = RegExp(r'^Expires in (\d+)m (\d+)s$')
+      .firstMatch(source);
+  if (expiresMinutesSeconds != null) {
+    return '${expiresMinutesSeconds.group(1)} 分 ${expiresMinutesSeconds.group(2)} 秒後到期';
+  }
+  final expiresMinutes = RegExp(r'^Expires in (\d+)m$').firstMatch(source);
+  if (expiresMinutes != null) {
+    return '${expiresMinutes.group(1)} 分鐘後到期';
+  }
+  final expiresSeconds = RegExp(r'^Expires in (\d+)s$').firstMatch(source);
+  if (expiresSeconds != null) {
+    return '${expiresSeconds.group(1)} 秒後到期';
+  }
+
   final selectedValue = RegExp(r'^Selected: (.+)$').firstMatch(source);
   if (selectedValue != null) {
     return '已選取：${selectedValue.group(1)}';
@@ -743,6 +827,34 @@ String? _translateDynamicTraditionalChinese(String source) {
   }
 
   return null;
+}
+
+String _translateAgentProfileReferences(String source) {
+  return source
+      .split(', ')
+      .map((part) {
+        final automations = RegExp(r'^(\d+) automations?$').firstMatch(part);
+        if (automations != null) {
+          return '${automations.group(1)} 個自動化';
+        }
+        final tabs = RegExp(r'^(\d+) tabs?$').firstMatch(part);
+        if (tabs != null) {
+          return '${tabs.group(1)} 個分頁';
+        }
+        final policies = RegExp(r'^(\d+) active execution (?:policy|policies)$')
+            .firstMatch(part);
+        if (policies != null) {
+          return '${policies.group(1)} 個作用中的執行政策';
+        }
+        if (part == 'the default profile setting') {
+          return '預設 Profile 設定';
+        }
+        if (part == 'an automation policy') {
+          return '自動化政策';
+        }
+        return part;
+      })
+      .join('、');
 }
 
 String _translateRuntimeBusyItems(String source) {

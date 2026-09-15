@@ -58,8 +58,8 @@ class const MobileDeviceListRow({
                     ),
                     if (device.isRevoked) ...<Widget>[
                       const SizedBox(width: AleraTokens.space8),
-                      const AleraBadge(
-                        label: 'Revoked',
+                      AleraBadge(
+                        label: context.tr('Revoked'),
                         color: AleraTokens.error,
                         foregroundColor: AleraTokens.onError,
                       ),

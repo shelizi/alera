@@ -156,7 +156,7 @@ class _AleraCliRegistrationControlState
               child: FilledButton.tonalIcon(
                 onPressed: _busy || hasConflict ? null : _install,
                 icon: const Icon(AleraIcons.terminal, size: 16),
-                label: Text(ready ? 'Update' : 'Register'),
+                label: Text(context.tr(ready ? 'Update' : 'Register')),
               ),
             ),
           ],
@@ -164,7 +164,7 @@ class _AleraCliRegistrationControlState
         if (summary != null) ...<Widget>[
           const SizedBox(height: AleraTokens.space6),
           Text(
-            summary,
+            context.tr(summary),
             textAlign: .right,
             maxLines: 1,
             overflow: .ellipsis,
@@ -179,7 +179,7 @@ class _AleraCliRegistrationControlState
           if (detail != null) ...<Widget>[
             const SizedBox(height: AleraTokens.space2),
             Text(
-              detail,
+              context.tr(detail),
               textAlign: .right,
               maxLines: 2,
               overflow: .ellipsis,

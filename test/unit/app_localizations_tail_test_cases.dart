@@ -297,7 +297,7 @@ void registerAppLocalizationTailTests() {
     final l10n = AleraLocalizations(const Locale('zh', 'TW'));
     final settingsRoot = Directory('lib/src/features/settings/presentation');
     final fieldPattern = RegExp(
-      r'''(?:title|description|label|tooltip|hintText|buttonLabel|placeholder)\s*:\s*'((?:\\'|[^'\r\n])*)' ''',
+      r'''(?:title|description|label|tooltip|hintText|buttonLabel|placeholder|message|confirmLabel|cancelLabel|sourceLabel)\s*:\s*'((?:\\'|[^'\r\n])*)',''',
     );
     final catalogTitlePattern = RegExp(
       r'''^\s*'((?:\\'|[^'\r\n])*)'\s*:\s*SettingsSearchEntryDetails\(''',
@@ -305,6 +305,15 @@ void registerAppLocalizationTailTests() {
     );
     const intentionallyEnglish = <String>{
       'Alera',
+      'Agent',
+      'AI Assist Agent',
+      'Pull Requests',
+      'Endpoint',
+      'NetBird Endpoint',
+      'Context',
+      'Persona',
+      'English',
+      '繁體中文',
       'Claude',
       'macOS',
       'Linux',
@@ -359,6 +368,139 @@ void registerAppLocalizationTailTests() {
       isEmpty,
       reason: 'Untranslated Settings literals:\n${missing.toList()..sort()}',
     );
+  });
+
+  test('traditional Chinese localizes Settings dynamic and multiline copy', () {
+    final l10n = AleraLocalizations(const Locale('zh', 'TW'));
+    expect(
+      l10n.translate(
+        'If this is useful, consider starring the repo. It helps more developers discover it.',
+      ),
+      '如果 Alera 對你有幫助，可以考慮在 GitHub 為 Repository 加星，讓更多開發者能發現它。',
+    );
+    expect(
+      l10n.translate(
+        "Keeps this computer and display awake while agents are working. Lid-close behavior follows this device's power settings.",
+      ),
+      'Agent 工作期間讓此電腦與顯示器保持喚醒；闔上上蓋時仍依此裝置的電源設定運作。',
+    );
+    expect(
+      l10n.translate(
+        'Ceiling for terminal scrollback held in the app. Over it, terminals you have not looked at recently are unloaded and restored when you return. Their agents keep running. Only panes currently on screen stay loaded over it. Use 0 for no limit.',
+      ),
+      '應用程式中終端機回捲內容的記憶體上限。超過上限時，最近未檢視的終端機會卸載，返回時再還原；其中的 Agent 仍會繼續執行。只有目前畫面上的 Pane 可超過此上限保持載入。設為 0 表示不限制。',
+    );
+    expect(l10n.translate('Revoke My Phone'), '撤銷「My Phone」');
+    expect(l10n.translate('Delete My Phone'), '刪除「My Phone」');
+    expect(
+      l10n.translate(
+        'The device loses access and active sessions disconnect immediately. This cannot be undone.',
+      ),
+      '此裝置會失去存取權，作用中的工作階段會立即中斷連線。此操作無法復原。',
+    );
+    expect(
+      l10n.translate(
+        'Team Profile has no references. Deleting it cannot be undone.',
+      ),
+      '「Team Profile」沒有任何參照。刪除後無法復原。',
+    );
+    expect(
+      l10n.translate(
+        'Team Profile is referenced by 2 automations, 1 tab. Remove its automation and tab references before deleting it.',
+      ),
+      '「Team Profile」正被 2 個自動化、1 個分頁參照。請先移除相關的自動化與分頁參照再刪除。',
+    );
+    expect(l10n.translate('Agent Profile In Use'), 'Agent Profile 使用中');
+    expect(l10n.translate('Delete Agent Profile?'), '刪除 Agent Profile？');
+    expect(l10n.translate('Name is required.'), '名稱為必填。');
+    expect(l10n.translate('Command is required.'), '指令為必填。');
+    expect(
+      l10n.translate(
+        'This profile reduces Codex approval or sandbox protections.',
+      ),
+      '此 Profile 會降低 Codex 的核准或沙盒保護。',
+    );
+    expect(
+      l10n.translate(
+        'This profile will bypass Codex approvals and sandbox protections.',
+      ),
+      '此 Profile 會略過 Codex 的核准與沙盒保護。',
+    );
+    expect(l10n.translate('Check Zed'), '檢查 Zed');
+    expect(
+      l10n.translate(
+        'After Alera creates a linked workspace, open that workspace in Zed automatically.',
+      ),
+      'Alera 建立連結工作區後，自動在 Zed 中開啟該工作區。',
+    );
+  });
+
+  test('traditional Chinese localizes Settings status and quota copy', () {
+    final l10n = AleraLocalizations(const Locale('zh', 'TW'));
+    expect(l10n.translate('Move Codex Earlier'), '將 Codex 往前移');
+    expect(l10n.translate('Move Work Later'), '將 Work 往後移');
+    expect(l10n.translate('Usage: Personal'), '用量：Personal');
+    expect(l10n.translate('Not shown in Usage'), '不顯示於用量');
+    expect(l10n.translate('Codex Quotas'), 'Codex 配額');
+    expect(
+      l10n.translate('Alias and profile are required.'),
+      '別名與 Profile 為必填。',
+    );
+    expect(
+      l10n.translate('Alias and profile must be unique.'),
+      '別名與 Profile 不可重複。',
+    );
+    expect(
+      l10n.translate('Registration check failed: unavailable'),
+      '註冊狀態檢查失敗：unavailable',
+    );
+    expect(
+      l10n.translate('Registration failed: unavailable'),
+      '註冊失敗：unavailable',
+    );
+    expect(l10n.translate('Model passed to Codex.'), '傳給 Codex 的模型。');
+    expect(l10n.translate('Global (Codex)'), '全域（Codex）');
+    expect(l10n.translate('Connected through relay'), '透過 Relay 連線');
+    expect(l10n.translate('Revoked 2026-09-15 09:30'), '已撤銷：2026-09-15 09:30');
+    expect(l10n.translate('Paired 2026-09-15 09:30'), '已配對：2026-09-15 09:30');
+    expect(
+      l10n.translate('Last seen 2026-09-15 09:30'),
+      '最後出現：2026-09-15 09:30',
+    );
+    expect(l10n.translate('Expired'), '已過期');
+    expect(l10n.translate('Expires in 2m'), '2 分鐘後到期');
+    expect(l10n.translate('Expires in 12s'), '12 秒後到期');
+    expect(l10n.translate('Expires in 2m 05s'), '2 分 05 秒後到期');
+    expect(l10n.translate('Download size 128.0 MiB.'), '下載大小 128.0 MiB。');
+    expect(
+      l10n.translate('Download interrupted at 12.0 MiB. Resume when ready.'),
+      '下載在 12.0 MiB 時中斷，可在準備好後繼續。',
+    );
+    expect(l10n.translate('12.0 MiB of 128.0 MiB'), '12.0 MiB / 128.0 MiB');
+  });
+
+  test('Settings direct text surfaces route through localization', () {
+    final quotaSource = File(
+      'lib/src/features/settings/presentation/panes/agent_quota_settings_controls.dart',
+    ).readAsStringSync();
+    final deviceSource = File(
+      'lib/src/features/settings/presentation/panes/mobile_device_list_row.dart',
+    ).readAsStringSync();
+    final offerSource = File(
+      'lib/src/features/settings/presentation/panes/mobile_pairing_offer_row.dart',
+    ).readAsStringSync();
+    final cliSource = File(
+      'lib/src/features/settings/presentation/panes/agents_cli_skill_control.dart',
+    ).readAsStringSync();
+
+    expect(quotaSource, contains("context.tr('No quota providers enabled')"));
+    expect(quotaSource, contains("context.tr('No CCS profiles configured')"));
+    expect(quotaSource, contains('context.tr(error)'));
+    expect(deviceSource, contains('context.tr(detail)'));
+    expect(deviceSource, contains("label: context.tr('Revoked')"));
+    expect(offerSource, contains('context.tr(_expiryLabel)'));
+    expect(cliSource, contains('context.tr(summary)'));
+    expect(cliSource, contains('context.tr(detail)'));
   });
 
   test('English and unknown strings fall back to source text', () {

@@ -514,6 +514,458 @@ const Map<String, String> _traditionalChineseSettings = <String, String>{
   'Duplicate And Reorder': '複製與重新排序',
   'Show Pull Request Status': '顯示 Pull Request 狀態',
   'Notify When Checks Fail': '檢查失敗時通知',
+  // Complete Settings surface coverage.
+  'Sign in with Google or GitHub.': '使用 Google 或 GitHub 登入。',
+  'Choose which runtime events notify enrolled phones.': '選擇哪些執行環境事件要通知已加入的手機。',
+  'Account Ownership': '帳號擁有權',
+  'Transfer a runtime or delete an Alera account.': '移轉執行環境或刪除 Alera 帳號。',
+  'Transcribe microphone recordings locally or with a remote speech API.':
+      '在本機或透過遠端語音 API 轉錄麥克風錄音。',
+  'Use a Codex subscription or an OpenAI-compatible API with a secure token.':
+      '使用 Codex 訂閱或搭配安全 Token 的 OpenAI 相容 API。',
+  'Download, resume, select, or remove local Whisper models.':
+      '下載、繼續下載、選擇或移除本機 Whisper 模型。',
+  'Clean up or summarize transcripts with an agent subscription.':
+      '使用 Agent 訂閱整理或摘要轉錄內容。',
+  'Record and transcribe a sample without leaving AI Dictation settings.':
+      '不離開 AI 聽寫設定即可錄製並轉錄範例。',
+  'Support Alera': '支持 Alera',
+  'Star On GitHub': '在 GitHub 加星',
+  'Not Now': '現在不要',
+  'Alera CLI And Skills': 'Alera CLI 與 Skills',
+  'Register the CLI command and install agent instructions.':
+      '註冊 CLI 指令並安裝 Agent 指示。',
+  'Alera CLI Command': 'Alera CLI 指令',
+  'Register the Alera command on PATH for terminals and agents.':
+      '將 Alera 指令註冊到 PATH，供終端機與 Agent 使用。',
+  'Install or update CLI and orchestration skills. Reapplies selected status hooks.':
+      '安裝或更新 CLI 與協調 Skills，並重新套用已選取的狀態 Hook。',
+  'Install the Codex skill that teaches agents to use the Alera CLI.':
+      '安裝教導 Agent 使用 Alera CLI 的 Codex Skill。',
+  'Install or update orchestration and reapply selected status hooks.':
+      '安裝或更新協調功能，並重新套用已選取的狀態 Hook。',
+  'Install optional skills for specialized Alera workflows.':
+      '安裝適用於特定 Alera 工作流程的選用 Skills。',
+  'Research models and design, manage, and validate quota-aware Agent Profiles.':
+      '研究模型，並設計、管理及驗證具配額感知能力的 Agent Profiles。',
+  'Managed hooks let terminal tabs show agent state.':
+      '受管理的 Hook 可讓終端機分頁顯示 Agent 狀態。',
+  'Use an Alera-managed Codex runtime home with status hooks.':
+      '使用由 Alera 管理、含狀態 Hook 的 Codex runtime home。',
+  'Use an Alera-managed Claude Code config with status hooks.':
+      '使用由 Alera 管理、含狀態 Hook 的 Claude Code 設定。',
+  'Use an Alera-managed GitHub Copilot home overlay.':
+      '使用由 Alera 管理的 GitHub Copilot home overlay。',
+  'Use an Alera-managed Cursor agent plugin wrapper.':
+      '使用由 Alera 管理的 Cursor Agent plugin wrapper。',
+  'Install Alera-managed Antigravity hooks for the agy CLI. Disable to remove only Alera-managed hook entries.':
+      '為 agy CLI 安裝由 Alera 管理的 Antigravity Hook；停用時只會移除 Alera 管理的 Hook 項目。',
+  'Use an Alera-managed OpenCode config overlay with status plugin.':
+      '使用由 Alera 管理、含狀態 Plugin 的 OpenCode 設定 overlay。',
+  'Use an Alera-managed OpenCode 2 config overlay with the v2 status plugin.':
+      '使用由 Alera 管理、含 v2 狀態 Plugin 的 OpenCode 2 設定 overlay。',
+  'Use an Alera-managed Pi agent overlay with status extension.':
+      '使用由 Alera 管理、含狀態 Extension 的 Pi Agent overlay。',
+  'Use an Alera-managed Amp config overlay.': '使用由 Alera 管理的 Amp 設定 overlay。',
+  'Install Alera-managed Grok build hooks in a dedicated global file.':
+      '在專用的全域檔案中安裝由 Alera 管理的 Grok Build Hook。',
+  'Devin Hooks': 'Devin 狀態 Hook',
+  'Install Alera-managed Devin lifecycle hooks in the global Devin config.':
+      '在全域 Devin 設定中安裝由 Alera 管理的生命週期 Hook。',
+  'fx Status': 'fx 狀態',
+  'Receive fx lifecycle state through its built-in local Herdr integration on macOS and Linux.':
+      '在 macOS 與 Linux 上透過 fx 內建的本機 Herdr 整合接收生命週期狀態。',
+  'How Alera reacts while agents are running.': '設定 Agent 執行期間 Alera 的行為。',
+  'Use each agent tab title under a workspace instead of the latest activity.':
+      '在工作區下顯示各 Agent 分頁標題，而非最新活動。',
+  'Show native notifications when an agent needs attention. Bursts are grouped into one notification.':
+      'Agent 需要注意時顯示原生通知；短時間大量事件會合併為一則通知。',
+  'Show native notifications when agents need attention.': 'Agent 需要注意時顯示原生通知。',
+  'Also notify when an agent finishes. Most agents report the end of a turn, not the end of a task, so this notifies on every reply.':
+      'Agent 完成時也通知。多數 Agent 回報的是一個回合結束而非整個工作結束，因此每次回覆都會通知。',
+  'Also notify when an agent finishes a turn.': 'Agent 完成一個回合時也通知。',
+  'Keep this computer and display awake during agent work.':
+      'Agent 工作期間讓此電腦與顯示器保持喚醒。',
+  'Agent profiles unavailable': '無法取得 Agent Profiles',
+  'No agent profiles': '尚無 Agent Profile',
+  'How this agent is launched for a dispatched task.':
+      '設定此 Agent 接收派送工作時的啟動方式。',
+  'Adapter Type': 'Adapter 類型',
+  'Command Preview': '指令預覽',
+  'The host quotes these arguments for the actual platform shell.':
+      'Host 會依實際平台 Shell 對這些參數加上適當引號。',
+  'Routing': '路由',
+  'Signals the orchestrator reads when planning a run.': '協調器規劃執行時會讀取的訊號。',
+  'Managed': '受管理',
+  'Command': '指令',
+  'Test Agent Profile': '測試 Agent Profile',
+  'The profile command runs here. It does not receive a dispatched task.':
+      'Profile 指令會在此執行，不會收到派送工作。',
+  'Confirm Reduced Protections': '確認降低保護',
+  'Save Anyway': '仍要儲存',
+  'Agent profile order could not be saved': '無法儲存 Agent Profile 順序',
+  'Agent profile saved': 'Agent Profile 已儲存',
+  'Default agent profile updated': '預設 Agent Profile 已更新',
+  'Agent profile cloned': 'Agent Profile 已複製',
+  'Choose which usage sources appear for the active workspace host.':
+      '選擇目前工作區 Host 要顯示哪些用量來源。',
+  'Active Quota Host': '目前配額 Host',
+  'Run quota commands locally or through the installed Alera runtime for this workspace.':
+      '在本機或透過此工作區已安裝的 Alera 執行環境執行配額指令。',
+  'Quota Display Order': '配額顯示順序',
+  'Set the left-to-right order of enabled providers in the status bar.':
+      '設定狀態列中已啟用 Provider 由左到右的顯示順序。',
+  'Configure the default Claude account and every CCS profile together.':
+      '一起設定預設 Claude 帳號與所有 CCS Profile。',
+  'Enable Claude quotas for default and CCS accounts.':
+      '啟用預設帳號與 CCS 帳號的 Claude 配額。',
+  'Query the default Claude account separately from configured CCS profiles.':
+      '將預設 Claude 帳號與已設定的 CCS Profile 分開查詢。',
+  'Configure the default Claude account independently.': '獨立設定預設 Claude 帳號。',
+  'Include the default Claude account in Usage independently of quota polling.':
+      '不受配額輪詢影響，獨立決定是否在「用量」中包含預設 Claude 帳號。',
+  'Choose whether the default Claude account appears in Usage.':
+      '選擇是否在「用量」中顯示預設 Claude 帳號。',
+  'Add CCS profiles and choose which ones appear in Usage.':
+      '新增 CCS Profile，並選擇哪些要顯示在「用量」中。',
+  'Configure CCS alias and profile pairs for Claude quotas.':
+      '設定 Claude 配額使用的 CCS 別名與 Profile 配對。',
+  'Credential Environment': '憑證環境',
+  'Configure environment variable names for the active workspace host.':
+      '設定目前工作區 Host 使用的環境變數名稱。',
+  'Configure environment variable names for Kimi, Z.ai and MiniMax.':
+      '設定 Kimi、Z.ai 與 MiniMax 的環境變數名稱。',
+  'Configure the Kimi API key environment variable name.':
+      '設定 Kimi API Key 的環境變數名稱。',
+  'Environment variable read on the active host. The secret value is never stored by Alera.':
+      '從目前 Host 讀取的環境變數；Alera 絕不儲存 Secret 值。',
+  'Z.ai API Key Variable': 'Z.ai API Key 環境變數',
+  'Z.ai Base URL Variable': 'Z.ai Base URL 環境變數',
+  'Optional environment variable for the coding plan API base URL.':
+      'Coding plan API Base URL 的選用環境變數。',
+  'MiniMax API Key Variable': 'MiniMax API Key 環境變數',
+  'MiniMax API Host Variable': 'MiniMax API Host 環境變數',
+  'Optional environment variable selecting the global or china token plan endpoint.':
+      '選用的環境變數，用來選擇全球或中國 Token plan endpoint。',
+  'Credential Availability': '憑證可用狀態',
+  'Check whether each configured variable exists without reading its secret value.':
+      '檢查各已設定的環境變數是否存在，不讀取其 Secret 值。',
+  'Show in Usage': '顯示於用量',
+  'Work': '工作',
+  'AI Assist Agent': 'AI Assist Agent',
+  'Choose the CLI used for AI Assist jobs.': '選擇 AI Assist 工作使用的 CLI。',
+  'CLI used for AI Assist jobs.': 'AI Assist 工作使用的 CLI。',
+  'AI Assist Commit Messages': 'AI Assist Commit 訊息',
+  'Choose the agent, model, reasoning and instructions for commit messages.':
+      '選擇產生 Commit 訊息使用的 Agent、模型、推理強度與指示。',
+  'AI Assist Pull Request Details': 'AI Assist Pull Request 詳細資料',
+  'Choose the agent, model, reasoning and instructions for pull request details.':
+      '選擇產生 Pull Request 詳細資料使用的 Agent、模型、推理強度與指示。',
+  'AI Assist Reading Diffs': 'AI Assist 閱讀差異',
+  'Choose the agent, model, reasoning and instructions for reading diffs.':
+      '選擇閱讀差異使用的 Agent、模型、推理強度與指示。',
+  'AI Assist Agent Titles': 'AI Assist Agent 標題',
+  'Configure automatic conversation titles, provider, model and instructions.':
+      '設定自動對話標題、Provider、模型與指示。',
+  'AI Assist Workspace Identity': 'AI Assist 工作區識別',
+  'Choose the agent, model, reasoning and instructions for workspace identity.':
+      '選擇產生工作區識別使用的 Agent、模型、推理強度與指示。',
+  'Local agent CLIs run short background jobs from source control and workspace context.':
+      '本機 Agent CLI 會依原始碼控制與工作區 Context 執行短時間背景工作。',
+  'Run short local agent jobs for source control, workspace identity, and speech.':
+      '執行用於原始碼控制、工作區識別與語音的短時間本機 Agent 工作。',
+  'Enable AI Assist': '啟用 AI Assist',
+  'Generate text for source control, workspaces, and agent conversations.':
+      '為原始碼控制、工作區與 Agent 對話產生文字。',
+  'Auto-Generate Agent Titles': '自動產生 Agent 標題',
+  'Name new agent conversations from their first prompt or recent context.':
+      '依第一個 Prompt 或最近 Context 為新的 Agent 對話命名。',
+  'Custom Command': '自訂指令',
+  'Use {prompt} to pass the prompt as an argument; otherwise Alera sends it on stdin.':
+      '使用 {prompt} 將 Prompt 當作參數傳入；否則 Alera 會透過 stdin 傳送。',
+  'Used by prompts that override the global agent with custom command.':
+      '供以自訂指令覆寫全域 Agent 的 Prompt 使用。',
+  'Configure the agent, model, reasoning and instructions for this prompt.':
+      '設定此 Prompt 使用的 Agent、模型、推理強度與指示。',
+  'Instructions': '指示',
+  'Reasoning effort for models that support it.': '支援此功能的模型所使用的推理強度。',
+  'Override the global agent for this prompt.': '為此 Prompt 覆寫全域 Agent。',
+  'Optional prompt guidance.': '選用的 Prompt 指引。',
+  'Optional instructions': '選用指示',
+  'Confirmation prompts for destructive workspace actions.': '破壞性工作區操作的確認提示。',
+  'Ask before unregistering a project and deleting its workspace metadata.':
+      '取消註冊專案並刪除其工作區中繼資料前先詢問。',
+  'Ask before unregistering a project.': '取消註冊專案前先詢問。',
+  'Always required because removal closes all tabs, stops running processes, and discards unsaved changes.':
+      '此確認一律必要，因為移除會關閉所有分頁、停止執行中的程序並捨棄未儲存變更。',
+  'Ask before removing a workspace worktree.': '移除工作區 Worktree 前先詢問。',
+  'Tray icon and dock or taskbar badge while Alera is running.':
+      'Alera 執行期間的系統匣圖示與 Dock 或工作列徽章。',
+  'Keep Alera in the menu extra (macOS), notification area (Windows), or status bar (Ubuntu). Closing the window hides it; Quit from the tray or the app menu exits.': '讓 Alera 保留在 menu extra（macOS）、通知區域（Windows）或狀態列（Ubuntu）。關閉視窗只會隱藏程式；從系統匣或應用程式選單選擇結束才會退出。',
+  'Keep Alera in the menu extra, notification area, or Ubuntu status bar.':
+      '讓 Alera 保留在 menu extra、通知區域或 Ubuntu 狀態列。',
+  'Show how many agents are waiting for review on the Dock, taskbar, or Ubuntu Dock.':
+      '在 Dock、工作列或 Ubuntu Dock 顯示等待審查的 Agent 數量。',
+  'Show how many agents are waiting for review on the Dock or taskbar.':
+      '在 Dock 或工作列顯示等待審查的 Agent 數量。',
+  'Draw how many agents are waiting for review onto the tray icon itself. Linux only; macOS and Windows show that count on the Dock or taskbar.':
+      '直接在系統匣圖示上顯示等待審查的 Agent 數量。僅限 Linux；macOS 與 Windows 會在 Dock 或工作列顯示。',
+  'Draw how many agents are waiting for review onto the tray icon.':
+      '在系統匣圖示上顯示等待審查的 Agent 數量。',
+  'Compact review and CI status for workspaces backed by a hosted Git repository.':
+      '為使用託管 Git Repository 的工作區顯示精簡的審查與 CI 狀態。',
+  'Show draft, ready, running, failed, merged, and closed state beside each workspace. Alera batches GitHub workspaces into one refresh per repository.':
+      '在各工作區旁顯示草稿、就緒、執行中、失敗、已合併與已關閉狀態。Alera 會依 Repository 批次重新整理 GitHub 工作區。',
+  'Show hosted review and CI state beside each workspace.':
+      '在各工作區旁顯示託管審查與 CI 狀態。',
+  'Show one native notification when a pull request enters a failed-check state. Enabling this keeps the lightweight monitor active while Alera is hidden.':
+      'Pull Request 進入檢查失敗狀態時顯示一則原生通知。啟用後，即使 Alera 隱藏仍會保持輕量監控運作。',
+  'Show a native notification when PR checks start failing.':
+      'PR 檢查開始失敗時顯示原生通知。',
+  'Lifecycle of the local runtime host that owns terminal sessions.':
+      '管理終端機工作階段的本機 Runtime Host 生命週期。',
+  'Prevent idle sleep and display sleep while Alera is running.':
+      'Alera 執行期間防止閒置休眠與顯示器休眠。',
+  'Prevents idle sleep and display sleep while Alera is running. Closing the lid still follows this device\'s power settings.':
+      'Alera 執行期間防止閒置休眠與顯示器休眠；闔上上蓋仍依此裝置的電源設定運作。',
+  'Leave the app-launched sidecar running after a clean quit.':
+      '應用程式正常結束後仍讓其啟動的 sidecar 保持執行。',
+  'Leave the app-launched sidecar running after a clean quit. Persistent CLI runtimes are never stopped by quitting, and unexpected exits always leave the host up.': '應用程式正常結束後仍讓其啟動的 sidecar 保持執行。持久化 CLI Runtime 不會因結束應用程式而停止，非預期退出也會保留 Host。',
+  'Seconds to keep the host alive after the app closes with no running sessions.':
+      '應用程式關閉且沒有執行中工作階段後，Host 保持存活的秒數。',
+  'Stop the terminal host after the app closes with no sessions.':
+      '應用程式關閉且沒有工作階段後停止 Terminal Host。',
+  'Seconds to keep detached running sessions alive after the app closes.':
+      '應用程式關閉後，分離且仍執行中的工作階段保持存活的秒數。',
+  'Stop detached running terminal sessions after the app stays closed.':
+      '應用程式持續關閉後停止分離且仍執行中的終端機工作階段。',
+  'Show the folder holding the app log files.': '顯示存放應用程式 Log 檔案的資料夾。',
+  'Could not open the logs folder.': '無法開啟 Log 資料夾。',
+  'Save app and runtime logs with version details as a zip.':
+      '將應用程式與 Runtime Log 連同版本資訊儲存為 ZIP。',
+  'Diagnostics exported.': '診斷資料已匯出。',
+  'Zip Archive': 'ZIP 壓縮檔',
+  'How much detail is written to the log files.': '設定寫入 Log 檔案的詳細程度。',
+  'Send crashes to Sentry, an external service.': '將當機資訊傳送至外部服務 Sentry。',
+  'Check desktop releases for this platform.': '檢查此平台的桌面版 Release。',
+  'Show your support for the project.': '表達你對此專案的支持。',
+  'Star': '加星',
+  'Starring…': '正在加星…',
+  'Thanks for starring Alera': '感謝你為 Alera 加星',
+  'Terminal colors, theme and spacing.': '終端機色彩、主題與間距。',
+  'Default terminal typography for new sessions.': '新工作階段的預設終端機字型設定。',
+  'Font Family': '字型家族',
+  'Typeface used in new terminal sessions.': '新終端機工作階段使用的字型。',
+  'Font Size': '字型大小',
+  'Text size used in new terminal sessions.': '新終端機工作階段使用的文字大小。',
+  'Font Weight': '字重',
+  'Weight used for terminal text.': '終端機文字使用的字重。',
+  'Line Height': '行高',
+  'Vertical spacing for terminal rows.': '終端機列的垂直間距。',
+  'Default cursor appearance for terminal sessions.': '終端機工作階段的預設游標外觀。',
+  'Blinking Cursor': '閃爍游標',
+  'Blink the cursor while the terminal has focus.': '終端機取得焦點時讓游標閃爍。',
+  'Blink the terminal cursor while focused.': '終端機取得焦點時讓游標閃爍。',
+  'Cursor Opacity': '游標不透明度',
+  'Opacity of the terminal cursor.': '終端機游標的不透明度。',
+  'Built-in terminal color theme.': '內建終端機配色主題。',
+  'Background Opacity': '背景不透明度',
+  'Opacity of the terminal background.': '終端機背景的不透明度。',
+  'Horizontal Padding': '水平內距',
+  'Horizontal spacing around the terminal grid.': '終端機網格周圍的水平間距。',
+  'Vertical Padding': '垂直內距',
+  'Vertical spacing around the terminal grid.': '終端機網格周圍的垂直間距。',
+  'Foreground Color': '前景色',
+  'Override the terminal text color.': '覆寫終端機文字顏色。',
+  'Background Color': '背景色',
+  'Override the terminal background color.': '覆寫終端機背景顏色。',
+  'Cursor Color': '游標顏色',
+  'Override the terminal cursor color.': '覆寫終端機游標顏色。',
+  'Selection Color': '選取顏色',
+  'Override the terminal selection color.': '覆寫終端機選取範圍顏色。',
+  'Mouse, scrolling and clipboard behavior for TUIs.': 'TUI 的滑鼠、捲動與剪貼簿行為。',
+  'TUI Scroll Speed': 'TUI 捲動速度',
+  'Mouse reports sent per wheel step while a TUI owns scrolling.':
+      'TUI 接管捲動時，每格滑鼠滾輪要送出的滑鼠事件數。',
+  'Mouse wheel speed for interactive terminal applications.':
+      '互動式終端機應用程式的滑鼠滾輪速度。',
+  'Copy On Select': '選取時複製',
+  'Copy local terminal selections to the system clipboard.':
+      '將本機終端機選取內容複製到系統剪貼簿。',
+  'Copy local terminal selections automatically.': '自動複製本機終端機選取內容。',
+  'Allow OSC 52 Clipboard Writes': '允許 OSC 52 寫入剪貼簿',
+  'Let terminal applications replace the system clipboard.':
+      '允許終端機應用程式取代系統剪貼簿內容。',
+  'Allow terminal applications to replace the clipboard.': '允許終端機應用程式取代剪貼簿內容。',
+  'Show Terminal Composer By Default': '預設顯示終端機輸入區',
+  'Open the prompt composer when a new terminal session starts.':
+      '新的終端機工作階段開始時開啟 Prompt 輸入區。',
+  'History, shell startup and double-click selection behavior.':
+      '歷史紀錄、Shell 啟動與雙擊選取行為。',
+  'Use Login Shell': '使用 Login Shell',
+  'Start shells as login shells so profile files such as ~/.zprofile and ~/.profile are loaded.':
+      '以 Login Shell 啟動 Shell，以載入 ~/.zprofile、~/.profile 等設定檔。',
+  'Reload Shell Environment': '重新載入 Shell 環境',
+  'Re-read the login shell PATH so tools installed since the runtime started resolve in new terminals.':
+      '重新讀取 Login Shell 的 PATH，讓 Runtime 啟動後新安裝的工具可在新終端機中解析。',
+  'Reload': '重新載入',
+  'Scrollback Lines': '回捲行數',
+  'Maximum terminal history retained per session.': '每個工作階段保留的終端機歷史最大行數。',
+  'Host Scrollback Size': 'Host 回捲大小',
+  'Maximum host-side terminal output retained per session.':
+      '每個工作階段在 Host 端保留的終端機輸出上限。',
+  'Terminal Memory Budget': '終端機記憶體預算',
+  'Word Separators': '單字分隔字元',
+  'Characters that break double-click word selection.': '雙擊選取單字時視為分隔的字元。',
+  'Color Overrides': '色彩覆寫',
+  'Override core terminal colors.': '覆寫終端機主要色彩。',
+  'Terminal Shortcut Behavior': '終端機快速鍵行為',
+  'View and remap app-wide key bindings.': '檢視並重新對應應用程式全域按鍵綁定。',
+  'Syntax highlighting theme used by editor tabs.': '編輯器分頁使用的語法醒目提示主題。',
+  'Spaces inserted when pressing tab in editor tabs.': '在編輯器分頁按下 Tab 時插入的空白數。',
+  'Automatically save dirty editor tabs after a pause.':
+      '暫停操作一段時間後自動儲存有變更的編輯器分頁。',
+  'Project Worktree Setup': '專案 Worktree 設定',
+  'Configure copy rules, setup commands, and new workspace prompts.':
+      '設定複製規則、Setup 指令與新工作區 Prompt。',
+  'Add a project before configuring workspace setup.': '請先新增專案，再設定工作區。',
+  'UI overrides take precedence over repo files.':
+      'UI 覆寫設定的優先順序高於 Repository 檔案。',
+  'Config Source': '設定來源',
+  'UI Override': 'UI 覆寫',
+  'Hosting Provider': '託管 Provider',
+  'Git hosting provider used for pull requests and checks.':
+      'Pull Request 與檢查使用的 Git 託管 Provider。',
+  'Auto-Detect': '自動偵測',
+  'Auto-detect uses public hosts. Select GitHub for GitHub Enterprise Server.':
+      '自動偵測會使用公開 Host；GitHub Enterprise Server 請選擇 GitHub。',
+  'Copy Rules': '複製規則',
+  'Files copied from the main worktree. Gitignored matches from .worktreeinclude are copied too.':
+      '從主 Worktree 複製的檔案；.worktreeinclude 中符合但被 Git 忽略的檔案也會複製。',
+  'Setup Commands': 'Setup 指令',
+  'Commands run from the new linked workspace.': '從新的 linked workspace 執行的指令。',
+  'Project instructions appended to prompts that start an agent.':
+      '附加到啟動 Agent Prompt 的專案指示。',
+  'Repo file error': 'Repository 檔案錯誤',
+  'No projects': '尚無專案',
+  'Manage SSH targets and remote runtime bootstrap.':
+      '管理 SSH 目標與遠端 Runtime Bootstrap。',
+  'Mobile access unavailable': '無法使用行動裝置存取',
+  'Enable Mobile Access': '啟用行動裝置存取',
+  'Accept connections from paired mobile devices.': '接受已配對行動裝置的連線。',
+  'Enable Remote Access': '啟用遠端存取',
+  'Allow signed-in Alera mobile devices to discover this runtime and use the encrypted relay.':
+      '允許已登入的 Alera 行動裝置探索此 Runtime 並使用加密 Relay。',
+  'Relay Status': 'Relay 狀態',
+  'Connection Mode': '連線模式',
+  'Windows Firewall': 'Windows 防火牆',
+  'Bind Host': '綁定 Host',
+  'Interface the gateway listens on.': 'Gateway 監聽的網路介面。',
+  'Network Hint': '網路提示',
+  'Gateway listener port.': 'Gateway 監聽連接埠。',
+  'Apply Gateway Settings': '套用 Gateway 設定',
+  'Persist gateway changes.': '儲存 Gateway 變更。',
+  'Tailscale Status': 'Tailscale 狀態',
+  'NetBird Status': 'NetBird 狀態',
+  'NetBird Endpoint': 'NetBird Endpoint',
+  'Address included in new pairing offers.': '新配對邀請中包含的位址。',
+  'Enable and configure the mobile companion gateway.':
+      '啟用並設定行動版輔助應用程式 Gateway。',
+  'Connected Remote Devices': '已連線的遠端裝置',
+  'Connected through your Alera account. Disable Remote Access to disconnect these devices.':
+      '這些裝置透過你的 Alera 帳號連線；停用遠端存取即可中斷連線。',
+  'Endpoint': 'Endpoint',
+  'Optional expected name for the new device.': '新裝置的選用預期名稱。',
+  'Expires In': '有效時間',
+  'Minutes before the offer expires.': '配對邀請到期前的分鐘數。',
+  'Generate Pairing QR': '產生配對 QR Code',
+  'Enables the gateway if it is disabled.': '若 Gateway 尚未啟用，會一併啟用。',
+  'Generate a pairing QR for the mobile companion app.':
+      '為行動版輔助應用程式產生配對 QR Code。',
+  'Generate a pairing QR to link a new device.': '產生配對 QR Code 以連結新裝置。',
+  'No active offers': '目前沒有有效邀請',
+  'Devices that can connect to this runtime.': '可連線到此 Runtime 的裝置。',
+  'No paired devices': '尚無已配對裝置',
+  'Link a device to see it here.': '連結裝置後會顯示在這裡。',
+  'Rename, revoke, or delete paired mobile devices.': '重新命名、撤銷或刪除已配對的行動裝置。',
+  'Link Mobile Device': '連結行動裝置',
+  'Cancel Pairing Offer': '取消配對邀請',
+  'The offer becomes unusable immediately.': '此邀請會立即失效。',
+  'Revoked': '已撤銷',
+  'Revoke': '撤銷',
+  'Installer Output': '安裝程式輸出',
+  'The installer runs here and skips confirmation prompts.':
+      '安裝程式會在此執行並略過確認提示。',
+  'Try again': '再試一次',
+  'Declare a profile to let a run dispatch work to it.':
+      '建立 Profile，讓執行工作可以派送給它。',
+  'Where new linked workspaces are created on disk.':
+      '新 linked workspace 在磁碟上的建立位置。',
+  'Install or update every core Alera agent skill.':
+      '安裝或更新所有核心 Alera Agent Skill。',
+  'Install agent instructions for the Alera CLI.': '安裝 Alera CLI 的 Agent 指示。',
+  'Install agent instructions for Alera orchestration.':
+      '安裝 Alera 協調功能的 Agent 指示。',
+  'Install specialized instructions for Agent Profile catalogs.':
+      '安裝 Agent Profile Catalog 專用指示。',
+  'Use Alera-managed Codex runtime hooks.': '使用由 Alera 管理的 Codex Runtime Hook。',
+  'Install managed Antigravity hooks for the agy CLI.':
+      '為 agy CLI 安裝受管理的 Antigravity Hook。',
+  'Install managed OpenCode status plugin.': '安裝受管理的 OpenCode 狀態 Plugin。',
+  'Install managed OpenCode 2 status plugin.': '安裝受管理的 OpenCode 2 狀態 Plugin。',
+  'Install managed Pi status extension.': '安裝受管理的 Pi 狀態 Extension。',
+  'Install managed Grok Build status hooks.': '安裝受管理的 Grok Build 狀態 Hook。',
+  'Choose quota providers and their display order.': '選擇配額 Provider 及其顯示順序。',
+  'Create a reusable text replacement action.': '建立可重複使用的文字替換動作。',
+  'Show an action in the Text Actions menu.': '在 Text Actions 選單中顯示動作。',
+  'Choose the CLI and model for an action.': '選擇動作使用的 CLI 與模型。',
+  'Copy actions and arrange their menu order.': '複製動作並調整其選單順序。',
+  'Remove a text action after confirmation.': '確認後移除文字動作。',
+  'If this is useful, consider starring the repo. It helps more developers discover it.':
+      '如果 Alera 對你有幫助，可以考慮在 GitHub 為 Repository 加星，讓更多開發者能發現它。',
+  'Keeps this computer and display awake while agents are working. Lid-close behavior follows this device\'s power settings.':
+      'Agent 工作期間讓此電腦與顯示器保持喚醒；闔上上蓋時仍依此裝置的電源設定運作。',
+  'Keeps this computer and display awake while agents are working. Alera also asks this device to stay awake when the lid is closed, subject to its power policy.':
+      'Agent 工作期間讓此電腦與顯示器保持喚醒；闔上上蓋時 Alera 也會要求裝置保持喚醒，但仍受其電源政策限制。',
+  'Ceiling for terminal scrollback held in the app. Over it, terminals you have not looked at recently are unloaded and restored when you return. Their agents keep running. Only panes currently on screen stay loaded over it. Use 0 for no limit.': '應用程式中終端機回捲內容的記憶體上限。超過上限時，最近未檢視的終端機會卸載，返回時再還原；其中的 Agent 仍會繼續執行。只有目前畫面上的 Pane 可超過此上限保持載入。設為 0 表示不限制。',
+  'The device loses access and active sessions disconnect immediately. This cannot be undone.':
+      '此裝置會失去存取權，作用中的工作階段會立即中斷連線。此操作無法復原。',
+  'Permanently removes this revoked device record from the list. This cannot be undone.':
+      '從清單永久移除此已撤銷的裝置紀錄。此操作無法復原。',
+  'Agent Profile In Use': 'Agent Profile 使用中',
+  'Delete Agent Profile?': '刪除 Agent Profile？',
+  'Name is required.': '名稱為必填。',
+  'Command is required.': '指令為必填。',
+  'This profile reduces Codex approval or sandbox protections.':
+      '此 Profile 會降低 Codex 的核准或沙盒保護。',
+  'This profile will bypass Codex approvals and sandbox protections.':
+      '此 Profile 會略過 Codex 的核准與沙盒保護。',
+  'This profile lets Claude continue with reduced permission prompts.':
+      '此 Profile 會讓 Claude 在較少權限提示的情況下繼續執行。',
+  'This profile lets Copilot take broader actions with less supervision.':
+      '此 Profile 會讓 Copilot 在較少監督下執行更廣泛的操作。',
+  'This profile reduces Cursor review, sandbox, or trust protections.':
+      '此 Profile 會降低 Cursor 的審查、沙盒或信任保護。',
+  'This profile lets Antigravity skip permission checks.':
+      '此 Profile 會讓 Antigravity 略過權限檢查。',
+  'This profile lets OpenCode approve actions automatically.':
+      '此 Profile 會讓 OpenCode 自動核准操作。',
+  'This profile pre-approves project trust for Pi.':
+      '此 Profile 會預先核准 Pi 的專案信任。',
+  'This profile lets Grok Build continue with reduced permission prompts.':
+      '此 Profile 會讓 Grok Build 在較少權限提示的情況下繼續執行。',
+  'This profile lets Devin take broader actions with less supervision.':
+      '此 Profile 會讓 Devin 在較少監督下執行更廣泛的操作。',
+  'No quota providers enabled': '尚未啟用配額 Provider',
+  'No CCS profiles configured': '尚未設定 CCS Profile',
+  'Not shown in Usage': '不顯示於用量',
+  'Alias and profile are required.': '別名與 Profile 為必填。',
+  'Alias and profile must be unique.': '別名與 Profile 不可重複。',
+  'Register': '註冊',
+  'Connected through relay': '透過 Relay 連線',
+  'Expired': '已過期',
+  'Offer expired': '配對邀請已過期',
+  'Scan with the Alera mobile app': '使用 Alera 行動版 App 掃描',
   'No matching options': '沒有符合的選項',
   'Language Intelligence': '語言智慧',
   'Enable project-aware definition and reference navigation per language. Semantic servers stay off until you enable them.':

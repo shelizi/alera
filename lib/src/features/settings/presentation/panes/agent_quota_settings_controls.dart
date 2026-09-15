@@ -348,7 +348,7 @@ class _ClaudeProfileDialogState extends State<_ClaudeProfileDialog> {
             if (_error case final error?) ...<Widget>[
               const SizedBox(height: AleraTokens.space8),
               Text(
-                error,
+                context.tr(error),
                 style: Theme.of(context).textTheme.bodySmall
                     ?.copyWith(color: AleraTokens.error),
               ),
