@@ -260,11 +260,16 @@ class _DiffRows {
         } else if (file.lines.isEmpty) {
           items.add(const _BannerRow('No text diff for this file.'));
         } else if (sideBySide) {
-          items.addAll(
-            _buildSideBySideRows(
-              _fileWithDecodedDiffLines(file, fullFileContents[file]),
-            ),
+          final decodedFile = _fileWithDecodedDiffLines(
+            file,
+            fullFileContents[file],
           );
+          final projectedSpans = _buildProjectedSideBySideRowSpans(decodedFile);
+          if (projectedSpans != null) {
+            items.addSpans(projectedSpans);
+          } else {
+            items.addAll(_buildSideBySideRows(decodedFile));
+          }
         } else {
           final lines = _decodedDiffLines(file, fullFileContents[file]);
           items.addSpans(<_DiffRowSpan>[

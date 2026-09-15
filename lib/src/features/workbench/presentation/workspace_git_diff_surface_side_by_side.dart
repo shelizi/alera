@@ -269,9 +269,39 @@ GitDiffFile _fileWithDecodedDiffLines(
   );
 }
 
-List<_DiffRow>? _buildProjectedSideBySideRows(GitDiffFile file) {
+class _ProjectedSideBySideDiffRowSpan implements _DiffRowSpan {
+  const _ProjectedSideBySideDiffRowSpan(this.file);
+
+  final GitDiffFile file;
+
+  @override
+  int get length => file.sideBySideRows.length;
+
+  @override
+  _DiffRow rowAt(int index) {
+    final projection = file.sideBySideRows[index];
+    return switch (projection.kind) {
+      GitDiffSideBySideRowKind.passthrough => _DiffLineRow(
+        file.lines[projection.lineIndex!],
+      ),
+      GitDiffSideBySideRowKind.pair => _SideBySideDiffRow(
+        left: _projectedSideLine(
+          file,
+          projection.leftLineIndex,
+          projection.leftLineNumber,
+        ),
+        right: _projectedSideLine(
+          file,
+          projection.rightLineIndex,
+          projection.rightLineNumber,
+        ),
+      ),
+    };
+  }
+}
+
+List<_DiffRowSpan>? _buildProjectedSideBySideRowSpans(GitDiffFile file) {
   if (file.sideBySideRows.isEmpty) return null;
-  final rows = <_DiffRow>[];
   for (final projection in file.sideBySideRows) {
     switch (projection.kind) {
       case GitDiffSideBySideRowKind.passthrough:
@@ -281,26 +311,27 @@ List<_DiffRow>? _buildProjectedSideBySideRows(GitDiffFile file) {
             lineIndex >= file.lines.length) {
           return null;
         }
-        rows.add(_DiffLineRow(file.lines[lineIndex]));
       case GitDiffSideBySideRowKind.pair:
-        final left = _projectedSideLine(
-          file,
+        for (final lineIndex in <int?>[
           projection.leftLineIndex,
-          projection.leftLineNumber,
-        );
-        final right = _projectedSideLine(
-          file,
           projection.rightLineIndex,
-          projection.rightLineNumber,
-        );
-        if ((projection.leftLineIndex != null && left == null) ||
-            (projection.rightLineIndex != null && right == null)) {
-          return null;
+        ]) {
+          if (lineIndex != null &&
+              (lineIndex < 0 || lineIndex >= file.lines.length)) {
+            return null;
+          }
         }
-        rows.add(_SideBySideDiffRow(left: left, right: right));
     }
   }
-  return rows;
+  return <_DiffRowSpan>[
+    _MaterializedDiffRowSpan(<_DiffRow>[
+      _SideBySideHeaderRow(
+        oldTitle: _diffOnlyOldLabel(file),
+        newTitle: _diffOnlyNewLabel(file),
+      ),
+    ]),
+    _ProjectedSideBySideDiffRowSpan(file),
+  ];
 }
 
 _DiffSideLine? _projectedSideLine(
@@ -318,23 +349,21 @@ _DiffSideLine? _projectedSideLine(
   );
 }
 
+String _diffOnlyOldLabel(GitDiffFile file) =>
+    file.status == GitChangeStatus.added
+    ? 'Empty'
+    : (file.oldPath != null && file.oldPath != file.path
+          ? 'Original (${file.oldPath})'
+          : 'Original');
+
+String _diffOnlyNewLabel(GitDiffFile file) =>
+    file.status == GitChangeStatus.deleted ? 'Deleted' : 'Modified';
+
 List<_DiffRow> _buildSideBySideRows(GitDiffFile file) {
   final items = <_DiffRow>[];
-  final oldLabel = file.status == GitChangeStatus.added
-      ? 'Empty'
-      : (file.oldPath != null && file.oldPath != file.path
-            ? 'Original (${file.oldPath})'
-            : 'Original');
-  final newLabel = file.status == GitChangeStatus.deleted
-      ? 'Deleted'
-      : 'Modified';
+  final oldLabel = _diffOnlyOldLabel(file);
+  final newLabel = _diffOnlyNewLabel(file);
   items.add(_SideBySideHeaderRow(oldTitle: oldLabel, newTitle: newLabel));
-
-  final projectedRows = _buildProjectedSideBySideRows(file);
-  if (projectedRows != null) {
-    items.addAll(projectedRows);
-    return items;
-  }
 
   int? currentOldLine;
   int? currentNewLine;
