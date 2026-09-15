@@ -23,6 +23,9 @@ typedef CodexResourceLinkCreator = void Function({
   required String sourcePath,
   required String targetPath,
 });
+typedef CodexRuntimeResourceFingerprinter = Future<String> Function(
+  String sourcePath,
+);
 
 final class const CodexRuntimeHomePreparation({
   required final String runtimeHomePath,
@@ -36,6 +39,7 @@ final class CodexRuntimeHomeService({
   ManagedAgentHookPlatform? platform,
   Map<String, String>? environment,
   @visibleForTesting CodexResourceLinkCreator? resourceLinkCreator,
+  CodexRuntimeResourceFingerprinter? resourceFingerprinter,
 }) {
   this
     : _homeDirectory = homeDirectory ?? _resolveHome(environment),
@@ -46,12 +50,14 @@ final class CodexRuntimeHomeService({
           (Platform.isWindows
               ? ManagedAgentHookPlatform.windows
               : ManagedAgentHookPlatform.posix),
-      _resourceLinkCreator = resourceLinkCreator ?? _createResourceLink;
+      _resourceLinkCreator = resourceLinkCreator ?? _createResourceLink,
+      _resourceFingerprinter = resourceFingerprinter;
 
   final String _homeDirectory;
   final CodexApplicationSupportDirectoryResolver _applicationSupportDirectory;
   final ManagedAgentHookPlatform _platform;
   final CodexResourceLinkCreator _resourceLinkCreator;
+  final CodexRuntimeResourceFingerprinter? _resourceFingerprinter;
 
   Future<CodexRuntimeHomePreparation> prepareForTerminalLaunch() async {
     final runtimeHome = await _runtimeHomeDirectory();
@@ -162,9 +168,9 @@ final class CodexRuntimeHomeService({
   }) async {
     final runtime = runtimeHome ?? await _runtimeHomeDirectory();
     _syncAuth(runtime);
-    _syncSystemResources(runtime);
+    await _syncSystemResources(runtime);
     _syncSystemConfig(runtime);
-    _syncSystemSessions(runtime);
+    await _syncSystemSessions(runtime);
 
     final descriptor = await _descriptor(runtimeHome: runtime);
     final runtimeConfig = _readJsonObject(descriptor.configPath);

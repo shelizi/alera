@@ -26,6 +26,8 @@ import 'package:alera/src/features/workbench/application/workbench_providers.dar
 import 'package:alera/src/features/workbench/application/workbench_state.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
+import 'package:alera/src/rust/api/agent_runtime_resources.dart'
+    as native_runtime_resources;
 import 'package:alera/src/shared/infra/process/process_providers.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:logging/logging.dart';
@@ -69,12 +71,18 @@ ManagedAgentHookInstallService managedAgentHookInstallService(Ref ref) {
 
 @Riverpod(keepAlive: true)
 CodexRuntimeHomeService codexRuntimeHomeService(Ref ref) {
-  return CodexRuntimeHomeService();
+  return CodexRuntimeHomeService(
+    resourceFingerprinter: (sourcePath) => native_runtime_resources
+        .fingerprintCodexRuntimeResource(sourcePath: sourcePath),
+  );
 }
 
 @Riverpod(keepAlive: true)
 ClaudeRuntimeHomeService claudeRuntimeHomeService(Ref ref) {
-  return ClaudeRuntimeHomeService();
+  return ClaudeRuntimeHomeService(
+    resourceFingerprinter: (sourcePath) => native_runtime_resources
+        .fingerprintClaudeRuntimeResource(sourcePath: sourcePath),
+  );
 }
 
 @Riverpod(keepAlive: true)

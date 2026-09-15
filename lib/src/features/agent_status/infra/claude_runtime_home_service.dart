@@ -20,6 +20,9 @@ typedef ClaudeResourceLinkCreator = void Function({
   required String sourcePath,
   required String targetPath,
 });
+typedef ClaudeRuntimeResourceFingerprinter = Future<String> Function(
+  String sourcePath,
+);
 
 abstract interface class ClaudeKeychainCredentialsStore {
   Future<String?> readLegacyCredentials();
@@ -46,6 +49,7 @@ final class ClaudeRuntimeHomeService({
   @visibleForTesting bool syncMacOSKeychainCredentials = true,
   @visibleForTesting ClaudeKeychainCredentialsStore? keychainCredentialsStore,
   @visibleForTesting ClaudeResourceLinkCreator? resourceLinkCreator,
+  ClaudeRuntimeResourceFingerprinter? resourceFingerprinter,
 }) {
   this
     : _environment = environment ?? Platform.environment,
@@ -62,7 +66,8 @@ final class ClaudeRuntimeHomeService({
           (syncMacOSKeychainCredentials && Platform.isMacOS
               ? const _MacOSClaudeKeychainCredentialsStore()
               : null),
-      _resourceLinkCreator = resourceLinkCreator ?? _createResourceLink;
+      _resourceLinkCreator = resourceLinkCreator ?? _createResourceLink,
+      _resourceFingerprinter = resourceFingerprinter;
 
   final Map<String, String> _environment;
   final String _homeDirectory;
@@ -70,6 +75,7 @@ final class ClaudeRuntimeHomeService({
   final ManagedAgentHookPlatform _platform;
   final ClaudeKeychainCredentialsStore? _keychainCredentialsStore;
   final ClaudeResourceLinkCreator _resourceLinkCreator;
+  final ClaudeRuntimeResourceFingerprinter? _resourceFingerprinter;
 
   Future<ClaudeRuntimeHomePreparation> prepareForTerminalLaunch() async {
     final runtimeHome = await _runtimeHomeDirectory();
@@ -125,7 +131,7 @@ final class ClaudeRuntimeHomeService({
   }) async {
     final runtime = runtimeHome ?? await _runtimeHomeDirectory();
     final source = _sourceConfigDirectory(runtime);
-    _syncRuntimeResources(runtime, source);
+    await _syncRuntimeResources(runtime, source);
     await _syncKeychainCredentials(runtime);
 
     final descriptor = _descriptor(runtime);

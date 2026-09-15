@@ -87,6 +87,26 @@ void main() {
         expect(target.readAsStringSync(), 'unmanaged resource');
         expect(marker.existsSync(), isFalse);
       });
+
+      test('uses an injected asynchronous resource fingerprinter', () async {
+        final fingerprintedPaths = <String>[];
+        const injectedFingerprint = 'sha256:injected-native-fingerprint';
+
+        final runtimeHome = await _prepareRuntime(
+          agent,
+          home,
+          support,
+          resourceFingerprinter: (sourcePath) async {
+            fingerprintedPaths.add(sourcePath);
+            return injectedFingerprint;
+          },
+        );
+
+        final marker = File(p.join(runtimeHome, '.alera-copied-plugins.json'));
+        final decoded = jsonDecode(marker.readAsStringSync()) as Map;
+        expect(decoded['sourceFingerprint'], injectedFingerprint);
+        expect(fingerprintedPaths, contains(source.path));
+      });
     });
   }
 }
@@ -94,8 +114,9 @@ void main() {
 Future<String> _prepareRuntime(
   String agent,
   Directory home,
-  Directory support,
-) async {
+  Directory support, {
+  Future<String> Function(String sourcePath)? resourceFingerprinter,
+}) async {
   void failLinks({required String sourcePath, required String targetPath}) {
     throw const FileSystemException('symlinks disabled');
   }
@@ -107,6 +128,7 @@ Future<String> _prepareRuntime(
       platform: .posix,
       environment: <String, String>{'HOME': home.path},
       resourceLinkCreator: failLinks,
+      resourceFingerprinter: resourceFingerprinter,
     ).prepareForTerminalLaunch();
     return preparation.runtimeHomePath;
   }
@@ -116,6 +138,7 @@ Future<String> _prepareRuntime(
     platform: .posix,
     environment: <String, String>{'HOME': home.path},
     resourceLinkCreator: failLinks,
+    resourceFingerprinter: resourceFingerprinter,
     syncMacOSKeychainCredentials: false,
   ).prepareForTerminalLaunch();
   return preparation.runtimeHomePath;

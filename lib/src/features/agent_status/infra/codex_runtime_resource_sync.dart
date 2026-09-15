@@ -25,9 +25,9 @@ extension _CodexRuntimeHomeServiceResourceSync on CodexRuntimeHomeService {
     }
   }
 
-  void _syncSystemResources(Directory runtimeHome) {
+  Future<void> _syncSystemResources(Directory runtimeHome) async {
     for (final entryName in _codexSystemResourceEntries) {
-      _syncLinkedResource(
+      await _syncLinkedResource(
         systemHomePath: _systemHomePath,
         runtimeHomePath: runtimeHome.path,
         entryName: entryName,
@@ -36,8 +36,8 @@ extension _CodexRuntimeHomeServiceResourceSync on CodexRuntimeHomeService {
     }
   }
 
-  void _syncSystemSessions(Directory runtimeHome) {
-    _syncLinkedResource(
+  Future<void> _syncSystemSessions(Directory runtimeHome) async {
+    await _syncLinkedResource(
       systemHomePath: _systemHomePath,
       runtimeHomePath: runtimeHome.path,
       entryName: 'sessions',
@@ -45,12 +45,12 @@ extension _CodexRuntimeHomeServiceResourceSync on CodexRuntimeHomeService {
     );
   }
 
-  void _syncLinkedResource({
+  Future<void> _syncLinkedResource({
     required String systemHomePath,
     required String runtimeHomePath,
     required String entryName,
     required bool allowCopyFallback,
-  }) {
+  }) async {
     final sourcePath = p.join(systemHomePath, entryName);
     final targetPath = p.join(runtimeHomePath, entryName);
     if (!FileSystemEntity.isDirectorySync(sourcePath) &&
@@ -78,7 +78,7 @@ extension _CodexRuntimeHomeServiceResourceSync on CodexRuntimeHomeService {
       if (!isOwnedFallbackCopy) {
         return;
       }
-      sourceFingerprint = _resourceFingerprint(sourcePath);
+      sourceFingerprint = await _fingerprintRuntimeResource(sourcePath);
       if (marker?.sourceFingerprint == sourceFingerprint) {
         return;
       }
@@ -100,9 +100,17 @@ extension _CodexRuntimeHomeServiceResourceSync on CodexRuntimeHomeService {
         runtimeHomePath,
         entryName,
         sourcePath,
-        sourceFingerprint ?? _resourceFingerprint(sourcePath),
+        sourceFingerprint ?? await _fingerprintRuntimeResource(sourcePath),
       );
     } catch (_) {}
+  }
+
+  Future<String> _fingerprintRuntimeResource(String sourcePath) async {
+    final fingerprinter = _resourceFingerprinter;
+    if (fingerprinter != null) {
+      return fingerprinter(sourcePath);
+    }
+    return _resourceFingerprint(sourcePath);
   }
 
   void _removeOwnedRuntimeResource(

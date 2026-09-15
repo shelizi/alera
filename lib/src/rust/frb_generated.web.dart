@@ -8,6 +8,7 @@
 
 import 'api/agent_descriptors.dart';
 import 'api/agent_hooks.dart';
+import 'api/agent_runtime_resources.dart';
 import 'api/ai_dictation.dart';
 import 'api/clipboard.dart';
 import 'api/git.dart';

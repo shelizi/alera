@@ -172,7 +172,10 @@ extension _ClaudeRuntimeResources on ClaudeRuntimeHomeService {
     );
   }
 
-  void _syncRuntimeResources(Directory runtimeHome, Directory source) {
+  Future<void> _syncRuntimeResources(
+    Directory runtimeHome,
+    Directory source,
+  ) async {
     final expected = <String, String>{};
     if (source.existsSync()) {
       for (final entity in source.listSync(followLinks: false)) {
@@ -191,7 +194,7 @@ extension _ClaudeRuntimeResources on ClaudeRuntimeHomeService {
     }
 
     for (final entry in expected.entries) {
-      _syncLinkedResource(
+      await _syncLinkedResource(
         runtimeHomePath: runtimeHome.path,
         entryName: entry.key,
         sourcePath: entry.value,
@@ -218,11 +221,11 @@ extension _ClaudeRuntimeResources on ClaudeRuntimeHomeService {
     } catch (_) {}
   }
 
-  void _syncLinkedResource({
+  Future<void> _syncLinkedResource({
     required String runtimeHomePath,
     required String entryName,
     required String sourcePath,
-  }) {
+  }) async {
     final targetPath = p.join(runtimeHomePath, entryName);
     // coverage:ignore-start
     // Source entries come from a just-read directory listing. This handles the
@@ -248,7 +251,7 @@ extension _ClaudeRuntimeResources on ClaudeRuntimeHomeService {
       if (targetType != FileSystemEntityType.link && !isOwnedFallbackCopy) {
         return;
       }
-      sourceFingerprint = _resourceFingerprint(sourcePath);
+      sourceFingerprint = await _fingerprintRuntimeResource(sourcePath);
       if (isOwnedFallbackCopy &&
           marker?.sourceFingerprint == sourceFingerprint) {
         return;
@@ -269,9 +272,17 @@ extension _ClaudeRuntimeResources on ClaudeRuntimeHomeService {
         runtimeHomePath,
         entryName,
         sourcePath,
-        sourceFingerprint ?? _resourceFingerprint(sourcePath),
+        sourceFingerprint ?? await _fingerprintRuntimeResource(sourcePath),
       );
     } catch (_) {}
+  }
+
+  Future<String> _fingerprintRuntimeResource(String sourcePath) async {
+    final fingerprinter = _resourceFingerprinter;
+    if (fingerprinter != null) {
+      return fingerprinter(sourcePath);
+    }
+    return _resourceFingerprint(sourcePath);
   }
 
   void _removeStaleRuntimeResources(
