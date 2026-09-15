@@ -706,6 +706,12 @@ String? _translateDynamicTraditionalChinese(String source) {
     return '${expiresSeconds.group(1)} 秒後到期';
   }
 
+  final mobileDriver = RegExp(r'^(.+) is driving this terminal$')
+      .firstMatch(source);
+  if (mobileDriver != null) {
+    return '${mobileDriver.group(1)!} 正在操作此終端機';
+  }
+
   final requiredField = RegExp(r'^(.+) is required$').firstMatch(source);
   if (requiredField != null) {
     final field = requiredField.group(1)!;

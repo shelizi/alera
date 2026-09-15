@@ -421,6 +421,8 @@ const Map<String, String> _traditionalChineseShell = <String, String>{
   'Take Back This Terminal': '取回此終端機',
   'Take Back All Terminals': '取回所有終端機',
   'Take Back': '取回',
+  'Desktop keyboard is paused': '桌面鍵盤已暫停',
+  'Phone driving': '手機操作中',
   'Add Git Project': '新增 Git 專案',
   'Use Custom Command': '使用自訂指令',
   'Continue Manually': '手動繼續',

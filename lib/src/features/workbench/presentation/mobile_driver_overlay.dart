@@ -70,7 +70,7 @@ class _MobileDriverOverlayState extends State<MobileDriverOverlay> {
               ),
               const SizedBox(width: AleraTokens.space8),
               Text(
-                '${widget.deviceName} is driving this terminal',
+                context.tr('${widget.deviceName} is driving this terminal'),
                 style: const TextStyle(
                   color: AleraTokens.foreground,
                   fontWeight: .w600,
@@ -78,7 +78,7 @@ class _MobileDriverOverlayState extends State<MobileDriverOverlay> {
               ),
               const SizedBox(width: AleraTokens.space8),
               IconButton(
-                tooltip: 'Collapse',
+                tooltip: context.tr('Collapse'),
                 visualDensity: .compact,
                 onPressed: () => setState(() => _collapsed = true),
                 icon: const Icon(
@@ -90,9 +90,9 @@ class _MobileDriverOverlayState extends State<MobileDriverOverlay> {
             ],
           ),
           const SizedBox(height: AleraTokens.space4),
-          const Text(
-            'Desktop keyboard is paused',
-            style: TextStyle(color: AleraTokens.foregroundMuted),
+          Text(
+            context.tr('Desktop keyboard is paused'),
+            style: const TextStyle(color: AleraTokens.foregroundMuted),
           ),
           const SizedBox(height: AleraTokens.space12),
           Row(
@@ -136,9 +136,9 @@ class _MobileDriverOverlayState extends State<MobileDriverOverlay> {
             color: AleraTokens.info,
           ),
           const SizedBox(width: AleraTokens.space6),
-          const Text(
-            'Phone driving',
-            style: TextStyle(color: AleraTokens.foregroundMuted),
+          Text(
+            context.tr('Phone driving'),
+            style: const TextStyle(color: AleraTokens.foregroundMuted),
           ),
           const SizedBox(width: AleraTokens.space8),
           TextButton(
@@ -146,7 +146,7 @@ class _MobileDriverOverlayState extends State<MobileDriverOverlay> {
             child: Text(context.tr('Take Back')),
           ),
           IconButton(
-            tooltip: 'Expand',
+            tooltip: context.tr('Expand'),
             visualDensity: .compact,
             onPressed: () => setState(() => _collapsed = false),
             icon: const Icon(

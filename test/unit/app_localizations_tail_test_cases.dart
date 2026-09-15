@@ -541,6 +541,33 @@ void registerAppLocalizationTailTests() {
     expect(panelSource, contains("tooltip: context.tr('Refresh Commits')"));
   });
 
+  test('traditional Chinese localizes mobile driver overlay copy', () {
+    final l10n = AleraLocalizations(const Locale('zh', 'TW'));
+    expect(
+      l10n.translate('Pixel 9 is driving this terminal'),
+      'Pixel 9 正在操作此終端機',
+    );
+    expect(l10n.translate('Desktop keyboard is paused'), '桌面鍵盤已暫停');
+    expect(l10n.translate('Phone driving'), '手機操作中');
+    expect(l10n.translate('Collapse'), '收合');
+    expect(l10n.translate('Expand'), '展開');
+  });
+
+  test('mobile driver overlay direct text routes through localization', () {
+    final source = File(
+      'lib/src/features/workbench/presentation/mobile_driver_overlay.dart',
+    ).readAsStringSync();
+
+    expect(
+      source,
+      contains("context.tr('\${widget.deviceName} is driving this terminal')"),
+    );
+    expect(source, contains("context.tr('Desktop keyboard is paused')"));
+    expect(source, contains("context.tr('Phone driving')"));
+    expect(source, contains("tooltip: context.tr('Collapse')"));
+    expect(source, contains("tooltip: context.tr('Expand')"));
+  });
+
   test('English and unknown strings fall back to source text', () {
     final en = AleraLocalizations(const Locale('en'));
     final zh = AleraLocalizations(const Locale('zh', 'TW'));
