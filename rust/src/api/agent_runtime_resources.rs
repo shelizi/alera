@@ -38,6 +38,46 @@ pub fn fingerprint_codex_runtime_resource(source_path: String) -> Result<String,
     fingerprint_runtime_resource(Path::new(&source_path), FingerprintStyle::CodexCanonical)
 }
 
+pub fn copy_runtime_resource(source_path: String, target_path: String) -> Result<(), String> {
+    copy_runtime_resource_path(Path::new(&source_path), Path::new(&target_path))
+}
+
+fn copy_runtime_resource_path(source_path: &Path, target_path: &Path) -> Result<(), String> {
+    let metadata = match fs::metadata(source_path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(format!("failed to stat {}: {error}", source_path.display()));
+        }
+    };
+    if metadata.is_dir() {
+        fs::create_dir_all(target_path)
+            .map_err(|error| format!("failed to create {}: {error}", target_path.display()))?;
+        let entries = fs::read_dir(source_path)
+            .map_err(|error| format!("failed to list {}: {error}", source_path.display()))?;
+        for entry in entries {
+            let entry = entry
+                .map_err(|error| format!("failed to read {}: {error}", source_path.display()))?;
+            copy_runtime_resource_path(&entry.path(), &target_path.join(entry.file_name()))?;
+        }
+        return Ok(());
+    }
+    if metadata.is_file() {
+        if let Some(parent) = target_path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|error| format!("failed to create {}: {error}", parent.display()))?;
+        }
+        fs::copy(source_path, target_path).map_err(|error| {
+            format!(
+                "failed to copy {} to {}: {error}",
+                source_path.display(),
+                target_path.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
 fn fingerprint_runtime_resource(
     source_path: &Path,
     style: FingerprintStyle,
@@ -72,7 +112,7 @@ fn collect_records(
             return Err(format!(
                 "failed to stat {}: {error}",
                 current_path.display()
-            ))
+            ));
         }
     };
     let file_type = metadata.file_type();
@@ -245,6 +285,44 @@ mod tests {
             size: 15,
             modified_micros: 1_767_323_045_123_000,
         }
+    }
+
+    #[test]
+    fn copies_runtime_resource_directory_recursively() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source");
+        let nested = source.join("nested");
+        let target = root.path().join("target");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(source.join("root.txt"), b"root").unwrap();
+        fs::write(nested.join("child.txt"), b"child").unwrap();
+
+        copy_runtime_resource(
+            source.to_string_lossy().into_owned(),
+            target.to_string_lossy().into_owned(),
+        )
+        .unwrap();
+
+        assert_eq!(fs::read(target.join("root.txt")).unwrap(), b"root");
+        assert_eq!(
+            fs::read(target.join("nested").join("child.txt")).unwrap(),
+            b"child"
+        );
+    }
+
+    #[test]
+    fn ignores_runtime_resource_that_disappears_before_copy() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("missing");
+        let target = root.path().join("target");
+
+        copy_runtime_resource(
+            source.to_string_lossy().into_owned(),
+            target.to_string_lossy().into_owned(),
+        )
+        .unwrap();
+
+        assert!(!target.exists());
     }
 
     #[test]

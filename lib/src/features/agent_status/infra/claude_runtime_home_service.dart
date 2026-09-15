@@ -23,6 +23,10 @@ typedef ClaudeResourceLinkCreator = void Function({
 typedef ClaudeRuntimeResourceFingerprinter = Future<String> Function(
   String sourcePath,
 );
+typedef ClaudeRuntimeResourceCopier = Future<void> Function({
+  required String sourcePath,
+  required String targetPath,
+});
 
 abstract interface class ClaudeKeychainCredentialsStore {
   Future<String?> readLegacyCredentials();
@@ -50,6 +54,7 @@ final class ClaudeRuntimeHomeService({
   @visibleForTesting ClaudeKeychainCredentialsStore? keychainCredentialsStore,
   @visibleForTesting ClaudeResourceLinkCreator? resourceLinkCreator,
   ClaudeRuntimeResourceFingerprinter? resourceFingerprinter,
+  ClaudeRuntimeResourceCopier? resourceCopier,
 }) {
   this
     : _environment = environment ?? Platform.environment,
@@ -67,7 +72,11 @@ final class ClaudeRuntimeHomeService({
               ? const _MacOSClaudeKeychainCredentialsStore()
               : null),
       _resourceLinkCreator = resourceLinkCreator ?? _createResourceLink,
-      _resourceFingerprinter = resourceFingerprinter;
+      // Keep the public constructor parameter names stable for injection.
+      // ignore: prefer_initializing_formals
+      _resourceFingerprinter = resourceFingerprinter,
+      // ignore: prefer_initializing_formals
+      _resourceCopier = resourceCopier;
 
   final Map<String, String> _environment;
   final String _homeDirectory;
@@ -76,6 +85,7 @@ final class ClaudeRuntimeHomeService({
   final ClaudeKeychainCredentialsStore? _keychainCredentialsStore;
   final ClaudeResourceLinkCreator _resourceLinkCreator;
   final ClaudeRuntimeResourceFingerprinter? _resourceFingerprinter;
+  final ClaudeRuntimeResourceCopier? _resourceCopier;
 
   Future<ClaudeRuntimeHomePreparation> prepareForTerminalLaunch() async {
     final runtimeHome = await _runtimeHomeDirectory();

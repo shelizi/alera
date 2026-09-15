@@ -7,7 +7,7 @@ import '../frb_generated.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `collect_records`, `fingerprint_runtime_resource`, `hash_serialized_records`, `json_string`, `legacy_modified_micros`, `path_string`, `serialize_record`, `serialize_records`
+// These functions are ignored because they are not marked as `pub`: `collect_records`, `copy_runtime_resource_path`, `fingerprint_runtime_resource`, `hash_serialized_records`, `json_string`, `legacy_modified_micros`, `path_string`, `serialize_record`, `serialize_records`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `FingerprintStyle`, `ResourceRecord`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `clone`, `eq`, `fmt`
 
@@ -22,3 +22,11 @@ Future<String> fingerprintCodexRuntimeResource({required String sourcePath}) =>
         .crateApiAgentRuntimeResourcesFingerprintCodexRuntimeResource(
           sourcePath: sourcePath,
         );
+
+Future<void> copyRuntimeResource({
+  required String sourcePath,
+  required String targetPath,
+}) => RustLib.instance.api.crateApiAgentRuntimeResourcesCopyRuntimeResource(
+  sourcePath: sourcePath,
+  targetPath: targetPath,
+);

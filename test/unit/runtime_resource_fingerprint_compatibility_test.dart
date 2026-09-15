@@ -107,6 +107,26 @@ void main() {
         expect(decoded['sourceFingerprint'], injectedFingerprint);
         expect(fingerprintedPaths, contains(source.path));
       });
+
+      test('uses an injected asynchronous resource copier', () async {
+        final copiedSources = <String>[];
+
+        final runtimeHome = await _prepareRuntime(
+          agent,
+          home,
+          support,
+          resourceCopier: ({required sourcePath, required targetPath}) async {
+            copiedSources.add(sourcePath);
+            File(sourcePath).copySync(targetPath);
+          },
+        );
+
+        expect(copiedSources, contains(source.path));
+        expect(
+          File(p.join(runtimeHome, 'plugins')).readAsStringSync(),
+          'plugin contents',
+        );
+      });
     });
   }
 }
@@ -116,21 +136,30 @@ Future<String> _prepareRuntime(
   Directory home,
   Directory support, {
   Future<String> Function(String sourcePath)? resourceFingerprinter,
+  Future<void> Function({
+    required String sourcePath,
+    required String targetPath,
+  })?
+  resourceCopier,
 }) async {
   void failLinks({required String sourcePath, required String targetPath}) {
     throw const FileSystemException('symlinks disabled');
   }
 
   if (agent == 'codex') {
-    final preparation = await CodexRuntimeHomeService(
+    final runtimeHome = Directory(p.join(support.path, 'codex-runtime'))
+      ..createSync(recursive: true);
+    final service = CodexRuntimeHomeService(
       homeDirectory: home.path,
       applicationSupportDirectory: () async => support,
       platform: .posix,
       environment: <String, String>{'HOME': home.path},
       resourceLinkCreator: failLinks,
       resourceFingerprinter: resourceFingerprinter,
-    ).prepareForTerminalLaunch();
-    return preparation.runtimeHomePath;
+      resourceCopier: resourceCopier,
+    );
+    await service.install(runtimeHome: runtimeHome);
+    return runtimeHome.path;
   }
   final preparation = await ClaudeRuntimeHomeService(
     homeDirectory: home.path,
@@ -139,6 +168,7 @@ Future<String> _prepareRuntime(
     environment: <String, String>{'HOME': home.path},
     resourceLinkCreator: failLinks,
     resourceFingerprinter: resourceFingerprinter,
+    resourceCopier: resourceCopier,
     syncMacOSKeychainCredentials: false,
   ).prepareForTerminalLaunch();
   return preparation.runtimeHomePath;

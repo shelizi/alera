@@ -86,7 +86,7 @@ extension _CodexRuntimeHomeServiceResourceSync on CodexRuntimeHomeService {
     }
     try {
       _deleteEntity(targetPath);
-      _copyEntity(sourcePath, targetPath);
+      await _copyRuntimeResource(sourcePath, targetPath);
       _markCopiedResource(
         runtimeHomePath,
         entryName,
@@ -94,6 +94,18 @@ extension _CodexRuntimeHomeServiceResourceSync on CodexRuntimeHomeService {
         sourceFingerprint ?? await _fingerprintRuntimeResource(sourcePath),
       );
     } catch (_) {}
+  }
+
+  Future<void> _copyRuntimeResource(
+    String sourcePath,
+    String targetPath,
+  ) async {
+    final copier = _resourceCopier;
+    if (copier != null) {
+      await copier(sourcePath: sourcePath, targetPath: targetPath);
+      return;
+    }
+    _copyEntity(sourcePath, targetPath);
   }
 
   Future<String> _fingerprintRuntimeResource(String sourcePath) async {

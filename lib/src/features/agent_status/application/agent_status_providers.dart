@@ -74,6 +74,11 @@ CodexRuntimeHomeService codexRuntimeHomeService(Ref ref) {
   return CodexRuntimeHomeService(
     resourceFingerprinter: (sourcePath) => native_runtime_resources
         .fingerprintCodexRuntimeResource(sourcePath: sourcePath),
+    resourceCopier: ({required sourcePath, required targetPath}) =>
+        native_runtime_resources.copyRuntimeResource(
+          sourcePath: sourcePath,
+          targetPath: targetPath,
+        ),
   );
 }
 
@@ -82,6 +87,11 @@ ClaudeRuntimeHomeService claudeRuntimeHomeService(Ref ref) {
   return ClaudeRuntimeHomeService(
     resourceFingerprinter: (sourcePath) => native_runtime_resources
         .fingerprintClaudeRuntimeResource(sourcePath: sourcePath),
+    resourceCopier: ({required sourcePath, required targetPath}) =>
+        native_runtime_resources.copyRuntimeResource(
+          sourcePath: sourcePath,
+          targetPath: targetPath,
+        ),
   );
 }
 

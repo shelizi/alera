@@ -26,6 +26,10 @@ typedef CodexResourceLinkCreator = void Function({
 typedef CodexRuntimeResourceFingerprinter = Future<String> Function(
   String sourcePath,
 );
+typedef CodexRuntimeResourceCopier = Future<void> Function({
+  required String sourcePath,
+  required String targetPath,
+});
 
 final class const CodexRuntimeHomePreparation({
   required final String runtimeHomePath,
@@ -40,6 +44,7 @@ final class CodexRuntimeHomeService({
   Map<String, String>? environment,
   @visibleForTesting CodexResourceLinkCreator? resourceLinkCreator,
   CodexRuntimeResourceFingerprinter? resourceFingerprinter,
+  CodexRuntimeResourceCopier? resourceCopier,
 }) {
   this
     : _homeDirectory = homeDirectory ?? _resolveHome(environment),
@@ -55,7 +60,11 @@ final class CodexRuntimeHomeService({
               ? ManagedAgentHookPlatform.windows
               : ManagedAgentHookPlatform.posix),
       _resourceLinkCreator = resourceLinkCreator ?? _createResourceLink,
-      _resourceFingerprinter = resourceFingerprinter;
+      // Keep the public constructor parameter names stable for injection.
+      // ignore: prefer_initializing_formals
+      _resourceFingerprinter = resourceFingerprinter,
+      // ignore: prefer_initializing_formals
+      _resourceCopier = resourceCopier;
 
   final String _homeDirectory;
   final String _codexHomePath;
@@ -63,6 +72,7 @@ final class CodexRuntimeHomeService({
   final ManagedAgentHookPlatform _platform;
   final CodexResourceLinkCreator _resourceLinkCreator;
   final CodexRuntimeResourceFingerprinter? _resourceFingerprinter;
+  final CodexRuntimeResourceCopier? _resourceCopier;
 
   Future<CodexRuntimeHomePreparation> prepareForTerminalLaunch() async {
     final codexHome = Directory(_systemHomePath)..createSync(recursive: true);
@@ -311,6 +321,9 @@ final class CodexRuntimeHomeService({
     return status();
   }
 
+  // Retained as a compatibility seam for callers/tests that still construct a
+  // non-global runtime home; normal Codex launches now use CODEX_HOME in place.
+  // ignore: unused_element
   Future<Directory> _runtimeHomeDirectory() async {
     final support = await _applicationSupportDirectory();
     final directory = Directory(
