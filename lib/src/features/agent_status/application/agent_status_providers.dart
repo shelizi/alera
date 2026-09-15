@@ -81,6 +81,13 @@ CodexRuntimeHomeService codexRuntimeHomeService(Ref ref) {
         ),
     resourceDeleter: (path) =>
         native_runtime_resources.deleteRuntimeResource(path: path),
+    resourceReconciler:
+        ({required sourcePath, required targetPath, knownFingerprint}) =>
+            native_runtime_resources.replaceCodexRuntimeResourceCopy(
+              sourcePath: sourcePath,
+              targetPath: targetPath,
+              knownFingerprint: knownFingerprint,
+            ),
   );
 }
 
@@ -96,6 +103,13 @@ ClaudeRuntimeHomeService claudeRuntimeHomeService(Ref ref) {
         ),
     resourceDeleter: (path) =>
         native_runtime_resources.deleteRuntimeResource(path: path),
+    resourceReconciler:
+        ({required sourcePath, required targetPath, knownFingerprint}) =>
+            native_runtime_resources.replaceClaudeRuntimeResourceCopy(
+              sourcePath: sourcePath,
+              targetPath: targetPath,
+              knownFingerprint: knownFingerprint,
+            ),
   );
 }
 

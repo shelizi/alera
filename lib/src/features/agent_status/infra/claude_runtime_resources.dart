@@ -266,15 +266,36 @@ extension _ClaudeRuntimeResources on ClaudeRuntimeHomeService {
     } catch (_) {}
 
     try {
-      await _deleteRuntimeResource(targetPath);
-      await _copyRuntimeResource(sourcePath, targetPath);
+      final reconciledFingerprint = await _replaceRuntimeResourceCopy(
+        sourcePath,
+        targetPath,
+        knownFingerprint: sourceFingerprint,
+      );
       _markCopiedResource(
         runtimeHomePath,
         entryName,
         sourcePath,
-        sourceFingerprint ?? await _fingerprintRuntimeResource(sourcePath),
+        reconciledFingerprint,
       );
     } catch (_) {}
+  }
+
+  Future<String> _replaceRuntimeResourceCopy(
+    String sourcePath,
+    String targetPath, {
+    String? knownFingerprint,
+  }) async {
+    final reconciler = _resourceReconciler;
+    if (reconciler != null) {
+      return reconciler(
+        sourcePath: sourcePath,
+        targetPath: targetPath,
+        knownFingerprint: knownFingerprint,
+      );
+    }
+    await _deleteRuntimeResource(targetPath);
+    await _copyRuntimeResource(sourcePath, targetPath);
+    return knownFingerprint ?? await _fingerprintRuntimeResource(sourcePath);
   }
 
   Future<void> _deleteRuntimeResource(String path) async {

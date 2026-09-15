@@ -46,6 +46,151 @@ pub fn delete_runtime_resource(path: String) -> Result<(), String> {
     delete_runtime_resource_path(Path::new(&path))
 }
 
+pub fn replace_claude_runtime_resource_copy(
+    source_path: String,
+    target_path: String,
+    known_fingerprint: Option<String>,
+) -> Result<String, String> {
+    replace_runtime_resource_copy(
+        Path::new(&source_path),
+        Path::new(&target_path),
+        FingerprintStyle::ClaudeLegacy,
+        known_fingerprint,
+    )
+}
+
+pub fn replace_codex_runtime_resource_copy(
+    source_path: String,
+    target_path: String,
+    known_fingerprint: Option<String>,
+) -> Result<String, String> {
+    replace_runtime_resource_copy(
+        Path::new(&source_path),
+        Path::new(&target_path),
+        FingerprintStyle::CodexCanonical,
+        known_fingerprint,
+    )
+}
+
+fn replace_runtime_resource_copy(
+    source_path: &Path,
+    target_path: &Path,
+    style: FingerprintStyle,
+    known_fingerprint: Option<String>,
+) -> Result<String, String> {
+    delete_runtime_resource_path(target_path)?;
+    if let Some(fingerprint) = known_fingerprint {
+        copy_runtime_resource_path(source_path, target_path)?;
+        return Ok(fingerprint);
+    }
+
+    let mut records = Vec::new();
+    copy_runtime_resource_and_collect(
+        source_path,
+        target_path,
+        Path::new(""),
+        style,
+        &mut records,
+    )?;
+    Ok(hash_serialized_records(&records, style))
+}
+
+fn copy_runtime_resource_and_collect(
+    source_path: &Path,
+    target_path: &Path,
+    relative_path: &Path,
+    style: FingerprintStyle,
+    records: &mut Vec<ResourceRecord>,
+) -> Result<(), String> {
+    let metadata = match fs::symlink_metadata(source_path) {
+        Ok(metadata) => metadata,
+        Err(error)
+            if matches!(style, FingerprintStyle::ClaudeLegacy)
+                && error.kind() == std::io::ErrorKind::NotFound =>
+        {
+            return Ok(());
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            records.push(ResourceRecord::Other {
+                path: path_string(relative_path),
+                kind: "notFound".to_owned(),
+            });
+            return Ok(());
+        }
+        Err(error) => {
+            return Err(format!("failed to stat {}: {error}", source_path.display()));
+        }
+    };
+    let file_type = metadata.file_type();
+    if file_type.is_symlink() {
+        records.push(ResourceRecord::Link {
+            path: path_string(relative_path),
+            target: fs::read_link(source_path)
+                .ok()
+                .map(|target| path_string(&target)),
+        });
+        return copy_runtime_resource_path(source_path, target_path);
+    }
+    if file_type.is_dir() {
+        records.push(ResourceRecord::Directory {
+            path: path_string(relative_path),
+            modified_micros: legacy_modified_micros(&metadata)?,
+        });
+        fs::create_dir_all(target_path)
+            .map_err(|error| format!("failed to create {}: {error}", target_path.display()))?;
+        let mut children = fs::read_dir(source_path)
+            .map_err(|error| format!("failed to list {}: {error}", source_path.display()))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("failed to read {}: {error}", source_path.display()))?;
+        children.sort_by(|left, right| {
+            left.file_name()
+                .to_string_lossy()
+                .cmp(&right.file_name().to_string_lossy())
+        });
+        for child in children {
+            let child_relative = if relative_path.as_os_str().is_empty() {
+                PathBuf::from(child.file_name())
+            } else {
+                relative_path.join(child.file_name())
+            };
+            copy_runtime_resource_and_collect(
+                &child.path(),
+                &target_path.join(child.file_name()),
+                &child_relative,
+                style,
+                records,
+            )?;
+        }
+        return Ok(());
+    }
+    if file_type.is_file() {
+        records.push(ResourceRecord::File {
+            path: path_string(relative_path),
+            size: metadata.len(),
+            modified_micros: legacy_modified_micros(&metadata)?,
+        });
+        if let Some(parent) = target_path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|error| format!("failed to create {}: {error}", parent.display()))?;
+        }
+        fs::copy(source_path, target_path).map_err(|error| {
+            format!(
+                "failed to copy {} to {}: {error}",
+                source_path.display(),
+                target_path.display()
+            )
+        })?;
+        return Ok(());
+    }
+    if matches!(style, FingerprintStyle::CodexCanonical) {
+        records.push(ResourceRecord::Other {
+            path: path_string(relative_path),
+            kind: format!("{:?}", file_type),
+        });
+    }
+    Ok(())
+}
+
 fn delete_runtime_resource_path(path: &Path) -> Result<(), String> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
@@ -374,6 +519,77 @@ mod tests {
         delete_runtime_resource(target.to_string_lossy().into_owned()).unwrap();
 
         assert!(!target.exists());
+    }
+
+    #[test]
+    fn replaces_runtime_copy_and_preserves_claude_fingerprint() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source");
+        let nested = source.join("nested");
+        let target = root.path().join("target");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(source.join("root.txt"), b"root").unwrap();
+        fs::write(nested.join("child.txt"), b"child").unwrap();
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join("stale.txt"), b"stale").unwrap();
+        let expected =
+            fingerprint_claude_runtime_resource(source.to_string_lossy().into_owned()).unwrap();
+
+        let actual = replace_claude_runtime_resource_copy(
+            source.to_string_lossy().into_owned(),
+            target.to_string_lossy().into_owned(),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(actual, expected);
+        assert!(!target.join("stale.txt").exists());
+        assert_eq!(fs::read(target.join("root.txt")).unwrap(), b"root");
+        assert_eq!(
+            fs::read(target.join("nested").join("child.txt")).unwrap(),
+            b"child"
+        );
+    }
+
+    #[test]
+    fn replaces_runtime_copy_and_preserves_codex_fingerprint() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source.txt");
+        let target = root.path().join("target.txt");
+        fs::write(&source, b"new").unwrap();
+        fs::write(&target, b"old").unwrap();
+        let expected =
+            fingerprint_codex_runtime_resource(source.to_string_lossy().into_owned()).unwrap();
+
+        let actual = replace_codex_runtime_resource_copy(
+            source.to_string_lossy().into_owned(),
+            target.to_string_lossy().into_owned(),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(actual, expected);
+        assert_eq!(fs::read(target).unwrap(), b"new");
+    }
+
+    #[test]
+    fn replace_runtime_copy_reuses_known_fingerprint() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source.txt");
+        let target = root.path().join("target.txt");
+        fs::write(&source, b"new").unwrap();
+        fs::write(&target, b"old").unwrap();
+        let known = "sha256:known".to_string();
+
+        let actual = replace_codex_runtime_resource_copy(
+            source.to_string_lossy().into_owned(),
+            target.to_string_lossy().into_owned(),
+            Some(known.clone()),
+        )
+        .unwrap();
+
+        assert_eq!(actual, known);
+        assert_eq!(fs::read(target).unwrap(), b"new");
     }
 
     #[test]

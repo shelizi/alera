@@ -128,6 +128,60 @@ void main() {
         );
       });
 
+      test(
+        'reuses a precomputed fingerprint during resource reconcile',
+        () async {
+          final runtimeHome = await prepare();
+          const refreshedFingerprint = 'sha256:refreshed';
+          var fingerprintCalls = 0;
+          String? reconcilerFingerprint;
+          source
+            ..writeAsStringSync('changed content')
+            ..setLastModifiedSync(
+              modified.add(const Duration(milliseconds: 1)),
+            );
+
+          await _prepareRuntime(
+            agent,
+            home,
+            support,
+            resourceFingerprinter: (sourcePath) async {
+              fingerprintCalls += 1;
+              return refreshedFingerprint;
+            },
+            resourceReconciler:
+                ({
+                  required sourcePath,
+                  required targetPath,
+                  knownFingerprint,
+                }) async {
+                  reconcilerFingerprint = knownFingerprint;
+                  final type = FileSystemEntity.typeSync(
+                    targetPath,
+                    followLinks: false,
+                  );
+                  if (type == FileSystemEntityType.directory) {
+                    Directory(targetPath).deleteSync(recursive: true);
+                  } else if (type == FileSystemEntityType.link) {
+                    Link(targetPath).deleteSync();
+                  } else if (type != FileSystemEntityType.notFound) {
+                    File(targetPath).deleteSync();
+                  }
+                  File(sourcePath).copySync(targetPath);
+                  return knownFingerprint ?? refreshedFingerprint;
+                },
+          );
+
+          final marker = File(
+            p.join(runtimeHome, '.alera-copied-plugins.json'),
+          );
+          final decoded = jsonDecode(marker.readAsStringSync()) as Map;
+          expect(fingerprintCalls, 1);
+          expect(reconcilerFingerprint, refreshedFingerprint);
+          expect(decoded['sourceFingerprint'], refreshedFingerprint);
+        },
+      );
+
       test('uses an injected asynchronous resource deleter', () async {
         final runtimeHome = await prepare();
         final targetPath = p.join(runtimeHome, 'plugins');
@@ -172,6 +226,12 @@ Future<String> _prepareRuntime(
   })?
   resourceCopier,
   Future<void> Function(String path)? resourceDeleter,
+  Future<String> Function({
+    required String sourcePath,
+    required String targetPath,
+    String? knownFingerprint,
+  })?
+  resourceReconciler,
 }) async {
   void failLinks({required String sourcePath, required String targetPath}) {
     throw const FileSystemException('symlinks disabled');
@@ -189,6 +249,7 @@ Future<String> _prepareRuntime(
       resourceFingerprinter: resourceFingerprinter,
       resourceCopier: resourceCopier,
       resourceDeleter: resourceDeleter,
+      resourceReconciler: resourceReconciler,
     );
     await service.install(runtimeHome: runtimeHome);
     return runtimeHome.path;
@@ -202,6 +263,7 @@ Future<String> _prepareRuntime(
     resourceFingerprinter: resourceFingerprinter,
     resourceCopier: resourceCopier,
     resourceDeleter: resourceDeleter,
+    resourceReconciler: resourceReconciler,
     syncMacOSKeychainCredentials: false,
   ).prepareForTerminalLaunch();
   return preparation.runtimeHomePath;
