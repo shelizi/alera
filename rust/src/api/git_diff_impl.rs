@@ -9,10 +9,10 @@ use git2::{
 use super::{
     open_repo, GitChangeArea, GitChangeEntry, GitChangeGroup, GitChangeStatus, GitChangeTreeRow,
     GitChangeTreeRowKind, GitCommitChangeEntry, GitCommitCompareResult, GitCommitCompareStatus,
-    GitCommitCompareSummary, GitDiffFile, GitDiffFullFileSideBySideRow,
-    GitDiffFullFileSideBySideRowKind, GitDiffLine, GitDiffLineKind, GitDiffPage, GitDiffResult,
-    GitDiffSideBySideRow, GitDiffSideBySideRowKind, GitDiffWhitespaceMode, GitError, GitErrorKind,
-    GitStatusResult, GitSubmoduleStatus,
+    GitCommitCompareSummary, GitDiffFile, GitDiffFullFileRow, GitDiffFullFileRowKind,
+    GitDiffFullFileSideBySideRow, GitDiffFullFileSideBySideRowKind, GitDiffLine, GitDiffLineKind,
+    GitDiffPage, GitDiffResult, GitDiffSideBySideRow, GitDiffSideBySideRowKind,
+    GitDiffWhitespaceMode, GitError, GitErrorKind, GitStatusResult, GitSubmoduleStatus,
 };
 
 #[path = "git_diff_combined.rs"]
@@ -709,6 +709,100 @@ pub(super) fn side_by_side_projection(lines: &[GitDiffLine]) -> Vec<GitDiffSideB
     rows
 }
 
+pub(super) fn full_file_projection(lines: &[GitDiffLine]) -> Vec<GitDiffFullFileRow> {
+    let mut rows = Vec::with_capacity(lines.len().saturating_add(1));
+    let mut next_full_index = 0u32;
+    let mut old_line = None;
+    let mut new_line = None;
+
+    for (diff_line_index, line) in lines.iter().enumerate() {
+        let diff_line_index = diff_line_index as u32;
+        match line.kind {
+            GitDiffLineKind::Hunk => {
+                let Some((old_start, new_start)) = parse_hunk_raw_line_starts(&line.text) else {
+                    continue;
+                };
+                old_line = Some(old_start);
+                new_line = Some(new_start);
+                let target = new_start.saturating_sub(1).max(next_full_index);
+                if target != next_full_index {
+                    rows.push(full_file_range(next_full_index, Some(target)));
+                }
+                next_full_index = target;
+            }
+            GitDiffLineKind::Header => {}
+            GitDiffLineKind::Deletion => {
+                rows.push(GitDiffFullFileRow {
+                    kind: GitDiffFullFileRowKind::Line,
+                    start_index: None,
+                    end_index: None,
+                    full_line_index: None,
+                    diff_line_index: Some(diff_line_index),
+                    line_number: old_line,
+                });
+                if let Some(value) = old_line {
+                    old_line = Some(value.saturating_add(1));
+                }
+            }
+            GitDiffLineKind::Addition => {
+                let line_number = new_line.unwrap_or_else(|| next_full_index.saturating_add(1));
+                rows.push(GitDiffFullFileRow {
+                    kind: GitDiffFullFileRowKind::Line,
+                    start_index: None,
+                    end_index: None,
+                    full_line_index: Some(next_full_index),
+                    diff_line_index: Some(diff_line_index),
+                    line_number: Some(line_number),
+                });
+                next_full_index = next_full_index.saturating_add(1);
+                new_line = Some(line_number.saturating_add(1));
+            }
+            GitDiffLineKind::Context => {
+                let line_number = new_line.unwrap_or_else(|| next_full_index.saturating_add(1));
+                rows.push(GitDiffFullFileRow {
+                    kind: GitDiffFullFileRowKind::Line,
+                    start_index: None,
+                    end_index: None,
+                    full_line_index: Some(next_full_index),
+                    diff_line_index: Some(diff_line_index),
+                    line_number: Some(line_number),
+                });
+                if let Some(value) = old_line {
+                    old_line = Some(value.saturating_add(1));
+                }
+                next_full_index = next_full_index.saturating_add(1);
+                new_line = Some(line_number.saturating_add(1));
+            }
+        }
+    }
+
+    rows.push(full_file_range(next_full_index, None));
+    rows
+}
+
+fn full_file_range(start_index: u32, end_index: Option<u32>) -> GitDiffFullFileRow {
+    GitDiffFullFileRow {
+        kind: GitDiffFullFileRowKind::ContextRange,
+        start_index: Some(start_index),
+        end_index,
+        full_line_index: None,
+        diff_line_index: None,
+        line_number: None,
+    }
+}
+
+fn full_file_projection_for_status(
+    status: GitChangeStatus,
+    lines: &[GitDiffLine],
+) -> Vec<GitDiffFullFileRow> {
+    match status {
+        GitChangeStatus::Added | GitChangeStatus::Deleted | GitChangeStatus::Untracked => {
+            Vec::new()
+        }
+        _ => full_file_projection(lines),
+    }
+}
+
 pub(super) fn full_file_side_by_side_projection(
     lines: &[GitDiffLine],
 ) -> Vec<GitDiffFullFileSideBySideRow> {
@@ -981,6 +1075,7 @@ fn diff_file_for_area_with_whitespace(
                 return Ok(None);
             };
             let side_by_side_rows = side_by_side_projection(&rendered.lines);
+            let full_file_rows = full_file_projection_for_status(selection.status, &rendered.lines);
             let full_file_side_by_side_rows =
                 full_file_side_by_side_projection_for_status(selection.status, &rendered.lines);
             Ok(Some(GitDiffFile {
@@ -993,6 +1088,7 @@ fn diff_file_for_area_with_whitespace(
                 status: selection.status,
                 lines: rendered.lines,
                 side_by_side_rows,
+                full_file_rows,
                 full_file_side_by_side_rows,
                 added: Some(rendered.added),
                 removed: Some(rendered.removed),
@@ -1014,6 +1110,7 @@ fn untracked_placeholder_diff_file(path: String) -> GitDiffFile {
         status: GitChangeStatus::Untracked,
         lines: Vec::new(),
         side_by_side_rows: Vec::new(),
+        full_file_rows: Vec::new(),
         full_file_side_by_side_rows: Vec::new(),
         added: None,
         removed: Some(0),
@@ -1121,6 +1218,7 @@ fn commit_diff_file_for_path(
         return Ok(None);
     };
     let side_by_side_rows = side_by_side_projection(&rendered.lines);
+    let full_file_rows = full_file_projection_for_status(selection.status, &rendered.lines);
     let full_file_side_by_side_rows =
         full_file_side_by_side_projection_for_status(selection.status, &rendered.lines);
     Ok(Some(GitDiffFile {
@@ -1133,6 +1231,7 @@ fn commit_diff_file_for_path(
         status: selection.status,
         lines: rendered.lines,
         side_by_side_rows,
+        full_file_rows,
         full_file_side_by_side_rows,
         added: Some(rendered.added),
         removed: Some(rendered.removed),

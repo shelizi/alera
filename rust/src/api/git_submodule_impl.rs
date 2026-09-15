@@ -473,6 +473,7 @@ fn pointer_diff(
         status,
         lines,
         side_by_side_rows,
+        full_file_rows: Vec::new(),
         full_file_side_by_side_rows: Vec::new(),
         added,
         removed,

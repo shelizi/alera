@@ -103,6 +103,60 @@ class const _FullFileDiffLine({required final _FullFileLine line})
   }
 }
 
+List<_DiffRow>? _buildProjectedFullFileRows(
+  GitDiffFile file,
+  List<String> lines,
+) {
+  if (file.fullFileRows.isEmpty) return null;
+  final rows = <_DiffRow>[];
+  for (final projection in file.fullFileRows) {
+    switch (projection.kind) {
+      case GitDiffFullFileRowKind.contextRange:
+        final start = projection.startIndex;
+        if (start == null || start < 0 || start > lines.length) return null;
+        final end = projection.endIndex ?? lines.length;
+        if (end < start || end > lines.length) return null;
+        for (var index = start; index < end; index++) {
+          rows.add(
+            _FullFileDiffRow(
+              _FullFileLine(
+                lineNumber: index + 1,
+                text: lines[index],
+                kind: GitDiffLineKind.context,
+              ),
+            ),
+          );
+        }
+      case GitDiffFullFileRowKind.line:
+        final diffLineIndex = projection.diffLineIndex;
+        if (diffLineIndex == null ||
+            diffLineIndex < 0 ||
+            diffLineIndex >= file.lines.length) {
+          return null;
+        }
+        final diffLine = file.lines[diffLineIndex];
+        final fullLineIndex = projection.fullLineIndex;
+        final text =
+            diffLine.kind == GitDiffLineKind.context &&
+                fullLineIndex != null &&
+                fullLineIndex >= 0 &&
+                fullLineIndex < lines.length
+            ? lines[fullLineIndex]
+            : _extractContent(diffLine.text);
+        rows.add(
+          _FullFileDiffRow(
+            _FullFileLine(
+              lineNumber: projection.lineNumber,
+              text: text,
+              kind: diffLine.kind,
+            ),
+          ),
+        );
+    }
+  }
+  return rows;
+}
+
 List<_DiffRow>? _buildFullFileRows(
   GitDiffFile file,
   native.WorkspaceDecodedText? decoded,
@@ -123,6 +177,9 @@ List<_DiffRow>? _buildFullFileRows(
         ),
     ];
   }
+
+  final projectedRows = _buildProjectedFullFileRows(file, lines);
+  if (projectedRows != null) return projectedRows;
 
   final rows = <_DiffRow>[];
   var nextFullIndex = 0;

@@ -71,6 +71,16 @@ extension on RustGitBackend {
     };
   }
 
+  GitDiffFullFileRowKind _toDiffFullFileRowKind(
+    rust.GitDiffFullFileRowKind kind,
+  ) {
+    return switch (kind) {
+      rust.GitDiffFullFileRowKind.contextRange =>
+        GitDiffFullFileRowKind.contextRange,
+      rust.GitDiffFullFileRowKind.line => GitDiffFullFileRowKind.line,
+    };
+  }
+
   GitDiffFullFileSideBySideRowKind _toDiffFullFileSideBySideRowKind(
     rust.GitDiffFullFileSideBySideRowKind kind,
   ) {
@@ -153,6 +163,18 @@ extension on RustGitBackend {
               leftLineNumber: row.leftLineNumber,
               rightLineIndex: row.rightLineIndex,
               rightLineNumber: row.rightLineNumber,
+            ),
+          )
+          .toList(growable: false),
+      fullFileRows: file.fullFileRows
+          .map(
+            (row) => GitDiffFullFileRow(
+              kind: _toDiffFullFileRowKind(row.kind),
+              startIndex: row.startIndex,
+              endIndex: row.endIndex,
+              fullLineIndex: row.fullLineIndex,
+              diffLineIndex: row.diffLineIndex,
+              lineNumber: row.lineNumber,
             ),
           )
           .toList(growable: false),

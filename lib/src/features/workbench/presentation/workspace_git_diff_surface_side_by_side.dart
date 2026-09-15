@@ -264,6 +264,7 @@ GitDiffFile _fileWithDecodedDiffLines(
     linePreviewTruncated: file.linePreviewTruncated,
     sourceLabel: file.sourceLabel,
     sideBySideRows: file.sideBySideRows,
+    fullFileRows: file.fullFileRows,
     fullFileSideBySideRows: file.fullFileSideBySideRows,
   );
 }

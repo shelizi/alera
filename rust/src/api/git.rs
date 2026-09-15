@@ -185,6 +185,24 @@ pub struct GitDiffSideBySideRow {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GitDiffFullFileRowKind {
+    ContextRange,
+    Line,
+}
+
+/// Compact projection for read-only single-column full-file rendering.
+/// Full-file text remains in the decoded blob and diff text remains in `lines`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GitDiffFullFileRow {
+    pub kind: GitDiffFullFileRowKind,
+    pub start_index: Option<u32>,
+    pub end_index: Option<u32>,
+    pub full_line_index: Option<u32>,
+    pub diff_line_index: Option<u32>,
+    pub line_number: Option<u32>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GitDiffFullFileSideBySideRowKind {
     ContextRange,
     Pair,
@@ -212,6 +230,8 @@ pub struct GitDiffFile {
     pub lines: Vec<GitDiffLine>,
     /// Native alignment projection for diff-only side-by-side rendering.
     pub side_by_side_rows: Vec<GitDiffSideBySideRow>,
+    /// Compact native projection for read-only single-column full-file rendering.
+    pub full_file_rows: Vec<GitDiffFullFileRow>,
     /// Compact native alignment plan for read-only full-file side-by-side rendering.
     pub full_file_side_by_side_rows: Vec<GitDiffFullFileSideBySideRow>,
     pub added: Option<u32>,

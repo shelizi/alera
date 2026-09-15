@@ -539,6 +539,29 @@ void main() {
                 rightLineNumber: 34,
               ),
             ],
+            fullFileRows: <GitDiffFullFileRow>[
+              // Intentionally omit full-file line index 1 so the default
+              // single-column view proves it consumes the native plan.
+              GitDiffFullFileRow(
+                kind: .contextRange,
+                startIndex: 0,
+                endIndex: 1,
+              ),
+              GitDiffFullFileRow(kind: .line, diffLineIndex: 1, lineNumber: 3),
+              GitDiffFullFileRow(
+                kind: .line,
+                fullLineIndex: 2,
+                diffLineIndex: 2,
+                lineNumber: 3,
+              ),
+              GitDiffFullFileRow(
+                kind: .line,
+                fullLineIndex: 3,
+                diffLineIndex: 3,
+                lineNumber: 4,
+              ),
+              GitDiffFullFileRow(kind: .contextRange, startIndex: 4),
+            ],
             fullFileSideBySideRows: <GitDiffFullFileSideBySideRow>[
               // Intentionally omit full-file line index 1. The full-file
               // side-by-side assertion below proves this native plan is used
@@ -597,6 +620,7 @@ void main() {
     expect(find.text('line one'), findsOneWidget);
     expect(find.text('line five'), findsOneWidget);
     expect(find.text('old three'), findsOneWidget);
+    expect(find.text('line two'), findsNothing);
     expect(find.text('new three'), findsOneWidget);
     expect(find.text('Original'), findsNothing);
 
@@ -648,6 +672,7 @@ void main() {
     expect(find.text('Original'), findsNothing);
     expect(find.text('line one'), findsOneWidget);
     expect(find.text('line five'), findsOneWidget);
+    expect(find.text('line two'), findsNothing);
   });
   testWidgets('whitespace comparison selection is sticky and reloads diff', (
     tester,

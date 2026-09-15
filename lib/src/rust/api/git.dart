@@ -8,7 +8,7 @@ import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // These functions are ignored because they are not marked as `pub`: `delete_workspace_relative_path`, `discard_status_entries`, `entries_for_area_and_scope`, `from_git2`, `from_io`, `git_cli_in_path`, `git_signature`, `is_parent_discardable`, `is_submodule_worktree_only`, `new`, `open_repo`, `pathspec_string`, `reject_out_of_scope_staged_entries`, `reject_out_of_scope_stash_pop`, `reject_out_of_scope_tracked_changes`, `reject_tree_diff_out_of_scope`, `relative_path`, `remove_index_path_if_present`, `repo_path_is_in_scope`, `repo_relative_path_from_workspace`, `repo_relative_path`, `repo_workdir_path_exists`, `scoped_pathspecs`, `split_clone_destination`, `stage_selected_path`, `stage_status_entries`, `stash_oid`, `unstage_selected_path`, `unstage_status_entries`, `workspace_path_is_in_scope`, `workspace_repo_relative_path`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`
 
 Future<bool> isGitRepository({required String path}) =>
     RustLib.instance.api.crateApiGitIsGitRepository(path: path);
@@ -547,6 +547,9 @@ class GitDiffFile {
   /// Native alignment projection for diff-only side-by-side rendering.
   final List<GitDiffSideBySideRow> sideBySideRows;
 
+  /// Compact native projection for read-only single-column full-file rendering.
+  final List<GitDiffFullFileRow> fullFileRows;
+
   /// Compact native alignment plan for read-only full-file side-by-side rendering.
   final List<GitDiffFullFileSideBySideRow> fullFileSideBySideRows;
   final int? added;
@@ -564,6 +567,7 @@ class GitDiffFile {
     required this.status,
     required this.lines,
     required this.sideBySideRows,
+    required this.fullFileRows,
     required this.fullFileSideBySideRows,
     this.added,
     this.removed,
@@ -582,6 +586,7 @@ class GitDiffFile {
       status.hashCode ^
       lines.hashCode ^
       sideBySideRows.hashCode ^
+      fullFileRows.hashCode ^
       fullFileSideBySideRows.hashCode ^
       added.hashCode ^
       removed.hashCode ^
@@ -602,6 +607,7 @@ class GitDiffFile {
           status == other.status &&
           lines == other.lines &&
           sideBySideRows == other.sideBySideRows &&
+          fullFileRows == other.fullFileRows &&
           fullFileSideBySideRows == other.fullFileSideBySideRows &&
           added == other.added &&
           removed == other.removed &&
@@ -611,6 +617,49 @@ class GitDiffFile {
           truncated == other.truncated &&
           linePreviewTruncated == other.linePreviewTruncated;
 }
+
+/// Compact projection for read-only single-column full-file rendering.
+/// Full-file text remains in the decoded blob and diff text remains in `lines`.
+class GitDiffFullFileRow {
+  final GitDiffFullFileRowKind kind;
+  final int? startIndex;
+  final int? endIndex;
+  final int? fullLineIndex;
+  final int? diffLineIndex;
+  final int? lineNumber;
+
+  const GitDiffFullFileRow({
+    required this.kind,
+    this.startIndex,
+    this.endIndex,
+    this.fullLineIndex,
+    this.diffLineIndex,
+    this.lineNumber,
+  });
+
+  @override
+  int get hashCode =>
+      kind.hashCode ^
+      startIndex.hashCode ^
+      endIndex.hashCode ^
+      fullLineIndex.hashCode ^
+      diffLineIndex.hashCode ^
+      lineNumber.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is GitDiffFullFileRow &&
+          runtimeType == other.runtimeType &&
+          kind == other.kind &&
+          startIndex == other.startIndex &&
+          endIndex == other.endIndex &&
+          fullLineIndex == other.fullLineIndex &&
+          diffLineIndex == other.diffLineIndex &&
+          lineNumber == other.lineNumber;
+}
+
+enum GitDiffFullFileRowKind { contextRange, line }
 
 /// Compact alignment plan for read-only full-file side-by-side rendering.
 /// Full-file text stays in the separately decoded old/new blobs; this plan only
