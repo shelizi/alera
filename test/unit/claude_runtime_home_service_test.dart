@@ -233,6 +233,13 @@ void main() {
         p.join(preparation.runtimeHomePath, 'settings.json'),
       );
       expect(_managedCommandCount(runtimeHooks, 'alera-claude-hook.cmd'), 6);
+      final promptCommand = _commandsFor(
+        runtimeHooks,
+        'UserPromptSubmit',
+      ).single;
+      expect(promptCommand, contains("MSYS2_ARG_CONV_EXCL='*'"));
+      expect(promptCommand, contains('cmd.exe /d /s /c'));
+      expect(promptCommand, isNot(startsWith('cmd /d /s /c')));
       expect(
         File(
           p.join(home.path, '.alera', 'agent-hooks', 'alera-claude-hook.cmd'),

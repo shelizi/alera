@@ -110,7 +110,7 @@ pub(super) const CLAUDE_HOOK_EVENTS: &[(&str, Option<&str>)] = &[
 pub(super) fn install_claude_hooks_into(settings: &mut Map<String, Value>, script: &Path) {
     let hooks = object_field(settings, "hooks");
     for (event, matcher) in CLAUDE_HOOK_EVENTS {
-        let command = managed_command(script, "claude", event);
+        let command = claude_managed_command(script, event);
         let mut definitions = clean_managed_definitions(hooks.remove(*event));
         definitions.push(managed_hook_definition(*matcher, &command));
         hooks.insert((*event).to_string(), Value::Array(definitions));
@@ -256,24 +256,40 @@ pub(super) fn managed_hook_definition(matcher: Option<&str>, command: &str) -> V
     Value::Object(definition)
 }
 
+fn claude_managed_command(script: &Path, event: &str) -> String {
+    #[cfg(windows)]
+    {
+        git_bash_windows_managed_command(script, "claude", event)
+    }
+    #[cfg(not(windows))]
+    {
+        managed_command(script, "claude", event)
+    }
+}
+
 fn devin_managed_command(script: &Path, event: &str) -> String {
     #[cfg(windows)]
     {
-        // Devin launches hook commands through Git Bash on Windows. Keep the
-        // shared Windows cmd hook, but disable MSYS argv conversion before
-        // entering cmd.exe so /d and /s remain cmd switches.
-        let command = format!("call \"{}\"", script.display());
-        format!(
-            "MSYS2_ARG_CONV_EXCL='*' ALERA_AGENT_TYPE={} ALERA_AGENT_HOOK_EVENT={} cmd.exe /d /s /c {}",
-            sh_quote("devin"),
-            sh_quote(event),
-            sh_quote(&command),
-        )
+        git_bash_windows_managed_command(script, "devin", event)
     }
     #[cfg(not(windows))]
     {
         managed_command(script, "devin", event)
     }
+}
+
+#[cfg(windows)]
+fn git_bash_windows_managed_command(script: &Path, agent: &str, event: &str) -> String {
+    // Claude Code and Devin launch shell-form hooks through Git Bash on Windows.
+    // Disable MSYS argv conversion before entering cmd.exe so /d and /s remain
+    // cmd switches instead of being rewritten as POSIX-looking paths.
+    let command = format!("call \"{}\"", script.display());
+    format!(
+        "MSYS2_ARG_CONV_EXCL='*' ALERA_AGENT_TYPE={} ALERA_AGENT_HOOK_EVENT={} cmd.exe /d /s /c {}",
+        sh_quote(agent),
+        sh_quote(event),
+        sh_quote(&command),
+    )
 }
 
 pub(super) fn managed_command(script: &Path, agent: &str, event: &str) -> String {

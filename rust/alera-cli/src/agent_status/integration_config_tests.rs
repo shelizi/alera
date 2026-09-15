@@ -35,6 +35,25 @@ fn keeps_the_matcher_key_for_tool_scoped_events() {
     assert_eq!(definition["matcher"], json!("*"));
 }
 
+#[cfg(windows)]
+#[test]
+fn claude_windows_hooks_bridge_git_bash_into_cmd() {
+    let mut config = Map::new();
+    install_claude_hooks_into(
+        &mut config,
+        Path::new(r"C:\Users\u\Alera Hooks\alera-runtime-agent-hook.cmd"),
+    );
+
+    let command = config["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"]
+        .as_str()
+        .expect("managed Claude command");
+
+    assert_eq!(
+        command,
+        "MSYS2_ARG_CONV_EXCL='*' ALERA_AGENT_TYPE='claude' ALERA_AGENT_HOOK_EVENT='UserPromptSubmit' cmd.exe /d /s /c 'call \"C:\\Users\\u\\Alera Hooks\\alera-runtime-agent-hook.cmd\"'"
+    );
+}
+
 #[test]
 fn devin_hooks_preserve_user_definitions_and_omit_matchers() {
     let mut config = Map::from_iter([

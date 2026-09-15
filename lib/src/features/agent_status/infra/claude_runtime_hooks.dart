@@ -222,8 +222,10 @@ extension _ClaudeRuntimeHooks on ClaudeRuntimeHomeService {
             'ALERA_AGENT_HOOK_EVENT=${_shQuote(event.eventName)} '
             '/bin/sh ${_shQuote(descriptor.scriptPath)}; fi',
       ManagedAgentHookPlatform.windows =>
-        'cmd /d /s /c "if exist ""${descriptor.scriptPath}"" '
-            '(set ALERA_AGENT_HOOK_EVENT=${event.eventName}&& call ""${descriptor.scriptPath}"")"',
+        "MSYS2_ARG_CONV_EXCL='*' "
+            'ALERA_AGENT_HOOK_EVENT=${_shQuote(event.eventName)} '
+            'cmd.exe /d /s /c '
+            "${_shQuote('if exist \"${descriptor.scriptPath}\" call \"${descriptor.scriptPath}\"')}",
     };
   }
 
