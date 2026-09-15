@@ -87,6 +87,18 @@ class _MaterializedDiffRowSpan implements _DiffRowSpan {
   _DiffRow rowAt(int index) => rows[index];
 }
 
+class _DiffLineRowSpan implements _DiffRowSpan {
+  const _DiffLineRowSpan(this.lines);
+
+  final List<GitDiffLine> lines;
+
+  @override
+  int get length => lines.length;
+
+  @override
+  _DiffRow rowAt(int index) => _DiffLineRow(lines[index]);
+}
+
 class _DiffRowsBuilder {
   final List<_DiffRowSpan> _spans = <_DiffRowSpan>[];
   final List<_DiffRow> _pending = <_DiffRow>[];
@@ -254,9 +266,10 @@ class _DiffRows {
             ),
           );
         } else {
-          for (final line in _decodedDiffLines(file, fullFileContents[file])) {
-            items.add(_DiffLineRow(line));
-          }
+          final lines = _decodedDiffLines(file, fullFileContents[file]);
+          items.addSpans(<_DiffRowSpan>[
+            if (lines.isNotEmpty) _DiffLineRowSpan(lines),
+          ]);
         }
         if (file.linePreviewTruncated) {
           items.add(const _BannerRow('Diff line preview truncated.'));
