@@ -1,3 +1,4 @@
+use super::git_diff_impl::full_file_side_by_side_projection;
 use super::*;
 
 #[test]
@@ -96,6 +97,61 @@ fn git_diff_projects_side_by_side_rows_without_duplicating_line_text() {
         left.is_none()
             && matches!(right, Some((Some(4), GitDiffLineKind::Addition, text)) if *text == "+new three")
     }));
+}
+
+#[test]
+fn git_diff_projects_full_file_side_by_side_alignment_plan() {
+    let lines = vec![
+        GitDiffLine {
+            text: "@@ -3,2 +3,2 @@".to_string(),
+            kind: GitDiffLineKind::Hunk,
+        },
+        GitDiffLine {
+            text: "-old three".to_string(),
+            kind: GitDiffLineKind::Deletion,
+        },
+        GitDiffLine {
+            text: "+new three".to_string(),
+            kind: GitDiffLineKind::Addition,
+        },
+        GitDiffLine {
+            text: " line four".to_string(),
+            kind: GitDiffLineKind::Context,
+        },
+    ];
+
+    let projection = full_file_side_by_side_projection(&lines);
+
+    assert_eq!(projection.len(), 4);
+    assert_eq!(
+        projection[0].kind,
+        GitDiffFullFileSideBySideRowKind::ContextRange
+    );
+    assert_eq!(projection[0].old_start_index, Some(0));
+    assert_eq!(projection[0].old_end_index, Some(2));
+    assert_eq!(projection[0].new_start_index, Some(0));
+    assert_eq!(projection[0].new_end_index, Some(2));
+
+    assert_eq!(projection[1].kind, GitDiffFullFileSideBySideRowKind::Pair);
+    assert_eq!(projection[1].old_start_index, Some(2));
+    assert_eq!(projection[1].new_start_index, Some(2));
+    assert_eq!(projection[1].left_diff_line_index, Some(1));
+    assert_eq!(projection[1].right_diff_line_index, Some(2));
+
+    assert_eq!(projection[2].kind, GitDiffFullFileSideBySideRowKind::Pair);
+    assert_eq!(projection[2].old_start_index, Some(3));
+    assert_eq!(projection[2].new_start_index, Some(3));
+    assert_eq!(projection[2].left_diff_line_index, Some(3));
+    assert_eq!(projection[2].right_diff_line_index, Some(3));
+
+    assert_eq!(
+        projection[3].kind,
+        GitDiffFullFileSideBySideRowKind::ContextRange
+    );
+    assert_eq!(projection[3].old_start_index, Some(4));
+    assert_eq!(projection[3].old_end_index, None);
+    assert_eq!(projection[3].new_start_index, Some(4));
+    assert_eq!(projection[3].new_end_index, None);
 }
 
 #[test]

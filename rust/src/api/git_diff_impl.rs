@@ -9,7 +9,8 @@ use git2::{
 use super::{
     open_repo, GitChangeArea, GitChangeEntry, GitChangeGroup, GitChangeStatus, GitChangeTreeRow,
     GitChangeTreeRowKind, GitCommitChangeEntry, GitCommitCompareResult, GitCommitCompareStatus,
-    GitCommitCompareSummary, GitDiffFile, GitDiffLine, GitDiffLineKind, GitDiffPage, GitDiffResult,
+    GitCommitCompareSummary, GitDiffFile, GitDiffFullFileSideBySideRow,
+    GitDiffFullFileSideBySideRowKind, GitDiffLine, GitDiffLineKind, GitDiffPage, GitDiffResult,
     GitDiffSideBySideRow, GitDiffSideBySideRowKind, GitDiffWhitespaceMode, GitError, GitErrorKind,
     GitStatusResult, GitSubmoduleStatus,
 };
@@ -708,6 +709,154 @@ pub(super) fn side_by_side_projection(lines: &[GitDiffLine]) -> Vec<GitDiffSideB
     rows
 }
 
+pub(super) fn full_file_side_by_side_projection(
+    lines: &[GitDiffLine],
+) -> Vec<GitDiffFullFileSideBySideRow> {
+    let mut rows = Vec::with_capacity(lines.len().saturating_add(1));
+    let mut old_index = 0u32;
+    let mut new_index = 0u32;
+    let mut pending_deletions = Vec::<(u32, u32)>::new();
+    let mut pending_additions = Vec::<(u32, u32)>::new();
+
+    for (diff_line_index, line) in lines.iter().enumerate() {
+        let diff_line_index = diff_line_index as u32;
+        match line.kind {
+            GitDiffLineKind::Hunk => {
+                flush_full_file_side_by_side_changes(
+                    &mut rows,
+                    &mut pending_deletions,
+                    &mut pending_additions,
+                );
+                let Some((old_start, new_start)) = parse_hunk_raw_line_starts(&line.text) else {
+                    continue;
+                };
+                let old_target = old_start.saturating_sub(1).max(old_index);
+                let new_target = new_start.saturating_sub(1).max(new_index);
+                if old_target != old_index || new_target != new_index {
+                    rows.push(full_file_context_range(
+                        old_index,
+                        Some(old_target),
+                        new_index,
+                        Some(new_target),
+                    ));
+                }
+                old_index = old_target;
+                new_index = new_target;
+            }
+            GitDiffLineKind::Header => {}
+            GitDiffLineKind::Deletion => {
+                if !pending_additions.is_empty() {
+                    flush_full_file_side_by_side_changes(
+                        &mut rows,
+                        &mut pending_deletions,
+                        &mut pending_additions,
+                    );
+                }
+                pending_deletions.push((old_index, diff_line_index));
+                old_index = old_index.saturating_add(1);
+            }
+            GitDiffLineKind::Addition => {
+                pending_additions.push((new_index, diff_line_index));
+                new_index = new_index.saturating_add(1);
+            }
+            GitDiffLineKind::Context => {
+                flush_full_file_side_by_side_changes(
+                    &mut rows,
+                    &mut pending_deletions,
+                    &mut pending_additions,
+                );
+                rows.push(GitDiffFullFileSideBySideRow {
+                    kind: GitDiffFullFileSideBySideRowKind::Pair,
+                    old_start_index: Some(old_index),
+                    old_end_index: None,
+                    new_start_index: Some(new_index),
+                    new_end_index: None,
+                    left_diff_line_index: Some(diff_line_index),
+                    right_diff_line_index: Some(diff_line_index),
+                });
+                old_index = old_index.saturating_add(1);
+                new_index = new_index.saturating_add(1);
+            }
+        }
+    }
+
+    flush_full_file_side_by_side_changes(&mut rows, &mut pending_deletions, &mut pending_additions);
+    rows.push(full_file_context_range(old_index, None, new_index, None));
+    rows
+}
+
+fn full_file_context_range(
+    old_start_index: u32,
+    old_end_index: Option<u32>,
+    new_start_index: u32,
+    new_end_index: Option<u32>,
+) -> GitDiffFullFileSideBySideRow {
+    GitDiffFullFileSideBySideRow {
+        kind: GitDiffFullFileSideBySideRowKind::ContextRange,
+        old_start_index: Some(old_start_index),
+        old_end_index,
+        new_start_index: Some(new_start_index),
+        new_end_index,
+        left_diff_line_index: None,
+        right_diff_line_index: None,
+    }
+}
+
+fn flush_full_file_side_by_side_changes(
+    rows: &mut Vec<GitDiffFullFileSideBySideRow>,
+    pending_deletions: &mut Vec<(u32, u32)>,
+    pending_additions: &mut Vec<(u32, u32)>,
+) {
+    if pending_deletions.is_empty() && pending_additions.is_empty() {
+        return;
+    }
+    let count = pending_deletions.len().max(pending_additions.len());
+    for index in 0..count {
+        let left = pending_deletions.get(index).copied();
+        let right = pending_additions.get(index).copied();
+        rows.push(GitDiffFullFileSideBySideRow {
+            kind: GitDiffFullFileSideBySideRowKind::Pair,
+            old_start_index: left.map(|(full_index, _)| full_index),
+            old_end_index: None,
+            new_start_index: right.map(|(full_index, _)| full_index),
+            new_end_index: None,
+            left_diff_line_index: left.map(|(_, diff_index)| diff_index),
+            right_diff_line_index: right.map(|(_, diff_index)| diff_index),
+        });
+    }
+    pending_deletions.clear();
+    pending_additions.clear();
+}
+
+fn parse_hunk_raw_line_starts(text: &str) -> Option<(u32, u32)> {
+    let mut parts = text.strip_prefix("@@")?.trim_start().split_whitespace();
+    Some((
+        parse_hunk_raw_side_start(parts.next()?, '-')?,
+        parse_hunk_raw_side_start(parts.next()?, '+')?,
+    ))
+}
+
+fn parse_hunk_raw_side_start(token: &str, prefix: char) -> Option<u32> {
+    token
+        .strip_prefix(prefix)?
+        .split(',')
+        .next()?
+        .parse::<u32>()
+        .ok()
+}
+
+fn full_file_side_by_side_projection_for_status(
+    status: GitChangeStatus,
+    lines: &[GitDiffLine],
+) -> Vec<GitDiffFullFileSideBySideRow> {
+    match status {
+        GitChangeStatus::Added | GitChangeStatus::Deleted | GitChangeStatus::Untracked => {
+            Vec::new()
+        }
+        _ => full_file_side_by_side_projection(lines),
+    }
+}
+
 fn passthrough_side_by_side_row(line_index: u32) -> GitDiffSideBySideRow {
     GitDiffSideBySideRow {
         kind: GitDiffSideBySideRowKind::Passthrough,
@@ -832,6 +981,8 @@ fn diff_file_for_area_with_whitespace(
                 return Ok(None);
             };
             let side_by_side_rows = side_by_side_projection(&rendered.lines);
+            let full_file_side_by_side_rows =
+                full_file_side_by_side_projection_for_status(selection.status, &rendered.lines);
             Ok(Some(GitDiffFile {
                 path,
                 old_path: selection
@@ -842,6 +993,7 @@ fn diff_file_for_area_with_whitespace(
                 status: selection.status,
                 lines: rendered.lines,
                 side_by_side_rows,
+                full_file_side_by_side_rows,
                 added: Some(rendered.added),
                 removed: Some(rendered.removed),
                 is_binary: rendered.is_binary,
@@ -862,6 +1014,7 @@ fn untracked_placeholder_diff_file(path: String) -> GitDiffFile {
         status: GitChangeStatus::Untracked,
         lines: Vec::new(),
         side_by_side_rows: Vec::new(),
+        full_file_side_by_side_rows: Vec::new(),
         added: None,
         removed: Some(0),
         is_binary: false,
@@ -968,6 +1121,8 @@ fn commit_diff_file_for_path(
         return Ok(None);
     };
     let side_by_side_rows = side_by_side_projection(&rendered.lines);
+    let full_file_side_by_side_rows =
+        full_file_side_by_side_projection_for_status(selection.status, &rendered.lines);
     Ok(Some(GitDiffFile {
         path,
         old_path: selection
@@ -978,6 +1133,7 @@ fn commit_diff_file_for_path(
         status: selection.status,
         lines: rendered.lines,
         side_by_side_rows,
+        full_file_side_by_side_rows,
         added: Some(rendered.added),
         removed: Some(rendered.removed),
         is_binary: rendered.is_binary,

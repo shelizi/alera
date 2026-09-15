@@ -222,6 +222,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   GitDiffFile dco_decode_git_diff_file(dynamic raw);
 
   @protected
+  GitDiffFullFileSideBySideRow dco_decode_git_diff_full_file_side_by_side_row(
+    dynamic raw,
+  );
+
+  @protected
+  GitDiffFullFileSideBySideRowKind
+  dco_decode_git_diff_full_file_side_by_side_row_kind(dynamic raw);
+
+  @protected
   GitDiffLine dco_decode_git_diff_line(dynamic raw);
 
   @protected
@@ -346,6 +355,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<GitDiffFile> dco_decode_list_git_diff_file(dynamic raw);
+
+  @protected
+  List<GitDiffFullFileSideBySideRow>
+  dco_decode_list_git_diff_full_file_side_by_side_row(dynamic raw);
 
   @protected
   List<GitDiffLine> dco_decode_list_git_diff_line(dynamic raw);
@@ -903,6 +916,17 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   GitDiffFile sse_decode_git_diff_file(SseDeserializer deserializer);
 
   @protected
+  GitDiffFullFileSideBySideRow sse_decode_git_diff_full_file_side_by_side_row(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  GitDiffFullFileSideBySideRowKind
+  sse_decode_git_diff_full_file_side_by_side_row_kind(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   GitDiffLine sse_decode_git_diff_line(SseDeserializer deserializer);
 
   @protected
@@ -1061,6 +1085,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<GitDiffFile> sse_decode_list_git_diff_file(SseDeserializer deserializer);
+
+  @protected
+  List<GitDiffFullFileSideBySideRow>
+  sse_decode_list_git_diff_full_file_side_by_side_row(
+    SseDeserializer deserializer,
+  );
 
   @protected
   List<GitDiffLine> sse_decode_list_git_diff_line(SseDeserializer deserializer);
@@ -1767,6 +1797,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_git_diff_file(GitDiffFile self, SseSerializer serializer);
 
   @protected
+  void sse_encode_git_diff_full_file_side_by_side_row(
+    GitDiffFullFileSideBySideRow self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_git_diff_full_file_side_by_side_row_kind(
+    GitDiffFullFileSideBySideRowKind self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_git_diff_line(GitDiffLine self, SseSerializer serializer);
 
   @protected
@@ -1967,6 +2009,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_list_git_diff_file(
     List<GitDiffFile> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_git_diff_full_file_side_by_side_row(
+    List<GitDiffFullFileSideBySideRow> self,
     SseSerializer serializer,
   );
 

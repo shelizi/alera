@@ -539,6 +539,37 @@ void main() {
                 rightLineNumber: 34,
               ),
             ],
+            fullFileSideBySideRows: <GitDiffFullFileSideBySideRow>[
+              // Intentionally omit full-file line index 1. The full-file
+              // side-by-side assertion below proves this native plan is used
+              // instead of rebuilding alignment from hunks on the UI isolate.
+              GitDiffFullFileSideBySideRow(
+                kind: .contextRange,
+                oldStartIndex: 0,
+                oldEndIndex: 1,
+                newStartIndex: 0,
+                newEndIndex: 1,
+              ),
+              GitDiffFullFileSideBySideRow(
+                kind: .pair,
+                oldStartIndex: 2,
+                newStartIndex: 2,
+                leftDiffLineIndex: 1,
+                rightDiffLineIndex: 2,
+              ),
+              GitDiffFullFileSideBySideRow(
+                kind: .pair,
+                oldStartIndex: 3,
+                newStartIndex: 3,
+                leftDiffLineIndex: 3,
+                rightDiffLineIndex: 3,
+              ),
+              GitDiffFullFileSideBySideRow(
+                kind: .contextRange,
+                oldStartIndex: 4,
+                newStartIndex: 4,
+              ),
+            ],
             added: 1,
             removed: 1,
           ),
@@ -605,6 +636,7 @@ void main() {
     expect(find.text('Modified'), findsOneWidget);
     expect(find.text('line one'), findsNWidgets(2));
     expect(find.text('line five'), findsNWidgets(2));
+    expect(find.text('line two'), findsNothing);
     expect(find.text('old three'), findsOneWidget);
     expect(find.text('new three'), findsOneWidget);
 

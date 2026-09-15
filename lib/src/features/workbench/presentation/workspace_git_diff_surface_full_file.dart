@@ -203,6 +203,115 @@ List<_DiffRow>? _buildFullFileRows(
   return rows;
 }
 
+List<_DiffRow>? _buildProjectedFullFileSideBySideRows(
+  GitDiffFile file,
+  List<String> oldLines,
+  List<String> newLines, {
+  required String oldLabel,
+  required String newLabel,
+}) {
+  if (file.fullFileSideBySideRows.isEmpty) return null;
+  final rows = <_DiffRow>[
+    _SideBySideHeaderRow(oldTitle: oldLabel, newTitle: newLabel),
+  ];
+
+  for (final projection in file.fullFileSideBySideRows) {
+    switch (projection.kind) {
+      case GitDiffFullFileSideBySideRowKind.contextRange:
+        final oldStart = projection.oldStartIndex;
+        final newStart = projection.newStartIndex;
+        if (oldStart == null || newStart == null) return null;
+        final oldEnd = math.min(
+          projection.oldEndIndex ?? oldLines.length,
+          oldLines.length,
+        );
+        final newEnd = math.min(
+          projection.newEndIndex ?? newLines.length,
+          newLines.length,
+        );
+        if (oldEnd < oldStart || newEnd < newStart) return null;
+        var oldIndex = math.min(oldStart, oldLines.length);
+        var newIndex = math.min(newStart, newLines.length);
+        while (oldIndex < oldEnd || newIndex < newEnd) {
+          final hasOld = oldIndex < oldEnd;
+          final hasNew = newIndex < newEnd;
+          rows.add(
+            _SideBySideDiffRow(
+              left: hasOld
+                  ? _DiffSideLine(
+                      lineNumber: oldIndex + 1,
+                      text: oldLines[oldIndex],
+                      kind: GitDiffLineKind.context,
+                    )
+                  : null,
+              right: hasNew
+                  ? _DiffSideLine(
+                      lineNumber: newIndex + 1,
+                      text: newLines[newIndex],
+                      kind: GitDiffLineKind.context,
+                    )
+                  : null,
+            ),
+          );
+          if (hasOld) oldIndex += 1;
+          if (hasNew) newIndex += 1;
+        }
+      case GitDiffFullFileSideBySideRowKind.pair:
+        final left = _projectedFullFileSideLine(
+          file: file,
+          fullLines: oldLines,
+          fullIndex: projection.oldStartIndex,
+          diffLineIndex: projection.leftDiffLineIndex,
+        );
+        final right = _projectedFullFileSideLine(
+          file: file,
+          fullLines: newLines,
+          fullIndex: projection.newStartIndex,
+          diffLineIndex: projection.rightDiffLineIndex,
+        );
+        if ((projection.oldStartIndex != null ||
+                projection.leftDiffLineIndex != null) &&
+            left == null) {
+          return null;
+        }
+        if ((projection.newStartIndex != null ||
+                projection.rightDiffLineIndex != null) &&
+            right == null) {
+          return null;
+        }
+        rows.add(_SideBySideDiffRow(left: left, right: right));
+    }
+  }
+  return rows;
+}
+
+_DiffSideLine? _projectedFullFileSideLine({
+  required GitDiffFile file,
+  required List<String> fullLines,
+  required int? fullIndex,
+  required int? diffLineIndex,
+}) {
+  if (fullIndex == null && diffLineIndex == null) return null;
+  GitDiffLine? diffLine;
+  if (diffLineIndex != null) {
+    if (diffLineIndex < 0 || diffLineIndex >= file.lines.length) return null;
+    diffLine = file.lines[diffLineIndex];
+  }
+  if (fullIndex != null && fullIndex >= 0 && fullIndex < fullLines.length) {
+    return _DiffSideLine(
+      lineNumber: fullIndex + 1,
+      text: fullLines[fullIndex],
+      kind: diffLine?.kind ?? GitDiffLineKind.context,
+    );
+  }
+  if (diffLine == null) return null;
+  return _DiffSideLine(
+    lineNumber: null,
+    text: _extractContent(diffLine.text),
+    kind: diffLine.kind,
+  );
+}
+
 List<_DiffRow>? _buildFullFileSideBySideRows(
   GitDiffFile file,
   _FullFileContents? contents,
@@ -253,6 +362,14 @@ List<_DiffRow>? _buildFullFileSideBySideRows(
     ];
   }
   if (oldLines == null || newLines == null) return null;
+  final projectedRows = _buildProjectedFullFileSideBySideRows(
+    file,
+    oldLines,
+    newLines,
+    oldLabel: oldLabel,
+    newLabel: newLabel,
+  );
+  if (projectedRows != null) return projectedRows;
 
   final rows = <_DiffRow>[
     _SideBySideHeaderRow(oldTitle: oldLabel, newTitle: newLabel),

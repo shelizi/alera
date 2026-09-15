@@ -43,6 +43,18 @@ class const GitDiffSideBySideRow({
   final int? rightLineNumber,
 });
 
+enum GitDiffFullFileSideBySideRowKind { contextRange, pair }
+
+class const GitDiffFullFileSideBySideRow({
+  required final GitDiffFullFileSideBySideRowKind kind,
+  final int? oldStartIndex,
+  final int? oldEndIndex,
+  final int? newStartIndex,
+  final int? newEndIndex,
+  final int? leftDiffLineIndex,
+  final int? rightDiffLineIndex,
+});
+
 enum GitDiffWhitespaceMode {
   normal,
   ignoreEol,
@@ -119,6 +131,7 @@ class const GitDiffFile({
   required final GitChangeStatus status,
   final List<GitDiffLine> lines = const [],
   final List<GitDiffSideBySideRow> sideBySideRows = const [],
+  final List<GitDiffFullFileSideBySideRow> fullFileSideBySideRows = const [],
   final String? oldPath,
   final int? added,
   final int? removed,

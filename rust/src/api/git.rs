@@ -184,6 +184,26 @@ pub struct GitDiffSideBySideRow {
     pub right_line_number: Option<u32>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GitDiffFullFileSideBySideRowKind {
+    ContextRange,
+    Pair,
+}
+
+/// Compact alignment plan for read-only full-file side-by-side rendering.
+/// Full-file text stays in the separately decoded old/new blobs; this plan only
+/// carries line indices and fallback diff-line indices.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GitDiffFullFileSideBySideRow {
+    pub kind: GitDiffFullFileSideBySideRowKind,
+    pub old_start_index: Option<u32>,
+    pub old_end_index: Option<u32>,
+    pub new_start_index: Option<u32>,
+    pub new_end_index: Option<u32>,
+    pub left_diff_line_index: Option<u32>,
+    pub right_diff_line_index: Option<u32>,
+}
+
 pub struct GitDiffFile {
     pub path: String,
     pub old_path: Option<String>,
@@ -192,6 +212,8 @@ pub struct GitDiffFile {
     pub lines: Vec<GitDiffLine>,
     /// Native alignment projection for diff-only side-by-side rendering.
     pub side_by_side_rows: Vec<GitDiffSideBySideRow>,
+    /// Compact native alignment plan for read-only full-file side-by-side rendering.
+    pub full_file_side_by_side_rows: Vec<GitDiffFullFileSideBySideRow>,
     pub added: Option<u32>,
     pub removed: Option<u32>,
     pub is_binary: bool,

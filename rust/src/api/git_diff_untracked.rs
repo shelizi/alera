@@ -49,6 +49,7 @@ pub(super) fn untracked_diff_file(
         status: GitChangeStatus::Untracked,
         lines,
         side_by_side_rows,
+        full_file_side_by_side_rows: Vec::new(),
         added: untracked.added,
         removed: Some(0),
         is_binary: untracked.is_binary,
