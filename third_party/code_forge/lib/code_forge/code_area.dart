@@ -6823,7 +6823,19 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
 
     final columnIndex = cursorOffset - lineStartOffset;
     final lineY = _getLineYOffset(lineIndex, hasActiveFolds);
-    final lineText = controller.getLineText(lineIndex);
+    if (!isRTL && columnIndex == 0) {
+      final result = (
+        lineIndex: lineIndex,
+        columnIndex: columnIndex,
+        offset: Offset(0, lineY + _getTotalVirtualOffset(lineIndex)),
+        height: _lineHeight,
+      );
+      _caretInfoCache[cursorOffset] = result;
+      return result;
+    }
+
+    final cachedLineText = _lineTextCache[lineIndex];
+    final lineText = cachedLineText ?? controller.getLineText(lineIndex);
     final contentWidth =
         size.width - _gutterWidth - (innerPadding?.horizontal ?? 0);
     final paragraphWidth = lineWrap
@@ -6840,7 +6852,7 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     ui.Paragraph? para;
     if (isRTL || (lineText.isNotEmpty && clampedCol > 0)) {
       if (_paragraphCache.containsKey(lineIndex) &&
-          _lineTextCache[lineIndex] == lineText &&
+          cachedLineText != null &&
           !isRTL) {
         para = _paragraphCache[lineIndex]!;
       } else {
@@ -6849,7 +6861,11 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
           lineText,
           width: paragraphWidth,
         );
+        if (_largeFilePerformanceMode && !_lineWrap && !isRTL) {
+          _paragraphCache[lineIndex] = para;
+        }
       }
+      _lineTextCache[lineIndex] = lineText;
     }
 
     if (isRTL) {
@@ -6941,7 +6957,19 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     final lineStartOffset = controller.getLineStartOffset(lineIndex);
     final columnIndex = cursorOffset - lineStartOffset;
     final lineY = _getLineYOffset(lineIndex, hasActiveFolds);
-    final lineText = controller.getLineText(lineIndex);
+    if (!isRTL && columnIndex == 0) {
+      final result = (
+        lineIndex: lineIndex,
+        columnIndex: columnIndex,
+        offset: Offset(0, lineY + _getTotalVirtualOffset(lineIndex)),
+        height: _lineHeight,
+      );
+      _caretInfoCache[cursorOffset] = result;
+      return result;
+    }
+
+    final cachedLineText = _lineTextCache[lineIndex];
+    final lineText = cachedLineText ?? controller.getLineText(lineIndex);
     final contentWidth =
         size.width - _gutterWidth - (innerPadding?.horizontal ?? 0);
     final paragraphWidth = lineWrap
@@ -6959,7 +6987,7 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     ui.Paragraph? para;
     if (isRTL || (lineText.isNotEmpty && clampedCol > 0)) {
       if (_paragraphCache.containsKey(lineIndex) &&
-          _lineTextCache[lineIndex] == lineText &&
+          cachedLineText != null &&
           !isRTL) {
         para = _paragraphCache[lineIndex]!;
       } else {
@@ -6968,7 +6996,11 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
           lineText,
           width: paragraphWidth,
         );
+        if (_largeFilePerformanceMode && !_lineWrap && !isRTL) {
+          _paragraphCache[lineIndex] = para;
+        }
       }
+      _lineTextCache[lineIndex] = lineText;
     }
 
     if (isRTL) {
