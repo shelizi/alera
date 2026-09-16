@@ -242,13 +242,8 @@ class _XtermTerminalSessionHandle(
   void advanceRestore(int chars) => _advanceRestore(chars);
 
   @override
-  void finishRestore() => _finishRestore();
-
-  @override
   void advancePointerInputCatchUp(int chars) =>
       _advancePointerInputCatchUp(chars);
-
-  void _writeToTerminal(String data) => writeToTerminal(data);
 
   void _queueTerminalOutput(
     String data, {
@@ -257,8 +252,6 @@ class _XtermTerminalSessionHandle(
 
   void _flushPendingTerminalOutputFrame({bool force = false}) =>
       _pump.flushFrame(force: force);
-
-  void _flushPendingTerminalOutputNow() => _pump.flushNow();
 
   void _replaceTerminalWithSnapshot(
     List<int> data, {

@@ -9,7 +9,6 @@ abstract interface class _TerminalSessionOutputHost {
 
   void writeToTerminal(String data);
   void advanceRestore(int chars);
-  void finishRestore();
   void advancePointerInputCatchUp(int chars);
 }
 
@@ -36,17 +35,13 @@ class _TerminalSessionOutputPump {
     pipeline.add(_TerminalOutputSegment(data, source));
     if (source == _TerminalOutputSource.live &&
         pipeline.liveLength > _terminalOutputMaxPendingChars) {
-      if (pipeline.restoreLength > 0) {
-        // Snapshot restore is an atomic state transition: live bytes queued
-        // behind it may depend on the restored cursor/mode state. Preserve the
-        // existing correctness guarantee and finish that transition in order.
-        flushNow();
-        return;
-      }
       // Never discard terminal output just to protect the UI queue, but also
       // never parse a full 1 MiB backlog synchronously on the Flutter UI
-      // isolate. Consume one normal frame budget now so escape-sequence state
-      // keeps advancing, then yield between additional hidden catch-up chunks.
+      // isolate. Restore, control, and live segments stay ordered in the same
+      // queue, so a partial snapshot can safely continue across these chunks;
+      // its overlay and pointer suspension are released only as restore bytes
+      // are actually consumed. Consume one adaptive budget now, then yield
+      // between additional hidden catch-up chunks.
       _drainChunk(adaptBudget: true);
       if (!_host.isOutputVisible &&
           pipeline.liveLength > _terminalOutputMaxPendingChars) {
@@ -194,24 +189,6 @@ class _TerminalSessionOutputPump {
     }
     _host.advanceRestore(restoreWritten);
     _host.advancePointerInputCatchUp(written);
-  }
-
-  void flushNow() {
-    pipeline.cancelDeferredFlush();
-    if (_host.isDisposed || pipeline.pending.isEmpty) {
-      return;
-    }
-    pipeline.restartFlushClock();
-    final pendingChars = pipeline.length;
-    final buffer = StringBuffer();
-    for (final segment in pipeline.pending) {
-      buffer.write(segment.remainingText);
-    }
-    clearPending();
-    _host.writeToTerminal(buffer.toString());
-    // Everything queued is on screen now, including a restore this bypassed.
-    _host.finishRestore();
-    _host.advancePointerInputCatchUp(pendingChars);
   }
 
   void clearPending() {

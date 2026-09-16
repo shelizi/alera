@@ -48,7 +48,9 @@ void feedTerminalInputForTesting(TerminalSessionHandle session, String data) {
 void writeTerminalOutputForTesting(TerminalSessionHandle session, String data) {
   final handle = session as _XtermTerminalSessionHandle;
   handle._handleTerminalOutput(data);
-  handle._flushPendingTerminalOutputNow();
+  while (handle._pump.pipeline.length > 0) {
+    handle._flushPendingTerminalOutputFrame(force: true);
+  }
 }
 
 @visibleForTesting

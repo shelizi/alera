@@ -210,7 +210,7 @@ void _registerTerminalRuntimeSnapshotTests() {
     }
   });
 
-  test('overflow during a partial restore flushes everything without dropping live output', () async {
+  test('overflow during a partial restore stays budgeted without dropping live output', () async {
     debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
     final fakeSession = _FakeTerminalPtySession();
     final runtime = XtermTerminalRuntime(
@@ -260,6 +260,18 @@ void _registerTerminalRuntimeSnapshotTests() {
       await Future.pause(.zero);
 
       expect(restoreAfterFirstFlush, greaterThan(0));
+      expect(
+        pendingRestoreTerminalOutputCharsForTesting(session),
+        greaterThan(0),
+      );
+      expect(pendingLiveTerminalOutputCharsForTesting(session), greaterThan(0));
+      expect(session.restoreProgress.value, isNotNull);
+      expect(terminalPointerInputSuspendedForTesting(session), isTrue);
+
+      while (pendingTerminalOutputCharsForTesting(session) > 0) {
+        flushTerminalOutputForTesting(session);
+      }
+
       expect(pendingRestoreTerminalOutputCharsForTesting(session), 0);
       expect(pendingLiveTerminalOutputCharsForTesting(session), 0);
       expect(session.restoreProgress.value, isNull);
