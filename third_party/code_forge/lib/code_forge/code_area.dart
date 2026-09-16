@@ -11659,17 +11659,24 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
       _selectionActive = selectionActiveNotifier.value = true;
     }
 
-    final text = controller.text;
-    int start = offset, end = offset;
+    if (offset < 0 || offset > controller.length) return;
+    final lineIndex = controller.getLineAtOffset(offset);
+    final lineStart = controller.getLineStartOffset(lineIndex);
+    final lineText = controller.getLineText(lineIndex);
+    final localOffset = (offset - lineStart).clamp(0, lineText.length);
+    int start = localOffset, end = localOffset;
 
-    while (start > 0 && !_isWordBoundary(text[start - 1])) {
+    while (start > 0 && !_isWordBoundary(lineText[start - 1])) {
       start--;
     }
-    while (end < text.length && !_isWordBoundary(text[end])) {
+    while (end < lineText.length && !_isWordBoundary(lineText[end])) {
       end++;
     }
 
-    controller.selection = TextSelection(baseOffset: start, extentOffset: end);
+    controller.selection = TextSelection(
+      baseOffset: lineStart + start,
+      extentOffset: lineStart + end,
+    );
     markNeedsPaint();
   }
 
@@ -11678,9 +11685,13 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
   }
 
   bool _isOffsetOverWord(int offset) {
-    final text = controller.text;
-    if (offset < 0 || offset >= text.length) return false;
-    return RegExp(_wordCharPattern).hasMatch(text[offset]);
+    if (offset < 0 || offset >= controller.length) return false;
+    final lineIndex = controller.getLineAtOffset(offset);
+    final lineStart = controller.getLineStartOffset(lineIndex);
+    final lineText = controller.getLineText(lineIndex);
+    final localOffset = offset - lineStart;
+    if (localOffset < 0 || localOffset >= lineText.length) return false;
+    return RegExp(_wordCharPattern).hasMatch(lineText[localOffset]);
   }
 
   Map<String, int> _offsetToLineChar(int offset) {
