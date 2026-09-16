@@ -27,6 +27,31 @@ void main() {
     );
   });
 
+  test('preserves replace-all regex and literal semantics off-thread', () {
+    expect(
+      code_forge.computeReplaceAllText((
+        text: 'foo food Foo\nfoo',
+        query: 'foo',
+        replacement: r'$1',
+        isRegex: false,
+        caseSensitive: false,
+        matchWholeWord: true,
+      )),
+      '\$1 food \$1\n\$1',
+    );
+    expect(
+      code_forge.computeReplaceAllText((
+        text: 'foo\nfoo',
+        query: r'^foo$',
+        replacement: 'bar',
+        isRegex: true,
+        caseSensitive: true,
+        matchWholeWord: false,
+      )),
+      'foo\nfoo',
+    );
+  });
+
   test('normalizes editor tab size to the supported range', () {
     expect(normalizeWorkspaceEditorTabSize(4), 4);
     expect(normalizeWorkspaceEditorTabSize(0), 1);

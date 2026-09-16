@@ -55,6 +55,24 @@ List<(int start, int end)> computeRegexSearchRanges(
   return ranges;
 }
 
+typedef ReplaceAllRequest = ({
+  String text,
+  String query,
+  String replacement,
+  bool isRegex,
+  bool caseSensitive,
+  bool matchWholeWord,
+});
+
+String computeReplaceAllText(ReplaceAllRequest request) {
+  var pattern = request.isRegex ? request.query : RegExp.escape(request.query);
+  if (request.matchWholeWord) {
+    pattern = '\\b$pattern\\b';
+  }
+  final regExp = RegExp(pattern, caseSensitive: request.caseSensitive);
+  return request.text.replaceAll(regExp, request.replacement);
+}
+
 class _FindMatch {
   const _FindMatch({required this.start, required this.end});
 
@@ -390,25 +408,59 @@ class FindController extends ChangeNotifier {
 
   /// Replaces all matches with the text in [replaceInputController].
   void replaceAll() {
-    if (_matches.isEmpty) return;
+    if (_matches.isEmpty || _lastQuery.isEmpty) return;
 
-    final text = _codeController.text;
-    String pattern = _lastQuery;
+    _searchDebounce?.cancel();
+    final requestSerial = ++_searchRequestSerial;
+    final documentVersion = _codeController.documentVersion;
+    final query = _lastQuery;
+    final replacement = replaceInputController.text;
+    final isRegex = _isRegex;
+    final caseSensitive = _caseSensitive;
+    final matchWholeWord = _matchWholeWord;
 
-    if (!_isRegex) {
-      pattern = RegExp.escape(_lastQuery);
-    }
+    unawaited(
+      _runReplaceAll(
+        requestSerial: requestSerial,
+        documentVersion: documentVersion,
+        query: query,
+        replacement: replacement,
+        isRegex: isRegex,
+        caseSensitive: caseSensitive,
+        matchWholeWord: matchWholeWord,
+      ),
+    );
+  }
 
-    if (_matchWholeWord) {
-      pattern = '\\b$pattern\\b';
-    }
-
+  Future<void> _runReplaceAll({
+    required int requestSerial,
+    required int documentVersion,
+    required String query,
+    required String replacement,
+    required bool isRegex,
+    required bool caseSensitive,
+    required bool matchWholeWord,
+  }) async {
     try {
-      final regExp = RegExp(pattern, caseSensitive: _caseSensitive);
-      final newText = text.replaceAll(regExp, replaceInputController.text);
-
+      if (!_isSearchRequestCurrent(requestSerial, documentVersion)) return;
+      _codeController.flushPendingBuffer();
+      if (!_isSearchRequestCurrent(requestSerial, documentVersion)) return;
+      final text = await _codeController.rope.getTextSnapshot();
+      if (!_isSearchRequestCurrent(requestSerial, documentVersion)) return;
+      final newText = await compute(computeReplaceAllText, (
+        text: text,
+        query: query,
+        replacement: replacement,
+        isRegex: isRegex,
+        caseSensitive: caseSensitive,
+        matchWholeWord: matchWholeWord,
+      ));
+      if (!_isSearchRequestCurrent(requestSerial, documentVersion)) return;
+      if (replacement != replaceInputController.text) return;
+      if (newText == text) return;
       _codeController.replaceRange(0, _codeController.length, newText);
     } catch (e) {
+      if (_disposed) return;
       debugPrint('FindController: Replace All failed. Error: $e');
     }
   }
