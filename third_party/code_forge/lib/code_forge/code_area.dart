@@ -5179,15 +5179,24 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
         final lineChar = hoverNotifier.value!.$2;
         final line = lineChar['line']!;
         final char = lineChar['character']!;
-        final lineText = controller.getLineText(line);
-        final para =
-            _paragraphCache.containsKey(line) &&
-                _lineTextCache[line] == lineText
-            ? _paragraphCache[line]!
-            : _buildParagraph(lineText, width: lineWrap ? _wrapWidth : null);
+        final cachedLineText = _lineTextCache[line];
+        final lineText = cachedLineText ?? controller.getLineText(line);
+        if (cachedLineText == null) {
+          _lineTextCache[line] = lineText;
+        }
 
         double hoveredX = 0.0;
         if (char > 0 && char <= lineText.length) {
+          var para = _paragraphCache[line];
+          if (para == null) {
+            para = _buildParagraph(
+              lineText,
+              width: lineWrap ? _wrapWidth : null,
+            );
+            if (_largeFilePerformanceMode && !_lineWrap && !isRTL) {
+              _paragraphCache[line] = para;
+            }
+          }
           final boxes = para.getBoxesForRange(0, char);
           if (boxes.isNotEmpty) {
             hoveredX = boxes.last.right;
