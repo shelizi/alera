@@ -204,6 +204,8 @@ class _WorkspaceEditorSurfaceState
               lineWrap: performanceProfile.lineWrap,
               enableLocalSuggestions: false,
               enableGuideLines: performanceProfile.guideLines,
+              largeFilePerformanceMode:
+                  performanceProfile.largeFilePerformanceMode,
               enableGutter: true,
               enableGutterDivider: false,
               editorTheme: editorTheme,
@@ -484,6 +486,7 @@ typedef WorkspaceEditorPerformanceProfile = ({
   bool lineWrap,
   bool guideLines,
   bool syntaxHighlighting,
+  bool largeFilePerformanceMode,
 });
 
 @visibleForTesting
@@ -498,6 +501,7 @@ WorkspaceEditorPerformanceProfile workspaceEditorPerformanceProfile({
     lineWrap: !largeFile,
     guideLines: !largeFile,
     syntaxHighlighting: !largeFile,
+    largeFilePerformanceMode: largeFile,
   );
 }
 

@@ -205,6 +205,14 @@ class CodeForge extends StatefulWidget {
   /// visualize code structure.
   final bool enableGuideLines;
 
+  /// Optimizes very large plain-text documents by avoiding full-document
+  /// String materialization on every content edit.
+  ///
+  /// When enabled, syntax edit deltas and transient AI/ghost-text reconciliation
+  /// are skipped. Line/layout/cache invalidation still uses the controller's
+  /// incremental rope-backed APIs. Defaults to false.
+  final bool largeFilePerformanceMode;
+
   /// Whether to show the gutter with line numbers.
   final bool enableGutter;
 
@@ -298,6 +306,7 @@ class CodeForge extends StatefulWidget {
     this.lineWrap = false,
     this.enableFolding = true,
     this.enableGuideLines = true,
+    this.largeFilePerformanceMode = false,
     this.enableLocalSuggestions = false,
     this.enableKeyboardSuggestions = true,
     this.keyboardType = TextInputType.multiline,
@@ -2752,6 +2761,8 @@ class _CodeForgeState extends State<CodeForge> with TickerProviderStateMixin {
                                                     widget.enableFolding,
                                                 enableGuideLines:
                                                     widget.enableGuideLines,
+                                                largeFilePerformanceMode: widget
+                                                    .largeFilePerformanceMode,
                                                 enableGutter:
                                                     widget.enableGutter,
                                                 enableGutterDivider:
@@ -4206,6 +4217,7 @@ class _CodeField extends LeafRenderObjectWidget {
   final AnimationController lineHighlightController;
   final TextStyle? textStyle;
   final bool enableFolding, enableGuideLines, enableGutter, enableGutterDivider;
+  final bool largeFilePerformanceMode;
   final GutterStyle gutterStyle;
   final CodeSelectionStyle selectionStyle;
   final List<LspErrors> diagnostics;
@@ -4239,6 +4251,7 @@ class _CodeField extends LeafRenderObjectWidget {
     required this.lineHighlightController,
     required this.enableFolding,
     required this.enableGuideLines,
+    required this.largeFilePerformanceMode,
     required this.enableGutter,
     required this.enableGutterDivider,
     required this.gutterStyle,
@@ -4294,6 +4307,7 @@ class _CodeField extends LeafRenderObjectWidget {
       matchHighlightStyle: matchHighlightStyle,
       enableFolding: enableFolding,
       enableGuideLines: enableGuideLines,
+      largeFilePerformanceMode: largeFilePerformanceMode,
       enableGutter: enableGutter,
       enableGutterDivider: enableGutterDivider,
       gutterStyle: gutterStyle,
@@ -4346,6 +4360,7 @@ class _CodeField extends LeafRenderObjectWidget {
       ..lineWrap = lineWrap
       ..enableFolding = enableFolding
       ..enableGuideLines = enableGuideLines
+      ..largeFilePerformanceMode = largeFilePerformanceMode
       ..enableGutter = enableGutter
       ..enableGutterDivider = enableGutterDivider
       ..gutterStyle = gutterStyle
@@ -4432,6 +4447,7 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
   Offset? _pointerDownPosition;
   Offset _currentPosition = Offset.zero;
   bool _enableFolding, _enableGuideLines, _enableGutter, _enableGutterDivider;
+  bool _largeFilePerformanceMode;
   bool _isFoldToggleInProgress = false, _lineWrap;
   bool _foldRangesNeedsClear = false;
   Set<int> _foldedLineIndices = {};
@@ -4762,6 +4778,7 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     required this._readOnly,
     required bool enableFolding,
     required this._enableGuideLines,
+    required this._largeFilePerformanceMode,
     required this._enableGutter,
     required this._enableGutterDivider,
     required GutterStyle gutterStyle,
@@ -4978,6 +4995,18 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
   bool get readOnly => _readOnly;
   bool get lineWrap => _lineWrap;
   bool get enableFolding => _enableFolding;
+  bool get largeFilePerformanceMode => _largeFilePerformanceMode;
+  set largeFilePerformanceMode(bool value) {
+    if (_largeFilePerformanceMode == value) return;
+    _largeFilePerformanceMode = value;
+    if (value) {
+      _lastProcessedText = null;
+    } else {
+      _lastProcessedText = controller.text;
+    }
+    _lastProcessedContentVersion = controller.contentVersion;
+  }
+
   bool get enableGuideLines => _enableGuideLines;
   bool get enableGutter => _enableGutter;
   bool get enableGutterDivider => _enableGutterDivider;
@@ -5526,9 +5555,12 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
       _showBubble = false;
     }
 
-    final newText = controller.text;
-    final previousText = _lastProcessedText ?? newText;
-    final textChanged = newText != previousText;
+    final trackFullDocumentText = !_largeFilePerformanceMode;
+    final newText = trackFullDocumentText ? controller.text : null;
+    final previousText = trackFullDocumentText
+        ? (_lastProcessedText ?? newText!)
+        : null;
+    final textChanged = !trackFullDocumentText || newText != previousText;
 
     if (textChanged) {
       _caretInfoCache.clear();
@@ -5538,22 +5570,24 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
 
     final dirtyRange = controller.dirtyRegion;
     if (dirtyRange != null) {
-      final safeEnd = dirtyRange.end.clamp(dirtyRange.start, newText.length);
-      final insertedText = newText.substring(dirtyRange.start, safeEnd);
-      final delta = newText.length - previousText.length;
-      final removedLength = max(insertedText.length - delta, 0);
-      final oldEnd = dirtyRange.start + removedLength;
-      final deletedText = previousText.substring(dirtyRange.start, oldEnd);
       final editLine = controller.getLineAtOffset(dirtyRange.start);
+      if (trackFullDocumentText) {
+        final safeEnd = dirtyRange.end.clamp(dirtyRange.start, newText!.length);
+        final insertedText = newText.substring(dirtyRange.start, safeEnd);
+        final delta = newText.length - previousText!.length;
+        final removedLength = max(insertedText.length - delta, 0);
+        final oldEnd = dirtyRange.start + removedLength;
+        final deletedText = previousText.substring(dirtyRange.start, oldEnd);
 
-      _syntaxHighlighter.applyDocumentEdit(
-        editLine,
-        dirtyRange.start,
-        oldEnd,
-        insertedText,
-        deletedText,
-        newText,
-      );
+        _syntaxHighlighter.applyDocumentEdit(
+          editLine,
+          dirtyRange.start,
+          oldEnd,
+          insertedText,
+          deletedText,
+          newText,
+        );
+      }
 
       final invalidateFromLine = max(0, editLine);
       _paragraphCache.removeWhere((line, _) => line >= invalidateFromLine);
@@ -5731,12 +5765,33 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
       markNeedsPaint();
     }
 
-    final oldText = previousText;
+    if (!trackFullDocumentText) {
+      if (_aiResponse != null) {
+        _aiResponse = null;
+        aiNotifier.value = null;
+        aiOffsetNotifier.value = null;
+        _ghostTextAnchorLine = null;
+        _ghostTextLineCount = 0;
+      }
+      final ghost = controller.ghostText;
+      if (ghost != null && !ghost.shouldPersist) {
+        controller.clearGhostText();
+      }
+      _lastSelectionForAi = controller.selection;
+      if (focusNode.hasFocus && !_isFoldToggleInProgress) {
+        _ensureCaretVisible();
+      }
+      _lastProcessedText = null;
+      _lastProcessedContentVersion = currentContentVersion;
+      return;
+    }
+
+    final oldText = previousText!;
     final cursorPosition = controller.selection.extentOffset.clamp(
       0,
       controller.length,
     );
-    final textBeforeCursor = newText.substring(0, cursorPosition);
+    final textBeforeCursor = newText!.substring(0, cursorPosition);
 
     if (_lastProcessedText == newText &&
         _aiResponse != null &&
