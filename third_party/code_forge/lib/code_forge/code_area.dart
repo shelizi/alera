@@ -4357,10 +4357,10 @@ class _CodeField extends LeafRenderObjectWidget {
       ..textStyle = textStyle
       ..innerPadding = innerPadding
       ..readOnly = readOnly
-      ..lineWrap = lineWrap
-      ..enableFolding = enableFolding
-      ..enableGuideLines = enableGuideLines
       ..largeFilePerformanceMode = largeFilePerformanceMode
+      ..enableFolding = enableFolding
+      ..lineWrap = lineWrap
+      ..enableGuideLines = enableGuideLines
       ..enableGutter = enableGutter
       ..enableGutterDivider = enableGutterDivider
       ..gutterStyle = gutterStyle
