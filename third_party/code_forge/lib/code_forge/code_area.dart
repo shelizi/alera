@@ -8616,6 +8616,10 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
 
     _actionBulbRects.clear();
 
+    final gutterDecorations = controller.hasGutterDecorations
+        ? controller.gutterDecorations
+        : const <GutterDecoration>[];
+
     double currentY = firstVisibleLineY;
     int indexTracker = firstVisibleLine + 1;
 
@@ -8630,13 +8634,16 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
       if (contentTop + visualYOffset > viewBottom) break;
 
       if (contentTop + visualYOffset + lineHeight >= viewTop) {
-        _drawGutterDecorations(
-          canvas,
-          offset,
-          i,
-          contentTop + visualYOffset,
-          lineHeight,
-        );
+        if (gutterDecorations.isNotEmpty) {
+          _drawGutterDecorations(
+            canvas,
+            offset,
+            i,
+            contentTop + visualYOffset,
+            lineHeight,
+            gutterDecorations,
+          );
+        }
 
         TextStyle lineNumberStyle;
         final severity = lineSeverityMap[i];
@@ -10652,10 +10659,8 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     int lineIndex,
     double contentTop,
     double lineHeight,
+    List<GutterDecoration> decorations,
   ) {
-    final decorations = controller.gutterDecorations;
-    if (decorations.isEmpty) return;
-
     for (final decoration in decorations) {
       if (lineIndex < decoration.startLine || lineIndex > decoration.endLine) {
         continue;

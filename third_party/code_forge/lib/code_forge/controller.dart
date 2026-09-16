@@ -680,6 +680,9 @@ class CodeForgeController implements DeltaTextInputClient {
   List<LineDecoration> get lineDecorations =>
       List.unmodifiable(_lineDecorations);
 
+  /// Whether any gutter decorations need to be painted.
+  bool get hasGutterDecorations => _gutterDecorations.isNotEmpty;
+
   /// Returns an unmodifiable view of gutter decorations
   List<GutterDecoration> get gutterDecorations =>
       List.unmodifiable(_gutterDecorations);
