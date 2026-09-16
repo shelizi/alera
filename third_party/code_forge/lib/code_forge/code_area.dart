@@ -4738,6 +4738,9 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     String text, {
     double? width,
   }) {
+    if (_largeFilePerformanceMode) {
+      return _buildParagraph(text, width: width);
+    }
     final fontSize = textStyle?.fontSize ?? 14.0;
     final fontFamily = textStyle?.fontFamily;
     return _syntaxHighlighter.buildHighlightedParagraph(
@@ -7529,13 +7532,15 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
 
     _pruneViewportCaches(firstVisibleLine, lastVisibleLine);
     _scheduleVisibleSemanticTokens(firstVisibleLine, lastVisibleLine);
-    unawaited(
-      _syntaxHighlighter.preHighlightLines(
-        firstVisibleLine,
-        lastVisibleLine,
-        controller.getLineText,
-      ),
-    );
+    if (!_largeFilePerformanceMode) {
+      unawaited(
+        _syntaxHighlighter.preHighlightLines(
+          firstVisibleLine,
+          lastVisibleLine,
+          controller.getLineText,
+        ),
+      );
+    }
 
     _drawSearchHighlights(
       canvas,
