@@ -216,45 +216,51 @@ final class TerminalSearchController._(
   }
 
   void _removeMatchesInRange(xterm.Buffer buffer, int start, int end) {
-    final staleLines = <xterm.BufferLine>[];
-    for (final line in _matchesByLine.keys) {
-      if (!_lineIndex(buffer, line).caseInRange(start, end)) {
-        continue;
-      }
-      staleLines.add(line);
-    }
-    for (final line in staleLines) {
-      _matchesByLine.remove(line);
+    final safeStart = start.clamp(0, buffer.height);
+    final safeEnd = end.clamp(safeStart, buffer.height);
+    for (var index = safeStart; index < safeEnd; index++) {
+      _matchesByLine.remove(buffer.lines[index]);
     }
   }
 
   void _rebuildMatches(TerminalSearchMatch? selected) {
     final next = <TerminalSearchMatch>[];
     final staleLines = <xterm.BufferLine>[];
+    final liveLines =
+        <({xterm.BufferLine line, int lineIndex, List<_LineMatch> matches})>[];
     for (final entry in _matchesByLine.entries) {
       final lineIndex = _lineIndex(_terminal.buffer, entry.key);
       if (lineIndex == null) {
         staleLines.add(entry.key);
         continue;
       }
-      for (final match in entry.value) {
+      liveLines.add((
+        line: entry.key,
+        lineIndex: lineIndex,
+        matches: entry.value,
+      ));
+    }
+    for (final line in staleLines) {
+      _matchesByLine.remove(line);
+    }
+
+    // `findTerminalSearchMatches` records hits in ascending column order for
+    // each line. Sorting the matched lines first therefore produces the same
+    // global order without sorting every individual hit. This matters for a
+    // query that occurs many times per line during continuous terminal output.
+    liveLines.sort((a, b) => a.lineIndex.compareTo(b.lineIndex));
+    for (final entry in liveLines) {
+      for (final match in entry.matches) {
         next.add(
           TerminalSearchMatch(
-            lineId: entry.key,
-            lineIndex: lineIndex,
+            lineId: entry.line,
+            lineIndex: entry.lineIndex,
             start: match.start,
             end: match.end,
           ),
         );
       }
     }
-    for (final line in staleLines) {
-      _matchesByLine.remove(line);
-    }
-    next.sort((a, b) {
-      final lineOrder = a.lineIndex.compareTo(b.lineIndex);
-      return lineOrder == 0 ? a.start.compareTo(b.start) : lineOrder;
-    });
     _matches = List<TerminalSearchMatch>.unmodifiableOf(next);
 
     if (_matches.isEmpty) {

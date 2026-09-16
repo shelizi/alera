@@ -88,6 +88,38 @@ void main() {
     expect(controller.needsFullRefreshForTesting, isFalse);
   });
 
+  test(
+    'keeps matches ordered by line then column after incremental output',
+    () {
+      final terminal = _terminal()
+        ..write('needle needle\r\nother\r\nneedle needle needle');
+      final controller = TerminalSearchController(
+        terminal: terminal,
+        scrollToLine: (_) {},
+      );
+      addTearDown(controller.dispose);
+
+      controller.open();
+      controller.setQuery('needle');
+
+      expect(
+        controller.matches
+            .map((match) => (match.lineIndex, match.start))
+            .toList(),
+        <(int, int)>[(0, 0), (0, 7), (2, 0), (2, 7), (2, 14)],
+      );
+
+      terminal.write('\r\ntail');
+
+      expect(
+        controller.matches
+            .map((match) => (match.lineIndex, match.start))
+            .toList(),
+        <(int, int)>[(0, 0), (0, 7), (2, 0), (2, 7), (2, 14)],
+      );
+    },
+  );
+
   test('only listens to terminal changes while search is open', () {
     final terminal = _terminal();
     final controller = TerminalSearchController(
