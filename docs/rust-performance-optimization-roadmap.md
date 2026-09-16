@@ -471,7 +471,7 @@ The workbench editor currently relies on Dart-side editor/highlighting infrastru
 
 ### Candidate direction
 
-Evaluate an incremental Rust parser, likely tree-sitter-based, that returns only changed highlight/syntax spans.
+Evaluate an incremental Rust parser, likely tree-sitter-based, that owns the document parse tree and returns only the syntax data the UI currently needs. The target architecture should support both changed-range updates and viewport-first materialization so large files do not require full-document highlight span transfer.
 
 Possible future uses:
 
@@ -481,19 +481,38 @@ Possible future uses:
 - bracket matching
 - structural selection
 
-### Gate
+### Implementation requirements
 
-Do not migrate this only because Rust is available. Profile large-file editing first. FFI transfer of very large span lists can erase parser gains.
-
-Prefer:
+Prefer a retained per-document parse model with the following flow:
 
 ```text
 Rust owns parse tree
 -> edit delta in
--> changed spans/symbol deltas out
+-> minimally affected parse ranges invalidated/reparsed
+-> viewport + overscan query
+-> visible/changed highlight spans out
 ```
 
-over reparsing/transferring the full document on every edit.
+Requirements:
+
+- send edit deltas to Rust instead of reparsing the complete document after each keystroke;
+- keep the parse tree and parser state on the Rust side for the lifetime of the editor document;
+- request highlight spans primarily for the visible viewport plus a bounded overscan region;
+- avoid transferring highlight spans for the entire document when only a small visible region is needed;
+- invalidate and regenerate only ranges whose syntax state may have changed after an edit;
+- use document/version identifiers so stale viewport span responses can be discarded safely;
+- reuse the same retained parse tree for symbols/outline, folding, bracket matching, and structural selection where practical;
+- keep viewport/overscan sizing bounded and measurable rather than letting scrolling trigger unbounded span generation.
+
+### Large-file behavior
+
+Until the incremental parser path is proven stable, large-file mode may continue to fall back to plaintext/no syntax highlighting to protect editing and scrolling latency. Once incremental parsing plus viewport span queries are validated, large files should be allowed to keep syntax highlighting without requiring whole-document parsing or span materialization on every edit or scroll.
+
+### Gate
+
+Do not migrate this only because Rust is available. Profile large-file editing first. FFI transfer of very large span lists can erase parser gains.
+
+The implementation should demonstrate that parsing, invalidation, viewport queries, FFI span transfer, and scrolling remain bounded as file size grows. Prefer viewport-first queries and incremental updates over reparsing/transferring the full document on every edit.
 
 ---
 
