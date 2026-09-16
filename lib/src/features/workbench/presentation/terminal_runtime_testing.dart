@@ -89,10 +89,7 @@ bool terminalOutputFlushScheduledForTesting(TerminalSessionHandle session) {
 /// next frame.
 @visibleForTesting
 bool terminalOutputFlushDeferredForTesting(TerminalSessionHandle session) {
-  return (session as _XtermTerminalSessionHandle)
-          ._pump
-          .pipeline
-          .flushTimer !=
+  return (session as _XtermTerminalSessionHandle)._pump.pipeline.flushTimer !=
       null;
 }
 
@@ -116,6 +113,17 @@ Duration get terminalOutputMinFlushIntervalForTesting =>
 @visibleForTesting
 int terminalOutputFrameCutoffForTesting(String value) {
   return _terminalOutputChunkCutoff(value, _terminalOutputMaxCharsPerFrame);
+}
+
+@visibleForTesting
+int terminalOutputAdaptiveBudgetForTesting({
+  required int currentChars,
+  required Duration parseTime,
+}) {
+  return _terminalOutputNextAdaptiveChunkBudget(
+    currentChars: currentChars,
+    parseTime: parseTime,
+  );
 }
 
 @visibleForTesting

@@ -24,6 +24,7 @@ class _TerminalSessionOutputPump {
   final _TerminalSessionOutputHost _host;
   final _TerminalOutputPipeline pipeline = _TerminalOutputPipeline();
   bool _hiddenCatchUpScheduled = false;
+  int _adaptiveChunkBudget = _terminalOutputMaxCharsPerFrame;
 
   void queue(
     String data, {
@@ -46,7 +47,7 @@ class _TerminalSessionOutputPump {
       // never parse a full 1 MiB backlog synchronously on the Flutter UI
       // isolate. Consume one normal frame budget now so escape-sequence state
       // keeps advancing, then yield between additional hidden catch-up chunks.
-      _drainChunk();
+      _drainChunk(adaptBudget: true);
       if (!_host.isOutputVisible &&
           pipeline.liveLength > _terminalOutputMaxPendingChars) {
         _scheduleHiddenCatchUp();
@@ -71,7 +72,7 @@ class _TerminalSessionOutputPump {
       if (pipeline.liveLength <= _terminalOutputMaxPendingChars) {
         return;
       }
-      _drainChunk();
+      _drainChunk(adaptBudget: true);
       if (pipeline.liveLength > _terminalOutputMaxPendingChars) {
         _scheduleHiddenCatchUp();
       }
@@ -133,7 +134,7 @@ class _TerminalSessionOutputPump {
     if (!force && !_host.isOutputVisible) {
       return;
     }
-    _drainChunk();
+    _drainChunk(adaptBudget: !force);
     if (pipeline.pending.isNotEmpty) {
       scheduleFlush();
     }
@@ -141,19 +142,20 @@ class _TerminalSessionOutputPump {
 
   /// Writes at most one frame's worth of pending output, consuming the chunk
   /// that straddles the budget in place so the rest is never copied.
-  void _drainChunk() {
+  void _drainChunk({bool adaptBudget = false}) {
     final pending = pipeline.pending;
     if (pending.isEmpty) {
       return;
     }
+    final chunkBudget = _adaptiveChunkBudget;
     final frame = StringBuffer();
     var written = 0;
     var restoreWritten = 0;
-    while (pending.isNotEmpty && written < _terminalOutputMaxCharsPerFrame) {
+    while (pending.isNotEmpty && written < chunkBudget) {
       final segment = pending.first;
       final head = segment.head;
       final available = segment.remaining;
-      final remaining = _terminalOutputMaxCharsPerFrame - written;
+      final remaining = chunkBudget - written;
       if (available <= remaining) {
         frame.write(segment.remainingText);
         pipeline.consume(segment, available);
@@ -180,7 +182,16 @@ class _TerminalSessionOutputPump {
     if (written == 0) {
       return;
     }
+    final shouldAdapt = adaptBudget && written >= chunkBudget - 1;
+    final parseClock = shouldAdapt ? (Stopwatch()..start()) : null;
     _host.writeToTerminal(frame.toString());
+    if (parseClock != null) {
+      parseClock.stop();
+      _adaptiveChunkBudget = _terminalOutputNextAdaptiveChunkBudget(
+        currentChars: chunkBudget,
+        parseTime: parseClock.elapsed,
+      );
+    }
     _host.advanceRestore(restoreWritten);
     _host.advancePointerInputCatchUp(written);
   }

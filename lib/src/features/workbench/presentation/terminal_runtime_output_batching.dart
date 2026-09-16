@@ -13,7 +13,57 @@ int _terminalOutputChunkCutoff(String value, int limit) {
 }
 
 const int _terminalOutputMaxCharsPerFrame = 64 * 1024;
+const int _terminalOutputMinAdaptiveCharsPerFrame = 4 * 1024;
+const int _terminalOutputAdaptiveGrowthStep = 8 * 1024;
+const int _terminalOutputAdaptiveQuantum = 1024;
+const Duration _terminalOutputTargetParseTime = Duration(milliseconds: 6);
 const int _terminalOutputMaxPendingChars = 1024 * 1024;
+
+/// Chooses the next saturated output-chunk budget from the measured xterm
+/// parse time of the previous chunk.
+///
+/// Shrinking is proportional but limited to at most 2x per sample, so one
+/// noisy frame cannot collapse throughput. Growth is deliberately slower: a
+/// cheap chunk earns only 8 KiB at a time, which avoids oscillating between a
+/// tiny ANSI-heavy budget and the 64 KiB ceiling.
+int _terminalOutputNextAdaptiveChunkBudget({
+  required int currentChars,
+  required Duration parseTime,
+}) {
+  final current = currentChars
+      .clamp(
+        _terminalOutputMinAdaptiveCharsPerFrame,
+        _terminalOutputMaxCharsPerFrame,
+      )
+      .toInt();
+  final targetMicros = _terminalOutputTargetParseTime.inMicroseconds;
+  final parseMicros = parseTime.inMicroseconds;
+
+  if (parseMicros < targetMicros ~/ 2) {
+    return (current + _terminalOutputAdaptiveGrowthStep)
+        .clamp(
+          _terminalOutputMinAdaptiveCharsPerFrame,
+          _terminalOutputMaxCharsPerFrame,
+        )
+        .toInt();
+  }
+  if (parseMicros <= targetMicros) {
+    return current;
+  }
+
+  final proportional = (current * targetMicros) ~/ parseMicros;
+  final noFasterThanHalf = current ~/ 2;
+  var next = proportional < noFasterThanHalf ? noFasterThanHalf : proportional;
+  next = next
+      .clamp(
+        _terminalOutputMinAdaptiveCharsPerFrame,
+        _terminalOutputMaxCharsPerFrame,
+      )
+      .toInt();
+  next =
+      (next ~/ _terminalOutputAdaptiveQuantum) * _terminalOutputAdaptiveQuantum;
+  return next.clamp(_terminalOutputMinAdaptiveCharsPerFrame, current).toInt();
+}
 
 /// Floor on the gap between two flushes, so a process writing without pause
 /// cannot drive the frame loop at full vsync.

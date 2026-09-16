@@ -1,6 +1,47 @@
 part of 'terminal_runtime_native_test.dart';
 
 void _registerTerminalRuntimeOutputBackpressureTests() {
+  test('adaptive parse budget shrinks when xterm parsing exceeds target', () {
+    expect(
+      terminalOutputAdaptiveBudgetForTesting(
+        currentChars: 64 * 1024,
+        parseTime: const Duration(milliseconds: 12),
+      ),
+      32 * 1024,
+    );
+    expect(
+      terminalOutputAdaptiveBudgetForTesting(
+        currentChars: 8 * 1024,
+        parseTime: const Duration(milliseconds: 24),
+      ),
+      4 * 1024,
+    );
+  });
+
+  test('adaptive parse budget grows conservatively after cheap parsing', () {
+    expect(
+      terminalOutputAdaptiveBudgetForTesting(
+        currentChars: 16 * 1024,
+        parseTime: const Duration(milliseconds: 2),
+      ),
+      24 * 1024,
+    );
+    expect(
+      terminalOutputAdaptiveBudgetForTesting(
+        currentChars: 64 * 1024,
+        parseTime: const Duration(milliseconds: 1),
+      ),
+      64 * 1024,
+    );
+    expect(
+      terminalOutputAdaptiveBudgetForTesting(
+        currentChars: 32 * 1024,
+        parseTime: const Duration(milliseconds: 5),
+      ),
+      32 * 1024,
+    );
+  });
+
   test(
     'bounds hidden overflow parsing instead of draining the whole backlog',
     () {
