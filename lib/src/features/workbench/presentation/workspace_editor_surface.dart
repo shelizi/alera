@@ -71,11 +71,13 @@ class _WorkspaceEditorSurfaceState
   WorkspaceEditorPerformanceProfile? _lastPerformanceProfile;
   Offset? _lastSecondaryTapGlobalPosition;
   int _loadRequestId = 0;
+  late int _lastObservedDocumentVersion;
 
   @override
   void initState() {
     super.initState();
     _controller = code_forge.CodeForgeController();
+    _lastObservedDocumentVersion = _controller.documentVersion;
     _applyEditorSettings(
       normalizeWorkspaceEditorTabSize(
         ref.read(settingsControllerProvider).editor.tabSize,
@@ -479,6 +481,14 @@ WorkspaceEditorPerformanceProfile workspaceEditorPerformanceProfile({
     guideLines: !largeFile,
     syntaxHighlighting: !largeFile,
   );
+}
+
+@visibleForTesting
+bool workspaceEditorShouldSyncControllerText({
+  required int previousDocumentVersion,
+  required int currentDocumentVersion,
+}) {
+  return previousDocumentVersion != currentDocumentVersion;
 }
 
 @visibleForTesting

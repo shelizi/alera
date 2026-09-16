@@ -160,6 +160,14 @@ extension _WorkspaceEditorSave on _WorkspaceEditorSurfaceState {
   }
 
   void _handleControllerChanged() {
+    final documentVersion = _controller.documentVersion;
+    if (!workspaceEditorShouldSyncControllerText(
+      previousDocumentVersion: _lastObservedDocumentVersion,
+      currentDocumentVersion: documentVersion,
+    )) {
+      return;
+    }
+    _lastObservedDocumentVersion = documentVersion;
     final wasDirty = _document.isDirty;
     final previousProfile =
         _lastPerformanceProfile ??

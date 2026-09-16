@@ -183,6 +183,23 @@ void main() {
     );
   });
 
+  test('syncs controller text only when the document version changes', () {
+    expect(
+      workspaceEditorShouldSyncControllerText(
+        previousDocumentVersion: 7,
+        currentDocumentVersion: 7,
+      ),
+      isFalse,
+    );
+    expect(
+      workspaceEditorShouldSyncControllerText(
+        previousDocumentVersion: 7,
+        currentDocumentVersion: 8,
+      ),
+      isTrue,
+    );
+  });
+
   test('offers Text Actions only for a valid editor selection', () {
     expect(
       workspaceEditorHasTextActionSelection(
