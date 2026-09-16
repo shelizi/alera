@@ -1,11 +1,32 @@
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_editor_surface.dart';
 import 'package:alera/src/features/settings/domain/editor_syntax_theme_catalog.dart';
+import 'package:code_forge/code_forge.dart' as code_forge;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 
 void main() {
+  test('preserves Dart regex semantics and scalar match offsets', () {
+    final ranges = code_forge.computeRegexSearchRanges((
+      text: 'a😀 Foo foo\nfoo_bar',
+      query: r'f.o(?=\s|$)',
+      caseSensitive: false,
+      matchWholeWord: true,
+    ));
+
+    expect(ranges, [(3, 6), (7, 10)]);
+    expect(
+      () => code_forge.computeRegexSearchRanges((
+        text: 'foo',
+        query: '(',
+        caseSensitive: true,
+        matchWholeWord: false,
+      )),
+      throwsFormatException,
+    );
+  });
+
   test('normalizes editor tab size to the supported range', () {
     expect(normalizeWorkspaceEditorTabSize(4), 4);
     expect(normalizeWorkspaceEditorTabSize(0), 1);

@@ -195,6 +195,8 @@ class Rope {
     return _rope.lineToChar(lineIdx: BigInt.from(lineIndex)).toInt();
   }
 
+  Future<String> getTextSnapshot() => _rope.getTextSnapshot();
+
   Future<List<(int start, int end)>> findLiteral(
     String query, {
     bool caseSensitive = false,

@@ -1,9 +1,59 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show compute;
+
 import 'package:flutter/material.dart';
 
 import 'controller.dart';
 import 'styling.dart';
+
+typedef RegexSearchRequest = ({
+  String text,
+  String query,
+  bool caseSensitive,
+  bool matchWholeWord,
+});
+
+List<(int start, int end)> computeRegexSearchRanges(
+  RegexSearchRequest request,
+) {
+  var pattern = request.query;
+  if (request.matchWholeWord) {
+    pattern = r'\b' + pattern + r'\b';
+  }
+  final regExp = RegExp(
+    pattern,
+    caseSensitive: request.caseSensitive,
+    multiLine: true,
+  );
+
+  final ranges = <(int start, int end)>[];
+  var utf16Cursor = 0;
+  var scalarCursor = 0;
+
+  int scalarOffsetAt(int targetUtf16) {
+    while (utf16Cursor < targetUtf16) {
+      final first = request.text.codeUnitAt(utf16Cursor);
+      if (first >= 0xD800 &&
+          first <= 0xDBFF &&
+          utf16Cursor + 1 < request.text.length) {
+        final second = request.text.codeUnitAt(utf16Cursor + 1);
+        utf16Cursor += second >= 0xDC00 && second <= 0xDFFF ? 2 : 1;
+      } else {
+        utf16Cursor++;
+      }
+      scalarCursor++;
+    }
+    return scalarCursor;
+  }
+
+  for (final match in regExp.allMatches(request.text)) {
+    final start = scalarOffsetAt(match.start);
+    final end = scalarOffsetAt(match.end);
+    ranges.add((start, end));
+  }
+  return ranges;
+}
 
 class _FindMatch {
   const _FindMatch({required this.start, required this.end});
@@ -27,8 +77,8 @@ class FindController extends ChangeNotifier {
   String _lastQuery = '';
   bool _isActive = false;
   bool _isReplaceMode = false;
-  static const _literalSearchDebounceDuration = Duration(milliseconds: 80);
-  Timer? _literalSearchDebounce;
+  static const _searchDebounceDuration = Duration(milliseconds: 80);
+  Timer? _searchDebounce;
   int _searchRequestSerial = 0;
   bool _disposed = false;
 
@@ -55,7 +105,7 @@ class FindController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
-    _literalSearchDebounce?.cancel();
+    _searchDebounce?.cancel();
     _searchRequestSerial++;
     if (_controllerListener != null) {
       _codeController.removeListener(_controllerListener!);
@@ -174,7 +224,7 @@ class FindController extends ChangeNotifier {
   /// [scrollToMatch] determines if the editor should scroll to the selected match.
   void find(String query, {bool scrollToMatch = true}) {
     _lastQuery = query;
-    _literalSearchDebounce?.cancel();
+    _searchDebounce?.cancel();
     final requestSerial = ++_searchRequestSerial;
 
     if (query.isEmpty) {
@@ -184,50 +234,32 @@ class FindController extends ChangeNotifier {
 
     final documentVersion = _codeController.documentVersion;
     _lastDocumentVersion = documentVersion;
+    final caseSensitive = _caseSensitive;
+    final matchWholeWord = _matchWholeWord;
+    final isRegex = _isRegex;
 
-    if (!_isRegex) {
-      final caseSensitive = _caseSensitive;
-      final matchWholeWord = _matchWholeWord;
-      _clearMatches(invalidatePendingSearch: false);
-      _literalSearchDebounce = Timer(_literalSearchDebounceDuration, () {
-        unawaited(
-          _runLiteralSearch(
-            requestSerial: requestSerial,
-            documentVersion: documentVersion,
-            query: query,
-            caseSensitive: caseSensitive,
-            matchWholeWord: matchWholeWord,
-            scrollToMatch: scrollToMatch,
-          ),
-        );
-      });
-      return;
-    }
-
-    try {
-      final text = _codeController.text;
-      var pattern = query;
-      if (_matchWholeWord) {
-        pattern = r'\b' + pattern + r'\b';
-      }
-      final regExp = RegExp(
-        pattern,
-        caseSensitive: _caseSensitive,
-        multiLine: true,
+    _clearMatches(invalidatePendingSearch: false);
+    _searchDebounce = Timer(_searchDebounceDuration, () {
+      unawaited(
+        isRegex
+            ? _runRegexSearch(
+                requestSerial: requestSerial,
+                documentVersion: documentVersion,
+                query: query,
+                caseSensitive: caseSensitive,
+                matchWholeWord: matchWholeWord,
+                scrollToMatch: scrollToMatch,
+              )
+            : _runLiteralSearch(
+                requestSerial: requestSerial,
+                documentVersion: documentVersion,
+                query: query,
+                caseSensitive: caseSensitive,
+                matchWholeWord: matchWholeWord,
+                scrollToMatch: scrollToMatch,
+              ),
       );
-      final matches = regExp
-          .allMatches(text)
-          .map(
-            (match) => _FindMatch(
-              start: CodeForgeController.utf16ToScalarOffset(text, match.start),
-              end: CodeForgeController.utf16ToScalarOffset(text, match.end),
-            ),
-          )
-          .toList(growable: false);
-      _applyMatches(matches, scrollToMatch: scrollToMatch);
-    } catch (e) {
-      _applyMatches(const [], scrollToMatch: false);
-    }
+    });
   }
 
   Future<void> _runLiteralSearch({
@@ -246,6 +278,37 @@ class FindController extends ChangeNotifier {
         caseSensitive: caseSensitive,
         matchWholeWord: matchWholeWord,
       );
+      if (!_isSearchRequestCurrent(requestSerial, documentVersion)) return;
+      final matches = ranges
+          .map((match) => _FindMatch(start: match.$1, end: match.$2))
+          .toList(growable: false);
+      _applyMatches(matches, scrollToMatch: scrollToMatch);
+    } catch (e) {
+      if (!_isSearchRequestCurrent(requestSerial, documentVersion)) return;
+      _applyMatches(const [], scrollToMatch: false);
+    }
+  }
+
+  Future<void> _runRegexSearch({
+    required int requestSerial,
+    required int documentVersion,
+    required String query,
+    required bool caseSensitive,
+    required bool matchWholeWord,
+    required bool scrollToMatch,
+  }) async {
+    try {
+      if (!_isSearchRequestCurrent(requestSerial, documentVersion)) return;
+      _codeController.flushPendingBuffer();
+      if (!_isSearchRequestCurrent(requestSerial, documentVersion)) return;
+      final text = await _codeController.rope.getTextSnapshot();
+      if (!_isSearchRequestCurrent(requestSerial, documentVersion)) return;
+      final ranges = await compute(computeRegexSearchRanges, (
+        text: text,
+        query: query,
+        caseSensitive: caseSensitive,
+        matchWholeWord: matchWholeWord,
+      ));
       if (!_isSearchRequestCurrent(requestSerial, documentVersion)) return;
       final matches = ranges
           .map((match) => _FindMatch(start: match.$1, end: match.$2))
@@ -351,7 +414,7 @@ class FindController extends ChangeNotifier {
   }
 
   void _clearMatches({bool invalidatePendingSearch = true}) {
-    _literalSearchDebounce?.cancel();
+    _searchDebounce?.cancel();
     if (invalidatePendingSearch) {
       _searchRequestSerial++;
     }

@@ -132,6 +132,11 @@ impl RopeBridge {
         self.rope.read().unwrap().to_string()
     }
 
+    pub fn get_text_snapshot(&self) -> String {
+        let rope = self.rope.read().unwrap().clone();
+        rope.to_string()
+    }
+
     #[flutter_rust_bridge::frb(sync)]
     pub fn insert(&self, char_idx: usize, text: String) {
         self.rope.write().unwrap().insert(char_idx, &text);
@@ -470,6 +475,7 @@ mod tests {
     #[test]
     fn find_literal_returns_scalar_offsets_without_materializing_the_document() {
         let rope = RopeBridge::create("a😀 Foo foo\nfoo_bar foo".to_owned());
+        assert_eq!(rope.get_text_snapshot(), "a😀 Foo foo\nfoo_bar foo");
 
         assert_eq!(
             pairs(rope.find_literal("foo".to_owned(), false, false)),

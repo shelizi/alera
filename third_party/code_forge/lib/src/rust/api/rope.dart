@@ -51,6 +51,8 @@ abstract class RopeBridge implements RustOpaqueInterface {
 
   String getText();
 
+  Future<String> getTextSnapshot();
+
   void insert({required BigInt charIdx, required String text});
 
   BigInt lenChars();
