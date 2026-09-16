@@ -80,6 +80,70 @@ void _registerTerminalRuntimeOutputBackpressureTests() {
     },
   );
 
+  test(
+    'visible overflow catches up on a frame instead of the output callback',
+    () {
+      final runtime = XtermTerminalRuntime(
+        ptySessionFactory: _FakeTerminalPtySessionFactory(),
+        shellLaunchesBuilder: () => <GhosttyTerminalShellLaunch>[
+          _launch('shell', shell: '/bin/sh'),
+        ],
+      );
+      addTearDown(runtime.dispose);
+      final session = runtime.sessionFor(workspace: _workspace(), tab: _tab());
+      final visibility = acquireTerminalVisibilityForTesting(session);
+      addTearDown(visibility.dispose);
+
+      queueTerminalOutputForTesting(
+        session,
+        '\x1b[?2004h${'a' * (1536 * 1024)}',
+      );
+
+      // Medium visible bursts should not synchronously parse on the host-output
+      // callback. They are promoted to the next frame instead, so repeated host
+      // frames cannot each spend a parse budget on the Flutter UI isolate.
+      expect(terminalBracketedPasteModeForTesting(session), isFalse);
+      expect(
+        pendingLiveTerminalOutputCharsForTesting(session),
+        greaterThan(1024 * 1024),
+      );
+      expect(terminalOutputFlushScheduledForTesting(session), isTrue);
+      expect(terminalOutputFlushDeferredForTesting(session), isFalse);
+
+      flushTerminalOutputForTesting(session);
+      expect(terminalBracketedPasteModeForTesting(session), isTrue);
+    },
+  );
+
+  test(
+    'extreme visible overflow keeps one bounded synchronous safety drain',
+    () {
+      final runtime = XtermTerminalRuntime(
+        ptySessionFactory: _FakeTerminalPtySessionFactory(),
+        shellLaunchesBuilder: () => <GhosttyTerminalShellLaunch>[
+          _launch('shell', shell: '/bin/sh'),
+        ],
+      );
+      addTearDown(runtime.dispose);
+      final session = runtime.sessionFor(workspace: _workspace(), tab: _tab());
+      final visibility = acquireTerminalVisibilityForTesting(session);
+      addTearDown(visibility.dispose);
+
+      final payload = '\x1b[?2004h${'a' * (5 * 1024 * 1024)}';
+      queueTerminalOutputForTesting(session, payload);
+
+      expect(terminalBracketedPasteModeForTesting(session), isTrue);
+      expect(
+        pendingLiveTerminalOutputCharsForTesting(session),
+        lessThan(payload.length),
+      );
+      expect(
+        pendingLiveTerminalOutputCharsForTesting(session),
+        greaterThan(4 * 1024 * 1024),
+      );
+    },
+  );
+
   test('hidden overflow catch-up yields down to a low-water backlog', () async {
     final runtime = XtermTerminalRuntime(
       ptySessionFactory: _FakeTerminalPtySessionFactory(),

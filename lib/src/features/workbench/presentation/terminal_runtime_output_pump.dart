@@ -39,6 +39,18 @@ class _TerminalSessionOutputPump {
     pipeline.add(_TerminalOutputSegment(data, source));
     if (source == _TerminalOutputSource.live &&
         pipeline.liveLength > _terminalOutputMaxPendingChars) {
+      if (_host.isOutputVisible) {
+        // A visible burst should not pay a parse budget inside every host
+        // output callback. Promote normal overflow to the next frame instead;
+        // this bounds parser work to the render cadence while keeping the
+        // application responsive. Only the much higher hard-water mark keeps
+        // one bounded synchronous drain as a local-memory safety valve.
+        if (pipeline.liveLength > _terminalOutputVisibleHardPendingChars) {
+          _drainChunk(adaptBudget: true);
+        }
+        _scheduleUrgentVisibleFlush();
+        return;
+      }
       // Never discard terminal output just to protect the UI queue, but also
       // never parse a full 1 MiB backlog synchronously on the Flutter UI
       // isolate. Restore, control, and live segments stay ordered in the same
@@ -56,6 +68,22 @@ class _TerminalSessionOutputPump {
       return;
     }
     scheduleFlush();
+  }
+
+  void _scheduleUrgentVisibleFlush() {
+    if (_host.isDisposed || !_host.isOutputVisible) {
+      return;
+    }
+    // Replace a 50 ms cadence timer with the next vsync. A frame callback that
+    // is already queued owns `flushScheduled` without a timer, so it is already
+    // as urgent as we can make it and must not be duplicated.
+    if (pipeline.flushTimer != null) {
+      pipeline.cancelDeferredFlush();
+    }
+    if (pipeline.flushScheduled) {
+      return;
+    }
+    _requestFrame();
   }
 
   void _scheduleHiddenCatchUp() {
@@ -136,7 +164,13 @@ class _TerminalSessionOutputPump {
     }
     _drainChunk(adaptBudget: !force);
     if (pipeline.pending.isNotEmpty) {
-      scheduleFlush();
+      if (!force &&
+          _host.isOutputVisible &&
+          pipeline.liveLength > _terminalOutputMaxPendingChars) {
+        _scheduleUrgentVisibleFlush();
+      } else {
+        scheduleFlush();
+      }
     }
   }
 
