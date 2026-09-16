@@ -1,6 +1,19 @@
 part of 'terminal_runtime_native_test.dart';
 
 void _registerTerminalRuntimeOutputBackpressureTests() {
+  test('starts adaptive parsing at the measured TUI-safe chunk size', () {
+    final runtime = XtermTerminalRuntime(
+      ptySessionFactory: _FakeTerminalPtySessionFactory(),
+      shellLaunchesBuilder: () => <GhosttyTerminalShellLaunch>[
+        _launch('shell', shell: '/bin/sh'),
+      ],
+    );
+    addTearDown(runtime.dispose);
+    final session = runtime.sessionFor(workspace: _workspace(), tab: _tab());
+
+    expect(terminalOutputAdaptiveBudgetCharsForTesting(session), 16 * 1024);
+  });
+
   test('adaptive parse budget shrinks when xterm parsing exceeds target', () {
     expect(
       terminalOutputAdaptiveBudgetForTesting(
@@ -151,7 +164,7 @@ void _registerTerminalRuntimeOutputBackpressureTests() {
     addTearDown(runtime.dispose);
     final session = runtime.sessionFor(workspace: _workspace(), tab: _tab());
 
-    const frame = 64 * 1024;
+    final frame = terminalOutputAdaptiveBudgetCharsForTesting(session);
     queueTerminalOutputForTesting(session, 'a' * (frame * 3));
     final queued = pendingTerminalOutputHeadChunkForTesting(session);
 

@@ -23,7 +23,11 @@ class _TerminalSessionOutputPump {
   final _TerminalSessionOutputHost _host;
   final _TerminalOutputPipeline pipeline = _TerminalOutputPipeline();
   bool _hiddenCatchUpScheduled = false;
-  int _adaptiveChunkBudget = _terminalOutputMaxCharsPerFrame;
+  // Start conservatively before this session has any parse-time samples.
+  // Local profiling of ANSI/TUI-heavy output measured ~25 ms at 64 KiB,
+  // ~13 ms at 32 KiB, and ~6.7 ms at 16 KiB. Plain/normal ANSI output is
+  // cheap and will quickly grow back toward the 64 KiB ceiling.
+  int _adaptiveChunkBudget = _terminalOutputInitialAdaptiveCharsPerFrame;
 
   void queue(
     String data, {

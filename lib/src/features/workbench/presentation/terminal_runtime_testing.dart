@@ -129,6 +129,11 @@ int terminalOutputAdaptiveBudgetForTesting({
 }
 
 @visibleForTesting
+int terminalOutputAdaptiveBudgetCharsForTesting(TerminalSessionHandle session) {
+  return (session as _XtermTerminalSessionHandle)._pump._adaptiveChunkBudget;
+}
+
+@visibleForTesting
 int pendingTerminalOutputCharsForTesting(TerminalSessionHandle session) {
   return (session as _XtermTerminalSessionHandle)._pump.pipeline.length;
 }

@@ -13,6 +13,7 @@ int _terminalOutputChunkCutoff(String value, int limit) {
 }
 
 const int _terminalOutputMaxCharsPerFrame = 64 * 1024;
+const int _terminalOutputInitialAdaptiveCharsPerFrame = 16 * 1024;
 const int _terminalOutputMinAdaptiveCharsPerFrame = 4 * 1024;
 const int _terminalOutputAdaptiveGrowthStep = 8 * 1024;
 const int _terminalOutputAdaptiveQuantum = 1024;
