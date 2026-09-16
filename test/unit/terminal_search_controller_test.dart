@@ -88,6 +88,23 @@ void main() {
     expect(controller.needsFullRefreshForTesting, isFalse);
   });
 
+  test('only listens to terminal changes while search is open', () {
+    final terminal = _terminal();
+    final controller = TerminalSearchController(
+      terminal: terminal,
+      scrollToLine: (_) {},
+    );
+    addTearDown(controller.dispose);
+
+    expect(terminal.listeners, isEmpty);
+
+    controller.open();
+    expect(terminal.listeners, hasLength(1));
+
+    controller.close();
+    expect(terminal.listeners, isEmpty);
+  });
+
   test('releases the match index when the overlay closes', () {
     final terminal = _terminal()..write('needle\r\nother needle');
     final controller = TerminalSearchController(

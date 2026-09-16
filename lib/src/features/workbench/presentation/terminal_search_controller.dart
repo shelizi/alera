@@ -17,10 +17,6 @@ final class TerminalSearchController._(
     return TerminalSearchController._(terminal, scrollToLine);
   }
 
-  this {
-    _terminal.addListener(_handleTerminalChanged);
-  }
-
   xterm.Buffer? _indexedBuffer;
   int _indexedHeight = -1;
   int _indexedWidth = -1;
@@ -59,6 +55,7 @@ final class TerminalSearchController._(
       return;
     }
     _isOpen = true;
+    _terminal.addListener(_handleTerminalChanged);
     if (_query.isNotEmpty) {
       _refresh(forceFull: _needsFullRefresh);
     }
@@ -69,6 +66,7 @@ final class TerminalSearchController._(
     if (!_isOpen) {
       return;
     }
+    _terminal.removeListener(_handleTerminalChanged);
     _isOpen = false;
     // Keep the query for the next invocation, but make reopening authoritative
     // after output that arrived while the overlay was hidden. The match index
@@ -126,9 +124,13 @@ final class TerminalSearchController._(
     if (identical(_terminal, terminal)) {
       return;
     }
-    _terminal.removeListener(_handleTerminalChanged);
+    if (_isOpen) {
+      _terminal.removeListener(_handleTerminalChanged);
+    }
     _terminal = terminal;
-    _terminal.addListener(_handleTerminalChanged);
+    if (_isOpen) {
+      _terminal.addListener(_handleTerminalChanged);
+    }
     _indexedBuffer = null;
     _indexedHeight = -1;
     _indexedWidth = -1;
@@ -293,7 +295,9 @@ final class TerminalSearchController._(
 
   @override
   void dispose() {
-    _terminal.removeListener(_handleTerminalChanged);
+    if (_isOpen) {
+      _terminal.removeListener(_handleTerminalChanged);
+    }
     super.dispose();
   }
 }
