@@ -264,6 +264,22 @@ void main() {
       );
     });
 
+    test('reports whether document text actually changed', () {
+      final registry = EditorSessionRegistry();
+      var notifications = 0;
+      registry.addListener(() => notifications += 1);
+      final document = registry.documentFor('tab-1')
+        ..acceptLoaded(
+          _editorFile(rawContent: 'original', displayContent: 'original'),
+        );
+      notifications = 0;
+
+      expect(document.updateCurrentText('original'), isFalse);
+      expect(notifications, 0);
+      expect(document.updateCurrentText('changed'), isTrue);
+      expect(notifications, 1);
+    });
+
     test(
       'notifies listeners when document content changes and is forgotten',
       () {

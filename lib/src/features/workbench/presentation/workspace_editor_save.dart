@@ -161,12 +161,33 @@ extension _WorkspaceEditorSave on _WorkspaceEditorSurfaceState {
 
   void _handleControllerChanged() {
     final wasDirty = _document.isDirty;
-    _document.updateCurrentText(_controller.text);
-    if (!_loading && widget.tab.isPreview && !wasDirty && _document.isDirty) {
+    final previousProfile =
+        _lastPerformanceProfile ??
+        workspaceEditorPerformanceProfile(
+          lineCount: _controller.lineCount,
+          contentLength: _document.currentText?.length ?? 0,
+        );
+    if (!_document.updateCurrentText(_controller.text)) {
+      return;
+    }
+    final isDirty = _document.isDirty;
+    if (!_loading && widget.tab.isPreview && !wasDirty && isDirty) {
       widget.onKeepPreview?.call();
     }
     _autosave.notifyTextChanged();
-    _refreshStateSafely();
+    final currentProfile = workspaceEditorPerformanceProfile(
+      lineCount: _controller.lineCount,
+      contentLength: _document.currentText?.length ?? 0,
+    );
+    _lastPerformanceProfile = currentProfile;
+    if (workspaceEditorShouldRefreshSurface(
+      wasDirty: wasDirty,
+      isDirty: isDirty,
+      previousProfile: previousProfile,
+      currentProfile: currentProfile,
+    )) {
+      _refreshStateSafely();
+    }
   }
 
   void _handleAutosaveError(Object error, StackTrace stackTrace) {

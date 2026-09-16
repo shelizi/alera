@@ -136,6 +136,53 @@ void main() {
     expect(profile.syntaxHighlighting, isFalse);
   });
 
+  test('skips surface refresh when editor-visible state stays stable', () {
+    final profile = workspaceEditorPerformanceProfile(
+      lineCount: 10,
+      contentLength: 100,
+    );
+
+    expect(
+      workspaceEditorShouldRefreshSurface(
+        wasDirty: true,
+        isDirty: true,
+        previousProfile: profile,
+        currentProfile: profile,
+      ),
+      isFalse,
+    );
+  });
+
+  test('refreshes surface when dirty state or performance profile changes', () {
+    final ordinary = workspaceEditorPerformanceProfile(
+      lineCount: 10,
+      contentLength: 100,
+    );
+    final large = workspaceEditorPerformanceProfile(
+      lineCount: workspaceEditorLargeFileLineThreshold,
+      contentLength: 100,
+    );
+
+    expect(
+      workspaceEditorShouldRefreshSurface(
+        wasDirty: false,
+        isDirty: true,
+        previousProfile: ordinary,
+        currentProfile: ordinary,
+      ),
+      isTrue,
+    );
+    expect(
+      workspaceEditorShouldRefreshSurface(
+        wasDirty: true,
+        isDirty: true,
+        previousProfile: ordinary,
+        currentProfile: large,
+      ),
+      isTrue,
+    );
+  });
+
   test('offers Text Actions only for a valid editor selection', () {
     expect(
       workspaceEditorHasTextActionSelection(

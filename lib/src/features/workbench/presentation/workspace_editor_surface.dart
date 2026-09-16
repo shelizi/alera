@@ -68,6 +68,7 @@ class _WorkspaceEditorSurfaceState
   bool _loading = true;
   bool _saving = false;
   bool _stateRefreshQueued = false;
+  WorkspaceEditorPerformanceProfile? _lastPerformanceProfile;
   Offset? _lastSecondaryTapGlobalPosition;
   int _loadRequestId = 0;
 
@@ -169,6 +170,7 @@ class _WorkspaceEditorSurfaceState
       lineCount: _controller.lineCount,
       contentLength: _document.currentText?.length ?? 0,
     );
+    _lastPerformanceProfile = performanceProfile;
     Widget content;
     if (_loading) {
       content = const Center(child: CircularProgressIndicator());
@@ -477,6 +479,16 @@ WorkspaceEditorPerformanceProfile workspaceEditorPerformanceProfile({
     guideLines: !largeFile,
     syntaxHighlighting: !largeFile,
   );
+}
+
+@visibleForTesting
+bool workspaceEditorShouldRefreshSurface({
+  required bool wasDirty,
+  required bool isDirty,
+  required WorkspaceEditorPerformanceProfile previousProfile,
+  required WorkspaceEditorPerformanceProfile currentProfile,
+}) {
+  return wasDirty != isDirty || previousProfile != currentProfile;
 }
 
 @visibleForTesting

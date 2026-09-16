@@ -398,12 +398,13 @@ class EditorDocumentSession({final VoidCallback? _onChanged}) {
     _notifyChanged();
   }
 
-  void updateCurrentText(String text) {
+  bool updateCurrentText(String text) {
     if (currentText == text) {
-      return;
+      return false;
     }
     currentText = text;
     _notifyChanged();
+    return true;
   }
 
   void _notifyChanged() {
