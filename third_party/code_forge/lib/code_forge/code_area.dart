@@ -7372,14 +7372,27 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     final lineText = controller.getLineText(lineIndex);
     final cachedText = _lineTextCache[lineIndex];
 
-    if (cachedText == lineText && _lineWidthCache.containsKey(lineIndex)) {
-      return _lineWidthCache[lineIndex]!;
+    if (cachedText == lineText) {
+      final cachedWidth = _lineWidthCache[lineIndex];
+      if (cachedWidth != null) return cachedWidth;
+
+      if (_largeFilePerformanceMode && !_lineWrap && !isRTL) {
+        final cachedParagraph = _paragraphCache[lineIndex];
+        if (cachedParagraph != null) {
+          final width = cachedParagraph.maxIntrinsicWidth;
+          _lineWidthCache[lineIndex] = width;
+          return width;
+        }
+      }
     }
 
     final para = _buildParagraph(lineText);
     final width = para.maxIntrinsicWidth;
     _lineTextCache[lineIndex] = lineText;
     _lineWidthCache[lineIndex] = width;
+    if (_largeFilePerformanceMode && !_lineWrap && !isRTL) {
+      _paragraphCache[lineIndex] = para;
+    }
     return width;
   }
 
