@@ -118,6 +118,12 @@ class _PosixPortablePtySessionAdapter implements TerminalPtySession {
     if (_disposed) {
       return;
     }
+    if (message is String) {
+      _events.add(TerminalPtyOutputTextEvent(message));
+      return;
+    }
+    // Retain byte handling for compatibility with manually injected/testing
+    // events; the real POSIX reader isolate now emits decoded text.
     if (message is Uint8List) {
       _events.add(TerminalPtyOutputEvent(message));
       return;

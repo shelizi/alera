@@ -32,6 +32,22 @@ int currentErrnoForTesting() {
 const int _eintr = 4;
 const int _readChunkSize = 4096;
 
+final class _PosixPtyDecodedTextSink implements Sink<String> {
+  _PosixPtyDecodedTextSink(this._sendPort);
+
+  final SendPort _sendPort;
+
+  @override
+  void add(String data) {
+    if (data.isNotEmpty) {
+      _sendPort.send(data);
+    }
+  }
+
+  @override
+  void close() {}
+}
+
 void _posixPtyReadIsolate(List<Object?> args) {
   final fd = args[0]! as int;
   final sendPort = args[1]! as SendPort;
@@ -51,8 +67,15 @@ void _runPosixPtyReadIsolate({
     return;
   }
   final buffer = calloc<ffi.Uint8>(_readChunkSize);
+  final decoder = const Utf8Decoder(allowMalformed: true)
+      .startChunkedConversion(_PosixPtyDecodedTextSink(sendPort));
   try {
-    _readPosixPtyLoop(fd: fd, sendPort: sendPort, buffer: buffer, read: read);
+    _readPosixPtyLoop(fd: fd, buffer: buffer, read: read, onBytes: decoder.add);
+    // Close before publishing done so an incomplete final sequence is emitted
+    // with the same replacement semantics as the UI-isolate decoder used to
+    // provide, and so the final text always precedes the EOF marker.
+    decoder.close();
+    sendPort.send(const <Object?, Object?>{'type': 'done'});
   } catch (error) {
     sendPort.send(<Object?, Object?>{
       'type': 'error',
@@ -65,20 +88,22 @@ void _runPosixPtyReadIsolate({
 
 void _readPosixPtyLoop({
   required int fd,
-  required SendPort sendPort,
   required ffi.Pointer<ffi.Uint8> buffer,
   required int Function(int, ffi.Pointer<ffi.Uint8>, int) read,
+  required void Function(List<int> bytes) onBytes,
 }) {
   while (true) {
     final byteCount = read(fd, buffer, _readChunkSize);
     if (byteCount > 0) {
-      sendPort.send(Uint8List.fromList(buffer.asTypedList(byteCount)));
+      // The decoder consumes this native-buffer view synchronously in the
+      // reader isolate, so there is no need to allocate/copy a Uint8List just
+      // to transfer it to the UI isolate.
+      onBytes(buffer.asTypedList(byteCount));
       continue;
     }
     if (byteCount < 0 && _currentErrno() == _eintr) {
       continue;
     }
-    sendPort.send(const <Object?, Object?>{'type': 'done'});
     break;
   }
 }
