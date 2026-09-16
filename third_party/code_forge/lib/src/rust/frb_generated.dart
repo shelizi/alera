@@ -170,7 +170,7 @@ abstract class RustLibApi extends BaseApi {
     required BigInt offset,
   });
 
-  List<SearchRange> crateApiRopeRopeBridgeFindLiteral({
+  Future<List<SearchRange>> crateApiRopeRopeBridgeFindLiteral({
     required RopeBridge that,
     required String query,
     required bool caseSensitive,
@@ -951,15 +951,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  List<SearchRange> crateApiRopeRopeBridgeFindLiteral({
+  Future<List<SearchRange>> crateApiRopeRopeBridgeFindLiteral({
     required RopeBridge that,
     required String query,
     required bool caseSensitive,
     required bool matchWholeWord,
   }) {
-    return handler.executeSync(
-      SyncTask(
-        callFfi: () {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerRopeBridge(
             that,
@@ -968,7 +968,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_String(query, serializer);
           sse_encode_bool(caseSensitive, serializer);
           sse_encode_bool(matchWholeWord, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 21)!;
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 21,
+            port: port_,
+          );
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_list_search_range,
@@ -2955,7 +2960,7 @@ class RopeBridgeImpl extends RustOpaque implements RopeBridge {
   BigInt findLineStart({required BigInt offset}) => RustLib.instance.api
       .crateApiRopeRopeBridgeFindLineStart(that: this, offset: offset);
 
-  List<SearchRange> findLiteral({
+  Future<List<SearchRange>> findLiteral({
     required String query,
     required bool caseSensitive,
     required bool matchWholeWord,

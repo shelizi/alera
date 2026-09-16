@@ -1024,15 +1024,16 @@ fn wire__crate__api__rope__RopeBridge_find_line_start_impl(
     )
 }
 fn wire__crate__api__rope__RopeBridge_find_literal_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
-) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
-    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
         flutter_rust_bridge::for_generated::TaskInfo {
             debug_name: "RopeBridge_find_literal",
-            port: None,
-            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
         },
         move || {
             let message = unsafe {
@@ -1051,29 +1052,31 @@ fn wire__crate__api__rope__RopeBridge_find_literal_impl(
             let api_case_sensitive = <bool>::sse_decode(&mut deserializer);
             let api_match_whole_word = <bool>::sse_decode(&mut deserializer);
             deserializer.end();
-            transform_result_sse::<_, ()>((move || {
-                let mut api_that_guard = None;
-                let decode_indices_ =
-                    flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
-                        flutter_rust_bridge::for_generated::LockableOrderInfo::new(
-                            &api_that, 0, false,
-                        ),
-                    ]);
-                for i in decode_indices_ {
-                    match i {
-                        0 => api_that_guard = Some(api_that.lockable_decode_sync_ref()),
-                        _ => unreachable!(),
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let mut api_that_guard = None;
+                    let decode_indices_ =
+                        flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
+                            flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                                &api_that, 0, false,
+                            ),
+                        ]);
+                    for i in decode_indices_ {
+                        match i {
+                            0 => api_that_guard = Some(api_that.lockable_decode_sync_ref()),
+                            _ => unreachable!(),
+                        }
                     }
-                }
-                let api_that_guard = api_that_guard.unwrap();
-                let output_ok = Ok::<_, ()>(crate::api::rope::RopeBridge::find_literal(
-                    &*api_that_guard,
-                    api_query,
-                    api_case_sensitive,
-                    api_match_whole_word,
-                ))?;
-                std::result::Result::Ok(output_ok)
-            })())
+                    let api_that_guard = api_that_guard.unwrap();
+                    let output_ok = Ok::<_, ()>(crate::api::rope::RopeBridge::find_literal(
+                        &*api_that_guard,
+                        api_query,
+                        api_case_sensitive,
+                        api_match_whole_word,
+                    ))?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
         },
     )
 }
@@ -2647,6 +2650,9 @@ fn pde_ffi_dispatcher_primary_impl(
 ) {
     // Codec=Pde (Serialization + dispatch), see doc to use other codecs
     match func_id {
+        21 => {
+            wire__crate__api__rope__RopeBridge_find_literal_impl(port, ptr, rust_vec_len, data_len)
+        }
         38 => wire__crate__api__editor__char_offset_default_impl(port, ptr, rust_vec_len, data_len),
         39 => wire__crate__api__editor__folds_compute_all_impl(port, ptr, rust_vec_len, data_len),
         42 => wire__crate__api__editor__init_app_impl(port, ptr, rust_vec_len, data_len),
@@ -2704,7 +2710,6 @@ fn pde_ffi_dispatcher_sync_impl(
         18 => wire__crate__api__rope__RopeBridge_deep_clone_impl(ptr, rust_vec_len, data_len),
         19 => wire__crate__api__rope__RopeBridge_find_line_end_impl(ptr, rust_vec_len, data_len),
         20 => wire__crate__api__rope__RopeBridge_find_line_start_impl(ptr, rust_vec_len, data_len),
-        21 => wire__crate__api__rope__RopeBridge_find_literal_impl(ptr, rust_vec_len, data_len),
         22 => wire__crate__api__rope__RopeBridge_get_bidi_segments_for_line_impl(
             ptr,
             rust_vec_len,

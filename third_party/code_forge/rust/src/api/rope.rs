@@ -296,7 +296,6 @@ impl RopeBridge {
         compute_bidi_segments(&rope, start, end)
     }
 
-    #[flutter_rust_bridge::frb(sync)]
     pub fn find_literal(
         &self,
         query: String,
@@ -320,7 +319,9 @@ impl RopeBridge {
             return Vec::new();
         };
 
-        let rope = self.rope.read().unwrap();
+        // Search a cheap Rope snapshot so the background scan does not hold the
+        // live document read lock and block foreground edits.
+        let rope = self.rope.read().unwrap().clone();
         if query.contains('\n') {
             let text = rope.to_string();
             return collect_search_ranges(&regex, &text, 0);

@@ -36,7 +36,7 @@ abstract class RopeBridge implements RustOpaqueInterface {
 
   BigInt findLineStart({required BigInt offset});
 
-  List<SearchRange> findLiteral({
+  Future<List<SearchRange>> findLiteral({
     required String query,
     required bool caseSensitive,
     required bool matchWholeWord,

@@ -195,17 +195,17 @@ class Rope {
     return _rope.lineToChar(lineIdx: BigInt.from(lineIndex)).toInt();
   }
 
-  List<(int start, int end)> findLiteral(
+  Future<List<(int start, int end)>> findLiteral(
     String query, {
     bool caseSensitive = false,
     bool matchWholeWord = false,
-  }) {
-    return _rope
-        .findLiteral(
-          query: query,
-          caseSensitive: caseSensitive,
-          matchWholeWord: matchWholeWord,
-        )
+  }) async {
+    final ranges = await _rope.findLiteral(
+      query: query,
+      caseSensitive: caseSensitive,
+      matchWholeWord: matchWholeWord,
+    );
+    return ranges
         .map((range) => (range.start.toInt(), range.end.toInt()))
         .toList(growable: false);
   }

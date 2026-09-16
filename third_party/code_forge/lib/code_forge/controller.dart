@@ -2248,6 +2248,10 @@ class CodeForgeController implements DeltaTextInputClient {
     return _rope.getLineStartOffset(lineIndex);
   }
 
+  /// Flushes the small active-line edit buffer into the Rope so native
+  /// background operations can snapshot the latest document contents.
+  void flushPendingBuffer() => _flushBuffer();
+
   /// Finds the start of the line containing [offset].
   int findLineStart(int offset) => _rope.findLineStart(offset);
 

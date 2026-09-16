@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import 'controller.dart';
@@ -25,6 +27,10 @@ class FindController extends ChangeNotifier {
   String _lastQuery = '';
   bool _isActive = false;
   bool _isReplaceMode = false;
+  static const _literalSearchDebounceDuration = Duration(milliseconds: 80);
+  Timer? _literalSearchDebounce;
+  int _searchRequestSerial = 0;
+  bool _disposed = false;
 
   int _lastDocumentVersion = -1;
   VoidCallback? _controllerListener;
@@ -48,6 +54,9 @@ class FindController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _disposed = true;
+    _literalSearchDebounce?.cancel();
+    _searchRequestSerial++;
     if (_controllerListener != null) {
       _codeController.removeListener(_controllerListener!);
     }
@@ -165,67 +174,108 @@ class FindController extends ChangeNotifier {
   /// [scrollToMatch] determines if the editor should scroll to the selected match.
   void find(String query, {bool scrollToMatch = true}) {
     _lastQuery = query;
+    _literalSearchDebounce?.cancel();
+    final requestSerial = ++_searchRequestSerial;
 
     if (query.isEmpty) {
-      _clearMatches();
+      _clearMatches(invalidatePendingSearch: false);
       return;
     }
 
-    _lastDocumentVersion = _codeController.documentVersion;
+    final documentVersion = _codeController.documentVersion;
+    _lastDocumentVersion = documentVersion;
+
+    if (!_isRegex) {
+      final caseSensitive = _caseSensitive;
+      final matchWholeWord = _matchWholeWord;
+      _clearMatches(invalidatePendingSearch: false);
+      _literalSearchDebounce = Timer(_literalSearchDebounceDuration, () {
+        unawaited(
+          _runLiteralSearch(
+            requestSerial: requestSerial,
+            documentVersion: documentVersion,
+            query: query,
+            caseSensitive: caseSensitive,
+            matchWholeWord: matchWholeWord,
+            scrollToMatch: scrollToMatch,
+          ),
+        );
+      });
+      return;
+    }
 
     try {
-      if (!_isRegex) {
-        _matches = _codeController.rope
-            .findLiteral(
-              query,
-              caseSensitive: _caseSensitive,
-              matchWholeWord: _matchWholeWord,
-            )
-            .map((match) => _FindMatch(start: match.$1, end: match.$2))
-            .toList(growable: false);
-      } else {
-        final text = _codeController.text;
-        var pattern = query;
-        if (_matchWholeWord) {
-          pattern = r'\b' + pattern + r'\b';
-        }
-        final regExp = RegExp(
-          pattern,
-          caseSensitive: _caseSensitive,
-          multiLine: true,
-        );
-        _matches = regExp
-            .allMatches(text)
-            .map(
-              (match) => _FindMatch(
-                start: CodeForgeController.utf16ToScalarOffset(
-                  text,
-                  match.start,
-                ),
-                end: CodeForgeController.utf16ToScalarOffset(text, match.end),
-              ),
-            )
-            .toList(growable: false);
+      final text = _codeController.text;
+      var pattern = query;
+      if (_matchWholeWord) {
+        pattern = r'\b' + pattern + r'\b';
       }
+      final regExp = RegExp(
+        pattern,
+        caseSensitive: _caseSensitive,
+        multiLine: true,
+      );
+      final matches = regExp
+          .allMatches(text)
+          .map(
+            (match) => _FindMatch(
+              start: CodeForgeController.utf16ToScalarOffset(text, match.start),
+              end: CodeForgeController.utf16ToScalarOffset(text, match.end),
+            ),
+          )
+          .toList(growable: false);
+      _applyMatches(matches, scrollToMatch: scrollToMatch);
     } catch (e) {
-      _matches = [];
-      _currentMatchIndex = -1;
-      _updateHighlights();
-      notifyListeners();
-      return;
+      _applyMatches(const [], scrollToMatch: false);
     }
+  }
+
+  Future<void> _runLiteralSearch({
+    required int requestSerial,
+    required int documentVersion,
+    required String query,
+    required bool caseSensitive,
+    required bool matchWholeWord,
+    required bool scrollToMatch,
+  }) async {
+    try {
+      _codeController.flushPendingBuffer();
+      if (!_isSearchRequestCurrent(requestSerial, documentVersion)) return;
+      final ranges = await _codeController.rope.findLiteral(
+        query,
+        caseSensitive: caseSensitive,
+        matchWholeWord: matchWholeWord,
+      );
+      if (!_isSearchRequestCurrent(requestSerial, documentVersion)) return;
+      final matches = ranges
+          .map((match) => _FindMatch(start: match.$1, end: match.$2))
+          .toList(growable: false);
+      _applyMatches(matches, scrollToMatch: scrollToMatch);
+    } catch (e) {
+      if (!_isSearchRequestCurrent(requestSerial, documentVersion)) return;
+      _applyMatches(const [], scrollToMatch: false);
+    }
+  }
+
+  bool _isSearchRequestCurrent(int requestSerial, int documentVersion) {
+    return !_disposed &&
+        requestSerial == _searchRequestSerial &&
+        documentVersion == _codeController.documentVersion;
+  }
+
+  void _applyMatches(List<_FindMatch> matches, {required bool scrollToMatch}) {
+    _matches = matches;
     if (_matches.isEmpty) {
       _currentMatchIndex = -1;
       _updateHighlights();
-      notifyListeners();
       return;
     }
 
     final cursor = _codeController.selection.start;
-    int index = 0;
-    bool found = false;
+    var index = 0;
+    var found = false;
 
-    for (int i = 0; i < _matches.length; i++) {
+    for (var i = 0; i < _matches.length; i++) {
       if (_matches[i].start >= cursor) {
         index = i;
         found = true;
@@ -234,13 +284,10 @@ class FindController extends ChangeNotifier {
     }
 
     _currentMatchIndex = found ? index : 0;
-
     _updateHighlights();
-
     if (scrollToMatch) {
       _scrollToCurrentMatch();
     }
-    notifyListeners();
   }
 
   /// Moves to the next match.
@@ -303,7 +350,11 @@ class FindController extends ChangeNotifier {
     }
   }
 
-  void _clearMatches() {
+  void _clearMatches({bool invalidatePendingSearch = true}) {
+    _literalSearchDebounce?.cancel();
+    if (invalidatePendingSearch) {
+      _searchRequestSerial++;
+    }
     _matches = [];
     _currentMatchIndex = -1;
     _codeController.searchHighlights = [];
