@@ -9220,21 +9220,35 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
   void _pruneViewportCaches(int firstVisibleLine, int lastVisibleLine) {
     const int keepMargin = 400;
     const int maxLineBoundedCacheEntries = 3000;
+    const int largeFileTextLayoutKeepMargin = 128;
+    const int largeFileTextLayoutMaxEntries = 512;
 
     final minKeep = max(0, firstVisibleLine - keepMargin);
     final maxKeep = min(controller.lineCount - 1, lastVisibleLine + keepMargin);
+    final textLayoutMinKeep = _largeFilePerformanceMode
+        ? max(0, firstVisibleLine - largeFileTextLayoutKeepMargin)
+        : minKeep;
+    final textLayoutMaxKeep = _largeFilePerformanceMode
+        ? min(
+            controller.lineCount - 1,
+            lastVisibleLine + largeFileTextLayoutKeepMargin,
+          )
+        : maxKeep;
+    final textLayoutMaxEntries = _largeFilePerformanceMode
+        ? largeFileTextLayoutMaxEntries
+        : maxLineBoundedCacheEntries;
 
     _pruneIntKeyedViewportCache(
       _lineTextCache,
-      minKeep,
-      maxKeep,
-      maxLineBoundedCacheEntries,
+      textLayoutMinKeep,
+      textLayoutMaxKeep,
+      textLayoutMaxEntries,
     );
     _pruneIntKeyedViewportCache(
       _lineWidthCache,
-      minKeep,
-      maxKeep,
-      maxLineBoundedCacheEntries,
+      textLayoutMinKeep,
+      textLayoutMaxKeep,
+      textLayoutMaxEntries,
     );
     _pruneIntKeyedViewportCache(
       _lineHeightCache,
@@ -9244,9 +9258,9 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     );
     _pruneIntKeyedViewportCache(
       _paragraphCache,
-      minKeep,
-      maxKeep,
-      maxLineBoundedCacheEntries,
+      textLayoutMinKeep,
+      textLayoutMaxKeep,
+      textLayoutMaxEntries,
     );
     _pruneIntKeyedViewportCache(
       _lineNumberParagraphCache,
