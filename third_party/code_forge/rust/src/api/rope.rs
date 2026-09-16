@@ -22,6 +22,12 @@ pub struct SelectionState {
     pub extent_offset: usize,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SearchRange {
+    pub start: usize,
+    pub end: usize,
+}
+
 #[flutter_rust_bridge::frb(opaque)]
 pub struct RopeBridge {
     pub(crate) rope: RwLock<RustRope>,
@@ -170,7 +176,7 @@ impl RopeBridge {
         }
         line_str
     }
-    
+
     #[flutter_rust_bridge::frb(sync)]
     pub fn len_lines(&self) -> usize {
         self.rope.read().unwrap().len_lines()
@@ -184,7 +190,7 @@ impl RopeBridge {
         }
         rope.char(position).to_string()
     }
-    
+
     #[flutter_rust_bridge::frb(sync)]
     pub fn copy(&self) -> Self {
         self.deep_clone()
@@ -224,13 +230,13 @@ impl RopeBridge {
         }
         lines
     }
-    
+
     #[flutter_rust_bridge::frb(sync)]
     pub fn primary_direction(&self) -> TextDirection {
         let rope = self.rope.read().unwrap();
         let mut rtl_count = 0;
         let mut ltr_count = 0;
-        
+
         for c in rope.chars() {
             match direction_for_char(c) {
                 Some(TextDirection::Rtl) => rtl_count += 1,
@@ -238,7 +244,7 @@ impl RopeBridge {
                 _ => {}
             }
         }
-        
+
         if rtl_count == 0 && ltr_count == 0 {
             TextDirection::Ltr
         } else if rtl_count > ltr_count {
@@ -253,7 +259,7 @@ impl RopeBridge {
         let rope: std::sync::RwLockReadGuard<'_, RustRope> = self.rope.read().unwrap();
         let mut has_rtl = false;
         let mut has_ltr = false;
-        
+
         for c in rope.chars() {
             match direction_for_char(c) {
                 Some(TextDirection::Rtl) => has_rtl = true,
@@ -264,10 +270,14 @@ impl RopeBridge {
                 return TextDirection::Mixed;
             }
         }
-        
-        if !has_rtl && !has_ltr { TextDirection::Ltr }
-        else if !has_rtl { TextDirection::Ltr }
-        else { TextDirection::Rtl }
+
+        if !has_rtl && !has_ltr {
+            TextDirection::Ltr
+        } else if !has_rtl {
+            TextDirection::Ltr
+        } else {
+            TextDirection::Rtl
+        }
     }
 
     #[flutter_rust_bridge::frb(sync)]
@@ -275,7 +285,7 @@ impl RopeBridge {
         let rope: std::sync::RwLockReadGuard<'_, RustRope> = self.rope.read().unwrap();
         compute_bidi_segments(&rope, start, end)
     }
-    
+
     #[flutter_rust_bridge::frb(sync)]
     pub fn get_bidi_segments_for_line(&self, line_index: usize) -> Vec<BiDiSegment> {
         let rope: std::sync::RwLockReadGuard<'_, RustRope> = self.rope.read().unwrap();
@@ -284,6 +294,46 @@ impl RopeBridge {
         let line: ropey::RopeSlice<'_> = rope.line(valid_idx);
         let end: usize = start + line.len_chars();
         compute_bidi_segments(&rope, start, end)
+    }
+
+    #[flutter_rust_bridge::frb(sync)]
+    pub fn find_literal(
+        &self,
+        query: String,
+        case_sensitive: bool,
+        match_whole_word: bool,
+    ) -> Vec<SearchRange> {
+        if query.is_empty() {
+            return Vec::new();
+        }
+
+        let escaped = regex::escape(&query);
+        let pattern = if match_whole_word {
+            format!(r"(?-u:\b){}(?-u:\b)", escaped)
+        } else {
+            escaped
+        };
+        let Ok(regex) = regex::RegexBuilder::new(&pattern)
+            .case_insensitive(!case_sensitive)
+            .build()
+        else {
+            return Vec::new();
+        };
+
+        let rope = self.rope.read().unwrap();
+        if query.contains('\n') {
+            let text = rope.to_string();
+            return collect_search_ranges(&regex, &text, 0);
+        }
+
+        let mut ranges = Vec::new();
+        let mut scalar_base = 0;
+        for line in rope.lines() {
+            let line_text = line.to_string();
+            append_search_ranges(&regex, &line_text, scalar_base, &mut ranges);
+            scalar_base += line.len_chars();
+        }
+        ranges
     }
 
     #[flutter_rust_bridge::frb(sync)]
@@ -320,6 +370,33 @@ impl RopeBridge {
     }
 }
 
+fn collect_search_ranges(regex: &regex::Regex, text: &str, scalar_base: usize) -> Vec<SearchRange> {
+    let mut ranges = Vec::new();
+    append_search_ranges(regex, text, scalar_base, &mut ranges);
+    ranges
+}
+
+fn append_search_ranges(
+    regex: &regex::Regex,
+    text: &str,
+    scalar_base: usize,
+    ranges: &mut Vec<SearchRange>,
+) {
+    let mut previous_byte_end = 0;
+    let mut scalar_cursor = 0;
+    for found in regex.find_iter(text) {
+        scalar_cursor += text[previous_byte_end..found.start()].chars().count();
+        let start = scalar_base + scalar_cursor;
+        let match_len = text[found.start()..found.end()].chars().count();
+        ranges.push(SearchRange {
+            start,
+            end: start + match_len,
+        });
+        scalar_cursor += match_len;
+        previous_byte_end = found.end();
+    }
+}
+
 fn compute_bidi_segments(rope: &RustRope, start: usize, end: usize) -> Vec<BiDiSegment> {
     let end: usize = end.min(rope.len_chars());
     if start >= end {
@@ -333,7 +410,11 @@ fn compute_bidi_segments(rope: &RustRope, start: usize, end: usize) -> Vec<BiDiS
     let slice = rope.slice(start..end);
 
     if slice.len_chars() <= 32 || slice.chars().take(32).all(|c| c.is_ascii()) {
-        return vec![BiDiSegment { start, end, direction: TextDirection::Ltr }];
+        return vec![BiDiSegment {
+            start,
+            end,
+            direction: TextDirection::Ltr,
+        }];
     }
 
     for (i, c) in slice.chars().enumerate() {
@@ -371,5 +452,43 @@ fn direction_for_char(c: char) -> Option<TextDirection> {
         BidiClass::L => Some(TextDirection::Ltr),
         BidiClass::R | BidiClass::AL | BidiClass::AN => Some(TextDirection::Rtl),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pairs(ranges: Vec<SearchRange>) -> Vec<(usize, usize)> {
+        ranges
+            .into_iter()
+            .map(|range| (range.start, range.end))
+            .collect()
+    }
+
+    #[test]
+    fn find_literal_returns_scalar_offsets_without_materializing_the_document() {
+        let rope = RopeBridge::create("a😀 Foo foo\nfoo_bar foo".to_owned());
+
+        assert_eq!(
+            pairs(rope.find_literal("foo".to_owned(), false, false)),
+            vec![(3, 6), (7, 10), (11, 14), (19, 22)]
+        );
+        assert_eq!(
+            pairs(rope.find_literal("foo".to_owned(), true, false)),
+            vec![(7, 10), (11, 14), (19, 22)]
+        );
+        assert_eq!(
+            pairs(rope.find_literal("foo".to_owned(), false, true)),
+            vec![(3, 6), (7, 10), (19, 22)]
+        );
+        assert_eq!(
+            pairs(rope.find_literal("😀".to_owned(), true, false)),
+            vec![(1, 2)]
+        );
+        assert_eq!(
+            pairs(rope.find_literal("foo\nfoo".to_owned(), true, false)),
+            vec![(7, 14)]
+        );
     }
 }

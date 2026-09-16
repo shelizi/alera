@@ -124,10 +124,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<RustFoldRange> dco_decode_list_rust_fold_range(dynamic raw);
 
   @protected
+  List<SearchRange> dco_decode_list_search_range(dynamic raw);
+
+  @protected
   PixelHeight dco_decode_pixel_height(dynamic raw);
 
   @protected
   RustFoldRange dco_decode_rust_fold_range(dynamic raw);
+
+  @protected
+  SearchRange dco_decode_search_range(dynamic raw);
 
   @protected
   SelectionState dco_decode_selection_state(dynamic raw);
@@ -246,10 +252,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  List<SearchRange> sse_decode_list_search_range(SseDeserializer deserializer);
+
+  @protected
   PixelHeight sse_decode_pixel_height(SseDeserializer deserializer);
 
   @protected
   RustFoldRange sse_decode_rust_fold_range(SseDeserializer deserializer);
+
+  @protected
+  SearchRange sse_decode_search_range(SseDeserializer deserializer);
 
   @protected
   SelectionState sse_decode_selection_state(SseDeserializer deserializer);
@@ -388,10 +400,19 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_search_range(
+    List<SearchRange> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_pixel_height(PixelHeight self, SseSerializer serializer);
 
   @protected
   void sse_encode_rust_fold_range(RustFoldRange self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_search_range(SearchRange self, SseSerializer serializer);
 
   @protected
   void sse_encode_selection_state(

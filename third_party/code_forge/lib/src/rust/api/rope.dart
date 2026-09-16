@@ -7,8 +7,8 @@ import '../frb_generated.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `compute_bidi_segments`, `direction_for_char`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `clone`, `clone`, `clone`, `eq`, `fmt`, `fmt`, `fmt`
+// These functions are ignored because they are not marked as `pub`: `append_search_ranges`, `collect_search_ranges`, `compute_bidi_segments`, `direction_for_char`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<RopeBridge>>
 abstract class RopeBridge implements RustOpaqueInterface {
@@ -35,6 +35,12 @@ abstract class RopeBridge implements RustOpaqueInterface {
   BigInt findLineEnd({required BigInt offset});
 
   BigInt findLineStart({required BigInt offset});
+
+  List<SearchRange> findLiteral({
+    required String query,
+    required bool caseSensitive,
+    required bool matchWholeWord,
+  });
 
   List<BiDiSegment> getBidiSegmentsForLine({required BigInt lineIndex});
 
@@ -99,6 +105,24 @@ class BiDiSegment {
           start == other.start &&
           end == other.end &&
           direction == other.direction;
+}
+
+class SearchRange {
+  final BigInt start;
+  final BigInt end;
+
+  const SearchRange({required this.start, required this.end});
+
+  @override
+  int get hashCode => start.hashCode ^ end.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SearchRange &&
+          runtimeType == other.runtimeType &&
+          start == other.start &&
+          end == other.end;
 }
 
 class SelectionState {

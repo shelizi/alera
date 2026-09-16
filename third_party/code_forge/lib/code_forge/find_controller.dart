@@ -3,6 +3,13 @@ import 'package:flutter/material.dart';
 import 'controller.dart';
 import 'styling.dart';
 
+class _FindMatch {
+  const _FindMatch({required this.start, required this.end});
+
+  final int start;
+  final int end;
+}
+
 /// Controller for managing text search functionality in [CodeForge].
 ///
 /// This controller handles searching for text, navigating through matches,
@@ -10,7 +17,7 @@ import 'styling.dart';
 class FindController extends ChangeNotifier {
   final CodeForgeController _codeController;
 
-  List<Match> _matches = [];
+  List<_FindMatch> _matches = [];
   int _currentMatchIndex = -1;
   bool _isRegex = false;
   bool _caseSensitive = false;
@@ -165,25 +172,41 @@ class FindController extends ChangeNotifier {
     }
 
     _lastDocumentVersion = _codeController.documentVersion;
-    final text = _codeController.text;
-    String pattern = query;
-
-    if (!_isRegex) {
-      pattern = RegExp.escape(pattern);
-    }
-
-    if (_matchWholeWord) {
-      pattern = r'\b' + pattern + r'\b';
-    }
 
     try {
-      final regExp = RegExp(
-        pattern,
-        caseSensitive: _caseSensitive,
-        multiLine: true,
-      );
-
-      _matches = regExp.allMatches(text).toList();
+      if (!_isRegex) {
+        _matches = _codeController.rope
+            .findLiteral(
+              query,
+              caseSensitive: _caseSensitive,
+              matchWholeWord: _matchWholeWord,
+            )
+            .map((match) => _FindMatch(start: match.$1, end: match.$2))
+            .toList(growable: false);
+      } else {
+        final text = _codeController.text;
+        var pattern = query;
+        if (_matchWholeWord) {
+          pattern = r'\b' + pattern + r'\b';
+        }
+        final regExp = RegExp(
+          pattern,
+          caseSensitive: _caseSensitive,
+          multiLine: true,
+        );
+        _matches = regExp
+            .allMatches(text)
+            .map(
+              (match) => _FindMatch(
+                start: CodeForgeController.utf16ToScalarOffset(
+                  text,
+                  match.start,
+                ),
+                end: CodeForgeController.utf16ToScalarOffset(text, match.end),
+              ),
+            )
+            .toList(growable: false);
+      }
     } catch (e) {
       _matches = [];
       _currentMatchIndex = -1;
@@ -274,7 +297,7 @@ class FindController extends ChangeNotifier {
       final regExp = RegExp(pattern, caseSensitive: _caseSensitive);
       final newText = text.replaceAll(regExp, replaceInputController.text);
 
-      _codeController.replaceRange(0, text.length, newText);
+      _codeController.replaceRange(0, _codeController.length, newText);
     } catch (e) {
       debugPrint('FindController: Replace All failed. Error: $e');
     }
