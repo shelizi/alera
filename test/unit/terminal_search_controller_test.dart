@@ -120,7 +120,7 @@ void main() {
     },
   );
 
-  test('only listens to terminal changes while search is open', () {
+  test('only listens while search is open with a non-empty query', () {
     final terminal = _terminal();
     final controller = TerminalSearchController(
       terminal: terminal,
@@ -131,6 +131,15 @@ void main() {
     expect(terminal.listeners, isEmpty);
 
     controller.open();
+    expect(terminal.listeners, isEmpty);
+
+    controller.setQuery('needle');
+    expect(terminal.listeners, hasLength(1));
+
+    controller.setQuery('');
+    expect(terminal.listeners, isEmpty);
+
+    controller.setQuery('needle');
     expect(terminal.listeners, hasLength(1));
 
     controller.close();

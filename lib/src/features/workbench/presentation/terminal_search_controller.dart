@@ -22,6 +22,7 @@ final class TerminalSearchController._(
   int _indexedWidth = -1;
   bool _needsFullRefresh = true;
   bool _isOpen = false;
+  bool _listeningToTerminal = false;
   String _query = '';
   int _selectedIndex = -1;
   final Map<xterm.BufferLine, List<_LineMatch>> _matchesByLine =
@@ -55,7 +56,7 @@ final class TerminalSearchController._(
       return;
     }
     _isOpen = true;
-    _terminal.addListener(_handleTerminalChanged);
+    _syncTerminalListener();
     if (_query.isNotEmpty) {
       _refresh(forceFull: _needsFullRefresh);
     }
@@ -66,8 +67,8 @@ final class TerminalSearchController._(
     if (!_isOpen) {
       return;
     }
-    _terminal.removeListener(_handleTerminalChanged);
     _isOpen = false;
+    _syncTerminalListener();
     // Keep the query for the next invocation, but make reopening authoritative
     // after output that arrived while the overlay was hidden. The match index
     // is released because reopening rescans anyway; keeping it would retain
@@ -84,6 +85,7 @@ final class TerminalSearchController._(
       return;
     }
     _query = query;
+    _syncTerminalListener();
     _selectedIndex = -1;
     _matchesByLine.clear();
     _matches = const <TerminalSearchMatch>[];
@@ -124,11 +126,11 @@ final class TerminalSearchController._(
     if (identical(_terminal, terminal)) {
       return;
     }
-    if (_isOpen) {
+    if (_listeningToTerminal) {
       _terminal.removeListener(_handleTerminalChanged);
     }
     _terminal = terminal;
-    if (_isOpen) {
+    if (_listeningToTerminal) {
       _terminal.addListener(_handleTerminalChanged);
     }
     _indexedBuffer = null;
@@ -143,6 +145,19 @@ final class TerminalSearchController._(
 
   @visibleForTesting
   bool get needsFullRefreshForTesting => _needsFullRefresh;
+
+  void _syncTerminalListener() {
+    final shouldListen = _isOpen && _query.isNotEmpty;
+    if (shouldListen == _listeningToTerminal) {
+      return;
+    }
+    if (shouldListen) {
+      _terminal.addListener(_handleTerminalChanged);
+    } else {
+      _terminal.removeListener(_handleTerminalChanged);
+    }
+    _listeningToTerminal = shouldListen;
+  }
 
   void _handleTerminalChanged() {
     if (!_isOpen || _query.isEmpty) {
@@ -301,8 +316,9 @@ final class TerminalSearchController._(
 
   @override
   void dispose() {
-    if (_isOpen) {
+    if (_listeningToTerminal) {
       _terminal.removeListener(_handleTerminalChanged);
+      _listeningToTerminal = false;
     }
     super.dispose();
   }
