@@ -3715,7 +3715,7 @@ class CodeForgeController implements DeltaTextInputClient {
   AutofillScope? get currentAutofillScope => null;
 
   @override
-  TextEditingValue? get currentTextEditingValue =>
+  TextEditingValue get currentTextEditingValue =>
       _buildCurrentImeEditingValue();
 
   TextEditingValue _buildCurrentImeEditingValue() {

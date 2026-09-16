@@ -597,13 +597,7 @@ class _CodeForgeState extends State<CodeForge> with TickerProviderStateMixin {
           _controller.connection = _connection;
         }
         if (!_isMobile) _connection!.show();
-        _connection!.setEditingState(
-          _controller.currentTextEditingValue ??
-              TextEditingValue(
-                text: _controller.text,
-                selection: _controller.selection,
-              ),
-        );
+        _connection!.setEditingState(_controller.currentTextEditingValue);
       }
     });
 
@@ -780,13 +774,7 @@ class _CodeForgeState extends State<CodeForge> with TickerProviderStateMixin {
       } else {
         _connection = _attachImeConnection();
 
-        _connection!.setEditingState(
-          _controller.currentTextEditingValue ??
-              TextEditingValue(
-                text: _controller.text,
-                selection: _controller.selection,
-              ),
-        );
+        _connection!.setEditingState(_controller.currentTextEditingValue);
 
         _controller.connection = _connection;
       }
@@ -820,13 +808,7 @@ class _CodeForgeState extends State<CodeForge> with TickerProviderStateMixin {
     _connection = fresh;
     _controller.connection = fresh;
     fresh.show();
-    fresh.setEditingState(
-      _controller.currentTextEditingValue ??
-          TextEditingValue(
-            text: _controller.text,
-            selection: _controller.selection,
-          ),
-    );
+    fresh.setEditingState(_controller.currentTextEditingValue);
   }
 
   void _updateScrollbarLineNumberIndicator() {
@@ -11428,11 +11410,7 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
         focusNode.requestFocus();
         if (focusNode.hasFocus) {
           controller.connection!.setEditingState(
-            controller.currentTextEditingValue ??
-                TextEditingValue(
-                  text: controller.text,
-                  selection: controller.selection,
-                ),
+            controller.currentTextEditingValue,
           );
         }
       }
