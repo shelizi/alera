@@ -42,6 +42,17 @@ class _TerminalSessionOutputPump {
     if (data.isEmpty || _host.isDisposed) {
       return;
     }
+    if (source == _TerminalOutputSource.live &&
+        pipeline.pending.isEmpty &&
+        pipeline.sinceFlushRequest.isRunning &&
+        pipeline.sinceFlushRequest.elapsed >=
+            _terminalOutputAdaptiveIdleResetInterval) {
+      // A learned 64 KiB budget is safe only while the workload stays similar.
+      // After a quiet gap the next burst may be a full-screen TUI, where local
+      // profiling measured a ~25 ms first parse at 64 KiB versus ~6-7 ms at
+      // 16 KiB. Start the new burst conservatively and learn upward again.
+      capAdaptiveBudgetForReveal();
+    }
     pipeline.add(_TerminalOutputSegment(data, source));
     if (source == _TerminalOutputSource.live &&
         pipeline.liveLength > _terminalOutputMaxPendingChars) {

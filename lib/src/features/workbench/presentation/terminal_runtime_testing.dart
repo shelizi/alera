@@ -113,6 +113,10 @@ Duration get terminalOutputMinFlushIntervalForTesting =>
     _terminalOutputMinFlushInterval;
 
 @visibleForTesting
+Duration get terminalOutputAdaptiveIdleResetIntervalForTesting =>
+    _terminalOutputAdaptiveIdleResetInterval;
+
+@visibleForTesting
 int terminalOutputFrameCutoffForTesting(String value) {
   return _terminalOutputChunkCutoff(value, _terminalOutputMaxCharsPerFrame);
 }

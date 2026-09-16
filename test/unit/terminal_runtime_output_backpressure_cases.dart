@@ -238,6 +238,34 @@ void _registerTerminalRuntimeOutputBackpressureTests() {
     expect(pendingTerminalOutputCharsForTesting(session), 48 * 1024);
   });
 
+  test(
+    'an idle terminal restarts a learned parse budget conservatively',
+    () async {
+      final runtime = XtermTerminalRuntime(
+        ptySessionFactory: _FakeTerminalPtySessionFactory(),
+        shellLaunchesBuilder: () => <GhosttyTerminalShellLaunch>[
+          _launch('shell', shell: '/bin/sh'),
+        ],
+      );
+      addTearDown(runtime.dispose);
+      final session = runtime.sessionFor(workspace: _workspace(), tab: _tab());
+      final visibility = acquireTerminalVisibilityForTesting(session);
+      addTearDown(visibility.dispose);
+
+      queueTerminalOutputForTesting(session, 'warmup');
+      flushTerminalOutputForTesting(session);
+      setTerminalOutputAdaptiveBudgetForTesting(session, 64 * 1024);
+
+      await Future<void>.delayed(
+        terminalOutputAdaptiveIdleResetIntervalForTesting +
+            const Duration(milliseconds: 50),
+      );
+      queueTerminalOutputForTesting(session, 'new-burst');
+
+      expect(terminalOutputAdaptiveBudgetCharsForTesting(session), 16 * 1024);
+    },
+  );
+
   test('drains a large chunk without recopying the pending head', () {
     final runtime = XtermTerminalRuntime(
       ptySessionFactory: _FakeTerminalPtySessionFactory(),

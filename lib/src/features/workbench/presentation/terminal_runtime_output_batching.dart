@@ -18,6 +18,9 @@ const int _terminalOutputMinAdaptiveCharsPerFrame = 4 * 1024;
 const int _terminalOutputAdaptiveGrowthStep = 8 * 1024;
 const int _terminalOutputAdaptiveQuantum = 1024;
 const Duration _terminalOutputTargetParseTime = Duration(milliseconds: 6);
+const Duration _terminalOutputAdaptiveIdleResetInterval = Duration(
+  milliseconds: 500,
+);
 const int _terminalOutputMaxPendingChars = 1024 * 1024;
 const int _terminalOutputVisibleHardPendingChars = 4 * 1024 * 1024;
 const int _terminalOutputHiddenCatchUpTargetChars = 256 * 1024;
