@@ -1444,29 +1444,57 @@ class _CodeForgeState extends State<CodeForge> with TickerProviderStateMixin {
     _controller.replaceRange(deleteFrom, caret, '');
   }
 
+  int _deleteWordForwardEnd(int caret) {
+    var lineIndex = _controller.getLineAtOffset(caret);
+    var localScalarOffset = caret - _controller.getLineStartOffset(lineIndex);
+    final lineCount = _controller.lineCount;
+
+    while (lineIndex < lineCount) {
+      final lineStart = _controller.getLineStartOffset(lineIndex);
+      final lineText = _controller.getLineText(lineIndex);
+      final localStringIndex = CodeForgeController.scalarToStringIndex(
+        lineText,
+        localScalarOffset,
+      );
+      final suffix = lineText.substring(localStringIndex);
+      final tokenStart = RegExp(r'\S').firstMatch(suffix);
+      if (tokenStart != null) {
+        final tokenStringIndex = localStringIndex + tokenStart.start;
+        final tokenMatch = RegExp(r'^(\w+|[^\w\s]+)')
+            .firstMatch(lineText.substring(tokenStringIndex));
+        if (tokenMatch != null) {
+          final tokenEndStringIndex = tokenStringIndex + tokenMatch.end;
+          return lineStart +
+              CodeForgeController.utf16ToScalarOffset(
+                lineText,
+                tokenEndStringIndex,
+              );
+        }
+        break;
+      }
+
+      lineIndex++;
+      localScalarOffset = 0;
+    }
+
+    // Preserve the old regex behavior for trailing whitespace with no token:
+    // Ctrl+Delete removes only the next character instead of all whitespace.
+    return (caret + 1).clamp(0, _controller.length);
+  }
+
   void _deleteWordForward() {
     if (_readOnly) return;
     final selection = _controller.selection;
-    final text = _controller.text;
 
     if (!selection.isCollapsed) {
       _controller.replaceRange(selection.start, selection.end, '');
       return;
     }
 
-    int caret = selection.extentOffset;
-    if (caret >= text.length) return;
+    final caret = selection.extentOffset;
+    if (caret >= _controller.length) return;
 
-    final after = text.substring(caret);
-    final match = RegExp(r'^(\s*\w+|\s*[^\w\s]+)').firstMatch(after);
-    int deleteTo = caret;
-    if (match != null) {
-      deleteTo = caret + match.end;
-    } else {
-      deleteTo = caret + 1;
-    }
-
-    _controller.replaceRange(caret, deleteTo, '');
+    _controller.replaceRange(caret, _deleteWordForwardEnd(caret), '');
   }
 
   void _moveWordLeft(bool withShift) {
@@ -1513,38 +1541,84 @@ class _CodeForgeState extends State<CodeForge> with TickerProviderStateMixin {
     );
   }
 
+  int _wordRightBoundary(int caret) {
+    var lineIndex = _controller.getLineAtOffset(caret);
+    var lineStart = _controller.getLineStartOffset(lineIndex);
+    var lineText = _controller.getLineText(lineIndex);
+    final localScalarOffset = caret - lineStart;
+    final lineScalarLength = lineText.runes.length;
+
+    // Preserve the old special case: when the caret is directly on a newline,
+    // Ctrl+Right advances by exactly one character instead of consuming the
+    // whole cross-line whitespace run.
+    if (localScalarOffset >= lineScalarLength) {
+      return lineIndex < _controller.lineCount - 1
+          ? caret + 1
+          : _controller.length;
+    }
+
+    final localStringIndex = CodeForgeController.scalarToStringIndex(
+      lineText,
+      localScalarOffset,
+    );
+    final suffix = lineText.substring(localStringIndex);
+    final whitespaceMatch = RegExp(r'^\s+').firstMatch(suffix);
+    if (whitespaceMatch == null) {
+      final tokenMatch = RegExp(
+        '^($_wordCharPattern+|[^$_wordCharPattern\\s]+)',
+      ).firstMatch(suffix);
+      if (tokenMatch == null) return (caret + 1).clamp(0, _controller.length);
+      return lineStart +
+          CodeForgeController.utf16ToScalarOffset(
+            lineText,
+            localStringIndex + tokenMatch.end,
+          );
+    }
+
+    var whitespaceEndStringIndex = localStringIndex + whitespaceMatch.end;
+    if (whitespaceEndStringIndex < lineText.length) {
+      return lineStart +
+          CodeForgeController.utf16ToScalarOffset(
+            lineText,
+            whitespaceEndStringIndex,
+          );
+    }
+
+    // A whitespace token may span newlines. Read only the leading whitespace
+    // of following lines until the token boundary is found.
+    final lineCount = _controller.lineCount;
+    lineIndex++;
+    while (lineIndex < lineCount) {
+      lineStart = _controller.getLineStartOffset(lineIndex);
+      lineText = _controller.getLineText(lineIndex);
+      if (lineText.isEmpty) {
+        lineIndex++;
+        continue;
+      }
+
+      final leadingWhitespace = RegExp(r'^\s+').firstMatch(lineText);
+      if (leadingWhitespace == null) return lineStart;
+      whitespaceEndStringIndex = leadingWhitespace.end;
+      if (whitespaceEndStringIndex < lineText.length) {
+        return lineStart +
+            CodeForgeController.utf16ToScalarOffset(
+              lineText,
+              whitespaceEndStringIndex,
+            );
+      }
+      lineIndex++;
+    }
+
+    return _controller.length;
+  }
+
   void _moveWordRight(bool withShift) {
     final selection = _controller.selection;
-    final text = _controller.text;
-    int caret = selection.extentOffset;
+    final caret = selection.extentOffset;
 
-    if (caret >= text.length) return;
+    if (caret >= _controller.length) return;
 
-    if (caret < text.length && text[caret] == '\n') {
-      final newOffset = caret + 1;
-      _controller.setSelectionSilently(
-        withShift
-            ? TextSelection(
-                baseOffset: selection.baseOffset,
-                extentOffset: newOffset,
-              )
-            : TextSelection.collapsed(offset: newOffset),
-      );
-      return;
-    }
-
-    final regex = RegExp('$_wordCharPattern+|[^$_wordCharPattern\\s]+|\\s+');
-    final matches = regex.allMatches(text, caret);
-
-    int newOffset = caret;
-    for (final match in matches) {
-      if (match.start > caret) {
-        newOffset = match.start;
-        break;
-      }
-    }
-    if (newOffset == caret) newOffset = text.length;
-
+    final newOffset = _wordRightBoundary(caret);
     _controller.setSelectionSilently(
       withShift
           ? TextSelection(
