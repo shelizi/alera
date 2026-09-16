@@ -4496,6 +4496,12 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
   CodeSelectionStyle _selectionStyle;
   List<LspErrors> _diagnostics;
   late List<LspErrors> _sortedDiagnostics;
+  List<LspErrors> _diagnosticsByStartLine = const [];
+  List<int> _diagnosticPrefixMaxEndLine = const [];
+  Map<LspErrors, int> _diagnosticPaintOrder = const {};
+  int _cachedVisibleDiagnosticFirstLine = -1;
+  int _cachedVisibleDiagnosticLastLine = -1;
+  List<LspErrors> _cachedVisibleDiagnostics = const [];
   List<SearchHighlight> _sortedSearchHighlights = const [];
   List<int> _searchHighlightPrefixMaxEnd = const [];
   List<SearchHighlight>? _indexedSearchHighlightSource;
@@ -4788,6 +4794,7 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     if (_diagnostics != diagnostics) {
       _diagnostics = diagnostics;
       _sortedDiagnostics = _sortDiagnostics(diagnostics);
+      _rebuildDiagnosticIndex();
       markNeedsPaint();
     }
   }
@@ -4796,6 +4803,85 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     if (diagnostics.length < 2) return diagnostics;
     return List<LspErrors>.of(diagnostics)
       ..sort((a, b) => b.severity.compareTo(a.severity));
+  }
+
+  void _rebuildDiagnosticIndex() {
+    _cachedVisibleDiagnosticFirstLine = -1;
+    _cachedVisibleDiagnosticLastLine = -1;
+    _cachedVisibleDiagnostics = const [];
+    if (_sortedDiagnostics.isEmpty) {
+      _diagnosticsByStartLine = const [];
+      _diagnosticPrefixMaxEndLine = const [];
+      _diagnosticPaintOrder = const {};
+      return;
+    }
+
+    final paintOrder = Map<LspErrors, int>.identity();
+    for (var i = 0; i < _sortedDiagnostics.length; i++) {
+      paintOrder[_sortedDiagnostics[i]] = i;
+    }
+    final sorted = List<LspErrors>.of(_sortedDiagnostics)
+      ..sort((a, b) {
+        final aLine = a.range['start']?['line'] as int;
+        final bLine = b.range['start']?['line'] as int;
+        return aLine.compareTo(bLine);
+      });
+    final prefixMaxEnd = List<int>.filled(sorted.length, 0);
+    var maxEnd = sorted.first.range['end']?['line'] as int;
+    for (var i = 0; i < sorted.length; i++) {
+      final endLine = sorted[i].range['end']?['line'] as int;
+      if (endLine > maxEnd) maxEnd = endLine;
+      prefixMaxEnd[i] = maxEnd;
+    }
+    _diagnosticsByStartLine = sorted;
+    _diagnosticPrefixMaxEndLine = prefixMaxEnd;
+    _diagnosticPaintOrder = paintOrder;
+  }
+
+  int _firstDiagnosticOverlapping(int firstVisibleLine) {
+    var low = 0;
+    var high = _diagnosticPrefixMaxEndLine.length;
+    while (low < high) {
+      final mid = low + ((high - low) >> 1);
+      if (_diagnosticPrefixMaxEndLine[mid] >= firstVisibleLine) {
+        high = mid;
+      } else {
+        low = mid + 1;
+      }
+    }
+    return low;
+  }
+
+  List<LspErrors> _visibleDiagnostics(
+    int firstVisibleLine,
+    int lastVisibleLine,
+  ) {
+    if (_cachedVisibleDiagnosticFirstLine == firstVisibleLine &&
+        _cachedVisibleDiagnosticLastLine == lastVisibleLine) {
+      return _cachedVisibleDiagnostics;
+    }
+    if (_diagnosticsByStartLine.isEmpty) return const [];
+
+    final first = _firstDiagnosticOverlapping(firstVisibleLine);
+    final visible = <LspErrors>[];
+    for (var i = first; i < _diagnosticsByStartLine.length; i++) {
+      final diagnostic = _diagnosticsByStartLine[i];
+      final startLine = diagnostic.range['start']?['line'] as int;
+      if (startLine > lastVisibleLine) break;
+      final endLine = diagnostic.range['end']?['line'] as int;
+      if (endLine >= firstVisibleLine) visible.add(diagnostic);
+    }
+    if (visible.length > 1) {
+      visible.sort(
+        (a, b) => (_diagnosticPaintOrder[a] ?? 0).compareTo(
+          _diagnosticPaintOrder[b] ?? 0,
+        ),
+      );
+    }
+    _cachedVisibleDiagnosticFirstLine = firstVisibleLine;
+    _cachedVisibleDiagnosticLastLine = lastVisibleLine;
+    _cachedVisibleDiagnostics = visible;
+    return visible;
   }
 
   void _rebuildSearchHighlightIndex() {
@@ -4981,6 +5067,7 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
        _innerPadding = innerPadding,
        _matchHighlightStyle = matchHighlightStyle {
     _sortedDiagnostics = _sortDiagnostics(_diagnostics);
+    _rebuildDiagnosticIndex();
     _rebuildSearchHighlightIndex();
     _rebuildLineDecorationIndex();
     final fontSize = _textStyle?.fontSize ?? 14.0;
@@ -8480,7 +8567,10 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     }
 
     final Map<int, int> lineSeverityMap = {};
-    for (final diagnostic in _diagnostics) {
+    for (final diagnostic in _visibleDiagnostics(
+      firstVisibleLine,
+      lastVisibleLine,
+    )) {
       final startLine = diagnostic.range['start']?['line'] as int?;
       final endLine = diagnostic.range['end']?['line'] as int?;
       if (startLine == null || startLine > lastVisibleLine) continue;
@@ -9284,7 +9374,10 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
   ) {
     if (_diagnostics.isEmpty) return;
 
-    for (final diagnostic in _sortedDiagnostics) {
+    for (final diagnostic in _visibleDiagnostics(
+      firstVisibleLine,
+      lastVisibleLine,
+    )) {
       final range = diagnostic.range;
       final startPos = range['start'] as Map<String, dynamic>;
       final endPos = range['end'] as Map<String, dynamic>;
