@@ -276,6 +276,65 @@ void main() {
     );
   });
 
+  test('uses viewport layout only for safe long printable ASCII lines', () {
+    final ascii = List.filled(
+      code_forge.kLargeFileParagraphProfileMinChars,
+      'x',
+    ).join();
+
+    expect(code_forge.isLargeFileAsciiViewportCandidate(ascii), isTrue);
+    expect(
+      code_forge.isLargeFileAsciiViewportCandidate('${ascii.substring(1)}\t'),
+      isFalse,
+    );
+    expect(
+      code_forge.isLargeFileAsciiViewportCandidate('${ascii.substring(1)}中'),
+      isFalse,
+    );
+    expect(
+      code_forge.isLargeFileAsciiViewportCandidate('${ascii.substring(1)}😀'),
+      isFalse,
+    );
+    expect(
+      code_forge.isLargeFileAsciiViewportCandidate('${ascii.substring(1)} '),
+      isFalse,
+    );
+    expect(
+      code_forge.isLargeFileAsciiViewportCandidate(ascii.substring(1)),
+      isFalse,
+    );
+  });
+
+  test('slices long ASCII lines around the horizontal viewport', () {
+    expect(
+      code_forge.largeFileAsciiViewportSlice(
+        textLength: 10000,
+        columnWidth: 10,
+        horizontalScroll: 2500,
+        viewportWidth: 1000,
+      ),
+      (start: 186, end: 414, xOffset: 1860.0),
+    );
+    expect(
+      code_forge.largeFileAsciiViewportSlice(
+        textLength: 100,
+        columnWidth: 10,
+        horizontalScroll: 0,
+        viewportWidth: 200,
+      ),
+      (start: 0, end: 84, xOffset: 0.0),
+    );
+    expect(
+      code_forge.largeFileAsciiViewportSlice(
+        textLength: 100,
+        columnWidth: 10,
+        horizontalScroll: 950,
+        viewportWidth: 200,
+      ),
+      (start: 31, end: 100, xOffset: 310.0),
+    );
+  });
+
   test('offers Text Actions only for a valid editor selection', () {
     expect(
       workspaceEditorHasTextActionSelection(

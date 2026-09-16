@@ -27,6 +27,52 @@ const String _wordCharPattern =
     r'[\w\u0600-\u06FF\u08A0-\u08FF\u0590-\u05FF'
     r'\u3040-\u309F\u30A0-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uAC00-\uD7AF\uF900-\uFAFF]';
 
+bool isLargeFileAsciiViewportCandidate(
+  String text, {
+  int minChars = kLargeFileParagraphProfileMinChars,
+}) {
+  if (text.length < minChars || text.isEmpty) return false;
+  if (text.codeUnitAt(text.length - 1) == 0x20) return false;
+
+  for (int i = 0; i < text.length; i++) {
+    final codeUnit = text.codeUnitAt(i);
+    if (codeUnit < 0x20 || codeUnit > 0x7e) return false;
+  }
+  return true;
+}
+
+({int start, int end, double xOffset}) largeFileAsciiViewportSlice({
+  required int textLength,
+  required double columnWidth,
+  required double horizontalScroll,
+  required double viewportWidth,
+  int overscanColumns = 64,
+}) {
+  if (textLength <= 0 ||
+      columnWidth <= 0 ||
+      !columnWidth.isFinite ||
+      viewportWidth <= 0 ||
+      !viewportWidth.isFinite) {
+    return (start: 0, end: 0, xOffset: 0.0);
+  }
+
+  final safeScroll = horizontalScroll.isFinite
+      ? max(0.0, horizontalScroll)
+      : 0.0;
+  final safeOverscan = max(0, overscanColumns);
+  final firstVisibleColumn = (safeScroll / columnWidth).floor().clamp(
+    0,
+    textLength,
+  );
+  final visibleColumns = (viewportWidth / columnWidth).ceil();
+  final start = max(0, firstVisibleColumn - safeOverscan);
+  final end = min(
+    textLength,
+    firstVisibleColumn + visibleColumns + safeOverscan,
+  );
+  return (start: start, end: end, xOffset: start * columnWidth);
+}
+
 /// A highly customizable code editor widget for Flutter.
 ///
 /// [CodeForge] provides a feature-rich code editing experience with support for:
@@ -4450,6 +4496,10 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
   final VoidCallback? onHoverSetByTap;
   final Map<int, double> _lineWidthCache = {};
   final Map<int, String> _lineTextCache = {};
+  final Map<int, ({int version, bool eligible})>
+  _largeFileAsciiViewportEligibilityCache = {};
+  bool _largeFileFixedAsciiColumnWidthMeasured = false;
+  double? _largeFileFixedAsciiColumnWidth;
   final Map<int, Rect> _actionBulbRects = {};
   final Map<Rect, DocumentColor> _colorBoxHitAreas = {};
   final Map<int, ui.Paragraph> _paragraphCache = {};
@@ -5017,6 +5067,54 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     return p;
   }
 
+  bool _canUseLargeFileAsciiViewportLine(int lineIndex, String text) {
+    final version = controller.contentVersion;
+    final cached = _largeFileAsciiViewportEligibilityCache[lineIndex];
+    if (cached != null && cached.version == version) {
+      return cached.eligible;
+    }
+
+    final eligible = isLargeFileAsciiViewportCandidate(text);
+    _largeFileAsciiViewportEligibilityCache[lineIndex] = (
+      version: version,
+      eligible: eligible,
+    );
+    return eligible;
+  }
+
+  double? _getLargeFileFixedAsciiColumnWidth() {
+    if (_largeFileFixedAsciiColumnWidthMeasured) {
+      return _largeFileFixedAsciiColumnWidth;
+    }
+    _largeFileFixedAsciiColumnWidthMeasured = true;
+
+    final unitWidth = _buildParagraph('M').maxIntrinsicWidth;
+    if (!unitWidth.isFinite || unitWidth <= 0) return null;
+
+    final allPrintableAscii = String.fromCharCodes([
+      for (int code = 0x20; code <= 0x7e; code++) code,
+    ]);
+    final samples = <String>[
+      'MMMMMMMM',
+      'iiiiiiii',
+      'WWWWWWWW',
+      '01234567',
+      ' ->=._x',
+      allPrintableAscii,
+    ];
+    for (final sample in samples) {
+      final measured = _buildParagraph(sample).maxIntrinsicWidth;
+      final expected = unitWidth * sample.length;
+      final tolerance = max(0.05, expected * 0.002);
+      if (!measured.isFinite || (measured - expected).abs() > tolerance) {
+        return null;
+      }
+    }
+
+    _largeFileFixedAsciiColumnWidth = unitWidth;
+    return unitWidth;
+  }
+
   ui.Paragraph _buildHighlightedParagraph(
     int lineIndex,
     String text, {
@@ -5418,6 +5516,8 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
       fontSize: fontSize,
       fontFamily: fontFamily,
     );
+    _largeFileFixedAsciiColumnWidthMeasured = false;
+    _largeFileFixedAsciiColumnWidth = null;
 
     _gutterPadding = fontSize;
     if (_enableGutter) {
@@ -7451,6 +7551,20 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     }
 
     final lineText = cachedText ?? controller.getLineText(lineIndex);
+    if (_largeFilePerformanceMode &&
+        !_lineWrap &&
+        !isRTL &&
+        !_enableFolding &&
+        _canUseLargeFileAsciiViewportLine(lineIndex, lineText)) {
+      final columnWidth = _getLargeFileFixedAsciiColumnWidth();
+      if (columnWidth != null) {
+        final width = lineText.length * columnWidth;
+        _lineTextCache[lineIndex] = lineText;
+        _lineWidthCache[lineIndex] = width;
+        return width;
+      }
+    }
+
     final para = _buildParagraph(lineText);
     final width = para.maxIntrinsicWidth;
     _lineTextCache[lineIndex] = lineText;
@@ -7995,6 +8109,25 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
         ? _wrapWidth
         : (rtl ? max(contentWidth * 3, 10000.0) : null);
     final horizontalScroll = wrapsLines ? 0.0 : _effectiveHScroll;
+    final horizontalViewportWidth = wrapsLines
+        ? 0.0
+        : hscrollController.hasClients
+        ? hscrollController.position.viewportDimension - _rightPaddingWidth
+        : max(
+            0.0,
+            _screenWidth -
+                _gutterWidth -
+                (innerPadding?.horizontal ?? 0.0) -
+                _rightPaddingWidth,
+          );
+    final largeFileAsciiColumnWidth =
+        _largeFilePerformanceMode &&
+            !wrapsLines &&
+            !rtl &&
+            !foldingEnabled &&
+            horizontalViewportWidth > 0
+        ? _getLargeFileFixedAsciiColumnWidth()
+        : null;
 
     double currentY = firstVisibleLineY;
     for (int i = firstVisibleLine; i <= lastVisibleLine && i < lineCount; i++) {
@@ -8006,6 +8139,7 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
 
       ui.Paragraph paragraph;
       String lineText;
+      double paragraphXOffset = 0.0;
 
       if (bufferActive && i == bufferLineIndex && bufferLineText != null) {
         lineText = bufferLineText;
@@ -8029,6 +8163,18 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
         final cachedParagraph = rtl ? null : _paragraphCache[i];
         if (cachedParagraph != null) {
           paragraph = cachedParagraph;
+        } else if (largeFileAsciiColumnWidth != null &&
+            _canUseLargeFileAsciiViewportLine(i, lineText)) {
+          final slice = largeFileAsciiViewportSlice(
+            textLength: lineText.length,
+            columnWidth: largeFileAsciiColumnWidth,
+            horizontalScroll: horizontalScroll,
+            viewportWidth: horizontalViewportWidth,
+          );
+          paragraph = _buildParagraph(
+            lineText.substring(slice.start, slice.end),
+          );
+          paragraphXOffset = slice.xOffset;
         } else {
           paragraph = _buildHighlightedParagraph(
             i,
@@ -8063,7 +8209,11 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
 
       canvas.drawParagraph(
         paragraph,
-        offset + Offset(textX, innerTop + contentTop + visualYOffset - viewTop),
+        offset +
+            Offset(
+              textX + paragraphXOffset,
+              innerTop + contentTop + visualYOffset - viewTop,
+            ),
       );
 
       if (isFoldStart && foldRange.isFolded) {
@@ -9264,6 +9414,12 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     );
     _pruneIntKeyedViewportCache(
       _lineWidthCache,
+      textLayoutMinKeep,
+      textLayoutMaxKeep,
+      textLayoutMaxEntries,
+    );
+    _pruneIntKeyedViewportCache(
+      _largeFileAsciiViewportEligibilityCache,
       textLayoutMinKeep,
       textLayoutMaxKeep,
       textLayoutMaxEntries,
