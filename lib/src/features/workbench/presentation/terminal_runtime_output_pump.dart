@@ -44,7 +44,7 @@ class _TerminalSessionOutputPump {
       // between additional hidden catch-up chunks.
       _drainChunk(adaptBudget: true);
       if (!_host.isOutputVisible &&
-          pipeline.liveLength > _terminalOutputMaxPendingChars) {
+          pipeline.liveLength > _terminalOutputHiddenCatchUpTargetChars) {
         _scheduleHiddenCatchUp();
       } else {
         scheduleFlush();
@@ -64,11 +64,11 @@ class _TerminalSessionOutputPump {
       if (_host.isDisposed || _host.isOutputVisible) {
         return;
       }
-      if (pipeline.liveLength <= _terminalOutputMaxPendingChars) {
+      if (pipeline.liveLength <= _terminalOutputHiddenCatchUpTargetChars) {
         return;
       }
       _drainChunk(adaptBudget: true);
-      if (pipeline.liveLength > _terminalOutputMaxPendingChars) {
+      if (pipeline.liveLength > _terminalOutputHiddenCatchUpTargetChars) {
         _scheduleHiddenCatchUp();
       }
     });
@@ -76,8 +76,9 @@ class _TerminalSessionOutputPump {
 
   void scheduleFlush() {
     // A hidden terminal keeps a bounded accumulation window without paying
-    // frame time for it. Overflow is parsed directly by queue(), and the final
-    // partial window is drained when the terminal becomes visible again.
+    // frame time for it. Once live output crosses the 1 MiB high-water mark,
+    // queue() yields through catch-up chunks down to a smaller low-water mark;
+    // the final partial window is drained when the terminal becomes visible.
     if (pipeline.flushScheduled || _host.isDisposed || !_host.isOutputVisible) {
       return;
     }

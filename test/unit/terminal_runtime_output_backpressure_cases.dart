@@ -67,6 +67,37 @@ void _registerTerminalRuntimeOutputBackpressureTests() {
     },
   );
 
+  test('hidden overflow catch-up yields down to a low-water backlog', () async {
+    final runtime = XtermTerminalRuntime(
+      ptySessionFactory: _FakeTerminalPtySessionFactory(),
+      shellLaunchesBuilder: () => <GhosttyTerminalShellLaunch>[
+        _launch('shell', shell: '/bin/sh'),
+      ],
+    );
+    addTearDown(runtime.dispose);
+    final session = runtime.sessionFor(workspace: _workspace(), tab: _tab());
+
+    queueTerminalOutputForTesting(session, 'a' * (1536 * 1024));
+
+    // Hidden catch-up is intentionally event-loop paced instead of one giant
+    // synchronous parse. Give even the 4 KiB minimum adaptive budget enough
+    // turns to reach the intended low-water mark.
+    for (
+      var turn = 0;
+      turn < 512 &&
+          pendingLiveTerminalOutputCharsForTesting(session) > 256 * 1024;
+      turn++
+    ) {
+      await Future<void>.delayed(Duration.zero);
+    }
+
+    expect(
+      pendingLiveTerminalOutputCharsForTesting(session),
+      lessThanOrEqualTo(256 * 1024),
+    );
+    expect(pendingLiveTerminalOutputCharsForTesting(session), greaterThan(0));
+  });
+
   test(
     'revealing a hidden terminal only parses one UI budget synchronously',
     () {
