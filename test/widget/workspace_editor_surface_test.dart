@@ -111,6 +111,7 @@ void main() {
 
     expect(profile.lineWrap, isTrue);
     expect(profile.guideLines, isTrue);
+    expect(profile.folding, isTrue);
     expect(profile.syntaxHighlighting, isTrue);
     expect(profile.largeFilePerformanceMode, isFalse);
   });
@@ -123,6 +124,7 @@ void main() {
 
     expect(profile.lineWrap, isFalse);
     expect(profile.guideLines, isFalse);
+    expect(profile.folding, isFalse);
     expect(profile.syntaxHighlighting, isFalse);
     expect(profile.largeFilePerformanceMode, isTrue);
   });
@@ -135,6 +137,7 @@ void main() {
 
     expect(profile.lineWrap, isFalse);
     expect(profile.guideLines, isFalse);
+    expect(profile.folding, isFalse);
     expect(profile.syntaxHighlighting, isFalse);
     expect(profile.largeFilePerformanceMode, isTrue);
   });

@@ -204,6 +204,7 @@ class _WorkspaceEditorSurfaceState
               lineWrap: performanceProfile.lineWrap,
               enableLocalSuggestions: false,
               enableGuideLines: performanceProfile.guideLines,
+              enableFolding: performanceProfile.folding,
               largeFilePerformanceMode:
                   performanceProfile.largeFilePerformanceMode,
               enableGutter: true,
@@ -485,6 +486,7 @@ const Duration workspaceEditorLargeFileSnapshotDebounce = Duration(
 typedef WorkspaceEditorPerformanceProfile = ({
   bool lineWrap,
   bool guideLines,
+  bool folding,
   bool syntaxHighlighting,
   bool largeFilePerformanceMode,
 });
@@ -500,6 +502,7 @@ WorkspaceEditorPerformanceProfile workspaceEditorPerformanceProfile({
   return (
     lineWrap: !largeFile,
     guideLines: !largeFile,
+    folding: !largeFile,
     syntaxHighlighting: !largeFile,
     largeFilePerformanceMode: largeFile,
   );
