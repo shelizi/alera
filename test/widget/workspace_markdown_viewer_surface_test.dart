@@ -366,6 +366,43 @@ void main() {
     expect(service.reads, const <String>['docs/readme.md']);
   });
 
+  testWidgets('debounces rapid editor updates and renders only the latest', (
+    tester,
+  ) async {
+    final registry = EditorSessionRegistry();
+    final service = _FakeWorkspaceFileService('# Disk');
+    final document = registry.documentFor('editor-tab')
+      ..attachFile(workspacePath: '/repo/alera', relativePath: 'docs/readme.md')
+      ..acceptLoaded(
+        _editorFile(rawContent: '# Disk', displayContent: '# Disk'),
+      );
+
+    await tester.pumpWidget(
+      _surface(registry: registry, workspaceFiles: service),
+    );
+    await tester.pumpAndSettle();
+
+    final halfDebounce = Duration(
+      milliseconds:
+          workspaceMarkdownViewerEditorUpdateDebounce.inMilliseconds ~/ 2,
+    );
+
+    document.updateCurrentText('# First');
+    await tester.pump(halfDebounce);
+    expect(find.textContaining('Disk'), findsOneWidget);
+    expect(find.textContaining('First'), findsNothing);
+
+    document.updateCurrentText('# Latest');
+    await tester.pump(
+      workspaceMarkdownViewerEditorUpdateDebounce - halfDebounce,
+    );
+    expect(find.textContaining('Latest'), findsNothing);
+
+    await tester.pump(workspaceMarkdownViewerEditorUpdateDebounce);
+    expect(find.textContaining('Latest'), findsOneWidget);
+    expect(find.textContaining('First'), findsNothing);
+  });
+
   testWidgets('ignores dirty editor changes from unrelated files', (
     tester,
   ) async {

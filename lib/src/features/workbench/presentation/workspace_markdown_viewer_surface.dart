@@ -18,6 +18,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:gpt_markdown/gpt_markdown.dart';
 
+@visibleForTesting
+const Duration workspaceMarkdownViewerEditorUpdateDebounce = Duration(
+  milliseconds: 75,
+);
+
 class const WorkspaceMarkdownViewerSurface({
   super.key,
   required final Workspace workspace,
@@ -39,7 +44,7 @@ class _WorkspaceMarkdownViewerSurfaceState
   bool _usingDirtyEditorContent = false;
   int _loadRequestId = 0;
   Listenable? _editorDocumentChanges;
-  bool _editorUpdateScheduled = false;
+  Timer? _editorUpdateDebounceTimer;
 
   @override
   void initState() {
@@ -62,6 +67,7 @@ class _WorkspaceMarkdownViewerSurfaceState
 
   @override
   void dispose() {
+    _editorUpdateDebounceTimer?.cancel();
     _editorDocumentChanges?.removeListener(_handleEditorSessionChanged);
     super.dispose();
   }
@@ -189,17 +195,19 @@ class _WorkspaceMarkdownViewerSurfaceState
   }
 
   void _handleEditorSessionChanged() {
-    if (!mounted || _editorUpdateScheduled) {
+    if (!mounted) {
       return;
     }
-    _editorUpdateScheduled = true;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _editorUpdateScheduled = false;
-      if (mounted) {
-        _applyEditorSessionChange();
-      }
-    });
-    WidgetsBinding.instance.scheduleFrame();
+    _editorUpdateDebounceTimer?.cancel();
+    _editorUpdateDebounceTimer = Timer(
+      workspaceMarkdownViewerEditorUpdateDebounce,
+      () {
+        _editorUpdateDebounceTimer = null;
+        if (mounted) {
+          _applyEditorSessionChange();
+        }
+      },
+    );
   }
 
   void _applyEditorSessionChange() {
@@ -221,6 +229,8 @@ class _WorkspaceMarkdownViewerSurfaceState
 
   void _subscribeToEditorDocument() {
     _editorDocumentChanges?.removeListener(_handleEditorSessionChanged);
+    _editorUpdateDebounceTimer?.cancel();
+    _editorUpdateDebounceTimer = null;
     final filePath = widget.tab.filePath;
     if (filePath == null) {
       _editorDocumentChanges = null;
