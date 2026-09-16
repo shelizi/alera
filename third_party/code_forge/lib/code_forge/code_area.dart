@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:developer' as developer;
 import 'dart:io';
 import 'dart:math';
 import 'dart:ui' as ui;
@@ -21,6 +22,7 @@ import './syntax_highlighter.dart';
 const int kSemanticTokenViewportPaddingLines = 1500;
 const int kExactWrappedHeightThreshold = 512;
 const int kWrappedHeightSampleSize = 64;
+const int kLargeFileParagraphProfileMinChars = 4096;
 const String _wordCharPattern =
     r'[\w\u0600-\u06FF\u08A0-\u08FF\u0590-\u05FF'
     r'\u3040-\u309F\u30A0-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uAC00-\uD7AF\uF900-\uFAFF]';
@@ -4995,7 +4997,23 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
       ..pushStyle(_uiTextStyle)
       ..addText(text.isEmpty ? ' ' : text);
     final p = builder.build();
-    p.layout(ui.ParagraphConstraints(width: width ?? double.infinity));
+    final constraints = ui.ParagraphConstraints(
+      width: width ?? double.infinity,
+    );
+    if (_largeFilePerformanceMode &&
+        text.length >= kLargeFileParagraphProfileMinChars &&
+        !kReleaseMode) {
+      developer.Timeline.timeSync(
+        'CodeForge.largeFileParagraphLayout',
+        () => p.layout(constraints),
+        arguments: <String, Object?>{
+          'chars': text.length,
+          'width': constraints.width.isFinite ? constraints.width : -1.0,
+        },
+      );
+    } else {
+      p.layout(constraints);
+    }
     return p;
   }
 
