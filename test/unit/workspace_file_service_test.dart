@@ -1,8 +1,95 @@
 import 'package:alera/src/features/workbench/application/workspace_file_service.dart';
+import 'package:alera/src/shared/infra/git/git_explorer_status.dart';
 import 'package:alera/src/rust/api/workspace_files.dart' as native;
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  group('WorkspaceFileService.applyGitStatusSnapshot', () {
+    const service = WorkspaceFileService();
+
+    test('returns the original empty entry list', () {
+      final entries = <native.WorkspaceFileEntry>[];
+
+      final result = service.applyGitStatusSnapshot(
+        entries,
+        const GitExplorerStatusSnapshot.empty(),
+      );
+
+      expect(identical(result, entries), isTrue);
+    });
+
+    test('reuses the list when the snapshot does not change any status', () {
+      final entry = _workspaceEntry('main.dart');
+      final entries = <native.WorkspaceFileEntry>[entry];
+
+      final result = service.applyGitStatusSnapshot(
+        entries,
+        const GitExplorerStatusSnapshot.empty(),
+      );
+
+      expect(identical(result, entries), isTrue);
+      expect(identical(result.single, entry), isTrue);
+    });
+
+    test('reuses entries whose git status is already applied', () {
+      final entry = _workspaceEntry(
+        'main.dart',
+        gitStatus: native.WorkspaceFileGitStatus.modified,
+      );
+      final entries = <native.WorkspaceFileEntry>[entry];
+
+      final result = service.applyGitStatusSnapshot(
+        entries,
+        GitExplorerStatusSnapshot(<String, GitExplorerStatus>{
+          'main.dart': GitExplorerStatus.modified,
+        }),
+      );
+
+      expect(identical(result, entries), isTrue);
+      expect(identical(result.single, entry), isTrue);
+    });
+
+    test('copies only changed entries and preserves entry metadata', () {
+      final changed = _workspaceEntry(
+        'src/main.dart',
+        isIgnored: true,
+        isHidden: true,
+        isSymlink: true,
+        isProtected: true,
+        hasChildrenHint: true,
+      );
+      final untouched = _workspaceEntry(
+        'README.md',
+        gitStatus: native.WorkspaceFileGitStatus.added,
+      );
+      final entries = <native.WorkspaceFileEntry>[changed, untouched];
+
+      final result = service.applyGitStatusSnapshot(
+        entries,
+        GitExplorerStatusSnapshot(<String, GitExplorerStatus>{
+          'src/main.dart': GitExplorerStatus.untracked,
+        }),
+      );
+
+      expect(identical(result, entries), isFalse);
+      expect(identical(result[0], changed), isFalse);
+      expect(identical(result[1], untouched), isTrue);
+      expect(result[0].relativePath, changed.relativePath);
+      expect(result[0].name, changed.name);
+      expect(result[0].kind, changed.kind);
+      expect(result[0].size, changed.size);
+      expect(result[0].modifiedMillis, changed.modifiedMillis);
+      expect(result[0].contentToken, changed.contentToken);
+      expect(result[0].isIgnored, changed.isIgnored);
+      expect(result[0].isHidden, changed.isHidden);
+      expect(result[0].isSymlink, changed.isSymlink);
+      expect(result[0].isProtected, changed.isProtected);
+      expect(result[0].hasChildrenHint, changed.hasChildrenHint);
+      expect(result[0].gitStatus, native.WorkspaceFileGitStatus.untracked);
+      expect(result[1].gitStatus, native.WorkspaceFileGitStatus.added);
+    });
+  });
+
   group('EditorSessionRegistry', () {
     test(
       'keeps dirty document state after the editor widget unregisters',
@@ -394,6 +481,31 @@ class _FakeWorkspaceFileService extends WorkspaceFileService {
       encoding: encoding,
     );
   }
+}
+
+native.WorkspaceFileEntry _workspaceEntry(
+  String relativePath, {
+  native.WorkspaceFileGitStatus? gitStatus,
+  bool isIgnored = false,
+  bool isHidden = false,
+  bool isSymlink = false,
+  bool isProtected = false,
+  bool hasChildrenHint = false,
+}) {
+  return native.WorkspaceFileEntry(
+    relativePath: relativePath,
+    name: relativePath.split('/').last,
+    kind: native.WorkspaceFileKind.file,
+    size: .from(42),
+    modifiedMillis: 7,
+    contentToken: '$relativePath-token',
+    isIgnored: isIgnored,
+    isHidden: isHidden,
+    isSymlink: isSymlink,
+    isProtected: isProtected,
+    hasChildrenHint: hasChildrenHint,
+    gitStatus: gitStatus,
+  );
 }
 
 native.WorkspaceEditorTextFile _editorFile({

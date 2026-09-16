@@ -61,34 +61,38 @@ class const WorkspaceFileService() {
     List<native.WorkspaceFileEntry> entries,
     GitExplorerStatusSnapshot snapshot,
   ) {
-    return entries
-        .map((entry) {
-          final status = snapshot.statusFor(entry.relativePath);
-          if (status == null) {
-            return entry;
-          }
-          return native.WorkspaceFileEntry(
-            relativePath: entry.relativePath,
-            name: entry.name,
-            kind: entry.kind,
-            size: entry.size,
-            modifiedMillis: entry.modifiedMillis,
-            contentToken: entry.contentToken,
-            isIgnored: entry.isIgnored,
-            isHidden: entry.isHidden,
-            isSymlink: entry.isSymlink,
-            isProtected: entry.isProtected,
-            hasChildrenHint: entry.hasChildrenHint,
-            gitStatus: switch (status) {
-              GitExplorerStatus.untracked =>
-                native.WorkspaceFileGitStatus.untracked,
-              GitExplorerStatus.added => native.WorkspaceFileGitStatus.added,
-              GitExplorerStatus.modified =>
-                native.WorkspaceFileGitStatus.modified,
-            },
-          );
-        })
-        .toList(growable: false);
+    List<native.WorkspaceFileEntry>? updated;
+    for (var index = 0; index < entries.length; index += 1) {
+      final entry = entries[index];
+      final status = snapshot.statusFor(entry.relativePath);
+      if (status == null) {
+        continue;
+      }
+      final gitStatus = switch (status) {
+        GitExplorerStatus.untracked => native.WorkspaceFileGitStatus.untracked,
+        GitExplorerStatus.added => native.WorkspaceFileGitStatus.added,
+        GitExplorerStatus.modified => native.WorkspaceFileGitStatus.modified,
+      };
+      if (entry.gitStatus == gitStatus) {
+        continue;
+      }
+      updated ??= List<native.WorkspaceFileEntry>.of(entries, growable: false);
+      updated[index] = native.WorkspaceFileEntry(
+        relativePath: entry.relativePath,
+        name: entry.name,
+        kind: entry.kind,
+        size: entry.size,
+        modifiedMillis: entry.modifiedMillis,
+        contentToken: entry.contentToken,
+        isIgnored: entry.isIgnored,
+        isHidden: entry.isHidden,
+        isSymlink: entry.isSymlink,
+        isProtected: entry.isProtected,
+        hasChildrenHint: entry.hasChildrenHint,
+        gitStatus: gitStatus,
+      );
+    }
+    return updated ?? entries;
   }
 
   Future<native.WorkspaceExplorerTreeProjection> projectExplorerTree({
