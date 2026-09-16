@@ -1413,7 +1413,6 @@ class _CodeForgeState extends State<CodeForge> with TickerProviderStateMixin {
   void _deleteWordBackward() {
     if (_readOnly) return;
     final selection = _controller.selection;
-    final text = _controller.text;
 
     if (!selection.isCollapsed) {
       _controller.replaceRange(selection.start, selection.end, '');
@@ -1423,15 +1422,16 @@ class _CodeForgeState extends State<CodeForge> with TickerProviderStateMixin {
     int caret = selection.extentOffset;
     if (caret <= 0) return;
 
-    final prevChar = text[caret - 1];
-    if (prevChar == '\n') {
+    final lineIndex = _controller.getLineAtOffset(caret);
+    final lineStart = _controller.getLineStartOffset(lineIndex);
+    if (caret == lineStart) {
       _controller.replaceRange(caret - 1, caret, '');
       return;
     }
 
-    final before = text.substring(0, caret);
-    final lineStart = text.lastIndexOf('\n', caret - 1) + 1;
-    final lineText = before.substring(lineStart);
+    final lineText = _controller
+        .getLineText(lineIndex)
+        .substring(0, caret - lineStart);
 
     final match = RegExp(r'(\w+|[^\w\s]+)\s*$').firstMatch(lineText);
     int deleteFrom = caret;
@@ -1471,13 +1471,12 @@ class _CodeForgeState extends State<CodeForge> with TickerProviderStateMixin {
 
   void _moveWordLeft(bool withShift) {
     final selection = _controller.selection;
-    final text = _controller.text;
     int caret = selection.extentOffset;
 
     if (caret <= 0) return;
 
-    final prevNewline = text.lastIndexOf('\n', caret - 1);
-    final lineStart = prevNewline == -1 ? 0 : prevNewline + 1;
+    final lineIndex = _controller.getLineAtOffset(caret);
+    final lineStart = _controller.getLineStartOffset(lineIndex);
     if (caret == lineStart && lineStart > 0) {
       final newOffset = lineStart - 1;
       _controller.setSelectionSilently(
@@ -1491,7 +1490,9 @@ class _CodeForgeState extends State<CodeForge> with TickerProviderStateMixin {
       return;
     }
 
-    final lineText = text.substring(lineStart, caret);
+    final lineText = _controller
+        .getLineText(lineIndex)
+        .substring(0, caret - lineStart);
     final wordMatches = RegExp('$_wordCharPattern+|[^$_wordCharPattern\\s]+')
         .allMatches(lineText)
         .toList();
