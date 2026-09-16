@@ -218,6 +218,26 @@ void _registerTerminalRuntimeOutputBackpressureTests() {
     },
   );
 
+  test('revealing a terminal resets a hidden learned parse budget', () {
+    final runtime = XtermTerminalRuntime(
+      ptySessionFactory: _FakeTerminalPtySessionFactory(),
+      shellLaunchesBuilder: () => <GhosttyTerminalShellLaunch>[
+        _launch('shell', shell: '/bin/sh'),
+      ],
+    );
+    addTearDown(runtime.dispose);
+    final session = runtime.sessionFor(workspace: _workspace(), tab: _tab());
+
+    setTerminalOutputAdaptiveBudgetForTesting(session, 64 * 1024);
+    queueTerminalOutputForTesting(session, 'a' * (64 * 1024));
+
+    final visibility = acquireTerminalVisibilityForTesting(session);
+    addTearDown(visibility.dispose);
+
+    expect(terminalOutputAdaptiveBudgetCharsForTesting(session), 16 * 1024);
+    expect(pendingTerminalOutputCharsForTesting(session), 48 * 1024);
+  });
+
   test('drains a large chunk without recopying the pending head', () {
     final runtime = XtermTerminalRuntime(
       ptySessionFactory: _FakeTerminalPtySessionFactory(),

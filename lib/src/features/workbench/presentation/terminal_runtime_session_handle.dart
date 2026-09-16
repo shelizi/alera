@@ -133,6 +133,7 @@ class _XtermTerminalSessionHandle(
       // A tab that was hidden may have accumulated a large partial window.
       // Parse only one normal UI budget synchronously on reveal, then let the
       // existing paced frame pipeline catch up without freezing this frame.
+      _pump.capAdaptiveBudgetForReveal();
       _pump.flushFrame(force: true);
     } else {
       _pump.pipeline.cancelDeferredFlush();

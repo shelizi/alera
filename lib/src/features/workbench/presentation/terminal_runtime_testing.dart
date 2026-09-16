@@ -134,6 +134,14 @@ int terminalOutputAdaptiveBudgetCharsForTesting(TerminalSessionHandle session) {
 }
 
 @visibleForTesting
+void setTerminalOutputAdaptiveBudgetForTesting(
+  TerminalSessionHandle session,
+  int chars,
+) {
+  (session as _XtermTerminalSessionHandle)._pump._adaptiveChunkBudget = chars;
+}
+
+@visibleForTesting
 int pendingTerminalOutputCharsForTesting(TerminalSessionHandle session) {
   return (session as _XtermTerminalSessionHandle)._pump.pipeline.length;
 }

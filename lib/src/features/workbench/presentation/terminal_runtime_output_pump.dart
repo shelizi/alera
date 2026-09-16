@@ -29,6 +29,12 @@ class _TerminalSessionOutputPump {
   // cheap and will quickly grow back toward the 64 KiB ceiling.
   int _adaptiveChunkBudget = _terminalOutputInitialAdaptiveCharsPerFrame;
 
+  void capAdaptiveBudgetForReveal() {
+    if (_adaptiveChunkBudget > _terminalOutputInitialAdaptiveCharsPerFrame) {
+      _adaptiveChunkBudget = _terminalOutputInitialAdaptiveCharsPerFrame;
+    }
+  }
+
   void queue(
     String data, {
     _TerminalOutputSource source = _TerminalOutputSource.live,
