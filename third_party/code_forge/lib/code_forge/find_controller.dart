@@ -19,7 +19,7 @@ class FindController extends ChangeNotifier {
   bool _isActive = false;
   bool _isReplaceMode = false;
 
-  String _lastText = '';
+  int _lastDocumentVersion = -1;
   VoidCallback? _controllerListener;
 
   final TextEditingController findInputController = TextEditingController();
@@ -29,7 +29,7 @@ class FindController extends ChangeNotifier {
 
   /// Creates a [FindController] associated with the given [CodeForgeController].
   FindController(this._codeController) {
-    _lastText = _codeController.text;
+    _lastDocumentVersion = _codeController.documentVersion;
     _controllerListener = _onCodeControllerChanged;
     _codeController.addListener(_controllerListener!);
     findInputController.addListener(_onFindInputChanged);
@@ -52,9 +52,9 @@ class FindController extends ChangeNotifier {
 
   void _onCodeControllerChanged() {
     if (!_isActive && _lastQuery.isEmpty) return;
-    final currentText = _codeController.text;
-    if (currentText != _lastText) {
-      _lastText = currentText;
+    final currentVersion = _codeController.documentVersion;
+    if (currentVersion != _lastDocumentVersion) {
+      _lastDocumentVersion = currentVersion;
       _reperformSearch();
     }
   }
@@ -164,6 +164,7 @@ class FindController extends ChangeNotifier {
       return;
     }
 
+    _lastDocumentVersion = _codeController.documentVersion;
     final text = _codeController.text;
     String pattern = query;
 
