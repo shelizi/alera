@@ -76,8 +76,9 @@ extension _WorkspaceEditorSave on _WorkspaceEditorSurfaceState {
     if (loadedText == null) {
       return;
     }
+    _clearPendingDocumentSnapshot();
     _document.updateCurrentText(loadedText);
-    _controller.text = loadedText;
+    _replaceControllerText(loadedText);
     _undoController.clear();
     if (mounted) {
       _setEditorState(() {});
@@ -134,8 +135,9 @@ extension _WorkspaceEditorSave on _WorkspaceEditorSurfaceState {
   }
 
   void _acceptSaved(native.WorkspaceEditorTextFile saved) {
+    _clearPendingDocumentSnapshot();
     _document.acceptSaved(saved, tabSize: _currentEditorTabSize());
-    _controller.text = _document.currentText ?? '';
+    _replaceControllerText(_document.currentText ?? '');
   }
 
   void _acceptSavedIfUnchanged(
@@ -147,6 +149,7 @@ extension _WorkspaceEditorSave on _WorkspaceEditorSurfaceState {
       return;
     }
     final currentText = _controller.text;
+    _clearPendingDocumentSnapshot();
     _document.acceptSaved(saved, tabSize: _currentEditorTabSize());
     _document.updateCurrentText(currentText);
   }
@@ -160,6 +163,9 @@ extension _WorkspaceEditorSave on _WorkspaceEditorSurfaceState {
   }
 
   void _handleControllerChanged() {
+    if (_suppressControllerChangeHandling) {
+      return;
+    }
     final documentVersion = _controller.documentVersion;
     if (!workspaceEditorShouldSyncControllerText(
       previousDocumentVersion: _lastObservedDocumentVersion,
@@ -168,24 +174,35 @@ extension _WorkspaceEditorSave on _WorkspaceEditorSurfaceState {
       return;
     }
     _lastObservedDocumentVersion = documentVersion;
-    final wasDirty = _document.isDirty;
+    final wasDirty = _isDirty();
+    final lineCount = _controller.lineCount;
+    final contentLength = _controller.length;
     final previousProfile =
         _lastPerformanceProfile ??
         workspaceEditorPerformanceProfile(
-          lineCount: _controller.lineCount,
-          contentLength: _document.currentText?.length ?? 0,
+          lineCount: lineCount,
+          contentLength: contentLength,
         );
-    if (!_document.updateCurrentText(_controller.text)) {
-      return;
+    final deferSnapshot = workspaceEditorShouldDeferDocumentSnapshot(
+      lineCount: lineCount,
+      contentLength: contentLength,
+    );
+    if (deferSnapshot) {
+      _scheduleDocumentSnapshot();
+    } else {
+      _clearPendingDocumentSnapshot();
+      if (!_document.updateCurrentText(_controller.text)) {
+        return;
+      }
     }
-    final isDirty = _document.isDirty;
+    final isDirty = _isDirty();
     if (!_loading && widget.tab.isPreview && !wasDirty && isDirty) {
       widget.onKeepPreview?.call();
     }
     _autosave.notifyTextChanged();
     final currentProfile = workspaceEditorPerformanceProfile(
-      lineCount: _controller.lineCount,
-      contentLength: _document.currentText?.length ?? 0,
+      lineCount: lineCount,
+      contentLength: contentLength,
     );
     _lastPerformanceProfile = currentProfile;
     if (workspaceEditorShouldRefreshSurface(
@@ -195,6 +212,44 @@ extension _WorkspaceEditorSave on _WorkspaceEditorSurfaceState {
       currentProfile: currentProfile,
     )) {
       _refreshStateSafely();
+    }
+  }
+
+  void _scheduleDocumentSnapshot() {
+    _hasPendingDocumentSnapshot = true;
+    _documentSnapshotDebounceTimer?.cancel();
+    _documentSnapshotDebounceTimer = Timer(
+      workspaceEditorLargeFileSnapshotDebounce,
+      _flushPendingDocumentSnapshot,
+    );
+  }
+
+  void _clearPendingDocumentSnapshot() {
+    _documentSnapshotDebounceTimer?.cancel();
+    _documentSnapshotDebounceTimer = null;
+    _hasPendingDocumentSnapshot = false;
+  }
+
+  void _flushPendingDocumentSnapshot({
+    bool refreshState = true,
+    bool notifyAutosave = true,
+  }) {
+    if (!_hasPendingDocumentSnapshot) {
+      _documentSnapshotDebounceTimer?.cancel();
+      _documentSnapshotDebounceTimer = null;
+      return;
+    }
+    final wasDirty = _isDirty();
+    _documentSnapshotDebounceTimer?.cancel();
+    _documentSnapshotDebounceTimer = null;
+    _hasPendingDocumentSnapshot = false;
+    _document.updateCurrentText(_controller.text);
+    final isDirty = _isDirty();
+    if (refreshState && mounted && wasDirty != isDirty) {
+      _refreshStateSafely();
+    }
+    if (notifyAutosave) {
+      _autosave.notifyStateChanged();
     }
   }
 

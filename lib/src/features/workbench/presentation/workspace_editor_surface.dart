@@ -72,6 +72,9 @@ class _WorkspaceEditorSurfaceState
   Offset? _lastSecondaryTapGlobalPosition;
   int _loadRequestId = 0;
   late int _lastObservedDocumentVersion;
+  Timer? _documentSnapshotDebounceTimer;
+  bool _hasPendingDocumentSnapshot = false;
+  bool _suppressControllerChangeHandling = false;
 
   @override
   void initState() {
@@ -124,6 +127,7 @@ class _WorkspaceEditorSurfaceState
         oldWidget.workspace.path != widget.workspace.path ||
         oldWidget.tab.filePath != widget.tab.filePath) {
       _autosave.cancelPending();
+      _flushPendingDocumentSnapshot(refreshState: false, notifyAutosave: false);
       _replaceFocusNode();
       _editorSessions.unregister(oldWidget.tab.id, _sessionHandle);
       _document = _editorSessions.documentFor(widget.tab.id);
@@ -138,6 +142,7 @@ class _WorkspaceEditorSurfaceState
 
   @override
   void dispose() {
+    _flushPendingDocumentSnapshot(refreshState: false, notifyAutosave: false);
     _autosave.dispose();
     _editorSessions.unregister(widget.tab.id, _sessionHandle);
     _focusNode.suppressThirdPartyListeners();
@@ -376,7 +381,17 @@ class _WorkspaceEditorSurfaceState
     );
   }
 
-  bool _isDirty() => _document.isDirty;
+  bool _isDirty() => _hasPendingDocumentSnapshot || _document.isDirty;
+
+  void _replaceControllerText(String text) {
+    _suppressControllerChangeHandling = true;
+    try {
+      _controller.text = text;
+      _lastObservedDocumentVersion = _controller.documentVersion;
+    } finally {
+      _suppressControllerChangeHandling = false;
+    }
+  }
 
   void _refreshStateSafely() {
     if (!mounted) {
@@ -461,6 +476,9 @@ const int workspaceEditorLargeFileLineThreshold = 5000;
 
 @visibleForTesting
 const int workspaceEditorLargeFileCharacterThreshold = 512 * 1024;
+const Duration workspaceEditorLargeFileSnapshotDebounce = Duration(
+  milliseconds: 75,
+);
 
 typedef WorkspaceEditorPerformanceProfile = ({
   bool lineWrap,
@@ -481,6 +499,15 @@ WorkspaceEditorPerformanceProfile workspaceEditorPerformanceProfile({
     guideLines: !largeFile,
     syntaxHighlighting: !largeFile,
   );
+}
+
+@visibleForTesting
+bool workspaceEditorShouldDeferDocumentSnapshot({
+  required int lineCount,
+  required int contentLength,
+}) {
+  return lineCount >= workspaceEditorLargeFileLineThreshold ||
+      contentLength >= workspaceEditorLargeFileCharacterThreshold;
 }
 
 @visibleForTesting

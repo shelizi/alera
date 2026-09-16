@@ -183,6 +183,30 @@ void main() {
     );
   });
 
+  test('defers document snapshots only for large files', () {
+    expect(
+      workspaceEditorShouldDeferDocumentSnapshot(
+        lineCount: workspaceEditorLargeFileLineThreshold - 1,
+        contentLength: workspaceEditorLargeFileCharacterThreshold - 1,
+      ),
+      isFalse,
+    );
+    expect(
+      workspaceEditorShouldDeferDocumentSnapshot(
+        lineCount: workspaceEditorLargeFileLineThreshold,
+        contentLength: 1,
+      ),
+      isTrue,
+    );
+    expect(
+      workspaceEditorShouldDeferDocumentSnapshot(
+        lineCount: 1,
+        contentLength: workspaceEditorLargeFileCharacterThreshold,
+      ),
+      isTrue,
+    );
+  });
+
   test('syncs controller text only when the document version changes', () {
     expect(
       workspaceEditorShouldSyncControllerText(

@@ -3,6 +3,7 @@ part of 'workspace_editor_surface.dart';
 extension _WorkspaceEditorLoading on _WorkspaceEditorSurfaceState {
   Future<void> _load() async {
     _autosave.cancelPending();
+    _clearPendingDocumentSnapshot();
     final requestId = ++_loadRequestId;
     final workspacePath = widget.workspace.path;
     final filePath = widget.tab.filePath;
@@ -35,7 +36,7 @@ extension _WorkspaceEditorLoading on _WorkspaceEditorSurfaceState {
         tabSize: tabSize,
         requestedEncoding: _document.requestedEncoding,
       );
-      _controller.text = _document.currentText ?? '';
+      _replaceControllerText(_document.currentText ?? '');
     } catch (error) {
       if (!_isCurrentLoadRequest(requestId, workspacePath, filePath)) {
         return;
@@ -56,7 +57,7 @@ extension _WorkspaceEditorLoading on _WorkspaceEditorSurfaceState {
     if (_document.requestedEncoding == requested && _document.hasSnapshot) {
       return;
     }
-    if (_document.isDirty) {
+    if (_isDirty()) {
       final discard = await showDialog<bool>(
         context: context,
         builder: (context) => const AleraConfirmDialog(
@@ -91,7 +92,7 @@ extension _WorkspaceEditorLoading on _WorkspaceEditorSurfaceState {
     );
     if (_document.hasSnapshot) {
       _invalidatePendingLoads();
-      _controller.text = _document.currentText ?? '';
+      _replaceControllerText(_document.currentText ?? '');
       _loadError = _document.loadError;
       _loading = false;
       _applyPendingReveal();
