@@ -419,7 +419,7 @@ class _CodeForgeState extends State<CodeForge> with TickerProviderStateMixin {
     _editorTheme = widget.editorTheme ?? lightfairTheme;
     _language = widget.language ?? Mode();
     _suggestionNotifier = _controller.suggestionsNotifier;
-    _prevSnippetTextLength = _controller.text.length;
+    _prevSnippetTextLength = _controller.length;
     _diagnosticsNotifier = _controller.diagnosticsNotifier;
     _lspActionNotifier = _controller.codeActionsNotifier;
     _lspSignatureNotifier = _controller.signatureNotifier;
@@ -1634,7 +1634,7 @@ class _CodeForgeState extends State<CodeForge> with TickerProviderStateMixin {
                                 _focusNode.requestFocus();
                               },
                               onDoubleTapDown: (details) {
-                                if (_controller.text.isNotEmpty) return;
+                                if (_controller.length > 0) return;
                                 _contextMenuOffsetNotifier.value =
                                     details.localPosition;
                               },
@@ -7879,7 +7879,7 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
                 cursor.line.clamp(0, controller.lineCount - 1),
               ) +
               cursor.character;
-          final safeOffset = cursorOffset.clamp(0, controller.text.length);
+          final safeOffset = cursorOffset.clamp(0, controller.length);
           final info = _getCaretInfoAtOffset(safeOffset);
           final cx = offset.dx + textX + info.offset.dx;
           final cy =
