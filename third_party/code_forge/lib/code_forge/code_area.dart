@@ -5010,6 +5010,9 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     _lastProcessedContentVersion = controller.contentVersion;
   }
 
+  bool get _usesUniformLargeFileLayout =>
+      _largeFilePerformanceMode && !_lineWrap && !_enableFolding;
+
   bool get enableGuideLines => _enableGuideLines;
   bool get enableGutter => _enableGutter;
   bool get enableGutterDivider => _enableGutterDivider;
@@ -5722,10 +5725,10 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
 
       _deferLayout(lineDelta: lineDelta);
 
-      if (lineDelta.abs() > 500) {
-        _rebuildLayoutMap();
-      } else {
-        if (lineDelta > 0) {
+      if (!_usesUniformLargeFileLayout) {
+        if (lineDelta.abs() > 500) {
+          _rebuildLayoutMap();
+        } else if (lineDelta > 0) {
           _updateLayoutMapLine(insertionLine);
           for (int i = 1; i <= lineDelta; i++) {
             final lineIdx = insertionLine + i;
@@ -5900,6 +5903,7 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
 
   void _rebuildLayoutMap() {
     _layoutMap.clear();
+    if (_usesUniformLargeFileLayout) return;
     final lineCount = controller.lineCount;
     final Set<int> foldedLines = {};
     for (final f in controller.foldings.values) {
@@ -5922,7 +5926,7 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
   }
 
   void _updateLayoutMapLine(int line) {
-    if (line < 0) return;
+    if (_usesUniformLargeFileLayout || line < 0) return;
     final lineCount = controller.lineCount;
     if (line >= lineCount) return;
     final isFolded = controller.foldings.values.any(
@@ -7455,6 +7459,16 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
             .clamp(0, lineCount - 1);
         lastVisibleLine = _findVisibleLineByYPosition(viewBottom)
             .clamp(0, lineCount - 1);
+        firstVisibleLineY = firstVisibleLine * _lineHeight;
+      } else if (_usesUniformLargeFileLayout) {
+        firstVisibleLine = (viewTop / _lineHeight).floor().clamp(
+          0,
+          lineCount - 1,
+        );
+        lastVisibleLine = (viewBottom / _lineHeight).ceil().clamp(
+          0,
+          lineCount - 1,
+        );
         firstVisibleLineY = firstVisibleLine * _lineHeight;
       } else {
         final frame = _layoutMap.buildViewportFrame(
