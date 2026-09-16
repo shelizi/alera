@@ -8909,28 +8909,64 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     final minKeep = max(0, firstVisibleLine - keepMargin);
     final maxKeep = min(controller.lineCount - 1, lastVisibleLine + keepMargin);
 
-    bool shouldPrune(Map<int, dynamic> cache) {
-      return cache.length > maxLineBoundedCacheEntries;
-    }
+    _pruneIntKeyedViewportCache(
+      _lineTextCache,
+      minKeep,
+      maxKeep,
+      maxLineBoundedCacheEntries,
+    );
+    _pruneIntKeyedViewportCache(
+      _lineWidthCache,
+      minKeep,
+      maxKeep,
+      maxLineBoundedCacheEntries,
+    );
+    _pruneIntKeyedViewportCache(
+      _lineHeightCache,
+      minKeep,
+      maxKeep,
+      maxLineBoundedCacheEntries,
+    );
+    _pruneIntKeyedViewportCache(
+      _paragraphCache,
+      minKeep,
+      maxKeep,
+      maxLineBoundedCacheEntries,
+    );
+    _pruneIntKeyedViewportCache(
+      _lineIndentCache,
+      minKeep,
+      maxKeep,
+      maxLineBoundedCacheEntries,
+    );
+    _pruneIntKeyedViewportCache(
+      _bracketCache,
+      minKeep,
+      maxKeep,
+      maxLineBoundedCacheEntries,
+    );
+    _pruneIntKeyedViewportCache(
+      _caretInfoCache,
+      minKeep,
+      maxKeep,
+      maxLineBoundedCacheEntries,
+    );
+    _pruneIntKeyedViewportCache(
+      _indentGuideCache,
+      minKeep,
+      maxKeep,
+      maxLineBoundedCacheEntries,
+    );
+  }
 
-    void pruneIntKeyed(Map<int, dynamic> cache) {
-      if (!shouldPrune(cache)) return;
-      cache.removeWhere((line, _) => line < minKeep || line > maxKeep);
-    }
-
-    pruneIntKeyed(_lineTextCache);
-    pruneIntKeyed(_lineWidthCache);
-    pruneIntKeyed(_lineHeightCache);
-    pruneIntKeyed(_paragraphCache);
-    pruneIntKeyed(_lineIndentCache);
-    pruneIntKeyed(_bracketCache);
-    pruneIntKeyed(_caretInfoCache);
-
-    if (_indentGuideCache.length > maxLineBoundedCacheEntries) {
-      _indentGuideCache.removeWhere(
-        (line, _) => line < minKeep || line > maxKeep,
-      );
-    }
+  void _pruneIntKeyedViewportCache<T>(
+    Map<int, T> cache,
+    int minKeep,
+    int maxKeep,
+    int maxEntries,
+  ) {
+    if (cache.length <= maxEntries) return;
+    cache.removeWhere((line, _) => line < minKeep || line > maxKeep);
   }
 
   void _drawBracketHighlight(
