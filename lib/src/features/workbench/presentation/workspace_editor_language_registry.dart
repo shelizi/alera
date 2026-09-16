@@ -1,8 +1,10 @@
 part of 'workspace_editor_surface.dart';
 
+Mode get _plainTextLanguage => builtinAllLanguages['plaintext']!;
+
 Mode _languageForPath(String filePath) {
   final languageId = _languageIdForPath(filePath);
-  return builtinAllLanguages[languageId] ?? builtinAllLanguages['plaintext']!;
+  return builtinAllLanguages[languageId] ?? _plainTextLanguage;
 }
 
 String _languageIdForPath(String filePath) {

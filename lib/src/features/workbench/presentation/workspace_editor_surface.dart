@@ -198,7 +198,9 @@ class _WorkspaceEditorSurfaceState
               enableGutter: true,
               enableGutterDivider: false,
               editorTheme: editorTheme,
-              language: _languageForPath(filePath),
+              language: performanceProfile.syntaxHighlighting
+                  ? _languageForPath(filePath)
+                  : _plainTextLanguage,
               tabSize: effectiveTabSize,
               useSpaceAsTab: true,
               scrollbarDecoration: workspaceEditorScrollbarDecoration(),
@@ -456,7 +458,11 @@ const int workspaceEditorLargeFileLineThreshold = 5000;
 @visibleForTesting
 const int workspaceEditorLargeFileCharacterThreshold = 512 * 1024;
 
-typedef WorkspaceEditorPerformanceProfile = ({bool lineWrap, bool guideLines});
+typedef WorkspaceEditorPerformanceProfile = ({
+  bool lineWrap,
+  bool guideLines,
+  bool syntaxHighlighting,
+});
 
 @visibleForTesting
 WorkspaceEditorPerformanceProfile workspaceEditorPerformanceProfile({
@@ -466,7 +472,11 @@ WorkspaceEditorPerformanceProfile workspaceEditorPerformanceProfile({
   final largeFile =
       lineCount >= workspaceEditorLargeFileLineThreshold ||
       contentLength >= workspaceEditorLargeFileCharacterThreshold;
-  return (lineWrap: !largeFile, guideLines: !largeFile);
+  return (
+    lineWrap: !largeFile,
+    guideLines: !largeFile,
+    syntaxHighlighting: !largeFile,
+  );
 }
 
 @visibleForTesting

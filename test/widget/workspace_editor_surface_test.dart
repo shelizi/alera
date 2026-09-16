@@ -111,6 +111,7 @@ void main() {
 
     expect(profile.lineWrap, isTrue);
     expect(profile.guideLines, isTrue);
+    expect(profile.syntaxHighlighting, isTrue);
   });
 
   test('disables wrapping and guides for long files', () {
@@ -121,6 +122,7 @@ void main() {
 
     expect(profile.lineWrap, isFalse);
     expect(profile.guideLines, isFalse);
+    expect(profile.syntaxHighlighting, isFalse);
   });
 
   test('uses large-file mode for a huge single-line file', () {
@@ -131,6 +133,7 @@ void main() {
 
     expect(profile.lineWrap, isFalse);
     expect(profile.guideLines, isFalse);
+    expect(profile.syntaxHighlighting, isFalse);
   });
 
   test('offers Text Actions only for a valid editor selection', () {
