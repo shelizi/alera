@@ -51,13 +51,13 @@ This can improve CPU time, GC pressure, RSS, FFI serialization cost, and UI resp
 | P3 | ICO decoding | CPU decode already moved to isolate | Native decode | Low incremental gain |
 | P3 | Terminal buffer accounting | Dart scans buffer lines | Cached/native accounting | Low unless profiling says otherwise |
 
-### Current implementation snapshot (2026-09-15)
+### Current implementation snapshot (2026-09-16)
 
 - Agent runtime recursive fingerprint/copy/delete and copy reconciliation are merged into `main` through `b5630823`; small top-level ownership/link decisions intentionally remain in Dart.
 - Git status grouping/tree projection, allocation-light reconciliation, native entry-index rebinding, and linear merging of already-sorted Unified Changes groups are merged into `main` through `b5630823`.
 - `main` through `b5630823` has native full-file diff alignment/single-column projection plus lazy materialization for full-file and side-by-side rows; row-level native paging remains future work.
 - `integration_test/terminal_parser_benchmark.dart` provides a parser/model-only xterm2 baseline. Terminal-core migration has not started.
-- The diagnostics ZIP Rust prototype is preserved on `perf/diagnostics-streaming-zip-v2` and intentionally kept off `main` until it writes directly to an output file and the Dart production path stops building/returning the whole archive in memory.
+- Diagnostics ZIP direct-to-file is complete and validated on `perf/diagnostics-streaming-zip-v2`: Rust streams logs into a temporary ZIP file and atomically persists it, while the Dart production path only forwards paths/metadata and never materializes the archive as a `List<int>`. Final merge to `main` remains gated on rebasing the latest local `main` and the final focused gate.
 
 ---
 
@@ -427,20 +427,31 @@ Do not copy 100,000 terminal lines over FFI merely to search them in Rust; the h
 
 ### Current state
 
-`lib/src/features/diagnostics/infra/diagnostics_bundle_builder.dart` currently performs synchronous listing/reads and builds an archive in Dart memory before ZIP encoding.
+`lib/src/features/diagnostics/infra/diagnostics_bundle_builder.dart` now forwards the destination path, log directories, and metadata to the native writer. Rust owns directory enumeration, sorted `.log` entry projection, compression, temporary-file creation, destination replacement, and persistence. Log contents are copied with `io::copy` directly into `ZipWriter<File>`; neither Rust nor Dart builds the complete ZIP in memory.
 
-### Proposed Rust API
+### Rust API
 
 ```text
-create_diagnostics_bundle(
-  app_log_dir,
-  runtime_log_dir,
+write_diagnostics_bundle(
   output_path,
-  redaction_options
+  metadata_json,
+  app_log_directory,
+  runtime_log_directory
 )
 ```
 
-Implement streaming ZIP creation so logs do not need to be loaded into one large Dart-side archive object.
+Security remains a sink-level invariant: app/runtime logging redacts secrets before bytes reach disk, and diagnostics packaging only copies those persisted bytes. The 2026-09-16 regression pass also found and fixed an `Authorization: Bearer <credential>` ordering bug that could previously leave the credential after keyed redaction.
+
+### Validation snapshot (2026-09-16)
+
+- Rust focused diagnostics tests: 3 passed.
+- Dart diagnostics builder tests: 3 passed.
+- App logger / packaged-log redaction tests: 11 passed; log-redaction unit tests: 6 passed.
+- Targeted Flutter analyzer: no issues; `git diff --check`: passed.
+- Windows RSS benchmark used 64 MiB deterministic, effectively incompressible input and five samples per workload:
+  - 4 x 16 MiB logs: median writer time 38.338 s (32.957-53.059 s), median peak RSS 7.57 MiB, max 7.60 MiB, ZIP about 64.02 MiB.
+  - 1024 x 64 KiB logs: median writer time 50.230 s (43.363-67.487 s), median peak RSS 8.34 MiB, max 8.42 MiB, ZIP about 64.13 MiB.
+- Peak RSS remains far below archive size in both shapes, providing direct evidence that the new writer does not retain the whole archive in process memory.
 
 ### Benefits
 
