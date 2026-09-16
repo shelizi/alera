@@ -1,0 +1,5 @@
+gifs/
+build/
+exmple/build
+example/lib/big_code.dart
+example/lib/little_code.dart

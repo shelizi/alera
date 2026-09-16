@@ -83,6 +83,10 @@ dev_dependencies:
   yaml: ^3.1.4
 
 dependency_overrides:
+  # Keep Alera's editor dependency reviewable while carrying narrow
+  # large-file performance fixes pending upstream adoption.
+  code_forge:
+    path: third_party/code_forge
   ghostty_vte:
     path: third_party/dart_terminal/pkgs/vte/ghostty_vte
   # Override both upstream pub.dev packages together so Alera consumes the

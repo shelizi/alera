@@ -1,0 +1,49 @@
+# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.buildlog/
+.history
+.svn/
+migrate_working_dir/
+
+# IntelliJ related
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# The .vscode folder contains launch configuration and tasks you configure in
+# VS Code which you may wish to be included in version control, so this line
+# is commented out by default.
+.vscode/
+
+# Flutter/Dart/Pub related
+# Libraries should not include pubspec.lock, per https://dart.dev/guides/libraries/private-files#pubspeclock.
+/pubspec.lock
+**/doc/api/
+.dart_tool/
+.flutter-plugins-dependencies
+/build/
+.build/
+/coverage/
+
+# Ephemeral folders
+**/ios/Flutter/ephemeral/
+**/windows/flutter/ephemeral/
+**/linux/flutter/ephemeral/
+**/macos/Flutter/ephemeral/
+
+/example/lib/little_code.dart
+/example/lib/big_code.dart
+example/build
+rust/target
+macos/Flutter/ephemeral/flutter_export_environment.sh
+linux/flutter/ephemeral/.plugin_symlinks/url_launcher_linux
+macos/Flutter/ephemeral/Flutter-Generated.xcconfig
+
+# FVM Version Cache
+.fvm/
