@@ -11,11 +11,10 @@ abstract interface class _TerminalSessionOutputHost {
   void advanceRestore(int chars);
   void finishRestore();
   void advancePointerInputCatchUp(int chars);
-  void discardPointerInputCatchUp({required int offset, required int chars});
 }
 
-/// Owns the output pipeline and drives all queuing, trimming, scheduling, and
-/// draining for one terminal session.
+/// Owns the output pipeline and drives all queuing, overflow protection,
+/// scheduling, and draining for one terminal session.
 ///
 /// Extracted from the free functions in terminal_runtime_output_batching.dart
 /// so the handle no longer owns raw pipeline state or batching policy.
@@ -33,34 +32,25 @@ class _TerminalSessionOutputPump {
       return;
     }
     pipeline.add(_TerminalOutputSegment(data, source));
-    if (source == _TerminalOutputSource.live) {
-      _trimLiveBacklog();
+    if (source == _TerminalOutputSource.live &&
+        pipeline.liveLength > _terminalOutputMaxPendingChars) {
+      // Never discard terminal output just to protect the UI queue. When a
+      // hidden tab has accumulated a full window, parse that window into the
+      // emulator in one shot (there is no mounted view to repaint), clear the
+      // queue, and start accumulating again. The same safety valve applies to
+      // a visible terminal only under extreme producer backpressure: one rare
+      // synchronous catch-up is preferable to silently losing terminal state.
+      flushNow();
+      return;
     }
     scheduleFlush();
   }
 
-  void _trimLiveBacklog() {
-    while (pipeline.liveLength > _terminalOutputMaxPendingChars) {
-      final segment = pipeline.pending.firstWhere(
-        (candidate) => candidate.source == _TerminalOutputSource.live,
-      );
-      final offset = pipeline.offsetOf(segment);
-      final excess = pipeline.liveLength - _terminalOutputMaxPendingChars;
-      final trim = excess < segment.remaining ? excess : segment.remaining;
-      final target = segment.head + trim;
-      final nextHead = _terminalOutputHeadTrimStart(segment.text, target);
-      final dropped = nextHead - segment.head;
-      pipeline.consume(segment, dropped);
-      _host.discardPointerInputCatchUp(offset: offset, chars: dropped);
-    }
-  }
-
   void scheduleFlush() {
-    // A hidden terminal keeps its backlog but pays no frame time for it; the
-    // backlog is drained when it becomes visible again.
-    if (pipeline.flushScheduled ||
-        _host.isDisposed ||
-        !_host.isOutputVisible) {
+    // A hidden terminal keeps a bounded accumulation window without paying
+    // frame time for it. Overflow is parsed directly by queue(), and the final
+    // partial window is drained when the terminal becomes visible again.
+    if (pipeline.flushScheduled || _host.isDisposed || !_host.isOutputVisible) {
       return;
     }
     final clock = pipeline.sinceFlushRequest;

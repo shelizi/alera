@@ -1,20 +1,5 @@
 part of 'terminal_runtime.dart';
 
-/// Start index for a head trim that never lands inside a surrogate pair.
-int _terminalOutputHeadTrimStart(String value, int start) {
-  if (start <= 0) {
-    return 0;
-  }
-  if (start >= value.length) {
-    return value.length;
-  }
-  final codeUnit = value.codeUnitAt(start);
-  if (codeUnit >= 0xDC00 && codeUnit <= 0xDFFF) {
-    return start + 1;
-  }
-  return start;
-}
-
 /// Never cuts between a surrogate pair, which would corrupt the code point.
 int _terminalOutputChunkCutoff(String value, int limit) {
   if (value.length <= limit) {

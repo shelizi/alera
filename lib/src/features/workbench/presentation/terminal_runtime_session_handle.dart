@@ -89,6 +89,7 @@ class _XtermTerminalSessionHandle(
       ValueNotifier<TerminalRestoreProgress?>(null);
   int _restoreGeneration = 0, _restoreTotalChars = 0, _restoreWrittenChars = 0;
   bool _pendingInteractionModeReset = false;
+  bool _ptyOutputPaused = false;
   @override
   int _pointerInputCatchUpChars = 0;
   @override
@@ -129,7 +130,10 @@ class _XtermTerminalSessionHandle(
   void onOutputVisibilityChanged() {
     _syncPtyOutputVisibility();
     if (_visibility.isOutputVisible) {
-      _pump.scheduleFlush();
+      // A tab that was hidden has no view to animate while it accumulates.
+      // Apply its final partial window before the first revealed frame so tab
+      // switching shows the caught-up state instead of a visible fast-scroll.
+      _pump.flushNow();
     } else {
       _pump.pipeline.cancelDeferredFlush();
     }
@@ -243,10 +247,6 @@ class _XtermTerminalSessionHandle(
   @override
   void advancePointerInputCatchUp(int chars) =>
       _advancePointerInputCatchUp(chars);
-
-  @override
-  void discardPointerInputCatchUp({required int offset, required int chars}) =>
-      _discardPointerInputCatchUp(offset: offset, chars: chars);
 
   void _writeToTerminal(String data) => writeToTerminal(data);
 

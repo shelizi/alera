@@ -14,7 +14,7 @@ String _terminalRestorePayload(int length, String suffix) {
 
 void _registerTerminalRuntimeSnapshotTests() {
   test(
-    'pauses hidden terminal output and restores from snapshots when visible',
+    'pauses output while the app is backgrounded and restores on foreground',
     () async {
       debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
       final fakeSession = _FakeTerminalPtySession();
@@ -29,7 +29,6 @@ void _registerTerminalRuntimeSnapshotTests() {
       addTearDown(runtime.dispose);
       final session = runtime.sessionFor(workspace: _workspace(), tab: _tab());
       TerminalVisibilityLease? visibility;
-      TerminalVisibilityLease? resumedVisibility;
       try {
         visibility = acquireTerminalVisibilityForTesting(session);
         await session.ensureStarted();
@@ -38,8 +37,7 @@ void _registerTerminalRuntimeSnapshotTests() {
         await Future.pause(.zero);
         flushTerminalOutputForTesting(session);
         expect(terminalBufferTextForTesting(session), contains('visible'));
-        visibility.dispose();
-        visibility = null;
+        runtime.setAppForeground(false);
         await Future.pause(.zero);
         expect(fakeSession.outputPausedCalls, contains(true));
         fakeSession.emitOutput(utf8.encode('hidden\r\n'));
@@ -48,7 +46,7 @@ void _registerTerminalRuntimeSnapshotTests() {
           terminalBufferTextForTesting(session),
           isNot(contains('hidden')),
         );
-        resumedVisibility = acquireTerminalVisibilityForTesting(session);
+        runtime.setAppForeground(true);
         await Future.pause(.zero);
         expect(fakeSession.outputPausedCalls.last, isFalse);
         fakeSession.emitSnapshot(
@@ -73,7 +71,6 @@ void _registerTerminalRuntimeSnapshotTests() {
         expect(terminalIsUsingAltBufferForTesting(session), isTrue);
       } finally {
         visibility?.dispose();
-        resumedVisibility?.dispose();
         debugDefaultTargetPlatformOverride = null;
       }
     },
@@ -213,87 +210,74 @@ void _registerTerminalRuntimeSnapshotTests() {
     }
   });
 
-  test(
-    'backpressure trims only live output during a partial restore',
-    () async {
-      debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
-      final fakeSession = _FakeTerminalPtySession();
-      final runtime = XtermTerminalRuntime(
-        ptySessionFactory: _FakeTerminalPtySessionFactory(
-          sessions: <_FakeTerminalPtySession>[fakeSession],
-        ),
-        shellLaunchesBuilder: () => <GhosttyTerminalShellLaunch>[
-          _launch('shell', shell: '/bin/sh'),
-        ],
+  test('overflow during a partial restore flushes everything without dropping live output', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    final fakeSession = _FakeTerminalPtySession();
+    final runtime = XtermTerminalRuntime(
+      ptySessionFactory: _FakeTerminalPtySessionFactory(
+        sessions: <_FakeTerminalPtySession>[fakeSession],
+      ),
+      shellLaunchesBuilder: () => <GhosttyTerminalShellLaunch>[
+        _launch('shell', shell: '/bin/sh'),
+      ],
+    );
+    addTearDown(runtime.dispose);
+    final session = runtime.sessionFor(workspace: _workspace(), tab: _tab());
+    final visibility = acquireTerminalVisibilityForTesting(session);
+    try {
+      await session.ensureStarted();
+      const snapshotLength = 64 * 1024 * 18;
+      const snapshotMarker = 'protected-snapshot-marker';
+      const oldLiveMarker = 'preserved-live-marker';
+      const newLiveMarker = 'retained-live-marker';
+      final snapshot = _terminalRestorePayload(
+        snapshotLength,
+        '\r\n$snapshotMarker\r\n\x1b[?1000h\x1b[?2004h',
       );
-      addTearDown(runtime.dispose);
-      final session = runtime.sessionFor(workspace: _workspace(), tab: _tab());
-      final visibility = acquireTerminalVisibilityForTesting(session);
-      try {
-        await session.ensureStarted();
-        const snapshotLength = 64 * 1024 * 18;
-        const snapshotMarker = 'protected-snapshot-marker';
-        const oldLiveMarker = 'discarded-live-marker';
-        const newLiveMarker = 'retained-live-marker';
-        final snapshot = _terminalRestorePayload(
-          snapshotLength,
-          '\r\n$snapshotMarker\r\n\x1b[?1000h\x1b[?2004h',
-        );
 
-        fakeSession.emitSnapshot(
-          utf8.encode(snapshot),
-          resetInteractionModes: true,
-        );
-        await Future.pause(.zero);
-        flushTerminalOutputForTesting(session);
-        final restoreAfterFirstFlush =
-            pendingRestoreTerminalOutputCharsForTesting(session);
+      fakeSession.emitSnapshot(
+        utf8.encode(snapshot),
+        resetInteractionModes: true,
+      );
+      await Future.pause(.zero);
+      flushTerminalOutputForTesting(session);
+      final restoreAfterFirstFlush =
+          pendingRestoreTerminalOutputCharsForTesting(session);
 
-        const oldLivePrefix = '$oldLiveMarker\r\n';
-        final oldLive =
-            oldLivePrefix +
-            _terminalRestorePayload(128 * 1024 - oldLivePrefix.length, '');
-        final newLive = _terminalRestorePayload(
-          1200 * 1024,
-          '$newLiveMarker\r\n',
-        );
-        fakeSession.emitOutput(utf8.encode(oldLive));
-        fakeSession.emitOutput(utf8.encode(newLive));
-        await Future.pause(.zero);
+      // The reset queued by the snapshot turns bracketed paste off. If the
+      // old live prefix were trimmed, this mode would stay off after the
+      // overflow flush, so the assertion below proves the prefix was parsed.
+      const oldLivePrefix = '\x1b[?2004h$oldLiveMarker\r\n';
+      final oldLive =
+          oldLivePrefix +
+          _terminalRestorePayload(128 * 1024 - oldLivePrefix.length, '');
+      final newLive = _terminalRestorePayload(
+        1200 * 1024,
+        '$newLiveMarker\r\n',
+      );
+      fakeSession.emitOutput(utf8.encode(oldLive));
+      fakeSession.emitOutput(utf8.encode(newLive));
+      await Future.pause(.zero);
 
-        expect(
-          pendingRestoreTerminalOutputCharsForTesting(session),
-          restoreAfterFirstFlush,
-        );
-        expect(
-          pendingLiveTerminalOutputCharsForTesting(session),
-          lessThanOrEqualTo(1024 * 1024),
-        );
-        expect(terminalPointerInputSuspendedForTesting(session), isTrue);
+      expect(restoreAfterFirstFlush, greaterThan(0));
+      expect(pendingRestoreTerminalOutputCharsForTesting(session), 0);
+      expect(pendingLiveTerminalOutputCharsForTesting(session), 0);
+      expect(session.restoreProgress.value, isNull);
+      expect(terminalPointerInputSuspendedForTesting(session), isFalse);
+      expect(terminalBracketedPasteModeForTesting(session), isTrue);
 
-        while (pendingRestoreTerminalOutputCharsForTesting(session) > 0) {
-          flushTerminalOutputForTesting(session);
-        }
-        expect(session.restoreProgress.value, isNull);
-        expect(terminalPointerInputSuspendedForTesting(session), isTrue);
-
-        while (pendingTerminalOutputCharsForTesting(session) > 0) {
-          flushTerminalOutputForTesting(session);
-        }
-
-        final text = terminalBufferTextForTesting(session);
-        expect(terminalPointerInputSuspendedForTesting(session), isFalse);
-        expect(text, contains(snapshotMarker));
-        expect(text, isNot(contains(oldLiveMarker)));
-        expect(text, contains(newLiveMarker));
-        expect(terminalMouseModeForTesting(session), xterm.MouseMode.none);
-        expect(terminalBracketedPasteModeForTesting(session), isFalse);
-      } finally {
-        visibility.dispose();
-        debugDefaultTargetPlatformOverride = null;
-      }
-    },
-  );
+      final text = terminalBufferTextForTesting(session);
+      // The snapshot was parsed before the live bytes, but xterm's own
+      // bounded scrollback may naturally roll its old visible marker away
+      // after this deliberately huge write. The mode assertion above proves
+      // the formerly-trimmed live prefix itself was not dropped.
+      expect(text, contains(newLiveMarker));
+      expect(terminalMouseModeForTesting(session), xterm.MouseMode.none);
+    } finally {
+      visibility.dispose();
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
 
   testWidgets('a snapshot reschedules the deferred flush it replaces', (
     tester,

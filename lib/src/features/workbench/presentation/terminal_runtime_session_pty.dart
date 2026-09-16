@@ -54,6 +54,7 @@ extension _XtermTerminalSessionPty on _XtermTerminalSessionHandle {
           return false;
         }
         _ptySession = session;
+        _ptyOutputPaused = false;
         _ptySessionSub = sub;
         bool isCurrent() =>
             !_disposed &&
@@ -90,6 +91,7 @@ extension _XtermTerminalSessionPty on _XtermTerminalSessionHandle {
         }
         if (identical(_ptySession, session)) {
           _ptySession = null;
+          _ptyOutputPaused = false;
         }
         if (identical(_ptySessionSub, sub)) {
           _ptySessionSub = null;
@@ -152,9 +154,17 @@ extension _XtermTerminalSessionPty on _XtermTerminalSessionHandle {
     }
     _running = false;
     _markTerminalPulseDisarmed();
-    _flushPendingTerminalOutputNow();
-    _writeToTerminal(terminalInteractionModeReset);
-    _writeToTerminal('\n[process exited: $exitCode]\n');
+    // An exit ends the usefulness of the restore overlay immediately. The
+    // remaining restore bytes may still drain through the frame-budgeted
+    // pipeline below, but they must not leave a stale "restoring" surface over
+    // an already-exited terminal.
+    _finishRestore();
+    // Keep process-exit delivery on the same frame-budgeted pipeline as live
+    // output. A process can exit immediately after a burst, and synchronously
+    // parsing the entire pending backlog here would block the Flutter UI isolate.
+    _queueTerminalOutput(terminalInteractionModeReset);
+    _queueTerminalOutput('\n[process exited: $exitCode]\n');
+    _flushPendingTerminalOutputFrame(force: true);
     _notifySessionListeners();
     if (notifyRuntime && !_suppressedExitPtyGenerations.contains(generation)) {
       _onExit(
@@ -195,6 +205,7 @@ extension _XtermTerminalSessionPty on _XtermTerminalSessionHandle {
     await sub?.cancel();
     final session = _ptySession;
     _ptySession = null;
+    _ptyOutputPaused = false;
     if (terminate) {
       session?.terminate();
     } else {

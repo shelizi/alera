@@ -42,6 +42,7 @@ class _TerminalSessionVisibilityAccounting {
   DateTime? _lastVisibleAt;
 
   bool get isVisible => _visible;
+  bool get isAppForeground => _appForeground;
   bool get isOutputVisible => _visible && _appForeground;
 
   // Setters used by dispose() in the search mixin, which clears these fields

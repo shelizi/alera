@@ -1,23 +1,64 @@
 part of 'terminal_runtime_native_test.dart';
 
 void _registerTerminalRuntimeOutputBackpressureTests() {
-  test('bounds pending terminal output during a burst', () {
-    final runtime = XtermTerminalRuntime(
-      ptySessionFactory: _FakeTerminalPtySessionFactory(),
-      shellLaunchesBuilder: () => <GhosttyTerminalShellLaunch>[
-        _launch('shell', shell: '/bin/sh'),
-      ],
-    );
-    addTearDown(runtime.dispose);
-    final session = runtime.sessionFor(workspace: _workspace(), tab: _tab());
+  test(
+    'flushes an overflowing hidden backlog instead of dropping its prefix',
+    () {
+      final runtime = XtermTerminalRuntime(
+        ptySessionFactory: _FakeTerminalPtySessionFactory(),
+        shellLaunchesBuilder: () => <GhosttyTerminalShellLaunch>[
+          _launch('shell', shell: '/bin/sh'),
+        ],
+      );
+      addTearDown(runtime.dispose);
+      final session = runtime.sessionFor(workspace: _workspace(), tab: _tab());
 
-    queueTerminalOutputForTesting(session, 'a' * (1024 * 1024 + 64 * 1024));
+      // If the old trimming path drops the head of this chunk, the DEC private
+      // mode never reaches xterm and bracketed paste remains disabled. Overflow
+      // should instead parse the whole backlog once, clear it, then start a new
+      // accumulation window.
+      queueTerminalOutputForTesting(
+        session,
+        '\x1b[?2004h${'a' * (1024 * 1024 + 64 * 1024)}',
+      );
 
-    expect(
-      pendingTerminalOutputCharsForTesting(session),
-      lessThanOrEqualTo(1024 * 1024),
-    );
-  });
+      expect(pendingTerminalOutputCharsForTesting(session), 0);
+      expect(terminalBracketedPasteModeForTesting(session), isTrue);
+
+      queueTerminalOutputForTesting(session, 'next-window\r\n');
+      expect(pendingTerminalOutputCharsForTesting(session), greaterThan(0));
+    },
+  );
+
+  test(
+    'revealing a hidden terminal applies its backlog before the first frame',
+    () {
+      final runtime = XtermTerminalRuntime(
+        ptySessionFactory: _FakeTerminalPtySessionFactory(),
+        shellLaunchesBuilder: () => <GhosttyTerminalShellLaunch>[
+          _launch('shell', shell: '/bin/sh'),
+        ],
+      );
+      addTearDown(runtime.dispose);
+      final session = runtime.sessionFor(workspace: _workspace(), tab: _tab());
+
+      queueTerminalOutputForTesting(session, 'hidden-before-reveal\r\n');
+      expect(pendingTerminalOutputCharsForTesting(session), greaterThan(0));
+      expect(
+        terminalBufferTextForTesting(session),
+        isNot(contains('hidden-before-reveal')),
+      );
+
+      final visibility = acquireTerminalVisibilityForTesting(session);
+      addTearDown(visibility.dispose);
+
+      expect(pendingTerminalOutputCharsForTesting(session), 0);
+      expect(
+        terminalBufferTextForTesting(session),
+        contains('hidden-before-reveal'),
+      );
+    },
+  );
 
   test('drains a large chunk without recopying the pending head', () {
     final runtime = XtermTerminalRuntime(
@@ -53,6 +94,35 @@ void _registerTerminalRuntimeOutputBackpressureTests() {
     expect(pendingTerminalOutputHeadChunkForTesting(session), isNull);
     expect(pendingTerminalOutputHeadForTesting(session), 0);
   });
+
+  test(
+    'process exit does not synchronously drain an oversized backlog',
+    () async {
+      final fakeSession = _FakeTerminalPtySession();
+      final factory = _FakeTerminalPtySessionFactory(
+        sessions: <_FakeTerminalPtySession>[fakeSession],
+      );
+      final runtime = XtermTerminalRuntime(
+        ptySessionFactory: factory,
+        shellLaunchesBuilder: () => <GhosttyTerminalShellLaunch>[
+          _launch('shell', shell: '/bin/sh'),
+        ],
+      );
+      addTearDown(runtime.dispose);
+      final session = runtime.sessionFor(workspace: _workspace(), tab: _tab());
+      await session.ensureStarted();
+
+      const frame = 64 * 1024;
+      queueTerminalOutputForTesting(session, 'a' * (frame * 3));
+      fakeSession.emitExit(0);
+      await Future.pause(.zero);
+
+      expect(
+        pendingTerminalOutputCharsForTesting(session),
+        greaterThanOrEqualTo(frame * 2),
+      );
+    },
+  );
 
   test('writes a multi-frame chunk through intact', () {
     final runtime = XtermTerminalRuntime(
