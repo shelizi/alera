@@ -4496,6 +4496,10 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
   CodeSelectionStyle _selectionStyle;
   List<LspErrors> _diagnostics;
   late List<LspErrors> _sortedDiagnostics;
+  List<SearchHighlight> _sortedSearchHighlights = const [];
+  List<int> _searchHighlightPrefixMaxEnd = const [];
+  List<SearchHighlight>? _indexedSearchHighlightSource;
+  int _indexedSearchHighlightCount = 0;
   int _cachedCaretOffset = -1, _cachedCaretLine = 0, _cachedCaretLineStart = 0;
   Rect? _lastImeCaretRect;
   Rect? _lastImeComposingRect;
@@ -4791,6 +4795,50 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
       ..sort((a, b) => b.severity.compareTo(a.severity));
   }
 
+  void _rebuildSearchHighlightIndex() {
+    final highlights = controller.searchHighlights;
+    _indexedSearchHighlightSource = highlights;
+    _indexedSearchHighlightCount = highlights.length;
+    if (highlights.isEmpty) {
+      _sortedSearchHighlights = const [];
+      _searchHighlightPrefixMaxEnd = const [];
+      return;
+    }
+
+    final sorted = List<SearchHighlight>.of(highlights)
+      ..sort((a, b) => a.start.compareTo(b.start));
+    final prefixMaxEnd = List<int>.filled(sorted.length, 0);
+    var maxEnd = sorted.first.end;
+    for (var i = 0; i < sorted.length; i++) {
+      if (sorted[i].end > maxEnd) maxEnd = sorted[i].end;
+      prefixMaxEnd[i] = maxEnd;
+    }
+    _sortedSearchHighlights = sorted;
+    _searchHighlightPrefixMaxEnd = prefixMaxEnd;
+  }
+
+  void _ensureSearchHighlightIndexCurrent() {
+    final highlights = controller.searchHighlights;
+    if (!identical(highlights, _indexedSearchHighlightSource) ||
+        highlights.length != _indexedSearchHighlightCount) {
+      _rebuildSearchHighlightIndex();
+    }
+  }
+
+  int _firstSearchHighlightOverlapping(int viewportStartOffset) {
+    var low = 0;
+    var high = _searchHighlightPrefixMaxEnd.length;
+    while (low < high) {
+      final mid = low + ((high - low) >> 1);
+      if (_searchHighlightPrefixMaxEnd[mid] >= viewportStartOffset) {
+        high = mid;
+      } else {
+        low = mid + 1;
+      }
+    }
+    return low;
+  }
+
   ui.Paragraph _buildParagraph(String text, {double? width}) {
     final builder = ui.ParagraphBuilder(_paragraphStyle)
       ..pushStyle(_uiTextStyle)
@@ -4870,6 +4918,7 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
        _innerPadding = innerPadding,
        _matchHighlightStyle = matchHighlightStyle {
     _sortedDiagnostics = _sortDiagnostics(_diagnostics);
+    _rebuildSearchHighlightIndex();
     final fontSize = _textStyle?.fontSize ?? 14.0;
     final fontFamily = _textStyle?.fontFamily;
     final color =
@@ -5521,6 +5570,7 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
 
     if (controller.searchHighlightsChanged) {
       controller.searchHighlightsChanged = false;
+      _rebuildSearchHighlightIndex();
       markNeedsPaint();
       return;
     }
@@ -9336,10 +9386,21 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     double firstVisibleLineY,
     bool hasActiveFolds,
   ) {
-    final highlights = controller.searchHighlights;
+    _ensureSearchHighlightIndexCurrent();
+    final highlights = _sortedSearchHighlights;
     if (highlights.isEmpty) return;
 
-    for (final highlight in highlights) {
+    final viewportStartOffset = controller.getLineStartOffset(firstVisibleLine);
+    final viewportEndOffset = lastVisibleLine + 1 < controller.lineCount
+        ? controller.getLineStartOffset(lastVisibleLine + 1)
+        : controller.length;
+    final firstHighlight = _firstSearchHighlightOverlapping(
+      viewportStartOffset,
+    );
+
+    for (var i = firstHighlight; i < highlights.length; i++) {
+      final highlight = highlights[i];
+      if (highlight.start > viewportEndOffset) break;
       final start = highlight.start;
       final end = highlight.end;
 
