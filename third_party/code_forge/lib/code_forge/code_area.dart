@@ -4500,6 +4500,9 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
   List<int> _searchHighlightPrefixMaxEnd = const [];
   List<SearchHighlight>? _indexedSearchHighlightSource;
   int _indexedSearchHighlightCount = 0;
+  List<LineDecoration> _lineDecorationsByStart = const [];
+  List<int> _lineDecorationPrefixMaxEnd = const [];
+  Map<String, int> _lineDecorationPaintOrder = const {};
   int _cachedCaretOffset = -1, _cachedCaretLine = 0, _cachedCaretLineStart = 0;
   Rect? _lastImeCaretRect;
   Rect? _lastImeComposingRect;
@@ -4839,6 +4842,66 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     return low;
   }
 
+  void _rebuildLineDecorationIndex() {
+    final decorations = controller.lineDecorations;
+    if (decorations.isEmpty) {
+      _lineDecorationsByStart = const [];
+      _lineDecorationPrefixMaxEnd = const [];
+      _lineDecorationPaintOrder = const {};
+      return;
+    }
+
+    _lineDecorationPaintOrder = {
+      for (var i = 0; i < decorations.length; i++) decorations[i].id: i,
+    };
+    final sorted = List<LineDecoration>.of(decorations)
+      ..sort((a, b) => a.startLine.compareTo(b.startLine));
+    final prefixMaxEnd = List<int>.filled(sorted.length, 0);
+    var maxEnd = sorted.first.endLine;
+    for (var i = 0; i < sorted.length; i++) {
+      if (sorted[i].endLine > maxEnd) maxEnd = sorted[i].endLine;
+      prefixMaxEnd[i] = maxEnd;
+    }
+    _lineDecorationsByStart = sorted;
+    _lineDecorationPrefixMaxEnd = prefixMaxEnd;
+  }
+
+  int _firstLineDecorationOverlapping(int firstVisibleLine) {
+    var low = 0;
+    var high = _lineDecorationPrefixMaxEnd.length;
+    while (low < high) {
+      final mid = low + ((high - low) >> 1);
+      if (_lineDecorationPrefixMaxEnd[mid] >= firstVisibleLine) {
+        high = mid;
+      } else {
+        low = mid + 1;
+      }
+    }
+    return low;
+  }
+
+  List<LineDecoration> _visibleLineDecorations(
+    int firstVisibleLine,
+    int lastVisibleLine,
+  ) {
+    if (_lineDecorationsByStart.isEmpty) return const [];
+    final first = _firstLineDecorationOverlapping(firstVisibleLine);
+    final visible = <LineDecoration>[];
+    for (var i = first; i < _lineDecorationsByStart.length; i++) {
+      final decoration = _lineDecorationsByStart[i];
+      if (decoration.startLine > lastVisibleLine) break;
+      if (decoration.endLine >= firstVisibleLine) visible.add(decoration);
+    }
+    if (visible.length > 1) {
+      visible.sort(
+        (a, b) => (_lineDecorationPaintOrder[a.id] ?? 0).compareTo(
+          _lineDecorationPaintOrder[b.id] ?? 0,
+        ),
+      );
+    }
+    return visible;
+  }
+
   ui.Paragraph _buildParagraph(String text, {double? width}) {
     final builder = ui.ParagraphBuilder(_paragraphStyle)
       ..pushStyle(_uiTextStyle)
@@ -4919,6 +4982,7 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
        _matchHighlightStyle = matchHighlightStyle {
     _sortedDiagnostics = _sortDiagnostics(_diagnostics);
     _rebuildSearchHighlightIndex();
+    _rebuildLineDecorationIndex();
     final fontSize = _textStyle?.fontSize ?? 14.0;
     final fontFamily = _textStyle?.fontFamily;
     final color =
@@ -5602,6 +5666,7 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
 
     if (controller.decorationsChanged) {
       controller.decorationsChanged = false;
+      _rebuildLineDecorationIndex();
       final ghost = controller.ghostText;
       if (ghost != null && ghost.text.isNotEmpty) {
         _ghostTextAnchorLine = ghost.line;
@@ -10317,7 +10382,10 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     double firstVisibleLineY,
     bool hasActiveFolds,
   ) {
-    final decorations = controller.lineDecorations;
+    final decorations = _visibleLineDecorations(
+      firstVisibleLine,
+      lastVisibleLine,
+    );
     if (decorations.isEmpty) return;
 
     for (final decoration in decorations) {
