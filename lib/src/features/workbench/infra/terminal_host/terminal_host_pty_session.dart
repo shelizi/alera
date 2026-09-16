@@ -162,12 +162,19 @@ final class TerminalHostPtySession._(
 
   Future<void> _applyAttachment(TerminalHostAttachment attachment) async {
     _startedNewProcess = attachment.created;
-    if (attachment.snapshot.isNotEmpty || attachment.created) {
+    if (attachment.hasSnapshot || attachment.created) {
+      final resetInteractionModes = attachment.created || !attachment.running;
+      final snapshotText = attachment.snapshotText;
       _events.add(
-        TerminalPtySnapshotEvent(
-          attachment.snapshot,
-          resetInteractionModes: attachment.created || !attachment.running,
-        ),
+        snapshotText != null
+            ? TerminalPtySnapshotTextEvent(
+                snapshotText,
+                resetInteractionModes: resetInteractionModes,
+              )
+            : TerminalPtySnapshotEvent(
+                attachment.snapshot,
+                resetInteractionModes: resetInteractionModes,
+              ),
       );
     }
     if (!attachment.running) {
@@ -335,11 +342,17 @@ final class TerminalHostPtySession._(
       // bytes on the output lane, ahead of whatever comes next.
       return;
     }
+    final snapshotText = resume.snapshotText;
     _events.add(
-      TerminalPtySnapshotEvent(
-        resume.snapshot,
-        resetInteractionModes: resume.resetInteractionModes,
-      ),
+      snapshotText != null
+          ? TerminalPtySnapshotTextEvent(
+              snapshotText,
+              resetInteractionModes: resume.resetInteractionModes,
+            )
+          : TerminalPtySnapshotEvent(
+              resume.snapshot,
+              resetInteractionModes: resume.resetInteractionModes,
+            ),
     );
   }
 

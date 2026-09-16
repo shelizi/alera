@@ -239,6 +239,18 @@ class _FakeTerminalPtySession({
     );
   }
 
+  void emitSnapshotText(String text, {bool resetInteractionModes = false}) {
+    if (_events.isClosed) {
+      return;
+    }
+    _events.add(
+      TerminalPtySnapshotTextEvent(
+        text,
+        resetInteractionModes: resetInteractionModes,
+      ),
+    );
+  }
+
   void emitExit(int exitCode) {
     if (_events.isClosed) {
       return;

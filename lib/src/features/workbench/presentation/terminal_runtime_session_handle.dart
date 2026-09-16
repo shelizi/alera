@@ -265,6 +265,17 @@ class _XtermTerminalSessionHandle(
     notifyListeners();
   }
 
+  void _replaceTerminalWithSnapshotText(
+    String text, {
+    required bool resetInteractionModes,
+  }) {
+    _rebuildTerminalFromSnapshotText(
+      text,
+      resetInteractionModes: resetInteractionModes,
+    );
+    notifyListeners();
+  }
+
   @override
   void _clearPendingTerminalOutput() {
     _pump.clearPending();

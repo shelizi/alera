@@ -198,6 +198,8 @@ void _registerTerminalRuntimeFactoryGroup() {
             }
           case TerminalPtySnapshotEvent():
             break;
+          case TerminalPtySnapshotTextEvent():
+            break;
           case TerminalPtyExitEvent():
             if (!exitCompleter.isCompleted) {
               exitCompleter.complete();
@@ -262,6 +264,8 @@ void _registerTerminalRuntimeFactoryGroup() {
             // adapters under test always emit bytes.
             break;
           case TerminalPtySnapshotEvent():
+            break;
+          case TerminalPtySnapshotTextEvent():
             break;
           case TerminalPtyExitEvent():
             if (!exitCompleter.isCompleted) {

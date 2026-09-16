@@ -142,6 +142,43 @@ void _registerTerminalRuntimeSnapshotTests() {
     }
   });
 
+  test('a predecoded snapshot restores without going through bytes', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    final fakeSession = _FakeTerminalPtySession();
+    final runtime = XtermTerminalRuntime(
+      ptySessionFactory: _FakeTerminalPtySessionFactory(
+        sessions: <_FakeTerminalPtySession>[fakeSession],
+      ),
+      shellLaunchesBuilder: () => <GhosttyTerminalShellLaunch>[
+        _launch('shell', shell: '/bin/sh'),
+      ],
+    );
+    addTearDown(runtime.dispose);
+    final session = runtime.sessionFor(workspace: _workspace(), tab: _tab());
+    final visibility = acquireTerminalVisibilityForTesting(session);
+    try {
+      await session.ensureStarted();
+
+      fakeSession.emitSnapshotText(
+        '\x1b[?1000h\x1b[?1006hpredecoded ñ snapshot',
+      );
+      await Future.pause(.zero);
+
+      expect(terminalPointerInputSuspendedForTesting(session), isTrue);
+      flushTerminalOutputForTesting(session);
+
+      expect(terminalPointerInputSuspendedForTesting(session), isFalse);
+      expect(
+        terminalBufferTextForTesting(session),
+        contains('predecoded ñ snapshot'),
+      );
+      expect(terminalMouseModeForTesting(session), isNot(xterm.MouseMode.none));
+    } finally {
+      visibility.dispose();
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
   test('live output cannot evict a restore before its first flush', () async {
     debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
     final fakeSession = _FakeTerminalPtySession();

@@ -131,6 +131,21 @@ extension _XtermTerminalSessionPty on _XtermTerminalSessionHandle {
           _completePointerInputSnapshotCatchUp();
           _pendingInteractionModeReset = false;
         }
+      case TerminalPtySnapshotTextEvent(
+        :final text,
+        :final resetInteractionModes,
+      ):
+        _pendingInteractionModeReset |= resetInteractionModes;
+        if (_outputVisible) {
+          final shouldResetInteractionModes = _pendingInteractionModeReset;
+          _preparePointerInputForSnapshot();
+          _replaceTerminalWithSnapshotText(
+            text,
+            resetInteractionModes: shouldResetInteractionModes,
+          );
+          _completePointerInputSnapshotCatchUp();
+          _pendingInteractionModeReset = false;
+        }
       case TerminalPtyExitEvent(:final exitCode):
         _handlePtyExit(
           exitCode: exitCode,

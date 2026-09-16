@@ -339,6 +339,14 @@ final class const TerminalPtySnapshotEvent(
   final bool resetInteractionModes = false,
 }) extends TerminalPtySessionEvent;
 
+/// A snapshot already decoded off the UI isolate. The terminal-host socket
+/// reader uses this path so a large attach/resume snapshot does not repeat its
+/// UTF-8 conversion on the Flutter UI isolate.
+final class const TerminalPtySnapshotTextEvent(
+  final String text, {
+  final bool resetInteractionModes = false,
+}) extends TerminalPtySessionEvent;
+
 final class const TerminalPtyExitEvent(
   final int exitCode, {
   final bool notifyRuntime = true,
