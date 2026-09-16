@@ -4730,6 +4730,8 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     int firstVisibleLine,
     int lastVisibleLine,
   ) {
+    if (_largeFilePerformanceMode) return;
+
     final config = lspConfig;
     final currentFile = filePath;
     if (config == null || currentFile == null) return;
@@ -5270,6 +5272,12 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
   set largeFilePerformanceMode(bool value) {
     if (_largeFilePerformanceMode == value) return;
     _largeFilePerformanceMode = value;
+    _semanticTokenTimer?.cancel();
+    _semanticTokenTimer = null;
+    _semanticTokenRequestSerial++;
+    _lastSemanticTokenRequestVersion = -1;
+    _lastSemanticTokenRequestStartLine = -1;
+    _lastSemanticTokenRequestEndLine = -1;
     if (value) {
       _lastProcessedText = null;
     } else {
@@ -11614,6 +11622,8 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
 
   @override
   void dispose() {
+    _semanticTokenTimer?.cancel();
+    _semanticTokenRequestSerial++;
     controller.removeListener(_onControllerChange);
     controller.setScrollCallback(null);
     _syntaxHighlighter.dispose();
