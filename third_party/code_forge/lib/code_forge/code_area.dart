@@ -11354,10 +11354,11 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
         focusNode.requestFocus();
         if (focusNode.hasFocus) {
           controller.connection!.setEditingState(
-            TextEditingValue(
-              text: controller.text,
-              selection: controller.selection,
-            ),
+            controller.currentTextEditingValue ??
+                TextEditingValue(
+                  text: controller.text,
+                  selection: controller.selection,
+                ),
           );
         }
       }
