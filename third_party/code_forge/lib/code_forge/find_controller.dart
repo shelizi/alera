@@ -458,7 +458,12 @@ class FindController extends ChangeNotifier {
       if (!_isSearchRequestCurrent(requestSerial, documentVersion)) return;
       if (replacement != replaceInputController.text) return;
       if (newText == text) return;
-      _codeController.replaceRange(0, _codeController.length, newText);
+      _codeController.replaceRange(
+        0,
+        _codeController.length,
+        newText,
+        knownDeletedText: text,
+      );
     } catch (e) {
       if (_disposed) return;
       debugPrint('FindController: Replace All failed. Error: $e');
