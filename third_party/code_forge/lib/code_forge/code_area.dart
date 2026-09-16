@@ -7459,6 +7459,10 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
   }
 
   double _getLineYOffset(int targetLine, bool hasActiveFolds) {
+    if (_usesUniformLargeFileLayout) {
+      return targetLine * _lineHeight;
+    }
+
     final cacheKey = '${targetLine}_$hasActiveFolds';
     if (_lineOffsetCache.containsKey(cacheKey)) {
       return _lineOffsetCache[cacheKey]!;
