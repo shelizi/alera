@@ -7685,22 +7685,28 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
       );
     }
 
+    final rtl = isRTL;
+    final wrapsLines = lineWrap;
+    final foldingEnabled = enableFolding;
+    final innerLeft = innerPadding?.left ?? 0.0;
+    final innerTop = innerPadding?.top ?? 0.0;
+    final contentWidth =
+        size.width - _gutterWidth - (innerPadding?.horizontal ?? 0.0);
+    final paragraphWidth = wrapsLines
+        ? _wrapWidth
+        : (rtl ? max(contentWidth * 3, 10000.0) : null);
+    final horizontalScroll = wrapsLines ? 0.0 : _effectiveHScroll;
+
     double currentY = firstVisibleLineY;
     for (int i = firstVisibleLine; i <= lastVisibleLine && i < lineCount; i++) {
       if (hasActiveFolds && _isLineFolded(i)) continue;
 
       final contentTop = currentY;
-      double lineHeight = lineWrap ? _getWrappedLineHeight(i) : _lineHeight;
+      double lineHeight = wrapsLines ? _getWrappedLineHeight(i) : _lineHeight;
       final visualYOffset = _getTotalVirtualOffset(i);
 
       ui.Paragraph paragraph;
       String lineText;
-
-      final contentWidth =
-          size.width - _gutterWidth - (innerPadding?.horizontal ?? 0);
-      final paragraphWidth = lineWrap
-          ? _wrapWidth
-          : (isRTL ? max(contentWidth * 3, 10000.0) : null);
 
       if (bufferActive && i == bufferLineIndex && bufferLineText != null) {
         lineText = bufferLineText;
@@ -7709,88 +7715,72 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
           bufferLineText,
           width: paragraphWidth,
         );
-        if (isRTL && lineWrap) {
+        if (rtl && wrapsLines) {
           lineHeight = paragraph.height;
         }
       } else {
-        if (_lineTextCache.containsKey(i)) {
-          lineText = _lineTextCache[i]!;
+        final cachedLineText = _lineTextCache[i];
+        if (cachedLineText != null) {
+          lineText = cachedLineText;
         } else {
           lineText = controller.getLineText(i);
           _lineTextCache[i] = lineText;
         }
 
-        if (_paragraphCache.containsKey(i) && !isRTL) {
-          paragraph = _paragraphCache[i]!;
+        final cachedParagraph = rtl ? null : _paragraphCache[i];
+        if (cachedParagraph != null) {
+          paragraph = cachedParagraph;
         } else {
           paragraph = _buildHighlightedParagraph(
             i,
             lineText,
             width: paragraphWidth,
           );
-          if (!isRTL) {
+          if (!rtl) {
             _paragraphCache[i] = paragraph;
           }
 
-          if (lineWrap) {
+          if (wrapsLines) {
             _lineHeightCache[i] = paragraph.height;
-            if (isRTL) {
+            if (rtl) {
               lineHeight = paragraph.height;
             }
           }
         }
       }
 
-      final foldRange = _getFoldRangeAtLine(i);
+      final foldRange = foldingEnabled ? _getFoldRangeAtLine(i) : null;
       final isFoldStart =
           foldRange != null && foldRange.endIndex > foldRange.startIndex;
 
-      final textX = isRTL
-          ? (lineWrap
-                ? (innerPadding?.left ?? 0)
-                : (innerPadding?.left ?? 0) +
+      final textX = rtl
+          ? (wrapsLines
+                ? innerLeft
+                : innerLeft +
                       contentWidth -
                       (paragraphWidth ?? 0) -
-                      _effectiveHScroll)
-          : _gutterWidth +
-                (innerPadding?.left ?? 0) -
-                (lineWrap ? 0 : _effectiveHScroll);
+                      horizontalScroll)
+          : _gutterWidth + innerLeft - horizontalScroll;
 
       canvas.drawParagraph(
         paragraph,
-        offset +
-            Offset(
-              textX,
-              (innerPadding?.top ?? 0) +
-                  contentTop +
-                  visualYOffset -
-                  vscrollController.offset,
-            ),
+        offset + Offset(textX, innerTop + contentTop + visualYOffset - viewTop),
       );
 
       if (isFoldStart && foldRange.isFolded) {
         final foldIndicator = _buildParagraph(' ...');
         final paraWidth = paragraph.longestLine;
-        final foldX = isRTL
-            ? (innerPadding?.left ?? 0) +
+        final foldX = rtl
+            ? innerLeft +
                   contentWidth -
                   paraWidth -
                   foldIndicator.longestLine -
-                  (lineWrap ? 0 : _effectiveHScroll)
-            : _gutterWidth +
-                  (innerPadding?.left ?? 0) +
-                  paraWidth -
-                  (lineWrap ? 0 : _effectiveHScroll);
+                  horizontalScroll
+            : _gutterWidth + innerLeft + paraWidth - horizontalScroll;
         canvas.drawParagraph(
           foldIndicator,
           offset +
-              Offset(
-                foldX,
-                (innerPadding?.top ?? 0) +
-                    contentTop +
-                    visualYOffset -
-                    vscrollController.offset,
-              ),
+              Offset(foldX, innerTop + contentTop + visualYOffset - viewTop),
         );
       }
 
