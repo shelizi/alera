@@ -4451,6 +4451,8 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
   final Map<int, Rect> _actionBulbRects = {};
   final Map<Rect, DocumentColor> _colorBoxHitAreas = {};
   final Map<int, ui.Paragraph> _paragraphCache = {};
+  final Map<int, ({String text, TextStyle style, ui.Paragraph paragraph})>
+  _lineNumberParagraphCache = {};
   final Map<int, double> _lineHeightCache = {};
   final Map<int, FoldRange?> _foldRanges = {};
   final Map<int, int?> _bracketCache = {};
@@ -4493,6 +4495,7 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
   GutterStyle _gutterStyle;
   CodeSelectionStyle _selectionStyle;
   List<LspErrors> _diagnostics;
+  late List<LspErrors> _sortedDiagnostics;
   int _cachedCaretOffset = -1, _cachedCaretLine = 0, _cachedCaretLineStart = 0;
   Rect? _lastImeCaretRect;
   Rect? _lastImeComposingRect;
@@ -4777,8 +4780,15 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
   void updateDiagnostics(List<LspErrors> diagnostics) {
     if (_diagnostics != diagnostics) {
       _diagnostics = diagnostics;
+      _sortedDiagnostics = _sortDiagnostics(diagnostics);
       markNeedsPaint();
     }
+  }
+
+  List<LspErrors> _sortDiagnostics(List<LspErrors> diagnostics) {
+    if (diagnostics.length < 2) return diagnostics;
+    return List<LspErrors>.of(diagnostics)
+      ..sort((a, b) => b.severity.compareTo(a.severity));
   }
 
   ui.Paragraph _buildParagraph(String text, {double? width}) {
@@ -4859,6 +4869,7 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
        _lineWrap = lineWrap,
        _innerPadding = innerPadding,
        _matchHighlightStyle = matchHighlightStyle {
+    _sortedDiagnostics = _sortDiagnostics(_diagnostics);
     final fontSize = _textStyle?.fontSize ?? 14.0;
     final fontFamily = _textStyle?.fontFamily;
     final color =
@@ -7857,6 +7868,10 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
         viewTop,
         viewBottom,
         lineCount,
+        firstVisibleLine,
+        lastVisibleLine,
+        firstVisibleLineY,
+        hasActiveFolds,
         bgColor,
         textStyle,
       );
@@ -8289,6 +8304,10 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     double viewTop,
     double viewBottom,
     int lineCount,
+    int firstVisibleLine,
+    int lastVisibleLine,
+    double firstVisibleLineY,
+    bool hasActiveFolds,
     Color bgColor,
     TextStyle? gutterTextStyle,
   ) {
@@ -8313,24 +8332,21 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
       );
     }
 
-    final baseLineNumberStyle = (() {
-      if (gutterStyle.lineNumberStyle != null) {
-        if (gutterStyle.lineNumberStyle!.fontSize == null) {
-          return gutterStyle.lineNumberStyle!.copyWith(
-            fontSize: gutterTextStyle?.fontSize,
-          );
-        }
-        return gutterStyle.lineNumberStyle;
-      } else {
-        if (gutterTextStyle == null) {
-          return editorTheme['root'];
-        } else if (gutterTextStyle.color == null) {
-          return gutterTextStyle.copyWith(color: editorTheme['root']?.color);
-        } else {
-          return gutterTextStyle;
-        }
-      }
-    })();
+    TextStyle? baseLineNumberStyle;
+    final configuredLineNumberStyle = gutterStyle.lineNumberStyle;
+    if (configuredLineNumberStyle != null) {
+      baseLineNumberStyle = configuredLineNumberStyle.fontSize == null
+          ? configuredLineNumberStyle.copyWith(
+              fontSize: gutterTextStyle?.fontSize,
+            )
+          : configuredLineNumberStyle;
+    } else if (gutterTextStyle == null) {
+      baseLineNumberStyle = editorTheme['root'];
+    } else {
+      baseLineNumberStyle = gutterTextStyle.color == null
+          ? gutterTextStyle.copyWith(color: editorTheme['root']?.color)
+          : gutterTextStyle;
+    }
 
     final cursorOffset = controller.selection.extentOffset;
     final currentLine = controller.getLineAtOffset(cursorOffset);
@@ -8352,16 +8368,19 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     for (final diagnostic in _diagnostics) {
       final startLine = diagnostic.range['start']?['line'] as int?;
       final endLine = diagnostic.range['end']?['line'] as int?;
-      if (startLine != null) {
-        final severity = diagnostic.severity;
-        if (severity == 1 || severity == 2) {
-          final rangeEnd = endLine ?? startLine;
-          for (int line = startLine; line <= rangeEnd; line++) {
-            final existing = lineSeverityMap[line];
-            if (existing == null || severity < existing) {
-              lineSeverityMap[line] = severity;
-            }
-          }
+      if (startLine == null || startLine > lastVisibleLine) continue;
+
+      final severity = diagnostic.severity;
+      if (severity != 1 && severity != 2) continue;
+
+      final rangeEnd = endLine ?? startLine;
+      if (rangeEnd < firstVisibleLine) continue;
+      final visibleStart = max(startLine, firstVisibleLine);
+      final visibleEnd = min(rangeEnd, lastVisibleLine);
+      for (int line = visibleStart; line <= visibleEnd; line++) {
+        final existing = lineSeverityMap[line];
+        if (existing == null || severity < existing) {
+          lineSeverityMap[line] = severity;
         }
       }
     }
@@ -8374,21 +8393,21 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
         (baseLineNumberStyle?.color?.withAlpha(120) ?? Colors.grey);
     final errorColor = gutterStyle.errorLineNumberColor;
     final warningColor = gutterStyle.warningLineNumberColor;
-
-    final firstVisibleLine = _findVisibleLineByYPosition(viewTop)
-        .clamp(0, lineCount - 1);
-    final firstVisibleLineY = _getLineYOffset(
-      firstVisibleLine,
-      _hasActiveFolds,
+    final baseStyle = baseLineNumberStyle!;
+    final activeLineNumberStyle = baseStyle.copyWith(color: activeLineColor);
+    final inactiveLineNumberStyle = baseStyle.copyWith(
+      color: inactiveLineColor,
     );
+    final errorLineNumberStyle = baseStyle.copyWith(color: errorColor);
+    final warningLineNumberStyle = baseStyle.copyWith(color: warningColor);
 
     _actionBulbRects.clear();
 
     double currentY = firstVisibleLineY;
     int indexTracker = firstVisibleLine + 1;
 
-    for (int i = firstVisibleLine; i < lineCount; i++) {
-      if (_hasActiveFolds && _isLineFolded(i)) continue;
+    for (int i = firstVisibleLine; i <= lastVisibleLine && i < lineCount; i++) {
+      if (hasActiveFolds && _isLineFolded(i)) continue;
 
       final contentTop = currentY;
       final lineHeight = lineWrap ? _getWrappedLineHeight(i) : _lineHeight;
@@ -8406,26 +8425,22 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
           lineHeight,
         );
 
-        Color lineNumberColor;
+        TextStyle lineNumberStyle;
         final severity = lineSeverityMap[i];
         if (severity == 1) {
-          lineNumberColor = errorColor;
+          lineNumberStyle = errorLineNumberStyle;
         } else if (severity == 2) {
-          lineNumberColor = warningColor;
+          lineNumberStyle = warningLineNumberStyle;
         } else if (i == currentLine) {
-          lineNumberColor = activeLineColor;
+          lineNumberStyle = activeLineNumberStyle;
         } else if (selectionStartLine != null &&
             selectionEndLine != null &&
             i >= selectionStartLine &&
             i <= selectionEndLine) {
-          lineNumberColor = activeLineColor;
+          lineNumberStyle = activeLineNumberStyle;
         } else {
-          lineNumberColor = inactiveLineColor;
+          lineNumberStyle = inactiveLineNumberStyle;
         }
-
-        final lineNumberStyle = baseLineNumberStyle!.copyWith(
-          color: lineNumberColor,
-        );
 
         String gutterText;
 
@@ -8454,7 +8469,8 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
           }
         }
 
-        final lineNumPara = _buildLineNumberParagraph(
+        final lineNumPara = _getLineNumberParagraph(
+          i,
           gutterText,
           lineNumberStyle,
         );
@@ -8588,6 +8604,25 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
 
       currentY += lineHeight;
     }
+  }
+
+  ui.Paragraph _getLineNumberParagraph(
+    int lineIndex,
+    String text,
+    TextStyle style,
+  ) {
+    final cached = _lineNumberParagraphCache[lineIndex];
+    if (cached != null && cached.text == text && cached.style == style) {
+      return cached.paragraph;
+    }
+
+    final paragraph = _buildLineNumberParagraph(text, style);
+    _lineNumberParagraphCache[lineIndex] = (
+      text: text,
+      style: style,
+      paragraph: paragraph,
+    );
+    return paragraph;
   }
 
   ui.Paragraph _buildLineNumberParagraph(String text, TextStyle style) {
@@ -8934,6 +8969,12 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
       maxLineBoundedCacheEntries,
     );
     _pruneIntKeyedViewportCache(
+      _lineNumberParagraphCache,
+      minKeep,
+      maxKeep,
+      maxLineBoundedCacheEntries,
+    );
+    _pruneIntKeyedViewportCache(
       _lineIndentCache,
       minKeep,
       maxKeep,
@@ -9109,10 +9150,7 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
   ) {
     if (_diagnostics.isEmpty) return;
 
-    final sortedDiagnostics = List<LspErrors>.from(_diagnostics)
-      ..sort((a, b) => (b.severity).compareTo(a.severity));
-
-    for (final diagnostic in sortedDiagnostics) {
+    for (final diagnostic in _sortedDiagnostics) {
       final range = diagnostic.range;
       final startPos = range['start'] as Map<String, dynamic>;
       final endPos = range['end'] as Map<String, dynamic>;
