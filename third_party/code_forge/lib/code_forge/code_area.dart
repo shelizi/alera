@@ -8980,18 +8980,27 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
       maxKeep,
       maxLineBoundedCacheEntries,
     );
-    _pruneIntKeyedViewportCache(
-      _bracketCache,
-      minKeep,
-      maxKeep,
-      maxLineBoundedCacheEntries,
-    );
-    _pruneIntKeyedViewportCache(
-      _caretInfoCache,
-      minKeep,
-      maxKeep,
-      maxLineBoundedCacheEntries,
-    );
+
+    if (_bracketCache.length > maxLineBoundedCacheEntries ||
+        _caretInfoCache.length > maxLineBoundedCacheEntries) {
+      final minOffset = controller.getLineStartOffset(minKeep);
+      final maxOffset = maxKeep + 1 < controller.lineCount
+          ? controller.getLineStartOffset(maxKeep + 1)
+          : controller.length;
+      _pruneOffsetKeyedViewportCache(
+        _bracketCache,
+        minOffset,
+        maxOffset,
+        maxLineBoundedCacheEntries,
+      );
+      _pruneOffsetKeyedViewportCache(
+        _caretInfoCache,
+        minOffset,
+        maxOffset,
+        maxLineBoundedCacheEntries,
+      );
+    }
+
     _pruneIntKeyedViewportCache(
       _indentGuideCache,
       minKeep,
@@ -9008,6 +9017,16 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
   ) {
     if (cache.length <= maxEntries) return;
     cache.removeWhere((line, _) => line < minKeep || line > maxKeep);
+  }
+
+  void _pruneOffsetKeyedViewportCache<T>(
+    Map<int, T> cache,
+    int minOffset,
+    int maxOffset,
+    int maxEntries,
+  ) {
+    if (cache.length <= maxEntries) return;
+    cache.removeWhere((offset, _) => offset < minOffset || offset > maxOffset);
   }
 
   void _drawBracketHighlight(
