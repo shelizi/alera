@@ -73,6 +73,22 @@ bool isLargeFileAsciiViewportCandidate(
   return (start: start, end: end, xOffset: start * columnWidth);
 }
 
+int largeFileAsciiColumnForX({
+  required int textLength,
+  required double columnWidth,
+  required double x,
+}) {
+  if (textLength <= 0 ||
+      columnWidth <= 0 ||
+      !columnWidth.isFinite ||
+      !x.isFinite) {
+    return 0;
+  }
+
+  final safeX = max(0.0, x);
+  return ((safeX / columnWidth) + 0.5).floor().clamp(0, textLength);
+}
+
 /// A highly customizable code editor widget for Flutter.
 ///
 /// [CodeForge] provides a feature-rich code editing experience with support for:
@@ -5115,6 +5131,17 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     return unitWidth;
   }
 
+  double? _largeFileAsciiColumnWidthForLine(int lineIndex, String text) {
+    if (!_largeFilePerformanceMode ||
+        _lineWrap ||
+        isRTL ||
+        _enableFolding ||
+        !_canUseLargeFileAsciiViewportLine(lineIndex, text)) {
+      return null;
+    }
+    return _getLargeFileFixedAsciiColumnWidth();
+  }
+
   ui.Paragraph _buildHighlightedParagraph(
     int lineIndex,
     String text, {
@@ -5303,19 +5330,24 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
 
         double hoveredX = 0.0;
         if (char > 0 && char <= lineText.length) {
-          var para = _paragraphCache[line];
-          if (para == null) {
-            para = _buildParagraph(
-              lineText,
-              width: lineWrap ? _wrapWidth : null,
-            );
-            if (_largeFilePerformanceMode && !_lineWrap && !isRTL) {
-              _paragraphCache[line] = para;
+          final columnWidth = _largeFileAsciiColumnWidthForLine(line, lineText);
+          if (columnWidth != null) {
+            hoveredX = char.clamp(0, lineText.length) * columnWidth;
+          } else {
+            var para = _paragraphCache[line];
+            if (para == null) {
+              para = _buildParagraph(
+                lineText,
+                width: lineWrap ? _wrapWidth : null,
+              );
+              if (_largeFilePerformanceMode && !_lineWrap && !isRTL) {
+                _paragraphCache[line] = para;
+              }
             }
-          }
-          final boxes = para.getBoxesForRange(0, char);
-          if (boxes.isNotEmpty) {
-            hoveredX = boxes.last.right;
+            final boxes = para.getBoxesForRange(0, char);
+            if (boxes.isNotEmpty) {
+              hoveredX = boxes.last.right;
+            }
           }
         }
 
@@ -6963,6 +6995,25 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
 
     final cachedLineText = _lineTextCache[lineIndex];
     final lineText = cachedLineText ?? controller.getLineText(lineIndex);
+    final fixedColumnWidth = _largeFileAsciiColumnWidthForLine(
+      lineIndex,
+      lineText,
+    );
+    if (fixedColumnWidth != null) {
+      final clampedColumn = columnIndex.clamp(0, lineText.length);
+      final caretX =
+          clampedColumn * fixedColumnWidth +
+          _getColorBoxOffsetForLine(lineIndex, clampedColumn);
+      final result = (
+        lineIndex: lineIndex,
+        columnIndex: columnIndex,
+        offset: Offset(caretX, lineY + _getTotalVirtualOffset(lineIndex)),
+        height: _lineHeight,
+      );
+      _lineTextCache[lineIndex] = lineText;
+      _caretInfoCache[cursorOffset] = result;
+      return result;
+    }
     final contentWidth =
         size.width - _gutterWidth - (innerPadding?.horizontal ?? 0);
     final paragraphWidth = lineWrap
@@ -7097,6 +7148,25 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
 
     final cachedLineText = _lineTextCache[lineIndex];
     final lineText = cachedLineText ?? controller.getLineText(lineIndex);
+    final fixedColumnWidth = _largeFileAsciiColumnWidthForLine(
+      lineIndex,
+      lineText,
+    );
+    if (fixedColumnWidth != null) {
+      final clampedColumn = columnIndex.clamp(0, lineText.length);
+      final caretX =
+          clampedColumn * fixedColumnWidth +
+          _getColorBoxOffsetForLine(lineIndex, clampedColumn);
+      final result = (
+        lineIndex: lineIndex,
+        columnIndex: columnIndex,
+        offset: Offset(caretX, lineY + _getTotalVirtualOffset(lineIndex)),
+        height: _lineHeight,
+      );
+      _lineTextCache[lineIndex] = lineText;
+      _caretInfoCache[cursorOffset] = result;
+      return result;
+    }
     final contentWidth =
         size.width - _gutterWidth - (innerPadding?.horizontal ?? 0);
     final paragraphWidth = lineWrap
@@ -7228,6 +7298,22 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
       lineText = controller.getLineText(tappedLineIndex);
       _lineTextCache[tappedLineIndex] = lineText;
       _paragraphCache.remove(tappedLineIndex);
+    }
+
+    if (controller.documentColors.isEmpty) {
+      final fixedColumnWidth = _largeFileAsciiColumnWidthForLine(
+        tappedLineIndex,
+        lineText,
+      );
+      if (fixedColumnWidth != null) {
+        final scalarColumn = largeFileAsciiColumnForX(
+          textLength: lineText.length,
+          columnWidth: fixedColumnWidth,
+          x: position.dx,
+        );
+        final lineStartOffset = controller.getLineStartOffset(tappedLineIndex);
+        return (lineStartOffset + scalarColumn).clamp(0, controller.length);
+      }
     }
 
     final contentWidth =

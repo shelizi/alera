@@ -1,3 +1,5 @@
+import 'dart:ui' as ui;
+
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_editor_surface.dart';
 import 'package:alera/src/features/settings/domain/editor_syntax_theme_catalog.dart';
@@ -333,6 +335,45 @@ void main() {
       ),
       (start: 31, end: 100, xOffset: 310.0),
     );
+  });
+
+  test('fixed-column hit testing matches Flutter paragraph positioning', () {
+    ui.Paragraph paragraph(String text) {
+      final builder = ui.ParagraphBuilder(
+        ui.ParagraphStyle(fontSize: 14, textDirection: ui.TextDirection.ltr),
+      )..pushStyle(ui.TextStyle(fontSize: 14));
+      builder.addText(text);
+      final result = builder.build();
+      result.layout(const ui.ParagraphConstraints(width: double.infinity));
+      return result;
+    }
+
+    const text = 'MMMMMMMMMM';
+    final laidOut = paragraph(text);
+    final columnWidth = paragraph('M').maxIntrinsicWidth;
+    for (final columnPosition in <double>[
+      0.0,
+      0.1,
+      0.49,
+      0.51,
+      1.49,
+      1.51,
+      5.25,
+      9.9,
+      12.0,
+    ]) {
+      final x = columnPosition * columnWidth;
+      final expected = laidOut.getPositionForOffset(ui.Offset(x, 0)).offset;
+      expect(
+        code_forge.largeFileAsciiColumnForX(
+          textLength: text.length,
+          columnWidth: columnWidth,
+          x: x,
+        ),
+        expected,
+        reason: 'x=$x columns=$columnPosition',
+      );
+    }
   });
 
   test('offers Text Actions only for a valid editor selection', () {
