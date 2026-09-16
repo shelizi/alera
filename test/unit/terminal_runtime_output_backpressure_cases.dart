@@ -2,7 +2,7 @@ part of 'terminal_runtime_native_test.dart';
 
 void _registerTerminalRuntimeOutputBackpressureTests() {
   test(
-    'flushes an overflowing hidden backlog instead of dropping its prefix',
+    'bounds hidden overflow parsing instead of draining the whole backlog',
     () {
       final runtime = XtermTerminalRuntime(
         ptySessionFactory: _FakeTerminalPtySessionFactory(),
@@ -13,25 +13,21 @@ void _registerTerminalRuntimeOutputBackpressureTests() {
       addTearDown(runtime.dispose);
       final session = runtime.sessionFor(workspace: _workspace(), tab: _tab());
 
-      // If the old trimming path drops the head of this chunk, the DEC private
-      // mode never reaches xterm and bracketed paste remains disabled. Overflow
-      // should instead parse the whole backlog once, clear it, then start a new
-      // accumulation window.
+      // The prefix must still reach xterm so terminal state is preserved, but
+      // an oversized hidden burst must not be parsed synchronously in one shot
+      // on the Flutter UI isolate.
       queueTerminalOutputForTesting(
         session,
         '\x1b[?2004h${'a' * (1024 * 1024 + 64 * 1024)}',
       );
 
-      expect(pendingTerminalOutputCharsForTesting(session), 0);
-      expect(terminalBracketedPasteModeForTesting(session), isTrue);
-
-      queueTerminalOutputForTesting(session, 'next-window\r\n');
       expect(pendingTerminalOutputCharsForTesting(session), greaterThan(0));
+      expect(terminalBracketedPasteModeForTesting(session), isTrue);
     },
   );
 
   test(
-    'revealing a hidden terminal applies its backlog before the first frame',
+    'revealing a hidden terminal only parses one UI budget synchronously',
     () {
       final runtime = XtermTerminalRuntime(
         ptySessionFactory: _FakeTerminalPtySessionFactory(),
@@ -42,7 +38,11 @@ void _registerTerminalRuntimeOutputBackpressureTests() {
       addTearDown(runtime.dispose);
       final session = runtime.sessionFor(workspace: _workspace(), tab: _tab());
 
-      queueTerminalOutputForTesting(session, 'hidden-before-reveal\r\n');
+      const frame = 64 * 1024;
+      queueTerminalOutputForTesting(
+        session,
+        'hidden-before-reveal\r\n${'a' * (frame * 3)}hidden-tail\r\n',
+      );
       expect(pendingTerminalOutputCharsForTesting(session), greaterThan(0));
       expect(
         terminalBufferTextForTesting(session),
@@ -52,11 +52,20 @@ void _registerTerminalRuntimeOutputBackpressureTests() {
       final visibility = acquireTerminalVisibilityForTesting(session);
       addTearDown(visibility.dispose);
 
-      expect(pendingTerminalOutputCharsForTesting(session), 0);
+      expect(pendingTerminalOutputCharsForTesting(session), greaterThan(0));
       expect(
         terminalBufferTextForTesting(session),
         contains('hidden-before-reveal'),
       );
+      expect(
+        terminalBufferTextForTesting(session),
+        isNot(contains('hidden-tail')),
+      );
+
+      while (pendingTerminalOutputCharsForTesting(session) > 0) {
+        flushTerminalOutputForTesting(session);
+      }
+      expect(terminalBufferTextForTesting(session), contains('hidden-tail'));
     },
   );
 

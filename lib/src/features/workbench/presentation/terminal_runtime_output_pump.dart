@@ -23,6 +23,7 @@ class _TerminalSessionOutputPump {
 
   final _TerminalSessionOutputHost _host;
   final _TerminalOutputPipeline pipeline = _TerminalOutputPipeline();
+  bool _hiddenCatchUpScheduled = false;
 
   void queue(
     String data, {
@@ -34,16 +35,47 @@ class _TerminalSessionOutputPump {
     pipeline.add(_TerminalOutputSegment(data, source));
     if (source == _TerminalOutputSource.live &&
         pipeline.liveLength > _terminalOutputMaxPendingChars) {
-      // Never discard terminal output just to protect the UI queue. When a
-      // hidden tab has accumulated a full window, parse that window into the
-      // emulator in one shot (there is no mounted view to repaint), clear the
-      // queue, and start accumulating again. The same safety valve applies to
-      // a visible terminal only under extreme producer backpressure: one rare
-      // synchronous catch-up is preferable to silently losing terminal state.
-      flushNow();
+      if (pipeline.restoreLength > 0) {
+        // Snapshot restore is an atomic state transition: live bytes queued
+        // behind it may depend on the restored cursor/mode state. Preserve the
+        // existing correctness guarantee and finish that transition in order.
+        flushNow();
+        return;
+      }
+      // Never discard terminal output just to protect the UI queue, but also
+      // never parse a full 1 MiB backlog synchronously on the Flutter UI
+      // isolate. Consume one normal frame budget now so escape-sequence state
+      // keeps advancing, then yield between additional hidden catch-up chunks.
+      _drainChunk();
+      if (!_host.isOutputVisible &&
+          pipeline.liveLength > _terminalOutputMaxPendingChars) {
+        _scheduleHiddenCatchUp();
+      } else {
+        scheduleFlush();
+      }
       return;
     }
     scheduleFlush();
+  }
+
+  void _scheduleHiddenCatchUp() {
+    if (_hiddenCatchUpScheduled || _host.isDisposed || _host.isOutputVisible) {
+      return;
+    }
+    _hiddenCatchUpScheduled = true;
+    Timer.run(() {
+      _hiddenCatchUpScheduled = false;
+      if (_host.isDisposed || _host.isOutputVisible) {
+        return;
+      }
+      if (pipeline.liveLength <= _terminalOutputMaxPendingChars) {
+        return;
+      }
+      _drainChunk();
+      if (pipeline.liveLength > _terminalOutputMaxPendingChars) {
+        _scheduleHiddenCatchUp();
+      }
+    });
   }
 
   void scheduleFlush() {
@@ -172,6 +204,7 @@ class _TerminalSessionOutputPump {
   }
 
   void clearPending() {
+    _hiddenCatchUpScheduled = false;
     pipeline.cancelDeferredFlush();
     pipeline.clear();
   }

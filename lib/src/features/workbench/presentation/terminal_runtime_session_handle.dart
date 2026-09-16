@@ -130,10 +130,10 @@ class _XtermTerminalSessionHandle(
   void onOutputVisibilityChanged() {
     _syncPtyOutputVisibility();
     if (_visibility.isOutputVisible) {
-      // A tab that was hidden has no view to animate while it accumulates.
-      // Apply its final partial window before the first revealed frame so tab
-      // switching shows the caught-up state instead of a visible fast-scroll.
-      _pump.flushNow();
+      // A tab that was hidden may have accumulated a large partial window.
+      // Parse only one normal UI budget synchronously on reveal, then let the
+      // existing paced frame pipeline catch up without freezing this frame.
+      _pump.flushFrame(force: true);
     } else {
       _pump.pipeline.cancelDeferredFlush();
     }
