@@ -89,6 +89,7 @@ final class TerminalXtermReplicaTerminal extends Terminal {
   }
 
   void applyBufferDelta(TerminalXtermWorkerBufferDelta delta) {
+    final shouldNotify = _bufferDeltaNeedsNotification(delta);
     _updateSynchronizedUpdateState(delta.globalState);
     _applyingReplicaDelta = true;
     try {
@@ -146,11 +147,15 @@ final class TerminalXtermReplicaTerminal extends Terminal {
       _applyingReplicaDelta = false;
     }
     if (_synchronizedUpdateSuppressed) {
-      _synchronizedUpdateNotificationPending = true;
+      if (shouldNotify) {
+        _synchronizedUpdateNotificationPending = true;
+      }
       return;
     }
-    _synchronizedUpdateNotificationPending = false;
-    notifyListeners();
+    if (shouldNotify || _synchronizedUpdateNotificationPending) {
+      _synchronizedUpdateNotificationPending = false;
+      notifyListeners();
+    }
   }
 
   void applyStateDelta(TerminalXtermWorkerStateDelta delta) {
@@ -181,6 +186,29 @@ final class TerminalXtermReplicaTerminal extends Terminal {
     _synchronizedUpdateSuppressed = false;
     _synchronizedUpdateReleaseTimer?.cancel();
     _synchronizedUpdateReleaseTimer = null;
+  }
+
+  bool _bufferDeltaNeedsNotification(TerminalXtermWorkerBufferDelta delta) {
+    if (!_hasReplicaState) return true;
+    final currentGlobal = _model.globalState;
+    final nextGlobal = delta.globalState;
+    return delta.fullRepaint ||
+        delta.trimStart > 0 ||
+        delta.rowDeltas.isNotEmpty ||
+        delta.cols != _model.cols ||
+        delta.rows != _model.rows ||
+        delta.bufferLength != _model.bufferLength ||
+        delta.scrollBack != _model.scrollBack ||
+        delta.cursorX != _model.cursorX ||
+        delta.cursorY != _model.cursorY ||
+        delta.cursorVisible != _model.cursorVisible ||
+        delta.mouseMode != _model.mouseMode ||
+        nextGlobal.isUsingAltBuffer != currentGlobal.isUsingAltBuffer ||
+        nextGlobal.reverseDisplay != currentGlobal.reverseDisplay ||
+        nextGlobal.cursorType != currentGlobal.cursorType ||
+        nextGlobal.cursorBlink != currentGlobal.cursorBlink ||
+        nextGlobal.cursorLineHighlight != currentGlobal.cursorLineHighlight ||
+        nextGlobal.colorRevision != currentGlobal.colorRevision;
   }
 
   void _releaseSynchronizedUpdate() {

@@ -457,6 +457,66 @@ void main() {
     expect(notifications, 1);
   });
 
+  test('replica skips repaint notifications for input-only modes', () async {
+    final worker = await TerminalXtermWorker.start(
+      cols: 12,
+      rows: 4,
+      maxLines: 64,
+    );
+    addTearDown(worker.close);
+    final replica = TerminalXtermReplicaTerminal(
+      cols: 12,
+      rows: 4,
+      maxLines: 64,
+    );
+    addTearDown(replica.dispose);
+    replica.applyBufferDelta(await worker.writeBufferDelta('ready'));
+    var notifications = 0;
+    replica.addListener(() => notifications += 1);
+    final escape = String.fromCharCode(27);
+
+    replica.applyBufferDelta(
+      await worker.writeBufferDelta(
+        '$escape[?2004h$escape[?1h$escape[?1004h$escape[?1006h$escape[2h',
+      ),
+    );
+
+    expect(notifications, 0);
+    expect(replica.bracketedPasteMode, isTrue);
+    expect(replica.cursorKeysMode, isTrue);
+    expect(replica.reportFocusMode, isTrue);
+    expect(replica.mouseReportMode, MouseReportMode.sgr);
+    expect(replica.keyInput(TerminalKey.keyA, text: 'a'), isFalse);
+  });
+
+  test(
+    'replica still notifies for renderer and scroll routing modes',
+    () async {
+      final worker = await TerminalXtermWorker.start(
+        cols: 12,
+        rows: 4,
+        maxLines: 64,
+      );
+      addTearDown(worker.close);
+      final replica = TerminalXtermReplicaTerminal(
+        cols: 12,
+        rows: 4,
+        maxLines: 64,
+      );
+      addTearDown(replica.dispose);
+      replica.applyBufferDelta(await worker.writeBufferDelta('ready'));
+      var notifications = 0;
+      replica.addListener(() => notifications += 1);
+      final escape = String.fromCharCode(27);
+
+      replica.applyBufferDelta(await worker.writeBufferDelta('$escape[?25l'));
+      expect(notifications, 1);
+
+      replica.applyBufferDelta(await worker.writeBufferDelta('$escape[?1000h'));
+      expect(notifications, 2);
+    },
+  );
+
   test('replica applies hidden state without touching buffer rows', () async {
     final worker = await TerminalXtermWorker.start(
       cols: 12,
