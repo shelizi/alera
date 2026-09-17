@@ -13,6 +13,7 @@ extension _XtermTerminalParserWorker on _XtermTerminalSessionHandle {
     _parserWorkerCommandTail = Future<void>.value();
     _parserWorkerLastApply = null;
     _parserWorkerReplicaNeedsSync = false;
+    _pendingParserWorkerSize = null;
     if (workerFuture == null) {
       return;
     }
@@ -72,6 +73,7 @@ extension _XtermTerminalParserWorker on _XtermTerminalSessionHandle {
       throw StateError('Parser worker backend requires an xterm replica.');
     }
     final generation = _parserWorkerGeneration;
+    _flushPendingParserWorkerResize();
     final applyBuffer = _visibility.isOutputVisible;
     if (!applyBuffer) {
       // Mark dirty when the hidden command is queued, not when it completes.
@@ -129,6 +131,7 @@ extension _XtermTerminalParserWorker on _XtermTerminalSessionHandle {
       return null;
     }
     final generation = _parserWorkerGeneration;
+    _flushPendingParserWorkerResize();
     final command = _queueParserWorkerCommand(terminal, generation, (
       worker,
     ) async {
@@ -221,14 +224,14 @@ extension _XtermTerminalParserWorker on _XtermTerminalSessionHandle {
         final worker = await _ensureParserWorker(terminal, generation);
         await command(worker);
       },
-      onError: (Object _, StackTrace __) async {
+      onError: (Object _, StackTrace _) async {
         final worker = await _ensureParserWorker(terminal, generation);
         await command(worker);
       },
     );
     _parserWorkerCommandTail = next.then<void>(
       (_) {},
-      onError: (Object _, StackTrace __) {},
+      onError: (Object _, StackTrace _) {},
     );
     return next;
   }
