@@ -24,6 +24,29 @@ void _registerTerminalRuntimeOutputBackpressureTests() {
     expect(terminalBracketedPasteModeForTesting(session), isTrue);
   });
 
+  test('parser worker resizes before parsing following output', () async {
+    final runtime = XtermTerminalRuntime(
+      parserWorkerEnabled: true,
+      ptySessionFactory: _FakeTerminalPtySessionFactory(),
+      shellLaunchesBuilder: () => <GhosttyTerminalShellLaunch>[
+        _launch('shell', shell: '/bin/sh'),
+      ],
+    );
+    addTearDown(runtime.dispose);
+    final session = runtime.sessionFor(workspace: _workspace(), tab: _tab());
+
+    queueTerminalOutputForTesting(session, 'warmup\r\n');
+    flushTerminalOutputForTesting(session);
+    await waitForTerminalParserApplyForTesting(session);
+
+    resizeTerminalForTesting(session, 6, 4);
+    queueTerminalOutputForTesting(session, '1234567890');
+    flushTerminalOutputForTesting(session);
+    await waitForTerminalParserApplyForTesting(session);
+
+    expect(terminalBufferTextForTesting(session), contains('123456\n7890'));
+  });
+
   test('starts adaptive parsing at the measured TUI-safe chunk size', () {
     final runtime = XtermTerminalRuntime(
       ptySessionFactory: _FakeTerminalPtySessionFactory(),

@@ -54,6 +54,55 @@ extension _XtermTerminalParserWorker on _XtermTerminalSessionHandle {
     return command;
   }
 
+  void _resizeParserWorker({
+    required int cols,
+    required int rows,
+    required int pixelWidth,
+    required int pixelHeight,
+  }) {
+    if (!_parserWorkerEnabled || _disposed || _parserWorkerFuture == null) {
+      return;
+    }
+    final terminal = _terminal;
+    if (terminal is! TerminalXtermReplicaTerminal) {
+      return;
+    }
+    final generation = _parserWorkerGeneration;
+    final command = _queueParserWorkerCommand(terminal, generation, (
+      worker,
+    ) async {
+      final delta = await worker.resizeBufferDelta(
+        cols: cols,
+        rows: rows,
+        pixelWidth: pixelWidth,
+        pixelHeight: pixelHeight,
+      );
+      if (_disposed ||
+          generation != _parserWorkerGeneration ||
+          !identical(_terminal, terminal)) {
+        return;
+      }
+      _applyParserWorkerEffects(delta.effects);
+      terminal.applyBufferDelta(delta);
+    });
+    _parserWorkerLastApply = command;
+    unawaited(
+      command.catchError((Object error, StackTrace stackTrace) {
+        if (_disposed || generation != _parserWorkerGeneration) {
+          return;
+        }
+        FlutterError.reportError(
+          FlutterErrorDetails(
+            exception: error,
+            stack: stackTrace,
+            library: 'terminal runtime',
+            context: ErrorDescription('resizing terminal parser worker'),
+          ),
+        );
+      }),
+    );
+  }
+
   Future<void> _queueParserWorkerCommand(
     TerminalXtermReplicaTerminal terminal,
     int generation,

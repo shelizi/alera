@@ -577,9 +577,17 @@ final class TerminalXtermWorker {
   Future<TerminalXtermWorkerBufferDelta> resizeBufferDelta({
     required int cols,
     required int rows,
+    int? pixelWidth,
+    int? pixelHeight,
   }) async {
     return TerminalXtermWorkerBufferDelta._fromMessage(
-      await _requestRaw(<Object?>[_workerResizeBufferDelta, cols, rows]),
+      await _requestRaw(<Object?>[
+        _workerResizeBufferDelta,
+        cols,
+        rows,
+        pixelWidth,
+        pixelHeight,
+      ]),
     );
   }
 
@@ -1114,7 +1122,12 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
           reply.send(delta(forceFullRepaint: true));
         case _workerResizeBufferDelta:
           effects.clear();
-          terminal.resize(raw[2]! as int, raw[3]! as int);
+          terminal.resize(
+            raw[2]! as int,
+            raw[3]! as int,
+            raw.length > 4 ? raw[4] as int? : null,
+            raw.length > 5 ? raw[5] as int? : null,
+          );
           revision += 1;
           bufferLineRefs = null;
           bufferLineCaches = null;

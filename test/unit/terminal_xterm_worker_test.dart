@@ -389,6 +389,35 @@ void main() {
       expect(foundHyperlink, isTrue);
     },
   );
+
+  test('worker resize preserves in-band pixel size reports', () async {
+    final directOutput = <String>[];
+    final direct = _createDirectTerminal(
+      cols: 10,
+      rows: 4,
+      onOutput: directOutput.add,
+    );
+    final worker = await TerminalXtermWorker.start(cols: 10, rows: 4);
+    addTearDown(worker.close);
+    final escape = String.fromCharCode(27);
+
+    direct.write('$escape[?2048h');
+    await worker.writeBufferDelta('$escape[?2048h');
+    directOutput.clear();
+
+    direct.resize(12, 5, 8, 16);
+    final delta = await worker.resizeBufferDelta(
+      cols: 12,
+      rows: 5,
+      pixelWidth: 8,
+      pixelHeight: 16,
+    );
+
+    _expectEffectsParity(delta.effects, <TerminalXtermWorkerEffect>[
+      for (final output in directOutput) TerminalXtermWorkerPtyWrite(output),
+    ]);
+    expect(directOutput, <String>['$escape[48;5;12;80;96t']);
+  });
 }
 
 Terminal _createDirectTerminal({
