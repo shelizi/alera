@@ -15,13 +15,21 @@ extension _WorkspaceEditorSave on _WorkspaceEditorSurfaceState {
       return;
     }
     final contentBeingSaved = _controller.text;
+    final documentVersionBeingSaved = _controller.documentVersion;
     _setEditorState(() => _saving = true);
     try {
-      final saved = await _write(overwriteIfChanged: false);
+      final saved = await _write(
+        overwriteIfChanged: false,
+        currentDisplayContent: contentBeingSaved,
+      );
       if (!mounted) {
         return;
       }
-      _acceptSavedIfUnchanged(saved, contentBeingSaved);
+      _acceptSavedIfUnchanged(
+        saved,
+        contentBeingSaved,
+        documentVersionBeingSaved,
+      );
       _autosave.resume();
       _showToast('File saved');
     } catch (error) {
@@ -54,13 +62,21 @@ extension _WorkspaceEditorSave on _WorkspaceEditorSurfaceState {
       return;
     }
     final contentBeingSaved = _controller.text;
+    final documentVersionBeingSaved = _controller.documentVersion;
     _setEditorState(() => _saving = true);
     try {
-      final saved = await _write(overwriteIfChanged: false);
+      final saved = await _write(
+        overwriteIfChanged: false,
+        currentDisplayContent: contentBeingSaved,
+      );
       if (!mounted) {
         return;
       }
-      _acceptSavedIfUnchanged(saved, contentBeingSaved);
+      _acceptSavedIfUnchanged(
+        saved,
+        contentBeingSaved,
+        documentVersionBeingSaved,
+      );
     } finally {
       if (mounted) {
         _setEditorState(() => _saving = false);
@@ -70,6 +86,15 @@ extension _WorkspaceEditorSave on _WorkspaceEditorSurfaceState {
 
   Future<void> _discardChanges() async {
     if (_loading || _saving || !_document.canSave) {
+      return;
+    }
+    if (_document.nativeBacked) {
+      _clearPendingDocumentSnapshot();
+      _undoController.clear();
+      await _load();
+      if (mounted) {
+        _showToast('Changes discarded');
+      }
       return;
     }
     final loadedText = _document.loadedText;
@@ -101,12 +126,20 @@ extension _WorkspaceEditorSave on _WorkspaceEditorSurfaceState {
       return false;
     }
     final contentBeingSaved = _controller.text;
+    final documentVersionBeingSaved = _controller.documentVersion;
     try {
-      final saved = await _write(overwriteIfChanged: true);
+      final saved = await _write(
+        overwriteIfChanged: true,
+        currentDisplayContent: contentBeingSaved,
+      );
       if (!mounted) {
         return false;
       }
-      _acceptSavedIfUnchanged(saved, contentBeingSaved);
+      _acceptSavedIfUnchanged(
+        saved,
+        contentBeingSaved,
+        documentVersionBeingSaved,
+      );
       _autosave.resume();
       _showToast('File overwritten');
       return true;
@@ -120,11 +153,12 @@ extension _WorkspaceEditorSave on _WorkspaceEditorSurfaceState {
 
   Future<native.WorkspaceEditorTextFile> _write({
     required bool overwriteIfChanged,
+    required String currentDisplayContent,
   }) {
     return _workspaceFiles.writeEditorTextFile(
       workspacePath: widget.workspace.path,
       relativePath: widget.tab.filePath!,
-      currentDisplayContent: _controller.text,
+      currentDisplayContent: currentDisplayContent,
       originalRawContent: _document.loadedRawText,
       originalDisplayContent: _document.loadedText,
       expectedContentToken: _document.contentToken,
@@ -136,6 +170,17 @@ extension _WorkspaceEditorSave on _WorkspaceEditorSurfaceState {
 
   void _acceptSaved(native.WorkspaceEditorTextFile saved) {
     _clearPendingDocumentSnapshot();
+    if (_document.nativeBacked) {
+      final documentVersion = _controller.documentVersion;
+      _document.acceptNativeSaved(
+        encoding: saved.encoding,
+        contentToken: saved.contentToken,
+        savedDocumentVersion: documentVersion,
+        currentDocumentVersion: documentVersion,
+        tabSize: _currentEditorTabSize(),
+      );
+      return;
+    }
     _document.acceptSaved(saved, tabSize: _currentEditorTabSize());
     _replaceControllerText(_document.currentText ?? '');
   }
@@ -143,7 +188,19 @@ extension _WorkspaceEditorSave on _WorkspaceEditorSurfaceState {
   void _acceptSavedIfUnchanged(
     native.WorkspaceEditorTextFile saved,
     String contentBeingSaved,
+    int documentVersionBeingSaved,
   ) {
+    if (_document.nativeBacked) {
+      _clearPendingDocumentSnapshot();
+      _document.acceptNativeSaved(
+        encoding: saved.encoding,
+        contentToken: saved.contentToken,
+        savedDocumentVersion: documentVersionBeingSaved,
+        currentDocumentVersion: _controller.documentVersion,
+        tabSize: _currentEditorTabSize(),
+      );
+      return;
+    }
     if (_controller.text == contentBeingSaved) {
       _acceptSaved(saved);
       return;
@@ -187,7 +244,12 @@ extension _WorkspaceEditorSave on _WorkspaceEditorSurfaceState {
       lineCount: lineCount,
       contentLength: contentLength,
     );
-    if (deferSnapshot) {
+    if (_document.nativeBacked) {
+      _clearPendingDocumentSnapshot();
+      if (!_document.updateNativeDocumentVersion(documentVersion)) {
+        return;
+      }
+    } else if (deferSnapshot) {
       _scheduleDocumentSnapshot();
     } else {
       _clearPendingDocumentSnapshot();
@@ -243,6 +305,9 @@ extension _WorkspaceEditorSave on _WorkspaceEditorSurfaceState {
     _documentSnapshotDebounceTimer?.cancel();
     _documentSnapshotDebounceTimer = null;
     _hasPendingDocumentSnapshot = false;
+    if (_document.nativeBacked) {
+      return;
+    }
     _document.updateCurrentText(_controller.text);
     final isDirty = _isDirty();
     if (refreshState && mounted && wasDirty != isDirty) {

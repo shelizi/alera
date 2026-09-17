@@ -1,3 +1,6 @@
+use super::workspace_source::{
+    open_workspace_source, NativeWorkspaceTextEncoding, WorkspaceSourceInfo,
+};
 use ropey::Rope as RustRope;
 use std::sync::RwLock;
 use unicode_bidi::{bidi_class, BidiClass};
@@ -39,6 +42,7 @@ pub struct LineLayoutInfo {
 pub struct RopeBridge {
     pub(crate) rope: RwLock<RustRope>,
     selection: RwLock<SelectionState>,
+    source_info: Option<WorkspaceSourceInfo>,
 }
 
 impl RopeBridge {
@@ -50,7 +54,34 @@ impl RopeBridge {
                 base_offset: 0,
                 extent_offset: 0,
             }),
+            source_info: None,
         }
+    }
+
+    /// Opens a workspace file directly into the authoritative native Rope.
+    ///
+    /// Only bounded source metadata crosses back to Dart. The decoded/display
+    /// text never leaves the CodeForge native library during initial open.
+    pub fn create_from_workspace_file(
+        workspace_path: String,
+        relative_path: String,
+        tab_size: i32,
+        encoding: Option<NativeWorkspaceTextEncoding>,
+    ) -> Result<Self, String> {
+        let source = open_workspace_source(&workspace_path, &relative_path, tab_size, encoding)?;
+        Ok(Self {
+            rope: RwLock::new(RustRope::from_str(&source.display_content)),
+            selection: RwLock::new(SelectionState {
+                base_offset: 0,
+                extent_offset: 0,
+            }),
+            source_info: Some(source.info),
+        })
+    }
+
+    #[flutter_rust_bridge::frb(sync)]
+    pub fn source_info(&self) -> Option<WorkspaceSourceInfo> {
+        self.source_info.clone()
     }
 
     #[flutter_rust_bridge::frb(sync)]
@@ -248,6 +279,7 @@ impl RopeBridge {
         Self {
             rope: RwLock::new(self.rope.read().unwrap().clone()),
             selection: RwLock::new(*self.selection.read().unwrap()),
+            source_info: self.source_info.clone(),
         }
     }
 

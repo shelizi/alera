@@ -7,7 +7,9 @@ import '../frb_generated.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `advance_point`, `append_capture_spans`, `apply_edit`, `line_content_end_char`, `native_language`, `normalize_language_id`, `normalize_scope`, `parse_rope`, `point_for_char`
+import 'rope.dart';
+
+// These functions are ignored because they are not marked as `pub`: `advance_point`, `append_capture_spans`, `apply_edit`, `line_content_end_char`, `native_language`, `normalize_language_id`, `normalize_scope`, `open_with_rope`, `parse_rope`, `point_for_char`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `NativeEditorDocumentState`, `NativeLanguage`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`
 
@@ -41,6 +43,22 @@ abstract class NativeEditorDocument implements RustOpaqueInterface {
     text: text,
     languageId: languageId,
   );
+
+  /// Opens retained syntax state by structurally cloning the existing native
+  /// CodeForge Rope. This avoids Rope -> Dart String -> second native Rope
+  /// during editor startup.
+  static Future<NativeEditorDocument> openFromRope({
+    required String documentId,
+    required BigInt revision,
+    required RopeBridge rope,
+    required String languageId,
+  }) => RustLib.instance.api
+      .crateApiEditorDocumentNativeEditorDocumentOpenFromRope(
+        documentId: documentId,
+        revision: revision,
+        rope: rope,
+        languageId: languageId,
+      );
 
   /// Returns syntax captures only for the requested viewport plus fixed overscan.
   /// No document-sized span collection is built or transferred across FFI.

@@ -37,6 +37,7 @@ class EditorSessionRegistry extends ChangeNotifier
     }
   }
 
+  @override
   bool isDirty(String tabId) {
     return _sessions[tabId]?.isDirty() ?? _documents[tabId]?.isDirty ?? false;
   }
@@ -91,7 +92,7 @@ class EditorSessionRegistry extends ChangeNotifier
   List<String> dirtyPathsFor({
     required String workspacePath,
     required Iterable<String> relativePaths,
-  }) async {
+  }) {
     final candidates = relativePaths.toSet();
     final dirtyPaths = <String>{};
     for (final entry in _documents.entries) {
@@ -122,11 +123,16 @@ class EditorSessionRegistry extends ChangeNotifier
     }
     for (final tabId in tabIds) {
       final document = _documents[tabId];
-      if (document != null &&
-          document.loadError == null &&
-          document.currentText != null &&
-          isDirty(tabId)) {
-        return document.currentText;
+      if (document == null || document.loadError != null || !isDirty(tabId)) {
+        continue;
+      }
+      final currentText = document.currentText;
+      if (currentText != null) {
+        return currentText;
+      }
+      final snapshotText = _sessions[tabId]?.snapshotText;
+      if (snapshotText != null) {
+        return snapshotText();
       }
     }
     return null;
@@ -247,6 +253,7 @@ class EditorSessionRegistry extends ChangeNotifier
     }
   }
 
+  @override
   void forget(String tabId) {
     final hadSession = _sessions.remove(tabId) != null;
     final hadDocument = _documents.remove(tabId) != null;
@@ -356,6 +363,7 @@ class const EditorSessionHandle({
   required final bool Function() isDirty,
   required final Future<void> Function() save,
   required final Future<void> Function() discard,
+  final String Function()? snapshotText,
   final void Function(WorkspaceEditorRevealTarget target)? reveal,
   final Future<void> Function()? reload,
 });
@@ -378,13 +386,21 @@ class EditorDocumentSession({final VoidCallback? _onChanged}) {
   native.WorkspaceTextEncoding? requestedEncoding;
   native.WorkspaceTextEncoding? encoding;
   int tabSize = 4;
+  bool nativeBacked = false;
+  int loadedDocumentVersion = 0;
+  int currentDocumentVersion = 0;
 
-  bool get hasSnapshot => currentText != null || loadError != null;
+  bool get hasSnapshot =>
+      nativeBacked || currentText != null || loadError != null;
 
   bool get canSave =>
-      loadedText != null && loadError == null && encoding != null;
+      (nativeBacked || loadedText != null) &&
+      loadError == null &&
+      encoding != null;
 
-  bool get isDirty => loadedText != null && currentText != loadedText;
+  bool get isDirty => nativeBacked
+      ? currentDocumentVersion != loadedDocumentVersion
+      : loadedText != null && currentText != loadedText;
 
   void attachFile({
     required String workspacePath,
@@ -412,6 +428,30 @@ class EditorDocumentSession({final VoidCallback? _onChanged}) {
     currentText = loadedText;
     contentToken = file.contentToken;
     loadError = null;
+    nativeBacked = false;
+    loadedDocumentVersion = 0;
+    currentDocumentVersion = 0;
+    _notifyChanged();
+  }
+
+  void acceptNativeLoaded({
+    required native.WorkspaceTextEncoding encoding,
+    required String contentToken,
+    required int documentVersion,
+    int tabSize = 4,
+    native.WorkspaceTextEncoding? requestedEncoding,
+  }) {
+    this.tabSize = tabSize;
+    this.requestedEncoding = requestedEncoding;
+    this.encoding = encoding;
+    loadedRawText = null;
+    loadedText = null;
+    currentText = null;
+    this.contentToken = contentToken;
+    nativeBacked = true;
+    loadedDocumentVersion = documentVersion;
+    currentDocumentVersion = documentVersion;
+    loadError = null;
     _notifyChanged();
   }
 
@@ -423,12 +463,35 @@ class EditorDocumentSession({final VoidCallback? _onChanged}) {
     );
   }
 
+  void acceptNativeSaved({
+    required native.WorkspaceTextEncoding encoding,
+    required String contentToken,
+    required int savedDocumentVersion,
+    required int currentDocumentVersion,
+    int? tabSize,
+  }) {
+    this.tabSize = tabSize ?? this.tabSize;
+    this.encoding = encoding;
+    loadedRawText = null;
+    loadedText = null;
+    currentText = null;
+    this.contentToken = contentToken;
+    nativeBacked = true;
+    loadedDocumentVersion = savedDocumentVersion;
+    this.currentDocumentVersion = currentDocumentVersion;
+    loadError = null;
+    _notifyChanged();
+  }
+
   void acceptLoadError(Object error) {
     loadedRawText = null;
     loadedText = null;
     currentText = null;
     contentToken = null;
     encoding = null;
+    nativeBacked = false;
+    loadedDocumentVersion = 0;
+    currentDocumentVersion = 0;
     loadError = error;
     _notifyChanged();
   }
@@ -440,6 +503,9 @@ class EditorDocumentSession({final VoidCallback? _onChanged}) {
     contentToken = null;
     requestedEncoding = null;
     encoding = null;
+    nativeBacked = false;
+    loadedDocumentVersion = 0;
+    currentDocumentVersion = 0;
     loadError = null;
     _notifyChanged();
   }
@@ -449,6 +515,15 @@ class EditorDocumentSession({final VoidCallback? _onChanged}) {
       return false;
     }
     currentText = text;
+    _notifyChanged();
+    return true;
+  }
+
+  bool updateNativeDocumentVersion(int version) {
+    if (!nativeBacked || currentDocumentVersion == version) {
+      return false;
+    }
+    currentDocumentVersion = version;
     _notifyChanged();
     return true;
   }

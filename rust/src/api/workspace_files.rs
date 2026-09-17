@@ -492,12 +492,6 @@ pub fn write_workspace_editor_text_file(
     tab_size: i32,
     encoding: WorkspaceTextEncoding,
 ) -> Result<WorkspaceEditorTextFile, WorkspaceFileError> {
-    let content = encode_workspace_editor_text_for_save(
-        &current_display_content,
-        original_raw_content.as_deref(),
-        original_display_content.as_deref(),
-    );
-    let bytes = encode_workspace_text_bytes_impl(&content, encoding)?;
     let root = workspace_root(&workspace_path)?;
     reject_protected(&relative_path)?;
     let path = resolve_existing(&root, &relative_path)?;
@@ -522,6 +516,35 @@ pub fn write_workspace_editor_text_file(
             }
         }
     }
+
+    // Native-backed C4 sessions intentionally do not retain duplicate full
+    // raw/display Dart Strings. On Save, recover the original tab layout from
+    // disk after the content-token check so unchanged lines still preserve
+    // tabs exactly without paying that memory cost during normal editing.
+    let disk_original = if original_raw_content.is_none() || original_display_content.is_none() {
+        Some(read_workspace_editor_text_file(
+            workspace_path.clone(),
+            canonical_relative_path.clone(),
+            tab_size,
+            Some(encoding),
+        )?)
+    } else {
+        None
+    };
+    let original_raw = original_raw_content
+        .as_deref()
+        .or_else(|| disk_original.as_ref().map(|file| file.raw_content.as_str()));
+    let original_display = original_display_content.as_deref().or_else(|| {
+        disk_original
+            .as_ref()
+            .map(|file| file.display_content.as_str())
+    });
+    let content = encode_workspace_editor_text_for_save(
+        &current_display_content,
+        original_raw,
+        original_display,
+    );
+    let bytes = encode_workspace_text_bytes_impl(&content, encoding)?;
     fs::write(&path, bytes).map_err(|error| WorkspaceFileError::from_io(error, &relative_path))?;
     read_workspace_editor_text_file(
         workspace_path,
@@ -1382,6 +1405,47 @@ mod tests {
             encoding,
         )
         .expect("save editor file");
+
+        assert_eq!(
+            fs::read_to_string(workspace.path().join("main.dart")).unwrap(),
+            "\talpha\n    beta changed\n\tgamma\n"
+        );
+        assert_eq!(
+            saved.display_content,
+            "    alpha\n    beta changed\n    gamma\n"
+        );
+    }
+
+    #[test]
+    fn write_workspace_editor_text_file_recovers_original_tabs_for_native_backed_save() {
+        let workspace = tempfile::tempdir().expect("tempdir");
+        fs::write(
+            workspace.path().join("main.dart"),
+            "\talpha\n\tbeta\n\tgamma\n",
+        )
+        .expect("write file");
+        let initial = read_workspace_editor_text_file(
+            workspace_path(&workspace),
+            "main.dart".to_string(),
+            4,
+            None,
+        )
+        .expect("read editor file");
+        let encoding = initial.encoding;
+        let token = initial.content_token;
+
+        let saved = write_workspace_editor_text_file(
+            workspace_path(&workspace),
+            "main.dart".to_string(),
+            "    alpha\n    beta changed\n    gamma\n".to_string(),
+            None,
+            None,
+            Some(token),
+            false,
+            4,
+            encoding,
+        )
+        .expect("save native-backed editor file");
 
         assert_eq!(
             fs::read_to_string(workspace.path().join("main.dart")).unwrap(),
