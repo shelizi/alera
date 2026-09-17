@@ -11,6 +11,7 @@ const String _workerWriteDelta = 'writeDelta';
 const String _workerWriteBufferDelta = 'writeBufferDelta';
 const String _workerResize = 'resize';
 const String _workerResizeDelta = 'resizeDelta';
+const String _workerResizeBufferDelta = 'resizeBufferDelta';
 const String _workerKeyInput = 'keyInput';
 const String _workerTextInput = 'textInput';
 const String _workerPaste = 'paste';
@@ -423,6 +424,15 @@ final class TerminalXtermWorker {
   }) async {
     return TerminalXtermWorkerDelta._fromMessage(
       await _requestRaw(<Object?>[_workerResizeDelta, cols, rows]),
+    );
+  }
+
+  Future<TerminalXtermWorkerBufferDelta> resizeBufferDelta({
+    required int cols,
+    required int rows,
+  }) async {
+    return TerminalXtermWorkerBufferDelta._fromMessage(
+      await _requestRaw(<Object?>[_workerResizeBufferDelta, cols, rows]),
     );
   }
 
@@ -885,6 +895,13 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
           terminal.resize(raw[2]! as int, raw[3]! as int);
           revision += 1;
           reply.send(delta(forceFullRepaint: true));
+        case _workerResizeBufferDelta:
+          effects.clear();
+          terminal.resize(raw[2]! as int, raw[3]! as int);
+          revision += 1;
+          bufferLineRefs = null;
+          bufferLineCaches = null;
+          reply.send(bufferDelta());
         case _workerKeyInput:
           effects.clear();
           final handled = terminal.keyInput(
