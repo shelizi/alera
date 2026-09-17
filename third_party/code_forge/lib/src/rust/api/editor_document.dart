@@ -9,9 +9,9 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 import 'rope.dart';
 
-// These functions are ignored because they are not marked as `pub`: `advance_point`, `append_capture_spans`, `apply_edit`, `collect_folding_ranges`, `find_structural_matching_bracket`, `is_foldable_node_kind`, `line_content_end_char`, `native_language`, `normalize_language_id`, `normalize_scope`, `open_with_rope`, `parse_rope`, `point_for_char`
+// These functions are ignored because they are not marked as `pub`: `advance_point`, `append_capture_spans`, `apply_edit`, `collect_folding_ranges`, `find_structural_matching_bracket`, `find_structural_selection_range`, `is_foldable_node_kind`, `line_content_end_char`, `native_language`, `normalize_language_id`, `normalize_scope`, `open_with_rope`, `parse_rope`, `point_for_char`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `NativeEditorDocumentState`, `NativeLanguage`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<NativeEditorDocument>>
 abstract class NativeEditorDocument implements RustOpaqueInterface {
@@ -72,6 +72,15 @@ abstract class NativeEditorDocument implements RustOpaqueInterface {
   BracketMatchResponse queryMatchingBracket({
     required BigInt expectedRevision,
     required BigInt targetOffset,
+  });
+
+  /// Expands a scalar selection to the smallest strictly enclosing named syntax node.
+  /// A supported response with negative offsets is authoritative: the current selection
+  /// already covers the outermost named syntax node and cannot expand further.
+  StructuralSelectionResponse queryStructuralSelection({
+    required BigInt expectedRevision,
+    required BigInt startOffset,
+    required BigInt endOffset,
   });
 
   /// Returns syntax captures only for the requested viewport plus fixed overscan.
@@ -304,6 +313,49 @@ class NativeSyntaxSpan {
           startColumn == other.startColumn &&
           endColumn == other.endColumn &&
           scope == other.scope;
+}
+
+class StructuralSelectionResponse {
+  final String documentId;
+  final BigInt revision;
+  final bool supported;
+  final bool stale;
+
+  /// Unicode-scalar start offset of the next enclosing named syntax node, or -1.
+  final PlatformInt64 startOffset;
+
+  /// Unicode-scalar exclusive end offset of the next enclosing named syntax node, or -1.
+  final PlatformInt64 endOffset;
+
+  const StructuralSelectionResponse({
+    required this.documentId,
+    required this.revision,
+    required this.supported,
+    required this.stale,
+    required this.startOffset,
+    required this.endOffset,
+  });
+
+  @override
+  int get hashCode =>
+      documentId.hashCode ^
+      revision.hashCode ^
+      supported.hashCode ^
+      stale.hashCode ^
+      startOffset.hashCode ^
+      endOffset.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is StructuralSelectionResponse &&
+          runtimeType == other.runtimeType &&
+          documentId == other.documentId &&
+          revision == other.revision &&
+          supported == other.supported &&
+          stale == other.stale &&
+          startOffset == other.startOffset &&
+          endOffset == other.endOffset;
 }
 
 class SyntaxSpanResponse {

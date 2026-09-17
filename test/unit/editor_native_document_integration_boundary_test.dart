@@ -38,4 +38,25 @@ void main() {
     expect(workspaceEditor, contains('languageId:'));
     expect(workspaceEditor, contains('_languageIdForPath(filePath)'));
   });
+
+  test('CodeForge structural selection stays on the retained native tree', () {
+    final controller = File(
+      'third_party/code_forge/lib/code_forge/controller.dart',
+    ).readAsStringSync();
+    final codeArea = File(
+      'third_party/code_forge/lib/code_forge/code_area.dart',
+    ).readAsStringSync();
+    final shortcuts = File('third_party/code_forge/lib/code_forge/utils.dart')
+        .readAsStringSync();
+
+    expect(controller, contains('queryNativeStructuralSelection('));
+    expect(controller, contains('document.queryStructuralSelection('));
+    expect(controller, contains('_pendingNativeEditorEdits.isNotEmpty'));
+    expect(controller, contains('expandStructuralSelection()'));
+    expect(controller, contains('shrinkStructuralSelection()'));
+    expect(codeArea, contains('.expandStructuralSelection'));
+    expect(codeArea, contains('.shrinkStructuralSelection'));
+    expect(shortcuts, contains('expandStructuralSelection'));
+    expect(shortcuts, contains('shrinkStructuralSelection'));
+  });
 }
