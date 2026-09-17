@@ -132,7 +132,7 @@ Do not assign a worker to the old "scan every search highlight/decoration/diagno
 | B | P0 gate | Finish current large-file editor profiling / measurement | Yes | Independent | None unless evidence requires changes |
 | C | P1 | `NativeEditorDocument` retained incremental parser / viewport spans | After B gate | Independent from A; conflicts with E implementation | CodeForge FRB |
 | D | P1 profile | Terminal search benchmark + current Dart rebuild optimization | Yes | Independent | None initially |
-| E | P2 | Editor regex full-snapshot benchmark / compatibility decision | Yes, benchmark only | Independent until native implementation | CodeForge FRB if implemented |
+| E | P2 | Editor regex full-snapshot benchmark / compatibility decision | Completed 2026-09-17 | Completed without native FRB changes | None |
 | F | P2 | Git history graph projection algorithm/cache | Yes, Dart-first | Independent initially | Root FRB only if later native |
 | G | P2 | Workspace search result projection/paging benchmark | Yes, benchmark/Dart-first | Independent initially | Root FRB only if later native |
 | H | Deferred | Rust terminal core shadow PoC | No, unless explicitly reopened | Separate architecture track | Terminal Host/wire; not current work |
@@ -423,6 +423,40 @@ Evaluate one of:
 - native engine with a compatibility-capable implementation;
 - native fast path for a supported subset plus explicit Dart fallback;
 - another engine only if packaging/security/maintenance costs are justified.
+
+### E1/E2 outcome - 2026-09-17
+
+E1 completed with a Windows desktop integration benchmark (`Flutter 3.47.2`, `Dart 3.13.2`) using five measured samples per case. The harness covers 512 KiB and 4 MiB ASCII inputs, low/high match density, 4 MiB Unicode/scalar offsets, lookahead compatibility, replace-all, and repeated query edits.
+
+Final representative medians:
+
+| Case | Full Rope snapshot | Dart regex/isolate | End to end |
+| --- | ---: | ---: | ---: |
+| 4 MiB ASCII, low density | 98.15 ms | 9.58 ms | 105.77 ms |
+| 4 MiB ASCII, high density | 103.74 ms | 25.16 ms | 128.00 ms |
+| 4 MiB Unicode/scalar offsets | 111.90 ms | 19.48 ms | 129.81 ms |
+
+The full `Rope -> String` snapshot accounts for roughly 81-93% of the measured 4 MiB regex end-to-end latency. Isolate overhead after the snapshot is small in the stable run (roughly 0.9-2.2 ms for the 4 MiB cases), so replacing Dart `RegExp` first would optimize the smaller part of the path while creating a compatibility and CodeForge-FRB conflict with C.
+
+Compatibility regression coverage locks in Dart semantics for lookahead, backreferences, whole-word behavior, Unicode scalar offsets, and regex replace-all. Therefore the E2 decision is:
+
+1. keep Dart `RegExp` as the compatibility authority for now;
+2. do **not** add a native regex engine or CodeForge Rust/FRB API in E;
+3. remove the dominant repeated-copy cost by caching one full-text snapshot per `documentVersion` while Find is active;
+4. invalidate that cache on document revision, Find close/clear, failure, and controller disposal;
+5. let C own any future retained-native-document/API shape. Revisit native regex only after C stabilizes and new profiling shows regex execution itself is still material.
+
+The implemented version-aware snapshot reuse changes a 4 MiB five-query edit sequence from a median **692.60 ms** with a fresh snapshot per query to **285.64 ms** including the first cached snapshot, a reduction of **406.96 ms (~58.8%)** for that sequence. It also deduplicates concurrent requests for the same document revision and shares the snapshot with replace-all when the revision is unchanged.
+
+Reproduction:
+
+```text
+flutter test integration_test/editor_regex_search_benchmark.dart -d windows
+flutter test test/unit/editor_regex_search_compatibility_test.dart test/unit/versioned_text_snapshot_cache_test.dart
+flutter analyze integration_test/editor_regex_search_benchmark.dart test/unit/editor_regex_search_compatibility_test.dart test/unit/versioned_text_snapshot_cache_test.dart third_party/code_forge/lib/code_forge/find_controller.dart third_party/code_forge/lib/code_forge/versioned_text_snapshot_cache.dart
+```
+
+Result: benchmark passed, 10 focused tests passed, and focused analyzer reported no issues.
 
 ### Parallelism rule
 
