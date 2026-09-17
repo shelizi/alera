@@ -28,7 +28,7 @@ TerminalRuntime terminalRuntime(Ref ref) {
       client: terminalHostClient,
     ),
     initialSettings: ref.read(settingsControllerProvider).terminal,
-    shellLaunchesBuilder: () => _terminalShellLaunches(
+    shellLaunchesBuilder: () => terminalShellLaunches(
       powerShell7ExecutablePath: ref
           .read(settingsControllerProvider)
           .terminal
