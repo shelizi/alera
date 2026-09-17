@@ -1,3 +1,6 @@
+import 'dart:convert';
+
+import 'package:alera/src/features/workbench/domain/terminal_osc52_clipboard.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_xterm_worker.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:xterm2/xterm.dart';
@@ -6,12 +9,18 @@ void main() {
   test(
     'worker-owned xterm matches direct xterm through writes and resize',
     () async {
-      final direct = Terminal(maxLines: 256, reflowWithHiddenCursor: false)
-        ..resize(10, 4);
+      final direct = _createDirectTerminal(
+        cols: 10,
+        rows: 4,
+        platform: TerminalTargetPlatform.windows,
+        wordSeparators: const <int>{0x2f, 0x5c},
+      );
       final worker = await TerminalXtermWorker.start(
         cols: 10,
         rows: 4,
         maxLines: 256,
+        platform: TerminalTargetPlatform.windows,
+        wordSeparators: const <int>{0x2f, 0x5c},
       );
       addTearDown(worker.close);
 
@@ -29,14 +38,19 @@ void main() {
   test(
     'worker-owned xterm preserves parser effects and interaction modes',
     () async {
-      final directEffects = <String>[];
-      final direct = Terminal(
-        maxLines: 256,
-        reflowWithHiddenCursor: false,
-        onTitleChange: (title) => directEffects.add('title:$title'),
-        onBell: () => directEffects.add('bell'),
-        onOutput: (value) => directEffects.add('pty:$value'),
-      )..resize(20, 6);
+      final directEffects = <TerminalXtermWorkerEffect>[];
+      final direct = _createDirectTerminal(
+        cols: 20,
+        rows: 6,
+        onTitleChange: (title) =>
+            directEffects.add(TerminalXtermWorkerTitleChanged(title)),
+        onBell: () => directEffects.add(const TerminalXtermWorkerBell()),
+        onOutput: (value) =>
+            directEffects.add(TerminalXtermWorkerPtyWrite(value)),
+        onClipboardStore: (selector, text) => directEffects.add(
+          TerminalXtermWorkerClipboardStore(selector: selector, text: text),
+        ),
+      );
       final worker = await TerminalXtermWorker.start(
         cols: 20,
         rows: 6,
@@ -44,15 +58,36 @@ void main() {
       );
       addTearDown(worker.close);
 
-      const text =
+      final clipboardPayload = base64.encode(utf8.encode('copied text'));
+      final text =
           '\x1b]2;worker-title\x07\x07\x1b[6n'
           '\x1b[?1h\x1b=\x1b[?25l\x1b[?1000h\x1b[?1004h'
-          '\x1b[?1006h\x1b[?1007h\x1b[?2004h';
+          '\x1b[?1006h\x1b[?1007h\x1b[?2004h'
+          '\x1b]52;c;$clipboardPayload\x07';
       direct.write(text);
       final snapshot = await worker.write(text);
 
       _expectParity(snapshot, direct);
-      expect(snapshot.effects, directEffects);
+      _expectEffectsParity(snapshot.effects, directEffects);
+    },
+  );
+
+  test(
+    'worker preserves orphan combining marks like the Alera terminal',
+    () async {
+      final direct = _createDirectTerminal(cols: 8, rows: 3);
+      final worker = await TerminalXtermWorker.start(
+        cols: 8,
+        rows: 3,
+        maxLines: 256,
+      );
+      addTearDown(worker.close);
+
+      const text = '\u0301A';
+      direct.write(text);
+      final snapshot = await worker.write(text);
+
+      _expectParity(snapshot, direct);
     },
   );
 
@@ -140,6 +175,58 @@ void main() {
     expect(delta.cursorY, direct.buffer.cursorY);
     expect(delta.scrollBack, direct.buffer.scrollBack);
   });
+}
+
+Terminal _createDirectTerminal({
+  required int cols,
+  required int rows,
+  TerminalTargetPlatform platform = TerminalTargetPlatform.unknown,
+  Set<int>? wordSeparators,
+  void Function(String title)? onTitleChange,
+  void Function()? onBell,
+  void Function(String data)? onOutput,
+  void Function(String selector, String text)? onClipboardStore,
+}) {
+  return Terminal(
+    maxLines: 256,
+    reflowWithHiddenCursor: false,
+    preserveOrphanCombiningMarks: true,
+    allowITerm2ClipboardCapture: false,
+    allowKittyClipboard: false,
+    onClipboardQuery: (_) => null,
+    clipboardDecoder: decodeTerminalOsc52Payload,
+    platform: platform,
+    wordSeparators: wordSeparators,
+    onTitleChange: onTitleChange,
+    onBell: onBell,
+    onOutput: onOutput,
+    onClipboardStore: onClipboardStore,
+  )..resize(cols, rows);
+}
+
+void _expectEffectsParity(
+  List<TerminalXtermWorkerEffect> actual,
+  List<TerminalXtermWorkerEffect> expected,
+) {
+  expect(actual, hasLength(expected.length));
+  for (var index = 0; index < expected.length; index++) {
+    final actualEffect = actual[index];
+    switch (expected[index]) {
+      case TerminalXtermWorkerTitleChanged(:final title):
+        expect(actualEffect, isA<TerminalXtermWorkerTitleChanged>());
+        expect((actualEffect as TerminalXtermWorkerTitleChanged).title, title);
+      case TerminalXtermWorkerBell():
+        expect(actualEffect, isA<TerminalXtermWorkerBell>());
+      case TerminalXtermWorkerPtyWrite(:final data):
+        expect(actualEffect, isA<TerminalXtermWorkerPtyWrite>());
+        expect((actualEffect as TerminalXtermWorkerPtyWrite).data, data);
+      case TerminalXtermWorkerClipboardStore(:final selector, :final text):
+        expect(actualEffect, isA<TerminalXtermWorkerClipboardStore>());
+        final clipboard = actualEffect as TerminalXtermWorkerClipboardStore;
+        expect(clipboard.selector, selector);
+        expect(clipboard.text, text);
+    }
+  }
 }
 
 void _expectParity(TerminalXtermWorkerSnapshot snapshot, Terminal direct) {

@@ -3,6 +3,8 @@ import 'dart:typed_data';
 
 import 'package:xterm2/xterm.dart';
 
+import '../domain/terminal_osc52_clipboard.dart';
+
 const String _workerReady = 'ready';
 const String _workerWrite = 'write';
 const String _workerWriteDelta = 'writeDelta';
@@ -10,6 +12,63 @@ const String _workerResize = 'resize';
 const String _workerResizeDelta = 'resizeDelta';
 const String _workerClose = 'close';
 const String _workerError = 'error';
+const String _effectTitleChanged = 'titleChanged';
+const String _effectBell = 'bell';
+const String _effectPtyWrite = 'ptyWrite';
+const String _effectClipboardStore = 'clipboardStore';
+
+sealed class TerminalXtermWorkerEffect {
+  const TerminalXtermWorkerEffect();
+}
+
+final class TerminalXtermWorkerTitleChanged extends TerminalXtermWorkerEffect {
+  const TerminalXtermWorkerTitleChanged(this.title);
+
+  final String title;
+}
+
+final class TerminalXtermWorkerBell extends TerminalXtermWorkerEffect {
+  const TerminalXtermWorkerBell();
+}
+
+final class TerminalXtermWorkerPtyWrite extends TerminalXtermWorkerEffect {
+  const TerminalXtermWorkerPtyWrite(this.data);
+
+  final String data;
+}
+
+final class TerminalXtermWorkerClipboardStore
+    extends TerminalXtermWorkerEffect {
+  const TerminalXtermWorkerClipboardStore({
+    required this.selector,
+    required this.text,
+  });
+
+  final String selector;
+  final String text;
+}
+
+TerminalXtermWorkerEffect _decodeWorkerEffect(List<Object?> message) {
+  return switch (message.first) {
+    _effectTitleChanged => TerminalXtermWorkerTitleChanged(
+      message[1]! as String,
+    ),
+    _effectBell => const TerminalXtermWorkerBell(),
+    _effectPtyWrite => TerminalXtermWorkerPtyWrite(message[1]! as String),
+    _effectClipboardStore => TerminalXtermWorkerClipboardStore(
+      selector: message[1]! as String,
+      text: message[2]! as String,
+    ),
+    final Object? tag => throw StateError('Unknown xterm worker effect: $tag'),
+  };
+}
+
+List<TerminalXtermWorkerEffect> _decodeWorkerEffects(Object? raw) {
+  return <TerminalXtermWorkerEffect>[
+    for (final effect in raw! as List)
+      _decodeWorkerEffect(List<Object?>.from(effect as List)),
+  ];
+}
 
 final class TerminalXtermWorkerSnapshot {
   const TerminalXtermWorkerSnapshot({
@@ -42,7 +101,7 @@ final class TerminalXtermWorkerSnapshot {
       mouseMode: message[9]! as int,
       mouseReportMode: message[10]! as int,
       scrollBack: message[11]! as int,
-      effects: List<String>.from(message[12]! as List),
+      effects: _decodeWorkerEffects(message[12]),
     );
   }
 
@@ -58,7 +117,7 @@ final class TerminalXtermWorkerSnapshot {
   final int mouseMode;
   final int mouseReportMode;
   final int scrollBack;
-  final List<String> effects;
+  final List<TerminalXtermWorkerEffect> effects;
 }
 
 final class TerminalXtermWorkerRenderCell {
@@ -162,7 +221,7 @@ final class TerminalXtermWorkerDelta {
       mouseMode: message[12]! as int,
       mouseReportMode: message[13]! as int,
       scrollBack: message[14]! as int,
-      effects: List<String>.from(message[15]! as List),
+      effects: _decodeWorkerEffects(message[15]),
     );
   }
 
@@ -182,7 +241,7 @@ final class TerminalXtermWorkerDelta {
   final int mouseMode;
   final int mouseReportMode;
   final int scrollBack;
-  final List<String> effects;
+  final List<TerminalXtermWorkerEffect> effects;
 }
 
 final class TerminalXtermWorker {
@@ -196,12 +255,21 @@ final class TerminalXtermWorker {
     required int cols,
     required int rows,
     int maxLines = 1000,
+    TerminalTargetPlatform platform = TerminalTargetPlatform.unknown,
+    Set<int>? wordSeparators,
   }) async {
     final ready = ReceivePort();
     final errors = ReceivePort();
     final isolate = await Isolate.spawn<List<Object?>>(
       terminalXtermWorkerMain,
-      <Object?>[ready.sendPort, cols, rows, maxLines],
+      <Object?>[
+        ready.sendPort,
+        cols,
+        rows,
+        maxLines,
+        platform.index,
+        wordSeparators?.toList(growable: false),
+      ],
       onError: errors.sendPort,
     );
 
@@ -360,14 +428,29 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
   final cols = initialization[1]! as int;
   final rows = initialization[2]! as int;
   final maxLines = initialization[3]! as int;
+  final platform = TerminalTargetPlatform.values[initialization[4]! as int];
+  final rawWordSeparators = initialization[5] as List?;
+  final wordSeparators = rawWordSeparators == null
+      ? null
+      : Set<int>.from(rawWordSeparators);
   final commands = ReceivePort();
-  final effects = <String>[];
+  final effects = <List<Object?>>[];
   final terminal = Terminal(
     maxLines: maxLines,
     reflowWithHiddenCursor: false,
-    onTitleChange: (title) => effects.add('title:$title'),
-    onBell: () => effects.add('bell'),
-    onOutput: (value) => effects.add('pty:$value'),
+    preserveOrphanCombiningMarks: true,
+    allowITerm2ClipboardCapture: false,
+    allowKittyClipboard: false,
+    onClipboardQuery: (_) => null,
+    clipboardDecoder: decodeTerminalOsc52Payload,
+    platform: platform,
+    wordSeparators: wordSeparators,
+    onTitleChange: (title) =>
+        effects.add(<Object?>[_effectTitleChanged, title]),
+    onBell: () => effects.add(const <Object?>[_effectBell]),
+    onOutput: (value) => effects.add(<Object?>[_effectPtyWrite, value]),
+    onClipboardStore: (selector, text) =>
+        effects.add(<Object?>[_effectClipboardStore, selector, text]),
   )..resize(cols, rows);
   var revision = 0;
   List<_TerminalXtermWorkerRowCache>? viewportCache;
@@ -435,7 +518,7 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
       terminal.mouseMode.index,
       terminal.mouseReportMode.index,
       terminal.buffer.scrollBack,
-      List<String>.from(effects),
+      <Object?>[for (final effect in effects) List<Object?>.from(effect)],
     ];
   }
 
@@ -482,7 +565,7 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
       terminal.mouseMode.index,
       terminal.mouseReportMode.index,
       terminal.buffer.scrollBack,
-      List<String>.from(effects),
+      <Object?>[for (final effect in effects) List<Object?>.from(effect)],
       revision,
     ];
   }

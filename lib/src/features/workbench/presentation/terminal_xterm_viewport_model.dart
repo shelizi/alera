@@ -20,7 +20,8 @@ final class TerminalXtermViewportModel {
   int _mouseMode = 0;
   int _mouseReportMode = 0;
   int _scrollBack = 0;
-  List<String> _effects = const <String>[];
+  List<TerminalXtermWorkerEffect> _effects =
+      const <TerminalXtermWorkerEffect>[];
   List<String> _rowTexts = const <String>[];
   List<List<TerminalXtermWorkerRenderCell>> _renderRows =
       const <List<TerminalXtermWorkerRenderCell>>[];
@@ -39,7 +40,7 @@ final class TerminalXtermViewportModel {
   int get mouseMode => _mouseMode;
   int get mouseReportMode => _mouseReportMode;
   int get scrollBack => _scrollBack;
-  List<String> get effects => _effects;
+  List<TerminalXtermWorkerEffect> get effects => _effects;
   List<String> get rowTexts => _rowTexts;
   List<List<TerminalXtermWorkerRenderCell>> get renderRows => _renderRows;
 
@@ -82,7 +83,7 @@ final class TerminalXtermViewportModel {
     _mouseMode = delta.mouseMode;
     _mouseReportMode = delta.mouseReportMode;
     _scrollBack = delta.scrollBack;
-    _effects = List<String>.unmodifiable(delta.effects);
+    _effects = List<TerminalXtermWorkerEffect>.unmodifiable(delta.effects);
   }
 
   void _rebuildFullViewport(TerminalXtermWorkerDelta delta) {
