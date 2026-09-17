@@ -82,15 +82,13 @@ void main() {
             first.result.linkedCount + first.result.copiedCount,
             greaterThan(BigInt.zero),
           );
-          expect(
-            repeated.result.linkedCount + repeated.result.copiedCount,
-            greaterThan(BigInt.zero),
-          );
+          expect(repeated.result.removedCount, BigInt.zero);
+          expect(repeated.result.writtenCount, BigInt.zero);
+          expect(repeated.result.linkedCount, BigInt.zero);
+          expect(repeated.result.copiedCount, BigInt.zero);
+          expect(repeated.result.warnings, isEmpty);
           if (first.result.copiedCount > BigInt.zero) {
             expect(first.result.warnings, isNotEmpty);
-          }
-          if (repeated.result.copiedCount > BigInt.zero) {
-            expect(repeated.result.warnings, isNotEmpty);
           }
 
           firstSamples.add(first.elapsedUs);
@@ -100,7 +98,7 @@ void main() {
           rssSamples.add(first.rssDeltaBytes);
 
           print(
-            'overlay_a2_ffi size=${scenario.$1} files=${scenario.$2} '
+            'overlay_a3_ffi size=${scenario.$1} files=${scenario.$2} '
             'sample=$sample first_us=${first.elapsedUs} '
             'repeated_unchanged_us=${repeated.elapsedUs} '
             'heartbeat_ticks=${first.heartbeatTicks} '
@@ -123,7 +121,7 @@ void main() {
       heartbeatGapSamples.sort();
       rssSamples.sort();
       print(
-        'overlay_a2_ffi_summary size=${scenario.$1} files=${scenario.$2} '
+        'overlay_a3_ffi_summary size=${scenario.$1} files=${scenario.$2} '
         'first_median_us=${_median(firstSamples)} '
         'repeated_unchanged_median_us=${_median(repeatedSamples)} '
         'heartbeat_ticks_median=${_median(heartbeatSamples)} '

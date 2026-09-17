@@ -38,27 +38,46 @@ void main() {
 
     final overlayRoot = p.join(root.path, 'overlays');
     final overlayPath = p.join(overlayRoot, 'session');
-    final result = await native.prepareAgentRuntimeOverlay(
-      request: native.AgentRuntimeOverlayRequest(
-        overlayRoot: overlayRoot,
-        overlayPath: overlayPath,
-        mirrorPath: null,
-        sourcePath: source.path,
-        managedSubdirectory: 'plugins',
-        managedFileNames: const <String>['alera.js'],
-        managedFiles: <native.AgentRuntimeOverlayManagedFile>[
-          native.AgentRuntimeOverlayManagedFile(
-            path: p.join(overlayPath, 'plugins', 'alera.js'),
-            allowedRoot: overlayPath,
-            content: 'managed-plugin',
-            writeMode: native.AgentRuntimeOverlayWriteMode.replace,
-            executable: false,
-          ),
-        ],
-      ),
+    final request = native.AgentRuntimeOverlayRequest(
+      overlayRoot: overlayRoot,
+      overlayPath: overlayPath,
+      mirrorPath: null,
+      sourcePath: source.path,
+      managedSubdirectory: 'plugins',
+      managedFileNames: const <String>['alera.js'],
+      managedFiles: <native.AgentRuntimeOverlayManagedFile>[
+        native.AgentRuntimeOverlayManagedFile(
+          path: p.join(overlayPath, 'plugins', 'alera.js'),
+          allowedRoot: overlayPath,
+          content: 'managed-plugin',
+          writeMode: native.AgentRuntimeOverlayWriteMode.replace,
+          executable: false,
+        ),
+      ],
     );
+    final result = await native.prepareAgentRuntimeOverlay(request: request);
 
     expect(result.sourceExists, isTrue);
+    expect(
+      File(p.join(overlayPath, 'settings.json')).readAsStringSync(),
+      'user-settings',
+    );
+    expect(
+      File(p.join(overlayPath, 'plugins', 'user.js')).readAsStringSync(),
+      'user-plugin',
+    );
+    expect(
+      File(p.join(overlayPath, 'plugins', 'alera.js')).readAsStringSync(),
+      'managed-plugin',
+    );
+
+    final repeated = await native.prepareAgentRuntimeOverlay(request: request);
+    expect(repeated.sourceExists, isTrue);
+    expect(repeated.removedCount, BigInt.zero);
+    expect(repeated.writtenCount, BigInt.zero);
+    expect(repeated.linkedCount, BigInt.zero);
+    expect(repeated.copiedCount, BigInt.zero);
+    expect(repeated.warnings, isEmpty);
     expect(
       File(p.join(overlayPath, 'settings.json')).readAsStringSync(),
       'user-settings',
