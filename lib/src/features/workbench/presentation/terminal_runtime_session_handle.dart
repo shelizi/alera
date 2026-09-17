@@ -70,6 +70,7 @@ class _XtermTerminalSessionHandle(
   Future<TerminalXtermWorker>? _parserWorkerFuture;
   Future<void> _parserWorkerCommandTail = Future<void>.value();
   Future<void>? _parserWorkerLastApply;
+  bool _parserWorkerFocused = true;
   @override
   int _startAttempt = 0;
   int? _activePtyGeneration;

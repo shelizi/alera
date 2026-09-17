@@ -6,6 +6,7 @@ extension _XtermTerminalAttachment on _XtermTerminalSessionHandle {
 
   xterm.Terminal _createTerminal({bool notificationsEnabled = false}) {
     if (_parserWorkerEnabled) {
+      _parserWorkerFocused = _focusNode.hasFocus;
       return TerminalXtermReplicaTerminal(
         cols: 80,
         rows: 24,
@@ -14,6 +15,8 @@ extension _XtermTerminalAttachment on _XtermTerminalSessionHandle {
         wordSeparators: _rendererAdapterOwner.resolveWordSeparators(
           _settings.wordSeparators,
         ),
+        initialFocused: _parserWorkerFocused,
+        onFocusStateChanged: (focused) => _parserWorkerFocused = focused,
         notificationsEnabled: notificationsEnabled,
       );
     }

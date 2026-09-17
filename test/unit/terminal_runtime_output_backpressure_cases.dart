@@ -47,6 +47,37 @@ void _registerTerminalRuntimeOutputBackpressureTests() {
     expect(terminalBufferTextForTesting(session), contains('123456\n7890'));
   });
 
+  test(
+    'parser worker enables focus reporting with the latest UI focus state',
+    () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      final fakeSession = _FakeTerminalPtySession();
+      final runtime = XtermTerminalRuntime(
+        parserWorkerEnabled: true,
+        ptySessionFactory: _FakeTerminalPtySessionFactory(
+          sessions: <_FakeTerminalPtySession>[fakeSession],
+        ),
+        shellLaunchesBuilder: () => <GhosttyTerminalShellLaunch>[
+          _launch('shell', shell: '/bin/sh'),
+        ],
+      );
+      addTearDown(runtime.dispose);
+      final session = runtime.sessionFor(workspace: _workspace(), tab: _tab());
+      await session.ensureStarted();
+      fakeSession.writes.clear();
+
+      focusTerminalForTesting(session, false);
+      queueTerminalOutputForTesting(session, '\x1b[?1004h');
+      flushTerminalOutputForTesting(session);
+      await waitForTerminalParserApplyForTesting(session);
+
+      expect(terminalReportFocusModeForTesting(session), isTrue);
+      expect(fakeSession.writes, hasLength(1));
+      expect(utf8.decode(fakeSession.writes.single), '\x1b[O');
+    },
+  );
+
   test('starts adaptive parsing at the measured TUI-safe chunk size', () {
     final runtime = XtermTerminalRuntime(
       ptySessionFactory: _FakeTerminalPtySessionFactory(),

@@ -18,8 +18,11 @@ final class TerminalXtermReplicaTerminal extends Terminal {
     TerminalTargetPlatform platform = TerminalTargetPlatform.unknown,
     Set<int>? wordSeparators,
     void Function(String)? onOutput,
+    bool initialFocused = true,
+    void Function(bool focused)? onFocusStateChanged,
     bool notificationsEnabled = true,
   }) : _model = TerminalXtermBufferModel(wordSeparators: wordSeparators),
+       _onFocusStateChanged = onFocusStateChanged,
        _notificationsEnabled = notificationsEnabled,
        super(
          maxLines: maxLines,
@@ -34,12 +37,13 @@ final class TerminalXtermReplicaTerminal extends Terminal {
          wordSeparators: wordSeparators,
        ) {
     super.resize(cols, rows);
+    super.focusInput(initialFocused);
   }
 
   final TerminalXtermBufferModel _model;
+  final void Function(bool focused)? _onFocusStateChanged;
   var _hasReplicaState = false;
   var _disposed = false;
-  var _focused = true;
   bool _notificationsEnabled;
   bool _notificationPending = false;
 
@@ -247,7 +251,7 @@ final class TerminalXtermReplicaTerminal extends Terminal {
 
   @override
   void focusInput(bool focused) {
-    _focused = focused;
+    _onFocusStateChanged?.call(focused);
     if (!_hasReplicaState) {
       super.focusInput(focused);
       return;

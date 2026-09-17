@@ -74,7 +74,10 @@ extension _XtermTerminalParserWorker on _XtermTerminalSessionHandle {
     final command = _queueParserWorkerCommand(terminal, generation, (
       worker,
     ) async {
-      final delta = await worker.writeBufferDelta(data);
+      final delta = await worker.writeBufferDelta(
+        data,
+        focused: _parserWorkerFocused,
+      );
       if (_disposed ||
           generation != _parserWorkerGeneration ||
           !identical(_terminal, terminal)) {

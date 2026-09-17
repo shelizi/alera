@@ -154,6 +154,24 @@ void main() {
     _expectEffectsParity(mouse.effects, directEffects);
   });
 
+  test('worker buffer write applies supplied focus before parsing', () async {
+    final worker = await TerminalXtermWorker.start(cols: 20, rows: 6);
+    addTearDown(worker.close);
+    final escape = String.fromCharCode(27);
+
+    final delta = await worker.writeBufferDelta(
+      '$escape[?1004h',
+      focused: false,
+    );
+
+    expect(delta.effects, hasLength(1));
+    expect(delta.effects.single, isA<TerminalXtermWorkerPtyWrite>());
+    expect(
+      (delta.effects.single as TerminalXtermWorkerPtyWrite).data,
+      '$escape[O',
+    );
+  });
+
   test('worker delta sends only changed viewport rows', () async {
     final direct = Terminal(maxLines: 256, reflowWithHiddenCursor: false)
       ..resize(12, 4);

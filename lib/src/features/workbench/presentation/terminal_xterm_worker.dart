@@ -552,9 +552,12 @@ final class TerminalXtermWorker {
     );
   }
 
-  Future<TerminalXtermWorkerBufferDelta> writeBufferDelta(String data) async {
+  Future<TerminalXtermWorkerBufferDelta> writeBufferDelta(
+    String data, {
+    bool? focused,
+  }) async {
     return TerminalXtermWorkerBufferDelta._fromMessage(
-      await _requestRaw(<Object?>[_workerWriteBufferDelta, data]),
+      await _requestRaw(<Object?>[_workerWriteBufferDelta, data, focused]),
     );
   }
 
@@ -1107,6 +1110,13 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
           reply.send(delta());
         case _workerWriteBufferDelta:
           effects.clear();
+          if (raw.length > 3) {
+            final focused = raw[3];
+            if (focused is bool) {
+              terminal.focusInput(focused);
+              effects.clear();
+            }
+          }
           terminal.write(raw[2]! as String);
           revision += 1;
           reply.send(bufferDelta());

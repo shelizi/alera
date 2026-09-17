@@ -81,6 +81,11 @@ Future<void> waitForTerminalParserApplyForTesting(
 }
 
 @visibleForTesting
+void focusTerminalForTesting(TerminalSessionHandle session, bool focused) {
+  (session as _XtermTerminalSessionHandle)._terminal.focusInput(focused);
+}
+
+@visibleForTesting
 void rebuildTerminalFromSnapshotTextForTesting(
   TerminalSessionHandle session,
   String text, {
