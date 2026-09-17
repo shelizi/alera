@@ -5639,10 +5639,14 @@ class CodeForgeController implements DeltaTextInputClient {
   }
 
   void _initBuffer(int lineIndex) {
+    final lineInfo = _rope.getLineLayoutInfo(lineIndex);
     _bufferLineIndex = lineIndex;
-    _bufferLineText = _rope.getLineText(lineIndex);
-    _bufferLineRopeStart = _rope.getLineStartOffset(lineIndex);
-    _bufferLineOriginalLength = _bufferLineText!.runes.length;
+    _bufferLineRopeStart = lineInfo.start;
+    _bufferLineOriginalLength = lineInfo.contentLength;
+    _bufferLineText = _rope.substring(
+      lineInfo.start,
+      lineInfo.start + lineInfo.contentLength,
+    );
     _bufferDirty = false;
   }
 
