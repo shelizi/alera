@@ -258,6 +258,47 @@ void _registerTerminalRuntimeOutputBackpressureTests() {
     expect(notifications, greaterThan(0));
   });
 
+  test(
+    'parser worker hidden catch-up coalesces replica listeners until reveal',
+    () async {
+      final runtime = XtermTerminalRuntime(
+        parserWorkerEnabled: true,
+        ptySessionFactory: _FakeTerminalPtySessionFactory(),
+        shellLaunchesBuilder: () => <GhosttyTerminalShellLaunch>[
+          _launch('shell', shell: '/bin/sh'),
+        ],
+      );
+      addTearDown(runtime.dispose);
+      final session = runtime.sessionFor(workspace: _workspace(), tab: _tab());
+      var notifications = 0;
+      final removeListener = addTerminalChangeListenerForTesting(
+        session,
+        () => notifications += 1,
+      );
+      addTearDown(removeListener);
+
+      queueTerminalOutputForTesting(
+        session,
+        'hidden-worker-listener-marker${'a' * (1536 * 1024)}',
+      );
+      for (
+        var turn = 0;
+        turn < 512 &&
+            pendingLiveTerminalOutputCharsForTesting(session) > 256 * 1024;
+        turn++
+      ) {
+        await Future<void>.delayed(Duration.zero);
+      }
+      await waitForTerminalParserApplyForTesting(session);
+      expect(notifications, 0);
+
+      final visibility = acquireTerminalVisibilityForTesting(session);
+      addTearDown(visibility.dispose);
+
+      expect(notifications, greaterThan(0));
+    },
+  );
+
   test('hidden catch-up refreshes an active search once on reveal', () async {
     final runtime = XtermTerminalRuntime(
       ptySessionFactory: _FakeTerminalPtySessionFactory(),

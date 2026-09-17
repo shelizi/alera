@@ -136,25 +136,34 @@ class _XtermTerminalSessionHandle(
     _syncPtyOutputVisibility();
     if (_visibility.isOutputVisible) {
       final terminal = _terminal;
-      if (terminal is _AleraTerminal) {
-        // Let the first catch-up write publish the hidden state together with
-        // the newly parsed chunk. If there is no backlog, flush the dirty bit
-        // explicitly below so an attached/offstage renderer and active search
-        // still observe the latest state exactly once.
-        terminal.setNotificationsEnabled(true, flushPending: false);
+      // Let the first catch-up write publish the hidden state together with
+      // the newly parsed chunk. If there is no backlog, flush the dirty bit
+      // explicitly below so an attached/offstage renderer and active search
+      // still observe the latest state exactly once.
+      switch (terminal) {
+        case _AleraTerminal():
+          terminal.setNotificationsEnabled(true, flushPending: false);
+        case TerminalXtermReplicaTerminal():
+          terminal.setNotificationsEnabled(true, flushPending: false);
       }
       // A tab that was hidden may have accumulated a large partial window.
       // Parse only one normal UI budget synchronously on reveal, then let the
       // existing paced frame pipeline catch up without freezing this frame.
       _pump.capAdaptiveBudgetForReveal();
       _pump.flushFrame(force: true);
-      if (terminal is _AleraTerminal) {
-        terminal.flushPendingNotification();
+      switch (terminal) {
+        case _AleraTerminal():
+          terminal.flushPendingNotification();
+        case TerminalXtermReplicaTerminal():
+          terminal.flushPendingNotification();
       }
     } else {
       final terminal = _terminal;
-      if (terminal is _AleraTerminal) {
-        terminal.setNotificationsEnabled(false);
+      switch (terminal) {
+        case _AleraTerminal():
+          terminal.setNotificationsEnabled(false);
+        case TerminalXtermReplicaTerminal():
+          terminal.setNotificationsEnabled(false);
       }
       _pump.pipeline.cancelDeferredFlush();
     }

@@ -14,6 +14,50 @@ String _terminalRestorePayload(int length, String suffix) {
 
 void _registerTerminalRuntimeSnapshotTests() {
   test(
+    'parser worker snapshot rebuild starts from a fresh generation',
+    () async {
+      final fakeSession = _FakeTerminalPtySession();
+      final runtime = XtermTerminalRuntime(
+        parserWorkerEnabled: true,
+        ptySessionFactory: _FakeTerminalPtySessionFactory(
+          sessions: <_FakeTerminalPtySession>[fakeSession],
+        ),
+        shellLaunchesBuilder: () => <GhosttyTerminalShellLaunch>[
+          _launch('shell', shell: '/bin/sh'),
+        ],
+      );
+      addTearDown(runtime.dispose);
+      final session = runtime.sessionFor(workspace: _workspace(), tab: _tab());
+      final visibility = acquireTerminalVisibilityForTesting(session);
+      addTearDown(visibility.dispose);
+      await session.ensureStarted();
+
+      queueTerminalOutputForTesting(session, 'old-marker\x1b[?2004h');
+      flushTerminalOutputForTesting(session);
+      await waitForTerminalParserApplyForTesting(session);
+      expect(terminalBufferTextForTesting(session), contains('old-marker'));
+      expect(terminalBracketedPasteModeForTesting(session), isTrue);
+
+      rebuildTerminalFromSnapshotTextForTesting(session, 'fresh-snapshot');
+      flushTerminalOutputForTesting(session);
+      await waitForTerminalParserApplyForTesting(session);
+
+      final restored = terminalBufferTextForTesting(session);
+      expect(restored, contains('fresh-snapshot'));
+      expect(restored, isNot(contains('old-marker')));
+      expect(terminalBracketedPasteModeForTesting(session), isFalse);
+
+      queueTerminalOutputForTesting(session, '\r\nlive-after-snapshot');
+      flushTerminalOutputForTesting(session);
+      await waitForTerminalParserApplyForTesting(session);
+      expect(
+        terminalBufferTextForTesting(session),
+        contains('live-after-snapshot'),
+      );
+    },
+  );
+
+  test(
     'pauses output while the app is backgrounded and restores on foreground',
     () async {
       debugDefaultTargetPlatformOverride = TargetPlatform.macOS;

@@ -2,6 +2,39 @@ part of 'terminal_runtime.dart';
 
 /// Parser/model isolation for the opt-in xterm worker backend.
 extension _XtermTerminalParserWorker on _XtermTerminalSessionHandle {
+  void _resetParserWorkerBackend() {
+    if (!_parserWorkerEnabled) {
+      return;
+    }
+    _parserWorkerGeneration += 1;
+    final workerFuture = _parserWorkerFuture;
+    final commandTail = _parserWorkerCommandTail;
+    _parserWorkerFuture = null;
+    _parserWorkerCommandTail = Future<void>.value();
+    _parserWorkerLastApply = null;
+    if (workerFuture == null) {
+      return;
+    }
+
+    Future<void> closeAfterDrain() async {
+      try {
+        await commandTail;
+      } catch (_) {
+        // A stale generation can reject while being replaced. The worker
+        // startup validation or the close below owns cleanup in either case.
+      }
+      try {
+        final worker = await workerFuture;
+        await worker.close();
+      } catch (_) {
+        // A worker that loses the generation race closes itself before the
+        // validated startup future completes, so there is nothing left to do.
+      }
+    }
+
+    unawaited(closeAfterDrain());
+  }
+
   Future<TerminalXtermWorker> _ensureParserWorker(
     TerminalXtermReplicaTerminal terminal,
     int generation,

@@ -81,6 +81,7 @@ extension _TerminalRestoreProgressTracking on _XtermTerminalSessionHandle {
       return;
     }
     _clearPendingTerminalOutput();
+    _resetParserWorkerBackend();
     _terminalController.clearSelection();
     final previousTerminal = _terminal;
     final viewWidth = previousTerminal.viewWidth;

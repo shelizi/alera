@@ -81,6 +81,18 @@ Future<void> waitForTerminalParserApplyForTesting(
 }
 
 @visibleForTesting
+void rebuildTerminalFromSnapshotTextForTesting(
+  TerminalSessionHandle session,
+  String text, {
+  bool resetInteractionModes = false,
+}) {
+  (session as _XtermTerminalSessionHandle)._rebuildTerminalFromSnapshotText(
+    text,
+    resetInteractionModes: resetInteractionModes,
+  );
+}
+
+@visibleForTesting
 void resizeTerminalForTesting(
   TerminalSessionHandle session,
   int width,
