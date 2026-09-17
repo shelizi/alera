@@ -9846,6 +9846,49 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     final lineStartOffset = controller.getLineStartOffset(lineIndex);
     final columnIndex = bracketOffset - lineStartOffset;
 
+    final nativeAsciiInfo = _largeFileNativeAsciiLineInfo(lineIndex);
+    final nativeColumnWidth = nativeAsciiInfo != null
+        ? _getLargeFileFixedAsciiColumnWidth()
+        : null;
+    if (nativeAsciiInfo != null && nativeColumnWidth != null) {
+      final nativeColumnIndex = bracketOffset - nativeAsciiInfo.start;
+      if (nativeColumnIndex < 0 ||
+          nativeColumnIndex >= nativeAsciiInfo.contentLength) {
+        return;
+      }
+
+      final lineY = _getLineYOffset(lineIndex, hasActiveFolds);
+      final colorBoxOffset = _getColorBoxOffsetForLine(
+        lineIndex,
+        nativeColumnIndex,
+      );
+      final textX =
+          _gutterWidth + (innerPadding?.left ?? 0) - _effectiveHScroll;
+      final screenX =
+          offset.dx +
+          textX +
+          nativeColumnIndex * nativeColumnWidth +
+          colorBoxOffset;
+      final screenY =
+          offset.dy +
+          (innerPadding?.top ?? 0) +
+          lineY -
+          vscrollController.offset;
+      final bracketRect = RRect.fromRectAndRadius(
+        Rect.fromLTWH(
+          screenX - 1.5,
+          screenY - 1,
+          nativeColumnWidth + 3,
+          _lineHeight + 2.5,
+        ),
+        Radius.circular(2),
+      );
+
+      _bracketHighlightPainter.color = textColor;
+      canvas.drawRRect(bracketRect, _bracketHighlightPainter);
+      return;
+    }
+
     String lineText;
     if (_lineTextCache.containsKey(lineIndex)) {
       lineText = _lineTextCache[lineIndex]!;
