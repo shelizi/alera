@@ -5,6 +5,7 @@
 
 import 'api/agent_descriptors.dart';
 import 'api/agent_hooks.dart';
+import 'api/agent_runtime_overlay.dart';
 import 'api/agent_runtime_resources.dart';
 import 'api/ai_dictation.dart';
 import 'api/clipboard.dart';
@@ -84,6 +85,34 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   AgentRiskRuleDto dco_decode_agent_risk_rule_dto(dynamic raw);
 
   @protected
+  AgentRuntimeOverlayCleanupResult
+  dco_decode_agent_runtime_overlay_cleanup_result(dynamic raw);
+
+  @protected
+  AgentRuntimeOverlayCleanupTarget
+  dco_decode_agent_runtime_overlay_cleanup_target(dynamic raw);
+
+  @protected
+  AgentRuntimeOverlayManagedFile dco_decode_agent_runtime_overlay_managed_file(
+    dynamic raw,
+  );
+
+  @protected
+  AgentRuntimeOverlayRequest dco_decode_agent_runtime_overlay_request(
+    dynamic raw,
+  );
+
+  @protected
+  AgentRuntimeOverlayResult dco_decode_agent_runtime_overlay_result(
+    dynamic raw,
+  );
+
+  @protected
+  AgentRuntimeOverlayWriteMode dco_decode_agent_runtime_overlay_write_mode(
+    dynamic raw,
+  );
+
+  @protected
   AiDictationError dco_decode_ai_dictation_error(dynamic raw);
 
   @protected
@@ -97,6 +126,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   bool dco_decode_bool(dynamic raw);
+
+  @protected
+  AgentRuntimeOverlayRequest
+  dco_decode_box_autoadd_agent_runtime_overlay_request(dynamic raw);
 
   @protected
   AiDictationRequest dco_decode_box_autoadd_ai_dictation_request(dynamic raw);
@@ -342,6 +375,14 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<AgentRiskRuleDto> dco_decode_list_agent_risk_rule_dto(dynamic raw);
+
+  @protected
+  List<AgentRuntimeOverlayCleanupTarget>
+  dco_decode_list_agent_runtime_overlay_cleanup_target(dynamic raw);
+
+  @protected
+  List<AgentRuntimeOverlayManagedFile>
+  dco_decode_list_agent_runtime_overlay_managed_file(dynamic raw);
 
   @protected
   List<CodexSavedPrompt> dco_decode_list_codex_saved_prompt(dynamic raw);
@@ -751,6 +792,34 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   AgentRiskRuleDto sse_decode_agent_risk_rule_dto(SseDeserializer deserializer);
 
   @protected
+  AgentRuntimeOverlayCleanupResult
+  sse_decode_agent_runtime_overlay_cleanup_result(SseDeserializer deserializer);
+
+  @protected
+  AgentRuntimeOverlayCleanupTarget
+  sse_decode_agent_runtime_overlay_cleanup_target(SseDeserializer deserializer);
+
+  @protected
+  AgentRuntimeOverlayManagedFile sse_decode_agent_runtime_overlay_managed_file(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  AgentRuntimeOverlayRequest sse_decode_agent_runtime_overlay_request(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  AgentRuntimeOverlayResult sse_decode_agent_runtime_overlay_result(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  AgentRuntimeOverlayWriteMode sse_decode_agent_runtime_overlay_write_mode(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   AiDictationError sse_decode_ai_dictation_error(SseDeserializer deserializer);
 
   @protected
@@ -770,6 +839,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   bool sse_decode_bool(SseDeserializer deserializer);
+
+  @protected
+  AgentRuntimeOverlayRequest
+  sse_decode_box_autoadd_agent_runtime_overlay_request(
+    SseDeserializer deserializer,
+  );
 
   @protected
   AiDictationRequest sse_decode_box_autoadd_ai_dictation_request(
@@ -1075,6 +1150,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<AgentRiskRuleDto> sse_decode_list_agent_risk_rule_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<AgentRuntimeOverlayCleanupTarget>
+  sse_decode_list_agent_runtime_overlay_cleanup_target(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<AgentRuntimeOverlayManagedFile>
+  sse_decode_list_agent_runtime_overlay_managed_file(
     SseDeserializer deserializer,
   );
 
@@ -1600,6 +1687,42 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_agent_runtime_overlay_cleanup_result(
+    AgentRuntimeOverlayCleanupResult self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_agent_runtime_overlay_cleanup_target(
+    AgentRuntimeOverlayCleanupTarget self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_agent_runtime_overlay_managed_file(
+    AgentRuntimeOverlayManagedFile self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_agent_runtime_overlay_request(
+    AgentRuntimeOverlayRequest self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_agent_runtime_overlay_result(
+    AgentRuntimeOverlayResult self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_agent_runtime_overlay_write_mode(
+    AgentRuntimeOverlayWriteMode self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_ai_dictation_error(
     AiDictationError self,
     SseSerializer serializer,
@@ -1625,6 +1748,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_bool(bool self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_box_autoadd_agent_runtime_overlay_request(
+    AgentRuntimeOverlayRequest self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_box_autoadd_ai_dictation_request(
@@ -2010,6 +2139,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_list_agent_risk_rule_dto(
     List<AgentRiskRuleDto> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_agent_runtime_overlay_cleanup_target(
+    List<AgentRuntimeOverlayCleanupTarget> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_agent_runtime_overlay_managed_file(
+    List<AgentRuntimeOverlayManagedFile> self,
     SseSerializer serializer,
   );
 

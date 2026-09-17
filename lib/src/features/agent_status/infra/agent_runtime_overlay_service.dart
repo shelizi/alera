@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:alera/src/features/agent_status/infra/managed_agent_hook_installer.dart';
-import 'package:alera/src/shared/infra/files/posix_file_mode.dart';
+import 'package:alera/src/rust/api/agent_runtime_overlay.dart' as native;
 import 'package:crypto/crypto.dart';
 import 'package:meta/meta.dart';
 import 'package:path/path.dart' as p;
@@ -15,10 +15,15 @@ part 'agent_runtime_overlay_shell.dart';
 
 typedef AgentOverlayApplicationSupportDirectoryResolver =
     Future<Directory> Function();
-typedef AgentOverlayResourceLinkCreator = void Function({
-  required String sourcePath,
-  required String targetPath,
-});
+
+typedef AgentRuntimeOverlayNativePreparer =
+    Future<native.AgentRuntimeOverlayResult> Function({
+      required native.AgentRuntimeOverlayRequest request,
+    });
+typedef AgentRuntimeOverlayNativeCleaner =
+    Future<native.AgentRuntimeOverlayCleanupResult> Function({
+      required List<native.AgentRuntimeOverlayCleanupTarget> targets,
+    });
 
 final class const AgentRuntimeOverlayPreparation({
   required final Map<String, String> environment,
@@ -31,7 +36,8 @@ final class AgentRuntimeOverlayService({
   ManagedAgentHookPlatform? platform,
   Map<String, String>? environment,
   AgentOverlayApplicationSupportDirectoryResolver? applicationSupportDirectory,
-  @visibleForTesting AgentOverlayResourceLinkCreator? resourceLinkCreator,
+  @visibleForTesting AgentRuntimeOverlayNativePreparer? nativePreparer,
+  @visibleForTesting AgentRuntimeOverlayNativeCleaner? nativeCleaner,
 }) {
   this
     : _environment = environment ?? Platform.environment,
@@ -43,14 +49,16 @@ final class AgentRuntimeOverlayService({
               : ManagedAgentHookPlatform.posix),
       _applicationSupportDirectory =
           applicationSupportDirectory ?? getApplicationSupportDirectory,
-      _resourceLinkCreator = resourceLinkCreator ?? _createResourceLink;
+      _nativePreparer = nativePreparer ?? native.prepareAgentRuntimeOverlay,
+      _nativeCleaner = nativeCleaner ?? native.clearAgentRuntimeOverlays;
 
   final Map<String, String> _environment;
   final String _homeDirectory;
   final ManagedAgentHookPlatform _platform;
   final AgentOverlayApplicationSupportDirectoryResolver
   _applicationSupportDirectory;
-  final AgentOverlayResourceLinkCreator _resourceLinkCreator;
+  final AgentRuntimeOverlayNativePreparer _nativePreparer;
+  final AgentRuntimeOverlayNativeCleaner _nativeCleaner;
 
   Future<AgentRuntimeOverlayPreparation> prepareOpenCodeForTerminalLaunch({
     required String terminalSessionId,
@@ -96,9 +104,24 @@ final class AgentRuntimeOverlayService({
     // Keep the real agent directory so resume sees the same sessions as an
     // external Pi launch, and install only Alera's managed extension in place.
     try {
-      _writeManagedFile(
-        p.join(source.path, 'extensions', 'alera-agent-status.ts'),
-        aleraPiStatusExtensionSource(),
+      await _nativePreparer(
+        request: native.AgentRuntimeOverlayRequest(
+          overlayRoot: null,
+          overlayPath: null,
+          mirrorPath: null,
+          sourcePath: source.path,
+          managedSubdirectory: null,
+          managedFileNames: const <String>[],
+          managedFiles: <native.AgentRuntimeOverlayManagedFile>[
+            native.AgentRuntimeOverlayManagedFile(
+              path: p.join(source.path, 'extensions', 'alera-agent-status.ts'),
+              allowedRoot: source.path,
+              content: aleraPiStatusExtensionSource(),
+              writeMode: native.AgentRuntimeOverlayWriteMode.replace,
+              executable: false,
+            ),
+          ],
+        ),
       );
     } catch (_) {
       return AgentRuntimeOverlayPreparation(
@@ -171,47 +194,58 @@ final class AgentRuntimeOverlayService({
     final overlay = _overlayDirectory(root, terminalSessionId);
     final xdgConfigHome = p.join(overlay.path, 'xdg');
     final ampConfigDir = p.join(xdgConfigHome, 'amp');
+    final settingsPath = p.join(ampConfigDir, 'settings.json');
+    final wrapperBin = _wrapperBinDirectory(support, terminalSessionId);
+    final wrapperRoot = p.dirname(wrapperBin.path);
+    final wrapperPath = p.join(wrapperBin.path, _wrapperFileName('amp'));
     try {
-      _safeRemoveOverlay(overlay.path, root);
-      Directory(ampConfigDir).createSync(recursive: true);
-      if (_sourceExists(source.path)) {
-        _mirrorSourceDirectory(
+      final result = await _nativePreparer(
+        request: native.AgentRuntimeOverlayRequest(
+          overlayRoot: root,
+          overlayPath: overlay.path,
+          mirrorPath: ampConfigDir,
           sourcePath: source.path,
-          overlayPath: ampConfigDir,
           managedSubdirectory: 'plugins',
-          managedFileNames: const <String>{'alera-agent-status.ts'},
-        );
-      }
-      _writeManagedFile(
-        p.join(ampConfigDir, 'plugins', 'alera-agent-status.ts'),
-        aleraAmpStatusPluginSource(),
-      );
-      final settingsFile = File(p.join(ampConfigDir, 'settings.json'));
-      if (!settingsFile.existsSync()) {
-        settingsFile.writeAsStringSync('{}\n');
-      }
-      final wrapperBin = _wrapperBinDirectory(support, terminalSessionId);
-      _writeAgentWrapper(
-        directory: wrapperBin,
-        executableName: 'amp',
-        source: _ampWrapperSource(
-          xdgConfigHome: xdgConfigHome,
-          settingsFile: settingsFile.path,
-          wrapperDirectory: wrapperBin.path,
+          managedFileNames: const <String>['alera-agent-status.ts'],
+          managedFiles: <native.AgentRuntimeOverlayManagedFile>[
+            native.AgentRuntimeOverlayManagedFile(
+              path: p.join(ampConfigDir, 'plugins', 'alera-agent-status.ts'),
+              allowedRoot: ampConfigDir,
+              content: aleraAmpStatusPluginSource(),
+              writeMode: native.AgentRuntimeOverlayWriteMode.replace,
+              executable: false,
+            ),
+            native.AgentRuntimeOverlayManagedFile(
+              path: settingsPath,
+              allowedRoot: ampConfigDir,
+              content: '{}\n',
+              writeMode: native.AgentRuntimeOverlayWriteMode.createIfMissing,
+              executable: false,
+            ),
+            native.AgentRuntimeOverlayManagedFile(
+              path: wrapperPath,
+              allowedRoot: wrapperRoot,
+              content: _ampWrapperSource(
+                xdgConfigHome: xdgConfigHome,
+                settingsFile: settingsPath,
+                wrapperDirectory: wrapperBin.path,
+              ),
+              writeMode: native.AgentRuntimeOverlayWriteMode.replace,
+              executable: _platform != ManagedAgentHookPlatform.windows,
+            ),
+          ],
         ),
       );
-      final sourceExists = _sourceExists(source.path);
       return AgentRuntimeOverlayPreparation(
         overlayPath: overlay.path,
-        sourcePath: sourceExists ? source.path : null,
+        sourcePath: result.sourceExists ? source.path : null,
         environment: <String, String>{
           'ALERA_AMP_CONFIG_DIR': ampConfigDir,
-          if (sourceExists) 'ALERA_AMP_SOURCE_CONFIG_DIR': source.path,
+          if (result.sourceExists) 'ALERA_AMP_SOURCE_CONFIG_DIR': source.path,
           'ALERA_AGENT_WRAPPER_PATH': wrapperBin.path,
         },
       );
     } catch (_) {
-      _safeRemoveOverlay(overlay.path, root);
       return const AgentRuntimeOverlayPreparation(
         environment: <String, String>{},
       );
@@ -220,6 +254,7 @@ final class AgentRuntimeOverlayService({
 
   Future<void> clearTerminalOverlays(String terminalSessionId) async {
     final support = await _applicationSupportDirectory();
+    final targets = <native.AgentRuntimeOverlayCleanupTarget>[];
     for (final agentKey in const <String>[
       'opencode',
       'pi',
@@ -229,8 +264,14 @@ final class AgentRuntimeOverlayService({
       'wrappers',
     ]) {
       final root = _overlayRoot(support, agentKey);
-      _safeRemoveOverlay(_overlayDirectory(root, terminalSessionId).path, root);
+      targets.add(
+        native.AgentRuntimeOverlayCleanupTarget(
+          overlayRoot: root,
+          overlayPath: _overlayDirectory(root, terminalSessionId).path,
+        ),
+      );
     }
+    await _nativeCleaner(targets: targets);
   }
 }
 
@@ -240,13 +281,6 @@ final class const _OverlaySource(
 });
 
 final class const _ShellValue(final String text, final String? quoted);
-
-void _createResourceLink({
-  required String sourcePath,
-  required String targetPath,
-}) {
-  Link(targetPath).createSync(sourcePath, recursive: true);
-}
 
 String _resolveHome(Map<String, String>? environment) {
   final env = environment ?? Platform.environment;

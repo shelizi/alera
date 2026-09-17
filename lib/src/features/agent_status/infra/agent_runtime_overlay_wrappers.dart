@@ -8,18 +8,6 @@ extension _AgentRuntimeOverlayWrappers on AgentRuntimeOverlayService {
     );
   }
 
-  void _writeAgentWrapper({
-    required Directory directory,
-    required String executableName,
-    required String source,
-  }) {
-    final path = p.join(directory.path, _wrapperFileName(executableName));
-    _writeManagedFile(path, source);
-    if (_platform != ManagedAgentHookPlatform.windows && !Platform.isWindows) {
-      setPosixFileMode(path, posixExecutableFileMode);
-    }
-  }
-
   String _wrapperFileName(String executableName) {
     return _platform == ManagedAgentHookPlatform.windows
         ? '$executableName.cmd'

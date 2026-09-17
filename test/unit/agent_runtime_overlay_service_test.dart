@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:alera/src/features/agent_status/infra/agent_runtime_overlay_service.dart';
 import 'package:alera/src/features/agent_status/infra/managed_agent_hook_installer.dart';
+import 'package:alera/src/rust/api/agent_runtime_overlay.dart' as native;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 
@@ -9,6 +10,7 @@ part 'agent_runtime_overlay_amp_test_cases.dart';
 
 void main() {
   group('AgentRuntimeOverlayService', () {
+    final fakeNative = _FakeAgentRuntimeOverlayNative();
     late Directory home;
     late Directory support;
 
@@ -28,7 +30,6 @@ void main() {
 
     AgentRuntimeOverlayService service({
       Map<String, String>? environment,
-      AgentOverlayResourceLinkCreator? resourceLinkCreator,
       ManagedAgentHookPlatform platform = ManagedAgentHookPlatform.posix,
       AgentOverlayApplicationSupportDirectoryResolver?
       applicationSupportDirectory,
@@ -43,7 +44,8 @@ void main() {
         },
         applicationSupportDirectory:
             applicationSupportDirectory ?? () async => support,
-        resourceLinkCreator: resourceLinkCreator,
+        nativePreparer: fakeNative.prepare,
+        nativeCleaner: fakeNative.clear,
       );
     }
 
@@ -238,60 +240,25 @@ void main() {
       },
     );
 
-    test('falls back to copying overlay resources when links fail', () async {
-      final userConfig = Directory(p.join(home.path, 'copy-opencode'))
-        ..createSync(recursive: true);
-      File(p.join(userConfig.path, 'opencode.json')).writeAsStringSync('{}');
-      final nested = Directory(p.join(userConfig.path, 'nested'))..createSync();
-      File(p.join(nested.path, 'config.json')).writeAsStringSync('nested');
-
-      final preparation = await service(
-        environment: <String, String>{'OPENCODE_CONFIG_DIR': userConfig.path},
-        resourceLinkCreator: ({required sourcePath, required targetPath}) =>
-            throw const FileSystemException('links disabled'),
-      ).prepareOpenCodeForTerminalLaunch(terminalSessionId: 'session-copy');
-
-      expect(
-        File(p.join(preparation.overlayPath!, 'nested', 'config.json'))
-            .readAsStringSync(),
-        'nested',
-      );
-      final markerRoot = Directory(
-        p.join(preparation.overlayPath!, '.alera-copied-resources'),
-      );
-      expect(markerRoot.existsSync(), isTrue);
-      expect(markerRoot.listSync(), isNotEmpty);
-    });
-
     test(
-      'copies symbolic links into overlays when resource links fail',
+      'mirrors nested OpenCode resources through the native bridge',
       () async {
-        final userConfig = Directory(p.join(home.path, 'copy-link-opencode'))
+        final userConfig = Directory(p.join(home.path, 'nested-opencode'))
           ..createSync(recursive: true);
-        final targetPath = p.join(home.path, 'missing-linked-target.json');
-        Link(p.join(userConfig.path, 'linked.json')).createSync(targetPath);
+        File(p.join(userConfig.path, 'opencode.json')).writeAsStringSync('{}');
+        final nested = Directory(p.join(userConfig.path, 'nested'))
+          ..createSync();
+        File(p.join(nested.path, 'config.json')).writeAsStringSync('nested');
 
-        final preparation =
-            await service(
-              environment: <String, String>{
-                'OPENCODE_CONFIG_DIR': userConfig.path,
-              },
-              resourceLinkCreator: ({
-                required sourcePath,
-                required targetPath,
-              }) => throw const FileSystemException('links disabled'),
-            ).prepareOpenCodeForTerminalLaunch(
-              terminalSessionId: 'session-copy-link',
-            );
+        final preparation = await service(
+          environment: <String, String>{'OPENCODE_CONFIG_DIR': userConfig.path},
+        ).prepareOpenCodeForTerminalLaunch(terminalSessionId: 'session-nested');
 
-        final copiedLink = Link(
-          p.join(preparation.overlayPath!, 'linked.json'),
-        );
         expect(
-          FileSystemEntity.typeSync(copiedLink.path, followLinks: false),
-          FileSystemEntityType.link,
+          File(p.join(preparation.overlayPath!, 'nested', 'config.json'))
+              .readAsStringSync(),
+          'nested',
         );
-        expect(copiedLink.targetSync(), targetPath);
       },
     );
 
@@ -580,6 +547,8 @@ void main() {
         final profileService = AgentRuntimeOverlayService(
           environment: <String, String>{'USERPROFILE': profileHome.path},
           applicationSupportDirectory: () async => support,
+          nativePreparer: fakeNative.prepare,
+          nativeCleaner: fakeNative.clear,
         );
 
         final piPreparation = await profileService.preparePiForTerminalLaunch(
@@ -591,6 +560,8 @@ void main() {
         final currentFallbackService = AgentRuntimeOverlayService(
           environment: const <String, String>{},
           applicationSupportDirectory: () async => support,
+          nativePreparer: fakeNative.prepare,
+          nativeCleaner: fakeNative.clear,
         );
         final openCodePreparation = await currentFallbackService
             .prepareOpenCodeForTerminalLaunch(
@@ -631,4 +602,161 @@ void main() {
       },
     );
   });
+}
+
+final class _FakeAgentRuntimeOverlayNative {
+  Future<native.AgentRuntimeOverlayResult> prepare({
+    required native.AgentRuntimeOverlayRequest request,
+  }) async {
+    var removedCount = 0;
+    var copiedCount = 0;
+    var writtenCount = 0;
+
+    final overlayPath = request.overlayPath;
+    if (overlayPath != null) {
+      removedCount += _removeEntity(overlayPath);
+      Directory(overlayPath).createSync(recursive: true);
+    }
+    final mirrorPath = request.mirrorPath ?? overlayPath;
+    if (mirrorPath != null) {
+      Directory(mirrorPath).createSync(recursive: true);
+    }
+
+    final sourcePath = request.sourcePath;
+    final sourceExists =
+        sourcePath != null && Directory(sourcePath).existsSync();
+    if (sourceExists && mirrorPath != null) {
+      copiedCount += _mirrorSource(
+        sourcePath: sourcePath,
+        targetPath: mirrorPath,
+        managedSubdirectory: request.managedSubdirectory,
+        managedFileNames: request.managedFileNames.toSet(),
+      );
+    }
+
+    for (final managedFile in request.managedFiles) {
+      if (_writeManagedFile(managedFile)) {
+        writtenCount += 1;
+      }
+    }
+
+    return native.AgentRuntimeOverlayResult(
+      sourceExists: sourceExists,
+      linkedCount: BigInt.zero,
+      copiedCount: BigInt.from(copiedCount),
+      writtenCount: BigInt.from(writtenCount),
+      removedCount: BigInt.from(removedCount),
+      warnings: const <String>[],
+    );
+  }
+
+  Future<native.AgentRuntimeOverlayCleanupResult> clear({
+    required List<native.AgentRuntimeOverlayCleanupTarget> targets,
+  }) async {
+    var removedCount = 0;
+    for (final target in targets) {
+      removedCount += _removeEntity(target.overlayPath);
+    }
+    return native.AgentRuntimeOverlayCleanupResult(
+      removedCount: BigInt.from(removedCount),
+      warnings: const <String>[],
+    );
+  }
+
+  int _mirrorSource({
+    required String sourcePath,
+    required String targetPath,
+    required String? managedSubdirectory,
+    required Set<String> managedFileNames,
+  }) {
+    var copiedCount = 0;
+    for (final entity in Directory(sourcePath).listSync(followLinks: false)) {
+      final name = p.basename(entity.path);
+      final type = FileSystemEntity.typeSync(entity.path, followLinks: false);
+      if (managedSubdirectory != null &&
+          name == managedSubdirectory &&
+          type == FileSystemEntityType.directory) {
+        final managedTarget = p.join(targetPath, name);
+        Directory(managedTarget).createSync(recursive: true);
+        for (final child in Directory(
+          entity.path,
+        ).listSync(followLinks: false)) {
+          if (managedFileNames.contains(p.basename(child.path))) {
+            continue;
+          }
+          copiedCount += _copyEntity(
+            child.path,
+            p.join(managedTarget, p.basename(child.path)),
+          );
+        }
+        continue;
+      }
+      copiedCount += _copyEntity(entity.path, p.join(targetPath, name));
+    }
+    return copiedCount;
+  }
+
+  int _copyEntity(String sourcePath, String targetPath) {
+    final type = FileSystemEntity.typeSync(sourcePath, followLinks: false);
+    switch (type) {
+      case FileSystemEntityType.directory:
+        Directory(targetPath).createSync(recursive: true);
+        var copiedCount = 1;
+        for (final child in Directory(
+          sourcePath,
+        ).listSync(followLinks: false)) {
+          copiedCount += _copyEntity(
+            child.path,
+            p.join(targetPath, p.basename(child.path)),
+          );
+        }
+        return copiedCount;
+      case FileSystemEntityType.file:
+        Directory(p.dirname(targetPath)).createSync(recursive: true);
+        File(sourcePath).copySync(targetPath);
+        return 1;
+      case FileSystemEntityType.link:
+        Directory(p.dirname(targetPath)).createSync(recursive: true);
+        Link(targetPath).createSync(Link(sourcePath).targetSync());
+        return 1;
+      case FileSystemEntityType.notFound:
+        return 0;
+      default:
+        throw FileSystemException(
+          'Unsupported fake overlay entity',
+          sourcePath,
+        );
+    }
+  }
+
+  bool _writeManagedFile(native.AgentRuntimeOverlayManagedFile managedFile) {
+    if (managedFile.writeMode ==
+            native.AgentRuntimeOverlayWriteMode.createIfMissing &&
+        File(managedFile.path).existsSync()) {
+      return false;
+    }
+    _removeEntity(managedFile.path);
+    Directory(p.dirname(managedFile.path)).createSync(recursive: true);
+    File(managedFile.path).writeAsStringSync(managedFile.content);
+    return true;
+  }
+
+  int _removeEntity(String path) {
+    final type = FileSystemEntity.typeSync(path, followLinks: false);
+    switch (type) {
+      case FileSystemEntityType.directory:
+        Directory(path).deleteSync(recursive: true);
+        return 1;
+      case FileSystemEntityType.file:
+        File(path).deleteSync();
+        return 1;
+      case FileSystemEntityType.link:
+        Link(path).deleteSync();
+        return 1;
+      case FileSystemEntityType.notFound:
+        return 0;
+      default:
+        throw FileSystemException('Unsupported fake overlay entity', path);
+    }
+  }
 }
