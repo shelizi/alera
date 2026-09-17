@@ -165,6 +165,17 @@ int terminalOutputAdaptiveBudgetForTesting({
 }
 
 @visibleForTesting
+Duration terminalOutputAdaptiveSampleForTesting({
+  required Duration wallTime,
+  Duration? asyncUiApplyTime,
+}) {
+  return _terminalOutputAdaptiveSample(
+    wallTime: wallTime,
+    asyncUiApplyTime: asyncUiApplyTime,
+  );
+}
+
+@visibleForTesting
 int terminalOutputAdaptiveBudgetCharsForTesting(TerminalSessionHandle session) {
   return (session as _XtermTerminalSessionHandle)._pump._adaptiveChunkBudget;
 }

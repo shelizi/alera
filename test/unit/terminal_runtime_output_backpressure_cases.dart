@@ -198,6 +198,32 @@ void _registerTerminalRuntimeOutputBackpressureTests() {
     );
   });
 
+  test('async parser budget measures UI apply time instead of worker wait', () {
+    expect(
+      terminalOutputAdaptiveSampleForTesting(
+        wallTime: const Duration(milliseconds: 20),
+        asyncUiApplyTime: const Duration(milliseconds: 1),
+      ),
+      const Duration(milliseconds: 1),
+    );
+    expect(
+      terminalOutputAdaptiveSampleForTesting(
+        wallTime: const Duration(milliseconds: 20),
+      ),
+      const Duration(milliseconds: 20),
+    );
+    expect(
+      terminalOutputAdaptiveBudgetForTesting(
+        currentChars: 16 * 1024,
+        parseTime: terminalOutputAdaptiveSampleForTesting(
+          wallTime: const Duration(milliseconds: 20),
+          asyncUiApplyTime: const Duration(milliseconds: 1),
+        ),
+      ),
+      24 * 1024,
+    );
+  });
+
   test(
     'bounds hidden overflow parsing instead of draining the whole backlog',
     () {

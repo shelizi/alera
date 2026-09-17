@@ -71,6 +71,19 @@ int _terminalOutputNextAdaptiveChunkBudget({
   return next.clamp(_terminalOutputMinAdaptiveCharsPerFrame, current).toInt();
 }
 
+/// Selects the UI-blocking time that should drive output chunk adaptation.
+///
+/// Direct xterm parsing is synchronous on the UI isolate, so its wall time is
+/// the blocking cost. The parser-worker backend spends most of its wall time in
+/// another isolate; only rebuilding/applying the returned replica delta blocks
+/// Flutter, so that narrower measurement wins when it is available.
+Duration _terminalOutputAdaptiveSample({
+  required Duration wallTime,
+  Duration? asyncUiApplyTime,
+}) {
+  return asyncUiApplyTime ?? wallTime;
+}
+
 /// Floor on the gap between two flushes, so a process writing without pause
 /// cannot drive the frame loop at full vsync.
 ///

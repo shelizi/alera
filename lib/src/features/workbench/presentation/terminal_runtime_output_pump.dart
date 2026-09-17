@@ -12,7 +12,7 @@ abstract interface class _TerminalSessionOutputHost {
   /// Returning null means the chunk was applied synchronously. A future keeps
   /// this pump from dispatching another chunk until the asynchronous emulator
   /// update has completed.
-  Future<void>? writeToTerminal(String data);
+  Future<Duration>? writeToTerminal(String data);
   void advanceRestore(int chars);
   void advancePointerInputCatchUp(int chars);
 }
@@ -253,7 +253,7 @@ class _TerminalSessionOutputPump {
       return;
     }
     final shouldAdapt = adaptBudget && written >= chunkBudget - 1;
-    final parseClock = shouldAdapt ? (Stopwatch()..start()) : null;
+    final blockingClock = shouldAdapt ? (Stopwatch()..start()) : null;
     final generation = _writeGeneration;
     final writeFuture = _host.writeToTerminal(frame.toString());
     if (writeFuture == null) {
@@ -262,24 +262,25 @@ class _TerminalSessionOutputPump {
         written: written,
         restoreWritten: restoreWritten,
         chunkBudget: chunkBudget,
-        parseClock: parseClock,
+        blockingClock: blockingClock,
       );
       return;
     }
 
+    blockingClock?.stop();
     _writeInFlight = true;
     unawaited(
       writeFuture.then(
-        (_) => _completeWrite(
+        (uiApplyTime) => _completeWrite(
           generation: generation,
           written: written,
           restoreWritten: restoreWritten,
           chunkBudget: chunkBudget,
-          parseClock: parseClock,
+          blockingClock: blockingClock,
+          asyncUiApplyTime: shouldAdapt ? uiApplyTime : null,
         ),
         onError: (Object error, StackTrace stackTrace) {
           _writeInFlight = false;
-          parseClock?.stop();
           FlutterError.reportError(
             FlutterErrorDetails(
               exception: error,
@@ -299,17 +300,22 @@ class _TerminalSessionOutputPump {
     required int written,
     required int restoreWritten,
     required int chunkBudget,
-    required Stopwatch? parseClock,
+    required Stopwatch? blockingClock,
+    Duration? asyncUiApplyTime,
   }) {
     _writeInFlight = false;
-    if (parseClock != null) {
-      parseClock.stop();
+    if (blockingClock != null && blockingClock.isRunning) {
+      blockingClock.stop();
     }
     if (generation == _writeGeneration) {
-      if (parseClock != null) {
+      if (blockingClock != null) {
+        final sample = _terminalOutputAdaptiveSample(
+          wallTime: blockingClock.elapsed,
+          asyncUiApplyTime: asyncUiApplyTime,
+        );
         _adaptiveChunkBudget = _terminalOutputNextAdaptiveChunkBudget(
           currentChars: chunkBudget,
-          parseTime: parseClock.elapsed,
+          parseTime: sample,
         );
       }
       _host.advanceRestore(restoreWritten);

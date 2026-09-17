@@ -66,7 +66,7 @@ extension _XtermTerminalParserWorker on _XtermTerminalSessionHandle {
     return validatedFuture;
   }
 
-  Future<void> _writeToParserWorker(String data) {
+  Future<Duration> _writeToParserWorker(String data) {
     final terminal = _terminal;
     if (terminal is! TerminalXtermReplicaTerminal) {
       throw StateError('Parser worker backend requires an xterm replica.');
@@ -79,6 +79,7 @@ extension _XtermTerminalParserWorker on _XtermTerminalSessionHandle {
       // snapshot behind it on the same worker command tail.
       _parserWorkerReplicaNeedsSync = true;
     }
+    var uiApplyTime = Duration.zero;
     final command = _queueParserWorkerCommand(terminal, generation, (
       worker,
     ) async {
@@ -92,8 +93,11 @@ extension _XtermTerminalParserWorker on _XtermTerminalSessionHandle {
             !identical(_terminal, terminal)) {
           return;
         }
+        final applyClock = Stopwatch()..start();
         _applyParserWorkerEffects(delta.effects);
         terminal.applyBufferDelta(delta);
+        applyClock.stop();
+        uiApplyTime = applyClock.elapsed;
         return;
       }
 
@@ -106,11 +110,14 @@ extension _XtermTerminalParserWorker on _XtermTerminalSessionHandle {
           !identical(_terminal, terminal)) {
         return;
       }
+      final applyClock = Stopwatch()..start();
       _applyParserWorkerEffects(state.effects);
       terminal.applyStateDelta(state);
+      applyClock.stop();
+      uiApplyTime = applyClock.elapsed;
     });
     _parserWorkerLastApply = command;
-    return command;
+    return command.then((_) => uiApplyTime);
   }
 
   Future<void>? _syncParserWorkerReplicaForReveal() {
