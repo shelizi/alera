@@ -5206,13 +5206,14 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
   }
 
   double? _largeFileAsciiColumnWidthForLine(int lineIndex, String text) {
-    if (!_largeFilePerformanceMode ||
-        _lineWrap ||
-        isRTL ||
-        _enableFolding ||
-        !_canUseLargeFileAsciiViewportLine(lineIndex, text)) {
+    if (!_largeFilePerformanceMode || _lineWrap || isRTL || _enableFolding) {
       return null;
     }
+    final eligible =
+        controller.isBufferActive && lineIndex == controller.bufferLineIndex
+        ? _canUseLargeFileAsciiViewportBuffer(text)
+        : _canUseLargeFileAsciiViewportLine(lineIndex, text);
+    if (!eligible) return null;
     return _getLargeFileFixedAsciiColumnWidth();
   }
 
@@ -5255,6 +5256,27 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
       return null;
     }
     return (start: info.start, contentLength: info.contentLength);
+  }
+
+  ({int start, int contentLength})? _largeFileAsciiGeometryLineInfo(
+    int lineIndex,
+  ) {
+    if (!_largeFilePerformanceMode || _lineWrap || isRTL || _enableFolding) {
+      return null;
+    }
+    if (controller.isBufferActive) {
+      if (lineIndex != controller.bufferLineIndex) return null;
+      final bufferText = controller.bufferLineText;
+      if (bufferText == null ||
+          !_canUseLargeFileAsciiViewportBuffer(bufferText)) {
+        return null;
+      }
+      return (
+        start: controller.bufferLineRopeStart,
+        contentLength: bufferText.length,
+      );
+    }
+    return _largeFileNativeAsciiLineInfo(lineIndex);
   }
 
   ui.Paragraph _buildHighlightedParagraph(
@@ -7122,7 +7144,7 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
       return result;
     }
 
-    final nativeAsciiInfo = _largeFileNativeAsciiLineInfo(lineIndex);
+    final nativeAsciiInfo = _largeFileAsciiGeometryLineInfo(lineIndex);
     final nativeColumnWidth = nativeAsciiInfo != null
         ? _getLargeFileFixedAsciiColumnWidth()
         : null;
@@ -7294,7 +7316,7 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
       return result;
     }
 
-    final nativeAsciiInfo = _largeFileNativeAsciiLineInfo(lineIndex);
+    final nativeAsciiInfo = _largeFileAsciiGeometryLineInfo(lineIndex);
     final nativeColumnWidth = nativeAsciiInfo != null
         ? _getLargeFileFixedAsciiColumnWidth()
         : null;
@@ -7459,7 +7481,7 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     final tappedLineIndex = _findVisibleLineByYPosition(position.dy);
 
     if (controller.documentColors.isEmpty) {
-      final nativeAsciiInfo = _largeFileNativeAsciiLineInfo(tappedLineIndex);
+      final nativeAsciiInfo = _largeFileAsciiGeometryLineInfo(tappedLineIndex);
       final nativeColumnWidth = nativeAsciiInfo != null
           ? _getLargeFileFixedAsciiColumnWidth()
           : null;
