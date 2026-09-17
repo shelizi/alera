@@ -28,6 +28,13 @@ pub struct SearchRange {
     pub end: usize,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LineLayoutInfo {
+    pub start: usize,
+    pub content_len: usize,
+    pub safe_ascii: bool,
+}
+
 #[flutter_rust_bridge::frb(opaque)]
 pub struct RopeBridge {
     pub(crate) rope: RwLock<RustRope>,
@@ -180,6 +187,41 @@ impl RopeBridge {
             line_str.truncate(line_str.len() - 1);
         }
         line_str
+    }
+
+    #[flutter_rust_bridge::frb(sync)]
+    pub fn line_layout_info(&self, line_idx: usize) -> LineLayoutInfo {
+        let rope = self.rope.read().unwrap();
+        let valid_idx = line_idx.min(rope.len_lines().saturating_sub(1));
+        let line = rope.line(valid_idx);
+        let start = rope.line_to_char(valid_idx);
+        let mut content_len = line.len_chars();
+
+        if content_len > 0 && line.char(content_len - 1) == '\n' {
+            content_len -= 1;
+            if content_len > 0 && line.char(content_len - 1) == '\r' {
+                content_len -= 1;
+            }
+        }
+
+        let mut safe_ascii = content_len > 0;
+        let mut last_char = None;
+        for ch in line.chars().take(content_len) {
+            if !((' '..='~').contains(&ch)) {
+                safe_ascii = false;
+                break;
+            }
+            last_char = Some(ch);
+        }
+        if last_char == Some(' ') {
+            safe_ascii = false;
+        }
+
+        LineLayoutInfo {
+            start,
+            content_len,
+            safe_ascii,
+        }
     }
 
     #[flutter_rust_bridge::frb(sync)]
@@ -470,6 +512,46 @@ mod tests {
             .into_iter()
             .map(|range| (range.start, range.end))
             .collect()
+    }
+
+    #[test]
+    fn line_layout_info_reports_scalar_ranges_without_materializing_lines() {
+        let long_ascii = "x".repeat(4096);
+        let text = format!("{}\nabc\r\ntrail \n😀", long_ascii);
+        let rope = RopeBridge::create(text);
+
+        assert_eq!(
+            rope.line_layout_info(0),
+            LineLayoutInfo {
+                start: 0,
+                content_len: 4096,
+                safe_ascii: true,
+            }
+        );
+        assert_eq!(
+            rope.line_layout_info(1),
+            LineLayoutInfo {
+                start: 4097,
+                content_len: 3,
+                safe_ascii: true,
+            }
+        );
+        assert_eq!(
+            rope.line_layout_info(2),
+            LineLayoutInfo {
+                start: 4102,
+                content_len: 6,
+                safe_ascii: false,
+            }
+        );
+        assert_eq!(
+            rope.line_layout_info(3),
+            LineLayoutInfo {
+                start: 4109,
+                content_len: 1,
+                safe_ascii: false,
+            }
+        );
     }
 
     #[test]

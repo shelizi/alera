@@ -8,7 +8,7 @@ import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // These functions are ignored because they are not marked as `pub`: `append_search_ranges`, `collect_search_ranges`, `compute_bidi_segments`, `direction_for_char`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<RopeBridge>>
 abstract class RopeBridge implements RustOpaqueInterface {
@@ -61,6 +61,8 @@ abstract class RopeBridge implements RustOpaqueInterface {
 
   String line({required BigInt lineIdx});
 
+  LineLayoutInfo lineLayoutInfo({required BigInt lineIdx});
+
   BigInt lineToChar({required BigInt lineIdx});
 
   TextDirection primaryDirection();
@@ -107,6 +109,30 @@ class BiDiSegment {
           start == other.start &&
           end == other.end &&
           direction == other.direction;
+}
+
+class LineLayoutInfo {
+  final BigInt start;
+  final BigInt contentLen;
+  final bool safeAscii;
+
+  const LineLayoutInfo({
+    required this.start,
+    required this.contentLen,
+    required this.safeAscii,
+  });
+
+  @override
+  int get hashCode => start.hashCode ^ contentLen.hashCode ^ safeAscii.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is LineLayoutInfo &&
+          runtimeType == other.runtimeType &&
+          start == other.start &&
+          contentLen == other.contentLen &&
+          safeAscii == other.safeAscii;
 }
 
 class SearchRange {

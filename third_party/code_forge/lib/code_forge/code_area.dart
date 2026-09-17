@@ -4514,6 +4514,8 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
   final Map<int, String> _lineTextCache = {};
   final Map<int, ({int version, bool eligible})>
   _largeFileAsciiViewportEligibilityCache = {};
+  final Map<int, ({int version, int start, int contentLength, bool safeAscii})>
+  _largeFileNativeLineInfoCache = {};
   bool _largeFileFixedAsciiColumnWidthMeasured = false;
   double? _largeFileFixedAsciiColumnWidth;
   final Map<int, Rect> _actionBulbRects = {};
@@ -5142,6 +5144,37 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     return _getLargeFileFixedAsciiColumnWidth();
   }
 
+  ({int start, int contentLength})? _largeFileNativeAsciiLineInfo(
+    int lineIndex,
+  ) {
+    if (!_largeFilePerformanceMode ||
+        _lineWrap ||
+        isRTL ||
+        _enableFolding ||
+        controller.isBufferActive) {
+      return null;
+    }
+
+    final version = controller.contentVersion;
+    var cached = _largeFileNativeLineInfoCache[lineIndex];
+    if (cached == null || cached.version != version) {
+      final info = controller.rope.getLineLayoutInfo(lineIndex);
+      cached = (
+        version: version,
+        start: info.start,
+        contentLength: info.contentLength,
+        safeAscii: info.safeAscii,
+      );
+      _largeFileNativeLineInfoCache[lineIndex] = cached;
+    }
+
+    if (!cached.safeAscii ||
+        cached.contentLength < kLargeFileParagraphProfileMinChars) {
+      return null;
+    }
+    return (start: cached.start, contentLength: cached.contentLength);
+  }
+
   ui.Paragraph _buildHighlightedParagraph(
     int lineIndex,
     String text, {
@@ -5322,31 +5355,45 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
         final lineChar = hoverNotifier.value!.$2;
         final line = lineChar['line']!;
         final char = lineChar['character']!;
-        final cachedLineText = _lineTextCache[line];
-        final lineText = cachedLineText ?? controller.getLineText(line);
-        if (cachedLineText == null) {
-          _lineTextCache[line] = lineText;
-        }
-
         double hoveredX = 0.0;
-        if (char > 0 && char <= lineText.length) {
-          final columnWidth = _largeFileAsciiColumnWidthForLine(line, lineText);
-          if (columnWidth != null) {
-            hoveredX = char.clamp(0, lineText.length) * columnWidth;
+        if (char > 0) {
+          final nativeAsciiInfo = _largeFileNativeAsciiLineInfo(line);
+          final nativeColumnWidth = nativeAsciiInfo != null
+              ? _getLargeFileFixedAsciiColumnWidth()
+              : null;
+          if (nativeAsciiInfo != null &&
+              nativeColumnWidth != null &&
+              char <= nativeAsciiInfo.contentLength) {
+            hoveredX = char * nativeColumnWidth;
           } else {
-            var para = _paragraphCache[line];
-            if (para == null) {
-              para = _buildParagraph(
-                lineText,
-                width: lineWrap ? _wrapWidth : null,
-              );
-              if (_largeFilePerformanceMode && !_lineWrap && !isRTL) {
-                _paragraphCache[line] = para;
-              }
+            final cachedLineText = _lineTextCache[line];
+            final lineText = cachedLineText ?? controller.getLineText(line);
+            if (cachedLineText == null) {
+              _lineTextCache[line] = lineText;
             }
-            final boxes = para.getBoxesForRange(0, char);
-            if (boxes.isNotEmpty) {
-              hoveredX = boxes.last.right;
+            if (char <= lineText.length) {
+              final columnWidth = _largeFileAsciiColumnWidthForLine(
+                line,
+                lineText,
+              );
+              if (columnWidth != null) {
+                hoveredX = char * columnWidth;
+              } else {
+                var para = _paragraphCache[line];
+                if (para == null) {
+                  para = _buildParagraph(
+                    lineText,
+                    width: lineWrap ? _wrapWidth : null,
+                  );
+                  if (_largeFilePerformanceMode && !_lineWrap && !isRTL) {
+                    _paragraphCache[line] = para;
+                  }
+                }
+                final boxes = para.getBoxesForRange(0, char);
+                if (boxes.isNotEmpty) {
+                  hoveredX = boxes.last.right;
+                }
+              }
             }
           }
         }
@@ -6993,6 +7040,25 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
       return result;
     }
 
+    final nativeAsciiInfo = _largeFileNativeAsciiLineInfo(lineIndex);
+    final nativeColumnWidth = nativeAsciiInfo != null
+        ? _getLargeFileFixedAsciiColumnWidth()
+        : null;
+    if (nativeAsciiInfo != null && nativeColumnWidth != null) {
+      final clampedColumn = columnIndex.clamp(0, nativeAsciiInfo.contentLength);
+      final caretX =
+          clampedColumn * nativeColumnWidth +
+          _getColorBoxOffsetForLine(lineIndex, clampedColumn);
+      final result = (
+        lineIndex: lineIndex,
+        columnIndex: columnIndex,
+        offset: Offset(caretX, lineY + _getTotalVirtualOffset(lineIndex)),
+        height: _lineHeight,
+      );
+      _caretInfoCache[cursorOffset] = result;
+      return result;
+    }
+
     final cachedLineText = _lineTextCache[lineIndex];
     final lineText = cachedLineText ?? controller.getLineText(lineIndex);
     final fixedColumnWidth = _largeFileAsciiColumnWidthForLine(
@@ -7146,6 +7212,25 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
       return result;
     }
 
+    final nativeAsciiInfo = _largeFileNativeAsciiLineInfo(lineIndex);
+    final nativeColumnWidth = nativeAsciiInfo != null
+        ? _getLargeFileFixedAsciiColumnWidth()
+        : null;
+    if (nativeAsciiInfo != null && nativeColumnWidth != null) {
+      final clampedColumn = columnIndex.clamp(0, nativeAsciiInfo.contentLength);
+      final caretX =
+          clampedColumn * nativeColumnWidth +
+          _getColorBoxOffsetForLine(lineIndex, clampedColumn);
+      final result = (
+        lineIndex: lineIndex,
+        columnIndex: columnIndex,
+        offset: Offset(caretX, lineY + _getTotalVirtualOffset(lineIndex)),
+        height: _lineHeight,
+      );
+      _caretInfoCache[cursorOffset] = result;
+      return result;
+    }
+
     final cachedLineText = _lineTextCache[lineIndex];
     final lineText = cachedLineText ?? controller.getLineText(lineIndex);
     final fixedColumnWidth = _largeFileAsciiColumnWidthForLine(
@@ -7290,6 +7375,24 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     if (lineCount == 0) return 0;
 
     final tappedLineIndex = _findVisibleLineByYPosition(position.dy);
+
+    if (controller.documentColors.isEmpty) {
+      final nativeAsciiInfo = _largeFileNativeAsciiLineInfo(tappedLineIndex);
+      final nativeColumnWidth = nativeAsciiInfo != null
+          ? _getLargeFileFixedAsciiColumnWidth()
+          : null;
+      if (nativeAsciiInfo != null && nativeColumnWidth != null) {
+        final scalarColumn = largeFileAsciiColumnForX(
+          textLength: nativeAsciiInfo.contentLength,
+          columnWidth: nativeColumnWidth,
+          x: position.dx,
+        );
+        return (nativeAsciiInfo.start + scalarColumn).clamp(
+          0,
+          controller.length,
+        );
+      }
+    }
 
     String lineText;
     if (_lineTextCache.containsKey(tappedLineIndex)) {
@@ -7620,8 +7723,18 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
   double _getLineWidth(int lineIndex) {
     final cachedText = _lineTextCache[lineIndex];
     final cachedWidth = _lineWidthCache[lineIndex];
-    if (cachedText != null && cachedWidth != null) {
+    if (cachedWidth != null) {
       return cachedWidth;
+    }
+
+    final nativeAsciiInfo = _largeFileNativeAsciiLineInfo(lineIndex);
+    if (nativeAsciiInfo != null) {
+      final columnWidth = _getLargeFileFixedAsciiColumnWidth();
+      if (columnWidth != null) {
+        final width = nativeAsciiInfo.contentLength * columnWidth;
+        _lineWidthCache[lineIndex] = width;
+        return width;
+      }
     }
 
     if (cachedText != null &&
@@ -8224,11 +8337,9 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
       final visualYOffset = _getTotalVirtualOffset(i);
 
       ui.Paragraph paragraph;
-      String lineText;
       double paragraphXOffset = 0.0;
 
       if (bufferActive && i == bufferLineIndex && bufferLineText != null) {
-        lineText = bufferLineText;
         paragraph = _buildHighlightedParagraph(
           i,
           bufferLineText,
@@ -8238,43 +8349,61 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
           lineHeight = paragraph.height;
         }
       } else {
-        final cachedLineText = _lineTextCache[i];
-        if (cachedLineText != null) {
-          lineText = cachedLineText;
-        } else {
-          lineText = controller.getLineText(i);
-          _lineTextCache[i] = lineText;
-        }
-
         final cachedParagraph = rtl ? null : _paragraphCache[i];
         if (cachedParagraph != null) {
           paragraph = cachedParagraph;
-        } else if (largeFileAsciiColumnWidth != null &&
-            _canUseLargeFileAsciiViewportLine(i, lineText)) {
-          final slice = largeFileAsciiViewportSlice(
-            textLength: lineText.length,
-            columnWidth: largeFileAsciiColumnWidth,
-            horizontalScroll: horizontalScroll,
-            viewportWidth: horizontalViewportWidth,
-          );
-          paragraph = _buildParagraph(
-            lineText.substring(slice.start, slice.end),
-          );
-          paragraphXOffset = slice.xOffset;
         } else {
-          paragraph = _buildHighlightedParagraph(
-            i,
-            lineText,
-            width: paragraphWidth,
-          );
-          if (!rtl) {
-            _paragraphCache[i] = paragraph;
-          }
+          final nativeAsciiInfo = largeFileAsciiColumnWidth != null
+              ? _largeFileNativeAsciiLineInfo(i)
+              : null;
+          if (nativeAsciiInfo != null && largeFileAsciiColumnWidth != null) {
+            final slice = largeFileAsciiViewportSlice(
+              textLength: nativeAsciiInfo.contentLength,
+              columnWidth: largeFileAsciiColumnWidth,
+              horizontalScroll: horizontalScroll,
+              viewportWidth: horizontalViewportWidth,
+            );
+            final sliceText = controller.rope.substring(
+              nativeAsciiInfo.start + slice.start,
+              nativeAsciiInfo.start + slice.end,
+            );
+            paragraph = _buildParagraph(sliceText);
+            paragraphXOffset = slice.xOffset;
+          } else {
+            final cachedLineText = _lineTextCache[i];
+            final lineText = cachedLineText ?? controller.getLineText(i);
+            if (cachedLineText == null) {
+              _lineTextCache[i] = lineText;
+            }
 
-          if (wrapsLines) {
-            _lineHeightCache[i] = paragraph.height;
-            if (rtl) {
-              lineHeight = paragraph.height;
+            if (largeFileAsciiColumnWidth != null &&
+                _canUseLargeFileAsciiViewportLine(i, lineText)) {
+              final slice = largeFileAsciiViewportSlice(
+                textLength: lineText.length,
+                columnWidth: largeFileAsciiColumnWidth,
+                horizontalScroll: horizontalScroll,
+                viewportWidth: horizontalViewportWidth,
+              );
+              paragraph = _buildParagraph(
+                lineText.substring(slice.start, slice.end),
+              );
+              paragraphXOffset = slice.xOffset;
+            } else {
+              paragraph = _buildHighlightedParagraph(
+                i,
+                lineText,
+                width: paragraphWidth,
+              );
+              if (!rtl) {
+                _paragraphCache[i] = paragraph;
+              }
+
+              if (wrapsLines) {
+                _lineHeightCache[i] = paragraph.height;
+                if (rtl) {
+                  lineHeight = paragraph.height;
+                }
+              }
             }
           }
         }
@@ -9506,6 +9635,12 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     );
     _pruneIntKeyedViewportCache(
       _largeFileAsciiViewportEligibilityCache,
+      textLayoutMinKeep,
+      textLayoutMaxKeep,
+      textLayoutMaxEntries,
+    );
+    _pruneIntKeyedViewportCache(
+      _largeFileNativeLineInfoCache,
       textLayoutMinKeep,
       textLayoutMaxKeep,
       textLayoutMaxEntries,

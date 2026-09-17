@@ -187,6 +187,17 @@ class Rope {
     return _rope.line(lineIdx: BigInt.from(lineIndex));
   }
 
+  ({int start, int contentLength, bool safeAscii}) getLineLayoutInfo(
+    int lineIndex,
+  ) {
+    final info = _rope.lineLayoutInfo(lineIdx: BigInt.from(lineIndex));
+    return (
+      start: info.start.toInt(),
+      contentLength: info.contentLen.toInt(),
+      safeAscii: info.safeAscii,
+    );
+  }
+
   int getLineAtOffset(int charOffset) {
     return _rope.charToLine(charIdx: BigInt.from(charOffset)).toInt();
   }

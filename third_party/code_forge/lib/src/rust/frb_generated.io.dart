@@ -103,6 +103,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   LineCount dco_decode_line_count(dynamic raw);
 
   @protected
+  LineLayoutInfo dco_decode_line_layout_info(dynamic raw);
+
+  @protected
   LineSummary dco_decode_line_summary(dynamic raw);
 
   @protected
@@ -227,6 +230,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   LineCount sse_decode_line_count(SseDeserializer deserializer);
+
+  @protected
+  LineLayoutInfo sse_decode_line_layout_info(SseDeserializer deserializer);
 
   @protected
   LineSummary sse_decode_line_summary(SseDeserializer deserializer);
@@ -362,6 +368,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_line_count(LineCount self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_line_layout_info(
+    LineLayoutInfo self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_line_summary(LineSummary self, SseSerializer serializer);
