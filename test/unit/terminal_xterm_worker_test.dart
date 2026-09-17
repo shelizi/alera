@@ -238,11 +238,72 @@ void main() {
     expect(delta.cursorY, direct.buffer.cursorY);
     expect(delta.scrollBack, direct.buffer.scrollBack);
   });
+
+  test(
+    'worker buffer delta preserves scrollback and streams tail changes',
+    () async {
+      final direct = _createDirectTerminal(cols: 8, rows: 3);
+      final worker = await TerminalXtermWorker.start(
+        cols: 8,
+        rows: 3,
+        maxLines: 64,
+      );
+      addTearDown(worker.close);
+      final mirror = <String>[];
+
+      const initial = 'one\r\ntwo\r\nthree\r\nfour';
+      direct.write(initial);
+      final first = await worker.writeBufferDelta(initial);
+      expect(first.fullRepaint, isTrue);
+      expect(first.trimStart, 0);
+      _applyBufferDelta(mirror, first);
+      expect(mirror, _bufferRows(direct));
+      expect(first.bufferLength, direct.buffer.lines.length);
+      expect(first.scrollBack, direct.buffer.scrollBack);
+
+      direct.write('\r\nfive');
+      final second = await worker.writeBufferDelta('\r\nfive');
+      expect(second.fullRepaint, isFalse);
+      expect(second.trimStart, 0);
+      expect(second.rowDeltas.length, lessThan(second.bufferLength));
+      _applyBufferDelta(mirror, second);
+      expect(mirror, _bufferRows(direct));
+    },
+  );
+
+  test('worker buffer delta reports circular scrollback trimming', () async {
+    final direct = _createDirectTerminal(cols: 8, rows: 3, maxLines: 25);
+    final worker = await TerminalXtermWorker.start(
+      cols: 8,
+      rows: 3,
+      maxLines: 25,
+    );
+    addTearDown(worker.close);
+    final mirror = <String>[];
+
+    final initial = List<String>.generate(
+      25,
+      (index) => '${index + 1}',
+    ).join('\r\n');
+    direct.write(initial);
+    _applyBufferDelta(mirror, await worker.writeBufferDelta(initial));
+    expect(mirror, _bufferRows(direct));
+    expect(direct.buffer.lines.length, 25);
+
+    direct.write('\r\n26');
+    final trimmed = await worker.writeBufferDelta('\r\n26');
+    expect(trimmed.fullRepaint, isFalse);
+    expect(trimmed.trimStart, 1);
+    _applyBufferDelta(mirror, trimmed);
+    expect(mirror, _bufferRows(direct));
+    expect(trimmed.bufferLength, 25);
+  });
 }
 
 Terminal _createDirectTerminal({
   required int cols,
   required int rows,
+  int maxLines = 256,
   TerminalTargetPlatform platform = TerminalTargetPlatform.unknown,
   Set<int>? wordSeparators,
   void Function(String title)? onTitleChange,
@@ -251,7 +312,7 @@ Terminal _createDirectTerminal({
   void Function(String selector, String text)? onClipboardStore,
 }) {
   return Terminal(
-    maxLines: 256,
+    maxLines: maxLines,
     reflowWithHiddenCursor: false,
     preserveOrphanCombiningMarks: true,
     allowITerm2ClipboardCapture: false,
@@ -313,6 +374,32 @@ List<String> _viewportRows(Terminal terminal) {
     for (var row = 0; row < terminal.viewHeight; row++)
       terminal.buffer.lines[first + row].toString(),
   ];
+}
+
+List<String> _bufferRows(Terminal terminal) {
+  return <String>[
+    for (var row = 0; row < terminal.buffer.lines.length; row++)
+      terminal.buffer.lines[row].toString(),
+  ];
+}
+
+void _applyBufferDelta(
+  List<String> mirror,
+  TerminalXtermWorkerBufferDelta delta,
+) {
+  if (delta.fullRepaint) {
+    mirror.clear();
+  } else if (delta.trimStart > 0) {
+    mirror.removeRange(0, delta.trimStart);
+  }
+  for (final row in delta.rowDeltas) {
+    if (row.row == mirror.length) {
+      mirror.add(row.text);
+    } else {
+      mirror[row.row] = row.text;
+    }
+  }
+  expect(mirror, hasLength(delta.bufferLength));
 }
 
 void _applyDelta(List<String> mirror, TerminalXtermWorkerDelta delta) {

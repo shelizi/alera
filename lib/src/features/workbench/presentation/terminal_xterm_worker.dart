@@ -8,6 +8,7 @@ import '../domain/terminal_osc52_clipboard.dart';
 const String _workerReady = 'ready';
 const String _workerWrite = 'write';
 const String _workerWriteDelta = 'writeDelta';
+const String _workerWriteBufferDelta = 'writeBufferDelta';
 const String _workerResize = 'resize';
 const String _workerResizeDelta = 'resizeDelta';
 const String _workerKeyInput = 'keyInput';
@@ -269,6 +270,79 @@ final class TerminalXtermWorkerDelta {
   final List<TerminalXtermWorkerEffect> effects;
 }
 
+final class TerminalXtermWorkerBufferDelta {
+  const TerminalXtermWorkerBufferDelta({
+    required this.revision,
+    required this.fullRepaint,
+    required this.cols,
+    required this.rows,
+    required this.bufferLength,
+    required this.scrollBack,
+    required this.trimStart,
+    required this.rowDeltas,
+    required this.cursorX,
+    required this.cursorY,
+    required this.cursorVisible,
+    required this.cursorKeys,
+    required this.keypadKeys,
+    required this.bracketedPaste,
+    required this.focusEvents,
+    required this.altScroll,
+    required this.mouseMode,
+    required this.mouseReportMode,
+    required this.effects,
+  });
+
+  factory TerminalXtermWorkerBufferDelta._fromMessage(List<Object?> message) {
+    return TerminalXtermWorkerBufferDelta(
+      fullRepaint: message[0]! as bool,
+      cols: message[1]! as int,
+      rows: message[2]! as int,
+      bufferLength: message[3]! as int,
+      scrollBack: message[4]! as int,
+      trimStart: message[5]! as int,
+      rowDeltas: <TerminalXtermWorkerRowDelta>[
+        for (final raw in message[6]! as List)
+          TerminalXtermWorkerRowDelta._fromMessage(
+            List<Object?>.from(raw as List),
+          ),
+      ],
+      cursorX: message[7]! as int,
+      cursorY: message[8]! as int,
+      cursorVisible: message[9]! as bool,
+      cursorKeys: message[10]! as bool,
+      keypadKeys: message[11]! as bool,
+      bracketedPaste: message[12]! as bool,
+      focusEvents: message[13]! as bool,
+      altScroll: message[14]! as bool,
+      mouseMode: message[15]! as int,
+      mouseReportMode: message[16]! as int,
+      effects: _decodeWorkerEffects(message[17]),
+      revision: message[18]! as int,
+    );
+  }
+
+  final int revision;
+  final bool fullRepaint;
+  final int cols;
+  final int rows;
+  final int bufferLength;
+  final int scrollBack;
+  final int trimStart;
+  final List<TerminalXtermWorkerRowDelta> rowDeltas;
+  final int cursorX;
+  final int cursorY;
+  final bool cursorVisible;
+  final bool cursorKeys;
+  final bool keypadKeys;
+  final bool bracketedPaste;
+  final bool focusEvents;
+  final bool altScroll;
+  final int mouseMode;
+  final int mouseReportMode;
+  final List<TerminalXtermWorkerEffect> effects;
+}
+
 final class TerminalXtermWorker {
   TerminalXtermWorker._(this._commands, this._isolate);
 
@@ -327,6 +401,12 @@ final class TerminalXtermWorker {
   Future<TerminalXtermWorkerDelta> writeDelta(String data) async {
     return TerminalXtermWorkerDelta._fromMessage(
       await _requestRaw(<Object?>[_workerWriteDelta, data]),
+    );
+  }
+
+  Future<TerminalXtermWorkerBufferDelta> writeBufferDelta(String data) async {
+    return TerminalXtermWorkerBufferDelta._fromMessage(
+      await _requestRaw(<Object?>[_workerWriteBufferDelta, data]),
     );
   }
 
@@ -551,6 +631,8 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
   List<_TerminalXtermWorkerRowCache>? viewportCache;
   var cachedCols = 0;
   var cachedRows = 0;
+  List<BufferLine>? bufferLineRefs;
+  List<_TerminalXtermWorkerRowCache>? bufferLineCaches;
 
   List<Object?> renderCellMessage(BufferLine line, int column) {
     final codePoint = line.getCodePoint(column);
@@ -665,6 +747,99 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
     ];
   }
 
+  List<Object?> bufferDelta() {
+    final lines = terminal.buffer.lines;
+    final previousRefs = bufferLineRefs;
+    final previousCaches = bufferLineCaches;
+    var fullRepaint = previousRefs == null || previousCaches == null;
+    var trimStart = 0;
+    var overlap = 0;
+
+    if (!fullRepaint) {
+      if (lines.length == 0 || previousRefs.isEmpty) {
+        fullRepaint = lines.length != previousRefs.length;
+      } else {
+        var retainedStart = -1;
+        final firstLine = lines[0];
+        for (var index = 0; index < previousRefs.length; index++) {
+          if (identical(previousRefs[index], firstLine)) {
+            retainedStart = index;
+            break;
+          }
+        }
+
+        if (retainedStart < 0) {
+          fullRepaint = true;
+        } else {
+          final availablePrevious = previousRefs.length - retainedStart;
+          overlap = availablePrevious < lines.length
+              ? availablePrevious
+              : lines.length;
+          if (retainedStart + overlap != previousRefs.length) {
+            fullRepaint = true;
+          } else {
+            for (var row = 0; row < overlap; row++) {
+              if (!identical(previousRefs[retainedStart + row], lines[row])) {
+                fullRepaint = true;
+                break;
+              }
+            }
+          }
+          if (!fullRepaint) {
+            trimStart = retainedStart;
+          }
+        }
+      }
+    }
+
+    if (fullRepaint) {
+      trimStart = 0;
+      overlap = 0;
+    }
+
+    final nextRefs = <BufferLine>[];
+    final nextCaches = <_TerminalXtermWorkerRowCache>[];
+    final changedRows = <Object?>[];
+    for (var row = 0; row < lines.length; row++) {
+      final line = lines[row];
+      nextRefs.add(line);
+      final previousCache =
+          !fullRepaint && previousCaches != null && row < overlap
+          ? previousCaches[trimStart + row]
+          : null;
+      if (previousCache != null && previousCache.matches(line)) {
+        nextCaches.add(previousCache);
+        continue;
+      }
+      nextCaches.add(_TerminalXtermWorkerRowCache.capture(line));
+      changedRows.add(rowMessage(row, line));
+    }
+
+    bufferLineRefs = nextRefs;
+    bufferLineCaches = nextCaches;
+    return <Object?>[
+      fullRepaint,
+      terminal.viewWidth,
+      terminal.viewHeight,
+      lines.length,
+      terminal.buffer.scrollBack,
+      trimStart,
+      changedRows,
+      terminal.buffer.cursorX,
+      terminal.buffer.cursorY,
+      terminal.cursorVisibleMode,
+      terminal.cursorKeysMode,
+      terminal.appKeypadMode,
+      terminal.bracketedPasteMode,
+      terminal.reportFocusMode,
+      terminal.altBufferMouseScrollMode,
+      terminal.mouseMode.index,
+      terminal.mouseReportMode.index,
+      <Object?>[for (final effect in effects) List<Object?>.from(effect)],
+      revision,
+    ];
+  }
+
   List<Object?> actionResult(bool? handled) {
     return <Object?>[
       revision,
@@ -695,6 +870,11 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
           terminal.write(raw[2]! as String);
           revision += 1;
           reply.send(delta());
+        case _workerWriteBufferDelta:
+          effects.clear();
+          terminal.write(raw[2]! as String);
+          revision += 1;
+          reply.send(bufferDelta());
         case _workerResize:
           effects.clear();
           terminal.resize(raw[2]! as int, raw[3]! as int);
