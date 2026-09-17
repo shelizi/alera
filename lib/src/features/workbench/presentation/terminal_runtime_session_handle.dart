@@ -247,11 +247,12 @@ class _XtermTerminalSessionHandle(
   bool get isOutputVisible => _visibility.isOutputVisible;
 
   @override
-  void writeToTerminal(String data) {
+  Future<void>? writeToTerminal(String data) {
     if (data.isEmpty || _disposed) {
-      return;
+      return null;
     }
     _terminal.write(data);
+    return null;
   }
 
   @override

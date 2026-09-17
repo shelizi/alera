@@ -7,7 +7,12 @@ abstract interface class _TerminalSessionOutputHost {
   bool get isDisposed;
   bool get isOutputVisible;
 
-  void writeToTerminal(String data);
+  /// Applies one ordered output chunk.
+  ///
+  /// Returning null means the chunk was applied synchronously. A future keeps
+  /// this pump from dispatching another chunk until the asynchronous emulator
+  /// update has completed.
+  Future<void>? writeToTerminal(String data);
   void advanceRestore(int chars);
   void advancePointerInputCatchUp(int chars);
 }
@@ -23,6 +28,8 @@ class _TerminalSessionOutputPump {
   final _TerminalSessionOutputHost _host;
   final _TerminalOutputPipeline pipeline = _TerminalOutputPipeline();
   bool _hiddenCatchUpScheduled = false;
+  bool _writeInFlight = false;
+  int _writeGeneration = 0;
   // Start conservatively before this session has any parse-time samples.
   // Local profiling of ANSI/TUI-heavy output measured ~25 ms at 64 KiB,
   // ~13 ms at 32 KiB, and ~6.7 ms at 16 KiB. Plain/normal ANSI output is
@@ -88,7 +95,7 @@ class _TerminalSessionOutputPump {
   }
 
   void _scheduleUrgentVisibleFlush() {
-    if (_host.isDisposed || !_host.isOutputVisible) {
+    if (_writeInFlight || _host.isDisposed || !_host.isOutputVisible) {
       return;
     }
     // Replace a 50 ms cadence timer with the next vsync. A frame callback that
@@ -104,7 +111,10 @@ class _TerminalSessionOutputPump {
   }
 
   void _scheduleHiddenCatchUp() {
-    if (_hiddenCatchUpScheduled || _host.isDisposed || _host.isOutputVisible) {
+    if (_writeInFlight ||
+        _hiddenCatchUpScheduled ||
+        _host.isDisposed ||
+        _host.isOutputVisible) {
       return;
     }
     _hiddenCatchUpScheduled = true;
@@ -128,7 +138,10 @@ class _TerminalSessionOutputPump {
     // frame time for it. Once live output crosses the 1 MiB high-water mark,
     // queue() yields through catch-up chunks down to a smaller low-water mark;
     // the final partial window is drained when the terminal becomes visible.
-    if (pipeline.flushScheduled || _host.isDisposed || !_host.isOutputVisible) {
+    if (_writeInFlight ||
+        pipeline.flushScheduled ||
+        _host.isDisposed ||
+        !_host.isOutputVisible) {
       return;
     }
     final clock = pipeline.sinceFlushRequest;
@@ -179,6 +192,9 @@ class _TerminalSessionOutputPump {
     if (!force && !_host.isOutputVisible) {
       return;
     }
+    if (_writeInFlight) {
+      return;
+    }
     _drainChunk(adaptBudget: !force);
     if (pipeline.pending.isNotEmpty) {
       if (!force &&
@@ -194,6 +210,9 @@ class _TerminalSessionOutputPump {
   /// Writes at most one frame's worth of pending output, consuming the chunk
   /// that straddles the budget in place so the rest is never copied.
   void _drainChunk({bool adaptBudget = false}) {
+    if (_writeInFlight) {
+      return;
+    }
     final pending = pipeline.pending;
     if (pending.isEmpty) {
       return;
@@ -235,19 +254,85 @@ class _TerminalSessionOutputPump {
     }
     final shouldAdapt = adaptBudget && written >= chunkBudget - 1;
     final parseClock = shouldAdapt ? (Stopwatch()..start()) : null;
-    _host.writeToTerminal(frame.toString());
+    final generation = _writeGeneration;
+    final writeFuture = _host.writeToTerminal(frame.toString());
+    if (writeFuture == null) {
+      _completeWrite(
+        generation: generation,
+        written: written,
+        restoreWritten: restoreWritten,
+        chunkBudget: chunkBudget,
+        parseClock: parseClock,
+      );
+      return;
+    }
+
+    _writeInFlight = true;
+    unawaited(
+      writeFuture.then(
+        (_) => _completeWrite(
+          generation: generation,
+          written: written,
+          restoreWritten: restoreWritten,
+          chunkBudget: chunkBudget,
+          parseClock: parseClock,
+        ),
+        onError: (Object error, StackTrace stackTrace) {
+          _writeInFlight = false;
+          parseClock?.stop();
+          FlutterError.reportError(
+            FlutterErrorDetails(
+              exception: error,
+              stack: stackTrace,
+              library: 'terminal runtime',
+              context: ErrorDescription('applying terminal output'),
+            ),
+          );
+          _scheduleAfterWrite();
+        },
+      ),
+    );
+  }
+
+  void _completeWrite({
+    required int generation,
+    required int written,
+    required int restoreWritten,
+    required int chunkBudget,
+    required Stopwatch? parseClock,
+  }) {
+    _writeInFlight = false;
     if (parseClock != null) {
       parseClock.stop();
-      _adaptiveChunkBudget = _terminalOutputNextAdaptiveChunkBudget(
-        currentChars: chunkBudget,
-        parseTime: parseClock.elapsed,
-      );
     }
-    _host.advanceRestore(restoreWritten);
-    _host.advancePointerInputCatchUp(written);
+    if (generation == _writeGeneration) {
+      if (parseClock != null) {
+        _adaptiveChunkBudget = _terminalOutputNextAdaptiveChunkBudget(
+          currentChars: chunkBudget,
+          parseTime: parseClock.elapsed,
+        );
+      }
+      _host.advanceRestore(restoreWritten);
+      _host.advancePointerInputCatchUp(written);
+    }
+    _scheduleAfterWrite();
+  }
+
+  void _scheduleAfterWrite() {
+    if (_host.isDisposed || pipeline.pending.isEmpty) {
+      return;
+    }
+    if (_host.isOutputVisible) {
+      scheduleFlush();
+      return;
+    }
+    if (pipeline.liveLength > _terminalOutputHiddenCatchUpTargetChars) {
+      _scheduleHiddenCatchUp();
+    }
   }
 
   void clearPending() {
+    _writeGeneration += 1;
     _hiddenCatchUpScheduled = false;
     pipeline.cancelDeferredFlush();
     pipeline.clear();
