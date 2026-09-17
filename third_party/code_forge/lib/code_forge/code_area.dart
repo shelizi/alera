@@ -4579,6 +4579,8 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
   _largeFileNativeLineInfoCache = {};
   bool _largeFileFixedAsciiColumnWidthMeasured = false;
   double? _largeFileFixedAsciiColumnWidth;
+  String? _largeFileBufferAsciiEligibilityText;
+  bool _largeFileBufferAsciiEligible = false;
   final Map<int, Rect> _actionBulbRects = {};
   final Map<Rect, DocumentColor> _colorBoxHitAreas = {};
   final Map<int, ui.Paragraph> _paragraphCache = {};
@@ -5159,6 +5161,15 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
       eligible: eligible,
     );
     return eligible;
+  }
+
+  bool _canUseLargeFileAsciiViewportBuffer(String text) {
+    if (identical(_largeFileBufferAsciiEligibilityText, text)) {
+      return _largeFileBufferAsciiEligible;
+    }
+    _largeFileBufferAsciiEligibilityText = text;
+    _largeFileBufferAsciiEligible = isLargeFileAsciiViewportCandidate(text);
+    return _largeFileBufferAsciiEligible;
   }
 
   double? _getLargeFileFixedAsciiColumnWidth() {
@@ -8411,13 +8422,27 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
       double paragraphXOffset = 0.0;
 
       if (bufferActive && i == bufferLineIndex && bufferLineText != null) {
-        paragraph = _buildHighlightedParagraph(
-          i,
-          bufferLineText,
-          width: paragraphWidth,
-        );
-        if (rtl && wrapsLines) {
-          lineHeight = paragraph.height;
+        if (largeFileAsciiColumnWidth != null &&
+            _canUseLargeFileAsciiViewportBuffer(bufferLineText)) {
+          final slice = largeFileAsciiViewportSlice(
+            textLength: bufferLineText.length,
+            columnWidth: largeFileAsciiColumnWidth,
+            horizontalScroll: horizontalScroll,
+            viewportWidth: horizontalViewportWidth,
+          );
+          paragraph = _buildParagraph(
+            bufferLineText.substring(slice.start, slice.end),
+          );
+          paragraphXOffset = slice.xOffset;
+        } else {
+          paragraph = _buildHighlightedParagraph(
+            i,
+            bufferLineText,
+            width: paragraphWidth,
+          );
+          if (rtl && wrapsLines) {
+            lineHeight = paragraph.height;
+          }
         }
       } else {
         final cachedParagraph = rtl ? null : _paragraphCache[i];
