@@ -130,6 +130,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   double dco_decode_f_64(dynamic raw);
 
   @protected
+  FoldingRangeResponse dco_decode_folding_range_response(dynamic raw);
+
+  @protected
   GuideBlock dco_decode_guide_block(dynamic raw);
 
   @protected
@@ -163,6 +166,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<LineSummary> dco_decode_list_line_summary(dynamic raw);
 
   @protected
+  List<NativeFoldingRange> dco_decode_list_native_folding_range(dynamic raw);
+
+  @protected
   List<NativeSyntaxSpan> dco_decode_list_native_syntax_span(dynamic raw);
 
   @protected
@@ -176,6 +182,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   NativeEditorDocumentInfo dco_decode_native_editor_document_info(dynamic raw);
+
+  @protected
+  NativeFoldingRange dco_decode_native_folding_range(dynamic raw);
 
   @protected
   NativeSyntaxSpan dco_decode_native_syntax_span(dynamic raw);
@@ -333,6 +342,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   double sse_decode_f_64(SseDeserializer deserializer);
 
   @protected
+  FoldingRangeResponse sse_decode_folding_range_response(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   GuideBlock sse_decode_guide_block(SseDeserializer deserializer);
 
   @protected
@@ -368,6 +382,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<LineSummary> sse_decode_list_line_summary(SseDeserializer deserializer);
 
   @protected
+  List<NativeFoldingRange> sse_decode_list_native_folding_range(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   List<NativeSyntaxSpan> sse_decode_list_native_syntax_span(
     SseDeserializer deserializer,
   );
@@ -385,6 +404,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   NativeEditorDocumentInfo sse_decode_native_editor_document_info(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  NativeFoldingRange sse_decode_native_folding_range(
     SseDeserializer deserializer,
   );
 
@@ -563,6 +587,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_f_64(double self, SseSerializer serializer);
 
   @protected
+  void sse_encode_folding_range_response(
+    FoldingRangeResponse self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_guide_block(GuideBlock self, SseSerializer serializer);
 
   @protected
@@ -611,6 +641,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_native_folding_range(
+    List<NativeFoldingRange> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_list_native_syntax_span(
     List<NativeSyntaxSpan> self,
     SseSerializer serializer,
@@ -637,6 +673,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_native_editor_document_info(
     NativeEditorDocumentInfo self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_native_folding_range(
+    NativeFoldingRange self,
     SseSerializer serializer,
   );
 

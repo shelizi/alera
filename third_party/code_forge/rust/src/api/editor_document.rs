@@ -48,6 +48,21 @@ pub struct SyntaxSpanResponse {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NativeFoldingRange {
+    pub start_line: usize,
+    pub end_line: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FoldingRangeResponse {
+    pub document_id: String,
+    pub revision: u64,
+    pub supported: bool,
+    pub stale: bool,
+    pub ranges: Vec<NativeFoldingRange>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NativeEditorDocumentInfo {
     pub document_id: String,
     pub revision: u64,
@@ -316,6 +331,75 @@ impl NativeEditorDocument {
         })
     }
 
+    /// Returns foldable structural ranges from the already-retained Tree-sitter tree.
+    /// This intentionally does not rescan or materialize the Rope text.
+    pub fn query_folding_ranges(
+        &self,
+        expected_revision: u64,
+    ) -> Result<FoldingRangeResponse, String> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| "native document lock poisoned")?;
+
+        if state.closed {
+            return Ok(FoldingRangeResponse {
+                document_id: state.document_id.clone(),
+                revision: state.revision,
+                supported: false,
+                stale: true,
+                ranges: Vec::new(),
+            });
+        }
+
+        if state.revision != expected_revision {
+            return Ok(FoldingRangeResponse {
+                document_id: state.document_id.clone(),
+                revision: state.revision,
+                supported: state.tree.is_some(),
+                stale: true,
+                ranges: Vec::new(),
+            });
+        }
+
+        let Some(tree) = &state.tree else {
+            return Ok(FoldingRangeResponse {
+                document_id: state.document_id.clone(),
+                revision: state.revision,
+                supported: false,
+                stale: false,
+                ranges: Vec::new(),
+            });
+        };
+
+        let mut ranges = Vec::new();
+        collect_folding_ranges(tree.root_node(), &mut ranges);
+        ranges.sort_by(|left, right| {
+            left.start_line
+                .cmp(&right.start_line)
+                .then(right.end_line.cmp(&left.end_line))
+        });
+        ranges.dedup();
+
+        let mut unique_starts = Vec::with_capacity(ranges.len());
+        let mut last_start = None;
+        for range in ranges {
+            if last_start == Some(range.start_line) {
+                continue;
+            }
+            last_start = Some(range.start_line);
+            unique_starts.push(range);
+        }
+
+        Ok(FoldingRangeResponse {
+            document_id: state.document_id.clone(),
+            revision: state.revision,
+            supported: true,
+            stale: false,
+            ranges: unique_starts,
+        })
+    }
+
     #[frb(sync)]
     pub fn info(&self) -> Result<NativeEditorDocumentInfo, String> {
         let state = self
@@ -347,6 +431,55 @@ impl NativeEditorDocument {
         state.closed = true;
         Ok(())
     }
+}
+
+fn collect_folding_ranges(node: tree_sitter::Node<'_>, ranges: &mut Vec<NativeFoldingRange>) {
+    if node.is_named() && is_foldable_node_kind(node.kind()) {
+        let start_line = node.start_position().row;
+        let end_line = node.end_position().row;
+        if start_line < end_line {
+            ranges.push(NativeFoldingRange {
+                start_line,
+                end_line,
+            });
+        }
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_folding_ranges(child, ranges);
+    }
+}
+
+fn is_foldable_node_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        "block"
+            | "statement_block"
+            | "class_body"
+            | "switch_body"
+            | "declaration_list"
+            | "field_declaration_list"
+            | "enum_variant_list"
+            | "match_block"
+            | "object"
+            | "array"
+            | "object_pattern"
+            | "array_pattern"
+            | "object_type"
+            | "interface_body"
+            | "type_parameters"
+            | "arguments"
+            | "argument_list"
+            | "parameters"
+            | "formal_parameters"
+            | "list"
+            | "list_pattern"
+            | "dictionary"
+            | "set"
+            | "tuple"
+            | "parenthesized_expression"
+    )
 }
 
 fn apply_edit(
@@ -831,6 +964,84 @@ mod tests {
                 "NativeEditorDocument benchmark lines={lines} open_us={open_us:?} edit_us={edit_us:?} viewport_query_us={query_us:?}"
             );
         }
+    }
+
+    #[test]
+    fn retained_tree_folding_ignores_braces_inside_strings() {
+        let text = "fn main() {\n    let fake = \"{\\nnot a block\\n}\";\n    if true {\n        println!(\"ok\");\n    }\n}\n";
+        let document = NativeEditorDocument::open(
+            "doc-folds".to_string(),
+            3,
+            text.to_string(),
+            "rust".to_string(),
+        )
+        .unwrap();
+
+        let response = document.query_folding_ranges(3).unwrap();
+        assert!(response.supported);
+        assert!(!response.stale);
+        assert!(response.ranges.contains(&NativeFoldingRange {
+            start_line: 0,
+            end_line: 5,
+        }));
+        assert!(response.ranges.contains(&NativeFoldingRange {
+            start_line: 2,
+            end_line: 4,
+        }));
+        assert!(!response.ranges.iter().any(|range| range.start_line == 1));
+    }
+
+    #[test]
+    fn retained_tree_folding_obeys_revision_and_incremental_edits() {
+        let text = "fn main() {\n    if true {\n        println!(\"ok\");\n    }\n}\n";
+        let document = NativeEditorDocument::open(
+            "doc-fold-edit".to_string(),
+            7,
+            text.to_string(),
+            "rust".to_string(),
+        )
+        .unwrap();
+
+        let stale = document.query_folding_ranges(6).unwrap();
+        assert!(stale.supported);
+        assert!(stale.stale);
+        assert!(stale.ranges.is_empty());
+
+        let start = char_offset(text, "    if true {");
+        let end = char_offset(text, "}\n") + 2;
+        let result = document
+            .apply_edits(
+                7,
+                8,
+                vec![EditorDocumentEdit {
+                    start,
+                    end,
+                    replacement: String::new(),
+                }],
+            )
+            .unwrap();
+        assert!(result.applied);
+
+        let response = document.query_folding_ranges(8).unwrap();
+        assert!(!response.stale);
+        assert_eq!(response.ranges.len(), 1);
+        assert_eq!(response.ranges[0].start_line, 0);
+    }
+
+    #[test]
+    fn retained_tree_folding_falls_back_cleanly_for_plaintext() {
+        let document = NativeEditorDocument::open(
+            "doc-fold-plain".to_string(),
+            1,
+            "hello {\nworld\n}\n".to_string(),
+            "plaintext".to_string(),
+        )
+        .unwrap();
+
+        let response = document.query_folding_ranges(1).unwrap();
+        assert!(!response.supported);
+        assert!(!response.stale);
+        assert!(response.ranges.is_empty());
     }
 
     #[test]
