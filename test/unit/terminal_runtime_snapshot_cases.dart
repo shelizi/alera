@@ -31,17 +31,26 @@ void _registerTerminalRuntimeSnapshotTests() {
       final visibility = acquireTerminalVisibilityForTesting(session);
       addTearDown(visibility.dispose);
       await session.ensureStarted();
+      expect(terminalSearchUsesReplicaModelForTesting(session), isTrue);
+      final searchController = session.searchController!
+        ..open()
+        ..setQuery('old-marker');
 
       queueTerminalOutputForTesting(session, 'old-marker\x1b[?2004h');
       flushTerminalOutputForTesting(session);
       await waitForTerminalParserApplyForTesting(session);
       expect(terminalBufferTextForTesting(session), contains('old-marker'));
       expect(terminalBracketedPasteModeForTesting(session), isTrue);
+      expect(searchController.matchCount, 1);
 
       rebuildTerminalFromSnapshotTextForTesting(session, 'fresh-snapshot');
+      expect(terminalSearchUsesReplicaModelForTesting(session), isTrue);
       flushTerminalOutputForTesting(session);
       await waitForTerminalParserApplyForTesting(session);
 
+      expect(searchController.matchCount, 0);
+      searchController.setQuery('fresh-snapshot');
+      expect(searchController.matchCount, 1);
       final restored = terminalBufferTextForTesting(session);
       expect(restored, contains('fresh-snapshot'));
       expect(restored, isNot(contains('old-marker')));

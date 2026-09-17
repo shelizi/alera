@@ -73,6 +73,14 @@ bool terminalParserWorkerEnabledForTesting(TerminalSessionHandle session) {
 }
 
 @visibleForTesting
+bool terminalSearchUsesReplicaModelForTesting(TerminalSessionHandle session) {
+  final handle = session as _XtermTerminalSessionHandle;
+  final terminal = handle._terminal;
+  return terminal is TerminalXtermReplicaTerminal &&
+      identical(handle._searchSource, terminal.replicaModel);
+}
+
+@visibleForTesting
 Future<void> waitForTerminalParserApplyForTesting(
   TerminalSessionHandle session,
 ) async {
