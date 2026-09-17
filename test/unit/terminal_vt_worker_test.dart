@@ -159,4 +159,40 @@ void main() {
       expect(disabled.modes.altScroll, isFalse);
     },
   );
+
+  test(
+    'serializes styled and wide dirty cells through a style table',
+    () async {
+      final worker = await TerminalVtWorker.start(
+        cols: 16,
+        rows: 4,
+        maxScrollback: 32,
+      );
+      addTearDown(worker.close);
+
+      final delta = await worker.writeDelta(
+        Uint8List.fromList(utf8.encode('A\x1b[1;3;31mB\x1b[0m界')),
+      );
+
+      final row = delta.changedRows.firstWhere(
+        (candidate) => candidate.cells.join().contains('AB界'),
+      );
+      final plain = row.renderCells.firstWhere((cell) => cell.text == 'A');
+      final styled = row.renderCells.firstWhere((cell) => cell.text == 'B');
+      final wide = row.renderCells.firstWhere((cell) => cell.text == '界');
+      final wideIndex = row.renderCells.indexOf(wide);
+
+      expect(plain.width, 1);
+      expect(plain.style.bold, isFalse);
+      expect(styled.style.bold, isTrue);
+      expect(styled.style.italic, isTrue);
+      expect(styled.style.foreground.tag, 1);
+      expect(styled.style.foreground.paletteIndex, 1);
+      expect(wide.width, 2);
+      expect(wide.wide, 1);
+      expect(row.renderCells[wideIndex + 1].width, 0);
+      expect(row.renderCells[wideIndex + 1].wide, 2);
+      expect(delta.styles.length, lessThan(row.renderCells.length));
+    },
+  );
 }

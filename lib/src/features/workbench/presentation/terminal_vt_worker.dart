@@ -112,6 +112,141 @@ final class TerminalVtWorkerModes {
   }
 }
 
+/// Primitive Ghostty style-color token safe to send across isolates.
+final class TerminalVtWorkerStyleColor {
+  const TerminalVtWorkerStyleColor({
+    required this.tag,
+    required this.paletteIndex,
+    required this.rgb,
+  });
+
+  final int tag;
+  final int? paletteIndex;
+
+  /// Packed 0xRRGGBB value when [tag] identifies an RGB color.
+  final int? rgb;
+
+  factory TerminalVtWorkerStyleColor._fromMessage(List<Object?> message) {
+    return TerminalVtWorkerStyleColor(
+      tag: message[0]! as int,
+      paletteIndex: message[1] as int?,
+      rgb: message[2] as int?,
+    );
+  }
+}
+
+/// Primitive cell style referenced by Ghostty style id inside one delta.
+final class TerminalVtWorkerCellStyle {
+  const TerminalVtWorkerCellStyle({
+    required this.foreground,
+    required this.background,
+    required this.underlineColor,
+    required this.bold,
+    required this.italic,
+    required this.faint,
+    required this.blink,
+    required this.inverse,
+    required this.invisible,
+    required this.strikethrough,
+    required this.overline,
+    required this.underline,
+  });
+
+  final TerminalVtWorkerStyleColor foreground;
+  final TerminalVtWorkerStyleColor background;
+  final TerminalVtWorkerStyleColor underlineColor;
+  final bool bold;
+  final bool italic;
+  final bool faint;
+  final bool blink;
+  final bool inverse;
+  final bool invisible;
+  final bool strikethrough;
+  final bool overline;
+  final int underline;
+
+  factory TerminalVtWorkerCellStyle._fromMessage(List<Object?> message) {
+    return TerminalVtWorkerCellStyle(
+      foreground: TerminalVtWorkerStyleColor._fromMessage(
+        (message[0]! as List).cast<Object?>(),
+      ),
+      background: TerminalVtWorkerStyleColor._fromMessage(
+        (message[1]! as List).cast<Object?>(),
+      ),
+      underlineColor: TerminalVtWorkerStyleColor._fromMessage(
+        (message[2]! as List).cast<Object?>(),
+      ),
+      bold: message[3]! as bool,
+      italic: message[4]! as bool,
+      faint: message[5]! as bool,
+      blink: message[6]! as bool,
+      inverse: message[7]! as bool,
+      invisible: message[8]! as bool,
+      strikethrough: message[9]! as bool,
+      overline: message[10]! as bool,
+      underline: message[11]! as int,
+    );
+  }
+}
+
+/// Styled cell in one dirty viewport row.
+final class TerminalVtWorkerRenderCell {
+  const TerminalVtWorkerRenderCell({
+    required this.text,
+    required this.width,
+    required this.wide,
+    required this.hasText,
+    required this.hasStyling,
+    required this.styleId,
+    required this.style,
+    required this.hasHyperlink,
+    required this.isProtected,
+    required this.semanticContent,
+    required this.backgroundPaletteIndex,
+    required this.backgroundRgb,
+  });
+
+  final String text;
+  final int width;
+
+  /// Raw Ghostty wide-cell code: narrow=0, wide=1, tail=2, wrap head=3.
+  final int wide;
+  final bool hasText;
+  final bool hasStyling;
+  final int styleId;
+  final TerminalVtWorkerCellStyle style;
+  final bool hasHyperlink;
+  final bool isProtected;
+  final int semanticContent;
+  final int? backgroundPaletteIndex;
+  final int? backgroundRgb;
+
+  factory TerminalVtWorkerRenderCell._fromMessage(
+    List<Object?> message,
+    Map<int, TerminalVtWorkerCellStyle> styles,
+  ) {
+    final styleId = message[5]! as int;
+    final style = styles[styleId];
+    if (style == null) {
+      throw StateError('Missing terminal VT worker style $styleId.');
+    }
+    return TerminalVtWorkerRenderCell(
+      text: message[0]! as String,
+      width: message[1]! as int,
+      wide: message[2]! as int,
+      hasText: message[3]! as bool,
+      hasStyling: message[4]! as bool,
+      styleId: styleId,
+      style: style,
+      hasHyperlink: message[6]! as bool,
+      isProtected: message[7]! as bool,
+      semanticContent: message[8]! as int,
+      backgroundPaletteIndex: message[9] as int?,
+      backgroundRgb: message[10] as int?,
+    );
+  }
+}
+
 /// Pure-Dart state returned from the VT worker.
 final class TerminalVtWorkerSnapshot {
   const TerminalVtWorkerSnapshot({
@@ -163,15 +298,31 @@ final class TerminalVtWorkerSnapshot {
 
 /// One changed viewport row returned by the VT worker.
 final class TerminalVtWorkerRowDelta {
-  const TerminalVtWorkerRowDelta({required this.row, required this.cells});
+  const TerminalVtWorkerRowDelta({
+    required this.row,
+    required this.cells,
+    required this.renderCells,
+  });
 
   final int row;
   final List<String> cells;
+  final List<TerminalVtWorkerRenderCell> renderCells;
 
-  factory TerminalVtWorkerRowDelta._fromMessage(List<Object?> message) {
+  factory TerminalVtWorkerRowDelta._fromMessage(
+    List<Object?> message,
+    Map<int, TerminalVtWorkerCellStyle> styles,
+  ) {
     return TerminalVtWorkerRowDelta(
       row: message[0]! as int,
       cells: List<String>.unmodifiable((message[1]! as List).cast<String>()),
+      renderCells: List<TerminalVtWorkerRenderCell>.unmodifiable(
+        (message[2]! as List).map(
+          (cell) => TerminalVtWorkerRenderCell._fromMessage(
+            (cell! as List).cast<Object?>(),
+            styles,
+          ),
+        ),
+      ),
     );
   }
 }
@@ -188,6 +339,7 @@ final class TerminalVtWorkerDelta {
     required this.cursorX,
     required this.cursorY,
     required this.modes,
+    required this.styles,
     this.effects = const <TerminalVtWorkerEffect>[],
   });
 
@@ -200,12 +352,25 @@ final class TerminalVtWorkerDelta {
   final int? cursorX;
   final int? cursorY;
   final TerminalVtWorkerModes modes;
+  final Map<int, TerminalVtWorkerCellStyle> styles;
   final List<TerminalVtWorkerEffect> effects;
 
   factory TerminalVtWorkerDelta._fromMessage(List<Object?> message) {
     if (message.length < 9 || message[0] != true) {
       throw StateError('Invalid terminal VT worker delta.');
     }
+    final styles = <int, TerminalVtWorkerCellStyle>{};
+    if (message.length > 11 && message[11] is List) {
+      for (final entry in message[11]! as List) {
+        final pair = (entry! as List).cast<Object?>();
+        styles[pair[0]! as int] = TerminalVtWorkerCellStyle._fromMessage(
+          (pair[1]! as List).cast<Object?>(),
+        );
+      }
+    }
+    final immutableStyles = Map<int, TerminalVtWorkerCellStyle>.unmodifiable(
+      styles,
+    );
     return TerminalVtWorkerDelta(
       revision: message[1]! as int,
       cols: message[2]! as int,
@@ -215,6 +380,7 @@ final class TerminalVtWorkerDelta {
         (message[5]! as List).map(
           (row) => TerminalVtWorkerRowDelta._fromMessage(
             (row! as List).cast<Object?>(),
+            immutableStyles,
           ),
         ),
       ),
@@ -225,6 +391,7 @@ final class TerminalVtWorkerDelta {
       modes: TerminalVtWorkerModes._fromMessage(
         (message[10]! as List).cast<Object?>(),
       ),
+      styles: immutableStyles,
     );
   }
 }
@@ -429,14 +596,71 @@ void terminalVtWorkerMain(List<Object?> initialization) {
     return message;
   }
 
-  List<String> rowCells(VtRenderRowCursor row) {
+  int? packedRgb(VtRgbColor? color) {
+    if (color == null) {
+      return null;
+    }
+    return (color.r << 16) | (color.g << 8) | color.b;
+  }
+
+  List<Object?> serializeStyleColor(VtStyleColor color) {
+    return <Object?>[color.tag.value, color.paletteIndex, packedRgb(color.rgb)];
+  }
+
+  List<Object?> serializeStyle(VtStyle style) {
+    return <Object?>[
+      serializeStyleColor(style.foreground),
+      serializeStyleColor(style.background),
+      serializeStyleColor(style.underlineColor),
+      style.bold,
+      style.italic,
+      style.faint,
+      style.blink,
+      style.inverse,
+      style.invisible,
+      style.strikethrough,
+      style.overline,
+      style.underline.value,
+    ];
+  }
+
+  int cellWidth(VtCellSnapshot cell) {
+    return switch (cell.wide.value) {
+      0 => 1,
+      1 => 2,
+      _ => 0,
+    };
+  }
+
+  List<Object?> rowCells(
+    VtRenderRowCursor row,
+    Map<int, List<Object?>> styles,
+  ) {
     final cells = <String>[];
+    final renderCells = <Object?>[];
     row.visitCells((cursor) {
       while (cursor.moveNext()) {
-        cells.add(cursor.current.graphemes);
+        final cell = cursor.current;
+        final raw = cell.raw;
+        final styleId = raw.styleId;
+        styles.putIfAbsent(styleId, () => serializeStyle(cell.style));
+        cells.add(cell.graphemes);
+        renderCells.add(<Object?>[
+          cell.graphemes,
+          cellWidth(raw),
+          raw.wide.value,
+          raw.hasText,
+          raw.hasStyling,
+          styleId,
+          raw.hasHyperlink,
+          raw.isProtected,
+          raw.semanticContent.value,
+          raw.colorPaletteIndex,
+          packedRgb(raw.colorRgb),
+        ]);
       }
     });
-    return cells;
+    return <Object?>[cells, renderCells];
   }
 
   List<Object?> delta() {
@@ -448,10 +672,12 @@ void terminalVtWorkerMain(List<Object?> initialization) {
             .GhosttyRenderStateDirty
             .GHOSTTY_RENDER_STATE_DIRTY_FULL;
     final changedRows = <Object?>[];
+    final styles = <int, List<Object?>>{};
     var rowIndex = 0;
     renderState.visitRows((row) {
       if (fullRepaint || row.dirty) {
-        changedRows.add(<Object?>[rowIndex, rowCells(row)]);
+        final cells = rowCells(row, styles);
+        changedRows.add(<Object?>[rowIndex, cells[0], cells[1]]);
       }
       if (row.dirty) {
         row.dirty = false;
@@ -471,6 +697,9 @@ void terminalVtWorkerMain(List<Object?> initialization) {
       cursor.hasViewportPosition ? cursor.viewportY : null,
       List<Object?>.from(pendingEffects),
       interactionModes(),
+      styles.entries
+          .map((entry) => <Object?>[entry.key, entry.value])
+          .toList(growable: false),
     ];
     renderState.dirty = ghostty_bindings
         .GhosttyRenderStateDirty
