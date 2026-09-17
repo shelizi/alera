@@ -6,6 +6,7 @@ import 'terminal_xterm_worker.dart';
 /// visible viewport while partial deltas replace only changed rows, preserving
 /// row identity for renderers that want to skip untouched lines.
 final class TerminalXtermViewportModel {
+  int _revision = 0;
   int _cols = 0;
   int _rows = 0;
   int _cursorX = 0;
@@ -24,6 +25,7 @@ final class TerminalXtermViewportModel {
   List<List<TerminalXtermWorkerRenderCell>> _renderRows =
       const <List<TerminalXtermWorkerRenderCell>>[];
 
+  int get revision => _revision;
   int get cols => _cols;
   int get rows => _rows;
   int get cursorX => _cursorX;
@@ -44,6 +46,12 @@ final class TerminalXtermViewportModel {
   String rowText(int row) => _rowTexts[row];
 
   void apply(TerminalXtermWorkerDelta delta) {
+    if (delta.revision <= _revision) {
+      throw StateError(
+        'Terminal xterm viewport received stale revision ${delta.revision}; '
+        'current revision is $_revision.',
+      );
+    }
     if (_renderRows.isEmpty || delta.fullRepaint) {
       if (!delta.fullRepaint) {
         throw StateError(
@@ -60,6 +68,7 @@ final class TerminalXtermViewportModel {
       _applyPartialRows(delta);
     }
 
+    _revision = delta.revision;
     _cols = delta.cols;
     _rows = delta.rows;
     _cursorX = delta.cursorX;

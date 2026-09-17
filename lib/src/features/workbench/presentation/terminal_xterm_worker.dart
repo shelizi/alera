@@ -120,6 +120,7 @@ final class TerminalXtermWorkerRowDelta {
 
 final class TerminalXtermWorkerDelta {
   const TerminalXtermWorkerDelta({
+    required this.revision,
     required this.fullRepaint,
     required this.cols,
     required this.rows,
@@ -140,6 +141,7 @@ final class TerminalXtermWorkerDelta {
 
   factory TerminalXtermWorkerDelta._fromMessage(List<Object?> message) {
     return TerminalXtermWorkerDelta(
+      revision: message[16]! as int,
       fullRepaint: message[0]! as bool,
       cols: message[1]! as int,
       rows: message[2]! as int,
@@ -164,6 +166,7 @@ final class TerminalXtermWorkerDelta {
     );
   }
 
+  final int revision;
   final bool fullRepaint;
   final int cols;
   final int rows;
@@ -366,6 +369,7 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
     onBell: () => effects.add('bell'),
     onOutput: (value) => effects.add('pty:$value'),
   )..resize(cols, rows);
+  var revision = 0;
   List<_TerminalXtermWorkerRowCache>? viewportCache;
   var cachedCols = 0;
   var cachedRows = 0;
@@ -479,6 +483,7 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
       terminal.mouseReportMode.index,
       terminal.buffer.scrollBack,
       List<String>.from(effects),
+      revision,
     ];
   }
 
@@ -497,18 +502,22 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
         case _workerWrite:
           effects.clear();
           terminal.write(raw[2]! as String);
+          revision += 1;
           reply.send(snapshot());
         case _workerWriteDelta:
           effects.clear();
           terminal.write(raw[2]! as String);
+          revision += 1;
           reply.send(delta());
         case _workerResize:
           effects.clear();
           terminal.resize(raw[2]! as int, raw[3]! as int);
+          revision += 1;
           reply.send(snapshot());
         case _workerResizeDelta:
           effects.clear();
           terminal.resize(raw[2]! as int, raw[3]! as int);
+          revision += 1;
           reply.send(delta(forceFullRepaint: true));
         case _workerClose:
           reply.send(const <Object?>[true]);

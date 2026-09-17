@@ -35,6 +35,8 @@ void main() {
       expect(identical(viewport.renderRows[1], changedSecondRow), isFalse);
       expect(viewport.cursorX, partial.cursorX);
       expect(viewport.cursorY, partial.cursorY);
+      expect(viewport.revision, partial.revision);
+      expect(() => viewport.apply(partial), throwsStateError);
     },
   );
 

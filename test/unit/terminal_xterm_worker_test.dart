@@ -69,6 +69,7 @@ void main() {
 
     direct.write('first');
     final first = await worker.writeDelta('first');
+    expect(first.revision, 1);
     expect(first.fullRepaint, isTrue);
     expect(first.rowDeltas, hasLength(4));
     _applyDelta(mirror, first);
@@ -76,6 +77,7 @@ void main() {
 
     direct.write('!');
     final second = await worker.writeDelta('!');
+    expect(second.revision, 2);
     expect(second.fullRepaint, isFalse);
     expect(second.rowDeltas.map((row) => row.row), <int>[0]);
     _applyDelta(mirror, second);
@@ -127,6 +129,7 @@ void main() {
 
     direct.resize(6, 6);
     final delta = await worker.resizeDelta(cols: 6, rows: 6);
+    expect(delta.revision, 2);
     expect(delta.fullRepaint, isTrue);
     expect(delta.rowDeltas, hasLength(6));
 
