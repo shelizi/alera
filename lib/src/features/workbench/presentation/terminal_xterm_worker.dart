@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:isolate';
 import 'dart:typed_data';
 
@@ -331,6 +332,8 @@ final class TerminalXtermWorkerGlobalState {
     required this.kittyKeyboardMode,
     required this.modifyOtherKeysMode,
     required this.keyboardActionMode,
+    required this.synchronizedUpdate,
+    required this.synchronizedUpdateGeneration,
   });
 
   factory TerminalXtermWorkerGlobalState._fromMessage(List<Object?> message) {
@@ -357,6 +360,8 @@ final class TerminalXtermWorkerGlobalState {
       kittyKeyboardMode: message[19]! as int,
       modifyOtherKeysMode: message[20]! as int,
       keyboardActionMode: message[21]! as bool,
+      synchronizedUpdate: message[22]! as bool,
+      synchronizedUpdateGeneration: message[23]! as int,
     );
   }
 
@@ -382,6 +387,8 @@ final class TerminalXtermWorkerGlobalState {
   final int kittyKeyboardMode;
   final int modifyOtherKeysMode;
   final bool keyboardActionMode;
+  final bool synchronizedUpdate;
+  final int synchronizedUpdateGeneration;
 }
 
 final class TerminalXtermWorkerStateDelta {
@@ -471,11 +478,49 @@ final class _TerminalXtermWorkerTerminal extends Terminal {
        );
 
   bool keyboardActionMode = false;
+  bool synchronizedUpdateMode = false;
+  int synchronizedUpdateGeneration = 0;
+  Timer? _synchronizedUpdateMirrorTimer;
 
   @override
   void setKeyboardActionMode(bool enabled) {
     keyboardActionMode = enabled;
     super.setKeyboardActionMode(enabled);
+  }
+
+  @override
+  void setSynchronizedUpdateMode(bool enabled) {
+    synchronizedUpdateGeneration += 1;
+    synchronizedUpdateMode = enabled;
+    _synchronizedUpdateMirrorTimer?.cancel();
+    _synchronizedUpdateMirrorTimer = null;
+    super.setSynchronizedUpdateMode(enabled);
+    if (!enabled) return;
+    _synchronizedUpdateMirrorTimer = Timer(
+      const Duration(milliseconds: 150),
+      () {
+        synchronizedUpdateMode = false;
+        _synchronizedUpdateMirrorTimer = null;
+      },
+    );
+  }
+
+  @override
+  void reset() {
+    _synchronizedUpdateMirrorTimer?.cancel();
+    _synchronizedUpdateMirrorTimer = null;
+    if (synchronizedUpdateMode) {
+      synchronizedUpdateGeneration += 1;
+    }
+    synchronizedUpdateMode = false;
+    super.reset();
+  }
+
+  @override
+  void dispose() {
+    _synchronizedUpdateMirrorTimer?.cancel();
+    _synchronizedUpdateMirrorTimer = null;
+    super.dispose();
   }
 }
 
@@ -998,6 +1043,8 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
       terminal.kittyKeyboardMode,
       terminal.modifyOtherKeysMode,
       terminal.keyboardActionMode,
+      terminal.synchronizedUpdateMode,
+      terminal.synchronizedUpdateGeneration,
     ];
   }
 

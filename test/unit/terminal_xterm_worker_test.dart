@@ -172,6 +172,27 @@ void main() {
     );
   });
 
+  test('worker mirrors synchronized update mode and generation', () async {
+    final worker = await TerminalXtermWorker.start(cols: 20, rows: 6);
+    addTearDown(worker.close);
+    final escape = String.fromCharCode(27);
+
+    final enabled = await worker.writeBufferDelta('$escape[?2026hframe-a');
+    expect(enabled.globalState.synchronizedUpdate, isTrue);
+    final generation = enabled.globalState.synchronizedUpdateGeneration;
+
+    final middle = await worker.writeBufferDelta('frame-b');
+    expect(middle.globalState.synchronizedUpdate, isTrue);
+    expect(middle.globalState.synchronizedUpdateGeneration, generation);
+
+    final disabled = await worker.writeBufferDelta('$escape[?2026lframe-c');
+    expect(disabled.globalState.synchronizedUpdate, isFalse);
+    expect(
+      disabled.globalState.synchronizedUpdateGeneration,
+      greaterThan(generation),
+    );
+  });
+
   test(
     'worker hidden parse defers buffer serialization until reveal',
     () async {

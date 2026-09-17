@@ -397,6 +397,66 @@ void main() {
     expect(notifications, 1);
   });
 
+  test(
+    'replica coalesces synchronized updates into one notification',
+    () async {
+      final worker = await TerminalXtermWorker.start(
+        cols: 12,
+        rows: 4,
+        maxLines: 64,
+      );
+      addTearDown(worker.close);
+      final replica = TerminalXtermReplicaTerminal(
+        cols: 12,
+        rows: 4,
+        maxLines: 64,
+      );
+      addTearDown(replica.dispose);
+      var notifications = 0;
+      replica.addListener(() => notifications += 1);
+      final escape = String.fromCharCode(27);
+
+      replica.applyBufferDelta(
+        await worker.writeBufferDelta('$escape[?2026hone'),
+      );
+      replica.applyBufferDelta(await worker.writeBufferDelta('two'));
+      expect(notifications, 0);
+      expect(_replicaBufferText(replica), contains('onetwo'));
+
+      replica.applyBufferDelta(
+        await worker.writeBufferDelta('$escape[?2026lthree'),
+      );
+      expect(notifications, 1);
+      expect(_replicaBufferText(replica), contains('onetwothree'));
+    },
+  );
+
+  test('replica releases synchronized update after safety timeout', () async {
+    final worker = await TerminalXtermWorker.start(
+      cols: 12,
+      rows: 4,
+      maxLines: 64,
+    );
+    addTearDown(worker.close);
+    final replica = TerminalXtermReplicaTerminal(
+      cols: 12,
+      rows: 4,
+      maxLines: 64,
+    );
+    addTearDown(replica.dispose);
+    var notifications = 0;
+    replica.addListener(() => notifications += 1);
+    final escape = String.fromCharCode(27);
+
+    replica.applyBufferDelta(
+      await worker.writeBufferDelta('$escape[?2026htimeout-frame'),
+    );
+    expect(notifications, 0);
+
+    await Future<void>.delayed(const Duration(milliseconds: 180));
+    expect(notifications, 1);
+  });
+
   test('replica applies hidden state without touching buffer rows', () async {
     final worker = await TerminalXtermWorker.start(
       cols: 12,

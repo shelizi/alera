@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:xterm2/xterm.dart';
 
 import '../domain/terminal_osc52_clipboard.dart';
@@ -46,6 +48,11 @@ final class TerminalXtermReplicaTerminal extends Terminal {
   var _disposed = false;
   bool _notificationsEnabled;
   bool _notificationPending = false;
+  bool _applyingReplicaDelta = false;
+  bool _synchronizedUpdateSuppressed = false;
+  bool _synchronizedUpdateNotificationPending = false;
+  int _synchronizedUpdateGeneration = -1;
+  Timer? _synchronizedUpdateReleaseTimer;
 
   TerminalXtermBufferModel get replicaModel => _model;
 
@@ -66,6 +73,13 @@ final class TerminalXtermReplicaTerminal extends Terminal {
 
   @override
   void notifyListeners() {
+    if (_applyingReplicaDelta) {
+      return;
+    }
+    if (_synchronizedUpdateSuppressed) {
+      _synchronizedUpdateNotificationPending = true;
+      return;
+    }
     if (!_notificationsEnabled) {
       _notificationPending = true;
       return;
@@ -75,64 +89,107 @@ final class TerminalXtermReplicaTerminal extends Terminal {
   }
 
   void applyBufferDelta(TerminalXtermWorkerBufferDelta delta) {
-    if (super.viewWidth != delta.cols || super.viewHeight != delta.rows) {
-      super.resize(delta.cols, delta.rows);
-    }
+    _updateSynchronizedUpdateState(delta.globalState);
+    _applyingReplicaDelta = true;
+    try {
+      if (super.viewWidth != delta.cols || super.viewHeight != delta.rows) {
+        super.resize(delta.cols, delta.rows);
+      }
 
-    final target = super.mainBuffer.lines;
-    if (delta.fullRepaint) {
-      final rows = List<BufferLine?>.filled(
-        delta.bufferLength,
-        null,
-        growable: false,
-      );
-      for (final changed in delta.rowDeltas) {
-        rows[changed.row] = _buildLine(changed);
-      }
-      if (rows.any((line) => line == null)) {
-        throw StateError(
-          'Terminal xterm replica full repaint did not include every row.',
+      final target = super.mainBuffer.lines;
+      if (delta.fullRepaint) {
+        final rows = List<BufferLine?>.filled(
+          delta.bufferLength,
+          null,
+          growable: false,
         );
-      }
-      target.replaceWith(rows.cast<BufferLine>());
-    } else {
-      if (delta.trimStart > 0) {
-        target.trimStart(delta.trimStart);
-      }
-      for (final changed in delta.rowDeltas) {
-        if (changed.row == target.length) {
-          target.push(_buildLine(changed));
-        } else if (changed.row >= 0 && changed.row < target.length) {
-          final line = target[changed.row];
-          _applyRowDelta(line, changed);
-        } else {
+        for (final changed in delta.rowDeltas) {
+          rows[changed.row] = _buildLine(changed);
+        }
+        if (rows.any((line) => line == null)) {
           throw StateError(
-            'Terminal xterm replica received invalid row ${changed.row}.',
+            'Terminal xterm replica full repaint did not include every row.',
           );
         }
+        target.replaceWith(rows.cast<BufferLine>());
+      } else {
+        if (delta.trimStart > 0) {
+          target.trimStart(delta.trimStart);
+        }
+        for (final changed in delta.rowDeltas) {
+          if (changed.row == target.length) {
+            target.push(_buildLine(changed));
+          } else if (changed.row >= 0 && changed.row < target.length) {
+            final line = target[changed.row];
+            _applyRowDelta(line, changed);
+          } else {
+            throw StateError(
+              'Terminal xterm replica received invalid row ${changed.row}.',
+            );
+          }
+        }
       }
-    }
 
-    if (target.length != delta.bufferLength) {
-      throw StateError(
-        'Terminal xterm replica has ${target.length} rows; '
-        'worker has ${delta.bufferLength}.',
-      );
-    }
+      if (target.length != delta.bufferLength) {
+        throw StateError(
+          'Terminal xterm replica has ${target.length} rows; '
+          'worker has ${delta.bufferLength}.',
+        );
+      }
 
-    super.mainBuffer.setCursor(delta.cursorX, delta.cursorY);
-    _model.apply(delta);
-    super.setKeyboardActionMode(_model.keyboardActionMode);
-    super.setBracketedPasteMode(_model.bracketedPaste);
-    _hasReplicaState = true;
+      super.mainBuffer.setCursor(delta.cursorX, delta.cursorY);
+      _model.apply(delta);
+      super.setKeyboardActionMode(_model.keyboardActionMode);
+      super.setBracketedPasteMode(_model.bracketedPaste);
+      _hasReplicaState = true;
+    } finally {
+      _applyingReplicaDelta = false;
+    }
+    if (_synchronizedUpdateSuppressed) {
+      _synchronizedUpdateNotificationPending = true;
+      return;
+    }
+    _synchronizedUpdateNotificationPending = false;
     notifyListeners();
   }
 
   void applyStateDelta(TerminalXtermWorkerStateDelta delta) {
+    _updateSynchronizedUpdateState(delta.globalState);
     _model.applyState(delta);
     super.setKeyboardActionMode(_model.keyboardActionMode);
     super.setBracketedPasteMode(_model.bracketedPaste);
     _hasReplicaState = true;
+  }
+
+  void _updateSynchronizedUpdateState(TerminalXtermWorkerGlobalState state) {
+    if (state.synchronizedUpdate) {
+      if (_synchronizedUpdateSuppressed &&
+          _synchronizedUpdateGeneration == state.synchronizedUpdateGeneration) {
+        return;
+      }
+      _synchronizedUpdateGeneration = state.synchronizedUpdateGeneration;
+      _synchronizedUpdateSuppressed = true;
+      _synchronizedUpdateReleaseTimer?.cancel();
+      _synchronizedUpdateReleaseTimer = Timer(
+        const Duration(milliseconds: 150),
+        _releaseSynchronizedUpdate,
+      );
+      return;
+    }
+
+    _synchronizedUpdateGeneration = state.synchronizedUpdateGeneration;
+    _synchronizedUpdateSuppressed = false;
+    _synchronizedUpdateReleaseTimer?.cancel();
+    _synchronizedUpdateReleaseTimer = null;
+  }
+
+  void _releaseSynchronizedUpdate() {
+    _synchronizedUpdateReleaseTimer = null;
+    if (_disposed || !_synchronizedUpdateSuppressed) return;
+    _synchronizedUpdateSuppressed = false;
+    if (!_synchronizedUpdateNotificationPending) return;
+    _synchronizedUpdateNotificationPending = false;
+    notifyListeners();
   }
 
   BufferLine _buildLine(TerminalXtermWorkerRowDelta row) {
@@ -364,6 +421,8 @@ final class TerminalXtermReplicaTerminal extends Terminal {
   @override
   void dispose() {
     _disposed = true;
+    _synchronizedUpdateReleaseTimer?.cancel();
+    _synchronizedUpdateReleaseTimer = null;
     super.dispose();
   }
 }

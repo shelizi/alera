@@ -26,6 +26,43 @@ void _registerTerminalRuntimeOutputBackpressureTests() {
     expect(terminalBracketedPasteModeForTesting(session), isTrue);
   });
 
+  test('parser worker coalesces synchronized update chunks', () async {
+    final runtime = XtermTerminalRuntime(
+      parserWorkerEnabled: true,
+      ptySessionFactory: _FakeTerminalPtySessionFactory(),
+      shellLaunchesBuilder: () => <GhosttyTerminalShellLaunch>[
+        _launch('shell', shell: '/bin/sh'),
+      ],
+    );
+    addTearDown(runtime.dispose);
+    final session = runtime.sessionFor(workspace: _workspace(), tab: _tab());
+    final visibility = acquireTerminalVisibilityForTesting(session);
+    addTearDown(visibility.dispose);
+    var notifications = 0;
+    final removeListener = addTerminalChangeListenerForTesting(
+      session,
+      () => notifications += 1,
+    );
+    addTearDown(removeListener);
+
+    queueTerminalOutputForTesting(session, '\x1b[?2026hone');
+    flushTerminalOutputForTesting(session);
+    await waitForTerminalParserApplyForTesting(session);
+    queueTerminalOutputForTesting(session, 'two');
+    flushTerminalOutputForTesting(session);
+    await waitForTerminalParserApplyForTesting(session);
+
+    expect(notifications, 0);
+    expect(terminalBufferTextForTesting(session), contains('onetwo'));
+
+    queueTerminalOutputForTesting(session, '\x1b[?2026lthree');
+    flushTerminalOutputForTesting(session);
+    await waitForTerminalParserApplyForTesting(session);
+
+    expect(notifications, 1);
+    expect(terminalBufferTextForTesting(session), contains('onetwothree'));
+  });
+
   test('parser worker hydrates hidden rows only when revealed', () async {
     final runtime = XtermTerminalRuntime(
       parserWorkerEnabled: true,
