@@ -2,39 +2,75 @@
 
 Status: active coordination plan
 Date: 2026-09-17
-Baseline reviewed: `main` @ `609bff2b4c5e162c2c04d7e580e10b0f12909a5f`
+Baseline reviewed: `main` @ `3b354577518268b9ef7f8d5d37379c54c157e6d2`
 
-This document replaces the earlier 2026-09-17 first-pass allocation. Most of the original A/B/E/F/G work has already landed. The remaining high-value work is now concentrated in two architecture tracks: **Terminal worker/model activation** and **NativeEditorDocument production integration**.
+This document is the current source of truth for the next heavy-operation / Rust performance phase. It supersedes the earlier same-day allocation at `856051cb`: the terminal parser worker is already enabled in production, NativeEditorDocument is already wired into CodeForge, editor open/reopen profiling is complete, and agent-overlay production validation is complete.
 
-The goal is still to move expensive ownership/state to the right boundary, not to move every Dart loop to Rust. Do not reopen completed migrations merely because an older roadmap or handoff still lists them.
+The coordination rule for this phase is: **finish the measured ownership/copy problems that remain; do not reopen migrations whose evidence gate has already passed.**
 
-## 1. Current repository state used for this plan
+## 1. Repository snapshot used for this re-sync
 
 At re-audit time:
 
 ```text
 branch: main
-HEAD:   609bff2b4c5e162c2c04d7e580e10b0f12909a5f
+HEAD:   3b354577518268b9ef7f8d5d37379c54c157e6d2
+upstream: origin/main
+ahead: 721
+behind: 84
 ```
 
-Tracked `main` files were clean. Existing untracked workspace artifacts remained:
+Tracked `main` files were clean. Existing workspace artifacts remained untracked:
 
 ```text
 ?? .worktrees/
 ?? docs/history-session/
 ```
 
-Do not add/delete those paths as part of the work packages below.
+Do not add/delete those paths as part of a work package. The existing upstream divergence is not part of this performance phase and must not be reconciled implicitly.
 
-The active terminal architecture work is in the existing worktree:
+## 2. What changed since the previous plan
+
+### 2.1 Terminal parser/model worker is production-active
+
+The old plan treated production cutover as future T3 work. That is stale.
+
+Current production provider constructs:
 
 ```text
-worktree: alera/.worktrees/terminal-parser-worker-phase1
-branch:   perf/terminal-parser-worker-phase1
-HEAD:     058c937ef7527b4fe2205fe765c3fd8db631e334
+XtermTerminalRuntime(parserWorkerEnabled: true, ...)
 ```
 
-At this audit that worktree still had local work in:
+The worker isolate is now the authoritative parser/model. The UI isolate uses `TerminalXtermReplicaTerminal` to reconstruct the xterm-compatible render surface from worker deltas without parsing PTY output itself.
+
+Relevant landed work includes:
+
+```text
+1c91aba8 perf(terminal): enable parser worker in production
+8be432ce perf(terminal): adapt to replica apply cost
+2e74a53e perf(terminal): stream partial xterm cell spans
+75eb27af perf(terminal): update buffer mirror in place
+1431f60f perf(terminal): amortize buffer mirror head trims
+517725da perf(terminal): skip immutable scrollback comparisons
+560eaae9 perf(terminal): coalesce synchronized xterm updates
+df0b3f0b perf(terminal): skip input-only repaints
+999f7cbe perf(terminal): cache only active xterm rows
+5f39aa1d merge: terminal parser worker phase 1
+```
+
+Therefore **do not assign another worker to T1/T3 parser-worker cutover**.
+
+### 2.2 The preserved Ghostty worktree is not active production work
+
+The worktree below is still attached:
+
+```text
+alera/.worktrees/terminal-parser-worker-phase1
+branch: perf/terminal-parser-worker-phase1
+HEAD:   999f7cbe
+```
+
+Its only remaining dirt is the older Ghostty alternative-backend experiment:
 
 ```text
 M  lib/src/features/workbench/presentation/terminal_vt_viewport_model.dart
@@ -42,549 +78,563 @@ M  lib/src/features/workbench/presentation/terminal_vt_worker.dart
 ?? test/unit/terminal_vt_shadow_parity_test.dart
 ```
 
-Those changes belong to the terminal owner and must not be overwritten by another worker.
+Those files remain intentionally uncommitted because Ghostty resize/reflow did not match current xterm semantics. **Leave them unstaged and do not use that worktree as the base of new production terminal work.** Reopen the Ghostty alternative only by an explicit architecture decision.
 
-## 2. Original work-package status after the first parallel wave
+### 2.3 NativeEditorDocument production wiring is complete
 
-| Old ID | Result | Current decision |
-| --- | --- | --- |
-| A - Agent runtime overlay | Completed in `0603e080` | Keep; only production benchmark/telemetry remains |
-| B - Large-file editor profile gate | Completed in `354f309b`, result B1 | Closed; current hot path is bounded enough |
-| C - NativeEditorDocument Phase 1 | Completed in `25c3e664` | **Continue as C2 production integration** |
-| D - Terminal search Dart optimization | Superseded by terminal worker/model track | Fold into terminal authority migration |
-| E - Regex snapshot/compatibility | Completed in `145206b3` | Closed; keep Dart `RegExp` compatibility authority |
-| F - Git history graph projection | Completed in `4837335a` | Closed; no F2 native work justified now |
-| G - Workspace search projection | Completed in `6262dc3b` | Closed; no G2 native paging justified now |
-| H - Terminal core shadow PoC | No longer deferred | **Reclassified as active Terminal Track** |
+`6a061b2d perf(editor): wire retained native document into CodeForge` landed the former C2 package.
 
-## 3. Evidence for closing F/G/E rather than adding more native APIs
+Current production CodeForge now:
 
-### Git history projection
+- opens `NativeEditorDocument`;
+- emits committed Unicode-scalar edit deltas;
+- applies monotonic native revisions;
+- queries viewport + overscan syntax spans;
+- rejects stale responses;
+- preserves fallback behavior;
+- schedules native highlighting from the visible viewport.
 
-Current five-sample benchmark after `4837335a`:
+This closes the old "native document exists but is not connected to production" gap.
 
-```text
-linear 50:          13.3 us median
-merge-heavy 50:     24.7 us
-linear 500:         82.6 us
-merge-heavy 500:   125.9 us
-linear 5000:       916.5 us
-merge-heavy 5000: 1338.5 us
-```
+### 2.4 Editor open/reopen profiling is complete
 
-A ~1.34 ms projection for a synthetic 5k merge-heavy history does not justify a new root FRB graph projection today.
+`9dbfb382 perf(editor): profile open initialization` completed C3.
 
-### Workspace search projection
+Five-sample 50k-line / ~4.0 MiB profiling found:
 
-The retained projection work reduced current production-cap warm projection to sub-millisecond cost. Native workspace search currently caps results at 2,000, so another native paging/projection API is not justified until the result cap or measured UI cost changes materially.
+| Stage | Median | p95 | Interpretation |
+| --- | ---: | ---: | --- |
+| production native editor read | 259.22 ms | 262.09 ms | Rust read/decode/normalization + full String back to Dart |
+| initial Rope construction | 257.82 ms | 274.11 ms | full Dart String sent back into CodeForge native Rope |
+| first CodeForge frame | 59.28 ms | 61.03 ms | state/layout after controller/Rope construction |
+| controller init | 0.05 ms | 0.23 ms | negligible |
+| full open -> first frame | 544.27 ms | 564.30 ms | independent end-to-end measurement |
 
-### Editor regex
+Raw warm file I/O (~3.70 ms) and plain Dart UTF-8 decode (~0.98 ms) are not the dominant cost. The measured problem is **whole-document ownership crossing native -> Dart -> native**.
 
-The remaining dominant cost was the full Rope snapshot, not Dart regex execution. Version-aware snapshot reuse reduced repeated multi-MiB query sequences without changing lookaround/backreference semantics. Do not introduce a second regex engine until new profiling after NativeEditorDocument integration proves regex execution itself is material.
+Because C3 was measured before C2 production wiring, the next editor worker must first re-run the same benchmark on latest `main`; C2 may add another large native-document open/parse stage, so the latest-main attribution must be recorded before changing architecture.
 
-## 4. Current priority map
+### 2.5 Agent-overlay production validation is complete
 
-| ID | Priority | Work package | Start now? | Parallel class | Primary owner surface |
-| --- | --- | --- | --- | --- | --- |
-| T1 | P0 | Terminal worker parity/correctness completion | **Yes; already active** | Terminal exclusive write owner | terminal worker/model files |
-| T2 | P0 | Terminal live-shadow + benchmark harness | Yes, harness-first | Parallel with T1 if test/harness-only | new tests/bench/docs first |
-| T3 | P0 gate | Terminal production cutover / default-on | After T1/T2 gates | Serialized after parity evidence | terminal runtime integration |
-| T4 | P1 | Terminal search/scrollback authority migration | After T3 | Blocked by terminal authority | terminal model/search |
-| C2 | P0 | NativeEditorDocument production integration | **Yes** | Independent from Terminal | CodeForge/editor |
-| C3 | P1 profile | Editor open/reopen initialization profile | **Yes, profile-only** | Parallel with C2 | benchmark/profile only |
-| A2 | P1 validation | Agent overlay production launch benchmark/telemetry | **Yes** | Independent | agent overlay benchmark/tests |
-| C4 | P2 | Folding/bracket/symbol/structural features from retained tree | After C2 | Blocked by C2 stability | CodeForge/editor |
+`4acc67dd perf: validate agent overlay production path` is merged through `3b354577`.
 
-There are **five immediate independent lanes**: T1, T2-harness, C2, C3-profile, and A2. Do not create artificial extra work just to fill more workers.
+On Windows through the actual FRB path:
 
-## 5. Terminal Track - active architecture work
+| Files | First median | Repeated unchanged median |
+| ---: | ---: | ---: |
+| 20 | 6.297 ms | 7.404 ms |
+| 500 | 115.438 ms | 155.768 ms |
+| 2000 | 478.278 ms | 636.891 ms |
 
-The old plan described a future Rust terminal shadow PoC. That description is stale. The branch `perf/terminal-parser-worker-phase1` has already established a much larger worker/model boundary.
+The Dart event loop remained responsive during native work. The remaining measured opportunity is clear: **repeated unchanged preparation currently deletes/rebuilds the overlay instead of taking a no-op/reuse fast path.**
 
-Current branch work includes, among other things:
+### 2.6 Old editor performance worktrees are not outstanding work
+
+The following branches still appear as separate worktrees/refs, but `git cherry main <branch>` reports their patches as already equivalent in `main`:
 
 ```text
-4f662065 perf(terminal): add isolated Ghostty VT worker
-86189b40 perf(terminal): stream dirty VT rows from worker
-45d3a844 perf(terminal): stream xterm scrollback deltas
-b7e5198c perf(terminal): mirror xterm scrollback buffer
-0855c098 perf(terminal): mirror xterm render state
-1dab0564 perf(terminal): mirror xterm selection queries
-930ea242 perf(terminal): abstract terminal search source
-3ac2bda5 perf(terminal): build xterm renderer replica
-0f5065eb perf(terminal): mirror xterm input state
-189cc24d perf(terminal): add opt-in parser worker backend
-14a7cdb7 perf(terminal): serialize parser worker resize
-df846867 perf(terminal): reset parser worker generations
-058c937e perf(terminal): synchronize parser worker focus
+perf/codeforge-large-file-fastpath
+perf/codeforge-large-scroll-fastpath
+perf/editor-change-refresh
+perf/editor-document-version
+perf/editor-large-file-highlight
+perf/editor-large-snapshot-debounce
+perf/markdown-preview-debounce
 ```
 
-The branch is approximately 47 files / +6.6k lines relative to the audited `main`. It is no longer a small parser experiment.
+Do not assign workers to "finish" these branches merely because their original commit hashes are not literal ancestors of current main. They are superseded by patch-equivalent main history.
 
-### Critical current fact
+## 3. Next-phase package summary
 
-Production default is still effectively legacy-authoritative:
+| ID | Priority | Work package | Start now? | Parallel rule |
+| --- | --- | --- | --- | --- |
+| C4 | P0 | Editor native-open handoff / remove whole-text round-trip | **Yes** | Single editor architecture owner |
+| T4 | P1 | Terminal search source cutover to replica model | **Yes** | Independent from C4/A3; coordinate with T5 |
+| T5 | P1 gate | Production terminal worker/render/restore profiling | **Yes, profile-only** | May run with T4 if it does not change terminal production code |
+| A3 | P1 | Agent overlay repeated-unchanged fast path | **Yes** | Independent |
+| S1 | P2 gate | Process-cold Alera + CodeForge Rust initialization profile | **Yes, profile-only** | Independent |
+| C5 | P2 | Retained-tree folding/brackets/symbols/structural features | **No; after C4** | Same CodeForge/native-document lane |
+| T6 | Evidence only | Renderer/delta/restore optimization selected by T5 | **No; after T5** | Same terminal lane |
+
+Five primary workers can therefore run immediately: **C4 || T4 || T5 || A3 || S1**.
+
+## 4. C4 - Editor native-open handoff / remove whole-text round-trip
+
+**Priority: P0. Highest measured remaining editor cost.**
+
+### Current production path
+
+The current workspace editor does roughly:
 
 ```text
-TerminalXtermRuntime(... parserWorkerEnabled = false)
+Rust workspace file API
+  -> read + decode + normalize
+  -> WorkspaceEditorTextFile(rawContent, displayContent, metadata)
+  -> full Strings cross FRB to Dart
+  -> EditorDocumentSession stores loaded/current Strings
+  -> _controller.text = currentText
+  -> CodeForge builds native Rope from the full String
+  -> NativeEditorDocument opens from logical text for retained syntax state
 ```
 
-The parser worker is opt-in. Therefore the next objective is **not another terminal implementation**. The objective is to prove parity and safely activate the worker/model path.
+The pre-C2 profile already measured ~259 ms for the first whole-text boundary and ~258 ms for the next Rope construction. C2 now also opens retained native syntax state, so **latest-main re-baselining is mandatory before implementation**.
 
-### T1 - parity/correctness completion
+### C4a - mandatory latest-main gate
 
-**Owner:** terminal implementation worker. Reuse the existing `terminal-parser-worker-phase1` worktree; do not create a competing branch for the same files.
+First re-run/adapt `integration_test/editor_open_profile_benchmark.dart` on the current `main` and split at least:
 
-Owned files include:
+- workspace native read/decode;
+- Dart `EditorDocumentSession` acceptance;
+- CodeForge Rope creation;
+- NativeEditorDocument open/initial parse;
+- first visible syntax query;
+- first CodeForge frame;
+- end-to-end open -> first useful frame.
+
+Use the same 50k-line fixture and five samples so the result is comparable to C3.
+
+### C4b - architecture target
+
+Remove the unnecessary large-file ownership bounce. The desired property is:
 
 ```text
-lib/src/features/workbench/presentation/terminal_vt_worker.dart
-lib/src/features/workbench/presentation/terminal_vt_viewport_model.dart
-lib/src/features/workbench/presentation/terminal_xterm_worker.dart
-lib/src/features/workbench/presentation/terminal_xterm_buffer_model.dart
-lib/src/features/workbench/presentation/terminal_xterm_replica_terminal.dart
-lib/src/features/workbench/presentation/terminal_runtime_parser_worker.dart
-related focused unit tests
+file bytes/text become native editor state once
+-> Dart receives bounded metadata/state
+-> viewport/edit operations stay incremental
+-> a full Dart String is materialized only when a compatibility operation truly needs it
 ```
 
-Finish the current dirty batch first: wide/tail-cell row text semantics, resize delta, and Ghostty/xterm shadow parity.
+Do not assume that a Rust opaque handle from the root Alera FRB library can simply be passed into the separate CodeForge FRB library. They are separate native/FRB surfaces. The worker must choose and document a safe ownership design rather than hand-wave cross-library handle sharing.
 
-Then extend parity coverage to at least:
+Candidate approaches to evaluate include:
 
-1. ASCII + styled cells;
-2. CJK wide cells;
-3. emoji / surrogate / combining/grapheme sequences;
-4. wrapping and reflow across resize;
-5. alternate buffer enter/leave/redraw;
-6. cursor movement/visibility;
-7. DEC/private interaction modes;
-8. mouse modes and formats;
-9. focus reporting;
-10. bracketed paste;
-11. title/BEL/PTY writeback effects;
-12. OSC 8 hyperlinks;
-13. OSC 133/633 shell/prompt metadata used by Alera;
-14. OSC 52 behavior where supported by the current model;
-15. selection semantics;
-16. deep scrollback and eviction boundaries;
-17. restore/reattach/snapshot rebuild;
-18. real TUI traces captured from Claude/Codex/Pi/Devin-style sessions where practical.
+1. a CodeForge native open-from-file/source API with Alera-owned validated path/encoding metadata;
+2. a shared/native document owner factored below both surfaces;
+3. another bounded-transfer design that avoids returning a multi-MiB Dart String only to immediately send it back native.
 
-If Ghostty and xterm intentionally differ, document the compatibility rule; do not silently normalize correctness failures away.
+Choose by measured cost, correctness, packaging complexity, and lifetime semantics.
 
-### T2 - live-shadow + performance harness
+### Compatibility requirements
 
-**Owner:** separate benchmark/parity worker.
+The new path must preserve:
 
-T2 may start in parallel with T1 **only if it does not edit T1-owned implementation files**. Start by adding independent harness/fixtures/docs against the already committed worker API. If a parity failure requires implementation changes, report it to T1 rather than fixing T1 files in the T2 branch.
+- workspace path containment/protected-path behavior;
+- encoding detection/reopen-with-encoding;
+- BOM and legacy encodings;
+- tab/display normalization semantics;
+- external-file-change detection and F5 reload;
+- dirty state;
+- save conflict/content-token checks;
+- autosave;
+- undo/redo;
+- reload/discard;
+- current large-file edit-buffer behavior;
+- NativeEditorDocument revision/stale guarantees;
+- unsupported-language fallback.
+
+`EditorDocumentSession` currently stores `loadedRawText`, `loadedText`, and `currentText`; C4 must explicitly decide which of these can become lazy/versioned/native-backed. Do not delete that state until save/reload/diff semantics have replacement coverage.
+
+### C4 success criteria
+
+- latest-main benchmark exists before and after;
+- the large-file open path no longer performs redundant full native -> Dart -> native text round-trips;
+- no new full-document snapshot appears in edit/paint/scroll hot paths;
+- initial/reopen latency is materially lower on the same fixture;
+- memory/RSS and FFI payload evidence is included;
+- focused load/save/reload/encoding/external-change tests pass.
 
 Suggested branch/worktree:
 
 ```text
-perf/terminal-worker-shadow-benchmark
+perf/editor-native-open-handoff
 ```
 
-Target harness:
+C4 is the sole production owner for this editor/open architecture batch.
+
+## 5. T4 - Terminal search source cutover to the worker replica model
+
+**Priority: P1. Small, well-bounded next ownership cleanup.**
+
+The parser/model worker is already authoritative. `TerminalXtermBufferModel` already implements `TerminalSearchSource` and maintains stable search line identities, but runtime search still normally constructs/reattaches through `XtermTerminalSearchSource(terminal)`.
+
+Current shape:
 
 ```text
-PTY bytes
-  -> existing authoritative xterm path
-  -> worker replica in shadow
-  -> compare revisions/state after quiescence
+worker authoritative buffer
+  -> TerminalXtermBufferModel replica
+  -> TerminalXtermReplicaTerminal xterm facade
+  -> XtermTerminalSearchSource facade
+  -> TerminalSearchController
 ```
 
-Compare at least:
+Target shape for parser-worker sessions:
 
-- viewport text/cells;
-- cursor position/visibility;
-- terminal modes;
-- scrollback tail/window hash;
-- side-effect sequence;
-- resize generation;
-- restore generation;
-- search-visible text source where applicable.
+```text
+worker authoritative buffer
+  -> TerminalXtermBufferModel (TerminalSearchSource)
+  -> TerminalSearchController
+```
 
-Benchmark scenarios:
+Keep the generic xterm source only as a fallback for non-worker/legacy test paths.
+
+### Required work
+
+- attach `TerminalSearchController` directly to `replicaModel` when the active terminal is `TerminalXtermReplicaTerminal`;
+- preserve source replacement on restore/rebuild;
+- preserve selected match/navigation semantics;
+- verify head trim / stable line identity behavior;
+- verify TUI same-height viewport rewrites;
+- verify hidden output + reveal;
+- verify search open/close listener lifetime;
+- benchmark 10k/100k logical lines, low/high match density, active output, next/previous navigation.
+
+Do **not** add a second worker-side match index in this package. If UI-side text matching remains material after the direct-source cutover, record evidence for a later T4b rather than duplicating state prematurely.
+
+Suggested branch/worktree:
+
+```text
+perf/terminal-search-replica-source
+```
+
+## 6. T5 - Production terminal worker/render/restore profile gate
+
+**Priority: P1 evidence gate. Profile-only while T4 runs.**
+
+The old terminal notes identified possible O(history) line-identity work, full viewport repaint, and restore replay cost. Since then main landed in-place buffer mutation, amortized head trims, immutable-scrollback skips, synchronized update coalescing, input-only repaint suppression, and active-row caching. Therefore the old hot-path list must not be treated as current truth without profiling.
+
+T5 should instrument the **latest production path**, not the old Ghostty experiment.
+
+### Scenarios
+
+Profile at least:
 
 - sustained compiler/log output;
 - bursty agent output;
 - full-screen TUI repaint;
-- hidden terminal + catch-up;
+- synchronized-update bursts;
+- deep scrollback with ongoing output;
+- hidden terminal output;
 - reveal after large hidden backlog;
-- deep scrollback;
-- resize storm;
-- session restore/reattach.
+- large host snapshot restore/reattach;
+- resize storm.
 
-Collect at minimum:
+### Separate costs
 
-- UI isolate CPU;
-- worker isolate CPU if measurable;
-- frame/jank evidence;
-- RSS/heap growth;
-- bytes/messages crossing isolate boundaries;
-- delta row count / full repaint frequency;
-- wall time for catch-up/restore.
+Measure where practical:
 
-Use at least five comparable samples for cutover decisions.
+- worker parse/model time;
+- worker delta construction/serialization;
+- isolate message bytes/count;
+- UI replica apply time;
+- changed-cell/changed-row count;
+- full-repaint frequency;
+- renderer build/paint/raster time;
+- frame jank;
+- RSS/heap;
+- restore catch-up wall time.
 
-### T3 - production cutover gate
+Use at least five comparable samples for any implementation decision.
 
-Do not default-enable the worker merely because unit tests pass.
-
-Gate sequence:
-
-```text
-T1 parity complete
-  +
-T2 benchmark/shadow evidence acceptable
-  -> opt-in runtime flag in real builds
-  -> dogfood / fallback telemetry
-  -> default-on with legacy fallback
-  -> remove duplicate authority only after stable period
-```
-
-During the opt-in/default-on stages preserve a quick fallback to the current authoritative xterm path.
-
-### T4 - terminal search/scrollback authority
-
-Do this only after T3 establishes the worker/model as the state authority.
-
-The earlier separate D package is retired. `terminal_search_controller.dart` already has a search-source abstraction, and the worker branch already mirrors scrollback/search-related state. Avoid creating a second independent Rust/Dart search index while authority is still duplicated.
-
-Once worker authority is stable:
+### T5 decision tree
 
 ```text
-worker/model owns scrollback
-  -> worker/model owns ordered search index/results
-  -> UI requests bounded search/navigation projection
+UI replica apply dominates
+  -> T6a optimize replica/delta apply
+
+renderer paint dominates
+  -> T6b investigate true dirty-row renderer seam
+
+full repaint protocol dominates
+  -> T6c refine structural delta/full-repaint triggers
+
+restore replay dominates
+  -> T6d design direct worker snapshot hydration / bounded restore path
+
+none are material
+  -> stop terminal micro-optimization
 ```
 
-### Terminal architecture decision: Rust Host vs isolate worker
-
-Do **not** start a separate wezterm-term/Rust Host rewrite now.
-
-First complete T1-T3 and measure. Escalate to host-owned Rust terminal state only if evidence shows one of these remains dominant:
-
-- isolate message serialization/copy;
-- duplicated xterm/worker memory;
-- Dart worker scheduling overhead;
-- FFI chatter around the native VT/model;
-- restore/search state duplication that cannot be removed cleanly.
-
-If those are not material, keeping the terminal model off the UI isolate may deliver the desired responsiveness without another large rewrite.
-
-## 6. C2 - NativeEditorDocument production integration
-
-Phase 1 exists and is validated, but it is not yet production-active.
-
-`NativeEditorDocument` already retains:
-
-```text
-Ropey document
-revision
-Tree-sitter parser/tree
-syntax query
-line/byte/scalar mapping
-explicit lifetime
-```
-
-and exposes:
-
-```text
-open
-applyEdits
-querySyntaxSpans
-info
-close
-```
-
-The key Phase 1 benchmark result was that viewport query cost remained around the same ~10-13 ms band from 2k through 100k logical lines. Incremental reparse is substantially cheaper than full open, though it still grows with very large syntax trees.
-
-### Missing production contract
-
-The missing piece is a reliable committed scalar-edit stream from the CodeForge controller/Rope mutation boundary.
-
-Do **not** integrate by calling `controller.text` or otherwise materializing a whole document after each edit. That would reintroduce the large-file regression the earlier work removed.
-
-Target flow:
-
-```text
-initial existing document payload
-  -> NativeEditorDocument.open once
-
-committed CodeForge edit
-  -> scalar start/end + replacement
-  -> NativeEditorDocument.applyEdits(expectedRevision, newRevision, edits)
-
-viewport scheduling window
-  -> one querySyntaxSpans(viewport + fixed overscan)
-  -> cache by native revision/range
-  -> reject stale response
-  -> paint grammar spans
-  -> merge semantic/LSP styling as today
-```
-
-### C2 required work
-
-1. identify the single committed edit mutation boundary;
-2. expose scalar edit deltas without whole-text reconstruction;
-3. define one revision authority and monotonic mapping;
-4. open retained native state from already-available initial text;
-5. serialize edit deltas to native state;
-6. add viewport+overscan syntax query scheduling/debouncing;
-7. cache native spans by revision/range;
-8. reject stale results;
-9. preserve `re_highlight` fallback for unsupported language/error;
-10. close native state on controller/document disposal;
-11. verify undo/redo, replace-all, paste, multi-step edit and file reload paths;
-12. re-enable large-file syntax highlighting only after the bounded path is proven.
+T5 must not edit production terminal implementation while T4 is active. It may add benchmark/test instrumentation and documentation. Implementation begins only as a separately assigned T6 after the evidence report.
 
 Suggested branch/worktree:
 
 ```text
-perf/editor-native-document-integration
+perf/terminal-production-profile
 ```
 
-### C2 ownership/conflict rule
+## 7. A3 - Agent overlay repeated-unchanged fast path
 
-C2 is the only active worker allowed to change the CodeForge editor production integration while this batch is open. Do not run a native-regex or folding worker against the same CodeForge FRB/generated/controller files in parallel.
+**Priority: P1. Directly justified by A2 measurements.**
 
-## 7. C3 - editor open/reopen initialization profile
+Current native `prepare_agent_runtime_overlay` removes the existing overlay before reconciliation. A2 proved that repeated unchanged launch is not a no-op and can be slower than first launch.
 
-B showed sustained editing/scrolling is no longer the main 60 Hz problem. Open/reopen remains a separate initialization cost shape:
+For 2,000 linked files on the Windows production bridge:
 
 ```text
-wall median:  ~347 ms
-build p95:    ~37 ms
-raster p95:   ~1.86 ms
+first:              478.278 ms median
+repeated unchanged: 636.891 ms median
 ```
 
-That points more strongly to initialization/build work than GPU raster work.
+The copy-fallback case is much more expensive.
 
-C3 is **profile-only while C2 is active**. Do not change CodeForge production files in parallel with C2.
+### Target
 
-Profile and attribute:
+Add a safe native reuse/reconciliation shortcut so an unchanged request/source does not recursively tear down and recreate the entire overlay.
 
-- file decode/read;
-- initial Rope construction;
-- controller/provider initialization;
-- initial editor state projection;
-- first viewport text materialization;
-- first syntax setup;
-- first layout/build chain;
-- widget/provider rebuild fan-out;
-- native initialization/FFI payloads.
+The fast-path identity must include all semantics that can affect output, not just source path. At minimum consider:
+
+- source tree/resource fingerprint;
+- managed files/content;
+- excluded managed subdirectories;
+- wrapper/shell/generated content;
+- overlay target/session identity;
+- link vs copy-fallback state;
+- source disappearance/addition/removal;
+- existing target validity;
+- copied-resource marker validity;
+- version/schema marker so future behavior changes invalidate safely.
+
+Reuse generic fingerprint helpers where contracts genuinely match existing Claude/Codex resource synchronization; do not duplicate an incompatible fingerprint format merely for speed.
+
+### Required tests
+
+- exact repeated unchanged request -> reuse fast path;
+- source file content changes;
+- source add/remove/rename;
+- managed file changes;
+- wrapper/generated content changes;
+- overlay target manually removed/corrupted;
+- link path and forced copy-fallback path;
+- stale/old marker schema;
+- Windows paths;
+- containment/error semantics unchanged.
+
+Re-run the A2 small/medium/large five-sample matrix and production Windows benchmark. The result must materially reduce repeated-unchanged latency without weakening cleanup/correctness.
+
+Prefer keeping the existing public FRB API shape. If no API shape changes, A3 should not regenerate root bindings unnecessarily.
 
 Suggested branch/worktree:
 
 ```text
-perf/editor-open-profile
+perf/agent-overlay-unchanged-fastpath
 ```
 
-Deliver evidence and a ranked list of measured contributors. Any production fix touching C2-owned files waits until C2 merges.
+## 8. S1 - Process-cold Rust initialization profile
 
-## 8. A2 - Agent runtime overlay production validation
+**Priority: P2 evidence gate. Profile-only.**
 
-A's recursive mirror/copy/delete/link/managed-file reconciliation is already native. Do not rewrite it again.
+C3 measured one-time process-cold initialization of approximately:
 
-A2 should prove the production effect and catch regressions:
+```text
+Alera Rust library:     590.13 ms
+CodeForge Rust library: 228.57 ms
+```
 
-- terminal launch preparation latency for small/medium/large source trees;
-- first launch vs repeated no-op launch;
-- link-success vs copy-fallback path;
-- Windows behavior;
-- error/warning projection;
-- UI-isolate stall evidence;
-- no leftover recursive Dart filesystem walk in the launch path.
+These costs are not recurring editor reopen costs, but they are large enough to justify a separate startup investigation.
 
-If useful, add low-overhead timing telemetry around the coarse native call, but avoid per-file production logging.
+S1 should answer before any production change:
+
+- are these initializations on the user-visible startup critical path?;
+- how much is dynamic/native asset load vs FRB initialization vs first native call?;
+- can Alera and CodeForge initialization overlap safely?;
+- is lazy initialization already hiding part of the cost?;
+- would post-first-frame prewarm improve perceived latency without increasing contention/RSS unacceptably?;
+- does Windows differ materially from Linux/macOS packaging behavior?
+
+Use fresh-process measurements; do not mix warm in-process calls with cold startup samples.
+
+Deliver a profile report and a decision. Do not add startup prewarm or concurrency behavior until the profile demonstrates it improves a real user-visible path.
 
 Suggested branch/worktree:
 
 ```text
-perf/agent-overlay-production-benchmark
+perf/rust-cold-init-profile
 ```
 
-A2 should normally be tests/benchmark/docs only. Change native overlay behavior only for a demonstrated regression.
+## 9. Deferred follow-ups
 
-## 9. Later work - explicitly blocked
+### C5 - retained Tree-sitter features
 
-### C4 retained-tree features
-
-Only after C2 is stable should workers reuse the retained Tree-sitter state for:
+After C4 stabilizes editor ownership/open semantics, the retained native tree may be extended one feature at a time for:
 
 - folding ranges;
 - bracket matching;
 - structural selection;
 - symbol outline/navigation.
 
-Do them as separate measured packages. Do not bundle all four into C2.
+Do not start C5 in parallel with C4. They share CodeForge controller/native-document/FRB ownership.
 
-### Native regex
+### T6 - evidence-selected terminal implementation
 
-Still blocked unless post-C2 profiling proves regex execution, rather than snapshot/materialization, is the remaining material cost.
+T6 exists only after T5 identifies a material current bottleneck. Do not start a generic "optimize terminal more" branch without that gate.
 
-### Native Git history projection
+### Native regex / Git F2 / Workspace Search G2
 
-Blocked unless real histories substantially above current workloads demonstrate Dart graph projection is a measurable problem.
+Still deferred. Existing evidence does not justify new native APIs:
 
-### Native workspace-search paging
+- regex execution was not the dominant editor regex cost;
+- Git history projection is already around low-millisecond even for synthetic 5k merge-heavy history;
+- workspace search UI projection is already sub-millisecond under the current native 2,000-result cap.
 
-Blocked unless the result cap rises substantially or UI profiling shows result projection/materialization becomes a frame problem.
+### Ghostty alternative backend
+
+Deferred/quarantined. Current xterm worker architecture is production-active, and the preserved Ghostty experiment has known resize/reflow parity differences. Do not spend a parallel worker on it unless the product explicitly reopens the backend choice.
 
 ## 10. Revised parallel staffing
 
-### If five people are available now
+### Five workers available now
 
 ```text
-Person 1 -> T1 Terminal parity/correctness completion
-Person 2 -> T2 Terminal live-shadow + benchmark harness (test/harness ownership only)
-Person 3 -> C2 NativeEditorDocument production integration
-Person 4 -> C3 Editor open/reopen profiling only
-Person 5 -> A2 Agent overlay production benchmark/telemetry
+Person 1 -> C4  Editor native-open handoff / whole-text round-trip removal
+Person 2 -> T4  Terminal search direct replica-source cutover
+Person 3 -> T5  Latest production terminal profile gate (profile/test only)
+Person 4 -> A3  Agent overlay repeated-unchanged fast path
+Person 5 -> S1  Process-cold Rust initialization profile (profile only)
 ```
 
-These five lanes can run concurrently under the ownership rules above.
+All five may start from the latest `main` in separate worktrees.
 
-### If six people are available
+### Six workers available
 
-Do **not** create a sixth overlapping implementation branch merely to use the person.
-
-Recommended sixth assignment:
+Do not create a second C4 or terminal implementation owner. Use the sixth worker for one of:
 
 ```text
-Person 6 -> assist T2 with terminal corpus/fixture collection and real-session parity cases
+Person 6 -> C4 benchmark/compatibility fixture subtrack only
 ```
 
-Person 6 should own fixtures/new tests rather than `terminal_*worker.dart` implementation. This keeps T1 as the single implementation owner while increasing parity coverage in parallel.
-
-Alternative after C2's edit-delta interface is frozen:
+or
 
 ```text
-Person 6 -> C2 integration-test/benchmark subtrack using the frozen adapter interface
+Person 6 -> T5 real-session/TUI corpus + benchmark fixtures only
 ```
 
-Again, avoid concurrent edits to CodeForge generated/API/controller files.
+The sixth worker should return fixtures/evidence to the architecture owner rather than independently modifying the same production files.
 
-## 11. Conflict matrix for the new allocation
+## 11. Conflict matrix
 
-Legend: LOW = safe; MEDIUM = coordinate ownership; HIGH = serialize.
+Legend: LOW = safe; MEDIUM = coordinate ownership/generated integration; HIGH = serialize.
 
 | Pair | Risk | Rule |
 | --- | --- | --- |
-| T1 vs T2 | MEDIUM | T2 adds harness/fixtures only; implementation fixes go through T1 |
-| T1 vs C2 | LOW | terminal vs CodeForge editor |
-| T1 vs C3 | LOW | terminal vs editor benchmark |
-| T1 vs A2 | LOW | terminal vs agent overlay |
-| T2 vs C2/C3/A2 | LOW | separate subsystems |
-| C2 vs C3 | MEDIUM | C3 profile-only; no production CodeForge changes until C2 merges |
-| C2 vs future C4 | HIGH | same retained editor/controller/FRB surface; serialize |
-| C2 vs native regex | HIGH | same CodeForge API/generated/dependency lane; serialize |
-| C3 vs A2 | LOW | independent benchmarks |
-| T3 cutover vs any terminal feature branch | HIGH | one integration owner during default/fallback changes |
+| C4 vs T4 | LOW | editor vs terminal |
+| C4 vs T5 | LOW | editor vs terminal profile |
+| C4 vs A3 | LOW/MEDIUM | handwritten areas differ; coordinate only if C4 changes root FRB and A3 unexpectedly changes API shape |
+| C4 vs S1 | LOW | S1 profile-only |
+| C4 vs C5 | HIGH | same CodeForge/native document/controller/FRB lane |
+| T4 vs T5 | MEDIUM | may run together only because T5 is profile/test-only; T5 production fixes wait |
+| T4 vs future T6 | HIGH | same terminal ownership lane; merge T4 first or coordinate explicitly |
+| T4 vs A3/S1 | LOW | separate subsystems |
+| A3 vs S1 | LOW | agent runtime vs startup profile |
 
-## 12. Worktree and merge rules
+## 12. Generated/native surface rules
 
-Every worker must:
+C4 may touch both root Alera file APIs and CodeForge native APIs depending on the selected ownership design. Treat those as two separate generated lanes.
 
-1. start from the agreed base or explicitly record a different dependency base;
-2. use a dedicated worktree except T1, which must continue the existing terminal worktree;
-3. preserve unrelated changes;
-4. never use `git add -A` for integration commits;
-5. commit exact paths/batches;
-6. add focused correctness tests before behavior changes where practical;
-7. benchmark before/after for performance claims;
-8. report generated-file/dependency conflicts explicitly;
-9. re-check `main` immediately before merge;
-10. never hand-merge FRB generated function IDs/content hashes.
-
-### Generated surfaces
-
-Root Alera FRB and CodeForge FRB remain separate integration lanes.
-
-For generated conflicts:
+If a generated conflict occurs:
 
 ```text
 merge handwritten source first
--> regenerate from source of truth
+-> regenerate from the corresponding source-of-truth config
 -> review generated diff
--> focused tests/analyzer
+-> run focused tests/analyzer
 -> git diff --check
 ```
 
-Do not preserve generated numbering from two branches manually.
+Never hand-merge FRB function IDs/content hashes.
 
-## 13. Revised merge order
+A3 should prefer an internal native fast path that keeps the existing public API stable; do not create generated churn solely for telemetry that can be tested/benchmarked internally.
 
-Independent benchmark-only work can merge whenever validated:
+## 13. Worktree rules
+
+Each new package must:
+
+1. create a dedicated worktree/branch from the current agreed `main`;
+2. record its base commit;
+3. not use the stale/superseded performance worktrees as implementation bases;
+4. leave the dirty Ghostty experiment untouched;
+5. preserve unrelated changes;
+6. stage/commit exact paths rather than `git add -A`;
+7. use TDD/focused regressions for behavior changes;
+8. benchmark before/after for performance claims;
+9. re-check `main` immediately before integration;
+10. avoid push unless explicitly requested.
+
+Suggested branches:
 
 ```text
-A2
-C3
-T2 harness-only batches
+perf/editor-native-open-handoff
+perf/terminal-search-replica-source
+perf/terminal-production-profile
+perf/agent-overlay-unchanged-fastpath
+perf/rust-cold-init-profile
 ```
 
-Architecture lanes:
+## 14. Recommended merge order
+
+The architecture lanes are mostly independent, so completion order does not need to match staffing order.
+
+Benchmark/profile-only results may merge whenever validated:
 
 ```text
-T1 parity/correctness
-  -> rebase T2 harness if needed
-  -> T1+T2 gate
-  -> T3 opt-in/default-on cutover
-  -> T4 worker-owned search/scrollback
-
-C2 production integration
-  -> large-file syntax validation
-  -> C4 retained-tree features one by one
+T5
+S1
 ```
 
-Terminal and C2 may merge in either order because they are separate subsystems.
+Independent implementation lanes:
 
-## 14. Definition of done
+```text
+T4
+A3
+C4
+```
 
-A package is not done merely because it compiles.
+Before merging C4, re-run editor load/save/reload/encoding/external-file tests and the latest-main open benchmark. Before merging T4, run terminal search + restore/rebuild suites. Before merging A3, run both link-success and copy-fallback matrices.
 
-Required where applicable:
+Afterward:
 
-- behavior parity/regression tests;
-- stale/generation/revision safety;
-- bounded state lifetime;
-- explicit fallback semantics;
-- reproducible five-sample performance evidence for performance decisions;
+```text
+C4 complete
+  -> C5 retained-tree features one at a time
+
+T5 evidence + T4 complete
+  -> optional T6 implementation selected by the measured bottleneck
+
+S1 evidence
+  -> optional startup prewarm/parallel-init implementation only if justified
+```
+
+## 15. Definition of done
+
+A performance package is complete only when applicable items below are satisfied:
+
+- behavior parity/regression coverage;
+- stale/generation/revision/lifetime safety;
+- explicit fallback/error semantics;
+- reproducible five-sample evidence for performance decisions;
 - UI-isolate/worker/RSS/FFI evidence appropriate to the package;
-- no accidental whole-document/full-history re-materialization in hot paths;
-- focused analyzer/lint/tests;
-- generated bindings regenerated from source of truth;
+- no accidental whole-document/history reconstruction in a hot path;
+- generated bindings regenerated only from source of truth;
+- focused tests/analyzer/lints;
 - `git diff --check`;
 - exact-path commit(s);
-- handoff with base, final commits, known limitations and merge order.
+- handoff documenting base, commits, benchmarks, limitations, conflicts, and merge order.
 
-## 15. Top-line execution order
-
-The current project order is now:
+## 16. Top-line next phase
 
 ```text
-T1 Terminal parity/correctness
+C4 Editor native-open / remove whole-text ownership bounce
  ||
-T2 Terminal live-shadow/benchmark harness
+T4 Terminal search -> replica source
  ||
-C2 NativeEditorDocument production wiring
+T5 Terminal latest-production profile gate
  ||
-C3 Editor open/reopen profiling
+A3 Agent overlay unchanged fast path
  ||
-A2 Agent overlay production validation
+S1 Rust cold-init profile
 
-T1 + T2 pass
- -> T3 terminal opt-in/default-on cutover
- -> T4 terminal search/scrollback authority
-
-C2 pass
- -> large-file syntax enabled on bounded native path
- -> C4 folding/brackets/symbols/structural selection one by one
-
-Only if evidence remains
- -> consider Rust Host terminal ownership
- -> consider native regex/F2/G2
+C4 done -> C5 retained-tree features
+T5 + T4 done -> evidence-selected T6 only if needed
+S1 done -> startup implementation only if user-visible evidence justifies it
 ```
 
-The coordination rule is now: **do not start more migrations; finish ownership transitions already built, prove parity, then remove duplicate work/state.**
+The highest-value measured target is C4. The cleanest independent wins are T4 and A3. T5 and S1 exist specifically to prevent the next round from optimizing stale assumptions.
