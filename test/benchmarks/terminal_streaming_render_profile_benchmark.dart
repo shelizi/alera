@@ -4,10 +4,10 @@
 /// worker is explicitly enabled. Five comparable samples report scheduling,
 /// worker catch-up, build/raster timing, frame jank, and RSS movement.
 ///
-///     flutter test integration_test/terminal_flush_cadence_benchmark.dart -d windows
+///     flutter test test/benchmarks/terminal_streaming_render_profile_benchmark.dart
 ///
-/// Deliberately not named `*_test.dart`: this is a hardware-dependent profile
-/// gate, not a CI performance assertion.
+/// Deliberately not named `*_test.dart`: this is an opt-in flutter_tester
+/// profile gate, not a CI performance assertion or Windows desktop result.
 library;
 
 import 'dart:io';
@@ -19,7 +19,6 @@ import 'package:alera/src/features/workbench/presentation/terminal_runtime.dart'
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:integration_test/integration_test.dart';
 
 const _sampleDuration = Duration(seconds: 3);
 const _writeInterval = Duration(milliseconds: 8);
@@ -66,7 +65,7 @@ WorkspaceTabRecord _tab() {
 }
 
 void main() {
-  final binding = IntegrationTestWidgetsFlutterBinding.ensureInitialized();
+  final binding = LiveTestWidgetsFlutterBinding.ensureInitialized();
 
   testWidgets('production terminal streaming/render profile gate', (
     tester,
@@ -133,7 +132,7 @@ void main() {
 
 Future<_StreamingSample> _measureStreamingSample({
   required WidgetTester tester,
-  required IntegrationTestWidgetsFlutterBinding binding,
+  required LiveTestWidgetsFlutterBinding binding,
   required TerminalSessionHandle session,
   required String line,
   required int run,
