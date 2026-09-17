@@ -5205,17 +5205,9 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     return _getLargeFileFixedAsciiColumnWidth();
   }
 
-  ({int start, int contentLength})? _largeFileNativeAsciiLineInfo(
+  ({int start, int contentLength, bool safeAscii}) _nativeLineLayoutInfo(
     int lineIndex,
   ) {
-    if (!_largeFilePerformanceMode ||
-        _lineWrap ||
-        isRTL ||
-        _enableFolding ||
-        controller.isBufferActive) {
-      return null;
-    }
-
     final version = controller.contentVersion;
     var cached = _largeFileNativeLineInfoCache[lineIndex];
     if (cached == null || cached.version != version) {
@@ -5228,12 +5220,30 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
       );
       _largeFileNativeLineInfoCache[lineIndex] = cached;
     }
+    return (
+      start: cached.start,
+      contentLength: cached.contentLength,
+      safeAscii: cached.safeAscii,
+    );
+  }
 
-    if (!cached.safeAscii ||
-        cached.contentLength < kLargeFileParagraphProfileMinChars) {
+  ({int start, int contentLength})? _largeFileNativeAsciiLineInfo(
+    int lineIndex,
+  ) {
+    if (!_largeFilePerformanceMode ||
+        _lineWrap ||
+        isRTL ||
+        _enableFolding ||
+        controller.isBufferActive) {
       return null;
     }
-    return (start: cached.start, contentLength: cached.contentLength);
+
+    final info = _nativeLineLayoutInfo(lineIndex);
+    if (!info.safeAscii ||
+        info.contentLength < kLargeFileParagraphProfileMinChars) {
+      return null;
+    }
+    return (start: info.start, contentLength: info.contentLength);
   }
 
   ui.Paragraph _buildHighlightedParagraph(
@@ -8730,20 +8740,20 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
             final caretLineIndex = controller.getLineAtOffset(
               controller.selection.baseOffset,
             );
-            final lineText =
-                _lineTextCache[caretLineIndex] ??
-                controller.getLineText(caretLineIndex);
-            final lineStartOffset = controller.getLineStartOffset(
-              caretLineIndex,
-            );
+            final lineInfo = _nativeLineLayoutInfo(caretLineIndex);
             final caretInLine =
-                controller.selection.baseOffset - lineStartOffset;
-
-            final previewStart = caretInLine.clamp(0, lineText.length);
-            final previewEnd = (caretInLine + 10).clamp(0, lineText.length);
-            final previewText = lineText.substring(
-              max(0, previewStart - 10),
-              min(lineText.length, previewEnd),
+                controller.selection.baseOffset - lineInfo.start;
+            final previewStart = max(
+              0,
+              caretInLine - 10,
+            ).clamp(0, lineInfo.contentLength);
+            final previewEnd = (caretInLine + 10).clamp(
+              0,
+              lineInfo.contentLength,
+            );
+            final previewText = controller.rope.substring(
+              lineInfo.start + previewStart,
+              lineInfo.start + previewEnd,
             );
 
             ui.Paragraph zoomParagraph;
@@ -8861,19 +8871,26 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
             final fontFamily = textStyle?.fontFamily;
 
             for (int line = startLine; line <= endLine; line++) {
-              final lineText = controller.getLineText(line);
-              final lineStartOffset = controller.getLineStartOffset(line);
+              final lineInfo = _nativeLineLayoutInfo(line);
 
               String displayText;
               if (line == dragLine) {
-                final colInLine = dragOffset - lineStartOffset;
+                final colInLine = (dragOffset - lineInfo.start).clamp(
+                  0,
+                  lineInfo.contentLength,
+                );
                 final previewStart = max(0, colInLine - 15);
-                final previewEnd = min(lineText.length, colInLine + 15);
-                displayText = lineText.substring(previewStart, previewEnd);
+                final previewEnd = min(lineInfo.contentLength, colInLine + 15);
+                displayText = controller.rope.substring(
+                  lineInfo.start + previewStart,
+                  lineInfo.start + previewEnd,
+                );
               } else {
-                displayText = lineText.length > 30
-                    ? lineText.substring(0, 30)
-                    : lineText;
+                final previewEnd = min(30, lineInfo.contentLength);
+                displayText = controller.rope.substring(
+                  lineInfo.start,
+                  lineInfo.start + previewEnd,
+                );
               }
 
               if (displayText.isEmpty) displayText = ' ';
