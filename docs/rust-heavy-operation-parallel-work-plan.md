@@ -499,6 +499,25 @@ Validation:
 
 Continue C5 one feature at a time. Next candidates are bracket matching, structural selection, then symbol outline/navigation; do not combine them into one branch.
 
+#### C5 bracket-matching status - 2026-09-17
+
+The second C5 feature is complete and merged to `main` (`517e346e` implementation, `64208f6a` merge):
+
+- bracket matching now uses a synchronous retained Tree-sitter query when the native document revision is current and has no pending edits;
+- structural delimiter matching walks the parsed token/parent relationship, so braces/brackets/parentheses inside strings are authoritative no-match results instead of being paired by raw-text scanning;
+- if native parsing is unsupported, still opening, syncing, stale, or otherwise unavailable, the existing `foldsFindMatchingBracket` Rope scan remains the compatibility fallback;
+- the paint/hit-test path remains synchronous and does not add an async wait on cursor movement.
+
+Validation:
+
+- CodeForge Rust: 19 passed, 0 failed, 1 manual benchmark ignored;
+- bracket regressions cover structural braces/arrays, string-contained braces, stale revision, and plaintext fallback;
+- targeted CodeForge Dart analyze: no issues;
+- root `workspace_editor_surface_test.dart`: 20 passed, 0 failed;
+- `git diff --check`: clean.
+
+Remaining C5 items: structural selection, then symbol outline/navigation.
+
 ### T6 - evidence-selected terminal implementation
 
 T6 exists only after T5 identifies a material current bottleneck. Do not start a generic "optimize terminal more" branch without that gate.
