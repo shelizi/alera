@@ -22,6 +22,8 @@ final class TerminalXtermBufferModel {
   int _mouseMode = 0;
   int _mouseReportMode = 0;
   int _scrollBack = 0;
+  TerminalXtermWorkerGlobalState? _globalState;
+  final Map<int, String> _hyperlinks = <int, String>{};
   List<TerminalXtermWorkerEffect> _effects =
       const <TerminalXtermWorkerEffect>[];
   List<String> _rowTexts = const <String>[];
@@ -43,11 +45,40 @@ final class TerminalXtermBufferModel {
   int get mouseReportMode => _mouseReportMode;
   int get scrollBack => _scrollBack;
   int get bufferLength => _renderRows.length;
+  TerminalXtermWorkerGlobalState get globalState =>
+      _globalState ??
+      (throw StateError('Terminal xterm global state is not initialized.'));
+  bool get isUsingAltBuffer => globalState.isUsingAltBuffer;
+  bool get reverseDisplay => globalState.reverseDisplay;
+  int? get cursorType => globalState.cursorType;
+  bool get cursorBlink => globalState.cursorBlink;
+  bool get cursorLineHighlight => globalState.cursorLineHighlight;
+  bool get mouseShiftCapture => globalState.mouseShiftCapture;
+  bool get altEscPrefix => globalState.altEscPrefix;
+  bool get altSendsEscape => globalState.altSendsEscape;
+  int get colorRevision => globalState.colorRevision;
+  Map<int, int> get indexedColorOverrides => globalState.indexedColorOverrides;
+  Map<int, int> get specialColorOverrides => globalState.specialColorOverrides;
+  int? get foregroundColorOverride => globalState.foregroundColorOverride;
+  int? get backgroundColorOverride => globalState.backgroundColorOverride;
+  int? get cursorColorOverride => globalState.cursorColorOverride;
+  int? get selectionColorOverride => globalState.selectionColorOverride;
+  int? get selectionForegroundColorOverride =>
+      globalState.selectionForegroundColorOverride;
   List<TerminalXtermWorkerEffect> get effects => _effects;
   List<String> get rowTexts => _rowTexts;
   List<List<TerminalXtermWorkerRenderCell>> get renderRows => _renderRows;
 
   String rowText(int row) => _rowTexts[row];
+
+  String? hyperlinkAt(int row, int column) {
+    if (row < 0 || row >= _renderRows.length) return null;
+    final cells = _renderRows[row];
+    if (column < 0 || column >= cells.length) return null;
+    final hyperlinkId = cells[column].hyperlinkId;
+    if (hyperlinkId == 0) return null;
+    return _hyperlinks[hyperlinkId];
+  }
 
   void apply(TerminalXtermWorkerBufferDelta delta) {
     if (delta.revision <= _revision) {
@@ -72,6 +103,12 @@ final class TerminalXtermBufferModel {
       }
       _applyPartialBuffer(delta);
     }
+
+    if (delta.fullRepaint) {
+      _hyperlinks.clear();
+    }
+    _hyperlinks.addAll(delta.hyperlinkUpdates);
+    _globalState = delta.globalState;
 
     _revision = delta.revision;
     _cols = delta.cols;

@@ -156,6 +156,8 @@ final class TerminalXtermWorkerRenderCell {
     required this.attributes,
     required this.underlineColor,
     required this.content,
+    required this.hyperlinkId,
+    required this.semanticAttributes,
   });
 
   factory TerminalXtermWorkerRenderCell._fromMessage(List<Object?> message) {
@@ -167,6 +169,8 @@ final class TerminalXtermWorkerRenderCell {
       attributes: message[4]! as int,
       underlineColor: message[5]! as int,
       content: message[6]! as int,
+      hyperlinkId: message[7]! as int,
+      semanticAttributes: message[8]! as int,
     );
   }
 
@@ -177,6 +181,8 @@ final class TerminalXtermWorkerRenderCell {
   final int attributes;
   final int underlineColor;
   final int content;
+  final int hyperlinkId;
+  final int semanticAttributes;
 }
 
 final class TerminalXtermWorkerRowDelta {
@@ -271,6 +277,78 @@ final class TerminalXtermWorkerDelta {
   final List<TerminalXtermWorkerEffect> effects;
 }
 
+Map<int, int> _decodeIntMap(Object? raw) {
+  return <int, int>{
+    for (final pair in raw! as List) (pair as List)[0]! as int: pair[1]! as int,
+  };
+}
+
+Map<int, String> _decodeStringMap(Object? raw) {
+  return <int, String>{
+    for (final pair in raw! as List)
+      (pair as List)[0]! as int: pair[1]! as String,
+  };
+}
+
+final class TerminalXtermWorkerGlobalState {
+  const TerminalXtermWorkerGlobalState({
+    required this.isUsingAltBuffer,
+    required this.reverseDisplay,
+    required this.cursorType,
+    required this.cursorBlink,
+    required this.cursorLineHighlight,
+    required this.mouseShiftCapture,
+    required this.altEscPrefix,
+    required this.altSendsEscape,
+    required this.colorRevision,
+    required this.indexedColorOverrides,
+    required this.specialColorOverrides,
+    required this.foregroundColorOverride,
+    required this.backgroundColorOverride,
+    required this.cursorColorOverride,
+    required this.selectionColorOverride,
+    required this.selectionForegroundColorOverride,
+  });
+
+  factory TerminalXtermWorkerGlobalState._fromMessage(List<Object?> message) {
+    return TerminalXtermWorkerGlobalState(
+      isUsingAltBuffer: message[0]! as bool,
+      reverseDisplay: message[1]! as bool,
+      cursorType: message[2] as int?,
+      cursorBlink: message[3]! as bool,
+      cursorLineHighlight: message[4]! as bool,
+      mouseShiftCapture: message[5]! as bool,
+      altEscPrefix: message[6]! as bool,
+      altSendsEscape: message[7]! as bool,
+      colorRevision: message[8]! as int,
+      indexedColorOverrides: _decodeIntMap(message[9]),
+      specialColorOverrides: _decodeIntMap(message[10]),
+      foregroundColorOverride: message[11] as int?,
+      backgroundColorOverride: message[12] as int?,
+      cursorColorOverride: message[13] as int?,
+      selectionColorOverride: message[14] as int?,
+      selectionForegroundColorOverride: message[15] as int?,
+    );
+  }
+
+  final bool isUsingAltBuffer;
+  final bool reverseDisplay;
+  final int? cursorType;
+  final bool cursorBlink;
+  final bool cursorLineHighlight;
+  final bool mouseShiftCapture;
+  final bool altEscPrefix;
+  final bool altSendsEscape;
+  final int colorRevision;
+  final Map<int, int> indexedColorOverrides;
+  final Map<int, int> specialColorOverrides;
+  final int? foregroundColorOverride;
+  final int? backgroundColorOverride;
+  final int? cursorColorOverride;
+  final int? selectionColorOverride;
+  final int? selectionForegroundColorOverride;
+}
+
 final class TerminalXtermWorkerBufferDelta {
   const TerminalXtermWorkerBufferDelta({
     required this.revision,
@@ -292,6 +370,8 @@ final class TerminalXtermWorkerBufferDelta {
     required this.mouseMode,
     required this.mouseReportMode,
     required this.effects,
+    required this.globalState,
+    required this.hyperlinkUpdates,
   });
 
   factory TerminalXtermWorkerBufferDelta._fromMessage(List<Object?> message) {
@@ -320,6 +400,10 @@ final class TerminalXtermWorkerBufferDelta {
       mouseReportMode: message[16]! as int,
       effects: _decodeWorkerEffects(message[17]),
       revision: message[18]! as int,
+      globalState: TerminalXtermWorkerGlobalState._fromMessage(
+        List<Object?>.from(message[19]! as List),
+      ),
+      hyperlinkUpdates: _decodeStringMap(message[20]),
     );
   }
 
@@ -342,6 +426,8 @@ final class TerminalXtermWorkerBufferDelta {
   final int mouseMode;
   final int mouseReportMode;
   final List<TerminalXtermWorkerEffect> effects;
+  final TerminalXtermWorkerGlobalState globalState;
+  final Map<int, String> hyperlinkUpdates;
 }
 
 final class TerminalXtermWorker {
@@ -644,9 +730,24 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
   List<BufferLine>? bufferLineRefs;
   List<_TerminalXtermWorkerRowCache>? bufferLineCaches;
 
-  List<Object?> renderCellMessage(BufferLine line, int column) {
+  List<Object?> renderCellMessage(
+    BufferLine line,
+    int column, {
+    int? bufferRow,
+    Map<int, String>? hyperlinkUpdates,
+  }) {
     final codePoint = line.getCodePoint(column);
     final combining = line.getCombiningCharacters(column);
+    final hyperlinkId = line.getHyperlinkId(column);
+    if (hyperlinkId != 0 &&
+        bufferRow != null &&
+        hyperlinkUpdates != null &&
+        !hyperlinkUpdates.containsKey(hyperlinkId)) {
+      final uri = terminal.hyperlinkAt(CellOffset(column, bufferRow));
+      if (uri != null) {
+        hyperlinkUpdates[hyperlinkId] = uri;
+      }
+    }
     final text = switch (codePoint) {
       0 => '',
       _ => String.fromCharCode(codePoint) + (combining ?? ''),
@@ -659,16 +760,28 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
       line.getAttributes(column),
       line.getUnderlineColor(column),
       line.getContent(column),
+      hyperlinkId,
+      line.getSemanticContent(column),
     ];
   }
 
-  List<Object?> rowMessage(int row, BufferLine line) {
+  List<Object?> rowMessage(
+    int row,
+    BufferLine line, {
+    int? bufferRow,
+    Map<int, String>? hyperlinkUpdates,
+  }) {
     return <Object?>[
       row,
       line.toString(),
       <Object?>[
         for (var column = 0; column < line.length; column++)
-          renderCellMessage(line, column),
+          renderCellMessage(
+            line,
+            column,
+            bufferRow: bufferRow,
+            hyperlinkUpdates: hyperlinkUpdates,
+          ),
       ],
     ];
   }
@@ -683,6 +796,33 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
     ];
     cachedCols = terminal.viewWidth;
     cachedRows = terminal.viewHeight;
+  }
+
+  List<Object?> globalStateMessage() {
+    return <Object?>[
+      terminal.isUsingAltBuffer,
+      terminal.reverseDisplayMode,
+      terminal.applicationCursorType?.index,
+      terminal.cursorBlinkMode,
+      terminal.cursorLineHighlightMode,
+      terminal.mouseShiftCaptureMode,
+      terminal.altEscPrefixMode,
+      terminal.altSendsEscapeMode,
+      terminal.colorRevision,
+      <Object?>[
+        for (final entry in terminal.indexedColorOverrides)
+          <Object?>[entry.key, entry.value],
+      ],
+      <Object?>[
+        for (final entry in terminal.specialColorOverrides)
+          <Object?>[entry.key, entry.value],
+      ],
+      terminal.foregroundColorOverride,
+      terminal.backgroundColorOverride,
+      terminal.cursorColorOverride,
+      terminal.selectionColorOverride,
+      terminal.selectionForegroundColorOverride,
+    ];
   }
 
   List<Object?> snapshot() {
@@ -810,6 +950,7 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
     final nextRefs = <BufferLine>[];
     final nextCaches = <_TerminalXtermWorkerRowCache>[];
     final changedRows = <Object?>[];
+    final hyperlinkUpdates = <int, String>{};
     for (var row = 0; row < lines.length; row++) {
       final line = lines[row];
       nextRefs.add(line);
@@ -822,7 +963,14 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
         continue;
       }
       nextCaches.add(_TerminalXtermWorkerRowCache.capture(line));
-      changedRows.add(rowMessage(row, line));
+      changedRows.add(
+        rowMessage(
+          row,
+          line,
+          bufferRow: row,
+          hyperlinkUpdates: hyperlinkUpdates,
+        ),
+      );
     }
 
     bufferLineRefs = nextRefs;
@@ -847,6 +995,11 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
       terminal.mouseReportMode.index,
       <Object?>[for (final effect in effects) List<Object?>.from(effect)],
       revision,
+      globalStateMessage(),
+      <Object?>[
+        for (final entry in hyperlinkUpdates.entries)
+          <Object?>[entry.key, entry.value],
+      ],
     ];
   }
 

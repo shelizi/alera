@@ -298,6 +298,97 @@ void main() {
     expect(mirror, _bufferRows(direct));
     expect(trimmed.bufferLength, 25);
   });
+
+  test(
+    'worker buffer delta carries global render state and hyperlinks',
+    () async {
+      final direct = _createDirectTerminal(cols: 16, rows: 4);
+      final worker = await TerminalXtermWorker.start(
+        cols: 16,
+        rows: 4,
+        maxLines: 64,
+      );
+      addTearDown(worker.close);
+
+      final escape = String.fromCharCode(27);
+      final bell = String.fromCharCode(7);
+      final stringTerminator = '$escape\\';
+      final sequence =
+          '$escape[?1049h'
+          '$escape[?5h'
+          '$escape[?1036l$escape[?1039h'
+          '$escape[>1s'
+          '$escape[5 q'
+          '$escape]4;1;#112233$bell'
+          '$escape]10;#010203$bell'
+          '$escape]8;;https://example.com$stringTerminator'
+          'link'
+          '$escape]8;;$stringTerminator';
+      direct.write(sequence);
+      final delta = await worker.writeBufferDelta(sequence);
+
+      expect(delta.globalState.isUsingAltBuffer, direct.isUsingAltBuffer);
+      expect(delta.globalState.reverseDisplay, direct.reverseDisplayMode);
+      expect(delta.globalState.cursorType, direct.applicationCursorType?.index);
+      expect(delta.globalState.cursorBlink, direct.cursorBlinkMode);
+      expect(
+        delta.globalState.cursorLineHighlight,
+        direct.cursorLineHighlightMode,
+      );
+      expect(delta.globalState.mouseShiftCapture, direct.mouseShiftCaptureMode);
+      expect(delta.globalState.altEscPrefix, direct.altEscPrefixMode);
+      expect(delta.globalState.altSendsEscape, direct.altSendsEscapeMode);
+      expect(delta.globalState.colorRevision, direct.colorRevision);
+      expect(
+        delta.globalState.indexedColorOverrides,
+        Map<int, int>.fromEntries(direct.indexedColorOverrides),
+      );
+      expect(
+        delta.globalState.specialColorOverrides,
+        Map<int, int>.fromEntries(direct.specialColorOverrides),
+      );
+      expect(
+        delta.globalState.foregroundColorOverride,
+        direct.foregroundColorOverride,
+      );
+      expect(
+        delta.globalState.backgroundColorOverride,
+        direct.backgroundColorOverride,
+      );
+      expect(delta.globalState.cursorColorOverride, direct.cursorColorOverride);
+      expect(
+        delta.globalState.selectionColorOverride,
+        direct.selectionColorOverride,
+      );
+      expect(
+        delta.globalState.selectionForegroundColorOverride,
+        direct.selectionForegroundColorOverride,
+      );
+
+      var foundHyperlink = false;
+      for (var row = 0; row < direct.buffer.lines.length; row++) {
+        final line = direct.buffer.lines[row];
+        for (var column = 0; column < line.length; column++) {
+          final hyperlinkId = line.getHyperlinkId(column);
+          if (hyperlinkId == 0) continue;
+          foundHyperlink = true;
+          expect(
+            delta.hyperlinkUpdates[hyperlinkId],
+            direct.hyperlinkAt(CellOffset(column, row)),
+          );
+          final changedRow = delta.rowDeltas.singleWhere(
+            (item) => item.row == row,
+          );
+          expect(changedRow.cells[column].hyperlinkId, hyperlinkId);
+          expect(
+            changedRow.cells[column].semanticAttributes,
+            line.getSemanticContent(column),
+          );
+        }
+      }
+      expect(foundHyperlink, isTrue);
+    },
+  );
 }
 
 Terminal _createDirectTerminal({

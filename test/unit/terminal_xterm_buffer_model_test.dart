@@ -109,4 +109,47 @@ void main() {
       expect(identical(model.renderRows[row], identities[row]), isTrue);
     }
   });
+
+  test('mirrors global render state and resolves OSC8 hyperlinks', () async {
+    final worker = await TerminalXtermWorker.start(
+      cols: 16,
+      rows: 4,
+      maxLines: 64,
+    );
+    addTearDown(worker.close);
+    final model = TerminalXtermBufferModel();
+
+    final escape = String.fromCharCode(27);
+    final bell = String.fromCharCode(7);
+    final stringTerminator = '$escape\\';
+    final delta = await worker.writeBufferDelta(
+      '$escape[?1049h'
+      '$escape[?5h'
+      '$escape[?1036l$escape[?1039h'
+      '$escape[5 q'
+      '$escape]4;1;#112233$bell'
+      '$escape]8;;https://example.com$stringTerminator'
+      'link'
+      '$escape]8;;$stringTerminator',
+    );
+    model.apply(delta);
+
+    expect(model.isUsingAltBuffer, isTrue);
+    expect(model.reverseDisplay, isTrue);
+    expect(model.altEscPrefix, isFalse);
+    expect(model.altSendsEscape, isTrue);
+    expect(model.cursorType, isNotNull);
+    expect(model.cursorBlink, isTrue);
+    expect(model.indexedColorOverrides[1], isNotNull);
+
+    String? hyperlink;
+    for (var row = 0; row < model.bufferLength && hyperlink == null; row++) {
+      for (var column = 0; column < model.renderRows[row].length; column++) {
+        if (model.renderRows[row][column].hyperlinkId == 0) continue;
+        hyperlink = model.hyperlinkAt(row, column);
+        break;
+      }
+    }
+    expect(hyperlink, 'https://example.com');
+  });
 }
