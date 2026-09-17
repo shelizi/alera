@@ -158,6 +158,7 @@ final class TerminalXtermWorkerRenderCell {
     required this.content,
     required this.hyperlinkId,
     required this.semanticAttributes,
+    required this.combiningCharacters,
   });
 
   factory TerminalXtermWorkerRenderCell._fromMessage(List<Object?> message) {
@@ -171,6 +172,7 @@ final class TerminalXtermWorkerRenderCell {
       content: message[6]! as int,
       hyperlinkId: message[7]! as int,
       semanticAttributes: message[8]! as int,
+      combiningCharacters: message[9] as String?,
     );
   }
 
@@ -183,6 +185,7 @@ final class TerminalXtermWorkerRenderCell {
   final int content;
   final int hyperlinkId;
   final int semanticAttributes;
+  final String? combiningCharacters;
 }
 
 final class TerminalXtermWorkerRowDelta {
@@ -768,6 +771,7 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
       line.getContent(column),
       hyperlinkId,
       line.getSemanticContent(column),
+      combining,
     ];
   }
 
