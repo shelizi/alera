@@ -12,6 +12,7 @@ extension _XtermTerminalParserWorker on _XtermTerminalSessionHandle {
     _parserWorkerFuture = null;
     _parserWorkerCommandTail = Future<void>.value();
     _parserWorkerLastApply = null;
+    _parserWorkerReplicaNeedsSync = false;
     if (workerFuture == null) {
       return;
     }
@@ -71,10 +72,32 @@ extension _XtermTerminalParserWorker on _XtermTerminalSessionHandle {
       throw StateError('Parser worker backend requires an xterm replica.');
     }
     final generation = _parserWorkerGeneration;
+    final applyBuffer = _visibility.isOutputVisible;
+    if (!applyBuffer) {
+      // Mark dirty when the hidden command is queued, not when it completes.
+      // A reveal that races the in-flight parse will therefore still enqueue a
+      // snapshot behind it on the same worker command tail.
+      _parserWorkerReplicaNeedsSync = true;
+    }
     final command = _queueParserWorkerCommand(terminal, generation, (
       worker,
     ) async {
-      final delta = await worker.writeBufferDelta(
+      if (applyBuffer) {
+        final delta = await worker.writeBufferDelta(
+          data,
+          focused: _parserWorkerFocused,
+        );
+        if (_disposed ||
+            generation != _parserWorkerGeneration ||
+            !identical(_terminal, terminal)) {
+          return;
+        }
+        _applyParserWorkerEffects(delta.effects);
+        terminal.applyBufferDelta(delta);
+        return;
+      }
+
+      final state = await worker.parseHidden(
         data,
         focused: _parserWorkerFocused,
       );
@@ -83,10 +106,51 @@ extension _XtermTerminalParserWorker on _XtermTerminalSessionHandle {
           !identical(_terminal, terminal)) {
         return;
       }
-      _applyParserWorkerEffects(delta.effects);
-      terminal.applyBufferDelta(delta);
+      _applyParserWorkerEffects(state.effects);
+      terminal.applyStateDelta(state);
     });
     _parserWorkerLastApply = command;
+    return command;
+  }
+
+  Future<void>? _syncParserWorkerReplicaForReveal() {
+    if (!_parserWorkerEnabled || _disposed || !_parserWorkerReplicaNeedsSync) {
+      return null;
+    }
+    final terminal = _terminal;
+    if (terminal is! TerminalXtermReplicaTerminal) {
+      return null;
+    }
+    final generation = _parserWorkerGeneration;
+    final command = _queueParserWorkerCommand(terminal, generation, (
+      worker,
+    ) async {
+      final delta = await worker.snapshotBufferDelta();
+      if (_disposed ||
+          generation != _parserWorkerGeneration ||
+          !identical(_terminal, terminal)) {
+        return;
+      }
+      _applyParserWorkerEffects(delta.effects);
+      terminal.applyBufferDelta(delta);
+      _parserWorkerReplicaNeedsSync = false;
+    });
+    _parserWorkerLastApply = command;
+    unawaited(
+      command.catchError((Object error, StackTrace stackTrace) {
+        if (_disposed || generation != _parserWorkerGeneration) {
+          return;
+        }
+        FlutterError.reportError(
+          FlutterErrorDetails(
+            exception: error,
+            stack: stackTrace,
+            library: 'terminal runtime',
+            context: ErrorDescription('hydrating terminal parser worker'),
+          ),
+        );
+      }),
+    );
     return command;
   }
 

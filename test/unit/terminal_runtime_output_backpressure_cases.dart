@@ -11,6 +11,8 @@ void _registerTerminalRuntimeOutputBackpressureTests() {
     );
     addTearDown(runtime.dispose);
     final session = runtime.sessionFor(workspace: _workspace(), tab: _tab());
+    final visibility = acquireTerminalVisibilityForTesting(session);
+    addTearDown(visibility.dispose);
 
     expect(terminalParserWorkerEnabledForTesting(session), isTrue);
     queueTerminalOutputForTesting(session, 'worker-runtime-marker\x1b[?2004h');
@@ -24,6 +26,68 @@ void _registerTerminalRuntimeOutputBackpressureTests() {
     expect(terminalBracketedPasteModeForTesting(session), isTrue);
   });
 
+  test('parser worker hydrates hidden rows only when revealed', () async {
+    final runtime = XtermTerminalRuntime(
+      parserWorkerEnabled: true,
+      ptySessionFactory: _FakeTerminalPtySessionFactory(),
+      shellLaunchesBuilder: () => <GhosttyTerminalShellLaunch>[
+        _launch('shell', shell: '/bin/sh'),
+      ],
+    );
+    addTearDown(runtime.dispose);
+    final session = runtime.sessionFor(workspace: _workspace(), tab: _tab());
+    var notifications = 0;
+    final removeListener = addTerminalChangeListenerForTesting(
+      session,
+      () => notifications += 1,
+    );
+    addTearDown(removeListener);
+
+    queueTerminalOutputForTesting(session, 'hidden-state-marker\x1b[?2004h');
+    flushTerminalOutputForTesting(session);
+    await waitForTerminalParserApplyForTesting(session);
+
+    expect(terminalBracketedPasteModeForTesting(session), isTrue);
+    expect(
+      terminalBufferTextForTesting(session),
+      isNot(contains('hidden-state-marker')),
+    );
+    expect(notifications, 0);
+
+    final visibility = acquireTerminalVisibilityForTesting(session);
+    addTearDown(visibility.dispose);
+    await waitForTerminalParserApplyForTesting(session);
+
+    expect(
+      terminalBufferTextForTesting(session),
+      contains('hidden-state-marker'),
+    );
+    expect(notifications, greaterThan(0));
+  });
+
+  test('parser worker reveal follows an in-flight hidden parse', () async {
+    final runtime = XtermTerminalRuntime(
+      parserWorkerEnabled: true,
+      ptySessionFactory: _FakeTerminalPtySessionFactory(),
+      shellLaunchesBuilder: () => <GhosttyTerminalShellLaunch>[
+        _launch('shell', shell: '/bin/sh'),
+      ],
+    );
+    addTearDown(runtime.dispose);
+    final session = runtime.sessionFor(workspace: _workspace(), tab: _tab());
+
+    queueTerminalOutputForTesting(session, 'in-flight-hidden-marker');
+    flushTerminalOutputForTesting(session);
+    final visibility = acquireTerminalVisibilityForTesting(session);
+    addTearDown(visibility.dispose);
+    await waitForTerminalParserApplyForTesting(session);
+
+    expect(
+      terminalBufferTextForTesting(session),
+      contains('in-flight-hidden-marker'),
+    );
+  });
+
   test('parser worker resizes before parsing following output', () async {
     final runtime = XtermTerminalRuntime(
       parserWorkerEnabled: true,
@@ -34,6 +98,8 @@ void _registerTerminalRuntimeOutputBackpressureTests() {
     );
     addTearDown(runtime.dispose);
     final session = runtime.sessionFor(workspace: _workspace(), tab: _tab());
+    final visibility = acquireTerminalVisibilityForTesting(session);
+    addTearDown(visibility.dispose);
 
     queueTerminalOutputForTesting(session, 'warmup\r\n');
     flushTerminalOutputForTesting(session);
@@ -325,6 +391,7 @@ void _registerTerminalRuntimeOutputBackpressureTests() {
 
       final visibility = acquireTerminalVisibilityForTesting(session);
       addTearDown(visibility.dispose);
+      await waitForTerminalParserApplyForTesting(session);
 
       expect(notifications, greaterThan(0));
     },

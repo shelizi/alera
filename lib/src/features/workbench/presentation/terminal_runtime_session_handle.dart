@@ -71,6 +71,7 @@ class _XtermTerminalSessionHandle(
   Future<void> _parserWorkerCommandTail = Future<void>.value();
   Future<void>? _parserWorkerLastApply;
   bool _parserWorkerFocused = true;
+  bool _parserWorkerReplicaNeedsSync = false;
   @override
   int _startAttempt = 0;
   int? _activePtyGeneration;
@@ -137,26 +138,27 @@ class _XtermTerminalSessionHandle(
     _syncPtyOutputVisibility();
     if (_visibility.isOutputVisible) {
       final terminal = _terminal;
-      // Let the first catch-up write publish the hidden state together with
-      // the newly parsed chunk. If there is no backlog, flush the dirty bit
-      // explicitly below so an attached/offstage renderer and active search
-      // still observe the latest state exactly once.
+      // Enable listener delivery before hydrating the worker replica so the
+      // reveal snapshot publishes exactly one fresh renderer/search state.
       switch (terminal) {
         case _AleraTerminal():
           terminal.setNotificationsEnabled(true, flushPending: false);
         case TerminalXtermReplicaTerminal():
           terminal.setNotificationsEnabled(true, flushPending: false);
       }
-      // A tab that was hidden may have accumulated a large partial window.
-      // Parse only one normal UI budget synchronously on reveal, then let the
-      // existing paced frame pipeline catch up without freezing this frame.
+      // Queue worker hydration before any newly visible output. Both commands
+      // share the parser-worker tail, so hidden state cannot be overtaken by
+      // visible deltas while the tab is being revealed.
+      final parserReveal = _syncParserWorkerReplicaForReveal();
       _pump.capAdaptiveBudgetForReveal();
       _pump.flushFrame(force: true);
       switch (terminal) {
         case _AleraTerminal():
           terminal.flushPendingNotification();
-        case TerminalXtermReplicaTerminal():
+        case TerminalXtermReplicaTerminal() when parserReveal == null:
           terminal.flushPendingNotification();
+        case TerminalXtermReplicaTerminal():
+          break;
       }
     } else {
       final terminal = _terminal;
