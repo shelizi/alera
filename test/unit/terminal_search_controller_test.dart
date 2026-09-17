@@ -1,5 +1,7 @@
 import 'package:alera/src/features/workbench/domain/terminal_search.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_search_controller.dart';
+import 'package:alera/src/features/workbench/presentation/terminal_xterm_buffer_model.dart';
+import 'package:alera/src/features/workbench/presentation/terminal_xterm_worker.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:xterm2/xterm.dart' as xterm;
 
@@ -188,6 +190,77 @@ void main() {
     expect(controller.matchCount, 1);
     expect(controller.selectedMatch?.lineIndex, 1);
   });
+
+  test(
+    'searches the xterm worker mirror without isolate round trips',
+    () async {
+      final worker = await TerminalXtermWorker.start(
+        cols: 20,
+        rows: 4,
+        maxLines: 64,
+      );
+      addTearDown(worker.close);
+      final model = TerminalXtermBufferModel();
+      model.apply(await worker.writeBufferDelta('needle\r\nother\r\nNEEDLE'));
+      final visitedLines = <int>[];
+      final controller = TerminalSearchController.fromSource(
+        source: model,
+        scrollToLine: visitedLines.add,
+      );
+      addTearDown(controller.dispose);
+
+      controller.open();
+      controller.setQuery('needle');
+      expect(controller.matchCount, 2);
+      expect(controller.matches.map((match) => match.lineIndex), <int>[0, 2]);
+      expect(visitedLines, <int>[0]);
+
+      model.apply(await worker.writeBufferDelta('\r\ntail needle'));
+      expect(controller.matchCount, 3);
+      expect(controller.matches.map((match) => match.lineIndex), <int>[
+        0,
+        2,
+        3,
+      ]);
+      expect(controller.needsFullRefreshForTesting, isFalse);
+    },
+  );
+
+  test(
+    'mirror search keeps matches correct across circular head trims',
+    () async {
+      final worker = await TerminalXtermWorker.start(
+        cols: 20,
+        rows: 3,
+        maxLines: 25,
+      );
+      addTearDown(worker.close);
+      final model = TerminalXtermBufferModel();
+      final initial = <String>[
+        'needle-drop',
+        'needle-keep',
+        ...List<String>.generate(23, (index) => 'line-$index'),
+      ].join('\r\n');
+      model.apply(await worker.writeBufferDelta(initial));
+      final controller = TerminalSearchController.fromSource(
+        source: model,
+        scrollToLine: (_) {},
+      );
+      addTearDown(controller.dispose);
+
+      controller.open();
+      controller.setQuery('needle');
+      expect(controller.matches.map((match) => match.lineIndex), <int>[0, 1]);
+
+      final trimmed = await worker.writeBufferDelta('\r\nneedle-tail');
+      expect(trimmed.trimStart, 1);
+      model.apply(trimmed);
+
+      expect(controller.matchCount, 2);
+      expect(controller.matches.map((match) => match.lineIndex), <int>[0, 24]);
+      expect(controller.needsFullRefreshForTesting, isFalse);
+    },
+  );
 }
 
 xterm.Terminal _terminal() {

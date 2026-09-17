@@ -1,6 +1,17 @@
 import 'package:xterm2/core.dart';
 
+import 'terminal_search_source.dart';
 import 'terminal_xterm_worker.dart';
+
+final class _TerminalXtermBufferSearchLineId {
+  const _TerminalXtermBufferSearchLineId({
+    required this.generation,
+    required this.absoluteIndex,
+  });
+
+  final Object generation;
+  final int absoluteIndex;
+}
 
 /// UI-isolate mirror of the complete active xterm buffer owned by
 /// [TerminalXtermWorker].
@@ -9,13 +20,19 @@ import 'terminal_xterm_worker.dart';
 /// complex worker-side structural changes arrive as full repaints. Retained
 /// row objects keep their identity so render/search layers can skip untouched
 /// scrollback rows.
-final class TerminalXtermBufferModel {
+final class TerminalXtermBufferModel implements TerminalSearchSource {
   TerminalXtermBufferModel({Set<int>? wordSeparators})
     : _wordSeparators = Set<int>.unmodifiable(
         wordSeparators ?? Buffer.defaultWordSeparators,
       );
 
   final Set<int> _wordSeparators;
+  final Set<TerminalSearchSourceListener> _searchListeners =
+      <TerminalSearchSourceListener>{};
+  Object _searchGeneration = Object();
+  int _searchLineBase = 0;
+  List<_TerminalXtermBufferSearchLineId> _searchLineIds =
+      const <_TerminalXtermBufferSearchLineId>[];
   int _revision = 0;
   int _cols = 0;
   int _rows = 0;
@@ -55,6 +72,14 @@ final class TerminalXtermBufferModel {
   int get mouseReportMode => _mouseReportMode;
   int get scrollBack => _scrollBack;
   int get bufferLength => _renderRows.length;
+  @override
+  int get height => bufferLength;
+  @override
+  int get viewWidth => _cols;
+  @override
+  int get viewHeight => _rows;
+  @override
+  Object get bufferIdentity => _searchGeneration;
   TerminalXtermWorkerGlobalState get globalState =>
       _globalState ??
       (throw StateError('Terminal xterm global state is not initialized.'));
@@ -81,6 +106,33 @@ final class TerminalXtermBufferModel {
 
   String rowText(int row) => _rowTexts[row];
   bool isWrapped(int row) => _wrappedRows[row];
+
+  @override
+  Object lineIdAt(int index) => _searchLineIds[index];
+
+  @override
+  String lineTextAt(int index) => _rowTexts[index];
+
+  @override
+  int? lineIndexOf(Object lineId) {
+    if (lineId is! _TerminalXtermBufferSearchLineId ||
+        !identical(lineId.generation, _searchGeneration)) {
+      return null;
+    }
+    final index = lineId.absoluteIndex - _searchLineBase;
+    if (index < 0 || index >= _searchLineIds.length) return null;
+    return identical(_searchLineIds[index], lineId) ? index : null;
+  }
+
+  @override
+  void addListener(TerminalSearchSourceListener listener) {
+    _searchListeners.add(listener);
+  }
+
+  @override
+  void removeListener(TerminalSearchSourceListener listener) {
+    _searchListeners.remove(listener);
+  }
 
   int hyperlinkIdAt(int row, int column) {
     if (row < 0 || row >= _renderRows.length) return 0;
@@ -209,6 +261,7 @@ final class TerminalXtermBufferModel {
       );
     }
 
+    final searchChanged = _searchChangedBy(delta);
     if (_renderRows.isEmpty || delta.fullRepaint) {
       if (!delta.fullRepaint) {
         throw StateError(
@@ -253,6 +306,22 @@ final class TerminalXtermBufferModel {
         'worker length ${delta.bufferLength}.',
       );
     }
+    if (searchChanged && _searchListeners.isNotEmpty) {
+      for (final listener in _searchListeners.toList(growable: false)) {
+        listener();
+      }
+    }
+  }
+
+  bool _searchChangedBy(TerminalXtermWorkerBufferDelta delta) {
+    if (delta.fullRepaint || delta.trimStart > 0) return true;
+    for (final changed in delta.rowDeltas) {
+      if (changed.row >= _rowTexts.length ||
+          _rowTexts[changed.row] != changed.text) {
+        return true;
+      }
+    }
+    return false;
   }
 
   void _rebuildFullBuffer(TerminalXtermWorkerBufferDelta delta) {
@@ -298,6 +367,15 @@ final class TerminalXtermBufferModel {
       for (final changed in delta.rowDeltas)
         if (changed.isSemanticPromptLine) changed.row,
     ];
+    _searchGeneration = Object();
+    _searchLineBase = 0;
+    _searchLineIds = <_TerminalXtermBufferSearchLineId>[
+      for (var row = 0; row < delta.bufferLength; row++)
+        _TerminalXtermBufferSearchLineId(
+          generation: _searchGeneration,
+          absoluteIndex: row,
+        ),
+    ];
   }
 
   void _applyPartialBuffer(TerminalXtermWorkerBufferDelta delta) {
@@ -310,10 +388,15 @@ final class TerminalXtermBufferModel {
     final nextTexts = List<String>.of(_rowTexts);
     final nextRows = List<List<TerminalXtermWorkerRenderCell>>.of(_renderRows);
     final nextWrapped = List<bool>.of(_wrappedRows);
+    final nextSearchLineIds = List<_TerminalXtermBufferSearchLineId>.of(
+      _searchLineIds,
+    );
     if (delta.trimStart > 0) {
       nextTexts.removeRange(0, delta.trimStart);
       nextRows.removeRange(0, delta.trimStart);
       nextWrapped.removeRange(0, delta.trimStart);
+      nextSearchLineIds.removeRange(0, delta.trimStart);
+      _searchLineBase += delta.trimStart;
       _semanticPromptLines = <int>[
         for (final line in _semanticPromptLines)
           if (line >= delta.trimStart) line - delta.trimStart,
@@ -332,6 +415,12 @@ final class TerminalXtermBufferModel {
         nextTexts.add(changed.text);
         nextRows.add(frozenCells);
         nextWrapped.add(changed.isWrapped);
+        nextSearchLineIds.add(
+          _TerminalXtermBufferSearchLineId(
+            generation: _searchGeneration,
+            absoluteIndex: _searchLineBase + changed.row,
+          ),
+        );
       } else {
         nextTexts[changed.row] = changed.text;
         nextRows[changed.row] = frozenCells;
@@ -351,6 +440,9 @@ final class TerminalXtermBufferModel {
       nextRows,
     );
     _wrappedRows = List<bool>.unmodifiable(nextWrapped);
+    _searchLineIds = List<_TerminalXtermBufferSearchLineId>.unmodifiable(
+      nextSearchLineIds,
+    );
   }
 
   List<TerminalXtermWorkerRenderCell> _freezeCells(
