@@ -6,7 +6,24 @@ import 'package:flutter/services.dart';
 
 import '../code_forge.dart';
 import '../src/rust/api/editor.dart';
+import '../src/rust/api/editor_document.dart';
 import 'rope.dart';
+
+class CodeForgeDocumentEditDelta {
+  final int expectedRevision;
+  final int newRevision;
+  final int start;
+  final int end;
+  final String replacement;
+
+  const CodeForgeDocumentEditDelta({
+    required this.expectedRevision,
+    required this.newRevision,
+    required this.start,
+    required this.end,
+    required this.replacement,
+  });
+}
 
 /// Controller for the [CodeForge] code editor widget.
 ///
@@ -104,6 +121,14 @@ class CodeForgeController implements DeltaTextInputClient {
   String? _activeCompletionKey;
   ({String filePath, String prefix, int line, int character})?
   _queuedCompletionRequest;
+  NativeEditorDocument? _nativeEditorDocument;
+  Future<void>? _nativeEditorOpenFuture;
+  Future<void>? _nativeEditorSyncFuture;
+  final List<CodeForgeDocumentEditDelta> _pendingNativeEditorEdits = [];
+  String? _nativeEditorLanguageId, _nativeEditorDocumentId;
+  int _nativeEditorRevision = -1, _nativeEditorGeneration = 0;
+  bool? _nativeEditorParserSupported;
+  bool _nativeEditorFailed = false;
 
   CodeForgeController({this.lspConfig}) {
     if (lspConfig != null) {
@@ -298,6 +323,240 @@ class CodeForgeController implements DeltaTextInputClient {
           }
         });
       });
+    }
+  }
+
+  void _commitDocumentEdit({
+    required int start,
+    required int end,
+    required String replacement,
+  }) {
+    final expectedRevision = _currentVersion;
+    final newRevision = expectedRevision + 1;
+    _currentVersion = newRevision;
+
+    if (_nativeEditorLanguageId != null &&
+        !_nativeEditorFailed &&
+        _nativeEditorParserSupported != false) {
+      _pendingNativeEditorEdits.add(
+        CodeForgeDocumentEditDelta(
+          expectedRevision: expectedRevision,
+          newRevision: newRevision,
+          start: start,
+          end: end,
+          replacement: replacement,
+        ),
+      );
+    }
+  }
+
+  /// Opens one retained native syntax document from the current logical text.
+  /// The full text crosses FFI only here; subsequent updates are Unicode-scalar
+  /// edit deltas emitted by [_commitDocumentEdit].
+  void configureNativeSyntaxDocument({
+    required String languageId,
+    String? documentId,
+  }) {
+    final normalizedLanguageId = languageId.trim().toLowerCase();
+    if (normalizedLanguageId.isEmpty) return;
+    final resolvedDocumentId =
+        documentId ?? _openedFile ?? 'code-forge-${identityHashCode(this)}';
+    if (_nativeEditorLanguageId == normalizedLanguageId &&
+        _nativeEditorDocumentId == resolvedDocumentId &&
+        !_nativeEditorFailed) {
+      return;
+    }
+
+    final generation = ++_nativeEditorGeneration;
+    final previous = _nativeEditorDocument;
+    _nativeEditorDocument = null;
+    _nativeEditorOpenFuture = null;
+    _nativeEditorSyncFuture = null;
+    _pendingNativeEditorEdits.clear();
+    _nativeEditorLanguageId = normalizedLanguageId;
+    _nativeEditorDocumentId = resolvedDocumentId;
+    _nativeEditorRevision = _currentVersion;
+    _nativeEditorParserSupported = null;
+    _nativeEditorFailed = false;
+    if (previous != null) {
+      unawaited(previous.close().catchError((_) {}));
+    }
+
+    final initialRevision = _currentVersion;
+    final initialText = text;
+    _nativeEditorOpenFuture = () async {
+      try {
+        final document = await NativeEditorDocument.open(
+          documentId: resolvedDocumentId,
+          revision: BigInt.from(initialRevision),
+          text: initialText,
+          languageId: normalizedLanguageId,
+        );
+        if (_isDisposed || generation != _nativeEditorGeneration) {
+          await document.close();
+          return;
+        }
+        final info = document.info();
+        _nativeEditorDocument = document;
+        _nativeEditorRevision = info.revision.toInt();
+        _nativeEditorParserSupported = info.parserSupported;
+        if (!info.parserSupported) {
+          _pendingNativeEditorEdits.clear();
+        }
+      } catch (error) {
+        if (generation != _nativeEditorGeneration) return;
+        _disableNativeSyntaxDocument(error);
+      }
+    }();
+  }
+
+  Future<void> _syncNativeSyntaxDocument() async {
+    while (true) {
+      final inFlight = _nativeEditorSyncFuture;
+      if (inFlight != null) {
+        await inFlight;
+        if (_nativeEditorFailed ||
+            _nativeEditorParserSupported == false ||
+            _pendingNativeEditorEdits.isEmpty) {
+          return;
+        }
+        continue;
+      }
+
+      final sync = _syncNativeSyntaxDocumentInternal();
+      _nativeEditorSyncFuture = sync;
+      try {
+        await sync;
+      } finally {
+        if (identical(_nativeEditorSyncFuture, sync)) {
+          _nativeEditorSyncFuture = null;
+        }
+      }
+
+      if (_nativeEditorFailed ||
+          _nativeEditorParserSupported == false ||
+          _pendingNativeEditorEdits.isEmpty) {
+        return;
+      }
+    }
+  }
+
+  Future<void> _syncNativeSyntaxDocumentInternal() async {
+    final generation = _nativeEditorGeneration;
+    final openFuture = _nativeEditorOpenFuture;
+    if (openFuture == null) return;
+    await openFuture;
+    if (generation != _nativeEditorGeneration) return;
+
+    final document = _nativeEditorDocument;
+    if (document == null ||
+        _nativeEditorFailed ||
+        _nativeEditorParserSupported == false) {
+      return;
+    }
+
+    while (_pendingNativeEditorEdits.isNotEmpty) {
+      if (generation != _nativeEditorGeneration) return;
+
+      final batch = List<CodeForgeDocumentEditDelta>.from(
+        _pendingNativeEditorEdits,
+      );
+      var expectedRevision = _nativeEditorRevision;
+      for (final edit in batch) {
+        if (edit.expectedRevision != expectedRevision ||
+            edit.newRevision != expectedRevision + 1) {
+          _disableNativeSyntaxDocument(
+            StateError(
+              'native editor revision gap: expected $expectedRevision, '
+              'got ${edit.expectedRevision}->${edit.newRevision}',
+            ),
+          );
+          return;
+        }
+        expectedRevision = edit.newRevision;
+      }
+
+      final nativeRevisionBeforeApply = _nativeEditorRevision;
+      final result = await document.applyEdits(
+        expectedRevision: BigInt.from(nativeRevisionBeforeApply),
+        newRevision: BigInt.from(batch.last.newRevision),
+        edits: batch
+            .map(
+              (edit) => EditorDocumentEdit(
+                start: BigInt.from(edit.start),
+                end: BigInt.from(edit.end),
+                replacement: edit.replacement,
+              ),
+            )
+            .toList(growable: false),
+      );
+      if (generation != _nativeEditorGeneration) return;
+      if (!result.applied ||
+          result.revision.toInt() != batch.last.newRevision) {
+        _disableNativeSyntaxDocument(
+          StateError(
+            'native editor rejected revision ${batch.last.newRevision}; '
+            'native=${result.revision}',
+          ),
+        );
+        return;
+      }
+      _nativeEditorRevision = result.revision.toInt();
+      _pendingNativeEditorEdits.removeRange(0, batch.length);
+    }
+  }
+
+  Future<SyntaxSpanResponse?> queryNativeSyntaxSpans({
+    required int startLine,
+    required int endLine,
+    int overscan = 20,
+  }) async {
+    if (_nativeEditorLanguageId == null ||
+        _nativeEditorFailed ||
+        _nativeEditorParserSupported == false) {
+      return null;
+    }
+
+    final generation = _nativeEditorGeneration;
+    try {
+      await _syncNativeSyntaxDocument();
+      if (generation != _nativeEditorGeneration) return null;
+
+      final document = _nativeEditorDocument;
+      final requestRevision = _currentVersion;
+      if (document == null || _nativeEditorRevision != requestRevision) {
+        return null;
+      }
+      final response = await document.querySyntaxSpans(
+        expectedRevision: BigInt.from(requestRevision),
+        startLine: BigInt.from(startLine),
+        endLine: BigInt.from(endLine),
+        overscan: BigInt.from(overscan),
+      );
+      if (generation != _nativeEditorGeneration ||
+          response.stale ||
+          response.revision.toInt() != requestRevision ||
+          _currentVersion != requestRevision) {
+        return null;
+      }
+      return response;
+    } catch (error) {
+      if (generation == _nativeEditorGeneration) {
+        _disableNativeSyntaxDocument(error);
+      }
+      return null;
+    }
+  }
+
+  void _disableNativeSyntaxDocument(Object error) {
+    debugPrint('CodeForge native syntax fallback: $error');
+    _nativeEditorFailed = true;
+    _nativeEditorParserSupported = false;
+    _pendingNativeEditorEdits.clear();
+    final document = _nativeEditorDocument;
+    _nativeEditorDocument = null;
+    if (document != null) {
+      unawaited(document.close().catchError((_) {}));
     }
   }
 
@@ -920,7 +1179,7 @@ class CodeForgeController implements DeltaTextInputClient {
         final deleteStart = (offset - 1).clamp(0, _rope.length);
         final deletedChar = _rope.substring(deleteStart, offset);
         _rope.delete(deleteStart, offset);
-        _currentVersion++;
+        _commitDocumentEdit(start: deleteStart, end: offset, replacement: '');
 
         _recordDeletion(
           deleteStart,
@@ -987,7 +1246,7 @@ class CodeForgeController implements DeltaTextInputClient {
       if (offset < _rope.length) {
         final deletedChar = _rope.substring(offset, offset + 1);
         _rope.delete(offset, offset + 1);
-        _currentVersion++;
+        _commitDocumentEdit(start: offset, end: offset + 1, replacement: '');
 
         _recordDeletion(
           offset,
@@ -1061,7 +1320,11 @@ class CodeForgeController implements DeltaTextInputClient {
     for (final offset in uniqueOffsets.reversed) {
       final safeOffset = offset.clamp(0, _rope.length);
       _rope.insert(safeOffset, textToInsert);
-      _currentVersion++;
+      _commitDocumentEdit(
+        start: safeOffset,
+        end: safeOffset,
+        replacement: textToInsert,
+      );
 
       _recordInsertion(
         safeOffset,
@@ -2119,7 +2382,7 @@ class CodeForgeController implements DeltaTextInputClient {
   int get length {
     if (_bufferLineIndex != null && _bufferDirty) {
       return _rope.length +
-          (_bufferLineText!.length - _bufferLineOriginalLength);
+          (_bufferLineText!.runes.length - _bufferLineOriginalLength);
     }
     return _rope.length;
   }
@@ -2200,14 +2463,14 @@ class CodeForgeController implements DeltaTextInputClient {
   int getLineAtOffset(int charOffset) {
     if (_bufferLineIndex != null && _bufferDirty) {
       final bufferStart = _bufferLineRopeStart;
-      final bufferEnd = bufferStart + _bufferLineText!.length;
+      final bufferEnd = bufferStart + _bufferLineText!.runes.length;
       if (charOffset >= bufferStart && charOffset <= bufferEnd) {
         final localOffset = charOffset - bufferStart;
         final utf16Local = scalarToStringIndex(_bufferLineText!, localOffset);
         final sub = _bufferLineText!.substring(0, utf16Local);
         return _bufferLineIndex! + '\n'.allMatches(sub).length;
       } else if (charOffset > bufferEnd) {
-        final delta = _bufferLineText!.length - _bufferLineOriginalLength;
+        final delta = _bufferLineText!.runes.length - _bufferLineOriginalLength;
         final newLines = '\n'.allMatches(_bufferLineText!).length;
         return _rope.getLineAtOffset(charOffset - delta) + newLines;
       }
@@ -2230,17 +2493,19 @@ class CodeForgeController implements DeltaTextInputClient {
           final lines = _bufferLineText!.split('\n');
           int offset = _bufferLineRopeStart;
           for (int i = 0; i < lineIndex - _bufferLineIndex!; i++) {
-            offset += lines[i].length + 1;
+            offset += lines[i].runes.length + 1;
           }
           return offset;
         } else if (lineIndex > _bufferLineIndex! + newLines) {
-          final delta = _bufferLineText!.length - _bufferLineOriginalLength;
+          final delta =
+              _bufferLineText!.runes.length - _bufferLineOriginalLength;
           return _rope.getLineStartOffset(lineIndex - newLines) + delta;
         }
       } else {
         if (lineIndex == _bufferLineIndex!) return _bufferLineRopeStart;
         if (lineIndex > _bufferLineIndex!) {
-          final delta = _bufferLineText!.length - _bufferLineOriginalLength;
+          final delta =
+              _bufferLineText!.runes.length - _bufferLineOriginalLength;
           return _rope.getLineStartOffset(lineIndex) + delta;
         }
       }
@@ -2259,12 +2524,20 @@ class CodeForgeController implements DeltaTextInputClient {
   int findLineEnd(int offset) => _rope.findLineEnd(offset);
 
   set text(String newText) {
+    final oldLength = length;
+    _flushTimer?.cancel();
+    _bufferLineIndex = null;
+    _bufferLineText = null;
+    _bufferDirty = false;
+    _cachedBufferLines = null;
+    bufferNeedsRepaint = false;
     _rope = Rope(newText);
-    _currentVersion++;
-    _selection = TextSelection.collapsed(offset: newText.length);
+    _commitDocumentEdit(start: 0, end: oldLength, replacement: newText);
+    final newLength = newText.runes.length;
+    _selection = TextSelection.collapsed(offset: newLength);
     _lastSentSelection = _selection;
     _imeProjectionDirty = true;
-    dirtyRegion = TextRange(start: 0, end: newText.length);
+    dirtyRegion = TextRange(start: 0, end: newLength);
     _isTyping = false;
     _scheduleLspFullSync(newText);
     notifyListeners();
@@ -3350,7 +3623,11 @@ class CodeForgeController implements DeltaTextInputClient {
 
               deletedText = _rope.substring(foldStart, foldEnd);
               _rope.delete(foldStart, foldEnd);
-              _currentVersion++;
+              _commitDocumentEdit(
+                start: foldStart,
+                end: foldEnd,
+                replacement: '',
+              );
               _selection = TextSelection.collapsed(offset: foldStart);
               dirtyLine = _rope.getLineAtOffset(
                 foldStart.clamp(0, _rope.length),
@@ -3383,7 +3660,7 @@ class CodeForgeController implements DeltaTextInputClient {
 
       deletedText = _rope.substring(sel.start, sel.end);
       _rope.delete(sel.start, sel.end);
-      _currentVersion++;
+      _commitDocumentEdit(start: sel.start, end: sel.end, replacement: '');
       _selection = TextSelection.collapsed(offset: sel.start);
       dirtyLine = _rope.getLineAtOffset(sel.start);
 
@@ -3404,9 +3681,12 @@ class CodeForgeController implements DeltaTextInputClient {
 
     String charToDelete;
     if (_bufferLineIndex != null && _bufferDirty) {
-      final bufferEnd = _bufferLineRopeStart + _bufferLineText!.length;
+      final bufferEnd = _bufferLineRopeStart + _bufferLineText!.runes.length;
       if (deleteOffset >= _bufferLineRopeStart && deleteOffset < bufferEnd) {
-        charToDelete = _bufferLineText![deleteOffset - _bufferLineRopeStart];
+        charToDelete = _scalarCharAt(
+          _bufferLineText!,
+          deleteOffset - _bufferLineRopeStart,
+        );
       } else {
         charToDelete = _rope.charAt(deleteOffset);
       }
@@ -3417,7 +3697,7 @@ class CodeForgeController implements DeltaTextInputClient {
     if (charToDelete == '\n') {
       _flushBuffer();
       _rope.delete(deleteOffset, sel.start);
-      _currentVersion++;
+      _commitDocumentEdit(start: deleteOffset, end: sel.start, replacement: '');
       _selection = TextSelection.collapsed(offset: deleteOffset);
       dirtyLine = _rope.getLineAtOffset(deleteOffset);
       lineStructureChanged = true;
@@ -3431,19 +3711,23 @@ class CodeForgeController implements DeltaTextInputClient {
     }
 
     if (_bufferLineIndex != null && _bufferDirty) {
-      final bufferEnd = _bufferLineRopeStart + _bufferLineText!.length;
+      final bufferEnd = _bufferLineRopeStart + _bufferLineText!.runes.length;
 
       if (deleteOffset >= _bufferLineRopeStart && deleteOffset < bufferEnd) {
         final localOffset = deleteOffset - _bufferLineRopeStart;
         final utf16Local = scalarToStringIndex(_bufferLineText!, localOffset);
-        final charToDelete = _rope.charAt(deleteOffset);
+        final charToDelete = _scalarCharAt(_bufferLineText!, localOffset);
         final utf16End = utf16Local + charToDelete.length;
         deletedText = charToDelete;
         _bufferLineText =
             _bufferLineText!.substring(0, utf16Local) +
             _bufferLineText!.substring(utf16End);
         _selection = TextSelection.collapsed(offset: deleteOffset);
-        _currentVersion++;
+        _commitDocumentEdit(
+          start: deleteOffset,
+          end: deleteOffset + 1,
+          replacement: '',
+        );
         bufferNeedsRepaint = true;
         dirtyRegion = TextRange(start: deleteOffset, end: deleteOffset);
         _recordDeletion(deleteOffset, deletedText, selectionBefore, _selection);
@@ -3459,9 +3743,9 @@ class CodeForgeController implements DeltaTextInputClient {
     _initBuffer(lineIndex);
 
     final localOffset = deleteOffset - _bufferLineRopeStart;
-    if (localOffset >= 0 && localOffset < _bufferLineText!.length) {
+    if (localOffset >= 0 && localOffset < _bufferLineText!.runes.length) {
       final utf16Local = scalarToStringIndex(_bufferLineText!, localOffset);
-      final charToDelete = _rope.charAt(deleteOffset);
+      final charToDelete = _scalarCharAt(_bufferLineText!, localOffset);
       final utf16End = utf16Local + charToDelete.length;
       deletedText = charToDelete;
       _bufferLineText =
@@ -3470,7 +3754,11 @@ class CodeForgeController implements DeltaTextInputClient {
       _bufferDirty = true;
       _cachedBufferLines = null;
       _selection = TextSelection.collapsed(offset: deleteOffset);
-      _currentVersion++;
+      _commitDocumentEdit(
+        start: deleteOffset,
+        end: deleteOffset + 1,
+        replacement: '',
+      );
       dirtyLine = lineIndex;
       bufferNeedsRepaint = true;
       dirtyRegion = TextRange(start: deleteOffset, end: deleteOffset);
@@ -3540,7 +3828,11 @@ class CodeForgeController implements DeltaTextInputClient {
 
               deletedText = _rope.substring(foldStart, foldEnd);
               _rope.delete(foldStart, foldEnd);
-              _currentVersion++;
+              _commitDocumentEdit(
+                start: foldStart,
+                end: foldEnd,
+                replacement: '',
+              );
               _selection = TextSelection.collapsed(offset: foldStart);
               dirtyLine = _rope.getLineAtOffset(
                 foldStart.clamp(0, _rope.length),
@@ -3572,7 +3864,7 @@ class CodeForgeController implements DeltaTextInputClient {
 
       deletedText = _rope.substring(sel.start, sel.end);
       _rope.delete(sel.start, sel.end);
-      _currentVersion++;
+      _commitDocumentEdit(start: sel.start, end: sel.end, replacement: '');
       _selection = TextSelection.collapsed(offset: sel.start);
       dirtyLine = _rope.getLineAtOffset(sel.start);
 
@@ -3593,9 +3885,12 @@ class CodeForgeController implements DeltaTextInputClient {
 
     String charToDelete;
     if (_bufferLineIndex != null && _bufferDirty) {
-      final bufferEnd = _bufferLineRopeStart + _bufferLineText!.length;
+      final bufferEnd = _bufferLineRopeStart + _bufferLineText!.runes.length;
       if (deleteOffset >= _bufferLineRopeStart && deleteOffset < bufferEnd) {
-        charToDelete = _bufferLineText![deleteOffset - _bufferLineRopeStart];
+        charToDelete = _scalarCharAt(
+          _bufferLineText!,
+          deleteOffset - _bufferLineRopeStart,
+        );
       } else {
         charToDelete = _rope.charAt(deleteOffset);
       }
@@ -3606,7 +3901,11 @@ class CodeForgeController implements DeltaTextInputClient {
     if (charToDelete == '\n') {
       _flushBuffer();
       _rope.delete(deleteOffset, deleteOffset + 1);
-      _currentVersion++;
+      _commitDocumentEdit(
+        start: deleteOffset,
+        end: deleteOffset + 1,
+        replacement: '',
+      );
       dirtyLine = _rope.getLineAtOffset(deleteOffset);
       lineStructureChanged = true;
       dirtyRegion = TextRange(start: deleteOffset, end: deleteOffset);
@@ -3618,18 +3917,22 @@ class CodeForgeController implements DeltaTextInputClient {
     }
 
     if (_bufferLineIndex != null && _bufferDirty) {
-      final bufferEnd = _bufferLineRopeStart + _bufferLineText!.length;
+      final bufferEnd = _bufferLineRopeStart + _bufferLineText!.runes.length;
 
       if (deleteOffset >= _bufferLineRopeStart && deleteOffset < bufferEnd) {
         final localOffset = deleteOffset - _bufferLineRopeStart;
         final utf16Local = scalarToStringIndex(_bufferLineText!, localOffset);
-        final charToDelete = _rope.charAt(deleteOffset);
+        final charToDelete = _scalarCharAt(_bufferLineText!, localOffset);
         final utf16End = utf16Local + charToDelete.length;
         deletedText = charToDelete;
         _bufferLineText =
             _bufferLineText!.substring(0, utf16Local) +
             _bufferLineText!.substring(utf16End);
-        _currentVersion++;
+        _commitDocumentEdit(
+          start: deleteOffset,
+          end: deleteOffset + 1,
+          replacement: '',
+        );
 
         bufferNeedsRepaint = true;
         dirtyRegion = TextRange(start: deleteOffset, end: deleteOffset);
@@ -3647,9 +3950,9 @@ class CodeForgeController implements DeltaTextInputClient {
     _initBuffer(lineIndex);
 
     final localOffset = deleteOffset - _bufferLineRopeStart;
-    if (localOffset >= 0 && localOffset < _bufferLineText!.length) {
+    if (localOffset >= 0 && localOffset < _bufferLineText!.runes.length) {
       final utf16Local = scalarToStringIndex(_bufferLineText!, localOffset);
-      final charToDelete = _rope.charAt(deleteOffset);
+      final charToDelete = _scalarCharAt(_bufferLineText!, localOffset);
       final utf16End = utf16Local + charToDelete.length;
       deletedText = charToDelete;
       _bufferLineText =
@@ -3657,7 +3960,11 @@ class CodeForgeController implements DeltaTextInputClient {
           _bufferLineText!.substring(utf16End);
       _bufferDirty = true;
       _cachedBufferLines = null;
-      _currentVersion++;
+      _commitDocumentEdit(
+        start: deleteOffset,
+        end: deleteOffset + 1,
+        replacement: '',
+      );
       dirtyLine = lineIndex;
 
       bufferNeedsRepaint = true;
@@ -3935,7 +4242,11 @@ class CodeForgeController implements DeltaTextInputClient {
         oldBase: BigInt.from(selectionBefore.baseOffset),
         oldExtent: BigInt.from(selectionBefore.extentOffset),
       );
-      _currentVersion++;
+      _commitDocumentEdit(
+        start: safeStart,
+        end: safeEnd,
+        replacement: replacement,
+      );
       final newSelection = TextSelection(
         baseOffset: result.baseOffset.toInt(),
         extentOffset: result.extentOffset.toInt(),
@@ -3944,7 +4255,7 @@ class CodeForgeController implements DeltaTextInputClient {
       dirtyLine = _rope.getLineAtOffset(safeStart);
       dirtyRegion = TextRange(
         start: safeStart,
-        end: safeStart + replacement.length,
+        end: safeStart + replacement.runes.length,
       );
 
       if (deletedText.isNotEmpty && replacement.isNotEmpty) {
@@ -4568,6 +4879,17 @@ class CodeForgeController implements DeltaTextInputClient {
   /// memory leaks.
   void dispose() {
     _isDisposed = true;
+    _nativeEditorGeneration++;
+    _pendingNativeEditorEdits.clear();
+    _nativeEditorOpenFuture = null;
+    _nativeEditorSyncFuture = null;
+    _nativeEditorLanguageId = null;
+    _nativeEditorDocumentId = null;
+    final nativeEditorDocument = _nativeEditorDocument;
+    _nativeEditorDocument = null;
+    if (nativeEditorDocument != null) {
+      unawaited(nativeEditorDocument.close().catchError((_) {}));
+    }
     _debounceTimer?.cancel();
     _flushTimer?.cancel();
     _codeActionTimer?.cancel();
@@ -5012,7 +5334,11 @@ class CodeForgeController implements DeltaTextInputClient {
       case InsertOperation(:final offset, :final text, :final selectionAfter):
         final safeOffset = offset.clamp(0, _rope.length);
         _rope.insert(safeOffset, text);
-        _currentVersion++;
+        _commitDocumentEdit(
+          start: safeOffset,
+          end: safeOffset,
+          replacement: text,
+        );
         _selection = selectionAfter;
         dirtyLine = _rope.getLineAtOffset(safeOffset);
         if (text.contains('\n')) {
@@ -5026,11 +5352,14 @@ class CodeForgeController implements DeltaTextInputClient {
 
       case DeleteOperation(:final offset, :final text, :final selectionAfter):
         final safeStart = offset.clamp(0, _rope.length);
-        final safeEnd = (offset + text.length).clamp(safeStart, _rope.length);
+        final safeEnd = (offset + text.runes.length).clamp(
+          safeStart,
+          _rope.length,
+        );
         if (safeStart < safeEnd) {
           _rope.delete(safeStart, safeEnd);
         }
-        _currentVersion++;
+        _commitDocumentEdit(start: safeStart, end: safeEnd, replacement: '');
         _selection = selectionAfter;
         dirtyLine = _rope.getLineAtOffset(safeStart);
         if (text.contains('\n')) {
@@ -5046,17 +5375,21 @@ class CodeForgeController implements DeltaTextInputClient {
         :final selectionAfter,
       ):
         final safeStart = offset.clamp(0, _rope.length);
-        if (deletedText.isNotEmpty) {
-          final deleteEnd = (safeStart + deletedText.length).clamp(
-            safeStart,
-            _rope.length,
-          );
-          if (deleteEnd > safeStart) _rope.delete(safeStart, deleteEnd);
-        }
+        final deleteEnd = deletedText.isEmpty
+            ? safeStart
+            : (safeStart + deletedText.runes.length).clamp(
+                safeStart,
+                _rope.length,
+              );
+        if (deleteEnd > safeStart) _rope.delete(safeStart, deleteEnd);
         if (insertedText.isNotEmpty) {
           _rope.insert(safeStart, insertedText);
         }
-        _currentVersion++;
+        _commitDocumentEdit(
+          start: safeStart,
+          end: deleteEnd,
+          replacement: insertedText,
+        );
         _selection = selectionAfter;
         dirtyLine = _rope.getLineAtOffset(safeStart);
         if (deletedText.contains('\n') || insertedText.contains('\n')) {
@@ -5064,7 +5397,7 @@ class CodeForgeController implements DeltaTextInputClient {
         }
         dirtyRegion = TextRange(
           start: safeStart,
-          end: safeStart + insertedText.length,
+          end: safeStart + insertedText.runes.length,
         );
         break;
       case CompoundOperation(:final operations):
@@ -5294,25 +5627,29 @@ class CodeForgeController implements DeltaTextInputClient {
           } else {
             actualInsertedText = '\n$indent';
             actualSelection = TextSelection.collapsed(
-              offset: offset + actualInsertedText.length,
+              offset: offset + actualInsertedText.runes.length,
             );
           }
         }
       } else {
         actualSelection = TextSelection.collapsed(
-          offset: offset + actualInsertedText.length,
+          offset: offset + actualInsertedText.runes.length,
         );
       }
 
       _flushBuffer();
       _rope.insert(offset, actualInsertedText);
-      _currentVersion++;
+      _commitDocumentEdit(
+        start: offset,
+        end: offset,
+        replacement: actualInsertedText,
+      );
       _selection = actualSelection;
       dirtyLine = _rope.getLineAtOffset(offset);
       lineStructureChanged = true;
       dirtyRegion = TextRange(
         start: offset,
-        end: offset + actualInsertedText.length,
+        end: offset + actualInsertedText.runes.length,
       );
 
       _recordInsertion(
@@ -5331,11 +5668,12 @@ class CodeForgeController implements DeltaTextInputClient {
     if (actualInsertedText.length == 2 &&
         actualInsertedText[0] != actualInsertedText[1]) {
       if (_bufferLineIndex != null && _bufferDirty) {
-        final bufferEnd = _bufferLineRopeStart + _bufferLineText!.length;
+        final bufferEnd = _bufferLineRopeStart + _bufferLineText!.runes.length;
 
         if (offset >= _bufferLineRopeStart && offset <= bufferEnd) {
           final localOffset = offset - _bufferLineRopeStart;
-          if (localOffset >= 0 && localOffset <= _bufferLineText!.length) {
+          if (localOffset >= 0 &&
+              localOffset <= _bufferLineText!.runes.length) {
             final utf16Local = scalarToStringIndex(
               _bufferLineText!,
               localOffset,
@@ -5345,7 +5683,11 @@ class CodeForgeController implements DeltaTextInputClient {
                 actualInsertedText +
                 _bufferLineText!.substring(utf16Local);
             _selection = actualSelection;
-            _currentVersion++;
+            _commitDocumentEdit(
+              start: offset,
+              end: offset,
+              replacement: actualInsertedText,
+            );
             dirtyLine = _bufferLineIndex;
 
             bufferNeedsRepaint = true;
@@ -5371,7 +5713,7 @@ class CodeForgeController implements DeltaTextInputClient {
       _initBuffer(lineIndex);
 
       final localOffset = offset - _bufferLineRopeStart;
-      if (localOffset >= 0 && localOffset <= _bufferLineText!.length) {
+      if (localOffset >= 0 && localOffset <= _bufferLineText!.runes.length) {
         final utf16Local = scalarToStringIndex(_bufferLineText!, localOffset);
         _bufferLineText =
             _bufferLineText!.substring(0, utf16Local) +
@@ -5380,7 +5722,11 @@ class CodeForgeController implements DeltaTextInputClient {
         _bufferDirty = true;
         _cachedBufferLines = null;
         _selection = actualSelection;
-        _currentVersion++;
+        _commitDocumentEdit(
+          start: offset,
+          end: offset,
+          replacement: actualInsertedText,
+        );
         dirtyLine = lineIndex;
 
         bufferNeedsRepaint = true;
@@ -5401,18 +5747,22 @@ class CodeForgeController implements DeltaTextInputClient {
     }
 
     if (_bufferLineIndex != null && _bufferDirty) {
-      final bufferEnd = _bufferLineRopeStart + _bufferLineText!.length;
+      final bufferEnd = _bufferLineRopeStart + _bufferLineText!.runes.length;
 
       if (offset >= _bufferLineRopeStart && offset <= bufferEnd) {
         final localOffset = offset - _bufferLineRopeStart;
-        if (localOffset >= 0 && localOffset <= _bufferLineText!.length) {
+        if (localOffset >= 0 && localOffset <= _bufferLineText!.runes.length) {
           final utf16Local = scalarToStringIndex(_bufferLineText!, localOffset);
           _bufferLineText =
               _bufferLineText!.substring(0, utf16Local) +
               actualInsertedText +
               _bufferLineText!.substring(utf16Local);
           _selection = actualSelection;
-          _currentVersion++;
+          _commitDocumentEdit(
+            start: offset,
+            end: offset,
+            replacement: actualInsertedText,
+          );
 
           bufferNeedsRepaint = true;
 
@@ -5436,7 +5786,7 @@ class CodeForgeController implements DeltaTextInputClient {
     _initBuffer(lineIndex);
 
     final localOffset = offset - _bufferLineRopeStart;
-    if (localOffset >= 0 && localOffset <= _bufferLineText!.length) {
+    if (localOffset >= 0 && localOffset <= _bufferLineText!.runes.length) {
       final utf16Local = scalarToStringIndex(_bufferLineText!, localOffset);
       _bufferLineText =
           _bufferLineText!.substring(0, utf16Local) +
@@ -5445,7 +5795,11 @@ class CodeForgeController implements DeltaTextInputClient {
       _bufferDirty = true;
       _cachedBufferLines = null;
       _selection = actualSelection;
-      _currentVersion++;
+      _commitDocumentEdit(
+        start: offset,
+        end: offset,
+        replacement: actualInsertedText,
+      );
       dirtyLine = lineIndex;
 
       bufferNeedsRepaint = true;
@@ -5484,13 +5838,13 @@ class CodeForgeController implements DeltaTextInputClient {
     final deleteLen = range.end - range.start;
 
     if (_bufferLineIndex != null && _bufferDirty) {
-      final bufferEnd = _bufferLineRopeStart + _bufferLineText!.length;
+      final bufferEnd = _bufferLineRopeStart + _bufferLineText!.runes.length;
 
       if (range.start >= _bufferLineRopeStart && range.end <= bufferEnd) {
         final localStart = range.start - _bufferLineRopeStart;
         final localEnd = range.end - _bufferLineRopeStart;
 
-        if (localStart >= 0 && localEnd <= _bufferLineText!.length) {
+        if (localStart >= 0 && localEnd <= _bufferLineText!.runes.length) {
           final utf16LocalStart = scalarToStringIndex(
             _bufferLineText!,
             localStart,
@@ -5503,7 +5857,11 @@ class CodeForgeController implements DeltaTextInputClient {
           if (deletedText.contains('\n')) {
             _flushBuffer();
             _rope.delete(range.start, range.end);
-            _currentVersion++;
+            _commitDocumentEdit(
+              start: range.start,
+              end: range.end,
+              replacement: '',
+            );
             _selection = newSelection;
             dirtyLine = _rope.getLineAtOffset(range.start);
             lineStructureChanged = true;
@@ -5524,7 +5882,11 @@ class CodeForgeController implements DeltaTextInputClient {
               _bufferLineText!.substring(0, utf16LocalStart) +
               _bufferLineText!.substring(utf16LocalEnd);
           _selection = newSelection;
-          _currentVersion++;
+          _commitDocumentEdit(
+            start: range.start,
+            end: range.end,
+            replacement: '',
+          );
 
           bufferNeedsRepaint = true;
 
@@ -5564,7 +5926,7 @@ class CodeForgeController implements DeltaTextInputClient {
         deletedText = _rope.substring(range.start, range.end);
       }
       _rope.delete(range.start, range.end);
-      _currentVersion++;
+      _commitDocumentEdit(start: range.start, end: range.end, replacement: '');
       _selection = newSelection;
       dirtyLine = _rope.getLineAtOffset(range.start);
       lineStructureChanged = true;
@@ -5585,7 +5947,7 @@ class CodeForgeController implements DeltaTextInputClient {
     final utf16LocalStart = scalarToStringIndex(_bufferLineText!, localStart);
     final utf16LocalEnd = scalarToStringIndex(_bufferLineText!, localEnd);
 
-    if (localStart >= 0 && localEnd <= _bufferLineText!.length) {
+    if (localStart >= 0 && localEnd <= _bufferLineText!.runes.length) {
       deletedText = _bufferLineText!.substring(utf16LocalStart, utf16LocalEnd);
       _bufferLineText =
           _bufferLineText!.substring(0, utf16LocalStart) +
@@ -5593,7 +5955,7 @@ class CodeForgeController implements DeltaTextInputClient {
       _bufferDirty = true;
       _cachedBufferLines = null;
       _selection = newSelection;
-      _currentVersion++;
+      _commitDocumentEdit(start: range.start, end: range.end, replacement: '');
 
       bufferNeedsRepaint = true;
 
@@ -5622,7 +5984,7 @@ class CodeForgeController implements DeltaTextInputClient {
 
     _rope.delete(range.start, range.end);
     _rope.insert(range.start, text);
-    _currentVersion++;
+    _commitDocumentEdit(start: range.start, end: range.end, replacement: text);
     _selection = newSelection;
     dirtyLine = _rope.getLineAtOffset(range.start);
     dirtyRegion = TextRange(start: range.start, end: range.start + text.length);
@@ -5682,6 +6044,12 @@ class CodeForgeController implements DeltaTextInputClient {
       scalar++;
     }
     return utf16;
+  }
+
+  static String _scalarCharAt(String text, int scalarOffset) {
+    final start = scalarToStringIndex(text, scalarOffset);
+    final end = scalarToStringIndex(text, scalarOffset + 1);
+    return text.substring(start, end);
   }
 
   /// Check whether the corresponding [lineIndex] is inside a folded code block or not.

@@ -5,6 +5,13 @@ import 'package:flutter/material.dart';
 import 'package:re_highlight/re_highlight.dart';
 
 import '../LSP/lsp.dart';
+import '../src/rust/api/editor_document.dart';
+
+typedef NativeSyntaxSpanQuery = Future<SyntaxSpanResponse?> Function({
+  required int startLine,
+  required int endLine,
+  int overscan,
+});
 
 class SemanticWordSpan {
   final int startChar;
@@ -55,8 +62,18 @@ class SyntaxHighlighter {
   static const int _maxLineCacheEntries = 6000;
   static const int _maxSpanCacheEntries = 8000;
   int get documentVersion => _documentVersion;
-  Future<void>? _preHighlightInFlight;
-  int _preHighlightInFlightVersion = -1, _version = 0, _documentVersion = 0;
+  Future<bool>? _preHighlightInFlight;
+  int _preHighlightInFlightVersion = -1,
+      _preHighlightInFlightNativeRevision = -1,
+      _preHighlightInFlightStartLine = -1,
+      _preHighlightInFlightEndLine = -1,
+      _preHighlightRequestId = 0,
+      _version = 0,
+      _documentVersion = 0;
+  int _nativeSpanCacheRevision = -1,
+      _nativeSpanCacheStartLine = -1,
+      _nativeSpanCacheEndLine = -1;
+  final Map<int, List<NativeSyntaxSpan>> _nativeSpansByLine = {};
   bool _isEditing = false;
 
   SyntaxHighlighter({
@@ -720,6 +737,43 @@ class SyntaxHighlighter {
     return p;
   }
 
+  /// Builds a paragraph for an already sliced large-file line without
+  /// materializing or shaping the rest of that line. Returns `null` when the
+  /// native viewport cache does not cover this revision/line.
+  ui.Paragraph? buildNativeHighlightedParagraphSlice({
+    required int lineIndex,
+    required int nativeRevision,
+    required String sliceText,
+    required int sourceStartColumn,
+    required ui.ParagraphStyle paragraphStyle,
+    required double fontSize,
+    String? fontFamily,
+    double? width,
+  }) {
+    if (_nativeSpanCacheRevision != nativeRevision ||
+        lineIndex < _nativeSpanCacheStartLine ||
+        lineIndex > _nativeSpanCacheEndLine) {
+      return null;
+    }
+
+    final span = _nativeLineSpan(
+      sliceText,
+      _nativeSpansByLine[lineIndex],
+      sourceStartColumn: sourceStartColumn,
+    );
+    final builder = ui.ParagraphBuilder(paragraphStyle);
+    if (span == null || sliceText.isEmpty) {
+      final style = _getUiTextStyle(null, fontSize, fontFamily);
+      builder.pushStyle(style);
+      builder.addText(sliceText.isEmpty ? ' ' : sliceText);
+    } else {
+      _addTextSpanToBuilder(builder, span, fontSize, fontFamily);
+    }
+    final paragraph = builder.build();
+    paragraph.layout(ui.ParagraphConstraints(width: width ?? double.infinity));
+    return paragraph;
+  }
+
   void _addTextSpanToBuilder(
     ui.ParagraphBuilder builder,
     TextSpan span,
@@ -777,43 +831,83 @@ class SyntaxHighlighter {
     );
   }
 
-  Future<void> preHighlightLines(
+  Future<bool> preHighlightLines(
     int startLine,
     int endLine,
-    String Function(int) getLineText,
-  ) async {
+    String Function(int) getLineText, {
+    int? nativeRevision,
+    NativeSyntaxSpanQuery? nativeQuery,
+    bool deferNativeSpanRendering = false,
+    bool allowFallbackHighlighting = true,
+  }) async {
     if (_preHighlightInFlight != null &&
-        _preHighlightInFlightVersion == _version) {
-      return _preHighlightInFlight;
+        _preHighlightInFlightVersion == _version &&
+        _preHighlightInFlightNativeRevision == (nativeRevision ?? -1) &&
+        _preHighlightInFlightStartLine <= startLine &&
+        _preHighlightInFlightEndLine >= endLine) {
+      return _preHighlightInFlight!;
     }
 
     final requestVersion = _version;
+    final requestId = ++_preHighlightRequestId;
     _preHighlightInFlightVersion = requestVersion;
+    _preHighlightInFlightNativeRevision = nativeRevision ?? -1;
+    _preHighlightInFlightStartLine = startLine;
+    _preHighlightInFlightEndLine = endLine;
     final future = _preHighlightLinesInternal(
       startLine,
       endLine,
       getLineText,
       requestVersion,
+      requestId,
+      nativeRevision,
+      nativeQuery,
+      deferNativeSpanRendering,
+      allowFallbackHighlighting,
     );
     _preHighlightInFlight = future;
 
     try {
-      await future;
+      return await future;
     } finally {
       if (identical(_preHighlightInFlight, future)) {
         _preHighlightInFlight = null;
         _preHighlightInFlightVersion = -1;
+        _preHighlightInFlightNativeRevision = -1;
+        _preHighlightInFlightStartLine = -1;
+        _preHighlightInFlightEndLine = -1;
       }
     }
   }
 
-  Future<void> _preHighlightLinesInternal(
+  Future<bool> _preHighlightLinesInternal(
     int startLine,
     int endLine,
     String Function(int) getLineText,
     int requestVersion,
+    int requestId,
+    int? nativeRevision,
+    NativeSyntaxSpanQuery? nativeQuery,
+    bool deferNativeSpanRendering,
+    bool allowFallbackHighlighting,
   ) async {
     _pruneCachesForViewport(startLine, endLine);
+
+    if (nativeRevision != null && nativeQuery != null) {
+      final nativeUpdated = await _preHighlightNativeLines(
+        startLine,
+        endLine,
+        getLineText,
+        requestVersion,
+        requestId,
+        nativeRevision,
+        nativeQuery,
+        deferNativeSpanRendering,
+      );
+      if (nativeUpdated != null) return nativeUpdated;
+    }
+
+    if (!allowFallbackHighlighting) return false;
 
     final linesToProcess = <int, String>{};
 
@@ -827,16 +921,20 @@ class SyntaxHighlighter {
       }
     }
 
-    if (linesToProcess.isEmpty) return;
+    if (linesToProcess.isEmpty) return false;
 
     if (linesToProcess.length < 50) {
-      if (requestVersion != _version) return;
+      if (requestVersion != _version || requestId != _preHighlightRequestId) {
+        return false;
+      }
       for (final entry in linesToProcess.entries) {
-        if (requestVersion != _version) return;
+        if (requestVersion != _version || requestId != _preHighlightRequestId) {
+          return false;
+        }
         final span = _highlightLine(entry.value);
         _grammarCache[entry.key] = HighlightedLine(entry.value, span, _version);
       }
-      return;
+      return true;
     }
 
     final results = await compute(
@@ -851,7 +949,9 @@ class SyntaxHighlighter {
       ),
     );
 
-    if (requestVersion != _version) return;
+    if (requestVersion != _version || requestId != _preHighlightRequestId) {
+      return false;
+    }
 
     for (final entry in results.entries) {
       final spanData = entry.value;
@@ -864,6 +964,162 @@ class SyntaxHighlighter {
     }
 
     _pruneCachesForViewport(startLine, endLine);
+    return true;
+  }
+
+  /// Returns `null` when native highlighting is unavailable so callers can
+  /// preserve the existing re_highlight fallback. Otherwise returns whether
+  /// the grammar cache changed for the requested viewport.
+  Future<bool?> _preHighlightNativeLines(
+    int startLine,
+    int endLine,
+    String Function(int) getLineText,
+    int requestVersion,
+    int requestId,
+    int nativeRevision,
+    NativeSyntaxSpanQuery nativeQuery,
+    bool deferNativeSpanRendering,
+  ) async {
+    final cacheCoversViewport =
+        _nativeSpanCacheRevision == nativeRevision &&
+        _nativeSpanCacheStartLine <= startLine &&
+        _nativeSpanCacheEndLine >= endLine;
+
+    bool cacheChanged = false;
+    if (!cacheCoversViewport) {
+      final response = await nativeQuery(
+        startLine: startLine,
+        endLine: endLine,
+        overscan: 20,
+      );
+      if (requestVersion != _version || requestId != _preHighlightRequestId) {
+        return false;
+      }
+      if (response == null || !response.supported || response.stale) {
+        return null;
+      }
+      if (response.revision.toInt() != nativeRevision) {
+        return false;
+      }
+
+      _nativeSpanCacheRevision = nativeRevision;
+      _nativeSpanCacheStartLine = response.actualStartLine.toInt();
+      _nativeSpanCacheEndLine = response.actualEndLine.toInt();
+      cacheChanged = true;
+      _nativeSpansByLine.clear();
+      for (final span in response.spans) {
+        _nativeSpansByLine
+            .putIfAbsent(span.line.toInt(), () => <NativeSyntaxSpan>[])
+            .add(span);
+      }
+    }
+
+    if (_nativeSpanCacheRevision != nativeRevision ||
+        _nativeSpanCacheStartLine > startLine ||
+        _nativeSpanCacheEndLine < endLine) {
+      return false;
+    }
+
+    if (deferNativeSpanRendering) return cacheChanged;
+
+    bool changed = false;
+    for (int line = startLine; line <= endLine; line++) {
+      final lineText = getLineText(line);
+      final cached = _grammarCache[line];
+      if (cached != null &&
+          cached.text == lineText &&
+          cached.version == requestVersion) {
+        continue;
+      }
+      final span = _nativeLineSpan(lineText, _nativeSpansByLine[line]);
+      _grammarCache[line] = HighlightedLine(lineText, span, requestVersion);
+      _mergedCache.remove(line);
+      changed = true;
+    }
+    if (changed) {
+      // This cache is keyed by text rather than line/revision, so any grammar
+      // source update must invalidate it before semantic merging resumes.
+      _lineSpanCache.clear();
+    }
+    _pruneCachesForViewport(startLine, endLine);
+    return changed;
+  }
+
+  TextSpan? _nativeLineSpan(
+    String lineText,
+    List<NativeSyntaxSpan>? nativeSpans, {
+    int sourceStartColumn = 0,
+  }) {
+    if (lineText.isEmpty) return null;
+    if (nativeSpans == null || nativeSpans.isEmpty) {
+      return TextSpan(text: lineText, style: baseTextStyle);
+    }
+
+    final scalarLength = lineText.runes.length;
+    final sourceEndColumn = sourceStartColumn + scalarLength;
+    final ranges = <({int start, int end, String scope})>[];
+    final boundaries = <int>{0, scalarLength};
+    for (final span in nativeSpans) {
+      final absoluteStart = span.startColumn.toInt();
+      final absoluteEnd = span.endColumn.toInt();
+      if (absoluteEnd <= sourceStartColumn ||
+          absoluteStart >= sourceEndColumn) {
+        continue;
+      }
+      final start =
+          absoluteStart.clamp(sourceStartColumn, sourceEndColumn) -
+          sourceStartColumn;
+      final end =
+          absoluteEnd.clamp(sourceStartColumn, sourceEndColumn) -
+          sourceStartColumn;
+      if (start >= end) continue;
+      ranges.add((start: start, end: end, scope: span.scope));
+      boundaries
+        ..add(start)
+        ..add(end);
+    }
+    if (ranges.isEmpty) {
+      return TextSpan(text: lineText, style: baseTextStyle);
+    }
+
+    final sortedBoundaries = boundaries.toList()..sort();
+    final children = <TextSpan>[];
+    for (int i = 0; i + 1 < sortedBoundaries.length; i++) {
+      final start = sortedBoundaries[i];
+      final end = sortedBoundaries[i + 1];
+      if (start >= end) continue;
+
+      ({int start, int end, String scope})? selected;
+      for (final range in ranges) {
+        if (range.start > start || range.end < end) continue;
+        final selectedLength = selected == null
+            ? 1 << 30
+            : selected.end - selected.start;
+        final rangeLength = range.end - range.start;
+        // Prefer the narrowest capture for nested tree-sitter captures.
+        if (selected == null || rangeLength < selectedLength) {
+          selected = range;
+        }
+      }
+
+      final utf16Start = _scalarToUtf16Index(lineText, start);
+      final utf16End = _scalarToUtf16Index(lineText, end);
+      if (utf16Start >= utf16End) continue;
+      children.add(
+        TextSpan(
+          text: lineText.substring(utf16Start, utf16End),
+          style: selected == null
+              ? baseTextStyle
+              : (_resolvedTheme[selected.scope] ?? baseTextStyle),
+        ),
+      );
+    }
+
+    if (children.isEmpty) {
+      return TextSpan(text: lineText, style: baseTextStyle);
+    }
+    if (children.length == 1) return children.first;
+    return TextSpan(style: baseTextStyle, children: children);
   }
 
   void _pruneCachesForViewport(int startLine, int endLine) {
@@ -886,6 +1142,12 @@ class SyntaxHighlighter {
 
     if (_lineSpanCache.length > _maxSpanCacheEntries) {
       _lineSpanCache.clear();
+    }
+
+    if (_nativeSpansByLine.length > _maxLineCacheEntries) {
+      _nativeSpansByLine.removeWhere(
+        (line, _) => line < minKeep || line > maxKeep,
+      );
     }
   }
 
@@ -925,6 +1187,7 @@ class SyntaxHighlighter {
     _mergedCache.clear();
     _lineSemanticSpans.clear();
     _lineSpanCache.clear();
+    _nativeSpansByLine.clear();
   }
 }
 

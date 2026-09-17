@@ -213,6 +213,7 @@ class _WorkspaceEditorSurfaceState
               language: performanceProfile.syntaxHighlighting
                   ? _languageForPath(filePath)
                   : _plainTextLanguage,
+              languageId: _languageIdForPath(filePath),
               tabSize: effectiveTabSize,
               useSpaceAsTab: true,
               scrollbarDecoration: workspaceEditorScrollbarDecoration(),

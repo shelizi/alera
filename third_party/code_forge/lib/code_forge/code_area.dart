@@ -204,6 +204,11 @@ class CodeForge extends StatefulWidget {
   /// by default if not specified.
   final Mode? language;
 
+  /// Stable language identifier used by the retained native syntax document.
+  /// This is intentionally independent from LSP configuration so viewport
+  /// grammar highlighting can stay enabled when LSP is disabled.
+  final String? languageId;
+
   /// Additional language modes registered in the same highlighter instance.
   ///
   /// Useful for languages that embed other grammars (for example, TSX using
@@ -415,6 +420,7 @@ class CodeForge extends StatefulWidget {
     this.undoController,
     this.editorTheme,
     this.language,
+    this.languageId,
     this.filePath,
     this.initialText,
     this.focusNode,
@@ -2918,9 +2924,11 @@ class _CodeForgeState extends State<CodeForge> with TickerProviderStateMixin {
                                                 language: _language,
                                                 extraLanguages:
                                                     widget.extraLanguages,
-                                                languageId: _controller
-                                                    .lspConfig
-                                                    ?.languageId,
+                                                languageId:
+                                                    widget.languageId ??
+                                                    _controller
+                                                        .lspConfig
+                                                        ?.languageId,
                                                 lspConfig:
                                                     _controller.lspConfig,
                                                 semanticTokens: _semanticTokens,
@@ -5285,7 +5293,13 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     double? width,
   }) {
     if (_largeFilePerformanceMode) {
-      return _buildParagraph(text, width: width);
+      return _buildNativeHighlightedParagraphSlice(
+            lineIndex,
+            text,
+            sourceStartColumn: 0,
+            width: width,
+          ) ??
+          _buildParagraph(text, width: width);
     }
     final fontSize = textStyle?.fontSize ?? 14.0;
     final fontFamily = textStyle?.fontFamily;
@@ -5295,6 +5309,27 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
       _paragraphStyle,
       fontSize,
       fontFamily,
+      width: width,
+    );
+  }
+
+  ui.Paragraph? _buildNativeHighlightedParagraphSlice(
+    int lineIndex,
+    String sliceText, {
+    required int sourceStartColumn,
+    double? width,
+  }) {
+    if (!_largeFilePerformanceMode) return null;
+    final fontSize = textStyle?.fontSize ?? 14.0;
+    final fontFamily = textStyle?.fontFamily;
+    return _syntaxHighlighter.buildNativeHighlightedParagraphSlice(
+      lineIndex: lineIndex,
+      nativeRevision: controller.contentVersion,
+      sliceText: sliceText,
+      sourceStartColumn: sourceStartColumn,
+      paragraphStyle: _paragraphStyle,
+      fontSize: fontSize,
+      fontFamily: fontFamily,
       width: width,
     );
   }
@@ -5368,6 +5403,13 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
       baseTextStyle: _textStyle,
       languageId: languageId,
     );
+    final nativeLanguageId = languageId?.trim();
+    if (nativeLanguageId != null && nativeLanguageId.isNotEmpty) {
+      controller.configureNativeSyntaxDocument(
+        languageId: nativeLanguageId,
+        documentId: filePath,
+      );
+    }
     _layoutMap = LayoutMap();
     _rebuildLayoutMap();
 
@@ -8323,15 +8365,26 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
 
     _pruneViewportCaches(firstVisibleLine, lastVisibleLine);
     _scheduleVisibleSemanticTokens(firstVisibleLine, lastVisibleLine);
-    if (!_largeFilePerformanceMode) {
-      unawaited(
-        _syntaxHighlighter.preHighlightLines(
-          firstVisibleLine,
-          lastVisibleLine,
-          controller.getLineText,
-        ),
-      );
-    }
+    final highlightRevision = controller.contentVersion;
+    unawaited(
+      _syntaxHighlighter
+          .preHighlightLines(
+            firstVisibleLine,
+            lastVisibleLine,
+            controller.getLineText,
+            nativeRevision: highlightRevision,
+            nativeQuery: controller.queryNativeSyntaxSpans,
+            deferNativeSpanRendering: _largeFilePerformanceMode,
+            allowFallbackHighlighting: !_largeFilePerformanceMode,
+          )
+          .then((changed) {
+            if (changed &&
+                attached &&
+                controller.contentVersion == highlightRevision) {
+              markNeedsPaint();
+            }
+          }),
+    );
 
     _drawSearchHighlights(
       canvas,
@@ -8452,9 +8505,14 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
             horizontalScroll: horizontalScroll,
             viewportWidth: horizontalViewportWidth,
           );
-          paragraph = _buildParagraph(
-            bufferLineText.substring(slice.start, slice.end),
-          );
+          final sliceText = bufferLineText.substring(slice.start, slice.end);
+          paragraph =
+              _buildNativeHighlightedParagraphSlice(
+                i,
+                sliceText,
+                sourceStartColumn: slice.start,
+              ) ??
+              _buildParagraph(sliceText);
           paragraphXOffset = slice.xOffset;
         } else {
           paragraph = _buildHighlightedParagraph(
@@ -8485,7 +8543,13 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
               nativeAsciiInfo.start + slice.start,
               nativeAsciiInfo.start + slice.end,
             );
-            paragraph = _buildParagraph(sliceText);
+            paragraph =
+                _buildNativeHighlightedParagraphSlice(
+                  i,
+                  sliceText,
+                  sourceStartColumn: slice.start,
+                ) ??
+                _buildParagraph(sliceText);
             paragraphXOffset = slice.xOffset;
           } else {
             final cachedLineText = _lineTextCache[i];
@@ -8502,9 +8566,14 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
                 horizontalScroll: horizontalScroll,
                 viewportWidth: horizontalViewportWidth,
               );
-              paragraph = _buildParagraph(
-                lineText.substring(slice.start, slice.end),
-              );
+              final sliceText = lineText.substring(slice.start, slice.end);
+              paragraph =
+                  _buildNativeHighlightedParagraphSlice(
+                    i,
+                    sliceText,
+                    sourceStartColumn: slice.start,
+                  ) ??
+                  _buildParagraph(sliceText);
               paragraphXOffset = slice.xOffset;
             } else {
               paragraph = _buildHighlightedParagraph(
