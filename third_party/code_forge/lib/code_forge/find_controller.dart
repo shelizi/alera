@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 
 import 'controller.dart';
 import 'styling.dart';
+import 'versioned_text_snapshot_cache.dart';
 
 typedef RegexSearchRequest = ({
   String text,
@@ -102,6 +103,8 @@ class FindController extends ChangeNotifier {
 
   int _lastDocumentVersion = -1;
   VoidCallback? _controllerListener;
+  final VersionedTextSnapshotCache _textSnapshotCache =
+      VersionedTextSnapshotCache();
 
   final TextEditingController findInputController = TextEditingController();
   final TextEditingController replaceInputController = TextEditingController();
@@ -123,6 +126,7 @@ class FindController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _textSnapshotCache.invalidate();
     _searchDebounce?.cancel();
     _searchRequestSerial++;
     if (_controllerListener != null) {
@@ -138,6 +142,7 @@ class FindController extends ChangeNotifier {
     if (!_isActive && _lastQuery.isEmpty) return;
     final currentVersion = _codeController.documentVersion;
     if (currentVersion != _lastDocumentVersion) {
+      _textSnapshotCache.invalidate();
       _lastDocumentVersion = currentVersion;
       _reperformSearch();
     }
@@ -198,6 +203,7 @@ class FindController extends ChangeNotifier {
         _reperformSearch();
       }
     } else {
+      _textSnapshotCache.invalidate();
       _clearMatches();
     }
     notifyListeners();
@@ -319,7 +325,10 @@ class FindController extends ChangeNotifier {
       if (!_isSearchRequestCurrent(requestSerial, documentVersion)) return;
       _codeController.flushPendingBuffer();
       if (!_isSearchRequestCurrent(requestSerial, documentVersion)) return;
-      final text = await _codeController.rope.getTextSnapshot();
+      final text = await _textSnapshotCache.get(
+        version: documentVersion,
+        load: _codeController.rope.getTextSnapshot,
+      );
       if (!_isSearchRequestCurrent(requestSerial, documentVersion)) return;
       final ranges = await compute(computeRegexSearchRanges, (
         text: text,
@@ -391,6 +400,7 @@ class FindController extends ChangeNotifier {
   /// Clears search results and highlights.
   void clear() {
     _lastQuery = '';
+    _textSnapshotCache.invalidate();
     _clearMatches();
   }
 
@@ -445,7 +455,10 @@ class FindController extends ChangeNotifier {
       if (!_isSearchRequestCurrent(requestSerial, documentVersion)) return;
       _codeController.flushPendingBuffer();
       if (!_isSearchRequestCurrent(requestSerial, documentVersion)) return;
-      final text = await _codeController.rope.getTextSnapshot();
+      final text = await _textSnapshotCache.get(
+        version: documentVersion,
+        load: _codeController.rope.getTextSnapshot,
+      );
       if (!_isSearchRequestCurrent(requestSerial, documentVersion)) return;
       final newText = await compute(computeReplaceAllText, (
         text: text,

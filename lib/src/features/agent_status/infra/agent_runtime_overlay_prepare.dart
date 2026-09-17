@@ -27,25 +27,29 @@ extension _AgentRuntimeOverlayPrepare on AgentRuntimeOverlayService {
     final support = await _applicationSupportDirectory();
     final root = _overlayRoot(support, agentKey);
     final overlay = _overlayDirectory(root, terminalSessionId);
+    late final native.AgentRuntimeOverlayResult result;
     try {
-      _safeRemoveOverlay(overlay.path, root);
-      overlay.createSync(recursive: true);
-      if (_sourceExists(source.path)) {
-        _mirrorSourceDirectory(
-          sourcePath: source.path,
+      result = await _nativePreparer(
+        request: native.AgentRuntimeOverlayRequest(
+          overlayRoot: root,
           overlayPath: overlay.path,
+          mirrorPath: null,
+          sourcePath: source.path,
           managedSubdirectory: managedSubdirectory,
-          managedFileNames: managedFiles.keys.toSet(),
-        );
-      }
-      for (final entry in managedFiles.entries) {
-        _writeManagedFile(
-          p.join(overlay.path, managedSubdirectory, entry.key),
-          entry.value,
-        );
-      }
+          managedFileNames: managedFiles.keys.toList(growable: false),
+          managedFiles: <native.AgentRuntimeOverlayManagedFile>[
+            for (final entry in managedFiles.entries)
+              native.AgentRuntimeOverlayManagedFile(
+                path: p.join(overlay.path, managedSubdirectory, entry.key),
+                allowedRoot: overlay.path,
+                content: entry.value,
+                writeMode: native.AgentRuntimeOverlayWriteMode.replace,
+                executable: false,
+              ),
+          ],
+        ),
+      );
     } catch (_) {
-      _safeRemoveOverlay(overlay.path, root);
       if (source.isExplicit) {
         return AgentRuntimeOverlayPreparation(
           sourcePath: source.path,
@@ -59,11 +63,11 @@ extension _AgentRuntimeOverlayPrepare on AgentRuntimeOverlayService {
 
     return AgentRuntimeOverlayPreparation(
       overlayPath: overlay.path,
-      sourcePath: _sourceExists(source.path) ? source.path : null,
+      sourcePath: result.sourceExists ? source.path : null,
       environment: <String, String>{
         publicEnvKey: overlay.path,
         overlayEnvKey: overlay.path,
-        if (_sourceExists(source.path)) sourceEnvKey: source.path,
+        if (result.sourceExists) sourceEnvKey: source.path,
       },
     );
   }

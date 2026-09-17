@@ -1,5 +1,6 @@
 pub mod agent_descriptors;
 pub mod agent_hooks;
+pub mod agent_runtime_overlay;
 pub mod agent_runtime_resources;
 pub mod ai_dictation;
 pub mod clipboard;

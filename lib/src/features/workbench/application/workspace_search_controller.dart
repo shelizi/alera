@@ -3,63 +3,22 @@ import 'dart:async';
 import 'package:alera/src/features/workbench/application/retired_workspace_invalidation.dart';
 import 'package:alera/src/features/workbench/application/workbench_providers.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_service.dart';
+import 'package:alera/src/features/workbench/application/workspace_search_projection.dart';
 import 'package:alera/src/features/workbench/application/workspace_search_service.dart';
 import 'package:alera/src/rust/api/workspace_search.dart' as native;
-import 'package:path/path.dart' as p;
 import 'package:riverpod_annotation/riverpod_annotation.dart';
+
+export 'package:alera/src/features/workbench/application/workspace_search_projection.dart'
+    show
+        workspaceSearchCollapsibleNodeKeys,
+        workspaceSearchDirectoryNodeKey,
+        workspaceSearchDirectoryPaths,
+        workspaceSearchFileNodeKey;
 
 part 'workspace_search_controller.g.dart';
 
 const int _workspaceSearchMaxResults = 2000;
 const Duration _workspaceSearchDebounce = Duration(milliseconds: 250);
-final p.Context _workspaceSearchPathContext = p.Context(style: p.Style.posix);
-
-String workspaceSearchDirectoryNodeKey(String relativePath) {
-  return 'dir:$relativePath';
-}
-
-String workspaceSearchFileNodeKey(String relativePath) {
-  return 'file:$relativePath';
-}
-
-Set<String> workspaceSearchCollapsibleNodeKeys(
-  native.WorkspaceSearchResult? result, {
-  required bool viewAsTree,
-}) {
-  if (result == null) {
-    return const <String>{};
-  }
-  final keys = <String>{};
-  for (final file in result.files) {
-    if (viewAsTree) {
-      for (final directory in workspaceSearchDirectoryPaths(
-        file.relativePath,
-      )) {
-        keys.add(workspaceSearchDirectoryNodeKey(directory));
-      }
-    }
-    keys.add(workspaceSearchFileNodeKey(file.relativePath));
-  }
-  return keys;
-}
-
-List<String> workspaceSearchDirectoryPaths(String relativePath) {
-  final normalized = relativePath.replaceAll('\\', '/');
-  final segments = _workspaceSearchPathContext
-      .split(normalized)
-      .where((segment) => segment.isNotEmpty)
-      .toList(growable: false);
-  if (segments.length <= 1) {
-    return const <String>[];
-  }
-  final paths = <String>[];
-  final current = <String>[];
-  for (final segment in segments.take(segments.length - 1)) {
-    current.add(segment);
-    paths.add(_workspaceSearchPathContext.joinAll(current));
-  }
-  return paths;
-}
 
 class const WorkspaceSearchState({
   final String query = '',
@@ -138,6 +97,8 @@ class WorkspaceSearchController extends _$WorkspaceSearchController {
   int _requestGeneration = 0;
   String? _activeRequestId;
   WorkspaceSearchService? _searchService;
+  native.WorkspaceSearchResult? _projectedResult;
+  WorkspaceSearchProjection? _resultProjection;
 
   @override
   WorkspaceSearchState build(String workspaceId) {
@@ -233,10 +194,11 @@ class WorkspaceSearchController extends _$WorkspaceSearchController {
   }
 
   void toggleAllResultsCollapsed() {
-    final keys = workspaceSearchCollapsibleNodeKeys(
-      state.result,
-      viewAsTree: state.viewAsTree,
-    );
+    final keys =
+        _projectionForCurrentResult()?.collapsibleNodeKeys(
+          viewAsTree: state.viewAsTree,
+        ) ??
+        const <String>{};
     if (keys.isEmpty) {
       return;
     }
@@ -449,6 +411,24 @@ class WorkspaceSearchController extends _$WorkspaceSearchController {
       for (final file in result.files)
         if (file.matches.any((match) => matchIds.contains(match.id))) file,
     ];
+  }
+
+  WorkspaceSearchProjection? _projectionForCurrentResult() {
+    final result = state.result;
+    if (result == null) {
+      _clearResultProjection();
+      return null;
+    }
+    if (!identical(_projectedResult, result)) {
+      _projectedResult = result;
+      _resultProjection = WorkspaceSearchProjection(result);
+    }
+    return _resultProjection;
+  }
+
+  void _clearResultProjection() {
+    _projectedResult = null;
+    _resultProjection = null;
   }
 
   String _messageFor(Object error) {
