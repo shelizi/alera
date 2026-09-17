@@ -10,6 +10,11 @@ const String _workerWrite = 'write';
 const String _workerWriteDelta = 'writeDelta';
 const String _workerResize = 'resize';
 const String _workerResizeDelta = 'resizeDelta';
+const String _workerKeyInput = 'keyInput';
+const String _workerTextInput = 'textInput';
+const String _workerPaste = 'paste';
+const String _workerFocusInput = 'focusInput';
+const String _workerMouseInput = 'mouseInput';
 const String _workerClose = 'close';
 const String _workerError = 'error';
 const String _effectTitleChanged = 'titleChanged';
@@ -68,6 +73,26 @@ List<TerminalXtermWorkerEffect> _decodeWorkerEffects(Object? raw) {
     for (final effect in raw! as List)
       _decodeWorkerEffect(List<Object?>.from(effect as List)),
   ];
+}
+
+final class TerminalXtermWorkerActionResult {
+  const TerminalXtermWorkerActionResult({
+    required this.revision,
+    required this.handled,
+    required this.effects,
+  });
+
+  factory TerminalXtermWorkerActionResult._fromMessage(List<Object?> message) {
+    return TerminalXtermWorkerActionResult(
+      revision: message[0]! as int,
+      handled: message[1] as bool?,
+      effects: _decodeWorkerEffects(message[2]),
+    );
+  }
+
+  final int revision;
+  final bool? handled;
+  final List<TerminalXtermWorkerEffect> effects;
 }
 
 final class TerminalXtermWorkerSnapshot {
@@ -321,6 +346,76 @@ final class TerminalXtermWorker {
     );
   }
 
+  Future<TerminalXtermWorkerActionResult> keyInput(
+    TerminalKey key, {
+    bool shift = false,
+    bool alt = false,
+    bool ctrl = false,
+    bool superKey = false,
+    bool capsLock = false,
+    bool numLock = false,
+    TerminalKeyEventType type = TerminalKeyEventType.press,
+    String? text,
+  }) async {
+    return TerminalXtermWorkerActionResult._fromMessage(
+      await _requestRaw(<Object?>[
+        _workerKeyInput,
+        key.index,
+        shift,
+        alt,
+        ctrl,
+        superKey,
+        capsLock,
+        numLock,
+        type.index,
+        text,
+      ]),
+    );
+  }
+
+  Future<TerminalXtermWorkerActionResult> textInput(String text) async {
+    return TerminalXtermWorkerActionResult._fromMessage(
+      await _requestRaw(<Object?>[_workerTextInput, text]),
+    );
+  }
+
+  Future<TerminalXtermWorkerActionResult> paste(String text) async {
+    return TerminalXtermWorkerActionResult._fromMessage(
+      await _requestRaw(<Object?>[_workerPaste, text]),
+    );
+  }
+
+  Future<TerminalXtermWorkerActionResult> focusInput(bool focused) async {
+    return TerminalXtermWorkerActionResult._fromMessage(
+      await _requestRaw(<Object?>[_workerFocusInput, focused]),
+    );
+  }
+
+  Future<TerminalXtermWorkerActionResult> mouseInput(
+    TerminalMouseButton button,
+    TerminalMouseButtonState buttonState,
+    CellOffset position, {
+    bool motion = false,
+    TerminalMouseModifiers modifiers = TerminalMouseModifiers.none,
+    CellOffset? pixelPosition,
+  }) async {
+    return TerminalXtermWorkerActionResult._fromMessage(
+      await _requestRaw(<Object?>[
+        _workerMouseInput,
+        button.index,
+        buttonState.index,
+        position.x,
+        position.y,
+        motion,
+        modifiers.shift,
+        modifiers.alt,
+        modifiers.control,
+        pixelPosition?.x,
+        pixelPosition?.y,
+      ]),
+    );
+  }
+
   Future<void> close() async {
     if (_closed) return;
     _closed = true;
@@ -570,6 +665,14 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
     ];
   }
 
+  List<Object?> actionResult(bool? handled) {
+    return <Object?>[
+      revision,
+      handled,
+      <Object?>[for (final effect in effects) List<Object?>.from(effect)],
+    ];
+  }
+
   void fail(SendPort reply, Object error, StackTrace stackTrace) {
     reply.send(<Object?>[_workerError, '$error\n$stackTrace']);
   }
@@ -602,6 +705,56 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
           terminal.resize(raw[2]! as int, raw[3]! as int);
           revision += 1;
           reply.send(delta(forceFullRepaint: true));
+        case _workerKeyInput:
+          effects.clear();
+          final handled = terminal.keyInput(
+            TerminalKey.values[raw[2]! as int],
+            shift: raw[3]! as bool,
+            alt: raw[4]! as bool,
+            ctrl: raw[5]! as bool,
+            superKey: raw[6]! as bool,
+            capsLock: raw[7]! as bool,
+            numLock: raw[8]! as bool,
+            type: TerminalKeyEventType.values[raw[9]! as int],
+            text: raw[10] as String?,
+          );
+          revision += 1;
+          reply.send(actionResult(handled));
+        case _workerTextInput:
+          effects.clear();
+          terminal.textInput(raw[2]! as String);
+          revision += 1;
+          reply.send(actionResult(null));
+        case _workerPaste:
+          effects.clear();
+          terminal.paste(raw[2]! as String);
+          revision += 1;
+          reply.send(actionResult(null));
+        case _workerFocusInput:
+          effects.clear();
+          terminal.focusInput(raw[2]! as bool);
+          revision += 1;
+          reply.send(actionResult(null));
+        case _workerMouseInput:
+          effects.clear();
+          final pixelX = raw[10] as int?;
+          final pixelY = raw[11] as int?;
+          final handled = terminal.mouseInput(
+            TerminalMouseButton.values[raw[2]! as int],
+            TerminalMouseButtonState.values[raw[3]! as int],
+            CellOffset(raw[4]! as int, raw[5]! as int),
+            motion: raw[6]! as bool,
+            modifiers: TerminalMouseModifiers(
+              shift: raw[7]! as bool,
+              alt: raw[8]! as bool,
+              control: raw[9]! as bool,
+            ),
+            pixelPosition: pixelX == null || pixelY == null
+                ? null
+                : CellOffset(pixelX, pixelY),
+          );
+          revision += 1;
+          reply.send(actionResult(handled));
         case _workerClose:
           reply.send(const <Object?>[true]);
           commands.close();

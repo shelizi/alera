@@ -91,6 +91,69 @@ void main() {
     },
   );
 
+  test('worker input encoding matches direct xterm state', () async {
+    final directEffects = <TerminalXtermWorkerEffect>[];
+    final direct = _createDirectTerminal(
+      cols: 20,
+      rows: 6,
+      onOutput: (value) =>
+          directEffects.add(TerminalXtermWorkerPtyWrite(value)),
+    );
+    final worker = await TerminalXtermWorker.start(
+      cols: 20,
+      rows: 6,
+      maxLines: 256,
+    );
+    addTearDown(worker.close);
+
+    final escape = String.fromCharCode(27);
+    final modes =
+        '$escape[?1h$escape[?1000h$escape[?1004h$escape[?1006h$escape[?2004h';
+    direct.write(modes);
+    await worker.writeDelta(modes);
+    directEffects.clear();
+
+    final directKeyHandled = direct.keyInput(TerminalKey.arrowUp);
+    final key = await worker.keyInput(TerminalKey.arrowUp);
+    expect(key.handled, directKeyHandled);
+    expect(key.revision, 2);
+    _expectEffectsParity(key.effects, directEffects);
+
+    directEffects.clear();
+    direct.textInput('typed');
+    final text = await worker.textInput('typed');
+    expect(text.handled, isNull);
+    _expectEffectsParity(text.effects, directEffects);
+
+    directEffects.clear();
+    direct.paste('a\nb');
+    final paste = await worker.paste('a\nb');
+    expect(paste.handled, isNull);
+    _expectEffectsParity(paste.effects, directEffects);
+
+    directEffects.clear();
+    direct.focusInput(true);
+    final focus = await worker.focusInput(true);
+    expect(focus.handled, isNull);
+    _expectEffectsParity(focus.effects, directEffects);
+
+    directEffects.clear();
+    final directMouseHandled = direct.mouseInput(
+      TerminalMouseButton.left,
+      TerminalMouseButtonState.down,
+      const CellOffset(2, 1),
+      modifiers: const TerminalMouseModifiers(alt: true),
+    );
+    final mouse = await worker.mouseInput(
+      TerminalMouseButton.left,
+      TerminalMouseButtonState.down,
+      const CellOffset(2, 1),
+      modifiers: const TerminalMouseModifiers(alt: true),
+    );
+    expect(mouse.handled, directMouseHandled);
+    _expectEffectsParity(mouse.effects, directEffects);
+  });
+
   test('worker delta sends only changed viewport rows', () async {
     final direct = Terminal(maxLines: 256, reflowWithHiddenCursor: false)
       ..resize(12, 4);
