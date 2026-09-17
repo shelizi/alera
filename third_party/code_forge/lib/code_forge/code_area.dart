@@ -10435,9 +10435,12 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
         }
         if (hasActiveFolds && _isLineFolded(lineIndex)) continue;
 
-        final lineText =
-            _lineTextCache[lineIndex] ?? controller.getLineText(lineIndex);
-        final lineLength = lineText.length;
+        final nativeAsciiInfo = _largeFileNativeAsciiLineInfo(lineIndex);
+        String? lineText = _lineTextCache[lineIndex];
+        if (nativeAsciiInfo == null && lineText == null) {
+          lineText = controller.getLineText(lineIndex);
+        }
+        final lineLength = nativeAsciiInfo?.contentLength ?? lineText!.length;
 
         int lineHighStart = 0;
         int lineHighEnd = lineLength;
@@ -10454,6 +10457,43 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
 
         if (lineHighStart >= lineHighEnd) continue;
 
+        final lineY = _getLineYOffset(lineIndex, hasActiveFolds);
+        final colorBoxOffset = _getColorBoxOffsetForLine(
+          lineIndex,
+          lineHighStart,
+        );
+        final scroll = lineWrap ? 0.0 : _effectiveHScroll;
+        final textX = isRTL
+            ? (innerPadding?.left ?? 0) - scroll
+            : _gutterWidth + (innerPadding?.left ?? 0) - scroll;
+        final nativeColumnWidth = nativeAsciiInfo != null
+            ? _getLargeFileFixedAsciiColumnWidth()
+            : null;
+
+        if (nativeAsciiInfo != null && nativeColumnWidth != null) {
+          final adjustedLeft =
+              lineHighStart * nativeColumnWidth + colorBoxOffset;
+          final adjustedRight =
+              lineHighEnd * nativeColumnWidth + colorBoxOffset;
+          final screenX = offset.dx + textX + adjustedLeft;
+          final screenY =
+              offset.dy +
+              (innerPadding?.top ?? 0) +
+              lineY -
+              vscrollController.offset;
+          canvas.drawRect(
+            Rect.fromLTWH(
+              screenX,
+              screenY,
+              adjustedRight - adjustedLeft,
+              _lineHeight,
+            ),
+            highlightPaint,
+          );
+          continue;
+        }
+
+        lineText ??= controller.getLineText(lineIndex);
         final contentWidth =
             size.width - _gutterWidth - (innerPadding?.horizontal ?? 0);
         final paragraphWidth = lineWrap
@@ -10471,11 +10511,6 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
           );
         }
 
-        final lineY = _getLineYOffset(lineIndex, hasActiveFolds);
-        final colorBoxOffset = _getColorBoxOffsetForLine(
-          lineIndex,
-          lineHighStart,
-        );
         final utf16Start = CodeForgeController.scalarToUtf16Offset(
           lineText,
           lineHighStart,
@@ -10485,11 +10520,6 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
           lineHighEnd,
         );
         final boxes = para.getBoxesForRange(utf16Start, utf16End);
-
-        final scroll = lineWrap ? 0.0 : _effectiveHScroll;
-        final textX = isRTL
-            ? (innerPadding?.left ?? 0) - scroll
-            : _gutterWidth + (innerPadding?.left ?? 0) - scroll;
 
         for (final box in boxes) {
           final adjustedLeft = box.left + colorBoxOffset;
