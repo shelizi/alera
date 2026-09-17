@@ -75,4 +75,30 @@ void main() {
     );
     expect(second.revision, 2);
   });
+
+  test('preserves VT writeback, title, and bell effects in order', () async {
+    final worker = await TerminalVtWorker.start(
+      cols: 16,
+      rows: 6,
+      maxScrollback: 32,
+    );
+    addTearDown(worker.close);
+
+    final delta = await worker.writeDelta(
+      Uint8List.fromList(utf8.encode('\x1b]2;worker-title\x07\x07\x1b[6n')),
+    );
+
+    expect(delta.effects, hasLength(3));
+    expect(delta.effects[0], isA<TerminalVtWorkerTitleChanged>());
+    expect(
+      (delta.effects[0] as TerminalVtWorkerTitleChanged).title,
+      'worker-title',
+    );
+    expect(delta.effects[1], isA<TerminalVtWorkerBell>());
+    expect(delta.effects[2], isA<TerminalVtWorkerPtyWrite>());
+    expect(
+      utf8.decode((delta.effects[2] as TerminalVtWorkerPtyWrite).bytes),
+      '\x1b[1;1R',
+    );
+  });
 }

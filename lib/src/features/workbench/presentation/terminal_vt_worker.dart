@@ -20,6 +20,59 @@ const String _workerWriteDelta = 'writeDelta';
 const String _workerResize = 'resize';
 const String _workerClose = 'close';
 
+const String _effectPtyWrite = 'ptyWrite';
+const String _effectTitleChanged = 'titleChanged';
+const String _effectBell = 'bell';
+
+/// Side effect emitted synchronously while parsing terminal bytes.
+sealed class TerminalVtWorkerEffect {
+  const TerminalVtWorkerEffect();
+
+  static TerminalVtWorkerEffect fromMessage(List<Object?> message) {
+    return switch (message[0]) {
+      _effectPtyWrite => TerminalVtWorkerPtyWrite(
+        Uint8List.fromList(message[1]! as Uint8List),
+      ),
+      _effectTitleChanged => TerminalVtWorkerTitleChanged(
+        message[1]! as String,
+      ),
+      _effectBell => const TerminalVtWorkerBell(),
+      _ => throw StateError('Unknown terminal VT worker effect: ${message[0]}'),
+    };
+  }
+}
+
+/// Bytes that must be written back to the PTY, such as a DSR response.
+final class TerminalVtWorkerPtyWrite extends TerminalVtWorkerEffect {
+  const TerminalVtWorkerPtyWrite(this.bytes);
+
+  final Uint8List bytes;
+}
+
+/// Terminal title update emitted by OSC 0/2.
+final class TerminalVtWorkerTitleChanged extends TerminalVtWorkerEffect {
+  const TerminalVtWorkerTitleChanged(this.title);
+
+  final String title;
+}
+
+/// Audible/visual bell request emitted by BEL.
+final class TerminalVtWorkerBell extends TerminalVtWorkerEffect {
+  const TerminalVtWorkerBell();
+}
+
+List<TerminalVtWorkerEffect> _effectsFromMessage(Object? value) {
+  if (value is! List) {
+    return const <TerminalVtWorkerEffect>[];
+  }
+  return List<TerminalVtWorkerEffect>.unmodifiable(
+    value.map(
+      (effect) =>
+          TerminalVtWorkerEffect.fromMessage((effect! as List).cast<Object?>()),
+    ),
+  );
+}
+
 /// Pure-Dart state returned from the VT worker.
 final class TerminalVtWorkerSnapshot {
   const TerminalVtWorkerSnapshot({
@@ -31,6 +84,7 @@ final class TerminalVtWorkerSnapshot {
     required this.cursorVisible,
     required this.cursorX,
     required this.cursorY,
+    this.effects = const <TerminalVtWorkerEffect>[],
   });
 
   final int revision;
@@ -41,6 +95,7 @@ final class TerminalVtWorkerSnapshot {
   final bool cursorVisible;
   final int? cursorX;
   final int? cursorY;
+  final List<TerminalVtWorkerEffect> effects;
 
   factory TerminalVtWorkerSnapshot._fromMessage(List<Object?> message) {
     if (message.length < 9 || message[0] != true) {
@@ -57,6 +112,7 @@ final class TerminalVtWorkerSnapshot {
       cursorVisible: message[6]! as bool,
       cursorX: message[7] as int?,
       cursorY: message[8] as int?,
+      effects: _effectsFromMessage(message.length > 9 ? message[9] : null),
     );
   }
 }
@@ -87,6 +143,7 @@ final class TerminalVtWorkerDelta {
     required this.cursorVisible,
     required this.cursorX,
     required this.cursorY,
+    this.effects = const <TerminalVtWorkerEffect>[],
   });
 
   final int revision;
@@ -97,6 +154,7 @@ final class TerminalVtWorkerDelta {
   final bool cursorVisible;
   final int? cursorX;
   final int? cursorY;
+  final List<TerminalVtWorkerEffect> effects;
 
   factory TerminalVtWorkerDelta._fromMessage(List<Object?> message) {
     if (message.length < 9 || message[0] != true) {
@@ -117,6 +175,7 @@ final class TerminalVtWorkerDelta {
       cursorVisible: message[6]! as bool,
       cursorX: message[7] as int?,
       cursorY: message[8] as int?,
+      effects: _effectsFromMessage(message.length > 9 ? message[9] : null),
     );
   }
 }
@@ -232,18 +291,29 @@ void terminalVtWorkerMain(List<Object?> initialization) {
   VtTerminal? terminal;
   VtTerminalFormatter? formatter;
   VtRenderState? renderState;
+  final pendingEffects = <Object?>[];
   var revision = 0;
 
   try {
-    terminal = VtTerminal(
+    final createdTerminal = VtTerminal(
       cols: initialization[1]! as int,
       rows: initialization[2]! as int,
       maxScrollback: initialization[3]! as int,
     );
-    formatter = terminal.createFormatter(
+    terminal = createdTerminal;
+    formatter = createdTerminal.createFormatter(
       const VtFormatterTerminalOptions(trim: false),
     );
-    renderState = terminal.createRenderState();
+    renderState = createdTerminal.createRenderState();
+    createdTerminal.onWritePty = (data) {
+      pendingEffects.add(<Object?>[_effectPtyWrite, Uint8List.fromList(data)]);
+    };
+    createdTerminal.onTitleChanged = () {
+      pendingEffects.add(<Object?>[_effectTitleChanged, createdTerminal.title]);
+    };
+    createdTerminal.onBell = () {
+      pendingEffects.add(const <Object?>[_effectBell]);
+    };
   } catch (error, stackTrace) {
     owner.send(<Object?>[
       _workerError,
@@ -287,6 +357,7 @@ void terminalVtWorkerMain(List<Object?> initialization) {
       cursor.visible,
       cursor.hasViewportPosition ? cursor.viewportX : null,
       cursor.hasViewportPosition ? cursor.viewportY : null,
+      List<Object?>.from(pendingEffects),
     ];
     clearDirty();
     return message;
@@ -332,6 +403,7 @@ void terminalVtWorkerMain(List<Object?> initialization) {
       cursor.visible,
       cursor.hasViewportPosition ? cursor.viewportX : null,
       cursor.hasViewportPosition ? cursor.viewportY : null,
+      List<Object?>.from(pendingEffects),
     ];
     renderState.dirty = ghostty_bindings
         .GhosttyRenderStateDirty
@@ -351,16 +423,19 @@ void terminalVtWorkerMain(List<Object?> initialization) {
     try {
       switch (message[0]) {
         case _workerWrite:
+          pendingEffects.clear();
           final transferable = message[2]! as TransferableTypedData;
           terminal!.writeBytes(transferable.materialize().asUint8List());
           revision += 1;
           reply.send(snapshot());
         case _workerWriteDelta:
+          pendingEffects.clear();
           final transferable = message[2]! as TransferableTypedData;
           terminal!.writeBytes(transferable.materialize().asUint8List());
           revision += 1;
           reply.send(delta());
         case _workerResize:
+          pendingEffects.clear();
           terminal!.resize(cols: message[2]! as int, rows: message[3]! as int);
           revision += 1;
           reply.send(snapshot());
