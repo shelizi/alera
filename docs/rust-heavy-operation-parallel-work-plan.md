@@ -479,6 +479,26 @@ After C4 stabilizes editor ownership/open semantics, the retained native tree ma
 
 Do not start C5 in parallel with C4. They share CodeForge controller/native-document/FRB ownership.
 
+#### C5 folding-ranges status - 2026-09-17
+
+The first C5 feature is complete and merged to `main` (`3607d825` implementation, `6e85b235` merge):
+
+- folding now prefers ranges derived from the already-retained `NativeEditorDocument` Tree-sitter tree instead of rescanning every Rope character;
+- the native query is revision-aware and rejects stale results before Dart can apply them;
+- LSP folding remains higher priority, and unsupported/unavailable native parsers retain the existing `foldsComputeAll` Rope-scan fallback;
+- the structural traversal excludes string/comment contents by operating on selected Tree-sitter container nodes, preventing delimiter characters inside strings from creating bogus folds;
+- folding results are discarded if the document version changes while the async query/fallback is in flight.
+
+Validation:
+
+- CodeForge Rust: 16 passed, 0 failed, 1 manual benchmark ignored;
+- retained folding regressions cover string-contained braces, stale revisions, incremental edits, and plaintext fallback;
+- targeted CodeForge Dart analyze: no issues;
+- root `workspace_editor_surface_test.dart`: 20 passed, 0 failed;
+- `git diff --check`: clean.
+
+Continue C5 one feature at a time. Next candidates are bracket matching, structural selection, then symbol outline/navigation; do not combine them into one branch.
+
 ### T6 - evidence-selected terminal implementation
 
 T6 exists only after T5 identifies a material current bottleneck. Do not start a generic "optimize terminal more" branch without that gate.
