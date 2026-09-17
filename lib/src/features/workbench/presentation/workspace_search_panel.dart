@@ -9,6 +9,7 @@ import 'package:alera/src/design_system/icons/alera_file_icon.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:alera/src/features/workbench/application/workbench_providers.dart';
 import 'package:alera/src/features/workbench/application/workspace_search_controller.dart';
+import 'package:alera/src/features/workbench/application/workspace_search_projection.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/rust/api/workspace_search.dart' as native;
 import 'package:flutter/material.dart';
@@ -17,9 +18,10 @@ import 'package:path/path.dart' as p;
 
 part 'workspace_search_panel_feedback.dart';
 part 'workspace_search_panel_inputs.dart';
-part 'workspace_search_panel_results.dart';
 part 'workspace_search_panel_toolbar.dart';
 part 'workspace_search_panel_widgets.dart';
+
+final p.Context _searchPathContext = p.Context(style: p.Style.posix);
 
 class const WorkspaceSearchMatchTarget({
   required final String relativePath,
@@ -46,13 +48,13 @@ class _WorkspaceSearchPanelState extends ConsumerState<WorkspaceSearchPanel> {
   bool _replaceVisible = false;
   bool _detailsVisible = false;
   String? _initializedOptionalSectionsWorkspaceId;
-  native.WorkspaceSearchResult? _cachedCollapsibleResult;
-  bool? _cachedCollapsibleViewAsTree;
-  Set<String> _cachedCollapsibleNodeKeys = const <String>{};
-  native.WorkspaceSearchResult? _cachedRowsResult;
+  native.WorkspaceSearchResult? _cachedProjectionResult;
+  WorkspaceSearchProjection? _cachedProjection;
+  WorkspaceSearchProjection? _cachedRowsProjection;
   Set<String>? _cachedRowsCollapsedNodeKeys;
   bool? _cachedRowsViewAsTree;
-  _SearchRows _cachedRows = const _SearchRows(<_SearchRow>[]);
+  List<WorkspaceSearchProjectionRow> _cachedRows =
+      const <WorkspaceSearchProjectionRow>[];
 
   @override
   void initState() {
@@ -82,11 +84,14 @@ class _WorkspaceSearchPanelState extends ConsumerState<WorkspaceSearchPanel> {
     _syncController(_excludeController, state.excludePattern);
     _initializeOptionalSections(state);
     final controller = ref.read(provider.notifier);
-    final collapsibleNodeKeys = _collapsibleNodeKeysFor(state);
+    final projection = _projectionFor(state.result);
+    final collapsibleNodeKeys =
+        projection?.collapsibleNodeKeys(viewAsTree: state.viewAsTree) ??
+        const <String>{};
     final allResultsCollapsed =
         collapsibleNodeKeys.isNotEmpty &&
         collapsibleNodeKeys.every(state.collapsedResultNodeKeys.contains);
-    final rows = _rowsFor(state);
+    final rows = _rowsFor(projection, state);
     return Column(
       crossAxisAlignment: .stretch,
       children: <Widget>[
@@ -162,14 +167,14 @@ class _WorkspaceSearchPanelState extends ConsumerState<WorkspaceSearchPanel> {
           ),
         const Divider(height: 1, color: AleraTokens.borderSubtle),
         Expanded(
-          child: rows.items.isEmpty
+          child: rows.isEmpty
               ? _SearchEmptyState(state: state)
               : ListView.builder(
-                  itemCount: rows.items.length,
+                  itemCount: rows.length,
                   itemBuilder: (context, index) {
-                    final item = rows.items[index];
+                    final item = rows[index];
                     return switch (item) {
-                      _SearchDirectoryRow(
+                      WorkspaceSearchProjectionDirectoryRow(
                         :final name,
                         :final path,
                         :final depth,
@@ -187,7 +192,10 @@ class _WorkspaceSearchPanelState extends ConsumerState<WorkspaceSearchPanel> {
                                 workspaceSearchDirectoryNodeKey(path),
                               ),
                         ),
-                      _SearchFileRow(:final file, :final depth) =>
+                      WorkspaceSearchProjectionFileRow(
+                        :final file,
+                        :final depth,
+                      ) =>
                         _SearchFileResultRow(
                           file: file,
                           collapsed: state.collapsedResultNodeKeys.contains(
@@ -210,7 +218,7 @@ class _WorkspaceSearchPanelState extends ConsumerState<WorkspaceSearchPanel> {
                                 )
                               : null,
                         ),
-                      _SearchMatchRow(
+                      WorkspaceSearchProjectionMatchRow(
                         :final file,
                         :final match,
                         :final depth,
@@ -312,22 +320,26 @@ class _WorkspaceSearchPanelState extends ConsumerState<WorkspaceSearchPanel> {
     setState(() => _detailsVisible = !_detailsVisible);
   }
 
-  Set<String> _collapsibleNodeKeysFor(WorkspaceSearchState state) {
-    if (identical(_cachedCollapsibleResult, state.result) &&
-        _cachedCollapsibleViewAsTree == state.viewAsTree) {
-      return _cachedCollapsibleNodeKeys;
+  WorkspaceSearchProjection? _projectionFor(
+    native.WorkspaceSearchResult? result,
+  ) {
+    if (result == null) {
+      _cachedProjectionResult = null;
+      _cachedProjection = null;
+      return null;
     }
-    _cachedCollapsibleResult = state.result;
-    _cachedCollapsibleViewAsTree = state.viewAsTree;
-    _cachedCollapsibleNodeKeys = workspaceSearchCollapsibleNodeKeys(
-      state.result,
-      viewAsTree: state.viewAsTree,
-    );
-    return _cachedCollapsibleNodeKeys;
+    if (!identical(_cachedProjectionResult, result)) {
+      _cachedProjectionResult = result;
+      _cachedProjection = WorkspaceSearchProjection(result);
+    }
+    return _cachedProjection;
   }
 
-  _SearchRows _rowsFor(WorkspaceSearchState state) {
-    if (identical(_cachedRowsResult, state.result) &&
+  List<WorkspaceSearchProjectionRow> _rowsFor(
+    WorkspaceSearchProjection? projection,
+    WorkspaceSearchState state,
+  ) {
+    if (identical(_cachedRowsProjection, projection) &&
         identical(
           _cachedRowsCollapsedNodeKeys,
           state.collapsedResultNodeKeys,
@@ -335,14 +347,15 @@ class _WorkspaceSearchPanelState extends ConsumerState<WorkspaceSearchPanel> {
         _cachedRowsViewAsTree == state.viewAsTree) {
       return _cachedRows;
     }
-    _cachedRowsResult = state.result;
+    _cachedRowsProjection = projection;
     _cachedRowsCollapsedNodeKeys = state.collapsedResultNodeKeys;
     _cachedRowsViewAsTree = state.viewAsTree;
-    _cachedRows = _SearchRows.from(
-      state.result,
-      collapsedResultNodeKeys: state.collapsedResultNodeKeys,
-      viewAsTree: state.viewAsTree,
-    );
+    _cachedRows =
+        projection?.rows(
+          collapsedResultNodeKeys: state.collapsedResultNodeKeys,
+          viewAsTree: state.viewAsTree,
+        ) ??
+        const <WorkspaceSearchProjectionRow>[];
     return _cachedRows;
   }
 }
