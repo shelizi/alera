@@ -7,25 +7,22 @@ final class TerminalRuntimeRendererAdapterOwner {
   TerminalRuntimeRendererAdapterOwner({
     ExternalUriLauncher? externalUriLauncher,
   }) : _externalUriLauncher =
-            externalUriLauncher ?? UrlLauncherExternalUriLauncher();
+           externalUriLauncher ?? UrlLauncherExternalUriLauncher();
 
   final ExternalUriLauncher _externalUriLauncher;
 
   ExternalUriLauncher get externalUriLauncher => _externalUriLauncher;
 
   /// Instantiates a new [xterm.Terminal] configured from [settings].
-  xterm.Terminal createTerminal({required TerminalSettings settings}) {
-    return xterm.Terminal(
-      reflowWithHiddenCursor: false,
-      preserveOrphanCombiningMarks: true,
-      allowITerm2ClipboardCapture: false,
-      allowKittyClipboard: false,
-      // An unset callback lets TerminalView install its system clipboard reader.
-      onClipboardQuery: (_) => null,
-      clipboardDecoder: decodeTerminalOsc52Payload,
-      maxLines: settings.scrollbackLines,
+  xterm.Terminal createTerminal({
+    required TerminalSettings settings,
+    bool notificationsEnabled = true,
+  }) {
+    return _AleraTerminal(
+      settings: settings,
       platform: _xtermTargetPlatform,
       wordSeparators: resolveWordSeparators(settings.wordSeparators),
+      notificationsEnabled: notificationsEnabled,
     );
   }
 
@@ -34,7 +31,12 @@ final class TerminalRuntimeRendererAdapterOwner {
     xterm.Terminal terminal, {
     required void Function(String title) onTitleChange,
     required void Function(String data) onOutput,
-    required void Function(int width, int height, int pixelWidth, int pixelHeight)
+    required void Function(
+      int width,
+      int height,
+      int pixelWidth,
+      int pixelHeight,
+    )
     onResize,
     required void Function(String text) onClipboardStore,
   }) {
@@ -94,7 +96,8 @@ final class TerminalRuntimeRendererAdapterOwner {
     required bool autofocus,
     required FocusOnKeyEventCallback? onKeyEvent,
     required MouseCursor mouseCursor,
-    required void Function(TapUpDetails details, xterm.CellOffset offset)? onTapUp,
+    required void Function(TapUpDetails details, xterm.CellOffset offset)?
+    onTapUp,
     required Future<void> Function() onPaste,
     required Future<void> Function(String text)? onCopy,
   }) {
@@ -210,5 +213,60 @@ final class TerminalRuntimeRendererAdapterOwner {
     }
     renderTerminal.markNeedsLayout();
     renderTerminal.markNeedsPaint();
+  }
+}
+
+/// xterm parsing and buffer mutation must continue while an inactive terminal
+/// catches up, but no visible renderer needs one listener dispatch per chunk.
+/// Keep a dirty bit while hidden and emit a single notification when the
+/// session becomes visible again. Parser side-effects such as title changes,
+/// OSC callbacks, and mode changes still run because only Observable delivery
+/// is gated.
+final class _AleraTerminal extends xterm.Terminal {
+  _AleraTerminal({
+    required TerminalSettings settings,
+    required xterm.TerminalTargetPlatform platform,
+    required Set<int>? wordSeparators,
+    required bool notificationsEnabled,
+  }) : _notificationsEnabled = notificationsEnabled,
+       super(
+         reflowWithHiddenCursor: false,
+         preserveOrphanCombiningMarks: true,
+         allowITerm2ClipboardCapture: false,
+         allowKittyClipboard: false,
+         // An unset callback lets TerminalView install its system clipboard reader.
+         onClipboardQuery: (_) => null,
+         clipboardDecoder: decodeTerminalOsc52Payload,
+         maxLines: settings.scrollbackLines,
+         platform: platform,
+         wordSeparators: wordSeparators,
+       );
+
+  bool _notificationsEnabled;
+  bool _notificationPending = false;
+
+  void setNotificationsEnabled(bool enabled, {bool flushPending = true}) {
+    _notificationsEnabled = enabled;
+    if (enabled && flushPending) {
+      flushPendingNotification();
+    }
+  }
+
+  void flushPendingNotification() {
+    if (!_notificationsEnabled || !_notificationPending) {
+      return;
+    }
+    _notificationPending = false;
+    super.notifyListeners();
+  }
+
+  @override
+  void notifyListeners() {
+    if (!_notificationsEnabled) {
+      _notificationPending = true;
+      return;
+    }
+    _notificationPending = false;
+    super.notifyListeners();
   }
 }

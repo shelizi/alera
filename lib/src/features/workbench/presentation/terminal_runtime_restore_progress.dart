@@ -87,7 +87,8 @@ extension _TerminalRestoreProgressTracking on _XtermTerminalSessionHandle {
     final viewHeight = previousTerminal.viewHeight;
     _detachTerminal(previousTerminal);
 
-    final nextTerminal = _createTerminal()..resize(viewWidth, viewHeight);
+    final nextTerminal = _createTerminal(notificationsEnabled: _outputVisible)
+      ..resize(viewWidth, viewHeight);
     _terminal = nextTerminal;
     _attachTerminal(nextTerminal);
     searchController.attachTerminal(nextTerminal);

@@ -4,8 +4,11 @@ part of 'terminal_runtime.dart';
 extension _XtermTerminalAttachment on _XtermTerminalSessionHandle {
   Future<void> _pasteFromClipboard() => _pasteTerminalClipboard(this);
 
-  xterm.Terminal _createTerminal() =>
-      _rendererAdapterOwner.createTerminal(settings: _settings);
+  xterm.Terminal _createTerminal({bool notificationsEnabled = false}) =>
+      _rendererAdapterOwner.createTerminal(
+        settings: _settings,
+        notificationsEnabled: notificationsEnabled,
+      );
 
   void _attachTerminal(xterm.Terminal terminal) {
     _rendererAdapterOwner.attachTerminal(

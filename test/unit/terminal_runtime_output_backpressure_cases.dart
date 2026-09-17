@@ -175,6 +175,79 @@ void _registerTerminalRuntimeOutputBackpressureTests() {
     expect(pendingLiveTerminalOutputCharsForTesting(session), greaterThan(0));
   });
 
+  test('hidden catch-up coalesces terminal listeners until reveal', () async {
+    final runtime = XtermTerminalRuntime(
+      ptySessionFactory: _FakeTerminalPtySessionFactory(),
+      shellLaunchesBuilder: () => <GhosttyTerminalShellLaunch>[
+        _launch('shell', shell: '/bin/sh'),
+      ],
+    );
+    addTearDown(runtime.dispose);
+    final session = runtime.sessionFor(workspace: _workspace(), tab: _tab());
+    var notifications = 0;
+    final removeListener = addTerminalChangeListenerForTesting(
+      session,
+      () => notifications += 1,
+    );
+    addTearDown(removeListener);
+
+    queueTerminalOutputForTesting(
+      session,
+      'hidden-listener-marker${'a' * (1536 * 1024)}',
+    );
+    for (
+      var turn = 0;
+      turn < 512 &&
+          pendingLiveTerminalOutputCharsForTesting(session) > 256 * 1024;
+      turn++
+    ) {
+      await Future<void>.delayed(Duration.zero);
+    }
+
+    expect(notifications, 0);
+
+    final visibility = acquireTerminalVisibilityForTesting(session);
+    addTearDown(visibility.dispose);
+
+    expect(notifications, greaterThan(0));
+  });
+
+  test('hidden catch-up refreshes an active search once on reveal', () async {
+    final runtime = XtermTerminalRuntime(
+      ptySessionFactory: _FakeTerminalPtySessionFactory(),
+      shellLaunchesBuilder: () => <GhosttyTerminalShellLaunch>[
+        _launch('shell', shell: '/bin/sh'),
+      ],
+    );
+    addTearDown(runtime.dispose);
+    final session = runtime.sessionFor(workspace: _workspace(), tab: _tab());
+    final searchController = session.searchController!;
+    searchController
+      ..open()
+      ..setQuery('hidden-search-marker');
+    expect(searchController.matchCount, 0);
+
+    final payload =
+        '${'a' * (1150 * 1024)}\r\nhidden-search-marker\r\n'
+        '${'b' * (386 * 1024)}';
+    queueTerminalOutputForTesting(session, payload);
+    for (
+      var turn = 0;
+      turn < 512 &&
+          pendingLiveTerminalOutputCharsForTesting(session) > 256 * 1024;
+      turn++
+    ) {
+      await Future<void>.delayed(Duration.zero);
+    }
+
+    expect(searchController.matchCount, 0);
+
+    final visibility = acquireTerminalVisibilityForTesting(session);
+    addTearDown(visibility.dispose);
+
+    expect(searchController.matchCount, greaterThan(0));
+  });
+
   test(
     'revealing a hidden terminal only parses one UI budget synchronously',
     () {

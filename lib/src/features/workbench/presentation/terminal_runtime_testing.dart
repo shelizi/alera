@@ -210,6 +210,16 @@ bool terminalCursorVisibleModeForTesting(TerminalSessionHandle session) {
 }
 
 @visibleForTesting
+VoidCallback addTerminalChangeListenerForTesting(
+  TerminalSessionHandle session,
+  VoidCallback listener,
+) {
+  final terminal = (session as _XtermTerminalSessionHandle)._terminal;
+  terminal.addListener(listener);
+  return () => terminal.removeListener(listener);
+}
+
+@visibleForTesting
 bool terminalCursorKeysModeForTesting(TerminalSessionHandle session) {
   return (session as _XtermTerminalSessionHandle)._terminal.cursorKeysMode;
 }
