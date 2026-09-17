@@ -548,6 +548,40 @@ class CodeForgeController implements DeltaTextInputClient {
     }
   }
 
+  ({int? match})? queryNativeMatchingBracket(int targetOffset) {
+    if (_nativeEditorLanguageId == null ||
+        _nativeEditorFailed ||
+        _nativeEditorParserSupported == false ||
+        _nativeEditorSyncFuture != null ||
+        _pendingNativeEditorEdits.isNotEmpty) {
+      return null;
+    }
+
+    final document = _nativeEditorDocument;
+    final requestRevision = _currentVersion;
+    if (document == null || _nativeEditorRevision != requestRevision) {
+      return null;
+    }
+
+    try {
+      final response = document.queryMatchingBracket(
+        expectedRevision: BigInt.from(requestRevision),
+        targetOffset: BigInt.from(targetOffset),
+      );
+      if (response.stale ||
+          !response.supported ||
+          response.revision.toInt() != requestRevision ||
+          _currentVersion != requestRevision) {
+        return null;
+      }
+      final matchOffset = response.matchOffset;
+      return (match: matchOffset < 0 ? null : matchOffset);
+    } catch (error) {
+      _disableNativeSyntaxDocument(error);
+      return null;
+    }
+  }
+
   Future<FoldingRangeResponse?> queryNativeFoldingRanges() async {
     if (_nativeEditorLanguageId == null ||
         _nativeEditorFailed ||

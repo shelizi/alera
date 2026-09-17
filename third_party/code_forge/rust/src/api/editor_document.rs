@@ -63,6 +63,16 @@ pub struct FoldingRangeResponse {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BracketMatchResponse {
+    pub document_id: String,
+    pub revision: u64,
+    pub supported: bool,
+    pub stale: bool,
+    /// Unicode-scalar offset of the structural matching delimiter, or -1.
+    pub match_offset: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NativeEditorDocumentInfo {
     pub document_id: String,
     pub revision: u64,
@@ -331,6 +341,60 @@ impl NativeEditorDocument {
         })
     }
 
+    /// Finds a structural matching delimiter from the retained Tree-sitter tree.
+    /// A supported response with `match_offset == -1` is authoritative (for example,
+    /// a brace inside a string) and must not fall back to raw-text bracket scanning.
+    #[frb(sync)]
+    pub fn query_matching_bracket(
+        &self,
+        expected_revision: u64,
+        target_offset: usize,
+    ) -> Result<BracketMatchResponse, String> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| "native document lock poisoned")?;
+
+        if state.closed {
+            return Ok(BracketMatchResponse {
+                document_id: state.document_id.clone(),
+                revision: state.revision,
+                supported: false,
+                stale: true,
+                match_offset: -1,
+            });
+        }
+        if state.revision != expected_revision {
+            return Ok(BracketMatchResponse {
+                document_id: state.document_id.clone(),
+                revision: state.revision,
+                supported: state.tree.is_some(),
+                stale: true,
+                match_offset: -1,
+            });
+        }
+        let Some(tree) = &state.tree else {
+            return Ok(BracketMatchResponse {
+                document_id: state.document_id.clone(),
+                revision: state.revision,
+                supported: false,
+                stale: false,
+                match_offset: -1,
+            });
+        };
+
+        let match_offset = find_structural_matching_bracket(tree, &state.rope, target_offset)
+            .map(|offset| offset as i64)
+            .unwrap_or(-1);
+        Ok(BracketMatchResponse {
+            document_id: state.document_id.clone(),
+            revision: state.revision,
+            supported: true,
+            stale: false,
+            match_offset,
+        })
+    }
+
     /// Returns foldable structural ranges from the already-retained Tree-sitter tree.
     /// This intentionally does not rescan or materialize the Rope text.
     pub fn query_folding_ranges(
@@ -431,6 +495,53 @@ impl NativeEditorDocument {
         state.closed = true;
         Ok(())
     }
+}
+
+fn find_structural_matching_bracket(
+    tree: &Tree,
+    rope: &RustRope,
+    target_offset: usize,
+) -> Option<usize> {
+    if target_offset >= rope.len_chars() {
+        return None;
+    }
+    let target = rope.char(target_offset);
+    let counterpart = match target {
+        '{' => '}',
+        '}' => '{',
+        '[' => ']',
+        ']' => '[',
+        '(' => ')',
+        ')' => '(',
+        _ => return None,
+    };
+
+    let start_byte = rope.char_to_byte(target_offset);
+    let end_byte = rope.char_to_byte(target_offset + 1);
+    let node = tree
+        .root_node()
+        .descendant_for_byte_range(start_byte, end_byte)?;
+    if node.start_byte() != start_byte
+        || node.end_byte() != end_byte
+        || node.kind().chars().next() != Some(target)
+        || node.kind().chars().count() != 1
+    {
+        return None;
+    }
+
+    let parent = node.parent()?;
+    for index in 0..parent.child_count() {
+        let Some(sibling) = parent.child(index as u32) else {
+            continue;
+        };
+        if sibling.id() == node.id() || sibling.kind().chars().count() != 1 {
+            continue;
+        }
+        if sibling.kind().chars().next() == Some(counterpart) {
+            return Some(rope.byte_to_char(sibling.start_byte()));
+        }
+    }
+    None
 }
 
 fn collect_folding_ranges(node: tree_sitter::Node<'_>, ranges: &mut Vec<NativeFoldingRange>) {
@@ -964,6 +1075,75 @@ mod tests {
                 "NativeEditorDocument benchmark lines={lines} open_us={open_us:?} edit_us={edit_us:?} viewport_query_us={query_us:?}"
             );
         }
+    }
+
+    #[test]
+    fn retained_tree_bracket_matching_uses_structural_delimiters() {
+        let text = "fn main() {\n    let values = [1, 2, 3];\n}\n";
+        let document = NativeEditorDocument::open(
+            "doc-brackets".to_string(),
+            4,
+            text.to_string(),
+            "rust".to_string(),
+        )
+        .unwrap();
+
+        let open_brace = char_offset(text, "{");
+        let close_brace = text[..text.rfind('}').unwrap()].chars().count();
+        let brace_response = document.query_matching_bracket(4, open_brace).unwrap();
+        assert!(brace_response.supported);
+        assert!(!brace_response.stale);
+        assert_eq!(brace_response.match_offset, close_brace as i64);
+
+        let open_array = char_offset(text, "[");
+        let close_array = text[..text.find(']').unwrap()].chars().count();
+        let array_response = document.query_matching_bracket(4, open_array).unwrap();
+        assert_eq!(array_response.match_offset, close_array as i64);
+    }
+
+    #[test]
+    fn retained_tree_bracket_matching_does_not_match_string_delimiters() {
+        let text = "fn main() {\n    let fake = \"{ not structural }\";\n}\n";
+        let document = NativeEditorDocument::open(
+            "doc-bracket-string".to_string(),
+            2,
+            text.to_string(),
+            "rust".to_string(),
+        )
+        .unwrap();
+
+        let string_brace = char_offset(text, "{ not structural");
+        let response = document.query_matching_bracket(2, string_brace).unwrap();
+        assert!(response.supported);
+        assert!(!response.stale);
+        assert_eq!(response.match_offset, -1);
+    }
+
+    #[test]
+    fn retained_tree_bracket_matching_rejects_stale_revision_and_plaintext() {
+        let rust_document = NativeEditorDocument::open(
+            "doc-bracket-stale".to_string(),
+            5,
+            "fn main() {}\n".to_string(),
+            "rust".to_string(),
+        )
+        .unwrap();
+        let stale = rust_document.query_matching_bracket(4, 10).unwrap();
+        assert!(stale.supported);
+        assert!(stale.stale);
+        assert_eq!(stale.match_offset, -1);
+
+        let plain_document = NativeEditorDocument::open(
+            "doc-bracket-plain".to_string(),
+            1,
+            "{plain}\n".to_string(),
+            "plaintext".to_string(),
+        )
+        .unwrap();
+        let unsupported = plain_document.query_matching_bracket(1, 0).unwrap();
+        assert!(!unsupported.supported);
+        assert!(!unsupported.stale);
+        assert_eq!(unsupported.match_offset, -1);
     }
 
     #[test]

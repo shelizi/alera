@@ -9,9 +9,9 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 import 'rope.dart';
 
-// These functions are ignored because they are not marked as `pub`: `advance_point`, `append_capture_spans`, `apply_edit`, `collect_folding_ranges`, `is_foldable_node_kind`, `line_content_end_char`, `native_language`, `normalize_language_id`, `normalize_scope`, `open_with_rope`, `parse_rope`, `point_for_char`
+// These functions are ignored because they are not marked as `pub`: `advance_point`, `append_capture_spans`, `apply_edit`, `collect_folding_ranges`, `find_structural_matching_bracket`, `is_foldable_node_kind`, `line_content_end_char`, `native_language`, `normalize_language_id`, `normalize_scope`, `open_with_rope`, `parse_rope`, `point_for_char`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `NativeEditorDocumentState`, `NativeLanguage`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<NativeEditorDocument>>
 abstract class NativeEditorDocument implements RustOpaqueInterface {
@@ -66,6 +66,14 @@ abstract class NativeEditorDocument implements RustOpaqueInterface {
     required BigInt expectedRevision,
   });
 
+  /// Finds a structural matching delimiter from the retained Tree-sitter tree.
+  /// A supported response with `match_offset == -1` is authoritative (for example,
+  /// a brace inside a string) and must not fall back to raw-text bracket scanning.
+  BracketMatchResponse queryMatchingBracket({
+    required BigInt expectedRevision,
+    required BigInt targetOffset,
+  });
+
   /// Returns syntax captures only for the requested viewport plus fixed overscan.
   /// No document-sized span collection is built or transferred across FFI.
   Future<SyntaxSpanResponse> querySyntaxSpans({
@@ -74,6 +82,43 @@ abstract class NativeEditorDocument implements RustOpaqueInterface {
     required BigInt endLine,
     required BigInt overscan,
   });
+}
+
+class BracketMatchResponse {
+  final String documentId;
+  final BigInt revision;
+  final bool supported;
+  final bool stale;
+
+  /// Unicode-scalar offset of the structural matching delimiter, or -1.
+  final PlatformInt64 matchOffset;
+
+  const BracketMatchResponse({
+    required this.documentId,
+    required this.revision,
+    required this.supported,
+    required this.stale,
+    required this.matchOffset,
+  });
+
+  @override
+  int get hashCode =>
+      documentId.hashCode ^
+      revision.hashCode ^
+      supported.hashCode ^
+      stale.hashCode ^
+      matchOffset.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is BracketMatchResponse &&
+          runtimeType == other.runtimeType &&
+          documentId == other.documentId &&
+          revision == other.revision &&
+          supported == other.supported &&
+          stale == other.stale &&
+          matchOffset == other.matchOffset;
 }
 
 class EditorDocumentEdit {
