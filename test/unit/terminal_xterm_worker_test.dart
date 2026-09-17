@@ -397,6 +397,78 @@ void main() {
     expect(trimmed.bufferLength, 25);
   });
 
+  test('worker only compares rows that were active before the write', () async {
+    final worker = await TerminalXtermWorker.start(
+      cols: 8,
+      rows: 3,
+      maxLines: 25,
+    );
+    addTearDown(worker.close);
+    final initial = List<String>.generate(
+      25,
+      (index) => '${index + 1}',
+    ).join('\r\n');
+    await worker.writeBufferDelta(initial);
+
+    final delta = await worker.writeBufferDelta('\r\n26');
+
+    expect(delta.fullRepaint, isFalse);
+    expect(delta.trimStart, 1);
+    expect(delta.comparedRowCount, lessThanOrEqualTo(3));
+  });
+
+  test(
+    'worker compares an active row before it scrolls into history',
+    () async {
+      final direct = _createDirectTerminal(cols: 8, rows: 3, maxLines: 25);
+      final worker = await TerminalXtermWorker.start(
+        cols: 8,
+        rows: 3,
+        maxLines: 25,
+      );
+      addTearDown(worker.close);
+      final mirror = <String>[];
+      final initial = List<String>.generate(
+        25,
+        (index) => '${index + 1}',
+      ).join('\r\n');
+      direct.write(initial);
+      _applyBufferDelta(mirror, await worker.writeBufferDelta(initial));
+
+      const updateAndScroll = '\rX\r\n26';
+      direct.write(updateAndScroll);
+      final delta = await worker.writeBufferDelta(updateAndScroll);
+      _applyBufferDelta(mirror, delta);
+
+      expect(mirror, _bufferRows(direct));
+      expect(mirror, contains('X5'));
+    },
+  );
+
+  test('worker invalidates cached scrollback when CSI 3 J clears it', () async {
+    final direct = _createDirectTerminal(cols: 8, rows: 3, maxLines: 25);
+    final worker = await TerminalXtermWorker.start(
+      cols: 8,
+      rows: 3,
+      maxLines: 25,
+    );
+    addTearDown(worker.close);
+    final mirror = <String>[];
+    final initial = List<String>.generate(
+      12,
+      (index) => '${index + 1}',
+    ).join('\r\n');
+    direct.write(initial);
+    _applyBufferDelta(mirror, await worker.writeBufferDelta(initial));
+
+    direct.write('\x1b[3J');
+    final delta = await worker.writeBufferDelta('\x1b[3J');
+    _applyBufferDelta(mirror, delta);
+
+    expect(mirror, _bufferRows(direct));
+    expect(delta.scrollBack, 0);
+  });
+
   test(
     'worker buffer delta carries global render state and hyperlinks',
     () async {
