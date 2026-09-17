@@ -47,11 +47,19 @@ mixin _TerminalSearchSessionSupport on TerminalSessionHandle {
 
   set _pointerInputCatchUpChars(int value);
 
+  late TerminalSearchSource _searchSource = _terminalSearchSourceFor(_terminal);
+
   late final TerminalSearchController _searchController =
-      TerminalSearchController(
-        terminal: _terminal,
+      TerminalSearchController.fromSource(
+        source: _searchSource,
         scrollToLine: _scrollToSearchLine,
       );
+
+  void _attachSearchTerminal(xterm.Terminal terminal) {
+    final source = _terminalSearchSourceFor(terminal);
+    _searchSource = source;
+    _searchController.attachSource(source);
+  }
 
   @override
   TerminalSearchController get searchController => _searchController;
@@ -124,4 +132,11 @@ mixin _TerminalSearchSessionSupport on TerminalSessionHandle {
     );
     position.jumpTo(target.toDouble());
   }
+}
+
+TerminalSearchSource _terminalSearchSourceFor(xterm.Terminal terminal) {
+  if (terminal is TerminalXtermReplicaTerminal) {
+    return terminal.replicaModel;
+  }
+  return XtermTerminalSearchSource(terminal);
 }
