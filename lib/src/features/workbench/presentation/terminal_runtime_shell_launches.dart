@@ -6,7 +6,9 @@ Map<String, String> _terminalPlatformEnvironment() {
   return environment;
 }
 
-List<GhosttyTerminalShellLaunch> _terminalShellLaunches() {
+List<GhosttyTerminalShellLaunch> _terminalShellLaunches({
+  String? powerShell7ExecutablePath,
+}) {
   final platformEnvironment = _terminalPlatformEnvironment();
   final ghosttyLaunches = <GhosttyTerminalShellLaunch>[
     ...ghosttyTerminalShellLaunches(
@@ -25,7 +27,10 @@ List<GhosttyTerminalShellLaunch> _terminalShellLaunches() {
   ];
   final launches = <GhosttyTerminalShellLaunch>[
     if (_isWindowsDesktopTerminalTarget)
-      ..._windowsTerminalShellLaunches(platformEnvironment),
+      ..._windowsTerminalShellLaunches(
+        platformEnvironment,
+        powerShell7ExecutablePath: powerShell7ExecutablePath,
+      ),
     ...ghosttyLaunches,
     if (!_isWindowsDesktopTerminalTarget && ghosttyLaunches.isEmpty)
       ..._posixDesktopFallbackShellLaunches(platformEnvironment),
@@ -114,6 +119,7 @@ String? _probeDefaultLoginShell(bool Function(String path) fileExists) {
 
 List<GhosttyTerminalShellLaunch> _windowsTerminalShellLaunches(
   Map<String, String> platformEnvironment, {
+  String? powerShell7ExecutablePath,
   bool Function(String path) fileExists = _fileExists,
 }) {
   final shellEnvironment = ghosttyTerminalShellEnvironment(
@@ -123,6 +129,7 @@ List<GhosttyTerminalShellLaunch> _windowsTerminalShellLaunches(
   final launches = <GhosttyTerminalShellLaunch>[];
   final pwsh = _resolveWindowsPowerShell7(
     platformEnvironment,
+    configuredPath: powerShell7ExecutablePath,
     fileExists: fileExists,
   );
   if (pwsh != null) {
@@ -156,17 +163,33 @@ List<GhosttyTerminalShellLaunch> _windowsTerminalShellLaunches(
 
 String? _resolveWindowsPowerShell7(
   Map<String, String> environment, {
+  String? configuredPath,
   required bool Function(String path) fileExists,
 }) {
   // On Windows the PTY first starts Alera's Job Object bootstrap and only then
   // launches the requested shell. Returning a bare `pwsh.exe` when PowerShell 7
   // is not installed makes the bootstrap itself appear to start successfully,
   // so the caller never gets a chance to fall back to Windows PowerShell/cmd.
+  final configured = configuredPath?.trim();
+  final path = _windowsEnvironmentValue(environment, 'PATH');
   return _resolveFirstExistingWindowsPath(<String>[
+    if (configured != null && configured.isNotEmpty) configured,
     if (_windowsEnvironmentValue(environment, 'ProgramFiles') case final dir?)
       _joinWindowsPath(dir, 'PowerShell', '7', 'pwsh.exe'),
     if (_windowsEnvironmentValue(environment, 'ProgramW6432') case final dir?)
       _joinWindowsPath(dir, 'PowerShell', '7', 'pwsh.exe'),
+    if (_windowsEnvironmentValue(environment, 'SCOOP') case final dir?)
+      _joinWindowsPath(dir, 'apps', 'pwsh', 'current', 'pwsh.exe'),
+    if (_windowsEnvironmentValue(environment, 'USERPROFILE') case final dir?)
+      _joinWindowsPath(dir, 'scoop', 'apps', 'pwsh', 'current\\pwsh.exe'),
+    if (_windowsEnvironmentValue(environment, 'LOCALAPPDATA')
+        case final dir?) ...<String>[
+      _joinWindowsPath(dir, 'Microsoft', 'WindowsApps', 'pwsh.exe'),
+      _joinWindowsPath(dir, 'Programs', 'PowerShell', '7', 'pwsh.exe'),
+    ],
+    if (path != null)
+      for (final dir in path.split(';'))
+        if (dir.trim().isNotEmpty) _joinWindowsPath(dir.trim(), 'pwsh.exe'),
   ], fileExists: fileExists);
 }
 
@@ -358,10 +381,12 @@ List<GhosttyTerminalShellLaunch> terminalShellLaunchesForTesting() {
 @visibleForTesting
 List<GhosttyTerminalShellLaunch> windowsTerminalShellLaunchesForTesting(
   Map<String, String> platformEnvironment, {
+  String? powerShell7ExecutablePath,
   required bool Function(String path) fileExists,
 }) {
   return _windowsTerminalShellLaunches(
     platformEnvironment,
+    powerShell7ExecutablePath: powerShell7ExecutablePath,
     fileExists: fileExists,
   );
 }
@@ -376,7 +401,6 @@ List<GhosttyTerminalShellLaunch> resolvedLoginShellFallbackLaunchesForTesting(
     fileExists: fileExists,
   );
 }
-
 
 bool _isWindowsCommandPromptLaunch(GhosttyTerminalShellLaunch launch) {
   return _shellExecutableName(launch) == 'cmd';

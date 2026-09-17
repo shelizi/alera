@@ -76,6 +76,7 @@ void main() {
           hostDetachedSessionShutdownDelaySeconds: 120,
           hostScrollbackBytes: 24 * 1000 * 1000,
           toolbarCorner: .bottomRight,
+          powerShell7ExecutablePath: r'D:\Portable\PowerShell\pwsh.exe',
         ),
         keyboard: KeyboardShortcutSettings(
           overrides: <KeyboardActionId, List<String>>{

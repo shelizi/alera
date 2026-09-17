@@ -86,6 +86,7 @@ class const TerminalSettings({
   this.bufferBudgetMegabytes = 256,
   this.keepRuntimeOpenOnAppQuit = false,
   this.loginShell,
+  this.powerShell7ExecutablePath,
   this.confirmCloseRunningProcesses = true,
 }) with TerminalSettingsMappable {
   final String fontFamily;
@@ -124,6 +125,10 @@ class const TerminalSettings({
 
   /// `null` keeps the platform default resolved by [resolvedLoginShell].
   final bool? loginShell;
+
+  /// Optional per-device PowerShell 7 executable override on Windows.
+  /// A blank or absent value keeps automatic detection.
+  final String? powerShell7ExecutablePath;
 
   /// Whether terminals start the user shell as a login shell.
   ///

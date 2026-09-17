@@ -2844,6 +2844,14 @@ class TerminalSettingsMapper extends ClassMapperBase<TerminalSettings> {
     _$loginShell,
     opt: true,
   );
+  static String? _$powerShell7ExecutablePath(TerminalSettings v) =>
+      v.powerShell7ExecutablePath;
+  static const Field<TerminalSettings, String> _f$powerShell7ExecutablePath =
+      Field(
+        'powerShell7ExecutablePath',
+        _$powerShell7ExecutablePath,
+        opt: true,
+      );
   static bool _$confirmCloseRunningProcesses(TerminalSettings v) =>
       v.confirmCloseRunningProcesses;
   static const Field<TerminalSettings, bool> _f$confirmCloseRunningProcesses =
@@ -2882,6 +2890,7 @@ class TerminalSettingsMapper extends ClassMapperBase<TerminalSettings> {
     #bufferBudgetMegabytes: _f$bufferBudgetMegabytes,
     #keepRuntimeOpenOnAppQuit: _f$keepRuntimeOpenOnAppQuit,
     #loginShell: _f$loginShell,
+    #powerShell7ExecutablePath: _f$powerShell7ExecutablePath,
     #confirmCloseRunningProcesses: _f$confirmCloseRunningProcesses,
   };
 
@@ -2916,6 +2925,7 @@ class TerminalSettingsMapper extends ClassMapperBase<TerminalSettings> {
       bufferBudgetMegabytes: data.dec(_f$bufferBudgetMegabytes),
       keepRuntimeOpenOnAppQuit: data.dec(_f$keepRuntimeOpenOnAppQuit),
       loginShell: data.dec(_f$loginShell),
+      powerShell7ExecutablePath: data.dec(_f$powerShell7ExecutablePath),
       confirmCloseRunningProcesses: data.dec(_f$confirmCloseRunningProcesses),
     );
   }
@@ -3014,6 +3024,7 @@ abstract class TerminalSettingsCopyWith<$R, $In extends TerminalSettings, $Out>
     int? bufferBudgetMegabytes,
     bool? keepRuntimeOpenOnAppQuit,
     bool? loginShell,
+    String? powerShell7ExecutablePath,
     bool? confirmCloseRunningProcesses,
   });
   TerminalSettingsCopyWith<$R2, $In, $Out2> $chain<$R2, $Out2>(
@@ -3064,6 +3075,7 @@ class _TerminalSettingsCopyWithImpl<$R, $Out>
     int? bufferBudgetMegabytes,
     bool? keepRuntimeOpenOnAppQuit,
     Object? loginShell = $none,
+    Object? powerShell7ExecutablePath = $none,
     bool? confirmCloseRunningProcesses,
   }) => $apply(
     FieldCopyWithData({
@@ -3101,6 +3113,8 @@ class _TerminalSettingsCopyWithImpl<$R, $Out>
       if (keepRuntimeOpenOnAppQuit != null)
         #keepRuntimeOpenOnAppQuit: keepRuntimeOpenOnAppQuit,
       if (loginShell != $none) #loginShell: loginShell,
+      if (powerShell7ExecutablePath != $none)
+        #powerShell7ExecutablePath: powerShell7ExecutablePath,
       if (confirmCloseRunningProcesses != null)
         #confirmCloseRunningProcesses: confirmCloseRunningProcesses,
     }),
@@ -3162,6 +3176,10 @@ class _TerminalSettingsCopyWithImpl<$R, $Out>
       or: $value.keepRuntimeOpenOnAppQuit,
     ),
     loginShell: data.get(#loginShell, or: $value.loginShell),
+    powerShell7ExecutablePath: data.get(
+      #powerShell7ExecutablePath,
+      or: $value.powerShell7ExecutablePath,
+    ),
     confirmCloseRunningProcesses: data.get(
       #confirmCloseRunningProcesses,
       or: $value.confirmCloseRunningProcesses,
