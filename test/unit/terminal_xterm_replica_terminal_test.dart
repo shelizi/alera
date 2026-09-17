@@ -132,15 +132,192 @@ void main() {
       _expectReplicaParity(replica, direct);
     },
   );
+
+  test('replica input encoding matches direct xterm parser state', () async {
+    final directOutput = <String>[];
+    final replicaOutput = <String>[];
+    final direct = _createDirect(
+      cols: 20,
+      rows: 6,
+      maxLines: 64,
+      platform: TerminalTargetPlatform.windows,
+      onOutput: directOutput.add,
+    );
+    final worker = await TerminalXtermWorker.start(
+      cols: 20,
+      rows: 6,
+      maxLines: 64,
+      platform: TerminalTargetPlatform.windows,
+    );
+    addTearDown(worker.close);
+    final replica = TerminalXtermReplicaTerminal(
+      cols: 20,
+      rows: 6,
+      maxLines: 64,
+      platform: TerminalTargetPlatform.windows,
+      onOutput: replicaOutput.add,
+    );
+    final escape = String.fromCharCode(27);
+    final modes =
+        '$escape[20h'
+        '$escape[?1h'
+        '$escape='
+        '$escape[?1035l'
+        '$escape[?67h'
+        '$escape[?1000h'
+        '$escape[?1004h'
+        '$escape[?1006h'
+        '$escape[?2004h'
+        '$escape[>4;2m';
+
+    direct.write(modes);
+    replica.applyBufferDelta(await worker.writeBufferDelta(modes));
+    directOutput.clear();
+    replicaOutput.clear();
+
+    _expectInputCallParity(
+      directOutput,
+      replicaOutput,
+      () => direct.keyInput(TerminalKey.arrowUp),
+      () => replica.keyInput(TerminalKey.arrowUp),
+    );
+    _expectInputCallParity(
+      directOutput,
+      replicaOutput,
+      () => direct.keyInput(TerminalKey.backspace),
+      () => replica.keyInput(TerminalKey.backspace),
+    );
+    _expectInputCallParity(
+      directOutput,
+      replicaOutput,
+      () => direct.keyInput(TerminalKey.numpad1, numLock: true),
+      () => replica.keyInput(TerminalKey.numpad1, numLock: true),
+    );
+    _expectInputCallParity(
+      directOutput,
+      replicaOutput,
+      () => direct.keyInput(TerminalKey.enter),
+      () => replica.keyInput(TerminalKey.enter),
+    );
+    _expectInputCallParity(
+      directOutput,
+      replicaOutput,
+      () =>
+          direct.keyInput(TerminalKey.keyH, ctrl: true, shift: true, text: 'H'),
+      () => replica.keyInput(
+        TerminalKey.keyH,
+        ctrl: true,
+        shift: true,
+        text: 'H',
+      ),
+    );
+
+    direct.paste('a\nb');
+    replica.paste('a\nb');
+    expect(replicaOutput, directOutput);
+    directOutput.clear();
+    replicaOutput.clear();
+
+    direct.focusInput(false);
+    replica.focusInput(false);
+    expect(replicaOutput, directOutput);
+    directOutput.clear();
+    replicaOutput.clear();
+
+    final directMouseHandled = direct.mouseInput(
+      TerminalMouseButton.left,
+      TerminalMouseButtonState.down,
+      const CellOffset(2, 1),
+      modifiers: const TerminalMouseModifiers(alt: true),
+    );
+    final replicaMouseHandled = replica.mouseInput(
+      TerminalMouseButton.left,
+      TerminalMouseButtonState.down,
+      const CellOffset(2, 1),
+      modifiers: const TerminalMouseModifiers(alt: true),
+    );
+    expect(replicaMouseHandled, directMouseHandled);
+    expect(replicaOutput, directOutput);
+
+    directOutput.clear();
+    replicaOutput.clear();
+    final kitty = '$escape[=3u';
+    direct.write(kitty);
+    replica.applyBufferDelta(await worker.writeBufferDelta(kitty));
+    _expectInputCallParity(
+      directOutput,
+      replicaOutput,
+      () => direct.keyInput(
+        TerminalKey.keyA,
+        ctrl: true,
+        type: TerminalKeyEventType.repeat,
+        text: 'a',
+      ),
+      () => replica.keyInput(
+        TerminalKey.keyA,
+        ctrl: true,
+        type: TerminalKeyEventType.repeat,
+        text: 'a',
+      ),
+    );
+  });
+
+  test(
+    'replica suppresses keyboard input while worker KAM is active',
+    () async {
+      final directOutput = <String>[];
+      final replicaOutput = <String>[];
+      final direct = _createDirect(
+        cols: 12,
+        rows: 4,
+        maxLines: 64,
+        onOutput: directOutput.add,
+      );
+      final worker = await TerminalXtermWorker.start(
+        cols: 12,
+        rows: 4,
+        maxLines: 64,
+      );
+      addTearDown(worker.close);
+      final replica = TerminalXtermReplicaTerminal(
+        cols: 12,
+        rows: 4,
+        maxLines: 64,
+        onOutput: replicaOutput.add,
+      );
+      final escape = String.fromCharCode(27);
+      final keyboardActionMode = '$escape[2h';
+
+      direct.write(keyboardActionMode);
+      replica.applyBufferDelta(
+        await worker.writeBufferDelta(keyboardActionMode),
+      );
+      directOutput.clear();
+      replicaOutput.clear();
+
+      expect(direct.keyInput(TerminalKey.keyA, text: 'a'), isFalse);
+      expect(replica.keyInput(TerminalKey.keyA, text: 'a'), isFalse);
+      direct.textInput('text');
+      replica.textInput('text');
+      direct.paste('paste');
+      replica.paste('paste');
+      expect(replicaOutput, directOutput);
+      expect(replicaOutput, isEmpty);
+    },
+  );
 }
 
 Terminal _createDirect({
   required int cols,
   required int rows,
   required int maxLines,
+  TerminalTargetPlatform platform = TerminalTargetPlatform.unknown,
+  void Function(String)? onOutput,
 }) {
   return Terminal(
     maxLines: maxLines,
+    platform: platform,
+    onOutput: onOutput,
     reflowWithHiddenCursor: false,
     preserveOrphanCombiningMarks: true,
     allowITerm2ClipboardCapture: false,
@@ -148,6 +325,18 @@ Terminal _createDirect({
     onClipboardQuery: (_) => null,
     clipboardDecoder: decodeTerminalOsc52Payload,
   )..resize(cols, rows);
+}
+
+void _expectInputCallParity(
+  List<String> directOutput,
+  List<String> replicaOutput,
+  bool Function() directCall,
+  bool Function() replicaCall,
+) {
+  directOutput.clear();
+  replicaOutput.clear();
+  expect(replicaCall(), directCall());
+  expect(replicaOutput, directOutput);
 }
 
 void _expectReplicaParity(

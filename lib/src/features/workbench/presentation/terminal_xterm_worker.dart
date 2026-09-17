@@ -317,6 +317,12 @@ final class TerminalXtermWorkerGlobalState {
     required this.cursorColorOverride,
     required this.selectionColorOverride,
     required this.selectionForegroundColorOverride,
+    required this.lineFeedMode,
+    required this.ignoreKeypadWithNumLockMode,
+    required this.backarrowKeyMode,
+    required this.kittyKeyboardMode,
+    required this.modifyOtherKeysMode,
+    required this.keyboardActionMode,
   });
 
   factory TerminalXtermWorkerGlobalState._fromMessage(List<Object?> message) {
@@ -337,6 +343,12 @@ final class TerminalXtermWorkerGlobalState {
       cursorColorOverride: message[13] as int?,
       selectionColorOverride: message[14] as int?,
       selectionForegroundColorOverride: message[15] as int?,
+      lineFeedMode: message[16]! as bool,
+      ignoreKeypadWithNumLockMode: message[17]! as bool,
+      backarrowKeyMode: message[18]! as bool,
+      kittyKeyboardMode: message[19]! as int,
+      modifyOtherKeysMode: message[20]! as int,
+      keyboardActionMode: message[21]! as bool,
     );
   }
 
@@ -356,6 +368,46 @@ final class TerminalXtermWorkerGlobalState {
   final int? cursorColorOverride;
   final int? selectionColorOverride;
   final int? selectionForegroundColorOverride;
+  final bool lineFeedMode;
+  final bool ignoreKeypadWithNumLockMode;
+  final bool backarrowKeyMode;
+  final int kittyKeyboardMode;
+  final int modifyOtherKeysMode;
+  final bool keyboardActionMode;
+}
+
+final class _TerminalXtermWorkerTerminal extends Terminal {
+  _TerminalXtermWorkerTerminal({
+    required int maxLines,
+    required TerminalTargetPlatform platform,
+    Set<int>? wordSeparators,
+    void Function(String)? onTitleChange,
+    void Function()? onBell,
+    void Function(String)? onOutput,
+    void Function(String, String)? onClipboardStore,
+  }) : super(
+         maxLines: maxLines,
+         reflowWithHiddenCursor: false,
+         preserveOrphanCombiningMarks: true,
+         allowITerm2ClipboardCapture: false,
+         allowKittyClipboard: false,
+         onClipboardQuery: (_) => null,
+         clipboardDecoder: decodeTerminalOsc52Payload,
+         platform: platform,
+         wordSeparators: wordSeparators,
+         onTitleChange: onTitleChange,
+         onBell: onBell,
+         onOutput: onOutput,
+         onClipboardStore: onClipboardStore,
+       );
+
+  bool keyboardActionMode = false;
+
+  @override
+  void setKeyboardActionMode(bool enabled) {
+    keyboardActionMode = enabled;
+    super.setKeyboardActionMode(enabled);
+  }
 }
 
 final class TerminalXtermWorkerBufferDelta {
@@ -715,14 +767,8 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
       : Set<int>.from(rawWordSeparators);
   final commands = ReceivePort();
   final effects = <List<Object?>>[];
-  final terminal = Terminal(
+  final terminal = _TerminalXtermWorkerTerminal(
     maxLines: maxLines,
-    reflowWithHiddenCursor: false,
-    preserveOrphanCombiningMarks: true,
-    allowITerm2ClipboardCapture: false,
-    allowKittyClipboard: false,
-    onClipboardQuery: (_) => null,
-    clipboardDecoder: decodeTerminalOsc52Payload,
     platform: platform,
     wordSeparators: wordSeparators,
     onTitleChange: (title) =>
@@ -834,6 +880,12 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
       terminal.cursorColorOverride,
       terminal.selectionColorOverride,
       terminal.selectionForegroundColorOverride,
+      terminal.lineFeedMode,
+      terminal.ignoreKeypadWithNumLockMode,
+      terminal.backarrowKeyMode,
+      terminal.kittyKeyboardMode,
+      terminal.modifyOtherKeysMode,
+      terminal.keyboardActionMode,
     ];
   }
 

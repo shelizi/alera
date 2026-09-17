@@ -91,6 +91,13 @@ final class TerminalXtermBufferModel implements TerminalSearchSource {
   bool get mouseShiftCapture => globalState.mouseShiftCapture;
   bool get altEscPrefix => globalState.altEscPrefix;
   bool get altSendsEscape => globalState.altSendsEscape;
+  bool get lineFeedMode => globalState.lineFeedMode;
+  bool get ignoreKeypadWithNumLockMode =>
+      globalState.ignoreKeypadWithNumLockMode;
+  bool get backarrowKeyMode => globalState.backarrowKeyMode;
+  int get kittyKeyboardMode => globalState.kittyKeyboardMode;
+  int get modifyOtherKeysMode => globalState.modifyOtherKeysMode;
+  bool get keyboardActionMode => globalState.keyboardActionMode;
   int get colorRevision => globalState.colorRevision;
   Map<int, int> get indexedColorOverrides => globalState.indexedColorOverrides;
   Map<int, int> get specialColorOverrides => globalState.specialColorOverrides;

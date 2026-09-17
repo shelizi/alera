@@ -15,10 +15,14 @@ final class TerminalXtermReplicaTerminal extends Terminal {
     required int cols,
     required int rows,
     int maxLines = 1000,
+    TerminalTargetPlatform platform = TerminalTargetPlatform.unknown,
     Set<int>? wordSeparators,
+    void Function(String)? onOutput,
   }) : _model = TerminalXtermBufferModel(wordSeparators: wordSeparators),
        super(
          maxLines: maxLines,
+         platform: platform,
+         onOutput: onOutput,
          reflowWithHiddenCursor: false,
          preserveOrphanCombiningMarks: true,
          allowITerm2ClipboardCapture: false,
@@ -32,6 +36,8 @@ final class TerminalXtermReplicaTerminal extends Terminal {
 
   final TerminalXtermBufferModel _model;
   var _hasReplicaState = false;
+  var _disposed = false;
+  var _focused = true;
 
   TerminalXtermBufferModel get replicaModel => _model;
 
@@ -83,6 +89,8 @@ final class TerminalXtermReplicaTerminal extends Terminal {
 
     super.mainBuffer.setCursor(delta.cursorX, delta.cursorY);
     _model.apply(delta);
+    super.setKeyboardActionMode(_model.keyboardActionMode);
+    super.setBracketedPasteMode(_model.bracketedPaste);
     _hasReplicaState = true;
     notifyListeners();
   }
@@ -150,6 +158,27 @@ final class TerminalXtermReplicaTerminal extends Terminal {
       _hasReplicaState ? _model.keypadKeys : super.appKeypadMode;
 
   @override
+  bool get lineFeedMode =>
+      _hasReplicaState ? _model.lineFeedMode : super.lineFeedMode;
+
+  @override
+  bool get ignoreKeypadWithNumLockMode => _hasReplicaState
+      ? _model.ignoreKeypadWithNumLockMode
+      : super.ignoreKeypadWithNumLockMode;
+
+  @override
+  bool get backarrowKeyMode =>
+      _hasReplicaState ? _model.backarrowKeyMode : super.backarrowKeyMode;
+
+  @override
+  int get kittyKeyboardMode =>
+      _hasReplicaState ? _model.kittyKeyboardMode : super.kittyKeyboardMode;
+
+  @override
+  int get modifyOtherKeysMode =>
+      _hasReplicaState ? _model.modifyOtherKeysMode : super.modifyOtherKeysMode;
+
+  @override
   bool get bracketedPasteMode =>
       _hasReplicaState ? _model.bracketedPaste : super.bracketedPasteMode;
 
@@ -186,6 +215,18 @@ final class TerminalXtermReplicaTerminal extends Terminal {
   @override
   bool get altSendsEscapeMode =>
       _hasReplicaState ? _model.altSendsEscape : super.altSendsEscapeMode;
+
+  @override
+  void focusInput(bool focused) {
+    _focused = focused;
+    if (!_hasReplicaState) {
+      super.focusInput(focused);
+      return;
+    }
+    if (_disposed || !_model.focusEvents) return;
+    final escape = String.fromCharCode(27);
+    onOutput?.call(focused ? '$escape[I' : '$escape[O');
+  }
 
   @override
   int get colorRevision =>
@@ -249,4 +290,10 @@ final class TerminalXtermReplicaTerminal extends Terminal {
   int? semanticPromptLineAfter(int line) => _hasReplicaState
       ? _model.semanticPromptLineAfter(line)
       : super.semanticPromptLineAfter(line);
+
+  @override
+  void dispose() {
+    _disposed = true;
+    super.dispose();
+  }
 }
