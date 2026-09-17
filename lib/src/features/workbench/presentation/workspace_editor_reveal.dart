@@ -1,13 +1,13 @@
 part of 'workspace_editor_surface.dart';
 
 extension _WorkspaceEditorReveal on _WorkspaceEditorSurfaceState {
-  void _reloadFromDiskAfterExternalChange() {
+  Future<void> _reloadFromDiskAfterExternalChange() async {
     if (_isDirty()) {
       return;
     }
     _autosave.cancelPending();
     _document.clearSnapshot();
-    unawaited(_load());
+    await _load();
   }
 
   void _revealOrDefer(WorkspaceEditorRevealTarget target) {

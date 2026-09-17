@@ -437,6 +437,61 @@ void main() {
       expect(registry.takePendingReveal('tab-1'), target);
     });
 
+    test(
+      'external watcher reloads only clean documents with a changed disk token',
+      () async {
+        final registry = EditorSessionRegistry();
+        addTearDown(registry.dispose);
+        final service = _FakeWorkspaceFileService()
+          ..contentTokens['note.txt'] = 'token-1';
+        final document = registry.documentFor('tab-1')
+          ..attachFile(workspacePath: '/repo/alera', relativePath: 'note.txt')
+          ..acceptLoaded(
+            _editorFile(
+              rawContent: 'original',
+              displayContent: 'original',
+              contentToken: 'token-1',
+            ),
+          );
+        var reloads = 0;
+        registry.register(
+          'tab-1',
+          EditorSessionHandle(
+            isDirty: () => document.isDirty,
+            save: () async {},
+            discard: () async {},
+            reload: () async => reloads += 1,
+          ),
+        );
+
+        await registry.reloadExternallyChangedCleanFiles(
+          workspaceFiles: service,
+          workspacePath: '/repo/alera',
+          relativePaths: const <String>['note.txt'],
+        );
+        expect(reloads, 0, reason: 'Alera own-save events must be ignored');
+
+        service.contentTokens['note.txt'] = 'token-2';
+        await registry.reloadExternallyChangedCleanFiles(
+          workspaceFiles: service,
+          workspacePath: '/repo/alera',
+          relativePaths: const <String>['note.txt'],
+        );
+        expect(reloads, 1);
+
+        document.updateCurrentText('local edit');
+        service.contentTokens['note.txt'] = 'token-3';
+        final readsBeforeDirtyEvent = service.contentTokenReads.length;
+        await registry.reloadExternallyChangedCleanFiles(
+          workspaceFiles: service,
+          workspacePath: '/repo/alera',
+          relativePaths: const <String>['note.txt'],
+        );
+        expect(reloads, 1, reason: 'dirty editor content must not be replaced');
+        expect(service.contentTokenReads, hasLength(readsBeforeDirtyEvent));
+      },
+    );
+
     test('clears clean snapshot when live session has no reload callback', () {
       final registry = EditorSessionRegistry();
       final document = registry.documentFor('tab-1')
@@ -465,6 +520,17 @@ void main() {
 
 class _FakeWorkspaceFileService extends WorkspaceFileService {
   final List<_EditorWrite> writes = <_EditorWrite>[];
+  final Map<String, String?> contentTokens = <String, String?>{};
+  final List<String> contentTokenReads = <String>[];
+
+  @override
+  Future<String?> contentTokenForFile({
+    required String workspacePath,
+    required String relativePath,
+  }) async {
+    contentTokenReads.add(relativePath);
+    return contentTokens[relativePath];
+  }
 
   @override
   Future<native.WorkspaceEditorTextFile> writeEditorTextFile({

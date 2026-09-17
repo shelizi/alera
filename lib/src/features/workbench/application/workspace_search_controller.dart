@@ -321,7 +321,7 @@ class WorkspaceSearchController extends _$WorkspaceSearchController {
           ],
         ),
       );
-      editorSessions.reloadCleanFiles(
+      await editorSessions.reloadCleanFiles(
         workspacePath: workspacePath,
         relativePaths: affectedFiles.map((file) => file.relativePath),
       );

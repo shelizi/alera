@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:alera/src/app/providers.dart';
 import 'package:alera/src/features/ai_assist/application/agent_title_providers.dart';
 import 'package:alera/src/features/ai_assist/application/agent_title_service.dart';
 import 'package:alera/src/design_system/feedback/alera_toast.dart';
@@ -23,6 +24,7 @@ import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_source_control_scope.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_preview_kind.dart';
+import 'package:alera/src/features/workbench/application/workspace_editor_file_watcher.dart';
 import 'package:alera/src/features/workbench/presentation/mobile_driver_overlay.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_runtime.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_surface.dart';
@@ -209,18 +211,48 @@ class const WorkspaceWorkbenchView({
   required final ActivateWorkbenchGroupCallback onActivateGroup,
   required final UpdateWorkbenchSplitRatioCallback onUpdateSplitRatio,
   final ValueChanged<String>? onKeepPreviewTab,
-}) extends StatefulWidget {
+}) extends ConsumerStatefulWidget {
   @override
-  State<WorkspaceWorkbenchView> createState() => _WorkspaceWorkbenchViewState();
+  ConsumerState<WorkspaceWorkbenchView> createState() =>
+      _WorkspaceWorkbenchViewState();
 }
 
-class _WorkspaceWorkbenchViewState extends State<WorkspaceWorkbenchView> {
+class _WorkspaceWorkbenchViewState
+    extends ConsumerState<WorkspaceWorkbenchView> {
   final _tabDragController = _WorkbenchTabDragController();
+  late final WorkspaceEditorFileWatcher _editorFileWatcher;
+
+  @override
+  void initState() {
+    super.initState();
+    _editorFileWatcher = WorkspaceEditorFileWatcher(
+      workspaceFiles: ref.read(workspaceFileServiceProvider),
+      editorSessions: ref.read(editorSessionRegistryProvider),
+    );
+    unawaited(_syncEditorFileWatcher());
+  }
+
+  @override
+  void didUpdateWidget(covariant WorkspaceWorkbenchView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    unawaited(_syncEditorFileWatcher());
+  }
 
   @override
   void dispose() {
+    unawaited(_editorFileWatcher.dispose());
     _tabDragController.dispose();
     super.dispose();
+  }
+
+  Future<void> _syncEditorFileWatcher() {
+    return _editorFileWatcher.update(
+      workspacePath: widget.workspace.path,
+      openRelativePaths: widget.tabs
+          .where((tab) => tab.kind == WorkspaceTabKind.editor)
+          .map((tab) => tab.filePath)
+          .whereType<String>(),
+    );
   }
 
   @override

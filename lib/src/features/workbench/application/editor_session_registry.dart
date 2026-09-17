@@ -12,7 +12,6 @@ class EditorSessionRegistry extends ChangeNotifier
       <_EditorDocumentPath, Set<String>>{};
   final Map<_EditorDocumentPath, _EditorPathChangeNotifier> _pathNotifiers =
       <_EditorDocumentPath, _EditorPathChangeNotifier>{};
-
   EditorDocumentSession documentFor(String tabId) {
     return _documents.putIfAbsent(
       tabId,
@@ -92,7 +91,7 @@ class EditorSessionRegistry extends ChangeNotifier
   List<String> dirtyPathsFor({
     required String workspacePath,
     required Iterable<String> relativePaths,
-  }) {
+  }) async {
     final candidates = relativePaths.toSet();
     final dirtyPaths = <String>{};
     for (final entry in _documents.entries) {
@@ -152,10 +151,10 @@ class EditorSessionRegistry extends ChangeNotifier
     return target;
   }
 
-  void reloadCleanFiles({
+  Future<void> reloadCleanFiles({
     required String workspacePath,
     required Iterable<String> relativePaths,
-  }) {
+  }) async {
     final candidates = relativePaths.toSet();
     for (final entry in _documents.entries) {
       final tabId = entry.key;
@@ -170,7 +169,54 @@ class EditorSessionRegistry extends ChangeNotifier
       final handle = _sessions[tabId];
       final reload = handle?.reload;
       if (reload != null) {
-        reload();
+        await reload();
+      } else {
+        document.clearSnapshot();
+      }
+    }
+  }
+
+  Future<void> reloadExternallyChangedCleanFiles({
+    required WorkspaceFileService workspaceFiles,
+    required String workspacePath,
+    required Iterable<String> relativePaths,
+  }) async {
+    final candidates = relativePaths.toSet();
+    final observedTokens = <String, String?>{};
+    for (final entry in _documents.entries) {
+      final tabId = entry.key;
+      final document = entry.value;
+      final relativePath = document.relativePath;
+      if (document.workspacePath != workspacePath ||
+          relativePath == null ||
+          !candidates.contains(relativePath) ||
+          isDirty(tabId)) {
+        continue;
+      }
+      final diskToken = observedTokens.containsKey(relativePath)
+          ? observedTokens[relativePath]
+          : await workspaceFiles.contentTokenForFile(
+              workspacePath: workspacePath,
+              relativePath: relativePath,
+            );
+      observedTokens[relativePath] = diskToken;
+
+      // A watcher also observes Alera's own writes. A successful save already
+      // adopts the new token, so an equal token is not an external change and
+      // must not reset the editor/undo state.
+      if (diskToken == null || diskToken == document.contentToken) {
+        continue;
+      }
+      // The editor may have become dirty while the async metadata lookup ran.
+      if (isDirty(tabId) ||
+          document.workspacePath != workspacePath ||
+          document.relativePath != relativePath) {
+        continue;
+      }
+      final handle = _sessions[tabId];
+      final reload = handle?.reload;
+      if (reload != null) {
+        await reload();
       } else {
         document.clearSnapshot();
       }
@@ -311,7 +357,7 @@ class const EditorSessionHandle({
   required final Future<void> Function() save,
   required final Future<void> Function() discard,
   final void Function(WorkspaceEditorRevealTarget target)? reveal,
-  final VoidCallback? reload,
+  final Future<void> Function()? reload,
 });
 
 class const WorkspaceEditorRevealTarget({
