@@ -83,6 +83,36 @@ void main() {
     expect(identical(model.renderRows.first, oldSecondRow), isTrue);
   });
 
+  test('circular trims advance a logical mirror head', () async {
+    final worker = await TerminalXtermWorker.start(
+      cols: 8,
+      rows: 3,
+      maxLines: 25,
+    );
+    addTearDown(worker.close);
+    final model = TerminalXtermBufferModel();
+    final initialText = List<String>.generate(
+      25,
+      (index) => '${index + 1}',
+    ).join('\r\n');
+    model.apply(await worker.writeBufferDelta(initialText));
+    final rowTexts = model.rowTexts;
+    final renderRows = model.renderRows;
+
+    for (var line = 26; line <= 35; line++) {
+      final delta = await worker.writeBufferDelta('\r\n$line');
+      expect(delta.trimStart, 1);
+      model.apply(delta);
+    }
+
+    expect(model.storageHeadForTesting, 10);
+    expect(model.bufferLength, 25);
+    expect(model.rowTexts.first, '11');
+    expect(model.rowTexts.last, '35');
+    expect(identical(model.rowTexts, rowTexts), isTrue);
+    expect(identical(model.renderRows, renderRows), isTrue);
+  });
+
   test(
     'resize buffer delta rebuilds reflowed scrollback immediately',
     () async {

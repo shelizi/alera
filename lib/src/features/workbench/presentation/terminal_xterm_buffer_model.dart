@@ -5,6 +5,79 @@ import 'package:xterm2/core.dart';
 import 'terminal_search_source.dart';
 import 'terminal_xterm_worker.dart';
 
+final class _TerminalXtermHeadList<T extends Object> extends ListBase<T> {
+  static const int _minCompactionHead = 1024;
+
+  final List<T?> _storage = <T?>[];
+  int _head = 0;
+
+  int get storageHead => _head;
+
+  @override
+  int get length => _storage.length - _head;
+
+  @override
+  set length(int value) {
+    if (value < 0) {
+      throw RangeError.range(value, 0, null, 'value');
+    }
+    final current = length;
+    if (value > current) {
+      throw UnsupportedError('Grow the terminal head list with add/addAll.');
+    }
+    if (value == 0) {
+      clear();
+      return;
+    }
+    if (value == current) return;
+    _storage.length = _head + value;
+  }
+
+  @override
+  T operator [](int index) {
+    RangeError.checkValidIndex(index, this);
+    return _storage[_head + index] as T;
+  }
+
+  @override
+  void operator []=(int index, T value) {
+    RangeError.checkValidIndex(index, this);
+    _storage[_head + index] = value;
+  }
+
+  @override
+  void add(T value) => _storage.add(value);
+
+  @override
+  void addAll(Iterable<T> iterable) => _storage.addAll(iterable);
+
+  @override
+  void clear() {
+    _storage.clear();
+    _head = 0;
+  }
+
+  void trimStart(int count) {
+    RangeError.checkValueInInterval(count, 0, length, 'count');
+    if (count == 0) return;
+    final end = _head + count;
+    for (var index = _head; index < end; index++) {
+      _storage[index] = null;
+    }
+    _head = end;
+    _compactIfNeeded();
+  }
+
+  void _compactIfNeeded() {
+    if (_head < _minCompactionHead || _head * 2 < _storage.length) return;
+    final retained = _storage.sublist(_head);
+    _storage
+      ..clear()
+      ..addAll(retained);
+    _head = 0;
+  }
+}
+
 final class _TerminalXtermBufferSearchLineId {
   const _TerminalXtermBufferSearchLineId({
     required this.generation,
@@ -33,8 +106,8 @@ final class TerminalXtermBufferModel implements TerminalSearchSource {
       <TerminalSearchSourceListener>{};
   Object _searchGeneration = Object();
   int _searchLineBase = 0;
-  final List<_TerminalXtermBufferSearchLineId> _searchLineIds =
-      <_TerminalXtermBufferSearchLineId>[];
+  final _TerminalXtermHeadList<_TerminalXtermBufferSearchLineId>
+  _searchLineIds = _TerminalXtermHeadList<_TerminalXtermBufferSearchLineId>();
   int _revision = 0;
   int _cols = 0;
   int _rows = 0;
@@ -53,10 +126,12 @@ final class TerminalXtermBufferModel implements TerminalSearchSource {
   final Map<int, String> _hyperlinks = <int, String>{};
   List<TerminalXtermWorkerEffect> _effects =
       const <TerminalXtermWorkerEffect>[];
-  final List<String> _rowTexts = <String>[];
-  final List<List<TerminalXtermWorkerRenderCell>> _renderRows =
-      <List<TerminalXtermWorkerRenderCell>>[];
-  final List<bool> _wrappedRows = <bool>[];
+  final _TerminalXtermHeadList<String> _rowTexts =
+      _TerminalXtermHeadList<String>();
+  final _TerminalXtermHeadList<List<TerminalXtermWorkerRenderCell>>
+  _renderRows = _TerminalXtermHeadList<List<TerminalXtermWorkerRenderCell>>();
+  final _TerminalXtermHeadList<bool> _wrappedRows =
+      _TerminalXtermHeadList<bool>();
   List<int> _semanticPromptLines = <int>[];
   late final UnmodifiableListView<String> _rowTextsView = UnmodifiableListView(
     _rowTexts,
@@ -117,6 +192,10 @@ final class TerminalXtermBufferModel implements TerminalSearchSource {
   List<TerminalXtermWorkerEffect> get effects => _effects;
   List<String> get rowTexts => _rowTextsView;
   List<List<TerminalXtermWorkerRenderCell>> get renderRows => _renderRowsView;
+
+  /// Exposes the logical backing head only to make amortized trim behavior
+  /// deterministic in unit tests; UI/runtime code must not depend on it.
+  int get storageHeadForTesting => _rowTexts.storageHead;
 
   String rowText(int row) => _rowTexts[row];
   bool isWrapped(int row) => _wrappedRows[row];
@@ -440,10 +519,10 @@ final class TerminalXtermBufferModel implements TerminalSearchSource {
 
     _validatePartialBuffer(delta);
     if (delta.trimStart > 0) {
-      _rowTexts.removeRange(0, delta.trimStart);
-      _renderRows.removeRange(0, delta.trimStart);
-      _wrappedRows.removeRange(0, delta.trimStart);
-      _searchLineIds.removeRange(0, delta.trimStart);
+      _rowTexts.trimStart(delta.trimStart);
+      _renderRows.trimStart(delta.trimStart);
+      _wrappedRows.trimStart(delta.trimStart);
+      _searchLineIds.trimStart(delta.trimStart);
       _searchLineBase += delta.trimStart;
       _semanticPromptLines = <int>[
         for (final line in _semanticPromptLines)
