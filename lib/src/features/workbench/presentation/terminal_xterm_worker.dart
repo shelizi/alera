@@ -190,6 +190,8 @@ final class TerminalXtermWorkerRowDelta {
     required this.row,
     required this.text,
     required this.cells,
+    required this.isWrapped,
+    required this.isSemanticPromptLine,
   });
 
   factory TerminalXtermWorkerRowDelta._fromMessage(List<Object?> message) {
@@ -202,12 +204,16 @@ final class TerminalXtermWorkerRowDelta {
             List<Object?>.from(raw as List),
           ),
       ],
+      isWrapped: message[3]! as bool,
+      isSemanticPromptLine: message[4]! as bool,
     );
   }
 
   final int row;
   final String text;
   final List<TerminalXtermWorkerRenderCell> cells;
+  final bool isWrapped;
+  final bool isSemanticPromptLine;
 }
 
 final class TerminalXtermWorkerDelta {
@@ -783,6 +789,8 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
             hyperlinkUpdates: hyperlinkUpdates,
           ),
       ],
+      line.isWrapped,
+      bufferRow != null && terminal.isSemanticPromptLine(bufferRow),
     ];
   }
 

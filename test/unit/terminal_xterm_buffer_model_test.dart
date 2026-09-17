@@ -1,6 +1,8 @@
 import 'package:alera/src/features/workbench/presentation/terminal_xterm_buffer_model.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_xterm_worker.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:xterm2/core.dart';
+import 'package:xterm2/xterm.dart';
 
 void main() {
   test(
@@ -152,4 +154,177 @@ void main() {
     }
     expect(hyperlink, 'https://example.com');
   });
+
+  test('word and logical-line boundaries match direct xterm', () async {
+    final separators = <int>{'/'.codeUnitAt(0)};
+    final direct = Terminal(
+      maxLines: 64,
+      reflowWithHiddenCursor: false,
+      wordSeparators: separators,
+    )..resize(6, 4);
+    final worker = await TerminalXtermWorker.start(
+      cols: 6,
+      rows: 4,
+      maxLines: 64,
+      wordSeparators: separators,
+    );
+    addTearDown(worker.close);
+    final model = TerminalXtermBufferModel(wordSeparators: separators);
+
+    const wrapped = 'foo/barbaz';
+    direct.write(wrapped);
+    model.apply(await worker.writeBufferDelta(wrapped));
+
+    expect(model.isWrapped(1), direct.buffer.lines[1].isWrapped);
+    _expectRangeParity(
+      model.getWordBoundary(const CellOffset(1, 1)),
+      direct.buffer.getWordBoundary(const CellOffset(1, 1)),
+    );
+    _expectRangeParity(
+      model.getLineBoundary(const CellOffset(1, 1)),
+      direct.buffer.getLineBoundary(const CellOffset(1, 1)),
+    );
+
+    const wide = '\r\nab界cd';
+    direct.write(wide);
+    model.apply(await worker.writeBufferDelta(wide));
+    _expectRangeParity(
+      model.getWordBoundary(const CellOffset(3, 2)),
+      direct.buffer.getWordBoundary(const CellOffset(3, 2)),
+    );
+  });
+
+  test('semantic prompt navigation matches direct xterm', () async {
+    final direct = Terminal(maxLines: 20, reflowWithHiddenCursor: false)
+      ..resize(12, 4);
+    final worker = await TerminalXtermWorker.start(
+      cols: 12,
+      rows: 4,
+      maxLines: 20,
+    );
+    addTearDown(worker.close);
+    final model = TerminalXtermBufferModel();
+    final escape = String.fromCharCode(27);
+    final stringTerminator = '$escape\\';
+    final sequence =
+        '$escape]133;A$stringTerminator'
+        'first\r\n'
+        '$escape]133;A;k=c$stringTerminator'
+        'continuation\r\n'
+        '$escape]133;A$stringTerminator'
+        'second';
+
+    direct.write(sequence);
+    model.apply(await worker.writeBufferDelta(sequence));
+
+    for (var line = 0; line < direct.buffer.lines.length; line++) {
+      expect(
+        model.isSemanticPromptLine(line),
+        direct.isSemanticPromptLine(line),
+      );
+    }
+    for (final line in <int>[-1, 0, 1, 2, 99]) {
+      expect(
+        model.semanticPromptLineBefore(line),
+        direct.semanticPromptLineBefore(line),
+      );
+      expect(
+        model.semanticPromptLineAfter(line),
+        direct.semanticPromptLineAfter(line),
+      );
+    }
+  });
+
+  test(
+    'semantic prompt indexes follow scrollback trims incrementally',
+    () async {
+      final direct = Terminal(maxLines: 25, reflowWithHiddenCursor: false)
+        ..resize(12, 3);
+      final worker = await TerminalXtermWorker.start(
+        cols: 12,
+        rows: 3,
+        maxLines: 25,
+      );
+      addTearDown(worker.close);
+      final model = TerminalXtermBufferModel();
+      final escape = String.fromCharCode(27);
+      final stringTerminator = '$escape\\';
+      final prompt = '$escape]133;A$stringTerminator';
+
+      final initial = <String>[
+        '${prompt}first',
+        ...List<String>.generate(23, (index) => 'seed-$index'),
+      ].join('\r\n');
+      direct.write(initial);
+      model.apply(await worker.writeBufferDelta(initial));
+      _expectSemanticPromptParity(model, direct);
+
+      const overflow = '\r\nline-24\r\nline-25';
+      direct.write(overflow);
+      final trimmed = await worker.writeBufferDelta(overflow);
+      expect(trimmed.trimStart, greaterThan(0));
+      model.apply(trimmed);
+      _expectSemanticPromptParity(model, direct);
+
+      final nextPrompt = '\r\n${prompt}latest';
+      direct.write(nextPrompt);
+      model.apply(await worker.writeBufferDelta(nextPrompt));
+      _expectSemanticPromptParity(model, direct);
+    },
+  );
+
+  test('hyperlink ID lookup stays synchronous in the mirror', () async {
+    final worker = await TerminalXtermWorker.start(
+      cols: 16,
+      rows: 4,
+      maxLines: 64,
+    );
+    addTearDown(worker.close);
+    final model = TerminalXtermBufferModel();
+    final escape = String.fromCharCode(27);
+    final stringTerminator = '$escape\\';
+
+    model.apply(
+      await worker.writeBufferDelta(
+        '$escape]8;;https://example.com$stringTerminator'
+        'link'
+        '$escape]8;;$stringTerminator',
+      ),
+    );
+
+    final hyperlinkId = model.hyperlinkIdAt(0, 0);
+    expect(hyperlinkId, greaterThan(0));
+    expect(model.hyperlinkAt(0, 0), 'https://example.com');
+  });
+}
+
+void _expectRangeParity(BufferRangeLine? actual, BufferRangeLine? expected) {
+  expect(actual == null, expected == null);
+  if (actual == null || expected == null) return;
+  expect(actual.begin.x, expected.begin.x);
+  expect(actual.begin.y, expected.begin.y);
+  expect(actual.end.x, expected.end.x);
+  expect(actual.end.y, expected.end.y);
+}
+
+void _expectSemanticPromptParity(
+  TerminalXtermBufferModel model,
+  Terminal terminal,
+) {
+  for (var line = 0; line < terminal.buffer.lines.length; line++) {
+    expect(
+      model.isSemanticPromptLine(line),
+      terminal.isSemanticPromptLine(line),
+    );
+  }
+  for (final line in <int>[-1, 0, 1, 2, terminal.buffer.lines.length, 999]) {
+    expect(
+      model.semanticPromptLineBefore(line),
+      terminal.semanticPromptLineBefore(line),
+    );
+    expect(
+      model.semanticPromptLineAfter(line),
+      terminal.semanticPromptLineAfter(line),
+    );
+  }
 }
