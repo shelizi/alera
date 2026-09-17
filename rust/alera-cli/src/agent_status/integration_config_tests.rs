@@ -70,7 +70,7 @@ fn claude_windows_hooks_bridge_git_bash_into_cmd() {
 
     assert_eq!(
         command,
-        "MSYS2_ARG_CONV_EXCL='*' ALERA_AGENT_TYPE='claude' ALERA_AGENT_HOOK_EVENT='UserPromptSubmit' cmd.exe /d /s /c 'call \"C:\\Users\\u\\Alera Hooks\\alera-runtime-agent-hook.cmd\"'"
+        "MSYS2_ARG_CONV_EXCL='*' ALERA_AGENT_TYPE='claude' ALERA_AGENT_HOOK_EVENT='UserPromptSubmit' cmd.exe /d /s /c call 'C:\\Users\\u\\Alera Hooks\\alera-runtime-agent-hook.cmd'"
     );
 }
 
@@ -149,7 +149,7 @@ fn devin_windows_hooks_bridge_git_bash_into_cmd() {
     // must be disabled or /d and /s are rewritten as POSIX-looking paths.
     assert_eq!(
         command,
-        "MSYS2_ARG_CONV_EXCL='*' ALERA_AGENT_TYPE='devin' ALERA_AGENT_HOOK_EVENT='SessionStart' cmd.exe /d /s /c 'call \"C:\\Users\\u\\Alera Hooks\\alera-runtime-agent-hook.cmd\"'"
+        "MSYS2_ARG_CONV_EXCL='*' ALERA_AGENT_TYPE='devin' ALERA_AGENT_HOOK_EVENT='SessionStart' cmd.exe /d /s /c call 'C:\\Users\\u\\Alera Hooks\\alera-runtime-agent-hook.cmd'"
     );
     assert!(!command.contains("alera-runtime-agent-hook.sh"));
 }

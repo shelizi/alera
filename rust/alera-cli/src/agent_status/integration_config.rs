@@ -286,12 +286,15 @@ fn windows_hook_execution_strategy(agent: &str) -> WindowsHookExecutionStrategy 
 
 #[cfg(windows)]
 fn git_bash_windows_managed_command(script: &Path, agent: &str, event: &str) -> String {
-    let command = format!("call \"{}\"", script.display());
+    // Claude Code and Devin execute shell-form hooks through Git Bash on Windows.
+    // Keep `call` and the batch path as separate Bash argv. Embedding `call "path"`
+    // inside one `/c` argument makes MSYS serialize the inner quotes as literal
+    // backslash-quote pairs (`\"`), which cmd.exe does not treat as quoting.
     format!(
-        "MSYS2_ARG_CONV_EXCL='*' ALERA_AGENT_TYPE={} ALERA_AGENT_HOOK_EVENT={} cmd.exe /d /s /c {}",
+        "MSYS2_ARG_CONV_EXCL='*' ALERA_AGENT_TYPE={} ALERA_AGENT_HOOK_EVENT={} cmd.exe /d /s /c call {}",
         sh_quote(agent),
         sh_quote(event),
-        sh_quote(&command),
+        sh_quote(&script.display().to_string()),
     )
 }
 

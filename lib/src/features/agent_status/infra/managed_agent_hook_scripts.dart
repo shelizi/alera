@@ -28,13 +28,13 @@ extension _ManagedAgentHookScripts on ManagedAgentHookInstallService {
             'powershell.exe -NoProfile -ExecutionPolicy Bypass -File '
             '${_powerShellPath(descriptor.scriptPath)}',
       _WindowsHookExecutionStrategy.gitBashToCmd =>
-        // Devin launches hook commands through Git Bash on Windows. Disable
-        // MSYS argv conversion before entering cmd.exe so /d and /s stay cmd
-        // switches instead of being rewritten as POSIX-looking paths.
-        "MSYS2_ARG_CONV_EXCL='*' "
+        // Devin launches hook commands through Git Bash on Windows. Keep `call`
+        // and the batch path as separate argv: embedding quoted path text inside
+        // one `/c` argument makes MSYS pass literal backslash-quote pairs to cmd.
+        'if [ -f ${_shQuote(descriptor.scriptPath)} ]; then '
+            "MSYS2_ARG_CONV_EXCL='*' "
             '${descriptor.eventEnvVar}=${_shQuote(event.eventName)} '
-            'cmd.exe /d /s /c '
-            "${_shQuote('if exist \"${descriptor.scriptPath}\" call \"${descriptor.scriptPath}\"')}",
+            'cmd.exe /d /s /c call ${_shQuote(descriptor.scriptPath)}; fi',
       _WindowsHookExecutionStrategy.nativeCmd =>
         'cmd /d /s /c "if exist ""${descriptor.scriptPath}"" '
             '(set ${descriptor.eventEnvVar}=${event.eventName}&& call ""${descriptor.scriptPath}"")"',

@@ -222,10 +222,13 @@ extension _ClaudeRuntimeHooks on ClaudeRuntimeHomeService {
             'ALERA_AGENT_HOOK_EVENT=${_shQuote(event.eventName)} '
             '/bin/sh ${_shQuote(descriptor.scriptPath)}; fi',
       ManagedAgentHookPlatform.windows =>
-        "MSYS2_ARG_CONV_EXCL='*' "
+        // Keep `call` and the batch path as separate Git Bash argv. If quoted
+        // path text is embedded inside the single cmd `/c` payload, MSYS emits
+        // literal backslash-quote pairs that cmd.exe cannot interpret.
+        'if [ -f ${_shQuote(descriptor.scriptPath)} ]; then '
+            "MSYS2_ARG_CONV_EXCL='*' "
             'ALERA_AGENT_HOOK_EVENT=${_shQuote(event.eventName)} '
-            'cmd.exe /d /s /c '
-            "${_shQuote('if exist \"${descriptor.scriptPath}\" call \"${descriptor.scriptPath}\"')}",
+            'cmd.exe /d /s /c call ${_shQuote(descriptor.scriptPath)}; fi',
     };
   }
 

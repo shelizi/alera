@@ -234,7 +234,8 @@ void main() {
         'UserPromptSubmit',
       ).single;
       expect(promptCommand, contains("MSYS2_ARG_CONV_EXCL='*'"));
-      expect(promptCommand, contains('cmd.exe /d /s /c'));
+      expect(promptCommand, contains('cmd.exe /d /s /c call '));
+      expect(promptCommand, isNot(contains('/c \'if exist "')));
       expect(promptCommand, isNot(startsWith('cmd /d /s /c')));
       expect(
         File(
