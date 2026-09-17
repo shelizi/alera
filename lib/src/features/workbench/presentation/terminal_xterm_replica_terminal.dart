@@ -100,11 +100,11 @@ final class TerminalXtermReplicaTerminal extends Terminal {
         target.trimStart(delta.trimStart);
       }
       for (final changed in delta.rowDeltas) {
-        final line = _buildLine(changed);
         if (changed.row == target.length) {
-          target.push(line);
+          target.push(_buildLine(changed));
         } else if (changed.row >= 0 && changed.row < target.length) {
-          target.swap(changed.row, line);
+          final line = target[changed.row];
+          _applyRowDelta(line, changed);
         } else {
           throw StateError(
             'Terminal xterm replica received invalid row ${changed.row}.',
@@ -136,9 +136,40 @@ final class TerminalXtermReplicaTerminal extends Terminal {
   }
 
   BufferLine _buildLine(TerminalXtermWorkerRowDelta row) {
-    final line = BufferLine(row.cells.length, isWrapped: row.isWrapped);
-    for (var column = 0; column < row.cells.length; column++) {
-      final cell = row.cells[column];
+    if (row.cellStart != 0 || row.cells.length != row.rowLength) {
+      throw StateError(
+        'Terminal xterm replica full row ${row.row} returned cell span '
+        '${row.cellStart}+${row.cells.length}; expected 0+${row.rowLength}.',
+      );
+    }
+    final line = BufferLine(row.rowLength, isWrapped: row.isWrapped);
+    _applyRowDelta(line, row);
+    return line;
+  }
+
+  void _applyRowDelta(BufferLine line, TerminalXtermWorkerRowDelta row) {
+    if (line.length != row.rowLength) {
+      if (row.cellStart != 0 || row.cells.length != row.rowLength) {
+        throw StateError(
+          'Terminal xterm replica cannot resize row ${row.row} from '
+          '${line.length} to ${row.rowLength} with partial span '
+          '${row.cellStart}+${row.cells.length}.',
+        );
+      }
+      line.resize(row.rowLength, clearNewCells: true);
+    }
+    final start = row.cellStart;
+    final end = start + row.cells.length;
+    if (start < 0 || end > line.length) {
+      throw StateError(
+        'Terminal xterm replica cell span [$start, $end) exceeds row width '
+        '${line.length}.',
+      );
+    }
+    line.isWrapped = row.isWrapped;
+    for (var offset = 0; offset < row.cells.length; offset++) {
+      final column = start + offset;
+      final cell = row.cells[offset];
       line.setCellData(
         column,
         CellData(
@@ -156,7 +187,6 @@ final class TerminalXtermReplicaTerminal extends Terminal {
         }
       }
     }
-    return line;
   }
 
   @override

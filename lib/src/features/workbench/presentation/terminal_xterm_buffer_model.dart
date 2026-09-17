@@ -386,6 +386,7 @@ final class TerminalXtermBufferModel implements TerminalSearchSource {
     );
     for (final changed in delta.rowDeltas) {
       _validateRow(changed.row, delta.bufferLength);
+      _validateFullRowCells(changed);
       nextTexts[changed.row] = changed.text;
       nextRows[changed.row] = _freezeCells(changed.cells);
       nextWrapped[changed.row] = changed.isWrapped;
@@ -449,10 +450,10 @@ final class TerminalXtermBufferModel implements TerminalSearchSource {
           'Terminal xterm buffer delta skipped appended row ${nextRows.length}.',
         );
       }
-      final frozenCells = _freezeCells(changed.cells);
       if (changed.row == nextRows.length) {
+        _validateFullRowCells(changed);
         nextTexts.add(changed.text);
-        nextRows.add(frozenCells);
+        nextRows.add(_freezeCells(changed.cells));
         nextWrapped.add(changed.isWrapped);
         nextSearchLineIds.add(
           _TerminalXtermBufferSearchLineId(
@@ -462,7 +463,7 @@ final class TerminalXtermBufferModel implements TerminalSearchSource {
         );
       } else {
         nextTexts[changed.row] = changed.text;
-        nextRows[changed.row] = frozenCells;
+        nextRows[changed.row] = _mergeCellSpan(nextRows[changed.row], changed);
         nextWrapped[changed.row] = changed.isWrapped;
       }
       _setSemanticPromptLine(changed.row, changed.isSemanticPromptLine);
@@ -488,6 +489,42 @@ final class TerminalXtermBufferModel implements TerminalSearchSource {
     List<TerminalXtermWorkerRenderCell> cells,
   ) {
     return List<TerminalXtermWorkerRenderCell>.unmodifiable(cells);
+  }
+
+  List<TerminalXtermWorkerRenderCell> _mergeCellSpan(
+    List<TerminalXtermWorkerRenderCell> existing,
+    TerminalXtermWorkerRowDelta changed,
+  ) {
+    if (existing.length != changed.rowLength) {
+      _validateFullRowCells(changed);
+      return _freezeCells(changed.cells);
+    }
+    final start = changed.cellStart;
+    final end = start + changed.cells.length;
+    if (start < 0 || end > existing.length) {
+      throw StateError(
+        'Terminal xterm cell span [$start, $end) exceeds row width '
+        '${existing.length}.',
+      );
+    }
+    if (changed.cells.isEmpty) return existing;
+    if (start == 0 && end == existing.length) {
+      return _freezeCells(changed.cells);
+    }
+    final next = List<TerminalXtermWorkerRenderCell>.of(existing);
+    for (var offset = 0; offset < changed.cells.length; offset++) {
+      next[start + offset] = changed.cells[offset];
+    }
+    return List<TerminalXtermWorkerRenderCell>.unmodifiable(next);
+  }
+
+  void _validateFullRowCells(TerminalXtermWorkerRowDelta row) {
+    if (row.cellStart != 0 || row.cells.length != row.rowLength) {
+      throw StateError(
+        'Terminal xterm full row ${row.row} returned cell span '
+        '${row.cellStart}+${row.cells.length}; expected 0+${row.rowLength}.',
+      );
+    }
   }
 
   void _validateRow(int row, int rowCount) {

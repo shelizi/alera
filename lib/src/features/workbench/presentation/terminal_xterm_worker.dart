@@ -193,6 +193,8 @@ final class TerminalXtermWorkerRenderCell {
 final class TerminalXtermWorkerRowDelta {
   const TerminalXtermWorkerRowDelta({
     required this.row,
+    required this.rowLength,
+    required this.cellStart,
     required this.text,
     required this.cells,
     required this.isWrapped,
@@ -211,10 +213,14 @@ final class TerminalXtermWorkerRowDelta {
       ],
       isWrapped: message[3]! as bool,
       isSemanticPromptLine: message[4]! as bool,
+      cellStart: message[5]! as int,
+      rowLength: message[6]! as int,
     );
   }
 
   final int row;
+  final int rowLength;
+  final int cellStart;
   final String text;
   final List<TerminalXtermWorkerRenderCell> cells;
   final bool isWrapped;
@@ -813,35 +819,43 @@ final class _TerminalXtermWorkerRowCache {
   final List<String?>? combiningCharacters;
   final bool isWrapped;
 
-  bool matches(BufferLine line) {
-    if (isWrapped != line.isWrapped || cells.length != line.length * 5) {
+  bool _cellMatches(BufferLine line, int column) {
+    final offset = column * 5;
+    if (offset + 4 >= cells.length ||
+        cells[offset] != line.getForeground(column) ||
+        cells[offset + 1] != line.getBackground(column) ||
+        cells[offset + 2] != line.getAttributes(column) ||
+        cells[offset + 3] != line.getContent(column) ||
+        cells[offset + 4] != line.getUnderlineColor(column)) {
       return false;
     }
-    for (var column = 0; column < line.length; column++) {
-      final offset = column * 5;
-      if (cells[offset] != line.getForeground(column) ||
-          cells[offset + 1] != line.getBackground(column) ||
-          cells[offset + 2] != line.getAttributes(column) ||
-          cells[offset + 3] != line.getContent(column) ||
-          cells[offset + 4] != line.getUnderlineColor(column)) {
-        return false;
-      }
-    }
-
-    final currentHasCombining = line.hasCombiningCharacters;
-    if (currentHasCombining != (combiningCharacters != null)) {
-      return false;
-    }
-    final cachedCombining = combiningCharacters;
-    if (cachedCombining != null) {
-      for (var column = 0; column < line.length; column++) {
-        if (cachedCombining[column] != line.getCombiningCharacters(column)) {
-          return false;
-        }
-      }
-    }
-    return true;
+    return combiningCharacters?[column] == line.getCombiningCharacters(column);
   }
+
+  _TerminalXtermWorkerCellSpan? changedCellSpan(BufferLine line) {
+    if (cells.length != line.length * 5) {
+      return _TerminalXtermWorkerCellSpan(0, line.length);
+    }
+    int? start;
+    var end = 0;
+    for (var column = 0; column < line.length; column++) {
+      if (_cellMatches(line, column)) continue;
+      start ??= column;
+      end = column + 1;
+    }
+    return start == null ? null : _TerminalXtermWorkerCellSpan(start, end);
+  }
+
+  bool matches(BufferLine line) {
+    return isWrapped == line.isWrapped && changedCellSpan(line) == null;
+  }
+}
+
+final class _TerminalXtermWorkerCellSpan {
+  const _TerminalXtermWorkerCellSpan(this.start, this.end);
+
+  final int start;
+  final int end;
 }
 
 void terminalXtermWorkerMain(List<Object?> initialization) {
@@ -915,12 +929,15 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
     BufferLine line, {
     int? bufferRow,
     Map<int, String>? hyperlinkUpdates,
+    int cellStart = 0,
+    int? cellEnd,
   }) {
+    final end = cellEnd ?? line.length;
     return <Object?>[
       row,
       line.toString(),
       <Object?>[
-        for (var column = 0; column < line.length; column++)
+        for (var column = cellStart; column < end; column++)
           renderCellMessage(
             line,
             column,
@@ -930,6 +947,8 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
       ],
       line.isWrapped,
       bufferRow != null && terminal.isSemanticPromptLine(bufferRow),
+      cellStart,
+      line.length,
     ];
   }
 
@@ -1132,17 +1151,25 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
           !fullRepaint && previousCaches != null && row < overlap
           ? previousCaches[trimStart + row]
           : null;
-      if (previousCache != null && previousCache.matches(line)) {
+      final changedSpan = previousCache?.changedCellSpan(line);
+      if (previousCache != null &&
+          previousCache.isWrapped == line.isWrapped &&
+          changedSpan == null) {
         nextCaches.add(previousCache);
         continue;
       }
       nextCaches.add(_TerminalXtermWorkerRowCache.capture(line));
+      final cellStart = changedSpan?.start ?? 0;
+      final cellEnd =
+          changedSpan?.end ?? (previousCache == null ? line.length : 0);
       changedRows.add(
         rowMessage(
           row,
           line,
           bufferRow: row,
           hyperlinkUpdates: hyperlinkUpdates,
+          cellStart: cellStart,
+          cellEnd: cellEnd,
         ),
       );
     }

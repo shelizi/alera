@@ -329,6 +329,46 @@ void main() {
     },
   );
 
+  test(
+    'worker buffer delta serializes only changed cells in retained row',
+    () async {
+      final worker = await TerminalXtermWorker.start(
+        cols: 16,
+        rows: 4,
+        maxLines: 64,
+      );
+      addTearDown(worker.close);
+
+      await worker.writeBufferDelta('abcdefghijkl');
+      final delta = await worker.writeBufferDelta('\rZ');
+
+      expect(delta.fullRepaint, isFalse);
+      expect(delta.rowDeltas, hasLength(1));
+      expect(delta.rowDeltas.single.row, 0);
+      expect(delta.rowDeltas.single.cellStart, 0);
+      expect(delta.rowDeltas.single.cells, hasLength(1));
+      expect(delta.rowDeltas.single.text, startsWith('Zbcdef'));
+    },
+  );
+
+  test('worker buffer delta preserves nonzero cell span offsets', () async {
+    final worker = await TerminalXtermWorker.start(
+      cols: 16,
+      rows: 4,
+      maxLines: 64,
+    );
+    addTearDown(worker.close);
+
+    await worker.writeBufferDelta('abcdefghijkl');
+    final delta = await worker.writeBufferDelta('\r\x1b[5CX');
+
+    expect(delta.fullRepaint, isFalse);
+    expect(delta.rowDeltas, hasLength(1));
+    expect(delta.rowDeltas.single.cellStart, 5);
+    expect(delta.rowDeltas.single.cells, hasLength(1));
+    expect(delta.rowDeltas.single.text, 'abcdeXghijkl');
+  });
+
   test('worker buffer delta reports circular scrollback trimming', () async {
     final direct = _createDirectTerminal(cols: 8, rows: 3, maxLines: 25);
     final worker = await TerminalXtermWorker.start(

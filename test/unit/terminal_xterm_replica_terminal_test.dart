@@ -75,6 +75,69 @@ void main() {
     },
   );
 
+  test(
+    'replica mutates a retained row in place for a cell span delta',
+    () async {
+      final direct = _createDirect(cols: 16, rows: 4, maxLines: 64);
+      final worker = await TerminalXtermWorker.start(
+        cols: 16,
+        rows: 4,
+        maxLines: 64,
+      );
+      addTearDown(worker.close);
+      final replica = TerminalXtermReplicaTerminal(
+        cols: 16,
+        rows: 4,
+        maxLines: 64,
+      );
+
+      direct.write('abcdefghijkl');
+      replica.applyBufferDelta(await worker.writeBufferDelta('abcdefghijkl'));
+      final retained = replica.buffer.lines[0];
+
+      direct.write('\rZ');
+      final delta = await worker.writeBufferDelta('\rZ');
+      expect(delta.rowDeltas.single.cellStart, 0);
+      expect(delta.rowDeltas.single.cells, hasLength(1));
+      replica.applyBufferDelta(delta);
+
+      expect(identical(replica.buffer.lines[0], retained), isTrue);
+      _expectReplicaParity(replica, direct);
+    },
+  );
+
+  test(
+    'replica preserves wide-cell parity through a partial overwrite',
+    () async {
+      final direct = _createDirect(cols: 16, rows: 4, maxLines: 64);
+      final worker = await TerminalXtermWorker.start(
+        cols: 16,
+        rows: 4,
+        maxLines: 64,
+      );
+      addTearDown(worker.close);
+      final replica = TerminalXtermReplicaTerminal(
+        cols: 16,
+        rows: 4,
+        maxLines: 64,
+      );
+
+      direct.write('abcdef');
+      replica.applyBufferDelta(await worker.writeBufferDelta('abcdef'));
+      final retained = replica.buffer.lines[0];
+
+      direct.write('\r\x1b[2C界');
+      final delta = await worker.writeBufferDelta('\r\x1b[2C界');
+      expect(delta.rowDeltas, hasLength(1));
+      expect(delta.rowDeltas.single.cellStart, 2);
+      expect(delta.rowDeltas.single.cells, hasLength(2));
+      replica.applyBufferDelta(delta);
+
+      expect(identical(replica.buffer.lines[0], retained), isTrue);
+      _expectReplicaParity(replica, direct);
+    },
+  );
+
   test('replica rebuilds direct xterm resize reflow immediately', () async {
     final direct = _createDirect(cols: 10, rows: 4, maxLines: 64);
     final worker = await TerminalXtermWorker.start(
