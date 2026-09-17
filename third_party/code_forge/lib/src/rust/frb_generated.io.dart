@@ -4,6 +4,7 @@
 // ignore_for_file: unused_import, unused_element, unnecessary_import, duplicate_ignore, invalid_use_of_internal_member, annotate_overrides, non_constant_identifier_names, curly_braces_in_flow_control_structures, prefer_const_literals_to_create_immutables, unused_field
 
 import 'api/editor.dart';
+import 'api/editor_document.dart';
 import 'api/rope.dart';
 
 import 'dart:async';
@@ -27,12 +28,22 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       ._rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLayoutMapPtr;
 
   CrossPlatformFinalizerArg
+  get rust_arc_decrement_strong_count_NativeEditorDocumentPtr => wire
+      ._rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerNativeEditorDocumentPtr;
+
+  CrossPlatformFinalizerArg
   get rust_arc_decrement_strong_count_RopeBridgePtr => wire
       ._rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerRopeBridgePtr;
 
   @protected
   LayoutMap
   dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLayoutMap(
+    dynamic raw,
+  );
+
+  @protected
+  NativeEditorDocument
+  dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerNativeEditorDocument(
     dynamic raw,
   );
 
@@ -55,6 +66,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  NativeEditorDocument
+  dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerNativeEditorDocument(
+    dynamic raw,
+  );
+
+  @protected
   RopeBridge
   dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerRopeBridge(
     dynamic raw,
@@ -63,6 +80,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   LayoutMap
   dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLayoutMap(
+    dynamic raw,
+  );
+
+  @protected
+  NativeEditorDocument
+  dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerNativeEditorDocument(
     dynamic raw,
   );
 
@@ -83,6 +106,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   CharOffset dco_decode_char_offset(dynamic raw);
+
+  @protected
+  EditorDocumentEdit dco_decode_editor_document_edit(dynamic raw);
+
+  @protected
+  EditorDocumentRevision dco_decode_editor_document_revision(dynamic raw);
 
   @protected
   double dco_decode_f_32(dynamic raw);
@@ -115,10 +144,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<BiDiSegment> dco_decode_list_bi_di_segment(dynamic raw);
 
   @protected
+  List<EditorDocumentEdit> dco_decode_list_editor_document_edit(dynamic raw);
+
+  @protected
   List<GuideBlock> dco_decode_list_guide_block(dynamic raw);
 
   @protected
   List<LineSummary> dco_decode_list_line_summary(dynamic raw);
+
+  @protected
+  List<NativeSyntaxSpan> dco_decode_list_native_syntax_span(dynamic raw);
 
   @protected
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
@@ -128,6 +163,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<SearchRange> dco_decode_list_search_range(dynamic raw);
+
+  @protected
+  NativeEditorDocumentInfo dco_decode_native_editor_document_info(dynamic raw);
+
+  @protected
+  NativeSyntaxSpan dco_decode_native_syntax_span(dynamic raw);
 
   @protected
   PixelHeight dco_decode_pixel_height(dynamic raw);
@@ -142,7 +183,13 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   SelectionState dco_decode_selection_state(dynamic raw);
 
   @protected
+  SyntaxSpanResponse dco_decode_syntax_span_response(dynamic raw);
+
+  @protected
   TextDirection dco_decode_text_direction(dynamic raw);
+
+  @protected
+  BigInt dco_decode_u_64(dynamic raw);
 
   @protected
   int dco_decode_u_8(dynamic raw);
@@ -166,6 +213,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  NativeEditorDocument
+  sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerNativeEditorDocument(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   RopeBridge
   sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerRopeBridge(
     SseDeserializer deserializer,
@@ -184,6 +237,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  NativeEditorDocument
+  sse_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerNativeEditorDocument(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   RopeBridge
   sse_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerRopeBridge(
     SseDeserializer deserializer,
@@ -192,6 +251,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   LayoutMap
   sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLayoutMap(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  NativeEditorDocument
+  sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerNativeEditorDocument(
     SseDeserializer deserializer,
   );
 
@@ -212,6 +277,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   CharOffset sse_decode_char_offset(SseDeserializer deserializer);
+
+  @protected
+  EditorDocumentEdit sse_decode_editor_document_edit(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  EditorDocumentRevision sse_decode_editor_document_revision(
+    SseDeserializer deserializer,
+  );
 
   @protected
   double sse_decode_f_32(SseDeserializer deserializer);
@@ -244,10 +319,20 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<BiDiSegment> sse_decode_list_bi_di_segment(SseDeserializer deserializer);
 
   @protected
+  List<EditorDocumentEdit> sse_decode_list_editor_document_edit(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   List<GuideBlock> sse_decode_list_guide_block(SseDeserializer deserializer);
 
   @protected
   List<LineSummary> sse_decode_list_line_summary(SseDeserializer deserializer);
+
+  @protected
+  List<NativeSyntaxSpan> sse_decode_list_native_syntax_span(
+    SseDeserializer deserializer,
+  );
 
   @protected
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
@@ -259,6 +344,14 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<SearchRange> sse_decode_list_search_range(SseDeserializer deserializer);
+
+  @protected
+  NativeEditorDocumentInfo sse_decode_native_editor_document_info(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  NativeSyntaxSpan sse_decode_native_syntax_span(SseDeserializer deserializer);
 
   @protected
   PixelHeight sse_decode_pixel_height(SseDeserializer deserializer);
@@ -273,7 +366,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   SelectionState sse_decode_selection_state(SseDeserializer deserializer);
 
   @protected
+  SyntaxSpanResponse sse_decode_syntax_span_response(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   TextDirection sse_decode_text_direction(SseDeserializer deserializer);
+
+  @protected
+  BigInt sse_decode_u_64(SseDeserializer deserializer);
 
   @protected
   int sse_decode_u_8(SseDeserializer deserializer);
@@ -294,6 +395,13 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void
   sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLayoutMap(
     LayoutMap self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
+  sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerNativeEditorDocument(
+    NativeEditorDocument self,
     SseSerializer serializer,
   );
 
@@ -320,6 +428,13 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void
+  sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerNativeEditorDocument(
+    NativeEditorDocument self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
   sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerRopeBridge(
     RopeBridge self,
     SseSerializer serializer,
@@ -329,6 +444,13 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void
   sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLayoutMap(
     LayoutMap self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
+  sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerNativeEditorDocument(
+    NativeEditorDocument self,
     SseSerializer serializer,
   );
 
@@ -350,6 +472,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_char_offset(CharOffset self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_editor_document_edit(
+    EditorDocumentEdit self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_editor_document_revision(
+    EditorDocumentRevision self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_f_32(double self, SseSerializer serializer);
@@ -388,6 +522,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_editor_document_edit(
+    List<EditorDocumentEdit> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_list_guide_block(
     List<GuideBlock> self,
     SseSerializer serializer,
@@ -396,6 +536,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_list_line_summary(
     List<LineSummary> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_native_syntax_span(
+    List<NativeSyntaxSpan> self,
     SseSerializer serializer,
   );
 
@@ -418,6 +564,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_native_editor_document_info(
+    NativeEditorDocumentInfo self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_native_syntax_span(
+    NativeSyntaxSpan self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_pixel_height(PixelHeight self, SseSerializer serializer);
 
   @protected
@@ -433,7 +591,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_syntax_span_response(
+    SyntaxSpanResponse self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_text_direction(TextDirection self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_u_64(BigInt self, SseSerializer serializer);
 
   @protected
   void sse_encode_u_8(int self, SseSerializer serializer);
@@ -500,6 +667,40 @@ class RustLibWire implements BaseWire {
       );
   late final _rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLayoutMap =
       _rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerLayoutMapPtr
+          .asFunction<void Function(ffi.Pointer<ffi.Void>)>();
+
+  void
+  rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerNativeEditorDocument(
+    ffi.Pointer<ffi.Void> ptr,
+  ) {
+    return _rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerNativeEditorDocument(
+      ptr,
+    );
+  }
+
+  late final _rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerNativeEditorDocumentPtr =
+      _lookup<ffi.NativeFunction<ffi.Void Function(ffi.Pointer<ffi.Void>)>>(
+        'frbgen_code_forge_rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerNativeEditorDocument',
+      );
+  late final _rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerNativeEditorDocument =
+      _rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerNativeEditorDocumentPtr
+          .asFunction<void Function(ffi.Pointer<ffi.Void>)>();
+
+  void
+  rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerNativeEditorDocument(
+    ffi.Pointer<ffi.Void> ptr,
+  ) {
+    return _rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerNativeEditorDocument(
+      ptr,
+    );
+  }
+
+  late final _rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerNativeEditorDocumentPtr =
+      _lookup<ffi.NativeFunction<ffi.Void Function(ffi.Pointer<ffi.Void>)>>(
+        'frbgen_code_forge_rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerNativeEditorDocument',
+      );
+  late final _rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerNativeEditorDocument =
+      _rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerNativeEditorDocumentPtr
           .asFunction<void Function(ffi.Pointer<ffi.Void>)>();
 
   void

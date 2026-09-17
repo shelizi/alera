@@ -356,6 +356,8 @@ This uses the **CodeForge FRB surface**, which is separate from A's root Alera F
 - retained native state is released on document close;
 - large files can eventually retain syntax highlighting without restoring old whole-document work.
 
+**2026-09-17 Phase 1 completion:** C now has a retained Tree-sitter `NativeEditorDocument` on the CodeForge FRB surface with monotonic revisions, incremental edit deltas, viewport + overscan syntax queries, stale-result rejection, explicit close, unsupported-language fallback, generated Dart bindings, focused correctness tests, and a five-sample 2k/20k/100k-line benchmark. Viewport query cost stayed in roughly the same 10-13 ms band across those sizes. Incremental parse was materially cheaper than a fresh full parse but still showed large-tree traversal cost, so production renderer activation is intentionally deferred until the controller exposes a reliable committed scalar edit stream without reintroducing full snapshots in large-file mode. See `docs/editor-native-document-c.md`.
+
 ## 8. Work package D - Terminal search benchmark and bounded Dart optimization
 
 **Priority: P1 profile track. Recommended to assign immediately.**
