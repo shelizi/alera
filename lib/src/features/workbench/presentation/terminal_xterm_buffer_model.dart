@@ -1,3 +1,5 @@
+import 'dart:collection';
+
 import 'package:xterm2/core.dart';
 
 import 'terminal_search_source.dart';
@@ -31,8 +33,8 @@ final class TerminalXtermBufferModel implements TerminalSearchSource {
       <TerminalSearchSourceListener>{};
   Object _searchGeneration = Object();
   int _searchLineBase = 0;
-  List<_TerminalXtermBufferSearchLineId> _searchLineIds =
-      const <_TerminalXtermBufferSearchLineId>[];
+  final List<_TerminalXtermBufferSearchLineId> _searchLineIds =
+      <_TerminalXtermBufferSearchLineId>[];
   int _revision = 0;
   int _cols = 0;
   int _rows = 0;
@@ -51,11 +53,16 @@ final class TerminalXtermBufferModel implements TerminalSearchSource {
   final Map<int, String> _hyperlinks = <int, String>{};
   List<TerminalXtermWorkerEffect> _effects =
       const <TerminalXtermWorkerEffect>[];
-  List<String> _rowTexts = const <String>[];
-  List<List<TerminalXtermWorkerRenderCell>> _renderRows =
-      const <List<TerminalXtermWorkerRenderCell>>[];
-  List<bool> _wrappedRows = const <bool>[];
+  final List<String> _rowTexts = <String>[];
+  final List<List<TerminalXtermWorkerRenderCell>> _renderRows =
+      <List<TerminalXtermWorkerRenderCell>>[];
+  final List<bool> _wrappedRows = <bool>[];
   List<int> _semanticPromptLines = <int>[];
+  late final UnmodifiableListView<String> _rowTextsView = UnmodifiableListView(
+    _rowTexts,
+  );
+  late final UnmodifiableListView<List<TerminalXtermWorkerRenderCell>>
+  _renderRowsView = UnmodifiableListView(_renderRows);
 
   int get revision => _revision;
   int get cols => _cols;
@@ -108,8 +115,8 @@ final class TerminalXtermBufferModel implements TerminalSearchSource {
   int? get selectionForegroundColorOverride =>
       globalState.selectionForegroundColorOverride;
   List<TerminalXtermWorkerEffect> get effects => _effects;
-  List<String> get rowTexts => _rowTexts;
-  List<List<TerminalXtermWorkerRenderCell>> get renderRows => _renderRows;
+  List<String> get rowTexts => _rowTextsView;
+  List<List<TerminalXtermWorkerRenderCell>> get renderRows => _renderRowsView;
 
   String rowText(int row) => _rowTexts[row];
   bool isWrapped(int row) => _wrappedRows[row];
@@ -398,24 +405,30 @@ final class TerminalXtermBufferModel implements TerminalSearchSource {
         'Terminal xterm full buffer repaint did not include every row.',
       );
     }
-    _rowTexts = List<String>.unmodifiable(nextTexts.cast<String>());
-    _renderRows = List<List<TerminalXtermWorkerRenderCell>>.unmodifiable(
-      nextRows.cast<List<TerminalXtermWorkerRenderCell>>(),
-    );
-    _wrappedRows = List<bool>.unmodifiable(nextWrapped.cast<bool>());
+    _rowTexts
+      ..clear()
+      ..addAll(nextTexts.cast<String>());
+    _renderRows
+      ..clear()
+      ..addAll(nextRows.cast<List<TerminalXtermWorkerRenderCell>>());
+    _wrappedRows
+      ..clear()
+      ..addAll(nextWrapped.cast<bool>());
     _semanticPromptLines = <int>[
       for (final changed in delta.rowDeltas)
         if (changed.isSemanticPromptLine) changed.row,
     ];
     _searchGeneration = Object();
     _searchLineBase = 0;
-    _searchLineIds = <_TerminalXtermBufferSearchLineId>[
-      for (var row = 0; row < delta.bufferLength; row++)
-        _TerminalXtermBufferSearchLineId(
-          generation: _searchGeneration,
-          absoluteIndex: row,
-        ),
-    ];
+    _searchLineIds
+      ..clear()
+      ..addAll(<_TerminalXtermBufferSearchLineId>[
+        for (var row = 0; row < delta.bufferLength; row++)
+          _TerminalXtermBufferSearchLineId(
+            generation: _searchGeneration,
+            absoluteIndex: row,
+          ),
+      ]);
   }
 
   void _applyPartialBuffer(TerminalXtermWorkerBufferDelta delta) {
@@ -425,17 +438,12 @@ final class TerminalXtermBufferModel implements TerminalSearchSource {
       );
     }
 
-    final nextTexts = List<String>.of(_rowTexts);
-    final nextRows = List<List<TerminalXtermWorkerRenderCell>>.of(_renderRows);
-    final nextWrapped = List<bool>.of(_wrappedRows);
-    final nextSearchLineIds = List<_TerminalXtermBufferSearchLineId>.of(
-      _searchLineIds,
-    );
+    _validatePartialBuffer(delta);
     if (delta.trimStart > 0) {
-      nextTexts.removeRange(0, delta.trimStart);
-      nextRows.removeRange(0, delta.trimStart);
-      nextWrapped.removeRange(0, delta.trimStart);
-      nextSearchLineIds.removeRange(0, delta.trimStart);
+      _rowTexts.removeRange(0, delta.trimStart);
+      _renderRows.removeRange(0, delta.trimStart);
+      _wrappedRows.removeRange(0, delta.trimStart);
+      _searchLineIds.removeRange(0, delta.trimStart);
       _searchLineBase += delta.trimStart;
       _semanticPromptLines = <int>[
         for (final line in _semanticPromptLines)
@@ -445,44 +453,77 @@ final class TerminalXtermBufferModel implements TerminalSearchSource {
 
     for (final changed in delta.rowDeltas) {
       _validateRow(changed.row, delta.bufferLength);
-      if (changed.row > nextRows.length) {
-        throw StateError(
-          'Terminal xterm buffer delta skipped appended row ${nextRows.length}.',
-        );
-      }
-      if (changed.row == nextRows.length) {
+      if (changed.row == _renderRows.length) {
         _validateFullRowCells(changed);
-        nextTexts.add(changed.text);
-        nextRows.add(_freezeCells(changed.cells));
-        nextWrapped.add(changed.isWrapped);
-        nextSearchLineIds.add(
+        _rowTexts.add(changed.text);
+        _renderRows.add(_freezeCells(changed.cells));
+        _wrappedRows.add(changed.isWrapped);
+        _searchLineIds.add(
           _TerminalXtermBufferSearchLineId(
             generation: _searchGeneration,
             absoluteIndex: _searchLineBase + changed.row,
           ),
         );
       } else {
-        nextTexts[changed.row] = changed.text;
-        nextRows[changed.row] = _mergeCellSpan(nextRows[changed.row], changed);
-        nextWrapped[changed.row] = changed.isWrapped;
+        _rowTexts[changed.row] = changed.text;
+        _renderRows[changed.row] = _mergeCellSpan(
+          _renderRows[changed.row],
+          changed,
+        );
+        _wrappedRows[changed.row] = changed.isWrapped;
       }
       _setSemanticPromptLine(changed.row, changed.isSemanticPromptLine);
     }
 
-    if (nextRows.length != delta.bufferLength) {
+    if (_renderRows.length != delta.bufferLength) {
       throw StateError(
-        'Terminal xterm partial delta produced ${nextRows.length} rows; '
+        'Terminal xterm partial delta produced ${_renderRows.length} rows; '
         'expected ${delta.bufferLength}.',
       );
     }
-    _rowTexts = List<String>.unmodifiable(nextTexts);
-    _renderRows = List<List<TerminalXtermWorkerRenderCell>>.unmodifiable(
-      nextRows,
-    );
-    _wrappedRows = List<bool>.unmodifiable(nextWrapped);
-    _searchLineIds = List<_TerminalXtermBufferSearchLineId>.unmodifiable(
-      nextSearchLineIds,
-    );
+  }
+
+  void _validatePartialBuffer(TerminalXtermWorkerBufferDelta delta) {
+    final retainedLength = _renderRows.length - delta.trimStart;
+    var predictedLength = retainedLength;
+    for (final changed in delta.rowDeltas) {
+      _validateRow(changed.row, delta.bufferLength);
+      if (changed.row > predictedLength) {
+        throw StateError(
+          'Terminal xterm buffer delta skipped appended row $predictedLength.',
+        );
+      }
+      if (changed.row == predictedLength) {
+        _validateFullRowCells(changed);
+        predictedLength += 1;
+        continue;
+      }
+
+      if (changed.row >= retainedLength) {
+        throw StateError(
+          'Terminal xterm buffer delta rewrote appended row ${changed.row}.',
+        );
+      }
+      final existing = _renderRows[delta.trimStart + changed.row];
+      if (existing.length != changed.rowLength) {
+        _validateFullRowCells(changed);
+        continue;
+      }
+      final start = changed.cellStart;
+      final end = start + changed.cells.length;
+      if (start < 0 || end > existing.length) {
+        throw StateError(
+          'Terminal xterm cell span [$start, $end) exceeds row width '
+          '${existing.length}.',
+        );
+      }
+    }
+    if (predictedLength != delta.bufferLength) {
+      throw StateError(
+        'Terminal xterm partial delta would produce $predictedLength rows; '
+        'expected ${delta.bufferLength}.',
+      );
+    }
   }
 
   List<TerminalXtermWorkerRenderCell> _freezeCells(

@@ -36,6 +36,26 @@ void main() {
     },
   );
 
+  test('partial updates keep top-level mirror storage in place', () async {
+    final worker = await TerminalXtermWorker.start(
+      cols: 10,
+      rows: 3,
+      maxLines: 64,
+    );
+    addTearDown(worker.close);
+    final model = TerminalXtermBufferModel();
+
+    model.apply(await worker.writeBufferDelta('one\r\ntwo\r\nthree'));
+    final rowTexts = model.rowTexts;
+    final renderRows = model.renderRows;
+
+    model.apply(await worker.writeBufferDelta('!'));
+
+    expect(identical(model.rowTexts, rowTexts), isTrue);
+    expect(identical(model.renderRows, renderRows), isTrue);
+    expect(model.rowTexts.last, 'three!');
+  });
+
   test('applies circular head trim without rebuilding retained rows', () async {
     final worker = await TerminalXtermWorker.start(
       cols: 8,
