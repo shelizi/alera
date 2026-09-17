@@ -288,6 +288,8 @@ B2: a still-reachable current hot path dominates; fix/measure that before openin
 
 B is the evidence gate for C.
 
+**2026-09-17 completion:** B concluded **B1** on the current main baseline. The real-device five-sample matrix found no sustained 60 Hz dominant hot path in the required scenarios. See `docs/editor-large-file-profiling-b.md` for the frame, raster, allocation/GC, paragraph/shaping, and FFI evidence. Work package C may proceed. The subsequently merged E result keeps Dart `RegExp` compatibility while reusing one full-text snapshot per document revision, so B does not duplicate that work.
+
 ## 7. Work package C - NativeEditorDocument retained incremental parser
 
 **Priority: P1. Start implementation after B confirms the gate.**
