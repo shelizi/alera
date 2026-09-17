@@ -150,6 +150,37 @@ void _registerTerminalRuntimeOutputBackpressureTests() {
     expect(terminalBufferTextForTesting(session), contains('123456\n7890'));
   });
 
+  test('parser worker coalesces a resize burst to the final size', () async {
+    final runtime = XtermTerminalRuntime(
+      parserWorkerEnabled: true,
+      ptySessionFactory: _FakeTerminalPtySessionFactory(),
+      shellLaunchesBuilder: () => <GhosttyTerminalShellLaunch>[
+        _launch('shell', shell: '/bin/sh'),
+      ],
+    );
+    addTearDown(runtime.dispose);
+    final session = runtime.sessionFor(workspace: _workspace(), tab: _tab());
+    final visibility = acquireTerminalVisibilityForTesting(session);
+    addTearDown(visibility.dispose);
+
+    queueTerminalOutputForTesting(session, 'warmup\r\n');
+    flushTerminalOutputForTesting(session);
+    await waitForTerminalParserApplyForTesting(session);
+    final revisionBefore = terminalParserWorkerRevisionForTesting(session);
+
+    for (var index = 0; index < 40; index++) {
+      resizeTerminalForTesting(
+        session,
+        100 + (index % 7) * 14,
+        28 + (index % 5) * 6,
+      );
+    }
+    flushPendingPtyResizeForTesting(session);
+    await waitForTerminalParserApplyForTesting(session);
+
+    expect(terminalParserWorkerRevisionForTesting(session), revisionBefore + 1);
+  });
+
   test(
     'parser worker enables focus reporting with the latest UI focus state',
     () async {
