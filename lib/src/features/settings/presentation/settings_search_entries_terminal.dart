@@ -108,6 +108,12 @@ const List<SettingsSearchEntry> terminalSearchEntries = <SettingsSearchEntry>[
     groupId: 'interaction',
   ),
   SettingsSearchEntry(
+    title: 'PowerShell 7 Executable',
+    description: 'Override or auto-detect the Windows pwsh.exe path.',
+    keywords: <String>['pwsh', 'powershell', 'shell', 'windows', 'scoop'],
+    groupId: 'advanced',
+  ),
+  SettingsSearchEntry(
     title: 'Scrollback Lines',
     description: 'Maximum terminal history retained per session.',
     keywords: <String>['history', 'buffer'],

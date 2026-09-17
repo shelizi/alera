@@ -298,6 +298,23 @@ class const TerminalSettingsPane({
                   buttonLabel: 'Reload',
                   onPressed: onReloadShellEnvironment,
                 ),
+              SettingsTextRow(
+                key: const ValueKey<String>('powershell-7-executable-path'),
+                title: 'PowerShell 7 Executable',
+                description: 'Optional full path to pwsh.exe on Windows. Leave blank to auto-detect standard, Scoop, LocalAppData, and PATH locations.',
+                value: settings.powerShell7ExecutablePath ?? '',
+                hintText: r'C:\Program Files\PowerShell\7\pwsh.exe',
+                onChanged: (value) {
+                  final normalized = value.trim();
+                  onChanged(
+                    (settings) => settings.copyWith(
+                      powerShell7ExecutablePath: normalized.isEmpty
+                          ? null
+                          : normalized,
+                    ),
+                  );
+                },
+              ),
               SettingsIntegerRow(
                 title: 'Scrollback Lines',
                 description: 'Maximum terminal history retained per session.',

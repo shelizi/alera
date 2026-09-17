@@ -28,6 +28,12 @@ TerminalRuntime terminalRuntime(Ref ref) {
       client: terminalHostClient,
     ),
     initialSettings: ref.read(settingsControllerProvider).terminal,
+    shellLaunchesBuilder: () => _terminalShellLaunches(
+      powerShell7ExecutablePath: ref
+          .read(settingsControllerProvider)
+          .terminal
+          .powerShell7ExecutablePath,
+    ),
     externalUriLauncher: ref.watch(externalUriLauncherProvider),
     shellStartupPreparer: shellStartupPreparer,
     terminalSessionCleanup: (terminalSessionId) {

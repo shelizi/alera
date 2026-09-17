@@ -169,6 +169,47 @@ void _registerTerminalRuntimeHelperGroup() {
       expect(launches.last.shell, r'C:\Windows\System32\cmd.exe');
       expect(launches.first.environment?['TERM'], 'xterm-256color');
 
+      final customLaunches = windowsTerminalShellLaunchesForTesting(
+        const <String, String>{
+          'PATH': r'C:\Tools\PowerShell;C:\Windows\System32',
+          'SYSTEMROOT': r'C:\Windows',
+        },
+        powerShell7ExecutablePath: r'D:\Portable\PowerShell\pwsh.exe',
+        fileExists: (path) =>
+            path == r'D:\Portable\PowerShell\pwsh.exe' ||
+            path ==
+                r'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe',
+      );
+      expect(customLaunches.first.label, 'PowerShell 7');
+      expect(customLaunches.first.shell, r'D:\Portable\PowerShell\pwsh.exe');
+
+      final pathLaunches = windowsTerminalShellLaunchesForTesting(
+        const <String, String>{
+          'PATH': r'C:\Tools\PowerShell;C:\Windows\System32',
+          'SYSTEMROOT': r'C:\Windows',
+        },
+        fileExists: (path) =>
+            path == r'C:\Tools\PowerShell\pwsh.exe' ||
+            path ==
+                r'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe',
+      );
+      expect(pathLaunches.first.shell, r'C:\Tools\PowerShell\pwsh.exe');
+
+      final scoopLaunches = windowsTerminalShellLaunchesForTesting(
+        const <String, String>{
+          'SCOOP': r'D:\Apps\scoop',
+          'SYSTEMROOT': r'C:\Windows',
+        },
+        fileExists: (path) =>
+            path == r'D:\Apps\scoop\apps\pwsh\current\pwsh.exe' ||
+            path ==
+                r'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe',
+      );
+      expect(
+        scoopLaunches.first.shell,
+        r'D:\Apps\scoop\apps\pwsh\current\pwsh.exe',
+      );
+
       final fallbackLaunches = windowsTerminalShellLaunchesForTesting(
         const <String, String>{
           'PATH': r'C:\Missing',
