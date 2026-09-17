@@ -217,6 +217,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   SelectionState dco_decode_selection_state(dynamic raw);
 
   @protected
+  StructuralSelectionResponse dco_decode_structural_selection_response(
+    dynamic raw,
+  );
+
+  @protected
   SyntaxSpanResponse dco_decode_syntax_span_response(dynamic raw);
 
   @protected
@@ -448,6 +453,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   SelectionState sse_decode_selection_state(SseDeserializer deserializer);
+
+  @protected
+  StructuralSelectionResponse sse_decode_structural_selection_response(
+    SseDeserializer deserializer,
+  );
 
   @protected
   SyntaxSpanResponse sse_decode_syntax_span_response(
@@ -730,6 +740,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_selection_state(
     SelectionState self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_structural_selection_response(
+    StructuralSelectionResponse self,
     SseSerializer serializer,
   );
 

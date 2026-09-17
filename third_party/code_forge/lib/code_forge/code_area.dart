@@ -2116,6 +2116,32 @@ class _CodeForgeState extends State<CodeForge> with TickerProviderStateMixin {
                                                   return KeyEventResult.handled;
                                                 }
 
+                                                if (shrtCt
+                                                    .expandStructuralSelection
+                                                    .accepts(
+                                                      event,
+                                                      HardwareKeyboard.instance,
+                                                    )) {
+                                                  if (_controller
+                                                      .expandStructuralSelection()) {
+                                                    _commonKeyFunctions();
+                                                  }
+                                                  return KeyEventResult.handled;
+                                                }
+
+                                                if (shrtCt
+                                                    .shrinkStructuralSelection
+                                                    .accepts(
+                                                      event,
+                                                      HardwareKeyboard.instance,
+                                                    )) {
+                                                  if (_controller
+                                                      .shrinkStructuralSelection()) {
+                                                    _commonKeyFunctions();
+                                                  }
+                                                  return KeyEventResult.handled;
+                                                }
+
                                                 if (shrtCt.moveSelectionForward
                                                     .accepts(
                                                       event,

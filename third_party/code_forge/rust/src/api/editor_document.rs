@@ -73,6 +73,18 @@ pub struct BracketMatchResponse {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StructuralSelectionResponse {
+    pub document_id: String,
+    pub revision: u64,
+    pub supported: bool,
+    pub stale: bool,
+    /// Unicode-scalar start offset of the next enclosing named syntax node, or -1.
+    pub start_offset: i64,
+    /// Unicode-scalar exclusive end offset of the next enclosing named syntax node, or -1.
+    pub end_offset: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NativeEditorDocumentInfo {
     pub document_id: String,
     pub revision: u64,
@@ -395,6 +407,57 @@ impl NativeEditorDocument {
         })
     }
 
+    /// Expands a scalar selection to the smallest strictly enclosing named syntax node.
+    /// A supported response with negative offsets is authoritative: the current selection
+    /// already covers the outermost named syntax node and cannot expand further.
+    #[frb(sync)]
+    pub fn query_structural_selection(
+        &self,
+        expected_revision: u64,
+        start_offset: usize,
+        end_offset: usize,
+    ) -> Result<StructuralSelectionResponse, String> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| "native document lock poisoned")?;
+
+        let unsupported = |stale: bool, supported: bool| StructuralSelectionResponse {
+            document_id: state.document_id.clone(),
+            revision: state.revision,
+            supported,
+            stale,
+            start_offset: -1,
+            end_offset: -1,
+        };
+
+        if state.closed {
+            return Ok(unsupported(true, false));
+        }
+        if state.revision != expected_revision {
+            return Ok(unsupported(true, state.tree.is_some()));
+        }
+        let Some(tree) = &state.tree else {
+            return Ok(unsupported(false, false));
+        };
+
+        let start = min(start_offset, end_offset).min(state.rope.len_chars());
+        let end = max(start_offset, end_offset).min(state.rope.len_chars());
+        let selection = find_structural_selection_range(tree, &state.rope, start, end);
+        let (start_offset, end_offset) = selection
+            .map(|(start, end)| (start as i64, end as i64))
+            .unwrap_or((-1, -1));
+
+        Ok(StructuralSelectionResponse {
+            document_id: state.document_id.clone(),
+            revision: state.revision,
+            supported: true,
+            stale: false,
+            start_offset,
+            end_offset,
+        })
+    }
+
     /// Returns foldable structural ranges from the already-retained Tree-sitter tree.
     /// This intentionally does not rescan or materialize the Rope text.
     pub fn query_folding_ranges(
@@ -494,6 +557,41 @@ impl NativeEditorDocument {
         state.query = None;
         state.closed = true;
         Ok(())
+    }
+}
+
+fn find_structural_selection_range(
+    tree: &Tree,
+    rope: &RustRope,
+    start_offset: usize,
+    end_offset: usize,
+) -> Option<(usize, usize)> {
+    let len_chars = rope.len_chars();
+    let start = min(start_offset, end_offset).min(len_chars);
+    let end = max(start_offset, end_offset).min(len_chars);
+
+    let (start_byte, end_byte) = if start < end {
+        (rope.char_to_byte(start), rope.char_to_byte(end))
+    } else if start < len_chars {
+        (rope.char_to_byte(start), rope.char_to_byte(start + 1))
+    } else if start > 0 {
+        (rope.char_to_byte(start - 1), rope.char_to_byte(start))
+    } else {
+        (0, 0)
+    };
+
+    let root = tree.root_node();
+    let mut node = root.named_descendant_for_byte_range(start_byte, end_byte)?;
+    loop {
+        let node_start = rope.byte_to_char(node.start_byte());
+        let node_end = rope.byte_to_char(node.end_byte());
+        if node_start <= start && node_end >= end && (node_start < start || node_end > end) {
+            return Some((node_start, node_end));
+        }
+        node = node.parent()?;
+        while !node.is_named() {
+            node = node.parent()?;
+        }
     }
 }
 
@@ -1075,6 +1173,88 @@ mod tests {
                 "NativeEditorDocument benchmark lines={lines} open_us={open_us:?} edit_us={edit_us:?} viewport_query_us={query_us:?}"
             );
         }
+    }
+
+    #[test]
+    fn retained_tree_structural_selection_expands_through_named_nodes() {
+        let text = "fn main() {\n    let value = (1 + 2);\n}\n";
+        let document = NativeEditorDocument::open(
+            "doc-structural-selection".to_string(),
+            3,
+            text.to_string(),
+            "rust".to_string(),
+        )
+        .unwrap();
+
+        let caret = char_offset(text, "1 + 2");
+        let first = document
+            .query_structural_selection(3, caret, caret)
+            .unwrap();
+        assert!(first.supported);
+        assert!(!first.stale);
+        assert!(first.start_offset >= 0);
+        assert!(first.end_offset > first.start_offset);
+        assert!(first.start_offset as usize <= caret);
+        assert!(first.end_offset as usize > caret);
+
+        let second = document
+            .query_structural_selection(3, first.start_offset as usize, first.end_offset as usize)
+            .unwrap();
+        assert!(second.supported);
+        assert!(!second.stale);
+        assert!(
+            second.start_offset < first.start_offset || second.end_offset > first.end_offset,
+            "second expansion must strictly contain the first"
+        );
+    }
+
+    #[test]
+    fn retained_tree_structural_selection_uses_unicode_scalar_offsets() {
+        let text = "fn main() { let value = \"🙂text\"; }\n";
+        let document = NativeEditorDocument::open(
+            "doc-structural-selection-unicode".to_string(),
+            5,
+            text.to_string(),
+            "rust".to_string(),
+        )
+        .unwrap();
+        let caret = char_offset(text, "text");
+
+        let response = document
+            .query_structural_selection(5, caret, caret)
+            .unwrap();
+        assert!(response.supported);
+        assert!(!response.stale);
+        assert!(response.start_offset >= 0);
+        assert!(response.start_offset as usize <= caret);
+        assert!(response.end_offset as usize > caret);
+    }
+
+    #[test]
+    fn retained_tree_structural_selection_rejects_stale_revision_and_plaintext() {
+        let rust_document = NativeEditorDocument::open(
+            "doc-structural-selection-stale".to_string(),
+            5,
+            "fn main() {}\n".to_string(),
+            "rust".to_string(),
+        )
+        .unwrap();
+        let stale = rust_document.query_structural_selection(4, 3, 3).unwrap();
+        assert!(stale.supported);
+        assert!(stale.stale);
+        assert_eq!((stale.start_offset, stale.end_offset), (-1, -1));
+
+        let plain_document = NativeEditorDocument::open(
+            "doc-structural-selection-plain".to_string(),
+            1,
+            "plain text\n".to_string(),
+            "plaintext".to_string(),
+        )
+        .unwrap();
+        let unsupported = plain_document.query_structural_selection(1, 2, 2).unwrap();
+        assert!(!unsupported.supported);
+        assert!(!unsupported.stale);
+        assert_eq!((unsupported.start_offset, unsupported.end_offset), (-1, -1));
     }
 
     #[test]

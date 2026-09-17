@@ -281,6 +281,14 @@ class CodeForgeKeyboardShortcuts {
   /// Defaults to `Ctrl + Shift + arrowRight`
   final ShortcutActivator moveSelectionToNextWord;
 
+  /// Expands the current selection to the next enclosing syntax node.
+  /// Defaults to `Shift + Alt + arrowRight`.
+  final ShortcutActivator expandStructuralSelection;
+
+  /// Restores the previous structural selection expansion.
+  /// Defaults to `Shift + Alt + arrowLeft`.
+  final ShortcutActivator shrinkStructuralSelection;
+
   /// Shows the [LSP code actions](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_codeAction) if available.
   /// Defaults to `Ctrl + .`
   final ShortcutActivator lspCodeActions;
@@ -367,6 +375,16 @@ class CodeForgeKeyboardShortcuts {
     this.moveSelectionBackward = const SingleActivator(
       LogicalKeyboardKey.arrowLeft,
       shift: true,
+    ),
+    this.expandStructuralSelection = const SingleActivator(
+      LogicalKeyboardKey.arrowRight,
+      shift: true,
+      alt: true,
+    ),
+    this.shrinkStructuralSelection = const SingleActivator(
+      LogicalKeyboardKey.arrowLeft,
+      shift: true,
+      alt: true,
     ),
     this.lspCodeActions = const SingleActivator(
       LogicalKeyboardKey.period,

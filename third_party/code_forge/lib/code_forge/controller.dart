@@ -331,6 +331,7 @@ class CodeForgeController implements DeltaTextInputClient {
     required int end,
     required String replacement,
   }) {
+    _structuralSelectionHistory.clear();
     final expectedRevision = _currentVersion;
     final newRevision = expectedRevision + 1;
     _currentVersion = newRevision;
@@ -580,6 +581,83 @@ class CodeForgeController implements DeltaTextInputClient {
       _disableNativeSyntaxDocument(error);
       return null;
     }
+  }
+
+  TextSelection? queryNativeStructuralSelection(
+    TextSelection currentSelection,
+  ) {
+    if (_nativeEditorLanguageId == null ||
+        _nativeEditorFailed ||
+        _nativeEditorParserSupported == false ||
+        _nativeEditorSyncFuture != null ||
+        _pendingNativeEditorEdits.isNotEmpty) {
+      return null;
+    }
+
+    final document = _nativeEditorDocument;
+    final requestRevision = _currentVersion;
+    if (document == null || _nativeEditorRevision != requestRevision) {
+      return null;
+    }
+
+    try {
+      final response = document.queryStructuralSelection(
+        expectedRevision: BigInt.from(requestRevision),
+        startOffset: BigInt.from(currentSelection.start),
+        endOffset: BigInt.from(currentSelection.end),
+      );
+      if (response.stale ||
+          !response.supported ||
+          response.revision.toInt() != requestRevision ||
+          _currentVersion != requestRevision ||
+          response.startOffset < 0 ||
+          response.endOffset <= response.startOffset) {
+        return null;
+      }
+      final next = TextSelection(
+        baseOffset: response.startOffset,
+        extentOffset: response.endOffset,
+      );
+      if (next.start > currentSelection.start ||
+          next.end < currentSelection.end ||
+          (next.start == currentSelection.start &&
+              next.end == currentSelection.end)) {
+        return null;
+      }
+      return next;
+    } catch (error) {
+      _disableNativeSyntaxDocument(error);
+      return null;
+    }
+  }
+
+  /// Expands the current selection to the next enclosing retained syntax node.
+  bool expandStructuralSelection() {
+    _flushBuffer();
+    final current = selection;
+    final next = queryNativeStructuralSelection(current);
+    if (next == null) return false;
+    _structuralSelectionHistory.add(current);
+    _applyingStructuralSelection = true;
+    try {
+      setSelectionImmediately(next);
+    } finally {
+      _applyingStructuralSelection = false;
+    }
+    return true;
+  }
+
+  /// Restores the previous selection produced by [expandStructuralSelection].
+  bool shrinkStructuralSelection() {
+    if (_structuralSelectionHistory.isEmpty) return false;
+    final previous = _structuralSelectionHistory.removeLast();
+    _applyingStructuralSelection = true;
+    try {
+      setSelectionImmediately(previous);
+    } finally {
+      _applyingStructuralSelection = false;
+    }
+    return true;
   }
 
   Future<FoldingRangeResponse?> queryNativeFoldingRanges() async {
@@ -925,6 +1003,8 @@ class CodeForgeController implements DeltaTextInputClient {
   Rope _rope = Rope('');
   Rope get rope => _rope;
   TextSelection _selectionCache = const TextSelection.collapsed(offset: 0);
+  final List<TextSelection> _structuralSelectionHistory = <TextSelection>[];
+  bool _applyingStructuralSelection = false;
 
   TextSelection get _selection {
     if (isBufferActive) {
@@ -2740,6 +2820,9 @@ class CodeForgeController implements DeltaTextInputClient {
 
   void setSelectionImmediately(TextSelection newSelection) {
     if (_selection == newSelection) return;
+    if (!_applyingStructuralSelection) {
+      _structuralSelectionHistory.clear();
+    }
 
     if (isComposingActive) {
       newSelection = _commitCompositionAndRemapSelection(newSelection);
