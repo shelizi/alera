@@ -62,4 +62,36 @@ void main() {
     expect(shortcuts, contains('expandStructuralSelection'));
     expect(shortcuts, contains('shrinkStructuralSelection'));
   });
+
+  test(
+    'editor outline prefers LSP and falls back to retained native symbols',
+    () {
+      final controller = File(
+        'third_party/code_forge/lib/code_forge/controller.dart',
+      ).readAsStringSync();
+      final workspaceEditor = File(
+        'lib/src/features/workbench/presentation/workspace_editor_surface.dart',
+      ).readAsStringSync();
+      final outline = File(
+        'lib/src/features/workbench/presentation/workspace_editor_outline.dart',
+      ).readAsStringSync();
+      final widgets = File(
+        'lib/src/features/workbench/presentation/workspace_editor_widgets.dart',
+      ).readAsStringSync();
+
+      expect(controller, contains('getDocumentSymbols(file)'));
+      expect(controller, contains('document.queryDocumentSymbols('));
+      expect(controller, contains('utf16ToScalarOffset('));
+      expect(controller, contains('navigateToDocumentSymbol('));
+      expect(
+        workspaceEditor,
+        contains("part 'workspace_editor_outline.dart';"),
+      );
+      expect(workspaceEditor, contains('_EditorOutlinePanel('));
+      expect(outline, contains('_controller.queryDocumentSymbols('));
+      expect(outline, contains('_workspaceEditorOutlineRefreshDebounce'));
+      expect(widgets, contains('AleraIcons.outline'));
+      expect(widgets, contains("'Tree-sitter'"));
+    },
+  );
 }

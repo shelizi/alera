@@ -49,6 +49,7 @@ extension _WorkspaceEditorLoading on _WorkspaceEditorSurfaceState {
         _setEditorState(() => _loading = false);
         _applyPendingReveal();
         _autosave.notifyStateChanged();
+        _scheduleOutlineRefresh(immediate: true);
       }
     }
   }
@@ -99,6 +100,7 @@ extension _WorkspaceEditorLoading on _WorkspaceEditorSurfaceState {
       _loading = false;
       _applyPendingReveal();
       _autosave.notifyStateChanged();
+      _scheduleOutlineRefresh(immediate: true);
       return;
     }
     _loading = true;

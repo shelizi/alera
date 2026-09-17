@@ -25,6 +25,46 @@ class CodeForgeDocumentEditDelta {
   });
 }
 
+enum CodeForgeDocumentSymbolSource { lsp, native }
+
+class CodeForgeDocumentSymbol {
+  final String name;
+  final String kind;
+  final int startOffset;
+  final int endOffset;
+  final int selectionStartOffset;
+  final int selectionEndOffset;
+  final int startLine;
+  final int endLine;
+  final int depth;
+  final CodeForgeDocumentSymbolSource source;
+
+  const CodeForgeDocumentSymbol({
+    required this.name,
+    required this.kind,
+    required this.startOffset,
+    required this.endOffset,
+    required this.selectionStartOffset,
+    required this.selectionEndOffset,
+    required this.startLine,
+    required this.endLine,
+    required this.depth,
+    required this.source,
+  });
+}
+
+class CodeForgeDocumentSymbols {
+  final List<CodeForgeDocumentSymbol> symbols;
+  final bool truncated;
+  final CodeForgeDocumentSymbolSource source;
+
+  const CodeForgeDocumentSymbols({
+    required this.symbols,
+    required this.truncated,
+    required this.source,
+  });
+}
+
 /// Controller for the [CodeForge] code editor widget.
 ///
 /// This controller manages the text content, selection state, and various
@@ -656,6 +696,248 @@ class CodeForgeController implements DeltaTextInputClient {
       setSelectionImmediately(previous);
     } finally {
       _applyingStructuralSelection = false;
+    }
+    return true;
+  }
+
+  /// Returns document symbols for outline/navigation. A ready LSP is preferred;
+  /// otherwise the query falls back to the already-retained native Tree-sitter tree.
+  Future<CodeForgeDocumentSymbols?> queryDocumentSymbols({
+    int maxSymbols = 1000,
+  }) async {
+    _flushBuffer();
+    final limit = maxSymbols.clamp(1, 5000);
+    final lspRequestRevision = _currentVersion;
+
+    final lspSymbols = await _queryLspDocumentSymbols(limit);
+    if (_currentVersion != lspRequestRevision) return null;
+    if (lspSymbols != null && lspSymbols.symbols.isNotEmpty) {
+      return lspSymbols;
+    }
+
+    if (_nativeEditorLanguageId == null ||
+        _nativeEditorFailed ||
+        _nativeEditorParserSupported == false) {
+      return lspSymbols;
+    }
+
+    final generation = _nativeEditorGeneration;
+    try {
+      await _syncNativeSyntaxDocument();
+      if (generation != _nativeEditorGeneration) return lspSymbols;
+
+      final document = _nativeEditorDocument;
+      final requestRevision = _currentVersion;
+      if (document == null || _nativeEditorRevision != requestRevision) {
+        return lspSymbols;
+      }
+      final response = await document.queryDocumentSymbols(
+        expectedRevision: BigInt.from(requestRevision),
+        maxSymbols: BigInt.from(limit),
+      );
+      if (generation != _nativeEditorGeneration ||
+          response.stale ||
+          !response.supported ||
+          response.revision.toInt() != requestRevision ||
+          _currentVersion != requestRevision) {
+        return lspSymbols;
+      }
+      return CodeForgeDocumentSymbols(
+        symbols: response.symbols
+            .map(
+              (symbol) => CodeForgeDocumentSymbol(
+                name: symbol.name,
+                kind: symbol.kind,
+                startOffset: symbol.startOffset.toInt(),
+                endOffset: symbol.endOffset.toInt(),
+                selectionStartOffset: symbol.selectionStartOffset.toInt(),
+                selectionEndOffset: symbol.selectionEndOffset.toInt(),
+                startLine: symbol.startLine.toInt(),
+                endLine: symbol.endLine.toInt(),
+                depth: symbol.depth.toInt(),
+                source: CodeForgeDocumentSymbolSource.native,
+              ),
+            )
+            .toList(growable: false),
+        truncated: response.truncated,
+        source: CodeForgeDocumentSymbolSource.native,
+      );
+    } catch (error) {
+      if (generation == _nativeEditorGeneration) {
+        _disableNativeSyntaxDocument(error);
+      }
+      return lspSymbols;
+    }
+  }
+
+  Future<CodeForgeDocumentSymbols?> _queryLspDocumentSymbols(int limit) async {
+    final config = lspConfig;
+    final file = openedFile;
+    if (config == null || !_lspReady || file == null) return null;
+
+    try {
+      _lspDocumentSyncTimer?.cancel();
+      await _flushLspDocumentSync();
+      final rawSymbols = await config.getDocumentSymbols(file);
+      if (rawSymbols.isEmpty) {
+        return const CodeForgeDocumentSymbols(
+          symbols: <CodeForgeDocumentSymbol>[],
+          truncated: false,
+          source: CodeForgeDocumentSymbolSource.lsp,
+        );
+      }
+
+      final symbols = <CodeForgeDocumentSymbol>[];
+      var truncated = false;
+      for (final raw in rawSymbols) {
+        if (symbols.length >= limit) {
+          truncated = true;
+          break;
+        }
+        if (raw is! Map) continue;
+        truncated =
+            _appendLspDocumentSymbol(raw, 0, limit, symbols) || truncated;
+      }
+      return CodeForgeDocumentSymbols(
+        symbols: symbols,
+        truncated: truncated,
+        source: CodeForgeDocumentSymbolSource.lsp,
+      );
+    } catch (error) {
+      debugPrint('CodeForge LSP document-symbol fallback: $error');
+      return null;
+    }
+  }
+
+  bool _appendLspDocumentSymbol(
+    Map<dynamic, dynamic> raw,
+    int depth,
+    int limit,
+    List<CodeForgeDocumentSymbol> output,
+  ) {
+    if (output.length >= limit) return true;
+    final name = raw['name'];
+    if (name is! String || name.isEmpty) return false;
+
+    final location = raw['location'];
+    final declarationRange =
+        raw['range'] ??
+        (location is Map<dynamic, dynamic> ? location['range'] : null);
+    final selectionRange = raw['selectionRange'] ?? declarationRange;
+    final offsets = _lspRangeToScalarOffsets(declarationRange);
+    final selectionOffsets = _lspRangeToScalarOffsets(selectionRange);
+    if (offsets == null || selectionOffsets == null) return false;
+
+    final kindValue = raw['kind'];
+    output.add(
+      CodeForgeDocumentSymbol(
+        name: name,
+        kind: _lspSymbolKindName(kindValue is int ? kindValue : 0),
+        startOffset: offsets.start,
+        endOffset: offsets.end,
+        selectionStartOffset: selectionOffsets.start,
+        selectionEndOffset: selectionOffsets.end,
+        startLine: offsets.startLine,
+        endLine: offsets.endLine,
+        depth: depth,
+        source: CodeForgeDocumentSymbolSource.lsp,
+      ),
+    );
+    if (output.length >= limit) {
+      final children = raw['children'];
+      return children is List && children.isNotEmpty;
+    }
+
+    final children = raw['children'];
+    if (children is List) {
+      for (final child in children) {
+        if (output.length >= limit) return true;
+        if (child is Map) {
+          if (_appendLspDocumentSymbol(child, depth + 1, limit, output)) {
+            return true;
+          }
+        }
+      }
+    }
+    return false;
+  }
+
+  ({int start, int end, int startLine, int endLine})? _lspRangeToScalarOffsets(
+    dynamic rawRange,
+  ) {
+    if (rawRange is! Map) return null;
+    final start = rawRange['start'];
+    final end = rawRange['end'];
+    if (start is! Map || end is! Map) return null;
+    final startLine = start['line'];
+    final startCharacter = start['character'];
+    final endLine = end['line'];
+    final endCharacter = end['character'];
+    if (startLine is! int ||
+        startCharacter is! int ||
+        endLine is! int ||
+        endCharacter is! int ||
+        lineCount <= 0) {
+      return null;
+    }
+
+    final safeStartLine = startLine.clamp(0, lineCount - 1);
+    final safeEndLine = endLine.clamp(0, lineCount - 1);
+    final startText = getLineText(safeStartLine);
+    final endText = getLineText(safeEndLine);
+    final startColumn = utf16ToScalarOffset(startText, startCharacter);
+    final endColumn = utf16ToScalarOffset(endText, endCharacter);
+    final startOffset = getLineStartOffset(safeStartLine) + startColumn;
+    final endOffset = getLineStartOffset(safeEndLine) + endColumn;
+    return (
+      start: startOffset.clamp(0, length),
+      end: endOffset.clamp(startOffset, length),
+      startLine: safeStartLine,
+      endLine: safeEndLine,
+    );
+  }
+
+  String _lspSymbolKindName(int kind) => switch (kind) {
+    1 => 'file',
+    2 => 'module',
+    3 => 'namespace',
+    4 => 'package',
+    5 => 'class',
+    6 => 'method',
+    7 => 'property',
+    8 => 'field',
+    9 => 'constructor',
+    10 => 'enum',
+    11 => 'interface',
+    12 => 'function',
+    13 => 'variable',
+    14 => 'constant',
+    15 => 'string',
+    16 => 'number',
+    17 => 'boolean',
+    18 => 'array',
+    19 => 'object',
+    20 => 'key',
+    21 => 'null',
+    22 => 'enumMember',
+    23 => 'struct',
+    24 => 'event',
+    25 => 'operator',
+    26 => 'typeParameter',
+    _ => 'symbol',
+  };
+
+  /// Selects a symbol name and scrolls the editor to its declaration line.
+  bool navigateToDocumentSymbol(CodeForgeDocumentSymbol symbol) {
+    final start = symbol.selectionStartOffset.clamp(0, length);
+    final end = symbol.selectionEndOffset.clamp(start, length);
+    setSelectionImmediately(
+      TextSelection(baseOffset: start, extentOffset: end),
+    );
+    try {
+      scrollToLine(symbol.startLine.clamp(0, lineCount - 1));
+    } on StateError {
+      // The editor can briefly be detached while a tab is being switched.
     }
     return true;
   }

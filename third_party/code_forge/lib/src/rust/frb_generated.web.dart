@@ -121,6 +121,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   CharOffset dco_decode_char_offset(dynamic raw);
 
   @protected
+  DocumentSymbolsResponse dco_decode_document_symbols_response(dynamic raw);
+
+  @protected
   EditorDocumentEdit dco_decode_editor_document_edit(dynamic raw);
 
   @protected
@@ -169,6 +172,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<LineSummary> dco_decode_list_line_summary(dynamic raw);
 
   @protected
+  List<NativeDocumentSymbol> dco_decode_list_native_document_symbol(
+    dynamic raw,
+  );
+
+  @protected
   List<NativeFoldingRange> dco_decode_list_native_folding_range(dynamic raw);
 
   @protected
@@ -182,6 +190,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<SearchRange> dco_decode_list_search_range(dynamic raw);
+
+  @protected
+  NativeDocumentSymbol dco_decode_native_document_symbol(dynamic raw);
 
   @protected
   NativeEditorDocumentInfo dco_decode_native_editor_document_info(dynamic raw);
@@ -339,6 +350,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   CharOffset sse_decode_char_offset(SseDeserializer deserializer);
 
   @protected
+  DocumentSymbolsResponse sse_decode_document_symbols_response(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   EditorDocumentEdit sse_decode_editor_document_edit(
     SseDeserializer deserializer,
   );
@@ -395,6 +411,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<LineSummary> sse_decode_list_line_summary(SseDeserializer deserializer);
 
   @protected
+  List<NativeDocumentSymbol> sse_decode_list_native_document_symbol(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   List<NativeFoldingRange> sse_decode_list_native_folding_range(
     SseDeserializer deserializer,
   );
@@ -414,6 +435,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<SearchRange> sse_decode_list_search_range(SseDeserializer deserializer);
+
+  @protected
+  NativeDocumentSymbol sse_decode_native_document_symbol(
+    SseDeserializer deserializer,
+  );
 
   @protected
   NativeEditorDocumentInfo sse_decode_native_editor_document_info(
@@ -593,6 +619,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_char_offset(CharOffset self, SseSerializer serializer);
 
   @protected
+  void sse_encode_document_symbols_response(
+    DocumentSymbolsResponse self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_editor_document_edit(
     EditorDocumentEdit self,
     SseSerializer serializer,
@@ -665,6 +697,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_native_document_symbol(
+    List<NativeDocumentSymbol> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_list_native_folding_range(
     List<NativeFoldingRange> self,
     SseSerializer serializer,
@@ -691,6 +729,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_list_search_range(
     List<SearchRange> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_native_document_symbol(
+    NativeDocumentSymbol self,
     SseSerializer serializer,
   );
 
