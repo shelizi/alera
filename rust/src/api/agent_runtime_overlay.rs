@@ -770,6 +770,13 @@ mod tests {
 
         assert!(result.source_exists);
         assert!(result.copied_count >= 4);
+        assert!(!result.warnings.is_empty());
+        assert!(
+            result
+                .warnings
+                .iter()
+                .all(|warning| warning.contains("copied instead"))
+        );
         assert_eq!(
             fs::read_to_string(overlay.join("plugins/user.js")).unwrap(),
             "user"
@@ -978,10 +985,12 @@ mod tests {
             .unwrap();
 
         let copied_link = overlay.join("linked.txt");
-        assert!(fs::symlink_metadata(&copied_link)
-            .unwrap()
-            .file_type()
-            .is_symlink());
+        assert!(
+            fs::symlink_metadata(&copied_link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
         assert_eq!(fs::read_link(copied_link).unwrap(), target_file);
     }
 
@@ -1006,6 +1015,46 @@ mod tests {
             "value"
         );
         assert!(!overlay.join(".alera-copied-resources").exists());
+    }
+
+    #[test]
+    fn actual_platform_link_or_copy_reconciles_repeated_unchanged_source() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source");
+        fs::create_dir_all(source.join("plugins")).unwrap();
+        fs::write(source.join("settings.json"), "settings-v1").unwrap();
+        fs::write(source.join("plugins/user.js"), "user-plugin").unwrap();
+        let request = request_for(root.path(), Some(&source));
+        let overlay = PathBuf::from(request.overlay_path.clone().unwrap());
+
+        let first = prepare_agent_runtime_overlay(request.clone()).unwrap();
+        assert!(first.source_exists);
+        assert_eq!(first.written_count, 1);
+        assert!(first.linked_count + first.copied_count >= 2);
+        if first.copied_count > 0 {
+            assert!(!first.warnings.is_empty());
+        }
+        assert_eq!(
+            fs::read_to_string(overlay.join("settings.json")).unwrap(),
+            "settings-v1"
+        );
+        assert_eq!(
+            fs::read_to_string(overlay.join("plugins/user.js")).unwrap(),
+            "user-plugin"
+        );
+
+        let repeated = prepare_agent_runtime_overlay(request).unwrap();
+        assert!(repeated.source_exists);
+        assert!(repeated.removed_count > 0);
+        assert_eq!(repeated.written_count, 1);
+        assert!(repeated.linked_count + repeated.copied_count >= 2);
+        if repeated.copied_count > 0 {
+            assert!(!repeated.warnings.is_empty());
+        }
+        assert_eq!(
+            fs::read_to_string(overlay.join("settings.json")).unwrap(),
+            "settings-v1"
+        );
     }
 
     #[test]
@@ -1074,41 +1123,121 @@ mod tests {
         );
     }
 
-    #[test]
-    #[ignore = "manual five-sample overlay filesystem benchmark"]
-    fn benchmark_small_and_large_fallback_copy() {
-        for file_count in [20usize, 2_000] {
-            let mut samples = Vec::new();
-            for sample in 0..5 {
-                let root = tempfile::tempdir().unwrap();
-                let source = root.path().join("source");
-                fs::create_dir_all(&source).unwrap();
-                for index in 0..file_count {
-                    let group = source.join(format!("group-{}", index / 100));
-                    fs::create_dir_all(&group).unwrap();
-                    fs::write(group.join(format!("file-{index}.txt")), b"0123456789abcdef")
-                        .unwrap();
-                }
-                let request = request_for(root.path(), Some(&source));
-                let started = Instant::now();
-                let result = prepare_agent_runtime_overlay_with_linker(request, |_, _| {
+    #[derive(Clone, Copy, Debug)]
+    enum BenchmarkLinkMode {
+        LinkSuccess,
+        CopyFallback,
+    }
+
+    impl BenchmarkLinkMode {
+        fn label(self) -> &'static str {
+            match self {
+                Self::LinkSuccess => "link-success",
+                Self::CopyFallback => "copy-fallback",
+            }
+        }
+    }
+
+    fn prepare_benchmark_overlay(
+        request: AgentRuntimeOverlayRequest,
+        mode: BenchmarkLinkMode,
+    ) -> AgentRuntimeOverlayResult {
+        match mode {
+            BenchmarkLinkMode::LinkSuccess => {
+                prepare_agent_runtime_overlay_with_linker(request, |source, target| {
+                    fs::hard_link(source, target).map_err(|error| error.to_string())
+                })
+                .unwrap()
+            }
+            BenchmarkLinkMode::CopyFallback => {
+                prepare_agent_runtime_overlay_with_linker(request, |_, _| {
                     Err("benchmark forces copy fallback".into())
                 })
-                .unwrap();
-                let elapsed = started.elapsed();
-                eprintln!(
-                    "overlay benchmark files={file_count} sample={} elapsed_us={} copied={}",
-                    sample + 1,
-                    elapsed.as_micros(),
-                    result.copied_count
-                );
-                samples.push(elapsed.as_micros());
+                .unwrap()
             }
-            samples.sort_unstable();
-            eprintln!(
-                "overlay benchmark files={file_count} median_us={}",
-                samples[samples.len() / 2]
-            );
+        }
+    }
+
+    fn create_benchmark_source(source: &Path, file_count: usize) {
+        fs::create_dir_all(source).unwrap();
+        for index in 0..file_count {
+            fs::write(
+                source.join(format!("file-{index:04}.txt")),
+                b"0123456789abcdef",
+            )
+            .unwrap();
+        }
+    }
+
+    fn assert_benchmark_result(
+        result: &AgentRuntimeOverlayResult,
+        mode: BenchmarkLinkMode,
+        file_count: usize,
+    ) {
+        assert!(result.source_exists);
+        assert_eq!(result.written_count, 1);
+        match mode {
+            BenchmarkLinkMode::LinkSuccess => {
+                assert_eq!(result.linked_count, file_count as u64);
+                assert_eq!(result.copied_count, 0);
+                assert!(result.warnings.is_empty());
+            }
+            BenchmarkLinkMode::CopyFallback => {
+                assert_eq!(result.linked_count, 0);
+                assert_eq!(result.copied_count, file_count as u64);
+                assert!(!result.warnings.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "manual five-sample overlay production benchmark"]
+    fn benchmark_overlay_production_matrix() {
+        for (size, file_count) in [("small", 20usize), ("medium", 500), ("large", 2_000)] {
+            for mode in [
+                BenchmarkLinkMode::LinkSuccess,
+                BenchmarkLinkMode::CopyFallback,
+            ] {
+                let mut first_samples = Vec::with_capacity(5);
+                let mut repeated_samples = Vec::with_capacity(5);
+
+                for sample in 1..=5 {
+                    let root = tempfile::tempdir().unwrap();
+                    let source = root.path().join("source");
+                    create_benchmark_source(&source, file_count);
+                    let request = request_for(root.path(), Some(&source));
+
+                    let first_started = Instant::now();
+                    let first = prepare_benchmark_overlay(request.clone(), mode);
+                    let first_us = first_started.elapsed().as_micros();
+                    assert_benchmark_result(&first, mode, file_count);
+
+                    let repeated_started = Instant::now();
+                    let repeated = prepare_benchmark_overlay(request, mode);
+                    let repeated_us = repeated_started.elapsed().as_micros();
+                    assert_benchmark_result(&repeated, mode, file_count);
+                    assert!(repeated.removed_count > 0);
+
+                    eprintln!(
+                        "overlay_a2 size={size} files={file_count} mode={} sample={sample} first_us={first_us} repeated_unchanged_us={repeated_us} first_removed={} repeated_removed={} warnings={}",
+                        mode.label(),
+                        first.removed_count,
+                        repeated.removed_count,
+                        repeated.warnings.len(),
+                    );
+                    first_samples.push(first_us);
+                    repeated_samples.push(repeated_us);
+                }
+
+                first_samples.sort_unstable();
+                repeated_samples.sort_unstable();
+                eprintln!(
+                    "overlay_a2_summary size={size} files={file_count} mode={} first_median_us={} repeated_unchanged_median_us={} first_samples={first_samples:?} repeated_samples={repeated_samples:?}",
+                    mode.label(),
+                    first_samples[first_samples.len() / 2],
+                    repeated_samples[repeated_samples.len() / 2],
+                );
+            }
         }
     }
 

@@ -13,8 +13,9 @@ void main() {
   setUpAll(() async {
     final libraryPath = Platform.environment['ALERA_NATIVE_LIBRARY_PATH'];
     await RustLib.init(
-      externalLibrary:
-          libraryPath == null ? null : ExternalLibrary.open(libraryPath),
+      externalLibrary: libraryPath == null
+          ? null
+          : ExternalLibrary.open(libraryPath),
     );
   });
 
@@ -86,5 +87,56 @@ void main() {
       File(p.join(source.path, 'settings.json')).readAsStringSync(),
       'user-settings',
     );
+  });
+
+  test('native bridge projects cleanup warnings to Dart', () async {
+    final root = await Directory.systemTemp.createTemp(
+      'alera-overlay-warning-',
+    );
+    addTearDown(() async {
+      if (await root.exists()) {
+        await root.delete(recursive: true);
+      }
+    });
+
+    final overlayRoot = p.join(root.path, 'overlays');
+    final outsidePath = p.join(root.path, 'outside');
+    final result = await native.clearAgentRuntimeOverlays(
+      targets: <native.AgentRuntimeOverlayCleanupTarget>[
+        native.AgentRuntimeOverlayCleanupTarget(
+          overlayRoot: overlayRoot,
+          overlayPath: outsidePath,
+        ),
+      ],
+    );
+
+    expect(result.removedCount, BigInt.zero);
+    expect(result.warnings, isNotEmpty);
+    expect(result.warnings.single, contains('strictly contained'));
+  });
+
+  test('native bridge projects preparation errors to Dart', () async {
+    final root = await Directory.systemTemp.createTemp('alera-overlay-error-');
+    addTearDown(() async {
+      if (await root.exists()) {
+        await root.delete(recursive: true);
+      }
+    });
+
+    final overlayRoot = p.join(root.path, 'overlays');
+    final outsidePath = p.join(root.path, 'outside');
+    final future = native.prepareAgentRuntimeOverlay(
+      request: native.AgentRuntimeOverlayRequest(
+        overlayRoot: overlayRoot,
+        overlayPath: outsidePath,
+        mirrorPath: null,
+        sourcePath: null,
+        managedSubdirectory: null,
+        managedFileNames: const <String>[],
+        managedFiles: const <native.AgentRuntimeOverlayManagedFile>[],
+      ),
+    );
+
+    await expectLater(future, throwsA(anything));
   });
 }
