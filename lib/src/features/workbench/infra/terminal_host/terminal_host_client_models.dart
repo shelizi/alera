@@ -114,17 +114,25 @@ final class const TerminalHostAttachment({
   required final bool created,
   required final bool running,
   required final Uint8List snapshot,
+  final String? snapshotText,
   final int? exitCode,
 }) {
   factory fromJson(Map<String, Object?> json) {
+    final snapshotText = json['snapshotText'] as String?;
     return TerminalHostAttachment(
       sessionId: json['sessionId'] as String,
       created: json['created'] == true,
       running: json['running'] == true,
-      snapshot: decodeTerminalHostBytes(json['snapshotBase64']),
+      snapshot: snapshotText == null
+          ? decodeTerminalHostBytes(json['snapshotBase64'])
+          : Uint8List(0),
+      snapshotText: snapshotText,
       exitCode: json['exitCode'] is int ? json['exitCode'] as int : null,
     );
   }
+
+  bool get hasSnapshot =>
+      snapshotText?.isNotEmpty == true || snapshot.isNotEmpty;
 }
 
 /// How the host answered a resume.
@@ -136,17 +144,25 @@ final class const TerminalHostAttachment({
 final class const TerminalHostResume({
   required final bool isDelta,
   required final Uint8List snapshot,
+  final String? snapshotText,
   final bool resetInteractionModes = false,
 }) {
   factory fromJson(Map<String, Object?> json) {
+    final snapshotText = json['snapshotText'] as String?;
     return TerminalHostResume(
       // A host that predates delta resumes answers with the whole scrollback
       // and no `delta` field, so an absent flag has to mean "replace".
       isDelta: json['delta'] == true,
-      snapshot: decodeTerminalHostBytes(json['snapshotBase64']),
+      snapshot: snapshotText == null
+          ? decodeTerminalHostBytes(json['snapshotBase64'])
+          : Uint8List(0),
+      snapshotText: snapshotText,
       resetInteractionModes: json['resetInteractionModes'] == true,
     );
   }
+
+  bool get hasSnapshot =>
+      snapshotText?.isNotEmpty == true || snapshot.isNotEmpty;
 }
 
 sealed class const TerminalHostEvent(final String sessionId);

@@ -6,7 +6,7 @@ class _TerminalOutputSegment(
   final String text,
   final _TerminalOutputSource source,
 ) {
-  /// How far this segment has already been consumed or deliberately trimmed.
+  /// How far this segment has already been consumed.
   int head = 0;
 
   int get remaining => text.length - head;
@@ -24,8 +24,8 @@ class _TerminalOutputPipeline {
   /// Pending output held as whole chunks rather than one growing buffer: a
   /// single buffer forced a full copy plus two substrings on every drain, so
   /// draining a full backlog was quadratic in its size. Each segment owns its
-  /// consumed head so live output behind a restore can be trimmed without
-  /// copying or discarding the protected prefix.
+  /// consumed head so frame-budgeted drains advance in place without copying
+  /// the remainder on every frame.
   final Queue<_TerminalOutputSegment> pending = Queue<_TerminalOutputSegment>();
 
   /// Chars still to write across every source.
@@ -93,17 +93,6 @@ class _TerminalOutputPipeline {
     } else {
       pending.remove(segment);
     }
-  }
-
-  int offsetOf(_TerminalOutputSegment target) {
-    var offset = 0;
-    for (final segment in pending) {
-      if (identical(segment, target)) {
-        return offset;
-      }
-      offset += segment.remaining;
-    }
-    throw StateError('Terminal output segment is not pending.');
   }
 
   void restartFlushClock() => sinceFlushRequest

@@ -139,9 +139,39 @@ Future<void> terminalHostSocketIsolateMain(
 /// the owner still reports it the way it always did.
 Object? decodeHostLine(String line) {
   try {
-    return jsonDecode(line);
+    final decoded = jsonDecode(line);
+    _predecodeSnapshotPayload(decoded);
+    return decoded;
   } catch (_) {
     return line;
+  }
+}
+
+/// Attach/resume responses can carry up to the host's full scrollback cap.
+/// Keep both expensive transforms -- base64 and UTF-8 decoding -- on the
+/// socket isolate rather than handing a multi-megabyte encoded string back to
+/// the UI isolate. This changes only the isolate's internal message shape; the
+/// host wire protocol remains unchanged.
+void _predecodeSnapshotPayload(Object? message) {
+  if (message is! Map) {
+    return;
+  }
+  final payload = message['payload'];
+  if (payload is! Map) {
+    return;
+  }
+  final encoded = payload['snapshotBase64'];
+  if (encoded is! String) {
+    return;
+  }
+  try {
+    final bytes = base64Decode(encoded);
+    payload['snapshotText'] = const Utf8Decoder(allowMalformed: true)
+        .convert(bytes);
+    payload.remove('snapshotBase64');
+  } catch (_) {
+    // Preserve the original payload if it is malformed so the main isolate's
+    // existing protocol validation/error path remains authoritative.
   }
 }
 

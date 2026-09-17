@@ -12,6 +12,8 @@ import 'package:alera/src/features/workbench/presentation/terminal_buffer_budget
 import 'package:alera/src/features/workbench/presentation/terminal_composer_controller.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_link_resolver.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_search_controller.dart';
+import 'package:alera/src/features/workbench/presentation/terminal_xterm_replica_terminal.dart';
+import 'package:alera/src/features/workbench/presentation/terminal_xterm_worker.dart';
 import 'package:alera/src/features/settings/domain/terminal_theme_catalog.dart';
 import 'package:alera/src/features/workbench/domain/terminal_agent_prompt_injection.dart';
 import 'package:alera/src/features/workbench/domain/terminal_image_paste.dart';
@@ -53,6 +55,7 @@ part 'terminal_runtime_clipboard.dart';
 part 'terminal_runtime_output_batching.dart';
 part 'terminal_runtime_output_pump.dart';
 part 'terminal_runtime_output_pipeline.dart';
+part 'terminal_runtime_parser_worker.dart';
 part 'terminal_runtime_pointer_synchronization.dart';
 part 'terminal_runtime_startup_delivery.dart';
 part 'terminal_runtime_interactive_view.dart';
@@ -336,6 +339,14 @@ final class const TerminalPtyOutputTextEvent(final String text)
 
 final class const TerminalPtySnapshotEvent(
   final Uint8List data, {
+  final bool resetInteractionModes = false,
+}) extends TerminalPtySessionEvent;
+
+/// A snapshot already decoded off the UI isolate. The terminal-host socket
+/// reader uses this path so a large attach/resume snapshot does not repeat its
+/// UTF-8 conversion on the Flutter UI isolate.
+final class const TerminalPtySnapshotTextEvent(
+  final String text, {
   final bool resetInteractionModes = false,
 }) extends TerminalPtySessionEvent;
 

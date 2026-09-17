@@ -71,7 +71,7 @@ void _registerTerminalRuntimeFactoryGroup() {
 
         expect(posix.writeBytes(const <int>[]), isFalse);
         posix.resize(80, 24, 8, 16);
-        handlePosixReadMessageForTesting(posix, Uint8List.fromList(<int>[65]));
+        handlePosixReadMessageForTesting(posix, 'A');
         handlePosixReadMessageForTesting(posix, <Object?, Object?>{
           'type': 'error',
           'error': 'boom',
@@ -81,7 +81,10 @@ void _registerTerminalRuntimeFactoryGroup() {
         });
         await Future.pause(.zero);
 
-        expect(posixEvents.whereType<TerminalPtyOutputEvent>(), hasLength(1));
+        expect(
+          posixEvents.whereType<TerminalPtyOutputTextEvent>(),
+          hasLength(1),
+        );
         expect(posixEvents.whereType<TerminalPtyErrorEvent>(), hasLength(1));
         expect(
           posixEvents.whereType<TerminalPtyExitEvent>().single.exitCode,
@@ -181,16 +184,21 @@ void _registerTerminalRuntimeFactoryGroup() {
         events.add(event);
         switch (event) {
           case TerminalPtyOutputEvent(:final data):
+            // Compatibility path for manually injected byte events.
             output.write(utf8.decode(data, allowMalformed: true));
             if (output.toString().contains('ready-posix') &&
                 !readyCompleter.isCompleted) {
               readyCompleter.complete();
             }
-          case TerminalPtyOutputTextEvent():
-            // Only the socket path produces decoded text; the native PTY
-            // adapters under test always emit bytes.
-            break;
+          case TerminalPtyOutputTextEvent(:final text):
+            output.write(text);
+            if (output.toString().contains('ready-posix') &&
+                !readyCompleter.isCompleted) {
+              readyCompleter.complete();
+            }
           case TerminalPtySnapshotEvent():
+            break;
+          case TerminalPtySnapshotTextEvent():
             break;
           case TerminalPtyExitEvent():
             if (!exitCompleter.isCompleted) {
@@ -256,6 +264,8 @@ void _registerTerminalRuntimeFactoryGroup() {
             // adapters under test always emit bytes.
             break;
           case TerminalPtySnapshotEvent():
+            break;
+          case TerminalPtySnapshotTextEvent():
             break;
           case TerminalPtyExitEvent():
             if (!exitCompleter.isCompleted) {

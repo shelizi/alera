@@ -6,6 +6,7 @@ import 'package:alera/src/features/diagnostics/infra/crash_reporting.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_client.dart';
 import 'package:alera/src/platform/runtime_host/transport/terminal_host_frame_codec.dart';
+import 'package:alera/src/platform/runtime_host/transport/terminal_host_socket_isolate.dart';
 import 'package:alera/src/platform/runtime_host/protocol/terminal_host_protocol.dart';
 import 'package:alera/src/shared/infra/logging/app_logger.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -21,6 +22,24 @@ part 'terminal_host_client_runtime_settings_cases.dart';
 part 'terminal_host_test_server.dart';
 
 void main() {
+  test('socket isolate predecodes snapshot payloads to terminal text', () {
+    final decoded = decodeHostLine(
+      jsonEncode(<String, Object?>{
+        'id': 1,
+        'ok': true,
+        'payload': <String, Object?>{
+          'sessionId': 'session-1',
+          'snapshotBase64': base64Encode(utf8.encode('before ñ after')),
+        },
+      }),
+    );
+
+    final message = Map<String, Object?>.from(decoded! as Map);
+    final payload = Map<String, Object?>.from(message['payload']! as Map);
+    expect(payload['snapshotText'], 'before ñ after');
+    expect(payload.containsKey('snapshotBase64'), isFalse);
+  });
+
   _registerTerminalHostClientResilienceTests();
   _registerTerminalHostClientTimeoutTests();
   _registerTerminalHostClientBinaryFrameTests();
@@ -140,10 +159,14 @@ void main() {
     expect(attachment.sessionId, 'session-1');
     expect(attachment.created, isTrue);
     expect(attachment.running, isTrue);
-    expect(attachment.snapshot, <int>[65, 66]);
+    expect(attachment.snapshot, isEmpty);
+    expect(attachment.snapshotText, 'AB');
     expect(restarted.created, isTrue);
+    expect(restarted.snapshot, isEmpty);
+    expect(restarted.snapshotText, 'AB');
     expect(resume.isDelta, isFalse);
-    expect(resume.snapshot, <int>[83, 78, 65, 80]);
+    expect(resume.snapshot, isEmpty);
+    expect(resume.snapshotText, 'SNAP');
     expect(server.requestTypes, <String>[
       'hello',
       'createOrAttach',

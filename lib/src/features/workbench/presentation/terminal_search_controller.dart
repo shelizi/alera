@@ -4,32 +4,41 @@ import 'package:alera/src/features/workbench/domain/terminal_search.dart';
 import 'package:flutter/foundation.dart';
 import 'package:xterm2/xterm.dart' as xterm;
 
+import 'terminal_search_source.dart';
+
 typedef TerminalSearchLineScroller = void Function(int lineIndex);
 
 final class TerminalSearchController._(
-  var xterm.Terminal _terminal,
+  var TerminalSearchSource _source,
   final TerminalSearchLineScroller _scrollToLine,
 ) extends ChangeNotifier {
   factory({
     required xterm.Terminal terminal,
     required TerminalSearchLineScroller scrollToLine,
   }) {
-    return TerminalSearchController._(terminal, scrollToLine);
+    return TerminalSearchController._(
+      XtermTerminalSearchSource(terminal),
+      scrollToLine,
+    );
   }
 
-  this {
-    _terminal.addListener(_handleTerminalChanged);
+  factory TerminalSearchController.fromSource({
+    required TerminalSearchSource source,
+    required TerminalSearchLineScroller scrollToLine,
+  }) {
+    return TerminalSearchController._(source, scrollToLine);
   }
 
-  xterm.Buffer? _indexedBuffer;
+  Object? _indexedBuffer;
   int _indexedHeight = -1;
   int _indexedWidth = -1;
   bool _needsFullRefresh = true;
   bool _isOpen = false;
+  bool _listeningToTerminal = false;
   String _query = '';
   int _selectedIndex = -1;
-  final Map<xterm.BufferLine, List<_LineMatch>> _matchesByLine =
-      <xterm.BufferLine, List<_LineMatch>>{};
+  final Map<Object, List<_LineMatch>> _matchesByLine =
+      <Object, List<_LineMatch>>{};
   List<TerminalSearchMatch> _matches = const <TerminalSearchMatch>[];
 
   bool get isOpen => _isOpen;
@@ -59,6 +68,7 @@ final class TerminalSearchController._(
       return;
     }
     _isOpen = true;
+    _syncTerminalListener();
     if (_query.isNotEmpty) {
       _refresh(forceFull: _needsFullRefresh);
     }
@@ -70,6 +80,7 @@ final class TerminalSearchController._(
       return;
     }
     _isOpen = false;
+    _syncTerminalListener();
     // Keep the query for the next invocation, but make reopening authoritative
     // after output that arrived while the overlay was hidden. The match index
     // is released because reopening rescans anyway; keeping it would retain
@@ -86,6 +97,7 @@ final class TerminalSearchController._(
       return;
     }
     _query = query;
+    _syncTerminalListener();
     _selectedIndex = -1;
     _matchesByLine.clear();
     _matches = const <TerminalSearchMatch>[];
@@ -123,12 +135,18 @@ final class TerminalSearchController._(
 
   /// Reattaches the search index when a snapshot replaces the emulator.
   void attachTerminal(xterm.Terminal terminal) {
-    if (identical(_terminal, terminal)) {
-      return;
+    attachSource(XtermTerminalSearchSource(terminal));
+  }
+
+  void attachSource(TerminalSearchSource source) {
+    if (identical(_source, source)) return;
+    if (_listeningToTerminal) {
+      _source.removeListener(_handleTerminalChanged);
     }
-    _terminal.removeListener(_handleTerminalChanged);
-    _terminal = terminal;
-    _terminal.addListener(_handleTerminalChanged);
+    _source = source;
+    if (_listeningToTerminal) {
+      _source.addListener(_handleTerminalChanged);
+    }
     _indexedBuffer = null;
     _indexedHeight = -1;
     _indexedWidth = -1;
@@ -141,6 +159,19 @@ final class TerminalSearchController._(
 
   @visibleForTesting
   bool get needsFullRefreshForTesting => _needsFullRefresh;
+
+  void _syncTerminalListener() {
+    final shouldListen = _isOpen && _query.isNotEmpty;
+    if (shouldListen == _listeningToTerminal) {
+      return;
+    }
+    if (shouldListen) {
+      _source.addListener(_handleTerminalChanged);
+    } else {
+      _source.removeListener(_handleTerminalChanged);
+    }
+    _listeningToTerminal = shouldListen;
+  }
 
   void _handleTerminalChanged() {
     if (!_isOpen || _query.isEmpty) {
@@ -161,46 +192,49 @@ final class TerminalSearchController._(
       return hadMatches;
     }
 
-    final buffer = _terminal.buffer;
-    final height = buffer.height;
+    final height = _source.height;
     final shouldScanAll =
         forceFull ||
         _needsFullRefresh ||
-        !identical(_indexedBuffer, buffer) ||
-        _indexedWidth != _terminal.viewWidth ||
+        !identical(_indexedBuffer, _source.bufferIdentity) ||
+        _indexedWidth != _source.viewWidth ||
         _indexedHeight < 0 ||
         height < _indexedHeight;
     final selected = selectedMatch;
 
     if (shouldScanAll) {
       _matchesByLine.clear();
-      _scanLines(buffer, 0, height);
+      _scanLines(0, height);
     } else {
       // A normal output batch appends from the previous tail. When the line
       // count is stable, rescan only the visible tail because TUIs rewrite
       // their viewport instead of the whole scrollback.
       final start = height > _indexedHeight
           ? max(0, _indexedHeight - 1)
-          : max(0, height - _terminal.viewHeight);
-      _removeMatchesInRange(buffer, start, height);
-      _scanLines(buffer, start, height);
+          : max(0, height - _source.viewHeight);
+      _removeMatchesInRange(start, height);
+      _scanLines(start, height);
     }
 
-    _indexedBuffer = buffer;
+    _indexedBuffer = _source.bufferIdentity;
     _indexedHeight = height;
-    _indexedWidth = _terminal.viewWidth;
+    _indexedWidth = _source.viewWidth;
     _needsFullRefresh = false;
     _rebuildMatches(selected);
     return true;
   }
 
-  void _scanLines(xterm.Buffer buffer, int start, int end) {
-    final safeStart = start.clamp(0, buffer.height);
-    final safeEnd = end.clamp(safeStart, buffer.height);
+  void _scanLines(int start, int end) {
+    final safeStart = start.clamp(0, _source.height);
+    final safeEnd = end.clamp(safeStart, _source.height);
     for (var index = safeStart; index < safeEnd; index++) {
-      final line = buffer.lines[index];
+      final line = _source.lineIdAt(index);
       final lineMatches = findTerminalSearchMatches(<TerminalSearchLine>[
-        TerminalSearchLine(id: line, index: index, text: line.getText()),
+        TerminalSearchLine(
+          id: line,
+          index: index,
+          text: _source.lineTextAt(index),
+        ),
       ], _query);
       if (lineMatches.isEmpty) {
         _matchesByLine.remove(line);
@@ -213,46 +247,52 @@ final class TerminalSearchController._(
     }
   }
 
-  void _removeMatchesInRange(xterm.Buffer buffer, int start, int end) {
-    final staleLines = <xterm.BufferLine>[];
-    for (final line in _matchesByLine.keys) {
-      if (!_lineIndex(buffer, line).caseInRange(start, end)) {
-        continue;
-      }
-      staleLines.add(line);
-    }
-    for (final line in staleLines) {
-      _matchesByLine.remove(line);
+  void _removeMatchesInRange(int start, int end) {
+    final safeStart = start.clamp(0, _source.height);
+    final safeEnd = end.clamp(safeStart, _source.height);
+    for (var index = safeStart; index < safeEnd; index++) {
+      _matchesByLine.remove(_source.lineIdAt(index));
     }
   }
 
   void _rebuildMatches(TerminalSearchMatch? selected) {
     final next = <TerminalSearchMatch>[];
-    final staleLines = <xterm.BufferLine>[];
+    final staleLines = <Object>[];
+    final liveLines =
+        <({Object line, int lineIndex, List<_LineMatch> matches})>[];
     for (final entry in _matchesByLine.entries) {
-      final lineIndex = _lineIndex(_terminal.buffer, entry.key);
+      final lineIndex = _source.lineIndexOf(entry.key);
       if (lineIndex == null) {
         staleLines.add(entry.key);
         continue;
       }
-      for (final match in entry.value) {
+      liveLines.add((
+        line: entry.key,
+        lineIndex: lineIndex,
+        matches: entry.value,
+      ));
+    }
+    for (final line in staleLines) {
+      _matchesByLine.remove(line);
+    }
+
+    // `findTerminalSearchMatches` records hits in ascending column order for
+    // each line. Sorting the matched lines first therefore produces the same
+    // global order without sorting every individual hit. This matters for a
+    // query that occurs many times per line during continuous terminal output.
+    liveLines.sort((a, b) => a.lineIndex.compareTo(b.lineIndex));
+    for (final entry in liveLines) {
+      for (final match in entry.matches) {
         next.add(
           TerminalSearchMatch(
-            lineId: entry.key,
-            lineIndex: lineIndex,
+            lineId: entry.line,
+            lineIndex: entry.lineIndex,
             start: match.start,
             end: match.end,
           ),
         );
       }
     }
-    for (final line in staleLines) {
-      _matchesByLine.remove(line);
-    }
-    next.sort((a, b) {
-      final lineOrder = a.lineIndex.compareTo(b.lineIndex);
-      return lineOrder == 0 ? a.start.compareTo(b.start) : lineOrder;
-    });
     _matches = List<TerminalSearchMatch>.unmodifiableOf(next);
 
     if (_matches.isEmpty) {
@@ -273,17 +313,6 @@ final class TerminalSearchController._(
     _selectedIndex = _selectedIndex.clamp(0, _matches.length - 1);
   }
 
-  int? _lineIndex(xterm.Buffer buffer, xterm.BufferLine line) {
-    if (!line.attached) {
-      return null;
-    }
-    final index = line.index;
-    if (index < 0 || index >= buffer.height) {
-      return null;
-    }
-    return identical(buffer.lines[index], line) ? index : null;
-  }
-
   void _scrollSelectedMatch() {
     final match = selectedMatch;
     if (match != null) {
@@ -293,7 +322,10 @@ final class TerminalSearchController._(
 
   @override
   void dispose() {
-    _terminal.removeListener(_handleTerminalChanged);
+    if (_listeningToTerminal) {
+      _source.removeListener(_handleTerminalChanged);
+      _listeningToTerminal = false;
+    }
     super.dispose();
   }
 }

@@ -8,6 +8,12 @@ extension _XtermTerminalPtyResize on _XtermTerminalSessionHandle {
     int pixelWidth,
     int pixelHeight,
   ) {
+    _resizeParserWorker(
+      cols: width,
+      rows: height,
+      pixelWidth: pixelWidth,
+      pixelHeight: pixelHeight,
+    );
     _pendingPtySize = _TerminalPtySize(
       cols: width,
       rows: height,

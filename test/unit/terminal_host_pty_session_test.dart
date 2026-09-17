@@ -63,6 +63,44 @@ void main() {
   );
 
   test(
+    'host PTY session forwards predecoded attachment snapshot text',
+    () async {
+      final client = FakeTerminalHostClient(
+        attachment: TerminalHostAttachment(
+          sessionId: 'session-1',
+          created: false,
+          running: true,
+          snapshot: Uint8List(0),
+          snapshotText: 'predecoded ñ snapshot',
+        ),
+      );
+      final session = TerminalHostPtySession(
+        client: client,
+        sessionId: 'session-1',
+        workspaceId: 'workspace-1',
+        tabId: 'tab-1',
+      );
+      addTearDown(session.dispose);
+      final events = <TerminalPtySessionEvent>[];
+      final sub = session.events.listen(events.add);
+      addTearDown(sub.cancel);
+
+      await session.start(
+        launch: _launch(),
+        workingDirectory: '/repo',
+        cols: 80,
+        rows: 24,
+      );
+      await _flushAsync();
+
+      expect(events.whereType<TerminalPtySnapshotEvent>(), isEmpty);
+      final snapshot = events.whereType<TerminalPtySnapshotTextEvent>().single;
+      expect(snapshot.text, 'predecoded ñ snapshot');
+      expect(snapshot.resetInteractionModes, isFalse);
+    },
+  );
+
+  test(
     'host PTY session writes, resizes, detaches, and terminates by id',
     () async {
       final client = FakeTerminalHostClient(

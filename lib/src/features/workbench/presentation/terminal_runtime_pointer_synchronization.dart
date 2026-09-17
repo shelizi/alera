@@ -2,9 +2,9 @@ part of 'terminal_runtime.dart';
 
 /// Keeps pointer events behind the output that determines terminal mouse mode.
 ///
-/// A hidden terminal can leave the emulator in a TUI mouse mode while the host
-/// has already returned to the shell. The missed cleanup bytes arrive during
-/// resume, so clicks stay suspended until that prefix has been parsed.
+/// A backgrounded app can leave the emulator in a TUI mouse mode while the
+/// host has already returned to the shell. Missed cleanup bytes arrive during
+/// host resume, so clicks stay suspended until that prefix has been parsed.
 extension _TerminalPointerSynchronization on _XtermTerminalSessionHandle {
   void _syncPtyOutputVisibility() {
     final generation = ++_outputVisibilityGeneration;
@@ -15,9 +15,20 @@ extension _TerminalPointerSynchronization on _XtermTerminalSessionHandle {
       return;
     }
 
-    final paused = !_outputVisible;
-    _pointerInputResumePending = !paused;
+    // Switching tabs must not pause host delivery: otherwise a long-running
+    // inactive terminal can outgrow the host ring and fall back to a lossy
+    // snapshot. Only park delivery when the whole app leaves the foreground.
+    final paused = !_visibility.isAppForeground;
+    final pauseStateChanged = _ptyOutputPaused != paused;
+    _pointerInputResumePending = _outputVisible && !paused && pauseStateChanged;
     _refreshPointerInputSuspension();
+    if (!pauseStateChanged) {
+      return;
+    }
+    // Record the requested state before awaiting so rapid foreground changes
+    // enqueue both edges instead of a late pause suppressing its matching
+    // resume. TerminalHostPtySession serializes those requests.
+    _ptyOutputPaused = paused;
     unawaited(
       _applyPtyOutputVisibility(
         session: session,
@@ -38,6 +49,14 @@ extension _TerminalPointerSynchronization on _XtermTerminalSessionHandle {
       if (!_disposed &&
           identical(_ptySession, session) &&
           generation == _outputVisibilityGeneration) {
+        // The optimistic marker above is what keeps a rapid background ->
+        // foreground transition ordered correctly. If this request itself
+        // failed and has not been superseded, roll the marker back so the next
+        // visibility sync can retry instead of believing the host is already
+        // in the requested state.
+        if (_ptyOutputPaused == paused) {
+          _ptyOutputPaused = !paused;
+        }
         _setTerminalHostError(error);
       }
       return;
@@ -88,16 +107,6 @@ extension _TerminalPointerSynchronization on _XtermTerminalSessionHandle {
       _pointerInputCatchUpChars -= chars;
     }
     _refreshPointerInputSuspension();
-  }
-
-  void _discardPointerInputCatchUp({required int offset, required int chars}) {
-    if (chars <= 0 || offset >= _pointerInputCatchUpChars) {
-      return;
-    }
-    final prefixRemaining = _pointerInputCatchUpChars - offset;
-    _advancePointerInputCatchUp(
-      chars < prefixRemaining ? chars : prefixRemaining,
-    );
   }
 
   void _resetPointerInputSynchronization() {

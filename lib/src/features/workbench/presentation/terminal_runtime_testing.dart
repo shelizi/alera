@@ -48,7 +48,9 @@ void feedTerminalInputForTesting(TerminalSessionHandle session, String data) {
 void writeTerminalOutputForTesting(TerminalSessionHandle session, String data) {
   final handle = session as _XtermTerminalSessionHandle;
   handle._handleTerminalOutput(data);
-  handle._flushPendingTerminalOutputNow();
+  while (handle._pump.pipeline.length > 0) {
+    handle._flushPendingTerminalOutputFrame(force: true);
+  }
 }
 
 @visibleForTesting
@@ -60,6 +62,38 @@ void queueTerminalOutputForTesting(TerminalSessionHandle session, String data) {
 void flushTerminalOutputForTesting(TerminalSessionHandle session) {
   (session as _XtermTerminalSessionHandle)._flushPendingTerminalOutputFrame(
     force: true,
+  );
+}
+
+@visibleForTesting
+bool terminalParserWorkerEnabledForTesting(TerminalSessionHandle session) {
+  final handle = session as _XtermTerminalSessionHandle;
+  return handle._parserWorkerEnabled &&
+      handle._terminal is TerminalXtermReplicaTerminal;
+}
+
+@visibleForTesting
+Future<void> waitForTerminalParserApplyForTesting(
+  TerminalSessionHandle session,
+) async {
+  final handle = session as _XtermTerminalSessionHandle;
+  await handle._parserWorkerLastApply;
+}
+
+@visibleForTesting
+void focusTerminalForTesting(TerminalSessionHandle session, bool focused) {
+  (session as _XtermTerminalSessionHandle)._terminal.focusInput(focused);
+}
+
+@visibleForTesting
+void rebuildTerminalFromSnapshotTextForTesting(
+  TerminalSessionHandle session,
+  String text, {
+  bool resetInteractionModes = false,
+}) {
+  (session as _XtermTerminalSessionHandle)._rebuildTerminalFromSnapshotText(
+    text,
+    resetInteractionModes: resetInteractionModes,
   );
 }
 
@@ -89,10 +123,7 @@ bool terminalOutputFlushScheduledForTesting(TerminalSessionHandle session) {
 /// next frame.
 @visibleForTesting
 bool terminalOutputFlushDeferredForTesting(TerminalSessionHandle session) {
-  return (session as _XtermTerminalSessionHandle)
-          ._pump
-          .pipeline
-          .flushTimer !=
+  return (session as _XtermTerminalSessionHandle)._pump.pipeline.flushTimer !=
       null;
 }
 
@@ -114,8 +145,47 @@ Duration get terminalOutputMinFlushIntervalForTesting =>
     _terminalOutputMinFlushInterval;
 
 @visibleForTesting
+Duration get terminalOutputAdaptiveIdleResetIntervalForTesting =>
+    _terminalOutputAdaptiveIdleResetInterval;
+
+@visibleForTesting
 int terminalOutputFrameCutoffForTesting(String value) {
   return _terminalOutputChunkCutoff(value, _terminalOutputMaxCharsPerFrame);
+}
+
+@visibleForTesting
+int terminalOutputAdaptiveBudgetForTesting({
+  required int currentChars,
+  required Duration parseTime,
+}) {
+  return _terminalOutputNextAdaptiveChunkBudget(
+    currentChars: currentChars,
+    parseTime: parseTime,
+  );
+}
+
+@visibleForTesting
+Duration terminalOutputAdaptiveSampleForTesting({
+  required Duration wallTime,
+  Duration? asyncUiApplyTime,
+}) {
+  return _terminalOutputAdaptiveSample(
+    wallTime: wallTime,
+    asyncUiApplyTime: asyncUiApplyTime,
+  );
+}
+
+@visibleForTesting
+int terminalOutputAdaptiveBudgetCharsForTesting(TerminalSessionHandle session) {
+  return (session as _XtermTerminalSessionHandle)._pump._adaptiveChunkBudget;
+}
+
+@visibleForTesting
+void setTerminalOutputAdaptiveBudgetForTesting(
+  TerminalSessionHandle session,
+  int chars,
+) {
+  (session as _XtermTerminalSessionHandle)._pump._adaptiveChunkBudget = chars;
 }
 
 @visibleForTesting
@@ -180,6 +250,16 @@ bool terminalBracketedPasteModeForTesting(TerminalSessionHandle session) {
 @visibleForTesting
 bool terminalCursorVisibleModeForTesting(TerminalSessionHandle session) {
   return (session as _XtermTerminalSessionHandle)._terminal.cursorVisibleMode;
+}
+
+@visibleForTesting
+VoidCallback addTerminalChangeListenerForTesting(
+  TerminalSessionHandle session,
+  VoidCallback listener,
+) {
+  final terminal = (session as _XtermTerminalSessionHandle)._terminal;
+  terminal.addListener(listener);
+  return () => terminal.removeListener(listener);
 }
 
 @visibleForTesting

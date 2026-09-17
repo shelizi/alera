@@ -77,6 +77,7 @@ mixin _TerminalSearchSessionSupport on TerminalSessionHandle {
   @override
   void dispose({bool terminatePty = true}) {
     _disposed = true;
+    (this as _XtermTerminalSessionHandle)._resetParserWorkerBackend();
     _startAttempt += 1;
     _outputVisibilityGeneration += 1;
     _visibility.leases.clear();

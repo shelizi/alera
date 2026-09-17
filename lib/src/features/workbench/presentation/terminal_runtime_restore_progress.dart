@@ -67,22 +67,36 @@ extension _TerminalRestoreProgressTracking on _XtermTerminalSessionHandle {
     if (_disposed) {
       return;
     }
+    _rebuildTerminalFromSnapshotText(
+      const Utf8Decoder(allowMalformed: true).convert(data),
+      resetInteractionModes: resetInteractionModes,
+    );
+  }
+
+  void _rebuildTerminalFromSnapshotText(
+    String restored, {
+    required bool resetInteractionModes,
+  }) {
+    if (_disposed) {
+      return;
+    }
     _clearPendingTerminalOutput();
+    _resetParserWorkerBackend();
     _terminalController.clearSelection();
     final previousTerminal = _terminal;
     final viewWidth = previousTerminal.viewWidth;
     final viewHeight = previousTerminal.viewHeight;
     _detachTerminal(previousTerminal);
 
-    final nextTerminal = _createTerminal()..resize(viewWidth, viewHeight);
+    final nextTerminal = _createTerminal(notificationsEnabled: _outputVisible)
+      ..resize(viewWidth, viewHeight);
     _terminal = nextTerminal;
     _attachTerminal(nextTerminal);
     searchController.attachTerminal(nextTerminal);
     previousTerminal.dispose();
-    // Scrollback can reach the host's 10 MB cap, and parsing all of it in one
-    // synchronous write blocked the frame that showed the terminal. Go through
-    // the same per-frame batcher as live output instead.
-    final restored = const Utf8Decoder(allowMalformed: true).convert(data);
+    // Scrollback can reach the host's 10 MB cap. The production socket path
+    // decodes it to text before it reaches the UI isolate; the legacy byte path
+    // above remains for fallback adapters. Parsing is still frame-budgeted.
     _beginRestore(restored.length);
     _queueTerminalOutput(restored, source: .restore);
     if (resetInteractionModes) {

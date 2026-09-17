@@ -23,6 +23,7 @@ TerminalRuntime terminalRuntime(Ref ref) {
   final aleraCliShim = ref.watch(aleraCliTerminalShimServiceProvider);
   final shellStartupPreparer = ref.watch(terminalShellStartupPreparerProvider);
   final runtime = XtermTerminalRuntime(
+    parserWorkerEnabled: true,
     ptySessionFactory: TerminalHostPtySessionFactory(
       client: terminalHostClient,
     ),

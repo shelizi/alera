@@ -256,7 +256,11 @@ void _registerXtermRuntimeSessionTests() {
         secondVisibility.dispose();
         secondVisibility = null;
         await Future.pause(.zero);
-        expect(fakeSession.outputPausedCalls, <bool>[true]);
+        expect(
+          fakeSession.outputPausedCalls,
+          isEmpty,
+          reason: 'an inactive tab keeps host delivery live while the app is foreground',
+        );
       } finally {
         firstVisibility?.dispose();
         secondVisibility?.dispose();

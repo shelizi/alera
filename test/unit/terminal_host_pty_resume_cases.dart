@@ -86,6 +86,47 @@ void _registerTerminalHostPtyResumeTests() {
     },
   );
 
+  test('host PTY session forwards a predecoded full resume snapshot', () async {
+    final client =
+        FakeTerminalHostClient(
+            attachment: TerminalHostAttachment(
+              sessionId: 'session-1',
+              created: true,
+              running: true,
+              snapshot: Uint8List(0),
+            ),
+          )
+          ..resume = TerminalHostResume(
+            isDelta: false,
+            snapshot: Uint8List(0),
+            snapshotText: 'resume ñ snapshot',
+          );
+    final session = TerminalHostPtySession(
+      client: client,
+      sessionId: 'session-1',
+      workspaceId: 'workspace-1',
+      tabId: 'tab-1',
+    );
+    addTearDown(session.dispose);
+    final events = <TerminalPtySessionEvent>[];
+    final sub = session.events.listen(events.add);
+    addTearDown(sub.cancel);
+
+    await session.start(
+      launch: _launch(),
+      workingDirectory: '/repo',
+      cols: 80,
+      rows: 24,
+    );
+    await session.setOutputPaused(false);
+    await _flushAsync();
+
+    final snapshots = events.whereType<TerminalPtySnapshotTextEvent>().toList();
+    expect(snapshots, hasLength(1));
+    expect(snapshots.single.text, 'resume ñ snapshot');
+    expect(snapshots.single.resetInteractionModes, isFalse);
+  });
+
   test('a host without delta resumes still sends a full snapshot', () {
     // An older sidecar answers a resume with the scrollback and no `delta`
     // field. The app can attach to one, so absence must not read as a delta.

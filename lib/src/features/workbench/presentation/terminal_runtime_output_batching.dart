@@ -1,20 +1,5 @@
 part of 'terminal_runtime.dart';
 
-/// Start index for a head trim that never lands inside a surrogate pair.
-int _terminalOutputHeadTrimStart(String value, int start) {
-  if (start <= 0) {
-    return 0;
-  }
-  if (start >= value.length) {
-    return value.length;
-  }
-  final codeUnit = value.codeUnitAt(start);
-  if (codeUnit >= 0xDC00 && codeUnit <= 0xDFFF) {
-    return start + 1;
-  }
-  return start;
-}
-
 /// Never cuts between a surrogate pair, which would corrupt the code point.
 int _terminalOutputChunkCutoff(String value, int limit) {
   if (value.length <= limit) {
@@ -28,7 +13,76 @@ int _terminalOutputChunkCutoff(String value, int limit) {
 }
 
 const int _terminalOutputMaxCharsPerFrame = 64 * 1024;
+const int _terminalOutputInitialAdaptiveCharsPerFrame = 16 * 1024;
+const int _terminalOutputMinAdaptiveCharsPerFrame = 4 * 1024;
+const int _terminalOutputAdaptiveGrowthStep = 8 * 1024;
+const int _terminalOutputAdaptiveQuantum = 1024;
+const Duration _terminalOutputTargetParseTime = Duration(milliseconds: 6);
+const Duration _terminalOutputAdaptiveIdleResetInterval = Duration(
+  milliseconds: 500,
+);
 const int _terminalOutputMaxPendingChars = 1024 * 1024;
+const int _terminalOutputVisibleHardPendingChars = 4 * 1024 * 1024;
+const int _terminalOutputHiddenCatchUpTargetChars = 256 * 1024;
+
+/// Chooses the next saturated output-chunk budget from the measured xterm
+/// parse time of the previous chunk.
+///
+/// Shrinking is proportional but limited to at most 2x per sample, so one
+/// noisy frame cannot collapse throughput. Growth is deliberately slower: a
+/// cheap chunk earns only 8 KiB at a time, which avoids oscillating between a
+/// tiny ANSI-heavy budget and the 64 KiB ceiling.
+int _terminalOutputNextAdaptiveChunkBudget({
+  required int currentChars,
+  required Duration parseTime,
+}) {
+  final current = currentChars
+      .clamp(
+        _terminalOutputMinAdaptiveCharsPerFrame,
+        _terminalOutputMaxCharsPerFrame,
+      )
+      .toInt();
+  final targetMicros = _terminalOutputTargetParseTime.inMicroseconds;
+  final parseMicros = parseTime.inMicroseconds;
+
+  if (parseMicros < targetMicros ~/ 2) {
+    return (current + _terminalOutputAdaptiveGrowthStep)
+        .clamp(
+          _terminalOutputMinAdaptiveCharsPerFrame,
+          _terminalOutputMaxCharsPerFrame,
+        )
+        .toInt();
+  }
+  if (parseMicros <= targetMicros) {
+    return current;
+  }
+
+  final proportional = (current * targetMicros) ~/ parseMicros;
+  final noFasterThanHalf = current ~/ 2;
+  var next = proportional < noFasterThanHalf ? noFasterThanHalf : proportional;
+  next = next
+      .clamp(
+        _terminalOutputMinAdaptiveCharsPerFrame,
+        _terminalOutputMaxCharsPerFrame,
+      )
+      .toInt();
+  next =
+      (next ~/ _terminalOutputAdaptiveQuantum) * _terminalOutputAdaptiveQuantum;
+  return next.clamp(_terminalOutputMinAdaptiveCharsPerFrame, current).toInt();
+}
+
+/// Selects the UI-blocking time that should drive output chunk adaptation.
+///
+/// Direct xterm parsing is synchronous on the UI isolate, so its wall time is
+/// the blocking cost. The parser-worker backend spends most of its wall time in
+/// another isolate; only rebuilding/applying the returned replica delta blocks
+/// Flutter, so that narrower measurement wins when it is available.
+Duration _terminalOutputAdaptiveSample({
+  required Duration wallTime,
+  Duration? asyncUiApplyTime,
+}) {
+  return asyncUiApplyTime ?? wallTime;
+}
 
 /// Floor on the gap between two flushes, so a process writing without pause
 /// cannot drive the frame loop at full vsync.

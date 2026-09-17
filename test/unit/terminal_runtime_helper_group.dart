@@ -502,6 +502,40 @@ void _registerTerminalRuntimeHelperGroup() {
     );
 
     test(
+      'posix read isolate decodes split UTF-8 before crossing isolates',
+      () async {
+        final receivePort = ReceivePort();
+        addTearDown(receivePort.close);
+        final encoded = utf8.encode('ñ');
+        var readCall = 0;
+
+        runPosixPtyReadIsolateForTesting(
+          fd: 1,
+          sendPort: receivePort.sendPort,
+          read: (_, buffer, _) {
+            switch (readCall++) {
+              case 0:
+                buffer[0] = encoded[0];
+                return 1;
+              case 1:
+                buffer[0] = encoded[1];
+                buffer[1] = 0x21;
+                return 2;
+              default:
+                return 0;
+            }
+          },
+        );
+
+        final messages = await receivePort.take(2).toList();
+        expect(messages, <Object?>[
+          'ñ!',
+          const <Object?, Object?>{'type': 'done'},
+        ]);
+      },
+    );
+
+    test(
       'posix read isolate reports reader failures through the send port',
       () async {
         final receivePort = ReceivePort();

@@ -8,6 +8,7 @@ class _XtermTerminalSessionHandle(
   var TerminalSettings _settings,
   final TerminalRuntimeRendererAdapterOwner _rendererAdapterOwner,
   final TerminalRuntimeLaunchInputOwner _launchInputOwner,
+  final bool _parserWorkerEnabled,
   final void Function(TerminalRuntimeExitEvent event) _onExit,
   this._onVisibilityChanged,
 ) extends TerminalSessionHandle
@@ -65,6 +66,12 @@ class _XtermTerminalSessionHandle(
   Timer? _deferredSubmitEnterTimer;
   _TerminalPtySize? _pendingPtySize;
   int _ptyGeneration = 0;
+  int _parserWorkerGeneration = 0;
+  Future<TerminalXtermWorker>? _parserWorkerFuture;
+  Future<void> _parserWorkerCommandTail = Future<void>.value();
+  Future<void>? _parserWorkerLastApply;
+  bool _parserWorkerFocused = true;
+  bool _parserWorkerReplicaNeedsSync = false;
   @override
   int _startAttempt = 0;
   int? _activePtyGeneration;
@@ -89,6 +96,7 @@ class _XtermTerminalSessionHandle(
       ValueNotifier<TerminalRestoreProgress?>(null);
   int _restoreGeneration = 0, _restoreTotalChars = 0, _restoreWrittenChars = 0;
   bool _pendingInteractionModeReset = false;
+  bool _ptyOutputPaused = false;
   @override
   int _pointerInputCatchUpChars = 0;
   @override
@@ -129,8 +137,37 @@ class _XtermTerminalSessionHandle(
   void onOutputVisibilityChanged() {
     _syncPtyOutputVisibility();
     if (_visibility.isOutputVisible) {
-      _pump.scheduleFlush();
+      final terminal = _terminal;
+      // Enable listener delivery before hydrating the worker replica so the
+      // reveal snapshot publishes exactly one fresh renderer/search state.
+      switch (terminal) {
+        case _AleraTerminal():
+          terminal.setNotificationsEnabled(true, flushPending: false);
+        case TerminalXtermReplicaTerminal():
+          terminal.setNotificationsEnabled(true, flushPending: false);
+      }
+      // Queue worker hydration before any newly visible output. Both commands
+      // share the parser-worker tail, so hidden state cannot be overtaken by
+      // visible deltas while the tab is being revealed.
+      final parserReveal = _syncParserWorkerReplicaForReveal();
+      _pump.capAdaptiveBudgetForReveal();
+      _pump.flushFrame(force: true);
+      switch (terminal) {
+        case _AleraTerminal():
+          terminal.flushPendingNotification();
+        case TerminalXtermReplicaTerminal() when parserReveal == null:
+          terminal.flushPendingNotification();
+        case TerminalXtermReplicaTerminal():
+          break;
+      }
     } else {
+      final terminal = _terminal;
+      switch (terminal) {
+        case _AleraTerminal():
+          terminal.setNotificationsEnabled(false);
+        case TerminalXtermReplicaTerminal():
+          terminal.setNotificationsEnabled(false);
+      }
       _pump.pipeline.cancelDeferredFlush();
     }
   }
@@ -227,28 +264,23 @@ class _XtermTerminalSessionHandle(
   bool get isOutputVisible => _visibility.isOutputVisible;
 
   @override
-  void writeToTerminal(String data) {
+  Future<Duration>? writeToTerminal(String data) {
     if (data.isEmpty || _disposed) {
-      return;
+      return null;
+    }
+    if (_parserWorkerEnabled) {
+      return _writeToParserWorker(data);
     }
     _terminal.write(data);
+    return null;
   }
 
   @override
   void advanceRestore(int chars) => _advanceRestore(chars);
 
   @override
-  void finishRestore() => _finishRestore();
-
-  @override
   void advancePointerInputCatchUp(int chars) =>
       _advancePointerInputCatchUp(chars);
-
-  @override
-  void discardPointerInputCatchUp({required int offset, required int chars}) =>
-      _discardPointerInputCatchUp(offset: offset, chars: chars);
-
-  void _writeToTerminal(String data) => writeToTerminal(data);
 
   void _queueTerminalOutput(
     String data, {
@@ -258,14 +290,23 @@ class _XtermTerminalSessionHandle(
   void _flushPendingTerminalOutputFrame({bool force = false}) =>
       _pump.flushFrame(force: force);
 
-  void _flushPendingTerminalOutputNow() => _pump.flushNow();
-
   void _replaceTerminalWithSnapshot(
     List<int> data, {
     required bool resetInteractionModes,
   }) {
     _rebuildTerminalFromSnapshot(
       data,
+      resetInteractionModes: resetInteractionModes,
+    );
+    notifyListeners();
+  }
+
+  void _replaceTerminalWithSnapshotText(
+    String text, {
+    required bool resetInteractionModes,
+  }) {
+    _rebuildTerminalFromSnapshotText(
+      text,
       resetInteractionModes: resetInteractionModes,
     );
     notifyListeners();

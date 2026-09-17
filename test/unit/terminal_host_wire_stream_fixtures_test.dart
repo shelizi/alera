@@ -194,8 +194,8 @@ void main() {
     );
 
     expect(resume.isDelta, isFalse);
-    expect(resume.snapshot, base64Decode('ZWZnaA=='));
-    expect(utf8.decode(resume.snapshot), 'efgh');
+    expect(resume.snapshot, isEmpty);
+    expect(resume.snapshotText, 'efgh');
     expect(resume.resetInteractionModes, isTrue);
   });
 
@@ -215,7 +215,8 @@ void main() {
     );
 
     expect(resume.isDelta, isFalse);
-    expect(resume.snapshot, base64Decode('ZWZnaA=='));
+    expect(resume.snapshot, isEmpty);
+    expect(resume.snapshotText, 'efgh');
     expect(resume.resetInteractionModes, isFalse);
   });
 
