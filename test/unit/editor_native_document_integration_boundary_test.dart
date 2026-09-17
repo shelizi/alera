@@ -10,12 +10,15 @@ void main() {
         'third_party/code_forge/lib/code_forge/controller.dart',
       ).readAsStringSync();
 
-      expect(controller, contains('NativeEditorDocument.open('));
+      expect(controller, contains('Rope.openWorkspaceFile('));
+      expect(controller, contains('NativeEditorDocument.openFromRope('));
       expect(controller, contains('.applyEdits('));
       expect(controller, contains('queryNativeSyntaxSpans('));
       expect(controller, contains('.close()'));
       expect(controller, contains('_commitDocumentEdit('));
-      expect(controller, isNot(contains('_currentVersion++;')));
+      expect(controller, contains('final expectedRevision = _currentVersion;'));
+      expect(controller, contains('final newRevision = expectedRevision + 1;'));
+      expect(controller, contains('_currentVersion = newRevision;'));
     },
   );
 

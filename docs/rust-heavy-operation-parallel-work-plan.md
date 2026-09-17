@@ -518,7 +518,26 @@ Validation:
 - root `workspace_editor_surface_test.dart`: 20 passed, 0 failed;
 - `git diff --check`: clean.
 
-Remaining C5 items: structural selection, then symbol outline/navigation.
+#### C5 structural-selection status - 2026-09-18
+
+The third C5 feature is complete and merged to `main` (`1890395b` implementation, `962b06e6` merge):
+
+- expand-selection queries the already-retained `NativeEditorDocument` Tree-sitter tree synchronously; it does not materialize the full document or trigger a fresh parse;
+- the native result is revision-aware and uses Unicode scalar offsets, with Rope scalar<->byte conversion only at the Tree-sitter boundary;
+- the Dart controller rejects native structural queries while the parser is unsupported/unavailable, the native document is still opening, edits are pending, or revisions are stale;
+- expand/shrink maintains a controller-side selection history and clears that history on ordinary edits/manual selection changes;
+- default shortcuts are `Shift+Alt+ArrowRight` to expand and `Shift+Alt+ArrowLeft` to shrink;
+- when the retained native tree is not ready the shortcut is a no-op rather than synchronously waiting for the measured first-parse cost. The C4 50k-line benchmark measured the first retained Tree-sitter parse/query at about 5.54 s median, so that scheduling/latency remains a separate concern for future work.
+
+Validation:
+
+- CodeForge Rust: 22 passed, 0 failed, 1 manual benchmark ignored;
+- targeted CodeForge Dart analyze: no issues;
+- root `workspace_editor_surface_test.dart`: passed;
+- root `editor_native_document_integration_boundary_test.dart`: 3 passed, 0 failed after refreshing its C4 native-open assertions to `Rope.openWorkspaceFile` + `NativeEditorDocument.openFromRope` and the revisioned edit-stream contract;
+- `git diff --check`: clean.
+
+Remaining C5 item: symbol outline/navigation.
 
 ### T6 - evidence-selected terminal implementation
 
