@@ -261,9 +261,10 @@ Validation completed:
 - native-backed Dart session regressions: 2 passed;
 - root Rust native-backed Save/tab-preservation regression: passed;
 - targeted Dart analyze for the C4 production/test files: no issues;
-- the broader workspace editor widget suite is currently blocked by the independent main-line terminal compile error `terminal_runtime_providers.dart: Method not found: _terminalShellLaunches`.
+- terminal provider compile blocker fixed by exposing the shell-launch builder across libraries (`d45ff07d` implementation; merged to `main`); targeted terminal analyze: no issues;
+- broader workspace editor widget suite rerun on latest `main`: 20 passed, 0 failed.
 
-C4a benchmark was attempted both before implementation and again after merging latest `main`, including a clean Windows build. Both attempts were blocked before the benchmark could execute because CMake could not locate a C++ compiler (`No CMAKE_CXX_COMPILER could be found`). Therefore no trustworthy latest-main before/after timing, RSS, or FFI-payload sample was produced in this environment. Do not infer a speedup from the earlier C3 numbers; rerun `integration_test/editor_open_profile_benchmark.dart -d windows` after the Windows CMake/MSVC environment is repaired.
+C4a benchmark still has no trustworthy latest-main before/after timing, RSS, or FFI-payload sample. The original CMake `No CMAKE_CXX_COMPILER could be found` failure was partially cleared: a warm Windows build now reaches MSBuild/CL, but Visual Studio 18.6 `Microsoft.Build.Utilities.FileTracker` fails during C++ dependency tracking with `System.ArgumentException: 不合法的路徑格式` / `Illegal path format`. A clean rebuild removes that tracking state but returns to CMake compiler discovery failure in the current shell environment. These are Windows toolchain/environment failures before the benchmark executes, not C4 timing results. Do not infer a speedup from the earlier C3 numbers; rerun `integration_test/editor_open_profile_benchmark.dart -d windows` only after the Visual Studio 18/CMake environment can complete a clean Windows build.
 
 ## 5. T4 - Terminal search source cutover to the worker replica model
 
