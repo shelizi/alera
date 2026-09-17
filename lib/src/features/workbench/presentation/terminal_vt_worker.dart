@@ -73,6 +73,45 @@ List<TerminalVtWorkerEffect> _effectsFromMessage(Object? value) {
   );
 }
 
+/// Interaction modes that affect keyboard, paste, and pointer routing.
+final class TerminalVtWorkerModes {
+  const TerminalVtWorkerModes({
+    required this.bracketedPaste,
+    required this.cursorKeys,
+    required this.keypadKeys,
+    required this.cursorVisible,
+    required this.mouseEnabled,
+    required this.mouseTrackingMode,
+    required this.mouseFormat,
+    required this.focusEvents,
+    required this.altScroll,
+  });
+
+  final bool bracketedPaste;
+  final bool cursorKeys;
+  final bool keypadKeys;
+  final bool cursorVisible;
+  final bool mouseEnabled;
+  final int? mouseTrackingMode;
+  final int? mouseFormat;
+  final bool focusEvents;
+  final bool altScroll;
+
+  factory TerminalVtWorkerModes._fromMessage(List<Object?> message) {
+    return TerminalVtWorkerModes(
+      bracketedPaste: message[0]! as bool,
+      cursorKeys: message[1]! as bool,
+      keypadKeys: message[2]! as bool,
+      cursorVisible: message[3]! as bool,
+      mouseEnabled: message[4]! as bool,
+      mouseTrackingMode: message[5] as int?,
+      mouseFormat: message[6] as int?,
+      focusEvents: message[7]! as bool,
+      altScroll: message[8]! as bool,
+    );
+  }
+}
+
 /// Pure-Dart state returned from the VT worker.
 final class TerminalVtWorkerSnapshot {
   const TerminalVtWorkerSnapshot({
@@ -84,6 +123,7 @@ final class TerminalVtWorkerSnapshot {
     required this.cursorVisible,
     required this.cursorX,
     required this.cursorY,
+    required this.modes,
     this.effects = const <TerminalVtWorkerEffect>[],
   });
 
@@ -95,6 +135,7 @@ final class TerminalVtWorkerSnapshot {
   final bool cursorVisible;
   final int? cursorX;
   final int? cursorY;
+  final TerminalVtWorkerModes modes;
   final List<TerminalVtWorkerEffect> effects;
 
   factory TerminalVtWorkerSnapshot._fromMessage(List<Object?> message) {
@@ -113,6 +154,9 @@ final class TerminalVtWorkerSnapshot {
       cursorX: message[7] as int?,
       cursorY: message[8] as int?,
       effects: _effectsFromMessage(message.length > 9 ? message[9] : null),
+      modes: TerminalVtWorkerModes._fromMessage(
+        (message[10]! as List).cast<Object?>(),
+      ),
     );
   }
 }
@@ -143,6 +187,7 @@ final class TerminalVtWorkerDelta {
     required this.cursorVisible,
     required this.cursorX,
     required this.cursorY,
+    required this.modes,
     this.effects = const <TerminalVtWorkerEffect>[],
   });
 
@@ -154,6 +199,7 @@ final class TerminalVtWorkerDelta {
   final bool cursorVisible;
   final int? cursorX;
   final int? cursorY;
+  final TerminalVtWorkerModes modes;
   final List<TerminalVtWorkerEffect> effects;
 
   factory TerminalVtWorkerDelta._fromMessage(List<Object?> message) {
@@ -176,6 +222,9 @@ final class TerminalVtWorkerDelta {
       cursorX: message[7] as int?,
       cursorY: message[8] as int?,
       effects: _effectsFromMessage(message.length > 9 ? message[9] : null),
+      modes: TerminalVtWorkerModes._fromMessage(
+        (message[10]! as List).cast<Object?>(),
+      ),
     );
   }
 }
@@ -335,6 +384,22 @@ void terminalVtWorkerMain(List<Object?> initialization) {
         .GHOSTTY_RENDER_STATE_DIRTY_FALSE;
   }
 
+  List<Object?> interactionModes() {
+    final currentTerminal = terminal!;
+    final mouse = currentTerminal.mouseProtocolState;
+    return <Object?>[
+      currentTerminal.getMode(VtModes.bracketedPaste),
+      currentTerminal.getMode(VtModes.cursorKeys),
+      currentTerminal.getMode(VtModes.keypadKeys),
+      currentTerminal.cursorVisible,
+      mouse.enabled,
+      mouse.trackingMode?.value,
+      mouse.format?.value,
+      mouse.focusEvents,
+      mouse.altScroll,
+    ];
+  }
+
   List<Object?> snapshot() {
     renderState!.update();
     final render = renderState.snapshot();
@@ -358,6 +423,7 @@ void terminalVtWorkerMain(List<Object?> initialization) {
       cursor.hasViewportPosition ? cursor.viewportX : null,
       cursor.hasViewportPosition ? cursor.viewportY : null,
       List<Object?>.from(pendingEffects),
+      interactionModes(),
     ];
     clearDirty();
     return message;
@@ -404,6 +470,7 @@ void terminalVtWorkerMain(List<Object?> initialization) {
       cursor.hasViewportPosition ? cursor.viewportX : null,
       cursor.hasViewportPosition ? cursor.viewportY : null,
       List<Object?>.from(pendingEffects),
+      interactionModes(),
     ];
     renderState.dirty = ghostty_bindings
         .GhosttyRenderStateDirty

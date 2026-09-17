@@ -101,4 +101,62 @@ void main() {
       '\x1b[1;1R',
     );
   });
+
+  test(
+    'reports interaction modes needed by terminal input and pointer routing',
+    () async {
+      final worker = await TerminalVtWorker.start(
+        cols: 16,
+        rows: 6,
+        maxScrollback: 32,
+      );
+      addTearDown(worker.close);
+
+      final enabled = await worker.writeDelta(
+        Uint8List.fromList(
+          utf8.encode(
+            '\x1b[?1h'
+            '\x1b[?25l'
+            '\x1b[?1000h'
+            '\x1b[?1004h'
+            '\x1b[?1006h'
+            '\x1b[?1007h'
+            '\x1b[?2004h',
+          ),
+        ),
+      );
+
+      expect(enabled.modes.bracketedPaste, isTrue);
+      expect(enabled.modes.cursorKeys, isTrue);
+      expect(enabled.modes.cursorVisible, isFalse);
+      expect(enabled.modes.mouseEnabled, isTrue);
+      expect(enabled.modes.mouseTrackingMode, 2);
+      expect(enabled.modes.mouseFormat, 2);
+      expect(enabled.modes.focusEvents, isTrue);
+      expect(enabled.modes.altScroll, isTrue);
+
+      final disabled = await worker.writeDelta(
+        Uint8List.fromList(
+          utf8.encode(
+            '\x1b[?1l'
+            '\x1b[?25h'
+            '\x1b[?1000l'
+            '\x1b[?1004l'
+            '\x1b[?1006l'
+            '\x1b[?1007l'
+            '\x1b[?2004l',
+          ),
+        ),
+      );
+
+      expect(disabled.modes.bracketedPaste, isFalse);
+      expect(disabled.modes.cursorKeys, isFalse);
+      expect(disabled.modes.cursorVisible, isTrue);
+      expect(disabled.modes.mouseEnabled, isFalse);
+      expect(disabled.modes.mouseTrackingMode, isNull);
+      expect(disabled.modes.mouseFormat, isNull);
+      expect(disabled.modes.focusEvents, isFalse);
+      expect(disabled.modes.altScroll, isFalse);
+    },
+  );
 }
