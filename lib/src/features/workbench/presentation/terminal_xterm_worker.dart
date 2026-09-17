@@ -12,7 +12,12 @@ const String _workerWriteDelta = 'writeDelta';
 const String _workerWriteBufferDelta = 'writeBufferDelta';
 const String _workerParseHidden = 'parseHidden';
 const String _workerSnapshotBufferDelta = 'snapshotBufferDelta';
+const String _workerProfileSnapshotBufferDelta = 'profileSnapshotBufferDelta';
+const String _workerProfilePackedSnapshotBufferDelta =
+    'profilePackedSnapshotBufferDelta';
 const String _workerResize = 'resize';
+const String _packedBufferRowsTag = 'packedBufferRowsV1';
+const int _packedCellStride = 8;
 const String _workerResizeDelta = 'resizeDelta';
 const String _workerResizeBufferDelta = 'resizeBufferDelta';
 const String _workerKeyInput = 'keyInput';
@@ -152,7 +157,7 @@ final class TerminalXtermWorkerSnapshot {
 
 final class TerminalXtermWorkerRenderCell {
   const TerminalXtermWorkerRenderCell({
-    required this.text,
+    this._text,
     required this.width,
     required this.foreground,
     required this.background,
@@ -179,7 +184,7 @@ final class TerminalXtermWorkerRenderCell {
     );
   }
 
-  final String text;
+  final String? _text;
   final int width;
   final int foreground;
   final int background;
@@ -189,6 +194,14 @@ final class TerminalXtermWorkerRenderCell {
   final int hyperlinkId;
   final int semanticAttributes;
   final String? combiningCharacters;
+
+  String get text {
+    final text = _text;
+    if (text != null) return text;
+    final codePoint = content & CellContent.codepointMask;
+    if (codePoint == 0) return '';
+    return String.fromCharCode(codePoint) + (combiningCharacters ?? '');
+  }
 }
 
 final class TerminalXtermWorkerRowDelta {
@@ -226,6 +239,78 @@ final class TerminalXtermWorkerRowDelta {
   final List<TerminalXtermWorkerRenderCell> cells;
   final bool isWrapped;
   final bool isSemanticPromptLine;
+}
+
+List<TerminalXtermWorkerRowDelta> _decodePackedWorkerRows(Object? raw) {
+  final message = List<Object?>.from(raw! as List);
+  if (message.length != 4 || message[0] != _packedBufferRowsTag) {
+    throw StateError('Unexpected packed terminal buffer row payload.');
+  }
+  final rowTexts = List<String>.from(message[1]! as List);
+  final packed = message[2];
+  if (packed is! TransferableTypedData) {
+    throw StateError('Packed terminal buffer rows are missing cell data.');
+  }
+  final words = packed.materialize().asUint32List();
+  final combining = message[3]! as List;
+  final rows = <TerminalXtermWorkerRowDelta>[];
+  var wordOffset = 0;
+  var combiningOffset = 0;
+  var absoluteCell = 0;
+
+  for (var row = 0; row < rowTexts.length; row++) {
+    if (wordOffset + 2 > words.length) {
+      throw StateError(
+        'Packed terminal row metadata is truncated at row $row.',
+      );
+    }
+    final rowLength = words[wordOffset++];
+    final flags = words[wordOffset++];
+    final cells = List<TerminalXtermWorkerRenderCell>.generate(rowLength, (
+      column,
+    ) {
+      if (wordOffset + _packedCellStride > words.length) {
+        throw StateError(
+          'Packed terminal cell data is truncated at row $row column $column.',
+        );
+      }
+      String? combiningCharacters;
+      if (combiningOffset < combining.length &&
+          combining[combiningOffset] == absoluteCell) {
+        combiningCharacters = combining[combiningOffset + 1]! as String;
+        combiningOffset += 2;
+      }
+      final cell = TerminalXtermWorkerRenderCell(
+        width: words[wordOffset++],
+        foreground: words[wordOffset++],
+        background: words[wordOffset++],
+        attributes: words[wordOffset++],
+        underlineColor: words[wordOffset++],
+        content: words[wordOffset++],
+        hyperlinkId: words[wordOffset++],
+        semanticAttributes: words[wordOffset++],
+        combiningCharacters: combiningCharacters,
+      );
+      absoluteCell += 1;
+      return cell;
+    }, growable: false);
+    rows.add(
+      TerminalXtermWorkerRowDelta(
+        row: row,
+        rowLength: rowLength,
+        cellStart: 0,
+        text: rowTexts[row],
+        cells: cells,
+        isWrapped: flags & 1 != 0,
+        isSemanticPromptLine: flags & 2 != 0,
+      ),
+    );
+  }
+
+  if (wordOffset != words.length || combiningOffset != combining.length) {
+    throw StateError('Packed terminal buffer row payload has trailing data.');
+  }
+  return rows;
 }
 
 final class TerminalXtermWorkerDelta {
@@ -552,6 +637,16 @@ final class TerminalXtermWorkerBufferDelta {
   });
 
   factory TerminalXtermWorkerBufferDelta._fromMessage(List<Object?> message) {
+    final rawRows = message[6]! as List;
+    final rowDeltas =
+        rawRows.isNotEmpty && rawRows.first == _packedBufferRowsTag
+        ? _decodePackedWorkerRows(rawRows)
+        : <TerminalXtermWorkerRowDelta>[
+            for (final raw in rawRows)
+              TerminalXtermWorkerRowDelta._fromMessage(
+                List<Object?>.from(raw as List),
+              ),
+          ];
     return TerminalXtermWorkerBufferDelta(
       fullRepaint: message[0]! as bool,
       cols: message[1]! as int,
@@ -559,12 +654,7 @@ final class TerminalXtermWorkerBufferDelta {
       bufferLength: message[3]! as int,
       scrollBack: message[4]! as int,
       trimStart: message[5]! as int,
-      rowDeltas: <TerminalXtermWorkerRowDelta>[
-        for (final raw in message[6]! as List)
-          TerminalXtermWorkerRowDelta._fromMessage(
-            List<Object?>.from(raw as List),
-          ),
-      ],
+      rowDeltas: rowDeltas,
       cursorX: message[7]! as int,
       cursorY: message[8]! as int,
       cursorVisible: message[9]! as bool,
@@ -609,6 +699,22 @@ final class TerminalXtermWorkerBufferDelta {
   final Map<int, String> hyperlinkUpdates;
   final int comparedRowCount;
   final int cachedRowCount;
+}
+
+final class TerminalXtermWorkerBufferDeltaProfile {
+  const TerminalXtermWorkerBufferDeltaProfile({
+    required this.delta,
+    required this.materializeMicros,
+    required this.rawRoundtripMicros,
+    required this.decodeMicros,
+  });
+
+  final TerminalXtermWorkerBufferDelta delta;
+  final int materializeMicros;
+  final int rawRoundtripMicros;
+  final int decodeMicros;
+
+  int get transferAndSchedulingMicros => rawRoundtripMicros - materializeMicros;
 }
 
 final class TerminalXtermWorker {
@@ -693,6 +799,48 @@ final class TerminalXtermWorker {
   Future<TerminalXtermWorkerBufferDelta> snapshotBufferDelta() async {
     return TerminalXtermWorkerBufferDelta._fromMessage(
       await _requestRaw(const <Object?>[_workerSnapshotBufferDelta]),
+    );
+  }
+
+  Future<TerminalXtermWorkerBufferDeltaProfile>
+  profileSnapshotBufferDelta() async {
+    final roundtripWatch = Stopwatch()..start();
+    final raw = await _requestRaw(const <Object?>[
+      _workerProfileSnapshotBufferDelta,
+    ]);
+    roundtripWatch.stop();
+    final materializeMicros = raw[0]! as int;
+    final decodeWatch = Stopwatch()..start();
+    final delta = TerminalXtermWorkerBufferDelta._fromMessage(
+      List<Object?>.from(raw[1]! as List),
+    );
+    decodeWatch.stop();
+    return TerminalXtermWorkerBufferDeltaProfile(
+      delta: delta,
+      materializeMicros: materializeMicros,
+      rawRoundtripMicros: roundtripWatch.elapsedMicroseconds,
+      decodeMicros: decodeWatch.elapsedMicroseconds,
+    );
+  }
+
+  Future<TerminalXtermWorkerBufferDeltaProfile>
+  profilePackedSnapshotBufferDelta() async {
+    final roundtripWatch = Stopwatch()..start();
+    final raw = await _requestRaw(const <Object?>[
+      _workerProfilePackedSnapshotBufferDelta,
+    ]);
+    roundtripWatch.stop();
+    final materializeMicros = raw[0]! as int;
+    final decodeWatch = Stopwatch()..start();
+    final delta = TerminalXtermWorkerBufferDelta._fromMessage(
+      List<Object?>.from(raw[1]! as List),
+    );
+    decodeWatch.stop();
+    return TerminalXtermWorkerBufferDeltaProfile(
+      delta: delta,
+      materializeMicros: materializeMicros,
+      rawRoundtripMicros: roundtripWatch.elapsedMicroseconds,
+      decodeMicros: decodeWatch.elapsedMicroseconds,
     );
   }
 
@@ -1282,6 +1430,116 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
     ];
   }
 
+  List<Object?> packedFullBufferDelta() {
+    final lines = terminal.buffer.lines;
+    var totalCells = 0;
+    for (var row = 0; row < lines.length; row++) {
+      totalCells += lines[row].length;
+    }
+    final packedWords = Uint32List(
+      lines.length * 2 + totalCells * _packedCellStride,
+    );
+    final rowTexts = List<String>.filled(lines.length, '', growable: false);
+    final combiningEntries = <Object?>[];
+    final hyperlinkUpdates = <int, String>{};
+    final nextRefs = <BufferLine>[];
+    final nextCaches = <_TerminalXtermWorkerRowCache?>[];
+    final currentScrollBack = terminal.buffer.scrollBack;
+    var wordOffset = 0;
+    var absoluteCell = 0;
+
+    for (var row = 0; row < lines.length; row++) {
+      final line = lines[row];
+      nextRefs.add(line);
+      nextCaches.add(
+        row < currentScrollBack
+            ? null
+            : _TerminalXtermWorkerRowCache.capture(line),
+      );
+      rowTexts[row] = line.toString();
+      packedWords[wordOffset++] = line.length;
+      packedWords[wordOffset++] =
+          (line.isWrapped ? 1 : 0) |
+          (terminal.isSemanticPromptLine(row) ? 2 : 0);
+
+      for (var column = 0; column < line.length; column++) {
+        final combining = line.getCombiningCharacters(column);
+        if (combining != null) {
+          combiningEntries
+            ..add(absoluteCell)
+            ..add(combining);
+        }
+        final hyperlinkId = line.getHyperlinkId(column);
+        if (hyperlinkId != 0 && !hyperlinkUpdates.containsKey(hyperlinkId)) {
+          final uri = terminal.hyperlinkAt(CellOffset(column, row));
+          if (uri != null) {
+            hyperlinkUpdates[hyperlinkId] = uri;
+          }
+        }
+        packedWords[wordOffset++] = line.getWidth(column).toUnsigned(32);
+        packedWords[wordOffset++] = line.getForeground(column).toUnsigned(32);
+        packedWords[wordOffset++] = line.getBackground(column).toUnsigned(32);
+        packedWords[wordOffset++] = line.getAttributes(column).toUnsigned(32);
+        packedWords[wordOffset++] = line
+            .getUnderlineColor(column)
+            .toUnsigned(32);
+        packedWords[wordOffset++] = line.getContent(column).toUnsigned(32);
+        packedWords[wordOffset++] = hyperlinkId.toUnsigned(32);
+        packedWords[wordOffset++] = line
+            .getSemanticContent(column)
+            .toUnsigned(32);
+        absoluteCell += 1;
+      }
+    }
+
+    if (wordOffset != packedWords.length) {
+      throw StateError(
+        'Packed terminal buffer wrote $wordOffset words; expected '
+        '${packedWords.length}.',
+      );
+    }
+    bufferLineRefs = nextRefs;
+    bufferLineCaches = nextCaches;
+    cachedBufferScrollBack = currentScrollBack;
+    final cachedRowCount = nextCaches
+        .whereType<_TerminalXtermWorkerRowCache>()
+        .length;
+    final packedRows = <Object?>[
+      _packedBufferRowsTag,
+      rowTexts,
+      TransferableTypedData.fromList(<TypedData>[packedWords]),
+      combiningEntries,
+    ];
+    return <Object?>[
+      true,
+      terminal.viewWidth,
+      terminal.viewHeight,
+      lines.length,
+      currentScrollBack,
+      0,
+      packedRows,
+      terminal.buffer.cursorX,
+      terminal.buffer.cursorY,
+      terminal.cursorVisibleMode,
+      terminal.cursorKeysMode,
+      terminal.appKeypadMode,
+      terminal.bracketedPasteMode,
+      terminal.reportFocusMode,
+      terminal.altBufferMouseScrollMode,
+      terminal.mouseMode.index,
+      terminal.mouseReportMode.index,
+      <Object?>[for (final effect in effects) List<Object?>.from(effect)],
+      revision,
+      globalStateMessage(),
+      <Object?>[
+        for (final entry in hyperlinkUpdates.entries)
+          <Object?>[entry.key, entry.value],
+      ],
+      0,
+      cachedRowCount,
+    ];
+  }
+
   List<Object?> actionResult(bool? handled) {
     return <Object?>[
       revision,
@@ -1341,7 +1599,25 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
           revision += 1;
           bufferLineRefs = null;
           bufferLineCaches = null;
-          reply.send(bufferDelta());
+          reply.send(packedFullBufferDelta());
+        case _workerProfileSnapshotBufferDelta:
+          effects.clear();
+          revision += 1;
+          bufferLineRefs = null;
+          bufferLineCaches = null;
+          final watch = Stopwatch()..start();
+          final message = bufferDelta();
+          watch.stop();
+          reply.send(<Object?>[watch.elapsedMicroseconds, message]);
+        case _workerProfilePackedSnapshotBufferDelta:
+          effects.clear();
+          revision += 1;
+          bufferLineRefs = null;
+          bufferLineCaches = null;
+          final watch = Stopwatch()..start();
+          final message = packedFullBufferDelta();
+          watch.stop();
+          reply.send(<Object?>[watch.elapsedMicroseconds, message]);
         case _workerResize:
           effects.clear();
           terminal.resize(raw[2]! as int, raw[3]! as int);
