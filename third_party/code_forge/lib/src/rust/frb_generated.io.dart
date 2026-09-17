@@ -113,6 +113,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   WorkspaceSourceInfo dco_decode_box_autoadd_workspace_source_info(dynamic raw);
 
   @protected
+  BracketMatchResponse dco_decode_bracket_match_response(dynamic raw);
+
+  @protected
   CharOffset dco_decode_char_offset(dynamic raw);
 
   @protected
@@ -317,6 +320,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   WorkspaceSourceInfo sse_decode_box_autoadd_workspace_source_info(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  BracketMatchResponse sse_decode_bracket_match_response(
     SseDeserializer deserializer,
   );
 
@@ -560,6 +568,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_box_autoadd_workspace_source_info(
     WorkspaceSourceInfo self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_bracket_match_response(
+    BracketMatchResponse self,
     SseSerializer serializer,
   );
 

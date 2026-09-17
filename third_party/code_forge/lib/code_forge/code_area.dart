@@ -6980,13 +6980,17 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
       return null;
     }
 
-    final match = foldsFindMatchingBracket(
+    final nativeMatch = controller.queryNativeMatchingBracket(pos);
+    if (nativeMatch != null) {
+      _bracketCache[pos] = nativeMatch.match;
+      return nativeMatch.match;
+    }
+
+    final legacyMatch = foldsFindMatchingBracket(
       rope: controller.rope.core,
       targetOffset: pos,
     );
-
-    final result = match == -1 ? null : match;
-
+    final result = legacyMatch == -1 ? null : legacyMatch;
     _bracketCache[pos] = result;
     return result;
   }
