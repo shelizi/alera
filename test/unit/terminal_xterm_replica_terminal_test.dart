@@ -305,6 +305,34 @@ void main() {
       expect(replicaOutput, isEmpty);
     },
   );
+
+  test('replica coalesces listener notifications while hidden', () async {
+    final worker = await TerminalXtermWorker.start(
+      cols: 12,
+      rows: 4,
+      maxLines: 64,
+    );
+    addTearDown(worker.close);
+    final replica = TerminalXtermReplicaTerminal(
+      cols: 12,
+      rows: 4,
+      maxLines: 64,
+      notificationsEnabled: false,
+    );
+    var notifications = 0;
+    replica.addListener(() => notifications += 1);
+
+    replica.applyBufferDelta(await worker.writeBufferDelta('one'));
+    replica.applyBufferDelta(await worker.writeBufferDelta('\r\ntwo'));
+    expect(notifications, 0);
+
+    replica.setNotificationsEnabled(true, flushPending: false);
+    expect(notifications, 0);
+    replica.flushPendingNotification();
+    expect(notifications, 1);
+    replica.flushPendingNotification();
+    expect(notifications, 1);
+  });
 }
 
 Terminal _createDirect({

@@ -18,7 +18,9 @@ final class TerminalXtermReplicaTerminal extends Terminal {
     TerminalTargetPlatform platform = TerminalTargetPlatform.unknown,
     Set<int>? wordSeparators,
     void Function(String)? onOutput,
+    bool notificationsEnabled = true,
   }) : _model = TerminalXtermBufferModel(wordSeparators: wordSeparators),
+       _notificationsEnabled = notificationsEnabled,
        super(
          maxLines: maxLines,
          platform: platform,
@@ -38,8 +40,35 @@ final class TerminalXtermReplicaTerminal extends Terminal {
   var _hasReplicaState = false;
   var _disposed = false;
   var _focused = true;
+  bool _notificationsEnabled;
+  bool _notificationPending = false;
 
   TerminalXtermBufferModel get replicaModel => _model;
+
+  void setNotificationsEnabled(bool enabled, {bool flushPending = true}) {
+    _notificationsEnabled = enabled;
+    if (enabled && flushPending) {
+      flushPendingNotification();
+    }
+  }
+
+  void flushPendingNotification() {
+    if (!_notificationsEnabled || !_notificationPending) {
+      return;
+    }
+    _notificationPending = false;
+    super.notifyListeners();
+  }
+
+  @override
+  void notifyListeners() {
+    if (!_notificationsEnabled) {
+      _notificationPending = true;
+      return;
+    }
+    _notificationPending = false;
+    super.notifyListeners();
+  }
 
   void applyBufferDelta(TerminalXtermWorkerBufferDelta delta) {
     if (super.viewWidth != delta.cols || super.viewHeight != delta.rows) {
