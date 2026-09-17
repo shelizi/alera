@@ -333,6 +333,38 @@ void main() {
     replica.flushPendingNotification();
     expect(notifications, 1);
   });
+
+  test('replica applies hidden state without touching buffer rows', () async {
+    final worker = await TerminalXtermWorker.start(
+      cols: 12,
+      rows: 4,
+      maxLines: 64,
+    );
+    addTearDown(worker.close);
+    final replica = TerminalXtermReplicaTerminal(
+      cols: 12,
+      rows: 4,
+      maxLines: 64,
+      notificationsEnabled: false,
+    );
+    replica.applyBufferDelta(await worker.writeBufferDelta('visible\r\n'));
+    final retainedLine = replica.buffer.lines[0];
+    final before = _replicaBufferText(replica);
+    final escape = String.fromCharCode(27);
+
+    final hidden = await worker.parseHidden(
+      'hidden-marker$escape[?2004h',
+      focused: false,
+    );
+    replica.applyStateDelta(hidden);
+
+    expect(replica.bracketedPasteMode, isTrue);
+    expect(identical(replica.buffer.lines[0], retainedLine), isTrue);
+    expect(_replicaBufferText(replica), before);
+
+    replica.applyBufferDelta(await worker.snapshotBufferDelta());
+    expect(_replicaBufferText(replica), contains('hidden-marker'));
+  });
 }
 
 Terminal _createDirect({
@@ -365,6 +397,13 @@ void _expectInputCallParity(
   replicaOutput.clear();
   expect(replicaCall(), directCall());
   expect(replicaOutput, directOutput);
+}
+
+String _replicaBufferText(TerminalXtermReplicaTerminal replica) {
+  return <String>[
+    for (var row = 0; row < replica.buffer.lines.length; row++)
+      replica.buffer.lines[row].toString(),
+  ].join();
 }
 
 void _expectReplicaParity(

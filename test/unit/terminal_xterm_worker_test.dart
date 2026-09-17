@@ -172,6 +172,46 @@ void main() {
     );
   });
 
+  test(
+    'worker hidden parse defers buffer serialization until reveal',
+    () async {
+      final worker = await TerminalXtermWorker.start(
+        cols: 12,
+        rows: 4,
+        maxLines: 64,
+      );
+      addTearDown(worker.close);
+      final escape = String.fromCharCode(27);
+
+      final initial = await worker.writeBufferDelta('visible\r\n');
+      expect(initial.fullRepaint, isTrue);
+
+      final hidden = await worker.parseHidden(
+        'hidden-marker$escape[?2004h$escape]2;hidden-title\x07',
+        focused: false,
+      );
+      expect(hidden.bracketedPaste, isTrue);
+      expect(hidden.focusEvents, isFalse);
+      expect(
+        hidden.effects
+            .whereType<TerminalXtermWorkerTitleChanged>()
+            .single
+            .title,
+        'hidden-title',
+      );
+
+      final reveal = await worker.snapshotBufferDelta();
+      expect(reveal.fullRepaint, isTrue);
+      expect(reveal.trimStart, 0);
+      expect(reveal.rowDeltas, hasLength(reveal.bufferLength));
+      expect(reveal.revision, greaterThan(hidden.revision));
+      expect(
+        reveal.rowDeltas.map((row) => row.text).join(),
+        contains('hidden-marker'),
+      );
+    },
+  );
+
   test('worker delta sends only changed viewport rows', () async {
     final direct = Terminal(maxLines: 256, reflowWithHiddenCursor: false)
       ..resize(12, 4);

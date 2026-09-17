@@ -128,6 +128,13 @@ final class TerminalXtermReplicaTerminal extends Terminal {
     notifyListeners();
   }
 
+  void applyStateDelta(TerminalXtermWorkerStateDelta delta) {
+    _model.applyState(delta);
+    super.setKeyboardActionMode(_model.keyboardActionMode);
+    super.setBracketedPasteMode(_model.bracketedPaste);
+    _hasReplicaState = true;
+  }
+
   BufferLine _buildLine(TerminalXtermWorkerRowDelta row) {
     final line = BufferLine(row.cells.length, isWrapped: row.isWrapped);
     for (var column = 0; column < row.cells.length; column++) {

@@ -9,6 +9,8 @@ const String _workerReady = 'ready';
 const String _workerWrite = 'write';
 const String _workerWriteDelta = 'writeDelta';
 const String _workerWriteBufferDelta = 'writeBufferDelta';
+const String _workerParseHidden = 'parseHidden';
+const String _workerSnapshotBufferDelta = 'snapshotBufferDelta';
 const String _workerResize = 'resize';
 const String _workerResizeDelta = 'resizeDelta';
 const String _workerResizeBufferDelta = 'resizeBufferDelta';
@@ -376,6 +378,67 @@ final class TerminalXtermWorkerGlobalState {
   final bool keyboardActionMode;
 }
 
+final class TerminalXtermWorkerStateDelta {
+  const TerminalXtermWorkerStateDelta({
+    required this.revision,
+    required this.cols,
+    required this.rows,
+    required this.cursorX,
+    required this.cursorY,
+    required this.cursorVisible,
+    required this.cursorKeys,
+    required this.keypadKeys,
+    required this.bracketedPaste,
+    required this.focusEvents,
+    required this.altScroll,
+    required this.mouseMode,
+    required this.mouseReportMode,
+    required this.scrollBack,
+    required this.effects,
+    required this.globalState,
+  });
+
+  factory TerminalXtermWorkerStateDelta._fromMessage(List<Object?> message) {
+    return TerminalXtermWorkerStateDelta(
+      revision: message[0]! as int,
+      cols: message[1]! as int,
+      rows: message[2]! as int,
+      cursorX: message[3]! as int,
+      cursorY: message[4]! as int,
+      cursorVisible: message[5]! as bool,
+      cursorKeys: message[6]! as bool,
+      keypadKeys: message[7]! as bool,
+      bracketedPaste: message[8]! as bool,
+      focusEvents: message[9]! as bool,
+      altScroll: message[10]! as bool,
+      mouseMode: message[11]! as int,
+      mouseReportMode: message[12]! as int,
+      scrollBack: message[13]! as int,
+      effects: _decodeWorkerEffects(message[14]),
+      globalState: TerminalXtermWorkerGlobalState._fromMessage(
+        List<Object?>.from(message[15]! as List),
+      ),
+    );
+  }
+
+  final int revision;
+  final int cols;
+  final int rows;
+  final int cursorX;
+  final int cursorY;
+  final bool cursorVisible;
+  final bool cursorKeys;
+  final bool keypadKeys;
+  final bool bracketedPaste;
+  final bool focusEvents;
+  final bool altScroll;
+  final int mouseMode;
+  final int mouseReportMode;
+  final int scrollBack;
+  final List<TerminalXtermWorkerEffect> effects;
+  final TerminalXtermWorkerGlobalState globalState;
+}
+
 final class _TerminalXtermWorkerTerminal extends Terminal {
   _TerminalXtermWorkerTerminal({
     required int maxLines,
@@ -558,6 +621,21 @@ final class TerminalXtermWorker {
   }) async {
     return TerminalXtermWorkerBufferDelta._fromMessage(
       await _requestRaw(<Object?>[_workerWriteBufferDelta, data, focused]),
+    );
+  }
+
+  Future<TerminalXtermWorkerStateDelta> parseHidden(
+    String data, {
+    bool? focused,
+  }) async {
+    return TerminalXtermWorkerStateDelta._fromMessage(
+      await _requestRaw(<Object?>[_workerParseHidden, data, focused]),
+    );
+  }
+
+  Future<TerminalXtermWorkerBufferDelta> snapshotBufferDelta() async {
+    return TerminalXtermWorkerBufferDelta._fromMessage(
+      await _requestRaw(const <Object?>[_workerSnapshotBufferDelta]),
     );
   }
 
@@ -900,6 +978,27 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
     ];
   }
 
+  List<Object?> stateDelta() {
+    return <Object?>[
+      revision,
+      terminal.viewWidth,
+      terminal.viewHeight,
+      terminal.buffer.cursorX,
+      terminal.buffer.cursorY,
+      terminal.cursorVisibleMode,
+      terminal.cursorKeysMode,
+      terminal.appKeypadMode,
+      terminal.bracketedPasteMode,
+      terminal.reportFocusMode,
+      terminal.altBufferMouseScrollMode,
+      terminal.mouseMode.index,
+      terminal.mouseReportMode.index,
+      terminal.buffer.scrollBack,
+      <Object?>[for (final effect in effects) List<Object?>.from(effect)],
+      globalStateMessage(),
+    ];
+  }
+
   List<Object?> snapshot() {
     final first = terminal.buffer.scrollBack;
     final viewportRows = <String>[
@@ -1119,6 +1218,24 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
           }
           terminal.write(raw[2]! as String);
           revision += 1;
+          reply.send(bufferDelta());
+        case _workerParseHidden:
+          effects.clear();
+          if (raw.length > 3) {
+            final focused = raw[3];
+            if (focused is bool) {
+              terminal.focusInput(focused);
+              effects.clear();
+            }
+          }
+          terminal.write(raw[2]! as String);
+          revision += 1;
+          reply.send(stateDelta());
+        case _workerSnapshotBufferDelta:
+          effects.clear();
+          revision += 1;
+          bufferLineRefs = null;
+          bufferLineCaches = null;
           reply.send(bufferDelta());
         case _workerResize:
           effects.clear();

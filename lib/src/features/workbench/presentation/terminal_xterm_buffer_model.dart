@@ -260,6 +260,38 @@ final class TerminalXtermBufferModel implements TerminalSearchSource {
         : null;
   }
 
+  void applyState(TerminalXtermWorkerStateDelta delta) {
+    if (delta.revision <= _revision) {
+      throw StateError(
+        'Terminal xterm buffer received stale revision ${delta.revision}; '
+        'current revision is $_revision.',
+      );
+    }
+    if (_renderRows.isNotEmpty &&
+        (delta.cols != _cols || delta.rows != _rows)) {
+      throw StateError(
+        'Terminal xterm hidden state changed dimensions without a buffer repaint.',
+      );
+    }
+
+    _revision = delta.revision;
+    _cols = delta.cols;
+    _rows = delta.rows;
+    _cursorX = delta.cursorX;
+    _cursorY = delta.cursorY;
+    _cursorVisible = delta.cursorVisible;
+    _cursorKeys = delta.cursorKeys;
+    _keypadKeys = delta.keypadKeys;
+    _bracketedPaste = delta.bracketedPaste;
+    _focusEvents = delta.focusEvents;
+    _altScroll = delta.altScroll;
+    _mouseMode = delta.mouseMode;
+    _mouseReportMode = delta.mouseReportMode;
+    _scrollBack = delta.scrollBack;
+    _effects = List<TerminalXtermWorkerEffect>.unmodifiable(delta.effects);
+    _globalState = delta.globalState;
+  }
+
   void apply(TerminalXtermWorkerBufferDelta delta) {
     if (delta.revision <= _revision) {
       throw StateError(
