@@ -1,4 +1,4 @@
-/// C3 editor open/reopen initialization profiler.
+/// C4 editor native-open handoff profiler.
 ///
 /// Run on the same Windows desktop used for the existing large-file benchmark:
 ///   flutter test integration_test/editor_open_profile_benchmark.dart -d windows
@@ -165,6 +165,8 @@ Widget _editorWidget(code_forge.CodeForgeController controller) => MaterialApp(
       enableGuideLines: false,
       enableLocalSuggestions: false,
       largeFilePerformanceMode: true,
+      language: builtinAllLanguages['dart']!,
+      languageId: 'dart',
       textStyle: const TextStyle(
         fontFamily: 'JetBrains Mono',
         fontSize: 14,
@@ -174,16 +176,40 @@ Widget _editorWidget(code_forge.CodeForgeController controller) => MaterialApp(
   ),
 );
 
+Future<
+  ({
+    code_forge.CodeForgeController controller,
+    code_forge.WorkspaceSourceInfo sourceInfo,
+  })
+>
+_openNativeController({
+  required String workspacePath,
+  required String relativePath,
+}) async {
+  final controller = code_forge.CodeForgeController();
+  final sourceInfo = await controller.openWorkspaceFile(
+    workspacePath: workspacePath,
+    relativePath: relativePath,
+    tabSize: 2,
+  );
+  expect(controller.lineCount, greaterThanOrEqualTo(_lineCount));
+  return (controller: controller, sourceInfo: sourceInfo);
+}
+
 Future<_FrameStageReport> _measureFirstFrame(
   WidgetTester tester,
-  IntegrationTestWidgetsFlutterBinding binding,
-  String text,
-) async {
+  IntegrationTestWidgetsFlutterBinding binding, {
+  required String workspacePath,
+  required String relativePath,
+}) async {
   Future<void> warmUp() async {
-    final controller = code_forge.CodeForgeController()..text = text;
-    await tester.pumpWidget(_editorWidget(controller));
+    final opened = await _openNativeController(
+      workspacePath: workspacePath,
+      relativePath: relativePath,
+    );
+    await tester.pumpWidget(_editorWidget(opened.controller));
     await tester.pumpWidget(const SizedBox.shrink());
-    controller.dispose();
+    opened.controller.dispose();
   }
 
   await warmUp();
@@ -193,7 +219,11 @@ Future<_FrameStageReport> _measureFirstFrame(
   final framesPerSample = <int>[];
 
   for (var i = 0; i < _sampleCount; i++) {
-    final controller = code_forge.CodeForgeController()..text = text;
+    final opened = await _openNativeController(
+      workspacePath: workspacePath,
+      relativePath: relativePath,
+    );
+    final controller = opened.controller;
     final timings = <FrameTiming>[];
     void collect(List<FrameTiming> frames) => timings.addAll(frames);
     binding.addTimingsCallback(collect);
@@ -205,8 +235,6 @@ Future<_FrameStageReport> _measureFirstFrame(
     developer.Timeline.finishSync();
     wallSamples.add(watch.elapsedMicroseconds);
 
-    // FrameTiming delivery can trail pumpWidget. This wait is outside the wall
-    // sample and exists only to collect engine build/raster evidence.
     await Future<void>.delayed(const Duration(milliseconds: 40));
     binding.removeTimingsCallback(collect);
     framesPerSample.add(timings.length);
@@ -227,7 +255,7 @@ Future<_FrameStageReport> _measureFirstFrame(
     wall: _StageReport(
       'first_codeforge_frame',
       _Stats(wallSamples),
-      note: 'controller/Rope construction excluded',
+      note: 'C4 native Rope already opened; retained syntax setup may start asynchronously during widget construction',
     ),
     build: _Stats(buildSamples),
     raster: _Stats(rasterSamples),
@@ -237,10 +265,15 @@ Future<_FrameStageReport> _measureFirstFrame(
 
 Future<_FrameStageReport> _measureSameControllerRebuild(
   WidgetTester tester,
-  IntegrationTestWidgetsFlutterBinding binding,
-  String text,
-) async {
-  final controller = code_forge.CodeForgeController()..text = text;
+  IntegrationTestWidgetsFlutterBinding binding, {
+  required String workspacePath,
+  required String relativePath,
+}) async {
+  final opened = await _openNativeController(
+    workspacePath: workspacePath,
+    relativePath: relativePath,
+  );
+  final controller = opened.controller;
   await tester.pumpWidget(_editorWidget(controller));
   await Future<void>.delayed(const Duration(milliseconds: 40));
 
@@ -281,7 +314,7 @@ Future<_FrameStageReport> _measureSameControllerRebuild(
     wall: _StageReport(
       'same_controller_rebuild',
       _Stats(wallSamples),
-      note: 'diagnostic widget/provider fan-out proxy; existing Rope retained',
+      note: 'diagnostic widget/provider fan-out proxy; existing native Rope retained',
     ),
     build: _Stats(buildSamples),
     raster: _Stats(rasterSamples),
@@ -308,13 +341,11 @@ Future<_FrameStageReport> _measureFullOpenToFirstFrame(
 
     developer.Timeline.startSync('EditorOpenProfile.full_open_to_first_frame');
     final watch = Stopwatch()..start();
-    final file = await native.readWorkspaceEditorTextFile(
+    final opened = await _openNativeController(
       workspacePath: workspacePath,
       relativePath: relativePath,
-      tabSize: 2,
     );
-    final controller = code_forge.CodeForgeController()
-      ..text = file.displayContent;
+    final controller = opened.controller;
     final find = code_forge.FindController(controller);
     await tester.pumpWidget(_editorWidget(controller));
     watch.stop();
@@ -362,7 +393,7 @@ Future<_FrameStageReport> _measureFullOpenToFirstFrame(
     wall: _StageReport(
       'full_open_to_first_frame',
       _Stats(walls),
-      note: 'native editor read + controller/Rope + FindController + first CodeForge frame',
+      note: 'C4 direct native file open + native Rope + FindController + first CodeForge frame; no whole-document Dart String',
     ),
     build: _Stats(builds),
     raster: _Stats(rasters),
@@ -373,9 +404,7 @@ Future<_FrameStageReport> _measureFullOpenToFirstFrame(
 void main() {
   final binding = IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
-  testWidgets('profiles C3 editor open/reopen initialization stages', (
-    tester,
-  ) async {
+  testWidgets('profiles C4 native-open handoff stages', (tester) async {
     final large = _largeDocument();
     final workspace = await Directory.systemTemp.createTemp(
       'alera_editor_open_profile_',
@@ -408,32 +437,36 @@ void main() {
       _measureSync('dart_utf8_decode', () {
         decoded = utf8.decode(fixtureBytes);
         expect(decoded.length, large.length);
-      }, note: 'diagnostic subset; decode only'),
+      }, note: 'legacy diagnostic control; Dart decode only'),
     );
 
     native.WorkspaceDecodedText? nativeDecoded;
     reports.add(
-      await _measureAsync('native_decode_ffi', () async {
-        nativeDecoded = await native.decodeWorkspaceTextBytes(
-          bytes: fixtureBytes,
-        );
-        expect(nativeDecoded!.content.length, large.length);
-      }, note: 'diagnostic subset; Dart bytes -> Rust decode -> Dart String'),
+      await _measureAsync(
+        'legacy_native_decode_ffi',
+        () async {
+          nativeDecoded = await native.decodeWorkspaceTextBytes(
+            bytes: fixtureBytes,
+          );
+          expect(nativeDecoded!.content.length, large.length);
+        },
+        note: 'legacy control; Dart bytes -> Alera Rust decode -> Dart String',
+      ),
     );
 
-    native.WorkspaceEditorTextFile? editorFile;
+    native.WorkspaceEditorTextFile? legacyEditorFile;
     reports.add(
       await _measureAsync(
-        'production_native_editor_read',
+        'legacy_alera_editor_read',
         () async {
-          editorFile = await native.readWorkspaceEditorTextFile(
+          legacyEditorFile = await native.readWorkspaceEditorTextFile(
             workspacePath: workspace.path,
             relativePath: relativePath,
             tabSize: 2,
           );
-          expect(editorFile!.displayContent.length, large.length);
+          expect(legacyEditorFile!.displayContent.length, large.length);
         },
-        note: 'disjoint pipeline stage: production read/decode/normalization/FRB payload',
+        note: 'legacy C3 control; Alera read/decode/normalize then whole Strings cross FRB',
       ),
     );
 
@@ -443,33 +476,76 @@ void main() {
         final find = code_forge.FindController(controller);
         find.dispose();
         controller.dispose();
-      }, note: 'disjoint pipeline stage: controller + FindController'),
+      }, note: 'diagnostic controller + FindController construction'),
     );
 
+    code_forge.WorkspaceSourceInfo? nativeSourceInfo;
     reports.add(
-      _measureSync(
-        'initial_rope_construction',
-        () {
-          final controller = code_forge.CodeForgeController();
-          controller.text = editorFile!.displayContent;
-          expect(controller.lineCount, greaterThanOrEqualTo(_lineCount));
-          controller.dispose();
+      await _measureAsync(
+        'codeforge_native_workspace_open',
+        () async {
+          final opened = await _openNativeController(
+            workspacePath: workspace.path,
+            relativePath: relativePath,
+          );
+          nativeSourceInfo = opened.sourceInfo;
+          expect(nativeSourceInfo!.displayChars.toInt(), large.length);
+          opened.controller.dispose();
         },
-        note: 'disjoint pipeline stage: full Dart String -> Rust RopeBridge.create',
+        note: 'C4 production handoff: file read/decode/tab normalization -> native Rope; Dart receives bounded metadata only',
       ),
     );
 
     reports.add(
       _measureSync(
-        'first_viewport_materialization',
+        'legacy_string_to_rope_construction',
         () {
-          final controller = code_forge.CodeForgeController()
-            ..text = editorFile!.displayContent;
-          final lines = controller.getLinesRange(0, _viewportLines);
-          expect(lines, hasLength(_viewportLines));
+          final controller = code_forge.CodeForgeController();
+          controller.text = legacyEditorFile!.displayContent;
+          expect(controller.lineCount, greaterThanOrEqualTo(_lineCount));
           controller.dispose();
         },
-        note: 'diagnostic stage; includes fresh Rope setup, subtract initial_rope_construction for viewport-only intuition',
+        note: 'legacy C3 control only: full Dart String -> Rust RopeBridge.create',
+      ),
+    );
+
+    reports.add(
+      await _measureAsync(
+        'native_open_plus_first_viewport',
+        () async {
+          final opened = await _openNativeController(
+            workspacePath: workspace.path,
+            relativePath: relativePath,
+          );
+          final lines = opened.controller.getLinesRange(0, _viewportLines);
+          expect(lines, hasLength(_viewportLines));
+          opened.controller.dispose();
+        },
+        note: 'C4 native open plus bounded viewport materialization; subtract codeforge_native_workspace_open for viewport-only intuition',
+      ),
+    );
+
+    reports.add(
+      await _measureAsync(
+        'retained_native_syntax_first_viewport',
+        () async {
+          final opened = await _openNativeController(
+            workspacePath: workspace.path,
+            relativePath: relativePath,
+          );
+          opened.controller.configureNativeSyntaxDocument(
+            languageId: 'dart',
+            documentId: relativePath,
+          );
+          final spans = await opened.controller.queryNativeSyntaxSpans(
+            startLine: 0,
+            endLine: _viewportLines - 1,
+            overscan: 0,
+          );
+          expect(spans, isNotNull);
+          opened.controller.dispose();
+        },
+        note: 'C4 native open + structural Rope clone + retained Tree-sitter parse/query; subtract native open for native-document/syntax intuition',
       ),
     );
 
@@ -479,7 +555,7 @@ void main() {
         .toList(growable: false);
     reports.add(
       await _measureAsync(
-        'syntax_setup_and_first_viewport_control',
+        'legacy_rehighlight_first_viewport_control',
         () async {
           final highlighter = SyntaxHighlighter(
             language: builtinAllLanguages['dart']!,
@@ -498,19 +574,21 @@ void main() {
             (line) => syntaxLines[line],
           );
         },
-        note: 'diagnostic control only; 50k large-file production path disables preHighlightLines',
+        note: 'legacy/fallback syntax control; not the C4 retained native-tree production path',
       ),
     );
 
     final firstFrame = await _measureFirstFrame(
       tester,
       binding,
-      editorFile!.displayContent,
+      workspacePath: workspace.path,
+      relativePath: relativePath,
     );
     final sameControllerRebuild = await _measureSameControllerRebuild(
       tester,
       binding,
-      editorFile!.displayContent,
+      workspacePath: workspace.path,
+      relativePath: relativePath,
     );
     final fullOpen = await _measureFullOpenToFirstFrame(
       tester,
@@ -520,10 +598,10 @@ void main() {
     );
 
     // ignore: avoid_print
-    print('\n=== C3 editor open profile ===');
+    print('\n=== C4 editor native-open profile ===');
     // ignore: avoid_print
     print(
-      'fixture_lines=$_lineCount fixture_bytes=${fixtureBytes.length} raw_chars=${editorFile!.rawContent.length} display_chars=${editorFile!.displayContent.length}',
+      'fixture_lines=$_lineCount fixture_bytes=${fixtureBytes.length} raw_chars=${nativeSourceInfo!.rawChars} display_chars=${nativeSourceInfo!.displayChars}',
     );
     // ignore: avoid_print
     print(
@@ -540,14 +618,10 @@ void main() {
     // ignore: avoid_print
     print(fullOpen);
 
-    final disjoint =
+    final c4Disjoint =
         <_StageReport>[
           reports.firstWhere(
-            (report) => report.name == 'production_native_editor_read',
-          ),
-          reports.firstWhere((report) => report.name == 'controller_init'),
-          reports.firstWhere(
-            (report) => report.name == 'initial_rope_construction',
+            (report) => report.name == 'codeforge_native_workspace_open',
           ),
           firstFrame.wall,
         ]..sort(
@@ -555,10 +629,10 @@ void main() {
         );
     // ignore: avoid_print
     print(
-      'ranked_disjoint_contributors=${disjoint.map((report) => '${report.name}:${report.stats.medianMs.toStringAsFixed(2)}ms').join(' > ')}',
+      'c4_first_frame_contributors=${c4Disjoint.map((report) => '${report.name}:${report.stats.medianMs.toStringAsFixed(2)}ms').join(' > ')}',
     );
 
-    expect(reports, hasLength(8));
+    expect(reports, hasLength(10));
     expect(firstFrame.wall.stats.samplesMicros, hasLength(_sampleCount));
     expect(
       sameControllerRebuild.wall.stats.samplesMicros,
