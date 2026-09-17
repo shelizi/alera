@@ -548,6 +548,7 @@ final class TerminalXtermWorkerBufferDelta {
     required this.globalState,
     required this.hyperlinkUpdates,
     required this.comparedRowCount,
+    required this.cachedRowCount,
   });
 
   factory TerminalXtermWorkerBufferDelta._fromMessage(List<Object?> message) {
@@ -581,6 +582,7 @@ final class TerminalXtermWorkerBufferDelta {
       ),
       hyperlinkUpdates: _decodeStringMap(message[20]),
       comparedRowCount: message[21]! as int,
+      cachedRowCount: message[22]! as int,
     );
   }
 
@@ -606,6 +608,7 @@ final class TerminalXtermWorkerBufferDelta {
   final TerminalXtermWorkerGlobalState globalState;
   final Map<int, String> hyperlinkUpdates;
   final int comparedRowCount;
+  final int cachedRowCount;
 }
 
 final class TerminalXtermWorker {
@@ -934,7 +937,7 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
   var cachedCols = 0;
   var cachedRows = 0;
   List<BufferLine>? bufferLineRefs;
-  List<_TerminalXtermWorkerRowCache>? bufferLineCaches;
+  List<_TerminalXtermWorkerRowCache?>? bufferLineCaches;
   var cachedBufferScrollBack = 0;
 
   List<Object?> renderCellMessage(
@@ -1192,10 +1195,11 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
     }
 
     final nextRefs = <BufferLine>[];
-    final nextCaches = <_TerminalXtermWorkerRowCache>[];
+    final nextCaches = <_TerminalXtermWorkerRowCache?>[];
     final changedRows = <Object?>[];
     final hyperlinkUpdates = <int, String>{};
     var comparedRowCount = 0;
+    final currentScrollBack = terminal.buffer.scrollBack;
     for (var row = 0; row < lines.length; row++) {
       final line = lines[row];
       nextRefs.add(line);
@@ -1205,11 +1209,15 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
           : null;
       final previousRow = trimStart + row;
       final wasAlreadyScrollback =
-          previousCache != null && previousRow < cachedBufferScrollBack;
-      final changedSpan = switch ((previousCache, wasAlreadyScrollback)) {
-        (null, _) => null,
-        (_, true) => null,
-        (final cache?, false) => () {
+          !fullRepaint && previousRow < cachedBufferScrollBack;
+      final remainsScrollback = row < currentScrollBack;
+      if (wasAlreadyScrollback && remainsScrollback) {
+        nextCaches.add(null);
+        continue;
+      }
+      final changedSpan = switch (previousCache) {
+        null => null,
+        final cache => () {
           comparedRowCount += 1;
           return cache.changedCellSpan(line);
         }(),
@@ -1217,10 +1225,12 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
       if (previousCache != null &&
           previousCache.isWrapped == line.isWrapped &&
           changedSpan == null) {
-        nextCaches.add(previousCache);
+        nextCaches.add(remainsScrollback ? null : previousCache);
         continue;
       }
-      nextCaches.add(_TerminalXtermWorkerRowCache.capture(line));
+      nextCaches.add(
+        remainsScrollback ? null : _TerminalXtermWorkerRowCache.capture(line),
+      );
       final cellStart = changedSpan?.start ?? 0;
       final cellEnd =
           changedSpan?.end ?? (previousCache == null ? line.length : 0);
@@ -1238,7 +1248,10 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
 
     bufferLineRefs = nextRefs;
     bufferLineCaches = nextCaches;
-    cachedBufferScrollBack = terminal.buffer.scrollBack;
+    cachedBufferScrollBack = currentScrollBack;
+    final cachedRowCount = nextCaches
+        .whereType<_TerminalXtermWorkerRowCache>()
+        .length;
     return <Object?>[
       fullRepaint,
       terminal.viewWidth,
@@ -1265,6 +1278,7 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
           <Object?>[entry.key, entry.value],
       ],
       comparedRowCount,
+      cachedRowCount,
     ];
   }
 

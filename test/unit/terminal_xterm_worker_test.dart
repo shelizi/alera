@@ -436,6 +436,7 @@ void main() {
     expect(delta.fullRepaint, isFalse);
     expect(delta.trimStart, 1);
     expect(delta.comparedRowCount, lessThanOrEqualTo(3));
+    expect(delta.cachedRowCount, lessThanOrEqualTo(3));
   });
 
   test(
