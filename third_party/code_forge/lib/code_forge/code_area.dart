@@ -4825,11 +4825,38 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     _asyncFoldComputationPending = true;
 
     try {
-      final computed = await foldsComputeAll(rope: controller.rope.core);
+      final requestVersion = controller.documentVersion;
+      final nativeResponse = await controller.queryNativeFoldingRanges();
+      if (controller.documentVersion != requestVersion) {
+        _asyncFoldComputationPending = false;
+        return;
+      }
+
+      final computed = nativeResponse?.supported == true
+          ? nativeResponse!.ranges
+                .map(
+                  (range) => (
+                    startLine: range.startLine.toInt(),
+                    endLine: range.endLine.toInt(),
+                  ),
+                )
+                .toList(growable: false)
+          : (await foldsComputeAll(rope: controller.rope.core))
+                .map(
+                  (range) => (
+                    startLine: range.startLine.toInt(),
+                    endLine: range.endLine.toInt(),
+                  ),
+                )
+                .toList(growable: false);
+      if (controller.documentVersion != requestVersion) {
+        _asyncFoldComputationPending = false;
+        return;
+      }
 
       for (final rustFold in computed) {
-        final startLine = rustFold.startLine.toInt();
-        final endLine = rustFold.endLine.toInt();
+        final startLine = rustFold.startLine;
+        final endLine = rustFold.endLine;
         if (_foldRanges[startLine] == null) {
           final existing = controller.foldings[startLine];
           final fold = FoldRange(startLine, endLine);

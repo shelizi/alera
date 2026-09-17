@@ -9,9 +9,9 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 import 'rope.dart';
 
-// These functions are ignored because they are not marked as `pub`: `advance_point`, `append_capture_spans`, `apply_edit`, `line_content_end_char`, `native_language`, `normalize_language_id`, `normalize_scope`, `open_with_rope`, `parse_rope`, `point_for_char`
+// These functions are ignored because they are not marked as `pub`: `advance_point`, `append_capture_spans`, `apply_edit`, `collect_folding_ranges`, `is_foldable_node_kind`, `line_content_end_char`, `native_language`, `normalize_language_id`, `normalize_scope`, `open_with_rope`, `parse_rope`, `point_for_char`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `NativeEditorDocumentState`, `NativeLanguage`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<NativeEditorDocument>>
 abstract class NativeEditorDocument implements RustOpaqueInterface {
@@ -59,6 +59,12 @@ abstract class NativeEditorDocument implements RustOpaqueInterface {
         rope: rope,
         languageId: languageId,
       );
+
+  /// Returns foldable structural ranges from the already-retained Tree-sitter tree.
+  /// This intentionally does not rescan or materialize the Rope text.
+  Future<FoldingRangeResponse> queryFoldingRanges({
+    required BigInt expectedRevision,
+  });
 
   /// Returns syntax captures only for the requested viewport plus fixed overscan.
   /// No document-sized span collection is built or transferred across FFI.
@@ -122,6 +128,41 @@ class EditorDocumentRevision {
           applied == other.applied;
 }
 
+class FoldingRangeResponse {
+  final String documentId;
+  final BigInt revision;
+  final bool supported;
+  final bool stale;
+  final List<NativeFoldingRange> ranges;
+
+  const FoldingRangeResponse({
+    required this.documentId,
+    required this.revision,
+    required this.supported,
+    required this.stale,
+    required this.ranges,
+  });
+
+  @override
+  int get hashCode =>
+      documentId.hashCode ^
+      revision.hashCode ^
+      supported.hashCode ^
+      stale.hashCode ^
+      ranges.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is FoldingRangeResponse &&
+          runtimeType == other.runtimeType &&
+          documentId == other.documentId &&
+          revision == other.revision &&
+          supported == other.supported &&
+          stale == other.stale &&
+          ranges == other.ranges;
+}
+
 class NativeEditorDocumentInfo {
   final String documentId;
   final BigInt revision;
@@ -163,6 +204,24 @@ class NativeEditorDocumentInfo {
           lenLines == other.lenLines &&
           parserSupported == other.parserSupported &&
           closed == other.closed;
+}
+
+class NativeFoldingRange {
+  final BigInt startLine;
+  final BigInt endLine;
+
+  const NativeFoldingRange({required this.startLine, required this.endLine});
+
+  @override
+  int get hashCode => startLine.hashCode ^ endLine.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is NativeFoldingRange &&
+          runtimeType == other.runtimeType &&
+          startLine == other.startLine &&
+          endLine == other.endLine;
 }
 
 class NativeSyntaxSpan {
