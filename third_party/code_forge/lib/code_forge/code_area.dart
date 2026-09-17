@@ -10069,10 +10069,14 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
         }
         if (hasActiveFolds && _isLineFolded(lineIndex)) continue;
 
-        final lineStartOffset = controller.getLineStartOffset(lineIndex);
-        final lineText =
-            _lineTextCache[lineIndex] ?? controller.getLineText(lineIndex);
-        final lineLength = lineText.length;
+        final nativeAsciiInfo = _largeFileNativeAsciiLineInfo(lineIndex);
+        final lineStartOffset =
+            nativeAsciiInfo?.start ?? controller.getLineStartOffset(lineIndex);
+        String? lineText = _lineTextCache[lineIndex];
+        if (nativeAsciiInfo == null && lineText == null) {
+          lineText = controller.getLineText(lineIndex);
+        }
+        final lineLength = nativeAsciiInfo?.contentLength ?? lineText!.length;
 
         int lineSelStart = 0;
         int lineSelEnd = lineLength;
@@ -10089,6 +10093,34 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
 
         if (lineSelStart >= lineSelEnd) continue;
 
+        final lineY = _getLineYOffset(lineIndex, hasActiveFolds);
+        final scroll = lineWrap ? 0.0 : _effectiveHScroll;
+        final textX = isRTL
+            ? (innerPadding?.left ?? 0) - scroll
+            : _gutterWidth + (innerPadding?.left ?? 0) - scroll;
+        final nativeColumnWidth = nativeAsciiInfo != null
+            ? _getLargeFileFixedAsciiColumnWidth()
+            : null;
+        if (nativeAsciiInfo != null && nativeColumnWidth != null) {
+          final screenX = offset.dx + textX + lineSelStart * nativeColumnWidth;
+          final screenY =
+              offset.dy +
+              (innerPadding?.top ?? 0) +
+              lineY -
+              vscrollController.offset;
+          canvas.drawRect(
+            Rect.fromLTWH(
+              screenX,
+              screenY,
+              (lineSelEnd - lineSelStart) * nativeColumnWidth,
+              _lineHeight,
+            ),
+            highlightPaint,
+          );
+          continue;
+        }
+
+        lineText ??= controller.getLineText(lineIndex);
         final contentWidth =
             size.width - _gutterWidth - (innerPadding?.horizontal ?? 0);
         final paragraphWidth = lineWrap
@@ -10106,13 +10138,6 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
           );
           _paragraphCache[lineIndex] = para;
         }
-
-        final lineY = _getLineYOffset(lineIndex, hasActiveFolds);
-
-        final scroll = lineWrap ? 0.0 : _effectiveHScroll;
-        final textX = isRTL
-            ? (innerPadding?.left ?? 0) - scroll
-            : _gutterWidth + (innerPadding?.left ?? 0) - scroll;
 
         if (lineText.isNotEmpty) {
           final boxKey = '$lineIndex-$lineSelStart-$lineSelEnd';
@@ -10230,10 +10255,14 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
       if (lineIndex < firstVisibleLine || lineIndex > lastVisibleLine) continue;
       if (hasActiveFolds && _isLineFolded(lineIndex)) continue;
 
-      final lineStartOffset = controller.getLineStartOffset(lineIndex);
-      final lineText =
-          _lineTextCache[lineIndex] ?? controller.getLineText(lineIndex);
-      final lineLength = lineText.length;
+      final nativeAsciiInfo = _largeFileNativeAsciiLineInfo(lineIndex);
+      final lineStartOffset =
+          nativeAsciiInfo?.start ?? controller.getLineStartOffset(lineIndex);
+      String? lineText = _lineTextCache[lineIndex];
+      if (nativeAsciiInfo == null && lineText == null) {
+        lineText = controller.getLineText(lineIndex);
+      }
+      final lineLength = nativeAsciiInfo?.contentLength ?? lineText!.length;
 
       int lineSelStart = 0;
       int lineSelEnd = lineLength;
@@ -10254,22 +10283,6 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
 
       final contentWidth =
           size.width - _gutterWidth - (innerPadding?.horizontal ?? 0);
-      final paragraphWidth = lineWrap
-          ? _wrapWidth
-          : (isRTL ? contentWidth : null);
-
-      ui.Paragraph para;
-      if (_paragraphCache.containsKey(lineIndex)) {
-        para = _paragraphCache[lineIndex]!;
-      } else {
-        para = _buildHighlightedParagraph(
-          lineIndex,
-          lineText,
-          width: paragraphWidth,
-        );
-        _paragraphCache[lineIndex] = para;
-      }
-
       final lineY = _getLineYOffset(lineIndex, hasActiveFolds);
       final visualYOffset = _getTotalVirtualOffset(lineIndex);
 
@@ -10286,41 +10299,84 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
       final textX = isRTL
           ? (innerPadding?.left ?? 0) - scroll
           : _gutterWidth + (innerPadding?.left ?? 0) - scroll;
+      final nativeColumnWidth = nativeAsciiInfo != null
+          ? _getLargeFileFixedAsciiColumnWidth()
+          : null;
 
-      if (lineSelStart < lineSelEnd && lineText.isNotEmpty) {
-        final utf16Start = CodeForgeController.scalarToUtf16Offset(
-          lineText,
-          lineSelStart,
+      if (lineSelStart < lineSelEnd &&
+          nativeAsciiInfo != null &&
+          nativeColumnWidth != null) {
+        final adjustedLeft =
+            lineSelStart * nativeColumnWidth + colorBoxOffsetStart;
+        final adjustedRight =
+            lineSelEnd * nativeColumnWidth + colorBoxOffsetEnd;
+        final screenX = offset.dx + textX + adjustedLeft;
+        final screenY =
+            offset.dy +
+            (innerPadding?.top ?? 0) +
+            lineY +
+            visualYOffset -
+            vscrollController.offset;
+        canvas.drawRect(
+          Rect.fromLTWH(
+            screenX,
+            screenY,
+            adjustedRight - adjustedLeft,
+            _lineHeight,
+          ),
+          selectionPaint,
         );
-        final utf16End = CodeForgeController.scalarToUtf16Offset(
-          lineText,
-          lineSelEnd,
-        );
-        final boxes = para.getBoxesForRange(utf16Start, utf16End);
-
-        for (int i = 0; i < boxes.length; i++) {
-          final box = boxes[i];
-          final adjustedLeft = box.left + colorBoxOffsetStart;
-          final adjustedRight = box.right + colorBoxOffsetEnd;
-
-          final screenX = offset.dx + textX + adjustedLeft;
-          final screenY =
-              offset.dy +
-              (innerPadding?.top ?? 0) +
-              lineY +
-              visualYOffset +
-              box.top -
-              vscrollController.offset;
-
-          canvas.drawRect(
-            Rect.fromLTWH(
-              screenX,
-              screenY,
-              adjustedRight - adjustedLeft,
-              _lineHeight,
-            ),
-            selectionPaint,
+      } else if (lineSelStart < lineSelEnd) {
+        lineText ??= controller.getLineText(lineIndex);
+        final paragraphWidth = lineWrap
+            ? _wrapWidth
+            : (isRTL ? contentWidth : null);
+        ui.Paragraph para;
+        if (_paragraphCache.containsKey(lineIndex)) {
+          para = _paragraphCache[lineIndex]!;
+        } else {
+          para = _buildHighlightedParagraph(
+            lineIndex,
+            lineText,
+            width: paragraphWidth,
           );
+          _paragraphCache[lineIndex] = para;
+        }
+        if (lineText.isNotEmpty) {
+          final utf16Start = CodeForgeController.scalarToUtf16Offset(
+            lineText,
+            lineSelStart,
+          );
+          final utf16End = CodeForgeController.scalarToUtf16Offset(
+            lineText,
+            lineSelEnd,
+          );
+          final boxes = para.getBoxesForRange(utf16Start, utf16End);
+
+          for (int i = 0; i < boxes.length; i++) {
+            final box = boxes[i];
+            final adjustedLeft = box.left + colorBoxOffsetStart;
+            final adjustedRight = box.right + colorBoxOffsetEnd;
+
+            final screenX = offset.dx + textX + adjustedLeft;
+            final screenY =
+                offset.dy +
+                (innerPadding?.top ?? 0) +
+                lineY +
+                visualYOffset +
+                box.top -
+                vscrollController.offset;
+
+            canvas.drawRect(
+              Rect.fromLTWH(
+                screenX,
+                screenY,
+                adjustedRight - adjustedLeft,
+                _lineHeight,
+              ),
+              selectionPaint,
+            );
+          }
         }
       } else if (lineIndex < endLine) {
         final screenX = isRTL
@@ -10479,6 +10535,63 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     final textX = isRTL
         ? (innerPadding?.left ?? 0) - scroll
         : _gutterWidth + (innerPadding?.left ?? 0) - scroll;
+
+    if (!isRTL) {
+      final startNativeInfo = _largeFileNativeAsciiLineInfo(startLine);
+      final endNativeInfo = _largeFileNativeAsciiLineInfo(endLine);
+      final nativeColumnWidth = startNativeInfo != null && endNativeInfo != null
+          ? _getLargeFileFixedAsciiColumnWidth()
+          : null;
+      if (startNativeInfo != null &&
+          endNativeInfo != null &&
+          nativeColumnWidth != null) {
+        final startCol = (start - startNativeInfo.start).clamp(
+          0,
+          startNativeInfo.contentLength,
+        );
+        final endCol = (end - endNativeInfo.start).clamp(
+          0,
+          endNativeInfo.contentLength,
+        );
+        final startX =
+            startCol * nativeColumnWidth +
+            _getColorBoxOffsetForLine(startLine, startCol);
+        final endX =
+            endCol * nativeColumnWidth +
+            _getColorBoxOffsetForLine(endLine, endCol);
+        final startScreenY =
+            offset.dy +
+            (innerPadding?.top ?? 0) +
+            _getLineYOffset(startLine, hasActiveFolds) +
+            _getTotalVirtualOffset(startLine) -
+            vscrollController.offset;
+        final endScreenY =
+            offset.dy +
+            (innerPadding?.top ?? 0) +
+            _getLineYOffset(endLine, hasActiveFolds) +
+            _getTotalVirtualOffset(endLine) -
+            vscrollController.offset;
+        final fontSize = textStyle?.fontSize ?? 14;
+
+        _startHandleRect = Rect.fromCenter(
+          center: Offset(
+            offset.dx + textX + startX - fontSize / 2,
+            startScreenY + _lineHeight + handleRadius,
+          ),
+          width: handleRadius * 2 * 1.2,
+          height: handleRadius * 2 * 1.2,
+        );
+        _endHandleRect = Rect.fromCenter(
+          center: Offset(
+            offset.dx + textX + endX + fontSize / 2,
+            endScreenY + _lineHeight + handleRadius,
+          ),
+          width: handleRadius * 2 * 1.2,
+          height: handleRadius * 2 * 1.2,
+        );
+        return;
+      }
+    }
 
     final startLineOffset = controller.getLineStartOffset(startLine);
     final startLineText =
