@@ -56,6 +56,8 @@ class _WorkspaceGitHistorySurfaceState
 
   List<GitHistoryItem> _items = const <GitHistoryItem>[];
   List<GitHistoryItemViewModel> _viewModels = const <GitHistoryItemViewModel>[];
+  GitHistoryProjectionContinuation _projectionContinuation =
+      const GitHistoryProjectionContinuation();
   Map<String, GitHistoryGraphColorId?> _colorMap =
       const <String, GitHistoryGraphColorId?>{};
   GitHistoryItemRef? _currentRef;
@@ -132,6 +134,7 @@ class _WorkspaceGitHistorySurfaceState
     setState(() {
       _items = const <GitHistoryItem>[];
       _viewModels = const <GitHistoryItemViewModel>[];
+      _projectionContinuation = const GitHistoryProjectionContinuation();
       _compareAnchorId = null;
       _hasMore = false;
       _pageFailed = false;
@@ -168,7 +171,9 @@ class _WorkspaceGitHistorySurfaceState
           remoteRef: result.remoteRef,
           baseRef: _selectedRef == null ? result.baseRef : null,
         );
-        _viewModels = _buildViewModels(result.items);
+        final projection = _buildProjection(result.items);
+        _viewModels = projection.viewModels;
+        _projectionContinuation = projection.continuation;
       });
       // A short first page may not fill the viewport, which means the scroll
       // listener never fires, so pull the next page eagerly instead.
@@ -210,12 +215,17 @@ class _WorkspaceGitHistorySurfaceState
       if (!mounted || generation != _generation) {
         return;
       }
+      final projection = _buildProjection(
+        result.items,
+        continuation: _projectionContinuation,
+      );
       setState(() {
         _items = <GitHistoryItem>[..._items, ...result.items];
         _viewModels = <GitHistoryItemViewModel>[
           ..._viewModels,
-          ..._buildViewModels(result.items),
+          ...projection.viewModels,
         ];
+        _projectionContinuation = projection.continuation;
         _hasMore = result.hasMore;
         _loadingMore = false;
       });
@@ -235,8 +245,12 @@ class _WorkspaceGitHistorySurfaceState
     }
   }
 
-  List<GitHistoryItemViewModel> _buildViewModels(List<GitHistoryItem> items) {
-    return buildGitHistoryViewModelsFromItems(
+  GitHistoryProjectionPage _buildProjection(
+    List<GitHistoryItem> items, {
+    GitHistoryProjectionContinuation continuation =
+        const GitHistoryProjectionContinuation(),
+  }) {
+    return buildGitHistoryProjectionPage(
       items,
       colorMap: _colorMap,
       currentRef: _currentRef,
@@ -245,9 +259,7 @@ class _WorkspaceGitHistorySurfaceState
       addIncomingChanges: _hasIncomingChanges,
       addOutgoingChanges: _hasOutgoingChanges,
       mergeBase: _mergeBase,
-      initialSwimlanes:
-          _viewModels.lastOrNull?.outputSwimlanes ??
-          const <GitHistoryGraphNode>[],
+      continuation: continuation,
     );
   }
 

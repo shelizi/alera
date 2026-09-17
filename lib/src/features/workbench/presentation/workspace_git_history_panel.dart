@@ -65,6 +65,9 @@ class _GitHistoryPanelState extends State<_GitHistoryPanel> {
   final Set<String> _expandedCommitIds = <String>{};
   final Map<String, _CommitFilesState> _filesByCommit =
       <String, _CommitFilesState>{};
+  GitHistoryResult? _projectedResult;
+  List<GitHistoryItemViewModel> _projectedViewModels =
+      const <GitHistoryItemViewModel>[];
   double _height = _defaultHeight;
   @override
   void didUpdateWidget(covariant _GitHistoryPanel oldWidget) {
@@ -143,7 +146,7 @@ class _GitHistoryPanelState extends State<_GitHistoryPanel> {
     if (result == null) {
       return const _HistoryLoadingMessage();
     }
-    final viewModels = buildGitHistoryViewModels(result);
+    final viewModels = _viewModelsFor(result);
     if (viewModels.isEmpty) {
       return const _HistoryMessage(message: 'No commits yet');
     }
@@ -198,6 +201,14 @@ class _GitHistoryPanelState extends State<_GitHistoryPanel> {
           ),
       ],
     );
+  }
+
+  List<GitHistoryItemViewModel> _viewModelsFor(GitHistoryResult result) {
+    if (!identical(_projectedResult, result)) {
+      _projectedResult = result;
+      _projectedViewModels = buildGitHistoryViewModels(result);
+    }
+    return _projectedViewModels;
   }
 
   void _resize(double delta) {

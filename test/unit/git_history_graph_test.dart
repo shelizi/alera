@@ -258,5 +258,116 @@ void main() {
         ),
       );
     });
+    test('projection continuation preserves lane colors across pages', () {
+      const firstPage = <GitHistoryItem>[
+        GitHistoryItem(
+          id: 'a',
+          parentIds: <String>['a-parent'],
+          subject: 'A',
+          message: 'A',
+        ),
+      ];
+      const secondPage = <GitHistoryItem>[
+        GitHistoryItem(
+          id: 'x',
+          parentIds: <String>['y'],
+          subject: 'X',
+          message: 'X',
+        ),
+      ];
+
+      final full = buildGitHistoryProjectionPage(<GitHistoryItem>[
+        ...firstPage,
+        ...secondPage,
+      ]);
+      final first = buildGitHistoryProjectionPage(firstPage);
+      final second = buildGitHistoryProjectionPage(
+        secondPage,
+        continuation: first.continuation,
+      );
+      final fullX = full.viewModels.singleWhere(
+        (viewModel) => viewModel.historyItem.id == 'x',
+      );
+      final pagedX = second.viewModels.single;
+
+      expect(
+        pagedX.inputSwimlanes.map((node) => (id: node.id, color: node.color)),
+        fullX.inputSwimlanes.map((node) => (id: node.id, color: node.color)),
+      );
+      expect(
+        pagedX.outputSwimlanes.map((node) => (id: node.id, color: node.color)),
+        fullX.outputSwimlanes.map((node) => (id: node.id, color: node.color)),
+      );
+    });
+
+    test(
+      'projection continuation does not duplicate outgoing boundary rows',
+      () {
+        const currentRef = GitHistoryItemRef(
+          id: 'refs/heads/main',
+          name: 'main',
+          revision: 'local',
+        );
+        const remoteRef = GitHistoryItemRef(
+          id: 'refs/remotes/origin/main',
+          name: 'origin/main',
+          revision: 'base',
+        );
+        const firstPage = <GitHistoryItem>[
+          GitHistoryItem(
+            id: 'local',
+            parentIds: <String>['middle'],
+            subject: 'Local',
+            message: 'Local',
+          ),
+          GitHistoryItem(
+            id: 'middle',
+            parentIds: <String>['base'],
+            subject: 'Middle',
+            message: 'Middle',
+          ),
+        ];
+        const secondPage = <GitHistoryItem>[
+          GitHistoryItem(
+            id: 'base',
+            parentIds: <String>[],
+            subject: 'Base',
+            message: 'Base',
+            references: <GitHistoryItemRef>[remoteRef],
+          ),
+        ];
+        final colorMap = buildDefaultGitHistoryColorMap(
+          currentRef: currentRef,
+          remoteRef: remoteRef,
+        );
+
+        final first = buildGitHistoryProjectionPage(
+          firstPage,
+          colorMap: colorMap,
+          currentRef: currentRef,
+          remoteRef: remoteRef,
+          addOutgoingChanges: true,
+          mergeBase: 'base',
+        );
+        final second = buildGitHistoryProjectionPage(
+          secondPage,
+          colorMap: colorMap,
+          currentRef: currentRef,
+          remoteRef: remoteRef,
+          addOutgoingChanges: true,
+          mergeBase: 'base',
+          continuation: first.continuation,
+        );
+        final combinedIds = <String>[
+          ...first.viewModels.map((viewModel) => viewModel.historyItem.id),
+          ...second.viewModels.map((viewModel) => viewModel.historyItem.id),
+        ];
+
+        expect(
+          combinedIds.where((id) => id == gitHistoryOutgoingChangesId),
+          hasLength(1),
+        );
+      },
+    );
   });
 }

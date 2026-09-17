@@ -8,6 +8,30 @@ class const GitHistoryGraphNode({
   required final GitHistoryGraphColorId color,
 });
 
+class GitHistoryProjectionContinuation {
+  const GitHistoryProjectionContinuation({
+    this.swimlanes = const <GitHistoryGraphNode>[],
+    this.colorIndex = -1,
+    this.incomingBoundaryAdded = false,
+    this.outgoingBoundaryAdded = false,
+  });
+
+  final List<GitHistoryGraphNode> swimlanes;
+  final int colorIndex;
+  final bool incomingBoundaryAdded;
+  final bool outgoingBoundaryAdded;
+}
+
+class GitHistoryProjectionPage {
+  const GitHistoryProjectionPage({
+    required this.viewModels,
+    required this.continuation,
+  });
+
+  final List<GitHistoryItemViewModel> viewModels;
+  final GitHistoryProjectionContinuation continuation;
+}
+
 class const GitHistoryItemViewModel({
   required final GitHistoryItem historyItem,
   required final List<GitHistoryGraphNode> inputSwimlanes,
@@ -77,15 +101,49 @@ List<GitHistoryItemViewModel> buildGitHistoryViewModelsFromItems(
   String? mergeBase,
   List<GitHistoryGraphNode> initialSwimlanes = const <GitHistoryGraphNode>[],
 }) {
-  var colorIndex = -1;
+  return buildGitHistoryProjectionPage(
+    historyItems,
+    colorMap: colorMap,
+    currentRef: currentRef,
+    remoteRef: remoteRef,
+    baseRef: baseRef,
+    addIncomingChanges: addIncomingChanges,
+    addOutgoingChanges: addOutgoingChanges,
+    mergeBase: mergeBase,
+    continuation: GitHistoryProjectionContinuation(swimlanes: initialSwimlanes),
+  ).viewModels;
+}
+
+GitHistoryProjectionPage buildGitHistoryProjectionPage(
+  List<GitHistoryItem> historyItems, {
+  Map<String, GitHistoryGraphColorId?> colorMap =
+      const <String, GitHistoryGraphColorId?>{},
+  GitHistoryItemRef? currentRef,
+  GitHistoryItemRef? remoteRef,
+  GitHistoryItemRef? baseRef,
+  bool addIncomingChanges = false,
+  bool addOutgoingChanges = false,
+  String? mergeBase,
+  GitHistoryProjectionContinuation continuation =
+      const GitHistoryProjectionContinuation(),
+}) {
+  var colorIndex = continuation.colorIndex;
   final viewModels = <GitHistoryItemViewModel>[];
+  Map<String, GitHistoryGraphColorId?>? labelColorsByItemId;
+
+  GitHistoryGraphColorId? parentLabelColor(String parentId) {
+    labelColorsByItemId ??= <String, GitHistoryGraphColorId?>{
+      for (final item in historyItems) item.id: _labelColor(item, colorMap),
+    };
+    return labelColorsByItemId![parentId];
+  }
 
   for (final historyItem in historyItems) {
     final kind = historyItem.id == currentRef?.revision
         ? GitHistoryItemViewModelKind.head
         : GitHistoryItemViewModelKind.node;
     final inputSwimlanes =
-        (viewModels.lastOrNull?.outputSwimlanes ?? initialSwimlanes)
+        (viewModels.lastOrNull?.outputSwimlanes ?? continuation.swimlanes)
             .map(_cloneNode)
             .toList(growable: true);
     final outputSwimlanes = <GitHistoryGraphNode>[];
@@ -116,11 +174,7 @@ List<GitHistoryItemViewModel> buildGitHistoryViewModelsFromItems(
     ) {
       var color = index == 0
           ? _labelColor(historyItem, colorMap)
-          : _parentLabelColor(
-              historyItems,
-              historyItem.parentIds[index],
-              colorMap,
-            );
+          : parentLabelColor(historyItem.parentIds[index]);
       if (color == null) {
         colorIndex = _rotate(colorIndex + 1, gitHistoryLaneColors.length);
         color = gitHistoryLaneColors[colorIndex];
@@ -180,12 +234,34 @@ List<GitHistoryItemViewModel> buildGitHistoryViewModelsFromItems(
     viewModels,
     currentRef: currentRef,
     remoteRef: remoteRef,
-    addIncomingChanges: addIncomingChanges,
-    addOutgoingChanges: addOutgoingChanges,
+    addIncomingChanges:
+        addIncomingChanges && !continuation.incomingBoundaryAdded,
+    addOutgoingChanges:
+        addOutgoingChanges && !continuation.outgoingBoundaryAdded,
     mergeBase: mergeBase,
   );
 
-  return viewModels;
+  return GitHistoryProjectionPage(
+    viewModels: viewModels,
+    continuation: GitHistoryProjectionContinuation(
+      swimlanes: List<GitHistoryGraphNode>.unmodifiableOf(
+        viewModels.lastOrNull?.outputSwimlanes ?? continuation.swimlanes,
+      ),
+      colorIndex: colorIndex,
+      incomingBoundaryAdded:
+          continuation.incomingBoundaryAdded ||
+          viewModels.any(
+            (viewModel) =>
+                viewModel.historyItem.id == gitHistoryIncomingChangesId,
+          ),
+      outgoingBoundaryAdded:
+          continuation.outgoingBoundaryAdded ||
+          viewModels.any(
+            (viewModel) =>
+                viewModel.historyItem.id == gitHistoryOutgoingChangesId,
+          ),
+    ),
+  );
 }
 
 int compareGitHistoryRefs(
@@ -248,19 +324,6 @@ GitHistoryGraphColorId? _labelColor(
   for (final itemRef in item.references) {
     if (colorMap.containsKey(itemRef.id)) {
       return colorMap[itemRef.id];
-    }
-  }
-  return null;
-}
-
-GitHistoryGraphColorId? _parentLabelColor(
-  List<GitHistoryItem> items,
-  String parentId,
-  Map<String, GitHistoryGraphColorId?> colorMap,
-) {
-  for (final item in items) {
-    if (item.id == parentId) {
-      return _labelColor(item, colorMap);
     }
   }
   return null;
