@@ -55,6 +55,42 @@ The existing `test/benchmarks/terminal_production_worker_profile_benchmark.dart`
 
 The comparison intentionally measures protocol work eliminated by runtime coalescing rather than claiming the final single worker resize became intrinsically faster.
 
+## Second T6c cut: packed full-buffer reveal transfer
+
+The next T6c target was the large hidden-backlog reveal identified by the first T6 handoff. Stage-local profiling showed that the dominant cost was not xterm parsing or replica apply. For an 8,001-row / 1,238,175-cell reveal, the nested object protocol spent most of its time materializing per-cell lists, copying them across the isolate boundary, and rebuilding Dart objects on the UI isolate.
+
+T6 therefore changes only **full-buffer snapshot** transport. Normal incremental `writeBufferDelta`, partial cell spans, head trims, resize deltas, and search behavior keep the existing row-delta representation.
+
+The full snapshot path now packs numeric cell fields into one `Uint32List`, wraps it in `TransferableTypedData`, and keeps row text plus sparse combining-character/hyperlink metadata separately. The UI decoder reconstructs the existing `TerminalXtermWorkerRowDelta` / `TerminalXtermWorkerRenderCell` API so downstream replica and buffer-model code is unchanged. Render-cell text is lazily derived from `content` + combining characters for packed cells instead of transmitting a redundant string per cell.
+
+Implementation commit: `24f778b9461dfb49bec8eb9bde597b23a62bb00a` (`perf(terminal): pack full buffer snapshot transfer`)
+
+### Five-sample stage-local A/B
+
+`test/benchmarks/terminal_reveal_pipeline_profile_benchmark.dart` compares the old nested object snapshot with the packed transferable snapshot against the same 1,325,790-byte hidden input and 8,001-row / 1,238,175-cell final buffer.
+
+| Metric | nested object rows | packed transferable rows | Change |
+| --- | ---: | ---: | ---: |
+| raw worker roundtrip median | 3558.70 ms | 257.78 ms | ~13.8x lower |
+| worker materialize median | 1154.30 ms | 245.39 ms | ~4.7x lower |
+| isolate transfer/scheduling median | 2404.40 ms | 2.69 ms | ~894x lower |
+| UI decode median | 863.35 ms | 299.95 ms | ~2.9x lower |
+| replica apply median | 289.72 ms | 229.43 ms | ~1.3x lower |
+| reveal end-to-end median | 4711.81 ms | 864.19 ms | ~5.45x lower |
+
+The especially large isolate-boundary improvement is the direct reason for using `TransferableTypedData`; this result does not depend on a new worker-side duplicate buffer or search index.
+
+### Production-profile verification
+
+Re-running `test/benchmarks/terminal_production_worker_profile_benchmark.dart` after the packed snapshot cut keeps the same 8,001-row reveal semantics and reports:
+
+- reveal-after-large-hidden-backlog wall median: **651.99 ms**;
+- worker roundtrip median: **287.69 ms**;
+- replica apply median: **85.22 ms**;
+- one full repaint, 8,001 changed rows, 1,238,175 changed cells.
+
+The older T6 baseline recorded roughly 1,238.84 ms wall / 1,099.79 ms worker roundtrip for the same logical reveal case. Machine/JIT noise makes cross-run wall values less controlled than the paired A/B benchmark, but both measurements point in the same direction and the paired benchmark isolates the transport improvement directly.
+
 ## Validation
 
 Focused correctness:
@@ -66,16 +102,18 @@ flutter test --no-pub test/unit/terminal_runtime_native_test.dart --plain-name "
 
 Both pass.
 
-Full T6 terminal regression set:
+Full T6 terminal regression set after both T6c cuts:
 
 ```text
 flutter test --no-pub \
   test/unit/terminal_runtime_native_test.dart \
   test/unit/terminal_xterm_worker_test.dart \
-  test/unit/terminal_xterm_replica_terminal_test.dart
+  test/unit/terminal_xterm_replica_terminal_test.dart \
+  test/unit/terminal_xterm_buffer_model_test.dart \
+  test/unit/terminal_search_controller_test.dart
 ```
 
-Result: **165 passed, 2 skipped**. The two skips are the existing POSIX FFI cases on Windows.
+Result: **188 passed, 2 skipped**. The two skips are the existing POSIX FFI cases on Windows.
 
 Benchmark:
 
@@ -100,4 +138,4 @@ Fresh linked worktrees did not initially have usable `third_party/dart_terminal`
 
 ## Remaining T6c direction
 
-The next structural candidate remains **reveal after a large hidden backlog**. T5/T6 profiling still measures roughly 1.24 s median wall time, about 1.10 s worker roundtrip, one full repaint, and ~92 MB logical payload for the 8,001-row reveal case. Unlike resize storms, most of that backlog contains genuinely new scrollback that the UI replica has never received, so simply retaining row caches will not eliminate the transfer. Any next change should first add stage-local evidence for serialization/materialization/chunking cost and preserve stable row IDs, head trims, search refresh, and reveal atomicity. Do not introduce a duplicate hidden-buffer/search index without evidence.
+The two evidence-backed structural hotspots are now addressed: resize storms are coalesced at the runtime boundary, and full reveal/initial snapshots use packed transferable cell storage. Further T6 work should return to profiling rather than automatically adding more protocol complexity. The current packed reveal profile shows UI decode/materialization and replica application as the remaining meaningful costs; any next cut should demonstrate a repeatable gain there while preserving stable row IDs, head trims, wide/combining cells, hyperlinks, search refresh, and reveal atomicity. Do not introduce a duplicate hidden-buffer/search index without new evidence.
