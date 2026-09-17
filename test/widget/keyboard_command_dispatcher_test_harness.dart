@@ -38,6 +38,20 @@ WorkspaceTabRecord _tab({
   );
 }
 
+WorkspaceTabRecord _editorTab({required String id}) {
+  return WorkspaceTabRecord(
+    id: id,
+    workspaceId: 'ws-1',
+    title: 'README.md',
+    kind: .editor,
+    payload: const <String, Object?>{
+      workspaceTabFilePathPayloadKey: 'README.md',
+    },
+    createdAt: .utc(2026),
+    updatedAt: .utc(2026),
+  );
+}
+
 class _DispatcherTestWorkbenchController(
   final WorkbenchState _seed, {
   final WorkspaceTabRecord? createdTab,

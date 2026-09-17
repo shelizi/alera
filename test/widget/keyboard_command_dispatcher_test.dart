@@ -13,6 +13,7 @@ import 'package:alera/src/features/projects/domain/project.dart';
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_service.dart';
 import 'package:alera/src/features/workbench/application/workbench_state.dart';
+import 'package:alera/src/features/workbench/application/workspace_file_service.dart';
 import 'package:alera/src/features/workbench/domain/workbench_layout.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
@@ -173,6 +174,118 @@ void main() {
     ]);
     expect(runtime.closedTabIds, <String>[newTab.id]);
     expect(controller.closedTabIds, <String>[newTab.id]);
+  });
+
+  testWidgets('reload document reloads a clean active editor', (tester) async {
+    final workspace = _workspace();
+    final editorTab = _editorTab(id: 'editor-1');
+    final controller = _DispatcherTestWorkbenchController(
+      WorkbenchState(
+        workspacesByProject: <String, List<Workspace>>{
+          workspace.projectId: <Workspace>[workspace],
+        },
+        tabsByWorkspace: <String, List<WorkspaceTabRecord>>{
+          workspace.id: <WorkspaceTabRecord>[editorTab],
+        },
+        layoutByWorkspace: <String, WorkbenchLayout>{
+          workspace.id: WorkbenchLayout.single(
+            workspaceId: workspace.id,
+            tabIds: <String>[editorTab.id],
+          ),
+        },
+        activeWorkspaceId: workspace.id,
+        activeTabIdByWorkspace: <String, String>{workspace.id: editorTab.id},
+      ),
+    );
+    final harness = await _pumpDispatcherHarness(
+      tester,
+      controller: controller,
+      runtime: _FakeTerminalRuntime(),
+    );
+    var reloadCount = 0;
+    harness.ref
+        .read(editorSessionRegistryProvider)
+        .register(
+          editorTab.id,
+          EditorSessionHandle(
+            isDirty: () => false,
+            save: () async {},
+            discard: () async {},
+            reload: () => reloadCount += 1,
+          ),
+        );
+
+    KeyboardCommandDispatcher(
+      ref: harness.ref,
+      context: harness.context,
+    ).dispatch(.reloadDocument);
+    await tester.pump();
+
+    expect(reloadCount, 1);
+    expect(find.text('Reload Document?'), findsNothing);
+  });
+
+  testWidgets('reload document confirms before discarding dirty edits', (
+    tester,
+  ) async {
+    final workspace = _workspace();
+    final editorTab = _editorTab(id: 'editor-1');
+    final controller = _DispatcherTestWorkbenchController(
+      WorkbenchState(
+        workspacesByProject: <String, List<Workspace>>{
+          workspace.projectId: <Workspace>[workspace],
+        },
+        tabsByWorkspace: <String, List<WorkspaceTabRecord>>{
+          workspace.id: <WorkspaceTabRecord>[editorTab],
+        },
+        layoutByWorkspace: <String, WorkbenchLayout>{
+          workspace.id: WorkbenchLayout.single(
+            workspaceId: workspace.id,
+            tabIds: <String>[editorTab.id],
+          ),
+        },
+        activeWorkspaceId: workspace.id,
+        activeTabIdByWorkspace: <String, String>{workspace.id: editorTab.id},
+      ),
+    );
+    final harness = await _pumpDispatcherHarness(
+      tester,
+      controller: controller,
+      runtime: _FakeTerminalRuntime(),
+    );
+    var dirty = true;
+    var discardCount = 0;
+    var reloadCount = 0;
+    harness.ref
+        .read(editorSessionRegistryProvider)
+        .register(
+          editorTab.id,
+          EditorSessionHandle(
+            isDirty: () => dirty,
+            save: () async {},
+            discard: () async {
+              discardCount += 1;
+              dirty = false;
+            },
+            reload: () => reloadCount += 1,
+          ),
+        );
+
+    KeyboardCommandDispatcher(
+      ref: harness.ref,
+      context: harness.context,
+    ).dispatch(.reloadDocument);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Reload Document?'), findsOneWidget);
+    expect(discardCount, 0);
+    expect(reloadCount, 0);
+
+    await tester.tap(find.text('Reload'));
+    await tester.pumpAndSettle();
+
+    expect(discardCount, 1);
+    expect(reloadCount, 1);
   });
 
   testWidgets(

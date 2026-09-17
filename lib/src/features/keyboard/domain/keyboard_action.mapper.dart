@@ -108,6 +108,8 @@ class KeyboardActionIdMapper extends EnumMapper<KeyboardActionId> {
         return KeyboardActionId.goToDefinition;
       case r'findReferences':
         return KeyboardActionId.findReferences;
+      case r'reloadDocument':
+        return KeyboardActionId.reloadDocument;
       case r'newTerminalTab':
         return KeyboardActionId.newTerminalTab;
       case r'closeTab':
@@ -182,6 +184,8 @@ class KeyboardActionIdMapper extends EnumMapper<KeyboardActionId> {
         return r'goToDefinition';
       case KeyboardActionId.findReferences:
         return r'findReferences';
+      case KeyboardActionId.reloadDocument:
+        return r'reloadDocument';
       case KeyboardActionId.newTerminalTab:
         return r'newTerminalTab';
       case KeyboardActionId.closeTab:

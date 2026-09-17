@@ -81,6 +81,41 @@ void _registerWorkspaceWorkbenchViewTabTests() {
     }
   }
 
+  testWidgets('editor tab context menu exposes reload document', (
+    tester,
+  ) async {
+    final terminalTab = _tab('terminal', title: 'Terminal');
+    final editorTab = _tab(
+      'editor',
+      title: 'README.md',
+      kind: WorkspaceTabKind.editor,
+      filePath: 'README.md',
+    );
+
+    await _pumpWorkbenchView(
+      tester,
+      tabs: <WorkspaceTabRecord>[terminalTab, editorTab],
+      terminalRuntime: terminalRuntime,
+      layout: .single(
+        workspaceId: _workspaceId,
+        groupId: 'group-a',
+        tabIds: <String>[terminalTab.id, editorTab.id],
+      ),
+      createdTabs: createdTabs,
+      selectedTabs: selectedTabs,
+      closedTabs: closedTabs,
+      closedTabGroups: closedTabGroups,
+      renamedTabs: renamedTabs,
+      movedTabs: movedTabs,
+      splitGroups: splitGroups,
+      mergedGroups: mergedGroups,
+      updatedRatios: updatedRatios,
+    );
+
+    await _openTabContextMenu(tester, 'README.md');
+    expect(find.text('Reload Document'), findsOneWidget);
+  });
+
   testWidgets('tab context menu closes sibling tabs', (tester) async {
     final tabs = <WorkspaceTabRecord>[
       _tab('tab-1', title: 'Terminal 1'),

@@ -63,6 +63,17 @@ void main() {
       );
     });
 
+    test('reload document defaults to F5', () {
+      final resolver = KeybindingResolver(
+        settings: .defaults,
+        platform: .windows,
+      );
+      expect(
+        resolver.effectiveChords(.reloadDocument).single.toCanonicalString(),
+        'F5',
+      );
+    });
+
     test('uses the user override when present', () {
       final settings = KeyboardShortcutSettings.defaults.copyWithOverride(
         .newTerminalTab,

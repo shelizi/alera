@@ -62,6 +62,7 @@ enum KeyboardActionId {
   saveFile,
   goToDefinition,
   findReferences,
+  reloadDocument,
   newTerminalTab,
   closeTab,
   nextTab,
@@ -297,6 +298,14 @@ const List<KeybindingDefinition> keybindingDefinitions = <KeybindingDefinition>[
     description: 'Find references for the symbol at the editor cursor.',
     defaultBindings: .uniform(<String>['Shift+F12']),
     searchKeywords: <String>['editor', 'symbol', 'references', 'navigation'],
+  ),
+  KeybindingDefinition(
+    id: .reloadDocument,
+    label: 'Reload Document',
+    group: .workspace,
+    description: 'Reload the active editor file from disk.',
+    defaultBindings: .uniform(<String>['F5']),
+    searchKeywords: <String>['reload', 'refresh', 'editor', 'file'],
   ),
   KeybindingDefinition(
     id: .newTerminalTab,

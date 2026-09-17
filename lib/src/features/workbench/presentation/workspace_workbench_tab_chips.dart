@@ -231,6 +231,7 @@ enum _TabMenuAction {
   splitLeft,
   splitRight,
   keepOpen,
+  reloadDocument,
   close,
   closeOthers,
   closeRight,

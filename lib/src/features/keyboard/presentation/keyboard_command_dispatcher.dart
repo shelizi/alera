@@ -12,6 +12,7 @@ import 'package:alera/src/features/workbench/application/workspace_file_service.
 import 'package:alera/src/features/workbench/presentation/terminal_runtime.dart';
 import 'package:alera/src/features/workbench/presentation/workbench_close_confirmation.dart';
 import 'package:alera/src/features/workbench/presentation/workbench_dialog_launchers.dart';
+import 'package:alera/src/features/workbench/presentation/workbench_editor_reload.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -67,6 +68,8 @@ class const KeyboardCommandDispatcher({
         _runActiveEditorNavigation(.goToDefinition);
       case KeyboardActionId.findReferences:
         _runActiveEditorNavigation(.findReferences);
+      case KeyboardActionId.reloadDocument:
+        _reloadActiveEditor();
       case KeyboardActionId.newTerminalTab:
         _newTerminalTab();
       case KeyboardActionId.closeTab:
@@ -203,6 +206,14 @@ class const KeyboardCommandDispatcher({
           .read(editorSessionRegistryProvider)
           .runNavigationCommand(tab.id, command),
     );
+  }
+
+  void _reloadActiveEditor() {
+    final tab = ref.read(workbenchControllerProvider).activeWorkspaceTab;
+    if (tab == null || tab.kind != WorkspaceTabKind.editor) {
+      return;
+    }
+    unawaited(reloadWorkspaceEditorDocument(context, ref, tab));
   }
 
   void _closeActiveTab() {

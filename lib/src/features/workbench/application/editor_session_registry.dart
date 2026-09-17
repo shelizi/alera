@@ -53,6 +53,19 @@ class EditorSessionRegistry extends ChangeNotifier
     await _sessions[tabId]?.runNavigationCommand?.call(command);
   }
 
+  void reload(String tabId) {
+    if (isDirty(tabId)) {
+      return;
+    }
+    final handle = _sessions[tabId];
+    final reload = handle?.reload;
+    if (reload != null) {
+      reload();
+      return;
+    }
+    _documents[tabId]?.clearSnapshot();
+  }
+
   Future<int> saveAll(WorkspaceFileService workspaceFiles) async {
     var savedCount = 0;
     final liveSessionIds = _sessions.keys.toList(growable: false);

@@ -527,6 +527,31 @@ void main() {
       },
     );
 
+    test(
+      'reload invokes the live editor callback only for clean documents',
+      () async {
+        final registry = EditorSessionRegistry();
+        var dirty = false;
+        var reloadCount = 0;
+        final handle = EditorSessionHandle(
+          isDirty: () => dirty,
+          save: () async {},
+          discard: () async {
+            dirty = false;
+          },
+          reload: () => reloadCount += 1,
+        );
+        registry.register('tab-1', handle);
+
+        registry.reload('tab-1');
+        expect(reloadCount, 1);
+
+        dirty = true;
+        registry.reload('tab-1');
+        expect(reloadCount, 1);
+      },
+    );
+
     test('clears clean snapshot when live session has no reload callback', () {
       final registry = EditorSessionRegistry();
       final document = registry.documentFor('tab-1')

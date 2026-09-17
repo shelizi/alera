@@ -29,6 +29,7 @@ import 'package:alera/src/features/workbench/presentation/mobile_driver_overlay.
 import 'package:alera/src/features/workbench/presentation/terminal_runtime.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_surface.dart';
 import 'package:alera/src/features/workbench/presentation/workbench_dialog_launchers.dart';
+import 'package:alera/src/features/workbench/presentation/workbench_editor_reload.dart';
 import 'package:alera/src/features/workbench/presentation/workbench_tab_attention_presentation.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_markdown_viewer_surface.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_editor_surface.dart';

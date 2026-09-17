@@ -61,6 +61,12 @@ extension _WorkspaceTabMenu on _WorkspaceTabChip {
             label: 'Keep Open',
             leading: Icon(AleraIcons.pin, size: 16),
           ),
+        if (tab.kind == WorkspaceTabKind.editor)
+          const AleraDropdownEntry<_TabMenuAction>(
+            value: .reloadDocument,
+            label: 'Reload Document',
+            leading: Icon(AleraIcons.refresh, size: 16),
+          ),
         const AleraDropdownEntry<_TabMenuAction>(
           value: .close,
           label: 'Close',
@@ -122,6 +128,8 @@ extension _WorkspaceTabMenu on _WorkspaceTabChip {
         onSplit(.right);
       case _TabMenuAction.keepOpen:
         _KeepPreviewTabScope.maybeOf(context)?.call(tab.id);
+      case _TabMenuAction.reloadDocument:
+        await reloadWorkspaceEditorDocument(context, ref, tab);
       case _TabMenuAction.close:
         onClose();
       case _TabMenuAction.closeOthers:
