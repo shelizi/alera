@@ -47,4 +47,32 @@ void main() {
       expect(snapshot.revision, 2);
     },
   );
+
+  test('returns only dirty viewport rows after the initial repaint', () async {
+    final worker = await TerminalVtWorker.start(
+      cols: 16,
+      rows: 6,
+      maxScrollback: 32,
+    );
+    addTearDown(worker.close);
+
+    final first = await worker.writeDelta(
+      Uint8List.fromList(utf8.encode('first')),
+    );
+    expect(first.fullRepaint, isTrue);
+    expect(first.changedRows, isNotEmpty);
+
+    final second = await worker.writeDelta(
+      Uint8List.fromList(utf8.encode('B')),
+    );
+
+    expect(second.fullRepaint, isFalse);
+    expect(second.changedRows, isNotEmpty);
+    expect(second.changedRows.length, lessThan(second.rows));
+    expect(
+      second.changedRows.expand((row) => row.cells).join(),
+      contains('firstB'),
+    );
+    expect(second.revision, 2);
+  });
 }

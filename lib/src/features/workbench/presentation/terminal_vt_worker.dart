@@ -10,10 +10,13 @@ import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:ghostty_vte/ghostty_vte.dart';
+import 'package:ghostty_vte/ghostty_vte_bindings_generated.dart'
+    as ghostty_bindings;
 
 const String _workerReady = 'ready';
 const String _workerError = 'error';
 const String _workerWrite = 'write';
+const String _workerWriteDelta = 'writeDelta';
 const String _workerResize = 'resize';
 const String _workerClose = 'close';
 
@@ -50,6 +53,66 @@ final class TerminalVtWorkerSnapshot {
       text: message[4]! as String,
       viewportRows: List<String>.unmodifiable(
         (message[5]! as List).cast<String>(),
+      ),
+      cursorVisible: message[6]! as bool,
+      cursorX: message[7] as int?,
+      cursorY: message[8] as int?,
+    );
+  }
+}
+
+/// One changed viewport row returned by the VT worker.
+final class TerminalVtWorkerRowDelta {
+  const TerminalVtWorkerRowDelta({required this.row, required this.cells});
+
+  final int row;
+  final List<String> cells;
+
+  factory TerminalVtWorkerRowDelta._fromMessage(List<Object?> message) {
+    return TerminalVtWorkerRowDelta(
+      row: message[0]! as int,
+      cells: List<String>.unmodifiable((message[1]! as List).cast<String>()),
+    );
+  }
+}
+
+/// Incremental viewport update produced without formatting the full terminal.
+final class TerminalVtWorkerDelta {
+  const TerminalVtWorkerDelta({
+    required this.revision,
+    required this.cols,
+    required this.rows,
+    required this.fullRepaint,
+    required this.changedRows,
+    required this.cursorVisible,
+    required this.cursorX,
+    required this.cursorY,
+  });
+
+  final int revision;
+  final int cols;
+  final int rows;
+  final bool fullRepaint;
+  final List<TerminalVtWorkerRowDelta> changedRows;
+  final bool cursorVisible;
+  final int? cursorX;
+  final int? cursorY;
+
+  factory TerminalVtWorkerDelta._fromMessage(List<Object?> message) {
+    if (message.length < 9 || message[0] != true) {
+      throw StateError('Invalid terminal VT worker delta.');
+    }
+    return TerminalVtWorkerDelta(
+      revision: message[1]! as int,
+      cols: message[2]! as int,
+      rows: message[3]! as int,
+      fullRepaint: message[4]! as bool,
+      changedRows: List<TerminalVtWorkerRowDelta>.unmodifiable(
+        (message[5]! as List).map(
+          (row) => TerminalVtWorkerRowDelta._fromMessage(
+            (row! as List).cast<Object?>(),
+          ),
+        ),
       ),
       cursorVisible: message[6]! as bool,
       cursorX: message[7] as int?,
@@ -106,6 +169,13 @@ final class TerminalVtWorker {
     return _request(<Object?>[_workerWrite, payload]);
   }
 
+  Future<TerminalVtWorkerDelta> writeDelta(Uint8List bytes) async {
+    final payload = TransferableTypedData.fromList(<Uint8List>[bytes]);
+    return TerminalVtWorkerDelta._fromMessage(
+      await _requestRaw(<Object?>[_workerWriteDelta, payload]),
+    );
+  }
+
   Future<TerminalVtWorkerSnapshot> resize({
     required int cols,
     required int rows,
@@ -114,6 +184,10 @@ final class TerminalVtWorker {
   }
 
   Future<TerminalVtWorkerSnapshot> _request(List<Object?> command) async {
+    return TerminalVtWorkerSnapshot._fromMessage(await _requestRaw(command));
+  }
+
+  Future<List<Object?>> _requestRaw(List<Object?> command) async {
     if (_closed) {
       throw StateError('Terminal VT worker is already closed.');
     }
@@ -127,7 +201,7 @@ final class TerminalVtWorker {
       if (response[0] != true) {
         throw StateError('Terminal VT worker failed: ${response[1]}');
       }
-      return TerminalVtWorkerSnapshot._fromMessage(response.cast<Object?>());
+      return response.cast<Object?>();
     } finally {
       reply.close();
     }
@@ -180,6 +254,17 @@ void terminalVtWorkerMain(List<Object?> initialization) {
     return;
   }
 
+  void clearDirty() {
+    renderState!.visitRows((row) {
+      if (row.dirty) {
+        row.dirty = false;
+      }
+    });
+    renderState.dirty = ghostty_bindings
+        .GhosttyRenderStateDirty
+        .GHOSTTY_RENDER_STATE_DIRTY_FALSE;
+  }
+
   List<Object?> snapshot() {
     renderState!.update();
     final render = renderState.snapshot();
@@ -192,7 +277,7 @@ void terminalVtWorkerMain(List<Object?> initialization) {
       rows.add(text.toString());
     }
     final cursor = render.cursor;
-    return <Object?>[
+    final message = <Object?>[
       true,
       revision,
       render.cols,
@@ -203,6 +288,55 @@ void terminalVtWorkerMain(List<Object?> initialization) {
       cursor.hasViewportPosition ? cursor.viewportX : null,
       cursor.hasViewportPosition ? cursor.viewportY : null,
     ];
+    clearDirty();
+    return message;
+  }
+
+  List<String> rowCells(VtRenderRowCursor row) {
+    final cells = <String>[];
+    row.visitCells((cursor) {
+      while (cursor.moveNext()) {
+        cells.add(cursor.current.graphemes);
+      }
+    });
+    return cells;
+  }
+
+  List<Object?> delta() {
+    renderState!.update();
+    final dirty = renderState.dirty;
+    final fullRepaint =
+        dirty ==
+        ghostty_bindings
+            .GhosttyRenderStateDirty
+            .GHOSTTY_RENDER_STATE_DIRTY_FULL;
+    final changedRows = <Object?>[];
+    var rowIndex = 0;
+    renderState.visitRows((row) {
+      if (fullRepaint || row.dirty) {
+        changedRows.add(<Object?>[rowIndex, rowCells(row)]);
+      }
+      if (row.dirty) {
+        row.dirty = false;
+      }
+      rowIndex += 1;
+    });
+    final cursor = renderState.cursorSnapshot;
+    final message = <Object?>[
+      true,
+      revision,
+      renderState.cols,
+      renderState.rows,
+      fullRepaint,
+      changedRows,
+      cursor.visible,
+      cursor.hasViewportPosition ? cursor.viewportX : null,
+      cursor.hasViewportPosition ? cursor.viewportY : null,
+    ];
+    renderState.dirty = ghostty_bindings
+        .GhosttyRenderStateDirty
+        .GHOSTTY_RENDER_STATE_DIRTY_FALSE;
+    return message;
   }
 
   void fail(SendPort reply, Object error, StackTrace stackTrace) {
@@ -221,6 +355,11 @@ void terminalVtWorkerMain(List<Object?> initialization) {
           terminal!.writeBytes(transferable.materialize().asUint8List());
           revision += 1;
           reply.send(snapshot());
+        case _workerWriteDelta:
+          final transferable = message[2]! as TransferableTypedData;
+          terminal!.writeBytes(transferable.materialize().asUint8List());
+          revision += 1;
+          reply.send(delta());
         case _workerResize:
           terminal!.resize(cols: message[2]! as int, rows: message[3]! as int);
           revision += 1;
