@@ -85,6 +85,32 @@ pub struct StructuralSelectionResponse {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NativeDocumentSymbol {
+    pub name: String,
+    pub kind: String,
+    /// Unicode-scalar range of the full declaration node.
+    pub start_offset: usize,
+    pub end_offset: usize,
+    /// Unicode-scalar range of the declaration name used for navigation.
+    pub selection_start_offset: usize,
+    pub selection_end_offset: usize,
+    pub start_line: usize,
+    pub end_line: usize,
+    /// Symbol nesting depth, not raw AST depth.
+    pub depth: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DocumentSymbolsResponse {
+    pub document_id: String,
+    pub revision: u64,
+    pub supported: bool,
+    pub stale: bool,
+    pub truncated: bool,
+    pub symbols: Vec<NativeDocumentSymbol>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NativeEditorDocumentInfo {
     pub document_id: String,
     pub revision: u64,
@@ -458,6 +484,73 @@ impl NativeEditorDocument {
         })
     }
 
+    /// Returns a bounded document outline from the already-retained Tree-sitter tree.
+    /// Only declaration metadata and short symbol names cross FFI; the document text
+    /// itself remains owned by the retained native Rope.
+    pub fn query_document_symbols(
+        &self,
+        expected_revision: u64,
+        max_symbols: usize,
+    ) -> Result<DocumentSymbolsResponse, String> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| "native document lock poisoned")?;
+
+        if state.closed {
+            return Ok(DocumentSymbolsResponse {
+                document_id: state.document_id.clone(),
+                revision: state.revision,
+                supported: false,
+                stale: true,
+                truncated: false,
+                symbols: Vec::new(),
+            });
+        }
+
+        if state.revision != expected_revision {
+            return Ok(DocumentSymbolsResponse {
+                document_id: state.document_id.clone(),
+                revision: state.revision,
+                supported: state.tree.is_some(),
+                stale: true,
+                truncated: false,
+                symbols: Vec::new(),
+            });
+        }
+
+        let Some(tree) = &state.tree else {
+            return Ok(DocumentSymbolsResponse {
+                document_id: state.document_id.clone(),
+                revision: state.revision,
+                supported: false,
+                stale: false,
+                truncated: false,
+                symbols: Vec::new(),
+            });
+        };
+
+        let limit = max_symbols.clamp(1, 5_000);
+        let mut symbols = Vec::new();
+        let truncated = collect_document_symbols(
+            tree.root_node(),
+            &state.rope,
+            &state.language_id,
+            0,
+            limit,
+            &mut symbols,
+        );
+
+        Ok(DocumentSymbolsResponse {
+            document_id: state.document_id.clone(),
+            revision: state.revision,
+            supported: true,
+            stale: false,
+            truncated,
+            symbols,
+        })
+    }
+
     /// Returns foldable structural ranges from the already-retained Tree-sitter tree.
     /// This intentionally does not rescan or materialize the Rope text.
     pub fn query_folding_ranges(
@@ -593,6 +686,121 @@ fn find_structural_selection_range(
             node = node.parent()?;
         }
     }
+}
+
+fn collect_document_symbols(
+    node: tree_sitter::Node<'_>,
+    rope: &RustRope,
+    language_id: &str,
+    depth: usize,
+    limit: usize,
+    symbols: &mut Vec<NativeDocumentSymbol>,
+) -> bool {
+    if symbols.len() >= limit {
+        return true;
+    }
+
+    let symbol_kind = symbol_kind_for_node(language_id, node.kind());
+    let mut child_depth = depth;
+    if let Some(kind) = symbol_kind {
+        if let Some(name_node) = symbol_name_node(node) {
+            let start_offset = rope.byte_to_char(node.start_byte());
+            let end_offset = rope.byte_to_char(node.end_byte());
+            let selection_start_offset = rope.byte_to_char(name_node.start_byte());
+            let selection_end_offset = rope.byte_to_char(name_node.end_byte());
+            if selection_start_offset < selection_end_offset {
+                let name =
+                    bounded_rope_text(rope, selection_start_offset, selection_end_offset, 256);
+                if !name.is_empty() {
+                    symbols.push(NativeDocumentSymbol {
+                        name,
+                        kind: kind.to_string(),
+                        start_offset,
+                        end_offset,
+                        selection_start_offset,
+                        selection_end_offset,
+                        start_line: node.start_position().row,
+                        end_line: node.end_position().row,
+                        depth,
+                    });
+                    child_depth = depth + 1;
+                    if symbols.len() >= limit {
+                        return node.named_child_count() > 0;
+                    }
+                }
+            }
+        }
+    }
+
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        if collect_document_symbols(child, rope, language_id, child_depth, limit, symbols) {
+            return true;
+        }
+    }
+    false
+}
+
+fn symbol_kind_for_node(_language_id: &str, kind: &str) -> Option<&'static str> {
+    match kind {
+        "function_item" | "function_definition" | "function_declaration" | "function_signature" => {
+            Some("function")
+        }
+        "method_definition"
+        | "method_signature"
+        | "getter_signature"
+        | "setter_signature"
+        | "constructor_signature"
+        | "constructor_declaration" => Some("method"),
+        "class_definition" | "class_declaration" => Some("class"),
+        "struct_item" => Some("struct"),
+        "enum_item" | "enum_declaration" => Some("enum"),
+        "trait_item" => Some("trait"),
+        "interface_declaration" => Some("interface"),
+        "mixin_declaration" => Some("mixin"),
+        "extension_declaration" => Some("extension"),
+        "impl_item" => Some("implementation"),
+        "mod_item" | "module" => Some("module"),
+        "type_item" | "type_alias_declaration" | "type_alias" => Some("type"),
+        "const_item" | "static_item" => Some("constant"),
+        "macro_definition" => Some("macro"),
+        _ => None,
+    }
+}
+
+fn symbol_name_node(node: tree_sitter::Node<'_>) -> Option<tree_sitter::Node<'_>> {
+    node.child_by_field_name("name")
+        .or_else(|| {
+            if node.kind() == "impl_item" {
+                node.child_by_field_name("type")
+            } else {
+                None
+            }
+        })
+        .or_else(|| first_identifier_child(node))
+}
+
+fn first_identifier_child(node: tree_sitter::Node<'_>) -> Option<tree_sitter::Node<'_>> {
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        if matches!(
+            child.kind(),
+            "identifier" | "type_identifier" | "field_identifier" | "property_identifier"
+        ) {
+            return Some(child);
+        }
+    }
+    None
+}
+
+fn bounded_rope_text(rope: &RustRope, start: usize, end: usize, max_chars: usize) -> String {
+    let safe_start = start.min(rope.len_chars());
+    let safe_end = end.min(rope.len_chars()).max(safe_start);
+    let bounded_end = safe_start + (safe_end - safe_start).min(max_chars);
+    rope.slice(safe_start..bounded_end)
+        .to_string()
+        .trim()
+        .to_string()
 }
 
 fn find_structural_matching_bracket(
@@ -1402,6 +1610,165 @@ mod tests {
         assert!(!response.supported);
         assert!(!response.stale);
         assert!(response.ranges.is_empty());
+    }
+
+    #[test]
+    fn retained_tree_symbols_preserve_rust_hierarchy_and_scalar_ranges() {
+        let text = "struct User { name: String }\nimpl User { fn display(&self) -> &str { &self.name } }\nfn top_level() {}\n";
+        let document = NativeEditorDocument::open(
+            "doc-symbols-rust".to_string(),
+            9,
+            text.to_string(),
+            "rust".to_string(),
+        )
+        .unwrap();
+
+        let response = document.query_document_symbols(9, 100).unwrap();
+        assert!(response.supported);
+        assert!(!response.stale);
+        assert!(!response.truncated);
+
+        let user = response
+            .symbols
+            .iter()
+            .find(|symbol| symbol.name == "User" && symbol.kind == "struct")
+            .expect("struct symbol");
+        assert_eq!(user.depth, 0);
+        assert_eq!(user.selection_start_offset, char_offset(text, "User"));
+
+        let display = response
+            .symbols
+            .iter()
+            .find(|symbol| symbol.name == "display")
+            .expect("method symbol");
+        assert_eq!(display.kind, "function");
+        assert_eq!(display.depth, 1);
+        assert_eq!(display.selection_start_offset, char_offset(text, "display"));
+
+        let top_level = response
+            .symbols
+            .iter()
+            .find(|symbol| symbol.name == "top_level")
+            .expect("top-level function symbol");
+        assert_eq!(top_level.depth, 0);
+    }
+
+    #[test]
+    fn retained_tree_symbols_cover_typescript_classes_methods_and_interfaces() {
+        let text = "interface Shape { area(): number; }\nclass Circle { area(): number { return 1; } }\nfunction helper() {}\n";
+        let document = NativeEditorDocument::open(
+            "doc-symbols-ts".to_string(),
+            4,
+            text.to_string(),
+            "typescript".to_string(),
+        )
+        .unwrap();
+
+        let response = document.query_document_symbols(4, 100).unwrap();
+        assert!(response.supported);
+        assert!(!response.stale);
+
+        assert!(response
+            .symbols
+            .iter()
+            .any(|symbol| symbol.name == "Shape" && symbol.kind == "interface"));
+        let circle = response
+            .symbols
+            .iter()
+            .find(|symbol| symbol.name == "Circle")
+            .expect("class symbol");
+        assert_eq!(circle.kind, "class");
+        assert_eq!(circle.depth, 0);
+        let area = response
+            .symbols
+            .iter()
+            .find(|symbol| symbol.name == "area" && symbol.depth == 1)
+            .expect("method symbol");
+        assert_eq!(area.kind, "method");
+        assert!(response
+            .symbols
+            .iter()
+            .any(|symbol| symbol.name == "helper" && symbol.kind == "function"));
+    }
+
+    #[test]
+    fn retained_tree_symbols_cover_dart_classes_methods_and_functions() {
+        let text = "class Greeter { String greet() { return 'hi'; } }\nString helper() => 'ok';\n";
+        let document = NativeEditorDocument::open(
+            "doc-symbols-dart".to_string(),
+            6,
+            text.to_string(),
+            "dart".to_string(),
+        )
+        .unwrap();
+
+        let response = document.query_document_symbols(6, 100).unwrap();
+        assert!(response.supported);
+        assert!(!response.stale);
+        let greeter = response
+            .symbols
+            .iter()
+            .find(|symbol| symbol.name == "Greeter")
+            .expect("class symbol");
+        assert_eq!(greeter.kind, "class");
+        assert_eq!(greeter.depth, 0);
+        let greet = response
+            .symbols
+            .iter()
+            .find(|symbol| symbol.name == "greet")
+            .expect("method symbol");
+        assert_eq!(greet.depth, 1);
+        assert!(response
+            .symbols
+            .iter()
+            .any(|symbol| symbol.name == "helper" && symbol.depth == 0));
+    }
+
+    #[test]
+    fn retained_tree_symbols_use_unicode_scalar_offsets_and_obey_revision() {
+        let text = "fn café() {}\nfn second() {}\n";
+        let document = NativeEditorDocument::open(
+            "doc-symbols-unicode".to_string(),
+            3,
+            text.to_string(),
+            "rust".to_string(),
+        )
+        .unwrap();
+
+        let response = document.query_document_symbols(3, 100).unwrap();
+        let cafe = response
+            .symbols
+            .iter()
+            .find(|symbol| symbol.name == "café")
+            .expect("unicode symbol");
+        assert_eq!(cafe.selection_start_offset, char_offset(text, "café"));
+        assert_eq!(cafe.selection_end_offset - cafe.selection_start_offset, 4);
+
+        let stale = document.query_document_symbols(2, 100).unwrap();
+        assert!(stale.supported);
+        assert!(stale.stale);
+        assert!(stale.symbols.is_empty());
+
+        let limited = document.query_document_symbols(3, 1).unwrap();
+        assert!(limited.truncated);
+        assert_eq!(limited.symbols.len(), 1);
+    }
+
+    #[test]
+    fn retained_tree_symbols_fall_back_cleanly_for_plaintext() {
+        let document = NativeEditorDocument::open(
+            "doc-symbols-plain".to_string(),
+            1,
+            "class Fake {}\n".to_string(),
+            "plaintext".to_string(),
+        )
+        .unwrap();
+
+        let response = document.query_document_symbols(1, 100).unwrap();
+        assert!(!response.supported);
+        assert!(!response.stale);
+        assert!(!response.truncated);
+        assert!(response.symbols.is_empty());
     }
 
     #[test]

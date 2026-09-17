@@ -9,9 +9,9 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 import 'rope.dart';
 
-// These functions are ignored because they are not marked as `pub`: `advance_point`, `append_capture_spans`, `apply_edit`, `collect_folding_ranges`, `find_structural_matching_bracket`, `find_structural_selection_range`, `is_foldable_node_kind`, `line_content_end_char`, `native_language`, `normalize_language_id`, `normalize_scope`, `open_with_rope`, `parse_rope`, `point_for_char`
+// These functions are ignored because they are not marked as `pub`: `advance_point`, `append_capture_spans`, `apply_edit`, `bounded_rope_text`, `collect_document_symbols`, `collect_folding_ranges`, `find_structural_matching_bracket`, `find_structural_selection_range`, `first_identifier_child`, `is_foldable_node_kind`, `line_content_end_char`, `native_language`, `normalize_language_id`, `normalize_scope`, `open_with_rope`, `parse_rope`, `point_for_char`, `symbol_kind_for_node`, `symbol_name_node`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `NativeEditorDocumentState`, `NativeLanguage`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<NativeEditorDocument>>
 abstract class NativeEditorDocument implements RustOpaqueInterface {
@@ -59,6 +59,14 @@ abstract class NativeEditorDocument implements RustOpaqueInterface {
         rope: rope,
         languageId: languageId,
       );
+
+  /// Returns a bounded document outline from the already-retained Tree-sitter tree.
+  /// Only declaration metadata and short symbol names cross FFI; the document text
+  /// itself remains owned by the retained native Rope.
+  Future<DocumentSymbolsResponse> queryDocumentSymbols({
+    required BigInt expectedRevision,
+    required BigInt maxSymbols,
+  });
 
   /// Returns foldable structural ranges from the already-retained Tree-sitter tree.
   /// This intentionally does not rescan or materialize the Rope text.
@@ -128,6 +136,45 @@ class BracketMatchResponse {
           supported == other.supported &&
           stale == other.stale &&
           matchOffset == other.matchOffset;
+}
+
+class DocumentSymbolsResponse {
+  final String documentId;
+  final BigInt revision;
+  final bool supported;
+  final bool stale;
+  final bool truncated;
+  final List<NativeDocumentSymbol> symbols;
+
+  const DocumentSymbolsResponse({
+    required this.documentId,
+    required this.revision,
+    required this.supported,
+    required this.stale,
+    required this.truncated,
+    required this.symbols,
+  });
+
+  @override
+  int get hashCode =>
+      documentId.hashCode ^
+      revision.hashCode ^
+      supported.hashCode ^
+      stale.hashCode ^
+      truncated.hashCode ^
+      symbols.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is DocumentSymbolsResponse &&
+          runtimeType == other.runtimeType &&
+          documentId == other.documentId &&
+          revision == other.revision &&
+          supported == other.supported &&
+          stale == other.stale &&
+          truncated == other.truncated &&
+          symbols == other.symbols;
 }
 
 class EditorDocumentEdit {
@@ -215,6 +262,63 @@ class FoldingRangeResponse {
           supported == other.supported &&
           stale == other.stale &&
           ranges == other.ranges;
+}
+
+class NativeDocumentSymbol {
+  final String name;
+  final String kind;
+
+  /// Unicode-scalar range of the full declaration node.
+  final BigInt startOffset;
+  final BigInt endOffset;
+
+  /// Unicode-scalar range of the declaration name used for navigation.
+  final BigInt selectionStartOffset;
+  final BigInt selectionEndOffset;
+  final BigInt startLine;
+  final BigInt endLine;
+
+  /// Symbol nesting depth, not raw AST depth.
+  final BigInt depth;
+
+  const NativeDocumentSymbol({
+    required this.name,
+    required this.kind,
+    required this.startOffset,
+    required this.endOffset,
+    required this.selectionStartOffset,
+    required this.selectionEndOffset,
+    required this.startLine,
+    required this.endLine,
+    required this.depth,
+  });
+
+  @override
+  int get hashCode =>
+      name.hashCode ^
+      kind.hashCode ^
+      startOffset.hashCode ^
+      endOffset.hashCode ^
+      selectionStartOffset.hashCode ^
+      selectionEndOffset.hashCode ^
+      startLine.hashCode ^
+      endLine.hashCode ^
+      depth.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is NativeDocumentSymbol &&
+          runtimeType == other.runtimeType &&
+          name == other.name &&
+          kind == other.kind &&
+          startOffset == other.startOffset &&
+          endOffset == other.endOffset &&
+          selectionStartOffset == other.selectionStartOffset &&
+          selectionEndOffset == other.selectionEndOffset &&
+          startLine == other.startLine &&
+          endLine == other.endLine &&
+          depth == other.depth;
 }
 
 class NativeEditorDocumentInfo {

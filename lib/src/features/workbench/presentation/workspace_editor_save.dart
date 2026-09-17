@@ -231,6 +231,7 @@ extension _WorkspaceEditorSave on _WorkspaceEditorSurfaceState {
       return;
     }
     _lastObservedDocumentVersion = documentVersion;
+    _scheduleOutlineRefresh();
     final wasDirty = _isDirty();
     final lineCount = _controller.lineCount;
     final contentLength = _controller.length;

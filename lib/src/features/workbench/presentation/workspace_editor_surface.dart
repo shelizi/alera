@@ -35,6 +35,7 @@ part 'workspace_editor_widgets.dart';
 part 'workspace_editor_focus.dart';
 part 'workspace_editor_reveal.dart';
 part 'workspace_editor_loading.dart';
+part 'workspace_editor_outline.dart';
 part 'workspace_editor_save.dart';
 part 'workspace_editor_text_actions.dart';
 
@@ -73,8 +74,15 @@ class _WorkspaceEditorSurfaceState
   int _loadRequestId = 0;
   late int _lastObservedDocumentVersion;
   Timer? _documentSnapshotDebounceTimer;
+  Timer? _outlineRefreshTimer;
   bool _hasPendingDocumentSnapshot = false;
   bool _suppressControllerChangeHandling = false;
+  bool _outlineOpen = false;
+  bool _outlineLoading = false;
+  bool _outlineTruncated = false;
+  int _outlineRequestId = 0;
+  code_forge.CodeForgeDocumentSymbolSource? _outlineSource;
+  List<code_forge.CodeForgeDocumentSymbol> _outlineSymbols = const [];
 
   @override
   void initState() {
@@ -137,6 +145,7 @@ class _WorkspaceEditorSurfaceState
           oldWidget.tab.filePath != widget.tab.filePath) {
         _document.clearSnapshot();
       }
+      _resetOutlineForDocumentChange();
       _registerSession(widget.tab.id);
       _restoreDocumentOrLoad();
     }
@@ -144,6 +153,7 @@ class _WorkspaceEditorSurfaceState
 
   @override
   void dispose() {
+    _outlineRefreshTimer?.cancel();
     _flushPendingDocumentSnapshot(refreshState: false, notifyAutosave: false);
     _materializeNativeDirtySnapshot();
     _autosave.dispose();
@@ -268,9 +278,38 @@ class _WorkspaceEditorSurfaceState
                 ? () => unawaited(_discardChanges())
                 : null,
             onOpenPreview: _openPreviewActionFor(filePath),
+            outlineOpen: _outlineOpen,
+            onToggleOutline: _loading || _loadError != null
+                ? null
+                : _toggleOutline,
           ),
           const Divider(height: 1, color: AleraTokens.borderSubtle),
-          Expanded(child: content),
+          Expanded(
+            child: Row(
+              crossAxisAlignment: .stretch,
+              children: <Widget>[
+                Expanded(child: content),
+                if (_outlineOpen) ...<Widget>[
+                  const VerticalDivider(
+                    width: 1,
+                    thickness: 1,
+                    color: AleraTokens.borderSubtle,
+                  ),
+                  SizedBox(
+                    width: 280,
+                    child: _EditorOutlinePanel(
+                      loading: _outlineLoading,
+                      symbols: _outlineSymbols,
+                      truncated: _outlineTruncated,
+                      source: _outlineSource,
+                      onRefresh: _loading ? null : _refreshOutline,
+                      onSelect: _navigateToOutlineSymbol,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
         ],
       ),
     );
