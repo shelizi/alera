@@ -9901,16 +9901,58 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
         }
         if (hasActiveFolds && _isLineFolded(lineIndex)) continue;
 
-        String lineText;
-        if (_lineTextCache.containsKey(lineIndex)) {
-          lineText = _lineTextCache[lineIndex]!;
-        } else {
+        final nativeAsciiInfo = _largeFileNativeAsciiLineInfo(lineIndex);
+        String? lineText = _lineTextCache[lineIndex];
+        if (nativeAsciiInfo == null && lineText == null) {
           lineText = controller.getLineText(lineIndex);
           _lineTextCache[lineIndex] = lineText;
         }
+        final lineLength = nativeAsciiInfo?.contentLength ?? lineText!.length;
+        if (lineLength == 0) continue;
 
-        if (lineText.isEmpty) continue;
+        final lineStartChar = ((lineIndex == startLine) ? startChar : 0).clamp(
+          0,
+          lineLength,
+        );
+        int lineEndChar = ((lineIndex == endLine) ? endChar : lineLength).clamp(
+          0,
+          lineLength,
+        );
 
+        if (lineStartChar >= lineLength) {
+          continue;
+        }
+
+        if (lineStartChar >= lineEndChar) {
+          lineEndChar = (lineStartChar + 1).clamp(0, lineLength);
+          if (lineStartChar >= lineEndChar) {
+            continue;
+          }
+        }
+
+        final lineY = _getLineYOffset(lineIndex, hasActiveFolds);
+        final nativeColumnWidth = nativeAsciiInfo != null
+            ? _getLargeFileFixedAsciiColumnWidth()
+            : null;
+        if (nativeAsciiInfo != null && nativeColumnWidth != null) {
+          final screenX =
+              offset.dx +
+              _gutterWidth +
+              (innerPadding?.left ?? 0) +
+              lineStartChar * nativeColumnWidth -
+              _effectiveHScroll;
+          final screenY =
+              offset.dy +
+              (innerPadding?.top ?? 0) +
+              lineY +
+              _lineHeight -
+              vscrollController.offset;
+          final width = (lineEndChar - lineStartChar) * nativeColumnWidth;
+          _drawSquigglyLine(canvas, screenX, screenY, width, paint);
+          continue;
+        }
+
+        lineText ??= controller.getLineText(lineIndex);
         ui.Paragraph para;
         if (_paragraphCache.containsKey(lineIndex)) {
           para = _paragraphCache[lineIndex]!;
@@ -9921,24 +9963,6 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
             width: lineWrap ? _wrapWidth : null,
           );
           _paragraphCache[lineIndex] = para;
-        }
-
-        final lineStartChar = ((lineIndex == startLine) ? startChar : 0).clamp(
-          0,
-          lineText.length,
-        );
-        int lineEndChar = ((lineIndex == endLine) ? endChar : lineText.length)
-            .clamp(0, lineText.length);
-
-        if (lineStartChar >= lineText.length) {
-          continue;
-        }
-
-        if (lineStartChar >= lineEndChar) {
-          lineEndChar = (lineStartChar + 1).clamp(0, lineText.length);
-          if (lineStartChar >= lineEndChar) {
-            continue;
-          }
         }
 
         final boxKey = '$lineIndex-$lineStartChar-$lineEndChar';
@@ -9958,8 +9982,6 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
         }
 
         if (boxes.isEmpty) continue;
-
-        final lineY = _getLineYOffset(lineIndex, hasActiveFolds);
 
         for (final box in boxes) {
           final screenX = isRTL
