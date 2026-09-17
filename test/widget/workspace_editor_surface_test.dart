@@ -1,11 +1,59 @@
+import 'dart:ui' as ui;
+
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_editor_surface.dart';
 import 'package:alera/src/features/settings/domain/editor_syntax_theme_catalog.dart';
+import 'package:code_forge/code_forge.dart' as code_forge;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 
 void main() {
+  test('preserves Dart regex semantics and scalar match offsets', () {
+    final ranges = code_forge.computeRegexSearchRanges((
+      text: 'a😀 Foo foo\nfoo_bar',
+      query: r'f.o(?=\s|$)',
+      caseSensitive: false,
+      matchWholeWord: true,
+    ));
+
+    expect(ranges, [(3, 6), (7, 10)]);
+    expect(
+      () => code_forge.computeRegexSearchRanges((
+        text: 'foo',
+        query: '(',
+        caseSensitive: true,
+        matchWholeWord: false,
+      )),
+      throwsFormatException,
+    );
+  });
+
+  test('preserves replace-all regex and literal semantics off-thread', () {
+    expect(
+      code_forge.computeReplaceAllText((
+        text: 'foo food Foo\nfoo',
+        query: 'foo',
+        replacement: r'$1',
+        isRegex: false,
+        caseSensitive: false,
+        matchWholeWord: true,
+      )),
+      '\$1 food \$1\n\$1',
+    );
+    expect(
+      code_forge.computeReplaceAllText((
+        text: 'foo\nfoo',
+        query: r'^foo$',
+        replacement: 'bar',
+        isRegex: true,
+        caseSensitive: true,
+        matchWholeWord: false,
+      )),
+      'foo\nfoo',
+    );
+  });
+
   test('normalizes editor tab size to the supported range', () {
     expect(normalizeWorkspaceEditorTabSize(4), 4);
     expect(normalizeWorkspaceEditorTabSize(0), 1);
@@ -228,6 +276,131 @@ void main() {
       ),
       isTrue,
     );
+  });
+
+  test('uses viewport layout only for safe long printable ASCII lines', () {
+    final ascii = List.filled(
+      code_forge.kLargeFileParagraphProfileMinChars,
+      'x',
+    ).join();
+
+    expect(code_forge.isLargeFileAsciiViewportCandidate(ascii), isTrue);
+    expect(
+      code_forge.isLargeFileAsciiViewportCandidate('${ascii.substring(1)}\t'),
+      isFalse,
+    );
+    expect(
+      code_forge.isLargeFileAsciiViewportCandidate('${ascii.substring(1)}中'),
+      isFalse,
+    );
+    expect(
+      code_forge.isLargeFileAsciiViewportCandidate('${ascii.substring(1)}😀'),
+      isFalse,
+    );
+    expect(
+      code_forge.isLargeFileAsciiViewportCandidate('${ascii.substring(1)} '),
+      isFalse,
+    );
+    expect(
+      code_forge.isLargeFileAsciiViewportCandidate(ascii.substring(1)),
+      isFalse,
+    );
+  });
+
+  test('slices long ASCII lines around the horizontal viewport', () {
+    expect(
+      code_forge.largeFileAsciiViewportSlice(
+        textLength: 10000,
+        columnWidth: 10,
+        horizontalScroll: 2500,
+        viewportWidth: 1000,
+      ),
+      (start: 186, end: 414, xOffset: 1860.0),
+    );
+    expect(
+      code_forge.largeFileAsciiViewportSlice(
+        textLength: 100,
+        columnWidth: 10,
+        horizontalScroll: 0,
+        viewportWidth: 200,
+      ),
+      (start: 0, end: 84, xOffset: 0.0),
+    );
+    expect(
+      code_forge.largeFileAsciiViewportSlice(
+        textLength: 100,
+        columnWidth: 10,
+        horizontalScroll: 950,
+        viewportWidth: 200,
+      ),
+      (start: 31, end: 100, xOffset: 310.0),
+    );
+  });
+
+  test('slices shifted ASCII tails around the visible viewport', () {
+    expect(
+      code_forge.largeFileAsciiShiftedViewportSlice(
+        textLength: 10000,
+        sourceStartColumn: 200,
+        sourceStartScreenX: -500,
+        columnWidth: 10,
+        viewportLeft: 0,
+        viewportRight: 1000,
+        overscanColumns: 2,
+      ),
+      (start: 248, end: 352, screenX: -20.0),
+    );
+    expect(
+      code_forge.largeFileAsciiShiftedViewportSlice(
+        textLength: 10000,
+        sourceStartColumn: 200,
+        sourceStartScreenX: 1500,
+        columnWidth: 10,
+        viewportLeft: 0,
+        viewportRight: 1000,
+        overscanColumns: 2,
+      ),
+      (start: 200, end: 200, screenX: 1500.0),
+    );
+  });
+
+  test('fixed-column hit testing matches Flutter paragraph positioning', () {
+    ui.Paragraph paragraph(String text) {
+      final builder = ui.ParagraphBuilder(
+        ui.ParagraphStyle(fontSize: 14, textDirection: ui.TextDirection.ltr),
+      )..pushStyle(ui.TextStyle(fontSize: 14));
+      builder.addText(text);
+      final result = builder.build();
+      result.layout(const ui.ParagraphConstraints(width: double.infinity));
+      return result;
+    }
+
+    const text = 'MMMMMMMMMM';
+    final laidOut = paragraph(text);
+    final columnWidth = paragraph('M').maxIntrinsicWidth;
+    for (final columnPosition in <double>[
+      0.0,
+      0.1,
+      0.49,
+      0.51,
+      1.49,
+      1.51,
+      5.25,
+      9.9,
+      12.0,
+    ]) {
+      final x = columnPosition * columnWidth;
+      final expected = laidOut.getPositionForOffset(ui.Offset(x, 0)).offset;
+      expect(
+        code_forge.largeFileAsciiColumnForX(
+          textLength: text.length,
+          columnWidth: columnWidth,
+          x: x,
+        ),
+        expected,
+        reason: 'x=$x columns=$columnPosition',
+      );
+    }
   });
 
   test('offers Text Actions only for a valid editor selection', () {

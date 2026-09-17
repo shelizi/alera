@@ -2248,6 +2248,10 @@ class CodeForgeController implements DeltaTextInputClient {
     return _rope.getLineStartOffset(lineIndex);
   }
 
+  /// Flushes the small active-line edit buffer into the Rope so native
+  /// background operations can snapshot the latest document contents.
+  void flushPendingBuffer() => _flushBuffer();
+
   /// Finds the start of the line containing [offset].
   int findLineStart(int offset) => _rope.findLineStart(offset);
 
@@ -3889,11 +3893,16 @@ class CodeForgeController implements DeltaTextInputClient {
 
   /// Replace a range of text with new text.
   /// Used for clipboard operations and text manipulation.
+  ///
+  /// [knownDeletedText] may be supplied when the caller already owns the exact
+  /// pre-edit contents of [start]..[end]. This avoids materializing the same
+  /// Rope slice again solely for undo bookkeeping.
   void replaceRange(
     int start,
     int end,
     String replacement, {
     bool preserveOldCursor = false,
+    String? knownDeletedText,
   }) {
     if (_undoController?.isUndoRedoInProgress ?? false) return;
 
@@ -3902,8 +3911,12 @@ class CodeForgeController implements DeltaTextInputClient {
     _flushBuffer();
     final safeStart = start.clamp(0, _rope.length);
     final safeEnd = end.clamp(safeStart, _rope.length);
+    final canReuseKnownDeletedText =
+        knownDeletedText != null && safeStart == start && safeEnd == end;
     final deletedText = safeStart < safeEnd
-        ? _rope.substring(safeStart, safeEnd)
+        ? canReuseKnownDeletedText
+              ? knownDeletedText
+              : _rope.substring(safeStart, safeEnd)
         : '';
     final supportsPullSemanticSync =
         lspConfig?.supportsSemanticTokensPull ?? true;
@@ -5626,10 +5639,14 @@ class CodeForgeController implements DeltaTextInputClient {
   }
 
   void _initBuffer(int lineIndex) {
+    final lineInfo = _rope.getLineLayoutInfo(lineIndex);
     _bufferLineIndex = lineIndex;
-    _bufferLineText = _rope.getLineText(lineIndex);
-    _bufferLineRopeStart = _rope.getLineStartOffset(lineIndex);
-    _bufferLineOriginalLength = _bufferLineText!.runes.length;
+    _bufferLineRopeStart = lineInfo.start;
+    _bufferLineOriginalLength = lineInfo.contentLength;
+    _bufferLineText = _rope.substring(
+      lineInfo.start,
+      lineInfo.start + lineInfo.contentLength,
+    );
     _bufferDirty = false;
   }
 

@@ -70,7 +70,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.13.0';
 
   @override
-  int get rustContentHash => 434014572;
+  int get rustContentHash => -1153913229;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -170,6 +170,13 @@ abstract class RustLibApi extends BaseApi {
     required BigInt offset,
   });
 
+  Future<List<SearchRange>> crateApiRopeRopeBridgeFindLiteral({
+    required RopeBridge that,
+    required String query,
+    required bool caseSensitive,
+    required bool matchWholeWord,
+  });
+
   List<BiDiSegment> crateApiRopeRopeBridgeGetBidiSegmentsForLine({
     required RopeBridge that,
     required BigInt lineIndex,
@@ -183,6 +190,10 @@ abstract class RustLibApi extends BaseApi {
 
   String crateApiRopeRopeBridgeGetText({required RopeBridge that});
 
+  Future<String> crateApiRopeRopeBridgeGetTextSnapshot({
+    required RopeBridge that,
+  });
+
   void crateApiRopeRopeBridgeInsert({
     required RopeBridge that,
     required BigInt charIdx,
@@ -194,6 +205,11 @@ abstract class RustLibApi extends BaseApi {
   BigInt crateApiRopeRopeBridgeLenLines({required RopeBridge that});
 
   String crateApiRopeRopeBridgeLine({
+    required RopeBridge that,
+    required BigInt lineIdx,
+  });
+
+  LineLayoutInfo crateApiRopeRopeBridgeLineLayoutInfo({
     required RopeBridge that,
     required BigInt lineIdx,
   });
@@ -944,6 +960,48 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<List<SearchRange>> crateApiRopeRopeBridgeFindLiteral({
+    required RopeBridge that,
+    required String query,
+    required bool caseSensitive,
+    required bool matchWholeWord,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerRopeBridge(
+            that,
+            serializer,
+          );
+          sse_encode_String(query, serializer);
+          sse_encode_bool(caseSensitive, serializer);
+          sse_encode_bool(matchWholeWord, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 21,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_search_range,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiRopeRopeBridgeFindLiteralConstMeta,
+        argValues: [that, query, caseSensitive, matchWholeWord],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiRopeRopeBridgeFindLiteralConstMeta =>
+      const TaskConstMeta(
+        debugName: "RopeBridge_find_literal",
+        argNames: ["that", "query", "caseSensitive", "matchWholeWord"],
+      );
+
+  @override
   List<BiDiSegment> crateApiRopeRopeBridgeGetBidiSegmentsForLine({
     required RopeBridge that,
     required BigInt lineIndex,
@@ -957,7 +1015,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             serializer,
           );
           sse_encode_usize(lineIndex, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 21)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 22)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_list_bi_di_segment,
@@ -992,7 +1050,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           );
           sse_encode_usize(start, serializer);
           sse_encode_usize(end, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 22)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 23)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_list_bi_di_segment,
@@ -1021,7 +1079,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 23)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 24)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_String,
@@ -1036,6 +1094,42 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateApiRopeRopeBridgeGetTextConstMeta =>
       const TaskConstMeta(debugName: "RopeBridge_get_text", argNames: ["that"]);
+
+  @override
+  Future<String> crateApiRopeRopeBridgeGetTextSnapshot({
+    required RopeBridge that,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerRopeBridge(
+            that,
+            serializer,
+          );
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 25,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiRopeRopeBridgeGetTextSnapshotConstMeta,
+        argValues: [that],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiRopeRopeBridgeGetTextSnapshotConstMeta =>
+      const TaskConstMeta(
+        debugName: "RopeBridge_get_text_snapshot",
+        argNames: ["that"],
+      );
 
   @override
   void crateApiRopeRopeBridgeInsert({
@@ -1053,7 +1147,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           );
           sse_encode_usize(charIdx, serializer);
           sse_encode_String(text, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 24)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 26)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
@@ -1082,7 +1176,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 25)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 27)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_usize,
@@ -1111,7 +1205,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 26)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 28)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_usize,
@@ -1144,7 +1238,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             serializer,
           );
           sse_encode_usize(lineIdx, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 27)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 29)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_String,
@@ -1163,6 +1257,39 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   );
 
   @override
+  LineLayoutInfo crateApiRopeRopeBridgeLineLayoutInfo({
+    required RopeBridge that,
+    required BigInt lineIdx,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerRopeBridge(
+            that,
+            serializer,
+          );
+          sse_encode_usize(lineIdx, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 30)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_line_layout_info,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiRopeRopeBridgeLineLayoutInfoConstMeta,
+        argValues: [that, lineIdx],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiRopeRopeBridgeLineLayoutInfoConstMeta =>
+      const TaskConstMeta(
+        debugName: "RopeBridge_line_layout_info",
+        argNames: ["that", "lineIdx"],
+      );
+
+  @override
   BigInt crateApiRopeRopeBridgeLineToChar({
     required RopeBridge that,
     required BigInt lineIdx,
@@ -1176,7 +1303,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             serializer,
           );
           sse_encode_usize(lineIdx, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 28)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 31)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_usize,
@@ -1207,7 +1334,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 29)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 32)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_text_direction,
@@ -1242,7 +1369,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           );
           sse_encode_usize(start, serializer);
           sse_encode_usize(end, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 30)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 33)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
@@ -1285,7 +1412,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_bool(preserveOldCursor, serializer);
           sse_encode_usize(oldBase, serializer);
           sse_encode_usize(oldExtent, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 31)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 34)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_selection_state,
@@ -1332,7 +1459,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 32)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 35)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_selection_state,
@@ -1367,7 +1494,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           );
           sse_encode_usize(baseOffset, serializer);
           sse_encode_usize(extentOffset, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 33)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 36)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
@@ -1402,7 +1529,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           );
           sse_encode_usize(start, serializer);
           sse_encode_usize(end, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 34)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 37)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_String,
@@ -1433,7 +1560,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 35)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 38)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_text_direction,
@@ -1470,7 +1597,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_f_64(viewTop, serializer);
           sse_encode_f_64(viewBottom, serializer);
           sse_encode_f_64(lineHeight, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 36)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 39)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_viewport_frame,
@@ -1498,7 +1625,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 37,
+            funcId: 40,
             port: port_,
           );
         },
@@ -1531,7 +1658,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 38,
+            funcId: 41,
             port: port_,
           );
         },
@@ -1563,7 +1690,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             serializer,
           );
           sse_encode_i_32(targetOffset, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 39)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 42)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_i_64,
@@ -1600,7 +1727,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_usize(firstVisible, serializer);
           sse_encode_usize(lastVisible, serializer);
           sse_encode_usize(tabSize, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 40)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 43)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_list_guide_block,
@@ -1628,7 +1755,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 41,
+            funcId: 44,
             port: port_,
           );
         },
@@ -1655,7 +1782,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 42,
+            funcId: 45,
             port: port_,
           );
         },
@@ -1682,7 +1809,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 43,
+            funcId: 46,
             port: port_,
           );
         },
@@ -1709,7 +1836,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 44,
+            funcId: 47,
             port: port_,
           );
         },
@@ -1742,7 +1869,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_f_64(viewTop, serializer);
           sse_encode_f_64(viewBottom, serializer);
           sse_encode_f_64(lineHeight, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 45)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 48)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_visible_line_range,
@@ -1774,7 +1901,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 46,
+            funcId: 49,
             port: port_,
           );
         },
@@ -1953,6 +2080,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  LineLayoutInfo dco_decode_line_layout_info(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 3)
+      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    return LineLayoutInfo(
+      start: dco_decode_usize(arr[0]),
+      contentLen: dco_decode_usize(arr[1]),
+      safeAscii: dco_decode_bool(arr[2]),
+    );
+  }
+
+  @protected
   LineSummary dco_decode_line_summary(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
@@ -2002,6 +2142,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<SearchRange> dco_decode_list_search_range(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_search_range).toList();
+  }
+
+  @protected
   PixelHeight dco_decode_pixel_height(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
@@ -2019,6 +2165,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     return RustFoldRange(
       startLine: dco_decode_i_32(arr[0]),
       endLine: dco_decode_i_32(arr[1]),
+    );
+  }
+
+  @protected
+  SearchRange dco_decode_search_range(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 2)
+      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    return SearchRange(
+      start: dco_decode_usize(arr[0]),
+      end: dco_decode_usize(arr[1]),
     );
   }
 
@@ -2249,6 +2407,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  LineLayoutInfo sse_decode_line_layout_info(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_start = sse_decode_usize(deserializer);
+    var var_contentLen = sse_decode_usize(deserializer);
+    var var_safeAscii = sse_decode_bool(deserializer);
+    return LineLayoutInfo(
+      start: var_start,
+      contentLen: var_contentLen,
+      safeAscii: var_safeAscii,
+    );
+  }
+
+  @protected
   LineSummary sse_decode_line_summary(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_lenChars = sse_decode_usize(deserializer);
@@ -2333,6 +2504,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<SearchRange> sse_decode_list_search_range(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <SearchRange>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_search_range(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
   PixelHeight sse_decode_pixel_height(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_field0 = sse_decode_f_32(deserializer);
@@ -2345,6 +2528,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_startLine = sse_decode_i_32(deserializer);
     var var_endLine = sse_decode_i_32(deserializer);
     return RustFoldRange(startLine: var_startLine, endLine: var_endLine);
+  }
+
+  @protected
+  SearchRange sse_decode_search_range(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_start = sse_decode_usize(deserializer);
+    var var_end = sse_decode_usize(deserializer);
+    return SearchRange(start: var_start, end: var_end);
   }
 
   @protected
@@ -2567,6 +2758,17 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_line_layout_info(
+    LineLayoutInfo self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_usize(self.start, serializer);
+    sse_encode_usize(self.contentLen, serializer);
+    sse_encode_bool(self.safeAscii, serializer);
+  }
+
+  @protected
   void sse_encode_line_summary(LineSummary self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_usize(self.lenChars, serializer);
@@ -2642,6 +2844,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_list_search_range(
+    List<SearchRange> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_search_range(item, serializer);
+    }
+  }
+
+  @protected
   void sse_encode_pixel_height(PixelHeight self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_f_32(self.field0, serializer);
@@ -2655,6 +2869,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.startLine, serializer);
     sse_encode_i_32(self.endLine, serializer);
+  }
+
+  @protected
+  void sse_encode_search_range(SearchRange self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_usize(self.start, serializer);
+    sse_encode_usize(self.end, serializer);
   }
 
   @protected
@@ -2854,6 +3075,17 @@ class RopeBridgeImpl extends RustOpaque implements RopeBridge {
   BigInt findLineStart({required BigInt offset}) => RustLib.instance.api
       .crateApiRopeRopeBridgeFindLineStart(that: this, offset: offset);
 
+  Future<List<SearchRange>> findLiteral({
+    required String query,
+    required bool caseSensitive,
+    required bool matchWholeWord,
+  }) => RustLib.instance.api.crateApiRopeRopeBridgeFindLiteral(
+    that: this,
+    query: query,
+    caseSensitive: caseSensitive,
+    matchWholeWord: matchWholeWord,
+  );
+
   List<BiDiSegment> getBidiSegmentsForLine({required BigInt lineIndex}) =>
       RustLib.instance.api.crateApiRopeRopeBridgeGetBidiSegmentsForLine(
         that: this,
@@ -2872,6 +3104,9 @@ class RopeBridgeImpl extends RustOpaque implements RopeBridge {
   String getText() =>
       RustLib.instance.api.crateApiRopeRopeBridgeGetText(that: this);
 
+  Future<String> getTextSnapshot() =>
+      RustLib.instance.api.crateApiRopeRopeBridgeGetTextSnapshot(that: this);
+
   void insert({required BigInt charIdx, required String text}) => RustLib
       .instance
       .api
@@ -2885,6 +3120,11 @@ class RopeBridgeImpl extends RustOpaque implements RopeBridge {
 
   String line({required BigInt lineIdx}) => RustLib.instance.api
       .crateApiRopeRopeBridgeLine(that: this, lineIdx: lineIdx);
+
+  LineLayoutInfo lineLayoutInfo({required BigInt lineIdx}) => RustLib
+      .instance
+      .api
+      .crateApiRopeRopeBridgeLineLayoutInfo(that: this, lineIdx: lineIdx);
 
   BigInt lineToChar({required BigInt lineIdx}) => RustLib.instance.api
       .crateApiRopeRopeBridgeLineToChar(that: this, lineIdx: lineIdx);

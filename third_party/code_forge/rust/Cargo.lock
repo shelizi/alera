@@ -152,6 +152,7 @@ name = "code_forge"
 version = "0.1.0"
 dependencies = [
  "flutter_rust_bridge",
+ "regex",
  "ropey",
  "unicode-bidi",
  "zed-sum-tree",

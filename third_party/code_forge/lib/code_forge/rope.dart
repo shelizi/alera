@@ -187,12 +187,40 @@ class Rope {
     return _rope.line(lineIdx: BigInt.from(lineIndex));
   }
 
+  ({int start, int contentLength, bool safeAscii}) getLineLayoutInfo(
+    int lineIndex,
+  ) {
+    final info = _rope.lineLayoutInfo(lineIdx: BigInt.from(lineIndex));
+    return (
+      start: info.start.toInt(),
+      contentLength: info.contentLen.toInt(),
+      safeAscii: info.safeAscii,
+    );
+  }
+
   int getLineAtOffset(int charOffset) {
     return _rope.charToLine(charIdx: BigInt.from(charOffset)).toInt();
   }
 
   int getLineStartOffset(int lineIndex) {
     return _rope.lineToChar(lineIdx: BigInt.from(lineIndex)).toInt();
+  }
+
+  Future<String> getTextSnapshot() => _rope.getTextSnapshot();
+
+  Future<List<(int start, int end)>> findLiteral(
+    String query, {
+    bool caseSensitive = false,
+    bool matchWholeWord = false,
+  }) async {
+    final ranges = await _rope.findLiteral(
+      query: query,
+      caseSensitive: caseSensitive,
+      matchWholeWord: matchWholeWord,
+    );
+    return ranges
+        .map((range) => (range.start.toInt(), range.end.toInt()))
+        .toList(growable: false);
   }
 
   int findLineStart(int offset) {

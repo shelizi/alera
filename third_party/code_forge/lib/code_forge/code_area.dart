@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:developer' as developer;
 import 'dart:io';
 import 'dart:math';
 import 'dart:ui' as ui;
@@ -21,9 +22,133 @@ import './syntax_highlighter.dart';
 const int kSemanticTokenViewportPaddingLines = 1500;
 const int kExactWrappedHeightThreshold = 512;
 const int kWrappedHeightSampleSize = 64;
+const int kLargeFileParagraphProfileMinChars = 4096;
 const String _wordCharPattern =
     r'[\w\u0600-\u06FF\u08A0-\u08FF\u0590-\u05FF'
     r'\u3040-\u309F\u30A0-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uAC00-\uD7AF\uF900-\uFAFF]';
+
+bool isLargeFileAsciiViewportCandidate(
+  String text, {
+  int minChars = kLargeFileParagraphProfileMinChars,
+}) {
+  if (text.length < minChars || text.isEmpty) return false;
+  if (text.codeUnitAt(text.length - 1) == 0x20) return false;
+
+  for (int i = 0; i < text.length; i++) {
+    final codeUnit = text.codeUnitAt(i);
+    if (codeUnit < 0x20 || codeUnit > 0x7e) return false;
+  }
+  return true;
+}
+
+({int start, int end, double xOffset}) largeFileAsciiViewportSlice({
+  required int textLength,
+  required double columnWidth,
+  required double horizontalScroll,
+  required double viewportWidth,
+  int overscanColumns = 64,
+}) {
+  if (textLength <= 0 ||
+      columnWidth <= 0 ||
+      !columnWidth.isFinite ||
+      viewportWidth <= 0 ||
+      !viewportWidth.isFinite) {
+    return (start: 0, end: 0, xOffset: 0.0);
+  }
+
+  final safeScroll = horizontalScroll.isFinite
+      ? max(0.0, horizontalScroll)
+      : 0.0;
+  final safeOverscan = max(0, overscanColumns);
+  final firstVisibleColumn = (safeScroll / columnWidth).floor().clamp(
+    0,
+    textLength,
+  );
+  final visibleColumns = (viewportWidth / columnWidth).ceil();
+  final start = max(0, firstVisibleColumn - safeOverscan);
+  final end = min(
+    textLength,
+    firstVisibleColumn + visibleColumns + safeOverscan,
+  );
+  return (start: start, end: end, xOffset: start * columnWidth);
+}
+
+({int start, int end, double screenX}) largeFileAsciiShiftedViewportSlice({
+  required int textLength,
+  required int sourceStartColumn,
+  required double sourceStartScreenX,
+  required double columnWidth,
+  required double viewportLeft,
+  required double viewportRight,
+  int overscanColumns = 64,
+}) {
+  if (textLength <= 0 ||
+      sourceStartColumn < 0 ||
+      sourceStartColumn >= textLength ||
+      columnWidth <= 0 ||
+      !columnWidth.isFinite ||
+      !sourceStartScreenX.isFinite ||
+      !viewportLeft.isFinite ||
+      !viewportRight.isFinite ||
+      viewportRight <= viewportLeft) {
+    final clampedStart = sourceStartColumn.clamp(0, textLength);
+    return (
+      start: clampedStart,
+      end: clampedStart,
+      screenX: sourceStartScreenX,
+    );
+  }
+
+  final remainingLength = textLength - sourceStartColumn;
+  final sourceEndScreenX = sourceStartScreenX + remainingLength * columnWidth;
+  if (sourceStartScreenX >= viewportRight || sourceEndScreenX <= viewportLeft) {
+    return (
+      start: sourceStartColumn,
+      end: sourceStartColumn,
+      screenX: sourceStartScreenX,
+    );
+  }
+
+  final safeOverscan = max(0, overscanColumns);
+  final firstVisibleRelative =
+      ((viewportLeft - sourceStartScreenX) / columnWidth).floor().clamp(
+        0,
+        remainingLength,
+      );
+  final lastVisibleRelative =
+      ((viewportRight - sourceStartScreenX) / columnWidth).ceil().clamp(
+        0,
+        remainingLength,
+      );
+  final startRelative = max(0, firstVisibleRelative - safeOverscan);
+  final endRelative = min(
+    remainingLength,
+    max(startRelative, lastVisibleRelative + safeOverscan),
+  );
+  final start = sourceStartColumn + startRelative;
+  final end = sourceStartColumn + endRelative;
+  return (
+    start: start,
+    end: end,
+    screenX: sourceStartScreenX + startRelative * columnWidth,
+  );
+}
+
+int largeFileAsciiColumnForX({
+  required int textLength,
+  required double columnWidth,
+  required double x,
+}) {
+  if (textLength <= 0 ||
+      columnWidth <= 0 ||
+      !columnWidth.isFinite ||
+      !x.isFinite) {
+    return 0;
+  }
+
+  final safeX = max(0.0, x);
+  return ((safeX / columnWidth) + 0.5).floor().clamp(0, textLength);
+}
 
 /// A highly customizable code editor widget for Flutter.
 ///
@@ -4448,6 +4573,14 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
   final VoidCallback? onHoverSetByTap;
   final Map<int, double> _lineWidthCache = {};
   final Map<int, String> _lineTextCache = {};
+  final Map<int, ({int version, bool eligible})>
+  _largeFileAsciiViewportEligibilityCache = {};
+  final Map<int, ({int version, int start, int contentLength, bool safeAscii})>
+  _largeFileNativeLineInfoCache = {};
+  bool _largeFileFixedAsciiColumnWidthMeasured = false;
+  double? _largeFileFixedAsciiColumnWidth;
+  String? _largeFileBufferAsciiEligibilityText;
+  bool _largeFileBufferAsciiEligible = false;
   final Map<int, Rect> _actionBulbRects = {};
   final Map<Rect, DocumentColor> _colorBoxHitAreas = {};
   final Map<int, ui.Paragraph> _paragraphCache = {};
@@ -4995,8 +5128,155 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
       ..pushStyle(_uiTextStyle)
       ..addText(text.isEmpty ? ' ' : text);
     final p = builder.build();
-    p.layout(ui.ParagraphConstraints(width: width ?? double.infinity));
+    final constraints = ui.ParagraphConstraints(
+      width: width ?? double.infinity,
+    );
+    if (_largeFilePerformanceMode &&
+        text.length >= kLargeFileParagraphProfileMinChars &&
+        !kReleaseMode) {
+      developer.Timeline.timeSync(
+        'CodeForge.largeFileParagraphLayout',
+        () => p.layout(constraints),
+        arguments: <String, Object?>{
+          'chars': text.length,
+          'width': constraints.width.isFinite ? constraints.width : -1.0,
+        },
+      );
+    } else {
+      p.layout(constraints);
+    }
     return p;
+  }
+
+  bool _canUseLargeFileAsciiViewportLine(int lineIndex, String text) {
+    final version = controller.contentVersion;
+    final cached = _largeFileAsciiViewportEligibilityCache[lineIndex];
+    if (cached != null && cached.version == version) {
+      return cached.eligible;
+    }
+
+    final eligible = isLargeFileAsciiViewportCandidate(text);
+    _largeFileAsciiViewportEligibilityCache[lineIndex] = (
+      version: version,
+      eligible: eligible,
+    );
+    return eligible;
+  }
+
+  bool _canUseLargeFileAsciiViewportBuffer(String text) {
+    if (identical(_largeFileBufferAsciiEligibilityText, text)) {
+      return _largeFileBufferAsciiEligible;
+    }
+    _largeFileBufferAsciiEligibilityText = text;
+    _largeFileBufferAsciiEligible = isLargeFileAsciiViewportCandidate(text);
+    return _largeFileBufferAsciiEligible;
+  }
+
+  double? _getLargeFileFixedAsciiColumnWidth() {
+    if (_largeFileFixedAsciiColumnWidthMeasured) {
+      return _largeFileFixedAsciiColumnWidth;
+    }
+    _largeFileFixedAsciiColumnWidthMeasured = true;
+
+    final unitWidth = _buildParagraph('M').maxIntrinsicWidth;
+    if (!unitWidth.isFinite || unitWidth <= 0) return null;
+
+    final allPrintableAscii = String.fromCharCodes([
+      for (int code = 0x20; code <= 0x7e; code++) code,
+    ]);
+    final samples = <String>[
+      'MMMMMMMM',
+      'iiiiiiii',
+      'WWWWWWWW',
+      '01234567',
+      ' ->=._x',
+      allPrintableAscii,
+    ];
+    for (final sample in samples) {
+      final measured = _buildParagraph(sample).maxIntrinsicWidth;
+      final expected = unitWidth * sample.length;
+      final tolerance = max(0.05, expected * 0.002);
+      if (!measured.isFinite || (measured - expected).abs() > tolerance) {
+        return null;
+      }
+    }
+
+    _largeFileFixedAsciiColumnWidth = unitWidth;
+    return unitWidth;
+  }
+
+  double? _largeFileAsciiColumnWidthForLine(int lineIndex, String text) {
+    if (!_largeFilePerformanceMode || _lineWrap || isRTL || _enableFolding) {
+      return null;
+    }
+    final eligible =
+        controller.isBufferActive && lineIndex == controller.bufferLineIndex
+        ? _canUseLargeFileAsciiViewportBuffer(text)
+        : _canUseLargeFileAsciiViewportLine(lineIndex, text);
+    if (!eligible) return null;
+    return _getLargeFileFixedAsciiColumnWidth();
+  }
+
+  ({int start, int contentLength, bool safeAscii}) _nativeLineLayoutInfo(
+    int lineIndex,
+  ) {
+    final version = controller.contentVersion;
+    var cached = _largeFileNativeLineInfoCache[lineIndex];
+    if (cached == null || cached.version != version) {
+      final info = controller.rope.getLineLayoutInfo(lineIndex);
+      cached = (
+        version: version,
+        start: info.start,
+        contentLength: info.contentLength,
+        safeAscii: info.safeAscii,
+      );
+      _largeFileNativeLineInfoCache[lineIndex] = cached;
+    }
+    return (
+      start: cached.start,
+      contentLength: cached.contentLength,
+      safeAscii: cached.safeAscii,
+    );
+  }
+
+  ({int start, int contentLength})? _largeFileNativeAsciiLineInfo(
+    int lineIndex,
+  ) {
+    if (!_largeFilePerformanceMode ||
+        _lineWrap ||
+        isRTL ||
+        _enableFolding ||
+        controller.isBufferActive) {
+      return null;
+    }
+
+    final info = _nativeLineLayoutInfo(lineIndex);
+    if (!info.safeAscii ||
+        info.contentLength < kLargeFileParagraphProfileMinChars) {
+      return null;
+    }
+    return (start: info.start, contentLength: info.contentLength);
+  }
+
+  ({int start, int contentLength})? _largeFileAsciiGeometryLineInfo(
+    int lineIndex,
+  ) {
+    if (!_largeFilePerformanceMode || _lineWrap || isRTL || _enableFolding) {
+      return null;
+    }
+    if (controller.isBufferActive) {
+      if (lineIndex != controller.bufferLineIndex) return null;
+      final bufferText = controller.bufferLineText;
+      if (bufferText == null ||
+          !_canUseLargeFileAsciiViewportBuffer(bufferText)) {
+        return null;
+      }
+      return (
+        start: controller.bufferLineRopeStart,
+        contentLength: bufferText.length,
+      );
+    }
+    return _largeFileNativeAsciiLineInfo(lineIndex);
   }
 
   ui.Paragraph _buildHighlightedParagraph(
@@ -5179,18 +5459,46 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
         final lineChar = hoverNotifier.value!.$2;
         final line = lineChar['line']!;
         final char = lineChar['character']!;
-        final lineText = controller.getLineText(line);
-        final para =
-            _paragraphCache.containsKey(line) &&
-                _lineTextCache[line] == lineText
-            ? _paragraphCache[line]!
-            : _buildParagraph(lineText, width: lineWrap ? _wrapWidth : null);
-
         double hoveredX = 0.0;
-        if (char > 0 && char <= lineText.length) {
-          final boxes = para.getBoxesForRange(0, char);
-          if (boxes.isNotEmpty) {
-            hoveredX = boxes.last.right;
+        if (char > 0) {
+          final nativeAsciiInfo = _largeFileNativeAsciiLineInfo(line);
+          final nativeColumnWidth = nativeAsciiInfo != null
+              ? _getLargeFileFixedAsciiColumnWidth()
+              : null;
+          if (nativeAsciiInfo != null &&
+              nativeColumnWidth != null &&
+              char <= nativeAsciiInfo.contentLength) {
+            hoveredX = char * nativeColumnWidth;
+          } else {
+            final cachedLineText = _lineTextCache[line];
+            final lineText = cachedLineText ?? controller.getLineText(line);
+            if (cachedLineText == null) {
+              _lineTextCache[line] = lineText;
+            }
+            if (char <= lineText.length) {
+              final columnWidth = _largeFileAsciiColumnWidthForLine(
+                line,
+                lineText,
+              );
+              if (columnWidth != null) {
+                hoveredX = char * columnWidth;
+              } else {
+                var para = _paragraphCache[line];
+                if (para == null) {
+                  para = _buildParagraph(
+                    lineText,
+                    width: lineWrap ? _wrapWidth : null,
+                  );
+                  if (_largeFilePerformanceMode && !_lineWrap && !isRTL) {
+                    _paragraphCache[line] = para;
+                  }
+                }
+                final boxes = para.getBoxesForRange(0, char);
+                if (boxes.isNotEmpty) {
+                  hoveredX = boxes.last.right;
+                }
+              }
+            }
           }
         }
 
@@ -5391,6 +5699,8 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
       fontSize: fontSize,
       fontFamily: fontFamily,
     );
+    _largeFileFixedAsciiColumnWidthMeasured = false;
+    _largeFileFixedAsciiColumnWidth = null;
 
     _gutterPadding = fontSize;
     if (_enableGutter) {
@@ -6823,25 +7133,62 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
 
     final columnIndex = cursorOffset - lineStartOffset;
     final lineY = _getLineYOffset(lineIndex, hasActiveFolds);
-    final lineText = controller.getLineText(lineIndex);
+    if (!isRTL && columnIndex == 0) {
+      final result = (
+        lineIndex: lineIndex,
+        columnIndex: columnIndex,
+        offset: Offset(0, lineY + _getTotalVirtualOffset(lineIndex)),
+        height: _lineHeight,
+      );
+      _caretInfoCache[cursorOffset] = result;
+      return result;
+    }
+
+    final nativeAsciiInfo = _largeFileAsciiGeometryLineInfo(lineIndex);
+    final nativeColumnWidth = nativeAsciiInfo != null
+        ? _getLargeFileFixedAsciiColumnWidth()
+        : null;
+    if (nativeAsciiInfo != null && nativeColumnWidth != null) {
+      final clampedColumn = columnIndex.clamp(0, nativeAsciiInfo.contentLength);
+      final caretX =
+          clampedColumn * nativeColumnWidth +
+          _getColorBoxOffsetForLine(lineIndex, clampedColumn);
+      final result = (
+        lineIndex: lineIndex,
+        columnIndex: columnIndex,
+        offset: Offset(caretX, lineY + _getTotalVirtualOffset(lineIndex)),
+        height: _lineHeight,
+      );
+      _caretInfoCache[cursorOffset] = result;
+      return result;
+    }
+
+    final cachedLineText = _lineTextCache[lineIndex];
+    final lineText = cachedLineText ?? controller.getLineText(lineIndex);
+    final fixedColumnWidth = _largeFileAsciiColumnWidthForLine(
+      lineIndex,
+      lineText,
+    );
+    if (fixedColumnWidth != null) {
+      final clampedColumn = columnIndex.clamp(0, lineText.length);
+      final caretX =
+          clampedColumn * fixedColumnWidth +
+          _getColorBoxOffsetForLine(lineIndex, clampedColumn);
+      final result = (
+        lineIndex: lineIndex,
+        columnIndex: columnIndex,
+        offset: Offset(caretX, lineY + _getTotalVirtualOffset(lineIndex)),
+        height: _lineHeight,
+      );
+      _lineTextCache[lineIndex] = lineText;
+      _caretInfoCache[cursorOffset] = result;
+      return result;
+    }
     final contentWidth =
         size.width - _gutterWidth - (innerPadding?.horizontal ?? 0);
     final paragraphWidth = lineWrap
         ? _wrapWidth
         : (isRTL ? max(contentWidth * 3, 10000.0) : null);
-
-    ui.Paragraph para;
-    if (_paragraphCache.containsKey(lineIndex) &&
-        _lineTextCache[lineIndex] == lineText &&
-        !isRTL) {
-      para = _paragraphCache[lineIndex]!;
-    } else {
-      para = _buildHighlightedParagraph(
-        lineIndex,
-        lineText,
-        width: paragraphWidth,
-      );
-    }
 
     final utf16Col = CodeForgeController.scalarToStringIndex(
       lineText,
@@ -6849,6 +7196,25 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     );
     final clampedCol = utf16Col.clamp(0, lineText.length);
     double caretX = 0.0, caretYInLine = 0.0;
+
+    ui.Paragraph? para;
+    if (isRTL || (lineText.isNotEmpty && clampedCol > 0)) {
+      if (_paragraphCache.containsKey(lineIndex) &&
+          cachedLineText != null &&
+          !isRTL) {
+        para = _paragraphCache[lineIndex]!;
+      } else {
+        para = _buildHighlightedParagraph(
+          lineIndex,
+          lineText,
+          width: paragraphWidth,
+        );
+        if (_largeFilePerformanceMode && !_lineWrap && !isRTL) {
+          _paragraphCache[lineIndex] = para;
+        }
+      }
+      _lineTextCache[lineIndex] = lineText;
+    }
 
     if (isRTL) {
       final paragraphOffset = lineWrap
@@ -6858,7 +7224,7 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
       if (lineText.isEmpty) {
         caretX = contentWidth;
       } else if (clampedCol == 0) {
-        final boxes = para.getBoxesForRange(0, 1);
+        final boxes = para!.getBoxesForRange(0, 1);
         if (boxes.isNotEmpty) {
           caretX = boxes.first.right + paragraphOffset;
           caretYInLine = _rowTopForBox(boxes.first);
@@ -6866,7 +7232,7 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
           caretX = contentWidth;
         }
       } else if (clampedCol >= lineText.length) {
-        final boxes = para.getBoxesForRange(0, lineText.length);
+        final boxes = para!.getBoxesForRange(0, lineText.length);
         if (boxes.isNotEmpty) {
           final lastBox = boxes.last;
           caretX = lastBox.left + paragraphOffset;
@@ -6875,7 +7241,7 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
           caretX = paragraphOffset;
         }
       } else {
-        final boxes = para.getBoxesForRange(0, clampedCol);
+        final boxes = para!.getBoxesForRange(0, clampedCol);
         if (boxes.isNotEmpty) {
           final lastBox = boxes.last;
           caretX = lastBox.left + paragraphOffset;
@@ -6888,7 +7254,7 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
       if (lineText.isEmpty) {
         caretX = 0;
       } else if (clampedCol > 0) {
-        final boxes = para.getBoxesForRange(0, clampedCol);
+        final boxes = para!.getBoxesForRange(0, clampedCol);
         if (boxes.isNotEmpty) {
           final lastBox = boxes.last;
           caretX = lastBox.right;
@@ -6939,25 +7305,62 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     final lineStartOffset = controller.getLineStartOffset(lineIndex);
     final columnIndex = cursorOffset - lineStartOffset;
     final lineY = _getLineYOffset(lineIndex, hasActiveFolds);
-    final lineText = controller.getLineText(lineIndex);
+    if (!isRTL && columnIndex == 0) {
+      final result = (
+        lineIndex: lineIndex,
+        columnIndex: columnIndex,
+        offset: Offset(0, lineY + _getTotalVirtualOffset(lineIndex)),
+        height: _lineHeight,
+      );
+      _caretInfoCache[cursorOffset] = result;
+      return result;
+    }
+
+    final nativeAsciiInfo = _largeFileAsciiGeometryLineInfo(lineIndex);
+    final nativeColumnWidth = nativeAsciiInfo != null
+        ? _getLargeFileFixedAsciiColumnWidth()
+        : null;
+    if (nativeAsciiInfo != null && nativeColumnWidth != null) {
+      final clampedColumn = columnIndex.clamp(0, nativeAsciiInfo.contentLength);
+      final caretX =
+          clampedColumn * nativeColumnWidth +
+          _getColorBoxOffsetForLine(lineIndex, clampedColumn);
+      final result = (
+        lineIndex: lineIndex,
+        columnIndex: columnIndex,
+        offset: Offset(caretX, lineY + _getTotalVirtualOffset(lineIndex)),
+        height: _lineHeight,
+      );
+      _caretInfoCache[cursorOffset] = result;
+      return result;
+    }
+
+    final cachedLineText = _lineTextCache[lineIndex];
+    final lineText = cachedLineText ?? controller.getLineText(lineIndex);
+    final fixedColumnWidth = _largeFileAsciiColumnWidthForLine(
+      lineIndex,
+      lineText,
+    );
+    if (fixedColumnWidth != null) {
+      final clampedColumn = columnIndex.clamp(0, lineText.length);
+      final caretX =
+          clampedColumn * fixedColumnWidth +
+          _getColorBoxOffsetForLine(lineIndex, clampedColumn);
+      final result = (
+        lineIndex: lineIndex,
+        columnIndex: columnIndex,
+        offset: Offset(caretX, lineY + _getTotalVirtualOffset(lineIndex)),
+        height: _lineHeight,
+      );
+      _lineTextCache[lineIndex] = lineText;
+      _caretInfoCache[cursorOffset] = result;
+      return result;
+    }
     final contentWidth =
         size.width - _gutterWidth - (innerPadding?.horizontal ?? 0);
     final paragraphWidth = lineWrap
         ? _wrapWidth
         : (isRTL ? max(contentWidth * 3, 10000.0) : null);
-
-    ui.Paragraph para;
-    if (_paragraphCache.containsKey(lineIndex) &&
-        _lineTextCache[lineIndex] == lineText &&
-        !isRTL) {
-      para = _paragraphCache[lineIndex]!;
-    } else {
-      para = _buildHighlightedParagraph(
-        lineIndex,
-        lineText,
-        width: paragraphWidth,
-      );
-    }
 
     final utf16Col = CodeForgeController.scalarToUtf16Offset(
       lineText,
@@ -6967,6 +7370,25 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     double caretX = 0.0;
     double caretYInLine = 0.0;
 
+    ui.Paragraph? para;
+    if (isRTL || (lineText.isNotEmpty && clampedCol > 0)) {
+      if (_paragraphCache.containsKey(lineIndex) &&
+          cachedLineText != null &&
+          !isRTL) {
+        para = _paragraphCache[lineIndex]!;
+      } else {
+        para = _buildHighlightedParagraph(
+          lineIndex,
+          lineText,
+          width: paragraphWidth,
+        );
+        if (_largeFilePerformanceMode && !_lineWrap && !isRTL) {
+          _paragraphCache[lineIndex] = para;
+        }
+      }
+      _lineTextCache[lineIndex] = lineText;
+    }
+
     if (isRTL) {
       final paragraphOffset = lineWrap
           ? 0.0
@@ -6974,7 +7396,7 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
       if (lineText.isEmpty) {
         caretX = contentWidth;
       } else if (clampedCol == 0) {
-        final boxes = para.getBoxesForRange(0, 1);
+        final boxes = para!.getBoxesForRange(0, 1);
         if (boxes.isNotEmpty) {
           caretX = boxes.first.right + paragraphOffset;
           caretYInLine = _rowTopForBox(boxes.first);
@@ -6982,7 +7404,7 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
           caretX = contentWidth;
         }
       } else if (clampedCol >= lineText.length) {
-        final boxes = para.getBoxesForRange(0, lineText.length);
+        final boxes = para!.getBoxesForRange(0, lineText.length);
         if (boxes.isNotEmpty) {
           final lastBox = boxes.last;
           caretX = lastBox.left + paragraphOffset;
@@ -6991,7 +7413,7 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
           caretX = paragraphOffset;
         }
       } else {
-        final boxes = para.getBoxesForRange(0, clampedCol);
+        final boxes = para!.getBoxesForRange(0, clampedCol);
         if (boxes.isNotEmpty) {
           final lastBox = boxes.last;
           caretX = lastBox.left + paragraphOffset;
@@ -7004,7 +7426,7 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
       if (lineText.isEmpty) {
         caretX = 0;
       } else if (clampedCol > 0) {
-        final boxes = para.getBoxesForRange(0, clampedCol);
+        final boxes = para!.getBoxesForRange(0, clampedCol);
         if (boxes.isNotEmpty) {
           final lastBox = boxes.last;
           caretX = lastBox.right;
@@ -7058,6 +7480,24 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
 
     final tappedLineIndex = _findVisibleLineByYPosition(position.dy);
 
+    if (controller.documentColors.isEmpty) {
+      final nativeAsciiInfo = _largeFileAsciiGeometryLineInfo(tappedLineIndex);
+      final nativeColumnWidth = nativeAsciiInfo != null
+          ? _getLargeFileFixedAsciiColumnWidth()
+          : null;
+      if (nativeAsciiInfo != null && nativeColumnWidth != null) {
+        final scalarColumn = largeFileAsciiColumnForX(
+          textLength: nativeAsciiInfo.contentLength,
+          columnWidth: nativeColumnWidth,
+          x: position.dx,
+        );
+        return (nativeAsciiInfo.start + scalarColumn).clamp(
+          0,
+          controller.length,
+        );
+      }
+    }
+
     String lineText;
     if (_lineTextCache.containsKey(tappedLineIndex)) {
       lineText = _lineTextCache[tappedLineIndex]!;
@@ -7065,6 +7505,22 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
       lineText = controller.getLineText(tappedLineIndex);
       _lineTextCache[tappedLineIndex] = lineText;
       _paragraphCache.remove(tappedLineIndex);
+    }
+
+    if (controller.documentColors.isEmpty) {
+      final fixedColumnWidth = _largeFileAsciiColumnWidthForLine(
+        tappedLineIndex,
+        lineText,
+      );
+      if (fixedColumnWidth != null) {
+        final scalarColumn = largeFileAsciiColumnForX(
+          textLength: lineText.length,
+          columnWidth: fixedColumnWidth,
+          x: position.dx,
+        );
+        final lineStartOffset = controller.getLineStartOffset(tappedLineIndex);
+        return (lineStartOffset + scalarColumn).clamp(0, controller.length);
+      }
     }
 
     final contentWidth =
@@ -7369,17 +7825,56 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
   }
 
   double _getLineWidth(int lineIndex) {
-    final lineText = controller.getLineText(lineIndex);
     final cachedText = _lineTextCache[lineIndex];
+    final cachedWidth = _lineWidthCache[lineIndex];
+    if (cachedWidth != null) {
+      return cachedWidth;
+    }
 
-    if (cachedText == lineText && _lineWidthCache.containsKey(lineIndex)) {
-      return _lineWidthCache[lineIndex]!;
+    final nativeAsciiInfo = _largeFileNativeAsciiLineInfo(lineIndex);
+    if (nativeAsciiInfo != null) {
+      final columnWidth = _getLargeFileFixedAsciiColumnWidth();
+      if (columnWidth != null) {
+        final width = nativeAsciiInfo.contentLength * columnWidth;
+        _lineWidthCache[lineIndex] = width;
+        return width;
+      }
+    }
+
+    if (cachedText != null &&
+        _largeFilePerformanceMode &&
+        !_lineWrap &&
+        !isRTL) {
+      final cachedParagraph = _paragraphCache[lineIndex];
+      if (cachedParagraph != null) {
+        final width = cachedParagraph.maxIntrinsicWidth;
+        _lineWidthCache[lineIndex] = width;
+        return width;
+      }
+    }
+
+    final lineText = cachedText ?? controller.getLineText(lineIndex);
+    if (_largeFilePerformanceMode &&
+        !_lineWrap &&
+        !isRTL &&
+        !_enableFolding &&
+        _canUseLargeFileAsciiViewportLine(lineIndex, lineText)) {
+      final columnWidth = _getLargeFileFixedAsciiColumnWidth();
+      if (columnWidth != null) {
+        final width = lineText.length * columnWidth;
+        _lineTextCache[lineIndex] = lineText;
+        _lineWidthCache[lineIndex] = width;
+        return width;
+      }
     }
 
     final para = _buildParagraph(lineText);
     final width = para.maxIntrinsicWidth;
     _lineTextCache[lineIndex] = lineText;
     _lineWidthCache[lineIndex] = width;
+    if (_largeFilePerformanceMode && !_lineWrap && !isRTL) {
+      _paragraphCache[lineIndex] = para;
+    }
     return width;
   }
 
@@ -7917,6 +8412,25 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
         ? _wrapWidth
         : (rtl ? max(contentWidth * 3, 10000.0) : null);
     final horizontalScroll = wrapsLines ? 0.0 : _effectiveHScroll;
+    final horizontalViewportWidth = wrapsLines
+        ? 0.0
+        : hscrollController.hasClients
+        ? hscrollController.position.viewportDimension - _rightPaddingWidth
+        : max(
+            0.0,
+            _screenWidth -
+                _gutterWidth -
+                (innerPadding?.horizontal ?? 0.0) -
+                _rightPaddingWidth,
+          );
+    final largeFileAsciiColumnWidth =
+        _largeFilePerformanceMode &&
+            !wrapsLines &&
+            !rtl &&
+            !foldingEnabled &&
+            horizontalViewportWidth > 0
+        ? _getLargeFileFixedAsciiColumnWidth()
+        : null;
 
     double currentY = firstVisibleLineY;
     for (int i = firstVisibleLine; i <= lastVisibleLine && i < lineCount; i++) {
@@ -7927,44 +8441,87 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
       final visualYOffset = _getTotalVirtualOffset(i);
 
       ui.Paragraph paragraph;
-      String lineText;
+      double paragraphXOffset = 0.0;
 
       if (bufferActive && i == bufferLineIndex && bufferLineText != null) {
-        lineText = bufferLineText;
-        paragraph = _buildHighlightedParagraph(
-          i,
-          bufferLineText,
-          width: paragraphWidth,
-        );
-        if (rtl && wrapsLines) {
-          lineHeight = paragraph.height;
+        if (largeFileAsciiColumnWidth != null &&
+            _canUseLargeFileAsciiViewportBuffer(bufferLineText)) {
+          final slice = largeFileAsciiViewportSlice(
+            textLength: bufferLineText.length,
+            columnWidth: largeFileAsciiColumnWidth,
+            horizontalScroll: horizontalScroll,
+            viewportWidth: horizontalViewportWidth,
+          );
+          paragraph = _buildParagraph(
+            bufferLineText.substring(slice.start, slice.end),
+          );
+          paragraphXOffset = slice.xOffset;
+        } else {
+          paragraph = _buildHighlightedParagraph(
+            i,
+            bufferLineText,
+            width: paragraphWidth,
+          );
+          if (rtl && wrapsLines) {
+            lineHeight = paragraph.height;
+          }
         }
       } else {
-        final cachedLineText = _lineTextCache[i];
-        if (cachedLineText != null) {
-          lineText = cachedLineText;
-        } else {
-          lineText = controller.getLineText(i);
-          _lineTextCache[i] = lineText;
-        }
-
         final cachedParagraph = rtl ? null : _paragraphCache[i];
         if (cachedParagraph != null) {
           paragraph = cachedParagraph;
         } else {
-          paragraph = _buildHighlightedParagraph(
-            i,
-            lineText,
-            width: paragraphWidth,
-          );
-          if (!rtl) {
-            _paragraphCache[i] = paragraph;
-          }
+          final nativeAsciiInfo = largeFileAsciiColumnWidth != null
+              ? _largeFileNativeAsciiLineInfo(i)
+              : null;
+          if (nativeAsciiInfo != null && largeFileAsciiColumnWidth != null) {
+            final slice = largeFileAsciiViewportSlice(
+              textLength: nativeAsciiInfo.contentLength,
+              columnWidth: largeFileAsciiColumnWidth,
+              horizontalScroll: horizontalScroll,
+              viewportWidth: horizontalViewportWidth,
+            );
+            final sliceText = controller.rope.substring(
+              nativeAsciiInfo.start + slice.start,
+              nativeAsciiInfo.start + slice.end,
+            );
+            paragraph = _buildParagraph(sliceText);
+            paragraphXOffset = slice.xOffset;
+          } else {
+            final cachedLineText = _lineTextCache[i];
+            final lineText = cachedLineText ?? controller.getLineText(i);
+            if (cachedLineText == null) {
+              _lineTextCache[i] = lineText;
+            }
 
-          if (wrapsLines) {
-            _lineHeightCache[i] = paragraph.height;
-            if (rtl) {
-              lineHeight = paragraph.height;
+            if (largeFileAsciiColumnWidth != null &&
+                _canUseLargeFileAsciiViewportLine(i, lineText)) {
+              final slice = largeFileAsciiViewportSlice(
+                textLength: lineText.length,
+                columnWidth: largeFileAsciiColumnWidth,
+                horizontalScroll: horizontalScroll,
+                viewportWidth: horizontalViewportWidth,
+              );
+              paragraph = _buildParagraph(
+                lineText.substring(slice.start, slice.end),
+              );
+              paragraphXOffset = slice.xOffset;
+            } else {
+              paragraph = _buildHighlightedParagraph(
+                i,
+                lineText,
+                width: paragraphWidth,
+              );
+              if (!rtl) {
+                _paragraphCache[i] = paragraph;
+              }
+
+              if (wrapsLines) {
+                _lineHeightCache[i] = paragraph.height;
+                if (rtl) {
+                  lineHeight = paragraph.height;
+                }
+              }
             }
           }
         }
@@ -7985,7 +8542,11 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
 
       canvas.drawParagraph(
         paragraph,
-        offset + Offset(textX, innerTop + contentTop + visualYOffset - viewTop),
+        offset +
+            Offset(
+              textX + paragraphXOffset,
+              innerTop + contentTop + visualYOffset - viewTop,
+            ),
       );
 
       if (isFoldStart && foldRange.isFolded) {
@@ -8226,20 +8787,20 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
             final caretLineIndex = controller.getLineAtOffset(
               controller.selection.baseOffset,
             );
-            final lineText =
-                _lineTextCache[caretLineIndex] ??
-                controller.getLineText(caretLineIndex);
-            final lineStartOffset = controller.getLineStartOffset(
-              caretLineIndex,
-            );
+            final lineInfo = _nativeLineLayoutInfo(caretLineIndex);
             final caretInLine =
-                controller.selection.baseOffset - lineStartOffset;
-
-            final previewStart = caretInLine.clamp(0, lineText.length);
-            final previewEnd = (caretInLine + 10).clamp(0, lineText.length);
-            final previewText = lineText.substring(
-              max(0, previewStart - 10),
-              min(lineText.length, previewEnd),
+                controller.selection.baseOffset - lineInfo.start;
+            final previewStart = max(
+              0,
+              caretInLine - 10,
+            ).clamp(0, lineInfo.contentLength);
+            final previewEnd = (caretInLine + 10).clamp(
+              0,
+              lineInfo.contentLength,
+            );
+            final previewText = controller.rope.substring(
+              lineInfo.start + previewStart,
+              lineInfo.start + previewEnd,
             );
 
             ui.Paragraph zoomParagraph;
@@ -8357,19 +8918,26 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
             final fontFamily = textStyle?.fontFamily;
 
             for (int line = startLine; line <= endLine; line++) {
-              final lineText = controller.getLineText(line);
-              final lineStartOffset = controller.getLineStartOffset(line);
+              final lineInfo = _nativeLineLayoutInfo(line);
 
               String displayText;
               if (line == dragLine) {
-                final colInLine = dragOffset - lineStartOffset;
+                final colInLine = (dragOffset - lineInfo.start).clamp(
+                  0,
+                  lineInfo.contentLength,
+                );
                 final previewStart = max(0, colInLine - 15);
-                final previewEnd = min(lineText.length, colInLine + 15);
-                displayText = lineText.substring(previewStart, previewEnd);
+                final previewEnd = min(lineInfo.contentLength, colInLine + 15);
+                displayText = controller.rope.substring(
+                  lineInfo.start + previewStart,
+                  lineInfo.start + previewEnd,
+                );
               } else {
-                displayText = lineText.length > 30
-                    ? lineText.substring(0, 30)
-                    : lineText;
+                final previewEnd = min(30, lineInfo.contentLength);
+                displayText = controller.rope.substring(
+                  lineInfo.start,
+                  lineInfo.start + previewEnd,
+                );
               }
 
               if (displayText.isEmpty) displayText = ' ';
@@ -9160,21 +9728,47 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
   void _pruneViewportCaches(int firstVisibleLine, int lastVisibleLine) {
     const int keepMargin = 400;
     const int maxLineBoundedCacheEntries = 3000;
+    const int largeFileTextLayoutKeepMargin = 128;
+    const int largeFileTextLayoutMaxEntries = 512;
 
     final minKeep = max(0, firstVisibleLine - keepMargin);
     final maxKeep = min(controller.lineCount - 1, lastVisibleLine + keepMargin);
+    final textLayoutMinKeep = _largeFilePerformanceMode
+        ? max(0, firstVisibleLine - largeFileTextLayoutKeepMargin)
+        : minKeep;
+    final textLayoutMaxKeep = _largeFilePerformanceMode
+        ? min(
+            controller.lineCount - 1,
+            lastVisibleLine + largeFileTextLayoutKeepMargin,
+          )
+        : maxKeep;
+    final textLayoutMaxEntries = _largeFilePerformanceMode
+        ? largeFileTextLayoutMaxEntries
+        : maxLineBoundedCacheEntries;
 
     _pruneIntKeyedViewportCache(
       _lineTextCache,
-      minKeep,
-      maxKeep,
-      maxLineBoundedCacheEntries,
+      textLayoutMinKeep,
+      textLayoutMaxKeep,
+      textLayoutMaxEntries,
     );
     _pruneIntKeyedViewportCache(
       _lineWidthCache,
-      minKeep,
-      maxKeep,
-      maxLineBoundedCacheEntries,
+      textLayoutMinKeep,
+      textLayoutMaxKeep,
+      textLayoutMaxEntries,
+    );
+    _pruneIntKeyedViewportCache(
+      _largeFileAsciiViewportEligibilityCache,
+      textLayoutMinKeep,
+      textLayoutMaxKeep,
+      textLayoutMaxEntries,
+    );
+    _pruneIntKeyedViewportCache(
+      _largeFileNativeLineInfoCache,
+      textLayoutMinKeep,
+      textLayoutMaxKeep,
+      textLayoutMaxEntries,
     );
     _pruneIntKeyedViewportCache(
       _lineHeightCache,
@@ -9184,9 +9778,9 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     );
     _pruneIntKeyedViewportCache(
       _paragraphCache,
-      minKeep,
-      maxKeep,
-      maxLineBoundedCacheEntries,
+      textLayoutMinKeep,
+      textLayoutMaxKeep,
+      textLayoutMaxEntries,
     );
     _pruneIntKeyedViewportCache(
       _lineNumberParagraphCache,
@@ -9316,6 +9910,49 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     final lineStartOffset = controller.getLineStartOffset(lineIndex);
     final columnIndex = bracketOffset - lineStartOffset;
 
+    final nativeAsciiInfo = _largeFileNativeAsciiLineInfo(lineIndex);
+    final nativeColumnWidth = nativeAsciiInfo != null
+        ? _getLargeFileFixedAsciiColumnWidth()
+        : null;
+    if (nativeAsciiInfo != null && nativeColumnWidth != null) {
+      final nativeColumnIndex = bracketOffset - nativeAsciiInfo.start;
+      if (nativeColumnIndex < 0 ||
+          nativeColumnIndex >= nativeAsciiInfo.contentLength) {
+        return;
+      }
+
+      final lineY = _getLineYOffset(lineIndex, hasActiveFolds);
+      final colorBoxOffset = _getColorBoxOffsetForLine(
+        lineIndex,
+        nativeColumnIndex,
+      );
+      final textX =
+          _gutterWidth + (innerPadding?.left ?? 0) - _effectiveHScroll;
+      final screenX =
+          offset.dx +
+          textX +
+          nativeColumnIndex * nativeColumnWidth +
+          colorBoxOffset;
+      final screenY =
+          offset.dy +
+          (innerPadding?.top ?? 0) +
+          lineY -
+          vscrollController.offset;
+      final bracketRect = RRect.fromRectAndRadius(
+        Rect.fromLTWH(
+          screenX - 1.5,
+          screenY - 1,
+          nativeColumnWidth + 3,
+          _lineHeight + 2.5,
+        ),
+        Radius.circular(2),
+      );
+
+      _bracketHighlightPainter.color = textColor;
+      canvas.drawRRect(bracketRect, _bracketHighlightPainter);
+      return;
+    }
+
     String lineText;
     if (_lineTextCache.containsKey(lineIndex)) {
       lineText = _lineTextCache[lineIndex]!;
@@ -9432,16 +10069,58 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
         }
         if (hasActiveFolds && _isLineFolded(lineIndex)) continue;
 
-        String lineText;
-        if (_lineTextCache.containsKey(lineIndex)) {
-          lineText = _lineTextCache[lineIndex]!;
-        } else {
+        final nativeAsciiInfo = _largeFileNativeAsciiLineInfo(lineIndex);
+        String? lineText = _lineTextCache[lineIndex];
+        if (nativeAsciiInfo == null && lineText == null) {
           lineText = controller.getLineText(lineIndex);
           _lineTextCache[lineIndex] = lineText;
         }
+        final lineLength = nativeAsciiInfo?.contentLength ?? lineText!.length;
+        if (lineLength == 0) continue;
 
-        if (lineText.isEmpty) continue;
+        final lineStartChar = ((lineIndex == startLine) ? startChar : 0).clamp(
+          0,
+          lineLength,
+        );
+        int lineEndChar = ((lineIndex == endLine) ? endChar : lineLength).clamp(
+          0,
+          lineLength,
+        );
 
+        if (lineStartChar >= lineLength) {
+          continue;
+        }
+
+        if (lineStartChar >= lineEndChar) {
+          lineEndChar = (lineStartChar + 1).clamp(0, lineLength);
+          if (lineStartChar >= lineEndChar) {
+            continue;
+          }
+        }
+
+        final lineY = _getLineYOffset(lineIndex, hasActiveFolds);
+        final nativeColumnWidth = nativeAsciiInfo != null
+            ? _getLargeFileFixedAsciiColumnWidth()
+            : null;
+        if (nativeAsciiInfo != null && nativeColumnWidth != null) {
+          final screenX =
+              offset.dx +
+              _gutterWidth +
+              (innerPadding?.left ?? 0) +
+              lineStartChar * nativeColumnWidth -
+              _effectiveHScroll;
+          final screenY =
+              offset.dy +
+              (innerPadding?.top ?? 0) +
+              lineY +
+              _lineHeight -
+              vscrollController.offset;
+          final width = (lineEndChar - lineStartChar) * nativeColumnWidth;
+          _drawSquigglyLine(canvas, screenX, screenY, width, paint);
+          continue;
+        }
+
+        lineText ??= controller.getLineText(lineIndex);
         ui.Paragraph para;
         if (_paragraphCache.containsKey(lineIndex)) {
           para = _paragraphCache[lineIndex]!;
@@ -9452,24 +10131,6 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
             width: lineWrap ? _wrapWidth : null,
           );
           _paragraphCache[lineIndex] = para;
-        }
-
-        final lineStartChar = ((lineIndex == startLine) ? startChar : 0).clamp(
-          0,
-          lineText.length,
-        );
-        int lineEndChar = ((lineIndex == endLine) ? endChar : lineText.length)
-            .clamp(0, lineText.length);
-
-        if (lineStartChar >= lineText.length) {
-          continue;
-        }
-
-        if (lineStartChar >= lineEndChar) {
-          lineEndChar = (lineStartChar + 1).clamp(0, lineText.length);
-          if (lineStartChar >= lineEndChar) {
-            continue;
-          }
         }
 
         final boxKey = '$lineIndex-$lineStartChar-$lineEndChar';
@@ -9489,8 +10150,6 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
         }
 
         if (boxes.isEmpty) continue;
-
-        final lineY = _getLineYOffset(lineIndex, hasActiveFolds);
 
         for (final box in boxes) {
           final screenX = isRTL
@@ -9600,10 +10259,14 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
         }
         if (hasActiveFolds && _isLineFolded(lineIndex)) continue;
 
-        final lineStartOffset = controller.getLineStartOffset(lineIndex);
-        final lineText =
-            _lineTextCache[lineIndex] ?? controller.getLineText(lineIndex);
-        final lineLength = lineText.length;
+        final nativeAsciiInfo = _largeFileNativeAsciiLineInfo(lineIndex);
+        final lineStartOffset =
+            nativeAsciiInfo?.start ?? controller.getLineStartOffset(lineIndex);
+        String? lineText = _lineTextCache[lineIndex];
+        if (nativeAsciiInfo == null && lineText == null) {
+          lineText = controller.getLineText(lineIndex);
+        }
+        final lineLength = nativeAsciiInfo?.contentLength ?? lineText!.length;
 
         int lineSelStart = 0;
         int lineSelEnd = lineLength;
@@ -9620,6 +10283,34 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
 
         if (lineSelStart >= lineSelEnd) continue;
 
+        final lineY = _getLineYOffset(lineIndex, hasActiveFolds);
+        final scroll = lineWrap ? 0.0 : _effectiveHScroll;
+        final textX = isRTL
+            ? (innerPadding?.left ?? 0) - scroll
+            : _gutterWidth + (innerPadding?.left ?? 0) - scroll;
+        final nativeColumnWidth = nativeAsciiInfo != null
+            ? _getLargeFileFixedAsciiColumnWidth()
+            : null;
+        if (nativeAsciiInfo != null && nativeColumnWidth != null) {
+          final screenX = offset.dx + textX + lineSelStart * nativeColumnWidth;
+          final screenY =
+              offset.dy +
+              (innerPadding?.top ?? 0) +
+              lineY -
+              vscrollController.offset;
+          canvas.drawRect(
+            Rect.fromLTWH(
+              screenX,
+              screenY,
+              (lineSelEnd - lineSelStart) * nativeColumnWidth,
+              _lineHeight,
+            ),
+            highlightPaint,
+          );
+          continue;
+        }
+
+        lineText ??= controller.getLineText(lineIndex);
         final contentWidth =
             size.width - _gutterWidth - (innerPadding?.horizontal ?? 0);
         final paragraphWidth = lineWrap
@@ -9637,13 +10328,6 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
           );
           _paragraphCache[lineIndex] = para;
         }
-
-        final lineY = _getLineYOffset(lineIndex, hasActiveFolds);
-
-        final scroll = lineWrap ? 0.0 : _effectiveHScroll;
-        final textX = isRTL
-            ? (innerPadding?.left ?? 0) - scroll
-            : _gutterWidth + (innerPadding?.left ?? 0) - scroll;
 
         if (lineText.isNotEmpty) {
           final boxKey = '$lineIndex-$lineSelStart-$lineSelEnd';
@@ -9761,10 +10445,14 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
       if (lineIndex < firstVisibleLine || lineIndex > lastVisibleLine) continue;
       if (hasActiveFolds && _isLineFolded(lineIndex)) continue;
 
-      final lineStartOffset = controller.getLineStartOffset(lineIndex);
-      final lineText =
-          _lineTextCache[lineIndex] ?? controller.getLineText(lineIndex);
-      final lineLength = lineText.length;
+      final nativeAsciiInfo = _largeFileNativeAsciiLineInfo(lineIndex);
+      final lineStartOffset =
+          nativeAsciiInfo?.start ?? controller.getLineStartOffset(lineIndex);
+      String? lineText = _lineTextCache[lineIndex];
+      if (nativeAsciiInfo == null && lineText == null) {
+        lineText = controller.getLineText(lineIndex);
+      }
+      final lineLength = nativeAsciiInfo?.contentLength ?? lineText!.length;
 
       int lineSelStart = 0;
       int lineSelEnd = lineLength;
@@ -9785,22 +10473,6 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
 
       final contentWidth =
           size.width - _gutterWidth - (innerPadding?.horizontal ?? 0);
-      final paragraphWidth = lineWrap
-          ? _wrapWidth
-          : (isRTL ? contentWidth : null);
-
-      ui.Paragraph para;
-      if (_paragraphCache.containsKey(lineIndex)) {
-        para = _paragraphCache[lineIndex]!;
-      } else {
-        para = _buildHighlightedParagraph(
-          lineIndex,
-          lineText,
-          width: paragraphWidth,
-        );
-        _paragraphCache[lineIndex] = para;
-      }
-
       final lineY = _getLineYOffset(lineIndex, hasActiveFolds);
       final visualYOffset = _getTotalVirtualOffset(lineIndex);
 
@@ -9817,41 +10489,84 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
       final textX = isRTL
           ? (innerPadding?.left ?? 0) - scroll
           : _gutterWidth + (innerPadding?.left ?? 0) - scroll;
+      final nativeColumnWidth = nativeAsciiInfo != null
+          ? _getLargeFileFixedAsciiColumnWidth()
+          : null;
 
-      if (lineSelStart < lineSelEnd && lineText.isNotEmpty) {
-        final utf16Start = CodeForgeController.scalarToUtf16Offset(
-          lineText,
-          lineSelStart,
+      if (lineSelStart < lineSelEnd &&
+          nativeAsciiInfo != null &&
+          nativeColumnWidth != null) {
+        final adjustedLeft =
+            lineSelStart * nativeColumnWidth + colorBoxOffsetStart;
+        final adjustedRight =
+            lineSelEnd * nativeColumnWidth + colorBoxOffsetEnd;
+        final screenX = offset.dx + textX + adjustedLeft;
+        final screenY =
+            offset.dy +
+            (innerPadding?.top ?? 0) +
+            lineY +
+            visualYOffset -
+            vscrollController.offset;
+        canvas.drawRect(
+          Rect.fromLTWH(
+            screenX,
+            screenY,
+            adjustedRight - adjustedLeft,
+            _lineHeight,
+          ),
+          selectionPaint,
         );
-        final utf16End = CodeForgeController.scalarToUtf16Offset(
-          lineText,
-          lineSelEnd,
-        );
-        final boxes = para.getBoxesForRange(utf16Start, utf16End);
-
-        for (int i = 0; i < boxes.length; i++) {
-          final box = boxes[i];
-          final adjustedLeft = box.left + colorBoxOffsetStart;
-          final adjustedRight = box.right + colorBoxOffsetEnd;
-
-          final screenX = offset.dx + textX + adjustedLeft;
-          final screenY =
-              offset.dy +
-              (innerPadding?.top ?? 0) +
-              lineY +
-              visualYOffset +
-              box.top -
-              vscrollController.offset;
-
-          canvas.drawRect(
-            Rect.fromLTWH(
-              screenX,
-              screenY,
-              adjustedRight - adjustedLeft,
-              _lineHeight,
-            ),
-            selectionPaint,
+      } else if (lineSelStart < lineSelEnd) {
+        lineText ??= controller.getLineText(lineIndex);
+        final paragraphWidth = lineWrap
+            ? _wrapWidth
+            : (isRTL ? contentWidth : null);
+        ui.Paragraph para;
+        if (_paragraphCache.containsKey(lineIndex)) {
+          para = _paragraphCache[lineIndex]!;
+        } else {
+          para = _buildHighlightedParagraph(
+            lineIndex,
+            lineText,
+            width: paragraphWidth,
           );
+          _paragraphCache[lineIndex] = para;
+        }
+        if (lineText.isNotEmpty) {
+          final utf16Start = CodeForgeController.scalarToUtf16Offset(
+            lineText,
+            lineSelStart,
+          );
+          final utf16End = CodeForgeController.scalarToUtf16Offset(
+            lineText,
+            lineSelEnd,
+          );
+          final boxes = para.getBoxesForRange(utf16Start, utf16End);
+
+          for (int i = 0; i < boxes.length; i++) {
+            final box = boxes[i];
+            final adjustedLeft = box.left + colorBoxOffsetStart;
+            final adjustedRight = box.right + colorBoxOffsetEnd;
+
+            final screenX = offset.dx + textX + adjustedLeft;
+            final screenY =
+                offset.dy +
+                (innerPadding?.top ?? 0) +
+                lineY +
+                visualYOffset +
+                box.top -
+                vscrollController.offset;
+
+            canvas.drawRect(
+              Rect.fromLTWH(
+                screenX,
+                screenY,
+                adjustedRight - adjustedLeft,
+                _lineHeight,
+              ),
+              selectionPaint,
+            );
+          }
         }
       } else if (lineIndex < endLine) {
         final screenX = isRTL
@@ -9910,9 +10625,12 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
         }
         if (hasActiveFolds && _isLineFolded(lineIndex)) continue;
 
-        final lineText =
-            _lineTextCache[lineIndex] ?? controller.getLineText(lineIndex);
-        final lineLength = lineText.length;
+        final nativeAsciiInfo = _largeFileNativeAsciiLineInfo(lineIndex);
+        String? lineText = _lineTextCache[lineIndex];
+        if (nativeAsciiInfo == null && lineText == null) {
+          lineText = controller.getLineText(lineIndex);
+        }
+        final lineLength = nativeAsciiInfo?.contentLength ?? lineText!.length;
 
         int lineHighStart = 0;
         int lineHighEnd = lineLength;
@@ -9929,6 +10647,43 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
 
         if (lineHighStart >= lineHighEnd) continue;
 
+        final lineY = _getLineYOffset(lineIndex, hasActiveFolds);
+        final colorBoxOffset = _getColorBoxOffsetForLine(
+          lineIndex,
+          lineHighStart,
+        );
+        final scroll = lineWrap ? 0.0 : _effectiveHScroll;
+        final textX = isRTL
+            ? (innerPadding?.left ?? 0) - scroll
+            : _gutterWidth + (innerPadding?.left ?? 0) - scroll;
+        final nativeColumnWidth = nativeAsciiInfo != null
+            ? _getLargeFileFixedAsciiColumnWidth()
+            : null;
+
+        if (nativeAsciiInfo != null && nativeColumnWidth != null) {
+          final adjustedLeft =
+              lineHighStart * nativeColumnWidth + colorBoxOffset;
+          final adjustedRight =
+              lineHighEnd * nativeColumnWidth + colorBoxOffset;
+          final screenX = offset.dx + textX + adjustedLeft;
+          final screenY =
+              offset.dy +
+              (innerPadding?.top ?? 0) +
+              lineY -
+              vscrollController.offset;
+          canvas.drawRect(
+            Rect.fromLTWH(
+              screenX,
+              screenY,
+              adjustedRight - adjustedLeft,
+              _lineHeight,
+            ),
+            highlightPaint,
+          );
+          continue;
+        }
+
+        lineText ??= controller.getLineText(lineIndex);
         final contentWidth =
             size.width - _gutterWidth - (innerPadding?.horizontal ?? 0);
         final paragraphWidth = lineWrap
@@ -9946,11 +10701,6 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
           );
         }
 
-        final lineY = _getLineYOffset(lineIndex, hasActiveFolds);
-        final colorBoxOffset = _getColorBoxOffsetForLine(
-          lineIndex,
-          lineHighStart,
-        );
         final utf16Start = CodeForgeController.scalarToUtf16Offset(
           lineText,
           lineHighStart,
@@ -9960,11 +10710,6 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
           lineHighEnd,
         );
         final boxes = para.getBoxesForRange(utf16Start, utf16End);
-
-        final scroll = lineWrap ? 0.0 : _effectiveHScroll;
-        final textX = isRTL
-            ? (innerPadding?.left ?? 0) - scroll
-            : _gutterWidth + (innerPadding?.left ?? 0) - scroll;
 
         for (final box in boxes) {
           final adjustedLeft = box.left + colorBoxOffset;
@@ -10010,6 +10755,63 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     final textX = isRTL
         ? (innerPadding?.left ?? 0) - scroll
         : _gutterWidth + (innerPadding?.left ?? 0) - scroll;
+
+    if (!isRTL) {
+      final startNativeInfo = _largeFileNativeAsciiLineInfo(startLine);
+      final endNativeInfo = _largeFileNativeAsciiLineInfo(endLine);
+      final nativeColumnWidth = startNativeInfo != null && endNativeInfo != null
+          ? _getLargeFileFixedAsciiColumnWidth()
+          : null;
+      if (startNativeInfo != null &&
+          endNativeInfo != null &&
+          nativeColumnWidth != null) {
+        final startCol = (start - startNativeInfo.start).clamp(
+          0,
+          startNativeInfo.contentLength,
+        );
+        final endCol = (end - endNativeInfo.start).clamp(
+          0,
+          endNativeInfo.contentLength,
+        );
+        final startX =
+            startCol * nativeColumnWidth +
+            _getColorBoxOffsetForLine(startLine, startCol);
+        final endX =
+            endCol * nativeColumnWidth +
+            _getColorBoxOffsetForLine(endLine, endCol);
+        final startScreenY =
+            offset.dy +
+            (innerPadding?.top ?? 0) +
+            _getLineYOffset(startLine, hasActiveFolds) +
+            _getTotalVirtualOffset(startLine) -
+            vscrollController.offset;
+        final endScreenY =
+            offset.dy +
+            (innerPadding?.top ?? 0) +
+            _getLineYOffset(endLine, hasActiveFolds) +
+            _getTotalVirtualOffset(endLine) -
+            vscrollController.offset;
+        final fontSize = textStyle?.fontSize ?? 14;
+
+        _startHandleRect = Rect.fromCenter(
+          center: Offset(
+            offset.dx + textX + startX - fontSize / 2,
+            startScreenY + _lineHeight + handleRadius,
+          ),
+          width: handleRadius * 2 * 1.2,
+          height: handleRadius * 2 * 1.2,
+        );
+        _endHandleRect = Rect.fromCenter(
+          center: Offset(
+            offset.dx + textX + endX + fontSize / 2,
+            endScreenY + _lineHeight + handleRadius,
+          ),
+          width: handleRadius * 2 * 1.2,
+          height: handleRadius * 2 * 1.2,
+        );
+        return;
+      }
+    }
 
     final startLineOffset = controller.getLineStartOffset(startLine);
     final startLineText =
@@ -10170,6 +10972,155 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     );
   }
 
+  void _drawLargeFileAsciiGhostText(
+    Canvas canvas,
+    Offset offset,
+    int cursorLine,
+    int cursorOffset,
+    ({int start, int contentLength}) lineInfo,
+    double columnWidth,
+    bool hasActiveFolds,
+  ) {
+    final ghostText = _aiResponse;
+    if (ghostText == null || ghostText.isEmpty) return;
+
+    final cursorCol = (cursorOffset - lineInfo.start).clamp(
+      0,
+      lineInfo.contentLength,
+    );
+    final cursorX = cursorCol * columnWidth;
+    final cursorY = _getLineYOffset(cursorLine, hasActiveFolds);
+    final contentLeft = offset.dx + _gutterWidth + (innerPadding?.left ?? 0);
+    final contentRight = offset.dx + size.width - (innerPadding?.right ?? 0);
+    final baseScreenX = contentLeft - _effectiveHScroll;
+    final cursorScreenX = baseScreenX + cursorX;
+    final screenY =
+        offset.dy +
+        (innerPadding?.top ?? 0) +
+        cursorY -
+        vscrollController.offset;
+    final bgColor = editorTheme['root']?.backgroundColor ?? Colors.black;
+    final defaultGhostColor =
+        (textStyle?.color ?? editorTheme['root']?.color ?? Colors.white)
+            .withAlpha(100);
+    final ghostStyle = ui.TextStyle(
+      color: _ghostTextStyle?.color ?? defaultGhostColor,
+      fontSize: _ghostTextStyle?.fontSize ?? textStyle?.fontSize ?? 14.0,
+      fontFamily: _ghostTextStyle?.fontFamily ?? textStyle?.fontFamily,
+      fontStyle: _ghostTextStyle?.fontStyle ?? FontStyle.italic,
+      fontWeight: _ghostTextStyle?.fontWeight,
+      letterSpacing: _ghostTextStyle?.letterSpacing,
+      wordSpacing: _ghostTextStyle?.wordSpacing,
+      decoration: _ghostTextStyle?.decoration,
+      decorationColor: _ghostTextStyle?.decorationColor,
+    );
+    final aiLines = ghostText.split('\n');
+
+    ui.Paragraph buildGhostParagraph(String text) {
+      final builder =
+          ui.ParagraphBuilder(
+              ui.ParagraphStyle(
+                fontFamily: textStyle?.fontFamily,
+                fontSize: textStyle?.fontSize ?? 14.0,
+                height: textStyle?.height ?? 1.2,
+                textDirection: textDirection,
+              ),
+            )
+            ..pushStyle(ghostStyle)
+            ..addText(text);
+      final paragraph = builder.build();
+      paragraph.layout(const ui.ParagraphConstraints(width: double.infinity));
+      return paragraph;
+    }
+
+    void clearAnchorTail() {
+      if (cursorCol >= lineInfo.contentLength) return;
+      final clearLeft = max(contentLeft, cursorScreenX);
+      if (clearLeft >= contentRight) return;
+      canvas.drawRect(
+        Rect.fromLTRB(clearLeft, screenY, contentRight, screenY + _lineHeight),
+        Paint()..color = bgColor,
+      );
+    }
+
+    void drawVisibleTail({
+      required double sourceStartScreenX,
+      required double tailScreenY,
+    }) {
+      if (cursorCol >= lineInfo.contentLength) return;
+      final slice = largeFileAsciiShiftedViewportSlice(
+        textLength: lineInfo.contentLength,
+        sourceStartColumn: cursorCol,
+        sourceStartScreenX: sourceStartScreenX,
+        columnWidth: columnWidth,
+        viewportLeft: contentLeft,
+        viewportRight: contentRight,
+      );
+      if (slice.start >= slice.end) return;
+      final tailText = controller.rope.substring(
+        lineInfo.start + slice.start,
+        lineInfo.start + slice.end,
+      );
+      final tailParagraph = _buildParagraph(tailText);
+      canvas.drawParagraph(tailParagraph, Offset(slice.screenX, tailScreenY));
+    }
+
+    clearAnchorTail();
+
+    if (aiLines.length == 1) {
+      final ghostParagraph = buildGhostParagraph(aiLines.first);
+      canvas.drawParagraph(ghostParagraph, Offset(cursorScreenX, screenY));
+      drawVisibleTail(
+        sourceStartScreenX: cursorScreenX + ghostParagraph.longestLine,
+        tailScreenY: screenY,
+      );
+      return;
+    }
+
+    if (aiLines.first.isNotEmpty) {
+      final firstGhostParagraph = buildGhostParagraph(aiLines.first);
+      canvas.drawParagraph(firstGhostParagraph, Offset(cursorScreenX, screenY));
+    }
+
+    double lastGhostLineWidth = 0;
+    double lastGhostLineScreenY = screenY;
+    double lastGhostLineScreenX = baseScreenX;
+    final viewportTop = offset.dy;
+    final viewportBottom =
+        offset.dy + vscrollController.position.viewportDimension;
+
+    for (int i = 1; i < aiLines.length; i++) {
+      final aiLineText = aiLines[i];
+      final isLastLine = i == aiLines.length - 1;
+      final lineScreenY = screenY + i * _lineHeight;
+      ui.Paragraph? paragraph;
+      double paragraphWidth = 0;
+      if (aiLineText.isNotEmpty || isLastLine) {
+        paragraph = buildGhostParagraph(aiLineText);
+        paragraphWidth = paragraph.longestLine;
+      }
+
+      if (isLastLine) {
+        lastGhostLineWidth = paragraphWidth;
+        lastGhostLineScreenY = lineScreenY;
+        lastGhostLineScreenX = baseScreenX;
+      }
+
+      if (lineScreenY + _lineHeight < viewportTop ||
+          lineScreenY > viewportBottom) {
+        continue;
+      }
+      if (paragraph != null) {
+        canvas.drawParagraph(paragraph, Offset(baseScreenX, lineScreenY));
+      }
+    }
+
+    drawVisibleTail(
+      sourceStartScreenX: lastGhostLineScreenX + lastGhostLineWidth,
+      tailScreenY: lastGhostLineScreenY,
+    );
+  }
+
   void _drawAiGhostText(
     Canvas canvas,
     Offset offset,
@@ -10188,6 +11139,23 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     final cursorLine = _ghostTextAnchorLine!;
 
     if (hasActiveFolds && _isLineFolded(cursorLine)) return;
+
+    final nativeAsciiInfo = _largeFileNativeAsciiLineInfo(cursorLine);
+    final nativeColumnWidth = nativeAsciiInfo != null
+        ? _getLargeFileFixedAsciiColumnWidth()
+        : null;
+    if (nativeAsciiInfo != null && nativeColumnWidth != null) {
+      _drawLargeFileAsciiGhostText(
+        canvas,
+        offset,
+        cursorLine,
+        cursorOffset,
+        nativeAsciiInfo,
+        nativeColumnWidth,
+        hasActiveFolds,
+      );
+      return;
+    }
 
     final lineStartOffset = controller.getLineStartOffset(cursorLine);
     final cursorCol = cursorOffset - lineStartOffset;
