@@ -147,6 +147,29 @@ class const WorkspaceFileService() {
     );
   }
 
+  /// Reads the same lightweight metadata token used by the Rust workspace
+  /// writer without reading the file contents. This keeps external-change
+  /// filtering cheap even for very large open files.
+  Future<String?> contentTokenForFile({
+    required String workspacePath,
+    required String relativePath,
+  }) async {
+    final root = p.normalize(p.absolute(workspacePath));
+    final path = p.normalize(p.join(root, relativePath));
+    if (!p.isWithin(root, path)) {
+      return null;
+    }
+    try {
+      final stat = await FileStat.stat(path);
+      if (stat.type != FileSystemEntityType.file) {
+        return null;
+      }
+      return '${stat.size}:${stat.modified.millisecondsSinceEpoch}';
+    } on FileSystemException {
+      return null;
+    }
+  }
+
   Future<merman_native.MermanWorkspaceRender> renderMermanWorkspaceFile({
     required String workspacePath,
     required String relativePath,
