@@ -73,6 +73,67 @@ bool isLargeFileAsciiViewportCandidate(
   return (start: start, end: end, xOffset: start * columnWidth);
 }
 
+({int start, int end, double screenX}) largeFileAsciiShiftedViewportSlice({
+  required int textLength,
+  required int sourceStartColumn,
+  required double sourceStartScreenX,
+  required double columnWidth,
+  required double viewportLeft,
+  required double viewportRight,
+  int overscanColumns = 64,
+}) {
+  if (textLength <= 0 ||
+      sourceStartColumn < 0 ||
+      sourceStartColumn >= textLength ||
+      columnWidth <= 0 ||
+      !columnWidth.isFinite ||
+      !sourceStartScreenX.isFinite ||
+      !viewportLeft.isFinite ||
+      !viewportRight.isFinite ||
+      viewportRight <= viewportLeft) {
+    final clampedStart = sourceStartColumn.clamp(0, textLength);
+    return (
+      start: clampedStart,
+      end: clampedStart,
+      screenX: sourceStartScreenX,
+    );
+  }
+
+  final remainingLength = textLength - sourceStartColumn;
+  final sourceEndScreenX = sourceStartScreenX + remainingLength * columnWidth;
+  if (sourceStartScreenX >= viewportRight || sourceEndScreenX <= viewportLeft) {
+    return (
+      start: sourceStartColumn,
+      end: sourceStartColumn,
+      screenX: sourceStartScreenX,
+    );
+  }
+
+  final safeOverscan = max(0, overscanColumns);
+  final firstVisibleRelative =
+      ((viewportLeft - sourceStartScreenX) / columnWidth).floor().clamp(
+        0,
+        remainingLength,
+      );
+  final lastVisibleRelative =
+      ((viewportRight - sourceStartScreenX) / columnWidth).ceil().clamp(
+        0,
+        remainingLength,
+      );
+  final startRelative = max(0, firstVisibleRelative - safeOverscan);
+  final endRelative = min(
+    remainingLength,
+    max(startRelative, lastVisibleRelative + safeOverscan),
+  );
+  final start = sourceStartColumn + startRelative;
+  final end = sourceStartColumn + endRelative;
+  return (
+    start: start,
+    end: end,
+    screenX: sourceStartScreenX + startRelative * columnWidth,
+  );
+}
+
 int largeFileAsciiColumnForX({
   required int textLength,
   required double columnWidth,
@@ -10804,6 +10865,155 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     );
   }
 
+  void _drawLargeFileAsciiGhostText(
+    Canvas canvas,
+    Offset offset,
+    int cursorLine,
+    int cursorOffset,
+    ({int start, int contentLength}) lineInfo,
+    double columnWidth,
+    bool hasActiveFolds,
+  ) {
+    final ghostText = _aiResponse;
+    if (ghostText == null || ghostText.isEmpty) return;
+
+    final cursorCol = (cursorOffset - lineInfo.start).clamp(
+      0,
+      lineInfo.contentLength,
+    );
+    final cursorX = cursorCol * columnWidth;
+    final cursorY = _getLineYOffset(cursorLine, hasActiveFolds);
+    final contentLeft = offset.dx + _gutterWidth + (innerPadding?.left ?? 0);
+    final contentRight = offset.dx + size.width - (innerPadding?.right ?? 0);
+    final baseScreenX = contentLeft - _effectiveHScroll;
+    final cursorScreenX = baseScreenX + cursorX;
+    final screenY =
+        offset.dy +
+        (innerPadding?.top ?? 0) +
+        cursorY -
+        vscrollController.offset;
+    final bgColor = editorTheme['root']?.backgroundColor ?? Colors.black;
+    final defaultGhostColor =
+        (textStyle?.color ?? editorTheme['root']?.color ?? Colors.white)
+            .withAlpha(100);
+    final ghostStyle = ui.TextStyle(
+      color: _ghostTextStyle?.color ?? defaultGhostColor,
+      fontSize: _ghostTextStyle?.fontSize ?? textStyle?.fontSize ?? 14.0,
+      fontFamily: _ghostTextStyle?.fontFamily ?? textStyle?.fontFamily,
+      fontStyle: _ghostTextStyle?.fontStyle ?? FontStyle.italic,
+      fontWeight: _ghostTextStyle?.fontWeight,
+      letterSpacing: _ghostTextStyle?.letterSpacing,
+      wordSpacing: _ghostTextStyle?.wordSpacing,
+      decoration: _ghostTextStyle?.decoration,
+      decorationColor: _ghostTextStyle?.decorationColor,
+    );
+    final aiLines = ghostText.split('\n');
+
+    ui.Paragraph buildGhostParagraph(String text) {
+      final builder =
+          ui.ParagraphBuilder(
+              ui.ParagraphStyle(
+                fontFamily: textStyle?.fontFamily,
+                fontSize: textStyle?.fontSize ?? 14.0,
+                height: textStyle?.height ?? 1.2,
+                textDirection: textDirection,
+              ),
+            )
+            ..pushStyle(ghostStyle)
+            ..addText(text);
+      final paragraph = builder.build();
+      paragraph.layout(const ui.ParagraphConstraints(width: double.infinity));
+      return paragraph;
+    }
+
+    void clearAnchorTail() {
+      if (cursorCol >= lineInfo.contentLength) return;
+      final clearLeft = max(contentLeft, cursorScreenX);
+      if (clearLeft >= contentRight) return;
+      canvas.drawRect(
+        Rect.fromLTRB(clearLeft, screenY, contentRight, screenY + _lineHeight),
+        Paint()..color = bgColor,
+      );
+    }
+
+    void drawVisibleTail({
+      required double sourceStartScreenX,
+      required double tailScreenY,
+    }) {
+      if (cursorCol >= lineInfo.contentLength) return;
+      final slice = largeFileAsciiShiftedViewportSlice(
+        textLength: lineInfo.contentLength,
+        sourceStartColumn: cursorCol,
+        sourceStartScreenX: sourceStartScreenX,
+        columnWidth: columnWidth,
+        viewportLeft: contentLeft,
+        viewportRight: contentRight,
+      );
+      if (slice.start >= slice.end) return;
+      final tailText = controller.rope.substring(
+        lineInfo.start + slice.start,
+        lineInfo.start + slice.end,
+      );
+      final tailParagraph = _buildParagraph(tailText);
+      canvas.drawParagraph(tailParagraph, Offset(slice.screenX, tailScreenY));
+    }
+
+    clearAnchorTail();
+
+    if (aiLines.length == 1) {
+      final ghostParagraph = buildGhostParagraph(aiLines.first);
+      canvas.drawParagraph(ghostParagraph, Offset(cursorScreenX, screenY));
+      drawVisibleTail(
+        sourceStartScreenX: cursorScreenX + ghostParagraph.longestLine,
+        tailScreenY: screenY,
+      );
+      return;
+    }
+
+    if (aiLines.first.isNotEmpty) {
+      final firstGhostParagraph = buildGhostParagraph(aiLines.first);
+      canvas.drawParagraph(firstGhostParagraph, Offset(cursorScreenX, screenY));
+    }
+
+    double lastGhostLineWidth = 0;
+    double lastGhostLineScreenY = screenY;
+    double lastGhostLineScreenX = baseScreenX;
+    final viewportTop = offset.dy;
+    final viewportBottom =
+        offset.dy + vscrollController.position.viewportDimension;
+
+    for (int i = 1; i < aiLines.length; i++) {
+      final aiLineText = aiLines[i];
+      final isLastLine = i == aiLines.length - 1;
+      final lineScreenY = screenY + i * _lineHeight;
+      ui.Paragraph? paragraph;
+      double paragraphWidth = 0;
+      if (aiLineText.isNotEmpty || isLastLine) {
+        paragraph = buildGhostParagraph(aiLineText);
+        paragraphWidth = paragraph.longestLine;
+      }
+
+      if (isLastLine) {
+        lastGhostLineWidth = paragraphWidth;
+        lastGhostLineScreenY = lineScreenY;
+        lastGhostLineScreenX = baseScreenX;
+      }
+
+      if (lineScreenY + _lineHeight < viewportTop ||
+          lineScreenY > viewportBottom) {
+        continue;
+      }
+      if (paragraph != null) {
+        canvas.drawParagraph(paragraph, Offset(baseScreenX, lineScreenY));
+      }
+    }
+
+    drawVisibleTail(
+      sourceStartScreenX: lastGhostLineScreenX + lastGhostLineWidth,
+      tailScreenY: lastGhostLineScreenY,
+    );
+  }
+
   void _drawAiGhostText(
     Canvas canvas,
     Offset offset,
@@ -10822,6 +11032,23 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     final cursorLine = _ghostTextAnchorLine!;
 
     if (hasActiveFolds && _isLineFolded(cursorLine)) return;
+
+    final nativeAsciiInfo = _largeFileNativeAsciiLineInfo(cursorLine);
+    final nativeColumnWidth = nativeAsciiInfo != null
+        ? _getLargeFileFixedAsciiColumnWidth()
+        : null;
+    if (nativeAsciiInfo != null && nativeColumnWidth != null) {
+      _drawLargeFileAsciiGhostText(
+        canvas,
+        offset,
+        cursorLine,
+        cursorOffset,
+        nativeAsciiInfo,
+        nativeColumnWidth,
+        hasActiveFolds,
+      );
+      return;
+    }
 
     final lineStartOffset = controller.getLineStartOffset(cursorLine);
     final cursorCol = cursorOffset - lineStartOffset;

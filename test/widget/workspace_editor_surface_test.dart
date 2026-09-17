@@ -337,6 +337,33 @@ void main() {
     );
   });
 
+  test('slices shifted ASCII tails around the visible viewport', () {
+    expect(
+      code_forge.largeFileAsciiShiftedViewportSlice(
+        textLength: 10000,
+        sourceStartColumn: 200,
+        sourceStartScreenX: -500,
+        columnWidth: 10,
+        viewportLeft: 0,
+        viewportRight: 1000,
+        overscanColumns: 2,
+      ),
+      (start: 248, end: 352, screenX: -20.0),
+    );
+    expect(
+      code_forge.largeFileAsciiShiftedViewportSlice(
+        textLength: 10000,
+        sourceStartColumn: 200,
+        sourceStartScreenX: 1500,
+        columnWidth: 10,
+        viewportLeft: 0,
+        viewportRight: 1000,
+        overscanColumns: 2,
+      ),
+      (start: 200, end: 200, screenX: 1500.0),
+    );
+  });
+
   test('fixed-column hit testing matches Flutter paragraph positioning', () {
     ui.Paragraph paragraph(String text) {
       final builder = ui.ParagraphBuilder(
