@@ -460,6 +460,38 @@ void _registerTerminalRuntimeOutputBackpressureTests() {
     },
   );
 
+  test(
+    'parser worker hidden output refreshes active replica search on reveal',
+    () async {
+      final runtime = XtermTerminalRuntime(
+        parserWorkerEnabled: true,
+        ptySessionFactory: _FakeTerminalPtySessionFactory(),
+        shellLaunchesBuilder: () => <GhosttyTerminalShellLaunch>[
+          _launch('shell', shell: '/bin/sh'),
+        ],
+      );
+      addTearDown(runtime.dispose);
+      final session = runtime.sessionFor(workspace: _workspace(), tab: _tab());
+      final searchController = session.searchController!
+        ..open()
+        ..setQuery('hidden-worker-search-marker');
+      expect(terminalSearchUsesReplicaModelForTesting(session), isTrue);
+      expect(searchController.matchCount, 0);
+
+      queueTerminalOutputForTesting(session, 'hidden-worker-search-marker');
+      flushTerminalOutputForTesting(session);
+      await waitForTerminalParserApplyForTesting(session);
+      expect(searchController.matchCount, 0);
+
+      final visibility = acquireTerminalVisibilityForTesting(session);
+      addTearDown(visibility.dispose);
+      await waitForTerminalParserApplyForTesting(session);
+
+      expect(terminalSearchUsesReplicaModelForTesting(session), isTrue);
+      expect(searchController.matchCount, 1);
+    },
+  );
+
   test('hidden catch-up refreshes an active search once on reveal', () async {
     final runtime = XtermTerminalRuntime(
       ptySessionFactory: _FakeTerminalPtySessionFactory(),

@@ -92,7 +92,7 @@ extension _TerminalRestoreProgressTracking on _XtermTerminalSessionHandle {
       ..resize(viewWidth, viewHeight);
     _terminal = nextTerminal;
     _attachTerminal(nextTerminal);
-    searchController.attachTerminal(nextTerminal);
+    _attachSearchTerminal(nextTerminal);
     previousTerminal.dispose();
     // Scrollback can reach the host's 10 MB cap. The production socket path
     // decodes it to text before it reaches the UI isolate; the legacy byte path

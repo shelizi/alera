@@ -227,6 +227,47 @@ void main() {
   );
 
   test(
+    'mirror search follows same-height TUI rewrites and keeps selection',
+    () async {
+      final worker = await TerminalXtermWorker.start(
+        cols: 20,
+        rows: 4,
+        maxLines: 64,
+      );
+      addTearDown(worker.close);
+      final model = TerminalXtermBufferModel();
+      model.apply(
+        await worker.writeBufferDelta(
+          'needle-first\r\nplain\r\nneedle-selected\r\nfooter',
+        ),
+      );
+      final controller = TerminalSearchController.fromSource(
+        source: model,
+        scrollToLine: (_) {},
+      );
+      addTearDown(controller.dispose);
+
+      controller
+        ..open()
+        ..setQuery('needle')
+        ..next();
+      expect(controller.selectedMatch?.lineIndex, 2);
+
+      final rewrite = await worker.writeBufferDelta(
+        '\x1b[1;1Hplain-now\x1b[K\x1b[2;1Hneedle-new\x1b[K',
+      );
+      expect(rewrite.fullRepaint, isFalse);
+      expect(rewrite.bufferLength, model.bufferLength);
+      model.apply(rewrite);
+
+      expect(controller.matches.map((match) => match.lineIndex), <int>[1, 2]);
+      expect(controller.selectedMatch?.lineIndex, 2);
+      expect(controller.selectedMatchNumber, 2);
+      expect(controller.needsFullRefreshForTesting, isFalse);
+    },
+  );
+
+  test(
     'mirror search keeps matches correct across circular head trims',
     () async {
       final worker = await TerminalXtermWorker.start(

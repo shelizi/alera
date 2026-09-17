@@ -1,10 +1,10 @@
-/// Snapshot-replay benchmark for an already-mounted terminal surface.
+/// Snapshot-replay benchmark for the production parser-worker terminal surface.
 ///
 /// This emits live output immediately behind a default-size snapshot, which is
 /// the production ordering that used to evict the snapshot and leave the
 /// "Restoring Terminal" overlay waiting for minutes.
 ///
-///     flutter test integration_test/terminal_restore_benchmark.dart -d linux
+///     flutter test integration_test/terminal_restore_benchmark.dart -d windows
 ///
 /// Deliberately not named `*_test.dart`: this is a hardware-dependent
 /// measurement tool, not a CI check. The three-second target applies to the
@@ -42,6 +42,7 @@ void main() {
     binding.framePolicy = LiveTestWidgetsFlutterBindingFramePolicy.fullyLive;
     final fakeSession = _BenchmarkPtySession();
     final runtime = XtermTerminalRuntime(
+      parserWorkerEnabled: true,
       ptySessionFactory: _BenchmarkPtySessionFactory(fakeSession),
       shellLaunchesBuilder: () => <GhosttyTerminalShellLaunch>[
         const GhosttyTerminalShellLaunch(
@@ -56,6 +57,7 @@ void main() {
       if (!runtimeDisposed) runtime.dispose();
     });
     final session = runtime.sessionFor(workspace: _workspace(), tab: _tab());
+    expect(terminalParserWorkerEnabledForTesting(session), isTrue);
 
     await tester.pumpWidget(
       ProviderScope(
