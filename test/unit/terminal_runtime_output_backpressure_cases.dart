@@ -1,6 +1,29 @@
 part of 'terminal_runtime_native_test.dart';
 
 void _registerTerminalRuntimeOutputBackpressureTests() {
+  test('parser worker applies output into the xterm replica', () async {
+    final runtime = XtermTerminalRuntime(
+      parserWorkerEnabled: true,
+      ptySessionFactory: _FakeTerminalPtySessionFactory(),
+      shellLaunchesBuilder: () => <GhosttyTerminalShellLaunch>[
+        _launch('shell', shell: '/bin/sh'),
+      ],
+    );
+    addTearDown(runtime.dispose);
+    final session = runtime.sessionFor(workspace: _workspace(), tab: _tab());
+
+    expect(terminalParserWorkerEnabledForTesting(session), isTrue);
+    queueTerminalOutputForTesting(session, 'worker-runtime-marker\x1b[?2004h');
+    flushTerminalOutputForTesting(session);
+    await waitForTerminalParserApplyForTesting(session);
+
+    expect(
+      terminalBufferTextForTesting(session),
+      contains('worker-runtime-marker'),
+    );
+    expect(terminalBracketedPasteModeForTesting(session), isTrue);
+  });
+
   test('starts adaptive parsing at the measured TUI-safe chunk size', () {
     final runtime = XtermTerminalRuntime(
       ptySessionFactory: _FakeTerminalPtySessionFactory(),

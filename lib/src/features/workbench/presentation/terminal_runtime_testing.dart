@@ -66,6 +66,21 @@ void flushTerminalOutputForTesting(TerminalSessionHandle session) {
 }
 
 @visibleForTesting
+bool terminalParserWorkerEnabledForTesting(TerminalSessionHandle session) {
+  final handle = session as _XtermTerminalSessionHandle;
+  return handle._parserWorkerEnabled &&
+      handle._terminal is TerminalXtermReplicaTerminal;
+}
+
+@visibleForTesting
+Future<void> waitForTerminalParserApplyForTesting(
+  TerminalSessionHandle session,
+) async {
+  final handle = session as _XtermTerminalSessionHandle;
+  await handle._parserWorkerLastApply;
+}
+
+@visibleForTesting
 void resizeTerminalForTesting(
   TerminalSessionHandle session,
   int width,

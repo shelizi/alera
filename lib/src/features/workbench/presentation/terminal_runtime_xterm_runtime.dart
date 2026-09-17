@@ -6,6 +6,7 @@ class XtermTerminalRuntime._(
   final TerminalRuntimeRendererAdapterOwner _rendererAdapterOwner,
   final TerminalRuntimeLaunchInputOwner _launchInputOwner,
   final TerminalSessionCleanup? _terminalSessionCleanup,
+  final bool _parserWorkerEnabled,
 ) implements TerminalRuntime, TerminalRuntimeSessionOwnerHost {
   factory({
     TerminalPtySessionFactory? ptySessionFactory,
@@ -20,6 +21,7 @@ class XtermTerminalRuntime._(
     void Function(String message, {bool error})? interactionNotice,
     TerminalRuntimeLaunchInputOwner? launchInputOwner,
     TerminalRuntimeRendererAdapterOwner? rendererAdapterOwner,
+    bool parserWorkerEnabled = false,
   }) {
     var osc52BlockedNoticeShown = false;
     void notifyOsc52Blocked() {
@@ -57,6 +59,7 @@ class XtermTerminalRuntime._(
       resolvedRendererAdapterOwner,
       resolvedLaunchInputOwner,
       terminalSessionCleanup,
+      parserWorkerEnabled,
     );
   }
 
@@ -120,6 +123,7 @@ class XtermTerminalRuntime._(
       _settings,
       _rendererAdapterOwner,
       _launchInputOwner,
+      _parserWorkerEnabled,
       owner._handleSessionExit,
       owner._handleVisibilityChanged,
     );

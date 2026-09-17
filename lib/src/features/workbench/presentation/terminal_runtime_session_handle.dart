@@ -8,6 +8,7 @@ class _XtermTerminalSessionHandle(
   var TerminalSettings _settings,
   final TerminalRuntimeRendererAdapterOwner _rendererAdapterOwner,
   final TerminalRuntimeLaunchInputOwner _launchInputOwner,
+  final bool _parserWorkerEnabled,
   final void Function(TerminalRuntimeExitEvent event) _onExit,
   this._onVisibilityChanged,
 ) extends TerminalSessionHandle
@@ -65,6 +66,10 @@ class _XtermTerminalSessionHandle(
   Timer? _deferredSubmitEnterTimer;
   _TerminalPtySize? _pendingPtySize;
   int _ptyGeneration = 0;
+  int _parserWorkerGeneration = 0;
+  Future<TerminalXtermWorker>? _parserWorkerFuture;
+  Future<void> _parserWorkerCommandTail = Future<void>.value();
+  Future<void>? _parserWorkerLastApply;
   @override
   int _startAttempt = 0;
   int? _activePtyGeneration;
@@ -250,6 +255,9 @@ class _XtermTerminalSessionHandle(
   Future<void>? writeToTerminal(String data) {
     if (data.isEmpty || _disposed) {
       return null;
+    }
+    if (_parserWorkerEnabled) {
+      return _writeToParserWorker(data);
     }
     _terminal.write(data);
     return null;
