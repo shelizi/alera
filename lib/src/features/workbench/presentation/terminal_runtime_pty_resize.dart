@@ -8,25 +8,37 @@ extension _XtermTerminalPtyResize on _XtermTerminalSessionHandle {
     int pixelWidth,
     int pixelHeight,
   ) {
-    _resizeParserWorker(
-      cols: width,
-      rows: height,
-      pixelWidth: pixelWidth,
-      pixelHeight: pixelHeight,
-    );
-    _pendingPtySize = _TerminalPtySize(
+    final size = _TerminalPtySize(
       cols: width,
       rows: height,
       cellWidthPx: pixelWidth,
       cellHeightPx: pixelHeight,
     );
+    _pendingParserWorkerSize = size;
+    _pendingPtySize = size;
     _pendingPtyResizeTimer ??= Timer(
       _ptyResizeDebounceDuration,
       _flushPendingPtyResize,
     );
   }
 
+  void _flushPendingParserWorkerResize() {
+    final size = _pendingParserWorkerSize;
+    if (_disposed || size == null) {
+      _pendingParserWorkerSize = null;
+      return;
+    }
+    _pendingParserWorkerSize = null;
+    _resizeParserWorker(
+      cols: size.cols,
+      rows: size.rows,
+      pixelWidth: size.cellWidthPx,
+      pixelHeight: size.cellHeightPx,
+    );
+  }
+
   void _flushPendingPtyResize() {
+    _flushPendingParserWorkerResize();
     _pendingPtyResizeTimer?.cancel();
     _pendingPtyResizeTimer = null;
     final size = _pendingPtySize;

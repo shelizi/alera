@@ -205,6 +205,7 @@ extension _XtermTerminalSessionPty on _XtermTerminalSessionHandle {
     _pendingPtyResizeTimer?.cancel();
     _pendingPtyResizeTimer = null;
     _pendingPtySize = null;
+    _pendingParserWorkerSize = null;
     _selectionCopyTimer?.cancel();
     _selectionCopyTimer = null;
     _launchInputOwner.cancelDeferredSubmitEnter(this);

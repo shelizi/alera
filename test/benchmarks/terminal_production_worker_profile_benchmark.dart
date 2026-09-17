@@ -113,6 +113,18 @@ void main() {
           }
         },
       ),
+      _Scenario(
+        name: 'coalesced resize storm final size',
+        setup: (harness) async {
+          await harness.visible(_logLines(0, 300));
+          harness.resetMetrics();
+        },
+        run: (harness) async {
+          // The production runtime now collapses the same 40-callback burst to
+          // the last requested dimensions before issuing worker protocol traffic.
+          await harness.resize(cols: 156, rows: 52);
+        },
+      ),
     ];
 
     // One unreported warm-up ensures isolate/JIT startup is not charged to the

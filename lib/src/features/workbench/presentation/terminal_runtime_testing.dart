@@ -89,6 +89,15 @@ Future<void> waitForTerminalParserApplyForTesting(
 }
 
 @visibleForTesting
+int terminalParserWorkerRevisionForTesting(TerminalSessionHandle session) {
+  final terminal = (session as _XtermTerminalSessionHandle)._terminal;
+  if (terminal is! TerminalXtermReplicaTerminal) {
+    return 0;
+  }
+  return terminal.replicaModel.revision;
+}
+
+@visibleForTesting
 void focusTerminalForTesting(TerminalSessionHandle session, bool focused) {
   (session as _XtermTerminalSessionHandle)._terminal.focusInput(focused);
 }

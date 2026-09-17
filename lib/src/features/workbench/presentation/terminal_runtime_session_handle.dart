@@ -65,6 +65,7 @@ class _XtermTerminalSessionHandle(
   Timer? _selectionCopyTimer;
   Timer? _deferredSubmitEnterTimer;
   _TerminalPtySize? _pendingPtySize;
+  _TerminalPtySize? _pendingParserWorkerSize;
   int _ptyGeneration = 0;
   int _parserWorkerGeneration = 0;
   Future<TerminalXtermWorker>? _parserWorkerFuture;
