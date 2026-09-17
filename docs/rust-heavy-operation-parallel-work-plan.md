@@ -251,6 +251,20 @@ perf/editor-native-open-handoff
 
 C4 is the sole production owner for this editor/open architecture batch.
 
+### C4 implementation status - 2026-09-17
+
+Implementation is merged to `main` (`bdbaa84d` implementation, `8dc011ef` merge). The selected ownership design is CodeForge-native open-from-workspace-file: CodeForge reads/decodes the validated workspace source directly into its native Rope, Dart retains bounded encoding/content-token/revision metadata, and `NativeEditorDocument` opens by structurally cloning that Rope rather than round-tripping a full Dart String. Native-backed `EditorDocumentSession` dirty state is revision-based; full text is materialized only at compatibility boundaries such as Save or an explicit dirty snapshot consumer.
+
+Validation completed:
+
+- CodeForge Rust: 13 passed, 0 failed, 1 manual benchmark ignored;
+- native-backed Dart session regressions: 2 passed;
+- root Rust native-backed Save/tab-preservation regression: passed;
+- targeted Dart analyze for the C4 production/test files: no issues;
+- the broader workspace editor widget suite is currently blocked by the independent main-line terminal compile error `terminal_runtime_providers.dart: Method not found: _terminalShellLaunches`.
+
+C4a benchmark was attempted both before implementation and again after merging latest `main`, including a clean Windows build. Both attempts were blocked before the benchmark could execute because CMake could not locate a C++ compiler (`No CMAKE_CXX_COMPILER could be found`). Therefore no trustworthy latest-main before/after timing, RSS, or FFI-payload sample was produced in this environment. Do not infer a speedup from the earlier C3 numbers; rerun `integration_test/editor_open_profile_benchmark.dart -d windows` after the Windows CMake/MSVC environment is repaired.
+
 ## 5. T4 - Terminal search source cutover to the worker replica model
 
 **Priority: P1. Small, well-bounded next ownership cleanup.**
