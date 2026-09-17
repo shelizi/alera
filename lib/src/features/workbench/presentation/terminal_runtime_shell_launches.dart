@@ -368,6 +368,14 @@ GhosttyTerminalShellLaunch launchInWorkingDirectoryForTesting(
   return _launchInWorkingDirectory(launch, workingDirectory);
 }
 
+List<GhosttyTerminalShellLaunch> terminalShellLaunches({
+  String? powerShell7ExecutablePath,
+}) {
+  return _terminalShellLaunches(
+    powerShell7ExecutablePath: powerShell7ExecutablePath,
+  );
+}
+
 @visibleForTesting
 Map<String, String> terminalPlatformEnvironmentForTesting() {
   return _terminalPlatformEnvironment();
