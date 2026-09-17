@@ -9,6 +9,7 @@
 import 'api/editor.dart';
 import 'api/editor_document.dart';
 import 'api/rope.dart';
+import 'api/workspace_source.dart';
 
 import 'dart:async';
 import 'dart:convert';
@@ -107,6 +108,13 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   bool dco_decode_bool(dynamic raw);
 
   @protected
+  NativeWorkspaceTextEncoding
+  dco_decode_box_autoadd_native_workspace_text_encoding(dynamic raw);
+
+  @protected
+  WorkspaceSourceInfo dco_decode_box_autoadd_workspace_source_info(dynamic raw);
+
+  @protected
   CharOffset dco_decode_char_offset(dynamic raw);
 
   @protected
@@ -173,6 +181,20 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   NativeSyntaxSpan dco_decode_native_syntax_span(dynamic raw);
 
   @protected
+  NativeWorkspaceTextEncoding dco_decode_native_workspace_text_encoding(
+    dynamic raw,
+  );
+
+  @protected
+  NativeWorkspaceTextEncoding?
+  dco_decode_opt_box_autoadd_native_workspace_text_encoding(dynamic raw);
+
+  @protected
+  WorkspaceSourceInfo? dco_decode_opt_box_autoadd_workspace_source_info(
+    dynamic raw,
+  );
+
+  @protected
   PixelHeight dco_decode_pixel_height(dynamic raw);
 
   @protected
@@ -207,6 +229,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   VisibleLineRange dco_decode_visible_line_range(dynamic raw);
+
+  @protected
+  WorkspaceSourceInfo dco_decode_workspace_source_info(dynamic raw);
 
   @protected
   LayoutMap
@@ -276,6 +301,17 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   bool sse_decode_bool(SseDeserializer deserializer);
+
+  @protected
+  NativeWorkspaceTextEncoding
+  sse_decode_box_autoadd_native_workspace_text_encoding(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  WorkspaceSourceInfo sse_decode_box_autoadd_workspace_source_info(
+    SseDeserializer deserializer,
+  );
 
   @protected
   CharOffset sse_decode_char_offset(SseDeserializer deserializer);
@@ -356,6 +392,22 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   NativeSyntaxSpan sse_decode_native_syntax_span(SseDeserializer deserializer);
 
   @protected
+  NativeWorkspaceTextEncoding sse_decode_native_workspace_text_encoding(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  NativeWorkspaceTextEncoding?
+  sse_decode_opt_box_autoadd_native_workspace_text_encoding(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  WorkspaceSourceInfo? sse_decode_opt_box_autoadd_workspace_source_info(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   PixelHeight sse_decode_pixel_height(SseDeserializer deserializer);
 
   @protected
@@ -392,6 +444,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   VisibleLineRange sse_decode_visible_line_range(SseDeserializer deserializer);
+
+  @protected
+  WorkspaceSourceInfo sse_decode_workspace_source_info(
+    SseDeserializer deserializer,
+  );
 
   @protected
   void
@@ -471,6 +528,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_bool(bool self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_box_autoadd_native_workspace_text_encoding(
+    NativeWorkspaceTextEncoding self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_box_autoadd_workspace_source_info(
+    WorkspaceSourceInfo self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_char_offset(CharOffset self, SseSerializer serializer);
@@ -578,6 +647,24 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_native_workspace_text_encoding(
+    NativeWorkspaceTextEncoding self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_opt_box_autoadd_native_workspace_text_encoding(
+    NativeWorkspaceTextEncoding? self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_opt_box_autoadd_workspace_source_info(
+    WorkspaceSourceInfo? self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_pixel_height(PixelHeight self, SseSerializer serializer);
 
   @protected
@@ -619,6 +706,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_visible_line_range(
     VisibleLineRange self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_workspace_source_info(
+    WorkspaceSourceInfo self,
     SseSerializer serializer,
   );
 }

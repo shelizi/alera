@@ -1,3 +1,4 @@
+use super::rope::RopeBridge;
 use flutter_rust_bridge::frb;
 use ropey::Rope as RustRope;
 use std::cmp::{max, min};
@@ -87,8 +88,34 @@ impl NativeEditorDocument {
         text: String,
         language_id: String,
     ) -> Result<Self, String> {
+        Self::open_with_rope(
+            document_id,
+            revision,
+            RustRope::from_str(&text),
+            language_id,
+        )
+    }
+
+    /// Opens retained syntax state by structurally cloning the existing native
+    /// CodeForge Rope. This avoids Rope -> Dart String -> second native Rope
+    /// during editor startup.
+    pub fn open_from_rope(
+        document_id: String,
+        revision: u64,
+        rope: &RopeBridge,
+        language_id: String,
+    ) -> Result<Self, String> {
+        let rope = rope.rope.read().map_err(|_| "rope lock poisoned")?.clone();
+        Self::open_with_rope(document_id, revision, rope, language_id)
+    }
+
+    fn open_with_rope(
+        document_id: String,
+        revision: u64,
+        rope: RustRope,
+        language_id: String,
+    ) -> Result<Self, String> {
         let normalized_language_id = normalize_language_id(&language_id);
-        let rope = RustRope::from_str(&text);
         let native_language = native_language(&normalized_language_id)?;
 
         let (parser, tree, query) = if let Some(native_language) = native_language {
@@ -572,6 +599,29 @@ mod tests {
             .spans
             .iter()
             .all(|span| (4..=5).contains(&span.line)));
+    }
+
+    #[test]
+    fn opens_retained_document_from_existing_native_rope() {
+        let text = "fn main() {\n    let value = 1;\n}\n";
+        let rope = RopeBridge::create(text.to_string());
+        let document = NativeEditorDocument::open_from_rope(
+            "doc-native-rope".to_string(),
+            9,
+            &rope,
+            "rust".to_string(),
+        )
+        .unwrap();
+
+        let info = document.info().unwrap();
+        assert_eq!(info.revision, 9);
+        assert_eq!(info.len_chars, text.chars().count());
+        assert_eq!(info.len_lines, text.lines().count() + 1);
+        assert!(info.parser_supported);
+        let response = document.query_syntax_spans(9, 0, 2, 0).unwrap();
+        assert!(response.supported);
+        assert!(!response.stale);
+        assert!(!response.spans.is_empty());
     }
 
     #[test]

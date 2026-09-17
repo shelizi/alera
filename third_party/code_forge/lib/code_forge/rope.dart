@@ -1,4 +1,5 @@
 import 'package:code_forge/src/rust/api/rope.dart';
+import 'package:code_forge/src/rust/api/workspace_source.dart';
 import 'package:flutter/material.dart';
 
 class Rope {
@@ -9,6 +10,25 @@ class Rope {
     : _rope = RopeBridge.create(initialText: initialText);
 
   Rope._fromBridge(this._rope);
+
+  /// Opens a workspace file directly into the native Rope without first
+  /// materializing the full document as a Dart String.
+  static Future<Rope> openWorkspaceFile({
+    required String workspacePath,
+    required String relativePath,
+    required int tabSize,
+    NativeWorkspaceTextEncoding? encoding,
+  }) async {
+    final bridge = await RopeBridge.createFromWorkspaceFile(
+      workspacePath: workspacePath,
+      relativePath: relativePath,
+      tabSize: tabSize,
+      encoding: encoding,
+    );
+    return Rope._fromBridge(bridge);
+  }
+
+  WorkspaceSourceInfo? get sourceInfo => _rope.sourceInfo();
 
   int get length => _rope.lenChars().toInt();
 

@@ -383,13 +383,13 @@ class CodeForgeController implements DeltaTextInputClient {
     }
 
     final initialRevision = _currentVersion;
-    final initialText = text;
+    final initialRope = _rope.core;
     _nativeEditorOpenFuture = () async {
       try {
-        final document = await NativeEditorDocument.open(
+        final document = await NativeEditorDocument.openFromRope(
           documentId: resolvedDocumentId,
           revision: BigInt.from(initialRevision),
-          text: initialText,
+          rope: initialRope,
           languageId: normalizedLanguageId,
         );
         if (_isDisposed || generation != _nativeEditorGeneration) {
@@ -2522,6 +2522,71 @@ class CodeForgeController implements DeltaTextInputClient {
 
   /// Finds the end of the line containing [offset].
   int findLineEnd(int offset) => _rope.findLineEnd(offset);
+
+  /// Opens [relativePath] directly into the native CodeForge Rope.
+  ///
+  /// This is the C4 large-file handoff path: decoded/display text stays native
+  /// during initial open. A full Dart String is materialized only when a
+  /// compatibility path (for example an active LSP server or Save) needs it.
+  Future<WorkspaceSourceInfo> openWorkspaceFile({
+    required String workspacePath,
+    required String relativePath,
+    required int tabSize,
+    NativeWorkspaceTextEncoding? encoding,
+  }) async {
+    final nextRope = await Rope.openWorkspaceFile(
+      workspacePath: workspacePath,
+      relativePath: relativePath,
+      tabSize: tabSize,
+      encoding: encoding,
+    );
+    final sourceInfo = nextRope.sourceInfo;
+    if (sourceInfo == null) {
+      throw StateError('native workspace source metadata is unavailable');
+    }
+
+    _resetNativeSyntaxDocument();
+    _flushTimer?.cancel();
+    _bufferLineIndex = null;
+    _bufferLineText = null;
+    _bufferDirty = false;
+    _cachedBufferLines = null;
+    bufferNeedsRepaint = false;
+    _rope = nextRope;
+    _currentVersion++;
+    _selection = const TextSelection.collapsed(offset: 0);
+    _lastSentSelection = _selection;
+    _imeProjectionDirty = true;
+    dirtyRegion = TextRange(start: 0, end: length);
+    _isTyping = false;
+    _cachedText = null;
+    _cachedTextVersion = -1;
+
+    // LSP is an explicit compatibility consumer of the whole document. Keep
+    // open cheap when no server is active; if one is active, materialize once.
+    if (lspConfig != null && openedFile != null && _lspReady) {
+      _scheduleLspFullSync(text);
+    }
+    notifyListeners();
+    return sourceInfo;
+  }
+
+  void _resetNativeSyntaxDocument() {
+    _nativeEditorGeneration++;
+    final document = _nativeEditorDocument;
+    _nativeEditorDocument = null;
+    _nativeEditorOpenFuture = null;
+    _nativeEditorSyncFuture = null;
+    _pendingNativeEditorEdits.clear();
+    _nativeEditorLanguageId = null;
+    _nativeEditorDocumentId = null;
+    _nativeEditorRevision = -1;
+    _nativeEditorParserSupported = null;
+    _nativeEditorFailed = false;
+    if (document != null) {
+      unawaited(document.close().catchError((_) {}));
+    }
+  }
 
   set text(String newText) {
     final oldLength = length;

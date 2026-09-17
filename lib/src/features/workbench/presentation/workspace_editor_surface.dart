@@ -95,6 +95,7 @@ class _WorkspaceEditorSurfaceState
       isDirty: _isDirty,
       save: _save,
       discard: _discardChanges,
+      snapshotText: () => _controller.text,
       reveal: _revealOrDefer,
       reload: _reloadFromDiskAfterExternalChange,
     );
@@ -128,6 +129,7 @@ class _WorkspaceEditorSurfaceState
         oldWidget.tab.filePath != widget.tab.filePath) {
       _autosave.cancelPending();
       _flushPendingDocumentSnapshot(refreshState: false, notifyAutosave: false);
+      _materializeNativeDirtySnapshot();
       _replaceFocusNode();
       _editorSessions.unregister(oldWidget.tab.id, _sessionHandle);
       _document = _editorSessions.documentFor(widget.tab.id);
@@ -143,6 +145,7 @@ class _WorkspaceEditorSurfaceState
   @override
   void dispose() {
     _flushPendingDocumentSnapshot(refreshState: false, notifyAutosave: false);
+    _materializeNativeDirtySnapshot();
     _autosave.dispose();
     _editorSessions.unregister(widget.tab.id, _sessionHandle);
     _focusNode.suppressThirdPartyListeners();
@@ -386,6 +389,36 @@ class _WorkspaceEditorSurfaceState
   }
 
   bool _isDirty() => _hasPendingDocumentSnapshot || _document.isDirty;
+
+  void _materializeNativeDirtySnapshot() {
+    if (!_document.nativeBacked ||
+        !_document.isDirty ||
+        _document.currentText != null) {
+      return;
+    }
+    _document.updateCurrentText(_controller.text);
+  }
+
+  Future<code_forge.WorkspaceSourceInfo> _openControllerFromWorkspace({
+    required String workspacePath,
+    required String relativePath,
+    required int tabSize,
+    native.WorkspaceTextEncoding? encoding,
+  }) async {
+    _suppressControllerChangeHandling = true;
+    try {
+      final info = await _controller.openWorkspaceFile(
+        workspacePath: workspacePath,
+        relativePath: relativePath,
+        tabSize: tabSize,
+        encoding: _toCodeForgeEncoding(encoding),
+      );
+      _lastObservedDocumentVersion = _controller.documentVersion;
+      return info;
+    } finally {
+      _suppressControllerChangeHandling = false;
+    }
+  }
 
   void _replaceControllerText(String text) {
     _suppressControllerChangeHandling = true;

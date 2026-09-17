@@ -7,6 +7,8 @@ import '../frb_generated.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
+import 'workspace_source.dart';
+
 // These functions are ignored because they are not marked as `pub`: `append_search_ranges`, `collect_search_ranges`, `compute_bidi_segments`, `direction_for_char`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`
 
@@ -29,6 +31,22 @@ abstract class RopeBridge implements RustOpaqueInterface {
       .instance
       .api
       .crateApiRopeRopeBridgeCreate(initialText: initialText);
+
+  /// Opens a workspace file directly into the authoritative native Rope.
+  ///
+  /// Only bounded source metadata crosses back to Dart. The decoded/display
+  /// text never leaves the CodeForge native library during initial open.
+  static Future<RopeBridge> createFromWorkspaceFile({
+    required String workspacePath,
+    required String relativePath,
+    required int tabSize,
+    NativeWorkspaceTextEncoding? encoding,
+  }) => RustLib.instance.api.crateApiRopeRopeBridgeCreateFromWorkspaceFile(
+    workspacePath: workspacePath,
+    relativePath: relativePath,
+    tabSize: tabSize,
+    encoding: encoding,
+  );
 
   RopeBridge deepClone();
 
@@ -83,6 +101,8 @@ abstract class RopeBridge implements RustOpaqueInterface {
   void setSelection({required BigInt baseOffset, required BigInt extentOffset});
 
   String slice({required BigInt start, required BigInt end});
+
+  WorkspaceSourceInfo? sourceInfo();
 
   TextDirection textDirection();
 }

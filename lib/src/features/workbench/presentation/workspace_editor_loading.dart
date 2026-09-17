@@ -22,7 +22,7 @@ extension _WorkspaceEditorLoading on _WorkspaceEditorSurfaceState {
     });
     try {
       final tabSize = _currentEditorTabSize();
-      final file = await _workspaceFiles.readEditorTextFile(
+      final info = await _openControllerFromWorkspace(
         workspacePath: workspacePath,
         relativePath: filePath,
         tabSize: tabSize,
@@ -31,12 +31,13 @@ extension _WorkspaceEditorLoading on _WorkspaceEditorSurfaceState {
       if (!_isCurrentLoadRequest(requestId, workspacePath, filePath)) {
         return;
       }
-      _document.acceptLoaded(
-        file,
+      _document.acceptNativeLoaded(
+        encoding: _fromCodeForgeEncoding(info.encoding),
+        contentToken: info.contentToken,
+        documentVersion: _controller.documentVersion,
         tabSize: tabSize,
         requestedEncoding: _document.requestedEncoding,
       );
-      _replaceControllerText(_document.currentText ?? '');
     } catch (error) {
       if (!_isCurrentLoadRequest(requestId, workspacePath, filePath)) {
         return;
@@ -90,7 +91,8 @@ extension _WorkspaceEditorLoading on _WorkspaceEditorSurfaceState {
       workspacePath: widget.workspace.path,
       relativePath: filePath,
     );
-    if (_document.hasSnapshot) {
+    if (_document.hasSnapshot &&
+        (!_document.nativeBacked || _document.currentText != null)) {
       _invalidatePendingLoads();
       _replaceControllerText(_document.currentText ?? '');
       _loadError = _document.loadError;
@@ -123,6 +125,61 @@ extension _WorkspaceEditorLoading on _WorkspaceEditorSurfaceState {
   void _invalidatePendingLoads() {
     _loadRequestId += 1;
   }
+}
+
+code_forge.NativeWorkspaceTextEncoding? _toCodeForgeEncoding(
+  native.WorkspaceTextEncoding? encoding,
+) {
+  if (encoding == null) return null;
+  return switch (encoding) {
+    native.WorkspaceTextEncoding.utf8 =>
+      code_forge.NativeWorkspaceTextEncoding.utf8,
+    native.WorkspaceTextEncoding.utf8Bom =>
+      code_forge.NativeWorkspaceTextEncoding.utf8Bom,
+    native.WorkspaceTextEncoding.utf16Le =>
+      code_forge.NativeWorkspaceTextEncoding.utf16Le,
+    native.WorkspaceTextEncoding.utf16Be =>
+      code_forge.NativeWorkspaceTextEncoding.utf16Be,
+    native.WorkspaceTextEncoding.big5 =>
+      code_forge.NativeWorkspaceTextEncoding.big5,
+    native.WorkspaceTextEncoding.gbk =>
+      code_forge.NativeWorkspaceTextEncoding.gbk,
+    native.WorkspaceTextEncoding.shiftJis =>
+      code_forge.NativeWorkspaceTextEncoding.shiftJis,
+    native.WorkspaceTextEncoding.eucJp =>
+      code_forge.NativeWorkspaceTextEncoding.eucJp,
+    native.WorkspaceTextEncoding.eucKr =>
+      code_forge.NativeWorkspaceTextEncoding.eucKr,
+    native.WorkspaceTextEncoding.windows1252 =>
+      code_forge.NativeWorkspaceTextEncoding.windows1252,
+  };
+}
+
+native.WorkspaceTextEncoding _fromCodeForgeEncoding(
+  code_forge.NativeWorkspaceTextEncoding encoding,
+) {
+  return switch (encoding) {
+    code_forge.NativeWorkspaceTextEncoding.utf8 =>
+      native.WorkspaceTextEncoding.utf8,
+    code_forge.NativeWorkspaceTextEncoding.utf8Bom =>
+      native.WorkspaceTextEncoding.utf8Bom,
+    code_forge.NativeWorkspaceTextEncoding.utf16Le =>
+      native.WorkspaceTextEncoding.utf16Le,
+    code_forge.NativeWorkspaceTextEncoding.utf16Be =>
+      native.WorkspaceTextEncoding.utf16Be,
+    code_forge.NativeWorkspaceTextEncoding.big5 =>
+      native.WorkspaceTextEncoding.big5,
+    code_forge.NativeWorkspaceTextEncoding.gbk =>
+      native.WorkspaceTextEncoding.gbk,
+    code_forge.NativeWorkspaceTextEncoding.shiftJis =>
+      native.WorkspaceTextEncoding.shiftJis,
+    code_forge.NativeWorkspaceTextEncoding.eucJp =>
+      native.WorkspaceTextEncoding.eucJp,
+    code_forge.NativeWorkspaceTextEncoding.eucKr =>
+      native.WorkspaceTextEncoding.eucKr,
+    code_forge.NativeWorkspaceTextEncoding.windows1252 =>
+      native.WorkspaceTextEncoding.windows1252,
+  };
 }
 
 @visibleForTesting
