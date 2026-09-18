@@ -270,10 +270,10 @@ C4 proved the ownership boundary structurally and measured latency, but direct F
 | --- | --- | --- | --- | --- |
 | C6P | P0 gate | Retained parser cold-start + memory/payload profile | **Yes** | benchmark/evidence only |
 | C6 | P0 | Large-file retained parser scheduling / lazy readiness | **Yes after C6P baseline** | CodeForge/native editor |
-| T7 | P1 gate | Post-T6 native Windows terminal render/restore/reveal profile | **Yes** | benchmark/evidence only |
+| T7 | P1 gate | Post-T6 native Windows terminal render/restore/reveal profile | **Complete** | benchmark/evidence only |
 | S2 | P1 gate | CodeForge post-first-frame/lazy-init A/B | **Yes, profile/prototype first** | startup/readiness |
 | A3V | P1 validation | Windows production FRB validation for overlay reuse | **Yes** | validation only |
-| T8 | Evidence only | Next terminal implementation selected by T7 | **No** | terminal implementation |
+| T8 | P1 | T8d direct worker snapshot hydration / restore redesign | **Selected by T7; not started** | terminal implementation |
 | S3 | Evidence only | Startup implementation retained by S2 evidence | **No** | startup implementation |
 
 Four completely independent evidence lanes can start immediately: **C6P || T7 || S2 || A3V**. C6 implementation can begin its tests/design in parallel but should not lock in production scheduling policy until the C6P baseline is recorded.
@@ -398,6 +398,8 @@ Cover:
 
 **Priority: P1 evidence gate. No production terminal changes in T7.**
 
+**2026-09-18 status: COMPLETE.** Native Windows restore and flush/render gates now pass under `@home-node`. Restore median/p95 is 9.90/12.44 s with 0/5 inside the 3 s target; native raster median/p95 is 58.61/84.32 ms. T7 therefore selects **T8d: direct worker snapshot hydration / restore redesign** as the single next terminal architecture cut. See `docs/t7-terminal-post-t6-native-profile-report.md`.
+
 Suggested branch/worktree:
 
 ```text
@@ -451,7 +453,9 @@ none are material in native measurements
   -> stop terminal architecture work
 ```
 
-Do not begin T8 while T7 is still collecting evidence.
+T7 evidence collection is complete.
+
+Native restore dominates the measured terminal bottlenecks: 9.90 s median / 12.44 s p95 versus a 431.22 ms packed reveal median and a 97.23 ms native total-frame median. Per the decision tree, the next terminal implementation is **T8d: direct worker snapshot hydration / restore redesign**. Keep T8a (packed UI materialization) and T8c (renderer seam) deferred so the first T8 cut remains isolated and measurable.
 
 ## 8. S2 - CodeForge post-first-frame / lazy-init A/B gate
 
