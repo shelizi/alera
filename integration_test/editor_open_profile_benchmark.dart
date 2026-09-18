@@ -292,6 +292,7 @@ Future<
 _openNativeController({
   required String workspacePath,
   required String relativePath,
+  int expectedMinimumLines = _lineCount,
 }) async {
   final controller = code_forge.CodeForgeController();
   final sourceInfo = await controller.openWorkspaceFile(
@@ -299,7 +300,7 @@ _openNativeController({
     relativePath: relativePath,
     tabSize: 2,
   );
-  expect(controller.lineCount, greaterThanOrEqualTo(_lineCount));
+  expect(controller.lineCount, greaterThanOrEqualTo(expectedMinimumLines));
   return (controller: controller, sourceInfo: sourceInfo);
 }
 
@@ -535,6 +536,7 @@ Future<Map<String, Object>> _measureC6pCase(
     final opened = await _openNativeController(
       workspacePath: workspace.path,
       relativePath: relativePath,
+      expectedMinimumLines: lineCount,
     );
     await tester.pumpWidget(_c6pEditorWidget(opened.controller, language.id));
     await opened.controller.queryNativeSyntaxSpans(
@@ -553,6 +555,7 @@ Future<Map<String, Object>> _measureC6pCase(
     final opened = await _openNativeController(
       workspacePath: workspace.path,
       relativePath: relativePath,
+      expectedMinimumLines: lineCount,
     );
     openWatch.stop();
     openSamples.add(openWatch.elapsedMicroseconds);
@@ -624,6 +627,7 @@ Future<Map<String, Object>> _measureRapidReplacement(
     final opened = await _openNativeController(
       workspacePath: workspace.path,
       relativePath: relativePath,
+      expectedMinimumLines: lineCount,
     );
     final controller = opened.controller;
     final rssBefore = ProcessInfo.currentRss;

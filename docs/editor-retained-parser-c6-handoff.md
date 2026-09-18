@@ -9,11 +9,11 @@ Production implementation and correctness closure are complete on:
 - branch: `perf/editor-native-parse-scheduling`
 - worktree: `.worktrees/editor-native-parse-scheduling`
 - base evidence commit: `24053f1d22de50b07b0c2792d49b86f2eda863f9`
-- current head: `ab6bdefe094fbfc666fc9550e80949d8b986de83`
+- after-profile baseline head: `c00b8299` (`docs: add C6 retained parser handoff`)
 
-The remaining closure item is the Flutter/Windows C6P **after** profile for first-frame/readiness/RSS. It is blocked by the current host, which has neither MSVC Build Tools nor a Windows SDK/C++ compiler visible to CMake. Both the explicit Windows-device run and a host-run attempt select the Windows desktop integration runner and fail before the test body with `No CMAKE_CXX_COMPILER could be found`.
+The Flutter/Windows C6P **after** profile is now complete. The host already contained Visual Studio 2022 Community on `F:`; after repairing the Windows build environment/discovery path, the full Windows integration matrix and rapid-replacement workload ran successfully.
 
-Do not interpret that environment failure as a C6 regression.
+C6 is therefore performance-closed as well as correctness-closed.
 
 ## Baseline decision from C6P
 
@@ -146,34 +146,48 @@ Flutter/Dart:
 
 The full crate `cargo fmt -- --check` still reports pre-existing formatting drift in `rust/src/api/editor.rs`; C6-owned Rust source passes its focused rustfmt check.
 
-## Performance closure still blocked
+## Windows after-profile closure
 
-Required after-profile command:
+The benchmark instrumentation was executed through the Windows integration runner after making the existing `F:` Visual Studio 2022 toolchain visible to Flutter/CMake.
+
+Five-sample after-profile medians:
+
+| Language | Lines | Rope ready | Open -> first useful frame | Open -> syntax ready |
+| --- | ---: | ---: | ---: | ---: |
+| Rust | 2k | 5.624 ms | 42.588 ms | 232.355 ms |
+| Rust | 20k | 49.957 ms | 94.664 ms | 1,128.307 ms |
+| Rust | 50k | 118.534 ms | 158.193 ms | 2,760.323 ms |
+| Rust | 100k | 237.994 ms | 279.086 ms | 5,214.875 ms |
+| Dart | 2k | 4.641 ms | 41.704 ms | 163.321 ms |
+| Dart | 20k | 37.746 ms | 74.391 ms | 902.805 ms |
+| Dart | 50k | 96.647 ms | 122.134 ms | 1,363.531 ms |
+| Dart | 100k | 190.147 ms | 221.303 ms | 2,895.852 ms |
+| TypeScript | 2k | 4.614 ms | 40.604 ms | 174.727 ms |
+| TypeScript | 20k | 44.671 ms | 70.275 ms | 563.640 ms |
+| TypeScript | 50k | 105.494 ms | 137.477 ms | 1,263.913 ms |
+| TypeScript | 100k | 226.783 ms | 253.106 ms | 2,445.289 ms |
+
+This is the key C6 closure result: at 100k lines the editor reaches a useful first frame in about 221-279 ms median even though retained syntax readiness remains about 2.45-5.21 s. The multi-second cold parse is therefore no longer a prerequisite for first useful paint.
+
+`WorkspaceSourceInfo` stayed bounded at 148-152 bytes across the matrix. RSS samples were collected but are noisy because process working-set movement includes allocator/GC reuse; they are not treated as precise per-document heap attribution.
+
+Rapid replacement, 20k Rust with three successive generations:
+
+- issue wall median: 7.536 ms
+- final-generation syntax-ready median: 984.197 ms
+- RSS delta median: 933,888 bytes
+
+Final Windows integration result: `All tests passed.`
+
+The benchmark harness also needed one correctness fix: its shared native-open helper had retained the C4-specific 50k minimum-line assertion, while the C6P matrix intentionally contains 2k and 20k cases. The helper now accepts a per-case expected minimum; C4 retains the 50k default.
+
+Original direct command documented by C6P:
 
 ```powershell
 flutter test integration_test/editor_open_profile_benchmark.dart -d windows --plain-name "profiles C6P retained parser readiness matrix"
 ```
 
-Also attempted without `-d windows`; Flutter's integration-test runner still selected Windows desktop and reached the same CMake failure.
-
-Current host findings:
-
-- no `cl.exe`
-- no Visual Studio C++ Build Tools installation reported by `vswhere`
-- no usable Windows SDK include/lib tree found
-- CMake error: `No CMAKE_CXX_COMPILER could be found`
-
-Once a Windows C++ desktop toolchain is available, rerun the existing C6P matrix unchanged and record:
-
-- native Rope-ready latency
-- first CodeForge frame
-- native open -> first useful frame
-- retained syntax readiness
-- process RSS movement
-- bounded source-info payload proxy
-- rapid replacement behavior
-
-The expected architecture result is that large-file cold parse begins only after the first frame. That expectation is structurally enforced, but it is not claimed as measured whole-app after-profile evidence until the Windows benchmark runs.
+Because this host's Flutter 3.47.2 test/path discovery interacts poorly with the MCP extended-path working directory and the unregistered portable VS2022 instance, the successful run used an equivalent temporary Windows harness to expose the same project at a normal non-root drive path and execute the existing integration benchmark. Those temporary host/build helpers are not production changes and are not part of the C6 commit set.
 
 ## Integration order / conflict notes
 
@@ -202,7 +216,7 @@ The currently active `perf/editor-large-file-highlight` and `perf/editor-change-
 
 No additional parser architecture phase is justified from the current evidence before the Windows after-profile closes.
 
-If after-profile confirms that first-frame overlap is removed and RSS/readiness are acceptable, C6 can be marked fully complete.
+C6 can be marked fully complete. The after-profile confirms that first-useful-frame latency is decoupled from retained syntax readiness for large files, bounded FRB metadata remains intact, and rapid replacement completes without a lifecycle failure.
 
-If a material readiness/RSS issue remains, choose the next parser task from measured evidence. Query compilation/cache work remains lower priority than the cold full parse and should not be selected without new measurements.
+No additional parser architecture phase is justified from this evidence. Query compilation/cache work remains lower priority than the cold full parse and should not be selected without new measurements.
 

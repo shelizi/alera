@@ -151,13 +151,42 @@ flutter analyze integration_test/editor_open_profile_benchmark.dart
 No issues found!
 ```
 
-The Windows integration run could not start on this host because Flutter/CMake reported:
+### Windows C6 after-profile closure
 
-```
-No CMAKE_CXX_COMPILER could be found.
-```
+The Windows integration matrix was subsequently closed on the same workstation using the existing Visual Studio 2022 Community installation on `F:` with MSVC 19.38.33133 and Windows SDK 10.0.26100.0.
 
-Therefore this C6P report does **not** claim measured Flutter first-frame, direct FRB serialization, Dart heap, or end-to-end RSS numbers. The executable instrumentation is committed so those measurements can be collected unchanged on a Windows host with the C++ desktop toolchain available.
+The benchmark ran all 12 Rust/Dart/TypeScript x 2k/20k/50k/100k cells with five samples per cell and passed end-to-end.
+
+Five-sample medians:
+
+| Language | Lines | Native Rope ready | Native open -> first useful frame | Native open -> syntax ready | Source-info proxy |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Rust | 2k | 5.624 ms | 42.588 ms | 232.355 ms | 148 B |
+| Rust | 20k | 49.957 ms | 94.664 ms | 1,128.307 ms | 152 B |
+| Rust | 50k | 118.534 ms | 158.193 ms | 2,760.323 ms | 152 B |
+| Rust | 100k | 237.994 ms | 279.086 ms | 5,214.875 ms | 152 B |
+| Dart | 2k | 4.641 ms | 41.704 ms | 163.321 ms | 148 B |
+| Dart | 20k | 37.746 ms | 74.391 ms | 902.805 ms | 152 B |
+| Dart | 50k | 96.647 ms | 122.134 ms | 1,363.531 ms | 152 B |
+| Dart | 100k | 190.147 ms | 221.303 ms | 2,895.852 ms | 152 B |
+| TypeScript | 2k | 4.614 ms | 40.604 ms | 174.727 ms | 148 B |
+| TypeScript | 20k | 44.671 ms | 70.275 ms | 563.640 ms | 152 B |
+| TypeScript | 50k | 105.494 ms | 137.477 ms | 1,263.913 ms | 152 B |
+| TypeScript | 100k | 226.783 ms | 253.106 ms | 2,445.289 ms | 152 B |
+
+The result confirms the C6 scheduling objective: large-file retained syntax readiness is still a multi-second operation, but it no longer has to complete before the editor reaches its first useful frame. At 100k lines the first useful frame arrives in roughly 221-279 ms median while retained syntax becomes ready roughly 2.45-5.21 s after open.
+
+The bounded `WorkspaceSourceInfo` proxy remained 148-152 bytes in every cell, well below the 1 KiB guard, so the after-profile did not reveal a whole-document FRB payload regression.
+
+RSS deltas were recorded but remain allocator/GC-sensitive and sometimes negative; use them as directional process-working-set evidence rather than clean retained-heap attribution.
+
+Rapid replacement (20k Rust, three configure generations) also completed:
+
+- replacement issue wall median: 7.536 ms
+- final-generation syntax-ready median: 984.197 ms
+- process RSS delta median: 933,888 bytes
+
+The production cancellation path therefore preserves fast supersession issuance while allowing the final generation to become ready normally.
 
 ## Reproduction / validation
 
@@ -169,10 +198,12 @@ Completed:
 - `dart format integration_test/editor_open_profile_benchmark.dart`
 - `flutter analyze integration_test/editor_open_profile_benchmark.dart`
 
-Environment-limited:
+Windows after-profile:
 
-- `flutter test integration_test/editor_open_profile_benchmark.dart -d windows --plain-name "profiles C6P retained parser readiness matrix"`
-  - blocked before test execution by missing C++ compiler / CMake toolchain
+- full Windows integration matrix: 12/12 profile cells completed
+- rapid replacement workload completed
+- final runner result: `All tests passed.`
+- `flutter analyze integration_test/editor_open_profile_benchmark.dart`: `No issues found!`
 
 ## Handoff to C6
 

@@ -386,13 +386,15 @@ Cover:
 
 ### Success criteria
 
-- first-frame/open latency no longer materially overlaps the multi-second cold parse for large files;
-- retained syntax still becomes available eventually;
-- no UI-isolate synchronous wait;
-- no whole-document Dart snapshot regression;
-- no duplicate cold parse per consumer;
-- rapid tab close/change does not leave useless parse work/lifetime leaks;
-- C6P before/after evidence includes RSS and readiness latency.
+- [x] first-frame/open latency no longer materially overlaps the multi-second cold parse for large files; 100k first-useful-frame median is 221-279 ms while syntax readiness is 2.45-5.21 s;
+- [x] retained syntax still becomes available eventually across Rust/Dart/TypeScript 2k/20k/50k/100k;
+- [x] no UI-isolate synchronous wait is exposed by the after-profile path;
+- [x] no whole-document Dart snapshot regression; source-info payload proxy stays 148-152 bytes;
+- [x] no duplicate consumer-owned cold parse was introduced;
+- [x] rapid replacement completes with 7.536 ms median issue wall and 984.197 ms final-generation readiness;
+- [x] C6P before/after evidence includes RSS and readiness latency.
+
+Windows after-profile closure: full 12-cell matrix + rapid replacement passed on 2026-09-18. C6 is complete; do not open another parser architecture phase without new measured evidence.
 
 ## 7. T7 - post-T6 native Windows terminal profile gate
 
