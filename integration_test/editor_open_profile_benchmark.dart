@@ -29,6 +29,34 @@ const _sampleCount = 5;
 const _lineCount = 50000;
 const _syntaxControlLines = 40;
 const _viewportLines = 80;
+const _c6pLineCounts = <int>[2000, 20000, 50000, 100000];
+
+class _C6pLanguage {
+  const _C6pLanguage(this.id, this.extension);
+
+  final String id;
+  final String extension;
+}
+
+const _c6pLanguages = <_C6pLanguage>[
+  _C6pLanguage('rust', 'rs'),
+  _C6pLanguage('dart', 'dart'),
+  _C6pLanguage('typescript', 'ts'),
+];
+
+var _aleraRustInitialized = false;
+var _codeForgeRustInitialized = false;
+
+Future<void> _ensureRustLibrariesInitialized() async {
+  if (!_aleraRustInitialized) {
+    await alera_rust.RustLib.init();
+    _aleraRustInitialized = true;
+  }
+  if (!_codeForgeRustInitialized) {
+    await code_forge.RustLib.init();
+    _codeForgeRustInitialized = true;
+  }
+}
 
 String _largeDocument() {
   final out = StringBuffer();
@@ -41,6 +69,60 @@ String _largeDocument() {
       ..write("'; // benchmark\n");
   }
   return out.toString();
+}
+
+String _c6pDocument(String languageId, int lineCount) {
+  final out = StringBuffer();
+  for (var i = 0; i < lineCount; i++) {
+    switch (languageId) {
+      case 'rust':
+        out.writeln(
+          'fn item_$i() { let value_$i: usize = $i; println!("{{}}", value_$i); }',
+        );
+        break;
+      case 'dart':
+        out.writeln(
+          "final value_$i = 'needle alpha beta gamma $i'; // benchmark",
+        );
+        break;
+      case 'typescript':
+        out.writeln(
+          'const value_$i: string = `needle alpha beta gamma $i`; // benchmark',
+        );
+        break;
+      default:
+        throw ArgumentError.value(languageId, 'languageId');
+    }
+  }
+  return out.toString();
+}
+
+Map<String, Object> _statsPayload(List<int> samplesMicros) {
+  final stats = _Stats(samplesMicros);
+  return <String, Object>{
+    'median_ms': stats.medianMs,
+    'p95_ms': stats.p95Ms,
+    'mad_ms': stats.madMs,
+    'samples_us': samplesMicros,
+  };
+}
+
+int _medianInt(List<int> values) {
+  if (values.isEmpty) return 0;
+  final sorted = [...values]..sort();
+  return sorted[(sorted.length - 1) ~/ 2];
+}
+
+int _sourceInfoPayloadProxyBytes(code_forge.WorkspaceSourceInfo info) {
+  final payload = <String, Object>{
+    'encoding': info.encoding.name,
+    'contentToken': info.contentToken,
+    'modifiedMillis': info.modifiedMillis,
+    'size': info.size.toString(),
+    'rawChars': info.rawChars.toString(),
+    'displayChars': info.displayChars.toString(),
+  };
+  return utf8.encode(jsonEncode(payload)).length;
 }
 
 class _Stats {
@@ -167,6 +249,31 @@ Widget _editorWidget(code_forge.CodeForgeController controller) => MaterialApp(
       largeFilePerformanceMode: true,
       language: builtinAllLanguages['dart']!,
       languageId: 'dart',
+      textStyle: const TextStyle(
+        fontFamily: 'JetBrains Mono',
+        fontSize: 14,
+        height: 1.35,
+      ),
+    ),
+  ),
+);
+
+Widget _c6pEditorWidget(
+  code_forge.CodeForgeController controller,
+  String languageId,
+) => MaterialApp(
+  debugShowCheckedModeBanner: false,
+  home: Scaffold(
+    body: code_forge.CodeForge(
+      controller: controller,
+      autoFocus: false,
+      lineWrap: false,
+      enableFolding: false,
+      enableGuideLines: false,
+      enableLocalSuggestions: false,
+      largeFilePerformanceMode: true,
+      language: builtinAllLanguages[languageId]!,
+      languageId: languageId,
       textStyle: const TextStyle(
         fontFamily: 'JetBrains Mono',
         fontSize: 14,
@@ -401,6 +508,163 @@ Future<_FrameStageReport> _measureFullOpenToFirstFrame(
   );
 }
 
+Future<Map<String, Object>> _measureC6pCase(
+  WidgetTester tester, {
+  required Directory workspace,
+  required _C6pLanguage language,
+  required int lineCount,
+}) async {
+  final relativePath = 'c6p_${language.id}_$lineCount.${language.extension}';
+  final fixture = File(p.join(workspace.path, relativePath));
+  await fixture.writeAsString(
+    _c6pDocument(language.id, lineCount),
+    flush: true,
+  );
+
+  final openSamples = <int>[];
+  final firstFrameSamples = <int>[];
+  final openToFirstFrameSamples = <int>[];
+  final syntaxReadySamples = <int>[];
+  final openToSyntaxReadySamples = <int>[];
+  final rssOpenDeltas = <int>[];
+  final rssSyntaxDeltas = <int>[];
+  final payloadProxyBytes = <int>[];
+  final spanCounts = <int>[];
+
+  {
+    final opened = await _openNativeController(
+      workspacePath: workspace.path,
+      relativePath: relativePath,
+    );
+    await tester.pumpWidget(_c6pEditorWidget(opened.controller, language.id));
+    await opened.controller.queryNativeSyntaxSpans(
+      startLine: 0,
+      endLine: _viewportLines - 1,
+      overscan: 0,
+    );
+    await tester.pumpWidget(const SizedBox.shrink());
+    opened.controller.dispose();
+  }
+
+  for (var sample = 0; sample < _sampleCount; sample++) {
+    final rssBefore = ProcessInfo.currentRss;
+    final totalWatch = Stopwatch()..start();
+    final openWatch = Stopwatch()..start();
+    final opened = await _openNativeController(
+      workspacePath: workspace.path,
+      relativePath: relativePath,
+    );
+    openWatch.stop();
+    openSamples.add(openWatch.elapsedMicroseconds);
+    rssOpenDeltas.add(ProcessInfo.currentRss - rssBefore);
+    payloadProxyBytes.add(_sourceInfoPayloadProxyBytes(opened.sourceInfo));
+
+    final frameWatch = Stopwatch()..start();
+    await tester.pumpWidget(_c6pEditorWidget(opened.controller, language.id));
+    frameWatch.stop();
+    firstFrameSamples.add(frameWatch.elapsedMicroseconds);
+    openToFirstFrameSamples.add(totalWatch.elapsedMicroseconds);
+
+    final syntaxWatch = Stopwatch()..start();
+    final spans = await opened.controller.queryNativeSyntaxSpans(
+      startLine: 0,
+      endLine: _viewportLines - 1,
+      overscan: 0,
+    );
+    syntaxWatch.stop();
+    totalWatch.stop();
+    syntaxReadySamples.add(syntaxWatch.elapsedMicroseconds);
+    openToSyntaxReadySamples.add(totalWatch.elapsedMicroseconds);
+    expect(spans, isNotNull);
+    spanCounts.add(spans!.spans.length);
+    rssSyntaxDeltas.add(ProcessInfo.currentRss - rssBefore);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    opened.controller.dispose();
+  }
+
+  return <String, Object>{
+    'language': language.id,
+    'lines': lineCount,
+    'fixture_bytes': await fixture.length(),
+    'native_rope_ready': _statsPayload(openSamples),
+    'first_codeforge_frame': _statsPayload(firstFrameSamples),
+    'native_open_to_first_useful_frame': _statsPayload(openToFirstFrameSamples),
+    'syntax_ready_after_first_frame': _statsPayload(syntaxReadySamples),
+    'native_open_to_syntax_ready': _statsPayload(openToSyntaxReadySamples),
+    'rss_open_delta_bytes_median': _medianInt(rssOpenDeltas),
+    'rss_syntax_delta_bytes_median': _medianInt(rssSyntaxDeltas),
+    'rss_open_delta_bytes_samples': rssOpenDeltas,
+    'rss_syntax_delta_bytes_samples': rssSyntaxDeltas,
+    'source_info_payload_proxy_bytes': payloadProxyBytes,
+    'source_info_payload_proxy_bytes_max': payloadProxyBytes.reduce(max),
+    'viewport_span_counts': spanCounts,
+  };
+}
+
+Future<Map<String, Object>> _measureRapidReplacement(
+  WidgetTester tester, {
+  required Directory workspace,
+}) async {
+  const language = _C6pLanguage('rust', 'rs');
+  const lineCount = 20000;
+  const replacementCount = 3;
+  const relativePath = 'c6p_rapid_replace.rs';
+  final fixture = File(p.join(workspace.path, relativePath));
+  await fixture.writeAsString(
+    _c6pDocument(language.id, lineCount),
+    flush: true,
+  );
+
+  final issueSamples = <int>[];
+  final finalQuerySamples = <int>[];
+  final rssDeltas = <int>[];
+
+  for (var sample = 0; sample < _sampleCount; sample++) {
+    final opened = await _openNativeController(
+      workspacePath: workspace.path,
+      relativePath: relativePath,
+    );
+    final controller = opened.controller;
+    final rssBefore = ProcessInfo.currentRss;
+    final issueWatch = Stopwatch()..start();
+    for (var generation = 0; generation < replacementCount; generation++) {
+      controller.configureNativeSyntaxDocument(
+        languageId: language.id,
+        documentId: '$relativePath#$sample#$generation',
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 1));
+    }
+    issueWatch.stop();
+    issueSamples.add(issueWatch.elapsedMicroseconds);
+
+    final queryWatch = Stopwatch()..start();
+    final spans = await controller.queryNativeSyntaxSpans(
+      startLine: 0,
+      endLine: _viewportLines - 1,
+      overscan: 0,
+    );
+    queryWatch.stop();
+    expect(spans, isNotNull);
+    finalQuerySamples.add(queryWatch.elapsedMicroseconds);
+    rssDeltas.add(ProcessInfo.currentRss - rssBefore);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    controller.dispose();
+  }
+
+  return <String, Object>{
+    'language': language.id,
+    'lines': lineCount,
+    'replacement_count_per_sample': replacementCount,
+    'replacement_issue_wall': _statsPayload(issueSamples),
+    'final_generation_syntax_ready': _statsPayload(finalQuerySamples),
+    'rss_delta_bytes_median': _medianInt(rssDeltas),
+    'rss_delta_bytes_samples': rssDeltas,
+    'note': 'Each configure starts an async retained parse; superseded generations are discarded only after openFromRope completes.',
+  };
+}
+
 void main() {
   final binding = IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
@@ -416,10 +680,16 @@ void main() {
     final fixtureBytes = await fixture.readAsBytes();
 
     final aleraInit = Stopwatch()..start();
-    await alera_rust.RustLib.init();
+    if (!_aleraRustInitialized) {
+      await alera_rust.RustLib.init();
+      _aleraRustInitialized = true;
+    }
     aleraInit.stop();
     final codeForgeInit = Stopwatch()..start();
-    await code_forge.RustLib.init();
+    if (!_codeForgeRustInitialized) {
+      await code_forge.RustLib.init();
+      _codeForgeRustInitialized = true;
+    }
     codeForgeInit.stop();
 
     final reports = <_StageReport>[];
@@ -640,4 +910,39 @@ void main() {
     );
     expect(fullOpen.wall.stats.samplesMicros, hasLength(_sampleCount));
   }, timeout: const Timeout(Duration(minutes: 12)));
+
+  testWidgets('profiles C6P retained parser readiness matrix', (tester) async {
+    await _ensureRustLibrariesInitialized();
+    final workspace = await Directory.systemTemp.createTemp(
+      'alera_c6p_parse_profile_',
+    );
+    addTearDown(() => workspace.delete(recursive: true));
+
+    final cases = <Map<String, Object>>[];
+    for (final language in _c6pLanguages) {
+      for (final lineCount in _c6pLineCounts) {
+        final result = await _measureC6pCase(
+          tester,
+          workspace: workspace,
+          language: language,
+          lineCount: lineCount,
+        );
+        cases.add(result);
+        // ignore: avoid_print
+        print('C6P_FLUTTER_PROFILE ${jsonEncode(result)}');
+      }
+    }
+
+    final rapidReplacement = await _measureRapidReplacement(
+      tester,
+      workspace: workspace,
+    );
+    // ignore: avoid_print
+    print('C6P_RAPID_REPLACEMENT ${jsonEncode(rapidReplacement)}');
+
+    expect(cases, hasLength(_c6pLanguages.length * _c6pLineCounts.length));
+    for (final result in cases) {
+      expect(result['source_info_payload_proxy_bytes_max'], lessThan(1024));
+    }
+  }, timeout: const Timeout(Duration(minutes: 30)));
 }
