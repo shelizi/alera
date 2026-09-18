@@ -9,14 +9,14 @@ extension _WorkspaceEditorOutline on _WorkspaceEditorSurfaceState {
     if (_outlineOpen) {
       _outlineRefreshTimer?.cancel();
       _outlineRequestId += 1;
-      setState(() {
+      _setEditorState(() {
         _outlineOpen = false;
         _outlineLoading = false;
       });
       return;
     }
 
-    setState(() {
+    _setEditorState(() {
       _outlineOpen = true;
       _outlineLoading = true;
     });
@@ -55,13 +55,13 @@ extension _WorkspaceEditorOutline on _WorkspaceEditorSurfaceState {
     _outlineRefreshTimer?.cancel();
     final requestId = ++_outlineRequestId;
     if (!_outlineLoading && mounted) {
-      setState(() => _outlineLoading = true);
+      _setEditorState(() => _outlineLoading = true);
     }
 
     final result = await _controller.queryDocumentSymbols(maxSymbols: 1000);
     if (!mounted || !_outlineOpen || requestId != _outlineRequestId) return;
 
-    setState(() {
+    _setEditorState(() {
       _outlineLoading = false;
       _outlineSymbols = result?.symbols ?? const [];
       _outlineTruncated = result?.truncated ?? false;

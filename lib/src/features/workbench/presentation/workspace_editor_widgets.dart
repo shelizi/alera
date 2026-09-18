@@ -152,7 +152,7 @@ class const _EditorOutlinePanel({
             height: AleraTokens.sidebarHeaderHeight,
             child: Padding(
               padding: const EdgeInsets.only(
-                left: AleraTokens.space10,
+                left: AleraTokens.space12,
                 right: AleraTokens.space4,
               ),
               child: Row(
@@ -214,9 +214,9 @@ class const _EditorOutlinePanel({
             if (truncated)
               Padding(
                 padding: const EdgeInsets.fromLTRB(
-                  AleraTokens.space10,
+                  AleraTokens.space12,
                   AleraTokens.space6,
-                  AleraTokens.space10,
+                  AleraTokens.space12,
                   AleraTokens.space4,
                 ),
                 child: Text(
