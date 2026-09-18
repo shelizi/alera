@@ -537,7 +537,29 @@ Validation:
 - root `editor_native_document_integration_boundary_test.dart`: 3 passed, 0 failed after refreshing its C4 native-open assertions to `Rope.openWorkspaceFile` + `NativeEditorDocument.openFromRope` and the revisioned edit-stream contract;
 - `git diff --check`: clean.
 
-Remaining C5 item: symbol outline/navigation.
+#### C5 symbol-outline/navigation status - 2026-09-18
+
+The fourth and final C5 feature is complete and merged to `main` (`1a0c5ae5` implementation, `4c8d147f` merge; root UI integration follow-up `e71c1a77`):
+
+- the editor Outline prefers LSP `textDocument/documentSymbol` when a ready language server returns symbols, and falls back to the already-retained `NativeEditorDocument` Tree-sitter tree when LSP is unavailable or returns no symbols;
+- the native fallback does not materialize or reparse the whole document for each outline request. It returns bounded symbol metadata plus short names, with a 5,000-symbol native safety cap and a 1,000-symbol editor-panel request cap;
+- native ranges use Unicode scalar offsets. LSP line/UTF-16 character positions are converted back to CodeForge scalar offsets before navigation, preserving non-BMP/Unicode correctness;
+- hierarchical document symbols preserve symbol nesting depth for the outline. Flat LSP `SymbolInformation` responses are accepted as top-level symbols;
+- native responses are revision-aware, and the controller also rejects an LSP result if the document version changes while that request is in flight;
+- the right-side Outline panel is opt-in, shows whether data came from `LSP` or `Tree-sitter`, supports explicit refresh, and navigates by selecting the symbol name and scrolling to its declaration;
+- outline refresh after edits is debounced by 350 ms rather than queried synchronously on every keystroke; completed file loads refresh an already-open outline immediately.
+
+Validation:
+
+- CodeForge Rust: 27 passed, 0 failed, 1 manual benchmark ignored;
+- retained-symbol regressions cover Rust hierarchy, TypeScript class/interface/method/function symbols, Dart class/method/top-level function symbols, Unicode scalar offsets, stale revisions, result truncation, and plaintext fallback;
+- targeted CodeForge Dart analyze: no issues;
+- targeted root Flutter analyze: no issues;
+- root `editor_native_document_integration_boundary_test.dart`: 4 passed, 0 failed;
+- root `workspace_editor_surface_test.dart`: 20 passed, 0 failed;
+- `git diff --check`: clean.
+
+C5 retained-tree feature series is complete: folding ranges, bracket matching, structural selection, and symbol outline/navigation are all merged. The previously measured roughly 5.54 s first retained Tree-sitter parse/query on the 50k-line fixture remains a separate scheduling/latency concern; this C5 cutover does not claim to remove parser startup cost.
 
 ### T6 - evidence-selected terminal implementation
 
