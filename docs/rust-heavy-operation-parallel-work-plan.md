@@ -270,7 +270,7 @@ C4 proved the ownership boundary structurally and measured latency, but direct F
 | --- | --- | --- | --- | --- |
 | C6P | P0 gate | Retained parser cold-start + memory/payload profile | **Yes** | benchmark/evidence only |
 | C6 | P0 | Large-file retained parser scheduling / lazy readiness | **Yes after C6P baseline** | CodeForge/native editor |
-| T7 | P1 gate | Post-T6 native Windows terminal render/restore/reveal profile | **Yes** | benchmark/evidence only |
+| T7 | P1 gate | Post-T6 native Windows terminal render/restore/reveal profile | **Blocked: native MSBuild FileTracker** | benchmark/evidence only |
 | S2 | P1 gate | CodeForge post-first-frame/lazy-init A/B | **Yes, profile/prototype first** | startup/readiness |
 | A3V | P1 validation | Windows production FRB validation for overlay reuse | **Yes** | validation only |
 | T8 | Evidence only | Next terminal implementation selected by T7 | **No** | terminal implementation |
@@ -398,6 +398,8 @@ Cover:
 
 **Priority: P1 evidence gate. No production terminal changes in T7.**
 
+**2026-09-18 status: PARTIAL / BLOCKED.** Portable five-sample worker, packed-reveal, and `flutter_tester` render evidence is complete, but both required native Windows integration gates still fail before test launch in VS18/MSBuild `CL` because `Microsoft.Build.Utilities.FileTracker.InitializeCommonApplicationDataPaths()` throws an illegal-path exception. See `docs/t7-terminal-post-t6-native-profile-report.md`. T8 remains unstarted.
+
 Suggested branch/worktree:
 
 ```text
@@ -452,6 +454,8 @@ none are material in native measurements
 ```
 
 Do not begin T8 while T7 is still collecting evidence.
+
+Current portable evidence, pending the blocked native gate, ranks the measurable packed-reveal costs as UI decode/materialization (226.55 ms median) > replica apply (156.86 ms) > worker materialization (53.81 ms) >> isolate transfer (0.82 ms). That makes T8a the leading **conditional** candidate, but it is not authorized until native restore/render evidence closes the T7 gate.
 
 ## 8. S2 - CodeForge post-first-frame / lazy-init A/B gate
 
