@@ -62,14 +62,42 @@ The 20-file link case is intentionally not optimized with weaker mtime-only vali
 
 `integration_test/agent_runtime_overlay_native_test.dart` and `integration_test/agent_runtime_overlay_benchmark.dart` were updated so the production bridge expects repeated unchanged preparation to be a zero-mutation reuse.
 
-The actual Windows Flutter integration rerun could not start on this node because CMake has no available C++ compiler:
+The A3V closure reran both tests through the actual Flutter/Windows production bridge after repairing the desktop build environment. The working environment was Visual Studio Community 2026 18.6.1 / MSVC 14.51.36231. The MCP shell needed the standard Windows system-path variables restored and the Coreutils `link.exe` entry removed from `PATH` so MSVC/MSBuild/FileTracker could configure normally.
+
+Production bridge correctness:
 
 ```text
-CMake Error at CMakeLists.txt:3 (project):
-  No CMAKE_CXX_COMPILER could be found.
+flutter test integration_test/agent_runtime_overlay_native_test.dart -d windows
+3 passed; 0 failed
 ```
 
-The worktree-local submodule dependencies were temporarily made available to confirm dependency resolution, then restored without repository changes. `cl.exe` is not available in the current environment and a Visual Studio C++ installation could not be located. Therefore the pre-A3 production-bridge baseline in the plan remains the latest completed FRB measurement; the new FRB assertions/benchmark should be rerun on a Windows environment with the Visual Studio C++ desktop toolchain installed.
+This verifies link-success reconciliation plus the public cleanup-warning and preparation-error projections to Dart.
+
+Production FRB benchmark:
+
+```text
+flutter test integration_test/agent_runtime_overlay_benchmark.dart -d windows \
+  --dart-define=ALERA_RUN_AGENT_OVERLAY_BENCHMARK=true
+1 passed; 0 failed
+```
+
+The benchmark executes five samples for each 20 / 500 / 2000-file scenario. The original 30-second test-package timeout was too short for the full 15-sample production matrix, so A3V raises only this benchmark harness timeout to five minutes; no production behavior changed.
+
+| Files | First preparation median | Repeated unchanged median | Heartbeat ticks median | Max heartbeat gap median | RSS delta median |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 20 | 8.937 ms | 8.532 ms | 3 | 3.590 ms | 176,128 B |
+| 500 | 161.476 ms | 36.265 ms | 77 | 11.595 ms | 520,192 B |
+| 2000 | 2,615.648 ms | 550.038 ms | 1087 | 44.704 ms | 360,448 B |
+
+Five-sample timing sets:
+
+- 20 first: `[8.416, 8.576, 8.937, 9.367, 14.001] ms`; unchanged: `[6.813, 7.962, 8.532, 8.611, 10.141] ms`.
+- 500 first: `[148.385, 151.763, 161.476, 695.931, 762.693] ms`; unchanged: `[35.172, 35.608, 36.265, 125.860, 182.536] ms`.
+- 2000 first: `[2,505.971, 2,605.404, 2,615.648, 3,084.639, 3,884.541] ms`; unchanged: `[520.268, 543.520, 550.038, 637.596, 729.260] ms`.
+
+Every repeated-unchanged production-FRB sample asserted zero removed/written/linked/copied entries and no warnings. Every first preparation used the Windows link path (`linked == file count`, `copied == 0`, no warnings). The 2000-file scenario also kept the Dart heartbeat active, confirming the async FRB call yields while the native filesystem workload runs.
+
+A3 is therefore closed end-to-end. A4 is not justified by this validation run.
 
 ## Merge notes
 

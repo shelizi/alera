@@ -140,7 +140,7 @@ void main() {
         );
       }
     }
-  }, skip: !_enabled);
+  }, skip: !_enabled, timeout: const Timeout(Duration(minutes: 5)));
 }
 
 Future<_Measurement> _measure(native.AgentRuntimeOverlayRequest request) async {

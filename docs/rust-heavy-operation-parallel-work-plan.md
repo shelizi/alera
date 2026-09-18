@@ -54,7 +54,7 @@ Five-sample Windows native benchmark medians for repeated unchanged preparation:
 | 2000 | link | 1936.822 ms | 181.511 ms | 10.7x faster |
 | 2000 | forced copy | 13852.686 ms | 278.280 ms | 49.8x faster |
 
-The production FRB rerun was originally blocked by the Windows desktop build environment. That environment class was later repaired while completing the C4 Windows benchmark, so A3 now has a small validation-closure task rather than another architecture task.
+The A3V production FRB closure is complete on Windows. The native integration test passed all three production-bridge cases (reconcile, warning projection, error projection), and the enabled 20 / 500 / 2000-file five-sample benchmark passed with repeated unchanged calls reporting zero removed/written/linked/copied mutations. Production-FRB repeated-unchanged medians were 8.532 ms / 36.265 ms / 550.038 ms respectively. No A4 follow-up is justified by this validation.
 
 Source: `docs/a3-agent-overlay-unchanged-fastpath-handoff.md`.
 
