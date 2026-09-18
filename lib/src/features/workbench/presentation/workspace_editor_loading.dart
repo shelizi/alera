@@ -1,7 +1,9 @@
 part of 'workspace_editor_surface.dart';
 
 extension _WorkspaceEditorLoading on _WorkspaceEditorSurfaceState {
-  Future<void> _load() async {
+  Future<void> _load({
+    _WorkspaceEditorScrollPosition? restoreScrollPosition,
+  }) async {
     _autosave.cancelPending();
     _clearPendingDocumentSnapshot();
     final requestId = ++_loadRequestId;
@@ -47,6 +49,12 @@ extension _WorkspaceEditorLoading on _WorkspaceEditorSurfaceState {
     } finally {
       if (_isCurrentLoadRequest(requestId, workspacePath, filePath)) {
         _setEditorState(() => _loading = false);
+        if (restoreScrollPosition != null) {
+          _scheduleEditorScrollRestore(
+            restoreScrollPosition,
+            requestId: requestId,
+          );
+        }
         _applyPendingReveal();
         _autosave.notifyStateChanged();
         _scheduleOutlineRefresh(immediate: true);

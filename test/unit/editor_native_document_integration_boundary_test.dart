@@ -48,6 +48,32 @@ void main() {
     expect(workspaceEditor, contains('_languageIdForPath(filePath)'));
   });
 
+  test('external editor reload keeps persistent viewport scroll state', () {
+    final workspaceEditor = File(
+      'lib/src/features/workbench/presentation/workspace_editor_surface.dart',
+    ).readAsStringSync();
+    final loading = File(
+      'lib/src/features/workbench/presentation/workspace_editor_loading.dart',
+    ).readAsStringSync();
+    final reveal = File(
+      'lib/src/features/workbench/presentation/workspace_editor_reveal.dart',
+    ).readAsStringSync();
+
+    expect(workspaceEditor, contains('_verticalScrollController'));
+    expect(workspaceEditor, contains('_horizontalScrollController'));
+    expect(
+      workspaceEditor,
+      contains('verticalScrollController: _verticalScrollController'),
+    );
+    expect(
+      workspaceEditor,
+      contains('horizontalScrollController: _horizontalScrollController'),
+    );
+    expect(reveal, contains('_captureEditorScrollPosition()'));
+    expect(loading, contains('restoreScrollPosition'));
+    expect(loading, contains('_scheduleEditorScrollRestore('));
+  });
+
   test(
     'large-file retained parsing starts only after first-frame admission',
     () {

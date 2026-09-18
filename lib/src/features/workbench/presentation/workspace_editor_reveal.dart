@@ -5,9 +5,56 @@ extension _WorkspaceEditorReveal on _WorkspaceEditorSurfaceState {
     if (_isDirty()) {
       return;
     }
+    final scrollPosition = _captureEditorScrollPosition();
     _autosave.cancelPending();
     _document.clearSnapshot();
-    await _load();
+    await _load(restoreScrollPosition: scrollPosition);
+  }
+
+  _WorkspaceEditorScrollPosition _captureEditorScrollPosition() {
+    return _WorkspaceEditorScrollPosition(
+      verticalOffset: _editorScrollOffset(_verticalScrollController),
+      horizontalOffset: _editorScrollOffset(_horizontalScrollController),
+    );
+  }
+
+  double? _editorScrollOffset(ScrollController controller) {
+    return controller.hasClients ? controller.offset : null;
+  }
+
+  void _scheduleEditorScrollRestore(
+    _WorkspaceEditorScrollPosition scrollPosition, {
+    required int requestId,
+  }) {
+    SchedulerBinding.instance.addPostFrameCallback((_) {
+      if (!mounted ||
+          requestId != _loadRequestId ||
+          _loading ||
+          _loadError != null) {
+        return;
+      }
+      _restoreEditorScrollOffset(
+        _verticalScrollController,
+        scrollPosition.verticalOffset,
+      );
+      _restoreEditorScrollOffset(
+        _horizontalScrollController,
+        scrollPosition.horizontalOffset,
+      );
+    });
+  }
+
+  void _restoreEditorScrollOffset(ScrollController controller, double? offset) {
+    if (offset == null || !controller.hasClients) {
+      return;
+    }
+    final position = controller.position;
+    final target = offset
+        .clamp(position.minScrollExtent, position.maxScrollExtent)
+        .toDouble();
+    if (position.pixels != target) {
+      controller.jumpTo(target);
+    }
   }
 
   void _revealOrDefer(WorkspaceEditorRevealTarget target) {
@@ -62,6 +109,11 @@ extension _WorkspaceEditorReveal on _WorkspaceEditorSurfaceState {
     });
   }
 }
+
+class const _WorkspaceEditorScrollPosition({
+  final double? verticalOffset,
+  final double? horizontalOffset,
+});
 
 @visibleForTesting
 WorkspaceEditorDisplayRevealRange workspaceEditorDisplayRevealRange({

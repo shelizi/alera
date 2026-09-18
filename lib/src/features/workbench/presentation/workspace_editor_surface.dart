@@ -59,6 +59,8 @@ class _WorkspaceEditorSurfaceState
   late final code_forge.CodeForgeController _controller;
   late final code_forge.UndoRedoController _undoController;
   late final code_forge.FindController _findController;
+  late final ScrollController _verticalScrollController;
+  late final ScrollController _horizontalScrollController;
   late WorkspaceEditorFocusNode _focusNode;
   late final WorkspaceFileService _workspaceFiles;
   late final EditorSessionRegistry _editorSessions;
@@ -96,6 +98,8 @@ class _WorkspaceEditorSurfaceState
     );
     _undoController = code_forge.UndoRedoController();
     _findController = code_forge.FindController(_controller);
+    _verticalScrollController = ScrollController();
+    _horizontalScrollController = ScrollController();
     _focusNode = WorkspaceEditorFocusNode();
     _workspaceFiles = ref.read(workspaceFileServiceProvider);
     _editorSessions = ref.read(editorSessionRegistryProvider);
@@ -164,6 +168,8 @@ class _WorkspaceEditorSurfaceState
     _findController.dispose();
     _undoController.dispose();
     _controller.dispose();
+    _verticalScrollController.dispose();
+    _horizontalScrollController.dispose();
     _focusNode.dispose();
     super.dispose();
   }
@@ -212,6 +218,8 @@ class _WorkspaceEditorSurfaceState
               controller: _controller,
               undoController: _undoController,
               findController: _findController,
+              verticalScrollController: _verticalScrollController,
+              horizontalScrollController: _horizontalScrollController,
               focusNode: _focusNode,
               autoFocus: widget.autofocus,
               lineWrap: performanceProfile.lineWrap,
