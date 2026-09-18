@@ -143,6 +143,85 @@ async fn create_or_attach_to_a_live_session_attaches_without_revalidating_metada
 }
 
 #[tokio::test]
+async fn create_or_attach_resumes_retained_state_from_an_absolute_output_cursor() {
+    let dir = tempfile::tempdir().unwrap();
+    let (control_tx, _control_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (terminal_tx, mut terminal_rx) = tokio::sync::mpsc::channel(8);
+    let handle = ClientHandle::new(control_tx, terminal_tx);
+    let mut session = Session::driver_test_stub("s1", 120, 40);
+    session.append_output(b"hello world");
+    let mut actor = test_actor(
+        &dir,
+        HashMap::from([(2, local_client(handle))]),
+        HashMap::from([("s1".to_string(), session)]),
+    )
+    .await;
+
+    let payload = actor
+        .create_or_attach(
+            2,
+            &json!({
+                "sessionId": "s1",
+                "workspaceId": "workspace",
+                "tabId": "tab-s1",
+                "workingDirectory": ".",
+                "resumeCursor": 5,
+            }),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(payload["delta"], true);
+    assert_eq!(payload["resumed"], true);
+    assert_eq!(payload["outputCursor"], 11);
+    assert_eq!(payload.get("snapshotBase64"), None);
+    let frame = terminal_rx.recv().await.expect("resume delta");
+    assert!(matches!(
+        frame,
+        ClientFrame::SequencedTerminal { frame, .. }
+            if matches!(*frame, ClientFrame::Output { ref data, .. } if data == b" world")
+    ));
+    assert_eq!(actor.sessions["s1"].delivered_output_cursor(2), Some(11));
+}
+
+#[tokio::test]
+async fn create_or_attach_falls_back_to_full_snapshot_for_a_stale_retained_cursor() {
+    let dir = tempfile::tempdir().unwrap();
+    let (handle, _receiver) = ClientHandle::test_channels();
+    let mut session = Session::driver_test_stub("s1", 120, 40);
+    session.set_max_bytes(4);
+    session.append_output(b"abcdefgh");
+    let mut actor = test_actor(
+        &dir,
+        HashMap::from([(2, local_client(handle))]),
+        HashMap::from([("s1".to_string(), session)]),
+    )
+    .await;
+
+    let payload = actor
+        .create_or_attach(
+            2,
+            &json!({
+                "sessionId": "s1",
+                "workspaceId": "workspace",
+                "tabId": "tab-s1",
+                "workingDirectory": ".",
+                "resumeCursor": 0,
+            }),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(payload["delta"], false);
+    assert_eq!(payload["outputCursor"], 8);
+    assert_eq!(
+        decode_bytes(payload.get("snapshotBase64")).unwrap(),
+        b"efgh"
+    );
+    assert_eq!(actor.sessions["s1"].delivered_output_cursor(2), Some(8));
+}
+
+#[tokio::test]
 async fn terminal_restart_fails_closed_when_metadata_disagrees_with_the_live_session() {
     let dir = tempfile::tempdir().unwrap();
     let (handle, mut receiver) = ClientHandle::test_channels();
@@ -330,7 +409,12 @@ async fn detach_keeps_the_session_and_terminate_deletes_tab_and_history() {
         .unwrap()
         .is_none());
     assert!(
-        actor.history.read("s1", usize::MAX).await.unwrap().is_none(),
+        actor
+            .history
+            .read("s1", usize::MAX)
+            .await
+            .unwrap()
+            .is_none(),
         "explicit termination deletes the session's history"
     );
 

@@ -7,6 +7,36 @@ import 'package:xterm2/xterm.dart';
 
 void main() {
   test(
+    'direct snapshot hydration returns a reset packed full buffer',
+    () async {
+      final worker = await TerminalXtermWorker.start(cols: 20, rows: 6);
+      addTearDown(worker.close);
+
+      final snapshot =
+          '${List<String>.filled(128 * 1024, '\x1b[0m').join()}'
+          '\r\nsnapshot-marker\x1b[?2004h\x1b[?1000h';
+      final profile = await worker.profileHydrateSnapshotBufferDelta(
+        snapshot,
+        resetInteractionModes: true,
+      );
+      final delta = profile.delta;
+
+      expect(profile.parseMicros, greaterThanOrEqualTo(0));
+      expect(profile.materializeMicros, greaterThanOrEqualTo(0));
+      expect(profile.rawRoundtripMicros, greaterThanOrEqualTo(0));
+      expect(profile.decodeMicros, greaterThanOrEqualTo(0));
+      expect(delta.fullRepaint, isTrue);
+      expect(delta.rowDeltas, isNotEmpty);
+      expect(delta.bracketedPaste, isFalse);
+      expect(delta.mouseMode, MouseMode.none.index);
+      expect(
+        delta.rowDeltas.map((row) => row.text).join('\n'),
+        contains('snapshot-marker'),
+      );
+    },
+  );
+
+  test(
     'worker-owned xterm matches direct xterm through writes and resize',
     () async {
       final direct = _createDirectTerminal(
@@ -202,8 +232,8 @@ void main() {
         maxLines: 64,
       );
       addTearDown(worker.close);
-      final escape = String.fromCharCode(27);
 
+      final escape = String.fromCharCode(27);
       final initial = await worker.writeBufferDelta('visible\r\n');
       expect(initial.fullRepaint, isTrue);
 
@@ -582,6 +612,106 @@ void main() {
     },
   );
 
+  test(
+    'retained worker state round-trips and preserves subsequent parsing',
+    () async {
+      final control = await TerminalXtermWorker.start(cols: 20, rows: 6);
+      addTearDown(control.close);
+      var original = await TerminalXtermWorker.start(cols: 20, rows: 6);
+      addTearDown(() async {
+        await original.close();
+      });
+      final prefix =
+          '\x1b[31;1mmain-state'
+          '\x1b7'
+          '\x1b[?1h'
+          '\x1b[?2004h'
+          '\x1b[2;5r'
+          '\x1b]1337;HighlightCursorLine=yes\x07'
+          '\x1b[?1049h'
+          '\x1b[32malt-state';
+
+      await control.writeBufferDelta(prefix);
+      await original.writeBufferDelta(prefix);
+      final exported = await original.exportRetainedState();
+      expect(exported.eligible, isTrue, reason: exported.blockers.join(', '));
+      expect(exported.blockers, isEmpty);
+
+      await original.close();
+      original = await TerminalXtermWorker.start(
+        cols: 20,
+        rows: 6,
+        retainedState: exported.state,
+      );
+
+      final beforeControl = await control.snapshotBufferDelta();
+      final beforeRestored = await original.snapshotBufferDelta();
+      _expectBufferDeltaParity(beforeRestored, beforeControl);
+
+      final suffix =
+          '\x1b[0m!'
+          '\x1b[3b'
+          '\x1b[?1049l'
+          'R'
+          '\x1b8'
+          '\x1b]1337;HighlightCursorLine=no\x07'
+          '\x1b[?1l'
+          '\x1b[?2004l';
+      final controlAfter = await control.writeBufferDelta(suffix);
+      final restoredAfter = await original.writeBufferDelta(suffix);
+      _expectBufferDeltaParity(restoredAfter, controlAfter);
+    },
+  );
+
+  test('retained worker state rejects a non-ground parser', () async {
+    final worker = await TerminalXtermWorker.start(cols: 20, rows: 6);
+    addTearDown(worker.close);
+
+    await worker.writeBufferDelta('\x1b[31');
+    final blocked = await worker.exportRetainedState();
+    expect(blocked.eligible, isFalse);
+    expect(blocked.blockers, contains('parser-not-ground'));
+
+    await worker.writeBufferDelta('mred\x1b[0m');
+    final safe = await worker.exportRetainedState();
+    expect(safe.blockers, isNot(contains('parser-not-ground')));
+  });
+
+  test('retained worker state rejects semantic shell state', () async {
+    final worker = await TerminalXtermWorker.start(cols: 20, rows: 6);
+    addTearDown(worker.close);
+
+    await worker.writeBufferDelta('\x1b]133;D;2\x07');
+    final exported = await worker.exportRetainedState();
+
+    expect(exported.eligible, isFalse);
+    expect(exported.blockers, contains('semantic-shell-state'));
+  });
+
+  test('retained worker state rejects auxiliary dynamic colors', () async {
+    final worker = await TerminalXtermWorker.start(cols: 20, rows: 6);
+    addTearDown(worker.close);
+
+    await worker.writeBufferDelta('\x1b]13;#02468a\x07');
+    final exported = await worker.exportRetainedState();
+
+    expect(exported.eligible, isFalse);
+    expect(exported.blockers, contains('custom-colors'));
+  });
+
+  test('retained worker state rejects unsupported hyperlink state', () async {
+    final worker = await TerminalXtermWorker.start(cols: 20, rows: 6);
+    addTearDown(worker.close);
+
+    await worker.writeBufferDelta(
+      '\x1b]8;;https://example.test\x07link\x1b]8;;\x07',
+    );
+    final exported = await worker.exportRetainedState();
+
+    expect(exported.eligible, isFalse);
+    expect(exported.blockers, contains('hyperlinks'));
+  });
+
   test('worker resize preserves in-band pixel size reports', () async {
     final directOutput = <String>[];
     final direct = _createDirectTerminal(
@@ -693,6 +823,55 @@ List<String> _bufferRows(Terminal terminal) {
     for (var row = 0; row < terminal.buffer.lines.length; row++)
       terminal.buffer.lines[row].toString(),
   ];
+}
+
+void _expectBufferDeltaParity(
+  TerminalXtermWorkerBufferDelta actual,
+  TerminalXtermWorkerBufferDelta expected,
+) {
+  expect(actual.cols, expected.cols);
+  expect(actual.rows, expected.rows);
+  expect(actual.bufferLength, expected.bufferLength);
+  expect(actual.scrollBack, expected.scrollBack);
+  expect(actual.cursorX, expected.cursorX);
+  expect(actual.cursorY, expected.cursorY);
+  expect(actual.cursorVisible, expected.cursorVisible);
+  expect(actual.cursorKeys, expected.cursorKeys);
+  expect(actual.keypadKeys, expected.keypadKeys);
+  expect(actual.bracketedPaste, expected.bracketedPaste);
+  expect(actual.focusEvents, expected.focusEvents);
+  expect(actual.altScroll, expected.altScroll);
+  expect(actual.mouseMode, expected.mouseMode);
+  expect(actual.mouseReportMode, expected.mouseReportMode);
+  expect(
+    actual.globalState.keyboardActionMode,
+    expected.globalState.keyboardActionMode,
+  );
+  expect(
+    actual.globalState.cursorLineHighlight,
+    expected.globalState.cursorLineHighlight,
+  );
+  expect(actual.rowDeltas, hasLength(expected.rowDeltas.length));
+  for (var rowIndex = 0; rowIndex < expected.rowDeltas.length; rowIndex++) {
+    final actualRow = actual.rowDeltas[rowIndex];
+    final expectedRow = expected.rowDeltas[rowIndex];
+    expect(actualRow.row, expectedRow.row);
+    expect(actualRow.rowLength, expectedRow.rowLength);
+    expect(actualRow.text, expectedRow.text);
+    expect(actualRow.isWrapped, expectedRow.isWrapped);
+    expect(actualRow.cells, hasLength(expectedRow.cells.length));
+    for (var cellIndex = 0; cellIndex < expectedRow.cells.length; cellIndex++) {
+      final actualCell = actualRow.cells[cellIndex];
+      final expectedCell = expectedRow.cells[cellIndex];
+      expect(actualCell.width, expectedCell.width);
+      expect(actualCell.foreground, expectedCell.foreground);
+      expect(actualCell.background, expectedCell.background);
+      expect(actualCell.attributes, expectedCell.attributes);
+      expect(actualCell.underlineColor, expectedCell.underlineColor);
+      expect(actualCell.content, expectedCell.content);
+      expect(actualCell.combiningCharacters, expectedCell.combiningCharacters);
+    }
+  }
 }
 
 void _applyBufferDelta(

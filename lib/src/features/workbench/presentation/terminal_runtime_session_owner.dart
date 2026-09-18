@@ -52,10 +52,19 @@ final class TerminalRuntimeSessionOwner
 
   @override
   void evictSession(String tabId) {
-    final session = _sessions.remove(tabId);
-    if (session != null) {
-      _disposeSession(session, terminatePty: false);
+    final session = _sessions[tabId];
+    if (session == null) {
+      return;
     }
+    // The parser worker already owns the authoritative terminal model while a
+    // tab is hidden. Drop only the duplicate UI cell buffer and keep the PTY +
+    // worker alive; reveal can rebuild the replica from one packed worker
+    // snapshot without reparsing the host's full ANSI scrollback.
+    if (session._evictParserWorkerUiBuffer()) {
+      return;
+    }
+    _sessions.remove(tabId);
+    _disposeSession(session, terminatePty: false);
   }
 
   TerminalSessionHandle sessionFor({

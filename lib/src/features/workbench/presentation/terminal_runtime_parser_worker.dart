@@ -2,14 +2,99 @@ part of 'terminal_runtime.dart';
 
 /// Parser/model isolation for the opt-in xterm worker backend.
 extension _XtermTerminalParserWorker on _XtermTerminalSessionHandle {
+  bool _hydrateParserWorkerSnapshot(
+    String restored, {
+    required bool resetInteractionModes,
+  }) {
+    if (!_parserWorkerEnabled || _disposed) {
+      return false;
+    }
+    final terminal = _terminal;
+    if (terminal is! TerminalXtermReplicaTerminal) {
+      return false;
+    }
+    final generation = _parserWorkerGeneration;
+    _lastSnapshotHydrationProfile = null;
+    _beginRestore(restored.length);
+    final command = _snapshotHydrationProfilingEnabled
+        ? _queueParserWorkerCommand(terminal, generation, (worker) async {
+            final hydrationWatch = Stopwatch()..start();
+            final queueAndStartupMicros = hydrationWatch.elapsedMicroseconds;
+            final profile = await worker.profileHydrateSnapshotBufferDelta(
+              restored,
+              resetInteractionModes: resetInteractionModes,
+            );
+            if (_disposed ||
+                generation != _parserWorkerGeneration ||
+                !identical(_terminal, terminal)) {
+              return;
+            }
+            final applyWatch = Stopwatch()..start();
+            _applyParserWorkerEffects(profile.delta.effects);
+            terminal.applyBufferDelta(profile.delta);
+            applyWatch.stop();
+            hydrationWatch.stop();
+            _lastSnapshotHydrationProfile = (
+              snapshotRevision: profile.delta.revision,
+              queueAndStartupMicros: queueAndStartupMicros,
+              workerParseMicros: profile.parseMicros,
+              workerMaterializeMicros: profile.materializeMicros,
+              workerRoundtripMicros: profile.rawRoundtripMicros,
+              decodeMicros: profile.decodeMicros,
+              uiApplyMicros: applyWatch.elapsedMicroseconds,
+              totalHydrationMicros: hydrationWatch.elapsedMicroseconds,
+            );
+            _completeRestoreProgress();
+            _completePointerInputDirectSnapshotHydration();
+          })
+        : _queueParserWorkerCommand(terminal, generation, (worker) async {
+            final delta = await worker.hydrateSnapshotBufferDelta(
+              restored,
+              resetInteractionModes: resetInteractionModes,
+            );
+            if (_disposed ||
+                generation != _parserWorkerGeneration ||
+                !identical(_terminal, terminal)) {
+              return;
+            }
+            _applyParserWorkerEffects(delta.effects);
+            terminal.applyBufferDelta(delta);
+            _completeRestoreProgress();
+            _completePointerInputDirectSnapshotHydration();
+          });
+    _parserWorkerLastApply = command;
+    unawaited(
+      command.catchError((Object error, StackTrace stackTrace) {
+        if (_disposed || generation != _parserWorkerGeneration) {
+          return;
+        }
+        _finishRestore();
+        _completePointerInputDirectSnapshotHydration();
+        FlutterError.reportError(
+          FlutterErrorDetails(
+            exception: error,
+            stack: stackTrace,
+            library: 'terminal runtime',
+            context: ErrorDescription('hydrating terminal snapshot'),
+          ),
+        );
+      }),
+    );
+    return true;
+  }
+
   void _resetParserWorkerBackend() {
     if (!_parserWorkerEnabled) {
       return;
     }
     _parserWorkerGeneration += 1;
+    _parserWorkerReady = false;
+    _uiBufferEvicted = false;
     final workerFuture = _parserWorkerFuture;
     final commandTail = _parserWorkerCommandTail;
     _parserWorkerFuture = null;
+    _parserWorkerRetainedState = null;
+    _parserWorkerHardEvictionBlockers = const <String>[];
     _parserWorkerCommandTail = Future<void>.value();
     _parserWorkerLastApply = null;
     _parserWorkerReplicaNeedsSync = false;
@@ -45,6 +130,7 @@ extension _XtermTerminalParserWorker on _XtermTerminalSessionHandle {
     if (existing != null) {
       return existing;
     }
+    final retainedState = _parserWorkerRetainedState;
     final workerFuture = TerminalXtermWorker.start(
       cols: terminal.viewWidth,
       rows: terminal.viewHeight,
@@ -53,6 +139,7 @@ extension _XtermTerminalParserWorker on _XtermTerminalSessionHandle {
       wordSeparators: _rendererAdapterOwner.resolveWordSeparators(
         _settings.wordSeparators,
       ),
+      retainedState: retainedState,
     );
     final validatedFuture = workerFuture.then((worker) async {
       if (_disposed ||
@@ -61,6 +148,11 @@ extension _XtermTerminalParserWorker on _XtermTerminalSessionHandle {
         await worker.close();
         throw StateError('Terminal parser worker generation was replaced.');
       }
+      if (identical(_parserWorkerRetainedState, retainedState)) {
+        _parserWorkerRetainedState = null;
+      }
+      _parserWorkerHardEvictionBlockers = const <String>[];
+      _parserWorkerReady = true;
       return worker;
     });
     _parserWorkerFuture = validatedFuture;
@@ -122,6 +214,101 @@ extension _XtermTerminalParserWorker on _XtermTerminalSessionHandle {
     return command.then((_) => uiApplyTime);
   }
 
+  bool _evictParserWorkerUiBuffer() {
+    if (!_parserWorkerEnabled ||
+        !_parserWorkerReady ||
+        _disposed ||
+        _outputVisible ||
+        _uiBufferEvicted) {
+      return false;
+    }
+    final previousTerminal = _terminal;
+    if (previousTerminal is! TerminalXtermReplicaTerminal) {
+      return false;
+    }
+
+    _terminalController.clearSelection();
+    final viewWidth = previousTerminal.viewWidth;
+    final viewHeight = previousTerminal.viewHeight;
+    _detachTerminal(previousTerminal);
+
+    final nextTerminal = _createTerminal(notificationsEnabled: false)
+      ..resize(viewWidth, viewHeight);
+    _terminal = nextTerminal;
+    _attachTerminal(nextTerminal);
+    _attachSearchTerminal(nextTerminal);
+    _parserWorkerReplicaNeedsSync = true;
+    _uiBufferEvicted = true;
+    previousTerminal.dispose();
+    _syncPtyOutputVisibility();
+    _scheduleParserWorkerHardEviction(
+      nextTerminal as TerminalXtermReplicaTerminal,
+    );
+    return true;
+  }
+
+  void _scheduleParserWorkerHardEviction(
+    TerminalXtermReplicaTerminal terminal,
+  ) {
+    final activeWorkerFuture = _parserWorkerFuture;
+    if (activeWorkerFuture == null) {
+      return;
+    }
+    final generation = _parserWorkerGeneration;
+    final command = _queueParserWorkerCommand(terminal, generation, (
+      worker,
+    ) async {
+      if (_disposed ||
+          generation != _parserWorkerGeneration ||
+          !identical(_terminal, terminal) ||
+          !_uiBufferEvicted ||
+          _outputVisible) {
+        return;
+      }
+      final exported = await worker.exportRetainedState();
+      if (_disposed ||
+          generation != _parserWorkerGeneration ||
+          !identical(_terminal, terminal) ||
+          !_uiBufferEvicted ||
+          _outputVisible) {
+        return;
+      }
+      _parserWorkerHardEvictionBlockers = exported.blockers;
+      final retainedState = exported.state;
+      if (retainedState == null) {
+        return;
+      }
+
+      _parserWorkerRetainedState = retainedState;
+      _parserWorkerHardEvictionBlockers = const <String>[];
+      _parserWorkerReady = false;
+      try {
+        await worker.close();
+      } finally {
+        if (generation == _parserWorkerGeneration &&
+            identical(_parserWorkerFuture, activeWorkerFuture)) {
+          _parserWorkerFuture = null;
+        }
+      }
+    });
+    _parserWorkerLastApply = command;
+    unawaited(
+      command.catchError((Object error, StackTrace stackTrace) {
+        if (_disposed || generation != _parserWorkerGeneration) {
+          return;
+        }
+        FlutterError.reportError(
+          FlutterErrorDetails(
+            exception: error,
+            stack: stackTrace,
+            library: 'terminal runtime',
+            context: ErrorDescription('hard-evicting terminal parser worker'),
+          ),
+        );
+      }),
+    );
+  }
+
   Future<void>? _syncParserWorkerReplicaForReveal() {
     if (!_parserWorkerEnabled || _disposed || !_parserWorkerReplicaNeedsSync) {
       return null;
@@ -144,6 +331,7 @@ extension _XtermTerminalParserWorker on _XtermTerminalSessionHandle {
       _applyParserWorkerEffects(delta.effects);
       terminal.applyBufferDelta(delta);
       _parserWorkerReplicaNeedsSync = false;
+      _uiBufferEvicted = false;
     });
     _parserWorkerLastApply = command;
     unawaited(
@@ -218,16 +406,33 @@ extension _XtermTerminalParserWorker on _XtermTerminalSessionHandle {
     int generation,
     Future<void> Function(TerminalXtermWorker worker) command,
   ) {
+    bool isCurrentGeneration() =>
+        !_disposed &&
+        generation == _parserWorkerGeneration &&
+        identical(_terminal, terminal);
+
+    Future<void> runCommand() async {
+      if (!isCurrentGeneration()) {
+        return;
+      }
+      try {
+        final worker = await _ensureParserWorker(terminal, generation);
+        if (!isCurrentGeneration()) {
+          return;
+        }
+        await command(worker);
+      } catch (_) {
+        if (!isCurrentGeneration()) {
+          return;
+        }
+        rethrow;
+      }
+    }
+
     final previous = _parserWorkerCommandTail;
     final next = previous.then<void>(
-      (_) async {
-        final worker = await _ensureParserWorker(terminal, generation);
-        await command(worker);
-      },
-      onError: (Object _, StackTrace _) async {
-        final worker = await _ensureParserWorker(terminal, generation);
-        await command(worker);
-      },
+      (_) => runCommand(),
+      onError: (Object _, StackTrace _) => runCommand(),
     );
     _parserWorkerCommandTail = next.then<void>(
       (_) {},

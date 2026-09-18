@@ -66,6 +66,85 @@ void flushTerminalOutputForTesting(TerminalSessionHandle session) {
 }
 
 @visibleForTesting
+bool terminalOutputWriteInFlightForTesting(TerminalSessionHandle session) {
+  return (session as _XtermTerminalSessionHandle)._pump._writeInFlight;
+}
+
+final class TerminalSnapshotHydrationProfileForTesting {
+  const TerminalSnapshotHydrationProfileForTesting({
+    required this.snapshotRevision,
+    required this.queueAndStartupMicros,
+    required this.workerParseMicros,
+    required this.workerMaterializeMicros,
+    required this.workerRoundtripMicros,
+    required this.decodeMicros,
+    required this.uiApplyMicros,
+    required this.totalHydrationMicros,
+  });
+
+  final int snapshotRevision;
+  final int queueAndStartupMicros;
+  final int workerParseMicros;
+  final int workerMaterializeMicros;
+  final int workerRoundtripMicros;
+  final int decodeMicros;
+  final int uiApplyMicros;
+  final int totalHydrationMicros;
+
+  int get transferAndSchedulingMicros =>
+      workerRoundtripMicros - workerParseMicros - workerMaterializeMicros;
+}
+
+@visibleForTesting
+TerminalSnapshotHydrationProfileForTesting?
+terminalSnapshotHydrationProfileForTesting(TerminalSessionHandle session) {
+  final raw =
+      (session as _XtermTerminalSessionHandle)._lastSnapshotHydrationProfile;
+  if (raw == null) {
+    return null;
+  }
+  return TerminalSnapshotHydrationProfileForTesting(
+    snapshotRevision: raw.snapshotRevision,
+    queueAndStartupMicros: raw.queueAndStartupMicros,
+    workerParseMicros: raw.workerParseMicros,
+    workerMaterializeMicros: raw.workerMaterializeMicros,
+    workerRoundtripMicros: raw.workerRoundtripMicros,
+    decodeMicros: raw.decodeMicros,
+    uiApplyMicros: raw.uiApplyMicros,
+    totalHydrationMicros: raw.totalHydrationMicros,
+  );
+}
+
+@visibleForTesting
+bool terminalUiBufferEvictedForTesting(TerminalSessionHandle session) {
+  return (session as _XtermTerminalSessionHandle)._uiBufferEvicted;
+}
+
+@visibleForTesting
+bool terminalParserWorkerHardEvictedForTesting(TerminalSessionHandle session) {
+  final handle = session as _XtermTerminalSessionHandle;
+  return handle._parserWorkerRetainedState != null &&
+      handle._parserWorkerFuture == null;
+}
+
+@visibleForTesting
+List<String> terminalParserWorkerHardEvictionBlockersForTesting(
+  TerminalSessionHandle session,
+) {
+  return List<String>.unmodifiable(
+    (session as _XtermTerminalSessionHandle)._parserWorkerHardEvictionBlockers,
+  );
+}
+
+@visibleForTesting
+void evictTerminalSessionForTesting(
+  XtermTerminalRuntime runtime,
+  String tabId,
+) {
+  runtime._sessionOwner.evictSession(tabId);
+}
+
+@visibleForTesting
 bool terminalParserWorkerEnabledForTesting(TerminalSessionHandle session) {
   final handle = session as _XtermTerminalSessionHandle;
   return handle._parserWorkerEnabled &&

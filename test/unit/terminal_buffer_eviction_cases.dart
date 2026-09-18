@@ -87,6 +87,117 @@ void _registerTerminalBufferEvictionTests() {
   });
 
   test(
+    'parser worker hard eviction keeps PTY and restores structured state',
+    () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      final pty = _FakeTerminalPtySession();
+      final runtime = XtermTerminalRuntime(
+        parserWorkerEnabled: true,
+        ptySessionFactory: _FakeTerminalPtySessionFactory(
+          sessions: <_FakeTerminalPtySession>[pty],
+        ),
+        shellLaunchesBuilder: () => <GhosttyTerminalShellLaunch>[
+          _launch('shell', shell: '/bin/sh'),
+        ],
+      );
+      addTearDown(runtime.dispose);
+
+      final tab = _tab(id: 'tab-1', workspaceId: 'workspace-1');
+      final session = runtime.sessionFor(
+        workspace: _workspace(id: 'workspace-1'),
+        tab: tab,
+      );
+      final visibility = acquireTerminalVisibilityForTesting(session);
+      await session.ensureStarted();
+      writeTerminalOutputForTesting(session, 'before-soft-evict\r\n');
+      await waitForTerminalParserApplyForTesting(session);
+      expect(
+        terminalBufferTextForTesting(session),
+        contains('before-soft-evict'),
+      );
+
+      visibility.dispose();
+      evictTerminalSessionForTesting(runtime, 'tab-1');
+
+      expect(runtime.peekSession('tab-1'), same(session));
+      expect(terminalUiBufferEvictedForTesting(session), isTrue);
+      expect(session.bufferUsage.bytes, 0);
+      expect(pty.disposed, isFalse);
+      await _settleUntil(() => pty.outputPausedCalls.contains(true));
+      expect(pty.outputPausedCalls, contains(true));
+      await waitForTerminalParserApplyForTesting(session);
+      expect(terminalParserWorkerHardEvictedForTesting(session), isTrue);
+      expect(
+        terminalBufferTextForTesting(session),
+        isNot(contains('before-soft-evict')),
+      );
+
+      pty.emitOutput(utf8.encode('during-soft-evict\r\n'));
+      await Future.pause(.zero);
+      flushTerminalOutputForTesting(session);
+      await waitForTerminalParserApplyForTesting(session);
+      expect(terminalUiBufferEvictedForTesting(session), isTrue);
+
+      final restoredVisibility = acquireTerminalVisibilityForTesting(session);
+      addTearDown(restoredVisibility.dispose);
+      await waitForTerminalParserApplyForTesting(session);
+      await _settleUntil(() => pty.outputPausedCalls.contains(false));
+
+      expect(terminalUiBufferEvictedForTesting(session), isFalse);
+      expect(pty.outputPausedCalls, <bool>[true, false]);
+      expect(runtime.peekSession('tab-1'), same(session));
+      expect(pty.disposed, isFalse);
+      final restoredText = terminalBufferTextForTesting(session);
+      expect(restoredText, contains('before-soft-evict'));
+      expect(restoredText, contains('during-soft-evict'));
+    },
+  );
+
+  test(
+    'parser worker keeps soft eviction when retained state is unsafe',
+    () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      final pty = _FakeTerminalPtySession();
+      final runtime = XtermTerminalRuntime(
+        parserWorkerEnabled: true,
+        ptySessionFactory: _FakeTerminalPtySessionFactory(
+          sessions: <_FakeTerminalPtySession>[pty],
+        ),
+        shellLaunchesBuilder: () => <GhosttyTerminalShellLaunch>[
+          _launch('shell', shell: '/bin/sh'),
+        ],
+      );
+      addTearDown(runtime.dispose);
+
+      final session = runtime.sessionFor(
+        workspace: _workspace(id: 'workspace-1'),
+        tab: _tab(id: 'tab-unsafe', workspaceId: 'workspace-1'),
+      );
+      final visibility = acquireTerminalVisibilityForTesting(session);
+      await session.ensureStarted();
+      const hyperlink =
+          '\x1b]8;;https://example.test\x07unsafe-link\x1b]8;;\x07';
+      writeTerminalOutputForTesting(session, hyperlink);
+      await waitForTerminalParserApplyForTesting(session);
+
+      visibility.dispose();
+      evictTerminalSessionForTesting(runtime, 'tab-unsafe');
+      await waitForTerminalParserApplyForTesting(session);
+
+      expect(terminalUiBufferEvictedForTesting(session), isTrue);
+      expect(terminalParserWorkerHardEvictedForTesting(session), isFalse);
+      expect(
+        terminalParserWorkerHardEvictionBlockersForTesting(session),
+        contains('hyperlinks'),
+      );
+      expect(runtime.peekSession('tab-unsafe'), same(session));
+      expect(pty.disposed, isFalse);
+    },
+  );
+
+  test(
     'off-screen terminals in the active workspace still obey the budget',
     () {
       final first = _FakeTerminalPtySession();

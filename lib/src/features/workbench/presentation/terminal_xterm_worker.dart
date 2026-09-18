@@ -4,12 +4,16 @@ import 'dart:typed_data';
 
 import 'package:xterm2/xterm.dart';
 
+import '../domain/terminal_mode_reset.dart';
 import '../domain/terminal_osc52_clipboard.dart';
 
 const String _workerReady = 'ready';
 const String _workerWrite = 'write';
 const String _workerWriteDelta = 'writeDelta';
 const String _workerWriteBufferDelta = 'writeBufferDelta';
+const String _workerHydrateSnapshotBufferDelta = 'hydrateSnapshotBufferDelta';
+const String _workerProfileHydrateSnapshotBufferDelta =
+    'profileHydrateSnapshotBufferDelta';
 const String _workerParseHidden = 'parseHidden';
 const String _workerSnapshotBufferDelta = 'snapshotBufferDelta';
 const String _workerProfileSnapshotBufferDelta = 'profileSnapshotBufferDelta';
@@ -25,12 +29,135 @@ const String _workerTextInput = 'textInput';
 const String _workerPaste = 'paste';
 const String _workerFocusInput = 'focusInput';
 const String _workerMouseInput = 'mouseInput';
+const String _workerExportRetainedState = 'exportRetainedState';
 const String _workerClose = 'close';
+const String _retainedStateTag = 'retainedTerminalStateV1';
+const int _retainedBufferCellStride = 5;
 const String _workerError = 'error';
 const String _effectTitleChanged = 'titleChanged';
 const String _effectBell = 'bell';
 const String _effectPtyWrite = 'ptyWrite';
 const String _effectClipboardStore = 'clipboardStore';
+
+final class TerminalXtermWorkerRetainedState {
+  const TerminalXtermWorkerRetainedState._(this._message);
+
+  final List<Object?> _message;
+}
+
+final class TerminalXtermWorkerRetainedStateExport {
+  const TerminalXtermWorkerRetainedStateExport({
+    required this.state,
+    required this.blockers,
+  });
+
+  factory TerminalXtermWorkerRetainedStateExport._fromMessage(
+    List<Object?> message,
+  ) {
+    final rawState = message[0];
+    return TerminalXtermWorkerRetainedStateExport(
+      state: rawState == null
+          ? null
+          : TerminalXtermWorkerRetainedState._(
+              List<Object?>.from(rawState as List),
+            ),
+      blockers: List<String>.from(message[1]! as List),
+    );
+  }
+
+  final TerminalXtermWorkerRetainedState? state;
+  final List<String> blockers;
+
+  bool get eligible => state != null;
+}
+
+final class _RetainedParserGroundTracker {
+  int _state = 0;
+  bool _escapeInString = false;
+  int? _pendingHighSurrogate;
+
+  bool get isGround =>
+      _state == 0 && !_escapeInString && _pendingHighSurrogate == null;
+
+  void reset() {
+    _state = 0;
+    _escapeInString = false;
+    _pendingHighSurrogate = null;
+  }
+
+  void accept(String input) {
+    if (_pendingHighSurrogate != null && input.isNotEmpty) {
+      _pendingHighSurrogate = null;
+    }
+    if (input.isNotEmpty) {
+      final last = input.codeUnitAt(input.length - 1);
+      if (last >= 0xd800 && last <= 0xdbff) {
+        _pendingHighSurrogate = last;
+      }
+    }
+    for (var index = 0; index < input.length; index++) {
+      final code = input.codeUnitAt(index);
+      if (code >= 0xd800 && code <= 0xdbff && index == input.length - 1) {
+        continue;
+      }
+      if (code == 0x18 || code == 0x1a) {
+        _state = 0;
+        _escapeInString = false;
+        continue;
+      }
+      switch (_state) {
+        case 0:
+          if (code == 0x1b) {
+            _state = 1;
+          } else if (code == 0x9b) {
+            _state = 2;
+          } else if (code == 0x9d) {
+            _state = 3;
+          } else if (code == 0x90 ||
+              code == 0x98 ||
+              code == 0x9e ||
+              code == 0x9f) {
+            _state = 4;
+          }
+        case 1:
+          if (code == 0x1b) {
+            continue;
+          }
+          if (code == 0x5b) {
+            _state = 2;
+          } else if (code == 0x5d) {
+            _state = 3;
+          } else if (code == 0x50 ||
+              code == 0x58 ||
+              code == 0x5e ||
+              code == 0x5f) {
+            _state = 4;
+          } else if (code >= 0x30 && code <= 0x7e) {
+            _state = 0;
+          }
+        case 2:
+          if (code == 0x1b) {
+            _state = 1;
+          } else if (code >= 0x40 && code <= 0x7e) {
+            _state = 0;
+          }
+        case 3:
+        case 4:
+          if (code == 0x9c || (_state == 3 && code == 0x07)) {
+            _state = 0;
+            _escapeInString = false;
+          } else if (_escapeInString) {
+            if (code == 0x5c) {
+              _state = 0;
+            }
+            _escapeInString = false;
+          } else if (code == 0x1b) {
+            _escapeInString = true;
+          }
+      }
+    }
+  }
+}
 
 sealed class TerminalXtermWorkerEffect {
   const TerminalXtermWorkerEffect();
@@ -565,12 +692,507 @@ final class _TerminalXtermWorkerTerminal extends Terminal {
   bool keyboardActionMode = false;
   bool synchronizedUpdateMode = false;
   int synchronizedUpdateGeneration = 0;
+  bool sendReceiveMode = true;
+  bool enableColumnMode = false;
+  bool slowScrollMode = false;
+  bool autoRepeatMode = false;
+  bool leftRightMarginMode = false;
+  bool focused = true;
+  int protectionMode = 0;
+  int precedingCodepoint = 0;
+  String? currentTitle;
+  String? currentIconTitle;
+  List<Object?>? mainSavedCursor;
+  List<Object?>? altSavedCursor;
+  final Set<String> retainedStateBlockers = <String>{};
+  final Set<int> auxiliaryDynamicColorCodes = <int>{};
   Timer? _synchronizedUpdateMirrorTimer;
+
+  List<Object?> _styleMessage() => <Object?>[
+    cursor.foreground,
+    cursor.background,
+    cursor.underlineColor,
+    cursor.attrs,
+    cursor.hyperlinkId,
+    cursor.semanticAttrs,
+  ];
+
+  void _applyStyleMessage(List<Object?> message) {
+    cursor
+      ..foreground = message[0]! as int
+      ..background = message[1]! as int
+      ..underlineColor = message[2]! as int
+      ..attrs = message[3]! as int
+      ..hyperlinkId = message[4]! as int
+      ..semanticAttrs = message[5]! as int;
+  }
+
+  List<Object?> _savedCursorMessage() => <Object?>[
+    buffer.cursorX,
+    buffer.cursorY,
+    originMode,
+    _styleMessage(),
+  ];
+
+  void _restoreSavedCursor(Buffer target, List<Object?>? state) {
+    if (state == null) return;
+    final currentX = target.cursorX;
+    final currentY = target.cursorY;
+    final currentStyle = _styleMessage();
+    target.setCursor(state[0]! as int, state[1]! as int);
+    _applyStyleMessage(List<Object?>.from(state[3]! as List));
+    target.saveCursor(originMode: state[2]! as bool);
+    target.setCursor(currentX, currentY);
+    _applyStyleMessage(currentStyle);
+  }
+
+  List<Object?> _bufferMessage(Buffer target) {
+    var wordCount = 0;
+    for (var row = 0; row < target.lines.length; row++) {
+      wordCount += 2 + target.lines[row].length * _retainedBufferCellStride;
+    }
+    final words = Uint32List(wordCount);
+    final combiningEntries = <Object?>[];
+    var wordOffset = 0;
+    var absoluteCell = 0;
+    for (var row = 0; row < target.lines.length; row++) {
+      final line = target.lines[row];
+      words[wordOffset++] = line.length;
+      words[wordOffset++] = line.isWrapped ? 1 : 0;
+      for (var column = 0; column < line.length; column++) {
+        words[wordOffset++] = line.getForeground(column);
+        words[wordOffset++] = line.getBackground(column);
+        words[wordOffset++] = line.getAttributes(column);
+        words[wordOffset++] = line.getUnderlineColor(column);
+        words[wordOffset++] = line.getContent(column);
+        final combining = line.getCombiningCharacters(column);
+        if (combining != null) {
+          combiningEntries
+            ..add(absoluteCell)
+            ..add(combining);
+        }
+        absoluteCell += 1;
+      }
+    }
+    return <Object?>[
+      target.cursorX,
+      target.cursorY,
+      target.marginTop,
+      target.marginBottom,
+      target.marginLeft,
+      target.marginRight,
+      words,
+      combiningEntries,
+    ];
+  }
+
+  void _restoreBuffer(Buffer target, List<Object?> message) {
+    final words = message[6]! as Uint32List;
+    final combiningEntries = message[7]! as List;
+    target.lines.clear();
+    var wordOffset = 0;
+    var combiningOffset = 0;
+    var absoluteCell = 0;
+    while (wordOffset < words.length) {
+      final length = words[wordOffset++];
+      final isWrapped = words[wordOffset++] != 0;
+      final line = BufferLine(length, isWrapped: isWrapped);
+      for (var column = 0; column < length; column++) {
+        final foreground = words[wordOffset++];
+        final background = words[wordOffset++];
+        final attributes = words[wordOffset++];
+        final underlineColor = words[wordOffset++];
+        final content = words[wordOffset++];
+        line.setCellData(
+          column,
+          CellData(
+            foreground: foreground,
+            background: background,
+            flags: attributes,
+            underlineColor: underlineColor,
+            content: content,
+          ),
+        );
+        if (combiningOffset < combiningEntries.length &&
+            combiningEntries[combiningOffset] == absoluteCell) {
+          final combining = combiningEntries[combiningOffset + 1]! as String;
+          for (final codePoint in combining.runes) {
+            line.addCombiningCharacter(column, codePoint);
+          }
+          combiningOffset += 2;
+        }
+        absoluteCell += 1;
+      }
+      target.lines.push(line);
+    }
+    target.setVerticalMargins(message[2]! as int, message[3]! as int);
+    target.setHorizontalMargins(message[4]! as int, message[5]! as int);
+    target.setCursor(message[0]! as int, message[1]! as int);
+  }
+
+  List<String> retainedStateEligibility({required bool parserGround}) {
+    final blockers = <String>{...retainedStateBlockers};
+    if (!parserGround) blockers.add('parser-not-ground');
+    if (synchronizedUpdateMode) blockers.add('synchronized-update-active');
+    if (mainBuffer.cursorX >= viewWidth - 1 ||
+        altBuffer.cursorX >= viewWidth - 1) {
+      blockers.add('pending-wrap-ambiguous');
+    }
+    if (indexedColorOverrides.isNotEmpty ||
+        specialColorOverrides.isNotEmpty ||
+        auxiliaryDynamicColorCodes.isNotEmpty ||
+        foregroundColorOverride != null ||
+        backgroundColorOverride != null ||
+        cursorColorOverride != null ||
+        selectionColorOverride != null ||
+        selectionForegroundColorOverride != null) {
+      blockers.add('custom-colors');
+    }
+    final semanticState = semanticPromptState;
+    if (semanticState.content != TerminalSemanticPromptContent.output ||
+        semanticState.lastCommandExitCode != null ||
+        semanticState.aid != null ||
+        semanticState.promptKind != null ||
+        semanticState.clickMode != null ||
+        semanticState.redraw != null ||
+        semanticState.specialKey != null ||
+        semanticState.commandLine != null) {
+      blockers.add('semantic-shell-state');
+    }
+    if (cursor.hyperlinkId != 0 || cursor.semanticAttrs != 0) {
+      blockers.add('cursor-extended-state');
+    }
+    for (final target in <Buffer>[mainBuffer, altBuffer]) {
+      for (var row = 0; row < target.lines.length; row++) {
+        final line = target.lines[row];
+        for (var column = 0; column < line.length; column++) {
+          if (line.getHyperlinkId(column) != 0) {
+            blockers.add('hyperlinks');
+          }
+          if (line.getSemanticContent(column) != 0) {
+            blockers.add('semantic-shell-state');
+          }
+        }
+      }
+    }
+    final result = blockers.toList()..sort();
+    return result;
+  }
+
+  List<Object?> retainedStateMessage() => <Object?>[
+    _retainedStateTag,
+    viewWidth,
+    viewHeight,
+    isUsingAltBuffer,
+    _bufferMessage(mainBuffer),
+    _bufferMessage(altBuffer),
+    _styleMessage(),
+    <Object?>[
+      insertMode,
+      sendReceiveMode,
+      keyboardActionMode,
+      lineFeedMode,
+      cursorKeysMode,
+      reverseDisplayMode,
+      originMode,
+      enableColumnMode,
+      slowScrollMode,
+      autoWrapMode,
+      autoRepeatMode,
+      reverseWrapMode,
+      reverseWrapExtendedMode,
+      mouseMode.index,
+      mouseReportMode.index,
+      cursorBlinkMode,
+      cursorVisibleMode,
+      applicationCursorType?.index,
+      appKeypadMode,
+      ignoreKeypadWithNumLockMode,
+      backarrowKeyMode,
+      reportFocusMode,
+      mouseShiftCaptureMode,
+      altBufferMouseScrollMode,
+      altEscPrefixMode,
+      altSendsEscapeMode,
+      bracketedPasteMode,
+      inBandSizeReportMode,
+      reportColorSchemeMode,
+      graphemeClusterMode,
+      leftRightMarginMode,
+      kittyKeyboardMode,
+      modifyOtherKeysMode,
+      protectionMode,
+      cursorLineHighlightMode,
+    ],
+    mainSavedCursor,
+    altSavedCursor,
+    precedingCodepoint,
+    focused,
+    currentTitle,
+    currentIconTitle,
+  ];
+
+  void restoreRetainedState(List<Object?> message) {
+    if (message.isEmpty || message[0] != _retainedStateTag) {
+      throw StateError('Unsupported terminal retained-state payload.');
+    }
+    reset();
+    final modes = List<Object?>.from(message[7]! as List);
+    setInsertMode(modes[0]! as bool);
+    setSendReceiveMode(modes[1]! as bool);
+    setKeyboardActionMode(modes[2]! as bool);
+    setLineFeedMode(modes[3]! as bool);
+    setCursorKeysMode(modes[4]! as bool);
+    setReverseDisplayMode(modes[5]! as bool);
+    setOriginMode(modes[6]! as bool);
+    setEnableColumnMode(modes[7]! as bool);
+    setSlowScrollMode(modes[8]! as bool);
+    setAutoWrapMode(modes[9]! as bool);
+    setAutoRepeatMode(modes[10]! as bool);
+    setReverseWrapMode(modes[11]! as bool);
+    setReverseWrapExtendedMode(modes[12]! as bool);
+    setMouseMode(MouseMode.values[modes[13]! as int]);
+    setMouseReportMode(MouseReportMode.values[modes[14]! as int]);
+    setCursorBlinkMode(modes[15]! as bool);
+    setCursorVisibleMode(modes[16]! as bool);
+    final cursorType = modes[17] as int?;
+    setCursorShape(switch (cursorType) {
+      null => 0,
+      0 => 2,
+      1 => 4,
+      2 => 6,
+      _ => 0,
+    });
+    setAppKeypadMode(modes[18]! as bool);
+    setIgnoreKeypadWithNumLockMode(modes[19]! as bool);
+    setBackarrowKeyMode(modes[20]! as bool);
+    setMouseShiftCaptureMode(modes[22]! as bool);
+    setMouseReportMode(MouseReportMode.values[modes[14]! as int]);
+    setAltBufferMouseScrollMode(modes[23]! as bool);
+    setAltEscPrefixMode(modes[24]! as bool);
+    setAltSendsEscapeMode(modes[25]! as bool);
+    setBracketedPasteMode(modes[26]! as bool);
+    setGraphemeClusterMode(modes[29]! as bool);
+    setLeftRightMarginMode(modes[30]! as bool);
+    setKittyKeyboardMode(modes[31]! as int, 1);
+    setModifyOtherKeysMode(4, modes[32]! as int);
+    protectionMode = modes[33]! as int;
+    if (protectionMode == 1) {
+      setProtectedMode(true);
+    } else if (protectionMode == 2) {
+      setIsoProtectedMode(true);
+    }
+    setCursorLineHighlight(modes[34]! as bool);
+    _restoreBuffer(mainBuffer, List<Object?>.from(message[4]! as List));
+    _restoreBuffer(altBuffer, List<Object?>.from(message[5]! as List));
+    if (message[3]! as bool) {
+      useAltBuffer();
+    } else {
+      useMainBuffer();
+    }
+    _applyStyleMessage(List<Object?>.from(message[6]! as List));
+    mainSavedCursor = message[8] == null
+        ? null
+        : List<Object?>.from(message[8]! as List);
+    altSavedCursor = message[9] == null
+        ? null
+        : List<Object?>.from(message[9]! as List);
+    _restoreSavedCursor(mainBuffer, mainSavedCursor);
+    _restoreSavedCursor(altBuffer, altSavedCursor);
+    precedingCodepoint = message[10]! as int;
+    focused = message[11]! as bool;
+    currentTitle = message[12] as String?;
+    currentIconTitle = message[13] as String?;
+    if (currentTitle != null) super.setTitle(currentTitle!);
+    if (currentIconTitle != null) super.setIconName(currentIconTitle!);
+    super.focusInput(focused);
+    setReportFocusMode(modes[21]! as bool);
+    setInBandSizeReportMode(modes[27]! as bool);
+    setReportColorSchemeMode(modes[28]! as bool);
+    retainedStateBlockers.clear();
+  }
+
+  @override
+  void writeChar(int char) {
+    super.writeChar(char);
+    precedingCodepoint = char;
+  }
+
+  @override
+  void writeText(String text, int start, int end) {
+    super.writeText(text, start, end);
+    if (start < end) precedingCodepoint = text.codeUnitAt(end - 1);
+  }
+
+  @override
+  void repeatPreviousCharacter(int count) {
+    if (precedingCodepoint == 0) return;
+    for (var index = 0; index < count; index++) {
+      buffer.writeChar(precedingCodepoint);
+    }
+  }
+
+  @override
+  void saveCursor() {
+    final saved = _savedCursorMessage();
+    if (isUsingAltBuffer) {
+      altSavedCursor = saved;
+    } else {
+      mainSavedCursor = saved;
+    }
+    super.saveCursor();
+  }
+
+  @override
+  void setSendReceiveMode(bool enabled) {
+    sendReceiveMode = enabled;
+    super.setSendReceiveMode(enabled);
+  }
 
   @override
   void setKeyboardActionMode(bool enabled) {
     keyboardActionMode = enabled;
     super.setKeyboardActionMode(enabled);
+  }
+
+  @override
+  void setEnableColumnMode(bool enabled) {
+    enableColumnMode = enabled;
+    super.setEnableColumnMode(enabled);
+  }
+
+  @override
+  void setSlowScrollMode(bool enabled) {
+    slowScrollMode = enabled;
+    super.setSlowScrollMode(enabled);
+  }
+
+  @override
+  void setAutoRepeatMode(bool enabled) {
+    autoRepeatMode = enabled;
+    super.setAutoRepeatMode(enabled);
+  }
+
+  @override
+  void setLeftRightMarginMode(bool enabled) {
+    leftRightMarginMode = enabled;
+    super.setLeftRightMarginMode(enabled);
+  }
+
+  @override
+  void setProtectedMode(bool enabled) {
+    protectionMode = enabled ? 1 : 0;
+    super.setProtectedMode(enabled);
+  }
+
+  @override
+  void setIsoProtectedMode(bool enabled) {
+    protectionMode = enabled ? 2 : 0;
+    super.setIsoProtectedMode(enabled);
+  }
+
+  @override
+  void focusInput(bool value) {
+    focused = value;
+    super.focusInput(value);
+  }
+
+  @override
+  void setTitle(String name) {
+    currentTitle = name;
+    super.setTitle(name);
+  }
+
+  @override
+  void setIconName(String name) {
+    currentIconTitle = name;
+    super.setIconName(name);
+  }
+
+  @override
+  void setTapStop() {
+    retainedStateBlockers.add('custom-tab-stops');
+    super.setTapStop();
+  }
+
+  @override
+  void clearTabStopUnderCursor() {
+    retainedStateBlockers.add('custom-tab-stops');
+    super.clearTabStopUnderCursor();
+  }
+
+  @override
+  void clearAllTabStops() {
+    retainedStateBlockers.add('custom-tab-stops');
+    super.clearAllTabStops();
+  }
+
+  @override
+  void designateCharset(int charset, int name) {
+    retainedStateBlockers.add('custom-charset');
+    super.designateCharset(charset, name);
+  }
+
+  @override
+  void useCharset(int charset) {
+    if (charset != 0) retainedStateBlockers.add('custom-charset');
+    super.useCharset(charset);
+  }
+
+  @override
+  void singleShiftCharset(int charset) {
+    retainedStateBlockers.add('custom-charset');
+    super.singleShiftCharset(charset);
+  }
+
+  @override
+  void saveDecMode(int mode) {
+    retainedStateBlockers.add('saved-dec-modes');
+    super.saveDecMode(mode);
+  }
+
+  @override
+  void pushKittyKeyboardMode(int mode) {
+    retainedStateBlockers.add('kitty-keyboard-stack');
+    super.pushKittyKeyboardMode(mode);
+  }
+
+  @override
+  void popKittyKeyboardModes(int count) {
+    retainedStateBlockers.add('kitty-keyboard-stack');
+    super.popKittyKeyboardModes(count);
+  }
+
+  @override
+  void pushTitle() {
+    retainedStateBlockers.add('title-stack');
+    super.pushTitle();
+  }
+
+  @override
+  void popTitle() {
+    retainedStateBlockers.add('title-stack');
+    super.popTitle();
+  }
+
+  @override
+  void setDynamicColor(int code, String value) {
+    if (code == 13 || code == 14 || code == 15 || code == 16 || code == 18) {
+      auxiliaryDynamicColorCodes.add(code);
+    }
+    super.setDynamicColor(code, value);
+  }
+
+  @override
+  void resetDynamicColor(int code) {
+    auxiliaryDynamicColorCodes.remove(code);
+    super.resetDynamicColor(code);
+  }
+
+  @override
+  void setHyperlink(String params, String uri) {
+    if (uri.isNotEmpty) retainedStateBlockers.add('hyperlinks');
+    super.setHyperlink(params, uri);
   }
 
   @override
@@ -594,10 +1216,23 @@ final class _TerminalXtermWorkerTerminal extends Terminal {
   void reset() {
     _synchronizedUpdateMirrorTimer?.cancel();
     _synchronizedUpdateMirrorTimer = null;
-    if (synchronizedUpdateMode) {
-      synchronizedUpdateGeneration += 1;
-    }
+    if (synchronizedUpdateMode) synchronizedUpdateGeneration += 1;
     synchronizedUpdateMode = false;
+    keyboardActionMode = false;
+    sendReceiveMode = true;
+    enableColumnMode = false;
+    slowScrollMode = false;
+    autoRepeatMode = false;
+    leftRightMarginMode = false;
+    focused = true;
+    protectionMode = 0;
+    precedingCodepoint = 0;
+    currentTitle = null;
+    currentIconTitle = null;
+    mainSavedCursor = null;
+    altSavedCursor = null;
+    auxiliaryDynamicColorCodes.clear();
+    retainedStateBlockers.clear();
     super.reset();
   }
 
@@ -701,6 +1336,25 @@ final class TerminalXtermWorkerBufferDelta {
   final int cachedRowCount;
 }
 
+final class TerminalXtermWorkerSnapshotHydrationProfile {
+  const TerminalXtermWorkerSnapshotHydrationProfile({
+    required this.delta,
+    required this.parseMicros,
+    required this.materializeMicros,
+    required this.rawRoundtripMicros,
+    required this.decodeMicros,
+  });
+
+  final TerminalXtermWorkerBufferDelta delta;
+  final int parseMicros;
+  final int materializeMicros;
+  final int rawRoundtripMicros;
+  final int decodeMicros;
+
+  int get transferAndSchedulingMicros =>
+      rawRoundtripMicros - parseMicros - materializeMicros;
+}
+
 final class TerminalXtermWorkerBufferDeltaProfile {
   const TerminalXtermWorkerBufferDeltaProfile({
     required this.delta,
@@ -730,6 +1384,7 @@ final class TerminalXtermWorker {
     int maxLines = 1000,
     TerminalTargetPlatform platform = TerminalTargetPlatform.unknown,
     Set<int>? wordSeparators,
+    TerminalXtermWorkerRetainedState? retainedState,
   }) async {
     final ready = ReceivePort();
     final errors = ReceivePort();
@@ -742,6 +1397,7 @@ final class TerminalXtermWorker {
         maxLines,
         platform.index,
         wordSeparators?.toList(growable: false),
+        retainedState?._message,
       ],
       onError: errors.sendPort,
     );
@@ -787,12 +1443,57 @@ final class TerminalXtermWorker {
     );
   }
 
+  Future<TerminalXtermWorkerBufferDelta> hydrateSnapshotBufferDelta(
+    String snapshot, {
+    bool resetInteractionModes = false,
+  }) async {
+    return TerminalXtermWorkerBufferDelta._fromMessage(
+      await _requestRaw(<Object?>[
+        _workerHydrateSnapshotBufferDelta,
+        snapshot,
+        resetInteractionModes,
+      ]),
+    );
+  }
+
+  Future<TerminalXtermWorkerSnapshotHydrationProfile>
+  profileHydrateSnapshotBufferDelta(
+    String snapshot, {
+    bool resetInteractionModes = false,
+  }) async {
+    final roundtripWatch = Stopwatch()..start();
+    final raw = await _requestRaw(<Object?>[
+      _workerProfileHydrateSnapshotBufferDelta,
+      snapshot,
+      resetInteractionModes,
+    ]);
+    roundtripWatch.stop();
+    final decodeWatch = Stopwatch()..start();
+    final delta = TerminalXtermWorkerBufferDelta._fromMessage(
+      List<Object?>.from(raw[2]! as List),
+    );
+    decodeWatch.stop();
+    return TerminalXtermWorkerSnapshotHydrationProfile(
+      delta: delta,
+      parseMicros: raw[0]! as int,
+      materializeMicros: raw[1]! as int,
+      rawRoundtripMicros: roundtripWatch.elapsedMicroseconds,
+      decodeMicros: decodeWatch.elapsedMicroseconds,
+    );
+  }
+
   Future<TerminalXtermWorkerStateDelta> parseHidden(
     String data, {
     bool? focused,
   }) async {
     return TerminalXtermWorkerStateDelta._fromMessage(
       await _requestRaw(<Object?>[_workerParseHidden, data, focused]),
+    );
+  }
+
+  Future<TerminalXtermWorkerRetainedStateExport> exportRetainedState() async {
+    return TerminalXtermWorkerRetainedStateExport._fromMessage(
+      await _requestRaw(const <Object?>[_workerExportRetainedState]),
     );
   }
 
@@ -1067,8 +1768,12 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
   final wordSeparators = rawWordSeparators == null
       ? null
       : Set<int>.from(rawWordSeparators);
+  final rawRetainedState = initialization.length > 6
+      ? initialization[6] as List?
+      : null;
   final commands = ReceivePort();
   final effects = <List<Object?>>[];
+  final parserGroundTracker = _RetainedParserGroundTracker();
   final terminal = _TerminalXtermWorkerTerminal(
     maxLines: maxLines,
     platform: platform,
@@ -1080,6 +1785,16 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
     onClipboardStore: (selector, text) =>
         effects.add(<Object?>[_effectClipboardStore, selector, text]),
   )..resize(cols, rows);
+  if (rawRetainedState != null) {
+    terminal.restoreRetainedState(List<Object?>.from(rawRetainedState));
+    effects.clear();
+  }
+
+  void writeTerminal(String data) {
+    parserGroundTracker.accept(data);
+    terminal.write(data);
+  }
+
   var revision = 0;
   List<_TerminalXtermWorkerRowCache>? viewportCache;
   var cachedCols = 0;
@@ -1562,12 +2277,12 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
       switch (command) {
         case _workerWrite:
           effects.clear();
-          terminal.write(raw[2]! as String);
+          writeTerminal(raw[2]! as String);
           revision += 1;
           reply.send(snapshot());
         case _workerWriteDelta:
           effects.clear();
-          terminal.write(raw[2]! as String);
+          writeTerminal(raw[2]! as String);
           revision += 1;
           reply.send(delta());
         case _workerWriteBufferDelta:
@@ -1579,9 +2294,38 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
               effects.clear();
             }
           }
-          terminal.write(raw[2]! as String);
+          writeTerminal(raw[2]! as String);
           revision += 1;
           reply.send(bufferDelta());
+        case _workerHydrateSnapshotBufferDelta:
+          effects.clear();
+          writeTerminal(raw[2]! as String);
+          if (raw.length > 3 && raw[3] == true) {
+            writeTerminal(terminalInteractionModeReset);
+          }
+          revision += 1;
+          bufferLineRefs = null;
+          bufferLineCaches = null;
+          reply.send(packedFullBufferDelta());
+        case _workerProfileHydrateSnapshotBufferDelta:
+          effects.clear();
+          final parseWatch = Stopwatch()..start();
+          writeTerminal(raw[2]! as String);
+          if (raw.length > 3 && raw[3] == true) {
+            writeTerminal(terminalInteractionModeReset);
+          }
+          parseWatch.stop();
+          revision += 1;
+          bufferLineRefs = null;
+          bufferLineCaches = null;
+          final materializeWatch = Stopwatch()..start();
+          final message = packedFullBufferDelta();
+          materializeWatch.stop();
+          reply.send(<Object?>[
+            parseWatch.elapsedMicroseconds,
+            materializeWatch.elapsedMicroseconds,
+            message,
+          ]);
         case _workerParseHidden:
           effects.clear();
           if (raw.length > 3) {
@@ -1591,9 +2335,18 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
               effects.clear();
             }
           }
-          terminal.write(raw[2]! as String);
+          writeTerminal(raw[2]! as String);
           revision += 1;
           reply.send(stateDelta());
+        case _workerExportRetainedState:
+          effects.clear();
+          final blockers = terminal.retainedStateEligibility(
+            parserGround: parserGroundTracker.isGround,
+          );
+          reply.send(<Object?>[
+            blockers.isEmpty ? terminal.retainedStateMessage() : null,
+            blockers,
+          ]);
         case _workerSnapshotBufferDelta:
           effects.clear();
           revision += 1;

@@ -79,6 +79,7 @@ final class TerminalHostPtySession._(
   bool _startedNewProcess = false;
   bool _outputPaused = false;
   Future<void>? _startFuture;
+  int? _retainedOutputCursor;
   // Resize and output resync can both observe a lost attachment. Keep their
   // retries in one lane so no request races the createOrAttach response.
   Future<void> _attachmentOperations = Future<void>.value();
@@ -157,11 +158,19 @@ final class TerminalHostPtySession._(
       launch: launch,
       cols: cols,
       rows: rows,
+      resumeCursor: _retainedOutputCursor,
     );
   }
 
   Future<void> _applyAttachment(TerminalHostAttachment attachment) async {
     _startedNewProcess = attachment.created;
+    if (_retainedOutputCursor != null) {
+      // Only a cursor captured while output is parked may survive a
+      // reattach. A normal full attachment keeps receiving live output, so
+      // its response cursor would immediately become stale as parser state
+      // advances.
+      _retainedOutputCursor = attachment.outputCursor;
+    }
     if (attachment.hasSnapshot || attachment.created) {
       final resetInteractionModes = attachment.created || !attachment.running;
       final snapshotText = attachment.snapshotText;
@@ -313,7 +322,13 @@ final class TerminalHostPtySession._(
           () => _client.setOutputPaused(sessionId: _sessionId, paused: paused),
           shouldRecover: _shouldRecoverFromHostError,
         );
+        if (paused) {
+          _retainedOutputCursor = resume.outputCursor;
+        }
         _emitResume(paused: paused, resume: resume);
+        if (!paused) {
+          _retainedOutputCursor = null;
+        }
       } catch (error) {
         _emitHostError(error);
       }
@@ -375,6 +390,7 @@ final class TerminalHostPtySession._(
         rows == null) {
       throw StateError('PTY session has not been started.');
     }
+    _retainedOutputCursor = null;
     final attachment = await _client.restart(
       sessionId: _sessionId,
       workspaceId: _workspaceId,

@@ -17,6 +17,7 @@ impl ServerActor {
         let workspace_id = require_string(payload, "workspaceId")?;
         let tab_id = require_string(payload, "tabId")?;
         let working_directory = require_string(payload, "workingDirectory")?;
+        let resume_cursor = payload.get("resumeCursor").and_then(Value::as_u64);
 
         // Attaching a user client to a tab created for an automation is the
         // durable takeover signal. It prevents a later successful completion
@@ -85,6 +86,41 @@ impl ServerActor {
             let running = self.sessions.get(&session_id).is_some_and(Session::running);
             if running {
                 self.flush_all_output(&session_id);
+                if let Some(cursor) = resume_cursor {
+                    let retained = self
+                        .sessions
+                        .get_mut(&session_id)
+                        .expect("just checked")
+                        .attach_at_output_cursor(client_id, cursor);
+                    if retained {
+                        let data = {
+                            let session = self.sessions.get(&session_id).expect("just checked");
+                            let (base_cursor, _) = session.output_stream_range();
+                            session.buffer.slice_from((cursor - base_cursor) as usize)
+                        };
+                        if data.is_empty()
+                            || self.send_terminal_output(
+                                &session_id,
+                                client_id,
+                                crate::terminal_host::client::ClientFrame::Output {
+                                    session_id: session_id.clone(),
+                                    data,
+                                },
+                            )
+                        {
+                            let session = self.sessions.get(&session_id).expect("just checked");
+                            return Ok(session.delta_attachment_payload(true));
+                        }
+
+                        // The terminal lane is backpressured. Do not acknowledge
+                        // a delta that never reached the client: reset the
+                        // delivery cursor to the current end and send the
+                        // scrollback through the control reply instead.
+                        let session = self.sessions.get_mut(&session_id).expect("just checked");
+                        session.attach(client_id);
+                        return Ok(session.attachment_payload(false, restore_bytes));
+                    }
+                }
                 let session = self.sessions.get_mut(&session_id).expect("just checked");
                 session.attach(client_id);
                 return Ok(session.attachment_payload(false, restore_bytes));

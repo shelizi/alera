@@ -124,11 +124,13 @@ extension _XtermTerminalSessionPty on _XtermTerminalSessionHandle {
         if (_outputVisible) {
           final shouldResetInteractionModes = _pendingInteractionModeReset;
           _preparePointerInputForSnapshot();
-          _replaceTerminalWithSnapshot(
+          final directHydration = _replaceTerminalWithSnapshot(
             data,
             resetInteractionModes: shouldResetInteractionModes,
           );
-          _completePointerInputSnapshotCatchUp();
+          if (!directHydration) {
+            _completePointerInputSnapshotCatchUp();
+          }
           _pendingInteractionModeReset = false;
         }
       case TerminalPtySnapshotTextEvent(
@@ -139,11 +141,13 @@ extension _XtermTerminalSessionPty on _XtermTerminalSessionHandle {
         if (_outputVisible) {
           final shouldResetInteractionModes = _pendingInteractionModeReset;
           _preparePointerInputForSnapshot();
-          _replaceTerminalWithSnapshotText(
+          final directHydration = _replaceTerminalWithSnapshotText(
             text,
             resetInteractionModes: shouldResetInteractionModes,
           );
-          _completePointerInputSnapshotCatchUp();
+          if (!directHydration) {
+            _completePointerInputSnapshotCatchUp();
+          }
           _pendingInteractionModeReset = false;
         }
       case TerminalPtyExitEvent(:final exitCode):

@@ -181,6 +181,7 @@ final class SocketTerminalHostClient._(
     required GhosttyTerminalShellLaunch launch,
     required int cols,
     required int rows,
+    int? resumeCursor,
   }) => _createOrAttachTerminal(
     this,
     sessionId: sessionId,
@@ -190,6 +191,7 @@ final class SocketTerminalHostClient._(
     launch: launch,
     cols: cols,
     rows: rows,
+    resumeCursor: resumeCursor,
   );
 
   @override

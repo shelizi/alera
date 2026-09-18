@@ -28,7 +28,9 @@ class _TerminalSessionOutputPump {
   final _TerminalSessionOutputHost _host;
   final _TerminalOutputPipeline pipeline = _TerminalOutputPipeline();
   bool _hiddenCatchUpScheduled = false;
-  bool _writeInFlight = false;
+  int? _writeInFlightGeneration;
+
+  bool get _writeInFlight => _writeInFlightGeneration != null;
   int _writeGeneration = 0;
   // Start conservatively before this session has any parse-time samples.
   // Local profiling of ANSI/TUI-heavy output measured ~25 ms at 64 KiB,
@@ -268,7 +270,7 @@ class _TerminalSessionOutputPump {
     }
 
     blockingClock?.stop();
-    _writeInFlight = true;
+    _writeInFlightGeneration = generation;
     unawaited(
       writeFuture.then(
         (uiApplyTime) => _completeWrite(
@@ -280,15 +282,19 @@ class _TerminalSessionOutputPump {
           asyncUiApplyTime: shouldAdapt ? uiApplyTime : null,
         ),
         onError: (Object error, StackTrace stackTrace) {
-          _writeInFlight = false;
-          FlutterError.reportError(
-            FlutterErrorDetails(
-              exception: error,
-              stack: stackTrace,
-              library: 'terminal runtime',
-              context: ErrorDescription('applying terminal output'),
-            ),
-          );
+          if (_writeInFlightGeneration == generation) {
+            _writeInFlightGeneration = null;
+          }
+          if (generation == _writeGeneration) {
+            FlutterError.reportError(
+              FlutterErrorDetails(
+                exception: error,
+                stack: stackTrace,
+                library: 'terminal runtime',
+                context: ErrorDescription('applying terminal output'),
+              ),
+            );
+          }
           _scheduleAfterWrite();
         },
       ),
@@ -303,7 +309,9 @@ class _TerminalSessionOutputPump {
     required Stopwatch? blockingClock,
     Duration? asyncUiApplyTime,
   }) {
-    _writeInFlight = false;
+    if (_writeInFlightGeneration == generation) {
+      _writeInFlightGeneration = null;
+    }
     if (blockingClock != null && blockingClock.isRunning) {
       blockingClock.stop();
     }
@@ -339,6 +347,7 @@ class _TerminalSessionOutputPump {
 
   void clearPending() {
     _writeGeneration += 1;
+    _writeInFlightGeneration = null;
     _hiddenCatchUpScheduled = false;
     pipeline.cancelDeferredFlush();
     pipeline.clear();

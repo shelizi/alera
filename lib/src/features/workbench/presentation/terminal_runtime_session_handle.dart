@@ -9,6 +9,7 @@ class _XtermTerminalSessionHandle(
   final TerminalRuntimeRendererAdapterOwner _rendererAdapterOwner,
   final TerminalRuntimeLaunchInputOwner _launchInputOwner,
   final bool _parserWorkerEnabled,
+  final bool _snapshotHydrationProfilingEnabled,
   final void Function(TerminalRuntimeExitEvent event) _onExit,
   this._onVisibilityChanged,
 ) extends TerminalSessionHandle
@@ -69,10 +70,25 @@ class _XtermTerminalSessionHandle(
   int _ptyGeneration = 0;
   int _parserWorkerGeneration = 0;
   Future<TerminalXtermWorker>? _parserWorkerFuture;
+  TerminalXtermWorkerRetainedState? _parserWorkerRetainedState;
+  List<String> _parserWorkerHardEvictionBlockers = const <String>[];
+  bool _parserWorkerReady = false;
+  bool _uiBufferEvicted = false;
   Future<void> _parserWorkerCommandTail = Future<void>.value();
   Future<void>? _parserWorkerLastApply;
   bool _parserWorkerFocused = true;
   bool _parserWorkerReplicaNeedsSync = false;
+  ({
+    int snapshotRevision,
+    int queueAndStartupMicros,
+    int workerParseMicros,
+    int workerMaterializeMicros,
+    int workerRoundtripMicros,
+    int decodeMicros,
+    int uiApplyMicros,
+    int totalHydrationMicros,
+  })?
+  _lastSnapshotHydrationProfile;
   @override
   int _startAttempt = 0;
   int? _activePtyGeneration;
@@ -126,8 +142,11 @@ class _XtermTerminalSessionHandle(
   bool get _outputVisible => _visibility.isOutputVisible;
 
   @override
-  TerminalBufferUsage get bufferUsage =>
-      _visibility.estimateUsage(tabId, _terminal);
+  TerminalBufferUsage get bufferUsage => _visibility.estimateUsage(
+    tabId,
+    _terminal,
+    bufferResident: !_uiBufferEvicted,
+  );
 
   @override
   ValueListenable<TerminalRestoreProgress?> get restoreProgress =>
@@ -291,26 +310,28 @@ class _XtermTerminalSessionHandle(
   void _flushPendingTerminalOutputFrame({bool force = false}) =>
       _pump.flushFrame(force: force);
 
-  void _replaceTerminalWithSnapshot(
+  bool _replaceTerminalWithSnapshot(
     List<int> data, {
     required bool resetInteractionModes,
   }) {
-    _rebuildTerminalFromSnapshot(
+    final directHydration = _rebuildTerminalFromSnapshot(
       data,
       resetInteractionModes: resetInteractionModes,
     );
     notifyListeners();
+    return directHydration;
   }
 
-  void _replaceTerminalWithSnapshotText(
+  bool _replaceTerminalWithSnapshotText(
     String text, {
     required bool resetInteractionModes,
   }) {
-    _rebuildTerminalFromSnapshotText(
+    final directHydration = _rebuildTerminalFromSnapshotText(
       text,
       resetInteractionModes: resetInteractionModes,
     );
     notifyListeners();
+    return directHydration;
   }
 
   @override

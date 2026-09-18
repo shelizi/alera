@@ -77,10 +77,11 @@ impl ServerActor {
         if !paused {
             return self.resume_output_for_client(session_id, client_id);
         }
-        if let Some(session) = self.sessions.get_mut(session_id) {
+        let output_cursor = self.sessions.get_mut(session_id).and_then(|session| {
             session.set_output_paused(client_id, true);
-        }
-        json!({})
+            session.delivered_output_cursor(client_id)
+        });
+        json!({ "outputCursor": output_cursor })
     }
 
     /// Resumes delivery for one client and sends only what it missed.

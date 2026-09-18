@@ -34,6 +34,27 @@ async fn actor_with_client(
 }
 
 #[tokio::test]
+async fn pausing_reports_the_exact_delivered_output_cursor() {
+    let dir = tempfile::tempdir().unwrap();
+    let (handle, mut terminal_rx) = ClientHandle::test_terminal_channels();
+    let mut actor = actor_with_client(&dir, handle, 1024).await;
+
+    actor
+        .sessions
+        .get_mut("s1")
+        .unwrap()
+        .append_output(b"hello");
+    assert!(actor.send_terminal_output("s1", 2, output(b"hello")));
+    let _ = terminal_rx.try_recv().expect("the delivered output");
+
+    let payload = actor.set_output_paused_for_client("s1", 2, true);
+
+    assert_eq!(payload["outputCursor"], 5);
+    assert_eq!(actor.sessions["s1"].delivered_output_cursor(2), Some(5));
+    assert!(actor.sessions["s1"].output_clients().is_empty());
+}
+
+#[tokio::test]
 async fn resume_serves_only_the_bytes_the_client_missed() {
     let dir = tempfile::tempdir().unwrap();
     let (handle, mut terminal_rx) = ClientHandle::test_terminal_channels();

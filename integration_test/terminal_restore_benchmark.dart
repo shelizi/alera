@@ -33,7 +33,7 @@ const _measuredRuns = 5;
 const _restoreTarget = Duration(seconds: 3);
 const _watchdog = Duration(seconds: 30);
 const _restoreMarker = 'RESTORE-END';
-const _liveMarker = 'LIVE-AFTER-SNAPSHOT';
+const _liveMarkerPrefix = 'LIVE-AFTER-SNAP-';
 
 void main() {
   final binding = IntegrationTestWidgetsFlutterBinding.ensureInitialized();
@@ -43,6 +43,7 @@ void main() {
     final fakeSession = _BenchmarkPtySession();
     final runtime = XtermTerminalRuntime(
       parserWorkerEnabled: true,
+      snapshotHydrationProfilingEnabled: true,
       ptySessionFactory: _BenchmarkPtySessionFactory(fakeSession),
       shellLaunchesBuilder: () => <GhosttyTerminalShellLaunch>[
         const GhosttyTerminalShellLaunch(
@@ -72,8 +73,9 @@ void main() {
 
     final snapshot = _buildSnapshot();
     expect(snapshot.length, _snapshotBytes);
-    final liveOutput = _buildLiveOutput();
-    expect(utf8.encode(liveOutput), hasLength(_liveOutputBytes));
+    final warmupMarker = _liveMarkerForRun(0);
+    final warmupLiveOutput = _buildLiveOutput(warmupMarker);
+    expect(utf8.encode(warmupLiveOutput), hasLength(_liveOutputBytes));
 
     await _measureRestore(
       tester: tester,
@@ -81,10 +83,14 @@ void main() {
       fakeSession: fakeSession,
       session: session,
       snapshot: snapshot,
-      liveOutput: liveOutput,
+      liveOutput: warmupLiveOutput,
+      liveMarker: warmupMarker,
     );
     final samples = <_RestoreSample>[];
     for (var run = 0; run < _measuredRuns; run++) {
+      final liveMarker = _liveMarkerForRun(run + 1);
+      final liveOutput = _buildLiveOutput(liveMarker);
+      expect(utf8.encode(liveOutput), hasLength(_liveOutputBytes));
       samples.add(
         await _measureRestore(
           tester: tester,
@@ -93,6 +99,7 @@ void main() {
           session: session,
           snapshot: snapshot,
           liveOutput: liveOutput,
+          liveMarker: liveMarker,
         ),
       );
     }
@@ -109,6 +116,68 @@ void main() {
     runtimeDisposed = true;
     await tester.pump();
   });
+
+  testWidgets('T8e soft eviction structured reveal latency', (tester) async {
+    binding.framePolicy = LiveTestWidgetsFlutterBindingFramePolicy.fullyLive;
+    final fakeSession = _BenchmarkPtySession();
+    final runtime = XtermTerminalRuntime(
+      parserWorkerEnabled: true,
+      ptySessionFactory: _BenchmarkPtySessionFactory(fakeSession),
+      shellLaunchesBuilder: () => <GhosttyTerminalShellLaunch>[
+        const GhosttyTerminalShellLaunch(
+          label: 'Benchmark',
+          shell: '/bin/sh',
+          environment: <String, String>{'TERM': 'xterm-256color'},
+        ),
+      ],
+    );
+    addTearDown(runtime.dispose);
+    final session = runtime.sessionFor(workspace: _workspace(), tab: _tab());
+    expect(terminalParserWorkerEnabledForTesting(session), isTrue);
+
+    final snapshot = _buildSnapshot();
+    final snapshotText = const Utf8Decoder(allowMalformed: true)
+        .convert(snapshot);
+    rebuildTerminalFromSnapshotTextForTesting(session, snapshotText);
+    await waitForTerminalParserApplyForTesting(session);
+    expect(terminalBufferTextForTesting(session), contains(_restoreMarker));
+
+    Future<double> measureReveal() async {
+      evictTerminalSessionForTesting(runtime, session.tabId);
+      expect(terminalUiBufferEvictedForTesting(session), isTrue);
+      expect(session.bufferUsage.bytes, 0);
+
+      final watch = Stopwatch()..start();
+      final visibility = acquireTerminalVisibilityForTesting(session);
+      await waitForTerminalParserApplyForTesting(session);
+      await tester.pump();
+      watch.stop();
+
+      expect(terminalUiBufferEvictedForTesting(session), isFalse);
+      expect(terminalBufferTextForTesting(session), contains(_restoreMarker));
+      visibility.dispose();
+      return watch.elapsedMicroseconds / 1000;
+    }
+
+    await measureReveal();
+    final samples = <double>[
+      for (var run = 0; run < _measuredRuns; run++) await measureReveal(),
+    ];
+    final sorted = List<double>.from(samples)..sort();
+    final median = _median(samples);
+    final p95 = sorted[(sorted.length * 0.95).ceil() - 1];
+    final withinTarget = samples.where((value) => value <= 3000).length;
+    // ignore: avoid_print
+    print(
+      '=== T8e soft eviction structured reveal ===\n'
+      '  samples ${samples.map((value) => value.toStringAsFixed(2)).join(', ')} ms\n'
+      '  median ${median.toStringAsFixed(2)} ms; '
+      'p95 ${p95.toStringAsFixed(2)} ms; '
+      'target max 3000 ms: $withinTarget/${samples.length}',
+    );
+    expect(samples, hasLength(_measuredRuns));
+    expect(withinTarget, _measuredRuns);
+  });
 }
 
 Future<_RestoreSample> _measureRestore({
@@ -118,6 +187,7 @@ Future<_RestoreSample> _measureRestore({
   required TerminalSessionHandle session,
   required Uint8List snapshot,
   required String liveOutput,
+  required String liveMarker,
 }) async {
   final watch = Stopwatch();
   Duration? accepted;
@@ -171,6 +241,16 @@ Future<_RestoreSample> _measureRestore({
     final pendingLiveAtRestoreReady = pendingLiveTerminalOutputCharsForTesting(
       session,
     );
+    final pendingTotalAtRestoreReady = pendingTerminalOutputCharsForTesting(
+      session,
+    );
+    final revisionAtRestoreReady = terminalParserWorkerRevisionForTesting(
+      session,
+    );
+    final writeInFlightAtRestoreReady = terminalOutputWriteInFlightForTesting(
+      session,
+    );
+    final flushesAtRestoreReady = terminalOutputFlushCountForTesting(session);
     expect(sawProgress, isTrue);
     expect(accepted, isNotNull);
     expect(firstChunk, isNotNull);
@@ -179,20 +259,57 @@ Future<_RestoreSample> _measureRestore({
     expect(find.text('Restoring Terminal'), findsNothing);
     expect(restoreOffset, greaterThanOrEqualTo(0));
     expect(pendingLiveAtRestoreReady, greaterThan(0));
+    final hydrationProfile = terminalSnapshotHydrationProfileForTesting(
+      session,
+    );
+    expect(hydrationProfile, isNotNull);
+    final snapshotRevision = hydrationProfile!.snapshotRevision;
+    expect(revisionAtRestoreReady, greaterThanOrEqualTo(snapshotRevision));
 
     final liveDeadline = DateTime.now().add(const Duration(seconds: 3));
-    var liveOffset = text.indexOf(_liveMarker);
+    var liveOffset = text.indexOf(liveMarker);
     while (liveOffset < 0 && DateTime.now().isBefore(liveDeadline)) {
       await tester.pump(const Duration(milliseconds: 16));
       text = terminalBufferTextForTesting(session);
-      liveOffset = text.indexOf(_liveMarker);
+      liveOffset = text.indexOf(liveMarker);
     }
-    expect(liveOffset, greaterThan(restoreOffset));
+    if (liveOffset < 0) {
+      final pendingLiveAtDeadline = pendingLiveTerminalOutputCharsForTesting(
+        session,
+      );
+      final pendingTotalAtDeadline = pendingTerminalOutputCharsForTesting(
+        session,
+      );
+      final revisionAtDeadline = terminalParserWorkerRevisionForTesting(
+        session,
+      );
+      final writeInFlightAtDeadline = terminalOutputWriteInFlightForTesting(
+        session,
+      );
+      final flushesAtDeadline = terminalOutputFlushCountForTesting(session);
+      debugPrint(
+        'T8D_RESTORE_DIAG '
+        'readyLive=$pendingLiveAtRestoreReady '
+        'readyTotal=$pendingTotalAtRestoreReady '
+        'readyRevision=$revisionAtRestoreReady '
+        'readyInFlight=$writeInFlightAtRestoreReady '
+        'readyFlushes=$flushesAtRestoreReady '
+        'deadlineLive=$pendingLiveAtDeadline '
+        'deadlineTotal=$pendingTotalAtDeadline '
+        'deadlineRevision=$revisionAtDeadline '
+        'deadlineInFlight=$writeInFlightAtDeadline '
+        'deadlineFlushes=$flushesAtDeadline',
+      );
+    }
+    expect(liveOffset, greaterThanOrEqualTo(0));
+    final liveRevision = terminalParserWorkerRevisionForTesting(session);
+    expect(liveRevision, greaterThan(snapshotRevision));
 
     return _RestoreSample(
       accepted: accepted!,
       firstChunk: firstChunk!,
       frameworkReady: elapsed,
+      hydrationProfile: hydrationProfile,
       flushes: flushes,
       cpuSeconds: cpuBefore == null || cpuAfter == null
           ? null
@@ -220,8 +337,11 @@ Uint8List _buildSnapshot() {
   return Uint8List.fromList(utf8.encode(records.join()));
 }
 
-String _buildLiveOutput() {
-  const prefix = '\r\n$_liveMarker\r\n';
+String _liveMarkerForRun(int run) =>
+    '$_liveMarkerPrefix${run.toString().padLeft(3, '0')}';
+
+String _buildLiveOutput(String liveMarker) {
+  final prefix = '\r\n$liveMarker\r\n';
   const control = '\x1b[0m';
   final bodyBytes = _liveOutputBytes - prefix.length;
   final controls = List<String>.filled(bodyBytes ~/ control.length, control);
@@ -265,6 +385,7 @@ final class _RestoreSample {
     required this.accepted,
     required this.firstChunk,
     required this.frameworkReady,
+    required this.hydrationProfile,
     required this.flushes,
     required this.cpuSeconds,
     required this.frames,
@@ -273,6 +394,7 @@ final class _RestoreSample {
   final Duration accepted;
   final Duration firstChunk;
   final Duration frameworkReady;
+  final TerminalSnapshotHydrationProfileForTesting hydrationProfile;
   final int flushes;
   final double? cpuSeconds;
   final List<FrameTiming> frames;
@@ -294,6 +416,34 @@ final class _RestoreReport {
         .map((sample) => _milliseconds(sample.firstChunk))
         .toList();
     final readyMedian = _median(ready);
+    final queueAndStartup = samples
+        .map((sample) => sample.hydrationProfile.queueAndStartupMicros / 1000)
+        .toList();
+    final workerParse = samples
+        .map((sample) => sample.hydrationProfile.workerParseMicros / 1000)
+        .toList();
+    final workerMaterialize = samples
+        .map((sample) => sample.hydrationProfile.workerMaterializeMicros / 1000)
+        .toList();
+    final transferAndScheduling = samples
+        .map(
+          (sample) =>
+              sample.hydrationProfile.transferAndSchedulingMicros / 1000,
+        )
+        .toList();
+    final decode = samples
+        .map((sample) => sample.hydrationProfile.decodeMicros / 1000)
+        .toList();
+    final uiApply = samples
+        .map((sample) => sample.hydrationProfile.uiApplyMicros / 1000)
+        .toList();
+    final hydrationTotal = samples
+        .map((sample) => sample.hydrationProfile.totalHydrationMicros / 1000)
+        .toList();
+    final postHydration = <double>[
+      for (var i = 0; i < samples.length; i++)
+        (ready[i] - accepted[i] - hydrationTotal[i]).clamp(0, double.infinity),
+    ];
     final deviations = ready
         .map((value) => (value - readyMedian).abs())
         .toList();
@@ -335,6 +485,16 @@ final class _RestoreReport {
         'MAD ${_median(deviations).toStringAsFixed(2)} ms\n'
         '  target max 3000 ms: $withinTarget/${samples.length}; '
         'throughput ${throughput.toStringAsFixed(2)} MiB/s\n'
+        '  hydrate medians: queue/startup '
+        '${_median(queueAndStartup).toStringAsFixed(2)} ms; worker parse '
+        '${_median(workerParse).toStringAsFixed(2)} ms; packed materialize '
+        '${_median(workerMaterialize).toStringAsFixed(2)} ms; '
+        'transfer/scheduling '
+        '${_median(transferAndScheduling).toStringAsFixed(2)} ms; decode '
+        '${_median(decode).toStringAsFixed(2)} ms; UI apply '
+        '${_median(uiApply).toStringAsFixed(2)} ms; total '
+        '${_median(hydrationTotal).toStringAsFixed(2)} ms; post-hydration '
+        '${_median(postHydration).toStringAsFixed(2)} ms\n'
         '  flushes ${samples.map((sample) => sample.flushes).join(', ')}; '
         'frames ${samples.fold<int>(0, (sum, sample) => sum + sample.frames.length)}, '
         'slow frames ${slowFrames.length}\n'
