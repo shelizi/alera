@@ -48,6 +48,31 @@ void main() {
     expect(workspaceEditor, contains('_languageIdForPath(filePath)'));
   });
 
+  test(
+    'large-file retained parsing starts only after first-frame admission',
+    () {
+      final controller = File(
+        'third_party/code_forge/lib/code_forge/controller.dart',
+      ).readAsStringSync();
+      final codeArea = File(
+        'third_party/code_forge/lib/code_forge/code_area.dart',
+      ).readAsStringSync();
+
+      expect(
+        codeArea,
+        contains('deferInitialParse: _largeFilePerformanceMode'),
+      );
+      expect(controller, contains('bool deferInitialParse = false'));
+      expect(controller, contains('SchedulerBinding.instance.endOfFrame'));
+      expect(
+        controller,
+        contains('final initialRope = _rope.core.deepClone();'),
+      );
+      expect(controller, contains('await openFuture;'));
+      expect(controller, contains('_pendingNativeEditorEdits.add('));
+    },
+  );
+
   test('CodeForge structural selection stays on the retained native tree', () {
     final controller = File(
       'third_party/code_forge/lib/code_forge/controller.dart',

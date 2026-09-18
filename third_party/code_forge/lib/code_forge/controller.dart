@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 
 import '../code_forge.dart';
@@ -398,6 +399,7 @@ class CodeForgeController implements DeltaTextInputClient {
   void configureNativeSyntaxDocument({
     required String languageId,
     String? documentId,
+    bool deferInitialParse = false,
   }) {
     final normalizedLanguageId = languageId.trim().toLowerCase();
     if (normalizedLanguageId.isEmpty) return;
@@ -411,8 +413,7 @@ class CodeForgeController implements DeltaTextInputClient {
 
     final generation = ++_nativeEditorGeneration;
     final previousCancellation = _nativeEditorParseCancellation;
-    final cancellation = NativeParseCancellation.create();
-    _nativeEditorParseCancellation = cancellation;
+    _nativeEditorParseCancellation = null;
     previousCancellation?.cancel();
     final previous = _nativeEditorDocument;
     _nativeEditorDocument = null;
@@ -429,9 +430,24 @@ class CodeForgeController implements DeltaTextInputClient {
     }
 
     final initialRevision = _currentVersion;
-    final initialRope = _rope.core;
+    // Keep the parse baseline immutable while large-file admission is deferred.
+    // Ropey cloning is copy-on-write, so this remains cheap while ensuring the
+    // queued deltas below are applied exactly once from [initialRevision].
+    final initialRope = _rope.core.deepClone();
     _nativeEditorOpenFuture = () async {
+      NativeParseCancellation? cancellation;
       try {
+        if (deferInitialParse) {
+          await SchedulerBinding.instance.endOfFrame;
+          if (_isDisposed || generation != _nativeEditorGeneration) return;
+        }
+
+        cancellation = NativeParseCancellation.create();
+        if (_isDisposed || generation != _nativeEditorGeneration) {
+          cancellation.cancel();
+          return;
+        }
+        _nativeEditorParseCancellation = cancellation;
         final document = await NativeEditorDocument.openFromRopeCancellable(
           documentId: resolvedDocumentId,
           revision: BigInt.from(initialRevision),
