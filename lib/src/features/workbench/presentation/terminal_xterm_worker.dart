@@ -4,12 +4,14 @@ import 'dart:typed_data';
 
 import 'package:xterm2/xterm.dart';
 
+import '../domain/terminal_mode_reset.dart';
 import '../domain/terminal_osc52_clipboard.dart';
 
 const String _workerReady = 'ready';
 const String _workerWrite = 'write';
 const String _workerWriteDelta = 'writeDelta';
 const String _workerWriteBufferDelta = 'writeBufferDelta';
+const String _workerHydrateSnapshotBufferDelta = 'hydrateSnapshotBufferDelta';
 const String _workerParseHidden = 'parseHidden';
 const String _workerSnapshotBufferDelta = 'snapshotBufferDelta';
 const String _workerProfileSnapshotBufferDelta = 'profileSnapshotBufferDelta';
@@ -784,6 +786,19 @@ final class TerminalXtermWorker {
   }) async {
     return TerminalXtermWorkerBufferDelta._fromMessage(
       await _requestRaw(<Object?>[_workerWriteBufferDelta, data, focused]),
+    );
+  }
+
+  Future<TerminalXtermWorkerBufferDelta> hydrateSnapshotBufferDelta(
+    String snapshot, {
+    bool resetInteractionModes = false,
+  }) async {
+    return TerminalXtermWorkerBufferDelta._fromMessage(
+      await _requestRaw(<Object?>[
+        _workerHydrateSnapshotBufferDelta,
+        snapshot,
+        resetInteractionModes,
+      ]),
     );
   }
 
@@ -1582,6 +1597,16 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
           terminal.write(raw[2]! as String);
           revision += 1;
           reply.send(bufferDelta());
+        case _workerHydrateSnapshotBufferDelta:
+          effects.clear();
+          terminal.write(raw[2]! as String);
+          if (raw.length > 3 && raw[3] == true) {
+            terminal.write(terminalInteractionModeReset);
+          }
+          revision += 1;
+          bufferLineRefs = null;
+          bufferLineCaches = null;
+          reply.send(packedFullBufferDelta());
         case _workerParseHidden:
           effects.clear();
           if (raw.length > 3) {

@@ -67,6 +67,134 @@ void _registerTerminalRuntimeSnapshotTests() {
   );
 
   test(
+    'parser worker snapshot hydrates directly and keeps live output ordered',
+    () async {
+      final fakeSession = _FakeTerminalPtySession();
+      final runtime = XtermTerminalRuntime(
+        parserWorkerEnabled: true,
+        ptySessionFactory: _FakeTerminalPtySessionFactory(
+          sessions: <_FakeTerminalPtySession>[fakeSession],
+        ),
+        shellLaunchesBuilder: () => <GhosttyTerminalShellLaunch>[
+          _launch('shell', shell: '/bin/sh'),
+        ],
+      );
+      addTearDown(runtime.dispose);
+      final session = runtime.sessionFor(workspace: _workspace(), tab: _tab());
+      final visibility = acquireTerminalVisibilityForTesting(session);
+      addTearDown(visibility.dispose);
+      await session.ensureStarted();
+
+      const snapshotMarker = 't8d-snapshot-marker';
+      const liveMarker = 't8d-live-marker';
+      final snapshot = _terminalRestorePayload(
+        512 * 1024,
+        '\r\n$snapshotMarker\r\n\x1b[?2004h\x1b[?1000h',
+      );
+
+      rebuildTerminalFromSnapshotTextForTesting(session, snapshot);
+      expect(pendingRestoreTerminalOutputCharsForTesting(session), 0);
+      await waitForTerminalParserApplyForTesting(session);
+      expect(session.restoreProgress.value, isNull);
+      expect(terminalPointerInputSuspendedForTesting(session), isFalse);
+      expect(terminalBufferTextForTesting(session), contains(snapshotMarker));
+
+      queueTerminalOutputForTesting(session, '\r\n$liveMarker');
+      flushTerminalOutputForTesting(session);
+      await waitForTerminalParserApplyForTesting(session);
+
+      final text = terminalBufferTextForTesting(session);
+      expect(text, contains(snapshotMarker));
+      expect(text, contains(liveMarker));
+      expect(text.indexOf(snapshotMarker), lessThan(text.indexOf(liveMarker)));
+    },
+  );
+
+  test(
+    'snapshot replacement invalidates stale in-flight output writes',
+    () async {
+      final fakeSession = _FakeTerminalPtySession();
+      final runtime = XtermTerminalRuntime(
+        parserWorkerEnabled: true,
+        ptySessionFactory: _FakeTerminalPtySessionFactory(
+          sessions: <_FakeTerminalPtySession>[fakeSession],
+        ),
+        shellLaunchesBuilder: () => <GhosttyTerminalShellLaunch>[
+          _launch('shell', shell: '/bin/sh'),
+        ],
+      );
+      addTearDown(runtime.dispose);
+      final session = runtime.sessionFor(workspace: _workspace(), tab: _tab());
+      final visibility = acquireTerminalVisibilityForTesting(session);
+      addTearDown(visibility.dispose);
+      await session.ensureStarted();
+
+      queueTerminalOutputForTesting(session, 'worker-warmup');
+      flushTerminalOutputForTesting(session);
+      await waitForTerminalParserApplyForTesting(session);
+
+      queueTerminalOutputForTesting(session, '\x1b[0m' * (128 * 1024));
+      flushTerminalOutputForTesting(session);
+      expect(terminalOutputWriteInFlightForTesting(session), isTrue);
+
+      rebuildTerminalFromSnapshotTextForTesting(
+        session,
+        '\r\nt8d-replacement-snapshot\r\n',
+      );
+      expect(terminalOutputWriteInFlightForTesting(session), isFalse);
+
+      queueTerminalOutputForTesting(session, '\r\nt8d-new-generation-live');
+      flushTerminalOutputForTesting(session);
+      await waitForTerminalParserApplyForTesting(session);
+
+      final text = terminalBufferTextForTesting(session);
+      expect(text, contains('t8d-replacement-snapshot'));
+      expect(text, contains('t8d-new-generation-live'));
+    },
+  );
+
+  test(
+    'parser worker direct snapshot reset clears interaction modes',
+    () async {
+      final fakeSession = _FakeTerminalPtySession();
+      final runtime = XtermTerminalRuntime(
+        parserWorkerEnabled: true,
+        ptySessionFactory: _FakeTerminalPtySessionFactory(
+          sessions: <_FakeTerminalPtySession>[fakeSession],
+        ),
+        shellLaunchesBuilder: () => <GhosttyTerminalShellLaunch>[
+          _launch('shell', shell: '/bin/sh'),
+        ],
+      );
+      addTearDown(runtime.dispose);
+      final session = runtime.sessionFor(workspace: _workspace(), tab: _tab());
+      final visibility = acquireTerminalVisibilityForTesting(session);
+      addTearDown(visibility.dispose);
+      await session.ensureStarted();
+
+      const marker = 't8d-reset-marker';
+      final snapshot = _terminalRestorePayload(
+        512 * 1024,
+        '\r\n$marker\r\n\x1b[?2004h\x1b[?1000h',
+      );
+
+      rebuildTerminalFromSnapshotTextForTesting(
+        session,
+        snapshot,
+        resetInteractionModes: true,
+      );
+      expect(pendingRestoreTerminalOutputCharsForTesting(session), 0);
+      await waitForTerminalParserApplyForTesting(session);
+
+      expect(session.restoreProgress.value, isNull);
+      expect(terminalPointerInputSuspendedForTesting(session), isFalse);
+      expect(terminalBracketedPasteModeForTesting(session), isFalse);
+      expect(terminalMouseModeForTesting(session), xterm.MouseMode.none);
+      expect(terminalBufferTextForTesting(session), contains(marker));
+    },
+  );
+
+  test(
     'pauses output while the app is backgrounded and restores on foreground',
     () async {
       debugDefaultTargetPlatformOverride = TargetPlatform.macOS;

@@ -97,6 +97,11 @@ extension _TerminalPointerSynchronization on _XtermTerminalSessionHandle {
     _refreshPointerInputSuspension();
   }
 
+  void _completePointerInputDirectSnapshotHydration() {
+    _pointerInputCatchUpChars = 0;
+    _refreshPointerInputSuspension();
+  }
+
   void _advancePointerInputCatchUp(int chars) {
     if (chars <= 0 || _pointerInputCatchUpChars <= 0) {
       return;

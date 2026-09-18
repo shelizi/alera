@@ -291,26 +291,28 @@ class _XtermTerminalSessionHandle(
   void _flushPendingTerminalOutputFrame({bool force = false}) =>
       _pump.flushFrame(force: force);
 
-  void _replaceTerminalWithSnapshot(
+  bool _replaceTerminalWithSnapshot(
     List<int> data, {
     required bool resetInteractionModes,
   }) {
-    _rebuildTerminalFromSnapshot(
+    final directHydration = _rebuildTerminalFromSnapshot(
       data,
       resetInteractionModes: resetInteractionModes,
     );
     notifyListeners();
+    return directHydration;
   }
 
-  void _replaceTerminalWithSnapshotText(
+  bool _replaceTerminalWithSnapshotText(
     String text, {
     required bool resetInteractionModes,
   }) {
-    _rebuildTerminalFromSnapshotText(
+    final directHydration = _rebuildTerminalFromSnapshotText(
       text,
       resetInteractionModes: resetInteractionModes,
     );
     notifyListeners();
+    return directHydration;
   }
 
   @override

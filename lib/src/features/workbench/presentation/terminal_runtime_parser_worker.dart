@@ -2,6 +2,57 @@ part of 'terminal_runtime.dart';
 
 /// Parser/model isolation for the opt-in xterm worker backend.
 extension _XtermTerminalParserWorker on _XtermTerminalSessionHandle {
+  bool _hydrateParserWorkerSnapshot(
+    String restored, {
+    required bool resetInteractionModes,
+  }) {
+    if (!_parserWorkerEnabled || _disposed) {
+      return false;
+    }
+    final terminal = _terminal;
+    if (terminal is! TerminalXtermReplicaTerminal) {
+      return false;
+    }
+    final generation = _parserWorkerGeneration;
+    _beginRestore(restored.length);
+    final command = _queueParserWorkerCommand(terminal, generation, (
+      worker,
+    ) async {
+      final delta = await worker.hydrateSnapshotBufferDelta(
+        restored,
+        resetInteractionModes: resetInteractionModes,
+      );
+      if (_disposed ||
+          generation != _parserWorkerGeneration ||
+          !identical(_terminal, terminal)) {
+        return;
+      }
+      _applyParserWorkerEffects(delta.effects);
+      terminal.applyBufferDelta(delta);
+      _completeRestoreProgress();
+      _completePointerInputDirectSnapshotHydration();
+    });
+    _parserWorkerLastApply = command;
+    unawaited(
+      command.catchError((Object error, StackTrace stackTrace) {
+        if (_disposed || generation != _parserWorkerGeneration) {
+          return;
+        }
+        _finishRestore();
+        _completePointerInputDirectSnapshotHydration();
+        FlutterError.reportError(
+          FlutterErrorDetails(
+            exception: error,
+            stack: stackTrace,
+            library: 'terminal runtime',
+            context: ErrorDescription('hydrating terminal snapshot'),
+          ),
+        );
+      }),
+    );
+    return true;
+  }
+
   void _resetParserWorkerBackend() {
     if (!_parserWorkerEnabled) {
       return;
@@ -218,16 +269,33 @@ extension _XtermTerminalParserWorker on _XtermTerminalSessionHandle {
     int generation,
     Future<void> Function(TerminalXtermWorker worker) command,
   ) {
+    bool isCurrentGeneration() =>
+        !_disposed &&
+        generation == _parserWorkerGeneration &&
+        identical(_terminal, terminal);
+
+    Future<void> runCommand() async {
+      if (!isCurrentGeneration()) {
+        return;
+      }
+      try {
+        final worker = await _ensureParserWorker(terminal, generation);
+        if (!isCurrentGeneration()) {
+          return;
+        }
+        await command(worker);
+      } catch (_) {
+        if (!isCurrentGeneration()) {
+          return;
+        }
+        rethrow;
+      }
+    }
+
     final previous = _parserWorkerCommandTail;
     final next = previous.then<void>(
-      (_) async {
-        final worker = await _ensureParserWorker(terminal, generation);
-        await command(worker);
-      },
-      onError: (Object _, StackTrace _) async {
-        final worker = await _ensureParserWorker(terminal, generation);
-        await command(worker);
-      },
+      (_) => runCommand(),
+      onError: (Object _, StackTrace _) => runCommand(),
     );
     _parserWorkerCommandTail = next.then<void>(
       (_) {},

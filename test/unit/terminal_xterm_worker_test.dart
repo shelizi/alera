@@ -7,6 +7,31 @@ import 'package:xterm2/xterm.dart';
 
 void main() {
   test(
+    'direct snapshot hydration returns a reset packed full buffer',
+    () async {
+      final worker = await TerminalXtermWorker.start(cols: 20, rows: 6);
+      addTearDown(worker.close);
+
+      final snapshot =
+          '${List<String>.filled(128 * 1024, '\x1b[0m').join()}'
+          '\r\nsnapshot-marker\x1b[?2004h\x1b[?1000h';
+      final delta = await worker.hydrateSnapshotBufferDelta(
+        snapshot,
+        resetInteractionModes: true,
+      );
+
+      expect(delta.fullRepaint, isTrue);
+      expect(delta.rowDeltas, isNotEmpty);
+      expect(delta.bracketedPaste, isFalse);
+      expect(delta.mouseMode, MouseMode.none.index);
+      expect(
+        delta.rowDeltas.map((row) => row.text).join('\n'),
+        contains('snapshot-marker'),
+      );
+    },
+  );
+
+  test(
     'worker-owned xterm matches direct xterm through writes and resize',
     () async {
       final direct = _createDirectTerminal(

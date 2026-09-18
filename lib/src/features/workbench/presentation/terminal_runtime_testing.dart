@@ -66,6 +66,11 @@ void flushTerminalOutputForTesting(TerminalSessionHandle session) {
 }
 
 @visibleForTesting
+bool terminalOutputWriteInFlightForTesting(TerminalSessionHandle session) {
+  return (session as _XtermTerminalSessionHandle)._pump._writeInFlight;
+}
+
+@visibleForTesting
 bool terminalParserWorkerEnabledForTesting(TerminalSessionHandle session) {
   final handle = session as _XtermTerminalSessionHandle;
   return handle._parserWorkerEnabled &&

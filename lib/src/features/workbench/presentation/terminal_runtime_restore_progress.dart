@@ -30,6 +30,18 @@ extension _TerminalRestoreProgressTracking on _XtermTerminalSessionHandle {
     );
   }
 
+  void _completeRestoreProgress() {
+    if (_restoreTotalChars <= 0) {
+      return;
+    }
+    _restoreWrittenChars = _restoreTotalChars;
+    _restoreProgress.value = TerminalRestoreProgress(
+      writtenChars: _restoreTotalChars,
+      totalChars: _restoreTotalChars,
+    );
+    _finishRestore();
+  }
+
   /// Takes the restore overlay down and refreshes the rebuilt view next frame.
   ///
   /// Any path that empties the backlog without going through [_advanceRestore]
@@ -60,25 +72,25 @@ extension _TerminalRestoreProgressTracking on _XtermTerminalSessionHandle {
     });
   }
 
-  void _rebuildTerminalFromSnapshot(
+  bool _rebuildTerminalFromSnapshot(
     List<int> data, {
     required bool resetInteractionModes,
   }) {
     if (_disposed) {
-      return;
+      return false;
     }
-    _rebuildTerminalFromSnapshotText(
+    return _rebuildTerminalFromSnapshotText(
       const Utf8Decoder(allowMalformed: true).convert(data),
       resetInteractionModes: resetInteractionModes,
     );
   }
 
-  void _rebuildTerminalFromSnapshotText(
+  bool _rebuildTerminalFromSnapshotText(
     String restored, {
     required bool resetInteractionModes,
   }) {
     if (_disposed) {
-      return;
+      return false;
     }
     _clearPendingTerminalOutput();
     _resetParserWorkerBackend();
@@ -94,6 +106,12 @@ extension _TerminalRestoreProgressTracking on _XtermTerminalSessionHandle {
     _attachTerminal(nextTerminal);
     _attachSearchTerminal(nextTerminal);
     previousTerminal.dispose();
+    if (_hydrateParserWorkerSnapshot(
+      restored,
+      resetInteractionModes: resetInteractionModes,
+    )) {
+      return true;
+    }
     // Scrollback can reach the host's 10 MB cap. The production socket path
     // decodes it to text before it reaches the UI isolate; the legacy byte path
     // above remains for fallback adapters. Parsing is still frame-budgeted.
@@ -102,5 +120,6 @@ extension _TerminalRestoreProgressTracking on _XtermTerminalSessionHandle {
     if (resetInteractionModes) {
       _queueTerminalOutput(terminalInteractionModeReset, source: .control);
     }
+    return false;
   }
 }

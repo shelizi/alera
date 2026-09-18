@@ -171,6 +171,16 @@ Future<_RestoreSample> _measureRestore({
     final pendingLiveAtRestoreReady = pendingLiveTerminalOutputCharsForTesting(
       session,
     );
+    final pendingTotalAtRestoreReady = pendingTerminalOutputCharsForTesting(
+      session,
+    );
+    final revisionAtRestoreReady = terminalParserWorkerRevisionForTesting(
+      session,
+    );
+    final writeInFlightAtRestoreReady = terminalOutputWriteInFlightForTesting(
+      session,
+    );
+    final flushesAtRestoreReady = terminalOutputFlushCountForTesting(session);
     expect(sawProgress, isTrue);
     expect(accepted, isNotNull);
     expect(firstChunk, isNotNull);
@@ -186,6 +196,34 @@ Future<_RestoreSample> _measureRestore({
       await tester.pump(const Duration(milliseconds: 16));
       text = terminalBufferTextForTesting(session);
       liveOffset = text.indexOf(_liveMarker);
+    }
+    if (liveOffset < 0) {
+      final pendingLiveAtDeadline = pendingLiveTerminalOutputCharsForTesting(
+        session,
+      );
+      final pendingTotalAtDeadline = pendingTerminalOutputCharsForTesting(
+        session,
+      );
+      final revisionAtDeadline = terminalParserWorkerRevisionForTesting(
+        session,
+      );
+      final writeInFlightAtDeadline = terminalOutputWriteInFlightForTesting(
+        session,
+      );
+      final flushesAtDeadline = terminalOutputFlushCountForTesting(session);
+      debugPrint(
+        'T8D_RESTORE_DIAG '
+        'readyLive=$pendingLiveAtRestoreReady '
+        'readyTotal=$pendingTotalAtRestoreReady '
+        'readyRevision=$revisionAtRestoreReady '
+        'readyInFlight=$writeInFlightAtRestoreReady '
+        'readyFlushes=$flushesAtRestoreReady '
+        'deadlineLive=$pendingLiveAtDeadline '
+        'deadlineTotal=$pendingTotalAtDeadline '
+        'deadlineRevision=$revisionAtDeadline '
+        'deadlineInFlight=$writeInFlightAtDeadline '
+        'deadlineFlushes=$flushesAtDeadline',
+      );
     }
     expect(liveOffset, greaterThan(restoreOffset));
 
