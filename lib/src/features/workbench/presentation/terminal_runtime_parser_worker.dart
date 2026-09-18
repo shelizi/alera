@@ -14,24 +14,54 @@ extension _XtermTerminalParserWorker on _XtermTerminalSessionHandle {
       return false;
     }
     final generation = _parserWorkerGeneration;
+    _lastSnapshotHydrationProfile = null;
     _beginRestore(restored.length);
-    final command = _queueParserWorkerCommand(terminal, generation, (
-      worker,
-    ) async {
-      final delta = await worker.hydrateSnapshotBufferDelta(
-        restored,
-        resetInteractionModes: resetInteractionModes,
-      );
-      if (_disposed ||
-          generation != _parserWorkerGeneration ||
-          !identical(_terminal, terminal)) {
-        return;
-      }
-      _applyParserWorkerEffects(delta.effects);
-      terminal.applyBufferDelta(delta);
-      _completeRestoreProgress();
-      _completePointerInputDirectSnapshotHydration();
-    });
+    final command = _snapshotHydrationProfilingEnabled
+        ? _queueParserWorkerCommand(terminal, generation, (worker) async {
+            final hydrationWatch = Stopwatch()..start();
+            final queueAndStartupMicros = hydrationWatch.elapsedMicroseconds;
+            final profile = await worker.profileHydrateSnapshotBufferDelta(
+              restored,
+              resetInteractionModes: resetInteractionModes,
+            );
+            if (_disposed ||
+                generation != _parserWorkerGeneration ||
+                !identical(_terminal, terminal)) {
+              return;
+            }
+            final applyWatch = Stopwatch()..start();
+            _applyParserWorkerEffects(profile.delta.effects);
+            terminal.applyBufferDelta(profile.delta);
+            applyWatch.stop();
+            hydrationWatch.stop();
+            _lastSnapshotHydrationProfile = (
+              snapshotRevision: profile.delta.revision,
+              queueAndStartupMicros: queueAndStartupMicros,
+              workerParseMicros: profile.parseMicros,
+              workerMaterializeMicros: profile.materializeMicros,
+              workerRoundtripMicros: profile.rawRoundtripMicros,
+              decodeMicros: profile.decodeMicros,
+              uiApplyMicros: applyWatch.elapsedMicroseconds,
+              totalHydrationMicros: hydrationWatch.elapsedMicroseconds,
+            );
+            _completeRestoreProgress();
+            _completePointerInputDirectSnapshotHydration();
+          })
+        : _queueParserWorkerCommand(terminal, generation, (worker) async {
+            final delta = await worker.hydrateSnapshotBufferDelta(
+              restored,
+              resetInteractionModes: resetInteractionModes,
+            );
+            if (_disposed ||
+                generation != _parserWorkerGeneration ||
+                !identical(_terminal, terminal)) {
+              return;
+            }
+            _applyParserWorkerEffects(delta.effects);
+            terminal.applyBufferDelta(delta);
+            _completeRestoreProgress();
+            _completePointerInputDirectSnapshotHydration();
+          });
     _parserWorkerLastApply = command;
     unawaited(
       command.catchError((Object error, StackTrace stackTrace) {

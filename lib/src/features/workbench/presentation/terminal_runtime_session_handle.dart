@@ -9,6 +9,7 @@ class _XtermTerminalSessionHandle(
   final TerminalRuntimeRendererAdapterOwner _rendererAdapterOwner,
   final TerminalRuntimeLaunchInputOwner _launchInputOwner,
   final bool _parserWorkerEnabled,
+  final bool _snapshotHydrationProfilingEnabled,
   final void Function(TerminalRuntimeExitEvent event) _onExit,
   this._onVisibilityChanged,
 ) extends TerminalSessionHandle
@@ -73,6 +74,17 @@ class _XtermTerminalSessionHandle(
   Future<void>? _parserWorkerLastApply;
   bool _parserWorkerFocused = true;
   bool _parserWorkerReplicaNeedsSync = false;
+  ({
+    int snapshotRevision,
+    int queueAndStartupMicros,
+    int workerParseMicros,
+    int workerMaterializeMicros,
+    int workerRoundtripMicros,
+    int decodeMicros,
+    int uiApplyMicros,
+    int totalHydrationMicros,
+  })?
+  _lastSnapshotHydrationProfile;
   @override
   int _startAttempt = 0;
   int? _activePtyGeneration;

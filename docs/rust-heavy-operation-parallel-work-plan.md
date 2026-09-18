@@ -273,7 +273,7 @@ C4 proved the ownership boundary structurally and measured latency, but direct F
 | T7 | P1 gate | Post-T6 native Windows terminal render/restore/reveal profile | **Complete** | benchmark/evidence only |
 | S2 | P1 gate | CodeForge post-first-frame/lazy-init A/B | **Yes, profile/prototype first** | startup/readiness |
 | A3V | P1 validation | Windows production FRB validation for overlay reuse | **Yes** | validation only |
-| T8 | P1 | T8d direct worker snapshot hydration / restore redesign | **T8d COMPLETE; follow-up re-profile required** | terminal implementation |
+| T8 | P1 | T8d direct worker snapshot hydration / restore redesign | **T8d COMPLETE; post-profile selects T8e** | terminal implementation |
 | S3 | Evidence only | Startup implementation retained by S2 evidence | **No** | startup implementation |
 
 Four completely independent evidence lanes can start immediately: **C6P || T7 || S2 || A3V**. C6 implementation can begin its tests/design in parallel but should not lock in production scheduling policy until the C6P baseline is recorded.
@@ -457,6 +457,7 @@ T7 evidence collection is complete.
 
 Native restore dominates the measured terminal bottlenecks: 9.90 s median / 12.44 s p95 versus a 431.22 ms packed reveal median and a 97.23 ms native total-frame median. Per the decision tree, the next terminal implementation is **T8d: direct worker snapshot hydration / restore redesign**. Keep T8a (packed UI materialization) and T8c (renderer seam) deferred so the first T8 cut remains isolated and measurable.
 **2026-09-18 T8d status: COMPLETE.** Direct parser-worker snapshot hydration replaces the 16-64 KiB UI restore replay loop with one worker parse plus one packed full-buffer hydrate. Native Windows five-sample framework-ready latency improved from T7's 9.90 s median / 12.44 s p95 to **3.337 s median / 5.904 s p95** (about 66% / 53% lower), with 1/5 samples inside the 3 s target. Correctness coverage includes snapshot/live ordering, interaction reset, pointer suspension, stale pump-write invalidation, and stale parser-worker generation cancellation. The 3 s gate is not fully closed; re-profile the remaining worker parse/serialization vs UI materialization/apply vs renderer cost before selecting another T8 cut. See docs/t8d-terminal-direct-snapshot-hydration-report.md.
+**2026-09-18 post-T8d profile: COMPLETE.** Two clean native Windows five-sample runs measured framework-ready at **1.606 s median / 2.162 s p95** and **1.595 s median / 2.212 s p95**; all 10 clean samples were inside the 3 s target. Phase profiling shows worker-side xterm snapshot parse is the stable dominant cost at **0.946 s** and **0.921 s** median, while packed materialization/decode/UI apply are secondary and more variable. Select **T8e: worker snapshot parse fast path / structured retained snapshot** as the next terminal cut. Keep T8a/T8b/T8c deferred until post-T8e profiling. See `docs/t8-post-t8d-native-profile-report.md`.
 
 ## 8. S2 - CodeForge post-first-frame / lazy-init A/B gate
 

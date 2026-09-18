@@ -15,11 +15,16 @@ void main() {
       final snapshot =
           '${List<String>.filled(128 * 1024, '\x1b[0m').join()}'
           '\r\nsnapshot-marker\x1b[?2004h\x1b[?1000h';
-      final delta = await worker.hydrateSnapshotBufferDelta(
+      final profile = await worker.profileHydrateSnapshotBufferDelta(
         snapshot,
         resetInteractionModes: true,
       );
+      final delta = profile.delta;
 
+      expect(profile.parseMicros, greaterThanOrEqualTo(0));
+      expect(profile.materializeMicros, greaterThanOrEqualTo(0));
+      expect(profile.rawRoundtripMicros, greaterThanOrEqualTo(0));
+      expect(profile.decodeMicros, greaterThanOrEqualTo(0));
       expect(delta.fullRepaint, isTrue);
       expect(delta.rowDeltas, isNotEmpty);
       expect(delta.bracketedPaste, isFalse);

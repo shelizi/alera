@@ -7,6 +7,7 @@ class XtermTerminalRuntime._(
   final TerminalRuntimeLaunchInputOwner _launchInputOwner,
   final TerminalSessionCleanup? _terminalSessionCleanup,
   final bool _parserWorkerEnabled,
+  final bool _snapshotHydrationProfilingEnabled,
 ) implements TerminalRuntime, TerminalRuntimeSessionOwnerHost {
   factory({
     TerminalPtySessionFactory? ptySessionFactory,
@@ -22,6 +23,7 @@ class XtermTerminalRuntime._(
     TerminalRuntimeLaunchInputOwner? launchInputOwner,
     TerminalRuntimeRendererAdapterOwner? rendererAdapterOwner,
     bool parserWorkerEnabled = false,
+    bool snapshotHydrationProfilingEnabled = false,
   }) {
     var osc52BlockedNoticeShown = false;
     void notifyOsc52Blocked() {
@@ -60,6 +62,7 @@ class XtermTerminalRuntime._(
       resolvedLaunchInputOwner,
       terminalSessionCleanup,
       parserWorkerEnabled,
+      snapshotHydrationProfilingEnabled,
     );
   }
 
@@ -124,6 +127,7 @@ class XtermTerminalRuntime._(
       _rendererAdapterOwner,
       _launchInputOwner,
       _parserWorkerEnabled,
+      _snapshotHydrationProfilingEnabled,
       owner._handleSessionExit,
       owner._handleVisibilityChanged,
     );

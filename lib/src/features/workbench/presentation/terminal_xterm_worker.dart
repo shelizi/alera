@@ -12,6 +12,8 @@ const String _workerWrite = 'write';
 const String _workerWriteDelta = 'writeDelta';
 const String _workerWriteBufferDelta = 'writeBufferDelta';
 const String _workerHydrateSnapshotBufferDelta = 'hydrateSnapshotBufferDelta';
+const String _workerProfileHydrateSnapshotBufferDelta =
+    'profileHydrateSnapshotBufferDelta';
 const String _workerParseHidden = 'parseHidden';
 const String _workerSnapshotBufferDelta = 'snapshotBufferDelta';
 const String _workerProfileSnapshotBufferDelta = 'profileSnapshotBufferDelta';
@@ -703,6 +705,25 @@ final class TerminalXtermWorkerBufferDelta {
   final int cachedRowCount;
 }
 
+final class TerminalXtermWorkerSnapshotHydrationProfile {
+  const TerminalXtermWorkerSnapshotHydrationProfile({
+    required this.delta,
+    required this.parseMicros,
+    required this.materializeMicros,
+    required this.rawRoundtripMicros,
+    required this.decodeMicros,
+  });
+
+  final TerminalXtermWorkerBufferDelta delta;
+  final int parseMicros;
+  final int materializeMicros;
+  final int rawRoundtripMicros;
+  final int decodeMicros;
+
+  int get transferAndSchedulingMicros =>
+      rawRoundtripMicros - parseMicros - materializeMicros;
+}
+
 final class TerminalXtermWorkerBufferDeltaProfile {
   const TerminalXtermWorkerBufferDeltaProfile({
     required this.delta,
@@ -799,6 +820,32 @@ final class TerminalXtermWorker {
         snapshot,
         resetInteractionModes,
       ]),
+    );
+  }
+
+  Future<TerminalXtermWorkerSnapshotHydrationProfile>
+  profileHydrateSnapshotBufferDelta(
+    String snapshot, {
+    bool resetInteractionModes = false,
+  }) async {
+    final roundtripWatch = Stopwatch()..start();
+    final raw = await _requestRaw(<Object?>[
+      _workerProfileHydrateSnapshotBufferDelta,
+      snapshot,
+      resetInteractionModes,
+    ]);
+    roundtripWatch.stop();
+    final decodeWatch = Stopwatch()..start();
+    final delta = TerminalXtermWorkerBufferDelta._fromMessage(
+      List<Object?>.from(raw[2]! as List),
+    );
+    decodeWatch.stop();
+    return TerminalXtermWorkerSnapshotHydrationProfile(
+      delta: delta,
+      parseMicros: raw[0]! as int,
+      materializeMicros: raw[1]! as int,
+      rawRoundtripMicros: roundtripWatch.elapsedMicroseconds,
+      decodeMicros: decodeWatch.elapsedMicroseconds,
     );
   }
 
@@ -1607,6 +1654,25 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
           bufferLineRefs = null;
           bufferLineCaches = null;
           reply.send(packedFullBufferDelta());
+        case _workerProfileHydrateSnapshotBufferDelta:
+          effects.clear();
+          final parseWatch = Stopwatch()..start();
+          terminal.write(raw[2]! as String);
+          if (raw.length > 3 && raw[3] == true) {
+            terminal.write(terminalInteractionModeReset);
+          }
+          parseWatch.stop();
+          revision += 1;
+          bufferLineRefs = null;
+          bufferLineCaches = null;
+          final materializeWatch = Stopwatch()..start();
+          final message = packedFullBufferDelta();
+          materializeWatch.stop();
+          reply.send(<Object?>[
+            parseWatch.elapsedMicroseconds,
+            materializeWatch.elapsedMicroseconds,
+            message,
+          ]);
         case _workerParseHidden:
           effects.clear();
           if (raw.length > 3) {
