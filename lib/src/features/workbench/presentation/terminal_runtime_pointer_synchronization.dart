@@ -15,10 +15,13 @@ extension _TerminalPointerSynchronization on _XtermTerminalSessionHandle {
       return;
     }
 
-    // Switching tabs must not pause host delivery: otherwise a long-running
-    // inactive terminal can outgrow the host ring and fall back to a lossy
-    // snapshot. Only park delivery when the whole app leaves the foreground.
-    final paused = !_visibility.isAppForeground;
+    // Normal hidden tabs keep host delivery flowing so long-running shells do
+    // not outgrow the host ring. Once the buffer budget has evicted this tab's
+    // duplicate UI replica, however, the retained parser worker is a precise
+    // structured checkpoint. Park host delivery until reveal so reconnect can
+    // consume only the missed delta without paying a full ANSI reparse.
+    final paused =
+        !_visibility.isAppForeground || (_uiBufferEvicted && !_outputVisible);
     final pauseStateChanged = _ptyOutputPaused != paused;
     _pointerInputResumePending = _outputVisible && !paused && pauseStateChanged;
     _refreshPointerInputSuspension();

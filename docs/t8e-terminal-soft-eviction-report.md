@@ -109,3 +109,35 @@ If full hard eviction must also avoid reparsing the complete ANSI scrollback, pr
 4. fall back to the existing full ANSI snapshot when the cursor is outside the host ring or incompatible.
 
 That phase crosses the Flutter/Rust terminal-host protocol boundary and should remain a separate commit from T8e-P1.
+
+## T8e Phase 2 - Cursor-aware reconnect resume
+
+Status: **resume protocol complete**.
+
+Phase 2 keeps the Phase 1 parser worker as the authoritative structured terminal state, but changes what happens while that UI replica is softly evicted:
+
+1. the runtime parks terminal-host output for the evicted hidden session;
+2. the host pause reply returns the exact absolute output cursor actually delivered to that client;
+3. Dart retains that cursor only for the parked checkpoint;
+4. if the host attachment survives, reveal uses the existing host delta-resume path;
+5. if the attachment is lost while parked, `createOrAttach` sends `resumeCursor`;
+6. the Rust host accepts the cursor only when the complete gap is still in the scrollback ring and sends only that delta on the terminal lane;
+7. stale/future cursors, or terminal-lane backpressure while sending the gap, fail closed to the existing full ANSI snapshot.
+
+The absolute cursor is deliberately **not** retained for an ordinary visible attachment. Visible output continues to advance parser state, so an attachment-response cursor would immediately become stale and must not later be reused as a structured checkpoint.
+
+### Correctness and fallback boundary
+
+The reconnect delta is ordered ahead of the control reply by the existing sequenced terminal/control lanes. A pause reply records the delivered cursor after already accepted terminal frames; on reattach the host validates the cursor against `[ring_base, stream_end]`. If the range cannot be satisfied exactly, the client gets a full snapshot rather than a partial splice.
+
+This phase still does **not** destroy the parser worker. The packed worker snapshot is sufficient to rebuild the UI replica, but not yet sufficient to recreate every parser-semantic state needed to continue parsing arbitrary future bytes safely. Full worker hard eviction therefore remains deferred until xterm exposes/imports the required state, including SGR attributes, scrolling margins, saved cursor state, alternate-screen and interaction modes, and equivalent parser state.
+
+### Phase 2 validation
+
+- full `terminal_runtime_native_test.dart`: **136 passed, 2 Windows/POSIX platform skips**;
+- full `terminal_host_pty_session_test.dart`: **23/23 passed**;
+- soft-eviction park/reveal focused regression: PASS;
+- Rust `create_or_attach_*` cursor contracts: **3/3 passed**;
+- Rust output-resume contracts: **6/6 passed**;
+- touched-file Dart analyzer: no errors/warnings (one style-only info for a null-aware collection element);
+- `git diff --check --ignore-submodules=all`: clean.

@@ -9,6 +9,7 @@ Future<TerminalHostAttachment> _createOrAttachTerminal(
   required GhosttyTerminalShellLaunch launch,
   required int cols,
   required int rows,
+  int? resumeCursor,
 }) async {
   final payload = await client._terminalRequestMap(
     'createOrAttach',
@@ -20,6 +21,7 @@ Future<TerminalHostAttachment> _createOrAttachTerminal(
       launch: launch,
       cols: cols,
       rows: rows,
+      resumeCursor: resumeCursor,
     ),
   );
   return TerminalHostAttachment.fromJson(payload);
@@ -63,6 +65,7 @@ Map<String, Object?> _terminalAttachmentRequest({
   required GhosttyTerminalShellLaunch launch,
   required int cols,
   required int rows,
+  int? resumeCursor,
 }) {
   return <String, Object?>{
     'sessionId': sessionId,
@@ -77,5 +80,6 @@ Map<String, Object?> _terminalAttachmentRequest({
     ).toJson(),
     'cols': cols,
     'rows': rows,
+    if (resumeCursor != null) 'resumeCursor': resumeCursor,
   };
 }

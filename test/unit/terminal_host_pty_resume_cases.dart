@@ -44,6 +44,70 @@ void _registerTerminalHostPtyResumeTests() {
   });
 
   test(
+    'host PTY reattach reuses the cursor captured while output is parked',
+    () async {
+      final client =
+          FakeTerminalHostClient(
+              attachment: TerminalHostAttachment(
+                sessionId: 'session-1',
+                created: true,
+                running: true,
+                snapshot: Uint8List(0),
+              ),
+              attachments: <TerminalHostAttachment>[
+                TerminalHostAttachment(
+                  sessionId: 'session-1',
+                  created: true,
+                  running: true,
+                  snapshot: Uint8List(0),
+                ),
+                TerminalHostAttachment(
+                  sessionId: 'session-1',
+                  created: false,
+                  running: true,
+                  snapshot: Uint8List(0),
+                  isDelta: true,
+                  outputCursor: 52,
+                ),
+              ],
+            )
+            ..resume = TerminalHostResume(
+              isDelta: true,
+              snapshot: Uint8List(0),
+              outputCursor: 37,
+            );
+
+      final session = TerminalHostPtySession(
+        client: client,
+        sessionId: 'session-1',
+        workspaceId: 'workspace-1',
+        tabId: 'tab-1',
+      );
+      addTearDown(session.dispose);
+
+      await session.start(
+        launch: _launch(),
+        workingDirectory: '/repo',
+        cols: 80,
+        rows: 24,
+      );
+      await session.setOutputPaused(true);
+      client.outputPausedErrors.add(
+        StateError('Terminal session is not attached: session-1'),
+      );
+      await session.setOutputPaused(false);
+      await _flushAsync();
+
+      expect(client.attachCalls, hasLength(2));
+      expect(client.attachCalls.last.resumeCursor, 37);
+      expect(client.outputPaused, <(String, bool)>[
+        ('session-1', true),
+        ('session-1', false),
+      ]);
+    },
+  );
+
+  test(
     'host PTY session rebuilds when the host cannot serve a delta',
     () async {
       final client =

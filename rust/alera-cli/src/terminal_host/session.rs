@@ -334,6 +334,24 @@ impl Session {
             .insert(client_id, self.output_stream_bytes);
     }
 
+    /// Reattaches a client at an absolute output cursor retained by the app.
+    ///
+    /// The cursor is accepted only while the entire gap is still present in
+    /// the scrollback ring. A stale or future cursor must fall back to a full
+    /// snapshot rather than splice unrelated bytes into retained emulator
+    /// state.
+    pub fn attach_at_output_cursor(&mut self, client_id: u64, cursor: u64) -> bool {
+        let (base_cursor, end_cursor) = self.output_stream_range();
+        if !(base_cursor..=end_cursor).contains(&cursor) {
+            return false;
+        }
+        self.clients.insert(client_id);
+        self.output_paused_clients.remove(&client_id);
+        self.output_resync_pending_clients.remove(&client_id);
+        self.delivered_output_cursors.insert(client_id, cursor);
+        true
+    }
+
     pub fn attach_for_resync(&mut self, client_id: u64) {
         self.clients.insert(client_id);
         self.delivered_output_cursors.remove(&client_id);
@@ -370,7 +388,8 @@ impl Session {
             return false;
         }
 
-        let mut observed = Vec::with_capacity(self.conpty_startup_cursor_query_tail.len() + data.len());
+        let mut observed =
+            Vec::with_capacity(self.conpty_startup_cursor_query_tail.len() + data.len());
         observed.extend_from_slice(&self.conpty_startup_cursor_query_tail);
         observed.extend_from_slice(data);
         if observed.windows(QUERY.len()).any(|window| window == QUERY) {
@@ -450,6 +469,8 @@ impl Session {
             "running": self.running,
             "exitCode": self.exit_code,
             "driver": self.driver.payload(),
+            "delta": false,
+            "outputCursor": self.output_stream_bytes,
             "snapshotBase64": encode_bytes(&self.buffer.tail(restore_bytes)),
             // The size the snapshot bytes were written at. A client whose own
             // viewport is narrower has to replay them here and then resize,
@@ -457,6 +478,25 @@ impl Session {
             // stream at another width lands every absolute cursor move and hard
             // wrap in the wrong column. Additive: a client that ignores these
             // behaves exactly as it does today.
+            "snapshotCols": cols,
+            "snapshotRows": rows,
+        })
+    }
+
+    /// Attachment reply for a client whose retained emulator state is still
+    /// inside the host output ring. The actual gap is sent on the terminal lane
+    /// before this control reply so normal stream ordering is preserved.
+    pub fn delta_attachment_payload(&self, resumed: bool) -> Value {
+        let (cols, rows) = self.current_dims;
+        json!({
+            "sessionId": self.id,
+            "created": false,
+            "running": self.running,
+            "exitCode": self.exit_code,
+            "driver": self.driver.payload(),
+            "delta": true,
+            "resumed": resumed,
+            "outputCursor": self.output_stream_bytes,
             "snapshotCols": cols,
             "snapshotRows": rows,
         })

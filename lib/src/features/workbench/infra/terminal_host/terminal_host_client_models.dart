@@ -35,6 +35,7 @@ abstract interface class TerminalHostClient {
     required GhosttyTerminalShellLaunch launch,
     required int cols,
     required int rows,
+    int? resumeCursor,
   });
 
   Future<TerminalHostAttachment> restart({
@@ -116,6 +117,9 @@ final class const TerminalHostAttachment({
   required final Uint8List snapshot,
   final String? snapshotText,
   final int? exitCode,
+  final bool isDelta = false,
+  final bool resumed = true,
+  final int? outputCursor,
 }) {
   factory fromJson(Map<String, Object?> json) {
     final snapshotText = json['snapshotText'] as String?;
@@ -128,6 +132,11 @@ final class const TerminalHostAttachment({
           : Uint8List(0),
       snapshotText: snapshotText,
       exitCode: json['exitCode'] is int ? json['exitCode'] as int : null,
+      isDelta: json['delta'] == true,
+      resumed: json['resumed'] != false,
+      outputCursor: json['outputCursor'] is int
+          ? json['outputCursor'] as int
+          : null,
     );
   }
 
@@ -146,6 +155,7 @@ final class const TerminalHostResume({
   required final Uint8List snapshot,
   final String? snapshotText,
   final bool resetInteractionModes = false,
+  final int? outputCursor,
 }) {
   factory fromJson(Map<String, Object?> json) {
     final snapshotText = json['snapshotText'] as String?;
@@ -158,6 +168,9 @@ final class const TerminalHostResume({
           : Uint8List(0),
       snapshotText: snapshotText,
       resetInteractionModes: json['resetInteractionModes'] == true,
+      outputCursor: json['outputCursor'] is int
+          ? json['outputCursor'] as int
+          : null,
     );
   }
 

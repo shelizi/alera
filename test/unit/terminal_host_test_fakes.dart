@@ -26,6 +26,7 @@ final class FakeTerminalHostClient({
       String workingDirectory,
       int cols,
       int rows,
+      int? resumeCursor,
     })
   >
   attachCalls =
@@ -37,6 +38,7 @@ final class FakeTerminalHostClient({
           String workingDirectory,
           int cols,
           int rows,
+          int? resumeCursor,
         })
       >[];
   final List<List<int>> writes = <List<int>>[];
@@ -105,6 +107,7 @@ final class FakeTerminalHostClient({
     required GhosttyTerminalShellLaunch launch,
     required int cols,
     required int rows,
+    int? resumeCursor,
   }) async {
     attachCalls.add((
       sessionId: sessionId,
@@ -113,6 +116,7 @@ final class FakeTerminalHostClient({
       workingDirectory: workingDirectory,
       cols: cols,
       rows: rows,
+      resumeCursor: resumeCursor,
     ));
     attachedWorkingDirectory = workingDirectory;
     final gate = attachCalls.length == 1 ? attachCompleter : reattachCompleter;

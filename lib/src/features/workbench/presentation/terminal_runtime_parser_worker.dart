@@ -232,6 +232,7 @@ extension _XtermTerminalParserWorker on _XtermTerminalSessionHandle {
     _parserWorkerReplicaNeedsSync = true;
     _uiBufferEvicted = true;
     previousTerminal.dispose();
+    _syncPtyOutputVisibility();
     return true;
   }
 

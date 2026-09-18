@@ -124,6 +124,8 @@ void _registerTerminalBufferEvictionTests() {
       expect(terminalUiBufferEvictedForTesting(session), isTrue);
       expect(session.bufferUsage.bytes, 0);
       expect(pty.disposed, isFalse);
+      await _settleUntil(() => pty.outputPausedCalls.contains(true));
+      expect(pty.outputPausedCalls, contains(true));
       expect(
         terminalBufferTextForTesting(session),
         isNot(contains('before-soft-evict')),
@@ -138,8 +140,10 @@ void _registerTerminalBufferEvictionTests() {
       final restoredVisibility = acquireTerminalVisibilityForTesting(session);
       addTearDown(restoredVisibility.dispose);
       await waitForTerminalParserApplyForTesting(session);
+      await _settleUntil(() => pty.outputPausedCalls.contains(false));
 
       expect(terminalUiBufferEvictedForTesting(session), isFalse);
+      expect(pty.outputPausedCalls, <bool>[true, false]);
       expect(runtime.peekSession('tab-1'), same(session));
       expect(pty.disposed, isFalse);
       final restoredText = terminalBufferTextForTesting(session);
