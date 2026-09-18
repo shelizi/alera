@@ -53,6 +53,10 @@ extension _WorkspaceExplorerActions on _WorkspaceExplorerState {
         if (entry != null) {
           await _reveal(entry);
         }
+      case _ExplorerAction.openWithDefaultApplication:
+        if (entry != null && !_isDirectoryEntry(entry)) {
+          await _openWithDefaultApplication(entry);
+        }
       case _ExplorerAction.openExternally:
         final kind =
             _pickedExternalEditorKind ??
@@ -389,6 +393,22 @@ extension _WorkspaceExplorerActions on _WorkspaceExplorerState {
     }
     if (!result.ok) {
       _showError(result.message ?? 'Could not reveal item');
+    }
+  }
+
+  Future<void> _openWithDefaultApplication(
+    native.WorkspaceFileEntry entry,
+  ) async {
+    final result = await _folderOpener.openWithDefaultApplication(
+      _absolutePath(entry.relativePath),
+    );
+    if (!mounted) {
+      return;
+    }
+    if (!result.ok) {
+      _showError(
+        result.message ?? 'Could not open item with the default application',
+      );
     }
   }
 

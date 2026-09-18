@@ -207,6 +207,26 @@ void _registerWorkspaceExplorerActionTests() {
     expect(opener.revealedPaths, <String>[p.join('/repo/alera', 'readme.md')]);
   });
 
+  testWidgets('context menu opens files with the system default application', (
+    tester,
+  ) async {
+    final service = _FakeWorkspaceFileService()
+      ..childrenByDirectory[''] = <native.WorkspaceFileEntry>[
+        _file('readme.md'),
+      ];
+    final opener = _FakeWorkspaceFolderOpener();
+    await _pumpExplorer(tester, service, folderOpener: opener);
+
+    await tester.tap(find.text('readme.md'), buttons: kSecondaryMouseButton);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Open with Default Application'));
+    await tester.pumpAndSettle();
+
+    expect(opener.defaultOpenedPaths, <String>[
+      p.join('/repo/alera', 'readme.md'),
+    ]);
+  });
+
   testWidgets('context menu opens Explorer files and folders in Zed', (
     tester,
   ) async {

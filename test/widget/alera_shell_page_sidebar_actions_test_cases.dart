@@ -670,4 +670,39 @@ void _registerAleraShellSidebarActionTests() {
 
     expect(find.text('From Prompt'), findsOneWidget);
   });
+
+  testWidgets('project context menu sleeps every workspace in the project', (
+    tester,
+  ) async {
+    final runtime = _FakeTerminalRuntime();
+    final state = _linkedWorkbenchState(linkedExpanded: true);
+    final harness = await _pumpShell(
+      tester,
+      state: state,
+      terminalRuntime: runtime,
+    );
+    final project = state.projects.single;
+    final workspaces = state.workspacesFor(project.id);
+
+    await tester.tapAt(
+      tester.getCenter(find.text('Alera').last),
+      buttons: kSecondaryMouseButton,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Sleep Project'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Sleep Project?'), findsOneWidget);
+    expect(find.textContaining('all 2 workspaces'), findsOneWidget);
+    await tester.tap(find.widgetWithText(FilledButton, 'Sleep All'));
+    await tester.pumpAndSettle();
+
+    expect(
+      runtime.closedWorkspaceIds.toSet(),
+      containsAll(workspaces.map((workspace) => workspace.id)),
+    );
+    for (final workspace in workspaces) {
+      expect(harness.controller.state.tabsFor(workspace.id), isEmpty);
+    }
+  });
 }

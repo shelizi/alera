@@ -133,6 +133,7 @@ class _ProjectWorkbenchSidebarState
                                 onOpenWorkspaceInBrowser:
                                     openWorkspaceInBrowser,
                                 onSleepWorkspace: sleepWorkspace,
+                                onSleepProject: sleepProject,
                                 onArchiveWorkspace: archiveWorkspace,
                                 onRestoreWorkspace: restoreWorkspace,
                                 onCreateWorkspace: _createWorkspace,

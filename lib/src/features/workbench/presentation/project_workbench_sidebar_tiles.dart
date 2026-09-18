@@ -109,6 +109,7 @@ class const _ProjectHeaderTile({
   required final VoidCallback? onCreateWorkspace,
   final VoidCallback? onRefreshWorktrees,
   required final VoidCallback onOpenProjectSettings,
+  required final VoidCallback onSleepProject,
   required final VoidCallback onRenameProject,
   required final VoidCallback onRemoveProject,
 }) extends StatefulWidget {
@@ -160,6 +161,11 @@ class _ProjectHeaderTileState extends State<_ProjectHeaderTile> {
             leading: Icon(AleraIcons.refresh, size: 16),
             label: 'Refresh Worktrees',
           ),
+        const AleraDropdownEntry<String>(
+          value: 'sleep-project',
+          leading: Icon(AleraIcons.theme, size: 16),
+          label: 'Sleep Project',
+        ),
         const PopupMenuDivider(height: AleraTokens.space8),
         const AleraDropdownEntry<String>(
           value: 'remove',
@@ -176,6 +182,8 @@ class _ProjectHeaderTileState extends State<_ProjectHeaderTile> {
       widget.onCreateWorkspace?.call();
     } else if (selected == 'refresh-worktrees') {
       widget.onRefreshWorktrees?.call();
+    } else if (selected == 'sleep-project') {
+      widget.onSleepProject();
     } else if (selected == 'remove') {
       widget.onRemoveProject();
     }

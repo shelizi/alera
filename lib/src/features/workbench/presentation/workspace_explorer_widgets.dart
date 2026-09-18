@@ -325,6 +325,12 @@ class const _ExplorerMenuDelegate({
             label: 'Reveal in $fileManagerLabel',
             leading: const Icon(AleraIcons.external, size: 16),
           ),
+          if (node.type == tree.NodeType.file)
+            const AleraDropdownEntry<_ExplorerAction>(
+              value: .openWithDefaultApplication,
+              label: 'Open with Default Application',
+              leading: Icon(AleraIcons.external, size: 16),
+            ),
           if (externalEditor case final editor?)
             AleraDropdownSubmenuEntry<_ExplorerAction, ExternalEditorKind>(
               primaryValue: .openExternally,
@@ -485,6 +491,7 @@ enum _ExplorerAction {
   copyRelativePath,
   duplicate,
   reveal,
+  openWithDefaultApplication,
   openExternally,
   openInAlera,
   delete,

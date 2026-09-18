@@ -17,6 +17,7 @@ class const _SidebarBody({
   required final Future<void> Function(Workspace workspace)
   onOpenWorkspaceInBrowser,
   required final Future<void> Function(Workspace workspace) onSleepWorkspace,
+  required final Future<void> Function(Project project) onSleepProject,
   required final Future<void> Function(Workspace workspace) onArchiveWorkspace,
   required final Future<void> Function(Workspace workspace) onRestoreWorkspace,
   required final Future<void> Function(Project project) onCreateWorkspace,
@@ -152,6 +153,7 @@ class const _SidebarBody({
               : null,
           onOpenProjectSettings: () =>
               unawaited(onOpenProjectSettings(row.project)),
+          onSleepProject: () => unawaited(onSleepProject(row.project)),
           onRenameProject: () => onRenameProject(row.project),
           onRemoveProject: () => onRemoveProject(row.project),
         ),

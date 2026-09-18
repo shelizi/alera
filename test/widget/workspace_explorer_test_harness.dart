@@ -156,10 +156,19 @@ class _FakeWorkspaceFolderOpener() extends WorkspaceFolderOpener {
   this : super(processRunner: _NoopProcessRunner(), platform: .macos);
 
   final List<String> revealedPaths = <String>[];
+  final List<String> defaultOpenedPaths = <String>[];
 
   @override
   Future<WorkspaceFolderOpenResult> reveal(String path) async {
     revealedPaths.add(path);
+    return const WorkspaceFolderOpenResult.success();
+  }
+
+  @override
+  Future<WorkspaceFolderOpenResult> openWithDefaultApplication(
+    String path,
+  ) async {
+    defaultOpenedPaths.add(path);
     return const WorkspaceFolderOpenResult.success();
   }
 }

@@ -105,6 +105,37 @@ class WorkspaceFolderOpener({
     );
   }
 
+  Future<WorkspaceFolderOpenResult> openWithDefaultApplication(
+    String path,
+  ) async {
+    final normalized = path.trim();
+    if (normalized.isEmpty) {
+      return const WorkspaceFolderOpenResult.failure('Path is empty.');
+    }
+    final entityType = await _entityType(normalized);
+    if (entityType == FileSystemEntityType.notFound) {
+      return const WorkspaceFolderOpenResult.failure('Path was not found.');
+    }
+
+    final commands = _defaultApplicationCommandsForPlatform(normalized);
+    for (final command in commands) {
+      try {
+        final result = await processRunner.run(
+          command.executable,
+          command.arguments,
+        );
+        if (result.exitCode == 0) {
+          return const WorkspaceFolderOpenResult.success();
+        }
+      } catch (_) {
+        continue;
+      }
+    }
+    return const WorkspaceFolderOpenResult.failure(
+      'Could not open item with the system default application.',
+    );
+  }
+
   List<_WorkspaceFolderOpenCommand> _commandsForPlatform(String path) {
     switch (_platform) {
       case WorkspaceFolderPlatform.macos:
@@ -156,6 +187,33 @@ class WorkspaceFolderOpener({
         final target = _fileManagerTargetForReveal(path);
         return <_WorkspaceFolderOpenCommand>[
           _WorkspaceFolderOpenCommand('xdg-open', <String>[target]),
+        ];
+    }
+  }
+
+  List<_WorkspaceFolderOpenCommand> _defaultApplicationCommandsForPlatform(
+    String path,
+  ) {
+    switch (_platform) {
+      case WorkspaceFolderPlatform.macos:
+        return <_WorkspaceFolderOpenCommand>[
+          _WorkspaceFolderOpenCommand('open', <String>[path]),
+        ];
+      case WorkspaceFolderPlatform.windows:
+        return <_WorkspaceFolderOpenCommand>[
+          _WorkspaceFolderOpenCommand('rundll32.exe', <String>[
+            'url.dll,FileProtocolHandler',
+            _windowsExplorerPath(path),
+          ]),
+        ];
+      case WorkspaceFolderPlatform.linux:
+        return <_WorkspaceFolderOpenCommand>[
+          _WorkspaceFolderOpenCommand('xdg-open', <String>[path]),
+          _WorkspaceFolderOpenCommand('gio', <String>['open', path]),
+        ];
+      case WorkspaceFolderPlatform.other:
+        return <_WorkspaceFolderOpenCommand>[
+          _WorkspaceFolderOpenCommand('xdg-open', <String>[path]),
         ];
     }
   }

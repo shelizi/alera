@@ -412,6 +412,75 @@ void main() {
     },
   );
 
+  test('opens a file with the default app on macOS', () async {
+    final processRunner = _FakeProcessRunner();
+    final opener = WorkspaceFolderOpener(
+      processRunner: processRunner,
+      platform: .macos,
+      entityType: (_) async => FileSystemEntityType.file,
+    );
+
+    final result = await opener.openWithDefaultApplication('/repo/readme.md');
+
+    expect(result.ok, isTrue);
+    expect(processRunner.calls, <_ProcessCall>[
+      const _ProcessCall('open', <String>['/repo/readme.md']),
+    ]);
+  });
+
+  test('opens a file with the default app on Windows', () async {
+    final processRunner = _FakeProcessRunner();
+    final opener = WorkspaceFolderOpener(
+      processRunner: processRunner,
+      platform: .windows,
+      entityType: (_) async => FileSystemEntityType.file,
+    );
+
+    final result = await opener.openWithDefaultApplication(
+      'C:/repo/My File.txt',
+    );
+
+    expect(result.ok, isTrue);
+    expect(processRunner.calls, <_ProcessCall>[
+      const _ProcessCall('rundll32.exe', <String>[
+        'url.dll,FileProtocolHandler',
+        r'C:\repo\My File.txt',
+      ]),
+    ]);
+  });
+
+  test('falls back to gio for default app opening on Linux', () async {
+    final processRunner = _FakeProcessRunner(exitCodes: <int>[1, 0]);
+    final opener = WorkspaceFolderOpener(
+      processRunner: processRunner,
+      platform: .linux,
+      entityType: (_) async => FileSystemEntityType.file,
+    );
+
+    final result = await opener.openWithDefaultApplication('/repo/readme.md');
+
+    expect(result.ok, isTrue);
+    expect(processRunner.calls, <_ProcessCall>[
+      const _ProcessCall('xdg-open', <String>['/repo/readme.md']),
+      const _ProcessCall('gio', <String>['open', '/repo/readme.md']),
+    ]);
+  });
+
+  test('does not launch a missing path with the default app', () async {
+    final processRunner = _FakeProcessRunner();
+    final opener = WorkspaceFolderOpener(
+      processRunner: processRunner,
+      platform: .linux,
+      entityType: (_) async => FileSystemEntityType.notFound,
+    );
+
+    final result = await opener.openWithDefaultApplication('/repo/missing.txt');
+
+    expect(result.ok, isFalse);
+    expect(result.message, 'Path was not found.');
+    expect(processRunner.calls, isEmpty);
+  });
+
   test(
     'detects the current workspace-folder platform for this environment',
     () {

@@ -332,6 +332,64 @@ mixin _WorkspaceSidebarActions on ConsumerState<ProjectWorkbenchSidebar> {
     }
   }
 
+  Future<void> sleepProject(Project project) async {
+    final state = ref.read(workbenchControllerProvider);
+    final workspaces = state.workspacesFor(project.id);
+    if (workspaces.isEmpty) {
+      return;
+    }
+
+    final editorRegistry = ref.read(editorSessionRegistryProvider);
+    final dirtyEditorCount = workspaces
+        .expand((workspace) => state.tabsFor(workspace.id))
+        .where((tab) => editorRegistry.isDirty(tab.id))
+        .length;
+    final dirtyWarning = dirtyEditorCount == 0
+        ? ''
+        : dirtyEditorCount == 1
+        ? ' One editor has unsaved changes that will be discarded.'
+        : ' $dirtyEditorCount editors have unsaved changes that will be discarded.';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AleraConfirmDialog(
+        title: 'Sleep Project?',
+        message:
+            'This closes all tabs and terminal sessions for all ${workspaces.length} '
+            'workspaces in "${project.name}". Worktrees, branches, and files will '
+            'be preserved.$dirtyWarning',
+        confirmLabel: 'Sleep All',
+        destructive: true,
+      ),
+    );
+    if (confirmed != true || !mounted) {
+      return;
+    }
+
+    try {
+      final controller = ref.read(workbenchControllerProvider.notifier);
+      for (final workspace in workspaces) {
+        await controller.sleepWorkspace(workspace);
+      }
+      if (!mounted) {
+        return;
+      }
+      AleraToast.show(
+        context,
+        message: 'Project workspaces slept',
+        tone: .success,
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      AleraToast.show(
+        context,
+        message: 'Could not sleep project: $error',
+        tone: .error,
+      );
+    }
+  }
+
   Future<void> archiveWorkspace(Workspace workspace) async {
     if (workspace.isMain || workspace.isArchived) {
       return;
