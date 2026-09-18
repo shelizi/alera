@@ -248,6 +248,15 @@ mixin _WorkbenchControllerViewPrefs
     _updateViewPrefs(state.viewPrefs.copyWith(showHiddenFiles: show));
   }
 
+  void setQuickOpenIncludeGitignored(bool include) {
+    if (state.viewPrefs.quickOpenIncludeGitignored == include) {
+      return;
+    }
+    _updateViewPrefs(
+      state.viewPrefs.copyWith(quickOpenIncludeGitignored: include),
+    );
+  }
+
   void setActiveContextPanelTab(WorkbenchContextPanelTab tab) {
     setContextPanelTab(tab);
   }

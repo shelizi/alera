@@ -106,9 +106,49 @@ void _registerSettingsDialogEditorTests() {
     expect(find.text('自訂 Zed 執行檔'), findsOneWidget);
     expect(find.text('自動在外部編輯器開啟新工作區'), findsOneWidget);
     expect(find.text('檢查 Zed'), findsWidgets);
+    expect(find.textContaining('本機命令環境中的 zed 指令'), findsOneWidget);
+  });
+
+  testWidgets('edits and restores Quick Open excluded directories', (
+    tester,
+  ) async {
+    final container = await _pumpSettingsDialog(
+      tester,
+      initialSectionId: 'editor',
+    );
+
+    await tester.ensureVisible(find.text('Quick Open'));
+    await tester.pump();
+    expect(find.text('bin'), findsOneWidget);
+    expect(find.text('obj'), findsOneWidget);
+    expect(find.text('.vs'), findsOneWidget);
+
+    await tester.enterText(
+      find.byKey(const ValueKey<String>('quick-open-excluded-directory-input')),
+      'generated',
+    );
+    await tester.tap(
+      find.byKey(const ValueKey<String>('quick-open-excluded-directory-add')),
+    );
+    await tester.pump(const Duration(milliseconds: 50));
     expect(
-      find.textContaining('本機命令環境中的 zed 指令'),
-      findsOneWidget,
+      container
+          .read(settingsControllerProvider)
+          .editor
+          .quickOpenExcludedDirectories,
+      contains('generated'),
+    );
+
+    await tester.tap(
+      find.byKey(const ValueKey<String>('quick-open-excluded-directory-reset')),
+    );
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(
+      container
+          .read(settingsControllerProvider)
+          .editor
+          .quickOpenExcludedDirectories,
+      EditorSettings.defaultQuickOpenExcludedDirectories,
     );
   });
 }

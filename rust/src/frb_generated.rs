@@ -4314,6 +4314,7 @@ fn wire__crate__api__workspace_files__search_workspace_quick_open_session_impl(
             );
             let api_query = <String>::sse_decode(&mut deserializer);
             let api_limit = <u32>::sse_decode(&mut deserializer);
+            let api_include_gitignored = <bool>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, crate::api::workspace_files::WorkspaceFileError>(
@@ -4323,6 +4324,7 @@ fn wire__crate__api__workspace_files__search_workspace_quick_open_session_impl(
                                 api_session,
                                 api_query,
                                 api_limit,
+                                api_include_gitignored,
                             )?;
                         std::result::Result::Ok(output_ok)
                     })(),
@@ -4571,6 +4573,7 @@ fn wire__crate__api__workspace_files__start_workspace_quick_open_session_impl(
             let mut deserializer =
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             let api_workspace_path = <String>::sse_decode(&mut deserializer);
+            let api_excluded_directories = <Vec<String>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, crate::api::workspace_files::WorkspaceFileError>(
@@ -4578,6 +4581,7 @@ fn wire__crate__api__workspace_files__start_workspace_quick_open_session_impl(
                         let output_ok =
                             crate::api::workspace_files::start_workspace_quick_open_session(
                                 api_workspace_path,
+                                api_excluded_directories,
                             )?;
                         std::result::Result::Ok(output_ok)
                     })(),

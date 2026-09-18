@@ -90,6 +90,7 @@ class const WorkbenchViewPrefs({
   this.activeContextPanelTab = WorkbenchContextPanelTab.explorer,
   this.explorerMode = WorkspaceExplorerMode.hideIgnored,
   this.showHiddenFiles = false,
+  this.quickOpenIncludeGitignored = false,
   this.gitDiffViewMode = GitDiffViewMode.tree,
   this.gitDiffGroupMode = GitDiffGroupMode.byArea,
   this.gitDiffContentMode = GitDiffContentMode.fullFile,
@@ -156,6 +157,10 @@ class const WorkbenchViewPrefs({
   /// workspace tree until the user explicitly reveals them.
   final bool showHiddenFiles;
 
+  /// Whether Quick Open indexes files excluded by Git ignore rules. This is
+  /// sticky across launches so repeated searches keep the user's choice.
+  final bool quickOpenIncludeGitignored;
+
   final GitDiffViewMode gitDiffViewMode;
 
   /// Whether Source Control groups files by staged state or shows one list.
@@ -203,6 +208,7 @@ class const WorkbenchViewPrefs({
     activeContextPanelTab: .explorer,
     explorerMode: .hideIgnored,
     showHiddenFiles: false,
+    quickOpenIncludeGitignored: false,
     gitDiffViewMode: .tree,
     gitDiffGroupMode: .byArea,
     gitDiffContentMode: .fullFile,

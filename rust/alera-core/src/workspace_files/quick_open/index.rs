@@ -169,6 +169,7 @@ fn sort_and_deduplicate_matches(matches: &mut Vec<SegmentMatch>) {
 #[derive(Debug)]
 pub(super) struct QuickOpenFile {
     pub(super) relative_path: String,
+    pub(super) is_gitignored: bool,
     pub(super) normalized_path: String,
     pub(super) normalized_segment_ranges: Vec<(usize, usize)>,
     pub(super) normalized_code_units: Vec<u16>,
@@ -176,13 +177,19 @@ pub(super) struct QuickOpenFile {
 }
 
 impl QuickOpenFile {
+    #[cfg(test)]
     pub(super) fn new(relative_path: String) -> Self {
+        Self::with_gitignored(relative_path, false)
+    }
+
+    pub(super) fn with_gitignored(relative_path: String, is_gitignored: bool) -> Self {
         let normalized_path = relative_path.to_lowercase();
         let normalized_segment_ranges = segment_ranges(&normalized_path);
         let normalized_code_units = normalized_path.encode_utf16().collect::<Vec<_>>();
         let normalized_character_counts = character_counts(&normalized_code_units);
         Self {
             relative_path,
+            is_gitignored,
             normalized_path,
             normalized_segment_ranges,
             normalized_code_units,

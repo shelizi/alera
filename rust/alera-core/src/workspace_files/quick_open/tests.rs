@@ -9,11 +9,34 @@ use std::time::{Duration, Instant};
 use super::*;
 
 fn start(workspace: &tempfile::TempDir) -> WorkspaceQuickOpenSession {
-    start_workspace_quick_open_session(workspace.path().to_string_lossy().into_owned()).unwrap()
+    start_with_exclusions(workspace, Vec::new())
+}
+
+fn start_with_exclusions(
+    workspace: &tempfile::TempDir,
+    excluded_directories: Vec<String>,
+) -> WorkspaceQuickOpenSession {
+    start_workspace_quick_open_session(
+        workspace.path().to_string_lossy().into_owned(),
+        excluded_directories,
+    )
+    .unwrap()
 }
 
 fn paths(session: &WorkspaceQuickOpenSession, query: &str, limit: u32) -> Vec<String> {
-    search_workspace_quick_open_session(session.clone(), query.to_string(), limit)
+    search_workspace_quick_open_session(session.clone(), query.to_string(), limit, false)
+        .unwrap()
+        .into_iter()
+        .map(|item| item.relative_path)
+        .collect()
+}
+
+fn paths_including_gitignored(
+    session: &WorkspaceQuickOpenSession,
+    query: &str,
+    limit: u32,
+) -> Vec<String> {
+    search_workspace_quick_open_session(session.clone(), query.to_string(), limit, true)
         .unwrap()
         .into_iter()
         .map(|item| item.relative_path)
@@ -32,6 +55,105 @@ fn indexes_and_ranks_workspace_files() {
 }
 
 #[test]
+fn indexes_gitignored_files_once_and_filters_them_at_query_time() {
+    let workspace = tempfile::tempdir().unwrap();
+    fs::write(workspace.path().join(".gitignore"), "ignored.txt\n").unwrap();
+    fs::write(workspace.path().join("visible.txt"), "visible").unwrap();
+    fs::write(workspace.path().join("ignored.txt"), "ignored").unwrap();
+
+    let session = start(&workspace);
+    assert!(!paths(&session, "ignored", 20).contains(&"ignored.txt".to_string()));
+    assert!(
+        paths_including_gitignored(&session, "ignored", 20).contains(&"ignored.txt".to_string())
+    );
+    stop_workspace_quick_open_session(session);
+}
+
+#[test]
+fn never_indexes_common_dependency_directories() {
+    let workspace = tempfile::tempdir().unwrap();
+    for relative in [
+        "node_modules/pkg/index.js",
+        ".dart_tool/package_config.json",
+        "vendor/package/file.php",
+        "vendor-bin/phpunit/vendor/bin/phpunit",
+        ".phpunit.cache/test-results",
+        "coverage/index.html",
+        "Pods/Library/file.m",
+        ".gradle/cache.bin",
+        ".venv/lib/site.py",
+        "target/debug/app.exe",
+        "bin/Debug/app.dll",
+        "obj/project.assets.json",
+        ".vs/cache/file.bin",
+        "packages/Newtonsoft.Json/file.dll",
+        "TestResults/results.trx",
+        "BenchmarkDotNet.Artifacts/results/report.md",
+        "artifacts/bin/app.dll",
+    ] {
+        let path = workspace.path().join(relative);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, relative).unwrap();
+    }
+    fs::create_dir_all(workspace.path().join("src")).unwrap();
+    fs::write(workspace.path().join("src/main.rs"), "fn main() {}").unwrap();
+
+    let session = start_with_exclusions(
+        &workspace,
+        [
+            "node_modules",
+            ".dart_tool",
+            "vendor",
+            "vendor-bin",
+            ".phpunit.cache",
+            "coverage",
+            "Pods",
+            ".gradle",
+            ".venv",
+            "target",
+            "bin",
+            "obj",
+            ".vs",
+            "packages",
+            "TestResults",
+            "BenchmarkDotNet.Artifacts",
+            "artifacts",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect(),
+    );
+    let indexed = paths_including_gitignored(&session, "", 100);
+
+    assert!(indexed.contains(&"src/main.rs".to_string()));
+    for excluded in [
+        "node_modules/pkg/index.js",
+        ".dart_tool/package_config.json",
+        "vendor/package/file.php",
+        "vendor-bin/phpunit/vendor/bin/phpunit",
+        ".phpunit.cache/test-results",
+        "coverage/index.html",
+        "Pods/Library/file.m",
+        ".gradle/cache.bin",
+        ".venv/lib/site.py",
+        "target/debug/app.exe",
+        "bin/Debug/app.dll",
+        "obj/project.assets.json",
+        ".vs/cache/file.bin",
+        "packages/Newtonsoft.Json/file.dll",
+        "TestResults/results.trx",
+        "BenchmarkDotNet.Artifacts/results/report.md",
+        "artifacts/bin/app.dll",
+    ] {
+        assert!(
+            !indexed.contains(&excluded.to_string()),
+            "indexed {excluded}"
+        );
+    }
+    stop_workspace_quick_open_session(session);
+}
+
+#[test]
 fn preserves_exact_path_segment_ranking() {
     let workspace = tempfile::tempdir().unwrap();
     for relative in [
@@ -45,7 +167,8 @@ fn preserves_exact_path_segment_ranking() {
         fs::write(path, relative).unwrap();
     }
     let session = start(&workspace);
-    let matches = search_workspace_quick_open_session(session.clone(), "src".into(), 20).unwrap();
+    let matches =
+        search_workspace_quick_open_session(session.clone(), "src".into(), 20, false).unwrap();
     assert_eq!(matches[0].relative_path, "src/file.dart");
     assert_eq!(matches[0].score, 90_000);
     assert_eq!(matches[1].relative_path, "lib/src/other.dart");
@@ -81,7 +204,8 @@ fn fuzzy_scoring_prefers_path_boundaries_and_contiguous_matches() {
     fs::write(workspace.path().join("farboo.txt"), "gap").unwrap();
     let session = start(&workspace);
 
-    let matches = search_workspace_quick_open_session(session.clone(), "fb".into(), 20).unwrap();
+    let matches =
+        search_workspace_quick_open_session(session.clone(), "fb".into(), 20, false).unwrap();
 
     assert_eq!(matches[0].relative_path, "foo/bar.txt");
     assert_eq!(matches[1].relative_path, "farboo.txt");
@@ -155,6 +279,7 @@ fn strict_sessions_exclude_all_file_symlinks() {
     }
     let session = start_workspace_quick_open_session_without_symlinks(
         workspace.path().to_string_lossy().into_owned(),
+        Vec::new(),
     )
     .expect("start strict session");
     let indexed = paths(&session, "", 20);
@@ -262,7 +387,9 @@ fn returns_a_bounded_partial_index_when_budgets_are_exhausted() {
         fs::write(workspace.path().join(relative), relative).unwrap();
     }
 
-    let files = collect_quick_open_files(workspace.path(), 2, usize::MAX, true).unwrap();
+    let exclusions = QuickOpenExclusions::new(Vec::new());
+    let files =
+        collect_quick_open_files(workspace.path(), 2, usize::MAX, true, &exclusions).unwrap();
     assert_eq!(
         files
             .iter()
@@ -271,7 +398,8 @@ fn returns_a_bounded_partial_index_when_budgets_are_exhausted() {
         ["one.txt", "three.txt"]
     );
 
-    let files = collect_quick_open_files(workspace.path(), usize::MAX, 8, true).unwrap();
+    let files =
+        collect_quick_open_files(workspace.path(), usize::MAX, 8, true, &exclusions).unwrap();
     assert!(files.len() <= 1);
     assert!(files.iter().all(|file| file.relative_path.len() <= 8));
 }
@@ -320,7 +448,9 @@ fn keeps_accessible_files_when_a_nested_directory_is_unreadable() {
     fs::write(denied.join("hidden.txt"), "hidden").unwrap();
     fs::set_permissions(&denied, fs::Permissions::from_mode(0o0)).unwrap();
 
-    let result = collect_quick_open_files(workspace.path(), usize::MAX, usize::MAX, true);
+    let exclusions = QuickOpenExclusions::new(Vec::new());
+    let result =
+        collect_quick_open_files(workspace.path(), usize::MAX, usize::MAX, true, &exclusions);
 
     fs::set_permissions(&denied, fs::Permissions::from_mode(0o700)).unwrap();
     let files = result.unwrap();

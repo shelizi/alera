@@ -220,16 +220,24 @@ void main() {
         (editor) => editor.copyWith(
           tabSize: 2,
           themeName: EditorSyntaxThemeNames.monokai,
+          quickOpenExcludedDirectories: <String>['generated'],
         ),
       );
       var restored = await repository.load();
       expect(restored.editor.tabSize, 2);
       expect(restored.editor.themeName, EditorSyntaxThemeNames.monokai);
+      expect(restored.editor.quickOpenExcludedDirectories, <String>[
+        'generated',
+      ]);
 
       await controller.resetEditorSettings();
       restored = await repository.load();
       expect(restored.editor.tabSize, EditorSettings.defaults.tabSize);
       expect(restored.editor.themeName, EditorSettings.defaults.themeName);
+      expect(
+        restored.editor.quickOpenExcludedDirectories,
+        EditorSettings.defaultQuickOpenExcludedDirectories,
+      );
     });
 
     test('persists keyboard binding changes and reset', () async {

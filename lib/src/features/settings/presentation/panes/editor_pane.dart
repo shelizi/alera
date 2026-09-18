@@ -1,7 +1,9 @@
 import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
+import 'package:alera/src/design_system/chips/alera_chip.dart';
 import 'package:alera/src/design_system/feedback/alera_empty_state.dart';
 import 'package:alera/src/design_system/forms/alera_search_field.dart';
+import 'package:alera/src/design_system/forms/alera_text_field.dart';
 import 'package:alera/src/design_system/layout/alera_settings_group.dart';
 import 'package:alera/src/design_system/menus/alera_menu_item.dart';
 import 'package:alera/src/design_system/surfaces/alera_panel.dart';
@@ -83,8 +85,152 @@ class const EditorSettingsPane({
           ],
         ),
         const SizedBox(height: AleraTokens.space16),
+        AleraSettingsGroup(
+          title: 'Quick Open',
+          description: 'Control dependency and build directories that Quick Open never indexes.',
+          children: <Widget>[
+            _QuickOpenExcludedDirectoriesSetting(
+              value: settings.quickOpenExcludedDirectories,
+              onChanged: (value) => onChanged(
+                (settings) =>
+                    settings.copyWith(quickOpenExcludedDirectories: value),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: AleraTokens.space16),
         ExternalEditorSettingsGroup(settings: settings, onChanged: onChanged),
       ],
+    );
+  }
+}
+
+class const _QuickOpenExcludedDirectoriesSetting({
+  required final List<String> value,
+  required final ValueChanged<List<String>> onChanged,
+}) extends StatefulWidget {
+  @override
+  State<_QuickOpenExcludedDirectoriesSetting> createState() =>
+      _QuickOpenExcludedDirectoriesSettingState();
+}
+
+class _QuickOpenExcludedDirectoriesSettingState
+    extends State<_QuickOpenExcludedDirectoriesSetting> {
+  final TextEditingController _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _add() {
+    final value = _controller.text.trim();
+    if (value.isEmpty || value.contains('/') || value.contains(r'\')) {
+      return;
+    }
+    final normalized = value.toLowerCase();
+    if (widget.value.any((item) => item.toLowerCase() == normalized)) {
+      _controller.clear();
+      return;
+    }
+    widget.onChanged(<String>[...widget.value, value]);
+    _controller.clear();
+  }
+
+  void _remove(String value) {
+    widget.onChanged(
+      widget.value.where((item) => item != value).toList(growable: false),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.all(AleraTokens.space16),
+      child: Column(
+        crossAxisAlignment: .stretch,
+        children: <Widget>[
+          Text(
+            context.tr('Excluded Directory Names'),
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: AleraTokens.foreground,
+              fontWeight: .w500,
+            ),
+          ),
+          const SizedBox(height: AleraTokens.space4),
+          Text(
+            context.tr(
+              'These directory names are never indexed, even when Git-ignored files are included. Matching is case-insensitive.',
+            ),
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: AleraTokens.foregroundMuted,
+            ),
+          ),
+          const SizedBox(height: AleraTokens.space12),
+          Wrap(
+            spacing: AleraTokens.space6,
+            runSpacing: AleraTokens.space6,
+            children: <Widget>[
+              for (final directory in widget.value)
+                AleraChip(
+                  key: ValueKey<String>(
+                    'quick-open-excluded-directory-$directory',
+                  ),
+                  label: directory,
+                  onRemove: () => _remove(directory),
+                ),
+            ],
+          ),
+          const SizedBox(height: AleraTokens.space12),
+          Row(
+            crossAxisAlignment: .start,
+            children: <Widget>[
+              Expanded(
+                child: AleraTextField(
+                  key: const ValueKey<String>(
+                    'quick-open-excluded-directory-input',
+                  ),
+                  controller: _controller,
+                  hintText: 'Directory name, e.g. generated',
+                  onSubmitted: (_) => _add(),
+                ),
+              ),
+              const SizedBox(width: AleraTokens.space8),
+              FilledButton(
+                key: const ValueKey<String>(
+                  'quick-open-excluded-directory-add',
+                ),
+                onPressed: _add,
+                child: Text(context.tr('Add')),
+              ),
+            ],
+          ),
+          const SizedBox(height: AleraTokens.space8),
+          Row(
+            children: <Widget>[
+              Expanded(
+                child: Text(
+                  context.tr('.git, .hg, and .svn are always excluded.'),
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: AleraTokens.foregroundMuted,
+                  ),
+                ),
+              ),
+              TextButton(
+                key: const ValueKey<String>(
+                  'quick-open-excluded-directory-reset',
+                ),
+                onPressed: () => widget.onChanged(
+                  EditorSettings.defaultQuickOpenExcludedDirectories,
+                ),
+                child: Text(context.tr('Restore Defaults')),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }

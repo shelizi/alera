@@ -24,19 +24,23 @@ Future<List<WorkspaceFileEntry>> listWorkspaceChildren({
 
 Future<WorkspaceQuickOpenSession> startWorkspaceQuickOpenSession({
   required String workspacePath,
+  required List<String> excludedDirectories,
 }) => RustLib.instance.api.crateApiWorkspaceFilesStartWorkspaceQuickOpenSession(
   workspacePath: workspacePath,
+  excludedDirectories: excludedDirectories,
 );
 
 Future<List<WorkspaceQuickOpenMatch>> searchWorkspaceQuickOpenSession({
   required WorkspaceQuickOpenSession session,
   required String query,
   required int limit,
+  required bool includeGitignored,
 }) =>
     RustLib.instance.api.crateApiWorkspaceFilesSearchWorkspaceQuickOpenSession(
       session: session,
       query: query,
       limit: limit,
+      includeGitignored: includeGitignored,
     );
 
 Future<void> stopWorkspaceQuickOpenSession({

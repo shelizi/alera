@@ -228,19 +228,24 @@ pub fn list_workspace_children(
 
 pub fn start_workspace_quick_open_session(
     workspace_path: String,
+    excluded_directories: Vec<String>,
 ) -> Result<WorkspaceQuickOpenSession, WorkspaceFileError> {
-    alera_core::workspace_files::start_workspace_quick_open_session(workspace_path)
-        .map(|session| WorkspaceQuickOpenSession {
-            id: session.id,
-            indexed_file_count: session.indexed_file_count,
-        })
-        .map_err(shared_workspace_file_error)
+    alera_core::workspace_files::start_workspace_quick_open_session(
+        workspace_path,
+        excluded_directories,
+    )
+    .map(|session| WorkspaceQuickOpenSession {
+        id: session.id,
+        indexed_file_count: session.indexed_file_count,
+    })
+    .map_err(shared_workspace_file_error)
 }
 
 pub fn search_workspace_quick_open_session(
     session: WorkspaceQuickOpenSession,
     query: String,
     limit: u32,
+    include_gitignored: bool,
 ) -> Result<Vec<WorkspaceQuickOpenMatch>, WorkspaceFileError> {
     alera_core::workspace_files::search_workspace_quick_open_session(
         alera_core::workspace_files::WorkspaceQuickOpenSession {
@@ -249,6 +254,7 @@ pub fn search_workspace_quick_open_session(
         },
         query,
         limit,
+        include_gitignored,
     )
     .map(|matches| {
         matches

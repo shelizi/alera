@@ -221,6 +221,15 @@ const Map<String, String> _traditionalChineseSettings = <String, String>{
   'Indentation': '縮排',
   'Autosave': '自動儲存',
   'Tab Size': 'Tab 寬度',
+  'Quick Open': '快速開啟',
+  'Control dependency and build directories that Quick Open never indexes.':
+      '管理快速開啟永遠不建立索引的套件庫與建置目錄。',
+  'Excluded Directory Names': '排除的目錄名稱',
+  'These directory names are never indexed, even when Git-ignored files are included. Matching is case-insensitive.':
+      '即使包含 Git 忽略檔案，這些目錄名稱也永遠不會建立索引；比對不分大小寫。',
+  'Directory name, e.g. generated': '目錄名稱，例如 generated',
+  '.git, .hg, and .svn are always excluded.': '.git、.hg、.svn 永遠固定排除。',
+  'Restore Defaults': '還原預設值',
   'Theme Preset': '主題預設',
   'Search and select a built-in terminal color theme.': '搜尋並選擇內建的終端機配色主題。',
   'Cursor Shape': '游標形狀',

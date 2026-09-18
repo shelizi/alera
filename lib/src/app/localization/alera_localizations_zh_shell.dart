@@ -89,6 +89,7 @@ const Map<String, String> _traditionalChineseShell = <String, String>{
   'Stash Pop': '套用 Stash',
   'Quick Open': '快速開啟',
   'Search workspace files': '搜尋工作區檔案',
+  'Include Git-ignored files': '包含 Git 忽略的檔案',
   'Use Up and Down to navigate, Enter to open, or Escape to close.':
       '使用上、下方向鍵移動，Enter 開啟，Escape 關閉。',
   'Loading workspace files...': '正在載入工作區檔案…',

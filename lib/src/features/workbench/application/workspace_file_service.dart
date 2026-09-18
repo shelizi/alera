@@ -35,19 +35,25 @@ class const WorkspaceFileService() {
 
   Future<native.WorkspaceQuickOpenSession> startQuickOpenSession({
     required String workspacePath,
+    required List<String> excludedDirectories,
   }) {
-    return native.startWorkspaceQuickOpenSession(workspacePath: workspacePath);
+    return native.startWorkspaceQuickOpenSession(
+      workspacePath: workspacePath,
+      excludedDirectories: excludedDirectories,
+    );
   }
 
   Future<List<native.WorkspaceQuickOpenMatch>> searchQuickOpenSession({
     required native.WorkspaceQuickOpenSession session,
     required String query,
+    required bool includeGitignored,
     int limit = 50,
   }) {
     return native.searchWorkspaceQuickOpenSession(
       session: session,
       query: query,
       limit: limit,
+      includeGitignored: includeGitignored,
     );
   }
 

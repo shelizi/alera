@@ -675,6 +675,7 @@ abstract class RustLibApi extends BaseApi {
     required WorkspaceQuickOpenSession session,
     required String query,
     required int limit,
+    required bool includeGitignored,
   });
 
   Future<void> crateApiAgentHooksSetAgentHookEnabledAgents({
@@ -708,6 +709,7 @@ abstract class RustLibApi extends BaseApi {
   Future<WorkspaceQuickOpenSession>
   crateApiWorkspaceFilesStartWorkspaceQuickOpenSession({
     required String workspacePath,
+    required List<String> excludedDirectories,
   });
 
   Future<void> crateApiAgentHooksStopAgentHookReceiver();
@@ -4876,6 +4878,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required WorkspaceQuickOpenSession session,
     required String query,
     required int limit,
+    required bool includeGitignored,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -4887,6 +4890,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           );
           sse_encode_String(query, serializer);
           sse_encode_u_32(limit, serializer);
+          sse_encode_bool(includeGitignored, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -4900,7 +4904,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         ),
         constMeta:
             kCrateApiWorkspaceFilesSearchWorkspaceQuickOpenSessionConstMeta,
-        argValues: [session, query, limit],
+        argValues: [session, query, limit, includeGitignored],
         apiImpl: this,
       ),
     );
@@ -4910,7 +4914,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   get kCrateApiWorkspaceFilesSearchWorkspaceQuickOpenSessionConstMeta =>
       const TaskConstMeta(
         debugName: "search_workspace_quick_open_session",
-        argNames: ["session", "query", "limit"],
+        argNames: ["session", "query", "limit", "includeGitignored"],
       );
 
   @override
@@ -5120,12 +5124,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   Future<WorkspaceQuickOpenSession>
   crateApiWorkspaceFilesStartWorkspaceQuickOpenSession({
     required String workspacePath,
+    required List<String> excludedDirectories,
   }) {
     return handler.executeNormal(
       NormalTask(
         callFfi: (port_) {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_String(workspacePath, serializer);
+          sse_encode_list_String(excludedDirectories, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -5139,7 +5145,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         ),
         constMeta:
             kCrateApiWorkspaceFilesStartWorkspaceQuickOpenSessionConstMeta,
-        argValues: [workspacePath],
+        argValues: [workspacePath, excludedDirectories],
         apiImpl: this,
       ),
     );
@@ -5149,7 +5155,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   get kCrateApiWorkspaceFilesStartWorkspaceQuickOpenSessionConstMeta =>
       const TaskConstMeta(
         debugName: "start_workspace_quick_open_session",
-        argNames: ["workspacePath"],
+        argNames: ["workspacePath", "excludedDirectories"],
       );
 
   @override

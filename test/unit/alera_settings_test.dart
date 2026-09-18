@@ -82,6 +82,26 @@ void main() {
       expect(editor.themeName, EditorSyntaxThemeNames.alera);
       expect(editor.autosaveEnabled, isFalse);
       expect(editor.autosaveDelaySeconds, 1);
+      expect(
+        editor.quickOpenExcludedDirectories,
+        EditorSettings.defaultQuickOpenExcludedDirectories,
+      );
+      expect(
+        editor.quickOpenExcludedDirectories,
+        containsAll(<String>[
+          'vendor',
+          'vendor-bin',
+          '.phpunit.cache',
+          'coverage',
+          'bin',
+          'obj',
+          '.vs',
+          'packages',
+          'TestResults',
+          'BenchmarkDotNet.Artifacts',
+          'artifacts',
+        ]),
+      );
       expect(editor.effectiveAutosaveDelaySeconds, 1);
       expect(editor.autosaveDebounce, const Duration(seconds: 1));
       expect(editor.externalEditor, ExternalEditorKind.zed);
@@ -104,6 +124,10 @@ void main() {
       expect(editor.themeName, EditorSyntaxThemeNames.monokai);
       expect(editor.autosaveEnabled, isFalse);
       expect(editor.autosaveDelaySeconds, 1);
+      expect(
+        editor.quickOpenExcludedDirectories,
+        EditorSettings.defaultQuickOpenExcludedDirectories,
+      );
       expect(editor.externalEditor, ExternalEditorKind.zed);
       expect(editor.codeOpenTarget, CodeOpenTarget.alera);
       expect(editor.externalEditorExecutablePaths, isEmpty);

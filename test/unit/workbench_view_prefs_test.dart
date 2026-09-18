@@ -35,6 +35,7 @@ void main() {
         WorkspaceExplorerMode.hideIgnored,
       );
       expect(WorkbenchViewPrefs.defaults.showHiddenFiles, isFalse);
+      expect(WorkbenchViewPrefs.defaults.quickOpenIncludeGitignored, isFalse);
     });
 
     test('round-trips through json', () {
@@ -58,6 +59,7 @@ void main() {
         activeContextPanelTab: .explorer,
         explorerMode: .showAll,
         showHiddenFiles: true,
+        quickOpenIncludeGitignored: true,
       );
       final restored = WorkbenchViewPrefs.fromJson(
         Map<String, Object?>.from(prefs.toMap()),
@@ -81,6 +83,7 @@ void main() {
       expect(restored.activeContextPanelTab, WorkbenchContextPanelTab.explorer);
       expect(restored.explorerMode, WorkspaceExplorerMode.showAll);
       expect(restored.showHiddenFiles, isTrue);
+      expect(restored.quickOpenIncludeGitignored, isTrue);
     });
 
     test('fromJson requires the current schema', () {
@@ -135,6 +138,7 @@ void main() {
       expect(restored.workspaceKindFilter, WorkspaceKindFilter.all);
       expect(restored.showPinnedWorkspacesBelow, isTrue);
       expect(restored.showActiveWorkspacesOnly, isFalse);
+      expect(restored.quickOpenIncludeGitignored, isFalse);
       expect(restored.gitDiffGroupMode, GitDiffGroupMode.byArea);
       expect(restored.gitDiffContentMode, GitDiffContentMode.fullFile);
       expect(restored.gitDiffPresentationMode, GitDiffPresentationMode.unified);

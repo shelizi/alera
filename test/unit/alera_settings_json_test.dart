@@ -19,7 +19,7 @@ void main() {
           showTrayBadge: false,
         ),
         agents: AgentSettings(
-          agentStatusHooks: const AgentStatusHookSettings(
+          agentStatusHooks: AgentStatusHookSettings(
             values: {
               'codex': true,
               'claude': true,
@@ -42,6 +42,7 @@ void main() {
           themeName: EditorSyntaxThemeNames.nord,
           autosaveEnabled: true,
           autosaveDelaySeconds: 3,
+          quickOpenExcludedDirectories: <String>['generated', 'cache'],
         ),
         aiAssist: AiAssistSettings(
           agent: .agy,
@@ -121,6 +122,10 @@ void main() {
       expect(restored.editor.themeName, EditorSyntaxThemeNames.nord);
       expect(restored.editor.autosaveEnabled, isTrue);
       expect(restored.editor.autosaveDelaySeconds, 3);
+      expect(restored.editor.quickOpenExcludedDirectories, <String>[
+        'generated',
+        'cache',
+      ]);
       expect(restored.aiAssist.agent, AiAssistAgent.agy);
       expect(restored.aiAssist.modelFor(.agy), 'Gemini 3.5 Flash (Medium)');
       expect(

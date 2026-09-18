@@ -34,15 +34,17 @@ class const _LegacyEditorSettingsHook() extends MappingHook {
   }
 }
 
-/// Mixed ownership: `tabSize`, `themeName`, `autosaveEnabled`, and
-/// `autosaveDelaySeconds` are portable-cloud configuration; the external
-/// editor and code-open fields are local-only UI prefs.
+/// Mixed ownership: `tabSize`, `themeName`, `autosaveEnabled`,
+/// `autosaveDelaySeconds`, and `quickOpenExcludedDirectories` are
+/// portable-cloud configuration; the external editor and code-open fields are
+/// local-only UI prefs.
 @MappableClass(hook: _LegacyEditorSettingsHook())
 class const EditorSettings({
   this.tabSize = 4,
   this.themeName = EditorSyntaxThemeNames.alera,
   this.autosaveEnabled = false,
   this.autosaveDelaySeconds = defaultAutosaveDelaySeconds,
+  this.quickOpenExcludedDirectories = defaultQuickOpenExcludedDirectories,
   this.externalEditor = ExternalEditorKind.zed,
   this.codeOpenTarget = CodeOpenTarget.alera,
   this.externalEditorExecutablePaths = const <String, String>{},
@@ -52,6 +54,32 @@ class const EditorSettings({
   static const int minAutosaveDelaySeconds = 1;
   static const int maxAutosaveDelaySeconds = 60;
   static const int defaultAutosaveDelaySeconds = 1;
+  static const List<String> defaultQuickOpenExcludedDirectories = <String>[
+    'node_modules',
+    '.dart_tool',
+    'vendor',
+    'vendor-bin',
+    '.phpunit.cache',
+    'coverage',
+    'Pods',
+    '.gradle',
+    '.venv',
+    'venv',
+    '.tox',
+    '__pypackages__',
+    'bower_components',
+    'jspm_packages',
+    '.pnpm-store',
+    '.pub-cache',
+    'target',
+    'bin',
+    'obj',
+    '.vs',
+    'packages',
+    'TestResults',
+    'BenchmarkDotNet.Artifacts',
+    'artifacts',
+  ];
 
   /// Number of spaces inserted when the editor handles a Tab key press.
   final int tabSize;
@@ -64,6 +92,10 @@ class const EditorSettings({
 
   /// Number of idle seconds before an automatic editor save.
   final int autosaveDelaySeconds;
+
+  /// Directory names that Quick Open never indexes, even when Git-ignored
+  /// files are included. Matching is case-insensitive in the native indexer.
+  final List<String> quickOpenExcludedDirectories;
 
   final ExternalEditorKind externalEditor;
   final CodeOpenTarget codeOpenTarget;

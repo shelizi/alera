@@ -2,10 +2,12 @@ import 'dart:async';
 
 import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
+import 'package:alera/src/design_system/forms/alera_checkbox.dart';
 import 'package:alera/src/design_system/forms/alera_text_field.dart';
 import 'package:alera/src/design_system/icons/alera_file_icon.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:alera/src/design_system/layout/alera_dialog.dart';
+import 'package:alera/src/features/settings/application/settings_controller.dart';
 import 'package:alera/src/features/workbench/application/workbench_controller.dart';
 import 'package:alera/src/features/workbench/application/workbench_providers.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_open_coordinator_provider.dart';
@@ -107,6 +109,10 @@ class _QuickOpenDialogState extends ConsumerState<QuickOpenDialog> {
     try {
       final session = await _workspaceFiles.startQuickOpenSession(
         workspacePath: workspace.path,
+        excludedDirectories: ref
+            .read(settingsControllerProvider)
+            .editor
+            .quickOpenExcludedDirectories,
       );
       if (!mounted || generation != _workspaceGeneration) {
         unawaited(_stopSession(session));
@@ -141,6 +147,10 @@ class _QuickOpenDialogState extends ConsumerState<QuickOpenDialog> {
       final matches = await _workspaceFiles.searchQuickOpenSession(
         session: session,
         query: query,
+        includeGitignored: ref
+            .read(workbenchControllerProvider)
+            .viewPrefs
+            .quickOpenIncludeGitignored,
         limit: _quickOpenResultLimit,
       );
       if (!_isCurrentSearch(session, workspaceGeneration, searchGeneration)) {
@@ -196,6 +206,17 @@ class _QuickOpenDialogState extends ConsumerState<QuickOpenDialog> {
         ),
       );
     }
+  }
+
+  void _setIncludeGitignored(bool include) {
+    final prefs = ref.read(workbenchControllerProvider).viewPrefs;
+    if (prefs.quickOpenIncludeGitignored == include) {
+      return;
+    }
+    ref
+        .read(workbenchControllerProvider.notifier)
+        .setQuickOpenIncludeGitignored(include);
+    _updateQuery(_queryController.text);
   }
 
   void _resetResultsScroll() {
@@ -315,6 +336,11 @@ class _QuickOpenDialogState extends ConsumerState<QuickOpenDialog> {
     final workspace = ref.watch(
       workbenchControllerProvider.select((state) => state.activeWorkspace),
     );
+    final includeGitignored = ref.watch(
+      workbenchControllerProvider.select(
+        (state) => state.viewPrefs.quickOpenIncludeGitignored,
+      ),
+    );
     return Focus(
       onKeyEvent: _handleKey,
       child: AleraDialog(
@@ -357,6 +383,16 @@ class _QuickOpenDialogState extends ConsumerState<QuickOpenDialog> {
                   prefixIcon: AleraIcons.search,
                   onChanged: _updateQuery,
                   onSubmitted: (_) => _openSelected(),
+                ),
+                const SizedBox(height: AleraTokens.space8),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: AleraCheckbox(
+                    value: includeGitignored,
+                    onChanged: _setIncludeGitignored,
+                    enabled: workspace != null,
+                    label: context.tr('Include Git-ignored files'),
+                  ),
                 ),
                 const SizedBox(height: AleraTokens.space12),
                 Expanded(child: _buildResults(theme)),

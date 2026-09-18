@@ -1,6 +1,6 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -42,33 +42,42 @@ const QUICK_OPEN_SESSION_IDLE_TTL: Duration = Duration::from_secs(15 * 60);
 const MAX_QUICK_OPEN_SESSIONS: usize = 16;
 const MAX_QUICK_OPEN_INDEXED_FILES: usize = 50_000;
 const MAX_QUICK_OPEN_INDEXED_PATH_BYTES: usize = 2 * 1024 * 1024;
+const MAX_QUICK_OPEN_IGNORED_INDEXED_FILES: usize = 25_000;
+const MAX_QUICK_OPEN_IGNORED_INDEXED_PATH_BYTES: usize = 1024 * 1024;
+
+const QUICK_OPEN_PROTECTED_DIRS: &[&str] = &[".git", ".hg", ".svn"];
 
 static SESSIONS: OnceLock<Mutex<HashMap<String, QuickOpenSessionEntry>>> = OnceLock::new();
 static INDEX_BUILD_GATE: OnceLock<Mutex<()>> = OnceLock::new();
 
 pub fn start_workspace_quick_open_session(
     workspace_path: String,
+    excluded_directories: Vec<String>,
 ) -> Result<WorkspaceQuickOpenSession, WorkspaceFileError> {
-    start_workspace_quick_open_session_with_symlinks(workspace_path, true)
+    start_workspace_quick_open_session_with_symlinks(workspace_path, true, excluded_directories)
 }
 
 pub fn start_workspace_quick_open_session_without_symlinks(
     workspace_path: String,
+    excluded_directories: Vec<String>,
 ) -> Result<WorkspaceQuickOpenSession, WorkspaceFileError> {
-    start_workspace_quick_open_session_with_symlinks(workspace_path, false)
+    start_workspace_quick_open_session_with_symlinks(workspace_path, false, excluded_directories)
 }
 
 fn start_workspace_quick_open_session_with_symlinks(
     workspace_path: String,
     include_internal_symlinks: bool,
+    excluded_directories: Vec<String>,
 ) -> Result<WorkspaceQuickOpenSession, WorkspaceFileError> {
     let root = workspace_root(&workspace_path)?;
+    let exclusions = QuickOpenExclusions::new(excluded_directories);
     let mut files = with_quick_open_build_gate(|| {
         collect_quick_open_files(
             &root,
             MAX_QUICK_OPEN_INDEXED_FILES,
             MAX_QUICK_OPEN_INDEXED_PATH_BYTES,
             include_internal_symlinks,
+            &exclusions,
         )
     })?;
     sort_quick_open_files(&mut files);
@@ -123,20 +132,28 @@ fn collect_quick_open_files(
     max_files: usize,
     max_path_bytes: usize,
     include_internal_symlinks: bool,
+    exclusions: &QuickOpenExclusions,
 ) -> Result<Vec<QuickOpenFile>, WorkspaceFileError> {
     let filter_root = root.to_path_buf();
+    let git_visible_paths = collect_git_visible_paths(root, exclusions)?;
+    let entry_exclusions = exclusions.clone();
     let walker = WalkBuilder::new(root)
         .hidden(false)
         .parents(true)
         .require_git(false)
-        .git_ignore(true)
-        .git_exclude(true)
+        .git_ignore(false)
+        .git_global(false)
+        .git_exclude(false)
         .follow_links(false)
         .sort_by_file_path(|left, right| left.cmp(right))
-        .filter_entry(move |entry| entry.path() == filter_root || !protected_entry(entry.path()))
+        .filter_entry(move |entry| {
+            entry.path() == filter_root || !entry_exclusions.excludes_entry(entry.path())
+        })
         .build();
     let mut files = Vec::new();
     let mut indexed_path_bytes = 0_usize;
+    let mut ignored_file_count = 0_usize;
+    let mut ignored_path_bytes = 0_usize;
     for entry in walker {
         let entry = match entry {
             Ok(entry) => entry,
@@ -149,26 +166,81 @@ fn collect_quick_open_files(
             }
         };
         if let Some(relative_path) =
-            quick_open_relative_path(root, entry.path(), include_internal_symlinks)?
+            quick_open_relative_path(root, entry.path(), include_internal_symlinks, exclusions)?
         {
-            if files.len() >= max_files {
-                break;
+            let is_gitignored = !git_visible_paths.contains(entry.path());
+            if is_gitignored {
+                if ignored_file_count >= MAX_QUICK_OPEN_IGNORED_INDEXED_FILES {
+                    continue;
+                }
+                let next_path_bytes = ignored_path_bytes.saturating_add(relative_path.len());
+                if next_path_bytes > MAX_QUICK_OPEN_IGNORED_INDEXED_PATH_BYTES {
+                    continue;
+                }
+                ignored_file_count += 1;
+                ignored_path_bytes = next_path_bytes;
+            } else {
+                let indexed_file_count = files.len().saturating_sub(ignored_file_count);
+                if indexed_file_count >= max_files {
+                    continue;
+                }
+                let next_path_bytes = indexed_path_bytes.saturating_add(relative_path.len());
+                if next_path_bytes > max_path_bytes {
+                    continue;
+                }
+                indexed_path_bytes = next_path_bytes;
             }
-            let next_path_bytes = indexed_path_bytes.saturating_add(relative_path.len());
-            if next_path_bytes > max_path_bytes {
-                break;
-            }
-            indexed_path_bytes = next_path_bytes;
-            files.push(QuickOpenFile::new(relative_path));
+            files.push(QuickOpenFile::with_gitignored(relative_path, is_gitignored));
         }
     }
     Ok(files)
+}
+
+fn collect_git_visible_paths(
+    root: &Path,
+    exclusions: &QuickOpenExclusions,
+) -> Result<HashSet<PathBuf>, WorkspaceFileError> {
+    let filter_root = root.to_path_buf();
+    let entry_exclusions = exclusions.clone();
+    let walker = WalkBuilder::new(root)
+        .hidden(false)
+        .parents(true)
+        .require_git(false)
+        .git_ignore(true)
+        .git_global(true)
+        .git_exclude(true)
+        .follow_links(false)
+        .filter_entry(move |entry| {
+            entry.path() == filter_root || !entry_exclusions.excludes_entry(entry.path())
+        })
+        .build();
+    let mut visible = HashSet::new();
+    for entry in walker {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) if error.depth().is_some_and(|depth| depth > 0) => continue,
+            Err(error) => {
+                return Err(WorkspaceFileError::new(
+                    WorkspaceFileErrorKind::Io,
+                    error.to_string(),
+                ));
+            }
+        };
+        if entry
+            .file_type()
+            .is_some_and(|file_type| !file_type.is_dir())
+        {
+            visible.insert(entry.into_path());
+        }
+    }
+    Ok(visible)
 }
 
 pub fn search_workspace_quick_open_session(
     session: WorkspaceQuickOpenSession,
     query: String,
     limit: u32,
+    include_gitignored: bool,
 ) -> Result<Vec<WorkspaceQuickOpenMatch>, WorkspaceFileError> {
     let index = {
         let mut sessions = sessions().lock().map_err(|_| {
@@ -179,7 +251,7 @@ pub fn search_workspace_quick_open_session(
         })?;
         access_session(&mut sessions, &session.id, Instant::now())?
     };
-    Ok(ranking::search(&index, &query, limit))
+    Ok(ranking::search(&index, &query, limit, include_gitignored))
 }
 
 fn access_session(
@@ -211,10 +283,10 @@ fn quick_open_relative_path(
     root: &std::path::Path,
     path: &std::path::Path,
     include_internal_symlinks: bool,
+    exclusions: &QuickOpenExclusions,
 ) -> Result<Option<String>, WorkspaceFileError> {
     let relative_path = relative_string(root, path)?;
-    if relative_path.is_empty() || is_protected_workspace_path(std::path::Path::new(&relative_path))
-    {
+    if relative_path.is_empty() || exclusions.excludes_path(std::path::Path::new(&relative_path)) {
         return Ok(None);
     }
     let link_metadata = fs::symlink_metadata(path)
@@ -232,7 +304,7 @@ fn quick_open_relative_path(
             return Ok(None);
         }
         let canonical_relative = relative_string(root, &canonical)?;
-        if is_protected_workspace_path(std::path::Path::new(&canonical_relative)) {
+        if exclusions.excludes_path(std::path::Path::new(&canonical_relative)) {
             return Ok(None);
         }
     }
@@ -247,13 +319,40 @@ fn quick_open_relative_path(
     Ok(metadata.is_file().then_some(relative_path))
 }
 
-fn protected_entry(path: &std::path::Path) -> bool {
-    path.file_name().is_some_and(|name| {
-        matches!(
-            name.to_string_lossy().to_ascii_lowercase().as_str(),
-            ".git" | ".hg" | ".svn"
-        )
-    })
+#[derive(Clone)]
+struct QuickOpenExclusions {
+    configured: HashSet<String>,
+}
+
+impl QuickOpenExclusions {
+    fn new(excluded_directories: Vec<String>) -> Self {
+        let configured = excluded_directories
+            .into_iter()
+            .map(|value| value.trim().to_ascii_lowercase())
+            .filter(|value| !value.is_empty() && !value.contains('/') && !value.contains('\\'))
+            .collect();
+        Self { configured }
+    }
+
+    fn excludes_entry(&self, path: &Path) -> bool {
+        path.file_name().is_some_and(|name| {
+            let normalized = name.to_string_lossy().to_ascii_lowercase();
+            self.excludes_name(&normalized)
+        })
+    }
+
+    fn excludes_path(&self, path: &Path) -> bool {
+        is_protected_workspace_path(path)
+            || path.components().any(|component| {
+                matches!(component, std::path::Component::Normal(value) if value.to_str().is_some_and(|value| {
+                    self.excludes_name(&value.to_ascii_lowercase())
+                }))
+            })
+    }
+
+    fn excludes_name(&self, normalized: &str) -> bool {
+        QUICK_OPEN_PROTECTED_DIRS.contains(&normalized) || self.configured.contains(normalized)
+    }
 }
 
 fn sessions() -> &'static Mutex<HashMap<String, QuickOpenSessionEntry>> {

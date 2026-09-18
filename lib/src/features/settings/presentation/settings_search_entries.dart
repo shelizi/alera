@@ -334,6 +334,22 @@ const List<SettingsSearchEntry> editorSearchEntries = <SettingsSearchEntry>[
     description: 'Idle time before saving editor changes.',
     keywords: <String>['save', 'automatic', 'debounce', 'seconds'],
   ),
+  SettingsSearchEntry(
+    title: 'Quick Open',
+    description:
+        'Manage dependency and build directory names excluded from indexing.',
+    keywords: <String>[
+      'quick open',
+      'search',
+      'index',
+      'exclude',
+      'ignore',
+      'node_modules',
+      'bin',
+      'obj',
+      '.vs',
+    ],
+  ),
 ];
 
 const List<SettingsSearchEntry> aiAssistSearchEntries = <SettingsSearchEntry>[

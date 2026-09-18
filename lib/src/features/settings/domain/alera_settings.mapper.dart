@@ -2272,6 +2272,15 @@ class EditorSettingsMapper extends ClassMapperBase<EditorSettings> {
     opt: true,
     def: EditorSettings.defaultAutosaveDelaySeconds,
   );
+  static List<String> _$quickOpenExcludedDirectories(EditorSettings v) =>
+      v.quickOpenExcludedDirectories;
+  static const Field<EditorSettings, List<String>>
+  _f$quickOpenExcludedDirectories = Field(
+    'quickOpenExcludedDirectories',
+    _$quickOpenExcludedDirectories,
+    opt: true,
+    def: EditorSettings.defaultQuickOpenExcludedDirectories,
+  );
   static ExternalEditorKind _$externalEditor(EditorSettings v) =>
       v.externalEditor;
   static const Field<EditorSettings, ExternalEditorKind> _f$externalEditor =
@@ -2324,6 +2333,7 @@ class EditorSettingsMapper extends ClassMapperBase<EditorSettings> {
     #themeName: _f$themeName,
     #autosaveEnabled: _f$autosaveEnabled,
     #autosaveDelaySeconds: _f$autosaveDelaySeconds,
+    #quickOpenExcludedDirectories: _f$quickOpenExcludedDirectories,
     #externalEditor: _f$externalEditor,
     #codeOpenTarget: _f$codeOpenTarget,
     #externalEditorExecutablePaths: _f$externalEditorExecutablePaths,
@@ -2339,6 +2349,7 @@ class EditorSettingsMapper extends ClassMapperBase<EditorSettings> {
       themeName: data.dec(_f$themeName),
       autosaveEnabled: data.dec(_f$autosaveEnabled),
       autosaveDelaySeconds: data.dec(_f$autosaveDelaySeconds),
+      quickOpenExcludedDirectories: data.dec(_f$quickOpenExcludedDirectories),
       externalEditor: data.dec(_f$externalEditor),
       codeOpenTarget: data.dec(_f$codeOpenTarget),
       externalEditorExecutablePaths: data.dec(_f$externalEditorExecutablePaths),
@@ -2411,6 +2422,8 @@ extension EditorSettingsValueCopy<$R, $Out>
 
 abstract class EditorSettingsCopyWith<$R, $In extends EditorSettings, $Out>
     implements ClassCopyWith<$R, $In, $Out> {
+  ListCopyWith<$R, String, ObjectCopyWith<$R, String, String>>
+  get quickOpenExcludedDirectories;
   MapCopyWith<$R, String, String, ObjectCopyWith<$R, String, String>>
   get externalEditorExecutablePaths;
   $R call({
@@ -2418,6 +2431,7 @@ abstract class EditorSettingsCopyWith<$R, $In extends EditorSettings, $Out>
     String? themeName,
     bool? autosaveEnabled,
     int? autosaveDelaySeconds,
+    List<String>? quickOpenExcludedDirectories,
     ExternalEditorKind? externalEditor,
     CodeOpenTarget? codeOpenTarget,
     Map<String, String>? externalEditorExecutablePaths,
@@ -2438,6 +2452,13 @@ class _EditorSettingsCopyWithImpl<$R, $Out>
   late final ClassMapperBase<EditorSettings> $mapper =
       EditorSettingsMapper.ensureInitialized();
   @override
+  ListCopyWith<$R, String, ObjectCopyWith<$R, String, String>>
+  get quickOpenExcludedDirectories => ListCopyWith(
+    $value.quickOpenExcludedDirectories,
+    (v, t) => ObjectCopyWith(v, $identity, t),
+    (v) => call(quickOpenExcludedDirectories: v),
+  );
+  @override
   MapCopyWith<$R, String, String, ObjectCopyWith<$R, String, String>>
   get externalEditorExecutablePaths => MapCopyWith(
     $value.externalEditorExecutablePaths,
@@ -2450,6 +2471,7 @@ class _EditorSettingsCopyWithImpl<$R, $Out>
     String? themeName,
     bool? autosaveEnabled,
     int? autosaveDelaySeconds,
+    List<String>? quickOpenExcludedDirectories,
     ExternalEditorKind? externalEditor,
     CodeOpenTarget? codeOpenTarget,
     Map<String, String>? externalEditorExecutablePaths,
@@ -2462,6 +2484,8 @@ class _EditorSettingsCopyWithImpl<$R, $Out>
       if (autosaveEnabled != null) #autosaveEnabled: autosaveEnabled,
       if (autosaveDelaySeconds != null)
         #autosaveDelaySeconds: autosaveDelaySeconds,
+      if (quickOpenExcludedDirectories != null)
+        #quickOpenExcludedDirectories: quickOpenExcludedDirectories,
       if (externalEditor != null) #externalEditor: externalEditor,
       if (codeOpenTarget != null) #codeOpenTarget: codeOpenTarget,
       if (externalEditorExecutablePaths != null)
@@ -2480,6 +2504,10 @@ class _EditorSettingsCopyWithImpl<$R, $Out>
     autosaveDelaySeconds: data.get(
       #autosaveDelaySeconds,
       or: $value.autosaveDelaySeconds,
+    ),
+    quickOpenExcludedDirectories: data.get(
+      #quickOpenExcludedDirectories,
+      or: $value.quickOpenExcludedDirectories,
     ),
     externalEditor: data.get(#externalEditor, or: $value.externalEditor),
     codeOpenTarget: data.get(#codeOpenTarget, or: $value.codeOpenTarget),

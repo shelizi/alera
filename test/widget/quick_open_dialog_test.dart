@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:alera/src/features/external_editor/domain/external_editor_launch_result.dart';
 import 'package:alera/src/features/external_editor/domain/external_editor_launcher.dart';
+import 'package:alera/src/features/settings/application/settings_controller.dart';
+import 'package:alera/src/features/settings/domain/alera_settings.dart';
 import 'package:alera/src/features/workbench/application/workbench_controller.dart';
 import 'package:alera/src/features/workbench/application/workbench_providers.dart';
 import 'package:alera/src/features/workbench/application/workbench_state.dart';
@@ -231,6 +233,41 @@ void main() {
     expect(find.text('old.dart'), findsNothing);
     expect(find.text('new.dart'), findsOneWidget);
   });
+
+  testWidgets('remembers include Git-ignored files and reuses the index', (
+    tester,
+  ) async {
+    final workspace = _workspace('workspace-1', 'Main', '/repo/main');
+    final controller = _QuickOpenTestController(_state(workspace));
+    final service = _QuickOpenFileService(entries: <String>['lib/main.dart']);
+    await _pumpQuickOpen(tester, controller: controller, service: service);
+
+    await tester.tap(find.text('Open Quick Open'));
+    await tester.pumpAndSettle();
+    expect(service.startedWorkspacePaths, <String>[workspace.path]);
+    expect(
+      service.excludedDirectoryRequests.single,
+      EditorSettings.defaultQuickOpenExcludedDirectories,
+    );
+    expect(service.includeGitignoredRequests, <bool>[false]);
+    expect(controller.state.viewPrefs.quickOpenIncludeGitignored, isFalse);
+
+    await tester.tap(find.text('Include Git-ignored files'));
+    await tester.pumpAndSettle();
+    expect(controller.state.viewPrefs.quickOpenIncludeGitignored, isTrue);
+    expect(service.startedWorkspacePaths, <String>[workspace.path]);
+    expect(service.includeGitignoredRequests, <bool>[false, true]);
+
+    await tester.sendKeyEvent(.escape);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Open Quick Open'));
+    await tester.pumpAndSettle();
+    expect(service.startedWorkspacePaths, <String>[
+      workspace.path,
+      workspace.path,
+    ]);
+    expect(service.includeGitignoredRequests, <bool>[false, true, true]);
+  });
 }
 
 Future<void> _pumpQuickOpen(
@@ -249,6 +286,7 @@ Future<void> _pumpQuickOpen(
   await tester.pumpWidget(
     ProviderScope(
       overrides: [
+        settingsControllerProvider.overrideWithValue(AleraSettings.defaults),
         workbenchControllerProvider.overrideWith(() => controller),
         workspaceFileServiceProvider.overrideWithValue(service),
         workspaceFileOpenCoordinatorProvider.overrideWithValue(
@@ -321,13 +359,19 @@ class _QuickOpenFileService({
       const <String, Completer<List<native.WorkspaceQuickOpenMatch>>>{},
 }) extends WorkspaceFileService {
   final List<String> stoppedSessionIds = <String>[];
+  final List<String> startedWorkspacePaths = <String>[];
+  final List<List<String>> excludedDirectoryRequests = <List<String>>[];
+  final List<bool> includeGitignoredRequests = <bool>[];
   final Map<String, List<String>> _entriesBySessionId =
       <String, List<String>>{};
 
   @override
   Future<native.WorkspaceQuickOpenSession> startQuickOpenSession({
     required String workspacePath,
+    required List<String> excludedDirectories,
   }) {
+    startedWorkspacePaths.add(workspacePath);
+    excludedDirectoryRequests.add(List<String>.of(excludedDirectories));
     if (error != null) {
       return Future<native.WorkspaceQuickOpenSession>.error(error!);
     }
@@ -351,8 +395,10 @@ class _QuickOpenFileService({
   Future<List<native.WorkspaceQuickOpenMatch>> searchQuickOpenSession({
     required native.WorkspaceQuickOpenSession session,
     required String query,
+    required bool includeGitignored,
     int limit = 50,
   }) {
+    includeGitignoredRequests.add(includeGitignored);
     final gate = searchGates[query];
     if (gate != null) {
       return gate.future;
