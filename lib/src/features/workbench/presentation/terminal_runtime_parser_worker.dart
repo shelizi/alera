@@ -88,6 +88,8 @@ extension _XtermTerminalParserWorker on _XtermTerminalSessionHandle {
       return;
     }
     _parserWorkerGeneration += 1;
+    _parserWorkerReady = false;
+    _uiBufferEvicted = false;
     final workerFuture = _parserWorkerFuture;
     final commandTail = _parserWorkerCommandTail;
     _parserWorkerFuture = null;
@@ -142,6 +144,7 @@ extension _XtermTerminalParserWorker on _XtermTerminalSessionHandle {
         await worker.close();
         throw StateError('Terminal parser worker generation was replaced.');
       }
+      _parserWorkerReady = true;
       return worker;
     });
     _parserWorkerFuture = validatedFuture;
@@ -203,6 +206,35 @@ extension _XtermTerminalParserWorker on _XtermTerminalSessionHandle {
     return command.then((_) => uiApplyTime);
   }
 
+  bool _evictParserWorkerUiBuffer() {
+    if (!_parserWorkerEnabled ||
+        !_parserWorkerReady ||
+        _disposed ||
+        _outputVisible ||
+        _uiBufferEvicted) {
+      return false;
+    }
+    final previousTerminal = _terminal;
+    if (previousTerminal is! TerminalXtermReplicaTerminal) {
+      return false;
+    }
+
+    _terminalController.clearSelection();
+    final viewWidth = previousTerminal.viewWidth;
+    final viewHeight = previousTerminal.viewHeight;
+    _detachTerminal(previousTerminal);
+
+    final nextTerminal = _createTerminal(notificationsEnabled: false)
+      ..resize(viewWidth, viewHeight);
+    _terminal = nextTerminal;
+    _attachTerminal(nextTerminal);
+    _attachSearchTerminal(nextTerminal);
+    _parserWorkerReplicaNeedsSync = true;
+    _uiBufferEvicted = true;
+    previousTerminal.dispose();
+    return true;
+  }
+
   Future<void>? _syncParserWorkerReplicaForReveal() {
     if (!_parserWorkerEnabled || _disposed || !_parserWorkerReplicaNeedsSync) {
       return null;
@@ -225,6 +257,7 @@ extension _XtermTerminalParserWorker on _XtermTerminalSessionHandle {
       _applyParserWorkerEffects(delta.effects);
       terminal.applyBufferDelta(delta);
       _parserWorkerReplicaNeedsSync = false;
+      _uiBufferEvicted = false;
     });
     _parserWorkerLastApply = command;
     unawaited(

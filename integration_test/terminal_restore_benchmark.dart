@@ -116,6 +116,68 @@ void main() {
     runtimeDisposed = true;
     await tester.pump();
   });
+
+  testWidgets('T8e soft eviction structured reveal latency', (tester) async {
+    binding.framePolicy = LiveTestWidgetsFlutterBindingFramePolicy.fullyLive;
+    final fakeSession = _BenchmarkPtySession();
+    final runtime = XtermTerminalRuntime(
+      parserWorkerEnabled: true,
+      ptySessionFactory: _BenchmarkPtySessionFactory(fakeSession),
+      shellLaunchesBuilder: () => <GhosttyTerminalShellLaunch>[
+        const GhosttyTerminalShellLaunch(
+          label: 'Benchmark',
+          shell: '/bin/sh',
+          environment: <String, String>{'TERM': 'xterm-256color'},
+        ),
+      ],
+    );
+    addTearDown(runtime.dispose);
+    final session = runtime.sessionFor(workspace: _workspace(), tab: _tab());
+    expect(terminalParserWorkerEnabledForTesting(session), isTrue);
+
+    final snapshot = _buildSnapshot();
+    final snapshotText = const Utf8Decoder(allowMalformed: true)
+        .convert(snapshot);
+    rebuildTerminalFromSnapshotTextForTesting(session, snapshotText);
+    await waitForTerminalParserApplyForTesting(session);
+    expect(terminalBufferTextForTesting(session), contains(_restoreMarker));
+
+    Future<double> measureReveal() async {
+      evictTerminalSessionForTesting(runtime, session.tabId);
+      expect(terminalUiBufferEvictedForTesting(session), isTrue);
+      expect(session.bufferUsage.bytes, 0);
+
+      final watch = Stopwatch()..start();
+      final visibility = acquireTerminalVisibilityForTesting(session);
+      await waitForTerminalParserApplyForTesting(session);
+      await tester.pump();
+      watch.stop();
+
+      expect(terminalUiBufferEvictedForTesting(session), isFalse);
+      expect(terminalBufferTextForTesting(session), contains(_restoreMarker));
+      visibility.dispose();
+      return watch.elapsedMicroseconds / 1000;
+    }
+
+    await measureReveal();
+    final samples = <double>[
+      for (var run = 0; run < _measuredRuns; run++) await measureReveal(),
+    ];
+    final sorted = List<double>.from(samples)..sort();
+    final median = _median(samples);
+    final p95 = sorted[(sorted.length * 0.95).ceil() - 1];
+    final withinTarget = samples.where((value) => value <= 3000).length;
+    // ignore: avoid_print
+    print(
+      '=== T8e soft eviction structured reveal ===\n'
+      '  samples ${samples.map((value) => value.toStringAsFixed(2)).join(', ')} ms\n'
+      '  median ${median.toStringAsFixed(2)} ms; '
+      'p95 ${p95.toStringAsFixed(2)} ms; '
+      'target max 3000 ms: $withinTarget/${samples.length}',
+    );
+    expect(samples, hasLength(_measuredRuns));
+    expect(withinTarget, _measuredRuns);
+  });
 }
 
 Future<_RestoreSample> _measureRestore({

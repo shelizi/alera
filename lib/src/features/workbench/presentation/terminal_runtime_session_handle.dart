@@ -70,6 +70,8 @@ class _XtermTerminalSessionHandle(
   int _ptyGeneration = 0;
   int _parserWorkerGeneration = 0;
   Future<TerminalXtermWorker>? _parserWorkerFuture;
+  bool _parserWorkerReady = false;
+  bool _uiBufferEvicted = false;
   Future<void> _parserWorkerCommandTail = Future<void>.value();
   Future<void>? _parserWorkerLastApply;
   bool _parserWorkerFocused = true;
@@ -138,8 +140,11 @@ class _XtermTerminalSessionHandle(
   bool get _outputVisible => _visibility.isOutputVisible;
 
   @override
-  TerminalBufferUsage get bufferUsage =>
-      _visibility.estimateUsage(tabId, _terminal);
+  TerminalBufferUsage get bufferUsage => _visibility.estimateUsage(
+    tabId,
+    _terminal,
+    bufferResident: !_uiBufferEvicted,
+  );
 
   @override
   ValueListenable<TerminalRestoreProgress?> get restoreProgress =>

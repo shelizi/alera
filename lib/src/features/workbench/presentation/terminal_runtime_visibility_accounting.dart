@@ -78,10 +78,14 @@ class _TerminalSessionVisibilityAccounting {
     }
   }
 
-  TerminalBufferUsage estimateUsage(String tabId, xterm.Terminal terminal) {
+  TerminalBufferUsage estimateUsage(
+    String tabId,
+    xterm.Terminal terminal, {
+    bool bufferResident = true,
+  }) {
     return TerminalBufferUsage(
       tabId: tabId,
-      bytes: measureTerminalCellBufferBytes(terminal),
+      bytes: bufferResident ? measureTerminalCellBufferBytes(terminal) : 0,
       lastVisibleAt: _lastVisibleAt,
     );
   }

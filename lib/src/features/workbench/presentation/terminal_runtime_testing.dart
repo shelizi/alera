@@ -116,6 +116,19 @@ terminalSnapshotHydrationProfileForTesting(TerminalSessionHandle session) {
 }
 
 @visibleForTesting
+bool terminalUiBufferEvictedForTesting(TerminalSessionHandle session) {
+  return (session as _XtermTerminalSessionHandle)._uiBufferEvicted;
+}
+
+@visibleForTesting
+void evictTerminalSessionForTesting(
+  XtermTerminalRuntime runtime,
+  String tabId,
+) {
+  runtime._sessionOwner.evictSession(tabId);
+}
+
+@visibleForTesting
 bool terminalParserWorkerEnabledForTesting(TerminalSessionHandle session) {
   final handle = session as _XtermTerminalSessionHandle;
   return handle._parserWorkerEnabled &&
