@@ -121,6 +121,22 @@ bool terminalUiBufferEvictedForTesting(TerminalSessionHandle session) {
 }
 
 @visibleForTesting
+bool terminalParserWorkerHardEvictedForTesting(TerminalSessionHandle session) {
+  final handle = session as _XtermTerminalSessionHandle;
+  return handle._parserWorkerRetainedState != null &&
+      handle._parserWorkerFuture == null;
+}
+
+@visibleForTesting
+List<String> terminalParserWorkerHardEvictionBlockersForTesting(
+  TerminalSessionHandle session,
+) {
+  return List<String>.unmodifiable(
+    (session as _XtermTerminalSessionHandle)._parserWorkerHardEvictionBlockers,
+  );
+}
+
+@visibleForTesting
 void evictTerminalSessionForTesting(
   XtermTerminalRuntime runtime,
   String tabId,

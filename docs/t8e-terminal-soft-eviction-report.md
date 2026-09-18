@@ -130,7 +130,7 @@ The absolute cursor is deliberately **not** retained for an ordinary visible att
 
 The reconnect delta is ordered ahead of the control reply by the existing sequenced terminal/control lanes. A pause reply records the delivered cursor after already accepted terminal frames; on reattach the host validates the cursor against `[ring_base, stream_end]`. If the range cannot be satisfied exactly, the client gets a full snapshot rather than a partial splice.
 
-This phase still does **not** destroy the parser worker. The packed worker snapshot is sufficient to rebuild the UI replica, but not yet sufficient to recreate every parser-semantic state needed to continue parsing arbitrary future bytes safely. Full worker hard eviction therefore remains deferred until xterm exposes/imports the required state, including SGR attributes, scrolling margins, saved cursor state, alternate-screen and interaction modes, and equivalent parser state.
+Phase 2 by itself did **not** destroy the parser worker. T8e-P3 below closes that remaining boundary by exporting/importing the parser-worker emulator state for an explicitly eligible safe subset, while failing closed to the Phase 2 soft-eviction path for unsupported or ambiguous parser state.
 
 ### Phase 2 validation
 
@@ -141,3 +141,76 @@ This phase still does **not** destroy the parser worker. The packed worker snaps
 - Rust output-resume contracts: **6/6 passed**;
 - touched-file Dart analyzer: no errors/warnings (one style-only info for a null-aware collection element);
 - `git diff --check --ignore-submodules=all`: clean.
+
+## T8e Phase 3 - Eligible parser-worker hard eviction
+
+Status: **complete**.
+
+Phase 3 adds a structured retained-state contract to `TerminalXtermWorker` and uses it to release the parser-worker isolate after a hidden session has already entered the Phase 2 parked-output state.
+
+### Runtime flow
+
+For a ready hidden parser-worker session:
+
+1. the duplicate UI replica buffer is discarded exactly as in Phase 1;
+2. terminal-host output is parked exactly as in Phase 2;
+3. the worker command tail exports a retained emulator checkpoint;
+4. if the checkpoint is eligible, the runtime stores the compact checkpoint and closes the parser-worker isolate;
+5. reveal, or any later parser command, starts a fresh worker from that retained checkpoint;
+6. the existing packed worker snapshot hydrates the UI replica;
+7. output accumulated behind the parked host cursor continues through the Phase 2 delta-resume path.
+
+The hard-eviction export is serialized on the same worker command tail as parsing, resizing, and reveal. Generation, terminal-identity, eviction-state, and visibility checks are repeated after the asynchronous export. A reveal that wins the race therefore keeps the live worker rather than closing it underneath the visible session.
+
+### Retained checkpoint
+
+The retained state covers the emulator state required by the currently validated shell/TUI paths:
+
+- main and alternate screen buffers;
+- cursor positions and saved cursor state;
+- vertical and horizontal margins;
+- current SGR cursor style;
+- active main/alternate buffer;
+- insert, line-feed, cursor-key, origin, wrap/reverse-wrap, keypad, mouse, focus, bracketed-paste, cursor-visibility/blink, cursor-line-highlight, left-right-margin, Kitty-keyboard, modify-other-keys, protection, and related interaction modes;
+- title/icon title and focus state;
+- preceding code point used by `CSI b` repeat-character semantics.
+
+Buffer cells are retained as packed `Uint32List` payloads with five 32-bit words per cell plus two row-metadata words and sparse combining-character strings. This deliberately avoids replacing the released worker's xterm object graph with another per-cell Dart object graph in the UI isolate.
+
+### Eligibility / fail-closed boundary
+
+The worker is hard-evicted only when the export reports no blockers. Current blockers include:
+
+- parser not in ground state, for example a split CSI/OSC/DCS sequence;
+- active synchronized update;
+- ambiguous pending wrap at the last column;
+- custom color overrides;
+- hyperlink or semantic shell-integration state;
+- custom tab stops or charsets;
+- saved DEC mode stacks;
+- Kitty keyboard stacks;
+- title stacks;
+- cursor extended semantic/hyperlink state.
+
+These cases keep the Phase 2 parser worker alive. They still release the duplicate UI replica and keep host output parked, so correctness falls back to the already validated soft-eviction behavior instead of approximating missing state.
+
+### Correctness validation
+
+Worker-level round-trip coverage closes the critical continuation property: a control worker and an exported worker receive the same prefix, the exported worker is closed, a fresh worker imports the retained checkpoint, both receive the same subsequent ANSI stream, and packed buffers, cursor state, interaction modes, cell attributes, and `CSI b` continuation remain equal.
+
+Additional gates verify that a split CSI is rejected until the parser returns to ground state and that OSC 8 hyperlink state rejects hard eviction.
+
+Validation on 2026-09-18:
+
+- `terminal_xterm_worker_test.dart`: **25/25 passed**;
+- parser-worker focused runtime regression: **14/14 passed**;
+- full `terminal_runtime_native_test.dart`: **137 passed + 2 Windows/POSIX platform skips**;
+- runtime analyzer: **No issues found**;
+- worker analyzer: no errors/warnings; one existing `use_super_parameters` style info;
+- `git diff --check --ignore-submodules=all`: clean.
+
+### Measurement boundary
+
+Phase 3 establishes correctness and a compact retained representation, but this batch does **not** claim a measured process-RSS reduction yet. The next evidence step, if required, is a native Windows multi-session RSS comparison of P2 soft UI eviction with the parser worker retained versus P3 eligible hard eviction with only the packed retained checkpoint, plus reveal/startup latency from the packed checkpoint.
+
+Do not infer an RSS percentage from the packed payload shape alone.
