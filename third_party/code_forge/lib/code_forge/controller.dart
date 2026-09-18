@@ -162,6 +162,7 @@ class CodeForgeController implements DeltaTextInputClient {
   ({String filePath, String prefix, int line, int character})?
   _queuedCompletionRequest;
   NativeEditorDocument? _nativeEditorDocument;
+  NativeParseCancellation? _nativeEditorParseCancellation;
   Future<void>? _nativeEditorOpenFuture;
   Future<void>? _nativeEditorSyncFuture;
   final List<CodeForgeDocumentEditDelta> _pendingNativeEditorEdits = [];
@@ -409,6 +410,10 @@ class CodeForgeController implements DeltaTextInputClient {
     }
 
     final generation = ++_nativeEditorGeneration;
+    final previousCancellation = _nativeEditorParseCancellation;
+    final cancellation = NativeParseCancellation.create();
+    _nativeEditorParseCancellation = cancellation;
+    previousCancellation?.cancel();
     final previous = _nativeEditorDocument;
     _nativeEditorDocument = null;
     _nativeEditorOpenFuture = null;
@@ -427,15 +432,19 @@ class CodeForgeController implements DeltaTextInputClient {
     final initialRope = _rope.core;
     _nativeEditorOpenFuture = () async {
       try {
-        final document = await NativeEditorDocument.openFromRope(
+        final document = await NativeEditorDocument.openFromRopeCancellable(
           documentId: resolvedDocumentId,
           revision: BigInt.from(initialRevision),
           rope: initialRope,
           languageId: normalizedLanguageId,
+          cancellation: cancellation,
         );
         if (_isDisposed || generation != _nativeEditorGeneration) {
           await document.close();
           return;
+        }
+        if (identical(_nativeEditorParseCancellation, cancellation)) {
+          _nativeEditorParseCancellation = null;
         }
         final info = document.info();
         _nativeEditorDocument = document;
@@ -446,6 +455,9 @@ class CodeForgeController implements DeltaTextInputClient {
         }
       } catch (error) {
         if (generation != _nativeEditorGeneration) return;
+        if (identical(_nativeEditorParseCancellation, cancellation)) {
+          _nativeEditorParseCancellation = null;
+        }
         _disableNativeSyntaxDocument(error);
       }
     }();
@@ -979,6 +991,9 @@ class CodeForgeController implements DeltaTextInputClient {
 
   void _disableNativeSyntaxDocument(Object error) {
     debugPrint('CodeForge native syntax fallback: $error');
+    final parseCancellation = _nativeEditorParseCancellation;
+    _nativeEditorParseCancellation = null;
+    parseCancellation?.cancel();
     _nativeEditorFailed = true;
     _nativeEditorParserSupported = false;
     _pendingNativeEditorEdits.clear();
@@ -3004,6 +3019,9 @@ class CodeForgeController implements DeltaTextInputClient {
 
   void _resetNativeSyntaxDocument() {
     _nativeEditorGeneration++;
+    final parseCancellation = _nativeEditorParseCancellation;
+    _nativeEditorParseCancellation = null;
+    parseCancellation?.cancel();
     final document = _nativeEditorDocument;
     _nativeEditorDocument = null;
     _nativeEditorOpenFuture = null;
@@ -5379,6 +5397,9 @@ class CodeForgeController implements DeltaTextInputClient {
   void dispose() {
     _isDisposed = true;
     _nativeEditorGeneration++;
+    final parseCancellation = _nativeEditorParseCancellation;
+    _nativeEditorParseCancellation = null;
+    parseCancellation?.cancel();
     _pendingNativeEditorEdits.clear();
     _nativeEditorOpenFuture = null;
     _nativeEditorSyncFuture = null;

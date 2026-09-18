@@ -2,10 +2,16 @@ use super::rope::RopeBridge;
 use flutter_rust_bridge::frb;
 use ropey::Rope as RustRope;
 use std::cmp::{max, min};
-use std::sync::Mutex;
-use tree_sitter::{
-    InputEdit, Language, Parser, Point, Query, QueryCursor, StreamingIterator, Tree,
+use std::ops::ControlFlow;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
 };
+use tree_sitter::{
+    InputEdit, Language, ParseOptions, Parser, Point, Query, QueryCursor, StreamingIterator, Tree,
+};
+
+const NATIVE_PARSE_CANCELLED_ERROR: &str = "native editor parse cancelled";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EditorDocumentEdit {
@@ -142,6 +148,31 @@ pub struct NativeEditorDocument {
     state: Mutex<NativeEditorDocumentState>,
 }
 
+#[derive(Clone)]
+#[frb(opaque)]
+pub struct NativeParseCancellation {
+    cancelled: Arc<AtomicBool>,
+}
+
+impl NativeParseCancellation {
+    #[frb(sync)]
+    pub fn create() -> Self {
+        Self {
+            cancelled: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    #[frb(sync)]
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Release);
+    }
+
+    #[frb(sync)]
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Acquire)
+    }
+}
+
 impl NativeEditorDocument {
     /// Opens a retained native document. The initial full text crosses FFI once;
     /// subsequent updates are edit deltas and parser input is read from Rope chunks.
@@ -156,6 +187,7 @@ impl NativeEditorDocument {
             revision,
             RustRope::from_str(&text),
             language_id,
+            None,
         )
     }
 
@@ -169,7 +201,21 @@ impl NativeEditorDocument {
         language_id: String,
     ) -> Result<Self, String> {
         let rope = rope.rope.read().map_err(|_| "rope lock poisoned")?.clone();
-        Self::open_with_rope(document_id, revision, rope, language_id)
+        Self::open_with_rope(document_id, revision, rope, language_id, None)
+    }
+
+    /// Opens retained syntax state with cooperative Tree-sitter cancellation.
+    /// A cancelled parse never publishes a partially initialized document.
+    pub fn open_from_rope_cancellable(
+        document_id: String,
+        revision: u64,
+        rope: &RopeBridge,
+        language_id: String,
+        cancellation: &NativeParseCancellation,
+    ) -> Result<Self, String> {
+        ensure_parse_not_cancelled(Some(cancellation))?;
+        let rope = rope.rope.read().map_err(|_| "rope lock poisoned")?.clone();
+        Self::open_with_rope(document_id, revision, rope, language_id, Some(cancellation))
     }
 
     fn open_with_rope(
@@ -177,7 +223,9 @@ impl NativeEditorDocument {
         revision: u64,
         rope: RustRope,
         language_id: String,
+        cancellation: Option<&NativeParseCancellation>,
     ) -> Result<Self, String> {
+        ensure_parse_not_cancelled(cancellation)?;
         let normalized_language_id = normalize_language_id(&language_id);
         let native_language = native_language(&normalized_language_id)?;
 
@@ -186,10 +234,11 @@ impl NativeEditorDocument {
             parser
                 .set_language(&native_language.language)
                 .map_err(|error| format!("failed to configure parser: {error}"))?;
-            let tree = parse_rope(&mut parser, &rope, None)
-                .ok_or_else(|| "tree-sitter parser returned no tree".to_string())?;
+            let tree = parse_rope(&mut parser, &rope, None, cancellation)?;
+            ensure_parse_not_cancelled(cancellation)?;
             let query = Query::new(&native_language.language, &native_language.highlight_query)
                 .map_err(|error| format!("failed to compile highlight query: {error}"))?;
+            ensure_parse_not_cancelled(cancellation)?;
             (Some(parser), Some(tree), Some(query))
         } else {
             (None, None, None)
@@ -944,27 +993,53 @@ fn apply_edit(
 
     if let Some(parser) = state.parser.as_mut() {
         let previous_tree = state.tree.as_ref();
-        state.tree = parse_rope(parser, &state.rope, previous_tree);
-        if state.tree.is_none() {
-            return Err("tree-sitter incremental parse returned no tree".to_string());
-        }
+        state.tree = Some(parse_rope(parser, &state.rope, previous_tree, None)?);
     }
 
     Ok(())
 }
 
-fn parse_rope(parser: &mut Parser, rope: &RustRope, old_tree: Option<&Tree>) -> Option<Tree> {
-    parser.parse_with_options(
-        &mut |byte_offset, _position| {
-            if byte_offset >= rope.len_bytes() {
-                return &[][..];
+fn ensure_parse_not_cancelled(
+    cancellation: Option<&NativeParseCancellation>,
+) -> Result<(), String> {
+    if cancellation.is_some_and(NativeParseCancellation::is_cancelled) {
+        Err(NATIVE_PARSE_CANCELLED_ERROR.to_string())
+    } else {
+        Ok(())
+    }
+}
+
+fn parse_rope(
+    parser: &mut Parser,
+    rope: &RustRope,
+    old_tree: Option<&Tree>,
+    cancellation: Option<&NativeParseCancellation>,
+) -> Result<Tree, String> {
+    ensure_parse_not_cancelled(cancellation)?;
+    let mut input = |byte_offset, _position| {
+        if byte_offset >= rope.len_bytes() {
+            return &[][..];
+        }
+        let (chunk, chunk_byte_idx, _, _) = rope.chunk_at_byte(byte_offset);
+        &chunk.as_bytes()[byte_offset - chunk_byte_idx..]
+    };
+
+    let tree = if let Some(cancellation) = cancellation {
+        let mut progress = |_state: &tree_sitter::ParseState| {
+            if cancellation.is_cancelled() {
+                ControlFlow::Break(())
+            } else {
+                ControlFlow::Continue(())
             }
-            let (chunk, chunk_byte_idx, _, _) = rope.chunk_at_byte(byte_offset);
-            &chunk.as_bytes()[byte_offset - chunk_byte_idx..]
-        },
-        old_tree,
-        None,
-    )
+        };
+        let options = ParseOptions::new().progress_callback(&mut progress);
+        parser.parse_with_options(&mut input, old_tree, Some(options))
+    } else {
+        parser.parse_with_options(&mut input, old_tree, None)
+    };
+
+    ensure_parse_not_cancelled(cancellation)?;
+    tree.ok_or_else(|| "tree-sitter parser returned no tree".to_string())
 }
 
 fn point_for_char(rope: &RustRope, char_offset: usize) -> Point {
@@ -1172,6 +1247,53 @@ mod tests {
         assert!(response.supported);
         assert!(!response.stale);
         assert!(!response.spans.is_empty());
+    }
+
+    #[test]
+    fn cancellable_open_stops_before_retaining_parser_state() {
+        let text = (0..20_000)
+            .map(|index| format!("fn item_{index}() {{ let value = {index}; }}\n"))
+            .collect::<String>();
+        let rope = RopeBridge::create(text);
+        let cancellation = NativeParseCancellation::create();
+        cancellation.cancel();
+
+        let result = NativeEditorDocument::open_from_rope_cancellable(
+            "doc-cancelled-open".to_string(),
+            1,
+            &rope,
+            "rust".to_string(),
+            &cancellation,
+        );
+
+        match result {
+            Ok(_) => panic!("cancelled parse must not publish a retained document"),
+            Err(error) => assert_eq!(error, NATIVE_PARSE_CANCELLED_ERROR),
+        }
+        assert!(cancellation.is_cancelled());
+    }
+
+    #[test]
+    fn cancellable_parse_interrupts_work_after_start() {
+        let text = (0..100_000)
+            .map(|index| format!("fn item_{index}() {{ let value = {index}; }}\n"))
+            .collect::<String>();
+        let rope = RustRope::from_str(&text);
+        let cancellation = NativeParseCancellation::create();
+        let canceller = cancellation.clone();
+        let cancel_thread = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            canceller.cancel();
+        });
+
+        let language: Language = tree_sitter_rust::LANGUAGE.into();
+        let mut parser = Parser::new();
+        parser.set_language(&language).unwrap();
+        let result = parse_rope(&mut parser, &rope, None, Some(&cancellation));
+        cancel_thread.join().unwrap();
+
+        assert_eq!(result.unwrap_err(), NATIVE_PARSE_CANCELLED_ERROR);
+        assert!(cancellation.is_cancelled());
     }
 
     #[test]

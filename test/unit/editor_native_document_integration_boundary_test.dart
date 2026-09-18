@@ -11,7 +11,13 @@ void main() {
       ).readAsStringSync();
 
       expect(controller, contains('Rope.openWorkspaceFile('));
-      expect(controller, contains('NativeEditorDocument.openFromRope('));
+      expect(
+        controller,
+        contains('NativeEditorDocument.openFromRopeCancellable('),
+      );
+      expect(controller, contains('NativeParseCancellation.create()'));
+      expect(controller, contains('previousCancellation?.cancel()'));
+      expect(controller, contains('parseCancellation?.cancel()'));
       expect(controller, contains('.applyEdits('));
       expect(controller, contains('queryNativeSyntaxSpans('));
       expect(controller, contains('.close()'));
