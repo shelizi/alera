@@ -73,6 +73,29 @@ void main() {
     },
   );
 
+  test(
+    'file switches invalidate retained parser work before Rope replacement',
+    () {
+      final controller = File(
+        'third_party/code_forge/lib/code_forge/controller.dart',
+      ).readAsStringSync();
+
+      final openedFileSetter = controller.substring(
+        controller.indexOf('set openedFile(String? file)'),
+        controller.indexOf(
+          'List<LspErrors> get diagnostics',
+          controller.indexOf('set openedFile(String? file)'),
+        ),
+      );
+      expect(openedFileSetter, contains('if (previousFile != file)'));
+      expect(openedFileSetter, contains('_resetNativeSyntaxDocument();'));
+      expect(
+        openedFileSetter.indexOf('_resetNativeSyntaxDocument();'),
+        lessThan(openedFileSetter.indexOf('_openedFile = file;')),
+      );
+    },
+  );
+
   test('CodeForge structural selection stays on the retained native tree', () {
     final controller = File(
       'third_party/code_forge/lib/code_forge/controller.dart',

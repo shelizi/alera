@@ -1423,6 +1423,52 @@ mod tests {
     }
 
     #[test]
+    fn deferred_rope_snapshot_applies_pending_edit_exactly_once() {
+        let original = "fn main() { let value = 1; }\n";
+        let live_rope = RopeBridge::create(original.to_string());
+        let parse_baseline = live_rope.deep_clone();
+        let edit_start = char_offset(original, "1");
+        let replacement = "12345";
+
+        live_rope.replace_range_and_update_selection(
+            edit_start,
+            edit_start + 1,
+            replacement.to_string(),
+            false,
+            edit_start,
+            edit_start,
+        );
+
+        let document = NativeEditorDocument::open_from_rope(
+            "doc-deferred-baseline".to_string(),
+            10,
+            &parse_baseline,
+            "rust".to_string(),
+        )
+        .unwrap();
+        assert_eq!(document.info().unwrap().len_chars, original.chars().count());
+
+        let result = document
+            .apply_edits(
+                10,
+                11,
+                vec![EditorDocumentEdit {
+                    start: edit_start,
+                    end: edit_start + 1,
+                    replacement: replacement.to_string(),
+                }],
+            )
+            .unwrap();
+        assert!(result.applied);
+        assert_eq!(result.revision, 11);
+        assert_eq!(
+            document.info().unwrap().len_chars,
+            live_rope.len_chars(),
+            "the queued delta must advance the immutable baseline exactly once"
+        );
+    }
+
+    #[test]
     fn unsupported_language_retains_text_but_falls_back_cleanly() {
         let document = NativeEditorDocument::open(
             "doc-5".to_string(),

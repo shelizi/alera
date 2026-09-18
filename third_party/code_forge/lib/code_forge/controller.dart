@@ -1279,6 +1279,12 @@ class CodeForgeController implements DeltaTextInputClient {
   /// Open a file using the controller API instead of passing `filePath` parameter to [CodeForge]
   set openedFile(String? file) {
     final previousFile = _openedFile;
+    if (previousFile != file) {
+      // A file switch is a new retained-document generation. Cancel any
+      // pending/active parse before replacing the authoritative Rope so a
+      // stale tab cannot continue consuming cold-parse work in the background.
+      _resetNativeSyntaxDocument();
+    }
     _openedFile = file;
     if (openedFile != null) {
       text = File(_openedFile!).readAsStringSync();
