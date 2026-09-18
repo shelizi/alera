@@ -216,4 +216,3 @@ The production lane should consume this result in this order:
 5. only then consider query caching if profiling still shows it matters.
 
 C6P itself should remain benchmark/report-only.
-

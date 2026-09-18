@@ -219,4 +219,3 @@ No additional parser architecture phase is justified from the current evidence b
 C6 can be marked fully complete. The after-profile confirms that first-useful-frame latency is decoupled from retained syntax readiness for large files, bounded FRB metadata remains intact, and rapid replacement completes without a lifecycle failure.
 
 No additional parser architecture phase is justified from this evidence. Query compilation/cache work remains lower priority than the cold full parse and should not be selected without new measurements.
-
