@@ -21,14 +21,18 @@ async function post(eventName, payload = {}) {
   const workspaceId = process.env.ALERA_WORKSPACE_ID
   const tabId = process.env.ALERA_TAB_ID
   if (!port || !token || !terminalSessionId || !workspaceId || !tabId) return
-  try {
-    await fetch(`http://127.0.0.1:${port}/hook/pi`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Alera-Agent-Hook-Token': token },
-      body: JSON.stringify({ terminalSessionId, workspaceId, tabId, payload: { hook_event_name: eventName, ...payload } }),
-      signal: typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? AbortSignal.timeout(1000) : undefined,
-    })
-  } catch {}
+  const attempts = eventName === 'agent_settled' || eventName === 'session_shutdown' ? 3 : 1
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/hook/pi`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Alera-Agent-Hook-Token': token },
+        body: JSON.stringify({ terminalSessionId, workspaceId, tabId, payload: { hook_event_name: eventName, ...payload } }),
+        signal: typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? AbortSignal.timeout(1000) : undefined,
+      })
+      if (response.ok) return
+    } catch {}
+  }
 }
 
 function assistantText(message) {
@@ -49,5 +53,6 @@ export default function (pi) {
     if (text) return post('message_end', { role: 'assistant', text })
   })
   pi.on('agent_end', () => post('agent_end'))
+  pi.on('agent_settled', () => post('agent_settled'))
   pi.on('session_shutdown', (_event, ctx) => post('session_shutdown', { sessionId: ctx?.sessionManager?.getSessionId?.() }))
 }

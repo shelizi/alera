@@ -117,20 +117,24 @@ async function post(hookEventName: string, extra: Record<string, unknown> = {}) 
     version: coords.version,
     payload: { hook_event_name: hookEventName, ...payload },
   })
-  try {
-    const options: RequestInit = {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Alera-Agent-Hook-Token': coords.token,
-      },
-      body,
-    }
-    if (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) {
-      options.signal = AbortSignal.timeout(1000)
-    }
-    await fetch(url, options)
-  } catch {}
+  const attempts = hookEventName === 'agent.end' ? 3 : 1
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      const options: RequestInit = {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Alera-Agent-Hook-Token': coords.token,
+        },
+        body,
+      }
+      if (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) {
+        options.signal = AbortSignal.timeout(1000)
+      }
+      const response = await fetch(url, options)
+      if (response.ok) return
+    } catch {}
+  }
 }
 
 const MAX_PENDING_POSTS = 50

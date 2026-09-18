@@ -35,6 +35,13 @@ fn keeps_the_matcher_key_for_tool_scoped_events() {
     assert_eq!(definition["matcher"], json!("*"));
 }
 
+#[test]
+fn claude_registers_failure_completion_event() {
+    assert!(CLAUDE_HOOK_EVENTS
+        .iter()
+        .any(|(event, matcher)| *event == "StopFailure" && matcher.is_none()));
+}
+
 #[cfg(windows)]
 #[test]
 fn windows_hook_execution_strategy_is_explicit_per_agent() {

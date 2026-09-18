@@ -18,6 +18,10 @@ bool _isInterrupted(AgentHookEvent event) {
 }
 
 bool _isGenericInterrupted(AgentHookEvent event) {
+  final eventName = agentHookEventName(event);
+  if (eventName == 'Interrupt' || eventName?.contains('Failure') == true) {
+    return true;
+  }
   final value = event.payload['is_interrupt'] ?? event.payload['interrupted'];
   return value == true;
 }

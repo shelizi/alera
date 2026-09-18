@@ -11,7 +11,7 @@ AgentStatusState? _normalizeClaudeState(String eventName, String? toolName) {
     'PostToolUse' ||
     'PostToolUseFailure' => AgentStatusState.working,
     'PermissionRequest' => AgentStatusState.waiting,
-    'Stop' => AgentStatusState.done,
+    'Stop' || 'StopFailure' => AgentStatusState.done,
     _ => null,
   };
 }

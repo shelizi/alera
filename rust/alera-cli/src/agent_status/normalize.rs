@@ -340,7 +340,9 @@ fn interrupted(event: &AgentHookEvent, name: &str, state: AgentPresenceState) ->
         return None;
     }
     let interrupted = bool_field(&event.payload, "interrupted") == Some(true)
+        || bool_field(&event.payload, "is_interrupt") == Some(true)
         || first_string(&event.payload, &["status"]).as_deref() == Some("cancelled")
+        || name == "Interrupt"
         || name.contains("Failure");
     interrupted.then_some(true)
 }

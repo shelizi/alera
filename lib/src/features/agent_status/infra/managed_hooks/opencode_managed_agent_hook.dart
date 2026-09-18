@@ -147,20 +147,24 @@ async function post(hookEventName, extraProperties) {
     version: coords.version,
     payload: { hook_event_name: hookEventName, ...(extraProperties || {}), ...titleContext },
   });
-  try {
-    const options = {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Alera-Agent-Hook-Token": coords.token,
-      },
-      body,
-    };
-    if (typeof AbortSignal !== "undefined" && AbortSignal.timeout) {
-      options.signal = AbortSignal.timeout(1000);
-    }
-    await fetch(url, options);
-  } catch {}
+  const attempts = hookEventName === "SessionIdle" ? 3 : 1;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      const options = {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Alera-Agent-Hook-Token": coords.token,
+        },
+        body,
+      };
+      if (typeof AbortSignal !== "undefined" && AbortSignal.timeout) {
+        options.signal = AbortSignal.timeout(1000);
+      }
+      const response = await fetch(url, options);
+      if (response.ok) return;
+    } catch {}
+  }
 }
 
 async function setStatus(next, extraProperties) {

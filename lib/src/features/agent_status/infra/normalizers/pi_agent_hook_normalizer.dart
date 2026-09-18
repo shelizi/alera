@@ -7,8 +7,9 @@ AgentStatusState? _normalizePiState(String eventName) {
     'tool_call' ||
     'tool_execution_start' ||
     'tool_execution_end' ||
-    'message_end' => AgentStatusState.working,
-    'agent_end' || 'session_shutdown' => AgentStatusState.done,
+    'message_end' ||
+    'agent_end' => AgentStatusState.working,
+    'agent_settled' || 'session_shutdown' => AgentStatusState.done,
     _ => null,
   };
 }

@@ -20,6 +20,7 @@ extension _ClaudeManagedAgentHook on ManagedAgentHookInstallService {
       events: const <_ManagedHookEvent>[
         _ManagedHookEvent('UserPromptSubmit'),
         _ManagedHookEvent('Stop'),
+        _ManagedHookEvent('StopFailure'),
         _ManagedHookEvent('PreToolUse', matcher: '*'),
         _ManagedHookEvent('PostToolUse', matcher: '*'),
         _ManagedHookEvent('PostToolUseFailure', matcher: '*'),

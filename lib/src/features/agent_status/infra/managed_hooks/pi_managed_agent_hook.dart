@@ -84,20 +84,24 @@ async function post(hookEventName, extra = {}) {
     version: coords.version,
     payload: { hook_event_name: hookEventName, ...extra },
   })
-  try {
-    const options = {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Alera-Agent-Hook-Token': coords.token,
-      },
-      body,
-    }
-    if (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) {
-      options.signal = AbortSignal.timeout(1000)
-    }
-    await fetch(url, options)
-  } catch {}
+  const attempts = hookEventName === 'agent_settled' || hookEventName === 'session_shutdown' ? 3 : 1
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      const options = {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Alera-Agent-Hook-Token': coords.token,
+        },
+        body,
+      }
+      if (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) {
+        options.signal = AbortSignal.timeout(1000)
+      }
+      const response = await fetch(url, options)
+      if (response.ok) return
+    } catch {}
+  }
 }
 
 function extractAssistantText(message) {
@@ -156,6 +160,10 @@ export default function (pi) {
 
   pi.on('agent_end', async () => {
     await post('agent_end')
+  })
+
+  pi.on('agent_settled', async () => {
+    await post('agent_settled')
   })
 
   pi.on('session_shutdown', async (_event, ctx) => {

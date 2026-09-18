@@ -32,6 +32,8 @@ pub(super) fn prepare_codex(
         ("PermissionRequest", "permission_request"),
         ("PostToolUse", "post_tool_use"),
         ("Stop", "stop"),
+        ("Interrupt", "interrupt"),
+        ("SessionEnd", "session_end"),
     ];
     let mut trust = Vec::new();
     let mut previous_managed_trust = Vec::new();
@@ -185,6 +187,26 @@ fn set_edit_value(table: &mut Table, key: &str, mut next: EditValue) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn codex_installs_interrupt_and_session_end_hooks() {
+        let home = tempfile::tempdir().expect("Codex home");
+        let mut environment = BTreeMap::new();
+        environment.insert(
+            "CODEX_HOME".to_string(),
+            home.path().to_string_lossy().into_owned(),
+        );
+
+        prepare_codex(Path::new("/tmp/alera-runtime-agent-hook.sh"), &environment)
+            .expect("prepare Codex hooks");
+
+        let config = read_json_object(&home.path().join("hooks.json"))
+            .expect("read hooks")
+            .expect("hooks object");
+        let hooks = config["hooks"].as_object().expect("hooks map");
+        assert!(hooks.contains_key("Interrupt"));
+        assert!(hooks.contains_key("SessionEnd"));
+    }
 
     #[test]
     fn codex_toml_update_preserves_user_comments_and_formatting() {

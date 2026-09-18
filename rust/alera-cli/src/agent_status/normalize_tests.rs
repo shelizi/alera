@@ -173,7 +173,10 @@ fn copilot_can_infer_missing_event_name() {
 fn descriptor_rules_normalize_common_events_for_each_agent() {
     for (agent_type, event_name, expected) in [
         ("codex", "SessionStart", AgentPresenceState::Working),
+        ("codex", "Interrupt", AgentPresenceState::Done),
+        ("codex", "SessionEnd", AgentPresenceState::Done),
         ("claude", "PostToolUseFailure", AgentPresenceState::Working),
+        ("claude", "StopFailure", AgentPresenceState::Done),
         ("copilot", "SessionEnd", AgentPresenceState::Done),
         (
             "cursor",
@@ -187,6 +190,7 @@ fn descriptor_rules_normalize_common_events_for_each_agent() {
             "PermissionRequest",
             AgentPresenceState::Waiting,
         ),
+        ("pi", "agent_settled", AgentPresenceState::Done),
         ("pi", "session_shutdown", AgentPresenceState::Done),
         ("amp", "tool.result", AgentPresenceState::Working),
         ("grok", "StopFailure", AgentPresenceState::Done),
@@ -197,6 +201,15 @@ fn descriptor_rules_normalize_common_events_for_each_agent() {
             .unwrap_or_else(|| panic!("{agent_type} {event_name} was not normalized"));
         assert_eq!(status.state, expected, "{agent_type} {event_name}");
     }
+}
+
+#[test]
+fn codex_interrupt_is_marked_interrupted() {
+    let status = normalize_hook_event(&event("codex", "Interrupt", json!({})), None)
+        .expect("Codex Interrupt status");
+
+    assert_eq!(status.state, AgentPresenceState::Done);
+    assert_eq!(status.interrupted, Some(true));
 }
 
 #[test]

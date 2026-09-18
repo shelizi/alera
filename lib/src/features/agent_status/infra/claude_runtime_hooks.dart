@@ -269,25 +269,29 @@ extension _ClaudeRuntimeHooks on ClaudeRuntimeHomeService {
       '  exit 0',
       'fi',
       'payload=\$(cat)',
-      'if [ -z "\$payload" ]; then',
-      '  exit 0',
-      'fi',
-      'curl -sS -X POST "http://127.0.0.1:\${ALERA_AGENT_HOOK_PORT}/hook/claude" \\',
-      '  -H "Content-Type: application/x-www-form-urlencoded" \\',
-      '  -H "$aleraAgentHookTokenHeader: \${ALERA_AGENT_HOOK_TOKEN}" \\',
-      '  --data-urlencode "terminalSessionId=\${ALERA_TERMINAL_SESSION_ID}" \\',
-      '  --data-urlencode "workspaceId=\${ALERA_WORKSPACE_ID}" \\',
-      '  --data-urlencode "tabId=\${ALERA_TAB_ID}" \\',
-      '  --data-urlencode "hookEventName=\${ALERA_AGENT_HOOK_EVENT}" \\',
-      '  --data-urlencode "version=\${ALERA_AGENT_HOOK_VERSION}" \\',
-      '  --data-urlencode "payload=\${payload}" >/dev/null 2>&1 || true',
+      'case "\$ALERA_AGENT_HOOK_EVENT" in Stop|StopFailure) alera_attempts=3 ;; *) alera_attempts=1 ;; esac',
+      'if [ -z "\$payload" ]; then if [ "\$alera_attempts" -gt 1 ]; then payload=\'{}\'; else exit 0; fi; fi',
+      'alera_attempt=1',
+      'while [ "\$alera_attempt" -le "\$alera_attempts" ]; do',
+      '  if curl -fsS -X POST "http://127.0.0.1:\${ALERA_AGENT_HOOK_PORT}/hook/claude" \\',
+      '    --connect-timeout 0.25 --max-time 1.0 \\',
+      '    -H "Content-Type: application/x-www-form-urlencoded" \\',
+      '    -H "$aleraAgentHookTokenHeader: \${ALERA_AGENT_HOOK_TOKEN}" \\',
+      '    --data-urlencode "terminalSessionId=\${ALERA_TERMINAL_SESSION_ID}" \\',
+      '    --data-urlencode "workspaceId=\${ALERA_WORKSPACE_ID}" \\',
+      '    --data-urlencode "tabId=\${ALERA_TAB_ID}" \\',
+      '    --data-urlencode "hookEventName=\${ALERA_AGENT_HOOK_EVENT}" \\',
+      '    --data-urlencode "version=\${ALERA_AGENT_HOOK_VERSION}" \\',
+      '    --data-urlencode "payload=\${payload}" >/dev/null 2>&1; then break; fi',
+      '  alera_attempt=\$((alera_attempt + 1))',
+      'done',
       'exit 0',
       '',
     ].join('\n');
   }
 
   String _windowsPostCommand() {
-    return 'powershell -NoProfile -ExecutionPolicy Bypass -Command "\$utf8=[System.Text.UTF8Encoding]::new(\$false); [Console]::InputEncoding=\$utf8; [Console]::OutputEncoding=\$utf8; \$inputData=[Console]::In.ReadToEnd(); if ([string]::IsNullOrWhiteSpace(\$inputData)) { exit 0 }; try { \$body=@{ terminalSessionId=\$env:ALERA_TERMINAL_SESSION_ID; workspaceId=\$env:ALERA_WORKSPACE_ID; tabId=\$env:ALERA_TAB_ID; hookEventName=\$env:ALERA_AGENT_HOOK_EVENT; version=\$env:ALERA_AGENT_HOOK_VERSION; payload=(\$inputData | ConvertFrom-Json) } | ConvertTo-Json -Depth 100 -Compress; \$bodyBytes=\$utf8.GetBytes(\$body); Invoke-WebRequest -UseBasicParsing -Method Post -Uri (\'http://127.0.0.1:\' + \$env:ALERA_AGENT_HOOK_PORT + \'/hook/claude\') -ContentType \'application/json; charset=utf-8\' -Headers @{ \'$aleraAgentHookTokenHeader\'=\$env:ALERA_AGENT_HOOK_TOKEN } -Body \$bodyBytes | Out-Null } catch {}"';
+    return 'powershell -NoProfile -ExecutionPolicy Bypass -Command "\$utf8=[System.Text.UTF8Encoding]::new(\$false); [Console]::InputEncoding=\$utf8; [Console]::OutputEncoding=\$utf8; \$inputData=[Console]::In.ReadToEnd(); \$terminal=@(\'Stop\',\'StopFailure\') -contains \$env:ALERA_AGENT_HOOK_EVENT; if ([string]::IsNullOrWhiteSpace(\$inputData)) { if (\$terminal) { \$inputData=\'{}\' } else { exit 0 } }; try { \$body=@{ terminalSessionId=\$env:ALERA_TERMINAL_SESSION_ID; workspaceId=\$env:ALERA_WORKSPACE_ID; tabId=\$env:ALERA_TAB_ID; hookEventName=\$env:ALERA_AGENT_HOOK_EVENT; version=\$env:ALERA_AGENT_HOOK_VERSION; payload=(\$inputData | ConvertFrom-Json) } | ConvertTo-Json -Depth 100 -Compress; \$bodyBytes=\$utf8.GetBytes(\$body) } catch { exit 0 }; \$attempts=if (\$terminal) { 3 } else { 1 }; for (\$attempt=1; \$attempt -le \$attempts; \$attempt++) { try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 1 -Method Post -Uri (\'http://127.0.0.1:\' + \$env:ALERA_AGENT_HOOK_PORT + \'/hook/claude\') -ContentType \'application/json; charset=utf-8\' -Headers @{ \'$aleraAgentHookTokenHeader\'=\$env:ALERA_AGENT_HOOK_TOKEN } -Body \$bodyBytes | Out-Null; break } catch {} }"';
   }
 
   Map<String, Object?> _hooksMap(Map<String, Object?> config) {

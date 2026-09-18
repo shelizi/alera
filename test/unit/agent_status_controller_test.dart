@@ -238,6 +238,62 @@ void main() {
       expect(entry.stateStartedAt, times[1]);
     });
 
+    test('normalizes Claude failure completion as interrupted done', () {
+      final controller = container.read(agentStatusControllerProvider.notifier);
+
+      controller.applyHookEvent(
+        _event(
+          agentType: .claude,
+          hookEventName: 'UserPromptSubmit',
+          payload: <String, Object?>{'prompt': 'retry deployment'},
+        ),
+      );
+      controller.applyHookEvent(
+        _event(
+          agentType: .claude,
+          hookEventName: 'StopFailure',
+          payload: <String, Object?>{'error': 'rate limit'},
+        ),
+      );
+
+      final entry = container.read(agentStatusControllerProvider)['session-1']!;
+      expect(entry.state, AgentStatusState.done);
+      expect(entry.interrupted, isTrue);
+    });
+
+    test('normalizes Codex interrupt and session end states', () {
+      final controller = container.read(agentStatusControllerProvider.notifier);
+
+      controller.applyHookEvent(
+        _event(
+          agentType: .codex,
+          hookEventName: 'UserPromptSubmit',
+          payload: <String, Object?>{'prompt': 'run tests'},
+        ),
+      );
+      controller.applyHookEvent(
+        _event(
+          agentType: .codex,
+          hookEventName: 'Interrupt',
+          payload: <String, Object?>{},
+        ),
+      );
+
+      var entry = container.read(agentStatusControllerProvider)['session-1']!;
+      expect(entry.state, AgentStatusState.done);
+      expect(entry.interrupted, isTrue);
+
+      controller.applyHookEvent(
+        _event(
+          agentType: .codex,
+          hookEventName: 'SessionEnd',
+          payload: <String, Object?>{},
+        ),
+      );
+      entry = container.read(agentStatusControllerProvider)['session-1']!;
+      expect(entry.state, AgentStatusState.done);
+    });
+
     test('normalizes Copilot blocked and done states', () {
       final controller = container.read(agentStatusControllerProvider.notifier);
 
@@ -426,7 +482,18 @@ void main() {
         ),
       );
 
-      final entry = container.read(agentStatusControllerProvider)['session-1']!;
+      var entry = container.read(agentStatusControllerProvider)['session-1']!;
+      expect(entry.state, AgentStatusState.working);
+
+      controller.applyHookEvent(
+        _event(
+          agentType: .pi,
+          hookEventName: 'agent_settled',
+          payload: <String, Object?>{},
+        ),
+      );
+
+      entry = container.read(agentStatusControllerProvider)['session-1']!;
       expect(entry.state, AgentStatusState.done);
       expect(entry.prompt, 'rename helper');
       expect(entry.toolName, 'bash');

@@ -28,7 +28,7 @@ void _registerCodexRuntimeHomeServiceCoreTests() {
         _commandsFor(systemHooks, 'PreToolUse'),
         contains('echo user-hook'),
       );
-      expect(_managedCommandCount(systemHooks, 'alera-codex-hook.sh'), 6);
+      expect(_managedCommandCount(systemHooks, 'alera-codex-hook.sh'), 8);
       expect(
         File(p.join(home.path, '.alera', 'agent-hooks', 'alera-codex-hook.sh'))
             .existsSync(),
@@ -119,7 +119,7 @@ void _registerCodexRuntimeHomeServiceCoreTests() {
     final runtimeHooksPath = p.join(preparation.runtimeHomePath, 'hooks.json');
     final runtimeHooks = _hooks(runtimeHooksPath);
     expect(_commandsFor(runtimeHooks, 'Stop'), contains(userCommand));
-    expect(_managedCommandCount(runtimeHooks, 'alera-codex-hook.sh'), 6);
+    expect(_managedCommandCount(runtimeHooks, 'alera-codex-hook.sh'), 8);
     for (final command in pluginCommands) {
       expect(_commandsFor(runtimeHooks, 'Stop'), contains(command));
       expect(_commandsFor(runtimeHooks, 'PreCompact'), contains(command));
@@ -430,7 +430,7 @@ void _registerCodexRuntimeHomeServiceCoreTests() {
     final runtimeTomlPath = p.join(preparation.runtimeHomePath, 'config.toml');
     expect(
       _managedCommandCount(_hooks(runtimeHooksPath), 'alera-codex-hook.sh'),
-      6,
+      8,
     );
     expect(File(runtimeTomlPath).readAsStringSync(), contains('[hooks.state.'));
 
@@ -460,7 +460,7 @@ void _registerCodexRuntimeHomeServiceCoreTests() {
     final runtimeHooks = _hooks(
       p.join(preparation.runtimeHomePath, 'hooks.json'),
     );
-    expect(_managedCommandCount(runtimeHooks, 'alera-codex-hook.cmd'), 6);
+    expect(_managedCommandCount(runtimeHooks, 'alera-codex-hook.cmd'), 8);
     final sessionStartCommand = _commandsFor(
       runtimeHooks,
       'SessionStart',

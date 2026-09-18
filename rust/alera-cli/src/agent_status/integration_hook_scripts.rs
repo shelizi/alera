@@ -56,18 +56,41 @@ if [ -z "$ALERA_AGENT_HOOK_PORT" ] || [ -z "$ALERA_AGENT_HOOK_TOKEN" ] || [ -z "
 fi
 payload=$(cat)
 if [ -z "$payload" ]; then payload='{}'; fi
+# Most hook traffic is advisory and must never slow the agent down. Completion
+# events are different: losing the final state leaves Alera permanently showing
+# the preceding working/waiting state. Give only those terminal transitions a
+# small bounded retry window.
+alera_completion_event=0
+case "$ALERA_AGENT_HOOK_EVENT" in
+  Stop|StopFailure|SessionEnd|stop|sessionEnd|SessionIdle|agent_settled|session_shutdown|agent.end|ErrorOccurred)
+    alera_completion_event=1
+    ;;
+esac
+alera_attempts=1
+if [ "$alera_completion_event" -eq 1 ]; then alera_attempts=3; fi
+alera_attempt=1
 # Pipe the payload through curl's stdin so tens-of-KB tool JSON stays off the
 # command line. Same wire body as an inline `payload=` argument.
-printf '%s' "$payload" | curl -sS -X POST "http://127.0.0.1:${ALERA_AGENT_HOOK_PORT}/hook/${ALERA_AGENT_TYPE}" \
-  --connect-timeout 0.5 --max-time 1.5 \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  -H "X-Alera-Agent-Hook-Token: ${ALERA_AGENT_HOOK_TOKEN}" \
-  --data-urlencode "terminalSessionId=${ALERA_TERMINAL_SESSION_ID}" \
-  --data-urlencode "workspaceId=${ALERA_WORKSPACE_ID}" \
-  --data-urlencode "tabId=${ALERA_TAB_ID}" \
-  --data-urlencode "hookEventName=${ALERA_AGENT_HOOK_EVENT}" \
-  --data-urlencode "version=${ALERA_AGENT_HOOK_VERSION}" \
-  --data-urlencode "payload@-" >/dev/null 2>&1 || true
+while [ "$alera_attempt" -le "$alera_attempts" ]; do
+  # Endpoint metadata can rotate when the runtime host restarts between a turn
+  # and its completion hook. Refresh it for each retry before posting.
+  if [ -n "$ALERA_AGENT_HOOK_ENDPOINT" ] && [ -r "$ALERA_AGENT_HOOK_ENDPOINT" ]; then
+    . "$ALERA_AGENT_HOOK_ENDPOINT" 2>/dev/null || :
+  fi
+  if printf '%s' "$payload" | curl -fsS -X POST "http://127.0.0.1:${ALERA_AGENT_HOOK_PORT}/hook/${ALERA_AGENT_TYPE}" \
+    --connect-timeout 0.25 --max-time 1.0 \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    -H "X-Alera-Agent-Hook-Token: ${ALERA_AGENT_HOOK_TOKEN}" \
+    --data-urlencode "terminalSessionId=${ALERA_TERMINAL_SESSION_ID}" \
+    --data-urlencode "workspaceId=${ALERA_WORKSPACE_ID}" \
+    --data-urlencode "tabId=${ALERA_TAB_ID}" \
+    --data-urlencode "hookEventName=${ALERA_AGENT_HOOK_EVENT}" \
+    --data-urlencode "version=${ALERA_AGENT_HOOK_VERSION}" \
+    --data-urlencode "payload@-" >/dev/null 2>&1; then
+    break
+  fi
+  alera_attempt=$((alera_attempt + 1))
+done
 exit 0
 "#;
 
@@ -96,7 +119,7 @@ if "%ALERA_AGENT_HOOK_TOKEN%"=="" exit /b 0
 if "%ALERA_TERMINAL_SESSION_ID%"=="" exit /b 0
 if "%ALERA_WORKSPACE_ID%"=="" exit /b 0
 if "%ALERA_TAB_ID%"=="" exit /b 0
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$inputData=[Console]::In.ReadToEnd(); if ([string]::IsNullOrWhiteSpace($inputData)) { $inputData='{}' }; try { $body=@{ terminalSessionId=$env:ALERA_TERMINAL_SESSION_ID; workspaceId=$env:ALERA_WORKSPACE_ID; tabId=$env:ALERA_TAB_ID; hookEventName=$env:ALERA_AGENT_HOOK_EVENT; version=$env:ALERA_AGENT_HOOK_VERSION; payload=($inputData | ConvertFrom-Json) } | ConvertTo-Json -Depth 100 -Compress; Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 -Method Post -Uri ('http://127.0.0.1:' + $env:ALERA_AGENT_HOOK_PORT + '/hook/' + $env:ALERA_AGENT_TYPE) -ContentType 'application/json' -Headers @{ 'X-Alera-Agent-Hook-Token'=$env:ALERA_AGENT_HOOK_TOKEN } -Body $body | Out-Null } catch {}"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$inputData=[Console]::In.ReadToEnd(); if ([string]::IsNullOrWhiteSpace($inputData)) { $inputData='{}' }; try { $body=@{ terminalSessionId=$env:ALERA_TERMINAL_SESSION_ID; workspaceId=$env:ALERA_WORKSPACE_ID; tabId=$env:ALERA_TAB_ID; hookEventName=$env:ALERA_AGENT_HOOK_EVENT; version=$env:ALERA_AGENT_HOOK_VERSION; payload=($inputData | ConvertFrom-Json) } | ConvertTo-Json -Depth 100 -Compress } catch { exit 0 }; $completionEvents=@('Stop','StopFailure','SessionEnd','stop','sessionEnd','SessionIdle','agent_settled','session_shutdown','agent.end','ErrorOccurred'); $attempts=1; if ($completionEvents -contains $env:ALERA_AGENT_HOOK_EVENT) { $attempts=3 }; for ($attempt=1; $attempt -le $attempts; $attempt++) { try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 1 -Method Post -Uri ('http://127.0.0.1:' + $env:ALERA_AGENT_HOOK_PORT + '/hook/' + $env:ALERA_AGENT_TYPE) -ContentType 'application/json' -Headers @{ 'X-Alera-Agent-Hook-Token'=$env:ALERA_AGENT_HOOK_TOKEN } -Body $body | Out-Null; break } catch {} }"
 exit /b 0
 "#;
 
@@ -148,6 +171,14 @@ mod tests {
         assert!(!POSIX_HOOK_SCRIPT.contains(r#"payload=${payload}"#));
     }
 
+    #[test]
+    fn managed_script_retries_completion_delivery_only() {
+        assert!(POSIX_HOOK_SCRIPT.contains("alera_completion_event"));
+        assert!(POSIX_HOOK_SCRIPT.contains("StopFailure"));
+        assert!(POSIX_HOOK_SCRIPT.contains("agent_settled"));
+        assert!(POSIX_HOOK_SCRIPT.contains("alera_attempts=3"));
+    }
+
     #[cfg(windows)]
     #[test]
     fn windows_managed_script_answers_stdout_agents() {
@@ -160,5 +191,14 @@ mod tests {
     #[test]
     fn windows_managed_script_can_derive_the_current_runtime_endpoint() {
         assert!(WINDOWS_HOOK_SCRIPT.contains("%ALERA_RUNTIME_DIR%\\agent-hooks\\endpoint.cmd"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_managed_script_retries_completion_delivery_only() {
+        assert!(WINDOWS_HOOK_SCRIPT.contains("$completionEvents"));
+        assert!(WINDOWS_HOOK_SCRIPT.contains("$attempts=3"));
+        assert!(WINDOWS_HOOK_SCRIPT.contains("StopFailure"));
+        assert!(WINDOWS_HOOK_SCRIPT.contains("agent_settled"));
     }
 }

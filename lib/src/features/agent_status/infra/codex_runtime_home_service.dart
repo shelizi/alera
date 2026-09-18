@@ -381,6 +381,8 @@ const List<String> _codexEvents = <String>[
   'PermissionRequest',
   'PostToolUse',
   'Stop',
+  'Interrupt',
+  'SessionEnd',
 ];
 
 const List<String> _codexSystemResourceEntries = <String>[
@@ -406,6 +408,8 @@ const Map<String, String> _codexEventLabels = <String, String>{
   'PermissionRequest': 'permission_request',
   'PostToolUse': 'post_tool_use',
   'Stop': 'stop',
+  'Interrupt': 'interrupt',
+  'SessionEnd': 'session_end',
   'PreCompact': 'pre_compact',
   'PostCompact': 'post_compact',
 };

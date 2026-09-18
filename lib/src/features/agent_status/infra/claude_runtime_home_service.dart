@@ -366,6 +366,7 @@ class const _CopiedResourceMarker({
 const List<_ClaudeHookEvent> _claudeEvents = <_ClaudeHookEvent>[
   _ClaudeHookEvent('UserPromptSubmit'),
   _ClaudeHookEvent('Stop'),
+  _ClaudeHookEvent('StopFailure'),
   _ClaudeHookEvent('PreToolUse', matcher: '*'),
   _ClaudeHookEvent('PostToolUse', matcher: '*'),
   _ClaudeHookEvent('PostToolUseFailure', matcher: '*'),

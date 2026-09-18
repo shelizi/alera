@@ -11,7 +11,7 @@ Object.assign(process.env, {
 let emitted = [];
 globalThis.fetch = async (_url, options) => {
   emitted.push(JSON.parse(options.body).payload);
-  return {};
+  return { ok: true };
 };
 
 for (const kind of ['opencode', 'opencode2', 'pi']) {

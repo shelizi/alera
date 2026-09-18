@@ -55,14 +55,18 @@ async function post(eventName, payload = {}) {
   const tabId = process.env.ALERA_TAB_ID
   if (!port || !token || !terminalSessionId || !workspaceId || !tabId) return
   const titleContext = await titleSessionContext(payload);
-  try {
-    await fetch(`http://127.0.0.1:${port}/hook/opencode`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Alera-Agent-Hook-Token': token },
-      body: JSON.stringify({ terminalSessionId, workspaceId, tabId, payload: { hook_event_name: eventName, ...payload, ...titleContext } }),
-      signal: typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? AbortSignal.timeout(1000) : undefined,
-    })
-  } catch {}
+  const attempts = eventName === 'SessionIdle' ? 3 : 1
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/hook/opencode`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Alera-Agent-Hook-Token': token },
+        body: JSON.stringify({ terminalSessionId, workspaceId, tabId, payload: { hook_event_name: eventName, ...payload, ...titleContext } }),
+        signal: typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? AbortSignal.timeout(1000) : undefined,
+      })
+      if (response.ok) return
+    } catch {}
+  }
 }
 
 async function setStatus(status, sessionId) {

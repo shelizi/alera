@@ -178,6 +178,8 @@ const CODEX_STATUS: &[AgentStatusNormalizationRule] = &[
     ),
     AgentStatusNormalizationRule::new("PermissionRequest", AgentStatusState::Waiting),
     AgentStatusNormalizationRule::new("Stop", AgentStatusState::Done),
+    AgentStatusNormalizationRule::new("Interrupt", AgentStatusState::Done),
+    AgentStatusNormalizationRule::new("SessionEnd", AgentStatusState::Done),
 ];
 const CLAUDE_STATUS: &[AgentStatusNormalizationRule] = &[
     AgentStatusNormalizationRule::new("UserPromptSubmit", AgentStatusState::Working),
@@ -191,6 +193,7 @@ const CLAUDE_STATUS: &[AgentStatusNormalizationRule] = &[
     AgentStatusNormalizationRule::new("PermissionRequest", AgentStatusState::Waiting),
     AgentStatusNormalizationRule::new("AskUserQuestion", AgentStatusState::Waiting),
     AgentStatusNormalizationRule::new("Stop", AgentStatusState::Done),
+    AgentStatusNormalizationRule::new("StopFailure", AgentStatusState::Done),
 ];
 const COPILOT_STATUS: &[AgentStatusNormalizationRule] = &[
     AgentStatusNormalizationRule::new("SessionStart", AgentStatusState::Working),
@@ -250,7 +253,8 @@ const PI_STATUS: &[AgentStatusNormalizationRule] = &[
     AgentStatusNormalizationRule::new("tool_execution_start", AgentStatusState::Working),
     AgentStatusNormalizationRule::new("tool_execution_end", AgentStatusState::Working),
     AgentStatusNormalizationRule::new("message_end", AgentStatusState::Working),
-    AgentStatusNormalizationRule::new("agent_end", AgentStatusState::Done),
+    AgentStatusNormalizationRule::new("agent_end", AgentStatusState::Working),
+    AgentStatusNormalizationRule::new("agent_settled", AgentStatusState::Done),
     AgentStatusNormalizationRule::new("session_shutdown", AgentStatusState::Done),
 ];
 const AMP_STATUS: &[AgentStatusNormalizationRule] = &[

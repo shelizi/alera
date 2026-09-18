@@ -10,7 +10,7 @@ AgentStatusState? _normalizeCodexState(String eventName, String? toolName) {
     'PreToolUse' ||
     'PostToolUse' => AgentStatusState.working,
     'PermissionRequest' => AgentStatusState.waiting,
-    'Stop' => AgentStatusState.done,
+    'Stop' || 'Interrupt' || 'SessionEnd' => AgentStatusState.done,
     _ => null,
   };
 }

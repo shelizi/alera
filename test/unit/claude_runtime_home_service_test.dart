@@ -97,7 +97,7 @@ void main() {
         _commandsFor(runtimeHooks, 'UserPromptSubmit'),
         contains('echo user-hook'),
       );
-      expect(_managedCommandCount(runtimeHooks, 'alera-claude-hook.sh'), 6);
+      expect(_managedCommandCount(runtimeHooks, 'alera-claude-hook.sh'), 7);
       expect(
         File(p.join(home.path, '.alera', 'agent-hooks', 'alera-claude-hook.sh'))
             .existsSync(),
@@ -228,7 +228,7 @@ void main() {
       final runtimeHooks = _hooks(
         p.join(preparation.runtimeHomePath, 'settings.json'),
       );
-      expect(_managedCommandCount(runtimeHooks, 'alera-claude-hook.cmd'), 6);
+      expect(_managedCommandCount(runtimeHooks, 'alera-claude-hook.cmd'), 7);
       final promptCommand = _commandsFor(
         runtimeHooks,
         'UserPromptSubmit',
@@ -607,7 +607,7 @@ void main() {
             isNot(contains(staleManagedCommand)),
           ),
         );
-        expect(_managedCommandCount(runtimeHooks, 'alera-claude-hook.sh'), 6);
+        expect(_managedCommandCount(runtimeHooks, 'alera-claude-hook.sh'), 7);
       },
     );
 

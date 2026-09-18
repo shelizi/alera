@@ -24,6 +24,8 @@ extension _CodexManagedAgentHook on ManagedAgentHookInstallService {
         _ManagedHookEvent('PostToolUse'),
         _ManagedHookEvent('PermissionRequest'),
         _ManagedHookEvent('Stop'),
+        _ManagedHookEvent('Interrupt'),
+        _ManagedHookEvent('SessionEnd'),
       ],
     );
   }
