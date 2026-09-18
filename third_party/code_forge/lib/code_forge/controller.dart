@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 
 import '../code_forge.dart';
@@ -162,6 +163,7 @@ class CodeForgeController implements DeltaTextInputClient {
   ({String filePath, String prefix, int line, int character})?
   _queuedCompletionRequest;
   NativeEditorDocument? _nativeEditorDocument;
+  NativeParseCancellation? _nativeEditorParseCancellation;
   Future<void>? _nativeEditorOpenFuture;
   Future<void>? _nativeEditorSyncFuture;
   final List<CodeForgeDocumentEditDelta> _pendingNativeEditorEdits = [];
@@ -397,6 +399,7 @@ class CodeForgeController implements DeltaTextInputClient {
   void configureNativeSyntaxDocument({
     required String languageId,
     String? documentId,
+    bool deferInitialParse = false,
   }) {
     final normalizedLanguageId = languageId.trim().toLowerCase();
     if (normalizedLanguageId.isEmpty) return;
@@ -409,6 +412,9 @@ class CodeForgeController implements DeltaTextInputClient {
     }
 
     final generation = ++_nativeEditorGeneration;
+    final previousCancellation = _nativeEditorParseCancellation;
+    _nativeEditorParseCancellation = null;
+    previousCancellation?.cancel();
     final previous = _nativeEditorDocument;
     _nativeEditorDocument = null;
     _nativeEditorOpenFuture = null;
@@ -424,18 +430,37 @@ class CodeForgeController implements DeltaTextInputClient {
     }
 
     final initialRevision = _currentVersion;
-    final initialRope = _rope.core;
+    // Keep the parse baseline immutable while large-file admission is deferred.
+    // Ropey cloning is copy-on-write, so this remains cheap while ensuring the
+    // queued deltas below are applied exactly once from [initialRevision].
+    final initialRope = _rope.core.deepClone();
     _nativeEditorOpenFuture = () async {
+      NativeParseCancellation? cancellation;
       try {
-        final document = await NativeEditorDocument.openFromRope(
+        if (deferInitialParse) {
+          await SchedulerBinding.instance.endOfFrame;
+          if (_isDisposed || generation != _nativeEditorGeneration) return;
+        }
+
+        cancellation = NativeParseCancellation.create();
+        if (_isDisposed || generation != _nativeEditorGeneration) {
+          cancellation.cancel();
+          return;
+        }
+        _nativeEditorParseCancellation = cancellation;
+        final document = await NativeEditorDocument.openFromRopeCancellable(
           documentId: resolvedDocumentId,
           revision: BigInt.from(initialRevision),
           rope: initialRope,
           languageId: normalizedLanguageId,
+          cancellation: cancellation,
         );
         if (_isDisposed || generation != _nativeEditorGeneration) {
           await document.close();
           return;
+        }
+        if (identical(_nativeEditorParseCancellation, cancellation)) {
+          _nativeEditorParseCancellation = null;
         }
         final info = document.info();
         _nativeEditorDocument = document;
@@ -446,6 +471,9 @@ class CodeForgeController implements DeltaTextInputClient {
         }
       } catch (error) {
         if (generation != _nativeEditorGeneration) return;
+        if (identical(_nativeEditorParseCancellation, cancellation)) {
+          _nativeEditorParseCancellation = null;
+        }
         _disableNativeSyntaxDocument(error);
       }
     }();
@@ -979,6 +1007,9 @@ class CodeForgeController implements DeltaTextInputClient {
 
   void _disableNativeSyntaxDocument(Object error) {
     debugPrint('CodeForge native syntax fallback: $error');
+    final parseCancellation = _nativeEditorParseCancellation;
+    _nativeEditorParseCancellation = null;
+    parseCancellation?.cancel();
     _nativeEditorFailed = true;
     _nativeEditorParserSupported = false;
     _pendingNativeEditorEdits.clear();
@@ -1248,6 +1279,12 @@ class CodeForgeController implements DeltaTextInputClient {
   /// Open a file using the controller API instead of passing `filePath` parameter to [CodeForge]
   set openedFile(String? file) {
     final previousFile = _openedFile;
+    if (previousFile != file) {
+      // A file switch is a new retained-document generation. Cancel any
+      // pending/active parse before replacing the authoritative Rope so a
+      // stale tab cannot continue consuming cold-parse work in the background.
+      _resetNativeSyntaxDocument();
+    }
     _openedFile = file;
     if (openedFile != null) {
       text = File(_openedFile!).readAsStringSync();
@@ -3004,6 +3041,9 @@ class CodeForgeController implements DeltaTextInputClient {
 
   void _resetNativeSyntaxDocument() {
     _nativeEditorGeneration++;
+    final parseCancellation = _nativeEditorParseCancellation;
+    _nativeEditorParseCancellation = null;
+    parseCancellation?.cancel();
     final document = _nativeEditorDocument;
     _nativeEditorDocument = null;
     _nativeEditorOpenFuture = null;
@@ -5379,6 +5419,9 @@ class CodeForgeController implements DeltaTextInputClient {
   void dispose() {
     _isDisposed = true;
     _nativeEditorGeneration++;
+    final parseCancellation = _nativeEditorParseCancellation;
+    _nativeEditorParseCancellation = null;
+    parseCancellation?.cancel();
     _pendingNativeEditorEdits.clear();
     _nativeEditorOpenFuture = null;
     _nativeEditorSyncFuture = null;

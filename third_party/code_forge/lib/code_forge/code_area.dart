@@ -5461,6 +5461,7 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
       controller.configureNativeSyntaxDocument(
         languageId: nativeLanguageId,
         documentId: filePath,
+        deferInitialParse: _largeFilePerformanceMode,
       );
     }
     _layoutMap = LayoutMap();

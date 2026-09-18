@@ -11,7 +11,13 @@ void main() {
       ).readAsStringSync();
 
       expect(controller, contains('Rope.openWorkspaceFile('));
-      expect(controller, contains('NativeEditorDocument.openFromRope('));
+      expect(
+        controller,
+        contains('NativeEditorDocument.openFromRopeCancellable('),
+      );
+      expect(controller, contains('NativeParseCancellation.create()'));
+      expect(controller, contains('previousCancellation?.cancel()'));
+      expect(controller, contains('parseCancellation?.cancel()'));
       expect(controller, contains('.applyEdits('));
       expect(controller, contains('queryNativeSyntaxSpans('));
       expect(controller, contains('.close()'));
@@ -41,6 +47,54 @@ void main() {
     expect(workspaceEditor, contains('languageId:'));
     expect(workspaceEditor, contains('_languageIdForPath(filePath)'));
   });
+
+  test(
+    'large-file retained parsing starts only after first-frame admission',
+    () {
+      final controller = File(
+        'third_party/code_forge/lib/code_forge/controller.dart',
+      ).readAsStringSync();
+      final codeArea = File(
+        'third_party/code_forge/lib/code_forge/code_area.dart',
+      ).readAsStringSync();
+
+      expect(
+        codeArea,
+        contains('deferInitialParse: _largeFilePerformanceMode'),
+      );
+      expect(controller, contains('bool deferInitialParse = false'));
+      expect(controller, contains('SchedulerBinding.instance.endOfFrame'));
+      expect(
+        controller,
+        contains('final initialRope = _rope.core.deepClone();'),
+      );
+      expect(controller, contains('await openFuture;'));
+      expect(controller, contains('_pendingNativeEditorEdits.add('));
+    },
+  );
+
+  test(
+    'file switches invalidate retained parser work before Rope replacement',
+    () {
+      final controller = File(
+        'third_party/code_forge/lib/code_forge/controller.dart',
+      ).readAsStringSync();
+
+      final openedFileSetter = controller.substring(
+        controller.indexOf('set openedFile(String? file)'),
+        controller.indexOf(
+          'List<LspErrors> get diagnostics',
+          controller.indexOf('set openedFile(String? file)'),
+        ),
+      );
+      expect(openedFileSetter, contains('if (previousFile != file)'));
+      expect(openedFileSetter, contains('_resetNativeSyntaxDocument();'));
+      expect(
+        openedFileSetter.indexOf('_resetNativeSyntaxDocument();'),
+        lessThan(openedFileSetter.indexOf('_openedFile = file;')),
+      );
+    },
+  );
 
   test('CodeForge structural selection stays on the retained native tree', () {
     final controller = File(

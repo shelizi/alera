@@ -9,9 +9,9 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 import 'rope.dart';
 
-// These functions are ignored because they are not marked as `pub`: `advance_point`, `append_capture_spans`, `apply_edit`, `bounded_rope_text`, `collect_document_symbols`, `collect_folding_ranges`, `find_structural_matching_bracket`, `find_structural_selection_range`, `first_identifier_child`, `is_foldable_node_kind`, `line_content_end_char`, `native_language`, `normalize_language_id`, `normalize_scope`, `open_with_rope`, `parse_rope`, `point_for_char`, `symbol_kind_for_node`, `symbol_name_node`
+// These functions are ignored because they are not marked as `pub`: `advance_point`, `append_capture_spans`, `apply_edit`, `bounded_rope_text`, `collect_document_symbols`, `collect_folding_ranges`, `ensure_parse_not_cancelled`, `find_structural_matching_bracket`, `find_structural_selection_range`, `first_identifier_child`, `is_foldable_node_kind`, `line_content_end_char`, `native_language`, `normalize_language_id`, `normalize_scope`, `open_with_rope`, `parse_rope`, `point_for_char`, `symbol_kind_for_node`, `symbol_name_node`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `NativeEditorDocumentState`, `NativeLanguage`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<NativeEditorDocument>>
 abstract class NativeEditorDocument implements RustOpaqueInterface {
@@ -60,6 +60,23 @@ abstract class NativeEditorDocument implements RustOpaqueInterface {
         languageId: languageId,
       );
 
+  /// Opens retained syntax state with cooperative Tree-sitter cancellation.
+  /// A cancelled parse never publishes a partially initialized document.
+  static Future<NativeEditorDocument> openFromRopeCancellable({
+    required String documentId,
+    required BigInt revision,
+    required RopeBridge rope,
+    required String languageId,
+    required NativeParseCancellation cancellation,
+  }) => RustLib.instance.api
+      .crateApiEditorDocumentNativeEditorDocumentOpenFromRopeCancellable(
+        documentId: documentId,
+        revision: revision,
+        rope: rope,
+        languageId: languageId,
+        cancellation: cancellation,
+      );
+
   /// Returns a bounded document outline from the already-retained Tree-sitter tree.
   /// Only declaration metadata and short symbol names cross FFI; the document text
   /// itself remains owned by the retained native Rope.
@@ -99,6 +116,16 @@ abstract class NativeEditorDocument implements RustOpaqueInterface {
     required BigInt endLine,
     required BigInt overscan,
   });
+}
+
+// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<NativeParseCancellation>>
+abstract class NativeParseCancellation implements RustOpaqueInterface {
+  void cancel();
+
+  static NativeParseCancellation create() => RustLib.instance.api
+      .crateApiEditorDocumentNativeParseCancellationCreate();
+
+  bool isCancelled();
 }
 
 class BracketMatchResponse {
