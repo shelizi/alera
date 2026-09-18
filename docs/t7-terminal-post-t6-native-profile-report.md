@@ -2,146 +2,125 @@
 
 Date: 2026-09-18
 Branch: `perf/terminal-post-t6-native-profile`
-Baseline: `c7947b42b623147465e1534844d340b3912d7152`
-Status: **BLOCKED on native Windows integration build; portable five-sample profile evidence complete**
+Terminal architecture baseline: `c7947b42b623147465e1534844d340b3912d7152`
+Native verification checkout: `6f4342cda57752836075d49370e4117feac09a72`
+Status: **COMPLETE — T8d selected**
 
-## Scope
+## Scope and baseline equivalence
 
-T7 is an evidence-only gate after T6. It does **not** change production terminal behavior. The goal is to rerun the post-T6 production worker/reveal/render profiles, collect the native Windows restore and flush gates that T5 could not run, and use the combined evidence to decide whether any T8 architecture cut is justified.
+T7 is the post-T6 evidence gate. It does not change production terminal behavior.
 
-The dedicated T7 worktree could not materialize its terminal submodules cleanly on this Windows host because the nested terminal dependency checkout hit the existing Windows long-path problem and the pinned xterm commit was not available from the current remote refs. The measurements below were therefore executed from the repository root at the exact same baseline commit, `c7947b42`, where the pinned terminal submodules were already materialized. Report and coordination-plan changes remain isolated on the T7 branch.
+The native Windows rerun was executed from the repository root under `@home-node`, because that MCP process inherits the complete Windows environment and can build Flutter desktop targets successfully. The root checkout was at `6f4342cd`; comparison against `c7947b42` shows that only A3 validation docs/tests changed between those commits:
 
-## Environment and native Windows recipe
+- `docs/a3-agent-overlay-unchanged-fastpath-handoff.md`
+- `docs/rust-heavy-operation-parallel-work-plan.md`
+- `integration_test/agent_runtime_overlay_benchmark.dart`
 
-Observed toolchain:
+No terminal production file changed, so the native terminal measurements are representative of the T7 terminal baseline.
 
-- Flutter 3.47.2 / Dart 3.13.2.
-- Windows desktop device: `windows-x64`.
-- Visual Studio Community 2026 18.6.1.
-- Windows SDK 10.0.26100.0.
-- The inherited MCP process PATH resolves `C:\Program Files\coreutils\bin\link.exe` before the MSVC linker and omits several standard Windows environment variables.
+## Environment finding
 
-The most complete reproducible child-shell setup found during T7 was:
+The earlier `@home-rust` failure was not an incomplete Visual Studio/MSVC/Windows SDK installation. Under `@home-node` the same machine successfully built and launched the native Windows app.
 
-```bat
-set CommonProgramFiles=C:\Program Files\Common Files&&
-set CommonProgramW6432=C:\Program Files\Common Files&&
-set CommonProgramFiles^(x86^)=C:\Program Files (x86)\Common Files&&
-set ALLUSERSPROFILE=C:\ProgramData&&
-set PUBLIC=C:\Users\Public&&
-set TrackFileAccess=false&&
-call C:\PROGRA~1\MICROS~2\18\COMMUN~1\VC\Auxiliary\Build\vcvars64.bat&&
-C:\flutter\bin\flutter.bat test <benchmark> -d windows
-```
+`@home-node` exposes the standard Windows environment variables that were missing from the `@home-rust` child process, including `CommonProgramFiles`, `CommonProgramW6432`, `ALLUSERSPROFILE`, `APPDATA`, and `LOCALAPPDATA`.
 
-The short Visual Studio path is intentional: the MCP-to-`cmd.exe` quoting layer did not preserve a quoted `call "C:\Program Files\...\vcvars64.bat"` command correctly. Loading `vcvars64.bat` restores the MSVC compiler/linker ordering. `TrackFileAccess=false` bypasses the earlier `GetOutOfDateItems` FileTracker call, but it does **not** suppress FileTracker use inside the MSBuild `CL` task itself.
+Therefore the previous `Microsoft.Build.Utilities.FileTracker.InitializeCommonApplicationDataPaths()` illegal-path failure is classified as an `@home-rust` MCP process-environment problem, not a project/toolchain installation problem.
 
-Both native integration gates therefore still fail before the test process launches:
+## Benchmark synchronization repair
 
-```text
-Microsoft.Build.Utilities.FileTracker
-System.ArgumentException: 不合法的路徑格式。
-System.IO.Path.GetPathRoot(...)
-FileTracker.InitializeCommonApplicationDataPaths()
-Microsoft.Build.CPPTasks.CL.ComputeOutOfDateSources()
-```
+The first successful native launch exposed a stale assumption in `integration_test/terminal_restore_benchmark.dart`.
 
-This is a Windows/MSBuild host-environment build failure, not a measured terminal regression. T7 does not report synthetic native restore/render numbers.
+The benchmark originally stopped restore timing correctly when `restoreProgress` became null, but then assumed one post-frame callback plus a fixed 50 ms delay was enough for the following 1 MiB live backlog marker to reach the emulator. Since `1f6d4b1d` serialized asynchronous parser-worker output applies, restore completion and subsequent live-output application are separate ordered steps.
+
+The benchmark-only fix keeps the restore latency boundary unchanged, records that live backlog is still pending at restore-ready, then waits up to three seconds for the live marker before validating snapshot/live ordering. No production terminal code is changed.
 
 ## Required run status
 
 | Required run | Samples | Result |
 | --- | ---: | --- |
-| `flutter test integration_test/terminal_restore_benchmark.dart -d windows` | 0/5 | **BLOCKED** before test launch; Windows build failed in VS18/MSBuild `CL` -> `FileTracker.InitializeCommonApplicationDataPaths()`. Final attempt spent 1158.2 s in Windows build before exit 1. |
-| `flutter test integration_test/terminal_flush_cadence_benchmark.dart -d windows` | 0/5 | **BLOCKED** by the same `CL` / FileTracker path-format exception. Cached follow-up attempt spent 240.6 s in Windows build before exit 1. |
+| `flutter test integration_test/terminal_restore_benchmark.dart -d windows` | 5 | **PASS** after benchmark synchronization repair |
+| `flutter test integration_test/terminal_flush_cadence_benchmark.dart -d windows` | 5 | **PASS** |
 | `flutter test test/benchmarks/terminal_production_worker_profile_benchmark.dart` | 5/scenario | **PASS** |
 | `flutter test test/benchmarks/terminal_reveal_pipeline_profile_benchmark.dart` | 5/path | **PASS** |
 | `flutter test test/benchmarks/terminal_streaming_render_profile_benchmark.dart` | 5 | **PASS** |
 
-## Production worker / replica profile
+## Native Windows restore
 
-All scenarios below use five measured samples.
-
-| Scenario | Wall median / p95 | Worker roundtrip median / p95 | Replica apply median / p95 | Full repaints |
-| --- | ---: | ---: | ---: | ---: |
-| sustained compiler/log output | 307.76 / 2587.01 ms | 237.61 / 1699.21 ms | 24.08 / 365.03 ms | 0 |
-| bursty agent output | 654.78 / 1516.86 ms | 579.63 / 1225.41 ms | 37.19 / 49.33 ms | 0 |
-| full-screen TUI repaint | 243.73 / 304.25 ms | 187.10 / 280.81 ms | 4.80 / 34.85 ms | 0 |
-| synchronized-update bursts | 293.41 / 506.12 ms | 258.91 / 387.64 ms | 5.90 / 42.99 ms | 0 |
-| deep scrollback + ongoing output | 330.26 / 2085.51 ms | 275.14 / 1653.81 ms | 34.08 / 71.30 ms | 0 |
-| hidden terminal output | 376.76 / 802.90 ms | 369.42 / 798.56 ms | 0.27 / 0.73 ms | 0 |
-| reveal after large hidden backlog | 640.63 / 1790.98 ms | 263.65 / 1157.59 ms | 95.27 / 362.79 ms | 1 |
-| resize storm | 10898.35 / 15541.56 ms | 9228.31 / 13528.53 ms | 521.55 / 659.88 ms | 40 |
-| coalesced resize final size | 160.70 / 293.07 ms | 118.89 / 231.73 ms | 43.30 / 54.86 ms | 1 |
-
-The ordinary output cases still avoid whole-buffer repaint. The structural cases remain distinct: reveal performs one full repaint for 8,001 rows / 1,238,175 cells, while an uncoalesced 40-resize storm performs 40 full repaints. The coalesced final-size scenario demonstrates why intermediate resize snapshots should stay collapsed.
-
-## Packed reveal stage profile
-
-The post-T6 packed-transfer path is the important comparison. Five measured samples produced:
+Five measured samples:
 
 ```text
-hidden input bytes:                    1,325,790
-rows / cells:                          8,001 / 1,238,175
-raw roundtrip median:                    59.39 ms
-worker materialize median:               53.81 ms
-isolate transfer/scheduling median:       0.82 ms
-UI decode median:                       226.55 ms
-replica apply median:                   156.86 ms
-reveal end-to-end median:               431.22 ms
+snapshot:                      2,560,000 bytes
+ESC characters:                 420,000
+live backlog:                 1,048,576 bytes
+accepted median:                   1.72 ms
+first chunk median:              145.69 ms
+restore-ready median:          9,899.17 ms
+restore-ready p95:            12,438.39 ms
+restore-ready max:            12,438.39 ms
+MAD:                            1,014.85 ms
+3-second target:                     0 / 5
+throughput:                         0.25 MiB/s
+flushes/sample:               43, 43, 45, 43, 48
+frames:                            1,381
+slow frames:                       1,327
+build median/p95:              0.28 / 29.20 ms
+raster median/p95:           35.47 / 54.44 ms
 ```
 
-For comparison, the intentionally object-heavy nested reference path measured 3298.60 ms raw roundtrip, 2753.30 ms isolate transfer/scheduling, 443.50 ms UI decode, 198.57 ms replica apply, and 5698.40 ms end-to-end. That reference path confirms the packed transfer removed the previous object-graph/isolate-transfer problem; it is not a production recommendation.
+This answers the first T7 question decisively: native snapshot restore is a material user-visible bottleneck. Median restore is about 9.9 seconds, more than 3x the 3-second target, and all five samples miss the target.
 
-Within the current packed path, the measured stage order is:
+## Native Windows streaming/render cadence
+
+Five measured samples:
 
 ```text
-UI decode/materialization 226.55 ms
-> replica apply           156.86 ms
-> worker materialize       53.81 ms
->> isolate transfer         0.82 ms
+writes/s median / p95:        20.2 / 22.9
+flushes/s median / p95:        8.0 / 9.3
+frames/s median:              15.9
+build median / p95:           6.25 / 103.22 ms
+raster median / p95:         58.61 / 84.32 ms
+total frame median / p95:    97.23 / 170.32 ms
+jank frames/sample:           51, 39, 48, 54, 41
+RSS delta median / p95:       7.07 / 22.40 MiB
 ```
 
-The standalone packed reveal profile is now 431.22 ms median, while the production worker-profile hidden-backlog reveal is 640.63 ms wall median on this run. The remaining latency is therefore still material enough to justify investigation, but the portable stage evidence points first at UI packed decode/materialization rather than another transport redesign.
+The native Windows renderer therefore confirms the portable `flutter_tester` raster-tail signal. Rendering is materially slow, but its frame-scale cost is still far smaller than the multi-second restore replay.
 
-## Streaming renderer signal
+## Portable worker / reveal evidence
 
-Five-sample `flutter_tester` result:
+The post-T6 portable evidence remains:
 
-```text
-writes/s median / p95:     9.2 / 13.4
-flushes/s median / p95:    5.3 / 5.7
-frames/s median:           4.9
-build median / p95:        2.65 / 87.96 ms
-raster median / p95:      81.68 / 503.41 ms
-total frame median / p95: 109.32 / 516.19 ms
-jank frames/sample:        16, 15, 15, 16, 15
-RSS delta median / p95:    2.74 / 7.66 MiB
-```
+- production hidden-backlog reveal wall median: **640.63 ms**;
+- packed reveal end-to-end median: **431.22 ms**;
+- UI packed decode/materialization: **226.55 ms**;
+- replica apply: **156.86 ms**;
+- worker materialization: **53.81 ms**;
+- isolate transfer/scheduling: **0.82 ms**.
 
-The `flutter_tester` raster tail is still present, but this cannot answer whether the native Windows compositor/GPU path confirms it because both native integration builds stop in MSBuild before app launch.
+This still shows a useful T8a opportunity inside reveal, and native renderer evidence also justifies future renderer work. Neither is the largest user-visible bottleneck found by T7.
 
-## T7 required interpretation
+## T7 interpretation
 
-1. **Is native restore now a material user-visible bottleneck?**  
-   Not measurable on this host. The native restore integration test never launches, so T7 does not select or reject T8d.
+1. **Is native restore a material user-visible bottleneck?**
+   Yes. Median **9.90 s**, p95 **12.44 s**, target hit **0/5**.
 
-2. **Does the native Windows renderer confirm or reject the `flutter_tester` raster-tail signal?**  
-   Not measurable on this host. The portable renderer signal remains strong, but native confirmation is still missing, so T7 does not select T8c.
+2. **Does native Windows confirm the raster-tail signal?**
+   Yes. Native raster median/p95 is **58.61/84.32 ms**, with total-frame median/p95 **97.23/170.32 ms** and 39–54 jank frames per sample.
 
-3. **After packed snapshot transport, what dominates reveal?**  
-   In the measurable portable pipeline, UI packed decode/materialization is largest at 226.55 ms median, followed by replica apply at 156.86 ms. Worker materialization is 53.81 ms and isolate transfer is only 0.82 ms.
+3. **What dominates packed reveal?**
+   Portable packed reveal remains UI decode/materialization (**226.55 ms**) > replica apply (**156.86 ms**) > worker materialization (**53.81 ms**) >> isolate transfer (**0.82 ms**).
 
-4. **Is the remaining reveal worth another architecture cut?**  
-   The current 431.22 ms standalone packed-pipeline median and 640.63 ms production hidden-backlog reveal wall median are still material. Portable evidence therefore makes **T8a** (keep packed storage longer / avoid rebuilding per-cell Dart objects) the leading implementation candidate, ahead of T8b. However, the T7 gate is incomplete until native Windows restore/render evidence exists, so T8 must not begin yet.
+4. **Which single T8 cut is justified?**
+   **T8d — direct worker snapshot hydration / restore redesign.** The native restore path is an order of magnitude more expensive than the remaining packed reveal stages and much larger than a single renderer frame tail.
 
 ## Decision
 
-T7 is **evidence-complete for the portable worker/reveal/render lanes but BLOCKED for the two required native Windows gates**.
+T7 is complete.
 
-- Do not begin T8 from this branch.
-- Do not infer a native renderer or restore result from `flutter_tester`.
-- When the Windows/MSBuild host environment can build Flutter desktop tests without the FileTracker exception, rerun the existing restore and flush integration benchmarks unchanged with five samples.
-- If native evidence does not identify renderer or restore as the dominant cost, current portable evidence selects **T8a** as the next architecture experiment.
-- No production terminal file was changed by T7.
+The single next terminal architecture cut selected by the documented decision tree is:
 
+> **T8d: direct worker snapshot hydration / restore redesign**
+
+T8a and T8c remain valid later opportunities, but should not be mixed into the first T8 implementation. T8d should preserve ordered live output, pointer/input catch-up semantics, restore-progress behavior, and the benchmark's separate restore-ready versus live-backlog assertions.
+
+No production terminal implementation file was changed by T7.

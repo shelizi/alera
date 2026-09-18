@@ -166,9 +166,11 @@ Future<_RestoreSample> _measureRestore({
       () => Future<void>.delayed(const Duration(milliseconds: 50)),
     );
 
-    final text = terminalBufferTextForTesting(session);
+    var text = terminalBufferTextForTesting(session);
     final restoreOffset = text.indexOf(_restoreMarker);
-    final liveOffset = text.indexOf(_liveMarker);
+    final pendingLiveAtRestoreReady = pendingLiveTerminalOutputCharsForTesting(
+      session,
+    );
     expect(sawProgress, isTrue);
     expect(accepted, isNotNull);
     expect(firstChunk, isNotNull);
@@ -176,8 +178,16 @@ Future<_RestoreSample> _measureRestore({
     expect(terminalPointerInputSuspendedForTesting(session), isFalse);
     expect(find.text('Restoring Terminal'), findsNothing);
     expect(restoreOffset, greaterThanOrEqualTo(0));
+    expect(pendingLiveAtRestoreReady, greaterThan(0));
+
+    final liveDeadline = DateTime.now().add(const Duration(seconds: 3));
+    var liveOffset = text.indexOf(_liveMarker);
+    while (liveOffset < 0 && DateTime.now().isBefore(liveDeadline)) {
+      await tester.pump(const Duration(milliseconds: 16));
+      text = terminalBufferTextForTesting(session);
+      liveOffset = text.indexOf(_liveMarker);
+    }
     expect(liveOffset, greaterThan(restoreOffset));
-    expect(pendingLiveTerminalOutputCharsForTesting(session), greaterThan(0));
 
     return _RestoreSample(
       accepted: accepted!,
