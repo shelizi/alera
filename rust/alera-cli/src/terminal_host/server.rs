@@ -175,6 +175,7 @@ mod pty_events_session_lifecycle;
 mod push_delivery;
 mod remote_relay;
 mod request_payloads;
+mod request_route_policy;
 mod requests;
 mod resource_requests;
 mod runtime_change_broadcasts;

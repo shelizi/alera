@@ -21,6 +21,7 @@ use crate::terminal_host::session::SessionDriver;
 
 use super::host_service_requests::required_non_blank;
 pub(super) use super::request_payloads::{json_result, parse_payload};
+use super::request_route_policy::{request_route_policy, PostResponseAction};
 use super::runtime_mutation_barrier::conflicts_with_runtime_mutation;
 use super::{ClientKind, ServerActor, ServerCommand};
 
@@ -67,8 +68,11 @@ impl ServerActor {
         let request_id = obj.get("id").and_then(Value::as_i64);
         let outcome: HostResult<Value> = match extract_request(obj) {
             Ok((request_type, payload)) => {
-                restart_after_response = request_type == "host.restart";
-                shutdown_after_response = request_type == "host.shutdown";
+                let route_policy = request_route_policy(&request_type);
+                restart_after_response =
+                    route_policy.post_response == PostResponseAction::Restart;
+                shutdown_after_response =
+                    route_policy.post_response == PostResponseAction::Shutdown;
                 if let Some(id) = request_id {
                     if self.mutation_queue.has_runtime_mutations()
                         && conflicts_with_runtime_mutation(&request_type)
