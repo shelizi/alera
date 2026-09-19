@@ -50,6 +50,10 @@ void main() {
     expect(find.text('First Commit'), findsOneWidget);
     expect(find.text('main'), findsOneWidget);
     expect(find.text('Alera Dev'), findsOneWidget);
+    final branchRect = tester.getRect(find.text('main'));
+    final subjectRect = tester.getRect(find.text('First Commit'));
+    expect(branchRect.left, lessThan(subjectRect.left));
+    expect(find.byTooltip('main'), findsOneWidget);
   });
   testWidgets('scrolling to the end pages history in by offset', (
     tester,
@@ -139,6 +143,16 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('feature'), findsOneWidget);
     expect(find.text('main (Current)'), findsOneWidget);
+
+    await tester.enterText(
+      find.byKey(
+        const ValueKey<String>('git-history-branch-perspective-search'),
+      ),
+      'feat',
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('feature'), findsOneWidget);
+    expect(find.text('main (Current)'), findsNothing);
 
     await tester.tap(find.text('feature'));
     await tester.pumpAndSettle();

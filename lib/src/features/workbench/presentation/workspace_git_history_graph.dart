@@ -31,10 +31,13 @@ class const GitHistoryGraph({
 
 class const GitHistoryGraphPainter(final GitHistoryItemViewModel viewModel)
     extends CustomPainter {
-  static const double laneHeight = 24;
-  static const double laneWidth = 11;
+  // Match the 28px history row height so vertical lane segments touch across
+  // adjacent rows instead of looking dashed. A wider lane pitch also keeps
+  // multi-branch graphs readable when several lanes run in parallel.
+  static const double laneHeight = 28;
+  static const double laneWidth = 16;
   static const double nodeY = laneHeight / 2;
-  static const double circleRadius = 3.5;
+  static const double circleRadius = 4;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -143,7 +146,7 @@ class const GitHistoryGraphPainter(final GitHistoryItemViewModel viewModel)
       path,
       Paint()
         ..color = gitHistoryGraphColor(color) ?? AleraTokens.foregroundMuted
-        ..strokeWidth = 1
+        ..strokeWidth = 1.5
         ..strokeCap = StrokeCap.round
         ..style = PaintingStyle.stroke,
     );
@@ -212,11 +215,20 @@ class const GitRefBadge({
 }) extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
-    final color = gitHistoryGraphColor(itemRef.color);
+    final color =
+        gitHistoryGraphColor(itemRef.color) ??
+        switch (itemRef.category) {
+          GitHistoryRefCategory.branches => AleraTokens.success,
+          GitHistoryRefCategory.remoteBranches => AleraTokens.info,
+          GitHistoryRefCategory.tags => AleraTokens.warning,
+          GitHistoryRefCategory.commits => AleraTokens.accent,
+          null => AleraTokens.accent,
+        };
     final badge = DecoratedBox(
       decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.14),
         borderRadius: BorderRadius.circular(AleraTokens.radiusPill),
-        border: Border.all(color: color ?? AleraTokens.borderSubtle),
+        border: Border.all(color: color.withValues(alpha: 0.72)),
       ),
       child: Padding(
         padding: const EdgeInsets.symmetric(
@@ -227,22 +239,21 @@ class const GitRefBadge({
           itemRef.name,
           maxLines: 1,
           overflow: .ellipsis,
-          style: Theme.of(context).textTheme.labelSmall?.copyWith(
-            color: color ?? AleraTokens.foregroundMuted,
-            fontSize: 10,
-          ),
+          style: Theme.of(context).textTheme.labelSmall
+              ?.copyWith(color: color, fontSize: 10, fontWeight: .w700),
         ),
       ),
     );
+    final tooltipBadge = Tooltip(message: itemRef.name, child: badge);
     final onOpenActions = this.onOpenActions;
     if (onOpenActions == null) {
-      return badge;
+      return tooltipBadge;
     }
     return GestureDetector(
       behavior: .opaque,
       onSecondaryTapDown: (details) => onOpenActions(details.globalPosition),
       onLongPressStart: (details) => onOpenActions(details.globalPosition),
-      child: badge,
+      child: tooltipBadge,
     );
   }
 }

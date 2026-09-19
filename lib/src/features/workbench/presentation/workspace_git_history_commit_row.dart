@@ -46,30 +46,36 @@ class const _CommitGraphRow({
                   ),
                   const SizedBox(width: AleraTokens.space4),
                   Expanded(
-                    child: Text(
-                      item.subject,
-                      maxLines: 1,
-                      overflow: .ellipsis,
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: AleraTokens.foreground,
-                      ),
+                    child: Row(
+                      children: <Widget>[
+                        for (final itemRef in item.references) ...<Widget>[
+                          ConstrainedBox(
+                            constraints: const BoxConstraints(
+                              maxWidth: _refBadgeMaxWidth,
+                            ),
+                            child: GitRefBadge(
+                              itemRef: itemRef,
+                              onOpenActions: onOpenRefActions == null
+                                  ? null
+                                  : (position) =>
+                                        onOpenRefActions!(itemRef, position),
+                            ),
+                          ),
+                          const SizedBox(width: AleraTokens.space4),
+                        ],
+                        Expanded(
+                          child: Text(
+                            item.subject,
+                            maxLines: 1,
+                            overflow: .ellipsis,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: AleraTokens.foreground,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                  for (final itemRef in item.references) ...<Widget>[
-                    const SizedBox(width: AleraTokens.space4),
-                    ConstrainedBox(
-                      constraints: const BoxConstraints(
-                        maxWidth: _refBadgeMaxWidth,
-                      ),
-                      child: GitRefBadge(
-                        itemRef: itemRef,
-                        onOpenActions: onOpenRefActions == null
-                            ? null
-                            : (position) =>
-                                  onOpenRefActions!(itemRef, position),
-                      ),
-                    ),
-                  ],
                   const SizedBox(width: AleraTokens.space8),
                   SizedBox(
                     width: 140,

@@ -121,42 +121,51 @@ class const _GitHistoryCommitRow({
                       const SizedBox(width: _chevronSlotWidth),
                     const SizedBox(width: AleraTokens.space4),
                     Expanded(
-                      child: Text(
-                        item.subject,
-                        maxLines: 1,
-                        overflow: .ellipsis,
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: boundary
-                              ? AleraTokens.foregroundMuted
-                              : AleraTokens.foreground,
-                        ),
+                      child: Row(
+                        children: <Widget>[
+                          for (final itemRef in item.references.take(
+                            budget.visibleRefCount,
+                          )) ...<Widget>[
+                            ConstrainedBox(
+                              constraints: BoxConstraints(
+                                maxWidth: budget.refBadgeMaxWidth,
+                              ),
+                              child: GitRefBadge(
+                                itemRef: itemRef,
+                                onOpenActions: onOpenRefActions == null
+                                    ? null
+                                    : (position) =>
+                                          onOpenRefActions!(itemRef, position),
+                              ),
+                            ),
+                            const SizedBox(width: AleraTokens.space4),
+                          ],
+                          if (hiddenRefCount > 0) ...<Widget>[
+                            Text(
+                              '+$hiddenRefCount',
+                              style: Theme.of(context).textTheme.labelSmall
+                                  ?.copyWith(
+                                    color: AleraTokens.foregroundFaint,
+                                  ),
+                            ),
+                            const SizedBox(width: AleraTokens.space4),
+                          ],
+                          Expanded(
+                            child: Text(
+                              item.subject,
+                              maxLines: 1,
+                              overflow: .ellipsis,
+                              style: Theme.of(context).textTheme.bodySmall
+                                  ?.copyWith(
+                                    color: boundary
+                                        ? AleraTokens.foregroundMuted
+                                        : AleraTokens.foreground,
+                                  ),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                    for (final itemRef in item.references.take(
-                      budget.visibleRefCount,
-                    )) ...<Widget>[
-                      const SizedBox(width: AleraTokens.space4),
-                      ConstrainedBox(
-                        constraints: BoxConstraints(
-                          maxWidth: budget.refBadgeMaxWidth,
-                        ),
-                        child: GitRefBadge(
-                          itemRef: itemRef,
-                          onOpenActions: onOpenRefActions == null
-                              ? null
-                              : (position) =>
-                                    onOpenRefActions!(itemRef, position),
-                        ),
-                      ),
-                    ],
-                    if (hiddenRefCount > 0) ...<Widget>[
-                      const SizedBox(width: AleraTokens.space4),
-                      Text(
-                        '+$hiddenRefCount',
-                        style: Theme.of(context).textTheme.labelSmall
-                            ?.copyWith(color: AleraTokens.foregroundFaint),
-                      ),
-                    ],
                     if (onOpenActions != null)
                       Builder(
                         builder: (context) => AleraIconButton(
