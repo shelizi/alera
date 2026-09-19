@@ -1,5 +1,42 @@
 part of '../agent_hook_event_normalizer.dart';
 
+const _grokAgentHookAdapter = _GrokAgentHookAdapter();
+
+final class _GrokAgentHookAdapter extends _AgentHookAdapter {
+  const _GrokAgentHookAdapter();
+
+  @override
+  String? normalizeEventName(AgentHookEvent event, String? rawEventName) {
+    return _normalizeGrokEventName(rawEventName);
+  }
+
+  @override
+  AgentStatusState? normalizeState(
+    AgentHookEvent event,
+    String eventName,
+    String? toolName,
+    AgentStatusEntry? previous,
+  ) => _normalizeGrokState(eventName, event.payload);
+
+  @override
+  bool isNewTurn(String eventName) => _isGrokNewTurn(eventName);
+
+  @override
+  bool isSessionClose(String eventName) => eventName == 'SessionEnd';
+
+  @override
+  bool isSessionReset(String eventName) => eventName == 'SessionStart';
+
+  @override
+  String promptForEvent(AgentHookEvent event, String eventName) {
+    if (eventName == 'Notification') {
+      return '';
+    }
+    final direct = super.promptForEvent(event, eventName);
+    return direct.isEmpty ? '' : _stripGrokUserQueryWrapper(direct);
+  }
+}
+
 AgentStatusState? _normalizeGrokState(
   String eventName,
   Map<String, Object?> payload,

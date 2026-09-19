@@ -1,5 +1,44 @@
 part of '../agent_hook_event_normalizer.dart';
 
+const _copilotAgentHookAdapter = _CopilotAgentHookAdapter();
+
+final class _CopilotAgentHookAdapter extends _AgentHookAdapter {
+  const _CopilotAgentHookAdapter();
+
+  @override
+  String? normalizeEventName(AgentHookEvent event, String? rawEventName) {
+    return _normalizeCopilotEventName(
+      rawEventName ?? _inferCopilotEventName(event.payload),
+    );
+  }
+
+  @override
+  AgentStatusState? normalizeState(
+    AgentHookEvent event,
+    String eventName,
+    String? toolName,
+    AgentStatusEntry? previous,
+  ) => _normalizeCopilotState(eventName, event.payload, toolName);
+
+  @override
+  bool isNewTurn(String eventName) => _isCopilotNewTurn(eventName);
+
+  @override
+  bool isSessionClose(String eventName) => eventName == 'SessionEnd';
+
+  @override
+  String promptForEvent(AgentHookEvent event, String eventName) {
+    return eventName == 'Notification'
+        ? ''
+        : super.promptForEvent(event, eventName);
+  }
+
+  @override
+  _NestedToolCall nestedToolCall(Map<String, Object?> payload) {
+    return _readCopilotToolCall(payload);
+  }
+}
+
 AgentStatusState? _normalizeCopilotState(
   String eventName,
   Map<String, Object?> payload,

@@ -3,7 +3,26 @@
 // installed only in Alera-managed runtime homes.
 part of '../managed_agent_hook_installer.dart';
 
+final _claudeManagedAgentHookAdapter = _ManagedAgentHookAdapter(
+  runtimeOnlyStatus: (service) => service._claudeRuntimeOnlyStatus(),
+  jsonDescriptor: (service, scriptFileName, scriptPath) =>
+      service._claudeDescriptor(
+        scriptFileName: scriptFileName,
+        scriptPath: scriptPath,
+      ),
+);
+
 extension _ClaudeManagedAgentHook on ManagedAgentHookInstallService {
+  ManagedAgentHookInstallStatus _claudeRuntimeOnlyStatus() {
+    return ManagedAgentHookInstallStatus(
+      agentType: .claude,
+      state: .notInstalled,
+      configPath: p.join(_homeDirectory, '.claude', 'settings.json'),
+      managedHooksPresent: false,
+      detail: 'Claude Code hooks are installed only in Alera-managed runtime homes.',
+    );
+  }
+
   _AgentHookDescriptor _claudeDescriptor({
     required String scriptFileName,
     required String scriptPath,

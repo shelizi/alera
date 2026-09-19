@@ -84,6 +84,12 @@ class AgentStatusController extends _$AgentStatusController
           normalizedState: .done,
           receivedAt: receivedAt,
           staleThreshold: agentStatusIdentityStaleThreshold,
+          shouldTakeOverActiveTerminal:
+              previous != null &&
+              shouldAgentHookTakeOverActiveStatus(
+                incomingAgentType: event.agentType,
+                previousAgentType: previous.agentType,
+              ),
         );
         if (identity.shouldIgnoreEvent || previous == null) {
           continue;
@@ -109,6 +115,12 @@ class AgentStatusController extends _$AgentStatusController
         normalizedState: normalized.state,
         receivedAt: receivedAt,
         staleThreshold: agentStatusIdentityStaleThreshold,
+        shouldTakeOverActiveTerminal:
+            previous != null &&
+            shouldAgentHookTakeOverActiveStatus(
+              incomingAgentType: event.agentType,
+              previousAgentType: previous.agentType,
+            ),
       );
       if (identity.shouldIgnoreEvent) {
         continue;

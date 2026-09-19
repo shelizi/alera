@@ -1,5 +1,33 @@
 part of '../agent_hook_event_normalizer.dart';
 
+const _openCodeAgentHookAdapter = _OpenCodeAgentHookAdapter();
+
+final class _OpenCodeAgentHookAdapter extends _AgentHookAdapter {
+  const _OpenCodeAgentHookAdapter();
+
+  @override
+  AgentStatusState? normalizeState(
+    AgentHookEvent event,
+    String eventName,
+    String? toolName,
+    AgentStatusEntry? previous,
+  ) => _normalizeOpenCodeState(eventName);
+
+  @override
+  bool isNewTurn(String eventName) => _isOpenCodeNewTurn(eventName);
+
+  @override
+  String promptForEvent(AgentHookEvent event, String eventName) {
+    return _openCodePromptForEvent(event, eventName) ??
+        super.promptForEvent(event, eventName);
+  }
+
+  @override
+  String? assistantText(AgentHookEvent event, String eventName) {
+    return _openCodeAssistantTextForEvent(event, eventName);
+  }
+}
+
 AgentStatusState? _normalizeOpenCodeState(String eventName) {
   return switch (eventName) {
     'SessionBusy' || 'MessagePart' => AgentStatusState.working,

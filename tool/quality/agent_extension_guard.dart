@@ -6,10 +6,24 @@ const _baselinePath = 'tool/quality/agent_extension_touchpoints.txt';
 const _scanRoot = 'lib/src';
 const _explicitManagedHookOwnershipToken = '_globalManagedHookAgentIds';
 const _targetTouchpointCount = 5;
+const _normalizerRoot = 'lib/src/features/agent_status/infra/normalizers';
+const _managedHookRoot = 'lib/src/features/agent_status/infra/managed_hooks';
+const _sharedHookPolicyPaths = <String>[
+  'lib/src/features/agent_status/infra/agent_hook_event_normalizer.dart',
+  'lib/src/features/agent_status/infra/managed_agent_hook_installer.dart',
+  'lib/src/features/agent_status/infra/managed_agent_hook_descriptors.dart',
+  'lib/src/features/agent_status/infra/managed_agent_hook_scripts.dart',
+  'lib/src/features/agent_status/infra/normalizers/agent_hook_status_helpers.dart',
+  'lib/src/features/agent_status/infra/normalizers/agent_hook_tool_preview.dart',
+  'lib/src/features/agent_status/infra/normalizers/agent_hook_tool_snapshot.dart',
+  'lib/src/features/agent_status/application/agent_hook_lifecycle_guard.dart',
+  'lib/src/features/agent_status/application/agent_status_identity_resolver.dart',
+];
 
 void main() {
   final violations = <String>[];
   final agentMembers = _agentTypeMembers(violations);
+  _validatePerAgentHookAdapters(agentMembers, violations);
   final actual = _findTouchpoints(agentMembers, violations);
   final baseline = _readBaseline(violations);
 
@@ -42,6 +56,53 @@ void main() {
     'Agent extension guard passed: ${actual.length} manual touchpoint file(s) '
     '(target <= $_targetTouchpointCount; ratchet prevents growth).',
   );
+}
+
+void _validatePerAgentHookAdapters(
+  Set<String> agentMembers,
+  List<String> violations,
+) {
+  for (final member in agentMembers) {
+    final normalizerPath =
+        '$_normalizerRoot/${member}_agent_hook_normalizer.dart';
+    if (!File(normalizerPath).existsSync()) {
+      violations.add(
+        'AgentType.$member must own a dedicated hook adapter file: '
+        '$normalizerPath',
+      );
+    }
+    final managedHookPath =
+        '$_managedHookRoot/${member}_managed_agent_hook.dart';
+    if (!File(managedHookPath).existsSync()) {
+      violations.add(
+        'AgentType.$member must own a dedicated managed-hook adapter file: '
+        '$managedHookPath',
+      );
+    }
+  }
+
+  final explicitAgentMember = RegExp(r'\bAgentType\.[A-Za-z_][A-Za-z0-9_]*\b');
+  for (final path in _sharedHookPolicyPaths) {
+    final file = File(path);
+    if (!file.existsSync()) {
+      violations.add('Missing shared hook policy file: $path');
+      continue;
+    }
+    final matches =
+        explicitAgentMember
+            .allMatches(file.readAsStringSync())
+            .map((match) => match.group(0)!)
+            .where((member) => member != 'AgentType.values')
+            .toSet()
+            .toList()
+          ..sort();
+    if (matches.isNotEmpty) {
+      violations.add(
+        '$path contains agent-specific branching (${matches.join(', ')}). '
+        'Move that policy into the matching per-agent hook adapter.',
+      );
+    }
+  }
 }
 
 Set<String> _agentTypeMembers(List<String> violations) {

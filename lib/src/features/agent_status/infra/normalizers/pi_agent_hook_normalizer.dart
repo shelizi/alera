@@ -1,5 +1,30 @@
 part of '../agent_hook_event_normalizer.dart';
 
+const _piAgentHookAdapter = _PiAgentHookAdapter();
+
+final class _PiAgentHookAdapter extends _AgentHookAdapter {
+  const _PiAgentHookAdapter();
+
+  @override
+  AgentStatusState? normalizeState(
+    AgentHookEvent event,
+    String eventName,
+    String? toolName,
+    AgentStatusEntry? previous,
+  ) => _normalizePiState(eventName);
+
+  @override
+  bool isNewTurn(String eventName) => _isPiNewTurn(eventName);
+
+  @override
+  bool isSessionClose(String eventName) => eventName == 'session_shutdown';
+
+  @override
+  String? assistantText(AgentHookEvent event, String eventName) {
+    return _piAssistantTextForEvent(event, eventName);
+  }
+}
+
 AgentStatusState? _normalizePiState(String eventName) {
   return switch (eventName) {
     'before_agent_start' ||

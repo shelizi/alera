@@ -3,7 +3,23 @@
 // installed only in Alera-managed runtime homes.
 part of '../managed_agent_hook_installer.dart';
 
+final _codexManagedAgentHookAdapter = _ManagedAgentHookAdapter(
+  runtimeOnlyStatus: (service) => service._codexRuntimeOnlyStatus(),
+  jsonDescriptor: (service, scriptFileName, scriptPath) => service
+      ._codexDescriptor(scriptFileName: scriptFileName, scriptPath: scriptPath),
+);
+
 extension _CodexManagedAgentHook on ManagedAgentHookInstallService {
+  ManagedAgentHookInstallStatus _codexRuntimeOnlyStatus() {
+    return ManagedAgentHookInstallStatus(
+      agentType: .codex,
+      state: .notInstalled,
+      configPath: p.join(_homeDirectory, '.codex', 'hooks.json'),
+      managedHooksPresent: false,
+      detail: 'Codex hooks are installed only in Alera-managed runtime homes.',
+    );
+  }
+
   _AgentHookDescriptor _codexDescriptor({
     required String scriptFileName,
     required String scriptPath,

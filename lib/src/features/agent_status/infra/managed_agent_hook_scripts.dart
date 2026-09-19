@@ -1,12 +1,5 @@
 part of 'managed_agent_hook_installer.dart';
 
-enum _WindowsHookExecutionStrategy {
-  nativeCmd,
-  powerShell,
-  gitBashToCmd,
-  cmdWrapper,
-}
-
 extension _ManagedAgentHookScripts on ManagedAgentHookInstallService {
   String _managedCommand({
     required _AgentHookDescriptor descriptor,
@@ -18,11 +11,11 @@ extension _ManagedAgentHookScripts on ManagedAgentHookInstallService {
           '/bin/sh ${_shQuote(descriptor.scriptPath)}; fi';
     }
 
-    return switch (_windowsHookExecutionStrategy(descriptor.agentType)) {
-      _WindowsHookExecutionStrategy.cmdWrapper =>
-        // Quoted so a profile path containing a space stays one token once AGY
-        // hands the command to cmd.
-        '"${_agyWindowsWrapperPath(event.eventName)}"',
+    final customCommand = descriptor.windowsCommandsByEvent[event.eventName];
+    if (customCommand != null) {
+      return customCommand;
+    }
+    return switch (descriptor.windowsExecutionStrategy) {
       _WindowsHookExecutionStrategy.powerShell =>
         '\$env:${descriptor.eventEnvVar} = \'${_powerShellSingleQuote(event.eventName)}\'; '
             'powershell.exe -NoProfile -ExecutionPolicy Bypass -File '
@@ -41,32 +34,23 @@ extension _ManagedAgentHookScripts on ManagedAgentHookInstallService {
     };
   }
 
-  _WindowsHookExecutionStrategy _windowsHookExecutionStrategy(
-    AgentType agentType,
-  ) {
-    return switch (agentType) {
-      AgentType.agy => _WindowsHookExecutionStrategy.cmdWrapper,
-      AgentType.copilot => _WindowsHookExecutionStrategy.powerShell,
-      AgentType.devin => _WindowsHookExecutionStrategy.gitBashToCmd,
-      _ => _WindowsHookExecutionStrategy.nativeCmd,
-    };
-  }
-
   // coverage:ignore-start
   // External shell/cmd hook templates. Installer tests verify selection and
   // persistence; exercising each literal line belongs to agent CLI smoke tests.
   String _managedScript({required _AgentHookDescriptor descriptor}) {
-    final source = descriptor.agentType.key;
-    if (descriptor.agentType == AgentType.agy) {
-      return _agyManagedScript(descriptor);
+    final customBuilder = descriptor.managedScriptBuilder;
+    if (customBuilder != null) {
+      return customBuilder(this, descriptor);
     }
+    final source = descriptor.agentType.key;
     final eventEnvVar = descriptor.eventEnvVar;
     if (_platform == ManagedAgentHookPlatform.windows) {
-      if (descriptor.agentType == AgentType.copilot) {
+      if (descriptor.windowsExecutionStrategy ==
+          _WindowsHookExecutionStrategy.powerShell) {
         return _windowsPowerShellManagedScript(
           source: source,
           eventEnvVar: eventEnvVar,
-          writeEmptyResponse: true,
+          writeEmptyResponse: descriptor.writeEmptyResponse,
         );
       }
       return <String>[
@@ -85,7 +69,7 @@ extension _ManagedAgentHookScripts on ManagedAgentHookInstallService {
     }
     return <String>[
       '#!/bin/sh',
-      if (descriptor.agentType == AgentType.copilot) "printf '{}\\n'",
+      if (descriptor.writeEmptyResponse) "printf '{}\\n'",
       'if [ -n "\$ALERA_AGENT_HOOK_ENDPOINT" ] && [ -r "\$ALERA_AGENT_HOOK_ENDPOINT" ]; then',
       '  . "\$ALERA_AGENT_HOOK_ENDPOINT" 2>/dev/null || :',
       'fi',

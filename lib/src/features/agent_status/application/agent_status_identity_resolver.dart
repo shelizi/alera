@@ -14,16 +14,14 @@ AgentStatusIdentityResolution resolveAgentStatusIdentity({
   required AgentStatusState normalizedState,
   required DateTime receivedAt,
   required Duration staleThreshold,
+  required bool shouldTakeOverActiveTerminal,
 }) {
   final inheritedFromActiveTerminal =
       previous != null &&
       previous.state != AgentStatusState.done &&
       previous.agentType != incomingAgentType &&
       !_isStale(previous, receivedAt, staleThreshold) &&
-      // Claude-compat hooks can land first; a later Grok/Cursor event
-      // must be able to take over instead of inheriting Claude for 30m.
-      !(previous.agentType == AgentType.claude &&
-          incomingAgentType != AgentType.claude);
+      !shouldTakeOverActiveTerminal;
   final effectiveAgentType = inheritedFromActiveTerminal
       ? previous.agentType
       : incomingAgentType;

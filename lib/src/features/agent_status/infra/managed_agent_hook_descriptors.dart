@@ -1,14 +1,35 @@
 part of 'managed_agent_hook_installer.dart';
 
+final Map<String, _ManagedAgentHookAdapter> _managedAgentHookAdapters =
+    <String, _ManagedAgentHookAdapter>{
+      'codex': _codexManagedAgentHookAdapter,
+      'claude': _claudeManagedAgentHookAdapter,
+      'copilot': _copilotManagedAgentHookAdapter,
+      'cursor': _cursorManagedAgentHookAdapter,
+      'agy': _agyManagedAgentHookAdapter,
+      'opencode': _openCodeManagedAgentHookAdapter,
+      'opencode2': _openCode2ManagedAgentHookAdapter,
+      'pi': _piManagedAgentHookAdapter,
+      'amp': _ampManagedAgentHookAdapter,
+      'grok': _grokManagedAgentHookAdapter,
+      'devin': _devinManagedAgentHookAdapter,
+      'fx': _fxManagedAgentHookAdapter,
+    };
+
+_ManagedAgentHookAdapter _managedAgentHookAdapterFor(AgentType agentType) {
+  final adapter = _managedAgentHookAdapters[agentType.key];
+  if (adapter == null) {
+    throw StateError('Missing managed-hook adapter for ${agentType.key}.');
+  }
+  return adapter;
+}
+
 extension _ManagedAgentHookDescriptors on ManagedAgentHookInstallService {
   ManagedAgentHookInstallStatus _runtimeOnlyStatus(AgentType agentType) {
-    return switch (agentType) {
-      AgentType.codex => _codexRuntimeOnlyStatus(),
-      AgentType.claude => _claudeRuntimeOnlyStatus(),
-      AgentType.cursor => _cursorRuntimeOnlyStatus(),
-      AgentType.fx => _fxRuntimeOnlyStatus(),
-      _ => _unsupportedStrategyStatus(agentType),
-    };
+    final builder = _managedAgentHookAdapterFor(agentType).runtimeOnlyStatus;
+    return builder == null
+        ? _unsupportedStrategyStatus(agentType)
+        : builder(this);
   }
 
   ManagedAgentHookInstallStatus _unsupportedStrategyStatus(
@@ -23,52 +44,11 @@ extension _ManagedAgentHookDescriptors on ManagedAgentHookInstallService {
     );
   }
 
-  ManagedAgentHookInstallStatus _codexRuntimeOnlyStatus() {
-    return ManagedAgentHookInstallStatus(
-      agentType: .codex,
-      state: .notInstalled,
-      configPath: p.join(_homeDirectory, '.codex', 'hooks.json'),
-      managedHooksPresent: false,
-      detail: 'Codex hooks are installed only in Alera-managed runtime homes.',
-    );
-  }
-
-  ManagedAgentHookInstallStatus _claudeRuntimeOnlyStatus() {
-    return ManagedAgentHookInstallStatus(
-      agentType: .claude,
-      state: .notInstalled,
-      configPath: p.join(_homeDirectory, '.claude', 'settings.json'),
-      managedHooksPresent: false,
-      detail: 'Claude Code hooks are installed only in Alera-managed runtime homes.',
-    );
-  }
-
-  ManagedAgentHookInstallStatus _cursorRuntimeOnlyStatus() {
-    return ManagedAgentHookInstallStatus(
-      agentType: .cursor,
-      state: .notInstalled,
-      configPath: p.join(_homeDirectory, '.cursor', 'hooks.json'),
-      managedHooksPresent: false,
-      detail: 'Cursor hooks are installed as a per-session plugin, never in this file.',
-    );
-  }
-
-  ManagedAgentHookInstallStatus _fxRuntimeOnlyStatus() {
-    return ManagedAgentHookInstallStatus(
-      agentType: .fx,
-      state: .notInstalled,
-      configPath: p.join(_homeDirectory, '.fx'),
-      managedHooksPresent: false,
-      detail: 'fx reports status through its built-in local Herdr integration, so no user hooks are installed.',
-    );
-  }
-
   _AgentHookDescriptor _descriptor(AgentType agentType) {
-    final extension = switch ((agentType, _platform)) {
-      (AgentType.copilot, ManagedAgentHookPlatform.windows) => 'ps1',
-      (_, ManagedAgentHookPlatform.windows) => 'cmd',
-      (_, ManagedAgentHookPlatform.posix) => 'sh',
-    };
+    final adapter = _managedAgentHookAdapterFor(agentType);
+    final extension = _platform == ManagedAgentHookPlatform.windows
+        ? adapter.windowsScriptExtension
+        : 'sh';
     final scriptFileName = 'alera-${agentType.key}-hook.$extension';
     final scriptPath = p.join(
       _homeDirectory,
@@ -76,64 +56,19 @@ extension _ManagedAgentHookDescriptors on ManagedAgentHookInstallService {
       'agent-hooks',
       scriptFileName,
     );
-    return switch (agentType) {
-      AgentType.codex => _codexDescriptor(
-        scriptFileName: scriptFileName,
-        scriptPath: scriptPath,
-      ),
-      AgentType.claude => _claudeDescriptor(
-        scriptFileName: scriptFileName,
-        scriptPath: scriptPath,
-      ),
-      AgentType.copilot => _copilotDescriptor(
-        scriptFileName: scriptFileName,
-        scriptPath: scriptPath,
-      ),
-      AgentType.agy => _agyDescriptor(
-        scriptFileName: scriptFileName,
-        scriptPath: scriptPath,
-      ),
-      AgentType.grok => _grokDescriptor(
-        scriptFileName: scriptFileName,
-        scriptPath: scriptPath,
-      ),
-      // coverage:ignore-start
-      // Descriptor lookups for artifact-backed agents are guarded by
-      AgentType.devin => _devinDescriptor(
-        scriptFileName: scriptFileName,
-        scriptPath: scriptPath,
-      ),
-      // _managedArtifact before this switch, and Cursor by its runtime-only
-      // status. This branch protects future misuse.
-      AgentType.cursor ||
-      AgentType.opencode ||
-      AgentType.opencode2 ||
-      AgentType.pi ||
-      AgentType.amp ||
-      AgentType.fx => throw ArgumentError.value(
+    final builder = adapter.jsonDescriptor;
+    if (builder == null) {
+      throw ArgumentError.value(
         agentType,
         'agentType',
         'This agent does not use a JSON hook descriptor.',
-      ),
-      // coverage:ignore-end
-    };
+      );
+    }
+    return builder(this, scriptFileName, scriptPath);
   }
 
   _ManagedHookArtifact? _managedArtifact(AgentType agentType) {
-    return switch (agentType) {
-      AgentType.opencode => _opencodeArtifact(),
-      AgentType.opencode2 => _opencode2Artifact(),
-      AgentType.pi => _piArtifact(),
-      AgentType.amp => _ampArtifact(),
-      AgentType.codex ||
-      AgentType.claude ||
-      AgentType.copilot ||
-      AgentType.cursor ||
-      AgentType.agy ||
-      AgentType.grok ||
-      AgentType.devin ||
-      AgentType.fx => null,
-    };
+    return _managedAgentHookAdapterFor(agentType).managedArtifact?.call(this);
   }
 
   ManagedAgentHookInstallStatus _managedArtifactStatus(

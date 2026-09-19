@@ -1,5 +1,9 @@
 part of '../managed_agent_hook_installer.dart';
 
+final _piManagedAgentHookAdapter = _ManagedAgentHookAdapter(
+  managedArtifact: (service) => service._piArtifact(),
+);
+
 extension _PiManagedAgentHook on ManagedAgentHookInstallService {
   _ManagedHookArtifact _piArtifact() {
     return _ManagedHookArtifact(

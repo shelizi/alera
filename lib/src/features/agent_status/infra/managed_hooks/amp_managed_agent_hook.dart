@@ -1,5 +1,9 @@
 part of '../managed_agent_hook_installer.dart';
 
+final _ampManagedAgentHookAdapter = _ManagedAgentHookAdapter(
+  managedArtifact: (service) => service._ampArtifact(),
+);
+
 extension _AmpManagedAgentHook on ManagedAgentHookInstallService {
   _ManagedHookArtifact _ampArtifact() {
     return _ManagedHookArtifact(

@@ -1,5 +1,9 @@
 part of '../managed_agent_hook_installer.dart';
 
+final _openCodeManagedAgentHookAdapter = _ManagedAgentHookAdapter(
+  managedArtifact: (service) => service._opencodeArtifact(),
+);
+
 extension _OpenCodeManagedAgentHook on ManagedAgentHookInstallService {
   _ManagedHookArtifact _opencodeArtifact() {
     return _ManagedHookArtifact(

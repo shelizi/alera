@@ -1,20 +1,5 @@
 part of '../agent_hook_event_normalizer.dart';
 
-String? _assistantTextFromHookEvent(AgentHookEvent event, String eventName) {
-  return switch (event.agentType) {
-    AgentType.opencode ||
-    AgentType.opencode2 => _openCodeAssistantTextForEvent(event, eventName),
-    AgentType.pi => _piAssistantTextForEvent(event, eventName),
-    AgentType.amp => _ampAssistantTextForEvent(event, eventName),
-    AgentType.codex ||
-    AgentType.claude ||
-    AgentType.copilot ||
-    AgentType.cursor ||
-    AgentType.agy => null,
-    AgentType.grok || AgentType.devin || AgentType.fx => null,
-  };
-}
-
 Map<String, Object?>? _parseJsonObjectString(Object? value) {
   if (value is! String || value.trim().isEmpty) {
     return null;

@@ -1,5 +1,14 @@
 part of '../managed_agent_hook_installer.dart';
 
+final _copilotManagedAgentHookAdapter = _ManagedAgentHookAdapter(
+  jsonDescriptor: (service, scriptFileName, scriptPath) =>
+      service._copilotDescriptor(
+        scriptFileName: scriptFileName,
+        scriptPath: scriptPath,
+      ),
+  windowsScriptExtension: 'ps1',
+);
+
 extension _CopilotManagedAgentHook on ManagedAgentHookInstallService {
   _AgentHookDescriptor _copilotDescriptor({
     required String scriptFileName,
@@ -12,6 +21,12 @@ extension _CopilotManagedAgentHook on ManagedAgentHookInstallService {
       scriptFileName: scriptFileName,
       scriptPath: scriptPath,
       eventEnvVar: 'ALERA_COPILOT_HOOK_EVENT',
+      windowsExecutionStrategy: .powerShell,
+      writeEmptyResponse: true,
+      disabledRootFlag: 'disableAllHooks',
+      disabledRootFlagDetail: 'Managed Copilot hook file is disabled.',
+      rootConfigValuesOnInstall: const <String, Object?>{'version': 1},
+      rootConfigKeysToRemoveOnInstall: const <String>{'disableAllHooks'},
       configShape: .hooks,
       definitionShape: .directCommand,
       events: const <_ManagedHookEvent>[

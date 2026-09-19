@@ -1,5 +1,27 @@
 part of '../agent_hook_event_normalizer.dart';
 
+const _codexAgentHookAdapter = _CodexAgentHookAdapter();
+
+final class _CodexAgentHookAdapter extends _AgentHookAdapter {
+  const _CodexAgentHookAdapter();
+
+  @override
+  AgentStatusState? normalizeState(
+    AgentHookEvent event,
+    String eventName,
+    String? toolName,
+    AgentStatusEntry? previous,
+  ) => _normalizeCodexState(eventName, toolName);
+
+  @override
+  bool isNewTurn(String eventName) => _isCodexNewTurn(eventName);
+
+  @override
+  _NestedToolCall nestedToolCall(Map<String, Object?> payload) {
+    return _readCodexToolCall(payload);
+  }
+}
+
 AgentStatusState? _normalizeCodexState(String eventName, String? toolName) {
   if (eventName == 'PreToolUse' && _isHumanInputTool(toolName)) {
     return AgentStatusState.waiting;

@@ -1,5 +1,10 @@
 part of '../managed_agent_hook_installer.dart';
 
+final _devinManagedAgentHookAdapter = _ManagedAgentHookAdapter(
+  jsonDescriptor: (service, scriptFileName, scriptPath) => service
+      ._devinDescriptor(scriptFileName: scriptFileName, scriptPath: scriptPath),
+);
+
 extension _DevinManagedAgentHook on ManagedAgentHookInstallService {
   _AgentHookDescriptor _devinDescriptor({
     required String scriptFileName,
@@ -19,6 +24,7 @@ extension _DevinManagedAgentHook on ManagedAgentHookInstallService {
       scriptFileName: scriptFileName,
       scriptPath: scriptPath,
       eventEnvVar: 'ALERA_DEVIN_EVENT',
+      windowsExecutionStrategy: .gitBashToCmd,
       // The runtime sidecar installs Devin hooks against its shared
       // alera-runtime-agent-hook script; both script families count as managed
       // so the two installers cannot leave duplicate handlers behind.

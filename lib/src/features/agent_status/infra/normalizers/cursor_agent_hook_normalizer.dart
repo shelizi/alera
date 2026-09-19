@@ -1,5 +1,49 @@
 part of '../agent_hook_event_normalizer.dart';
 
+const _cursorAgentHookAdapter = _CursorAgentHookAdapter();
+
+final class _CursorAgentHookAdapter extends _AgentHookAdapter {
+  const _CursorAgentHookAdapter();
+
+  @override
+  AgentStatusState? normalizeState(
+    AgentHookEvent event,
+    String eventName,
+    String? toolName,
+    AgentStatusEntry? previous,
+  ) => _normalizeCursorState(eventName, previous);
+
+  @override
+  bool isNewTurn(String eventName) => _isCursorNewTurn(eventName);
+
+  @override
+  bool isSessionClose(String eventName) => eventName == 'sessionEnd';
+
+  @override
+  _ToolSnapshot? extractToolSnapshot(AgentHookEvent event, String eventName) =>
+      _extractCursorToolSnapshot(event, eventName);
+
+  @override
+  bool isInterrupted(AgentHookEvent event, String eventName) {
+    return _isCursorInterrupted(event);
+  }
+
+  @override
+  bool? interruptedFor(
+    AgentHookEvent event,
+    String eventName,
+    AgentStatusState state,
+    AgentStatusEntry? previous,
+  ) {
+    if (state == AgentStatusState.done &&
+        eventName == 'afterAgentResponse' &&
+        previous?.state == AgentStatusState.done) {
+      return previous?.interrupted;
+    }
+    return super.interruptedFor(event, eventName, state, previous);
+  }
+}
+
 AgentStatusState? _normalizeCursorState(
   String eventName,
   AgentStatusEntry? previous,
@@ -18,7 +62,7 @@ AgentStatusState? _normalizeCursorState(
     'afterMCPExecution' => AgentStatusState.working,
     'beforeShellExecution' || 'beforeMCPExecution' => AgentStatusState.waiting,
     'afterAgentResponse' =>
-      previous?.agentType == AgentType.cursor &&
+      previous?.agentType.key == 'cursor' &&
               previous?.state == AgentStatusState.done
           ? AgentStatusState.done
           : AgentStatusState.working,

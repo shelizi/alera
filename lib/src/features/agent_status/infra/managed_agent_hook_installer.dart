@@ -16,7 +16,9 @@ part 'managed_hooks/amp_managed_agent_hook.dart';
 part 'managed_hooks/claude_managed_agent_hook.dart';
 part 'managed_hooks/codex_managed_agent_hook.dart';
 part 'managed_hooks/copilot_managed_agent_hook.dart';
+part 'managed_hooks/cursor_managed_agent_hook.dart';
 part 'managed_hooks/devin_managed_agent_hook.dart';
+part 'managed_hooks/fx_managed_agent_hook.dart';
 part 'managed_hooks/grok_managed_agent_hook.dart';
 part 'managed_hooks/opencode_managed_agent_hook.dart';
 part 'managed_hooks/opencode2_managed_agent_hook.dart';
@@ -39,6 +41,31 @@ enum _ManagedHookDefinitionShape {
   /// Antigravity tool hooks: `[{ "matcher": "*", "hooks": [{ "type": "command", ... }] }]`.
   agyToolCommand,
 }
+
+enum _WindowsHookExecutionStrategy { nativeCmd, powerShell, gitBashToCmd }
+
+typedef _RuntimeOnlyStatusBuilder = ManagedAgentHookInstallStatus Function(
+  ManagedAgentHookInstallService service,
+);
+typedef _JsonDescriptorBuilder = _AgentHookDescriptor Function(
+  ManagedAgentHookInstallService service,
+  String scriptFileName,
+  String scriptPath,
+);
+typedef _ManagedArtifactBuilder = _ManagedHookArtifact Function(
+  ManagedAgentHookInstallService service,
+);
+typedef _ManagedScriptBuilder = String Function(
+  ManagedAgentHookInstallService service,
+  _AgentHookDescriptor descriptor,
+);
+
+class const _ManagedAgentHookAdapter({
+  final _RuntimeOnlyStatusBuilder? runtimeOnlyStatus,
+  final _JsonDescriptorBuilder? jsonDescriptor,
+  final _ManagedArtifactBuilder? managedArtifact,
+  final String windowsScriptExtension = 'cmd',
+});
 
 const String _managedArtifactMarker = 'ALERA_AGENT_STATUS_MANAGED_FILE';
 
@@ -115,15 +142,18 @@ class ManagedAgentHookInstallService({
       }
     }
     final managedHooksPresent = presentCount > 0;
-    if (descriptor.agentType == AgentType.copilot &&
-        config['disableAllHooks'] == true &&
+    final disabledRootFlag = descriptor.disabledRootFlag;
+    if (disabledRootFlag != null &&
+        config[disabledRootFlag] == true &&
         managedHooksPresent) {
       return ManagedAgentHookInstallStatus(
         agentType: agentType,
         state: .partial,
         configPath: descriptor.configPath,
         managedHooksPresent: true,
-        detail: 'Managed Copilot hook file is disabled.',
+        detail:
+            descriptor.disabledRootFlagDetail ??
+            'Managed hook configuration is disabled.',
       );
     }
     // Antigravity's `enabled: false` disables a whole bundle without removing
@@ -239,9 +269,11 @@ class ManagedAgentHookInstallService({
       hooks.remove('enabled');
     }
     _setHookContainer(config, descriptor, hooks);
-    if (descriptor.agentType == AgentType.copilot) {
-      config['version'] = 1;
-      config.remove('disableAllHooks');
+    for (final entry in descriptor.rootConfigValuesOnInstall.entries) {
+      config[entry.key] = entry.value;
+    }
+    for (final key in descriptor.rootConfigKeysToRemoveOnInstall) {
+      config.remove(key);
     }
     _writeManagedScript(
       descriptor.scriptPath,
@@ -358,6 +390,16 @@ class _AgentHookDescriptor({
   final String bundleName = 'hooks',
   List<String>? managedScriptFileNames,
   final Map<String, String> windowsWrappers = const <String, String>{},
+  final Map<String, String> windowsCommandsByEvent = const <String, String>{},
+  final _WindowsHookExecutionStrategy windowsExecutionStrategy =
+      _WindowsHookExecutionStrategy.nativeCmd,
+  final _ManagedScriptBuilder? managedScriptBuilder,
+  final bool writeEmptyResponse = false,
+  final String? disabledRootFlag,
+  final String? disabledRootFlagDetail,
+  final Map<String, Object?> rootConfigValuesOnInstall =
+      const <String, Object?>{},
+  final Set<String> rootConfigKeysToRemoveOnInstall = const <String>{},
 }) {
   this
     : managedScriptFileNames =

@@ -1,22 +1,5 @@
 part of '../agent_hook_event_normalizer.dart';
 
-bool _isInterrupted(AgentHookEvent event) {
-  return switch (event.agentType) {
-    AgentType.amp => _isAmpInterrupted(event),
-    AgentType.cursor => _isCursorInterrupted(event),
-    AgentType.claude => _isGenericInterrupted(event, inferFailure: false),
-    AgentType.codex ||
-    AgentType.copilot ||
-    AgentType.agy ||
-    AgentType.opencode ||
-    AgentType.opencode2 ||
-    AgentType.pi => _isGenericInterrupted(event),
-    AgentType.grok ||
-    AgentType.devin ||
-    AgentType.fx => _isGenericInterrupted(event),
-  };
-}
-
 bool _isGenericInterrupted(AgentHookEvent event, {bool inferFailure = true}) {
   final eventName = agentHookEventName(event);
   if (eventName == 'Interrupt' ||

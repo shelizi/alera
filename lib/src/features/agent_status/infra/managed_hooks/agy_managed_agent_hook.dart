@@ -1,5 +1,10 @@
 part of '../managed_agent_hook_installer.dart';
 
+final _agyManagedAgentHookAdapter = _ManagedAgentHookAdapter(
+  jsonDescriptor: (service, scriptFileName, scriptPath) => service
+      ._agyDescriptor(scriptFileName: scriptFileName, scriptPath: scriptPath),
+);
+
 extension _AgyManagedAgentHook on ManagedAgentHookInstallService {
   _AgentHookDescriptor _agyDescriptor({
     required String scriptFileName,
@@ -25,10 +30,12 @@ extension _AgyManagedAgentHook on ManagedAgentHookInstallService {
       ),
     ];
     final wrappers = <String, String>{};
+    final windowsCommandsByEvent = <String, String>{};
     if (_platform == ManagedAgentHookPlatform.windows) {
       for (final event in events) {
         final path = _agyWindowsWrapperPath(event.eventName);
         wrappers[path] = _agyWindowsWrapperScript(event.eventName);
+        windowsCommandsByEvent[event.eventName] = '"$path"';
       }
     }
     return _AgentHookDescriptor(
@@ -38,6 +45,8 @@ extension _AgyManagedAgentHook on ManagedAgentHookInstallService {
       scriptFileName: scriptFileName,
       scriptPath: scriptPath,
       eventEnvVar: 'ALERA_AGY_EVENT',
+      managedScriptBuilder: (service, descriptor) =>
+          service._agyManagedScript(descriptor),
       configShape: .agyBundle,
       definitionShape: .agyLifecycleCommand,
       bundleName: 'alera-status',
@@ -52,6 +61,7 @@ extension _AgyManagedAgentHook on ManagedAgentHookInstallService {
             p.basename(_agyWindowsWrapperPath(event.eventName)),
       ],
       windowsWrappers: wrappers,
+      windowsCommandsByEvent: windowsCommandsByEvent,
       events: events,
     );
   }

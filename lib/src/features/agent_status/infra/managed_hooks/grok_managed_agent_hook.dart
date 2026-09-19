@@ -1,5 +1,10 @@
 part of '../managed_agent_hook_installer.dart';
 
+final _grokManagedAgentHookAdapter = _ManagedAgentHookAdapter(
+  jsonDescriptor: (service, scriptFileName, scriptPath) => service
+      ._grokDescriptor(scriptFileName: scriptFileName, scriptPath: scriptPath),
+);
+
 extension _GrokManagedAgentHook on ManagedAgentHookInstallService {
   _AgentHookDescriptor _grokDescriptor({
     required String scriptFileName,

@@ -1,17 +1,21 @@
 import 'dart:convert';
+import 'dart:collection';
 import 'dart:io';
 
 import 'package:alera/src/features/agent_status/domain/agent_status.dart';
-import 'package:alera/src/features/agent_status/infra/agent_descriptor_strategies.dart';
 
+part 'normalizers/agent_hook_adapter.dart';
 part 'normalizers/agy_agent_hook_normalizer.dart';
 part 'normalizers/amp_agent_hook_normalizer.dart';
 part 'normalizers/claude_agent_hook_normalizer.dart';
 part 'normalizers/codex_agent_hook_normalizer.dart';
 part 'normalizers/copilot_agent_hook_normalizer.dart';
 part 'normalizers/cursor_agent_hook_normalizer.dart';
+part 'normalizers/devin_agent_hook_normalizer.dart';
+part 'normalizers/fx_agent_hook_normalizer.dart';
 part 'normalizers/grok_agent_hook_normalizer.dart';
 part 'normalizers/opencode_agent_hook_normalizer.dart';
+part 'normalizers/opencode2_agent_hook_normalizer.dart';
 part 'normalizers/pi_agent_hook_normalizer.dart';
 part 'normalizers/agent_hook_tool_snapshot.dart';
 part 'normalizers/agent_hook_tool_preview.dart';
@@ -31,40 +35,29 @@ NormalizedAgentStatus? normalizeAgentHookEvent(
   AgentHookEvent event, {
   AgentStatusEntry? previous,
 }) {
+  final adapter = _agentHookAdapterFor(event.agentType);
   final eventName = agentHookEventName(event);
   if (eventName == null) {
     return null;
   }
-  final toolSnapshot = _extractToolSnapshot(event, eventName: eventName);
-  final state = switch (event.agentType.statusStrategy) {
-    AgentStatusStrategy.herdrSocket => switch (eventName) {
-      'Working' => AgentStatusState.working,
-      'Blocked' => AgentStatusState.blocked,
-      'Idle' => AgentStatusState.done,
-      _ => null,
-    },
-    AgentStatusStrategy.hookEvents ||
-    AgentStatusStrategy.hookEventsWithTranscriptWatch =>
-      _normalizeHookEventState(
-        event,
-        eventName,
-        toolSnapshot.toolName,
-        previous,
-      ),
-  };
+  final toolSnapshot = _extractToolSnapshot(
+    event,
+    eventName: eventName,
+    adapter: adapter,
+  );
+  final state = adapter.normalizeState(
+    event,
+    eventName,
+    toolSnapshot.toolName,
+    previous,
+  );
   if (state == null) {
     return null;
   }
 
-  final isNewTurn = _isNewTurn(event.agentType, eventName);
-  final prompt = _extractPromptForEvent(event, eventName);
-  final interrupted = state == AgentStatusState.done && _isInterrupted(event)
-      ? true
-      : event.agentType == AgentType.cursor &&
-            eventName == 'afterAgentResponse' &&
-            previous?.state == AgentStatusState.done
-      ? previous?.interrupted
-      : null;
+  final isNewTurn = adapter.isNewTurn(eventName);
+  final prompt = adapter.promptForEvent(event, eventName);
+  final interrupted = adapter.interruptedFor(event, eventName, state, previous);
   return NormalizedAgentStatus(
     state: state,
     prompt: prompt.isNotEmpty
@@ -81,69 +74,22 @@ NormalizedAgentStatus? normalizeAgentHookEvent(
   );
 }
 
-AgentStatusState? _normalizeHookEventState(
-  AgentHookEvent event,
-  String eventName,
-  String? toolName,
-  AgentStatusEntry? previous,
-) {
-  return switch (event.agentType) {
-    AgentType.codex => _normalizeCodexState(eventName, toolName),
-    AgentType.claude => _normalizeClaudeState(eventName, toolName),
-    AgentType.copilot => _normalizeCopilotState(
-      eventName,
-      event.payload,
-      toolName,
-    ),
-    AgentType.cursor => _normalizeCursorState(eventName, previous),
-    AgentType.agy => _normalizeAgyState(eventName, toolName, event.payload),
-    AgentType.opencode ||
-    AgentType.opencode2 => _normalizeOpenCodeState(eventName),
-    AgentType.pi => _normalizePiState(eventName),
-    AgentType.amp => _normalizeAmpState(eventName),
-    AgentType.grok => _normalizeGrokState(eventName, event.payload),
-    AgentType.devin => switch (eventName) {
-      'SessionStart' ||
-      'UserPromptSubmit' ||
-      'PreToolUse' ||
-      'PostToolUse' => AgentStatusState.working,
-      'PermissionRequest' => AgentStatusState.blocked,
-      'Stop' || 'SessionEnd' => AgentStatusState.done,
-      _ => null,
-    },
-    AgentType.fx => null,
-  };
-}
-
 bool isAgentSessionCloseHookEvent(AgentHookEvent event) {
   final eventName = agentHookEventName(event);
-  if (eventName == null) {
-    return false;
-  }
-  return switch (event.agentType) {
-    AgentType.copilot => eventName == 'SessionEnd',
-    AgentType.cursor => eventName == 'sessionEnd',
-    AgentType.pi => eventName == 'session_shutdown',
-    AgentType.codex ||
-    AgentType.claude ||
-    AgentType.agy ||
-    AgentType.opencode ||
-    AgentType.opencode2 ||
-    AgentType.amp => false,
-    AgentType.grok => _normalizeGrokEventName(eventName) == 'SessionEnd',
-    AgentType.devin => eventName == 'SessionEnd',
-    AgentType.fx => eventName == 'SessionEnd',
-  };
+  return eventName != null &&
+      _agentHookAdapterFor(event.agentType).isSessionClose(eventName);
 }
 
 bool isAgentSessionResetHookEvent(AgentHookEvent event) {
   final eventName = agentHookEventName(event);
-  return event.agentType == AgentType.grok && eventName == 'SessionStart';
+  return eventName != null &&
+      _agentHookAdapterFor(event.agentType).isSessionReset(eventName);
 }
 
 bool isAgentNewTurnHookEvent(AgentHookEvent event) {
   final eventName = agentHookEventName(event);
-  return eventName != null && _isNewTurn(event.agentType, eventName);
+  return eventName != null &&
+      _agentHookAdapterFor(event.agentType).isNewTurn(eventName);
 }
 
 /// True only for an explicit cancellation/interruption signal from the agent.
@@ -153,20 +99,9 @@ bool isAgentNewTurnHookEvent(AgentHookEvent event) {
 /// while Ctrl+C/cancel should remove the stale attention state entirely.
 bool isExplicitAgentInterruptHookEvent(AgentHookEvent event) {
   final eventName = agentHookEventName(event);
-  if (eventName == 'Interrupt') {
-    return true;
-  }
-  if (event.payload['is_interrupt'] == true ||
-      event.payload['interrupted'] == true) {
-    return true;
-  }
-  final status = _readFirstString(event.payload, const <String>[
-    'status',
-  ])?.toLowerCase();
-  return status == 'interrupted' ||
-      status == 'cancelled' ||
-      status == 'canceled' ||
-      status == 'aborted';
+  return eventName != null &&
+      _agentHookAdapterFor(event.agentType)
+          .isExplicitInterrupt(event, eventName);
 }
 
 String? agentHookEventName(AgentHookEvent event) {
@@ -182,58 +117,7 @@ String? agentHookEventName(AgentHookEvent event) {
         'hook_type',
         'hookType',
       ]);
-  if (event.agentType == AgentType.copilot) {
-    return _normalizeCopilotEventName(
-      raw ?? _inferCopilotEventName(event.payload),
-    );
-  }
-  if (event.agentType == AgentType.grok) {
-    return _normalizeGrokEventName(raw);
-  }
-  return raw;
-}
-
-bool _isNewTurn(AgentType agentType, String eventName) {
-  return switch (agentType) {
-    AgentType.codex => _isCodexNewTurn(eventName),
-    AgentType.claude => _isClaudeNewTurn(eventName),
-    AgentType.copilot => _isCopilotNewTurn(eventName),
-    AgentType.cursor => _isCursorNewTurn(eventName),
-    AgentType.agy => _isAgyNewTurn(eventName),
-    AgentType.opencode || AgentType.opencode2 => _isOpenCodeNewTurn(eventName),
-    AgentType.pi => _isPiNewTurn(eventName),
-    AgentType.amp => _isAmpNewTurn(eventName),
-    AgentType.grok => _isGrokNewTurn(eventName),
-    AgentType.devin =>
-      eventName == 'SessionStart' || eventName == 'UserPromptSubmit',
-    AgentType.fx => eventName == 'Working',
-  };
-}
-
-String _extractPromptForEvent(AgentHookEvent event, String eventName) {
-  if (event.agentType == AgentType.copilot && eventName == 'Notification') {
-    return '';
-  }
-  if (event.agentType == AgentType.grok && eventName == 'Notification') {
-    return '';
-  }
-  if (event.agentType == AgentType.opencode ||
-      event.agentType == AgentType.opencode2) {
-    final prompt = _openCodePromptForEvent(event, eventName);
-    if (prompt != null) {
-      return prompt;
-    }
-  }
-  final direct = _extractPrompt(event.payload);
-  if (direct.isNotEmpty) {
-    return event.agentType == AgentType.grok
-        ? _stripGrokUserQueryWrapper(direct)
-        : direct;
-  }
-  if (event.agentType == AgentType.agy) {
-    return _agyPromptForEvent(event) ?? '';
-  }
-  return '';
+  return _agentHookAdapterFor(event.agentType).normalizeEventName(event, raw);
 }
 
 String _extractPrompt(Map<String, Object?> payload) {

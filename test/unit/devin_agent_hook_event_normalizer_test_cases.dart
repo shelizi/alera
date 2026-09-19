@@ -39,6 +39,17 @@ void _registerDevinAgentHookEventNormalizerTests() {
     expect(
       normalizeAgentHookEvent(
         _event(
+          agentType: .claude,
+          hookEventName: 'PermissionRequest',
+          payload: const <String, Object?>{},
+        ),
+      )?.state,
+      AgentStatusState.waiting,
+      reason: 'Devin policy must not leak into Claude',
+    );
+    expect(
+      normalizeAgentHookEvent(
+        _event(
           agentType: .devin,
           hookEventName: 'Stop',
           payload: const <String, Object?>{},

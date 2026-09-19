@@ -12,6 +12,22 @@ part 'agent_hook_event_normalizer_test_harness.dart';
 
 void main() {
   group('agent hook event normalizer', () {
+    test('every AgentType has a registered hook adapter', () {
+      for (final agentType in AgentType.values) {
+        expect(
+          () => agentHookEventName(
+            _event(
+              agentType: agentType,
+              hookEventName: 'UnknownEvent',
+              payload: const <String, Object?>{},
+            ),
+          ),
+          returnsNormally,
+          reason: '${agentType.key} must have its own registered hook adapter',
+        );
+      }
+    });
+
     _registerGrokAgentHookEventNormalizerTests();
     _registerDevinAgentHookEventNormalizerTests();
     _registerAgyAgentHookEventNormalizerTests();

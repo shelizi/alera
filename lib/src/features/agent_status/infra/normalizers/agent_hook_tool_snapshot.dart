@@ -3,32 +3,19 @@ part of '../agent_hook_event_normalizer.dart';
 _ToolSnapshot _extractToolSnapshot(
   AgentHookEvent event, {
   required String eventName,
+  required _AgentHookAdapter adapter,
 }) {
-  if (event.agentType == AgentType.cursor) {
-    return _extractCursorToolSnapshot(event, eventName);
+  final customSnapshot = adapter.extractToolSnapshot(event, eventName);
+  if (customSnapshot != null) {
+    return customSnapshot;
   }
   final payload = event.payload;
-  final hasToolEvent =
-      eventName == 'PreToolUse' ||
-      eventName == 'PostToolUse' ||
-      eventName == 'PostToolUseFailure' ||
-      eventName == 'PermissionRequest' ||
-      eventName == 'tool_call' ||
-      eventName == 'tool_execution_start' ||
-      eventName == 'tool_execution_end' ||
-      eventName == 'tool.call' ||
-      eventName == 'tool.result';
+  final hasToolEvent = adapter.isToolEvent(eventName);
   String? toolName;
   String? toolInput;
   var hasToolInput = false;
   if (hasToolEvent) {
-    final nestedToolCall = event.agentType == AgentType.agy
-        ? _readAgyToolCall(payload)
-        : event.agentType == AgentType.copilot
-        ? _readCopilotToolCall(payload)
-        : event.agentType == AgentType.codex
-        ? _readCodexToolCall(payload)
-        : const _NestedToolCall();
+    final nestedToolCall = adapter.nestedToolCall(payload);
     toolName =
         _readFirstString(payload, const <String>[
           'tool_name',
@@ -62,7 +49,7 @@ _ToolSnapshot _extractToolSnapshot(
   }
 
   final lastAssistantMessage =
-      _assistantTextFromHookEvent(event, eventName) ??
+      adapter.assistantText(event, eventName) ??
       _readFirstString(payload, const <String>[
         'last_assistant_message',
         'lastAssistantMessage',
@@ -80,7 +67,7 @@ _ToolSnapshot _extractToolSnapshot(
         'errorMessage',
         'error',
       ]) ??
-      ((eventName == 'Stop')
+      (adapter.shouldReadAssistantTranscript(eventName)
           ? _readLastAssistantFromTranscript(
               payload['transcript_path'] ?? payload['transcriptPath'],
             )
