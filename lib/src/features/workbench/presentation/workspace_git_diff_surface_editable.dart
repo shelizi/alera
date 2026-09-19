@@ -32,6 +32,25 @@ final class _EditableDiffLineChanges {
   final Set<int> newChangedLines;
 }
 
+/// Keeps horizontal diff scrolling under explicit user control.
+///
+/// EditableText asks ancestor scrollables to reveal the caret/selection. For
+/// the side-by-side diff, that implicit horizontal reveal makes the whole pane
+/// jump left/right when selection moves between long and short lines. User
+/// wheel/drag/scrollbar input remains enabled; only implicit bring-into-view
+/// requests are rejected.
+final class _NoImplicitHorizontalScrollPhysics extends ScrollPhysics {
+  const _NoImplicitHorizontalScrollPhysics({super.parent});
+
+  @override
+  _NoImplicitHorizontalScrollPhysics applyTo(ScrollPhysics? ancestor) {
+    return _NoImplicitHorizontalScrollPhysics(parent: buildParent(ancestor));
+  }
+
+  @override
+  bool get allowImplicitScrolling => false;
+}
+
 _LiveDiffStats _liveDiffStats(
   String baseline,
   String current,
@@ -119,13 +138,13 @@ _EditableDiffLineChanges _editableDiffLineChanges(
     return _liveEditableDiffLineChanges(baseline, current, whitespaceMode);
   }
 
-  final oldLines = _splitFullFileLines(baseline);
-  final newLines = _splitFullFileLines(current);
+  final oldLineCount = _textLineCount(baseline);
+  final newLineCount = _textLineCount(current);
   if (file.status == GitChangeStatus.added ||
       file.status == GitChangeStatus.untracked) {
     return _EditableDiffLineChanges(
       oldChangedLines: const <int>{},
-      newChangedLines: Set<int>.from(Iterable<int>.generate(newLines.length)),
+      newChangedLines: Set<int>.from(Iterable<int>.generate(newLineCount)),
     );
   }
 
@@ -144,14 +163,14 @@ _EditableDiffLineChanges _editableDiffLineChanges(
     }
     if (line.kind == GitDiffLineKind.header) continue;
     if (line.kind == GitDiffLineKind.deletion) {
-      if (oldLine != null && oldLine > 0 && oldLine <= oldLines.length) {
+      if (oldLine != null && oldLine > 0 && oldLine <= oldLineCount) {
         oldChanged.add(oldLine - 1);
       }
       if (oldLine != null) oldLine += 1;
       continue;
     }
     if (line.kind == GitDiffLineKind.addition) {
-      if (newLine != null && newLine > 0 && newLine <= newLines.length) {
+      if (newLine != null && newLine > 0 && newLine <= newLineCount) {
         newChanged.add(newLine - 1);
       }
       if (newLine != null) newLine += 1;
@@ -170,6 +189,56 @@ _EditableDiffLineChanges _editableDiffLineChanges(
     );
   }
   return _liveEditableDiffLineChanges(baseline, current, whitespaceMode);
+}
+
+int _textLineCount(String text) {
+  if (text.isEmpty) return 0;
+  var count = 1;
+  for (var index = 0; index < text.length; index += 1) {
+    if (text.codeUnitAt(index) == 0x0a) count += 1;
+  }
+  if (text.endsWith('\n')) count -= 1;
+  return count;
+}
+
+String _widestDiffLineCandidate(String text) {
+  if (text.isEmpty) return ' ';
+  var bestStart = 0;
+  var bestEnd = 0;
+  var bestColumns = -1;
+  var lineStart = 0;
+  var columns = 0;
+
+  void finishLine(int end) {
+    if (columns > bestColumns) {
+      bestColumns = columns;
+      bestStart = lineStart;
+      bestEnd = end;
+    }
+  }
+
+  for (var index = 0; index < text.length; index += 1) {
+    final unit = text.codeUnitAt(index);
+    if (unit == 0x0a || unit == 0x0d) {
+      finishLine(index);
+      if (unit == 0x0d &&
+          index + 1 < text.length &&
+          text.codeUnitAt(index + 1) == 0x0a) {
+        index += 1;
+      }
+      lineStart = index + 1;
+      columns = 0;
+      continue;
+    }
+    columns += switch (unit) {
+      0x09 => 4,
+      <= 0x7f => 1,
+      _ => 2,
+    };
+  }
+  finishLine(text.length);
+  if (bestEnd <= bestStart) return ' ';
+  return text.substring(bestStart, bestEnd);
 }
 
 extension _WorkspaceGitDiffEditable on _WorkspaceGitDiffSurfaceState {
@@ -225,10 +294,12 @@ extension _WorkspaceGitDiffEditable on _WorkspaceGitDiffSurfaceState {
   void _editWorkingTreeDocument(GitDiffFile file, String text) {
     final document = _editableDocuments[file.path];
     if (document == null || document.currentText == text) return;
-    _updateDiffState(() {
-      document.currentText = text;
-      document.error = null;
-    });
+    // The editable diff owns the TextField and already rebuilds itself on
+    // input. Mutating the document here is enough for save/dirty state; a
+    // parent surface setState would rebuild the entire diff tree for every
+    // keystroke and is especially expensive for full-file side-by-side views.
+    document.currentText = text;
+    document.error = null;
   }
 
   Future<void> _saveWorkingTreeDocument(GitDiffFile file) async {
@@ -362,8 +433,8 @@ class _EditableWorkingTreeDiff extends StatefulWidget {
       _EditableWorkingTreeDiffState();
 }
 
-class _EditableDiffOverviewRuler extends StatelessWidget {
-  const _EditableDiffOverviewRuler({
+class _DiffOverviewRuler extends StatelessWidget {
+  const _DiffOverviewRuler({
     super.key,
     required this.changes,
     required this.lineCount,
@@ -421,7 +492,8 @@ class _EditableDiffOverviewRuler extends StatelessWidget {
                       builder: (context, _) {
                         var viewportStart = 0.0;
                         var viewportEnd = 1.0;
-                        if (scrollController.hasClients) {
+                        if (scrollController.hasClients &&
+                            scrollController.position.hasContentDimensions) {
                           final position = scrollController.position;
                           final totalExtent =
                               position.maxScrollExtent +
@@ -437,7 +509,7 @@ class _EditableDiffOverviewRuler extends StatelessWidget {
                           }
                         }
                         return CustomPaint(
-                          painter: _EditableDiffOverviewPainter(
+                          painter: _DiffOverviewPainter(
                             oldChangedLines: changes.oldChangedLines,
                             newChangedLines: changes.newChangedLines,
                             lineCount: lineCount,
@@ -458,8 +530,8 @@ class _EditableDiffOverviewRuler extends StatelessWidget {
   }
 }
 
-class _EditableDiffOverviewPainter extends CustomPainter {
-  const _EditableDiffOverviewPainter({
+class _DiffOverviewPainter extends CustomPainter {
+  const _DiffOverviewPainter({
     required this.oldChangedLines,
     required this.newChangedLines,
     required this.lineCount,
@@ -532,7 +604,7 @@ class _EditableDiffOverviewPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant _EditableDiffOverviewPainter oldDelegate) =>
+  bool shouldRepaint(covariant _DiffOverviewPainter oldDelegate) =>
       oldDelegate.oldChangedLines != oldChangedLines ||
       oldDelegate.newChangedLines != newChangedLines ||
       oldDelegate.lineCount != lineCount ||
@@ -650,37 +722,52 @@ class _EditableWorkingTreeDiffState extends State<_EditableWorkingTreeDiff> {
       widget.baseline,
       widget.document.currentText,
     ]) {
-      for (final line in _splitFullFileLines(content)) {
-        painter.text = TextSpan(
-          text: line.isEmpty ? ' ' : line,
-          style: textStyle,
-        );
-        painter.layout();
-        maxWidth = math.max(maxWidth, painter.width);
-      }
+      painter.text = TextSpan(
+        text: _widestDiffLineCandidate(content),
+        style: textStyle,
+      );
+      painter.layout();
+      maxWidth = math.max(maxWidth, painter.width);
     }
-    return maxWidth + AleraTokens.space24;
+    // The candidate selection uses display-column estimates for tabs/fallback
+    // glyphs, so leave a small safety margin without paying a TextPainter
+    // layout for every line in the file.
+    return maxWidth * 1.08 + AleraTokens.space24;
   }
 
   @override
   Widget build(BuildContext context) {
-    final stats = _liveDiffStats(
-      widget.baseline,
-      widget.document.currentText,
-      widget.whitespaceMode,
-    );
+    final useSourceDiff =
+        widget.document.currentText == widget.document.loaded.displayContent;
+    final stats = useSourceDiff
+        ? _LiveDiffStats(
+            added:
+                widget.file.added ??
+                widget.file.lines
+                    .where((line) => line.kind == GitDiffLineKind.addition)
+                    .length,
+            removed:
+                widget.file.removed ??
+                widget.file.lines
+                    .where((line) => line.kind == GitDiffLineKind.deletion)
+                    .length,
+          )
+        : _liveDiffStats(
+            widget.baseline,
+            widget.document.currentText,
+            widget.whitespaceMode,
+          );
     final changes = _editableDiffLineChanges(
       widget.file,
       widget.baseline,
       widget.document.currentText,
       widget.whitespaceMode,
-      useSourceDiff:
-          widget.document.currentText == widget.document.loaded.displayContent,
+      useSourceDiff: useSourceDiff,
     );
     const lineHeight = 18.0;
     final lineCount = math.max(
-      _splitFullFileLines(widget.baseline).length,
-      _splitFullFileLines(widget.document.currentText).length,
+      _textLineCount(widget.baseline),
+      _textLineCount(widget.document.currentText),
     );
     final fallbackHeight = (lineCount * 18.0 + 72).clamp(260.0, 620.0);
     final viewportHeight = widget.viewportHeight;
@@ -794,6 +881,8 @@ class _EditableWorkingTreeDiffState extends State<_EditableWorkingTreeDiff> {
                             child: SingleChildScrollView(
                               controller: _leftHorizontalController,
                               scrollDirection: Axis.horizontal,
+                              physics:
+                                  const _NoImplicitHorizontalScrollPhysics(),
                               child: SizedBox(
                                 width: contentWidth,
                                 height: constraints.maxHeight,
@@ -873,6 +962,7 @@ class _EditableWorkingTreeDiffState extends State<_EditableWorkingTreeDiff> {
                           child: SingleChildScrollView(
                             controller: _rightHorizontalController,
                             scrollDirection: Axis.horizontal,
+                            physics: const _NoImplicitHorizontalScrollPhysics(),
                             child: SizedBox(
                               width: contentWidth,
                               height: constraints.maxHeight,
@@ -982,8 +1072,8 @@ class _EditableWorkingTreeDiffState extends State<_EditableWorkingTreeDiff> {
                     ),
                   ),
                   SizedBox(
-                    width: _EditableDiffOverviewRuler.width,
-                    child: _EditableDiffOverviewRuler(
+                    width: _DiffOverviewRuler.width,
+                    child: _DiffOverviewRuler(
                       key: ValueKey<String>(
                         'git-diff-working-tree-overview-${widget.file.path}',
                       ),

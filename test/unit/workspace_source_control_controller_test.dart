@@ -49,6 +49,51 @@ Future<(ProviderContainer, WorkspaceSourceControlController)> _boot(
 }
 
 void main() {
+  test(
+    'stage publishes status before repository metadata refresh completes',
+    () async {
+      final backend = FakeGitBackend()..gitStatusResult = _statusWith(1);
+      final watcher = FakeSourceControlWatcher();
+      addTearDown(watcher.dispose);
+      final (container, controller) = await _boot(backend, watcher);
+      final provider = workspaceSourceControlControllerProvider(_workspacePath);
+      final repositoryGate = Completer<void>();
+      final stashCallsBefore = backend.calls
+          .where((call) => call.method == 'listStashes')
+          .length;
+
+      backend.beforeRepositoryState = (_) => repositoryGate.future;
+      backend.gitStatusResult = GitStatusResult(
+        entries: const <GitChangeEntry>[
+          GitChangeEntry(
+            path: 'file_0.dart',
+            area: .staged,
+            status: .modified,
+            added: 1,
+            removed: 0,
+          ),
+        ],
+      );
+
+      await controller.stage('file_0.dart');
+
+      final afterStage = container.read(provider).requireValue;
+      expect(afterStage.isBusy, isFalse);
+      expect(afterStage.status.entries.single.area, GitChangeArea.staged);
+      expect(
+        backend.calls.where((call) => call.method == 'listStashes').length,
+        stashCallsBefore,
+      );
+      expect(
+        backend.calls.where((call) => call.method == 'repositoryState').length,
+        greaterThanOrEqualTo(2),
+      );
+
+      repositoryGate.complete();
+      await Future.pause(const Duration(milliseconds: 10));
+    },
+  );
+
   test('a watch signal reloads source control state', () async {
     final backend = FakeGitBackend()..gitStatusResult = _statusWith(1);
     final watcher = FakeSourceControlWatcher();

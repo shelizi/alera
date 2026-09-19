@@ -108,12 +108,14 @@ class WorkspaceSourceControlController
   Future<void> stage(String? filePath) => _run(
     .stage,
     (backend) => backend.stage(path: workspacePath, filePath: filePath),
+    statusFirst: true,
   );
 
   Future<void> stageArea(GitChangeArea area, {String? filePath}) => _run(
     .stage,
     (backend) =>
         backend.stageArea(path: workspacePath, area: area, filePath: filePath),
+    statusFirst: true,
   );
 
   Future<void> stageEntry(GitChangeEntry entry) {
@@ -124,12 +126,13 @@ class WorkspaceSourceControlController
       for (final filePath in _actionPaths(entry)) {
         await backend.stage(path: workspacePath, filePath: filePath);
       }
-    });
+    }, statusFirst: true);
   }
 
   Future<void> unstage(String? filePath) => _run(
     .unstage,
     (backend) => backend.unstage(path: workspacePath, filePath: filePath),
+    statusFirst: true,
   );
 
   Future<void> unstageArea(GitChangeArea area, {String? filePath}) => _run(
@@ -139,6 +142,7 @@ class WorkspaceSourceControlController
       area: area,
       filePath: filePath,
     ),
+    statusFirst: true,
   );
 
   Future<void> unstageEntry(GitChangeEntry entry) {
@@ -149,7 +153,7 @@ class WorkspaceSourceControlController
       for (final filePath in _actionPaths(entry)) {
         await backend.unstage(path: workspacePath, filePath: filePath);
       }
-    });
+    }, statusFirst: true);
   }
 
   Future<void> discard(String? filePath) => _run(
@@ -326,8 +330,9 @@ class WorkspaceSourceControlController
 
   Future<void> _run(
     WorkspaceSourceControlAction action,
-    Future<void> Function(GitBackend backend) operation,
-  ) async {
+    Future<void> Function(GitBackend backend) operation, {
+    bool statusFirst = false,
+  }) async {
     final previous = state.asData?.value;
     if (previous?.isBusy ?? false) {
       return;
@@ -345,8 +350,11 @@ class WorkspaceSourceControlController
       );
     }
     try {
-      await operation(ref.read(gitBackendProvider));
-      final next = await _load();
+      final backend = ref.read(gitBackendProvider);
+      await operation(backend);
+      final next = statusFirst && previous != null
+          ? await _loadStatusOnly(previous, backend)
+          : await _load();
       // `_disposed` only gates watcher callbacks: `ref.onDispose` also runs
       // when `build()` rejects, so a failed initial load leaves the flag set
       // while the element stays alive. Checking it here would brick refresh.
@@ -356,6 +364,14 @@ class WorkspaceSourceControlController
         return;
       }
       state = AsyncData(next);
+      if (statusFirst && previous != null) {
+        unawaited(
+          _refreshRepositoryStateAfterFastAction(
+            backend: backend,
+            loadGeneration: loadGeneration,
+          ),
+        );
+      }
     } catch (error, stackTrace) {
       final recovered = await _recoverAfterFailure(previous);
       if (recovered != null) {
@@ -366,6 +382,49 @@ class WorkspaceSourceControlController
       rethrow;
     } finally {
       _scheduleQueuedWatcherReload();
+    }
+  }
+
+  Future<WorkspaceSourceControlState> _loadStatusOnly(
+    WorkspaceSourceControlState previous,
+    GitBackend backend,
+  ) async {
+    final status = await backend.status(workspacePath);
+    return _reconcileLoadedState(
+      previous: previous,
+      status: status,
+      repositoryState: previous.repositoryState,
+      stashes: previous.stashes,
+    );
+  }
+
+  Future<void> _refreshRepositoryStateAfterFastAction({
+    required GitBackend backend,
+    required int loadGeneration,
+  }) async {
+    try {
+      final repositoryState = await backend.repositoryState(workspacePath);
+      if (loadGeneration != _loadGeneration) return;
+      final current = state.asData?.value;
+      if (current == null || current.isBusy) return;
+      if (gitRepositoryStateValuesEqual(
+        current.repositoryState,
+        repositoryState,
+      )) {
+        return;
+      }
+      state = AsyncData(
+        WorkspaceSourceControlState(
+          status: current.status,
+          repositoryState: repositoryState,
+          stashes: current.stashes,
+          revision: current.revision + 1,
+        ),
+      );
+    } catch (_) {
+      // Stage/unstage already succeeded and status is current. Repository
+      // metadata is best-effort here and can be repaired by watcher/manual
+      // refresh without keeping the source-control UI busy.
     }
   }
 

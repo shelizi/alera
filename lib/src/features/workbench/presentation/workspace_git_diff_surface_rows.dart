@@ -1,8 +1,174 @@
 part of 'workspace_git_diff_surface.dart';
 
+final class _SingleColumnDiffOverviewProjection {
+  const _SingleColumnDiffOverviewProjection({
+    required this.changes,
+    required this.lineCount,
+  });
+
+  final _EditableDiffLineChanges changes;
+  final int lineCount;
+}
+
+_SingleColumnDiffOverviewProjection _singleColumnDiffOverviewProjection({
+  required GitDiffResult result,
+  required Map<GitDiffFile, _FullFileContents> fullFileContents,
+  required Set<String> fullFilePreviewLimitedPaths,
+  required GitDiffContentMode contentMode,
+}) {
+  final oldChangedLines = <int>{};
+  final newChangedLines = <int>{};
+  var globalOffset = 0;
+
+  for (final file in result.files) {
+    if (file.isBinary || file.isLarge || file.isGitlink) {
+      globalOffset += 1;
+      continue;
+    }
+    final fileContentMode =
+        contentMode == GitDiffContentMode.fullFile &&
+            fullFilePreviewLimitedPaths.contains(file.path)
+        ? GitDiffContentMode.diffOnly
+        : contentMode;
+    final contents = fullFileContents[file];
+    var oldLineCount = 0;
+    var newLineCount = 0;
+    if (fileContentMode == GitDiffContentMode.fullFile) {
+      oldLineCount = _textLineCount(contents?.oldDecoded?.content ?? '');
+      newLineCount = _textLineCount(contents?.newDecoded?.content ?? '');
+    }
+    var estimatedLineCount = math.max(oldLineCount, newLineCount);
+    int? oldLine;
+    int? newLine;
+
+    for (final line in file.lines) {
+      if (line.kind == GitDiffLineKind.hunk) {
+        final match = _hunkHeaderRegExp.firstMatch(line.text);
+        if (match == null) continue;
+        final oldStart = int.tryParse(match.group(1) ?? '');
+        final newStart = int.tryParse(match.group(3) ?? '');
+        final oldCount = int.tryParse(match.group(2) ?? '') ?? 1;
+        final newCount = int.tryParse(match.group(4) ?? '') ?? 1;
+        oldLine = oldCount == 0 ? null : oldStart;
+        newLine = newCount == 0 ? null : newStart;
+        if (oldStart != null) {
+          final oldSpan = oldCount > 1 ? oldCount : 1;
+          estimatedLineCount = math.max(
+            estimatedLineCount,
+            oldStart + oldSpan - 1,
+          );
+        }
+        if (newStart != null) {
+          final newSpan = newCount > 1 ? newCount : 1;
+          estimatedLineCount = math.max(
+            estimatedLineCount,
+            newStart + newSpan - 1,
+          );
+        }
+        continue;
+      }
+      if (line.kind == GitDiffLineKind.header) continue;
+      if (line.kind == GitDiffLineKind.deletion) {
+        if (oldLine != null && oldLine > 0) {
+          oldChangedLines.add(globalOffset + oldLine - 1);
+          estimatedLineCount = math.max(estimatedLineCount, oldLine);
+          oldLine += 1;
+        }
+        continue;
+      }
+      if (line.kind == GitDiffLineKind.addition) {
+        if (newLine != null && newLine > 0) {
+          newChangedLines.add(globalOffset + newLine - 1);
+          estimatedLineCount = math.max(estimatedLineCount, newLine);
+          newLine += 1;
+        }
+        continue;
+      }
+      if (line.kind == GitDiffLineKind.context) {
+        if (oldLine != null) {
+          estimatedLineCount = math.max(estimatedLineCount, oldLine);
+          oldLine += 1;
+        }
+        if (newLine != null) {
+          estimatedLineCount = math.max(estimatedLineCount, newLine);
+          newLine += 1;
+        }
+      }
+    }
+
+    // Keep each file represented in the global overview even when the patch
+    // has no parseable hunk header. One separator line keeps adjacent file
+    // markers from collapsing onto the same ruler position.
+    globalOffset += math.max(estimatedLineCount, 1) + 1;
+  }
+
+  return _SingleColumnDiffOverviewProjection(
+    changes: _EditableDiffLineChanges(
+      oldChangedLines: oldChangedLines,
+      newChangedLines: newChangedLines,
+    ),
+    lineCount: math.max(globalOffset - 1, 1),
+  );
+}
+
+class _SingleColumnDiffList extends StatefulWidget {
+  const _SingleColumnDiffList({required this.rows, required this.overview});
+
+  final _DiffRows rows;
+  final _SingleColumnDiffOverviewProjection overview;
+
+  @override
+  State<_SingleColumnDiffList> createState() => _SingleColumnDiffListState();
+}
+
+class _SingleColumnDiffListState extends State<_SingleColumnDiffList> {
+  late final ScrollController _scrollController;
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController = ScrollController();
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        Expanded(
+          child: ListView.builder(
+            key: const ValueKey<String>('git-diff-single-column-list'),
+            controller: _scrollController,
+            padding: const EdgeInsets.only(bottom: AleraTokens.space16),
+            itemCount: widget.rows.length,
+            itemBuilder: (context, index) =>
+                widget.rows.rowAt(index).build(context),
+          ),
+        ),
+        SizedBox(
+          width: _DiffOverviewRuler.width,
+          child: _DiffOverviewRuler(
+            key: const ValueKey<String>('git-diff-single-column-overview'),
+            changes: widget.overview.changes,
+            lineCount: widget.overview.lineCount,
+            scrollController: _scrollController,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class const _DiffFileList({
   required final GitDiffResult result,
   required final Map<GitDiffFile, _FullFileContents> fullFileContents,
+  final Set<String> fullFilePreviewLimitedPaths = const <String>{},
   required final String sourcePath,
   final String? sourceLabel,
   final String? commitOid,
@@ -21,6 +187,7 @@ class const _DiffFileList({
       return _DiffRows.fromResult(
         result,
         fullFileContents: fullFileContents,
+        fullFilePreviewLimitedPaths: fullFilePreviewLimitedPaths,
         sourcePath: sourcePath,
         sourceLabel: sourceLabel,
         commitOid: commitOid,
@@ -61,10 +228,14 @@ class const _DiffFileList({
       );
     }
     final rows = buildRows();
-    return ListView.builder(
-      padding: const EdgeInsets.only(bottom: AleraTokens.space16),
-      itemCount: rows.length,
-      itemBuilder: (context, index) => rows.rowAt(index).build(context),
+    return _SingleColumnDiffList(
+      rows: rows,
+      overview: _singleColumnDiffOverviewProjection(
+        result: result,
+        fullFileContents: fullFileContents,
+        fullFilePreviewLimitedPaths: fullFilePreviewLimitedPaths,
+        contentMode: contentMode,
+      ),
     );
   }
 }
@@ -161,6 +332,7 @@ class _DiffRows {
   factory _DiffRows.fromResult(
     GitDiffResult result, {
     required Map<GitDiffFile, _FullFileContents> fullFileContents,
+    Set<String> fullFilePreviewLimitedPaths = const <String>{},
     required String sourcePath,
     String? sourceLabel,
     String? commitOid,
@@ -195,9 +367,21 @@ class _DiffRows {
       } else {
         final sideBySide =
             presentationMode == GitDiffPresentationMode.sideBySide;
+        final fileContentMode =
+            contentMode == GitDiffContentMode.fullFile &&
+                fullFilePreviewLimitedPaths.contains(file.path)
+            ? GitDiffContentMode.diffOnly
+            : contentMode;
+        if (fileContentMode != contentMode) {
+          items.add(
+            const _BannerRow(
+              'Full file preview is limited for large files. Showing diff only.',
+            ),
+          );
+        }
         final editable = editableDocuments[file.path];
         if (sideBySide &&
-            contentMode == GitDiffContentMode.fullFile &&
+            fileContentMode == GitDiffContentMode.fullFile &&
             editable != null &&
             onEditableChanged != null &&
             onEditableSave != null) {
@@ -219,7 +403,7 @@ class _DiffRows {
         }
         List<_DiffRow>? renderedRows;
         var renderedLazyRows = false;
-        if (contentMode == GitDiffContentMode.fullFile) {
+        if (fileContentMode == GitDiffContentMode.fullFile) {
           final contents = fullFileContents[file];
           final decodedFile = _fileWithDecodedDiffLines(file, contents);
           if (sideBySide) {

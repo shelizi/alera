@@ -77,6 +77,7 @@ class _WorkspaceGitDiffSurfaceState
   int _encodingGeneration = 0;
   final Map<String, _EditableWorkingTreeDocument> _editableDocuments =
       <String, _EditableWorkingTreeDocument>{};
+  final Set<String> _fullFilePreviewLimitedPaths = <String>{};
 
   GitDiffContentMode get _effectiveContentMode {
     return _overrideContentMode ??
@@ -109,6 +110,9 @@ class _WorkspaceGitDiffSurfaceState
           .setGitDiffContentMode(next);
     } catch (_) {
       // In minimal test harnesses workbenchControllerProvider.notifier might not be wired.
+    }
+    if (next == GitDiffContentMode.fullFile && _loadedResult != null) {
+      _load(preserveEditableDocuments: true);
     }
   }
 
@@ -316,6 +320,8 @@ class _WorkspaceGitDiffSurfaceState
                       return _DiffFileList(
                         result: result,
                         fullFileContents: _fullFileContents,
+                        fullFilePreviewLimitedPaths:
+                            _fullFilePreviewLimitedPaths,
                         editableDocuments: _editableDocuments,
                         onEditableChanged: _editWorkingTreeDocument,
                         onEditableSave: (file) =>

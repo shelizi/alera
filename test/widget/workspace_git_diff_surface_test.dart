@@ -653,7 +653,7 @@ void main() {
     expect(find.text('33'), findsNWidgets(2));
 
     await tester.tap(find.byTooltip('Switch to Full File View'));
-    await tester.pump();
+    await tester.pumpAndSettle();
     expect(find.byTooltip('Switch to Diff Only'), findsOneWidget);
     expect(find.byTooltip('Switch to Single-Column View'), findsOneWidget);
     expect(find.text('Original'), findsOneWidget);
@@ -674,6 +674,57 @@ void main() {
     expect(find.text('line five'), findsOneWidget);
     expect(find.text('line two'), findsNothing);
   });
+
+  testWidgets('oversized tracked full-file preview falls back to diff only', (
+    tester,
+  ) async {
+    final oversized = Uint8List(2 * 1024 * 1024 + 1);
+    final backend = FakeGitBackend()
+      ..gitDiffResult = const GitDiffResult(
+        files: <GitDiffFile>[
+          GitDiffFile(
+            path: 'lib/huge.dart',
+            area: .unstaged,
+            status: .modified,
+            lines: <GitDiffLine>[
+              GitDiffLine.hunk('@@ -1 +1 @@'),
+              GitDiffLine.deletion('-old value'),
+              GitDiffLine.addition('+new value'),
+            ],
+          ),
+        ],
+      )
+      ..diffBlobBytesBySide[(filePath: 'lib/huge.dart', oldSide: true)] =
+          oversized
+      ..diffBlobBytesBySide[(filePath: 'lib/huge.dart', oldSide: false)] =
+          oversized;
+    final fileService = _DiffEncodingFileService();
+
+    await _pumpDiffSurface(
+      tester,
+      backend: backend,
+      workspaceFileService: fileService,
+      tab: _diffTab(filePath: 'lib/huge.dart', title: 'huge.dart unstaged'),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text(
+        'Full file preview is limited for large files. Showing diff only.',
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('-old value'), findsOneWidget);
+    expect(find.text('+new value'), findsOneWidget);
+    expect(fileService.decodeCalls, isEmpty);
+    expect(
+      find.byKey(
+        const ValueKey<String>('git-diff-working-tree-editor-lib/huge.dart'),
+      ),
+      findsNothing,
+    );
+  });
+
   testWidgets('whitespace comparison selection is sticky and reloads diff', (
     tester,
   ) async {
@@ -952,6 +1003,137 @@ void main() {
     expect(rightY.offset, greaterThan(0));
     expect(leftY.offset, closeTo(rightY.offset, 0.5));
   });
+
+  testWidgets('single-column diff shows interactive overview ruler', (
+    tester,
+  ) async {
+    final lines = <GitDiffLine>[
+      const GitDiffLine.hunk('@@ -1,80 +1,80 @@'),
+      for (var index = 0; index < 80; index += 1)
+        if (index == 10)
+          const GitDiffLine.deletion('-old changed')
+        else if (index == 11)
+          const GitDiffLine.addition('+new changed')
+        else
+          GitDiffLine.context(' line $index'),
+    ];
+    final backend = FakeGitBackend()
+      ..gitDiffResult = GitDiffResult(
+        files: <GitDiffFile>[
+          GitDiffFile(
+            path: 'lib/main.dart',
+            area: .unstaged,
+            status: .modified,
+            lines: lines,
+          ),
+        ],
+      );
+
+    await _pumpDiffSurface(
+      tester,
+      backend: backend,
+      tab: _diffTab(filePath: 'lib/main.dart', title: 'main.dart unstaged'),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Switch to Diff Only'));
+    await tester.pumpAndSettle();
+
+    final listFinder = find.byKey(
+      const ValueKey<String>('git-diff-single-column-list'),
+    );
+    final overviewFinder = find.byKey(
+      const ValueKey<String>('git-diff-single-column-overview'),
+    );
+    expect(listFinder, findsOneWidget);
+    expect(overviewFinder, findsOneWidget);
+    expect(find.byTooltip('Diff Overview'), findsOneWidget);
+
+    final list = tester.widget<ListView>(listFinder);
+    final controller = list.controller!;
+    expect(controller.hasClients, isTrue);
+    expect(controller.position.maxScrollExtent, greaterThan(0));
+
+    controller.jumpTo(0);
+    await tester.pump();
+    final overviewTopLeft = tester.getTopLeft(overviewFinder);
+    final overviewSize = tester.getSize(overviewFinder);
+    await tester.tapAt(
+      overviewTopLeft +
+          Offset(overviewSize.width / 2, overviewSize.height * 0.8),
+    );
+    await tester.pump();
+    expect(controller.offset, greaterThan(0));
+  });
+
+  testWidgets(
+    'editable side-by-side selection keeps manual horizontal scroll position',
+    (tester) async {
+      final longLine = List<String>.filled(220, 'x').join();
+      final content = '$longLine\nshort\n';
+      final backend = FakeGitBackend()
+        ..gitDiffResult = const GitDiffResult(
+          files: <GitDiffFile>[
+            GitDiffFile(
+              path: 'lib/main.dart',
+              area: .unstaged,
+              status: .modified,
+              lines: <GitDiffLine>[
+                GitDiffLine.hunk('@@ -1,1 +1,1 @@'),
+                GitDiffLine.deletion('-old line'),
+                GitDiffLine.addition('+new line'),
+              ],
+            ),
+          ],
+        )
+        ..diffBlobBytesBySide[(filePath: 'lib/main.dart', oldSide: true)] =
+            Uint8List.fromList(content.codeUnits)
+        ..diffBlobBytesBySide[(filePath: 'lib/main.dart', oldSide: false)] =
+            Uint8List.fromList(content.codeUnits);
+      final files = _EditableDiffFileService(content: content);
+
+      await _pumpDiffSurface(
+        tester,
+        backend: backend,
+        workspaceFileService: files,
+        tab: _diffTab(filePath: 'lib/main.dart', title: 'main.dart unstaged'),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Switch to Side-by-Side View'));
+      await tester.pumpAndSettle();
+
+      final editorFinder = find.byKey(
+        const ValueKey<String>('git-diff-working-tree-editor-lib/main.dart'),
+      );
+      final rightXFinder = find.byKey(
+        const ValueKey<String>(
+          'git-diff-working-tree-editor-x-scrollbar-lib/main.dart',
+        ),
+      );
+      final editor = tester.widget<TextField>(editorFinder);
+      final controller = editor.controller!;
+      final rightX = tester.widget<Scrollbar>(rightXFinder).controller!;
+      final editable = tester.widget<EditableText>(
+        find.descendant(of: editorFinder, matching: find.byType(EditableText)),
+      );
+
+      editable.focusNode.requestFocus();
+      await tester.pump();
+      expect(editable.focusNode.hasFocus, isTrue);
+      rightX.jumpTo(180);
+      await tester.pump();
+      expect(rightX.offset, closeTo(180, 0.5));
+
+      controller.selection = TextSelection.collapsed(offset: longLine.length);
+      await tester.pumpAndSettle();
+      expect(rightX.offset, closeTo(180, 0.5));
+
+      controller.selection = TextSelection.collapsed(
+        offset: longLine.length + 1 + 'short'.length,
+      );
+      await tester.pumpAndSettle();
+      expect(rightX.offset, closeTo(180, 0.5));
+    },
+  );
 
   testWidgets('staged side-by-side diff stays read only', (tester) async {
     final backend = FakeGitBackend()

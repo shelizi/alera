@@ -1,6 +1,8 @@
 part of 'workspace_git_diff_surface.dart';
 
 const _maxProgressiveDiffPreviewBytes = 512 * 1024;
+const _maxEditableFullFileBytes = 512 * 1024;
+const _maxFullFileRenderBytes = 2 * 1024 * 1024;
 const _progressiveFirstDiffPageSize = 1;
 const _progressiveDiffPageSize = 4;
 
@@ -12,6 +14,16 @@ class _ProgressiveDiffPage {
 }
 
 extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
+  GitDiffContentMode get _contentModeForLoading {
+    final override = _overrideContentMode;
+    if (override != null) return override;
+    try {
+      return ref.read(workbenchControllerProvider).viewPrefs.gitDiffContentMode;
+    } catch (_) {
+      return GitDiffContentMode.fullFile;
+    }
+  }
+
   void _load({bool preserveEditableDocuments = false}) {
     final loadGeneration = ++_diffLoadGeneration;
     final readingDiffCompletion = _readingDiffCompletion;
@@ -93,6 +105,7 @@ extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
     _updateDiffState(() {
       _loadedResult = null;
       _fullFileContents = const <GitDiffFile, _FullFileContents>{};
+      _fullFilePreviewLimitedPaths.clear();
       if (!preserveEditableDocuments) {
         _editableDocuments.clear();
       }
@@ -333,6 +346,9 @@ extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
     required Future<GitDiffResult> nextFuture,
     required int loadGeneration,
   }) async {
+    if (_contentModeForLoading != GitDiffContentMode.fullFile) {
+      return;
+    }
     Future<Uint8List?> loadSide(GitDiffFile file, bool oldSide) async {
       try {
         return await backend.diffBlobBytes(
@@ -356,14 +372,6 @@ extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
       if (!_isCurrentDiffLoad(nextFuture, loadGeneration)) {
         return;
       }
-      await _ensureEditableDocument(
-        file: file,
-        sourceControlScope: sourceControlScope,
-        loadGeneration: loadGeneration,
-      );
-      if (!_isCurrentDiffLoad(nextFuture, loadGeneration)) {
-        return;
-      }
       if (file.isBinary || file.isLarge || file.isGitlink) {
         continue;
       }
@@ -377,6 +385,29 @@ extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
       ]);
       if (!_isCurrentDiffLoad(nextFuture, loadGeneration)) {
         return;
+      }
+      final largestSideBytes = sides.fold<int>(0, (largest, bytes) {
+        final length = bytes?.length ?? 0;
+        return math.max(largest, length);
+      });
+      if (largestSideBytes > _maxFullFileRenderBytes) {
+        _updateDiffState(() {
+          _fullFilePreviewLimitedPaths.add(file.path);
+          _editableDocuments.remove(file.path);
+        });
+        continue;
+      }
+      if (largestSideBytes <= _maxEditableFullFileBytes) {
+        await _ensureEditableDocument(
+          file: file,
+          sourceControlScope: sourceControlScope,
+          loadGeneration: loadGeneration,
+        );
+        if (!_isCurrentDiffLoad(nextFuture, loadGeneration)) {
+          return;
+        }
+      } else {
+        _updateDiffState(() => _editableDocuments.remove(file.path));
       }
       late _FullFileContents contents;
       while (true) {

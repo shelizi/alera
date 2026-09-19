@@ -117,6 +117,7 @@ class FakeGitBackend
   GitRepositoryState gitRepositoryStateResult = const GitRepositoryState(
     branch: 'main',
   );
+  Future<void> Function(String path)? beforeRepositoryState;
   List<GitStashEntry> gitStashEntries = const <GitStashEntry>[];
   String gitCommitOid = 'abc123';
 
@@ -461,6 +462,10 @@ class FakeGitBackend
     calls.add(
       GitBackendCall('repositoryState', <String, Object?>{'path': path}),
     );
+    final before = beforeRepositoryState;
+    if (before != null) {
+      await before(path);
+    }
     return gitRepositoryStateResult;
   }
 
