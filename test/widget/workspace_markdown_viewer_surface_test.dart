@@ -313,6 +313,48 @@ void main() {
     expect(service.reads, const <String>['docs/readme.md']);
   });
 
+  testWidgets('restores scroll position after switching away and back', (
+    tester,
+  ) async {
+    final registry = EditorSessionRegistry();
+    final service = _FakeWorkspaceFileService(
+      List<String>.generate(
+        120,
+        (index) =>
+            'Paragraph $index has enough markdown preview text to make the '
+            'document scroll vertically.',
+      ).join('\n\n'),
+    );
+    final showMarkdown = ValueNotifier<bool>(true);
+    addTearDown(showMarkdown.dispose);
+
+    await tester.pumpWidget(
+      _switchableSurface(
+        registry: registry,
+        workspaceFiles: service,
+        showMarkdown: showMarkdown,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.drag(
+      find.byType(SingleChildScrollView),
+      const Offset(0, -600),
+    );
+    await tester.pumpAndSettle();
+    final offsetBeforeSwitch = _markdownScrollOffset(tester);
+    expect(offsetBeforeSwitch, greaterThan(0));
+
+    showMarkdown.value = false;
+    await tester.pump();
+    expect(find.byType(SingleChildScrollView), findsNothing);
+
+    showMarkdown.value = true;
+    await tester.pumpAndSettle();
+
+    expect(_markdownScrollOffset(tester), closeTo(offsetBeforeSwitch, 0.5));
+  });
+
   testWidgets('refresh reloads disk content while the editor buffer is clean', (
     tester,
   ) async {
@@ -514,6 +556,44 @@ Widget _surface({
       ),
     ),
   );
+}
+
+Widget _switchableSurface({
+  required EditorSessionRegistry registry,
+  required WorkspaceFileService workspaceFiles,
+  required ValueNotifier<bool> showMarkdown,
+}) {
+  return ProviderScope(
+    overrides: [
+      editorSessionRegistryProvider.overrideWithValue(registry),
+      workspaceFileServiceProvider.overrideWithValue(workspaceFiles),
+    ],
+    child: MaterialApp(
+      home: Scaffold(
+        body: ValueListenableBuilder<bool>(
+          valueListenable: showMarkdown,
+          builder: (context, visible, _) {
+            if (!visible) {
+              return const Center(child: Text('Other tab'));
+            }
+            return WorkspaceMarkdownViewerSurface(
+              workspace: _workspace(),
+              tab: _tab(),
+              onOpenEditorTab: (_) {},
+            );
+          },
+        ),
+      ),
+    ),
+  );
+}
+
+double _markdownScrollOffset(WidgetTester tester) {
+  final scrollable = find.descendant(
+    of: find.byType(SingleChildScrollView),
+    matching: find.byType(Scrollable),
+  );
+  return tester.state<ScrollableState>(scrollable).position.pixels;
 }
 
 Workspace _workspace({String path = '/repo/alera'}) {

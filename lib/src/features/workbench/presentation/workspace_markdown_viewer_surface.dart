@@ -90,6 +90,9 @@ class _WorkspaceMarkdownViewerSurfaceState
       content = SelectionArea(
         contextMenuBuilder: AleraTextSelectionToolbar.selectableRegion,
         child: SingleChildScrollView(
+          key: PageStorageKey<String>(
+            'markdown-viewer-scroll:${widget.workspace.id}:${widget.tab.id}:$filePath',
+          ),
           padding: const EdgeInsets.all(AleraTokens.space24),
           child: GptMarkdownTheme(
             gptThemeData: GptMarkdownThemeData(
