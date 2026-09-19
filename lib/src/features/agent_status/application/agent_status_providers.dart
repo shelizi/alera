@@ -233,7 +233,7 @@ void agentHookInstallerCoordinator(Ref ref) {
       (settings) => settings.agents.agentStatusHooks,
     ),
     (previous, next) {
-      if (previous == null || previous == next) {
+      if (previous != null && previous == next) {
         return;
       }
       final operation = service.reconcile(next);
@@ -241,6 +241,7 @@ void agentHookInstallerCoordinator(Ref ref) {
         operation.then<void>((_) {}).catchError(_ignoreProviderAsyncError),
       );
     },
+    fireImmediately: true,
   );
 }
 

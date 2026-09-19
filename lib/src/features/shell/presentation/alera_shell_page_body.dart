@@ -15,6 +15,7 @@ class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody> {
   Widget build(BuildContext context) {
     ref.watch(terminalHostWarmupCoordinatorProvider);
     ref.watch(runtimeAgentStatusSyncProvider);
+    ref.watch(agentHookInstallerCoordinatorProvider);
     ref.watch(agentStatusNotificationCoordinatorProvider);
     ref.watch(workspacePullRequestMonitorControllerProvider.notifier);
     ref.watch(workspacePullRequestFailureNotificationCoordinatorProvider);

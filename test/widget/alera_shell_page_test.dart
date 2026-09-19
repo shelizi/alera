@@ -11,6 +11,7 @@ import 'package:alera/src/features/agent_profiles/application/agent_profile_prov
 import 'package:alera/src/features/agent_profiles/application/local_agent_providers.dart';
 import 'package:alera/src/features/agent_profiles/domain/agent_profile.dart';
 import 'package:alera/src/features/agent_profiles/domain/agent_profile_adapters.dart';
+import 'package:alera/src/features/agent_status/application/agent_status_providers.dart';
 import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 import 'package:alera/src/features/external_editor/application/external_editor_providers.dart';
 import 'package:alera/src/features/external_editor/domain/external_editor_spec.dart';
@@ -78,6 +79,7 @@ Future<_ShellPumpHarness> _pumpShell(
   bool agentTitlesAvailable = false,
   List<AgentType> installedAgents = const <AgentType>[],
   ExternalTerminalLauncher? externalTerminalLauncher,
+  VoidCallback? onAgentHookInstallerCoordinatorStarted,
 }) async {
   final shellController = controller ?? _ShellTestWorkbenchController(state);
   final runtime = terminalRuntime ?? _FakeTerminalRuntime();
@@ -119,6 +121,10 @@ Future<_ShellPumpHarness> _pumpShell(
             editorSessionRegistry,
           ),
         terminalHostWarmupCoordinatorProvider.overrideWith((ref) {}),
+        if (onAgentHookInstallerCoordinatorStarted != null)
+          agentHookInstallerCoordinatorProvider.overrideWith((ref) {
+            onAgentHookInstallerCoordinatorStarted();
+          }),
         settingsControllerProvider.overrideWith(() => settingsController),
         agentTitleAvailableProvider.overrideWith(
           (ref) async => agentTitlesAvailable,
@@ -157,6 +163,20 @@ class _ShellAgentProfiles extends AgentProfiles {
 }
 
 void main() {
+  testWidgets('shell starts the agent hook installer coordinator', (
+    WidgetTester tester,
+  ) async {
+    var starts = 0;
+
+    await _pumpShell(
+      tester,
+      state: _stackedWorkbenchState(),
+      onAgentHookInstallerCoordinatorStarted: () => starts += 1,
+    );
+
+    expect(starts, 1);
+  });
+
   _registerAleraShellWorkbenchTests();
   _registerAleraShellSidebarActionTests();
   _registerAleraShellSidebarMutationTests();
