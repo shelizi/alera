@@ -4,8 +4,8 @@ bool _isInterrupted(AgentHookEvent event) {
   return switch (event.agentType) {
     AgentType.amp => _isAmpInterrupted(event),
     AgentType.cursor => _isCursorInterrupted(event),
+    AgentType.claude => _isGenericInterrupted(event, inferFailure: false),
     AgentType.codex ||
-    AgentType.claude ||
     AgentType.copilot ||
     AgentType.agy ||
     AgentType.opencode ||
@@ -17,9 +17,10 @@ bool _isInterrupted(AgentHookEvent event) {
   };
 }
 
-bool _isGenericInterrupted(AgentHookEvent event) {
+bool _isGenericInterrupted(AgentHookEvent event, {bool inferFailure = true}) {
   final eventName = agentHookEventName(event);
-  if (eventName == 'Interrupt' || eventName?.contains('Failure') == true) {
+  if (eventName == 'Interrupt' ||
+      (inferFailure && eventName?.contains('Failure') == true)) {
     return true;
   }
   final value = event.payload['is_interrupt'] ?? event.payload['interrupted'];

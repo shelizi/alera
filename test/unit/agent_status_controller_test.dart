@@ -238,7 +238,7 @@ void main() {
       expect(entry.stateStartedAt, times[1]);
     });
 
-    test('normalizes Claude failure completion as interrupted done', () {
+    test('normalizes Claude failure completion as done without interrupt', () {
       final controller = container.read(agentStatusControllerProvider.notifier);
 
       controller.applyHookEvent(
@@ -258,7 +258,7 @@ void main() {
 
       final entry = container.read(agentStatusControllerProvider)['session-1']!;
       expect(entry.state, AgentStatusState.done);
-      expect(entry.interrupted, isTrue);
+      expect(entry.interrupted, isNot(true));
     });
 
     test('normalizes Codex interrupt and session end states', () {
