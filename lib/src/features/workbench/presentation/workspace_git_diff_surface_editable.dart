@@ -899,6 +899,7 @@ class _EditableWorkingTreeDiffState extends State<_EditableWorkingTreeDiff> {
                                     style: textStyle,
                                     decoration: const InputDecoration(
                                       border: InputBorder.none,
+                                      filled: false,
                                       contentPadding: EdgeInsets.all(
                                         AleraTokens.space8,
                                       ),
@@ -931,6 +932,7 @@ class _EditableWorkingTreeDiffState extends State<_EditableWorkingTreeDiff> {
                                     return Stack(
                                       clipBehavior: Clip.hardEdge,
                                       children: <Widget>[
+                                        Positioned.fill(child: child!),
                                         if (lastVisible >= firstVisible)
                                           for (
                                             var lineIndex = firstVisible;
@@ -968,7 +970,6 @@ class _EditableWorkingTreeDiffState extends State<_EditableWorkingTreeDiff> {
                                                   ),
                                                 ),
                                               ),
-                                        Positioned.fill(child: child!),
                                       ],
                                     );
                                   },

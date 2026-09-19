@@ -819,13 +819,20 @@ void main() {
       ),
       findsOneWidget,
     );
-    expect(
-      find.byKey(
-        const ValueKey<String>(
-          'git-diff-working-tree-editor-addition-lib/main.dart-0',
-        ),
+    final rightHighlight = find.byKey(
+      const ValueKey<String>(
+        'git-diff-working-tree-editor-addition-lib/main.dart-0',
       ),
-      findsOneWidget,
+    );
+    expect(rightHighlight, findsOneWidget);
+    final rightHighlightStack = tester.widget<Stack>(
+      find.ancestor(of: rightHighlight, matching: find.byType(Stack)).first,
+    );
+    expect(
+      rightHighlightStack.children.last.key,
+      const ValueKey<String>(
+        'git-diff-working-tree-editor-addition-lib/main.dart-0',
+      ),
     );
 
     await tester.enterText(editor, 'edited line\n');
