@@ -32,6 +32,20 @@ This document defines contributor and agent governance only. It does not change 
 - After generation, run `dart tool/ci/normalize_generated_eof.dart` from the root (or `dart ../tool/ci/normalize_generated_eof.dart .` from mobile) before formatting. This canonicalizes the extra trailing newline emitted by dart_mappable without editing generated bodies.
 - Agents MUST verify the regenerated files are included alongside the source changes that produced them.
 
+## Dependency Injection And Module Boundaries
+
+- Alera uses Riverpod as the Flutter composition root. Do not add another DI framework or a global service locator unless there is a demonstrated requirement Riverpod and constructor injection cannot satisfy.
+- Provider functions may `read`/`watch` other providers to construct objects. Ordinary domain and application services, owners, coordinators, repositories, and ports SHOULD NOT depend on `Ref`, `WidgetRef`, `ProviderContainer`, or provider globals. A Riverpod `Notifier` may use Riverpod as part of its state-owner role, but substantial reusable logic should be delegated to constructor-injected collaborators when it can be tested independently.
+- Prefer constructor injection for long-lived collaborators. Required dependencies must be explicit, immutable where practical, and scoped to the feature that owns them.
+- Apply interface segregation before introducing fakes for broad infrastructure. Inject the smallest capability the consumer actually needs, such as `GitDiffQueryPort` instead of the complete `GitBackend`. One production implementation may implement several capability ports; splitting an interface does not require duplicating the implementation.
+- Good DI boundaries include database/store access, filesystem I/O, Git, network/RPC clients, process execution, clocks, notifications, clipboard/window/OS integration, repositories, and mutable shared-state owners. Do not wrap pure parsers, mappers, formatters, DTOs, value objects, or pure algorithms in interfaces only to satisfy a DI pattern.
+- Do not introduce giant `AppServices`, `Dependencies`, `ServiceLocator`, or similar bags that hide coupling. If several collaborators always belong to one owner, use a narrowly named feature dependency set such as `WorkbenchCatalogDependencies`.
+- Presentation code should not own application request lifecycle state such as cache generations, cancellation tokens, pagination coordination, stale-result suppression, or mutation orchestration when that state can live in an application controller/owner and be tested without widgets.
+- Unit tests for application services SHOULD instantiate the unit directly with small fakes/stubs and SHOULD NOT require Riverpod or Flutter bindings unless the unit itself is a Riverpod state owner. Use `ProviderContainer(overrides: ...)` primarily for provider-wiring tests and `ProviderScope` primarily for widget/integration tests.
+- Rust does not use a DI framework. Pass narrow capability references/traits or purpose-built request contexts to handlers instead of making every domain handler depend on a complete `ServerActor` or another broad owner when only a subset is required. Preserve shared transaction, SQLite pool, runtime-host, process, and lifecycle ownership boundaries while splitting interfaces or modules.
+- When refactoring for testability, first identify the true owner, list the effects it uses, separate pure logic from effectful dependencies, move provider/global lookup to the composition root, inject narrow ports, then add direct unit tests. A refactor is incomplete if a test still has to implement dozens of unrelated methods from a giant interface for a unit that uses only a few operations.
+- Follow `skills/alera-di-architecture/SKILL.md` for the reusable DI/refactor workflow and its review checklist.
+
 ## Dart Language
 
 - Own packages use Dart 3.13.2 with Flutter 3.47.2. Follow the source conventions and generator exceptions in `docs/dart-3.13-modernization.md`; do not modernize vendored sources or manually rewrite generated bindings.

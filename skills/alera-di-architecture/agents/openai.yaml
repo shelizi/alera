@@ -1,0 +1,3 @@
+interface:
+  display_name: "Alera DI Architecture"
+  short_description: "Refactor Alera modules with narrow ports and testable DI"
