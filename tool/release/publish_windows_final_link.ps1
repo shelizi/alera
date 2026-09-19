@@ -3,6 +3,8 @@ param(
     [string]$RemoteHost = 'neo-ai',
     [string]$RemoteDirectory = '/opt/running/fileServer/uploads/alera',
     [string]$ContainerName = 'file-server',
+    [ValidateSet('auto', 'rsync', 'scp')][string]$UploadTransport = 'auto',
+    [string]$RsyncPath = '',
     [switch]$SkipBuild,
     [switch]$NoPublish,
     [switch]$NoRestart,
@@ -49,6 +51,107 @@ function Get-GitText {
         throw "Git command failed: git $($Arguments -join ' ')`n$($value -join "`n")"
     }
     return ($value -join "`n").Trim()
+}
+
+function Resolve-RsyncExecutable {
+    param([string]$ExplicitPath = '')
+
+    if (-not [string]::IsNullOrWhiteSpace($ExplicitPath)) {
+        if (Test-Path -LiteralPath $ExplicitPath -PathType Leaf) {
+            return (Resolve-Path -LiteralPath $ExplicitPath).Path
+        }
+        $explicitCommand = Get-Command $ExplicitPath -ErrorAction SilentlyContinue
+        if ($null -ne $explicitCommand) {
+            return $explicitCommand.Source
+        }
+        throw "Configured rsync executable was not found: $ExplicitPath"
+    }
+
+    foreach ($commandName in @('rsync.exe', 'rsync')) {
+        $command = Get-Command $commandName -ErrorAction SilentlyContinue
+        if ($null -ne $command) {
+            return $command.Source
+        }
+    }
+
+    $candidates = @(
+        (Join-Path $env:LOCALAPPDATA 'Alera\tools\rsync\runtime\bin\rsync.exe'),
+        (Join-Path $env:LOCALAPPDATA 'Alera\tools\rsync\bin\rsync.exe'),
+        (Join-Path $env:USERPROFILE '.alera\tools\rsync\bin\rsync.exe'),
+        'C:\ProgramData\chocolatey\bin\rsync.exe',
+        'C:\Program Files\cwRsync\bin\rsync.exe',
+        'C:\msys64\usr\bin\rsync.exe',
+        'C:\cygwin64\bin\rsync.exe'
+    )
+    foreach ($candidate in $candidates) {
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+            return (Resolve-Path -LiteralPath $candidate).Path
+        }
+    }
+
+    return $null
+}
+
+function Convert-ToRsyncLocalPath {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$RsyncExecutable
+    )
+
+    $fullPath = [System.IO.Path]::GetFullPath($Path)
+    $cygpath = Join-Path (Split-Path -Parent $RsyncExecutable) 'cygpath.exe'
+    if (Test-Path -LiteralPath $cygpath -PathType Leaf) {
+        $converted = @(& $cygpath -u $fullPath 2>&1)
+        if ($LASTEXITCODE -eq 0 -and $converted.Count -gt 0) {
+            return ([string]$converted[0]).Trim()
+        }
+    }
+
+    if ($fullPath -match '^([A-Za-z]):\\(.*)$') {
+        $drive = $matches[1].ToLowerInvariant()
+        $rest = $matches[2].Replace('\', '/')
+        return "/cygdrive/$drive/$rest"
+    }
+
+    return $fullPath.Replace('\', '/')
+}
+
+function Sync-RemoteStaging {
+    param(
+        [Parameter(Mandatory = $true)][string]$LocalPath,
+        [Parameter(Mandatory = $true)][string]$RemoteStable,
+        [Parameter(Mandatory = $true)][string]$RemoteStaging
+    )
+
+    if ($script:UploadTransport -eq 'rsync') {
+        Write-Host "Upload transport: rsync ($($script:Rsync))"
+        Invoke-Checked -FilePath $script:Ssh -Arguments @(
+            $RemoteHost,
+            "mkdir -p $RemoteDirectory && if [ ! -f $RemoteStaging ] && [ -f $RemoteStable ]; then cp -f --reflink=auto $RemoteStable $RemoteStaging 2>/dev/null || cp -f $RemoteStable $RemoteStaging; fi"
+        )
+
+        $rsyncLocalPath = Convert-ToRsyncLocalPath -Path $LocalPath -RsyncExecutable $script:Rsync
+        $bundledSsh = Join-Path (Split-Path -Parent $script:Rsync) 'ssh.exe'
+        $sshForRsync = if (Test-Path -LiteralPath $bundledSsh -PathType Leaf) { $bundledSsh } else { $script:Ssh }
+        $rsyncSshPath = Convert-ToRsyncLocalPath -Path $sshForRsync -RsyncExecutable $script:Rsync
+        $rsyncSshCommand = if ($rsyncSshPath -match '\s') { '"' + $rsyncSshPath + '"' } else { $rsyncSshPath }
+        Invoke-Checked -FilePath $script:Rsync -Arguments @(
+            '--partial',
+            '--inplace',
+            '--no-whole-file',
+            '--chmod=F644',
+            '--stats',
+            '--rsync-path=/usr/bin/rsync',
+            '-e', $rsyncSshCommand,
+            $rsyncLocalPath,
+            "${RemoteHost}:$RemoteStaging"
+        )
+        return
+    }
+
+    Write-Host 'Upload transport: scp (rsync unavailable or explicitly disabled)'
+    Invoke-Checked -FilePath $script:Ssh -Arguments @($RemoteHost, "mkdir -p $RemoteDirectory")
+    Invoke-Checked -FilePath $script:Scp -Arguments @($LocalPath, "${RemoteHost}:$RemoteStaging")
 }
 
 function Resolve-GitCommonDirectory {
@@ -220,7 +323,22 @@ if (-not [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $script:RepoRoot = (Resolve-Path -LiteralPath (Join-Path $scriptDir '..\..')).Path
 $script:Ssh = (Get-Command ssh.exe -ErrorAction Stop).Source
-$scp = (Get-Command scp.exe -ErrorAction Stop).Source
+$script:Scp = (Get-Command scp.exe -ErrorAction Stop).Source
+$script:Rsync = Resolve-RsyncExecutable -ExplicitPath $RsyncPath
+$script:UploadTransport = $UploadTransport
+if ($UploadTransport -eq 'rsync' -and $null -eq $script:Rsync) {
+    throw 'UploadTransport=rsync was requested, but rsync could not be found. Install rsync or pass -RsyncPath.'
+}
+if ($UploadTransport -eq 'auto') {
+    $script:UploadTransport = if ($null -ne $script:Rsync) { 'rsync' } else { 'scp' }
+}
+if ($script:UploadTransport -eq 'rsync') {
+    $remoteRsync = Invoke-Checked -FilePath $script:Ssh -Arguments @(
+        $RemoteHost,
+        "command -v rsync >/dev/null && rsync --version | head -1"
+    ) -Capture
+    Write-Host "Remote rsync: $($remoteRsync[0])"
+}
 
 $lockPath = Join-Path $script:RepoRoot 'build\windows-final-link-publish.lock'
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $lockPath) | Out-Null
@@ -298,9 +416,8 @@ try {
     $remoteStable = "$RemoteDirectory/Alera-Final-Link-Kit.zip"
     $remoteStaging = "$RemoteDirectory/.Alera-Final-Link-Kit.uploading.zip"
 
-    Write-Step 'Upload to remote staging path'
-    Invoke-Checked -FilePath $script:Ssh -Arguments @($RemoteHost, "mkdir -p $RemoteDirectory")
-    Invoke-Checked -FilePath $scp -Arguments @($artifact.ZipPath, "${RemoteHost}:$remoteStaging")
+    Write-Step 'Sync to remote staging path'
+    Sync-RemoteStaging -LocalPath $artifact.ZipPath -RemoteStable $remoteStable -RemoteStaging $remoteStaging
     $stagingHash = Get-RemoteHash -RemotePath $remoteStaging
     if ($stagingHash -ne $artifact.Sha256) {
         throw "Remote staging hash mismatch. Local $($artifact.Sha256), remote $stagingHash."
