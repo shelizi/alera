@@ -59,8 +59,15 @@ extension _CodexRuntimeHomeServiceIo on CodexRuntimeHomeService {
             'ALERA_AGENT_HOOK_EVENT=${_shQuote(eventName)} '
             '/bin/sh ${_shQuote(scriptPath)}; fi',
       ManagedAgentHookPlatform.windows =>
-        'cmd /d /s /c "if exist ""$scriptPath"" '
-            '(set ALERA_AGENT_HOOK_EVENT=$eventName&& call ""$scriptPath"")"',
+        // Codex launches Windows hook commands through its POSIX-compatible
+        // shell. Keep the batch path out of a quoted cmd `/c` payload: MSYS
+        // otherwise forwards literal quote characters and the hook can report
+        // completion without ever executing the batch file. This mirrors the
+        // hardened Claude hook invocation used by Alera on Windows.
+        'if [ -f ${_shQuote(scriptPath)} ]; then '
+            "MSYS2_ARG_CONV_EXCL='*' "
+            'ALERA_AGENT_HOOK_EVENT=${_shQuote(eventName)} '
+            'cmd.exe /d /s /c call ${_shQuote(scriptPath)}; fi',
     };
   }
 
