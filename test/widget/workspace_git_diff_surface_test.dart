@@ -26,8 +26,11 @@ import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_git_diff_surface.dart';
 import 'package:alera/src/shared/infra/git/git_diff_models.dart';
 import 'package:alera/src/shared/infra/git/git_providers.dart';
+import 'package:flutter/foundation.dart'
+    show debugDefaultTargetPlatformOverride;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 
@@ -825,6 +828,28 @@ void main() {
   testWidgets('working-tree side-by-side right pane edits and saves file', (
     tester,
   ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    String? clipboardText;
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'Clipboard.setData') {
+          clipboardText =
+              (call.arguments as Map<Object?, Object?>)['text'] as String?;
+        }
+        if (call.method == 'Clipboard.getData') {
+          return <String, Object?>{'text': clipboardText};
+        }
+        return null;
+      },
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      ),
+    );
     final backend = FakeGitBackend()
       ..gitDiffResult = const GitDiffResult(
         files: <GitDiffFile>[
@@ -859,7 +884,12 @@ void main() {
     final editor = find.byKey(
       const ValueKey<String>('git-diff-working-tree-editor-lib/main.dart'),
     );
+    final original = find.byKey(
+      const ValueKey<String>('git-diff-working-tree-original-lib/main.dart'),
+    );
     expect(editor, findsOneWidget);
+    expect(original, findsOneWidget);
+    expect(tester.widget<TextField>(original).readOnly, isTrue);
     expect(find.text('Workspace · Editable'), findsOneWidget);
     expect(tester.getSize(editor).height, greaterThan(400));
     expect(
@@ -885,6 +915,23 @@ void main() {
         'git-diff-working-tree-editor-addition-lib/main.dart-0',
       ),
     );
+
+    final originalController = tester.widget<TextField>(original).controller!;
+    final originalEditable = tester.widget<EditableText>(
+      find.descendant(of: original, matching: find.byType(EditableText)),
+    );
+    originalEditable.focusNode.requestFocus();
+    originalController.selection = const TextSelection(
+      baseOffset: 0,
+      extentOffset: 8,
+    );
+    await tester.pump();
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.keyC);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.keyC);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pump();
+    expect(clipboardText, 'old line');
 
     await tester.enterText(editor, 'edited line\n');
     await tester.pump();
@@ -1007,6 +1054,23 @@ void main() {
   testWidgets('single-column diff shows interactive overview ruler', (
     tester,
   ) async {
+    String? copiedText;
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'Clipboard.setData') {
+          copiedText =
+              (call.arguments as Map<Object?, Object?>)['text'] as String?;
+        }
+        return null;
+      },
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      ),
+    );
     final lines = <GitDiffLine>[
       const GitDiffLine.hunk('@@ -1,80 +1,80 @@'),
       for (var index = 0; index < 80; index += 1)
@@ -1047,6 +1111,16 @@ void main() {
     expect(listFinder, findsOneWidget);
     expect(overviewFinder, findsOneWidget);
     expect(find.byTooltip('Diff Overview'), findsOneWidget);
+    expect(find.byType(SelectionArea), findsOneWidget);
+
+    await tester.tap(find.text('+new changed'));
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyA);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyC);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pump();
+    expect(copiedText, isNotNull);
+    expect(copiedText, contains('+new changed'));
 
     final list = tester.widget<ListView>(listFinder);
     final controller = list.controller!;
@@ -1177,6 +1251,7 @@ void main() {
       ),
       findsNothing,
     );
+    expect(find.byType(SelectionArea), findsOneWidget);
     expect(files.readCount, 0);
     expect(find.text('Modified'), findsOneWidget);
   });

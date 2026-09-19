@@ -112,10 +112,15 @@ _SingleColumnDiffOverviewProjection _singleColumnDiffOverviewProjection({
 }
 
 class _SingleColumnDiffList extends StatefulWidget {
-  const _SingleColumnDiffList({required this.rows, required this.overview});
+  const _SingleColumnDiffList({
+    required this.rows,
+    required this.overview,
+    required this.selectionEnabled,
+  });
 
   final _DiffRows rows;
   final _SingleColumnDiffOverviewProjection overview;
+  final bool selectionEnabled;
 
   @override
   State<_SingleColumnDiffList> createState() => _SingleColumnDiffListState();
@@ -138,18 +143,18 @@ class _SingleColumnDiffListState extends State<_SingleColumnDiffList> {
 
   @override
   Widget build(BuildContext context) {
+    final list = ListView.builder(
+      key: const ValueKey<String>('git-diff-single-column-list'),
+      controller: _scrollController,
+      padding: const EdgeInsets.only(bottom: AleraTokens.space16),
+      itemCount: widget.rows.length,
+      itemBuilder: (context, index) => widget.rows.rowAt(index).build(context),
+    );
     return Row(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
         Expanded(
-          child: ListView.builder(
-            key: const ValueKey<String>('git-diff-single-column-list'),
-            controller: _scrollController,
-            padding: const EdgeInsets.only(bottom: AleraTokens.space16),
-            itemCount: widget.rows.length,
-            itemBuilder: (context, index) =>
-                widget.rows.rowAt(index).build(context),
-          ),
+          child: widget.selectionEnabled ? SelectionArea(child: list) : list,
         ),
         SizedBox(
           width: _DiffOverviewRuler.width,
@@ -183,6 +188,20 @@ class const _DiffFileList({
 }) extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
+    final hasEditableSideBySide =
+        presentationMode == GitDiffPresentationMode.sideBySide &&
+        contentMode == GitDiffContentMode.fullFile &&
+        onEditableChanged != null &&
+        onEditableSave != null &&
+        result.files.any(
+          (file) =>
+              !file.isBinary &&
+              !file.isLarge &&
+              !file.isGitlink &&
+              !fullFilePreviewLimitedPaths.contains(file.path) &&
+              editableDocuments.containsKey(file.path),
+        );
+
     _DiffRows buildRows({double? editableViewportHeight}) {
       return _DiffRows.fromResult(
         result,
@@ -211,7 +230,7 @@ class const _DiffFileList({
                 ? constraints.maxHeight
                 : null,
           );
-          return SingleChildScrollView(
+          final sideBySideView = SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: SizedBox(
               width: contentWidth,
@@ -224,12 +243,16 @@ class const _DiffFileList({
               ),
             ),
           );
+          return hasEditableSideBySide
+              ? sideBySideView
+              : SelectionArea(child: sideBySideView);
         },
       );
     }
     final rows = buildRows();
     return _SingleColumnDiffList(
       rows: rows,
+      selectionEnabled: true,
       overview: _singleColumnDiffOverviewProjection(
         result: result,
         fullFileContents: fullFileContents,
@@ -485,33 +508,35 @@ class const _FileHeaderRow(final GitDiffFile file, {final String? sourceLabel})
     extends _DiffRow {
   @override
   Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: const BoxDecoration(
-        color: AleraTokens.surfaceVariant,
-        border: Border(bottom: BorderSide(color: AleraTokens.borderSubtle)),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(
-          horizontal: AleraTokens.space12,
-          vertical: AleraTokens.space8,
+    return SelectionContainer.disabled(
+      child: DecoratedBox(
+        decoration: const BoxDecoration(
+          color: AleraTokens.surfaceVariant,
+          border: Border(bottom: BorderSide(color: AleraTokens.borderSubtle)),
         ),
-        child: Row(
-          children: <Widget>[
-            AleraFileIcon(pathOrName: file.path, kind: .file, size: 16),
-            const SizedBox(width: AleraTokens.space8),
-            Expanded(
-              child: Text(
-                '${sourceLabel ?? file.sourceLabel ?? file.area.label} · ${file.path}',
-                maxLines: 1,
-                overflow: .ellipsis,
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: AleraTokens.foreground,
-                  fontFamily: 'JetBrains Mono',
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+            horizontal: AleraTokens.space12,
+            vertical: AleraTokens.space8,
+          ),
+          child: Row(
+            children: <Widget>[
+              AleraFileIcon(pathOrName: file.path, kind: .file, size: 16),
+              const SizedBox(width: AleraTokens.space8),
+              Expanded(
+                child: Text(
+                  '${sourceLabel ?? file.sourceLabel ?? file.area.label} · ${file.path}',
+                  maxLines: 1,
+                  overflow: .ellipsis,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: AleraTokens.foreground,
+                    fontFamily: 'JetBrains Mono',
+                  ),
                 ),
               ),
-            ),
-            _DiffStats(file: file),
-          ],
+              _DiffStats(file: file),
+            ],
+          ),
         ),
       ),
     );

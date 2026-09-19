@@ -62,24 +62,28 @@ class const _FullFileDiffLine({required final _FullFileLine line})
           children: <Widget>[
             SizedBox(
               width: 42,
-              child: Text(
-                line.lineNumber?.toString() ?? '',
-                textAlign: TextAlign.right,
-                style: AleraTokens.monoStyle.copyWith(
-                  fontSize: 11,
-                  color: AleraTokens.foregroundMuted.withValues(alpha: 0.5),
+              child: SelectionContainer.disabled(
+                child: Text(
+                  line.lineNumber?.toString() ?? '',
+                  textAlign: TextAlign.right,
+                  style: AleraTokens.monoStyle.copyWith(
+                    fontSize: 11,
+                    color: AleraTokens.foregroundMuted.withValues(alpha: 0.5),
+                  ),
                 ),
               ),
             ),
             const SizedBox(width: AleraTokens.space8),
             SizedBox(
               width: 12,
-              child: Text(
-                marker,
-                textAlign: TextAlign.center,
-                style: AleraTokens.monoStyle.copyWith(
-                  fontSize: 12,
-                  color: color,
+              child: SelectionContainer.disabled(
+                child: Text(
+                  marker,
+                  textAlign: TextAlign.center,
+                  style: AleraTokens.monoStyle.copyWith(
+                    fontSize: 12,
+                    color: color,
+                  ),
                 ),
               ),
             ),

@@ -22,47 +22,49 @@ class const _SideBySideHeaderRow({
       color: AleraTokens.foregroundMuted,
       fontFamily: 'JetBrains Mono',
     );
-    return DecoratedBox(
-      decoration: const BoxDecoration(
-        color: AleraTokens.surfaceVariant,
-        border: Border(bottom: BorderSide(color: AleraTokens.borderSubtle)),
-      ),
-      child: Row(
-        children: <Widget>[
-          Expanded(
-            child: Container(
-              decoration: const BoxDecoration(
-                border: Border(
-                  right: BorderSide(color: AleraTokens.borderSubtle),
+    return SelectionContainer.disabled(
+      child: DecoratedBox(
+        decoration: const BoxDecoration(
+          color: AleraTokens.surfaceVariant,
+          border: Border(bottom: BorderSide(color: AleraTokens.borderSubtle)),
+        ),
+        child: Row(
+          children: <Widget>[
+            Expanded(
+              child: Container(
+                decoration: const BoxDecoration(
+                  border: Border(
+                    right: BorderSide(color: AleraTokens.borderSubtle),
+                  ),
+                ),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: AleraTokens.space12,
+                  vertical: AleraTokens.space4,
+                ),
+                child: Text(
+                  context.tr(oldTitle),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: style,
                 ),
               ),
-              padding: const EdgeInsets.symmetric(
-                horizontal: AleraTokens.space12,
-                vertical: AleraTokens.space4,
-              ),
-              child: Text(
-                context.tr(oldTitle),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: style,
+            ),
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: AleraTokens.space12,
+                  vertical: AleraTokens.space4,
+                ),
+                child: Text(
+                  context.tr(newTitle),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: style,
+                ),
               ),
             ),
-          ),
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(
-                horizontal: AleraTokens.space12,
-                vertical: AleraTokens.space4,
-              ),
-              child: Text(
-                context.tr(newTitle),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: style,
-              ),
-            ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -126,24 +128,28 @@ class const _SideBySideCell({
             children: <Widget>[
               SizedBox(
                 width: 36,
-                child: Text(
-                  line?.lineNumber?.toString() ?? '',
-                  textAlign: TextAlign.right,
-                  style: AleraTokens.monoStyle.copyWith(
-                    fontSize: 11,
-                    color: AleraTokens.foregroundMuted.withValues(alpha: 0.5),
+                child: SelectionContainer.disabled(
+                  child: Text(
+                    line?.lineNumber?.toString() ?? '',
+                    textAlign: TextAlign.right,
+                    style: AleraTokens.monoStyle.copyWith(
+                      fontSize: 11,
+                      color: AleraTokens.foregroundMuted.withValues(alpha: 0.5),
+                    ),
                   ),
                 ),
               ),
               const SizedBox(width: AleraTokens.space8),
               SizedBox(
                 width: 12,
-                child: Text(
-                  marker,
-                  textAlign: TextAlign.center,
-                  style: AleraTokens.monoStyle.copyWith(
-                    fontSize: 12,
-                    color: color,
+                child: SelectionContainer.disabled(
+                  child: Text(
+                    marker,
+                    textAlign: TextAlign.center,
+                    style: AleraTokens.monoStyle.copyWith(
+                      fontSize: 12,
+                      color: color,
+                    ),
                   ),
                 ),
               ),
