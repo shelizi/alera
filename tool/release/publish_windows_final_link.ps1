@@ -324,7 +324,7 @@ try {
             try {
                 $remote = Invoke-Checked -FilePath $script:Ssh -Arguments @(
                     $RemoteHost,
-                    "docker exec $ContainerName sh -lc `"stat -c '%n|%s|%y' $containerPath && sha256sum $containerPath`" && docker ps --filter name=^/$ContainerName`$ --format '{{.Names}}\t{{.Status}}\t{{.Image}}'"
+                    "docker exec $ContainerName sha256sum $containerPath && docker ps --filter name=^/$ContainerName`$ --format '{{.Names}}\t{{.Status}}\t{{.Image}}'"
                 ) -Capture
                 $lastContainerOutput = $remote -join "`n"
                 $containerHashMatch = [regex]::Match(
