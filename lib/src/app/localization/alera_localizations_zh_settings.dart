@@ -229,6 +229,11 @@ const Map<String, String> _traditionalChineseSettings = <String, String>{
   'Directory name, e.g. generated': '目錄名稱，例如 generated',
   '.git, .hg, and .svn are always excluded.': '.git、.hg、.svn 永遠固定排除。',
   'Restore Defaults': '還原預設值',
+  'PowerShell 7 Executable': 'PowerShell 7 執行檔',
+  'Optional full path to pwsh.exe on Windows. Leave blank to auto-detect standard, Scoop, LocalAppData, and PATH locations.':
+      'Windows 上 pwsh.exe 的完整路徑（選填）。留白會自動偵測標準安裝位置、Scoop、LocalAppData 與 PATH。',
+  'Override or auto-detect the Windows pwsh.exe path.':
+      '指定 Windows pwsh.exe 路徑，或使用自動偵測。',
   'Theme Preset': '主題預設',
   'Search and select a built-in terminal color theme.': '搜尋並選擇內建的終端機配色主題。',
   'Cursor Shape': '游標形狀',

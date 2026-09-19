@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/forms/alera_text_field.dart';
 import 'package:alera/src/design_system/layout/alera_dialog.dart';
@@ -117,7 +118,7 @@ class _GitHistorySingleInputDialogState
           mainAxisSize: .min,
           crossAxisAlignment: .start,
           children: <Widget>[
-            Text(widget.title, style: theme.textTheme.titleMedium),
+            Text(context.tr(widget.title), style: theme.textTheme.titleMedium),
             const SizedBox(height: AleraTokens.space16),
             AleraTextField(
               controller: _controller,
@@ -137,12 +138,12 @@ class _GitHistorySingleInputDialogState
               children: <Widget>[
                 TextButton(
                   onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('Cancel'),
+                  child: Text(context.tr('Cancel')),
                 ),
                 const SizedBox(width: AleraTokens.space8),
                 FilledButton(
                   onPressed: _submit,
-                  child: Text(widget.confirmLabel),
+                  child: Text(context.tr(widget.confirmLabel)),
                 ),
               ],
             ),
@@ -196,7 +197,7 @@ class _GitHistoryTagInputDialogState extends State<_GitHistoryTagInputDialog> {
           mainAxisSize: .min,
           crossAxisAlignment: .start,
           children: <Widget>[
-            Text('Add Tag', style: theme.textTheme.titleMedium),
+            Text(context.tr('Add Tag'), style: theme.textTheme.titleMedium),
             const SizedBox(height: AleraTokens.space16),
             AleraTextField(
               controller: _nameController,
@@ -223,10 +224,13 @@ class _GitHistoryTagInputDialogState extends State<_GitHistoryTagInputDialog> {
               children: <Widget>[
                 TextButton(
                   onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('Cancel'),
+                  child: Text(context.tr('Cancel')),
                 ),
                 const SizedBox(width: AleraTokens.space8),
-                FilledButton(onPressed: _submit, child: const Text('Add Tag')),
+                FilledButton(
+                  onPressed: _submit,
+                  child: Text(context.tr('Add Tag')),
+                ),
               ],
             ),
           ],

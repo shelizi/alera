@@ -118,6 +118,7 @@ class _GitHistoryBranchPerspectiveMenuState
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final normalizedQuery = _query.trim().toLowerCase();
+    final localizedAllBranches = context.tr('All Branches').toLowerCase();
     final filteredBranches = widget.branches
         .where(
           (branch) =>
@@ -126,7 +127,9 @@ class _GitHistoryBranchPerspectiveMenuState
         )
         .toList(growable: false);
     final showAllBranches =
-        normalizedQuery.isEmpty || 'all branches'.contains(normalizedQuery);
+        normalizedQuery.isEmpty ||
+        'all branches'.contains(normalizedQuery) ||
+        localizedAllBranches.contains(normalizedQuery);
 
     return MenuAnchor(
       controller: _menuController,
@@ -146,11 +149,11 @@ class _GitHistoryBranchPerspectiveMenuState
                   controller: _searchController,
                   focusNode: _searchFocusNode,
                   textInputAction: .search,
-                  decoration: const InputDecoration(
+                  decoration: InputDecoration(
                     isDense: true,
-                    hintText: 'Search branches',
-                    prefixIcon: Icon(Icons.search, size: 16),
-                    border: OutlineInputBorder(),
+                    hintText: context.tr('Search branches'),
+                    prefixIcon: const Icon(Icons.search, size: 16),
+                    border: const OutlineInputBorder(),
                   ),
                   onChanged: (value) => setState(() => _query = value),
                 ),
@@ -166,7 +169,7 @@ class _GitHistoryBranchPerspectiveMenuState
                           leadingIcon: widget.allBranches
                               ? const Icon(Icons.check, size: 16)
                               : const SizedBox(width: 16),
-                          child: const Text('All Branches'),
+                          child: Text(context.tr('All Branches')),
                         ),
                       for (final branch in filteredBranches)
                         MenuItemButton(
@@ -184,7 +187,7 @@ class _GitHistoryBranchPerspectiveMenuState
                               alignment: .centerLeft,
                               child: Text(
                                 branch == widget.currentBranch
-                                    ? '$branch (Current)'
+                                    ? '$branch (${context.tr('Current')})'
                                     : branch,
                                 maxLines: 1,
                                 overflow: .ellipsis,
@@ -196,7 +199,7 @@ class _GitHistoryBranchPerspectiveMenuState
                         Padding(
                           padding: const EdgeInsets.all(AleraTokens.space12),
                           child: Text(
-                            'No matching branches',
+                            context.tr('No matching branches'),
                             style: theme.textTheme.bodySmall?.copyWith(
                               color: AleraTokens.foregroundMuted,
                             ),
@@ -211,7 +214,7 @@ class _GitHistoryBranchPerspectiveMenuState
         ),
       ],
       builder: (context, controller, child) => Tooltip(
-        message: 'Branch Perspective',
+        message: context.tr('Branch Perspective'),
         child: InkWell(
           key: const ValueKey<String>('git-history-branch-perspective-menu'),
           borderRadius: BorderRadius.circular(AleraTokens.radiusSm),
@@ -227,7 +230,7 @@ class _GitHistoryBranchPerspectiveMenuState
                 ConstrainedBox(
                   constraints: const BoxConstraints(maxWidth: 220),
                   child: Text(
-                    widget.label,
+                    context.tr(widget.label),
                     maxLines: 1,
                     overflow: .ellipsis,
                     style: theme.textTheme.labelMedium?.copyWith(

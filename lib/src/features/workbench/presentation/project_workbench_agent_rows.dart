@@ -27,11 +27,13 @@ class _AgentRunRowState extends ConsumerState<_AgentRunRow> {
         (settings) => settings.agents.showTabTitlesInSidebar,
       ),
     );
+    final groupLabel = context.tr(workspaceAgentGroupLabel(widget.displayKind));
     final description = _agentRunLabel(
       tab: widget.tab,
       status: widget.status,
       displayKind: widget.displayKind,
       showTabTitle: showTabTitle,
+      groupLabel: groupLabel,
     );
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
@@ -61,7 +63,7 @@ class _AgentRunRowState extends ConsumerState<_AgentRunRow> {
                 crossAxisAlignment: .center,
                 children: <Widget>[
                   Tooltip(
-                    message: workspaceAgentGroupLabel(widget.displayKind),
+                    message: groupLabel,
                     child: WorkspaceAgentGroupGlyph(
                       kind: widget.displayKind,
                       size: 12,
@@ -163,6 +165,7 @@ String _agentRunLabel({
   required AgentStatusEntry status,
   required WorkspaceAgentGroupKind displayKind,
   required bool showTabTitle,
+  required String groupLabel,
 }) {
   if (showTabTitle) {
     final title = tab.title.trim();
@@ -170,12 +173,17 @@ String _agentRunLabel({
       return title;
     }
   }
-  return _agentRunDescription(status, displayKind: displayKind);
+  return _agentRunDescription(
+    status,
+    displayKind: displayKind,
+    groupLabel: groupLabel,
+  );
 }
 
 String _agentRunDescription(
   AgentStatusEntry status, {
   required WorkspaceAgentGroupKind displayKind,
+  String? groupLabel,
 }) {
   if (displayKind == WorkspaceAgentGroupKind.working) {
     final toolName = status.toolName?.trim() ?? '';
@@ -191,5 +199,5 @@ String _agentRunDescription(
   if (assistantMessage.isNotEmpty) {
     return assistantMessage;
   }
-  return '${agentDisplayName(status.agentType)} · ${workspaceAgentGroupLabel(displayKind)}';
+  return '${agentDisplayName(status.agentType)} · ${groupLabel ?? workspaceAgentGroupLabel(displayKind)}';
 }

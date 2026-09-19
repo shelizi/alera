@@ -3,6 +3,81 @@ part of 'alera_localizations.dart';
 // Pattern-based Traditional Chinese translations for strings that embed
 // runtime values. Lookup order: static table first, then these rules.
 String? _translateDynamicTraditionalChinese(String source) {
+  final sleepProject = RegExp(
+    r'^This closes all tabs and terminal sessions for all (\d+) workspaces in "(.+)"\. Worktrees, branches, and files will be preserved\.(.*)$',
+  ).firstMatch(source);
+  if (sleepProject != null) {
+    final suffix = sleepProject.group(3)!;
+    var dirtyWarning = '';
+    if (suffix == ' One editor has unsaved changes that will be discarded.') {
+      dirtyWarning = ' 有 1 個編輯器包含尚未儲存的變更，將會捨棄。';
+    } else {
+      final dirtyEditors = RegExp(
+        r'^ (\d+) editors have unsaved changes that will be discarded\.$',
+      ).firstMatch(suffix);
+      if (dirtyEditors != null) {
+        dirtyWarning = ' 有 ${dirtyEditors.group(1)} 個編輯器包含尚未儲存的變更，將會捨棄。';
+      }
+    }
+    return '這會關閉「${sleepProject.group(2)}」全部 ${sleepProject.group(1)} 個工作區中的分頁與終端機工作階段。Worktree、分支與檔案會保留。$dirtyWarning';
+  }
+  final sleepProjectFailed = RegExp(r'^Could not sleep project: (.+)$')
+      .firstMatch(source);
+  if (sleepProjectFailed != null) {
+    return '無法讓專案休眠：${sleepProjectFailed.group(1)}';
+  }
+  final diffOverview = RegExp(r'^Diff overview, (\d+) removed, (\d+) added$')
+      .firstMatch(source);
+  if (diffOverview != null) {
+    return '差異總覽，移除 ${diffOverview.group(1)} 行，新增 ${diffOverview.group(2)} 行';
+  }
+  final requiredField = RegExp(r'^(.+) is required$').firstMatch(source);
+  if (requiredField != null) {
+    final label =
+        AleraLocalizations._traditionalChinese[requiredField.group(1)!] ??
+        requiredField.group(1)!;
+    return '$label 為必填。';
+  }
+  final agentGroupDescription = RegExp(
+    r'^(.+) · (Waiting for input|Blocked|Interrupted|Done \(Unread\)|Done)$',
+  ).firstMatch(source);
+  if (agentGroupDescription != null) {
+    final state =
+        AleraLocalizations._traditionalChinese[agentGroupDescription.group(
+          2,
+        )!] ??
+        agentGroupDescription.group(2)!;
+    return '${agentGroupDescription.group(1)} · $state';
+  }
+  final rebaseCurrentBranchOnto = RegExp(r'^Rebase Current Branch onto (.+)$')
+      .firstMatch(source);
+  if (rebaseCurrentBranchOnto != null) {
+    return '將目前分支 Rebase 到 ${rebaseCurrentBranchOnto.group(1)}';
+  }
+  final autosavePaused = RegExp(r'^Autosave paused: (.+)$').firstMatch(source);
+  if (autosavePaused != null) {
+    final detail =
+        AleraLocalizations._traditionalChinese[autosavePaused.group(1)!] ??
+        autosavePaused.group(1)!;
+    return '自動儲存已暫停：$detail';
+  }
+  final dropCommitMessage = RegExp(
+    r'^Removes (.+) "(.+)" from the current branch\. This cannot be undone\.$',
+  ).firstMatch(source);
+  if (dropCommitMessage != null) {
+    return '這會從目前分支移除 ${dropCommitMessage.group(1)}「${dropCommitMessage.group(2)}」，且無法復原。';
+  }
+  final mergeCommitMessage = RegExp(r'^Merge (.+) into (.+)\?$')
+      .firstMatch(source);
+  if (mergeCommitMessage != null) {
+    return '要將 ${mergeCommitMessage.group(1)} 合併到 ${mergeCommitMessage.group(2)} 嗎？';
+  }
+  final rebaseCommitMessage = RegExp(
+    r'^Rebase (.+) onto (.+) "(.+)"\. This rewrites the current branch history\.$',
+  ).firstMatch(source);
+  if (rebaseCommitMessage != null) {
+    return '要將 ${rebaseCommitMessage.group(1)} Rebase 到 ${rebaseCommitMessage.group(2)}「${rebaseCommitMessage.group(3)}」。這會重寫目前分支的歷史紀錄。';
+  }
   final singleDirty = RegExp(r'^(.+) has unsaved changes\.$')
       .firstMatch(source);
   if (singleDirty != null) {

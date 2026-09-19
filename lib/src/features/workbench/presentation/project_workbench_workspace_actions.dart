@@ -375,7 +375,7 @@ mixin _WorkspaceSidebarActions on ConsumerState<ProjectWorkbenchSidebar> {
       }
       AleraToast.show(
         context,
-        message: 'Project workspaces slept',
+        message: context.tr('Project workspaces slept'),
         tone: .success,
       );
     } catch (error) {
@@ -384,7 +384,7 @@ mixin _WorkspaceSidebarActions on ConsumerState<ProjectWorkbenchSidebar> {
       }
       AleraToast.show(
         context,
-        message: 'Could not sleep project: $error',
+        message: context.tr('Could not sleep project: $error'),
         tone: .error,
       );
     }

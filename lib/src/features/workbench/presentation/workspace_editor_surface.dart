@@ -536,7 +536,7 @@ class _WorkspaceEditorSurfaceState
     if (!mounted) {
       return;
     }
-    AleraToast.show(context, message: message, tone: tone);
+    AleraToast.show(context, message: context.tr(message), tone: tone);
   }
 
   String _messageFor(Object error) {

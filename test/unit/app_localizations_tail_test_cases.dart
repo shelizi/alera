@@ -89,6 +89,48 @@ void registerAppLocalizationTailTests() {
     },
   );
 
+  test('traditional Chinese localizes recent workbench and Git features', () {
+    final l10n = AleraLocalizations(const Locale('zh', 'TW'));
+    expect(l10n.translate('PowerShell 7 Executable'), 'PowerShell 7 執行檔');
+    expect(l10n.translate('Sleep Project'), '休眠專案');
+    expect(l10n.translate('Open with Default Application'), '使用預設應用程式開啟');
+    expect(l10n.translate('Refresh Outline'), '重新整理大綱');
+    expect(l10n.translate('Diff Overview'), '差異總覽');
+    expect(l10n.translate('All Branches'), '所有分支');
+    expect(l10n.translate('Waiting for input'), '等待輸入');
+    expect(l10n.translate('Done (Unread)'), '完成（未讀）');
+    expect(l10n.translate('Copy Commit Hash'), '複製 Commit Hash');
+    expect(l10n.translate('Current Branch'), '目前分支');
+    expect(l10n.translate('Create Branch Here'), '在此建立分支');
+    expect(l10n.translate('File changed on disk'), '檔案已在磁碟上變更');
+  });
+
+  test('traditional Chinese localizes recent dynamic workbench copy', () {
+    final l10n = AleraLocalizations(const Locale('zh', 'TW'));
+    expect(
+      l10n.translate(
+        'This closes all tabs and terminal sessions for all 3 workspaces in "Alera". '
+        'Worktrees, branches, and files will be preserved. '
+        '2 editors have unsaved changes that will be discarded.',
+      ),
+      contains('「Alera」全部 3 個工作區'),
+    );
+    expect(l10n.translate('Could not sleep project: boom'), '無法讓專案休眠：boom');
+    expect(
+      l10n.translate('Diff overview, 4 removed, 7 added'),
+      '差異總覽，移除 4 行，新增 7 行',
+    );
+    expect(
+      l10n.translate('Rebase Current Branch onto feature/demo'),
+      '將目前分支 Rebase 到 feature/demo',
+    );
+    expect(l10n.translate('Branch Name is required'), '分支名稱 為必填。');
+    expect(
+      l10n.translate('Autosave paused: File changed on disk'),
+      '自動儲存已暫停：檔案已在磁碟上變更',
+    );
+  });
+
   test('English and unknown strings fall back to source text', () {
     final en = AleraLocalizations(const Locale('en'));
     final zh = AleraLocalizations(const Locale('zh', 'TW'));

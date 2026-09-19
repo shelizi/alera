@@ -461,12 +461,13 @@ class _DiffOverviewRuler extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Tooltip(
-      message: 'Diff Overview',
+      message: context.tr('Diff Overview'),
       child: Semantics(
         button: true,
-        label:
-            'Diff overview, ${changes.oldChangedLines.length} removed, '
-            '${changes.newChangedLines.length} added',
+        label: context.tr(
+          'Diff overview, ${changes.oldChangedLines.length} removed, '
+          '${changes.newChangedLines.length} added',
+        ),
         child: DecoratedBox(
           decoration: const BoxDecoration(
             color: AleraTokens.surfaceVariant,

@@ -3,6 +3,7 @@ export 'workspace_git_history_input_dialogs.dart';
 
 import 'workspace_git_history_commit_menus.dart';
 
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:alera/src/design_system/layout/alera_confirm_dialog.dart';
 import 'package:alera/src/design_system/menus/alera_dropdown_entry.dart';
@@ -61,7 +62,7 @@ Future<GitHistoryCommitMenuAction?> showGitHistoryCommitMenu(
         enabled: false,
         height: 32,
         child: Text(
-          'Commit · ${gitHistoryItemShortId(item)}',
+          '${context.tr('Commit')} · ${gitHistoryItemShortId(item)}',
           maxLines: 1,
           overflow: .ellipsis,
           style: Theme.of(context).textTheme.labelMedium?.copyWith(
@@ -74,70 +75,59 @@ Future<GitHistoryCommitMenuAction?> showGitHistoryCommitMenu(
       const AleraDropdownEntry<GitHistoryCommitMenuAction>(
         value: .copyHash,
         label: 'Copy Commit Hash',
-        localizeLabel: false,
         leading: Icon(AleraIcons.gitBranch, size: 16),
       ),
       const AleraDropdownEntry<GitHistoryCommitMenuAction>(
         value: .copySubject,
         label: 'Copy Commit Subject',
-        localizeLabel: false,
         leading: Icon(AleraIcons.copy, size: 16),
       ),
       const PopupMenuDivider(),
       const AleraDropdownEntry<GitHistoryCommitMenuAction>(
         value: .addTag,
         label: 'Add Tag…',
-        localizeLabel: false,
         leading: Icon(AleraIcons.tag, size: 16),
       ),
       const AleraDropdownEntry<GitHistoryCommitMenuAction>(
         value: .createBranch,
         label: 'Create Branch Here…',
-        localizeLabel: false,
         leading: Icon(AleraIcons.gitBranch, size: 16),
       ),
       const AleraDropdownEntry<GitHistoryCommitMenuAction>(
         value: .openInWorktree,
         label: 'Create Worktree Here…',
-        localizeLabel: false,
         leading: Icon(AleraIcons.folderSpecial, size: 16),
       ),
       const AleraDropdownEntry<GitHistoryCommitMenuAction>(
         value: .checkoutCommit,
         label: 'Checkout Commit',
-        localizeLabel: false,
         leading: Icon(AleraIcons.forward, size: 16),
       ),
       const AleraDropdownEntry<GitHistoryCommitMenuAction>(
         value: .cherryPick,
         label: 'Cherry Pick',
-        localizeLabel: false,
         leading: Icon(AleraIcons.gitCommit, size: 16),
       ),
       const AleraDropdownEntry<GitHistoryCommitMenuAction>(
         value: .revertCommit,
         label: 'Revert Commit',
-        localizeLabel: false,
         leading: Icon(AleraIcons.restore, size: 16),
       ),
       AleraDropdownEntry<GitHistoryCommitMenuAction>(
         value: .dropCommit,
         label: 'Drop Commit',
-        localizeLabel: false,
         enabled: item.parentIds.isNotEmpty,
         leading: const Icon(AleraIcons.delete, size: 16),
       ),
       AleraDropdownEntry<GitHistoryCommitMenuAction>(
         value: .mergeIntoCurrentBranch,
         label: 'Merge Into Current Branch',
-        localizeLabel: false,
         enabled: currentBranchName?.trim().isNotEmpty ?? false,
         leading: const Icon(AleraIcons.gitMerge, size: 16),
       ),
       AleraDropdownEntry<GitHistoryCommitMenuAction>(
         value: .rebaseCurrentBranch,
         label: 'Rebase Current Branch Onto This Commit',
-        localizeLabel: false,
         enabled: currentBranchName?.trim().isNotEmpty ?? false,
         leading: const Icon(AleraIcons.gitFork, size: 16),
       ),
@@ -148,32 +138,27 @@ Future<GitHistoryCommitMenuAction?> showGitHistoryCommitMenu(
       >(
         primaryValue: .resetMixed,
         label: 'Reset Current Branch Here',
-        localizeLabel: false,
         leading: Icon(AleraIcons.restart, size: 16),
         childResult: _resetModeResult,
         children: <PopupMenuEntry<GitHistoryCommitMenuAction>>[
           AleraDropdownEntry<GitHistoryCommitMenuAction>(
             value: .resetSoft,
             label: 'Soft',
-            localizeLabel: false,
           ),
           AleraDropdownEntry<GitHistoryCommitMenuAction>(
             value: .resetMixed,
             label: 'Mixed',
-            localizeLabel: false,
             selected: true,
           ),
           AleraDropdownEntry<GitHistoryCommitMenuAction>(
             value: .resetHard,
             label: 'Hard',
-            localizeLabel: false,
           ),
         ],
       ),
       const AleraDropdownEntry<GitHistoryCommitMenuAction>(
         value: .createArchive,
         label: 'Create Archive…',
-        localizeLabel: false,
         leading: Icon(AleraIcons.archive, size: 16),
       ),
     ],

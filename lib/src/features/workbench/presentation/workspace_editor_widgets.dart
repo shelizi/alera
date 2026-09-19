@@ -165,7 +165,7 @@ class const _EditorOutlinePanel({
                   const SizedBox(width: AleraTokens.space6),
                   Expanded(
                     child: Text(
-                      'Outline',
+                      context.tr('Outline'),
                       style: theme.textTheme.labelMedium?.copyWith(
                         color: AleraTokens.foreground,
                       ),
@@ -202,7 +202,7 @@ class const _EditorOutlinePanel({
             Expanded(
               child: Center(
                 child: Text(
-                  'No symbols',
+                  context.tr('No symbols'),
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: AleraTokens.foregroundMuted,
                   ),

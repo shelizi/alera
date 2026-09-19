@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:alera/src/features/workbench/application/workspace_agent_run_groups.dart';
@@ -22,7 +23,7 @@ class const WorkspaceAgentCompactSummary({
     final tooltip =
         tooltipOverride ?? (expanded ? 'Hide Agent Runs' : 'Show Agent Runs');
     return Tooltip(
-      message: tooltip,
+      message: context.tr(tooltip),
       child: InkWell(
         onTap: onToggle,
         mouseCursor: SystemMouseCursors.click,

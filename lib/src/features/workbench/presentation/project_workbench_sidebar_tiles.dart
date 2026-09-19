@@ -291,7 +291,8 @@ class const _ProjectAgentCountBadge({
         for (final (index, entry) in entries.indexed) ...<Widget>[
           if (index > 0) const SizedBox(width: AleraTokens.space6),
           Tooltip(
-            message: '${entry.$2} ${workspaceAgentGroupLabel(entry.$1)}',
+            message:
+                '${entry.$2} ${context.tr(workspaceAgentGroupLabel(entry.$1))}',
             child: WorkspaceAgentGroupCount(kind: entry.$1, count: entry.$2),
           ),
         ],

@@ -612,7 +612,11 @@ extension _WorkspaceExplorerActions on _WorkspaceExplorerState {
     if (!mounted) {
       return;
     }
-    AleraToast.show(context, message: _errorMessage(error), tone: .error);
+    AleraToast.show(
+      context,
+      message: context.tr(_errorMessage(error)),
+      tone: .error,
+    );
   }
 
   String _errorMessage(Object error) {
