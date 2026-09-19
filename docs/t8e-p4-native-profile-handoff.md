@@ -1,8 +1,8 @@
 # T8e P4 Native RSS / Reveal Profile Handoff
 
-Date: 2026-09-19  
-Project: Alera  
-Branch: `perf/terminal-t8e-p4-native-profile`  
+Date: 2026-09-19
+Project: Alera
+Branch: `perf/terminal-t8e-p4-native-profile`
 Worktree: `.worktrees/terminal-t8e-p4-native-profile`
 
 ## Goal

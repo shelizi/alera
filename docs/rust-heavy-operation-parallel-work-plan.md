@@ -135,7 +135,7 @@ Recent Quick Open work now builds one index containing normal files plus Git-ign
 
 This is the intended UX, but it increases the importance of measuring index build time and retained-memory cost on a large monorepo rather than assuming the larger index is free.
 
-## 3. T8e P4 evidence: COMPLETE ON BRANCH, NOT MERGED TO MAIN
+## 3. T8e P4 evidence: COMPLETE AND P4I-INTEGRATED
 
 Branch/worktree:
 
@@ -150,6 +150,13 @@ P4 measurement commits:
 ```text
 c478b985 perf(terminal): profile T8e hard eviction
 6a1fb7d4 docs(terminal): finalize T8e P4 native profile
+```
+
+P4I selective integration on the current main lineage:
+
+```text
+c4237748 perf(terminal): profile T8e hard eviction
+df622481 docs(terminal): finalize T8e P4 native profile
 ```
 
 P4 is measurement-only and compares P2 soft eviction with P3 hard parser-worker eviction.
@@ -190,7 +197,8 @@ This does not prove hard eviction is useless: it may still reduce live Dart heap
 
 P4 also found the Windows native-build root cause: stripped child processes were missing `SystemDrive`. Setting `SystemDrive=C:` fixes .NET Framework CommonApplicationData resolution and Visual C++ FileTracker. No Visual Studio reinstall or registry change is required.
 
-Authoritative P4 evidence currently lives in the P4 worktree:
+P4I selectively integrated the authoritative P4 evidence into the current main
+lineage without merging the old P4 branch history:
 
 - `docs/t8e-p4-native-profile-results.md`
 - `docs/t8e-p4-native-profile-handoff.md`
@@ -237,7 +245,7 @@ This is developer-infrastructure work, not application runtime optimization, but
 
 | ID | Priority | Work package | Start now? | Parallel ownership |
 | --- | --- | --- | --- | --- |
-| P4I | P0 closure | Selectively integrate T8e P4 measurement commits/docs | **Yes when main index is safe** | integration only |
+| P4I | P0 closure | Selectively integrate T8e P4 measurement commits/docs | **Complete** | integration only |
 | S2 | P0 | CodeForge post-first-frame / lazy-init A/B | **Yes** | startup/readiness |
 | T9 | P1 gate | Hard-eviction live-resource + policy profile | **Yes** | terminal profile only |
 | G3 | P1 gate | Git diff/stage heavy-path profile | **Yes** | Git benchmark/profile |
@@ -254,21 +262,25 @@ The four main performance lanes that can run immediately and independently are:
 S2 || T9 || G3 || Q1
 ```
 
-W1 can run in parallel as infrastructure support. P4I is an integration closure, not another implementation lane.
+W1 can run in parallel as infrastructure support. P4I is complete; it was an integration closure, not another implementation lane.
 
 ## 6. P4I - integrate the completed T8e P4 evidence
 
-Do not merge the entire old P4 branch blindly into current main. The branch history also contains earlier Quick Open compatibility fixes that current main has since evolved past.
+**2026-09-20 status: COMPLETE.**
 
-Preferred integration when the primary main index is safe:
+Integration record:
 
-1. re-check current main;
-2. selectively cherry-pick/rebase the measurement-only P4 commits `c478b985` and `6a1fb7d4`, resolving only genuine drift;
-3. rerun the focused eviction gate / benchmark compile checks;
-4. keep the final P4 conclusion unchanged unless current-main reruns materially disagree;
-5. update this plan to mark P4I complete.
+- current main was re-checked before integration and had no unrelated staged tracked work;
+- the current 2026-09-20 performance plan was brought onto the current main lineage first;
+- source commits `c478b985` and `6a1fb7d4` were selectively cherry-picked as `c4237748` and `df622481`;
+- the old P4 branch and its unrelated Quick Open history were not merged;
+- the focused hard-eviction profiling gate passed on the current lineage;
+- minimum-valid direct-worker and runtime soft/hard benchmark smokes compiled and passed;
+- the smoke direction remains consistent with P4: hard eviction closes workers/sessions, but did not demonstrate process-RSS reclamation, so the P4 conclusion remains unchanged.
 
-Do not perform this integration while the current main index contains unrelated staged work.
+Validation used the existing local `ghostty-vt.dll` through the supported
+`.prebuilt/windows-x64` cache in the isolated integration worktree because
+Zig was not available on PATH. No system/toolchain changes were required.
 
 ## 7. S2 - CodeForge post-first-frame / lazy-init A/B
 
@@ -506,7 +518,7 @@ Person 5 -> W1  Windows native benchmark environment helper
 
 ### Integration owner
 
-P4I should be handled by whoever owns terminal integration after the main working tree is safe. It is not a separate architecture worker.
+P4I was handled by the terminal integration owner after the main index was confirmed safe. It is complete and was not a separate architecture worker.
 
 ### Conflict rules
 
@@ -520,11 +532,11 @@ P4I should be handled by whoever owns terminal integration after the main workin
 ## 14. Recommended order
 
 ```text
+completed:
+  P4I selective evidence integration
+
 now:
   S2 || T9 || G3 || Q1 || W1
-
-when primary main index is safe:
-  P4I selective evidence integration
 
 after evidence:
   S2 -> optional S3
@@ -566,7 +578,7 @@ Q1  Quick Open: verify the larger normal+ignored index fits latency/memory
 
 W1  Make native Windows performance gates reproducible (SystemDrive/toolchain)
 
-P4I Integrate completed P4 evidence when the active main index is safe
+P4I COMPLETE — completed P4 evidence selectively integrated and current-lineage smoke-validated
 ```
 
 The current highest-value runtime opportunities are **S2 startup latency** and **T9 terminal policy simplification/resource validation**. The next Git/Quick Open work should be measurement-first, because recent code has already removed several obvious hot paths.
