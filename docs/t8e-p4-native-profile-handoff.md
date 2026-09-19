@@ -90,7 +90,8 @@ All three are currently untracked and formatted.
 - Intended to measure the real desktop app process.
 - Emits `T8E_P4_PROFILE {...}`.
 - Supports mode/session/row/reveal/settle dart-defines.
-- Test body has not yet run because MCP-launched Windows desktop builds are blocked by MSBuild FileTracker initialization.
+- Test body now runs successfully from MCP when the child process is given
+  `SystemDrive=C:`.
 
 ### flutter_tester runtime benchmark
 
@@ -121,11 +122,17 @@ git diff --check --ignore-submodules=all
 PASS
 ```
 
-The benchmark implementations still need actual soft/hard measurement runs before they are evidence.
+All three benchmark surfaces now have soft/hard measurements. See
+`docs/t8e-p4-native-profile-results.md` for the aggregate evidence and final
+P4 decision.
 
 ## Unrelated current-main build blockers found during P4
 
-These fixes are currently mixed into the P4 worktree but should preferably be committed separately from profiling.
+These fixes were separated from profiling and committed independently before
+the P4 measurement commit.
+
+- `f20e41ef` — `fix(l10n): remove duplicate Quick Open translation`
+- `48a786c3` — `fix(quick-open): align mobile indexing API`
 
 ### 1. Duplicate zh-TW Quick Open localization key
 
@@ -177,13 +184,14 @@ PASS / exit 0
 
 Only pre-existing warnings remain.
 
-## Native Windows MSBuild blocker
+## Native Windows MSBuild blocker — resolved
 
-The native integration benchmark does not reach the test body under the current MCP process.
+The native integration benchmark now reaches and completes the test body under
+MCP. The prior Visual C++ MSBuild/FileTracker failure was caused by a stripped
+Windows child-process environment, not by Alera, the Rust sidecar, Visual
+Studio, or the F-drive VS2022 installation.
 
-This is no longer an Alera/Rust compile failure. The Rust sidecar builds successfully; failure occurs later inside Visual C++ MSBuild/FileTracker.
-
-Observed stack:
+Observed failure stack:
 
 ```text
 Microsoft.Build.Utilities.FileTracker
@@ -192,32 +200,17 @@ System.ArgumentException: illegal path format
 System.IO.Path.GetPathRoot(...)
 Microsoft.Build.Utilities.FileTracker.InitializeCommonApplicationDataPaths()
 Microsoft.Build.Utilities.FileTracker..cctor()
-Microsoft.Build.Utilities.CanonicalTrackedInputFiles...
-Microsoft.Build.CPPTasks.CL.ComputeOutOfDateSources()
 ```
 
-### Environment facts
+### Root cause
 
-The MCP process is missing standard Windows variables such as:
-- `ALLUSERSPROFILE`
-- `PUBLIC`
-- `CommonProgramFiles`
-- `CommonProgramW6432`
-- `CommonProgramFiles(x86)`
-
-It also initially resolves `link.exe` to:
-
-`C:\Program Files\coreutils\bin\link.exe`
-
-Loading `vcvars64.bat` fixes the MSVC tool path. Supplying the missing environment variables also helps, but does not fix the decisive issue.
-
-Windows PowerShell 5.1 / .NET Framework still returns an empty value for:
+The decisive missing variable was:
 
 ```text
-Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData)
+SystemDrive=
 ```
 
-The registry is correct:
+The registry remained correct in both 32-bit and 64-bit views:
 
 ```text
 HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders
@@ -227,15 +220,39 @@ HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders
   Common AppData = %ProgramData%
 ```
 
-Therefore do not modify the global registry.
+Under the stripped MCP environment:
 
-`TrackFileAccess=false` is insufficient because Visual C++ targets initialize FileTracker/GetOutOfDateItems before it can avoid every tracking path.
+- `.NET Framework Environment.GetFolderPath(CommonApplicationData)` returned
+  an empty string.
+- `SHGetFolderPath` and `SHGetKnownFolderPath` failed path verification.
+- With `DONT_VERIFY`, both returned
+  `%SystemDrive%\ProgramData`, proving the unresolved environment expansion.
+- Direct filesystem access to `C:\ProgramData` succeeded.
 
-Interpretation: the problem is the MCP/service process token or user-profile environment as seen by .NET Framework.
+Setting only:
 
-Best next native check: run the same native benchmark from a normal interactive Windows Terminal/PowerShell launched as the logged-in desktop user. If it succeeds there, treat MCP service profile initialization as the root cause.
+```text
+SystemDrive=C:
+```
 
-## Recommended continuation order
+for the child process fixed the same VS18 `ZERO_CHECK.vcxproj` that previously
+failed, then allowed the full Flutter Windows integration benchmark to build
+and execute. No registry changes and no Visual Studio reinstall are required.
+
+### Native Windows results
+
+One directional native-process sample per mode was completed:
+
+- soft: reclaimed `-2,232,320 B` (-2.13 MiB), reveal median
+  `217.966 ms`, p95 `1011.591 ms`
+- hard: reclaimed `-12,898,304 B` (-12.30 MiB), reveal median
+  `235.237 ms`, p95 `866.137 ms`, 4/4 sessions hard-evicted
+
+These native results agree with the repeated direct-worker and
+`flutter_tester` evidence: hard eviction does not produce process-RSS
+release in this workload.
+
+## Historical continuation order — completed
 
 ### A. Separate the unrelated build fixes
 
@@ -309,7 +326,7 @@ If P3 has no stable RSS advantage, investigate isolate teardown / allocator rete
 
 If P3 clearly saves RSS but reveal becomes material, profile worker startup/import separately before changing retained-state format.
 
-## Current Git state
+## Historical Git state at original handoff
 
 Branch:
 
@@ -324,7 +341,7 @@ HEAD:
 merge: terminal T8e hard eviction
 ```
 
-No P4 commit exists yet.
+At the time this handoff was first written, no P4 commit existed yet.
 
 Tracked WIP:
 - P4 profiling-only gate and focused test
@@ -355,16 +372,19 @@ No push was performed.
 4. Do not claim memory savings before multi-run evidence.
 5. Keep Quick Open build fixes separate from terminal profiling.
 6. Do not edit Windows registry for the MCP FileTracker issue; registry values are already correct.
-7. If native Windows works from an interactive user shell, treat the MCP/.NET Framework profile environment as infrastructure debt.
+7. MCP Windows native builds must preserve the standard
+   `SystemDrive=C:` environment; otherwise .NET Framework
+   `CommonApplicationData` resolution breaks and Visual C++ FileTracker
+   fails before compilation.
 
-## Continuation prompt
+## Completion status
 
-```text
-Continue Alera T8e P4 from docs/t8e-p4-native-profile-handoff.md.
-Use @home-rust and worktree perf/terminal-t8e-p4-native-profile.
-Do not start another terminal architecture cut.
-First review git status and separate the unrelated current-main compile fixes from P4 profiling changes.
-Run direct-worker soft/hard fresh-process RSS profiling first, then runtime flutter_tester profiling.
-Run native integration from a normal interactive Windows shell if available because MCP's .NET Framework CommonApplicationData/FileTracker environment is broken.
-Aggregate at least 5 fresh-process samples per mode before deciding whether P3 hard eviction gives a real RSS benefit.
-```
+P4 profiling is complete. The authoritative evidence summary is:
+
+`docs/t8e-p4-native-profile-results.md`
+
+Final conclusion: P3 hard parser-worker eviction has no demonstrated RSS
+advantage in the repeated direct-worker/runtime profiles, and the native
+Windows desktop-process cross-check agrees with that direction. Do not start
+another terminal architecture cut on the assumption that hard isolate teardown
+will reduce process RSS.
