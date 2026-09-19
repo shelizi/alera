@@ -181,10 +181,10 @@ impl ServerActor {
                     .or_else(|| previous.and_then(|value| value.tool_input.clone())),
                 last_assistant_message: optional_status_string(entry, "lastAssistantMessage")
                     .or_else(|| previous.and_then(|value| value.last_assistant_message.clone())),
-                interrupted: entry
-                    .get("interrupted")
-                    .and_then(Value::as_bool)
-                    .or_else(|| previous.and_then(|value| value.interrupted)),
+                interrupted: merged_interrupted_status(
+                    entry,
+                    previous.and_then(|value| value.interrupted),
+                ),
             };
             let presence_change = self.sessions.get(handle).map(|session| {
                 json!({
@@ -316,4 +316,41 @@ fn optional_status_string(entry: &Value, key: &str) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
+}
+
+fn merged_interrupted_status(entry: &Value, previous: Option<bool>) -> Option<bool> {
+    match entry.get("interrupted") {
+        Some(Value::Null) => None,
+        Some(value) => value.as_bool().or(previous),
+        None => previous,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn explicit_null_interrupted_status_clears_previous_interrupt() {
+        assert_eq!(
+            merged_interrupted_status(&json!({"interrupted": null}), Some(true)),
+            None
+        );
+    }
+
+    #[test]
+    fn omitted_interrupted_status_preserves_previous_value() {
+        assert_eq!(
+            merged_interrupted_status(&json!({}), Some(true)),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn explicit_interrupted_status_replaces_previous_value() {
+        assert_eq!(
+            merged_interrupted_status(&json!({"interrupted": false}), Some(true)),
+            Some(false)
+        );
+    }
 }
