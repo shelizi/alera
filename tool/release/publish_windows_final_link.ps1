@@ -316,17 +316,38 @@ try {
     if (-not $NoRestart) {
         Write-Step "Restart $ContainerName and verify the served package"
         $containerPath = '/app/uploads/alera/Alera-Final-Link-Kit.zip'
-        $remoteCommand = "docker restart $ContainerName >/dev/null && docker exec $ContainerName sh -lc `"stat -c '%n|%s|%y' $containerPath && sha256sum $containerPath`" && docker ps --filter name=^/$ContainerName`$ --format '{{.Names}}\t{{.Status}}\t{{.Image}}'"
-        $remote = Invoke-Checked -FilePath $script:Ssh -Arguments @(
-            $RemoteHost,
-            $remoteCommand
-        ) -Capture
-        $remoteText = $remote -join "`n"
-        $containerHashMatch = [regex]::Match($remoteText, '(?im)^([0-9a-f]{64})\s+/app/uploads/alera/Alera-Final-Link-Kit\.zip$')
-        if (-not $containerHashMatch.Success) {
-            throw "Could not verify the package inside $ContainerName.`n$remoteText"
+        Invoke-Checked -FilePath $script:Ssh -Arguments @($RemoteHost, "docker restart $ContainerName >/dev/null")
+
+        $containerHash = $null
+        $lastContainerOutput = ''
+        for ($attempt = 1; $attempt -le 10; $attempt++) {
+            try {
+                $remote = Invoke-Checked -FilePath $script:Ssh -Arguments @(
+                    $RemoteHost,
+                    "docker exec $ContainerName sh -lc `"stat -c '%n|%s|%y' $containerPath && sha256sum $containerPath`" && docker ps --filter name=^/$ContainerName`$ --format '{{.Names}}\t{{.Status}}\t{{.Image}}'"
+                ) -Capture
+                $lastContainerOutput = $remote -join "`n"
+                $containerHashMatch = [regex]::Match(
+                    $lastContainerOutput,
+                    '(?im)^([0-9a-f]{64})\s+/app/uploads/alera/Alera-Final-Link-Kit\.zip\s*$'
+                )
+                if ($containerHashMatch.Success) {
+                    $containerHash = $containerHashMatch.Groups[1].Value.ToUpperInvariant()
+                    break
+                }
+            }
+            catch {
+                $lastContainerOutput = $_.Exception.Message
+            }
+
+            if ($attempt -lt 10) {
+                Start-Sleep -Seconds 1
+            }
         }
-        $containerHash = $containerHashMatch.Groups[1].Value.ToUpperInvariant()
+
+        if (-not $containerHash) {
+            throw "Could not verify the package inside $ContainerName after restart.`n$lastContainerOutput"
+        }
         if ($containerHash -ne $artifact.Sha256) {
             throw "Container-visible hash mismatch. Local $($artifact.Sha256), container $containerHash."
         }
