@@ -2,7 +2,19 @@
 pub(super) enum RuntimeMutationPolicy {
     Available,
     Conflicts,
-    Serialized,
+    Serialized(SerializedRuntimeMutation),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum SerializedRuntimeMutation {
+    RemoveProject,
+    RemoveWorkspace,
+    RemoveProjectWorkspaces,
+    RemoveManagedWorkspace,
+    SwitchWorkspaceBranch,
+    RemoveTab,
+    RemoveWorkspaceTabs,
+    SleepWorkspace,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -38,16 +50,6 @@ const LOCAL_CONFLICT: RequestRoutePolicy = RequestRoutePolicy {
 const MOBILE_CONFLICT: RequestRoutePolicy = RequestRoutePolicy {
     mobile_allowed: true,
     ..LOCAL_CONFLICT
-};
-
-const LOCAL_SERIALIZED: RequestRoutePolicy = RequestRoutePolicy {
-    runtime_mutation: RuntimeMutationPolicy::Serialized,
-    ..LOCAL
-};
-
-const MOBILE_SERIALIZED: RequestRoutePolicy = RequestRoutePolicy {
-    mobile_allowed: true,
-    ..LOCAL_SERIALIZED
 };
 
 /// Cross-cutting system policy for one terminal-host request name.
@@ -123,9 +125,12 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         | "workspaceTag.setForWorkspace"
         | "write" => MOBILE_CONFLICT,
 
-        "project.remove" | "tab.remove" | "workspace.removeManaged" | "workspace.sleep" => {
-            MOBILE_SERIALIZED
+        "project.remove" => serialized_mobile(SerializedRuntimeMutation::RemoveProject),
+        "tab.remove" => serialized_mobile(SerializedRuntimeMutation::RemoveTab),
+        "workspace.removeManaged" => {
+            serialized_mobile(SerializedRuntimeMutation::RemoveManagedWorkspace)
         }
+        "workspace.sleep" => serialized_mobile(SerializedRuntimeMutation::SleepWorkspace),
 
         "createOrAttach"
         | "layout.remove"
@@ -149,10 +154,16 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         | "workspaceTag.unassign"
         | "workspaceTag.upsert" => LOCAL_CONFLICT,
 
-        "tab.removeForWorkspace"
-        | "workspace.remove"
-        | "workspace.removeForProject"
-        | "workspace.switchBranch" => LOCAL_SERIALIZED,
+        "tab.removeForWorkspace" => {
+            serialized_local(SerializedRuntimeMutation::RemoveWorkspaceTabs)
+        }
+        "workspace.remove" => serialized_local(SerializedRuntimeMutation::RemoveWorkspace),
+        "workspace.removeForProject" => {
+            serialized_local(SerializedRuntimeMutation::RemoveProjectWorkspaces)
+        }
+        "workspace.switchBranch" => {
+            serialized_local(SerializedRuntimeMutation::SwitchWorkspaceBranch)
+        }
 
         "agentPresence.list"
         | "agentProfile.launch"
@@ -250,6 +261,20 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
     }
 }
 
+const fn serialized_local(kind: SerializedRuntimeMutation) -> RequestRoutePolicy {
+    RequestRoutePolicy {
+        runtime_mutation: RuntimeMutationPolicy::Serialized(kind),
+        ..LOCAL
+    }
+}
+
+const fn serialized_mobile(kind: SerializedRuntimeMutation) -> RequestRoutePolicy {
+    RequestRoutePolicy {
+        mobile_allowed: true,
+        ..serialized_local(kind)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -261,11 +286,14 @@ mod tests {
             MOBILE_CONFLICT
         );
         assert_eq!(
-            request_route_policy("workspace.removeManaged"),
-            MOBILE_SERIALIZED
+            request_route_policy("workspace.removeManaged").runtime_mutation,
+            RuntimeMutationPolicy::Serialized(SerializedRuntimeMutation::RemoveManagedWorkspace)
         );
         assert_eq!(request_route_policy("workspace.upsert"), LOCAL_CONFLICT);
-        assert_eq!(request_route_policy("workspace.remove"), LOCAL_SERIALIZED);
+        assert_eq!(
+            request_route_policy("workspace.remove").runtime_mutation,
+            RuntimeMutationPolicy::Serialized(SerializedRuntimeMutation::RemoveWorkspace)
+        );
         assert_eq!(request_route_policy("workspace.list"), MOBILE);
         assert_eq!(request_route_policy("unknown.request"), LOCAL);
     }

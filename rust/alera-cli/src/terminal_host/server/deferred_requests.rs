@@ -2,10 +2,7 @@ use std::future::Future;
 
 use serde_json::Value;
 
-use crate::managed_workspace::{
-    ManagedWorkspaceCreateRequest, ManagedWorkspaceRemoveRequest,
-    ManagedWorkspaceSwitchBranchRequest,
-};
+use crate::managed_workspace::ManagedWorkspaceCreateRequest;
 use crate::project_management::list_host_directory;
 use crate::terminal_host::host_error::{HostError, HostResult};
 use crate::terminal_host::protocol::{error_response, ok_response};
@@ -15,7 +12,6 @@ use super::deferred_admission::DeferredRequestClass;
 use super::project_requests::{load_effective_project_config, load_project_branches};
 use super::request_payloads::parse_payload;
 use super::requests::{require_string_key, validate_mobile_runtime_settings_payload};
-use super::runtime_mutations::RuntimeMutationRequest;
 use super::workspace_sidebar_requests::load_workspace_repository_web_url;
 use super::{ServerActor, ServerCommand};
 
@@ -107,6 +103,14 @@ impl ServerActor {
             }
             self.start_autostart_reconcile_update(client_id, request_id, payload)
                 .await?;
+            return Ok(true);
+        }
+        if self.try_start_serialized_runtime_mutation(
+            client_id,
+            request_id,
+            request_type,
+            payload,
+        )? {
             return Ok(true);
         }
         match request_type {
@@ -316,102 +320,6 @@ impl ServerActor {
                         .get("closeSessions")
                         .and_then(Value::as_bool)
                         .unwrap_or(false),
-                );
-                Ok(true)
-            }
-            "workspace.switchBranch" => {
-                self.require_auth(client_id)?;
-                self.require_request_allowed(client_id, request_type)?;
-                let request: ManagedWorkspaceSwitchBranchRequest = parse_payload(payload)?;
-                self.start_runtime_mutation(
-                    client_id,
-                    request_id,
-                    RuntimeMutationRequest::SwitchWorkspaceBranch { request },
-                );
-                Ok(true)
-            }
-            "workspace.removeManaged" => {
-                self.require_auth(client_id)?;
-                self.require_request_allowed(client_id, request_type)?;
-                let request: ManagedWorkspaceRemoveRequest = parse_payload(payload)?;
-                self.start_runtime_mutation(
-                    client_id,
-                    request_id,
-                    RuntimeMutationRequest::RemoveManagedWorkspace { request },
-                );
-                Ok(true)
-            }
-            "project.remove" => {
-                self.require_auth(client_id)?;
-                self.require_request_allowed(client_id, request_type)?;
-                let project_id = require_string_key(payload, "id")?;
-                self.start_runtime_mutation(
-                    client_id,
-                    request_id,
-                    RuntimeMutationRequest::RemoveProject { project_id },
-                );
-                Ok(true)
-            }
-            "workspace.remove" => {
-                self.require_auth(client_id)?;
-                self.require_request_allowed(client_id, request_type)?;
-                let workspace_id = require_string_key(payload, "id")?;
-                let cascade_tabs = payload
-                    .get("cascadeTabs")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(true);
-                self.start_runtime_mutation(
-                    client_id,
-                    request_id,
-                    RuntimeMutationRequest::RemoveWorkspace {
-                        workspace_id,
-                        cascade_tabs,
-                    },
-                );
-                Ok(true)
-            }
-            "workspace.removeForProject" => {
-                self.require_auth(client_id)?;
-                self.require_request_allowed(client_id, request_type)?;
-                let project_id = require_string_key(payload, "projectId")?;
-                self.start_runtime_mutation(
-                    client_id,
-                    request_id,
-                    RuntimeMutationRequest::RemoveProjectWorkspaces { project_id },
-                );
-                Ok(true)
-            }
-            "workspace.sleep" => {
-                self.require_auth(client_id)?;
-                self.require_request_allowed(client_id, request_type)?;
-                let workspace_id = require_string_key(payload, "workspaceId")?;
-                self.start_runtime_mutation(
-                    client_id,
-                    request_id,
-                    RuntimeMutationRequest::SleepWorkspace { workspace_id },
-                );
-                Ok(true)
-            }
-            "tab.remove" => {
-                self.require_auth(client_id)?;
-                self.require_request_allowed(client_id, request_type)?;
-                let tab_id = require_string_key(payload, "id")?;
-                self.cancel_agent_title_job(&tab_id);
-                self.start_runtime_mutation(
-                    client_id,
-                    request_id,
-                    RuntimeMutationRequest::RemoveTab { tab_id },
-                );
-                Ok(true)
-            }
-            "tab.removeForWorkspace" => {
-                self.require_auth(client_id)?;
-                self.require_request_allowed(client_id, request_type)?;
-                let workspace_id = require_string_key(payload, "workspaceId")?;
-                self.start_runtime_mutation(
-                    client_id,
-                    request_id,
-                    RuntimeMutationRequest::RemoveWorkspaceTabs { workspace_id },
                 );
                 Ok(true)
             }
