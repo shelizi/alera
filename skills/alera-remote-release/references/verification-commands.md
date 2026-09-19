@@ -81,11 +81,14 @@ SIDECAR=1
 
 ## Atomic remote publish
 
-Upload staging file:
+Seed staging from the current stable package when possible, then rsync the new ZIP into staging:
 
 ```text
-scp build/final-link-kit/Alera-Final-Link-Kit.zip neo-ai:/opt/running/fileServer/uploads/alera/.Alera-Final-Link-Kit.uploading.zip
+ssh neo-ai "mkdir -p /opt/running/fileServer/uploads/alera && if [ ! -f /opt/running/fileServer/uploads/alera/.Alera-Final-Link-Kit.uploading.zip ] && [ -f /opt/running/fileServer/uploads/alera/Alera-Final-Link-Kit.zip ]; then cp -f --reflink=auto /opt/running/fileServer/uploads/alera/Alera-Final-Link-Kit.zip /opt/running/fileServer/uploads/alera/.Alera-Final-Link-Kit.uploading.zip 2>/dev/null || cp -f /opt/running/fileServer/uploads/alera/Alera-Final-Link-Kit.zip /opt/running/fileServer/uploads/alera/.Alera-Final-Link-Kit.uploading.zip; fi"
+rsync --partial --inplace --no-whole-file --chmod=F644 --stats --rsync-path=/usr/bin/rsync build/final-link-kit/Alera-Final-Link-Kit.zip neo-ai:/opt/running/fileServer/uploads/alera/.Alera-Final-Link-Kit.uploading.zip
 ```
+
+The tracked PowerShell publisher handles Windows/Cygwin path conversion and SSH executable selection automatically. Use the manual `rsync` form only from a shell where the local path syntax is valid.
 
 Verify the staged file with a single direct remote command, without shell variables:
 

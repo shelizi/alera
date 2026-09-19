@@ -13,7 +13,7 @@ For the normal end-to-end release, prefer the tracked one-command wrapper:
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File tool/release/publish_windows_final_link.ps1
 ```
 
-It runs the authoritative exporter, verifies Release identity and ZIP contents, uploads through a staged path, atomically promotes the package, restarts `file-server`, and verifies the container-visible SHA-256. Use the detailed workflow below when diagnosing or extending the release process.
+It runs the authoritative exporter, verifies Release identity and ZIP contents, syncs through a staged path (preferring `rsync` delta/resume semantics), atomically promotes the package, restarts `file-server`, and verifies the container-visible SHA-256. Use the detailed workflow below when diagnosing or extending the release process.
 
 ## Workflow
 
@@ -84,15 +84,18 @@ Before retrying a failed Windows build, classify the failure. Do not repeatedly 
    - Use the configured SSH alias `neo-ai`; never embed an IP address, password, or private-key path in the Skill or report.
    - Stable destination:
      `/opt/running/fileServer/uploads/alera/Alera-Final-Link-Kit.zip`
-   - Prefer an atomic replacement:
-     1. upload to `/opt/running/fileServer/uploads/alera/.Alera-Final-Link-Kit.uploading.zip`;
-     2. compute its remote SHA-256 and run `unzip -t`;
-     3. only when both pass and the hash equals the local hash, rename it to the stable destination with `mv -f`;
-     4. verify the stable destination again.
+   - Prefer `rsync` over SCP for repeat releases. The tracked publisher auto-detects local rsync and supports `-RsyncPath`; `-UploadTransport rsync` can require it explicitly, while `auto` falls back to SCP only when local rsync is unavailable.
+   - Keep rsync delta/resume behavior together with atomic replacement:
+     1. sync to `/opt/running/fileServer/uploads/alera/.Alera-Final-Link-Kit.uploading.zip`;
+     2. when staging does not exist but the stable package does, seed staging from stable first so rsync has a delta basis; if an interrupted staging file already exists, preserve it so rsync can resume/update it;
+     3. use `--partial --inplace --no-whole-file` and do not promote until validation succeeds;
+     4. compute staging SHA-256 and run `unzip -t`;
+     5. only when both pass and the hash equals the local hash, rename it to the stable destination with `mv -f`;
+     6. verify the stable destination again.
    - Do not update the legacy `Alera-Final-Link-Kit-EWDK-Aware.zip` unless the user explicitly asks. The current standard kit already contains the portable-SDK finalizer workflow.
 
 6. Verify remote state.
-   - Treat SSH/SCP diagnostics with the same classification rule: stderr text alone is not failure. Use the command exit code plus hash/ZIP assertions.
+   - Treat SSH/rsync/SCP diagnostics with the same classification rule: stderr text alone is not failure. Use the command exit code plus hash/ZIP assertions.
    - Remote SHA-256 must exactly equal the local SHA-256.
    - Remote `unzip -t` must succeed and print/return an explicit success marker such as `ZIP_OK`.
    - Use direct remote paths in SSH verification commands. Avoid `$f`-style remote shell variables from a Windows caller because quoting/interpolation mistakes can make verification target the wrong path.
