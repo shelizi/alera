@@ -906,11 +906,16 @@ void main() {
         'git-diff-working-tree-editor-y-scrollbar-lib/main.dart',
       ),
     );
+    final overviewFinder = find.byKey(
+      const ValueKey<String>('git-diff-working-tree-overview-lib/main.dart'),
+    );
 
     expect(leftXFinder, findsOneWidget);
     expect(rightXFinder, findsOneWidget);
     expect(leftYFinder, findsOneWidget);
     expect(rightYFinder, findsOneWidget);
+    expect(overviewFinder, findsOneWidget);
+    expect(find.byTooltip('Diff Overview'), findsOneWidget);
 
     final leftX = tester.widget<Scrollbar>(leftXFinder).controller!;
     final rightX = tester.widget<Scrollbar>(rightXFinder).controller!;
@@ -927,6 +932,18 @@ void main() {
     leftY.jumpTo(180);
     await tester.pump();
     expect(rightY.offset, closeTo(leftY.offset, 0.5));
+
+    rightY.jumpTo(0);
+    await tester.pump();
+    final overviewTopLeft = tester.getTopLeft(overviewFinder);
+    final overviewSize = tester.getSize(overviewFinder);
+    await tester.tapAt(
+      overviewTopLeft +
+          Offset(overviewSize.width / 2, overviewSize.height * 0.75),
+    );
+    await tester.pump();
+    expect(rightY.offset, greaterThan(0));
+    expect(leftY.offset, closeTo(rightY.offset, 0.5));
   });
 
   testWidgets('staged side-by-side diff stays read only', (tester) async {

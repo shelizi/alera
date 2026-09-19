@@ -362,6 +362,184 @@ class _EditableWorkingTreeDiff extends StatefulWidget {
       _EditableWorkingTreeDiffState();
 }
 
+class _EditableDiffOverviewRuler extends StatelessWidget {
+  const _EditableDiffOverviewRuler({
+    super.key,
+    required this.changes,
+    required this.lineCount,
+    required this.scrollController,
+  });
+
+  static const double width = 14;
+
+  final _EditableDiffLineChanges changes;
+  final int lineCount;
+  final ScrollController scrollController;
+
+  void _jumpTo(double localY, double height) {
+    if (!scrollController.hasClients || height <= 0) return;
+    final position = scrollController.position;
+    final ratio = (localY / height).clamp(0.0, 1.0);
+    final target = (ratio * position.maxScrollExtent).clamp(
+      position.minScrollExtent,
+      position.maxScrollExtent,
+    );
+    scrollController.jumpTo(target);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: 'Diff Overview',
+      child: Semantics(
+        button: true,
+        label:
+            'Diff overview, ${changes.oldChangedLines.length} removed, '
+            '${changes.newChangedLines.length} added',
+        child: DecoratedBox(
+          decoration: const BoxDecoration(
+            color: AleraTokens.surfaceVariant,
+            border: Border(left: BorderSide(color: AleraTokens.borderSubtle)),
+          ),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final height = constraints.maxHeight;
+              return MouseRegion(
+                cursor: SystemMouseCursors.click,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTapDown: (details) =>
+                      _jumpTo(details.localPosition.dy, height),
+                  onVerticalDragStart: (details) =>
+                      _jumpTo(details.localPosition.dy, height),
+                  onVerticalDragUpdate: (details) =>
+                      _jumpTo(details.localPosition.dy, height),
+                  child: SizedBox(
+                    width: width,
+                    child: AnimatedBuilder(
+                      animation: scrollController,
+                      builder: (context, _) {
+                        var viewportStart = 0.0;
+                        var viewportEnd = 1.0;
+                        if (scrollController.hasClients) {
+                          final position = scrollController.position;
+                          final totalExtent =
+                              position.maxScrollExtent +
+                              position.viewportDimension;
+                          if (totalExtent > 0) {
+                            viewportStart = (position.pixels / totalExtent)
+                                .clamp(0.0, 1.0);
+                            viewportEnd =
+                                ((position.pixels +
+                                            position.viewportDimension) /
+                                        totalExtent)
+                                    .clamp(viewportStart, 1.0);
+                          }
+                        }
+                        return CustomPaint(
+                          painter: _EditableDiffOverviewPainter(
+                            oldChangedLines: changes.oldChangedLines,
+                            newChangedLines: changes.newChangedLines,
+                            lineCount: lineCount,
+                            viewportStart: viewportStart,
+                            viewportEnd: viewportEnd,
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _EditableDiffOverviewPainter extends CustomPainter {
+  const _EditableDiffOverviewPainter({
+    required this.oldChangedLines,
+    required this.newChangedLines,
+    required this.lineCount,
+    required this.viewportStart,
+    required this.viewportEnd,
+  });
+
+  final Set<int> oldChangedLines;
+  final Set<int> newChangedLines;
+  final int lineCount;
+  final double viewportStart;
+  final double viewportEnd;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (size.width <= 0 || size.height <= 0) return;
+
+    final contentWidth = math.max(0.0, size.width - 4);
+    final halfWidth = contentWidth / 2;
+    final markerHeight = math.max(
+      2.0,
+      math.min(5.0, size.height / math.max(lineCount, 1) * 1.5),
+    );
+    final denominator = math.max(lineCount - 1, 1);
+
+    double markerTop(int lineIndex) {
+      final ratio = (lineIndex / denominator).clamp(0.0, 1.0);
+      return ratio * math.max(0.0, size.height - markerHeight);
+    }
+
+    final removedPaint = Paint()..color = AleraTokens.error;
+    final addedPaint = Paint()..color = AleraTokens.success;
+    for (final lineIndex in oldChangedLines) {
+      canvas.drawRect(
+        Rect.fromLTWH(2, markerTop(lineIndex), halfWidth, markerHeight),
+        removedPaint,
+      );
+    }
+    for (final lineIndex in newChangedLines) {
+      canvas.drawRect(
+        Rect.fromLTWH(
+          2 + halfWidth,
+          markerTop(lineIndex),
+          halfWidth,
+          markerHeight,
+        ),
+        addedPaint,
+      );
+    }
+
+    final top = viewportStart.clamp(0.0, 1.0) * size.height;
+    final bottom = viewportEnd.clamp(viewportStart, 1.0) * size.height;
+    final viewportRect = Rect.fromLTRB(
+      1,
+      top,
+      size.width - 1,
+      math.max(top + 4, bottom).clamp(0.0, size.height),
+    );
+    canvas.drawRect(
+      viewportRect,
+      Paint()..color = AleraTokens.foregroundMuted.withValues(alpha: 0.08),
+    );
+    canvas.drawRect(
+      viewportRect,
+      Paint()
+        ..color = AleraTokens.foregroundMuted.withValues(alpha: 0.5)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _EditableDiffOverviewPainter oldDelegate) =>
+      oldDelegate.oldChangedLines != oldChangedLines ||
+      oldDelegate.newChangedLines != newChangedLines ||
+      oldDelegate.lineCount != lineCount ||
+      oldDelegate.viewportStart != viewportStart ||
+      oldDelegate.viewportEnd != viewportEnd;
+}
+
 class _EditableWorkingTreeDiffState extends State<_EditableWorkingTreeDiff> {
   late final TextEditingController _controller;
   late final ScrollController _leftHorizontalController;
@@ -800,6 +978,17 @@ class _EditableWorkingTreeDiffState extends State<_EditableWorkingTreeDiff> {
                           ),
                         );
                       },
+                    ),
+                  ),
+                  SizedBox(
+                    width: _EditableDiffOverviewRuler.width,
+                    child: _EditableDiffOverviewRuler(
+                      key: ValueKey<String>(
+                        'git-diff-working-tree-overview-${widget.file.path}',
+                      ),
+                      changes: changes,
+                      lineCount: lineCount,
+                      scrollController: _rightVerticalController,
                     ),
                   ),
                 ],
