@@ -221,7 +221,6 @@ const Map<String, String> _traditionalChineseSettings = <String, String>{
   'Indentation': '縮排',
   'Autosave': '自動儲存',
   'Tab Size': 'Tab 寬度',
-  'Quick Open': '快速開啟',
   'Control dependency and build directories that Quick Open never indexes.':
       '管理快速開啟永遠不建立索引的套件庫與建置目錄。',
   'Excluded Directory Names': '排除的目錄名稱',

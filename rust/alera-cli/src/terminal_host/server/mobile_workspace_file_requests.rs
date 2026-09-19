@@ -6,6 +6,7 @@ use alera_core::workspace_files::{
     is_protected_workspace_path, open_workspace_file_root, read_workspace_file_range_from_root,
     search_workspace_quick_open_session, start_workspace_quick_open_session_without_symlinks,
     stop_workspace_quick_open_session, WorkspaceFileRoot, WorkspaceQuickOpenSession,
+    DEFAULT_QUICK_OPEN_EXCLUDED_DIRECTORIES,
 };
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
@@ -96,7 +97,13 @@ async fn handle_mobile_workspace_file_request(
             let workspace = workspace_for_mobile_file_request(&runtime_store, payload).await?;
             let root = mobile_workspace_file_root(&runtime_store, payload, &workspace).await?;
             spawn_blocking_workspace("Quick Open indexing", move || {
-                start_workspace_quick_open_session_without_symlinks(root)
+                start_workspace_quick_open_session_without_symlinks(
+                    root,
+                    DEFAULT_QUICK_OPEN_EXCLUDED_DIRECTORIES
+                        .iter()
+                        .map(|value| (*value).to_string())
+                        .collect(),
+                )
                     .map_err(workspace_file_error)
                     .map(|session| {
                         json!({
@@ -155,6 +162,7 @@ async fn search_mobile_workspace_quick_open(payload: &Value) -> HostResult<Value
             },
             query,
             limit,
+            false,
         )
         .map_err(workspace_file_error)
         .map(|matches| {

@@ -47,6 +47,33 @@ const MAX_QUICK_OPEN_IGNORED_INDEXED_PATH_BYTES: usize = 1024 * 1024;
 
 const QUICK_OPEN_PROTECTED_DIRS: &[&str] = &[".git", ".hg", ".svn"];
 
+pub const DEFAULT_QUICK_OPEN_EXCLUDED_DIRECTORIES: &[&str] = &[
+    "node_modules",
+    ".dart_tool",
+    "vendor",
+    "vendor-bin",
+    ".phpunit.cache",
+    "coverage",
+    "Pods",
+    ".gradle",
+    ".venv",
+    "venv",
+    ".tox",
+    "__pypackages__",
+    "bower_components",
+    "jspm_packages",
+    ".pnpm-store",
+    ".pub-cache",
+    "target",
+    "bin",
+    "obj",
+    ".vs",
+    "packages",
+    "TestResults",
+    "BenchmarkDotNet.Artifacts",
+    "artifacts",
+];
+
 static SESSIONS: OnceLock<Mutex<HashMap<String, QuickOpenSessionEntry>>> = OnceLock::new();
 static INDEX_BUILD_GATE: OnceLock<Mutex<()>> = OnceLock::new();
 

@@ -16,7 +16,7 @@ pub use prompts::{list_codex_saved_prompts, CodexSavedPrompt, CodexSavedPromptSc
 pub use quick_open::{
     search_workspace_quick_open_session, start_workspace_quick_open_session,
     start_workspace_quick_open_session_without_symlinks, stop_workspace_quick_open_session,
-    WorkspaceQuickOpenMatch, WorkspaceQuickOpenSession,
+    WorkspaceQuickOpenMatch, WorkspaceQuickOpenSession, DEFAULT_QUICK_OPEN_EXCLUDED_DIRECTORIES,
 };
 
 pub const MAX_REMOTE_READ_BYTES: u64 = 256 * 1024;
