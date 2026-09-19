@@ -7,6 +7,14 @@ description: Build and publish the Alera Windows Release as the semi-compiled Fi
 
 Use the project's tracked Windows Final-Link workflow to publish the reusable semi-compiled Release package. Treat successful upload as incomplete until Release identity, package contents, hash, and remote ZIP integrity are verified.
 
+For the normal end-to-end release, prefer the tracked one-command wrapper:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tool/release/publish_windows_final_link.ps1
+```
+
+It runs the authoritative exporter, verifies Release identity and ZIP contents, uploads through a staged path, atomically promotes the package, restarts `file-server`, and verifies the container-visible SHA-256. Use the detailed workflow below when diagnosing or extending the release process.
+
 ## Workflow
 
 1. Connect to the Alera workspace with `home-node`.
@@ -39,6 +47,19 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File tool/windows-finalizer/e
    - Do not decide success while the build is still running. Wait for the terminal exit code, then validate the newly generated artifacts.
    - If the build command has a fatal failure, stop. Never upload a previous/stale package after a failed build.
 
+### Windows toolchain failure triage
+
+Before retrying a failed Windows build, classify the failure. Do not repeatedly reinstall, relocate, or swap compilers when the evidence already shows the compiler is being invoked.
+
+- If `cl.exe` is found/invoked and MSBuild fails with `MSB4018`, `Microsoft.Build.Utilities.FileTracker`, `InitializeCommonApplicationDataPaths`, and `System.ArgumentException` / an illegal path-format error, treat this as a **host .NET Framework/MSBuild FileTracker failure**, not a missing C++ compiler.
+- Probe the failing runtime with **Windows PowerShell 5.1**, not only PowerShell 7. `pwsh` can report a valid `CommonApplicationData` while .NET Framework still returns an empty string or throws.
+- If Windows PowerShell 5.1 reports empty/broken `CommonApplicationData` while `C:\ProgramData` exists and HKLM `Common AppData` points to `C:\ProgramData`, stop retrying environment-variable patches or different Visual Studio generators. The shell-folder resolution itself is broken for the .NET Framework runtime used by MSBuild.
+- Do not spend additional retries on `TrackFileAccess=false` or `MinimalRebuildFromTracking=false` after this signature is confirmed. `CL` and `GetOutOfDateItems` can initialize `FileTracker` even with tracking disabled.
+- Do not assume changing from an extended `\\?\...` working directory to a normal drive path fixes this signature. Verify the Windows PowerShell 5.1 folder probe instead.
+- Flutter's Windows build path uses a Visual Studio generator; do not expect a CMake/Ninja environment variable alone to make `flutter build windows` bypass MSBuild.
+- When Visual Studio is installed on a secondary drive, search likely VS/SDK roots first instead of recursively scanning the entire drive. Prefer the complete VS2022 x64 toolchain when available, and use the exact CMake generator instance syntax `path,version=<installationVersion>` when CMake does not discover it from the registry.
+- If the FileTracker signature is proven, follow `references/windows-msbuild-recovery.md` rather than repeating the normal exporter build. Keep the normal exporter as the publishing authority and preserve every Release/package verification below.
+
 4. Verify the package is genuinely Release before upload.
    - Confirm `build/windows/x64/runner/Alera.vcxproj` exists.
    - In its `Release|x64` configuration confirm:
@@ -62,9 +83,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File tool/windows-finalizer/e
 5. Upload to the internal file server only after all local checks pass.
    - Use the configured SSH alias `neo-ai`; never embed an IP address, password, or private-key path in the Skill or report.
    - Stable destination:
-     `/opt/fileServer-direct/uploads/alera/Alera-Final-Link-Kit.zip`
+     `/opt/running/fileServer/uploads/alera/Alera-Final-Link-Kit.zip`
    - Prefer an atomic replacement:
-     1. upload to `/opt/fileServer-direct/uploads/alera/.Alera-Final-Link-Kit.uploading.zip`;
+     1. upload to `/opt/running/fileServer/uploads/alera/.Alera-Final-Link-Kit.uploading.zip`;
      2. compute its remote SHA-256 and run `unzip -t`;
      3. only when both pass and the hash equals the local hash, rename it to the stable destination with `mv -f`;
      4. verify the stable destination again.

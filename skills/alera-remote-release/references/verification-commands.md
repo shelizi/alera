@@ -84,23 +84,23 @@ SIDECAR=1
 Upload staging file:
 
 ```text
-scp build/final-link-kit/Alera-Final-Link-Kit.zip neo-ai:/opt/fileServer-direct/uploads/alera/.Alera-Final-Link-Kit.uploading.zip
+scp build/final-link-kit/Alera-Final-Link-Kit.zip neo-ai:/opt/running/fileServer/uploads/alera/.Alera-Final-Link-Kit.uploading.zip
 ```
 
 Verify the staged file with a single direct remote command, without shell variables:
 
 ```text
-ssh neo-ai "sha256sum /opt/fileServer-direct/uploads/alera/.Alera-Final-Link-Kit.uploading.zip && unzip -t /opt/fileServer-direct/uploads/alera/.Alera-Final-Link-Kit.uploading.zip >/dev/null && echo ZIP_OK"
+ssh neo-ai "sha256sum /opt/running/fileServer/uploads/alera/.Alera-Final-Link-Kit.uploading.zip && unzip -t /opt/running/fileServer/uploads/alera/.Alera-Final-Link-Kit.uploading.zip >/dev/null && echo ZIP_OK"
 ```
 
 Only after the staged hash equals the local hash and ZIP validation succeeds:
 
 ```text
-ssh neo-ai "mv -f /opt/fileServer-direct/uploads/alera/.Alera-Final-Link-Kit.uploading.zip /opt/fileServer-direct/uploads/alera/Alera-Final-Link-Kit.zip"
+ssh neo-ai "mv -f /opt/running/fileServer/uploads/alera/.Alera-Final-Link-Kit.uploading.zip /opt/running/fileServer/uploads/alera/Alera-Final-Link-Kit.zip"
 ```
 
 Final verification:
 
 ```text
-ssh neo-ai "sha256sum /opt/fileServer-direct/uploads/alera/Alera-Final-Link-Kit.zip && unzip -t /opt/fileServer-direct/uploads/alera/Alera-Final-Link-Kit.zip >/dev/null && echo ZIP_OK"
+ssh neo-ai "sha256sum /opt/running/fileServer/uploads/alera/Alera-Final-Link-Kit.zip && unzip -t /opt/running/fileServer/uploads/alera/Alera-Final-Link-Kit.zip >/dev/null && echo ZIP_OK"
 ```
