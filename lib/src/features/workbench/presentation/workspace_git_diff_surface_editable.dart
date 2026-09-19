@@ -22,6 +22,16 @@ final class _LiveDiffStats {
   final int removed;
 }
 
+final class _EditableDiffLineChanges {
+  const _EditableDiffLineChanges({
+    required this.oldChangedLines,
+    required this.newChangedLines,
+  });
+
+  final Set<int> oldChangedLines;
+  final Set<int> newChangedLines;
+}
+
 _LiveDiffStats _liveDiffStats(
   String baseline,
   String current,
@@ -61,6 +71,105 @@ String _normalizeLiveDiffLine(String line, GitDiffWhitespaceMode mode) {
       line.replaceAll(RegExp(r'[ \t]+'), ' ').replaceFirst(RegExp(r' $'), ''),
     GitDiffWhitespaceMode.ignoreAll => line.replaceAll(RegExp(r'[ \t]+'), ''),
   };
+}
+
+_EditableDiffLineChanges _liveEditableDiffLineChanges(
+  String baseline,
+  String current,
+  GitDiffWhitespaceMode whitespaceMode,
+) {
+  final oldLines = _splitFullFileLines(baseline)
+      .map((line) => _normalizeLiveDiffLine(line, whitespaceMode))
+      .toList(growable: false);
+  final newLines = _splitFullFileLines(current)
+      .map((line) => _normalizeLiveDiffLine(line, whitespaceMode))
+      .toList(growable: false);
+  var prefix = 0;
+  while (prefix < oldLines.length &&
+      prefix < newLines.length &&
+      oldLines[prefix] == newLines[prefix]) {
+    prefix += 1;
+  }
+  var oldSuffix = oldLines.length;
+  var newSuffix = newLines.length;
+  while (oldSuffix > prefix &&
+      newSuffix > prefix &&
+      oldLines[oldSuffix - 1] == newLines[newSuffix - 1]) {
+    oldSuffix -= 1;
+    newSuffix -= 1;
+  }
+  return _EditableDiffLineChanges(
+    oldChangedLines: Set<int>.from(
+      Iterable<int>.generate(oldSuffix - prefix, (index) => prefix + index),
+    ),
+    newChangedLines: Set<int>.from(
+      Iterable<int>.generate(newSuffix - prefix, (index) => prefix + index),
+    ),
+  );
+}
+
+_EditableDiffLineChanges _editableDiffLineChanges(
+  GitDiffFile file,
+  String baseline,
+  String current,
+  GitDiffWhitespaceMode whitespaceMode, {
+  required bool useSourceDiff,
+}) {
+  if (!useSourceDiff) {
+    return _liveEditableDiffLineChanges(baseline, current, whitespaceMode);
+  }
+
+  final oldLines = _splitFullFileLines(baseline);
+  final newLines = _splitFullFileLines(current);
+  if (file.status == GitChangeStatus.added ||
+      file.status == GitChangeStatus.untracked) {
+    return _EditableDiffLineChanges(
+      oldChangedLines: const <int>{},
+      newChangedLines: Set<int>.from(Iterable<int>.generate(newLines.length)),
+    );
+  }
+
+  final oldChanged = <int>{};
+  final newChanged = <int>{};
+  int? oldLine;
+  int? newLine;
+  for (final line in file.lines) {
+    if (line.kind == GitDiffLineKind.hunk) {
+      final match = _hunkHeaderRegExp.firstMatch(line.text);
+      oldLine = int.tryParse(match?.group(1) ?? '');
+      newLine = int.tryParse(match?.group(3) ?? '');
+      if (match?.group(2) == '0') oldLine = null;
+      if (match?.group(4) == '0') newLine = null;
+      continue;
+    }
+    if (line.kind == GitDiffLineKind.header) continue;
+    if (line.kind == GitDiffLineKind.deletion) {
+      if (oldLine != null && oldLine > 0 && oldLine <= oldLines.length) {
+        oldChanged.add(oldLine - 1);
+      }
+      if (oldLine != null) oldLine += 1;
+      continue;
+    }
+    if (line.kind == GitDiffLineKind.addition) {
+      if (newLine != null && newLine > 0 && newLine <= newLines.length) {
+        newChanged.add(newLine - 1);
+      }
+      if (newLine != null) newLine += 1;
+      continue;
+    }
+    if (line.kind == GitDiffLineKind.context) {
+      if (oldLine != null) oldLine += 1;
+      if (newLine != null) newLine += 1;
+    }
+  }
+
+  if (oldChanged.isNotEmpty || newChanged.isNotEmpty || baseline == current) {
+    return _EditableDiffLineChanges(
+      oldChangedLines: oldChanged,
+      newChangedLines: newChanged,
+    );
+  }
+  return _liveEditableDiffLineChanges(baseline, current, whitespaceMode);
 }
 
 extension _WorkspaceGitDiffEditable on _WorkspaceGitDiffSurfaceState {
@@ -382,6 +491,15 @@ class _EditableWorkingTreeDiffState extends State<_EditableWorkingTreeDiff> {
       widget.document.currentText,
       widget.whitespaceMode,
     );
+    final changes = _editableDiffLineChanges(
+      widget.file,
+      widget.baseline,
+      widget.document.currentText,
+      widget.whitespaceMode,
+      useSourceDiff:
+          widget.document.currentText == widget.document.loaded.displayContent,
+    );
+    const lineHeight = 18.0;
     final lineCount = math.max(
       _splitFullFileLines(widget.baseline).length,
       _splitFullFileLines(widget.document.currentText).length,
@@ -515,9 +633,39 @@ class _EditableWorkingTreeDiffState extends State<_EditableWorkingTreeDiff> {
                                     padding: const EdgeInsets.all(
                                       AleraTokens.space8,
                                     ),
-                                    child: SelectableText(
-                                      widget.baseline,
-                                      style: textStyle,
+                                    child: Stack(
+                                      fit: StackFit.passthrough,
+                                      children: <Widget>[
+                                        for (final lineIndex
+                                            in changes.oldChangedLines)
+                                          Positioned(
+                                            key: ValueKey<String>(
+                                              'git-diff-working-tree-original-deletion-${widget.file.path}-$lineIndex',
+                                            ),
+                                            left: 0,
+                                            right: 0,
+                                            top: lineIndex * lineHeight,
+                                            height: lineHeight,
+                                            child: IgnorePointer(
+                                              child: DecoratedBox(
+                                                decoration: BoxDecoration(
+                                                  color: AleraTokens.error
+                                                      .withValues(alpha: 0.08),
+                                                  border: const Border(
+                                                    left: BorderSide(
+                                                      color: AleraTokens.error,
+                                                      width: 3,
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                        SelectableText(
+                                          widget.baseline,
+                                          style: textStyle,
+                                        ),
+                                      ],
                                     ),
                                   ),
                                 ),
@@ -558,24 +706,94 @@ class _EditableWorkingTreeDiffState extends State<_EditableWorkingTreeDiff> {
                                 thumbVisibility: true,
                                 notificationPredicate: (notification) =>
                                     notification.metrics.axis == Axis.vertical,
-                                child: TextField(
-                                  key: ValueKey<String>(
-                                    'git-diff-working-tree-editor-${widget.file.path}',
-                                  ),
-                                  controller: _controller,
-                                  scrollController: _rightVerticalController,
-                                  expands: true,
-                                  maxLines: null,
-                                  minLines: null,
-                                  keyboardType: TextInputType.multiline,
-                                  style: textStyle,
-                                  decoration: const InputDecoration(
-                                    border: InputBorder.none,
-                                    contentPadding: EdgeInsets.all(
-                                      AleraTokens.space8,
+                                child: AnimatedBuilder(
+                                  animation: _rightVerticalController,
+                                  child: TextField(
+                                    key: ValueKey<String>(
+                                      'git-diff-working-tree-editor-${widget.file.path}',
                                     ),
+                                    controller: _controller,
+                                    scrollController: _rightVerticalController,
+                                    expands: true,
+                                    maxLines: null,
+                                    minLines: null,
+                                    keyboardType: TextInputType.multiline,
+                                    style: textStyle,
+                                    decoration: const InputDecoration(
+                                      border: InputBorder.none,
+                                      contentPadding: EdgeInsets.all(
+                                        AleraTokens.space8,
+                                      ),
+                                    ),
+                                    onChanged: (text) {
+                                      setState(() {});
+                                      widget.onChanged(text);
+                                    },
                                   ),
-                                  onChanged: widget.onChanged,
+                                  builder: (context, child) {
+                                    final scrollOffset =
+                                        _rightVerticalController.hasClients
+                                        ? _rightVerticalController.offset
+                                        : 0.0;
+                                    final firstVisible = math.max(
+                                      0,
+                                      ((scrollOffset - AleraTokens.space8) /
+                                                  lineHeight)
+                                              .floor() -
+                                          1,
+                                    );
+                                    final lastVisible = math.min(
+                                      lineCount - 1,
+                                      ((scrollOffset +
+                                                  constraints.maxHeight -
+                                                  AleraTokens.space8) /
+                                              lineHeight)
+                                          .ceil(),
+                                    );
+                                    return Stack(
+                                      clipBehavior: Clip.hardEdge,
+                                      children: <Widget>[
+                                        if (lastVisible >= firstVisible)
+                                          for (
+                                            var lineIndex = firstVisible;
+                                            lineIndex <= lastVisible;
+                                            lineIndex += 1
+                                          )
+                                            if (changes.newChangedLines
+                                                .contains(lineIndex))
+                                              Positioned(
+                                                key: ValueKey<String>(
+                                                  'git-diff-working-tree-editor-addition-${widget.file.path}-$lineIndex',
+                                                ),
+                                                left: 0,
+                                                right: 0,
+                                                top:
+                                                    AleraTokens.space8 +
+                                                    lineIndex * lineHeight -
+                                                    scrollOffset,
+                                                height: lineHeight,
+                                                child: IgnorePointer(
+                                                  child: DecoratedBox(
+                                                    decoration: BoxDecoration(
+                                                      color: AleraTokens.success
+                                                          .withValues(
+                                                            alpha: 0.08,
+                                                          ),
+                                                      border: const Border(
+                                                        left: BorderSide(
+                                                          color: AleraTokens
+                                                              .success,
+                                                          width: 3,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                        Positioned.fill(child: child!),
+                                      ],
+                                    );
+                                  },
                                 ),
                               ),
                             ),

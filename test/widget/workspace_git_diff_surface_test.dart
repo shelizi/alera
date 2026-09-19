@@ -811,6 +811,22 @@ void main() {
     expect(editor, findsOneWidget);
     expect(find.text('Workspace · Editable'), findsOneWidget);
     expect(tester.getSize(editor).height, greaterThan(400));
+    expect(
+      find.byKey(
+        const ValueKey<String>(
+          'git-diff-working-tree-original-deletion-lib/main.dart-0',
+        ),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(
+        const ValueKey<String>(
+          'git-diff-working-tree-editor-addition-lib/main.dart-0',
+        ),
+      ),
+      findsOneWidget,
+    );
 
     await tester.enterText(editor, 'edited line\n');
     await tester.pump();
