@@ -4,6 +4,7 @@ class const _AgentRunRow({
   super.key,
   required final WorkspaceTabRecord tab,
   required final AgentStatusEntry status,
+  required final WorkspaceAgentGroupKind displayKind,
   required final bool isActive,
   required final VoidCallback onTap,
   required final VoidCallback onClose,
@@ -29,6 +30,7 @@ class _AgentRunRowState extends ConsumerState<_AgentRunRow> {
     final description = _agentRunLabel(
       tab: widget.tab,
       status: widget.status,
+      displayKind: widget.displayKind,
       showTabTitle: showTabTitle,
     );
     return MouseRegion(
@@ -58,7 +60,13 @@ class _AgentRunRowState extends ConsumerState<_AgentRunRow> {
               child: Row(
                 crossAxisAlignment: .center,
                 children: <Widget>[
-                  AgentRunStateIndicator(status: widget.status, size: 12),
+                  Tooltip(
+                    message: workspaceAgentGroupLabel(widget.displayKind),
+                    child: WorkspaceAgentGroupGlyph(
+                      kind: widget.displayKind,
+                      size: 12,
+                    ),
+                  ),
                   const SizedBox(width: AleraTokens.space6),
                   AgentIdentityIcon(
                     agentType: widget.status.agentType,
@@ -153,6 +161,7 @@ class _AgentRunRowState extends ConsumerState<_AgentRunRow> {
 String _agentRunLabel({
   required WorkspaceTabRecord tab,
   required AgentStatusEntry status,
+  required WorkspaceAgentGroupKind displayKind,
   required bool showTabTitle,
 }) {
   if (showTabTitle) {
@@ -161,11 +170,14 @@ String _agentRunLabel({
       return title;
     }
   }
-  return _agentRunDescription(status);
+  return _agentRunDescription(status, displayKind: displayKind);
 }
 
-String _agentRunDescription(AgentStatusEntry status) {
-  if (status.state == AgentStatusState.working) {
+String _agentRunDescription(
+  AgentStatusEntry status, {
+  required WorkspaceAgentGroupKind displayKind,
+}) {
+  if (displayKind == WorkspaceAgentGroupKind.working) {
     final toolName = status.toolName?.trim() ?? '';
     final toolInput = status.toolInput?.trim() ?? '';
     if (toolName.isNotEmpty && toolInput.isNotEmpty) {
@@ -179,5 +191,5 @@ String _agentRunDescription(AgentStatusEntry status) {
   if (assistantMessage.isNotEmpty) {
     return assistantMessage;
   }
-  return '${agentDisplayName(status.agentType)} · ${agentRunStateLabel(status)}';
+  return '${agentDisplayName(status.agentType)} · ${workspaceAgentGroupLabel(displayKind)}';
 }

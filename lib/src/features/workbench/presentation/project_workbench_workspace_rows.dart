@@ -305,6 +305,7 @@ class _WorkspaceRowState extends State<_WorkspaceRow> {
                             agentTooltip: hasAgents
                                 ? _agentTrayTooltip(
                                     runs: widget.agentRuns,
+                                    groups: widget.agentRunGroups,
                                     expanded: widget.expanded,
                                   )
                                 : null,
@@ -321,6 +322,7 @@ class _WorkspaceRowState extends State<_WorkspaceRow> {
                         child: _WorkspaceAgentRunList(
                           workspace: widget.workspace,
                           runs: widget.agentRuns,
+                          groups: widget.agentRunGroups,
                           workspaceIsActive: widget.isActive,
                           activeTabId: widget.activeTabId,
                           onSelectTerminal: widget.onSelectTerminal,
@@ -341,13 +343,17 @@ class _WorkspaceRowState extends State<_WorkspaceRow> {
 
 String _agentTrayTooltip({
   required List<WorkspaceAgentRun> runs,
+  required List<WorkspaceAgentRunGroup> groups,
   required bool expanded,
 }) {
   if (expanded) {
     return 'Hide Agent Runs';
   }
   if (runs.length == 1) {
-    return _agentRunDescription(runs.single.status);
+    return _agentRunDescription(
+      runs.single.status,
+      displayKind: groups.single.kind,
+    );
   }
   return 'Show Agent Runs';
 }

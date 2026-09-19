@@ -3,6 +3,7 @@ part of 'project_workbench_sidebar.dart';
 class const _WorkspaceAgentRunList({
   required final Workspace workspace,
   required final List<WorkspaceAgentRun> runs,
+  required final List<WorkspaceAgentRunGroup> groups,
   required final bool workspaceIsActive,
   required final String? activeTabId,
   required final _TerminalTabCallback onSelectTerminal,
@@ -10,6 +11,10 @@ class const _WorkspaceAgentRunList({
 }) extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
+    final kindBySessionId = <String, WorkspaceAgentGroupKind>{
+      for (final group in groups)
+        for (final run in group.runs) run.status.terminalSessionId: group.kind,
+    };
     return Column(
       crossAxisAlignment: .stretch,
       mainAxisSize: .min,
@@ -21,6 +26,7 @@ class const _WorkspaceAgentRunList({
             key: ValueKey<String>(run.tab.id),
             tab: run.tab,
             status: run.status,
+            displayKind: kindBySessionId[run.status.terminalSessionId]!,
             isActive: workspaceIsActive && activeTabId == run.tab.id,
             onTap: () => onSelectTerminal(workspace, run.tab.id),
             onClose: () => onCloseTerminal(workspace, run.tab.id),

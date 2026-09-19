@@ -298,10 +298,10 @@ void _registerAleraShellSidebarActionTests() {
     );
 
     expect(find.text('Bash'), findsOneWidget);
-    expect(find.text('Codex · Done'), findsOneWidget);
+    expect(find.text('Codex · Done (Unread)'), findsOneWidget);
     expect(
       find.byWidgetPredicate(
-        (widget) => widget is Tooltip && widget.message == 'Done',
+        (widget) => widget is Tooltip && widget.message == 'Done (Unread)',
       ),
       findsWidgets,
     );
