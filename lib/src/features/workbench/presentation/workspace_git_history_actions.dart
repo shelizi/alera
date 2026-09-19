@@ -56,6 +56,21 @@ Future<GitHistoryCommitMenuAction?> showGitHistoryCommitMenu(
     context: context,
     position: position,
     items: <PopupMenuEntry<GitHistoryCommitMenuAction>>[
+      PopupMenuItem<GitHistoryCommitMenuAction>(
+        key: const ValueKey<String>('git-history-commit-menu-identity'),
+        enabled: false,
+        height: 32,
+        child: Text(
+          'Commit · ${gitHistoryItemShortId(item)}',
+          maxLines: 1,
+          overflow: .ellipsis,
+          style: Theme.of(context).textTheme.labelMedium?.copyWith(
+            color: Theme.of(context).colorScheme.onSurface,
+            fontWeight: .w700,
+          ),
+        ),
+      ),
+      const PopupMenuDivider(height: 1),
       const AleraDropdownEntry<GitHistoryCommitMenuAction>(
         value: .copyHash,
         label: 'Copy Commit Hash',

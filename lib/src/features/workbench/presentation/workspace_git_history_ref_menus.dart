@@ -77,10 +77,31 @@ Future<GitHistoryRefMenuAction?> showGitHistoryRefMenuForKind(
   final copyLabel = kind == GitHistoryRefMenuKind.tag
       ? 'Copy Tag Name'
       : 'Copy Branch Name';
+  final identityLabel = switch (kind) {
+    GitHistoryRefMenuKind.tag => 'Tag · ${itemRef.name}',
+    GitHistoryRefMenuKind.localBranch ||
+    GitHistoryRefMenuKind.remoteBranch => 'Branch · ${itemRef.name}',
+    GitHistoryRefMenuKind.unsupported => itemRef.name,
+  };
   return showMenu<GitHistoryRefMenuAction>(
     context: context,
     position: position,
     items: <PopupMenuEntry<GitHistoryRefMenuAction>>[
+      PopupMenuItem<GitHistoryRefMenuAction>(
+        key: const ValueKey<String>('git-history-ref-menu-identity'),
+        enabled: false,
+        height: 32,
+        child: Text(
+          identityLabel,
+          maxLines: 1,
+          overflow: .ellipsis,
+          style: Theme.of(context).textTheme.labelMedium?.copyWith(
+            color: Theme.of(context).colorScheme.onSurface,
+            fontWeight: .w700,
+          ),
+        ),
+      ),
+      const PopupMenuDivider(height: 1),
       if (kind == GitHistoryRefMenuKind.localBranch) ...<
         PopupMenuEntry<GitHistoryRefMenuAction>
       >[

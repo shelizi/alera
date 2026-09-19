@@ -218,6 +218,7 @@ void main() {
     await tester.tap(find.text('Only Commit'), buttons: kSecondaryMouseButton);
     await tester.pumpAndSettle();
 
+    expect(find.text('Commit · abc123'), findsOneWidget);
     expect(find.text('Copy Commit Hash'), findsOneWidget);
     expect(find.text('Copy Commit Subject'), findsOneWidget);
     await tester.tap(find.text('Copy Commit Hash'));
@@ -294,6 +295,7 @@ void main() {
 
     await tester.tap(find.text('origin/main'), buttons: kSecondaryMouseButton);
     await tester.pumpAndSettle();
+    expect(find.text('Branch · origin/main'), findsOneWidget);
     expect(find.text('Checkout Remote Branch'), findsOneWidget);
     expect(find.text('Delete Remote Branch'), findsOneWidget);
     expect(find.text('Pull into Current Branch'), findsOneWidget);
@@ -304,6 +306,7 @@ void main() {
 
     await tester.tap(find.text('v1.0.0'), buttons: kSecondaryMouseButton);
     await tester.pumpAndSettle();
+    expect(find.text('Tag · v1.0.0'), findsOneWidget);
     expect(find.text('Push Tag'), findsOneWidget);
     expect(find.text('Delete Tag'), findsOneWidget);
     expect(find.text('Create Archive...'), findsOneWidget);
@@ -315,6 +318,7 @@ void main() {
 Future<void> _switchBranchFromMenu(WidgetTester tester) async {
   await tester.tap(find.text('feature'), buttons: kSecondaryMouseButton);
   await tester.pumpAndSettle();
+  expect(find.text('Branch · feature'), findsOneWidget);
   expect(find.text('Switch to Branch'), findsOneWidget);
   await tester.tap(find.text('Switch to Branch'));
   await tester.pumpAndSettle();
