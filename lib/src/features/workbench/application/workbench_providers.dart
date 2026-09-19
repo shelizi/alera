@@ -317,10 +317,9 @@ void terminalRuntimeExitCoordinator(Ref ref) {
     }
     ref
         .read(agentStatusControllerProvider.notifier)
-        .markTerminalExited(
+        .clearExitedTerminal(
           workspaceId: event.workspaceId,
           tabId: event.tabId,
-          exitCode: event.exitCode,
         );
     ref
         .read(workspaceActivityControllerProvider.notifier)

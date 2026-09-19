@@ -141,6 +141,34 @@ bool isAgentSessionResetHookEvent(AgentHookEvent event) {
   return event.agentType == AgentType.grok && eventName == 'SessionStart';
 }
 
+bool isAgentNewTurnHookEvent(AgentHookEvent event) {
+  final eventName = agentHookEventName(event);
+  return eventName != null && _isNewTurn(event.agentType, eventName);
+}
+
+/// True only for an explicit cancellation/interruption signal from the agent.
+///
+/// This intentionally does not treat generic failure events as user
+/// interruptions: a failed tool/turn may still be useful as a completed state,
+/// while Ctrl+C/cancel should remove the stale attention state entirely.
+bool isExplicitAgentInterruptHookEvent(AgentHookEvent event) {
+  final eventName = agentHookEventName(event);
+  if (eventName == 'Interrupt') {
+    return true;
+  }
+  if (event.payload['is_interrupt'] == true ||
+      event.payload['interrupted'] == true) {
+    return true;
+  }
+  final status = _readFirstString(event.payload, const <String>[
+    'status',
+  ])?.toLowerCase();
+  return status == 'interrupted' ||
+      status == 'cancelled' ||
+      status == 'canceled' ||
+      status == 'aborted';
+}
+
 String? agentHookEventName(AgentHookEvent event) {
   final explicit = _readFirstString(
     <String, Object?>{'hookEventName': event.hookEventName},

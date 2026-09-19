@@ -159,7 +159,8 @@ final class _FakeTabCleaner implements WorkbenchExplicitTabResourceCleaner {
   final List<String> events;
 
   @override
-  void closeTabLocalResources(String tabId) => events.add('local:$tabId');
+  void closeTabLocalResources(String tabId, {String? terminalSessionId}) =>
+      events.add('local:$tabId');
 }
 
 Workspace _workspace() => Workspace(

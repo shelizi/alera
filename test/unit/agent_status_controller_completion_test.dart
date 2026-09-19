@@ -28,7 +28,7 @@ void main() {
       addTearDown(container.dispose);
     });
 
-    test('normalizes Amp prompt, tool, assistant, and cancelled states', () {
+    test('normalizes Amp prompt, tool, assistant, and completed states', () {
       final controller = container.read(agentStatusControllerProvider.notifier);
 
       controller.applyHookEvent(
@@ -53,7 +53,7 @@ void main() {
           agentType: .amp,
           hookEventName: 'agent.end',
           payload: <String, Object?>{
-            'status': 'cancelled',
+            'status': 'done',
             'messages': <Object?>[
               <String, Object?>{
                 'role': 'assistant',
@@ -72,7 +72,7 @@ void main() {
       expect(entry.toolName, 'bash');
       expect(entry.toolInput, 'dart format .');
       expect(entry.lastAssistantMessage, 'All set.');
-      expect(entry.interrupted, isTrue);
+      expect(entry.interrupted, isNot(true));
     });
 
     test('keeps Amp lifecycle scoped to each completed thread', () {
@@ -142,7 +142,7 @@ void main() {
       expect(nextTurn.prompt, 'second turn');
     });
 
-    test('marks active terminal exits as inferred done', () {
+    test('clears active agent status when its terminal exits', () {
       final controller = container.read(agentStatusControllerProvider.notifier);
       controller.applyHookEvent(
         _event(
@@ -152,16 +152,12 @@ void main() {
         ),
       );
 
-      controller.markTerminalExited(
+      controller.clearExitedTerminal(
         workspaceId: 'workspace-1',
         tabId: 'tab-1',
-        exitCode: 0,
       );
 
-      final entry = container.read(agentStatusControllerProvider)['session-1']!;
-      expect(entry.state, AgentStatusState.done);
-      expect(entry.lastAssistantMessage, 'Terminal exited with code 0.');
-      expect(entry.stateStartedAt, times[1]);
+      expect(container.read(agentStatusControllerProvider), isEmpty);
     });
   });
 }

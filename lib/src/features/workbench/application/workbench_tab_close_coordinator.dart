@@ -27,7 +27,10 @@ final class WorkbenchTabCloseCoordinator {
       if (closedTab != null) {
         await _hostedReviewRetention.releaseTab(workspace, closedTab);
       }
-      _resourceCleaner.closeTabLocalResources(tabId);
+      _resourceCleaner.closeTabLocalResources(
+        tabId,
+        terminalSessionId: closedTab?.terminalSessionId,
+      );
     }
   }
 }

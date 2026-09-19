@@ -231,11 +231,7 @@ void main() {
         ),
       );
 
-      final entry = container.read(agentStatusControllerProvider)['session-1']!;
-      expect(entry.state, AgentStatusState.done);
-      expect(entry.interrupted, isTrue);
-      expect(entry.lastAssistantMessage, 'Cancelled by user.');
-      expect(entry.stateStartedAt, times[1]);
+      expect(container.read(agentStatusControllerProvider), isEmpty);
     });
 
     test('normalizes Claude failure completion as done without interrupt', () {
@@ -279,9 +275,7 @@ void main() {
         ),
       );
 
-      var entry = container.read(agentStatusControllerProvider)['session-1']!;
-      expect(entry.state, AgentStatusState.done);
-      expect(entry.interrupted, isTrue);
+      expect(container.read(agentStatusControllerProvider), isEmpty);
 
       controller.applyHookEvent(
         _event(
@@ -290,8 +284,18 @@ void main() {
           payload: <String, Object?>{},
         ),
       );
-      entry = container.read(agentStatusControllerProvider)['session-1']!;
-      expect(entry.state, AgentStatusState.done);
+      expect(container.read(agentStatusControllerProvider), isEmpty);
+
+      controller.applyHookEvent(
+        _event(
+          agentType: .codex,
+          hookEventName: 'UserPromptSubmit',
+          payload: <String, Object?>{'prompt': 'continue'},
+        ),
+      );
+      final entry = container.read(agentStatusControllerProvider)['session-1']!;
+      expect(entry.state, AgentStatusState.working);
+      expect(entry.prompt, 'continue');
     });
 
     test('normalizes Copilot blocked and done states', () {
@@ -384,7 +388,7 @@ void main() {
         _event(
           agentType: .cursor,
           hookEventName: 'stop',
-          payload: <String, Object?>{'status': 'interrupted'},
+          payload: <String, Object?>{'status': 'completed'},
         ),
       );
       controller.applyHookEvent(
@@ -401,8 +405,57 @@ void main() {
       expect(entry.toolName, 'MCP');
       expect(entry.toolInput, 'https://example.test/mcp');
       expect(entry.lastAssistantMessage, 'Final response.');
-      expect(entry.interrupted, isTrue);
+      expect(entry.interrupted, isNot(true));
       expect(entry.stateStartedAt, times[4]);
+    });
+
+    test('clears Cursor explicit interrupted completion', () {
+      final controller = container.read(agentStatusControllerProvider.notifier);
+
+      controller.applyHookEvent(
+        _event(
+          agentType: .cursor,
+          hookEventName: 'beforeSubmitPrompt',
+          payload: <String, Object?>{'prompt': 'ship cursor'},
+        ),
+      );
+      controller.applyHookEvent(
+        _event(
+          agentType: .cursor,
+          hookEventName: 'stop',
+          payload: <String, Object?>{'status': 'interrupted'},
+        ),
+      );
+      controller.applyHookEvent(
+        _event(
+          agentType: .cursor,
+          hookEventName: 'afterAgentResponse',
+          payload: <String, Object?>{'text': 'late response'},
+        ),
+      );
+
+      expect(container.read(agentStatusControllerProvider), isEmpty);
+    });
+
+    test('clears Amp cancelled completion', () {
+      final controller = container.read(agentStatusControllerProvider.notifier);
+
+      controller.applyHookEvent(
+        _event(
+          agentType: .amp,
+          hookEventName: 'agent.start',
+          payload: <String, Object?>{'message': 'ship amp'},
+        ),
+      );
+      controller.applyHookEvent(
+        _event(
+          agentType: .amp,
+          hookEventName: 'agent.end',
+          payload: <String, Object?>{'status': 'cancelled'},
+        ),
+      );
+
+      expect(container.read(agentStatusControllerProvider), isEmpty);
     });
 
     test('normalizes OpenCode message, waiting, and idle states', () {

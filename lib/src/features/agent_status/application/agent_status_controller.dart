@@ -64,7 +64,11 @@ class AgentStatusController extends _$AgentStatusController
         continue;
       }
       final previous = next[event.terminalSessionId];
+      final locallyCleared = _clearedAt.containsKey(event.terminalSessionId);
       if (isAgentSessionResetHookEvent(event)) {
+        if (locallyCleared) {
+          _clearedAt.remove(event.terminalSessionId);
+        }
         if (previous == null) {
           continue;
         }
@@ -93,6 +97,12 @@ class AgentStatusController extends _$AgentStatusController
       if (normalized == null) {
         continue;
       }
+      if (locallyCleared) {
+        if (!isAgentNewTurnHookEvent(event)) {
+          continue;
+        }
+        _clearedAt.remove(event.terminalSessionId);
+      }
       final identity = resolveAgentStatusIdentity(
         previous: previous,
         incomingAgentType: event.agentType,
@@ -101,6 +111,17 @@ class AgentStatusController extends _$AgentStatusController
         staleThreshold: agentStatusIdentityStaleThreshold,
       );
       if (identity.shouldIgnoreEvent) {
+        continue;
+      }
+      if (normalized.state == AgentStatusState.done &&
+          isExplicitAgentInterruptHookEvent(event)) {
+        _lifecycleGuard.clearTerminal(event.terminalSessionId);
+        _clearedAt[event.terminalSessionId] = receivedAt;
+        if (previous != null) {
+          next = <String, AgentStatusEntry>{...next}
+            ..remove(event.terminalSessionId);
+          changed = true;
+        }
         continue;
       }
       final stateStartedAt = previous?.state == normalized.state
@@ -131,30 +152,26 @@ class AgentStatusController extends _$AgentStatusController
     }
   }
 
-  void markTerminalExited({
+  void clearExitedTerminal({
     required String workspaceId,
     required String tabId,
-    required int exitCode,
   }) {
-    final current = state.values.where(
-      (entry) =>
-          entry.workspaceId == workspaceId &&
-          entry.tabId == tabId &&
-          entry.state != AgentStatusState.done,
-    );
+    final current = state.entries
+        .where(
+          (entry) =>
+              entry.value.workspaceId == workspaceId &&
+              entry.value.tabId == tabId,
+        )
+        .toList(growable: false);
     if (current.isEmpty) {
       return;
     }
-    final receivedAt = _now();
+    final clearedAt = _now();
     final next = <String, AgentStatusEntry>{...state};
     for (final entry in current) {
-      next[entry.terminalSessionId] = entry.copyWith(
-        state: .done,
-        updatedAt: receivedAt,
-        stateStartedAt: receivedAt,
-        lastAssistantMessage: 'Terminal exited with code $exitCode.',
-        interrupted: null,
-      );
+      _lifecycleGuard.clearTerminal(entry.key);
+      _clearedAt[entry.key] = clearedAt;
+      next.remove(entry.key);
     }
     state = next;
   }

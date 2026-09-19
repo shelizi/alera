@@ -33,24 +33,24 @@ void main() {
     expect(overlays, isEmpty);
   });
 
-  test(
-    'closeTabLocalResources closes one runtime tab and forgets its editor',
-    () {
-      final lifecycle = _FakeTerminalRuntimeLifecycle();
-      final forgotten = <String>[];
-      final cleaner = WorkbenchExplicitResourceCleaner(
-        runtimeLifecycle: lifecycle,
-        forgetEditorSession: forgotten.add,
-        removeWorkspaceActivity: (_) {},
-        clearAgentWorkspace: (_) {},
-      );
+  test('closeTabLocalResources closes runtime, forgets editor, and clears agent status', () {
+    final lifecycle = _FakeTerminalRuntimeLifecycle();
+    final forgotten = <String>[];
+    final terminalSessions = <String>[];
+    final cleaner = WorkbenchExplicitResourceCleaner(
+      runtimeLifecycle: lifecycle,
+      forgetEditorSession: forgotten.add,
+      removeWorkspaceActivity: (_) {},
+      clearAgentWorkspace: (_) {},
+      clearTerminalSession: terminalSessions.add,
+    );
 
-      cleaner.closeTabLocalResources('tab-1');
+    cleaner.closeTabLocalResources('tab-1', terminalSessionId: 'session-1');
 
-      expect(lifecycle.closedTabIds, <String>['tab-1']);
-      expect(forgotten, <String>['tab-1']);
-    },
-  );
+    expect(lifecycle.closedTabIds, <String>['tab-1']);
+    expect(forgotten, <String>['tab-1']);
+    expect(terminalSessions, <String>['session-1']);
+  });
 
   test('clearDeletedWorkspaceObservers clears workspace state and terminal-only observers', () async {
     final lifecycle = _FakeTerminalRuntimeLifecycle();

@@ -45,18 +45,14 @@ void _registerAgentStatusSnapshotTests(ProviderContainer Function() container) {
       _snapshotEntry(updatedAt: at),
     ]);
 
-    controller.markTerminalExited(
-      workspaceId: 'workspace-1',
-      tabId: 'tab-1',
-      exitCode: 0,
-    );
-    expect(controller.state['session-1']!.state, AgentStatusState.done);
+    controller.clearExitedTerminal(workspaceId: 'workspace-1', tabId: 'tab-1');
+    expect(controller.state, isEmpty);
 
     controller.replaceRuntimeSnapshot(<AgentStatusEntry>[
       _snapshotEntry(updatedAt: at),
     ]);
 
-    expect(controller.state['session-1']!.state, AgentStatusState.done);
+    expect(controller.state, isEmpty);
   });
 
   test('a genuinely newer snapshot wins over the local resolution', () {
@@ -64,11 +60,7 @@ void _registerAgentStatusSnapshotTests(ProviderContainer Function() container) {
     controller.replaceRuntimeSnapshot(<AgentStatusEntry>[
       _snapshotEntry(updatedAt: .utc(2026, 5, 26, 0, 30)),
     ]);
-    controller.markTerminalExited(
-      workspaceId: 'workspace-1',
-      tabId: 'tab-1',
-      exitCode: 0,
-    );
+    controller.clearExitedTerminal(workspaceId: 'workspace-1', tabId: 'tab-1');
 
     controller.replaceRuntimeSnapshot(<AgentStatusEntry>[
       _snapshotEntry(updatedAt: .utc(2026, 5, 26, 9)),

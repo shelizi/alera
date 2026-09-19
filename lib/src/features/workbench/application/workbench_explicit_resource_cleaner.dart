@@ -15,7 +15,7 @@ typedef WorkbenchExplicitAsyncResourceIdConsumer = Future<void> Function(
 /// controller can preserve the hosted-review failure ordering between local
 /// resource teardown and observer cleanup.
 abstract interface class WorkbenchExplicitTabResourceCleaner {
-  void closeTabLocalResources(String tabId);
+  void closeTabLocalResources(String tabId, {String? terminalSessionId});
 }
 
 abstract interface class WorkbenchExplicitWorkspaceResourceCleaner {
@@ -55,7 +55,10 @@ final class WorkbenchExplicitResourceCleaner
   final WorkbenchExplicitResourceIdConsumer? _clearTerminalSession;
   final WorkbenchExplicitAsyncResourceIdConsumer? _clearTerminalOverlays;
 
-  void closeTabLocalResources(String tabId) {
+  void closeTabLocalResources(String tabId, {String? terminalSessionId}) {
+    if (terminalSessionId != null && terminalSessionId.isNotEmpty) {
+      _clearTerminalSession?.call(terminalSessionId);
+    }
     _runtimeLifecycle.closeTab(tabId);
     _forgetEditorSession(tabId);
   }

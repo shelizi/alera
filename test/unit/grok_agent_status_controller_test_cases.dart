@@ -56,4 +56,37 @@ void _registerGrokAgentStatusControllerTests(
       isNot(contains('session-1')),
     );
   });
+
+  test('a Grok SessionStart releases a local clear for the new session', () {
+    final container = readContainer();
+    final controller = container.read(agentStatusControllerProvider.notifier);
+    controller.applyHookEvent(
+      _event(
+        agentType: .grok,
+        hookEventName: 'UserPromptSubmit',
+        payload: <String, Object?>{'prompt': 'old turn'},
+      ),
+    );
+    controller.clearTerminal('session-1');
+
+    controller.applyHookEvent(
+      _event(
+        agentType: .grok,
+        hookEventName: 'SessionStart',
+        payload: const <String, Object?>{},
+      ),
+    );
+    controller.applyHookEvent(
+      _event(
+        agentType: .grok,
+        hookEventName: 'UserPromptSubmit',
+        payload: <String, Object?>{'prompt': 'new turn'},
+      ),
+    );
+
+    expect(
+      container.read(agentStatusControllerProvider)['session-1']?.prompt,
+      'new turn',
+    );
+  });
 }
