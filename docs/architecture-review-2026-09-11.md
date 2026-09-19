@@ -63,7 +63,7 @@ Desktop feature 層級的直接 package import/export 圖出現一個包含 23 �
 | 資料儲存 | runtime.sqlite 是多個業務領域的權威；Drift 保留 local prefs/legacy migration | 為各類寫入明訂 revision、冪等、事件與恢復契約 |
 | Mobile | per-host 連線 owner、foreground retry、epoch、cleanup timeout 與窄 client surfaces 已存在 | 統一 direct/relay/restart 的狀態轉移契約，不共用桌面 UI state |
 | Cloud/edge | API、授權與 relay 分開；edge 有 frame/connection 上限；已有跨語言 relay fixture | 保留控制面與資料面區分，補端到端故障驗證與 CI 觸發策略 |
-| Agent integration | Rust 已有 agent registry，Dart 有各 agent hook normalizer 與 focused tests | 建立跨層 capability matrix，減少新增 agent 時的散落修改 |
+| Agent integration | Rust 已有 agent registry；Dart hook/status 已於 2026-09-20 收斂成 per-agent status + managed-hook adapters，並有 architecture guard | 下一步收斂 Rust/Dart capability schema 與跨層 fixture，減少 launch/quota/UI 等剩餘散落修改 |
 | CI/release | 已有 analyze、產碼重現、測試分片、coverage report、舊 host compatibility、cloud PostgreSQL tests、簽章更新檢查 | 補 architecture gate、adapter conformance、穩定效能基準與平台矩陣 |
 | Landing/infra | Landing 是獨立 Astro package；部署已有 plan validation 與 recovery 路徑 | 低優先維持 release metadata 一致性，不混進 runtime refactor |
 
@@ -149,7 +149,7 @@ WorkspaceGitDiffPanel 合計 4,394 行，widget state 持有 history future/resu
 
 Mobile HostConnectionController 已有 retry timer、lifecycle epoch、opening attempt 及 dispose；應先補 direct/relay 切換、background/foreground、host restart 與 provider dispose 交錯的轉移矩陣，再評估縮小對 concrete MobileRuntimeClient 的依賴。不要把 desktop 的 keepAlive/window 模型直接套進 mobile。[S12]
 
-Agent 支援分散在 Dart AgentType、hook normalization、安裝/launch、用量/UI 與 Rust registry。Rust registry 已存在，應以它及各能力的真實 owner 為基礎建立「agent × launch/hook/status/usage/restart」契約表，不要再建平行 registry。先選兩個差異明確的 agent 做一致性 fixture，再推導需要的 adapter seam。[S17]
+Agent 支援仍分散在 Dart AgentType、安裝/launch、用量/UI 與 Rust registry，但 hook/status 這一段已在 2026-09-20 落地 adapter seam：每個 Agent 各自擁有 `normalizers/<agent>_agent_hook_normalizer.dart` 與 `managed_hooks/<agent>_managed_agent_hook.dart`，共享 normalizer/lifecycle/identity/installer/scripts 不再允許 `AgentType.<agent>` 分支，並由 `tool/quality/agent_extension_guard.dart` 強制檢查。Devin 的 status policy 與 Windows Git-Bash→cmd bridge 也都回到 Devin 自己的 adapter，不再混在中央邏輯。後續仍應以 Rust registry 及各能力的真實 owner 為基礎建立「agent × launch/hook/status/usage/restart」契約表，並用跨層 fixture 收斂 Rust/Dart 行為；不要把已拆出的 per-agent policy 再合回新的中央 switch。[S17]
 
 Settings 同時是多功能的設定聚合與 UI 整合點。允許聚合各 feature 的公開設定型別，但避免業務層反向依賴設定頁面或 app barrel。local-only UI prefs、runtime operational settings、portable cloud configuration 應分清 serialization 與 authority，而非強行放進同一個全域 SettingsController 寫入佇列。[S4][S11][S18]
 
