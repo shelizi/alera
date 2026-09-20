@@ -142,6 +142,15 @@ impl ServerActor {
                         payload,
                     )?;
                 }
+                MobileDeferredRoute::WorkspaceFile(operation) => {
+                    self.start_mobile_workspace_file_request(
+                        client_id,
+                        request_id,
+                        operation,
+                        request_type,
+                        payload,
+                    )?;
+                }
             }
             return Ok(true);
         }
@@ -203,20 +212,6 @@ impl ServerActor {
                 self.require_auth(client_id)?;
                 self.require_request_allowed(client_id, request_type)?;
                 self.start_ai_assist_speech_message(client_id, request_id, payload)?;
-                Ok(true)
-            }
-            "mobile.workspaceQuickOpen.start"
-            | "mobile.workspaceQuickOpen.search"
-            | "mobile.workspaceFile.read"
-            | "mobile.promptAttachment.read" => {
-                self.require_auth(client_id)?;
-                self.require_request_allowed(client_id, request_type)?;
-                self.start_mobile_workspace_file_request(
-                    client_id,
-                    request_id,
-                    request_type,
-                    payload,
-                )?;
                 Ok(true)
             }
             "workspace.createManaged" => {

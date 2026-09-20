@@ -59,9 +59,18 @@ pub(crate) enum MobilePromptFileOperation {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum MobileWorkspaceFileOperation {
+    QuickOpenStart,
+    QuickOpenSearch,
+    WorkspaceFileRead,
+    PromptAttachmentRead,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum MobileDeferredRoute {
     PromptImage(MobilePromptImageOperation),
     PromptFile(MobilePromptFileOperation),
+    WorkspaceFile(MobileWorkspaceFileOperation),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -204,6 +213,18 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         "mobile.promptFile.cancel" => mobile_deferred_operation(MobileDeferredRoute::PromptFile(
             MobilePromptFileOperation::Cancel,
         )),
+        "mobile.workspaceQuickOpen.start" => mobile_deferred_operation(
+            MobileDeferredRoute::WorkspaceFile(MobileWorkspaceFileOperation::QuickOpenStart),
+        ),
+        "mobile.workspaceQuickOpen.search" => mobile_deferred_operation(
+            MobileDeferredRoute::WorkspaceFile(MobileWorkspaceFileOperation::QuickOpenSearch),
+        ),
+        "mobile.workspaceFile.read" => mobile_deferred_operation(
+            MobileDeferredRoute::WorkspaceFile(MobileWorkspaceFileOperation::WorkspaceFileRead),
+        ),
+        "mobile.promptAttachment.read" => mobile_deferred_operation(
+            MobileDeferredRoute::WorkspaceFile(MobileWorkspaceFileOperation::PromptAttachmentRead),
+        ),
 
         "project.remove" => serialized_mobile(SerializedRuntimeMutation::RemoveProject),
         "tab.remove" => serialized_mobile(SerializedRuntimeMutation::RemoveTab),
@@ -301,14 +322,10 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         | "mobile.aiDictation.transcribe"
         | "mobile.cloudEnrollment.create"
         | "mobile.cloudSubscriptions.refresh"
-        | "mobile.promptAttachment.read"
         | "mobile.relayAuthorization.renew"
         | "mobile.runtimeSettings.get"
         | "mobile.runtimeSettings.update"
         | "mobile.status.get"
-        | "mobile.workspaceFile.read"
-        | "mobile.workspaceQuickOpen.search"
-        | "mobile.workspaceQuickOpen.start"
         | "mobile.workspaceQuickOpen.stop"
         | "project.clone.cancel"
         | "project.clone.list"
@@ -534,6 +551,37 @@ mod tests {
             assert_eq!(
                 policy.mobile_deferred,
                 Some(MobileDeferredRoute::PromptFile(operation)),
+                "{request_type}"
+            );
+        }
+    }
+
+    #[test]
+    fn workspace_file_routes_are_typed_mobile_deferred_operations() {
+        let expected = [
+            (
+                "mobile.workspaceQuickOpen.start",
+                MobileWorkspaceFileOperation::QuickOpenStart,
+            ),
+            (
+                "mobile.workspaceQuickOpen.search",
+                MobileWorkspaceFileOperation::QuickOpenSearch,
+            ),
+            (
+                "mobile.workspaceFile.read",
+                MobileWorkspaceFileOperation::WorkspaceFileRead,
+            ),
+            (
+                "mobile.promptAttachment.read",
+                MobileWorkspaceFileOperation::PromptAttachmentRead,
+            ),
+        ];
+        for (request_type, operation) in expected {
+            let policy = request_route_policy(request_type);
+            assert!(policy.mobile_allowed, "{request_type}");
+            assert_eq!(
+                policy.mobile_deferred,
+                Some(MobileDeferredRoute::WorkspaceFile(operation)),
                 "{request_type}"
             );
         }

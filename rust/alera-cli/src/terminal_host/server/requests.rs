@@ -210,6 +210,9 @@ impl ServerActor {
                 MobileDeferredRoute::PromptFile(operation) => {
                     self.execute_mobile_prompt_file_operation(operation, payload)
                 }
+                MobileDeferredRoute::WorkspaceFile(_) => Err(HostError::state(format!(
+                    "Unknown terminal host request: {request_type}"
+                ))),
             };
         }
         match request_type {

@@ -285,6 +285,37 @@ async fn prompt_file_typed_route_keeps_inline_dispatch() {
     assert_eq!(cancelled, serde_json::json!({}));
 }
 
+#[tokio::test]
+async fn workspace_file_typed_route_keeps_deferred_only_dispatch() {
+    let dir = tempfile::tempdir().unwrap();
+    let (handle, _receiver) = crate::terminal_host::client::ClientHandle::test_channels();
+    let mut actor = crate::terminal_host::server::actor_test_harness::test_actor(
+        &dir,
+        std::collections::HashMap::from([(
+            1,
+            crate::terminal_host::server::actor_test_harness::local_client(handle),
+        )]),
+        std::collections::HashMap::new(),
+    )
+    .await;
+
+    let error = actor
+        .handle_request(
+            1,
+            "mobile.workspaceFile.read",
+            &serde_json::json!({
+                "workspaceId": "missing",
+                "relativePath": "README.md",
+            }),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.wire_message(),
+        "Unknown terminal host request: mobile.workspaceFile.read"
+    );
+}
+
 #[test]
 fn mobile_allowlist_still_excludes_raw_and_admin_mutations() {
     assert!(!mobile_request_allowed("workspace.upsert"));

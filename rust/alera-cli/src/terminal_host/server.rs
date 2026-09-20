@@ -249,6 +249,7 @@ mod workspace_sidebar_requests_tests;
 pub(crate) use disconnect_reason::DisconnectReason;
 pub(crate) use request_route_policy::MobilePromptFileOperation;
 pub(crate) use request_route_policy::MobilePromptImageOperation;
+pub(crate) use request_route_policy::MobileWorkspaceFileOperation;
 pub use server_command::ServerCommand;
 
 /// Delay before a debounced checkpoint write fires.
@@ -483,14 +484,11 @@ impl ServerActor {
             ServerCommand::MobileWorkspaceFileFinished {
                 client_id,
                 request_id,
-                request_type,
+                operation,
                 result,
-            } => self.handle_mobile_workspace_file_finished(
-                client_id,
-                request_id,
-                &request_type,
-                result,
-            ),
+            } => {
+                self.handle_mobile_workspace_file_finished(client_id, request_id, operation, result)
+            }
             ServerCommand::MobilePromptFileFinished {
                 client_id,
                 request_id,

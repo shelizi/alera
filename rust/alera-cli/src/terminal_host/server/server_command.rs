@@ -137,7 +137,7 @@ pub enum ServerCommand {
     MobileWorkspaceFileFinished {
         client_id: u64,
         request_id: i64,
-        request_type: String,
+        operation: super::MobileWorkspaceFileOperation,
         result: HostResult<Value>,
     },
     MobilePromptFileFinished {
