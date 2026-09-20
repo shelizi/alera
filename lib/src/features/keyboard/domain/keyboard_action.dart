@@ -35,6 +35,7 @@ enum KeyboardPlatform {
 enum KeyboardActionGroup(this.label) {
   global('Global'),
   workspace('Workspace'),
+  editor('Editor'),
   tabs('Tabs'),
   panes('Panes');
 
@@ -59,6 +60,8 @@ enum KeyboardActionId {
   toggleTerminalComposer,
   replaceInFiles,
   saveFile,
+  goToDefinition,
+  findReferences,
   newTerminalTab,
   closeTab,
   nextTab,
@@ -278,6 +281,22 @@ const List<KeybindingDefinition> keybindingDefinitions = <KeybindingDefinition>[
     description: 'Save the active editor file.',
     defaultBindings: .uniform(<String>['Mod+S']),
     searchKeywords: <String>['editor', 'write'],
+  ),
+  KeybindingDefinition(
+    id: .goToDefinition,
+    label: 'Go to Definition',
+    group: .editor,
+    description: 'Open the definition for the symbol at the editor cursor.',
+    defaultBindings: .uniform(<String>['F12']),
+    searchKeywords: <String>['editor', 'symbol', 'definition', 'navigation'],
+  ),
+  KeybindingDefinition(
+    id: .findReferences,
+    label: 'Find References',
+    group: .editor,
+    description: 'Find references for the symbol at the editor cursor.',
+    defaultBindings: .uniform(<String>['Shift+F12']),
+    searchKeywords: <String>['editor', 'symbol', 'references', 'navigation'],
   ),
   KeybindingDefinition(
     id: .newTerminalTab,

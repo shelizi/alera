@@ -11,6 +11,7 @@ import 'package:alera/src/features/keyboard/presentation/keyboard_command_dispat
 import 'package:alera/src/features/keyboard/presentation/keyboard_command_palette_dialog.dart';
 import 'package:alera/src/features/projects/domain/project.dart';
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
+import 'package:alera/src/features/workbench/application/workspace_file_service.dart';
 import 'package:alera/src/features/workbench/application/workbench_state.dart';
 import 'package:alera/src/features/workbench/domain/workbench_layout.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
@@ -224,6 +225,59 @@ void main() {
     await tester.pump();
 
     expect(controller.navigationCalls, <String>['back', 'forward']);
+  });
+
+  testWidgets('language navigation commands target the active editor session', (
+    tester,
+  ) async {
+    final workspace = _workspace();
+    final editorTab = _tab(id: 'editor-1', kind: .editor);
+    final controller = _DispatcherTestWorkbenchController(
+      WorkbenchState(
+        workspacesByProject: <String, List<Workspace>>{
+          workspace.projectId: <Workspace>[workspace],
+        },
+        tabsByWorkspace: <String, List<WorkspaceTabRecord>>{
+          workspace.id: <WorkspaceTabRecord>[editorTab],
+        },
+        layoutByWorkspace: <String, WorkbenchLayout>{
+          workspace.id: WorkbenchLayout.single(
+            workspaceId: workspace.id,
+            tabIds: <String>[editorTab.id],
+          ),
+        },
+        activeWorkspaceId: workspace.id,
+        activeTabIdByWorkspace: <String, String>{workspace.id: editorTab.id},
+      ),
+    );
+    final harness = await _pumpDispatcherHarness(
+      tester,
+      controller: controller,
+      runtime: _FakeTerminalRuntime(),
+    );
+    final commands = <EditorSessionNavigationCommand>[];
+    final handle = EditorSessionHandle(
+      isDirty: () => false,
+      save: () async {},
+      discard: () async {},
+      runNavigationCommand: (command) async => commands.add(command),
+    );
+    final registry = harness.ref.read(editorSessionRegistryProvider);
+    registry.register(editorTab.id, handle);
+    addTearDown(() => registry.unregister(editorTab.id, handle));
+    final dispatcher = KeyboardCommandDispatcher(
+      ref: harness.ref,
+      context: harness.context,
+    );
+
+    dispatcher.dispatch(.goToDefinition);
+    dispatcher.dispatch(.findReferences);
+    await tester.pump();
+
+    expect(commands, <EditorSessionNavigationCommand>[
+      EditorSessionNavigationCommand.goToDefinition,
+      EditorSessionNavigationCommand.findReferences,
+    ]);
   });
 
   testWidgets('closeSplit merges only multi-pane layouts', (tester) async {

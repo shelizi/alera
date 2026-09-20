@@ -92,6 +92,41 @@ void main() {
 
   group('EditorSessionRegistry', () {
     test(
+      'forwards language navigation only to the live editor session',
+      () async {
+        final registry = EditorSessionRegistry();
+        final commands = <EditorSessionNavigationCommand>[];
+        final handle = EditorSessionHandle(
+          isDirty: () => false,
+          save: () async {},
+          discard: () async {},
+          runNavigationCommand: (command) async => commands.add(command),
+        );
+
+        registry.register('tab-1', handle);
+        await registry.runNavigationCommand(
+          'tab-1',
+          EditorSessionNavigationCommand.goToDefinition,
+        );
+        await registry.runNavigationCommand(
+          'tab-1',
+          EditorSessionNavigationCommand.findReferences,
+        );
+        expect(commands, <EditorSessionNavigationCommand>[
+          EditorSessionNavigationCommand.goToDefinition,
+          EditorSessionNavigationCommand.findReferences,
+        ]);
+
+        registry.unregister('tab-1', handle);
+        await registry.runNavigationCommand(
+          'tab-1',
+          EditorSessionNavigationCommand.goToDefinition,
+        );
+        expect(commands, hasLength(2));
+      },
+    );
+
+    test(
       'keeps dirty document state after the editor widget unregisters',
       () async {
         final registry = EditorSessionRegistry();

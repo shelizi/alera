@@ -46,6 +46,13 @@ class EditorSessionRegistry extends ChangeNotifier
     await _sessions[tabId]?.save();
   }
 
+  Future<void> runNavigationCommand(
+    String tabId,
+    EditorSessionNavigationCommand command,
+  ) async {
+    await _sessions[tabId]?.runNavigationCommand?.call(command);
+  }
+
   Future<int> saveAll(WorkspaceFileService workspaceFiles) async {
     var savedCount = 0;
     final liveSessionIds = _sessions.keys.toList(growable: false);
@@ -366,7 +373,11 @@ class const EditorSessionHandle({
   final String Function()? snapshotText,
   final void Function(WorkspaceEditorRevealTarget target)? reveal,
   final Future<void> Function()? reload,
+  final Future<void> Function(EditorSessionNavigationCommand command)?
+  runNavigationCommand,
 });
+
+enum EditorSessionNavigationCommand { goToDefinition, findReferences }
 
 class const WorkspaceEditorRevealTarget({
   required final int line,

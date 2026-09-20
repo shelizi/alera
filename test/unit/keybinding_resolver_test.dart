@@ -106,6 +106,23 @@ void main() {
         'Alt+ArrowRight',
       );
     });
+
+    test('uses standard editor navigation defaults on every platform', () {
+      for (final platform in KeyboardPlatform.values) {
+        final resolver = KeybindingResolver(
+          settings: .defaults,
+          platform: platform,
+        );
+        expect(
+          resolver.effectiveChords(.goToDefinition).single.toCanonicalString(),
+          'F12',
+        );
+        expect(
+          resolver.effectiveChords(.findReferences).single.toCanonicalString(),
+          'Shift+F12',
+        );
+      }
+    });
   });
 
   test('worktree navigation remains terminal-first safe', () {
@@ -175,6 +192,23 @@ void main() {
         const KeyModifierState(),
       );
       expect(resolved, isNull);
+    });
+
+    test('resolves F12 language navigation actions', () {
+      final resolver = KeybindingResolver(
+        settings: .defaults,
+        platform: .windows,
+      );
+      expect(
+        resolver.resolveAction(_down(.f12), const KeyModifierState())?.id,
+        KeyboardActionId.goToDefinition,
+      );
+      expect(
+        resolver
+            .resolveAction(_down(.f12), const KeyModifierState(shift: true))
+            ?.id,
+        KeyboardActionId.findReferences,
+      );
     });
 
     test('ignores a disabled binding', () {

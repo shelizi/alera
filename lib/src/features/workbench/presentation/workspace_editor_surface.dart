@@ -126,6 +126,10 @@ class _WorkspaceEditorSurfaceState
       snapshotText: () => _controller.text,
       reveal: _revealOrDefer,
       reload: _reloadFromDiskAfterExternalChange,
+      runNavigationCommand: (command) => switch (command) {
+        EditorSessionNavigationCommand.goToDefinition => _goToDefinition(),
+        EditorSessionNavigationCommand.findReferences => _findReferences(),
+      },
     );
     _controller.addListener(_handleControllerChanged);
     _document = _editorSessions.documentFor(widget.tab.id);

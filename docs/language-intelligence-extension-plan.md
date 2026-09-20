@@ -940,8 +940,10 @@ Completed:
 - **D / P6 — generic navigation:** Go to Definition can open/reveal cross-file
   targets, multiple definitions can be selected, and Find References has a
   workspace-scoped grouped result panel with exact-range navigation and stale-
-  query suppression. These paths are capability/provider driven and do not
-  branch on concrete language ids.
+  query suppression. `F12` and `Shift+F12` route the active editor session to
+  Go to Definition and Find References through the generic keyboard command
+  registry. These paths are capability/provider driven and do not branch on
+  concrete language ids.
 - **E / P5 — Settings UX:** each first-wave language has optional semantic
   enablement, provider selection, executable override, and status display.
 - **F4 / P10 — Go semantic compatibility gate:** validated locally on Windows

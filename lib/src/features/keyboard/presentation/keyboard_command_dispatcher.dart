@@ -8,6 +8,7 @@ import 'package:alera/src/features/keyboard/presentation/keyboard_command_palett
 import 'package:alera/src/features/workbench/domain/workbench_layout.dart';
 import 'package:alera/src/features/workbench/domain/workbench_view_prefs.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
+import 'package:alera/src/features/workbench/application/workspace_file_service.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_runtime.dart';
 import 'package:alera/src/features/workbench/presentation/workbench_close_confirmation.dart';
 import 'package:alera/src/features/workbench/presentation/workbench_dialog_launchers.dart';
@@ -62,6 +63,10 @@ class const KeyboardCommandDispatcher({
         _showContextPanel(.search);
       case KeyboardActionId.saveFile:
         _saveActiveEditor();
+      case KeyboardActionId.goToDefinition:
+        _runActiveEditorNavigation(.goToDefinition);
+      case KeyboardActionId.findReferences:
+        _runActiveEditorNavigation(.findReferences);
       case KeyboardActionId.newTerminalTab:
         _newTerminalTab();
       case KeyboardActionId.closeTab:
@@ -186,6 +191,18 @@ class const KeyboardCommandDispatcher({
       return;
     }
     unawaited(ref.read(editorSessionRegistryProvider).save(tab.id));
+  }
+
+  void _runActiveEditorNavigation(EditorSessionNavigationCommand command) {
+    final tab = ref.read(workbenchControllerProvider).activeWorkspaceTab;
+    if (tab == null || tab.kind != WorkspaceTabKind.editor) {
+      return;
+    }
+    unawaited(
+      ref
+          .read(editorSessionRegistryProvider)
+          .runNavigationCommand(tab.id, command),
+    );
   }
 
   void _closeActiveTab() {

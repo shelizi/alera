@@ -161,6 +161,8 @@ const Map<String, String> _traditionalChineseShell = <String, String>{
   'File saved': '檔案已儲存',
   'Go to Definition': '跳至定義',
   'Find References': '尋找引用',
+  'Open the definition for the symbol at the editor cursor.': '開啟編輯器游標所在符號的定義。',
+  'Find references for the symbol at the editor cursor.': '尋找編輯器游標所在符號的引用。',
   'References': '引用',
   'No References': '沒有引用',
   'Run Find References from an editor to show project references here.':

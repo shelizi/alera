@@ -24,11 +24,15 @@ Workspace _workspace() {
   );
 }
 
-WorkspaceTabRecord _tab({required String id}) {
+WorkspaceTabRecord _tab({
+  required String id,
+  WorkspaceTabKind kind = WorkspaceTabKind.terminal,
+}) {
   return WorkspaceTabRecord(
     id: id,
     workspaceId: 'ws-1',
-    title: 'Terminal',
+    title: kind == WorkspaceTabKind.editor ? 'Editor' : 'Terminal',
+    kind: kind,
     createdAt: .utc(2026),
     updatedAt: .utc(2026),
   );
@@ -85,6 +89,7 @@ class _DispatcherTestWorkbenchController(
     String? targetGroupId,
     String? title,
     String? initialCommand,
+    Map<String, Object?>? initialManagedAgentLaunch,
     bool spawnOnCreate = false,
     bool initialCommandOnce = false,
     bool autoCloseOnSuccess = false,
