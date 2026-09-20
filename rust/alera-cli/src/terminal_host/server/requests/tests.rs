@@ -5,6 +5,9 @@ use crate::terminal_host::server::mobile_gateway_surface::mobile_request_allowed
 use crate::mobile_access::MOBILE_PROTOCOL_VERSION;
 use crate::terminal_host::server::mobile_gateway_surface::MOBILE_HELLO_CAPABILITIES;
 use crate::terminal_host::server::mobile_hello_requests::MobileHelloRequest;
+use alera_core::runtime::MobileAccessSettings;
+use std::net::Ipv4Addr;
+use tokio::net::TcpListener;
 // Only the hello-capabilities test needs this one, and importing it in the
 // parent would leave it unused in every non-test build.
 use crate::terminal_host::ai_assist_capabilities::{
@@ -21,6 +24,20 @@ use crate::terminal_host::protocol::{
     RUNTIME_HOST_TERMINAL_DEFERRED_INPUT_CAPABILITY, RUNTIME_HOST_TERMINAL_DRIVER_CAPABILITY,
     RUNTIME_HOST_TERMINAL_RESTART_CAPABILITY,
 };
+
+fn drain_event_names(
+    receiver: &mut tokio::sync::mpsc::UnboundedReceiver<crate::terminal_host::client::ClientFrame>,
+) -> Vec<String> {
+    let mut events = Vec::new();
+    while let Ok(frame) = receiver.try_recv() {
+        if let Some(value) = frame.as_json() {
+            if let Some(event) = value["event"].as_str() {
+                events.push(event.to_string());
+            }
+        }
+    }
+    events
+}
 
 #[tokio::test]
 async fn soft_shutdown_counts_a_queued_runtime_mutation() {
@@ -215,6 +232,195 @@ async fn authenticated_mobile_client_can_request_a_safe_runtime_restart() {
             )
     ));
     assert!(inbox_receiver.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn mobile_settings_update_failure_preserves_settings_gateway_and_broadcast_order() {
+    let blocked_listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let blocked_port = blocked_listener.local_addr().unwrap().port();
+    let current_probe = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let current_port = current_probe.local_addr().unwrap().port();
+    drop(current_probe);
+
+    let dir = tempfile::tempdir().unwrap();
+    let (handle, mut receiver) = crate::terminal_host::client::ClientHandle::test_channels();
+    let mut actor = crate::terminal_host::server::actor_test_harness::test_actor(
+        &dir,
+        std::collections::HashMap::from([(
+            1,
+            crate::terminal_host::server::actor_test_harness::local_client(handle),
+        )]),
+        std::collections::HashMap::new(),
+    )
+    .await;
+    let current = MobileAccessSettings {
+        enabled: true,
+        bind_host: Ipv4Addr::LOCALHOST.to_string(),
+        port: i64::from(current_port),
+        ..MobileAccessSettings::default()
+    };
+    actor
+        .apply_mobile_gateway_settings(MobileAccessSettings::default(), current.clone())
+        .await
+        .unwrap();
+    drain_event_names(&mut receiver);
+
+    actor
+        .handle_request(
+            1,
+            "mobile.settings.update",
+            &serde_json::json!({"port": blocked_port}),
+        )
+        .await
+        .expect_err("blocked port should reject the settings update");
+
+    let saved_after_failure = actor.runtime_store.mobile_access_settings().await.unwrap();
+    assert_eq!(saved_after_failure.enabled, current.enabled);
+    assert_eq!(
+        saved_after_failure.remote_access_enabled,
+        current.remote_access_enabled
+    );
+    assert_eq!(saved_after_failure.bind_host, current.bind_host);
+    assert_eq!(saved_after_failure.port, current.port);
+    assert_eq!(saved_after_failure.endpoint_mode, current.endpoint_mode);
+    assert_eq!(
+        saved_after_failure.netbird_endpoint,
+        current.netbird_endpoint
+    );
+    assert_eq!(
+        saved_after_failure.server_public_key_b64,
+        current.server_public_key_b64
+    );
+    assert!(actor.mobile_gateway.is_some());
+    assert!(!drain_event_names(&mut receiver)
+        .iter()
+        .any(|event| event == "mobileSettingsChanged"));
+
+    drop(blocked_listener);
+    let updated = actor
+        .handle_request(
+            1,
+            "mobile.settings.update",
+            &serde_json::json!({"port": blocked_port}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated["port"], i64::from(blocked_port));
+    assert!(drain_event_names(&mut receiver)
+        .iter()
+        .any(|event| event == "mobileSettingsChanged"));
+    actor.dispose().await;
+}
+
+#[tokio::test]
+async fn pairing_create_restarts_unchanged_gateway_only_when_missing() {
+    let probe = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let port = probe.local_addr().unwrap().port();
+    drop(probe);
+
+    let dir = tempfile::tempdir().unwrap();
+    let (handle, mut receiver) = crate::terminal_host::client::ClientHandle::test_channels();
+    let mut actor = crate::terminal_host::server::actor_test_harness::test_actor(
+        &dir,
+        std::collections::HashMap::from([(
+            1,
+            crate::terminal_host::server::actor_test_harness::local_client(handle),
+        )]),
+        std::collections::HashMap::new(),
+    )
+    .await;
+    let settings = MobileAccessSettings {
+        enabled: true,
+        bind_host: Ipv4Addr::LOCALHOST.to_string(),
+        port: i64::from(port),
+        ..MobileAccessSettings::default()
+    };
+    actor
+        .runtime_store
+        .set_mobile_access_settings(settings)
+        .await
+        .unwrap();
+    let payload = serde_json::json!({
+        "endpoint": format!("ws://127.0.0.1:{port}"),
+        "deviceName": "Phone",
+    });
+
+    let first = actor
+        .handle_request(1, "mobile.pairing.create", &payload)
+        .await
+        .unwrap();
+    assert!(first["pairingId"].as_str().is_some());
+    assert!(actor.mobile_gateway.is_some());
+    let first_events = drain_event_names(&mut receiver);
+    assert!(first_events
+        .iter()
+        .any(|event| event == "mobileGatewayChanged"));
+    assert!(first_events
+        .iter()
+        .any(|event| event == "mobilePairingsChanged"));
+
+    let second = actor
+        .handle_request(1, "mobile.pairing.create", &payload)
+        .await
+        .unwrap();
+    assert!(second["pairingId"].as_str().is_some());
+    assert!(actor.mobile_gateway.is_some());
+    let second_events = drain_event_names(&mut receiver);
+    assert!(!second_events
+        .iter()
+        .any(|event| event == "mobileGatewayChanged"));
+    assert!(second_events
+        .iter()
+        .any(|event| event == "mobilePairingsChanged"));
+    actor.dispose().await;
+}
+
+#[tokio::test]
+async fn pairing_offer_failure_keeps_selected_settings_and_skips_pairing_broadcast() {
+    let probe = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let port = probe.local_addr().unwrap().port();
+    drop(probe);
+
+    let dir = tempfile::tempdir().unwrap();
+    let (handle, mut receiver) = crate::terminal_host::client::ClientHandle::test_channels();
+    let mut actor = crate::terminal_host::server::actor_test_harness::test_actor(
+        &dir,
+        std::collections::HashMap::from([(
+            1,
+            crate::terminal_host::server::actor_test_harness::local_client(handle),
+        )]),
+        std::collections::HashMap::new(),
+    )
+    .await;
+    sqlx::query(
+        "CREATE TRIGGER fail_mobile_pairing_offer_insert \
+         BEFORE INSERT ON mobilePairingOffers \
+         BEGIN SELECT RAISE(ABORT, 'blocked pairing insert'); END",
+    )
+    .execute(actor.runtime_store.pool())
+    .await
+    .unwrap();
+
+    actor
+        .handle_request(
+            1,
+            "mobile.pairing.create",
+            &serde_json::json!({
+                "endpoint": format!("ws://127.0.0.1:{port}"),
+                "deviceName": "Phone",
+            }),
+        )
+        .await
+        .expect_err("pairing offer persistence should fail");
+
+    let saved = actor.runtime_store.mobile_access_settings().await.unwrap();
+    assert!(saved.enabled);
+    assert_eq!(saved.port, i64::from(port));
+    assert!(actor.mobile_gateway.is_some());
+    let events = drain_event_names(&mut receiver);
+    assert!(events.iter().any(|event| event == "mobileGatewayChanged"));
+    assert!(!events.iter().any(|event| event == "mobilePairingsChanged"));
+    actor.dispose().await;
 }
 
 #[test]

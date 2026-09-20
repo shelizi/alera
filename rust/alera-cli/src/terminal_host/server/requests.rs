@@ -2,9 +2,8 @@ use alera_core::runtime::WorkspaceTabRecord;
 use serde_json::{json, Map, Value};
 
 use crate::mobile_access::{
-    apply_mobile_settings_update_resolved, create_mobile_pairing_offer_for_settings,
-    prepare_mobile_pairing_offer_settings_resolved, MobileDevicePairRequest,
-    MobilePairingCreateRequest, MobileSettingsUpdateRequest,
+    apply_mobile_settings_update_resolved, prepare_mobile_pairing_offer_settings_resolved,
+    MobileDevicePairRequest, MobilePairingCreateRequest, MobileSettingsUpdateRequest,
 };
 use crate::ssh_bootstrap::SshTargetBootstrapRequest;
 use crate::terminal_host::host_error::{HostError, HostResult};
@@ -913,11 +912,9 @@ impl ServerActor {
             "mobile.settings.update" => {
                 self.require_auth(client_id)?;
                 let request: MobileSettingsUpdateRequest = parse_payload(payload)?;
-                let current = self
-                    .runtime_store
-                    .mobile_access_settings()
-                    .await
-                    .map_err(|error| HostError::state(error.to_string()))?;
+                let current = MobileDevicePairingRequestHandler::new(&self.runtime_store)
+                    .load_access_settings()
+                    .await?;
                 let next = apply_mobile_settings_update_resolved(current.clone(), request)
                     .await
                     .map_err(|error| HostError::state(error.to_string()))?;
@@ -930,11 +927,9 @@ impl ServerActor {
             "mobile.pairing.create" | "pairing.create" => {
                 self.require_auth(client_id)?;
                 let request: MobilePairingCreateRequest = parse_payload(payload)?;
-                let current = self
-                    .runtime_store
-                    .mobile_access_settings()
-                    .await
-                    .map_err(|error| HostError::state(error.to_string()))?;
+                let current = MobileDevicePairingRequestHandler::new(&self.runtime_store)
+                    .load_access_settings()
+                    .await?;
                 let (next, endpoint) =
                     prepare_mobile_pairing_offer_settings_resolved(current.clone(), &request)
                         .await
@@ -947,15 +942,9 @@ impl ServerActor {
                 } else {
                     self.apply_mobile_gateway_settings(current, next).await?
                 };
-                let value = json_result(
-                    create_mobile_pairing_offer_for_settings(
-                        &self.runtime_store,
-                        &settings,
-                        &request,
-                        endpoint,
-                    )
-                    .await,
-                )?;
+                let value = MobileDevicePairingRequestHandler::new(&self.runtime_store)
+                    .create_pairing_offer_for_settings(&settings, &request, endpoint)
+                    .await?;
                 self.broadcast_authenticated(event("mobilePairingsChanged", json!({})));
                 Ok(value)
             }
