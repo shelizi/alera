@@ -952,6 +952,12 @@ Completed:
   `CodeForgeSemanticProviderAdapter` path. The smoke covered initialize,
   `didOpen`, cross-file definition, references returning both declaration and
   call site, graceful shutdown, and process exit.
+- **F1 / P7 — C# semantic compatibility gate:** validated locally on Windows
+  with `csharp-ls 0.28.0` and .NET SDK 10.0.401 through the built-in
+  `csharp.csharp-ls` descriptor and production runtime/adapter path. The
+  smoke covered project restore/build, initialize, `didOpen`, cross-file
+  definition, references spanning declaration and call site, graceful shutdown,
+  and process exit.
 - **F2 / P8 — Python semantic compatibility gate:** validated locally on
   Windows with `pyright 1.1.414` through the built-in `python.pyright`
   descriptor and production runtime/adapter path. The smoke covered
@@ -990,9 +996,8 @@ Completed:
   detach. The architecture guard also covers the Definition/References editor
   integration surfaces.
 
-Still pending for first-release semantic validation:
-
-- **F1 C#:** real `csharp-ls` startup/definition/references smoke.
+All first-release semantic validation lanes are now complete for C#, Python,
+Rust, Go, PHP, TypeScript, and JavaScript.
 
 Known status semantics:
 
