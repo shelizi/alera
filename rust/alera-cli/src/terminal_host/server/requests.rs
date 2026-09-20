@@ -2,11 +2,9 @@ use alera_core::runtime::WorkspaceTabRecord;
 use serde_json::{json, Map, Value};
 
 use crate::mobile_access::{
-    apply_mobile_settings_update_resolved, cancel_mobile_pairing_offer,
-    create_mobile_pairing_offer_for_settings, delete_mobile_device, list_mobile_devices,
-    pair_mobile_device, prepare_mobile_pairing_offer_settings_resolved, rename_mobile_device,
-    revoke_mobile_device, MobileDevicePairRequest, MobilePairingCreateRequest,
-    MobileSettingsUpdateRequest,
+    apply_mobile_settings_update_resolved, create_mobile_pairing_offer_for_settings,
+    prepare_mobile_pairing_offer_settings_resolved, MobileDevicePairRequest,
+    MobilePairingCreateRequest, MobileSettingsUpdateRequest,
 };
 use crate::ssh_bootstrap::{build_ssh_bootstrap_plan, SshTargetBootstrapRequest};
 use crate::terminal_host::host_error::{HostError, HostResult};
@@ -17,6 +15,7 @@ use crate::terminal_host::session::SessionDriver;
 
 use super::deferred_read_requests::DeferredReadRequestHandler;
 use super::host_service_requests::required_non_blank;
+use super::mobile_device_pairing_requests::MobileDevicePairingRequestHandler;
 use super::project_registration_requests::ProjectRegistrationRequestHandler;
 use super::project_requests::{ProjectStoreChange, ProjectStoreRequestHandler};
 pub(super) use super::request_payloads::{json_result, parse_payload, require_string_key};
@@ -218,7 +217,9 @@ impl ServerActor {
             "mobile.hello" => self.handle_mobile_hello(client_id, payload).await,
             "mobile.device.pair" if self.is_mobile_client(client_id) => {
                 let request: MobileDevicePairRequest = parse_payload(payload)?;
-                let value = json_result(pair_mobile_device(&self.runtime_store, request).await)?;
+                let value = MobileDevicePairingRequestHandler::new(&self.runtime_store)
+                    .pair_device(request)
+                    .await?;
                 self.broadcast_authenticated(event("mobileDevicesChanged", json!({})));
                 self.broadcast_authenticated(event("mobilePairingsChanged", json!({})));
                 Ok(value)
@@ -958,7 +959,9 @@ impl ServerActor {
             "mobile.pairing.cancel" => {
                 self.require_auth(client_id)?;
                 let id = require_string_key(payload, "id")?;
-                json_result(cancel_mobile_pairing_offer(&self.runtime_store, &id).await)?;
+                MobileDevicePairingRequestHandler::new(&self.runtime_store)
+                    .cancel_pairing(&id)
+                    .await?;
                 self.broadcast_authenticated(event("mobilePairingsChanged", json!({})));
                 Ok(json!({}))
             }
@@ -968,12 +971,16 @@ impl ServerActor {
                     .get("includeRevoked")
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
-                json_result(list_mobile_devices(&self.runtime_store, include_revoked).await)
+                MobileDevicePairingRequestHandler::new(&self.runtime_store)
+                    .list_devices(include_revoked)
+                    .await
             }
             "mobile.device.pair" => {
                 self.require_auth(client_id)?;
                 let request: MobileDevicePairRequest = parse_payload(payload)?;
-                let value = json_result(pair_mobile_device(&self.runtime_store, request).await)?;
+                let value = MobileDevicePairingRequestHandler::new(&self.runtime_store)
+                    .pair_device(request)
+                    .await?;
                 self.broadcast_authenticated(event("mobileDevicesChanged", json!({})));
                 self.broadcast_authenticated(event("mobilePairingsChanged", json!({})));
                 Ok(value)
@@ -981,7 +988,9 @@ impl ServerActor {
             "mobile.device.revoke" => {
                 self.require_auth(client_id)?;
                 let id = require_string_key(payload, "id")?;
-                json_result(revoke_mobile_device(&self.runtime_store, &id).await)?;
+                MobileDevicePairingRequestHandler::new(&self.runtime_store)
+                    .revoke_device(&id)
+                    .await?;
                 self.dispose_mobile_clients_for_device(&id).await;
                 self.broadcast_authenticated(event("mobileDevicesChanged", json!({})));
                 Ok(json!({}))
@@ -989,7 +998,9 @@ impl ServerActor {
             "mobile.device.delete" => {
                 self.require_auth(client_id)?;
                 let id = require_string_key(payload, "id")?;
-                json_result(delete_mobile_device(&self.runtime_store, &id).await)?;
+                MobileDevicePairingRequestHandler::new(&self.runtime_store)
+                    .delete_device(&id)
+                    .await?;
                 self.broadcast_authenticated(event("mobileDevicesChanged", json!({})));
                 Ok(json!({}))
             }
@@ -997,9 +1008,9 @@ impl ServerActor {
                 self.require_auth(client_id)?;
                 let id = require_string_key(payload, "id")?;
                 let display_name = require_string_key(payload, "displayName")?;
-                let value = json_result(
-                    rename_mobile_device(&self.runtime_store, &id, &display_name).await,
-                )?;
+                let value = MobileDevicePairingRequestHandler::new(&self.runtime_store)
+                    .rename_device(&id, &display_name)
+                    .await?;
                 self.broadcast_authenticated(event("mobileDevicesChanged", json!({})));
                 Ok(value)
             }

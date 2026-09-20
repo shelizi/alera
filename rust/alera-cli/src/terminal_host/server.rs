@@ -131,6 +131,7 @@ mod lifecycle;
 #[cfg(test)]
 mod managed_workspace_cleanup_tests;
 mod managed_workspace_requests;
+mod mobile_device_pairing_requests;
 mod mobile_gateway_replacement;
 mod mobile_gateway_surface;
 mod mobile_hello_requests;
