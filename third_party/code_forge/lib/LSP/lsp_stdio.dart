@@ -259,11 +259,28 @@ class LspStdioConfig extends LspConfig {
   }
 
   @override
-  Future<Map<String, dynamic>> sendResponse(
-    int id,
-    List<dynamic> result,
-  ) async {
+  Future<Map<String, dynamic>> sendResponse(Object id, Object? result) async {
     final request = {'jsonrpc': '2.0', 'id': id, 'result': result};
+    await _sendLspMessage(request);
+    return request;
+  }
+
+  @override
+  Future<Map<String, dynamic>> sendErrorResponse(
+    Object id, {
+    required int code,
+    required String message,
+    Object? data,
+  }) async {
+    final error = <String, dynamic>{'code': code, 'message': message};
+    if (data != null) {
+      error['data'] = data;
+    }
+    final request = <String, dynamic>{
+      'jsonrpc': '2.0',
+      'id': id,
+      'error': error,
+    };
     await _sendLspMessage(request);
     return request;
   }

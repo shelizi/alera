@@ -174,6 +174,79 @@ void main() {
     },
   );
 
+  test('server configuration requests are answered while initialization is in progress', () async {
+    final transport = _FakeTransport(
+      initializationRequest: <String, dynamic>{
+        'jsonrpc': '2.0',
+        'id': 'config-1',
+        'method': 'workspace/configuration',
+        'params': <String, dynamic>{
+          'items': <Map<String, dynamic>>[
+            <String, dynamic>{'section': 'gopls'},
+            <String, dynamic>{'section': 'gopls.ui'},
+          ],
+        },
+      },
+    );
+    final runtime = CodeForgeLanguageServerRuntime(
+      transportFactory: (_) async => transport,
+    );
+
+    final session = await runtime.start(
+      LanguageServerRuntimeStartRequest(
+        provider: provider,
+        executable: 'gopls',
+        workspaceRoot: r'C:\repo',
+        target: LanguageServerTarget.localWorkspace,
+      ),
+    );
+
+    expect(transport.sentResponses, <Map<String, dynamic>>[
+      <String, dynamic>{
+        'id': 'config-1',
+        'result': <Map<String, dynamic>>[
+          <String, dynamic>{},
+          <String, dynamic>{},
+        ],
+      },
+    ]);
+    await runtime.stop(session);
+  });
+
+  test('unknown server requests receive method-not-found responses', () async {
+    final transport = _FakeTransport();
+    final runtime = CodeForgeLanguageServerRuntime(
+      transportFactory: (_) async => transport,
+    );
+    final session = await runtime.start(
+      LanguageServerRuntimeStartRequest(
+        provider: provider,
+        executable: 'gopls',
+        workspaceRoot: r'C:\repo',
+        target: LanguageServerTarget.localWorkspace,
+      ),
+    );
+
+    transport.emit(<String, dynamic>{
+      'jsonrpc': '2.0',
+      'id': 42,
+      'method': 'custom/unsupportedRequest',
+      'params': <String, dynamic>{},
+    });
+    await Future<void>.delayed(Duration.zero);
+
+    expect(transport.sentErrors, <Map<String, dynamic>>[
+      <String, dynamic>{
+        'id': 42,
+        'code': -32601,
+        'message':
+            'Unsupported language-server request: custom/unsupportedRequest',
+        'data': null,
+      },
+    ]);
+    await runtime.stop(session);
+  });
+
   test(
     'initialization failure disposes transport and does not return a session',
     () async {
@@ -231,10 +304,16 @@ Future<CodeForgeLanguageServerTransport> _unexpectedTransportFactory(
 ) => throw StateError('transport must not be started');
 
 final class _FakeTransport implements CodeForgeLanguageServerTransport {
-  _FakeTransport({this.initializeError});
+  _FakeTransport({this.initializeError, this.initializationRequest});
 
   final Object? initializeError;
+  final Map<String, dynamic>? initializationRequest;
   final Completer<int> exitCode = Completer<int>();
+  final StreamController<Map<String, dynamic>> _responses =
+      StreamController<Map<String, dynamic>>.broadcast();
+  final List<Map<String, dynamic>> sentResponses = <Map<String, dynamic>>[];
+  final List<Map<String, dynamic>> sentErrors = <Map<String, dynamic>>[];
+  Completer<void>? _initializationReply;
   int initializeCalls = 0;
   int shutdownCalls = 0;
   int exitCalls = 0;
@@ -248,6 +327,12 @@ final class _FakeTransport implements CodeForgeLanguageServerTransport {
     initializeCalls += 1;
     final error = initializeError;
     if (error != null) throw error;
+    final request = initializationRequest;
+    if (request != null) {
+      _initializationReply = Completer<void>();
+      _responses.add(request);
+      await _initializationReply!.future;
+    }
   }
 
   @override
@@ -263,6 +348,7 @@ final class _FakeTransport implements CodeForgeLanguageServerTransport {
   @override
   void dispose() {
     disposeCalls += 1;
+    unawaited(_responses.close());
     if (!exitCode.isCompleted) exitCode.complete(0);
   }
 
@@ -279,5 +365,35 @@ final class _FakeTransport implements CodeForgeLanguageServerTransport {
   }) => throw UnimplementedError();
 
   @override
-  Stream<Map<String, dynamic>> get responses => const Stream.empty();
+  Future<void> sendResponse({required Object id, Object? result}) async {
+    sentResponses.add(<String, dynamic>{'id': id, 'result': result});
+    final reply = _initializationReply;
+    if (reply != null && !reply.isCompleted) {
+      reply.complete();
+    }
+  }
+
+  @override
+  Future<void> sendErrorResponse({
+    required Object id,
+    required int code,
+    required String message,
+    Object? data,
+  }) async {
+    sentErrors.add(<String, dynamic>{
+      'id': id,
+      'code': code,
+      'message': message,
+      'data': data,
+    });
+    final reply = _initializationReply;
+    if (reply != null && !reply.isCompleted) {
+      reply.complete();
+    }
+  }
+
+  void emit(Map<String, dynamic> message) => _responses.add(message);
+
+  @override
+  Stream<Map<String, dynamic>> get responses => _responses.stream;
 }

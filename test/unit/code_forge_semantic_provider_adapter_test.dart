@@ -322,4 +322,15 @@ final class _FakeSemanticTransport implements CodeForgeLanguageServerTransport {
     requests.add(_RecordedMessage(method, params));
     return <String, dynamic>{'result': nextResult};
   }
+
+  @override
+  Future<void> sendResponse({required Object id, Object? result}) async {}
+
+  @override
+  Future<void> sendErrorResponse({
+    required Object id,
+    required int code,
+    required String message,
+    Object? data,
+  }) async {}
 }

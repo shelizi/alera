@@ -57,14 +57,27 @@ abstract interface class CodeForgeLanguageServerTransport {
     required Map<String, dynamic> params,
   });
 
+  Future<void> sendResponse({required Object id, Object? result});
+
+  Future<void> sendErrorResponse({
+    required Object id,
+    required int code,
+    required String message,
+    Object? data,
+  });
+
   void dispose();
 }
 
 final class CodeForgeLanguageServerSession
     implements LanguageServerRuntimeSession {
-  const CodeForgeLanguageServerSession._(this.transport);
+  const CodeForgeLanguageServerSession._(
+    this.transport,
+    this.serverRequestSubscription,
+  );
 
   final CodeForgeLanguageServerTransport transport;
+  final StreamSubscription<Map<String, dynamic>> serverRequestSubscription;
 }
 
 final class CodeForgeLanguageServerRuntime
@@ -177,13 +190,22 @@ final class CodeForgeLanguageServerRuntime
         capabilities: request.provider.capabilities,
       ),
     );
+    final serverRequestSubscription = _listenForServerRequests(
+      transport,
+      workspaceRoot: request.workspaceRoot,
+      isWindows: _isWindows,
+    );
     try {
       await transport.initialize();
     } catch (_) {
+      await serverRequestSubscription.cancel();
       _disposeQuietly(transport);
       rethrow;
     }
-    return CodeForgeLanguageServerSession._(transport);
+    return CodeForgeLanguageServerSession._(
+      transport,
+      serverRequestSubscription,
+    );
   }
 
   @override
@@ -194,7 +216,8 @@ final class CodeForgeLanguageServerRuntime
 
   @override
   Future<void> stop(LanguageServerRuntimeSession session) async {
-    final transport = _requireSession(session).transport;
+    final codeForgeSession = _requireSession(session);
+    final transport = codeForgeSession.transport;
     try {
       await transport.shutdown();
     } catch (_) {
@@ -205,6 +228,7 @@ final class CodeForgeLanguageServerRuntime
     } catch (_) {
       // Best-effort graceful exit; dispose below is the final process cleanup.
     }
+    await codeForgeSession.serverRequestSubscription.cancel();
     _disposeQuietly(transport);
   }
 
@@ -254,6 +278,101 @@ final class CodeForgeLanguageServerRuntime
       transport.dispose();
     } catch (_) {
       // Process cleanup is best effort after shutdown/init failure.
+    }
+  }
+
+  static StreamSubscription<Map<String, dynamic>> _listenForServerRequests(
+    CodeForgeLanguageServerTransport transport, {
+    required String workspaceRoot,
+    required bool isWindows,
+  }) => transport.responses.listen((message) {
+    final id = message['id'];
+    final method = message['method'];
+    if (id == null || method is! String) {
+      return;
+    }
+    unawaited(
+      _respondToServerRequest(
+        transport,
+        id: id,
+        method: method,
+        params: message['params'],
+        workspaceRoot: workspaceRoot,
+        isWindows: isWindows,
+      ),
+    );
+  });
+
+  static Future<void> _respondToServerRequest(
+    CodeForgeLanguageServerTransport transport, {
+    required Object id,
+    required String method,
+    required Object? params,
+    required String workspaceRoot,
+    required bool isWindows,
+  }) async {
+    try {
+      switch (method) {
+        case 'workspace/configuration':
+          final items = params is Map ? params['items'] : null;
+          final count = items is List ? items.length : 0;
+          await transport.sendResponse(
+            id: id,
+            result: List<Map<String, dynamic>>.generate(
+              count,
+              (_) => <String, dynamic>{},
+              growable: false,
+            ),
+          );
+          return;
+        case 'client/registerCapability':
+        case 'client/unregisterCapability':
+        case 'window/workDoneProgress/create':
+        case 'window/showMessageRequest':
+        case 'workspace/codeLens/refresh':
+        case 'workspace/semanticTokens/refresh':
+        case 'workspace/inlayHint/refresh':
+        case 'workspace/diagnostic/refresh':
+          await transport.sendResponse(id: id, result: null);
+          return;
+        case 'workspace/workspaceFolders':
+          await transport.sendResponse(
+            id: id,
+            result: <Map<String, dynamic>>[
+              <String, dynamic>{
+                'uri': Uri.directory(
+                  workspaceRoot,
+                  windows: isWindows,
+                ).toString(),
+                'name': 'workspace',
+              },
+            ],
+          );
+          return;
+        case 'workspace/applyEdit':
+          await transport.sendResponse(
+            id: id,
+            result: <String, dynamic>{
+              'applied': false,
+              'failureReason': 'Workspace edits are not supported by Alera language intelligence.',
+            },
+          );
+          return;
+        case 'window/showDocument':
+          await transport.sendResponse(
+            id: id,
+            result: const <String, dynamic>{'success': false},
+          );
+          return;
+        default:
+          await transport.sendErrorResponse(
+            id: id,
+            code: -32601,
+            message: 'Unsupported language-server request: $method',
+          );
+      }
+    } catch (_) {
+      // The language-server process may exit while a response is being sent.
     }
   }
 }
@@ -331,6 +450,26 @@ final class _LspStdioCodeForgeTransport
     required String method,
     required Map<String, dynamic> params,
   }) => _config.sendNotification(method: method, params: params);
+
+  @override
+  Future<void> sendResponse({required Object id, Object? result}) async {
+    await _config.sendResponse(id, result);
+  }
+
+  @override
+  Future<void> sendErrorResponse({
+    required Object id,
+    required int code,
+    required String message,
+    Object? data,
+  }) async {
+    await _config.sendErrorResponse(
+      id,
+      code: code,
+      message: message,
+      data: data,
+    );
+  }
 
   @override
   void dispose() => _config.dispose();
