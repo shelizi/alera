@@ -1,6 +1,7 @@
 use alera_core::runtime::{
     AutomationActor, AutomationActorKind, AutomationAgentPolicy, AutomationDefinition,
-    AutomationProjectPolicy, AutomationTarget, ProjectKind, RuntimeStore,
+    AutomationProjectPolicy, AutomationRun, AutomationTarget, Project, ProjectKind, RuntimeStore,
+    Workspace,
 };
 use chrono::Utc;
 use serde_json::{json, Map, Value};
@@ -9,7 +10,39 @@ use std::path::Path;
 use crate::terminal_host::host_error::{HostError, HostResult};
 
 use super::terminal_startup_commands::agent_profile_id;
+use super::workspace_tab_requests::WorkspaceTabStoreHandler;
 use super::ServerActor;
+
+struct AutomationPolicyContextStoreHandler<'a> {
+    runtime_store: &'a RuntimeStore,
+}
+
+impl<'a> AutomationPolicyContextStoreHandler<'a> {
+    const fn new(runtime_store: &'a RuntimeStore) -> Self {
+        Self { runtime_store }
+    }
+
+    async fn find_run(&self, run_id: &str) -> HostResult<Option<AutomationRun>> {
+        self.runtime_store
+            .find_automation_run(run_id)
+            .await
+            .map_err(state_error)
+    }
+
+    async fn find_workspace(&self, workspace_id: &str) -> HostResult<Option<Workspace>> {
+        self.runtime_store
+            .find_workspace(workspace_id)
+            .await
+            .map_err(state_error)
+    }
+
+    async fn find_project(&self, project_id: &str) -> HostResult<Option<Project>> {
+        self.runtime_store
+            .find_project(project_id)
+            .await
+            .map_err(state_error)
+    }
+}
 
 struct AutomationAgentPolicyStoreHandler<'a> {
     runtime_store: &'a RuntimeStore,
@@ -133,11 +166,9 @@ impl ServerActor {
         let identity = super::automation_run_target_requests::requested_target_identity(payload)?;
         self.verify_live_target_identity(client_id, &identity)
             .await?;
-        let run = self
-            .runtime_store
-            .find_automation_run(run_id)
-            .await
-            .map_err(|error| HostError::state(error.to_string()))?
+        let run = AutomationPolicyContextStoreHandler::new(&self.runtime_store)
+            .find_run(run_id)
+            .await?
             .ok_or_else(|| HostError::state(format!("automation run not found: {run_id}")))?;
         if run
             .target_identity
@@ -210,20 +241,11 @@ impl ServerActor {
                 ..
             } => source_workspace_id,
         };
-        let Some(workspace) = self
-            .runtime_store
-            .find_workspace(source_workspace_id)
-            .await
-            .map_err(|error| HostError::state(error.to_string()))?
-        else {
+        let context = AutomationPolicyContextStoreHandler::new(&self.runtime_store);
+        let Some(workspace) = context.find_workspace(source_workspace_id).await? else {
             return Err(HostError::state("automation target workspace is missing"));
         };
-        let Some(project) = self
-            .runtime_store
-            .find_project(&workspace.project_id)
-            .await
-            .map_err(|error| HostError::state(error.to_string()))?
-        else {
+        let Some(project) = context.find_project(&workspace.project_id).await? else {
             return Err(HostError::state("automation target project is missing"));
         };
         if matches!(definition.target, AutomationTarget::ManagedWorkspace { .. })
@@ -257,11 +279,9 @@ impl ServerActor {
     ) -> HostResult<Option<String>> {
         match &definition.target {
             AutomationTarget::ExistingTab { tab_id, .. } => {
-                let tab = self
-                    .runtime_store
-                    .find_workspace_tab(tab_id)
-                    .await
-                    .map_err(|error| HostError::state(error.to_string()))?
+                let tab = WorkspaceTabStoreHandler::new(&self.runtime_store)
+                    .find(tab_id)
+                    .await?
                     .ok_or_else(|| HostError::state("automation existing tab is missing"))?;
                 Ok(agent_profile_id(&tab).map(str::to_string))
             }
@@ -356,10 +376,9 @@ async fn repository_declared_for_project(
     runtime_store: &RuntimeStore,
     project_id: &str,
 ) -> HostResult<bool> {
-    let Some(project) = runtime_store
+    let Some(project) = AutomationPolicyContextStoreHandler::new(runtime_store)
         .find_project(project_id)
-        .await
-        .map_err(|error| HostError::state(error.to_string()))?
+        .await?
     else {
         return Ok(false);
     };
@@ -466,19 +485,87 @@ fn state_error(error: impl std::fmt::Display) -> HostError {
 #[cfg(test)]
 mod tests {
     use alera_core::runtime::{
-        AgentProfile, AgentProfileLaunchMode, AutomationAgentPolicy, RuntimeStore,
+        AgentProfile, AgentProfileLaunchMode, AutomationActor, AutomationActorKind,
+        AutomationAgentPolicy, AutomationDefinition, AutomationProjectPolicy, AutomationRun,
+        AutomationTarget, AutomationTargetIdentity, Project, ProjectKind, RuntimeStore, Workspace,
+        WorkspaceTabRecord,
     };
     use chrono::Utc;
+    use serde_json::json;
 
     use super::{
         repository_declares_automation, AutomationAgentPolicyStoreHandler,
-        AutomationProjectPolicyStoreHandler,
+        AutomationPolicyContextStoreHandler, AutomationProjectPolicyStoreHandler,
     };
+    use crate::terminal_host::client::ClientHandle;
+    use crate::terminal_host::server::actor_test_harness::{local_client, test_actor};
+    use crate::terminal_host::session::Session;
+    use std::collections::HashMap;
     use std::fs;
     use std::path::Path;
 
     fn declare(dir: &Path, contents: &str) {
         fs::write(dir.join("alera.toml"), contents).unwrap();
+    }
+
+    fn automation_definition(target: AutomationTarget) -> AutomationDefinition {
+        let now = Utc::now();
+        let actor = json!({"kind": "humanDesktop"});
+        let mut definition: AutomationDefinition = serde_json::from_value(json!({
+            "id": "automation",
+            "slug": "automation",
+            "name": "Automation",
+            "promptTemplate": "Run",
+            "schedule": {"recurring": {"cron": "0 0 * * *", "timezone": "UTC"}},
+            "target": {"freshTab": {"workspace_id": "placeholder", "agent_profile_id": "profile"}},
+            "state": "draft",
+            "revision": 1,
+            "createdBy": actor,
+            "modifiedBy": actor,
+            "createdAt": now,
+            "updatedAt": now,
+        }))
+        .unwrap();
+        definition.target = target;
+        definition
+    }
+
+    fn automation_run(id: &str, target_identity: AutomationTargetIdentity) -> AutomationRun {
+        let now = Utc::now();
+        serde_json::from_value(json!({
+            "id": id,
+            "automationId": "automation",
+            "number": 1,
+            "occurrenceKey": format!("manual|{id}"),
+            "scheduledAt": now,
+            "trigger": "manual",
+            "actorKind": "managedAgent",
+            "actorId": "profile",
+            "targetIdentity": target_identity,
+            "status": "pending",
+            "attemptCount": 0,
+            "createdAt": now,
+            "updatedAt": now,
+        }))
+        .unwrap()
+    }
+
+    fn workspace(id: &str, project_id: &str, path: &Path) -> Workspace {
+        let now = Utc::now();
+        serde_json::from_value(json!({
+            "id": id,
+            "instanceId": format!("instance-{id}"),
+            "hostId": "local",
+            "projectId": project_id,
+            "name": id,
+            "path": path.to_string_lossy(),
+            "createdAt": now,
+            "updatedAt": now,
+            "kind": "main",
+            "status": "active",
+            "reusesExistingBranch": false,
+        }))
+        .unwrap()
     }
 
     #[tokio::test]
@@ -591,5 +678,292 @@ mod tests {
 
         let loaded = handler.get("project").await.unwrap();
         assert_eq!(loaded, saved);
+    }
+
+    #[tokio::test]
+    async fn automation_policy_context_reads_can_be_tested_without_server_actor() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        let store = RuntimeStore::open(dir.path()).await.unwrap();
+        let now = Utc::now();
+        store
+            .upsert_project(Project {
+                id: "project".into(),
+                name: "Project".into(),
+                repo_path: repo.to_string_lossy().into_owned(),
+                created_at: now,
+                updated_at: now,
+                kind: ProjectKind::GitRepository,
+            })
+            .await
+            .unwrap();
+        store
+            .upsert_workspace(workspace("workspace", "project", &repo))
+            .await
+            .unwrap();
+        let identity = AutomationTargetIdentity {
+            workspace_id: Some("workspace".into()),
+            tab_id: None,
+            session_id: Some("session".into()),
+            profile_id: None,
+            conversation_id: None,
+            terminal_handle: None,
+        };
+        store
+            .insert_automation_run(&automation_run("run", identity))
+            .await
+            .unwrap();
+        let handler = AutomationPolicyContextStoreHandler::new(&store);
+
+        assert_eq!(handler.find_run("run").await.unwrap().unwrap().id, "run");
+        assert_eq!(
+            handler
+                .find_workspace("workspace")
+                .await
+                .unwrap()
+                .unwrap()
+                .id,
+            "workspace"
+        );
+        assert_eq!(
+            handler.find_project("project").await.unwrap().unwrap().id,
+            "project"
+        );
+        assert!(handler.find_run("missing").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn automation_policy_context_failures_keep_existing_messages_and_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        let actor = test_actor(&dir, HashMap::new(), HashMap::new()).await;
+        let human = AutomationActor {
+            kind: AutomationActorKind::HumanDesktop,
+            id: None,
+            label: None,
+        };
+        let fresh = automation_definition(AutomationTarget::FreshTab {
+            workspace_id: "workspace".into(),
+            agent_profile_id: "profile".into(),
+        });
+
+        assert_eq!(
+            actor
+                .ensure_agent_policy(&fresh, &human, false)
+                .await
+                .unwrap_err()
+                .to_string(),
+            "automation target workspace is missing"
+        );
+
+        actor
+            .runtime_store
+            .upsert_workspace(workspace("workspace", "project", &repo))
+            .await
+            .unwrap();
+        assert_eq!(
+            actor
+                .ensure_agent_policy(&fresh, &human, false)
+                .await
+                .unwrap_err()
+                .to_string(),
+            "automation target project is missing"
+        );
+
+        let now = Utc::now();
+        actor
+            .runtime_store
+            .upsert_project(Project {
+                id: "project".into(),
+                name: "Project".into(),
+                repo_path: repo.to_string_lossy().into_owned(),
+                created_at: now,
+                updated_at: now,
+                kind: ProjectKind::Folder,
+            })
+            .await
+            .unwrap();
+        let managed = automation_definition(AutomationTarget::ManagedWorkspace {
+            source_workspace_id: "workspace".into(),
+            source_branch: "main".into(),
+            name_template: "automation/{slug}".into(),
+            agent_profile_id: "profile".into(),
+        });
+        assert_eq!(
+            actor
+                .ensure_agent_policy(&managed, &human, false)
+                .await
+                .unwrap_err()
+                .to_string(),
+            "managed workspace automations require a git repository project"
+        );
+
+        actor
+            .runtime_store
+            .upsert_project(Project {
+                id: "project".into(),
+                name: "Project".into(),
+                repo_path: repo.to_string_lossy().into_owned(),
+                created_at: now,
+                updated_at: Utc::now(),
+                kind: ProjectKind::GitRepository,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            actor
+                .ensure_agent_policy(&managed, &human, false)
+                .await
+                .unwrap_err()
+                .to_string(),
+            "repository project has no automation declaration in alera.toml"
+        );
+
+        declare(&repo, "automation_declared = true\n");
+        actor
+            .runtime_store
+            .set_automation_project_policy(AutomationProjectPolicy {
+                project_id: "project".into(),
+                repo_declared: true,
+                local_approved: false,
+                restrictive: true,
+                updated_at: Utc::now(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            actor
+                .ensure_agent_policy(&managed, &human, false)
+                .await
+                .unwrap_err()
+                .to_string(),
+            "project policy for project requires local approval"
+        );
+    }
+
+    #[tokio::test]
+    async fn existing_tab_target_profile_keeps_workspace_tab_semantics() {
+        let dir = tempfile::tempdir().unwrap();
+        let actor = test_actor(&dir, HashMap::new(), HashMap::new()).await;
+        let now = Utc::now();
+        actor
+            .runtime_store
+            .upsert_agent_profile(
+                AgentProfile {
+                    id: "profile".into(),
+                    name: "Profile".into(),
+                    sort_order: 0,
+                    agent_type: "codex".into(),
+                    command: "codex".into(),
+                    launch_mode: AgentProfileLaunchMode::Command,
+                    managed_config: None,
+                    custom_prompt: String::new(),
+                    description: String::new(),
+                    quota_group: None,
+                    revision: 0,
+                    created_at: now,
+                    updated_at: now,
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        actor
+            .runtime_store
+            .upsert_workspace_tab(WorkspaceTabRecord {
+                id: "tab".into(),
+                workspace_id: "workspace".into(),
+                kind: "terminal".into(),
+                title: "Terminal".into(),
+                created_at: now,
+                updated_at: now,
+                payload: json!({"agentProfileId": "profile"}),
+            })
+            .await
+            .unwrap();
+        let definition = automation_definition(AutomationTarget::ExistingTab {
+            workspace_id: "workspace".into(),
+            tab_id: "tab".into(),
+            conversation_id: None,
+        });
+
+        assert_eq!(
+            actor
+                .target_profile_id(&definition)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("profile")
+        );
+    }
+
+    #[tokio::test]
+    async fn policy_actor_resolution_keeps_run_identity_and_managed_actor_semantics() {
+        let dir = tempfile::tempdir().unwrap();
+        let (handle, _responses) = ClientHandle::test_channels();
+        let mut session = Session::driver_test_stub("session", 80, 24);
+        session.workspace_id = "workspace".into();
+        session.tab_id = "tab".into();
+        session.attach(1);
+        let actor = test_actor(
+            &dir,
+            HashMap::from([(1, local_client(handle))]),
+            HashMap::from([("session".into(), session)]),
+        )
+        .await;
+        let identity = AutomationTargetIdentity {
+            workspace_id: Some("workspace".into()),
+            tab_id: None,
+            session_id: Some("session".into()),
+            profile_id: None,
+            conversation_id: None,
+            terminal_handle: None,
+        };
+        actor
+            .runtime_store
+            .insert_automation_run(&automation_run("run", identity.clone()))
+            .await
+            .unwrap();
+        let local_cli = AutomationActor {
+            kind: AutomationActorKind::LocalCli,
+            id: None,
+            label: None,
+        };
+        let payload = json!({
+            "run": "run",
+            "targetIdentity": {"workspaceId": "workspace", "sessionId": "session"}
+        });
+
+        let resolved = actor
+            .resolve_policy_actor(1, &payload, local_cli.clone())
+            .await
+            .unwrap();
+        assert_eq!(resolved.kind, AutomationActorKind::ManagedAgent);
+        assert_eq!(resolved.id.as_deref(), Some("profile"));
+
+        let mut mismatch = identity;
+        mismatch.workspace_id = Some("other".into());
+        actor
+            .runtime_store
+            .insert_automation_run(&automation_run("run-mismatch", mismatch))
+            .await
+            .unwrap();
+        let error = actor
+            .resolve_policy_actor(
+                1,
+                &json!({
+                    "run": "run-mismatch",
+                    "targetIdentity": {"workspaceId": "workspace", "sessionId": "session"}
+                }),
+                local_cli,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "automation run target identity does not match the live run"
+        );
     }
 }
