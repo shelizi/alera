@@ -133,6 +133,15 @@ impl ServerActor {
                         payload,
                     )?;
                 }
+                MobileDeferredRoute::PromptFile(operation) => {
+                    self.start_mobile_prompt_file_request(
+                        client_id,
+                        request_id,
+                        operation,
+                        request_type,
+                        payload,
+                    )?;
+                }
             }
             return Ok(true);
         }
@@ -203,20 +212,6 @@ impl ServerActor {
                 self.require_auth(client_id)?;
                 self.require_request_allowed(client_id, request_type)?;
                 self.start_mobile_workspace_file_request(
-                    client_id,
-                    request_id,
-                    request_type,
-                    payload,
-                )?;
-                Ok(true)
-            }
-            "mobile.promptFile.start"
-            | "mobile.promptFile.chunk"
-            | "mobile.promptFile.complete"
-            | "mobile.promptFile.cancel" => {
-                self.require_auth(client_id)?;
-                self.require_request_allowed(client_id, request_type)?;
-                self.start_mobile_prompt_file_request(
                     client_id,
                     request_id,
                     request_type,

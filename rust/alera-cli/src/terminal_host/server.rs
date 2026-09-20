@@ -247,6 +247,7 @@ mod workspace_sidebar_requests;
 mod workspace_sidebar_requests_tests;
 
 pub(crate) use disconnect_reason::DisconnectReason;
+pub(crate) use request_route_policy::MobilePromptFileOperation;
 pub(crate) use request_route_policy::MobilePromptImageOperation;
 pub use server_command::ServerCommand;
 
@@ -493,13 +494,13 @@ impl ServerActor {
             ServerCommand::MobilePromptFileFinished {
                 client_id,
                 request_id,
-                request_type,
+                operation,
                 upload_id,
                 result,
             } => self.handle_mobile_prompt_file_finished(
                 client_id,
                 request_id,
-                &request_type,
+                operation,
                 upload_id.as_deref(),
                 result,
             ),

@@ -251,6 +251,40 @@ fn mobile_allowlist_includes_workspace_mutations() {
     assert!(mobile_request_allowed("mobile.promptImage.cancel"));
 }
 
+#[tokio::test]
+async fn prompt_file_typed_route_keeps_inline_dispatch() {
+    let dir = tempfile::tempdir().unwrap();
+    let (handle, _receiver) = crate::terminal_host::client::ClientHandle::test_channels();
+    let mut actor = crate::terminal_host::server::actor_test_harness::test_actor(
+        &dir,
+        std::collections::HashMap::from([(
+            1,
+            crate::terminal_host::server::actor_test_harness::local_client(handle),
+        )]),
+        std::collections::HashMap::new(),
+    )
+    .await;
+
+    let started = actor
+        .handle_request(
+            1,
+            "mobile.promptFile.start",
+            &serde_json::json!({"name": "inline.txt", "sizeBytes": 1}),
+        )
+        .await
+        .unwrap();
+    let upload_id = started["uploadId"].as_str().unwrap().to_string();
+    let cancelled = actor
+        .handle_request(
+            1,
+            "mobile.promptFile.cancel",
+            &serde_json::json!({"uploadId": upload_id}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(cancelled, serde_json::json!({}));
+}
+
 #[test]
 fn mobile_allowlist_still_excludes_raw_and_admin_mutations() {
     assert!(!mobile_request_allowed("workspace.upsert"));

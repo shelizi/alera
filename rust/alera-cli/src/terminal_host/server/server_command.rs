@@ -143,7 +143,7 @@ pub enum ServerCommand {
     MobilePromptFileFinished {
         client_id: u64,
         request_id: i64,
-        request_type: String,
+        operation: super::MobilePromptFileOperation,
         upload_id: Option<String>,
         result: HostResult<Value>,
     },

@@ -207,6 +207,9 @@ impl ServerActor {
                 MobileDeferredRoute::PromptImage(operation) => {
                     self.execute_mobile_prompt_image_operation(operation, payload)
                 }
+                MobileDeferredRoute::PromptFile(operation) => {
+                    self.execute_mobile_prompt_file_operation(operation, payload)
+                }
             };
         }
         match request_type {

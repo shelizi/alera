@@ -13,6 +13,7 @@ use super::prompt_file_store::{
     PromptFileStore, MAX_PROMPT_FILE_BYTES, MAX_PROMPT_FILE_CHUNK_BYTES,
     MAX_PROMPT_FILE_STORE_BYTES,
 };
+use super::request_route_policy::MobilePromptFileOperation;
 use super::requests::require_string_key;
 use super::{ServerActor, ServerCommand};
 
@@ -27,11 +28,11 @@ impl ServerActor {
         &self,
         client_id: u64,
         request_id: i64,
+        operation: MobilePromptFileOperation,
         request_type: &str,
         payload: &Value,
     ) -> HostResult<()> {
         let runtime_dir = self.runtime_dir.clone();
-        let request_type = request_type.to_string();
         let upload_id = payload
             .get("uploadId")
             .and_then(Value::as_str)
@@ -40,12 +41,11 @@ impl ServerActor {
         let inbox = self.inbox.clone();
         self.deferred_admission.schedule(
             super::deferred_admission::DeferredRequestClass::Bulk,
-            request_type.clone(),
+            request_type,
             Some(client_id),
             async move {
-                let operation = request_type.clone();
                 let result = tokio::task::spawn_blocking(move || {
-                    handle_prompt_file_request(runtime_dir, &request_type, &payload)
+                    handle_prompt_file_request(runtime_dir, operation, &payload)
                 })
                 .await
                 .map_err(|error| HostError::state(format!("Prompt file operation failed: {error}")))
@@ -53,7 +53,7 @@ impl ServerActor {
                 let _ = inbox.send(ServerCommand::MobilePromptFileFinished {
                     client_id,
                     request_id,
-                    request_type: operation,
+                    operation,
                     upload_id,
                     result,
                 });
@@ -65,13 +65,13 @@ impl ServerActor {
         &mut self,
         client_id: u64,
         request_id: i64,
-        request_type: &str,
+        operation: MobilePromptFileOperation,
         requested_upload_id: Option<&str>,
         result: HostResult<Value>,
     ) {
         if matches!(
-            request_type,
-            "mobile.promptFile.complete" | "mobile.promptFile.cancel"
+            operation,
+            MobilePromptFileOperation::Complete | MobilePromptFileOperation::Cancel
         ) {
             if let Some(upload_id) = requested_upload_id {
                 self.remove_mobile_prompt_file_upload(client_id, upload_id);
@@ -92,7 +92,7 @@ impl ServerActor {
         if result.is_err() {
             return;
         }
-        if request_type == "mobile.promptFile.start" {
+        if operation == MobilePromptFileOperation::Start {
             if let Some(upload_id) = result
                 .as_ref()
                 .ok()
@@ -157,6 +157,14 @@ impl ServerActor {
             self.mobile_prompt_file_uploads.remove(&client_id);
         }
     }
+
+    pub(super) fn execute_mobile_prompt_file_operation(
+        &self,
+        operation: MobilePromptFileOperation,
+        payload: &Value,
+    ) -> HostResult<Value> {
+        handle_prompt_file_request(self.runtime_dir.clone(), operation, payload)
+    }
 }
 
 fn cancel_orphaned_start(runtime_dir: &std::path::Path, result: &HostResult<Value>) {
@@ -184,12 +192,12 @@ fn cancel_upload(runtime_dir: &std::path::Path, upload_id: &str) {
 
 fn handle_prompt_file_request(
     runtime_dir: PathBuf,
-    request_type: &str,
+    operation: MobilePromptFileOperation,
     payload: &Value,
 ) -> HostResult<Value> {
     let store = PromptFileStore::in_runtime_dir(&runtime_dir);
-    match request_type {
-        "mobile.promptFile.start" => {
+    match operation {
+        MobilePromptFileOperation::Start => {
             let display_name = require_string_key(payload, "name")?;
             let declared_bytes = payload
                 .get("sizeBytes")
@@ -205,7 +213,7 @@ fn handle_prompt_file_request(
                 "maxStoreBytes": MAX_PROMPT_FILE_STORE_BYTES,
             }))
         }
-        "mobile.promptFile.chunk" => {
+        MobilePromptFileOperation::Chunk => {
             let upload_id = require_string_key(payload, "uploadId")?;
             let offset = payload
                 .get("offset")
@@ -227,21 +235,20 @@ fn handle_prompt_file_request(
             })?;
             Ok(json!({"nextOffset": next_offset}))
         }
-        "mobile.promptFile.complete" => {
+        MobilePromptFileOperation::Complete => {
             let upload_id = require_string_key(payload, "uploadId")?;
             let path = with_upload_gate(&upload_id, || {
                 store.complete(&upload_id).map_err(prompt_file_error)
             })?;
             Ok(json!({"path": path, "uploadId": upload_id}))
         }
-        "mobile.promptFile.cancel" => {
+        MobilePromptFileOperation::Cancel => {
             let upload_id = require_string_key(payload, "uploadId")?;
             with_upload_gate(&upload_id, || {
                 store.cancel(&upload_id).map_err(prompt_file_error)
             })?;
             Ok(json!({}))
         }
-        _ => Err(HostError::state("Unsupported prompt file operation.")),
     }
 }
 

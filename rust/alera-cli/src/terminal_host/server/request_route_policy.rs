@@ -51,8 +51,17 @@ pub(crate) enum MobilePromptImageOperation {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum MobilePromptFileOperation {
+    Start,
+    Chunk,
+    Complete,
+    Cancel,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum MobileDeferredRoute {
     PromptImage(MobilePromptImageOperation),
+    PromptFile(MobilePromptFileOperation),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -183,6 +192,18 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         "mobile.promptImage.cancel" => mobile_deferred_operation(MobileDeferredRoute::PromptImage(
             MobilePromptImageOperation::Cancel,
         )),
+        "mobile.promptFile.start" => mobile_deferred_operation(MobileDeferredRoute::PromptFile(
+            MobilePromptFileOperation::Start,
+        )),
+        "mobile.promptFile.chunk" => mobile_deferred_operation(MobileDeferredRoute::PromptFile(
+            MobilePromptFileOperation::Chunk,
+        )),
+        "mobile.promptFile.complete" => mobile_deferred_operation(MobileDeferredRoute::PromptFile(
+            MobilePromptFileOperation::Complete,
+        )),
+        "mobile.promptFile.cancel" => mobile_deferred_operation(MobileDeferredRoute::PromptFile(
+            MobilePromptFileOperation::Cancel,
+        )),
 
         "project.remove" => serialized_mobile(SerializedRuntimeMutation::RemoveProject),
         "tab.remove" => serialized_mobile(SerializedRuntimeMutation::RemoveTab),
@@ -281,10 +302,6 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         | "mobile.cloudEnrollment.create"
         | "mobile.cloudSubscriptions.refresh"
         | "mobile.promptAttachment.read"
-        | "mobile.promptFile.cancel"
-        | "mobile.promptFile.chunk"
-        | "mobile.promptFile.complete"
-        | "mobile.promptFile.start"
         | "mobile.relayAuthorization.renew"
         | "mobile.runtimeSettings.get"
         | "mobile.runtimeSettings.update"
@@ -492,6 +509,31 @@ mod tests {
             assert_eq!(
                 policy.mobile_deferred,
                 Some(MobileDeferredRoute::PromptImage(operation)),
+                "{request_type}"
+            );
+        }
+    }
+
+    #[test]
+    fn prompt_file_routes_are_typed_mobile_deferred_operations() {
+        let expected = [
+            ("mobile.promptFile.start", MobilePromptFileOperation::Start),
+            ("mobile.promptFile.chunk", MobilePromptFileOperation::Chunk),
+            (
+                "mobile.promptFile.complete",
+                MobilePromptFileOperation::Complete,
+            ),
+            (
+                "mobile.promptFile.cancel",
+                MobilePromptFileOperation::Cancel,
+            ),
+        ];
+        for (request_type, operation) in expected {
+            let policy = request_route_policy(request_type);
+            assert!(policy.mobile_allowed, "{request_type}");
+            assert_eq!(
+                policy.mobile_deferred,
+                Some(MobileDeferredRoute::PromptFile(operation)),
                 "{request_type}"
             );
         }
