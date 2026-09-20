@@ -242,7 +242,6 @@ mod workspace_activity_requests;
 mod workspace_artifact_requests;
 #[cfg(test)]
 mod workspace_contract_tests;
-mod workspace_pinning;
 mod workspace_relation_requests;
 mod workspace_requests;
 mod workspace_section_requests;

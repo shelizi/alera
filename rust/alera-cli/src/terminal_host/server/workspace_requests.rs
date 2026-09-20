@@ -66,6 +66,24 @@ impl<'a> WorkspaceRequestHandler<'a> {
                     Some(project_id),
                 )
             }
+            "workspace.setPinned" => {
+                let id = require_string_key(payload, "id")?;
+                let is_pinned = payload
+                    .get("isPinned")
+                    .and_then(Value::as_bool)
+                    .ok_or_else(|| HostError::format("isPinned is required."))?;
+                let workspace = self
+                    .runtime_store
+                    .set_workspace_pinned(&id, is_pinned)
+                    .await
+                    .map_err(|error| HostError::state(error.to_string()))?;
+                let project_id = workspace.project_id.clone();
+                (
+                    serde_json::to_value(workspace)
+                        .map_err(|error| HostError::state(error.to_string()))?,
+                    Some(project_id),
+                )
+            }
             "workspaceCascade.preview" => {
                 let workspace_ids = string_array(payload.get("workspaceIds"));
                 let tag_ids = string_array(payload.get("tagIds"));
@@ -183,6 +201,13 @@ mod tests {
             .unwrap();
         assert_eq!(renamed.changed_project_id.as_deref(), Some("p"));
         assert_eq!(renamed.value["name"], "Renamed");
+
+        let pinned = handler
+            .execute("workspace.setPinned", &json!({"id": "w", "isPinned": true}))
+            .await
+            .unwrap();
+        assert_eq!(pinned.changed_project_id.as_deref(), Some("p"));
+        assert_eq!(pinned.value["isPinned"], true);
 
         let all = handler
             .execute("workspace.listAll", &json!({}))

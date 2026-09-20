@@ -692,6 +692,7 @@ impl ServerActor {
             | "workspace.find"
             | "workspace.upsert"
             | "workspace.rename"
+            | "workspace.setPinned"
             | "workspaceCascade.preview" => {
                 self.require_auth(client_id)?;
                 let outcome = WorkspaceRequestHandler::new(&self.runtime_store)
@@ -702,7 +703,6 @@ impl ServerActor {
                 }
                 Ok(outcome.value)
             }
-            "workspace.setPinned" => self.handle_workspace_pinning(client_id, payload).await,
             "tab.list" => {
                 self.require_auth(client_id)?;
                 let workspace_id = require_string_key(payload, "workspaceId")?;
