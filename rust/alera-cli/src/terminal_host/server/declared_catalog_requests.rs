@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 
 use alera_core::agent_descriptor::{agent_descriptor, AGENT_DESCRIPTORS};
-use alera_core::runtime::{AgentProfile, AgentProfileLaunchMode, RuntimeStoreError};
+use alera_core::runtime::{AgentProfile, AgentProfileLaunchMode};
 use chrono::Utc;
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -15,6 +15,9 @@ use crate::terminal_host::orchestration::managed_agent_launch::build_managed_age
 use crate::terminal_host::orchestration::managed_launch_shell_rendering::managed_launch_preview;
 use crate::terminal_host::protocol::event;
 
+use super::agent_profile_catalog_requests::{
+    agent_profile_store_error, AgentProfileCatalogRequestHandler,
+};
 use super::requests::require_string_key;
 use super::ssh_target_requests::SshTargetRequestHandler;
 use super::ServerActor;
@@ -45,14 +48,9 @@ impl ServerActor {
     }
 
     pub(super) async fn agent_profile_list(&mut self) -> HostResult<Value> {
-        let profiles = self
-            .runtime_store
-            .list_agent_profiles()
+        AgentProfileCatalogRequestHandler::new(&self.runtime_store)
+            .list()
             .await
-            .map_err(|error| HostError::state(error.to_string()))?;
-        let items =
-            serde_json::to_value(profiles).map_err(|error| HostError::format(error.to_string()))?;
-        Ok(json!({ "kind": "agentProfiles", "items": items, "filters": {} }))
     }
 
     pub(super) async fn agent_profile_upsert(&mut self, payload: &Value) -> HostResult<Value> {
@@ -63,13 +61,9 @@ impl ServerActor {
             optional_revision(payload, "expectedRevision")?
         };
         let profile = profile_from_payload(payload)?;
-        let stored = self
-            .runtime_store
-            .upsert_agent_profile(profile, expected_revision)
-            .await
-            .map_err(agent_profile_store_error)?;
-        let value =
-            serde_json::to_value(stored).map_err(|error| HostError::format(error.to_string()))?;
+        let value = AgentProfileCatalogRequestHandler::new(&self.runtime_store)
+            .upsert(profile, expected_revision)
+            .await?;
         self.broadcast_authenticated(event("agentProfilesChanged", json!({})));
         Ok(value)
     }
@@ -233,26 +227,6 @@ fn optional_revision(payload: &Value, key: &str) -> HostResult<Option<i64>> {
             .map(Some)
             .ok_or_else(|| HostError::format(format!("{key} must be a non-negative integer."))),
     }
-}
-
-fn agent_profile_store_error(error: anyhow::Error) -> HostError {
-    if let Some(RuntimeStoreError::AgentProfileRevisionConflict {
-        profile_id,
-        expected,
-        current,
-    }) = error.downcast_ref::<RuntimeStoreError>()
-    {
-        return HostError::conflict(
-            "agent_profile_revision_conflict",
-            error.to_string(),
-            json!({
-                "profileId": profile_id,
-                "expectedRevision": expected,
-                "currentRevision": current,
-            }),
-        );
-    }
-    HostError::state(error.to_string())
 }
 
 fn require_profile_string(payload: &Value, key: &str) -> HostResult<String> {
