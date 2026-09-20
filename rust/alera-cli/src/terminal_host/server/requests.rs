@@ -1,4 +1,4 @@
-use alera_core::runtime::{LinkedReview, WorkbenchLayoutRecord, WorkspaceTabRecord, WorkspaceTag};
+use alera_core::runtime::{WorkspaceTabRecord, WorkspaceTag};
 use serde_json::{json, Map, Value};
 
 use crate::mobile_access::{
@@ -25,6 +25,9 @@ use super::request_route_policy::{
     PostResponseAction, RequestHandlerFamily, RequestRoutePolicy,
 };
 use super::runtime_mutation_barrier::conflicts_with_runtime_mutation;
+use super::workspace_artifact_requests::{
+    WorkspaceArtifactChange, WorkspaceArtifactRequestHandler,
+};
 use super::workspace_requests::WorkspaceRequestHandler;
 use super::{ClientKind, ServerActor, ServerCommand};
 
@@ -759,51 +762,26 @@ impl ServerActor {
                 self.broadcast_workspace_tabs_changed(Some(&workspace_id));
                 Ok(json!(tab))
             }
-            "linkedReview.find" => {
+            "linkedReview.find"
+            | "linkedReview.upsert"
+            | "linkedReview.remove"
+            | "layout.find"
+            | "layout.upsert"
+            | "layout.remove" => {
                 self.require_auth(client_id)?;
-                let workspace_id = require_string_key(payload, "workspaceId")?;
-                json_result(self.runtime_store.find_linked_review(&workspace_id).await)
-            }
-            "linkedReview.upsert" => {
-                self.require_auth(client_id)?;
-                let review: LinkedReview = parse_payload(payload)?;
-                let value = json_result(self.runtime_store.upsert_linked_review(review).await)?;
-                self.broadcast_authenticated(event("linkedReviewsChanged", json!({})));
-                Ok(value)
-            }
-            "linkedReview.remove" => {
-                self.require_auth(client_id)?;
-                let workspace_id = require_string_key(payload, "workspaceId")?;
-                json_result(self.runtime_store.remove_linked_review(&workspace_id).await)?;
-                self.broadcast_authenticated(event("linkedReviewsChanged", json!({})));
-                Ok(json!({}))
-            }
-            "layout.find" => {
-                self.require_auth(client_id)?;
-                let workspace_id = require_string_key(payload, "workspaceId")?;
-                json_result(
-                    self.runtime_store
-                        .find_workbench_layout(&workspace_id)
-                        .await,
-                )
-            }
-            "layout.upsert" => {
-                self.require_auth(client_id)?;
-                let layout: WorkbenchLayoutRecord = parse_payload(payload)?;
-                let value = json_result(self.runtime_store.upsert_workbench_layout(layout).await)?;
-                self.broadcast_authenticated(event("workbenchLayoutsChanged", json!({})));
-                Ok(value)
-            }
-            "layout.remove" => {
-                self.require_auth(client_id)?;
-                let workspace_id = require_string_key(payload, "workspaceId")?;
-                json_result(
-                    self.runtime_store
-                        .remove_workbench_layout(&workspace_id)
-                        .await,
-                )?;
-                self.broadcast_authenticated(event("workbenchLayoutsChanged", json!({})));
-                Ok(json!({}))
+                let outcome = WorkspaceArtifactRequestHandler::new(&self.runtime_store)
+                    .execute(request_type, payload)
+                    .await?;
+                match outcome.change {
+                    Some(WorkspaceArtifactChange::LinkedReviews) => {
+                        self.broadcast_authenticated(event("linkedReviewsChanged", json!({})))
+                    }
+                    Some(WorkspaceArtifactChange::WorkbenchLayouts) => {
+                        self.broadcast_authenticated(event("workbenchLayoutsChanged", json!({})))
+                    }
+                    None => {}
+                }
+                Ok(outcome.value)
             }
             "workspaceTag.list" => {
                 self.require_auth(client_id)?;

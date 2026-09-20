@@ -236,6 +236,7 @@ mod wire_fixture_tests_requests;
 mod wire_fixture_tests_requests_workspace;
 #[cfg(test)]
 mod wire_fixture_tests_stream;
+mod workspace_artifact_requests;
 #[cfg(test)]
 mod workspace_contract_tests;
 mod workspace_pinning;
