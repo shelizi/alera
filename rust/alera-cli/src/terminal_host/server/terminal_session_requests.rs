@@ -1,3 +1,4 @@
+use alera_core::runtime::{AutomationActor, RuntimeStore, WorkspaceTabRecord};
 use serde_json::Value;
 
 use crate::terminal_host::host_error::{HostError, HostResult};
@@ -5,7 +6,39 @@ use crate::terminal_host::protocol::{int_or, require_object, TerminalHostLaunch}
 use crate::terminal_host::session::Session;
 
 use super::requests::require_string;
+use super::workspace_tab_requests::WorkspaceTabStoreHandler;
 use super::ServerActor;
+
+struct TerminalAttachPersistence<'a> {
+    runtime_store: &'a RuntimeStore,
+    tabs: WorkspaceTabStoreHandler<'a>,
+}
+
+impl<'a> TerminalAttachPersistence<'a> {
+    const fn new(runtime_store: &'a RuntimeStore) -> Self {
+        Self {
+            runtime_store,
+            tabs: WorkspaceTabStoreHandler::new(runtime_store),
+        }
+    }
+
+    async fn find_tab(&self, tab_id: &str) -> HostResult<Option<WorkspaceTabRecord>> {
+        self.tabs.find(tab_id).await
+    }
+
+    async fn touch_tab(&self, mut tab: WorkspaceTabRecord) -> HostResult<WorkspaceTabRecord> {
+        tab.updated_at = chrono::Utc::now();
+        self.tabs.upsert(tab).await
+    }
+
+    async fn mark_run_taken_over(&self, run_id: &str, actor: AutomationActor) -> HostResult<()> {
+        self.runtime_store
+            .mark_automation_run_taken_over(run_id, actor)
+            .await
+            .map(|_| ())
+            .map_err(|error| HostError::state(error.to_string()))
+    }
+}
 
 impl ServerActor {
     pub(super) async fn create_or_attach(
@@ -22,21 +55,21 @@ impl ServerActor {
         // Attaching a user client to a tab created for an automation is the
         // durable takeover signal. It prevents a later successful completion
         // from deleting a tab the user has started using.
-        if let Ok(Some(tab)) = self.runtime_store.find_workspace_tab(&tab_id).await {
+        let persistence = TerminalAttachPersistence::new(&self.runtime_store);
+        if let Ok(Some(tab)) = persistence.find_tab(&tab_id).await {
             if tab
                 .payload
                 .get("automationOwned")
                 .and_then(Value::as_bool)
                 .unwrap_or(false)
             {
-                let mut tab = tab;
+                let tab = tab;
                 let run_id = tab
                     .payload
                     .get("automationRunId")
                     .and_then(Value::as_str)
                     .map(str::to_string);
-                tab.updated_at = chrono::Utc::now();
-                let _ = self.runtime_store.upsert_workspace_tab(tab).await;
+                let _ = persistence.touch_tab(tab).await;
                 if let Some(run_id) = run_id.as_deref() {
                     let (mobile, local_role, id, human_client) = self
                         .clients
@@ -68,10 +101,7 @@ impl ServerActor {
                         // as a user takeover. The automation CLI is a local
                         // client too, but it must not preserve its own cleanup
                         // target.
-                        let _ = self
-                            .runtime_store
-                            .mark_automation_run_taken_over(run_id, actor)
-                            .await;
+                        let _ = persistence.mark_run_taken_over(run_id, actor).await;
                     }
                 }
             }
@@ -223,5 +253,88 @@ impl ServerActor {
             self.spawn_output_resync_timer(session_id.clone(), attached_client_id);
         }
         Ok(attachment)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alera_core::runtime::{
+        AutomationActor, AutomationActorKind, AutomationRun, RuntimeStore, WorkspaceTabRecord,
+    };
+    use chrono::{Duration, Utc};
+    use serde_json::json;
+
+    use super::TerminalAttachPersistence;
+
+    fn automation_run(id: &str) -> AutomationRun {
+        let now = Utc::now();
+        serde_json::from_value(json!({
+            "id": id,
+            "automationId": "automation",
+            "number": 1,
+            "occurrenceKey": format!("manual|{id}"),
+            "scheduledAt": now,
+            "trigger": "manual",
+            "actorKind": "managedAgent",
+            "actorId": "profile",
+            "status": "pending",
+            "attemptCount": 0,
+            "createdAt": now,
+            "updatedAt": now,
+        }))
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn automation_takeover_persistence_can_be_tested_without_server_actor() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = RuntimeStore::open(dir.path()).await.unwrap();
+        let old_updated_at = Utc::now() - Duration::minutes(1);
+        store
+            .upsert_workspace_tab(WorkspaceTabRecord {
+                id: "tab".into(),
+                workspace_id: "workspace".into(),
+                kind: "terminal".into(),
+                title: "Automation".into(),
+                created_at: old_updated_at,
+                updated_at: old_updated_at,
+                payload: json!({
+                    "automationOwned": true,
+                    "automationRunId": "run",
+                    "keep": "value",
+                }),
+            })
+            .await
+            .unwrap();
+        store
+            .insert_automation_run(&automation_run("run"))
+            .await
+            .unwrap();
+        let persistence = TerminalAttachPersistence::new(&store);
+
+        let tab = persistence.find_tab("tab").await.unwrap().unwrap();
+        let touched = persistence.touch_tab(tab).await.unwrap();
+        assert!(touched.updated_at > old_updated_at);
+        assert_eq!(touched.payload["keep"], "value");
+
+        persistence
+            .mark_run_taken_over(
+                "run",
+                AutomationActor {
+                    kind: AutomationActorKind::HumanDesktop,
+                    id: Some("desktop".into()),
+                    label: None,
+                },
+            )
+            .await
+            .unwrap();
+        assert!(
+            store
+                .find_automation_run("run")
+                .await
+                .unwrap()
+                .unwrap()
+                .taken_over
+        );
     }
 }

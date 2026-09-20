@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 
-use alera_core::runtime::WorkspaceTabRecord;
+use alera_core::runtime::{AutomationRun, WorkspaceTabRecord};
 use chrono::Utc;
 use serde_json::{json, Value};
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -29,6 +29,37 @@ fn terminal_tab(tab_id: &str, workspace_id: &str) -> WorkspaceTabRecord {
         updated_at: now,
         payload: json!({"terminalSessionId": "s1"}),
     }
+}
+
+fn automation_run(id: &str) -> AutomationRun {
+    let now = Utc::now();
+    serde_json::from_value(json!({
+        "id": id,
+        "automationId": "automation",
+        "number": 1,
+        "occurrenceKey": format!("manual|{id}"),
+        "scheduledAt": now,
+        "trigger": "manual",
+        "actorKind": "managedAgent",
+        "actorId": "profile",
+        "status": "pending",
+        "attemptCount": 0,
+        "createdAt": now,
+        "updatedAt": now,
+    }))
+    .unwrap()
+}
+
+async fn seed_automation_owned_tab(actor: &ServerActor, tab_id: &str, run_id: &str) {
+    let mut tab = terminal_tab(tab_id, "workspace");
+    tab.payload["automationOwned"] = Value::Bool(true);
+    tab.payload["automationRunId"] = Value::String(run_id.to_string());
+    actor.runtime_store.upsert_workspace_tab(tab).await.unwrap();
+    actor
+        .runtime_store
+        .insert_automation_run(&automation_run(run_id))
+        .await
+        .unwrap();
 }
 
 async fn request(
@@ -140,6 +171,84 @@ async fn create_or_attach_to_a_live_session_attaches_without_revalidating_metada
     let session = &actor.sessions["s1"];
     assert_eq!(session.instance_id(), instance_id);
     assert!(session.clients.contains(&1) && session.clients.contains(&2));
+}
+
+#[tokio::test]
+async fn desktop_app_attach_marks_an_automation_owned_tab_run_taken_over() {
+    let dir = tempfile::tempdir().unwrap();
+    let (handle, _receiver) = ClientHandle::test_channels();
+    let mut session = Session::driver_test_stub("s1", 120, 40);
+    session.workspace_id = "workspace".into();
+    session.tab_id = "tab-takeover".into();
+    let mut actor = test_actor(
+        &dir,
+        HashMap::from([(1, super::ClientState::local(handle, true))]),
+        HashMap::from([("s1".to_string(), session)]),
+    )
+    .await;
+    seed_automation_owned_tab(&actor, "tab-takeover", "run-takeover").await;
+
+    actor
+        .create_or_attach(
+            1,
+            &json!({
+                "sessionId": "s1",
+                "workspaceId": "workspace",
+                "tabId": "tab-takeover",
+                "workingDirectory": ".",
+            }),
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        actor
+            .runtime_store
+            .find_automation_run("run-takeover")
+            .await
+            .unwrap()
+            .unwrap()
+            .taken_over
+    );
+}
+
+#[tokio::test]
+async fn local_cli_attach_does_not_mark_an_automation_owned_tab_run_taken_over() {
+    let dir = tempfile::tempdir().unwrap();
+    let (handle, _receiver) = ClientHandle::test_channels();
+    let mut session = Session::driver_test_stub("s1", 120, 40);
+    session.workspace_id = "workspace".into();
+    session.tab_id = "tab-cli".into();
+    let mut actor = test_actor(
+        &dir,
+        HashMap::from([(1, local_client(handle))]),
+        HashMap::from([("s1".to_string(), session)]),
+    )
+    .await;
+    seed_automation_owned_tab(&actor, "tab-cli", "run-cli").await;
+
+    actor
+        .create_or_attach(
+            1,
+            &json!({
+                "sessionId": "s1",
+                "workspaceId": "workspace",
+                "tabId": "tab-cli",
+                "workingDirectory": ".",
+            }),
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        !actor
+            .runtime_store
+            .find_automation_run("run-cli")
+            .await
+            .unwrap()
+            .unwrap()
+            .taken_over
+    );
 }
 
 #[tokio::test]
