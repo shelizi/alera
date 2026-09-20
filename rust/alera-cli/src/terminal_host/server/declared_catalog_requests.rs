@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 
 use alera_core::agent_descriptor::{agent_descriptor, AGENT_DESCRIPTORS};
-use alera_core::runtime::{AgentProfile, AgentProfileLaunchMode, RuntimeStoreError, SshTarget};
+use alera_core::runtime::{AgentProfile, AgentProfileLaunchMode, RuntimeStoreError};
 use chrono::Utc;
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -16,40 +16,20 @@ use crate::terminal_host::orchestration::managed_launch_shell_rendering::managed
 use crate::terminal_host::protocol::event;
 
 use super::requests::require_string_key;
+use super::ssh_target_requests::SshTargetRequestHandler;
 use super::ServerActor;
 
 impl ServerActor {
     pub(super) async fn ssh_target_list(&mut self) -> HostResult<Value> {
-        let targets = self
-            .runtime_store
-            .list_ssh_targets()
+        SshTargetRequestHandler::new(&self.runtime_store)
+            .list()
             .await
-            .map_err(|error| HostError::state(error.to_string()))?;
-        serde_json::to_value(targets).map_err(|error| HostError::format(error.to_string()))
     }
 
     pub(super) async fn ssh_target_upsert(&mut self, payload: &Value) -> HostResult<Value> {
-        let mut target: SshTarget = serde_json::from_value(payload.clone())
-            .map_err(|error| HostError::format(error.to_string()))?;
-        // An omitted installDir means "leave it alone", not "clear it": the app
-        // only sends it when the user edited the bootstrap location.
-        if payload.get("installDir").is_none() {
-            if let Some(existing) = self
-                .runtime_store
-                .find_ssh_target(&target.id)
-                .await
-                .map_err(|error| HostError::state(error.to_string()))?
-            {
-                target.install_dir = existing.install_dir;
-            }
-        }
-        let stored = self
-            .runtime_store
-            .upsert_ssh_target(target)
-            .await
-            .map_err(|error| HostError::state(error.to_string()))?;
-        let value =
-            serde_json::to_value(stored).map_err(|error| HostError::format(error.to_string()))?;
+        let value = SshTargetRequestHandler::new(&self.runtime_store)
+            .upsert(payload)
+            .await?;
         self.broadcast_authenticated(event("sshTargetsChanged", json!({})));
         Ok(value)
     }
@@ -57,10 +37,9 @@ impl ServerActor {
     pub(super) async fn ssh_target_remove(&mut self, payload: &Value) -> HostResult<Value> {
         let id = require_string_key(payload, "id")?;
         self.cancel_ssh_bootstrap_job_before_remove(&id).await?;
-        self.runtime_store
-            .remove_ssh_target(&id)
-            .await
-            .map_err(|error| HostError::state(error.to_string()))?;
+        SshTargetRequestHandler::new(&self.runtime_store)
+            .remove(&id)
+            .await?;
         self.broadcast_authenticated(event("sshTargetsChanged", json!({})));
         Ok(json!({}))
     }

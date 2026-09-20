@@ -207,6 +207,7 @@ mod session_termination;
 #[cfg(test)]
 mod session_termination_tests;
 mod ssh_bootstrap_jobs;
+mod ssh_target_requests;
 mod tab_compatibility;
 #[cfg(test)]
 mod tab_compatibility_tests;
