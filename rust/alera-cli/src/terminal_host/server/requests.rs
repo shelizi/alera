@@ -28,6 +28,7 @@ use super::runtime_mutation_barrier::conflicts_with_runtime_mutation;
 use super::workspace_artifact_requests::{
     WorkspaceArtifactChange, WorkspaceArtifactRequestHandler,
 };
+use super::workspace_relation_requests::WorkspaceRelationRequestHandler;
 use super::workspace_requests::WorkspaceRequestHandler;
 use super::{ClientKind, ServerActor, ServerCommand};
 
@@ -825,35 +826,16 @@ impl ServerActor {
                 self.broadcast_workspaces_changed(None);
                 Ok(json!({}))
             }
-            "workspaceRelation.list" => {
+            "workspaceRelation.list" | "workspaceRelation.link" | "workspaceRelation.unlink" => {
                 self.require_auth(client_id)?;
-                json_result(self.runtime_store.list_relations().await)
-            }
-            "workspaceRelation.link" => {
-                self.require_auth(client_id)?;
-                let parent_id = require_string_key(payload, "parentWorkspaceId")?;
-                let child_id = require_string_key(payload, "childWorkspaceId")?;
-                let value = json_result(
-                    self.runtime_store
-                        .link_workspaces(&parent_id, &child_id)
-                        .await,
-                )?;
-                self.broadcast_authenticated(event("workspaceRelationsChanged", json!({})));
-                self.broadcast_workspaces_changed(None);
-                Ok(value)
-            }
-            "workspaceRelation.unlink" => {
-                self.require_auth(client_id)?;
-                let parent_id = require_string_key(payload, "parentWorkspaceId")?;
-                let child_id = require_string_key(payload, "childWorkspaceId")?;
-                json_result(
-                    self.runtime_store
-                        .unlink_workspaces(&parent_id, &child_id)
-                        .await,
-                )?;
-                self.broadcast_authenticated(event("workspaceRelationsChanged", json!({})));
-                self.broadcast_workspaces_changed(None);
-                Ok(json!({}))
+                let outcome = WorkspaceRelationRequestHandler::new(&self.runtime_store)
+                    .execute(request_type, payload)
+                    .await?;
+                if outcome.changed {
+                    self.broadcast_authenticated(event("workspaceRelationsChanged", json!({})));
+                    self.broadcast_workspaces_changed(None);
+                }
+                Ok(outcome.value)
             }
             "workspaceCascade.preview" => {
                 self.require_auth(client_id)?;
