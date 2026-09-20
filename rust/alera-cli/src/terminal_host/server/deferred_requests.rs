@@ -29,7 +29,7 @@ impl ServerActor {
             .schedule(client_id, request_id, request_type, task)
     }
 
-    fn deferred_request_scheduler(&self) -> DeferredRequestScheduler {
+    pub(super) fn deferred_request_scheduler(&self) -> DeferredRequestScheduler {
         DeferredRequestScheduler::new(self.deferred_admission.clone(), self.inbox.clone())
     }
 

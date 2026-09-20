@@ -5,8 +5,7 @@ use serde_json::{json, Value};
 
 use crate::project_management::{
     commit_project_registration, effective_project_config, host_directory_roots,
-    list_host_directory, prepare_project_registration, register_project, rename_project,
-    PreparedProjectRegistration,
+    prepare_project_registration, register_project, rename_project, PreparedProjectRegistration,
 };
 use crate::terminal_host::host_error::{HostError, HostResult};
 use crate::terminal_host::protocol::{error_response, event, ok_response};
@@ -144,26 +143,8 @@ impl ServerActor {
         }))
     }
 
-    pub(super) async fn project_effective_config_request(
-        &self,
-        payload: &Value,
-    ) -> HostResult<Value> {
-        let project_id = string_key(payload, "projectId")?;
-        load_effective_project_config(self.runtime_store.clone(), project_id).await
-    }
-
     pub(super) fn host_directory_roots_request(&self) -> HostResult<Value> {
         Ok(json!({ "roots": host_directory_roots() }))
-    }
-
-    pub(super) fn host_directory_list_request(&self, payload: &Value) -> HostResult<Value> {
-        let path = string_key(payload, "path")?;
-        serde_json::to_value(list_host_directory(&path).map_err(state_error)?).map_err(state_error)
-    }
-
-    pub(super) async fn project_branches_request(&self, payload: &Value) -> HostResult<Value> {
-        let project_id = string_key(payload, "projectId")?;
-        load_project_branches(self.runtime_store.clone(), project_id).await
     }
 
     pub(super) fn broadcast_project_state_changed(&self) {

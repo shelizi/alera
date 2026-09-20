@@ -244,16 +244,6 @@ impl ServerActor {
         serde_json::to_value(workspace).map_err(state_error)
     }
 
-    pub(super) async fn workspace_repository_web_url(
-        &self,
-        client_id: u64,
-        payload: &Value,
-    ) -> HostResult<Value> {
-        self.require_auth(client_id)?;
-        let workspace_id = string_field(payload, "workspaceId")?.to_string();
-        load_workspace_repository_web_url(self.runtime_store.clone(), workspace_id).await
-    }
-
     pub(super) async fn create_workspace_tag(
         &mut self,
         client_id: u64,

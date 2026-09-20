@@ -19,6 +19,7 @@ use crate::terminal_host::protocol::{
 };
 use crate::terminal_host::session::SessionDriver;
 
+use super::deferred_read_requests::DeferredReadRequestHandler;
 use super::host_service_requests::required_non_blank;
 pub(super) use super::request_payloads::{json_result, parse_payload};
 use super::request_route_policy::{request_route_policy, PostResponseAction};
@@ -69,8 +70,7 @@ impl ServerActor {
         let outcome: HostResult<Value> = match extract_request(obj) {
             Ok((request_type, payload)) => {
                 let route_policy = request_route_policy(&request_type);
-                restart_after_response =
-                    route_policy.post_response == PostResponseAction::Restart;
+                restart_after_response = route_policy.post_response == PostResponseAction::Restart;
                 shutdown_after_response =
                     route_policy.post_response == PostResponseAction::Shutdown;
                 if let Some(id) = request_id {
@@ -158,6 +158,16 @@ impl ServerActor {
         request_type: &str,
         payload: &Value,
     ) -> HostResult<Value> {
+        if let Some(route) = request_route_policy(request_type).deferred_read {
+            self.require_auth(client_id)?;
+            self.require_request_allowed(client_id, request_type)?;
+            return DeferredReadRequestHandler::new(
+                self.runtime_store.clone(),
+                self.deferred_request_scheduler(),
+            )
+            .execute_inline(route, payload)
+            .await;
+        }
         match request_type {
             "hello" => self.handle_hello(client_id, payload),
             "mobile.relayAuthorization.renew" => Err(HostError::state(
@@ -591,10 +601,6 @@ impl ServerActor {
                 self.require_auth(client_id)?;
                 self.host_directory_roots_request()
             }
-            "hostDirectory.list" => {
-                self.require_auth(client_id)?;
-                self.host_directory_list_request(payload)
-            }
             "project.register" => {
                 self.require_auth(client_id)?;
                 self.project_register_request(payload).await
@@ -619,10 +625,6 @@ impl ServerActor {
                 self.require_auth(client_id)?;
                 self.project_clone_cancel_request(payload).await
             }
-            "project.branches.list" => {
-                self.require_auth(client_id)?;
-                self.project_branches_request(payload).await
-            }
             "project.upsert" => {
                 self.require_auth(client_id)?;
                 let project: Project = parse_payload(payload)?;
@@ -634,10 +636,6 @@ impl ServerActor {
                 self.require_auth(client_id)?;
                 let project_id = require_string_key(payload, "projectId")?;
                 json_result(self.runtime_store.find_project_config(&project_id).await)
-            }
-            "projectConfig.effective" => {
-                self.require_auth(client_id)?;
-                self.project_effective_config_request(payload).await
             }
             "projectConfig.list" => {
                 self.require_auth(client_id)?;
@@ -689,9 +687,6 @@ impl ServerActor {
             }
             "workspace.setPinned" => self.handle_workspace_pinning(client_id, payload).await,
             "workspace.rename" => self.rename_workspace_request(client_id, payload).await,
-            "workspace.repositoryWebUrl" => {
-                self.workspace_repository_web_url(client_id, payload).await
-            }
             "tab.list" => {
                 self.require_auth(client_id)?;
                 let workspace_id = require_string_key(payload, "workspaceId")?;

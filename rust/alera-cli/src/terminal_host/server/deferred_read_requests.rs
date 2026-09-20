@@ -71,4 +71,31 @@ impl DeferredReadRequestHandler {
             }
         }
     }
+
+    pub(super) async fn execute_inline(
+        &self,
+        route: DeferredReadRoute,
+        payload: &Value,
+    ) -> HostResult<Value> {
+        match route {
+            DeferredReadRoute::ProjectConfigEffective => {
+                let project_id = require_string_key(payload, "projectId")?.to_string();
+                load_effective_project_config(self.runtime_store.clone(), project_id).await
+            }
+            DeferredReadRoute::ProjectBranchesList => {
+                let project_id = require_string_key(payload, "projectId")?.to_string();
+                load_project_branches(self.runtime_store.clone(), project_id).await
+            }
+            DeferredReadRoute::WorkspaceRepositoryWebUrl => {
+                let workspace_id = require_string_key(payload, "workspaceId")?.to_string();
+                load_workspace_repository_web_url(self.runtime_store.clone(), workspace_id).await
+            }
+            DeferredReadRoute::HostDirectoryList => {
+                let path = require_string_key(payload, "path")?;
+                let entries = list_host_directory(&path)
+                    .map_err(|error| HostError::state(error.to_string()))?;
+                serde_json::to_value(entries).map_err(|error| HostError::state(error.to_string()))
+            }
+        }
+    }
 }
