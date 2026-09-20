@@ -72,6 +72,7 @@ class _XtermTerminalSessionHandle(
   Future<TerminalXtermWorker>? _parserWorkerFuture;
   TerminalXtermWorkerRetainedState? _parserWorkerRetainedState;
   List<String> _parserWorkerHardEvictionBlockers = const <String>[];
+  bool _parserWorkerHardEvictionEnabledForTesting = true;
   bool _parserWorkerReady = false;
   bool _uiBufferEvicted = false;
   Future<void> _parserWorkerCommandTail = Future<void>.value();

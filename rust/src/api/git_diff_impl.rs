@@ -1062,7 +1062,7 @@ fn diff_file_for_area_with_whitespace(
                 pathspecs.push(old_path);
             }
             let mut diff = diff_for_area_with_whitespace(repo, &pathspecs, area, whitespace_mode)?;
-            let rendered = render_diff_for_path(&mut diff, &selection.path)?;
+            let rendered = render_diff_for_path(repo, &mut diff, &selection.path, Some(area))?;
             if rendered.lines.is_empty() {
                 return Ok(None);
             }
@@ -1177,7 +1177,7 @@ fn commit_change_entries(
 }
 
 fn commit_diff_file_for_path(
-    _repo: &Repository,
+    repo: &Repository,
     paths: &GitPathContext,
     diff: &mut Diff<'_>,
     repo_path: &str,
@@ -1205,7 +1205,7 @@ fn commit_diff_file_for_path(
     let Some(selection) = selection else {
         return Ok(None);
     };
-    let rendered = render_diff_for_path(diff, &selection.path)?;
+    let rendered = render_diff_for_path(repo, diff, &selection.path, None)?;
     if rendered.lines.is_empty() {
         return Ok(None);
     }
@@ -1484,7 +1484,7 @@ fn diff_line_stats_for_paths(
         pathspecs.push(old_path);
     }
     let mut diff = diff_for_area(repo, &pathspecs, area)?;
-    let rendered = render_diff_for_path(&mut diff, path)?;
+    let rendered = render_diff_for_path(repo, &mut diff, path, Some(area))?;
     if rendered.is_binary || rendered.lines.is_empty() {
         return Ok(None);
     }

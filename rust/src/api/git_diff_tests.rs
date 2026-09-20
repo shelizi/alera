@@ -26,6 +26,96 @@ fn diff_accepts_backslash_separators_from_subdirectory_workspace() {
 }
 
 #[test]
+fn git_diff_decodes_big5_tracked_text_from_full_file_encoding() {
+    let repo = init_repo();
+    let (before, _, before_had_errors) =
+        encoding_rs::BIG5.encode("\u{6a19}\u{984c}\n\u{820a}\u{5167}\u{5bb9}\n\u{7d50}\u{5c3e}\n");
+    assert!(!before_had_errors);
+    std::fs::write(repo.path().join("legacy.txt"), before.as_ref()).expect("write Big5 baseline");
+    run_git(repo.path(), &["add", "legacy.txt"]);
+    run_git(repo.path(), &["commit", "-m", "add Big5 fixture"]);
+
+    let (after, _, after_had_errors) =
+        encoding_rs::BIG5.encode("\u{6a19}\u{984c}\n\u{65b0}\u{5167}\u{5bb9}\n\u{7d50}\u{5c3e}\n");
+    assert!(!after_had_errors);
+    std::fs::write(repo.path().join("legacy.txt"), after.as_ref()).expect("write Big5 change");
+
+    let diff = git_diff(
+        path_str(repo.path()),
+        "legacy.txt".to_string(),
+        GitChangeArea::Unstaged,
+    )
+    .expect("Big5 diff");
+    let text = diff_text(&diff.files[0]);
+
+    assert!(text.contains("-\u{820a}\u{5167}\u{5bb9}"), "{text}");
+    assert!(text.contains("+\u{65b0}\u{5167}\u{5bb9}"), "{text}");
+    assert!(!text.contains('\u{fffd}'), "{text}");
+
+    run_git(repo.path(), &["add", "legacy.txt"]);
+    let staged = git_diff(
+        path_str(repo.path()),
+        "legacy.txt".to_string(),
+        GitChangeArea::Staged,
+    )
+    .expect("staged Big5 diff");
+    let staged_text = diff_text(&staged.files[0]);
+    assert!(
+        staged_text.contains("-\u{820a}\u{5167}\u{5bb9}"),
+        "{staged_text}"
+    );
+    assert!(
+        staged_text.contains("+\u{65b0}\u{5167}\u{5bb9}"),
+        "{staged_text}"
+    );
+    assert!(!staged_text.contains('\u{fffd}'), "{staged_text}");
+
+    run_git(repo.path(), &["commit", "-m", "modify Big5 fixture"]);
+    let history =
+        git_history(path_str(repo.path()), Some(2), None, None, None).expect("Big5 commit history");
+    let committed = git_commit_diff(
+        path_str(repo.path()),
+        history.items[0].id.clone(),
+        Some(history.items[1].id.clone()),
+        Some("legacy.txt".to_string()),
+        None,
+    )
+    .expect("committed Big5 diff");
+    let committed_text = diff_text(&committed.files[0]);
+    assert!(
+        committed_text.contains("-\u{820a}\u{5167}\u{5bb9}"),
+        "{committed_text}"
+    );
+    assert!(
+        committed_text.contains("+\u{65b0}\u{5167}\u{5bb9}"),
+        "{committed_text}"
+    );
+    assert!(!committed_text.contains('\u{fffd}'), "{committed_text}");
+}
+
+#[test]
+fn git_diff_decodes_big5_untracked_text_instead_of_marking_it_binary() {
+    let repo = init_repo();
+    let (bytes, _, had_errors) = encoding_rs::BIG5.encode("\u{7e41}\u{9ad4}\u{4e2d}\u{6587}\n");
+    assert!(!had_errors);
+    std::fs::write(repo.path().join("legacy-new.txt"), bytes.as_ref())
+        .expect("write untracked Big5 fixture");
+
+    let diff = git_diff(
+        path_str(repo.path()),
+        "legacy-new.txt".to_string(),
+        GitChangeArea::Untracked,
+    )
+    .expect("untracked Big5 diff");
+    let file = &diff.files[0];
+
+    assert!(!file.is_binary);
+    let text = diff_text(file);
+    assert!(text.contains("+\u{7e41}\u{9ad4}\u{4e2d}\u{6587}"), "{text}");
+    assert!(!text.contains('\u{fffd}'), "{text}");
+}
+
+#[test]
 fn git_diff_projects_side_by_side_rows_without_duplicating_line_text() {
     let repo = init_repo();
     std::fs::write(

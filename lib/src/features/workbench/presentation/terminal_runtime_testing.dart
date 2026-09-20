@@ -137,6 +137,16 @@ List<String> terminalParserWorkerHardEvictionBlockersForTesting(
 }
 
 @visibleForTesting
+void setTerminalParserWorkerHardEvictionEnabledForTesting(
+  TerminalSessionHandle session,
+  bool enabled,
+) {
+  (session as _XtermTerminalSessionHandle)
+          ._parserWorkerHardEvictionEnabledForTesting =
+      enabled;
+}
+
+@visibleForTesting
 void evictTerminalSessionForTesting(
   XtermTerminalRuntime runtime,
   String tabId,

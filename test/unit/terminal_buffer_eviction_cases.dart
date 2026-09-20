@@ -197,6 +197,45 @@ void _registerTerminalBufferEvictionTests() {
     },
   );
 
+  test('parser worker hard eviction can be disabled for profiling', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    final pty = _FakeTerminalPtySession();
+    final runtime = XtermTerminalRuntime(
+      parserWorkerEnabled: true,
+      ptySessionFactory: _FakeTerminalPtySessionFactory(
+        sessions: <_FakeTerminalPtySession>[pty],
+      ),
+      shellLaunchesBuilder: () => <GhosttyTerminalShellLaunch>[
+        _launch('shell', shell: '/bin/sh'),
+      ],
+    );
+    addTearDown(runtime.dispose);
+
+    final session = runtime.sessionFor(
+      workspace: _workspace(id: 'workspace-1'),
+      tab: _tab(id: 'tab-profile-soft', workspaceId: 'workspace-1'),
+    );
+    final visibility = acquireTerminalVisibilityForTesting(session);
+    await session.ensureStarted();
+    writeTerminalOutputForTesting(session, 'profile-soft\r\n');
+    await waitForTerminalParserApplyForTesting(session);
+    setTerminalParserWorkerHardEvictionEnabledForTesting(session, false);
+
+    visibility.dispose();
+    evictTerminalSessionForTesting(runtime, 'tab-profile-soft');
+    await waitForTerminalParserApplyForTesting(session);
+
+    expect(terminalUiBufferEvictedForTesting(session), isTrue);
+    expect(terminalParserWorkerHardEvictedForTesting(session), isFalse);
+    expect(
+      terminalParserWorkerHardEvictionBlockersForTesting(session),
+      isEmpty,
+    );
+    expect(runtime.peekSession('tab-profile-soft'), same(session));
+    expect(pty.disposed, isFalse);
+  });
+
   test(
     'off-screen terminals in the active workspace still obey the budget',
     () {

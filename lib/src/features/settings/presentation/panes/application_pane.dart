@@ -14,6 +14,32 @@ import 'package:alera/src/features/updater/presentation/update_settings_section.
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+/// Language choices offered by the App Language dropdown. Each label is written
+/// in its own language so it stays readable whatever locale is active.
+const List<AleraDropdownFieldEntry<AppLanguage>> appLanguageEntries =
+    <AleraDropdownFieldEntry<AppLanguage>>[
+      AleraDropdownFieldEntry<AppLanguage>(
+        value: AppLanguage.system,
+        label: 'Follow System',
+      ),
+      AleraDropdownFieldEntry<AppLanguage>(
+        value: AppLanguage.english,
+        label: 'English',
+      ),
+      AleraDropdownFieldEntry<AppLanguage>(
+        value: AppLanguage.traditionalChinese,
+        label: '繁體中文',
+      ),
+      AleraDropdownFieldEntry<AppLanguage>(
+        value: AppLanguage.simplifiedChinese,
+        label: '简体中文',
+      ),
+      AleraDropdownFieldEntry<AppLanguage>(
+        value: AppLanguage.japanese,
+        label: '日本語',
+      ),
+    ];
+
 /// App-level preferences: storage, safety confirmations, runtime lifecycle,
 /// updates, and the support row.
 class const ApplicationSettingsPane({
@@ -41,20 +67,7 @@ class const ApplicationSettingsPane({
                 description: 'Follow the system language or choose a language for Alera.',
                 child: AleraDropdownField<AppLanguage>(
                   value: general.language,
-                  entries: const <AleraDropdownFieldEntry<AppLanguage>>[
-                    AleraDropdownFieldEntry<AppLanguage>(
-                      value: AppLanguage.system,
-                      label: 'Follow System',
-                    ),
-                    AleraDropdownFieldEntry<AppLanguage>(
-                      value: AppLanguage.english,
-                      label: 'English',
-                    ),
-                    AleraDropdownFieldEntry<AppLanguage>(
-                      value: AppLanguage.traditionalChinese,
-                      label: '繁體中文',
-                    ),
-                  ],
+                  entries: appLanguageEntries,
                   onChanged: controller.setAppLanguage,
                 ),
               ),

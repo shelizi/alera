@@ -1,251 +1,213 @@
-# Alera Rust Heavy-Operation Parallel Work Plan
+# Alera Heavy-Operation / Performance Parallel Work Plan
 
 Status: active coordination plan
-Date: 2026-09-18
-Baseline reviewed: `main` @ `fe947080ec04c5edcb20139ede808a9caccc6540`
+Date: 2026-09-20
+Committed baseline reviewed: `main` @ `3ba4a9ffc417903db2fcebeef9fd6e530c23f241`
 
-This document is the current source of truth for the next heavy-operation / Rust performance phase. The 2026-09-17 plan is now largely complete: A3, T4, T5, S1, C4, the evidence-selected T6c cuts, and the full C5 retained-tree feature series have landed. The next phase therefore shifts from migration/cutover work to the remaining measured latency and validation gaps.
+This revision re-syncs the plan against the current committed code after C6, T7, T8d, T8e P1-P3, A3V, and the recent Git diff / Quick Open work. It replaces the older allocation that still listed C6/T7/A3V as active.
 
-The rule for this phase is: **profile the latest architecture, close the remaining evidence gaps, and only then add another production optimization.**
+The coordination rule for this phase is: **finish evidence closure first, then optimize only the paths that still have a measured user-visible or resource cost.**
 
-## 1. Repository snapshot used for this re-sync
+## 1. Repository snapshot and coordination constraints
 
 At re-audit time:
 
 ```text
 branch: main
-HEAD:   fe947080ec04c5edcb20139ede808a9caccc6540
-upstream: origin/main
-ahead: 758
-behind: 116
+HEAD: 3ba4a9ffc417903db2fcebeef9fd6e530c23f241
+upstream divergence: ahead 803 / behind 129
 ```
 
-Tracked `main` files are clean. Existing workspace artifacts remain untracked:
+The primary main worktree is currently busy with unrelated staged/unstaged localization and workbench changes plus generated/build artifacts. In particular, multiple localization, Git diff/history, workbench sidebar/editor files are staged, and `workspace_git_diff_surface_editable.dart` plus a localization test have both staged and unstaged changes.
+
+Therefore:
+
+- do not reset, clean, restage, merge, or commit through the primary worktree as part of this performance planning batch;
+- new optimization work must use dedicated worktrees from an agreed committed `main`;
+- the plan itself is updated in an isolated docs worktree so it does not disturb the active main index;
+- do not push unless explicitly requested.
+
+The old Ghostty experiment remains quarantined in `alera/.worktrees/terminal-parser-worker-phase1`. Do not use it as a production terminal base.
+
+## 2. Completed optimization ledger
+
+### 2.1 C6 retained parser scheduling: COMPLETE
+
+C6 is closed on main.
+
+Relevant commits include:
 
 ```text
-?? .worktrees/
-?? docs/history-session/
+24053f1d perf: profile retained parser cold-start
+a24f546b perf: cancel stale retained parses
+b04e168e perf: defer large-file retained parse
+ab6bdefe test: harden retained parse lifecycle
+6df87dbc perf: close C6 Windows after-profile
+986b5a74 Merge branch ''perf/editor-native-parse-scheduling''
 ```
 
-The upstream divergence is not part of this performance phase. Do not rebase/pull/push implicitly.
+Windows after-profile completed the full Rust/Dart/TypeScript x 2k/20k/50k/100k matrix plus rapid replacement. At 100k lines, native open -> first useful frame medians remained roughly 221-279 ms while retained syntax readiness remained 2.45-5.21 s. The UI/open path is therefore decoupled from the multi-second parse.
 
-The preserved worktree `alera/.worktrees/terminal-parser-worker-phase1` is already merged for the production xterm worker work but is still dirty with the older Ghostty alternative-backend experiment. Leave that dirt untouched unless the backend choice is explicitly reopened.
+Do not open another parser architecture phase without new evidence.
 
-## 2. Completion ledger since the previous allocation
+Sources:
 
-### 2.1 A3 - repeated-unchanged agent overlay reuse: COMPLETE
+- `docs/editor-retained-parser-c6p-profile.md`
+- `docs/editor-retained-parser-c6-handoff.md`
 
-Implementation:
+### 2.2 A3 / A3V runtime overlay reuse: COMPLETE
+
+A3 repeated-unchanged reuse and the production FRB validation are complete.
+
+Relevant commits:
 
 ```text
 24353b5b perf(agent): reuse unchanged runtime overlays
+6f4342cd test(agent): close A3 production FRB validation
 ```
 
-A3 adds a private versioned reuse manifest and validates both request/source identity and the materialized overlay before taking a zero-mutation reuse path.
+Production FRB repeated-unchanged medians for 20 / 500 / 2000 files were approximately 8.532 / 36.265 / 550.038 ms, with zero mutation on reuse. No A4 work is justified by the current evidence.
 
-Five-sample Windows native benchmark medians for repeated unchanged preparation:
+### 2.3 T7 / T8d restore redesign: COMPLETE
 
-| Files | Mode | Before | After | Change |
-| ---: | --- | ---: | ---: | ---: |
-| 20 | link | 4.148 ms | 9.509 ms | integrity validation overhead |
-| 20 | forced copy | 22.153 ms | 11.226 ms | 1.97x faster |
-| 500 | link | 82.692 ms | 42.564 ms | 1.94x faster |
-| 500 | forced copy | 4815.203 ms | 62.601 ms | 76.9x faster |
-| 2000 | link | 1936.822 ms | 181.511 ms | 10.7x faster |
-| 2000 | forced copy | 13852.686 ms | 278.280 ms | 49.8x faster |
+T7 measured native restore at roughly 9.90 s median / 12.44 s p95 and selected direct worker hydration.
 
-The A3V production FRB closure is complete on Windows. The native integration test passed all three production-bridge cases (reconcile, warning projection, error projection), and the enabled 20 / 500 / 2000-file five-sample benchmark passed with repeated unchanged calls reporting zero removed/written/linked/copied mutations. Production-FRB repeated-unchanged medians were 8.532 ms / 36.265 ms / 550.038 ms respectively. No A4 follow-up is justified by this validation.
-
-Source: `docs/a3-agent-overlay-unchanged-fastpath-handoff.md`.
-
-### 2.2 T4 - terminal search direct replica source: COMPLETE
-
-Implementation:
+Relevant commits:
 
 ```text
-f2c78cfc perf(terminal): search worker replica model directly
-6c4c7182 Merge branch 'perf/terminal-search-replica-source'
+b058d803 docs(perf): close T7 native terminal gate
+b8144755 perf(terminal): hydrate snapshots directly in worker
+2ed0b8a1 perf(terminal): profile post-T8d restore phases
 ```
 
-Parser-worker sessions now search `TerminalXtermBufferModel` directly instead of routing through the xterm facade.
+Post-T8d clean native runs reached about 1.60 s median framework-ready, with all ten clean samples inside the 3 s gate. Worker-side snapshot parse remained the dominant restore phase, which led to T8e.
 
-Five-sample benchmark highlights:
+Sources:
 
-- 100k low-density scan: 22.87 ms direct vs 65.63 ms legacy (~2.87x lower).
-- 100k high-density scan: 75.24 ms direct vs 94.22 ms legacy (~1.25x lower).
-- Navigation remains sub-millisecond after indexing.
-- No second worker-side search index was added.
+- `docs/t7-terminal-post-t6-native-profile-report.md`
+- `docs/t8d-terminal-direct-snapshot-hydration-report.md`
+- `docs/t8-post-t8d-native-profile-report.md`
 
-Source: `docs/t4-terminal-search-replica-source-handoff.md`.
+### 2.4 T8e P1-P3 structured eviction/resume: COMPLETE AND MERGED
 
-### 2.3 T5 - production terminal profile gate: COMPLETE
-
-Implementation/report:
+Relevant commits:
 
 ```text
-b6a61fa1 perf(terminal): profile production worker render paths
-678afeb8 Merge branch 'perf/terminal-production-profile'
+5273a98d perf(terminal): retain worker state across eviction
+bc619483 perf(terminal): resume parked sessions from output cursor
+c6790e6f perf(terminal): hard-evict eligible parser workers
+1f16ccae merge: terminal T8e hard eviction
 ```
 
-The latest-production profile rejected the old generic O(history) concern for normal output. It instead identified two structural hotspots:
+Current production behavior:
 
-1. hidden-backlog reveal -> one whole-buffer full-state transfer;
-2. resize storms -> one full repaint per resize callback.
+- P1: hidden parser-worker sessions can evict the duplicate UI replica buffer while retaining PTY + authoritative worker state;
+- P2: parked sessions capture an absolute output cursor and resume only the retained host-ring delta when possible;
+- P3: eligible parser workers can export compact structured emulator state, close the isolate, and recreate from retained state;
+- unsafe/ambiguous emulator state fails closed to P2 soft eviction.
 
-It also found a renderer/raster tail under `flutter_tester`, but native Windows render/restore evidence was missing at that time.
+Important current code fact: after UI-buffer eviction, production automatically schedules P3 hard eviction for eligible parser-worker sessions.
 
-Source: `docs/t5-terminal-production-profile-report.md`.
+Source: `docs/t8e-terminal-soft-eviction-report.md`.
 
-### 2.4 T6c - structural terminal full-state traffic reduction: TWO EVIDENCE-BACKED CUTS COMPLETE
-
-First cut:
+### 2.5 Recent Git diff stabilization: LANDED, PERFORMANCE EVIDENCE STILL INCOMPLETE
 
 ```text
-343b2c0b perf(terminal): coalesce parser worker resize storms
+95c23cd6 perf(git): stabilize diff rendering and source control refresh
 ```
 
-40 resize callbacks now collapse to one final parser-worker resize at the existing ordering/debounce boundary.
+The recent cut already removes several obvious UI hot paths:
 
-Paired result:
+- no parent diff-tree rebuild on every editable keystroke;
+- line counting avoids splitting the whole string repeatedly;
+- width measurement lays out only the widest candidate instead of every line;
+- full-file render is bounded at 2 MiB and editable full-file mode at 512 KiB;
+- large full-file previews fall back to diff-only;
+- full-file blob loading is skipped when the active content mode does not need it;
+- single-column diff rendering uses a lazy list;
+- source-control refresh behavior was tightened.
 
-| Metric | Before | After |
+However, there is still no dedicated Git diff/stage performance benchmark. The recent fixes are correctness/perf motivated but not yet backed by a reproducible heavy-repo profile.
+
+### 2.6 Quick Open indexing changes: LANDED, RESOURCE PROFILE NOT YET CLOSED
+
+Recent Quick Open work now builds one index containing normal files plus Git-ignored entries, filters ignored entries at query time by default, permanently prunes common dependency/build directories, and uses separate normal/ignored index budgets.
+
+This is the intended UX, but it increases the importance of measuring index build time and retained-memory cost on a large monorepo rather than assuming the larger index is free.
+
+## 3. T8e P4 evidence: COMPLETE AND P4I-INTEGRATED
+
+Branch/worktree:
+
+```text
+branch: perf/terminal-t8e-p4-native-profile
+HEAD:   6a1fb7d40991fb52908b5b9626b6b241ed2fb2cb
+worktree: alera/.worktrees/terminal-t8e-p4-native-profile
+```
+
+P4 measurement commits:
+
+```text
+c478b985 perf(terminal): profile T8e hard eviction
+6a1fb7d4 docs(terminal): finalize T8e P4 native profile
+```
+
+P4I selective integration on the current main lineage:
+
+```text
+c4237748 perf(terminal): profile T8e hard eviction
+df622481 docs(terminal): finalize T8e P4 native profile
+```
+
+P4 is measurement-only and compares P2 soft eviction with P3 hard parser-worker eviction.
+
+### Direct parser-worker fresh-process median
+
+| Metric | Soft | Hard |
 | --- | ---: | ---: |
-| full repaints | 40 | 1 |
-| wall median | 1652.51 ms | 35.05 ms |
-| worker roundtrip median | 1329.27 ms | 31.54 ms |
-| replica apply median | 126.97 ms | 0.97 ms |
-| logical delta proxy | 141.5 MB | 3.44 MB |
+| hydrated RSS delta | 17.94 MiB | 18.56 MiB |
+| RSS reclaimed after eviction | 0 MiB | -4.86 MiB |
+| reveal median | 69.448 ms | 68.057 ms |
+| reveal p95 | 89.281 ms | 96.341 ms |
 
-Second cut:
+### Runtime-level flutter_tester median
 
-```text
-24f778b9 perf(terminal): pack full buffer snapshot transfer
-5953e71f Merge branch 'perf/terminal-reveal-backlog-staging'
-```
-
-Full snapshots now use packed `Uint32List` + `TransferableTypedData` transport rather than nested per-cell object lists.
-
-Paired hidden-reveal result:
-
-| Stage | Nested | Packed |
+| Metric | Soft | Hard |
 | --- | ---: | ---: |
-| raw worker roundtrip median | 3558.70 ms | 257.78 ms |
-| worker materialize median | 1154.30 ms | 245.39 ms |
-| isolate transfer/scheduling median | 2404.40 ms | 2.69 ms |
-| UI decode median | 863.35 ms | 299.95 ms |
-| replica apply median | 289.72 ms | 229.43 ms |
-| reveal end-to-end median | 4711.81 ms | 864.19 ms |
+| hydrated RSS delta | 59.81 MiB | 63.34 MiB |
+| RSS reclaimed after eviction | -0.19 MiB | -9.51 MiB |
+| reveal median | 17.741 ms | 23.280 ms |
+| reveal p95 | 30.020 ms | 33.688 ms |
 
-The production-profile reveal median after the packed cut is about 651.99 ms. Further terminal work must return to profiling before changing protocol again.
+One hard sample had a severe 834.344 ms median / 939.382 ms p95 reveal outlier.
 
-Source: `docs/t6-terminal-structural-delta-handoff.md`.
+### Native Windows directional cross-check
 
-### 2.5 S1 - process-cold Rust initialization profile: COMPLETE
+| Metric | Soft | Hard |
+| --- | ---: | ---: |
+| hydrated RSS delta | 51.48 MiB | 57.39 MiB |
+| RSS reclaimed after eviction | -2.13 MiB | -12.30 MiB |
+| hard-evicted sessions | 0 | 4 |
+| reveal median | 217.966 ms | 235.237 ms |
+| reveal p95 | 1011.591 ms | 866.137 ms |
 
-Implementation/report:
+The workers really close in hard mode, but process RSS does not fall. The available evidence therefore **does not support P3 hard eviction as an RSS optimization**.
 
-```text
-fffa63fd perf: profile process-cold Rust initialization
-8696d64e Merge branch 'perf/rust-cold-init-profile'
-```
+This does not prove hard eviction is useless: it may still reduce live Dart heap, isolate count, ports, GC roots, or idle scheduling cost that the process-RSS metric cannot see. Those are the next measurements if we want to justify keeping hard eviction as the default hidden-session policy.
 
-Important decision:
+P4 also found the Windows native-build root cause: stripped child processes were missing `SystemDrive`. Setting `SystemDrive=C:` fixes .NET Framework CommonApplicationData resolution and Visual C++ FileTracker. No Visual Studio reinstall or registry change is required.
 
-- sequential dev-DLL `bothReady` median: 22.855 ms;
-- concurrent FRB-init median: 22.767 ms;
-- delta: ~0.4%, within noise.
+P4I selectively integrated the authoritative P4 evidence into the current main
+lineage without merging the old P4 branch history:
 
-Therefore do **not** convert the two startup awaits to `Future.wait`.
+- `docs/t8e-p4-native-profile-results.md`
+- `docs/t8e-p4-native-profile-handoff.md`
 
-Both Alera and CodeForge Rust initialization are still awaited before `runApp()`. The next justified startup experiment is CodeForge post-first-frame/lazy initialization with a readiness gate, not simple concurrent initialization.
+## 4. Current open optimization targets
 
-Source: `docs/performance/rust-cold-init-s1-report.md`.
+### S2 - startup still waits for CodeForge before runApp
 
-### 2.6 C4 - native editor open handoff: COMPLETE
-
-Implementation:
-
-```text
-bdbaa84d perf(editor): hand off file open to native rope
-6bccb422 perf(editor): benchmark native open handoff
-```
-
-The production editor no longer needs the old native -> full Dart String -> CodeForge native Rope ownership bounce for the initial large-file open. CodeForge opens the workspace source into a native Rope, and `NativeEditorDocument` structurally clones that Rope.
-
-Latest 50k-line / five-sample Windows evidence:
-
-| Stage | Median |
-| --- | ---: |
-| CodeForge native workspace open | 115.35 ms |
-| legacy full Dart String -> Rope | 468.11 ms |
-| first CodeForge frame after native open | 59.11 ms |
-| same-controller rebuild | 9.08 ms |
-| native-open -> first frame, current noisy end-to-end | 1108.29 ms |
-| first retained Tree-sitter parse/query probe | 5542.45 ms |
-
-The whole-text handoff problem is solved. The largest remaining editor structural cost is now retained Tree-sitter startup/first parse.
-
-Current code confirms why: `NativeEditorDocument.open_from_rope` clones the Rope and immediately runs a full Tree-sitter parse before the retained document becomes ready.
-
-Source: `docs/rust-heavy-operation-parallel-work-plan.md` C4 status and `third_party/code_forge/rust/src/api/editor_document.rs`.
-
-### 2.7 C5 - retained Tree-sitter feature series: COMPLETE
-
-Landed one feature at a time:
-
-```text
-3607d825 perf(editor): derive folds from retained syntax tree
-517e346e perf(editor): match brackets from retained syntax tree
-1890395b perf(editor): expand selection from retained syntax tree
-1a0c5ae5 perf(editor): outline symbols from retained syntax tree
-e71c1a77 fix(editor): align outline surface integration
-fe947080 docs(perf): complete C5 retained symbol outline
-```
-
-Completed retained-tree consumers:
-
-- folding ranges;
-- bracket matching;
-- structural expand/shrink selection;
-- symbol outline/navigation.
-
-All preserve stale/revision safety and existing fallbacks. None claims to solve the ~5.54 s large-file initial parse.
-
-## 3. Current measured gaps
-
-The previous five-worker allocation is complete. The remaining work is now narrower and more evidence-driven.
-
-### Gap E1 - retained Tree-sitter cold parse dominates large-file editor startup
-
-On the 50k-line fixture the first retained Tree-sitter parse/query probe is about 5.54 s median. The production open itself is already down to about 115 ms, so parser startup is now the obvious editor target.
-
-Current `open_from_rope` behavior:
-
-```text
-clone native Rope
--> configure Tree-sitter parser
--> full parse_rope(...)
--> compile highlight query
--> publish retained NativeEditorDocument
-```
-
-The FRB call is asynchronous, so this does not block the Flutter UI isolate directly, but it can overlap first-frame/editor work, consume CPU, delay native syntax readiness, and waste work when a large document is closed or replaced quickly.
-
-### Gap T1 - terminal post-T6 evidence is incomplete
-
-T6 eliminated the two largest structural transport pathologies, but the packed reveal still shows meaningful:
-
-- UI decode/materialization cost (~300 ms in the paired stage-local case);
-- replica apply cost (~229 ms in that paired case);
-- end-to-end production-profile reveal around 652 ms.
-
-Separately, T5's renderer signal came from `flutter_tester`, not the native Windows compositor/GPU path, and the native restore benchmark was not collected because the desktop compiler environment was broken at the time.
-
-The C4 benchmark work later identified and fixed the relevant Windows environment class (Coreutils `link.exe` shadowing MSVC plus missing standard Windows environment variables), so these native terminal measurements should be retried before another terminal production patch.
-
-### Gap S1 - startup still awaits CodeForge before first frame
-
-`lib/main.dart` still does:
+Current committed `lib/main.dart` still does:
 
 ```text
 await RustLib.init()
@@ -254,219 +216,75 @@ await code_forge.RustLib.init()
 runApp(...)
 ```
 
-S1 proved concurrent init is not useful. CodeForge remains the stronger candidate for post-first-frame prewarm or lazy initialization because it is editor-specific.
+S1 already showed that simply starting both FRB init futures together is effectively noise (~0.4%). C6 is now complete, so the prior parser-readiness coordination blocker is gone.
 
-### Gap V1 - A3 production FRB validation closure
+The next justified startup question is whether CodeForge can move to:
 
-A3's native benchmark and Rust correctness coverage are strong, but its actual Flutter/Windows FRB rerun was blocked by the same desktop build environment that was subsequently repaired for C4. Close this evidence gap before considering A3 fully validated end-to-end.
+1. post-first-frame prewarm; or
+2. lazy initialization immediately before first editor/native use.
 
-### Gap M1 - C4 RSS / direct payload metrics are still missing
+### T9 - hard-eviction resource policy is unproven
 
-C4 proved the ownership boundary structurally and measured latency, but direct FFI payload and whole-app/RSS evidence remain unmeasured. Collect them while profiling E1 instead of creating a separate production architecture branch.
+P4 disproved the expected process-RSS win. Because production currently hard-evicts automatically after UI-buffer eviction, we should now measure the resources that isolate teardown can actually change before keeping that extra state-export/import complexity as the default policy.
 
-## 4. Next-phase package summary
+### G3 - Git diff/stage freeze path lacks a benchmark gate
 
-| ID | Priority | Work package | Start now? | Ownership |
+Recent code addressed concrete freeze/rebuild issues, but there is no repeatable benchmark covering large full-file diff, side-by-side edit/selection, or stage/unstage refresh. Re-profile before adding more architecture.
+
+### Q1 - larger Quick Open index lacks a resource budget
+
+Quick Open now intentionally retains Git-ignored entries in the session index. Add a large-repo benchmark for build time, query time, and memory before increasing caps or moving more index work across boundaries.
+
+### W1 - native Windows benchmark environment is fragile
+
+Multiple performance phases lost time to the same stripped Windows child-process environment. The minimum required invariant is now known: native Windows benchmark/build children need a valid `SystemDrive` (and should sanity-check the standard common-program/application-data paths before launching Flutter/MSBuild).
+
+This is developer-infrastructure work, not application runtime optimization, but it directly improves the reliability and throughput of every Windows performance gate.
+
+## 5. Next-phase package summary
+
+| ID | Priority | Work package | Start now? | Parallel ownership |
 | --- | --- | --- | --- | --- |
-| C6P | P0 gate | Retained parser cold-start + memory/payload profile | **Yes** | benchmark/evidence only |
-| C6 | P0 | Large-file retained parser scheduling / lazy readiness | **Yes after C6P baseline** | CodeForge/native editor |
-| T7 | P1 gate | Post-T6 native Windows terminal render/restore/reveal profile | **Complete** | benchmark/evidence only |
-| S2 | P1 gate | CodeForge post-first-frame/lazy-init A/B | **Yes, profile/prototype first** | startup/readiness |
-| A3V | P1 validation | Windows production FRB validation for overlay reuse | **Yes** | validation only |
-| T8 | P1 | T8d/T8e terminal restore architecture | **T8d COMPLETE; T8e-P1/P2/P3 COMPLETE** | terminal implementation |
-| S3 | Evidence only | Startup implementation retained by S2 evidence | **No** | startup implementation |
+| P4I | P0 closure | Selectively integrate T8e P4 measurement commits/docs | **Complete** | integration only |
+| S2 | P0 | CodeForge post-first-frame / lazy-init A/B | **Yes** | startup/readiness |
+| T9 | P1 gate | Hard-eviction live-resource + policy profile | **Yes** | terminal profile only |
+| G3 | P1 gate | Git diff/stage heavy-path profile | **Yes** | Git benchmark/profile |
+| Q1 | P2 gate | Quick Open index/search memory + latency profile | **Yes** | Quick Open benchmark/profile |
+| W1 | P2 infra | Normalize Windows native benchmark environment | **Yes** | tooling only |
+| S3 | evidence only | Production startup ordering change | **No; after S2** | startup implementation |
+| T10 | evidence only | Terminal policy/allocator follow-up | **No; after T9** | terminal implementation |
+| G4 | evidence only | Git diff architecture follow-up | **No; after G3** | Git implementation |
+| Q2 | evidence only | Quick Open index architecture follow-up | **No; after Q1** | search implementation |
 
-Four completely independent evidence lanes can start immediately: **C6P || T7 || S2 || A3V**. C6 implementation can begin its tests/design in parallel but should not lock in production scheduling policy until the C6P baseline is recorded.
-
-## 5. C6P - retained parser cold-start profile and C4 measurement closure
-
-**Priority: P0 evidence gate. No production behavior changes.**
-
-Suggested branch/worktree:
+The four main performance lanes that can run immediately and independently are:
 
 ```text
-perf/editor-native-parse-profile
+S2 || T9 || G3 || Q1
 ```
 
-### Required measurements
+W1 can run in parallel as infrastructure support. P4I is complete; it was an integration closure, not another implementation lane.
 
-Use the current C4 production open path and collect at least five samples for:
+## 6. P4I - integrate the completed T8e P4 evidence
 
-- 2k / 20k / 50k / 100k logical lines where practical;
-- Rust, Dart, TypeScript/TSX at minimum;
-- Rope clone time;
-- parser creation / language setup;
-- full Tree-sitter parse;
-- highlight-query compilation;
-- first viewport syntax query;
-- native-document ready latency;
-- first CodeForge frame;
-- native open -> first useful frame;
-- CPU time / contention signal where available;
-- process RSS / heap movement;
-- direct FRB payload or a stable proxy that confirms initial-open metadata remains bounded.
+**2026-09-20 status: COMPLETE.**
 
-Also measure rapid tab replacement/close while parsing to quantify wasted cold-parse work.
+Integration record:
 
-### C6P output
+- current main was re-checked before integration and had no unrelated staged tracked work;
+- the current 2026-09-20 performance plan was brought onto the current main lineage first;
+- source commits `c478b985` and `6a1fb7d4` were selectively cherry-picked as `c4237748` and `df622481`;
+- the old P4 branch and its unrelated Quick Open history were not merged;
+- the focused hard-eviction profiling gate passed on the current lineage;
+- minimum-valid direct-worker and runtime soft/hard benchmark smokes compiled and passed;
+- the smoke direction remains consistent with P4: hard eviction closes workers/sessions, but did not demonstrate process-RSS reclamation, so the P4 conclusion remains unchanged.
 
-Produce one report that decides whether the first C6 production cut should prioritize:
+Validation used the existing local `ghostty-vt.dll` through the supported
+`.prebuilt/windows-x64` cache in the isolated integration worktree because
+Zig was not available on PATH. No system/toolchain changes were required.
 
-1. deferred parse start;
-2. cancellation/supersession;
-3. size-aware parse policy;
-4. parser/query caching;
-5. another measured source.
+## 7. S2 - CodeForge post-first-frame / lazy-init A/B
 
-Do not optimize based only on the old 5.54 s aggregate.
-
-C6P owns `integration_test/editor_open_profile_benchmark.dart` and new profile docs while active.
-
-## 6. C6 - large-file retained parser scheduling / lazy readiness
-
-**Priority: P0 implementation, gated by C6P baseline.**
-
-Suggested branch/worktree:
-
-```text
-perf/editor-native-parse-scheduling
-```
-
-Current retained-tree consumers already tolerate native syntax state being unavailable:
-
-- viewport syntax uses fallback/no-highlight policy according to large-file mode;
-- folding has fallback;
-- bracket matching falls back;
-- structural selection is a no-op while native state is not ready;
-- outline can use LSP/fallback and refresh later.
-
-That makes scheduling the retained parse later safer than blocking user interaction on parser readiness.
-
-### Target architecture
-
-Separate **native document/Rope ownership** from **full Tree-sitter readiness**.
-
-Desired state machine:
-
-```text
-Rope ready
--> native syntax document handle exists
--> parse state = pending / parsing / ready / unsupported / failed / cancelled
--> retained-tree consumers query only when revision-ready
-```
-
-For large documents, do not automatically force a multi-second full parse into the first-frame window.
-
-### Candidate first cut
-
-Subject to C6P evidence:
-
-- small files: preserve eager behavior if latency is already cheap;
-- large files: schedule first parse after first frame / idle window rather than immediately on controller configuration;
-- cancel/supersede stale parse generations when the document closes, language changes, or a newer generation replaces it;
-- queue committed edit deltas safely while initial parse is pending;
-- when the parse becomes ready, apply/verify the current revision before exposing the tree;
-- never make cursor movement, paint, bracket matching, structural selection, or outline synchronously wait for first parse;
-- avoid starting duplicate cold parses from multiple consumers.
-
-### Correctness gates
-
-Cover:
-
-- edit while initial parse is pending;
-- close/dispose while parse is pending;
-- language switch during parse;
-- reload/replace during parse;
-- stale generation completion;
-- unsupported grammar;
-- parse failure fallback;
-- first viewport request before readiness;
-- folding/bracket/selection/outline behavior before and after readiness;
-- Unicode scalar revision correctness.
-
-### Success criteria
-
-- [x] first-frame/open latency no longer materially overlaps the multi-second cold parse for large files; 100k first-useful-frame median is 221-279 ms while syntax readiness is 2.45-5.21 s;
-- [x] retained syntax still becomes available eventually across Rust/Dart/TypeScript 2k/20k/50k/100k;
-- [x] no UI-isolate synchronous wait is exposed by the after-profile path;
-- [x] no whole-document Dart snapshot regression; source-info payload proxy stays 148-152 bytes;
-- [x] no duplicate consumer-owned cold parse was introduced;
-- [x] rapid replacement completes with 7.536 ms median issue wall and 984.197 ms final-generation readiness;
-- [x] C6P before/after evidence includes RSS and readiness latency.
-
-Windows after-profile closure: full 12-cell matrix + rapid replacement passed on 2026-09-18. C6 is complete; do not open another parser architecture phase without new measured evidence.
-
-## 7. T7 - post-T6 native Windows terminal profile gate
-
-**Priority: P1 evidence gate. No production terminal changes in T7.**
-
-**2026-09-18 status: COMPLETE.** Native Windows restore and flush/render gates now pass under `@home-node`. Restore median/p95 is 9.90/12.44 s with 0/5 inside the 3 s target; native raster median/p95 is 58.61/84.32 ms. T7 therefore selects **T8d: direct worker snapshot hydration / restore redesign** as the single next terminal architecture cut. See `docs/t7-terminal-post-t6-native-profile-report.md`.
-
-Suggested branch/worktree:
-
-```text
-perf/terminal-post-t6-native-profile
-```
-
-Now that the Windows desktop environment issue is understood, rerun the native gates that T5 could not collect.
-
-### Required runs
-
-At minimum:
-
-```text
-flutter test integration_test/terminal_restore_benchmark.dart -d windows
-flutter test integration_test/terminal_flush_cadence_benchmark.dart -d windows
-```
-
-Also rerun:
-
-- `test/benchmarks/terminal_production_worker_profile_benchmark.dart`;
-- `test/benchmarks/terminal_reveal_pipeline_profile_benchmark.dart`;
-- `test/benchmarks/terminal_streaming_render_profile_benchmark.dart`.
-
-Use five samples and capture the repaired environment recipe so future worktrees are reproducible.
-
-### Required interpretation
-
-T7 must answer four questions:
-
-1. Is native restore now a material user-visible bottleneck?
-2. Does the native Windows renderer confirm or reject the `flutter_tester` raster-tail signal?
-3. After packed snapshot transport, is reveal dominated by UI decode/materialization, replica apply, or renderer work?
-4. Is the remaining ~650 ms reveal worth another architecture cut under realistic backlog sizes?
-
-### T8 decision tree
-
-```text
-UI packed decode/materialization dominates
-  -> T8a keep packed storage longer / avoid rebuilding per-cell Dart objects
-
-replica apply dominates
-  -> T8b apply packed rows directly into BufferLine / retained replica state
-
-native renderer dominates
-  -> T8c investigate a dirty-row renderer seam
-
-restore replay dominates
-  -> T8d direct worker snapshot hydration / restore redesign
-
-none are material in native measurements
-  -> stop terminal architecture work
-```
-
-T7 evidence collection is complete.
-
-Native restore dominates the measured terminal bottlenecks: 9.90 s median / 12.44 s p95 versus a 431.22 ms packed reveal median and a 97.23 ms native total-frame median. Per the decision tree, the next terminal implementation is **T8d: direct worker snapshot hydration / restore redesign**. Keep T8a (packed UI materialization) and T8c (renderer seam) deferred so the first T8 cut remains isolated and measurable.
-**2026-09-18 T8d status: COMPLETE.** Direct parser-worker snapshot hydration replaces the 16-64 KiB UI restore replay loop with one worker parse plus one packed full-buffer hydrate. Native Windows five-sample framework-ready latency improved from T7's 9.90 s median / 12.44 s p95 to **3.337 s median / 5.904 s p95** (about 66% / 53% lower), with 1/5 samples inside the 3 s target. Correctness coverage includes snapshot/live ordering, interaction reset, pointer suspension, stale pump-write invalidation, and stale parser-worker generation cancellation. The 3 s gate is not fully closed; re-profile the remaining worker parse/serialization vs UI materialization/apply vs renderer cost before selecting another T8 cut. See docs/t8d-terminal-direct-snapshot-hydration-report.md.
-**2026-09-18 post-T8d profile: COMPLETE.** Two clean native Windows five-sample runs measured framework-ready at **1.606 s median / 2.162 s p95** and **1.595 s median / 2.212 s p95**; all 10 clean samples were inside the 3 s target. Phase profiling shows worker-side xterm snapshot parse is the stable dominant cost at **0.946 s** and **0.921 s** median, while packed materialization/decode/UI apply are secondary and more variable. Select **T8e: worker snapshot parse fast path / structured retained snapshot** as the next terminal cut. Keep T8a/T8b/T8c deferred until post-T8e profiling. See `docs/t8-post-t8d-native-profile-report.md`.
-**2026-09-18 T8e-P1 status: COMPLETE.** Ready hidden parser-worker sessions now use soft eviction: the PTY + authoritative worker model remain alive while only the duplicate UI replica buffer is discarded. Reveal hydrates from the worker's packed structured state instead of reparsing host ANSI scrollback. Native Windows structured-reveal measurements were **278.83 ms median / 545.91 ms p95** and **163.22 ms median / 234.78 ms p95**, with all 10 samples inside 3 s. Full runtime regression: **136 passed + 2 platform skips**. Non-worker/not-ready sessions retain the original hard-eviction fallback. T8e-P2 (structured hard-eviction/reconnect with host output cursor) remains a separate protocol-boundary follow-up. See `docs/t8e-terminal-soft-eviction-report.md`.
-**2026-09-18 T8e-P2 status: RESUME PROTOCOL COMPLETE.** Soft-evicted hidden parser-worker sessions now park terminal-host output and capture the exact delivered absolute output cursor. If the transport/attachment is lost while parked, `createOrAttach` carries that cursor; the Rust host sends only the retained ring delta when possible and falls back to a full ANSI snapshot when the cursor is stale, future, or the terminal lane is backpressured. The cursor exists only at an explicit parked checkpoint, so normal visible output cannot advance parser state behind a stale cursor. Full runtime regression: **136 passed + 2 platform skips**; PTY suite: **23/23 passed**; Rust cursor contracts: **3/3 passed** plus output-resume **6/6 passed**. This does **not** yet release the parser worker itself: complete worker hard eviction still needs xterm parser-state export/import for SGR, margins, saved cursor, alternate-screen/mode state and related parser semantics. See `docs/t8e-terminal-soft-eviction-report.md`.
-**2026-09-18 T8e-P3 status: COMPLETE.** Eligible hidden parser-worker sessions now export a compact structured emulator checkpoint, close the parser-worker isolate, and recreate it from that checkpoint before subsequent parse/reveal work. The checkpoint uses packed `Uint32List` cell storage rather than a per-cell Dart object graph and preserves buffer/cursor/SGR/margin/saved-cursor/main-alt/mode/title/focus/REP continuation state. Hard eviction fails closed to P2 soft eviction when parser state is non-ground or when unsupported state such as hyperlinks, semantic shell integration, custom tab stops/charsets/colors, DEC/Kitty stacks, synchronized updates, or ambiguous pending wrap is present. Validation: worker **25/25**, parser-worker runtime focus **14/14**, full runtime **137 passed + 2 platform skips**, runtime analyzer clean, diff-check clean. RSS reduction is intentionally not claimed until a native multi-session memory profile is collected. See `docs/t8e-terminal-soft-eviction-report.md`.
-
-## 8. S2 - CodeForge post-first-frame / lazy-init A/B gate
-
-**Priority: P1 evidence/prototype gate.**
+**Priority: P0. Highest remaining app-startup opportunity.**
 
 Suggested branch/worktree:
 
@@ -474,226 +292,293 @@ Suggested branch/worktree:
 perf/codeforge-lazy-init-profile
 ```
 
-S1 already rejected simple concurrent initialization. S2 should test the next justified idea: move CodeForge initialization off the pre-`runApp` critical path without creating an unacceptable first-editor stall.
+### Baseline variants
 
-### S2 variants
+Use fresh processes and at least five samples per variant:
 
-Compare at least:
+1. current baseline: Alera Rust + CodeForge Rust both awaited before `runApp`;
+2. post-first-frame CodeForge prewarm;
+3. lazy CodeForge init immediately before first editor/native use.
 
-1. current baseline: CodeForge initialized before `runApp`;
-2. post-first-frame prewarm;
-3. lazy init immediately before first editor/native CodeForge use.
+### Required measurements
 
-### Measure
-
-Fresh process, at least five samples:
-
-- process start -> first frame;
-- process start -> app interactive;
-- first editor open when CodeForge is already warm;
-- first editor open when lazy init is still cold;
-- CPU contention around first frame;
+- process start -> first Flutter frame;
+- process start -> first interactive workbench frame;
+- first editor open, warm CodeForge;
+- first editor open, cold/lazy CodeForge;
+- CPU contention around the first two frames;
 - whole-app RSS/working set;
-- error/readiness behavior if an editor is opened immediately at startup.
+- immediate-editor-open race/readiness behavior;
+- startup failure behavior if CodeForge init fails after `runApp`.
 
-### Coordination with C6
+Reuse `AleraPerformanceTrace` and existing performance tooling where practical.
 
-S2 owns startup/readiness behavior, not CodeForge parser internals. While C6 is active:
+### Implementation boundary
 
-- S2 may add instrumentation and an isolated prototype/readiness gate;
-- do not merge a production lazy-init cut that changes first-editor initialization ordering until C6's parser-readiness contract is stable;
-- C6 must not assume CodeForge was initialized before `runApp`.
+Do not scatter `RustLib.init()` checks through widgets. Introduce one readiness owner/future so every first-use path shares the same idempotent initialization.
 
-If S2 does not show a material first-frame win, stop and keep the current startup sequence.
+C6 is already complete, so S2 no longer waits on a parser-contract change. The editor must simply await CodeForge readiness before the first native CodeForge call.
 
-## 9. A3V - production FRB validation closure
+### S2 decision
 
-**Priority: P1 validation only.**
+Keep a production S3 change only if the first-frame improvement is repeatable and the cold first-editor penalty/readiness complexity is acceptable. Otherwise keep the current pre-`runApp` initialization.
+
+## 8. T9 - terminal hard-eviction resource/policy profile
+
+**Priority: P1 evidence gate. No terminal architecture changes in T9.**
 
 Suggested branch/worktree:
 
 ```text
-perf/agent-overlay-frb-validation
+perf/terminal-hard-eviction-policy-profile
 ```
 
-Do not redesign A3.
+P4 already answered the process-RSS question: hard eviction does not reclaim stable RSS in the tested environment.
 
-Using the repaired Windows desktop environment:
+T9 should instead measure the resources that isolate teardown can actually release.
 
-- rerun `integration_test/agent_runtime_overlay_native_test.dart -d windows`;
-- rerun `integration_test/agent_runtime_overlay_benchmark.dart -d windows --dart-define=ALERA_RUN_AGENT_OVERLAY_BENCHMARK=true`;
-- verify repeated unchanged calls report zero mutation through the actual production bridge;
-- record five-sample 20/500/2000 results;
-- verify link-success and the public error/warning projection;
-- update the A3 handoff with production bridge evidence.
+### Scenarios
 
-The 20-file link case may remain slower than the old rebuild path because A3 intentionally performs content/integrity validation. Do not weaken correctness merely to win that micro-case.
+Use identical fresh-process workloads for P2 soft and P3 hard modes with at least:
 
-If all FRB checks pass, close A3 completely. Only create A4 if a correctness bug or a materially important production regression is found.
+- 4 / 16 / 32 hidden parser-worker sessions;
+- moderate and deep scrollback/checkpoint sizes;
+- settle windows such as immediate, 5 s, and 30 s after eviction;
+- five fresh-process samples per meaningful decision case.
 
-## 10. Deferred / stopped work
+### Metrics
 
-### C7 and later retained-tree features
+Where available, record:
 
-The originally planned retained-tree consumers are complete. Do not add more native structural features until C6 fixes or consciously accepts the large-file parser startup cost.
+- process RSS / working set;
+- Dart VM heap used/capacity before hydration, after hydration, after eviction, after settle;
+- isolate / isolate-group count;
+- live object/allocation profile for terminal worker/row/cell structures;
+- GC count/time around eviction and reveal;
+- active receive ports / timers / task sources if observable;
+- idle CPU consumption with hidden sessions parked;
+- reveal median/p95 and severe-tail frequency;
+- hard-eviction eligibility/blocker rate under representative shell/TUI traces.
 
-### Native regex
-
-Still stopped. Existing evidence says the full-text snapshot was the dominant old regex cost, not regex execution itself.
-
-### Git F2
-
-Still stopped. Current projection costs are already low-millisecond even at synthetic 5k merge-heavy history.
-
-### Workspace Search G2
-
-Still stopped under the current 2,000-result cap.
-
-### Ghostty terminal backend
-
-Still quarantined. The production xterm worker architecture is active and the preserved Ghostty experiment has known resize/reflow parity differences.
-
-## 11. Revised parallel staffing
-
-### Five workers
+### T9 decision tree
 
 ```text
-Person 1 -> C6P  retained parser cold-start + RSS/payload profile
-Person 2 -> C6   parser scheduling/cancellation tests + implementation after C6P baseline
-Person 3 -> T7   post-T6 native Windows terminal profile
-Person 4 -> S2   CodeForge lazy/post-first-frame init A/B
-Person 5 -> A3V  production FRB validation closure
+hard eviction materially reduces live heap / idle resource cost
+and reveal tail remains acceptable
+  -> keep P3 as the default eligible-session policy
+
+hard eviction has no meaningful live-resource benefit
+  -> prefer P2 soft eviction by default
+  -> retain P3 only behind explicit pressure/experimental policy, or remove it later
+
+live Dart heap falls but process RSS stays retained
+  -> allocator/VM retention is the target
+  -> do not rewrite terminal state architecture again
+
+hard reveal/tail regressions outweigh resource savings
+  -> default to soft eviction even if some heap is released
 ```
 
-Parallelism rules:
+Do not start T10 until this gate decides what problem actually remains.
 
-- C6P and C6 may run together only with explicit file ownership:
-  - C6P owns benchmark/profile files and report;
-  - C6 owns CodeForge controller/native parser implementation and focused tests.
-- C6 may design tests immediately, but should not finalize the scheduling policy until the C6P baseline is recorded.
-- T7 is profile-only and does not compete with C6/S2/A3V.
-- S2 production merge waits for the C6 readiness contract if it changes CodeForge first-use ordering.
-- A3V is validation-only and independent.
+## 9. G3 - Git diff/stage heavy-path profile
 
-### Four workers
+**Priority: P1 evidence gate.**
 
-Prefer:
+Suggested branch/worktree:
 
 ```text
-C6P/C6 combined owner
-T7
-S2
-A3V
+perf/git-diff-stage-profile
 ```
 
-### Six workers
+The recent `95c23cd6` cut is directionally correct but lacks a reproducible performance report.
 
-Use the sixth worker only for reusable benchmark/corpus work, for example:
+### Scenarios
+
+Profile at least:
+
+- single 100k-line text file with sparse changes;
+- long-line file stressing horizontal layout/selection;
+- file near the 512 KiB editable boundary;
+- file near / above the 2 MiB full-file-render boundary;
+- 10 / 100 / 1000 changed-file result sets;
+- side-by-side full-file view;
+- single-column diff-only view;
+- editable selection/caret movement on long lines;
+- stage/unstage one file while a large diff is open;
+- repeated source-control refresh after staging.
+
+### Metrics
+
+- diff request -> first useful frame;
+- full-file blob/decode wall time;
+- row/projection build time;
+- frame build/raster p95;
+- UI isolate stall/jank;
+- source-control refresh wall time;
+- stage/unstage action -> stable refreshed UI;
+- peak/steady memory for full-file contents and editable documents.
+
+### G3 decision tree
 
 ```text
-Person 6 -> terminal real-session/TUI replay fixtures for T7
+blob/decode dominates
+  -> bound/defer full-file materialization further
+
+row/projection/layout dominates
+  -> improve virtualization / retained projection
+
+stage/unstage refresh dominates
+  -> incremental source-control invalidation / narrower refresh
+
+no material hot path remains
+  -> stop Git diff architecture work
 ```
 
-or:
+Do not jump to a Rust/native diff renderer without evidence. The current bottleneck may still be Flutter layout/materialization rather than diff computation.
+
+## 10. Q1 - Quick Open index/search resource profile
+
+**Priority: P2 evidence gate.**
+
+Suggested branch/worktree:
 
 ```text
-Person 6 -> editor language/size benchmark matrix for C6P
+perf/quick-open-index-profile
 ```
 
-Do not create a second production C6 or T8 owner.
+The new UX intentionally indexes normal + Git-ignored files once and filters ignored entries at query time. Validate the cost before increasing scope further.
 
-## 12. Conflict matrix
+### Scenarios
 
-Legend: LOW = safe; MEDIUM = coordinate; HIGH = serialize.
+Use synthetic/real large repositories with:
 
-| Pair | Risk | Rule |
-| --- | --- | --- |
-| C6P vs C6 | MEDIUM | split benchmark/docs vs production CodeForge/native files |
-| C6 vs T7 | LOW | editor vs terminal |
-| C6 vs A3V | LOW | CodeForge/editor vs agent overlay |
-| C6 vs S2 | MEDIUM | S2 changes CodeForge readiness/first-use ordering; production merge after C6 contract |
-| T7 vs S2 | LOW | terminal profile vs startup |
-| T7 vs A3V | LOW | terminal vs agent overlay |
-| S2 vs A3V | LOW | startup vs agent overlay |
-| T7 vs future T8 | HIGH | T8 starts only after T7 decision |
-| C6 vs future retained-tree feature work | HIGH | same retained native document/parser lane |
+- 10k / 50k normal entries;
+- a large ignored tree up to the current ignored-entry budget;
+- common pruned dependency trees;
+- include-gitignored off/on queries;
+- prefix, fuzzy, deep-path, and high-match-density queries;
+- repeated open/search in the same index session.
 
-## 13. Worktree and validation rules
+### Metrics
 
-Each package must:
+- initial index wall time;
+- time to first searchable result;
+- retained index bytes / process memory proxy;
+- query median/p95;
+- normal-vs-ignored result filtering cost;
+- index rebuild/invalidation cost;
+- UI responsiveness while indexing.
 
-1. create a dedicated worktree/branch from the current agreed `main`;
-2. record its base commit;
-3. not use stale performance worktrees as implementation bases;
-4. leave the dirty Ghostty experiment untouched;
-5. preserve unrelated changes;
-6. stage/commit exact paths, never blanket-add unrelated workspace artifacts;
-7. use TDD/focused regressions for behavior changes;
-8. collect before/after evidence for performance claims;
-9. use five samples for benchmark decisions;
-10. re-check `main` immediately before integration;
-11. avoid push unless explicitly requested.
+Only create Q2 if the expanded session index is materially expensive.
 
-Generated FRB files must only be regenerated from the corresponding handwritten source/config. Never hand-edit generated function IDs or content hashes.
+## 11. W1 - Windows native benchmark environment guardrail
 
-## 14. Recommended merge order
+**Priority: P2 infrastructure.**
 
-Evidence/validation reports may land first:
+Add or extend a reusable development/performance helper instead of rediscovering the same host issue per phase.
+
+The helper should:
+
+- ensure `SystemDrive` is valid before native Flutter/MSBuild runs;
+- validate `ProgramData`, common application-data and common-program-files resolution;
+- report the selected `cl.exe`, `link.exe`, MSBuild/CMake toolchain;
+- fail early with a precise environment diagnostic rather than a late FileTracker stack trace;
+- avoid globally changing registry/VS installation state.
+
+Prefer integrating with existing `tool/development/setup_windows.ps1` or performance tooling instead of creating a duplicate one-off script.
+
+## 12. Deferred / stopped lanes
+
+Keep these stopped unless fresh evidence changes the decision:
+
+- another C7 parser/editor architecture phase;
+- native regex engine;
+- Git history F2 native projection;
+- Workspace Search G2 native paging/projection under the current result cap;
+- Ghostty production terminal backend;
+- T8a/T8b/T8c protocol/renderer work without a new T9/T10 measurement target.
+
+## 13. Parallel staffing
+
+### Four primary performance workers
 
 ```text
-A3V
-T7
-C6P
+Person 1 -> S2  CodeForge startup A/B
+Person 2 -> T9  terminal hard-eviction policy profile
+Person 3 -> G3  Git diff/stage profile
+Person 4 -> Q1  Quick Open index/search profile
 ```
 
-Then:
+### Fifth worker
 
 ```text
-C6
+Person 5 -> W1  Windows native benchmark environment helper
 ```
 
-S2:
+### Integration owner
 
-- report/prototype evidence may land independently;
-- a production startup-order change should integrate after C6's readiness contract is stable.
+P4I was handled by the terminal integration owner after the main index was confirmed safe. It is complete and was not a separate architecture worker.
 
-Afterward:
+### Conflict rules
+
+- S2 touches startup/readiness; keep it out of current unrelated UI/localization work.
+- T9 should be benchmark/test/documentation only while profiling.
+- G3 should begin benchmark-first and avoid production Git diff edits until the current main Git-diff/UI changes are committed and its profile selects a target.
+- Q1 should begin benchmark-first; do not change index semantics/caps during measurement.
+- W1 is tooling-only and independent.
+- T10/G4/Q2/S3 each start only after their corresponding evidence gate.
+
+## 14. Recommended order
 
 ```text
-T7 selects T8 only if native evidence justifies it
-S2 selects S3 only if first-frame gain is material
-C6 decides whether another parser architecture phase is necessary
+completed:
+  P4I selective evidence integration
+
+now:
+  S2 || T9 || G3 || Q1 || W1
+
+after evidence:
+  S2 -> optional S3
+  T9 -> optional T10 or soft-eviction default simplification
+  G3 -> optional G4
+  Q1 -> optional Q2
 ```
 
 ## 15. Definition of done
 
-A next-phase package is complete only when applicable items below are satisfied:
+Each performance package must, where applicable, include:
 
-- behavior/regression coverage;
-- stale/generation/revision/lifetime safety;
-- explicit fallback/error semantics;
-- five-sample evidence for performance decisions;
-- UI-isolate/worker/RSS/FFI evidence appropriate to the package;
+- exact committed baseline;
+- TDD/focused correctness coverage;
+- five-sample evidence for performance claims;
+- UI-isolate/frame/RSS/heap/worker evidence appropriate to the subsystem;
+- stale/generation/lifetime safety;
+- explicit fallback/error behavior;
 - no accidental full-document/history reconstruction in a hot path;
-- generated bindings updated only from source of truth;
-- focused tests/analyzer/lints;
+- no unnecessary generated-binding churn;
+- focused analyzer/lints/tests;
 - `git diff --check`;
 - exact-path commit(s);
-- handoff documenting base, commits, benchmark numbers, limitations, and integration order.
+- handoff with measured before/after values, known limitations, and the next decision gate.
 
 ## 16. Top-line next phase
 
 ```text
-C6P  Editor retained-parser cold-start profile
-  -> C6 large-file parser scheduling / cancellation / readiness
+S2  Startup: move CodeForge off pre-runApp only if A/B proves a real win
 
-T7   Terminal post-T6 native Windows profile
-  -> T8 only if decode/apply/render/restore evidence justifies it
+T9  Terminal: decide whether hard eviction has any real resource benefit
+    beyond process RSS; otherwise prefer the simpler soft-eviction policy
 
-S2   CodeForge post-first-frame/lazy-init A/B
-  -> S3 only if startup gain is material
+G3  Git diff/stage: profile the recently stabilized heavy UI path before
+    another architecture cut
 
-A3V  Close production FRB validation gap
+Q1  Quick Open: verify the larger normal+ignored index fits latency/memory
+    budgets
+
+W1  Make native Windows performance gates reproducible (SystemDrive/toolchain)
+
+P4I COMPLETE — completed P4 evidence selectively integrated and current-lineage smoke-validated
 ```
 
-The highest-value measured editor target is no longer file ownership; it is the multi-second retained Tree-sitter cold parse. The highest-value terminal action is now validation/profiling rather than another blind protocol rewrite.
+The current highest-value runtime opportunities are **S2 startup latency** and **T9 terminal policy simplification/resource validation**. The next Git/Quick Open work should be measurement-first, because recent code has already removed several obvious hot paths.

@@ -250,6 +250,9 @@ extension _XtermTerminalParserWorker on _XtermTerminalSessionHandle {
   void _scheduleParserWorkerHardEviction(
     TerminalXtermReplicaTerminal terminal,
   ) {
+    if (!_parserWorkerHardEvictionEnabledForTesting) {
+      return;
+    }
     final activeWorkerFuture = _parserWorkerFuture;
     if (activeWorkerFuture == null) {
       return;

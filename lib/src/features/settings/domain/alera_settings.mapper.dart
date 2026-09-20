@@ -33,6 +33,10 @@ class AppLanguageMapper extends EnumMapper<AppLanguage> {
         return AppLanguage.english;
       case r'traditionalChinese':
         return AppLanguage.traditionalChinese;
+      case r'simplifiedChinese':
+        return AppLanguage.simplifiedChinese;
+      case r'japanese':
+        return AppLanguage.japanese;
       default:
         throw MapperException.unknownEnumValue(value);
     }
@@ -47,6 +51,10 @@ class AppLanguageMapper extends EnumMapper<AppLanguage> {
         return r'english';
       case AppLanguage.traditionalChinese:
         return r'traditionalChinese';
+      case AppLanguage.simplifiedChinese:
+        return r'simplifiedChinese';
+      case AppLanguage.japanese:
+        return r'japanese';
     }
   }
 }
@@ -3394,4 +3402,3 @@ class _TerminalColorOverridesCopyWithImpl<$R, $Out>
   $chain<$R2, $Out2>(Then<$Out2, $R2> t) =>
       _TerminalColorOverridesCopyWithImpl<$R2, $Out2>($value, $cast, t);
 }
-

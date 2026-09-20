@@ -111,16 +111,330 @@ _SingleColumnDiffOverviewProjection _singleColumnDiffOverviewProjection({
   );
 }
 
+int _maxDiffDisplayColumns(String text) {
+  var maxColumns = 0;
+  var columns = 0;
+  for (var index = 0; index < text.length; index += 1) {
+    final unit = text.codeUnitAt(index);
+    if (unit == 0x0a || unit == 0x0d) {
+      maxColumns = math.max(maxColumns, columns);
+      if (unit == 0x0d &&
+          index + 1 < text.length &&
+          text.codeUnitAt(index + 1) == 0x0a) {
+        index += 1;
+      }
+      columns = 0;
+      continue;
+    }
+    columns += switch (unit) {
+      0x09 => 4,
+      <= 0x7f => 1,
+      _ => 2,
+    };
+  }
+  return math.max(maxColumns, columns);
+}
+
+double _readOnlyDiffContentWidth(
+  BuildContext context, {
+  required GitDiffResult result,
+  required Map<GitDiffFile, _FullFileContents> fullFileContents,
+  required Set<String> fullFilePreviewLimitedPaths,
+  required GitDiffContentMode contentMode,
+  required GitDiffPresentationMode presentationMode,
+}) {
+  var maxColumns = 1;
+
+  void consider(String text) {
+    maxColumns = math.max(maxColumns, _maxDiffDisplayColumns(text));
+  }
+
+  for (final file in result.files) {
+    if (file.isBinary || file.isLarge || file.isGitlink) continue;
+    final fileContentMode =
+        contentMode == GitDiffContentMode.fullFile &&
+            fullFilePreviewLimitedPaths.contains(file.path)
+        ? GitDiffContentMode.diffOnly
+        : contentMode;
+    final contents = fullFileContents[file];
+    var measuredFullFile = false;
+    if (fileContentMode == GitDiffContentMode.fullFile) {
+      if (presentationMode == GitDiffPresentationMode.sideBySide) {
+        final oldContent = contents?.oldDecoded?.content;
+        final newContent = contents?.newDecoded?.content;
+        if (oldContent != null) {
+          consider(oldContent);
+          measuredFullFile = true;
+        }
+        if (newContent != null) {
+          consider(newContent);
+          measuredFullFile = true;
+        }
+      } else {
+        final decoded = contents?.singleSideDecoded(file);
+        if (decoded != null) {
+          consider(decoded.content);
+          measuredFullFile = true;
+        }
+      }
+    }
+    if (!measuredFullFile) {
+      for (final line in _decodedDiffLines(file, contents)) {
+        consider(line.text);
+      }
+    }
+  }
+
+  final style = AleraTokens.monoStyle.copyWith(fontSize: 12);
+  final painter = TextPainter(
+    text: TextSpan(text: 'M', style: style),
+    textDirection: Directionality.of(context),
+    maxLines: 1,
+  )..layout();
+  final textWidth = maxColumns * painter.width * 1.08;
+  return presentationMode == GitDiffPresentationMode.sideBySide
+      ? textWidth + 88.0
+      : textWidth + 96.0;
+}
+
+class _DiffHorizontalViewport extends StatefulWidget {
+  const _DiffHorizontalViewport({
+    required this.scrollbarKey,
+    required this.contentWidth,
+    required this.child,
+  });
+
+  final String scrollbarKey;
+  final double contentWidth;
+  final Widget child;
+
+  @override
+  State<_DiffHorizontalViewport> createState() =>
+      _DiffHorizontalViewportState();
+}
+
+class _DiffHorizontalViewportState extends State<_DiffHorizontalViewport> {
+  late final ScrollController _scrollController;
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController = ScrollController();
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scrollbar(
+      key: ValueKey<String>(widget.scrollbarKey),
+      controller: _scrollController,
+      thumbVisibility: true,
+      scrollbarOrientation: ScrollbarOrientation.bottom,
+      notificationPredicate: (notification) =>
+          notification.metrics.axis == Axis.horizontal,
+      child: SingleChildScrollView(
+        controller: _scrollController,
+        scrollDirection: Axis.horizontal,
+        child: SizedBox(width: widget.contentWidth, child: widget.child),
+      ),
+    );
+  }
+}
+
+class _ReadOnlySideBySideDiffList extends StatefulWidget {
+  const _ReadOnlySideBySideDiffList({
+    required this.rows,
+    required this.contentWidth,
+  });
+
+  final _DiffRows rows;
+  final double contentWidth;
+
+  @override
+  State<_ReadOnlySideBySideDiffList> createState() =>
+      _ReadOnlySideBySideDiffListState();
+}
+
+class _ReadOnlySideBySideDiffListState
+    extends State<_ReadOnlySideBySideDiffList> {
+  late final ScrollController _leftHorizontalController;
+  late final ScrollController _rightHorizontalController;
+  late final ScrollController _leftVerticalController;
+  late final ScrollController _rightVerticalController;
+  var _syncingHorizontal = false;
+  var _syncingVertical = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _leftHorizontalController = ScrollController();
+    _rightHorizontalController = ScrollController();
+    _leftVerticalController = ScrollController();
+    _rightVerticalController = ScrollController();
+    _leftHorizontalController.addListener(_syncHorizontalFromLeft);
+    _rightHorizontalController.addListener(_syncHorizontalFromRight);
+    _leftVerticalController.addListener(_syncVerticalFromLeft);
+    _rightVerticalController.addListener(_syncVerticalFromRight);
+  }
+
+  @override
+  void dispose() {
+    _leftHorizontalController.dispose();
+    _rightHorizontalController.dispose();
+    _leftVerticalController.dispose();
+    _rightVerticalController.dispose();
+    super.dispose();
+  }
+
+  void _syncHorizontalFromLeft() => _syncScrollOffset(
+    _leftHorizontalController,
+    _rightHorizontalController,
+    horizontal: true,
+  );
+
+  void _syncHorizontalFromRight() => _syncScrollOffset(
+    _rightHorizontalController,
+    _leftHorizontalController,
+    horizontal: true,
+  );
+
+  void _syncVerticalFromLeft() => _syncScrollOffset(
+    _leftVerticalController,
+    _rightVerticalController,
+    horizontal: false,
+  );
+
+  void _syncVerticalFromRight() => _syncScrollOffset(
+    _rightVerticalController,
+    _leftVerticalController,
+    horizontal: false,
+  );
+
+  void _syncScrollOffset(
+    ScrollController source,
+    ScrollController target, {
+    required bool horizontal,
+  }) {
+    if (!source.hasClients || !target.hasClients) return;
+    if (horizontal ? _syncingHorizontal : _syncingVertical) return;
+    final position = target.position;
+    if (!position.hasContentDimensions) return;
+    final nextOffset = source.offset.clamp(
+      position.minScrollExtent,
+      position.maxScrollExtent,
+    );
+    if ((target.offset - nextOffset).abs() < 0.5) return;
+    if (horizontal) {
+      _syncingHorizontal = true;
+    } else {
+      _syncingVertical = true;
+    }
+    try {
+      target.jumpTo(nextOffset);
+    } finally {
+      if (horizontal) {
+        _syncingHorizontal = false;
+      } else {
+        _syncingVertical = false;
+      }
+    }
+  }
+
+  Widget _buildPane({
+    required bool isLeft,
+    required ScrollController horizontalController,
+    required ScrollController verticalController,
+  }) {
+    final side = isLeft ? 'left' : 'right';
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final contentWidth = math.max(
+          constraints.maxWidth,
+          widget.contentWidth,
+        );
+        final list = ListView.builder(
+          key: ValueKey<String>('git-diff-side-by-side-$side-list'),
+          controller: verticalController,
+          padding: const EdgeInsets.only(bottom: AleraTokens.space16),
+          itemCount: widget.rows.length,
+          itemBuilder: (context, index) => widget.rows
+              .rowAt(index)
+              .buildSideBySidePane(context, isLeft: isLeft),
+        );
+        return Scrollbar(
+          key: ValueKey<String>('git-diff-side-by-side-$side-y-scrollbar'),
+          controller: verticalController,
+          thumbVisibility: true,
+          notificationPredicate: (notification) =>
+              notification.metrics.axis == Axis.vertical,
+          child: Scrollbar(
+            key: ValueKey<String>('git-diff-side-by-side-$side-x-scrollbar'),
+            controller: horizontalController,
+            thumbVisibility: true,
+            scrollbarOrientation: ScrollbarOrientation.bottom,
+            notificationPredicate: (notification) =>
+                notification.metrics.axis == Axis.horizontal,
+            child: SingleChildScrollView(
+              controller: horizontalController,
+              scrollDirection: Axis.horizontal,
+              physics: const _NoImplicitHorizontalScrollPhysics(),
+              child: SizedBox(
+                width: contentWidth,
+                height: constraints.maxHeight,
+                child: SelectionArea(child: list),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        Expanded(
+          child: _buildPane(
+            isLeft: true,
+            horizontalController: _leftHorizontalController,
+            verticalController: _leftVerticalController,
+          ),
+        ),
+        const SizedBox(
+          width: 1,
+          child: ColoredBox(color: AleraTokens.borderSubtle),
+        ),
+        Expanded(
+          child: _buildPane(
+            isLeft: false,
+            horizontalController: _rightHorizontalController,
+            verticalController: _rightVerticalController,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _SingleColumnDiffList extends StatefulWidget {
   const _SingleColumnDiffList({
     required this.rows,
     required this.overview,
     required this.selectionEnabled,
+    required this.contentWidth,
   });
 
   final _DiffRows rows;
   final _SingleColumnDiffOverviewProjection overview;
   final bool selectionEnabled;
+  final double contentWidth;
 
   @override
   State<_SingleColumnDiffList> createState() => _SingleColumnDiffListState();
@@ -143,18 +457,36 @@ class _SingleColumnDiffListState extends State<_SingleColumnDiffList> {
 
   @override
   Widget build(BuildContext context) {
-    final list = ListView.builder(
-      key: const ValueKey<String>('git-diff-single-column-list'),
-      controller: _scrollController,
-      padding: const EdgeInsets.only(bottom: AleraTokens.space16),
-      itemCount: widget.rows.length,
-      itemBuilder: (context, index) => widget.rows.rowAt(index).build(context),
-    );
     return Row(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
         Expanded(
-          child: widget.selectionEnabled ? SelectionArea(child: list) : list,
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final list = ListView.builder(
+                key: const ValueKey<String>('git-diff-single-column-list'),
+                controller: _scrollController,
+                padding: const EdgeInsets.only(bottom: AleraTokens.space16),
+                itemCount: widget.rows.length,
+                itemBuilder: (context, index) =>
+                    widget.rows.rowAt(index).build(context),
+              );
+              final selectable = widget.selectionEnabled
+                  ? SelectionArea(child: list)
+                  : list;
+              return _DiffHorizontalViewport(
+                scrollbarKey: 'git-diff-single-column-x-scrollbar',
+                contentWidth: math.max(
+                  constraints.maxWidth,
+                  widget.contentWidth,
+                ),
+                child: SizedBox(
+                  height: constraints.maxHeight,
+                  child: selectable,
+                ),
+              );
+            },
+          ),
         ),
         SizedBox(
           width: _DiffOverviewRuler.width,
@@ -224,28 +556,38 @@ class const _DiffFileList({
     if (presentationMode == GitDiffPresentationMode.sideBySide) {
       return LayoutBuilder(
         builder: (context, constraints) {
-          final contentWidth = math.max(constraints.maxWidth, 720.0);
           final rows = buildRows(
             editableViewportHeight: constraints.hasBoundedHeight
                 ? constraints.maxHeight
                 : null,
           );
-          final sideBySideView = SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: SizedBox(
-              width: contentWidth,
-              height: constraints.maxHeight,
-              child: ListView.builder(
-                padding: const EdgeInsets.only(bottom: AleraTokens.space16),
-                itemCount: rows.length,
-                itemBuilder: (context, index) =>
-                    rows.rowAt(index).build(context),
+          if (hasEditableSideBySide) {
+            final contentWidth = math.max(constraints.maxWidth, 720.0);
+            final list = ListView.builder(
+              padding: const EdgeInsets.only(bottom: AleraTokens.space16),
+              itemCount: rows.length,
+              itemBuilder: (context, index) => rows.rowAt(index).build(context),
+            );
+            return SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: SizedBox(
+                width: contentWidth,
+                height: constraints.maxHeight,
+                child: list,
               ),
+            );
+          }
+          return _ReadOnlySideBySideDiffList(
+            rows: rows,
+            contentWidth: _readOnlyDiffContentWidth(
+              context,
+              result: result,
+              fullFileContents: fullFileContents,
+              fullFilePreviewLimitedPaths: fullFilePreviewLimitedPaths,
+              contentMode: contentMode,
+              presentationMode: presentationMode,
             ),
           );
-          return hasEditableSideBySide
-              ? sideBySideView
-              : SelectionArea(child: sideBySideView);
         },
       );
     }
@@ -253,6 +595,14 @@ class const _DiffFileList({
     return _SingleColumnDiffList(
       rows: rows,
       selectionEnabled: true,
+      contentWidth: _readOnlyDiffContentWidth(
+        context,
+        result: result,
+        fullFileContents: fullFileContents,
+        fullFilePreviewLimitedPaths: fullFilePreviewLimitedPaths,
+        contentMode: contentMode,
+        presentationMode: presentationMode,
+      ),
       overview: _singleColumnDiffOverviewProjection(
         result: result,
         fullFileContents: fullFileContents,
@@ -497,6 +847,9 @@ class _DiffRows {
 
 abstract class const _DiffRow() {
   Widget build(BuildContext context);
+
+  Widget buildSideBySidePane(BuildContext context, {required bool isLeft}) =>
+      build(context);
 }
 
 class const _WidgetDiffRow(final Widget child) extends _DiffRow {

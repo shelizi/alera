@@ -25,7 +25,7 @@ void main() {
         const Locale('zh', 'TW'),
       );
       expect(
-        resolveAleraLocale(AppLanguage.system, const Locale('ja', 'JP')),
+        resolveAleraLocale(AppLanguage.system, const Locale('ko', 'KR')),
         const Locale('en'),
       );
     });

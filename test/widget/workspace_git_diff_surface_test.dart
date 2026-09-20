@@ -1139,6 +1139,169 @@ void main() {
     expect(controller.offset, greaterThan(0));
   });
 
+  testWidgets('diff-only side-by-side selection stays in the active pane', (
+    tester,
+  ) async {
+    String? copiedText;
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'Clipboard.setData') {
+          copiedText =
+              (call.arguments as Map<Object?, Object?>)['text'] as String?;
+        }
+        return null;
+      },
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      ),
+    );
+    final backend = FakeGitBackend()
+      ..gitDiffResult = const GitDiffResult(
+        files: <GitDiffFile>[
+          GitDiffFile(
+            path: 'lib/main.dart',
+            area: .unstaged,
+            status: .modified,
+            lines: <GitDiffLine>[
+              GitDiffLine.hunk('@@ -1,2 +1,2 @@'),
+              GitDiffLine.deletion('-left one'),
+              GitDiffLine.addition('+right one'),
+              GitDiffLine.deletion('-left two'),
+              GitDiffLine.addition('+right two'),
+            ],
+          ),
+        ],
+      );
+
+    await _pumpDiffSurface(
+      tester,
+      backend: backend,
+      tab: _diffTab(filePath: 'lib/main.dart', title: 'main.dart unstaged'),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Switch to Diff Only'));
+    await tester.pump();
+    await tester.tap(find.byTooltip('Switch to Side-by-Side View'));
+    await tester.pump();
+
+    await tester.tap(find.text('right one'));
+    await tester.pump();
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyA);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyC);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pump();
+
+    expect(copiedText, isNotNull);
+    expect(copiedText, contains('right one'));
+    expect(copiedText, contains('right two'));
+    expect(copiedText, isNot(contains('left one')));
+    expect(copiedText, isNot(contains('left two')));
+  });
+
+  testWidgets(
+    'read-only diff keeps horizontal scrolling in all content and layout modes',
+    (tester) async {
+      final longLine = List<String>.filled(320, 'x').join();
+      final backend = FakeGitBackend()
+        ..gitDiffResult = GitDiffResult(
+          files: <GitDiffFile>[
+            GitDiffFile(
+              path: 'lib/main.dart',
+              area: .staged,
+              status: .modified,
+              lines: <GitDiffLine>[
+                const GitDiffLine.hunk('@@ -1,1 +1,1 @@'),
+                const GitDiffLine.deletion('-old line'),
+                GitDiffLine.addition('+$longLine'),
+              ],
+            ),
+          ],
+        )
+        ..diffBlobBytesBySide[(filePath: 'lib/main.dart', oldSide: true)] =
+            Uint8List.fromList('old line\n'.codeUnits)
+        ..diffBlobBytesBySide[(filePath: 'lib/main.dart', oldSide: false)] =
+            Uint8List.fromList('$longLine\n'.codeUnits);
+
+      await _pumpDiffSurface(
+        tester,
+        backend: backend,
+        tab: _diffTab(
+          filePath: 'lib/main.dart',
+          title: 'main.dart staged',
+          area: .staged,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      Future<ScrollController> expectHorizontalScroll(String key) async {
+        final finder = find.byKey(ValueKey<String>(key));
+        expect(finder, findsOneWidget);
+        final controller = tester.widget<Scrollbar>(finder).controller!;
+        expect(controller.hasClients, isTrue);
+        expect(controller.position.maxScrollExtent, greaterThan(0));
+        controller.jumpTo(controller.position.maxScrollExtent);
+        await tester.pump();
+        expect(controller.offset, greaterThan(0));
+        return controller;
+      }
+
+      // Full file + single column.
+      await expectHorizontalScroll('git-diff-single-column-x-scrollbar');
+
+      // Diff only + single column.
+      await tester.tap(find.byTooltip('Switch to Diff Only'));
+      await tester.pumpAndSettle();
+      await expectHorizontalScroll('git-diff-single-column-x-scrollbar');
+
+      // Diff only + side-by-side.
+      await tester.tap(find.byTooltip('Switch to Side-by-Side View'));
+      await tester.pumpAndSettle();
+      final leftX = await expectHorizontalScroll(
+        'git-diff-side-by-side-left-x-scrollbar',
+      );
+      final rightXFinder = find.byKey(
+        const ValueKey<String>('git-diff-side-by-side-right-x-scrollbar'),
+      );
+      expect(rightXFinder, findsOneWidget);
+      final rightX = tester.widget<Scrollbar>(rightXFinder).controller!;
+      expect(rightX.offset, closeTo(leftX.offset, 0.5));
+
+      final leftYFinder = find.byKey(
+        const ValueKey<String>('git-diff-side-by-side-left-y-scrollbar'),
+      );
+      final rightYFinder = find.byKey(
+        const ValueKey<String>('git-diff-side-by-side-right-y-scrollbar'),
+      );
+      final leftY = tester.widget<Scrollbar>(leftYFinder).controller!;
+      final rightY = tester.widget<Scrollbar>(rightYFinder).controller!;
+      if (leftY.position.maxScrollExtent > 0) {
+        leftY.jumpTo(leftY.position.maxScrollExtent);
+        await tester.pump();
+        expect(rightY.offset, closeTo(leftY.offset, 0.5));
+      }
+
+      // Full file + side-by-side.
+      await tester.tap(find.byTooltip('Switch to Full File View'));
+      await tester.pumpAndSettle();
+      final fullLeftX = await expectHorizontalScroll(
+        'git-diff-side-by-side-left-x-scrollbar',
+      );
+      final fullRightX = tester
+          .widget<Scrollbar>(
+            find.byKey(
+              const ValueKey<String>('git-diff-side-by-side-right-x-scrollbar'),
+            ),
+          )
+          .controller!;
+      expect(fullRightX.offset, closeTo(fullLeftX.offset, 0.5));
+    },
+  );
+
   testWidgets(
     'editable side-by-side selection keeps manual horizontal scroll position',
     (tester) async {
@@ -1251,7 +1414,7 @@ void main() {
       ),
       findsNothing,
     );
-    expect(find.byType(SelectionArea), findsOneWidget);
+    expect(find.byType(SelectionArea), findsNWidgets(2));
     expect(files.readCount, 0);
     expect(find.text('Modified'), findsOneWidget);
   });
