@@ -15,9 +15,7 @@ use crate::terminal_host::orchestration::managed_agent_launch::build_managed_age
 use crate::terminal_host::orchestration::managed_launch_shell_rendering::managed_launch_preview;
 use crate::terminal_host::protocol::event;
 
-use super::agent_profile_catalog_requests::{
-    agent_profile_store_error, AgentProfileCatalogRequestHandler,
-};
+use super::agent_profile_catalog_requests::AgentProfileCatalogRequestHandler;
 use super::requests::require_string_key;
 use super::ssh_target_requests::SshTargetRequestHandler;
 use super::ServerActor;
@@ -99,19 +97,11 @@ impl ServerActor {
                 Ok((id.clone(), revision))
             })
             .collect::<HostResult<HashMap<_, _>>>()?;
-        let profiles = self
-            .runtime_store
-            .reorder_agent_profiles(&profile_ids, &expected_revisions)
-            .await
-            .map_err(agent_profile_store_error)?;
-        let items =
-            serde_json::to_value(profiles).map_err(|error| HostError::format(error.to_string()))?;
+        let value = AgentProfileCatalogRequestHandler::new(&self.runtime_store)
+            .reorder(&profile_ids, &expected_revisions)
+            .await?;
         self.broadcast_authenticated(event("agentProfilesChanged", json!({})));
-        Ok(json!({
-            "kind": "agentProfiles",
-            "items": items,
-            "filters": {}
-        }))
+        Ok(value)
     }
 
     pub(super) async fn agent_profile_removal_impact(
@@ -120,25 +110,9 @@ impl ServerActor {
     ) -> HostResult<Value> {
         let id = require_profile_string(payload, "id")?;
         let expected_revision = required_revision(payload, "expectedRevision")?;
-        let impact = self
-            .runtime_store
-            .agent_profile_removal_impact(&id, expected_revision)
+        AgentProfileCatalogRequestHandler::new(&self.runtime_store)
+            .removal_impact(&id, expected_revision)
             .await
-            .map_err(agent_profile_store_error)?;
-        let reference_count = impact.reference_count();
-        let blocking_reference_count =
-            impact.automation_ids.len() + impact.execution_policy_run_ids.len() + impact.tabs.len();
-        let mut value =
-            serde_json::to_value(impact).map_err(|error| HostError::format(error.to_string()))?;
-        let object = value
-            .as_object_mut()
-            .ok_or_else(|| HostError::format("Agent profile removal impact must be an object."))?;
-        object.insert("referenceCount".into(), json!(reference_count));
-        object.insert(
-            "blockingReferenceCount".into(),
-            json!(blocking_reference_count),
-        );
-        Ok(value)
     }
 
     pub(super) async fn agent_profile_remove(&mut self, payload: &Value) -> HostResult<Value> {
@@ -149,11 +123,9 @@ impl ServerActor {
                 "Agent profile removal requires explicit confirmation.",
             ));
         }
-        let removed = self
-            .runtime_store
-            .remove_agent_profile(&id, expected_revision)
-            .await
-            .map_err(agent_profile_store_error)?;
+        let removed = AgentProfileCatalogRequestHandler::new(&self.runtime_store)
+            .remove(&id, expected_revision)
+            .await?;
         if removed {
             self.broadcast_authenticated(event("agentProfilesChanged", json!({})));
             self.broadcast_authenticated(event("runtimeSettingsChanged", json!({})));
