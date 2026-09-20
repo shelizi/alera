@@ -171,13 +171,13 @@ async fn workspace_tag_create_rejects_case_insensitive_duplicate_names() {
     .await;
 
     let first = actor
-        .create_workspace_tag(1, &json!({ "name": "Urgent" }))
+        .workspace_tag_request(1, "workspaceTag.create", &json!({ "name": "Urgent" }))
         .await
         .unwrap();
     let first_id = first["id"].as_str().unwrap().to_string();
 
     let duplicate = actor
-        .create_workspace_tag(1, &json!({ "name": "Urgent" }))
+        .workspace_tag_request(1, "workspaceTag.create", &json!({ "name": "Urgent" }))
         .await;
     match duplicate {
         Err(HostError::Conflict { code, details, .. }) => {
@@ -189,7 +189,7 @@ async fn workspace_tag_create_rejects_case_insensitive_duplicate_names() {
     }
 
     let different_case = actor
-        .create_workspace_tag(1, &json!({ "name": "urgent" }))
+        .workspace_tag_request(1, "workspaceTag.create", &json!({ "name": "urgent" }))
         .await;
     match different_case {
         Err(HostError::Conflict { code, .. }) => {
@@ -199,7 +199,7 @@ async fn workspace_tag_create_rejects_case_insensitive_duplicate_names() {
     }
 
     let other = actor
-        .create_workspace_tag(1, &json!({ "name": "Review" }))
+        .workspace_tag_request(1, "workspaceTag.create", &json!({ "name": "Review" }))
         .await
         .unwrap();
     assert_eq!(other["name"], "Review");

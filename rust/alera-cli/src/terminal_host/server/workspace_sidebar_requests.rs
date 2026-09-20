@@ -10,6 +10,7 @@ use uuid::Uuid;
 use crate::terminal_host::host_error::{HostError, HostResult};
 use crate::terminal_host::protocol::{error_response, event, ok_response};
 
+use super::request_payloads::{json_result, parse_payload, require_string_key};
 use super::{ServerActor, ServerCommand};
 
 #[derive(Debug, Deserialize)]
@@ -24,6 +25,129 @@ struct UpdateViewPrefsRequest {
 struct SetWorkspaceTagsRequest {
     workspace_id: String,
     tag_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum WorkspaceTagChange {
+    None,
+    Tags,
+    Workspaces(Option<String>),
+    TagsAndWorkspaces,
+}
+
+#[derive(Debug)]
+pub(super) struct WorkspaceTagRequestOutcome {
+    pub(super) value: Value,
+    pub(super) change: WorkspaceTagChange,
+}
+
+pub(super) struct WorkspaceTagRequestHandler<'a> {
+    runtime_store: &'a RuntimeStore,
+}
+
+impl<'a> WorkspaceTagRequestHandler<'a> {
+    pub(super) const fn new(runtime_store: &'a RuntimeStore) -> Self {
+        Self { runtime_store }
+    }
+
+    pub(super) async fn execute(
+        &self,
+        request_type: &str,
+        payload: &Value,
+    ) -> HostResult<WorkspaceTagRequestOutcome> {
+        let (value, change) = match request_type {
+            "workspaceTag.list" => (
+                json_result(self.runtime_store.list_tags().await)?,
+                WorkspaceTagChange::None,
+            ),
+            "workspaceTag.create" => {
+                let name = string_field(payload, "name")?.trim();
+                if name.is_empty() {
+                    return Err(HostError::format("Tag name cannot be empty."));
+                }
+                if let Some(existing) = self
+                    .runtime_store
+                    .list_tags()
+                    .await
+                    .map_err(state_error)?
+                    .into_iter()
+                    .find(|tag| tag.name.eq_ignore_ascii_case(name))
+                {
+                    return Err(HostError::conflict(
+                        "workspace_tag_name_conflict",
+                        format!("A tag named '{name}' already exists."),
+                        json!({
+                            "name": name,
+                            "existingTagId": existing.id,
+                        }),
+                    ));
+                }
+                let color = payload
+                    .get("color")
+                    .and_then(Value::as_str)
+                    .map(ToString::to_string);
+                let now = Utc::now();
+                (
+                    json_result(
+                        self.runtime_store
+                            .upsert_tag(WorkspaceTag {
+                                id: Uuid::new_v4().to_string(),
+                                name: name.to_string(),
+                                color,
+                                created_at: now,
+                                updated_at: now,
+                            })
+                            .await,
+                    )?,
+                    WorkspaceTagChange::Tags,
+                )
+            }
+            "workspaceTag.setForWorkspace" => {
+                let request: SetWorkspaceTagsRequest =
+                    serde_json::from_value(payload.clone()).map_err(format_error)?;
+                let workspace = self
+                    .runtime_store
+                    .set_workspace_tags(&request.workspace_id, &request.tag_ids)
+                    .await
+                    .map_err(state_error)?;
+                let project_id = workspace.project_id.clone();
+                (
+                    serde_json::to_value(workspace).map_err(state_error)?,
+                    WorkspaceTagChange::Workspaces(Some(project_id)),
+                )
+            }
+            "workspaceTag.upsert" => {
+                let tag: WorkspaceTag = parse_payload(payload)?;
+                (
+                    json_result(self.runtime_store.upsert_tag(tag).await)?,
+                    WorkspaceTagChange::TagsAndWorkspaces,
+                )
+            }
+            "workspaceTag.remove" => {
+                let id = require_string_key(payload, "id")?;
+                json_result(self.runtime_store.remove_tag(&id).await)?;
+                (json!({}), WorkspaceTagChange::TagsAndWorkspaces)
+            }
+            "workspaceTag.assign" => {
+                let workspace_id = require_string_key(payload, "workspaceId")?;
+                let tag_id = require_string_key(payload, "tagId")?;
+                json_result(self.runtime_store.assign_tag(&workspace_id, &tag_id).await)?;
+                (json!({}), WorkspaceTagChange::Workspaces(None))
+            }
+            "workspaceTag.unassign" => {
+                let workspace_id = require_string_key(payload, "workspaceId")?;
+                let tag_id = require_string_key(payload, "tagId")?;
+                json_result(
+                    self.runtime_store
+                        .unassign_tag(&workspace_id, &tag_id)
+                        .await,
+                )?;
+                (json!({}), WorkspaceTagChange::Workspaces(None))
+            }
+            _ => return Err(HostError::format("Unknown workspace tag request.")),
+        };
+        Ok(WorkspaceTagRequestOutcome { value, change })
+    }
 }
 
 #[derive(Default)]
@@ -249,69 +373,30 @@ impl ServerActor {
         serde_json::to_value(workspace).map_err(state_error)
     }
 
-    pub(super) async fn create_workspace_tag(
+    pub(super) async fn workspace_tag_request(
         &mut self,
         client_id: u64,
+        request_type: &str,
         payload: &Value,
     ) -> HostResult<Value> {
         self.require_auth(client_id)?;
-        let name = string_field(payload, "name")?.trim();
-        if name.is_empty() {
-            return Err(HostError::format("Tag name cannot be empty."));
+        let outcome = WorkspaceTagRequestHandler::new(&self.runtime_store)
+            .execute(request_type, payload)
+            .await?;
+        match outcome.change {
+            WorkspaceTagChange::None => {}
+            WorkspaceTagChange::Tags => {
+                self.broadcast_authenticated(event("workspaceTagsChanged", json!({})));
+            }
+            WorkspaceTagChange::Workspaces(project_id) => {
+                self.broadcast_workspaces_changed(project_id.as_deref());
+            }
+            WorkspaceTagChange::TagsAndWorkspaces => {
+                self.broadcast_authenticated(event("workspaceTagsChanged", json!({})));
+                self.broadcast_workspaces_changed(None);
+            }
         }
-        if let Some(existing) = self
-            .runtime_store
-            .list_tags()
-            .await
-            .map_err(state_error)?
-            .into_iter()
-            .find(|tag| tag.name.eq_ignore_ascii_case(name))
-        {
-            return Err(HostError::conflict(
-                "workspace_tag_name_conflict",
-                format!("A tag named '{name}' already exists."),
-                json!({
-                    "name": name,
-                    "existingTagId": existing.id,
-                }),
-            ));
-        }
-        let color = payload
-            .get("color")
-            .and_then(Value::as_str)
-            .map(ToString::to_string);
-        let now = Utc::now();
-        let tag = self
-            .runtime_store
-            .upsert_tag(WorkspaceTag {
-                id: Uuid::new_v4().to_string(),
-                name: name.to_string(),
-                color,
-                created_at: now,
-                updated_at: now,
-            })
-            .await
-            .map_err(state_error)?;
-        self.broadcast_authenticated(event("workspaceTagsChanged", json!({})));
-        serde_json::to_value(tag).map_err(state_error)
-    }
-
-    pub(super) async fn set_tags_for_workspace(
-        &mut self,
-        client_id: u64,
-        payload: &Value,
-    ) -> HostResult<Value> {
-        self.require_auth(client_id)?;
-        let request: SetWorkspaceTagsRequest =
-            serde_json::from_value(payload.clone()).map_err(format_error)?;
-        let workspace = self
-            .runtime_store
-            .set_workspace_tags(&request.workspace_id, &request.tag_ids)
-            .await
-            .map_err(state_error)?;
-        let project_id = workspace.project_id.clone();
-        self.broadcast_workspaces_changed(Some(&project_id));
-        serde_json::to_value(workspace).map_err(state_error)
+        Ok(outcome.value)
     }
 }
 

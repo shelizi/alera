@@ -1,4 +1,4 @@
-use alera_core::runtime::{WorkspaceTabRecord, WorkspaceTag};
+use alera_core::runtime::WorkspaceTabRecord;
 use serde_json::{json, Map, Value};
 
 use crate::mobile_access::{
@@ -784,47 +784,15 @@ impl ServerActor {
                 }
                 Ok(outcome.value)
             }
-            "workspaceTag.list" => {
-                self.require_auth(client_id)?;
-                json_result(self.runtime_store.list_tags().await)
-            }
-            "workspaceTag.create" => self.create_workspace_tag(client_id, payload).await,
-            "workspaceTag.setForWorkspace" => self.set_tags_for_workspace(client_id, payload).await,
-            "workspaceTag.upsert" => {
-                self.require_auth(client_id)?;
-                let tag: WorkspaceTag = parse_payload(payload)?;
-                let value = json_result(self.runtime_store.upsert_tag(tag).await)?;
-                self.broadcast_authenticated(event("workspaceTagsChanged", json!({})));
-                self.broadcast_workspaces_changed(None);
-                Ok(value)
-            }
-            "workspaceTag.remove" => {
-                self.require_auth(client_id)?;
-                let id = require_string_key(payload, "id")?;
-                json_result(self.runtime_store.remove_tag(&id).await)?;
-                self.broadcast_authenticated(event("workspaceTagsChanged", json!({})));
-                self.broadcast_workspaces_changed(None);
-                Ok(json!({}))
-            }
-            "workspaceTag.assign" => {
-                self.require_auth(client_id)?;
-                let workspace_id = require_string_key(payload, "workspaceId")?;
-                let tag_id = require_string_key(payload, "tagId")?;
-                json_result(self.runtime_store.assign_tag(&workspace_id, &tag_id).await)?;
-                self.broadcast_workspaces_changed(None);
-                Ok(json!({}))
-            }
-            "workspaceTag.unassign" => {
-                self.require_auth(client_id)?;
-                let workspace_id = require_string_key(payload, "workspaceId")?;
-                let tag_id = require_string_key(payload, "tagId")?;
-                json_result(
-                    self.runtime_store
-                        .unassign_tag(&workspace_id, &tag_id)
-                        .await,
-                )?;
-                self.broadcast_workspaces_changed(None);
-                Ok(json!({}))
+            "workspaceTag.list"
+            | "workspaceTag.create"
+            | "workspaceTag.setForWorkspace"
+            | "workspaceTag.upsert"
+            | "workspaceTag.remove"
+            | "workspaceTag.assign"
+            | "workspaceTag.unassign" => {
+                self.workspace_tag_request(client_id, request_type, payload)
+                    .await
             }
             "workspaceRelation.list" | "workspaceRelation.link" | "workspaceRelation.unlink" => {
                 self.require_auth(client_id)?;
