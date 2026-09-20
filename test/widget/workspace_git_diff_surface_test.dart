@@ -1204,6 +1204,72 @@ void main() {
   });
 
   testWidgets(
+    'read-only diff keeps horizontal scrolling in all content and layout modes',
+    (tester) async {
+      final longLine = List<String>.filled(320, 'x').join();
+      final backend = FakeGitBackend()
+        ..gitDiffResult = GitDiffResult(
+          files: <GitDiffFile>[
+            GitDiffFile(
+              path: 'lib/main.dart',
+              area: .staged,
+              status: .modified,
+              lines: <GitDiffLine>[
+                const GitDiffLine.hunk('@@ -1,1 +1,1 @@'),
+                const GitDiffLine.deletion('-old line'),
+                GitDiffLine.addition('+$longLine'),
+              ],
+            ),
+          ],
+        )
+        ..diffBlobBytesBySide[(filePath: 'lib/main.dart', oldSide: true)] =
+            Uint8List.fromList('old line\n'.codeUnits)
+        ..diffBlobBytesBySide[(filePath: 'lib/main.dart', oldSide: false)] =
+            Uint8List.fromList('$longLine\n'.codeUnits);
+
+      await _pumpDiffSurface(
+        tester,
+        backend: backend,
+        tab: _diffTab(
+          filePath: 'lib/main.dart',
+          title: 'main.dart staged',
+          area: .staged,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      Future<void> expectHorizontalScroll(String key) async {
+        final finder = find.byKey(ValueKey<String>(key));
+        expect(finder, findsOneWidget);
+        final controller = tester.widget<Scrollbar>(finder).controller!;
+        expect(controller.hasClients, isTrue);
+        expect(controller.position.maxScrollExtent, greaterThan(0));
+        controller.jumpTo(controller.position.maxScrollExtent);
+        await tester.pump();
+        expect(controller.offset, greaterThan(0));
+      }
+
+      // Full file + single column.
+      await expectHorizontalScroll('git-diff-single-column-x-scrollbar');
+
+      // Diff only + single column.
+      await tester.tap(find.byTooltip('Switch to Diff Only'));
+      await tester.pumpAndSettle();
+      await expectHorizontalScroll('git-diff-single-column-x-scrollbar');
+
+      // Diff only + side-by-side.
+      await tester.tap(find.byTooltip('Switch to Side-by-Side View'));
+      await tester.pumpAndSettle();
+      await expectHorizontalScroll('git-diff-side-by-side-x-scrollbar');
+
+      // Full file + side-by-side.
+      await tester.tap(find.byTooltip('Switch to Full File View'));
+      await tester.pumpAndSettle();
+      await expectHorizontalScroll('git-diff-side-by-side-x-scrollbar');
+    },
+  );
+
+  testWidgets(
     'editable side-by-side selection keeps manual horizontal scroll position',
     (tester) async {
       final longLine = List<String>.filled(220, 'x').join();
