@@ -9,8 +9,9 @@ use crate::terminal_host::protocol::{error_response, ok_response};
 use super::automation_policy_requests::load_automation_policy_show;
 use super::deferred_read_requests::DeferredReadRequestHandler;
 use super::deferred_request_scheduler::DeferredRequestScheduler;
+use super::project_registration_requests::ProjectRegistrationRequestHandler;
 use super::request_payloads::parse_payload;
-use super::request_route_policy::request_route_policy;
+use super::request_route_policy::{request_route_policy, DeferredWriteRoute};
 use super::requests::{require_string_key, validate_mobile_runtime_settings_payload};
 use super::ServerActor;
 
@@ -92,6 +93,20 @@ impl ServerActor {
             .start(route, client_id, request_id, request_type, payload)?;
             return Ok(true);
         }
+        if let Some(route) = request_route_policy(request_type).deferred_write {
+            self.require_auth(client_id)?;
+            self.require_request_allowed(client_id, request_type)?;
+            match route {
+                DeferredWriteRoute::ProjectRegister => {
+                    ProjectRegistrationRequestHandler::new(
+                        self.runtime_store.clone(),
+                        self.deferred_request_scheduler(),
+                    )
+                    .start(client_id, request_id, request_type, payload)?;
+                }
+            }
+            return Ok(true);
+        }
         match request_type {
             "automation.policy"
                 if payload
@@ -110,12 +125,6 @@ impl ServerActor {
                     request_type,
                     load_automation_policy_show(runtime_store, payload.clone()),
                 )?;
-                Ok(true)
-            }
-            "project.register" => {
-                self.require_auth(client_id)?;
-                self.require_request_allowed(client_id, request_type)?;
-                self.start_project_registration(client_id, request_id, payload)?;
                 Ok(true)
             }
             "workspaceSidebar.snapshot" => {

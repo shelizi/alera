@@ -33,11 +33,17 @@ pub(super) enum DeferredReadRoute {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum DeferredWriteRoute {
+    ProjectRegister,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct RequestRoutePolicy {
     pub(super) mobile_allowed: bool,
     pub(super) runtime_mutation: RuntimeMutationPolicy,
     pub(super) post_response: PostResponseAction,
     pub(super) deferred_read: Option<DeferredReadRoute>,
+    pub(super) deferred_write: Option<DeferredWriteRoute>,
 }
 
 const LOCAL: RequestRoutePolicy = RequestRoutePolicy {
@@ -45,6 +51,7 @@ const LOCAL: RequestRoutePolicy = RequestRoutePolicy {
     runtime_mutation: RuntimeMutationPolicy::Available,
     post_response: PostResponseAction::None,
     deferred_read: None,
+    deferred_write: None,
 };
 
 const MOBILE: RequestRoutePolicy = RequestRoutePolicy {
@@ -112,7 +119,6 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         | "automation.resume"
         | "automation.runNow"
         | "automation.upsert"
-        | "project.register"
         | "project.rename"
         | "projectConfig.remove"
         | "projectConfig.upsert"
@@ -134,6 +140,10 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         | "workspaceTag.remove"
         | "workspaceTag.setForWorkspace"
         | "write" => MOBILE_CONFLICT,
+
+        "project.register" => {
+            mobile_conflicting_deferred_write(DeferredWriteRoute::ProjectRegister)
+        }
 
         "project.remove" => serialized_mobile(SerializedRuntimeMutation::RemoveProject),
         "tab.remove" => serialized_mobile(SerializedRuntimeMutation::RemoveTab),
@@ -296,6 +306,15 @@ const fn mobile_deferred(route: DeferredReadRoute) -> RequestRoutePolicy {
     }
 }
 
+const fn mobile_conflicting_deferred_write(route: DeferredWriteRoute) -> RequestRoutePolicy {
+    RequestRoutePolicy {
+        mobile_allowed: true,
+        runtime_mutation: RuntimeMutationPolicy::Conflicts,
+        deferred_write: Some(route),
+        ..LOCAL
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -374,5 +393,16 @@ mod tests {
             assert!(policy.mobile_allowed, "{request_type}");
             assert_eq!(policy.deferred_read, Some(route), "{request_type}");
         }
+    }
+
+    #[test]
+    fn project_registration_is_a_typed_deferred_write() {
+        let policy = request_route_policy("project.register");
+        assert!(policy.mobile_allowed);
+        assert_eq!(policy.runtime_mutation, RuntimeMutationPolicy::Conflicts);
+        assert_eq!(
+            policy.deferred_write,
+            Some(DeferredWriteRoute::ProjectRegister)
+        );
     }
 }

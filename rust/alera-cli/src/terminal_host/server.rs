@@ -166,6 +166,7 @@ mod output_resume_tests;
 mod project_clone_requests;
 #[cfg(test)]
 mod project_contract_tests;
+mod project_registration_requests;
 mod project_requests;
 mod prompt_file_requests;
 mod prompt_file_store;

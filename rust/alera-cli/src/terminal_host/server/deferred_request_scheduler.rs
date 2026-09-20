@@ -33,6 +33,32 @@ impl DeferredRequestScheduler {
     where
         F: Future<Output = HostResult<Value>> + Send + 'static,
     {
+        self.schedule_typed(
+            client_id,
+            request_id,
+            request_type,
+            task,
+            |client_id, request_id, result| ServerCommand::DeferredRequestFinished {
+                client_id,
+                request_id,
+                result,
+            },
+        )
+    }
+
+    pub(super) fn schedule_typed<T, F, C>(
+        &self,
+        client_id: u64,
+        request_id: i64,
+        request_type: &str,
+        task: F,
+        completion: C,
+    ) -> HostResult<()>
+    where
+        T: Send + 'static,
+        F: Future<Output = HostResult<T>> + Send + 'static,
+        C: FnOnce(u64, i64, HostResult<T>) -> ServerCommand + Send + 'static,
+    {
         let inbox = self.inbox.clone();
         self.admission.schedule_with_request_id(
             DeferredRequestClass::Bulk,
@@ -41,11 +67,7 @@ impl DeferredRequestScheduler {
             Some(request_id),
             async move {
                 let result = task.await;
-                let _ = inbox.send(ServerCommand::DeferredRequestFinished {
-                    client_id,
-                    request_id,
-                    result,
-                });
+                let _ = inbox.send(completion(client_id, request_id, result));
             },
         )
     }

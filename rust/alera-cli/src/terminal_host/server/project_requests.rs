@@ -3,21 +3,11 @@ use alera_core::runtime::{ProjectConfig, RuntimeStore};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::project_management::{
-    commit_project_registration, effective_project_config, host_directory_roots,
-    prepare_project_registration, register_project, rename_project, PreparedProjectRegistration,
-};
+use crate::project_management::{effective_project_config, host_directory_roots, rename_project};
 use crate::terminal_host::host_error::{HostError, HostResult};
-use crate::terminal_host::protocol::{error_response, event, ok_response};
+use crate::terminal_host::protocol::event;
 
-use super::{ServerActor, ServerCommand};
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ProjectRegisterRequest {
-    path: String,
-    name: Option<String>,
-}
+use super::ServerActor;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -27,73 +17,6 @@ struct ProjectRenameRequest {
 }
 
 impl ServerActor {
-    pub(super) fn start_project_registration(
-        &self,
-        client_id: u64,
-        request_id: i64,
-        payload: &Value,
-    ) -> HostResult<()> {
-        let request: ProjectRegisterRequest = parse(payload)?;
-        let path = request.path;
-        let name = request.name;
-        let inbox = self.inbox.clone();
-        self.deferred_admission.schedule(
-            super::deferred_admission::DeferredRequestClass::Bulk,
-            "project.register",
-            Some(client_id),
-            async move {
-                let result = tokio::task::spawn_blocking(move || {
-                    prepare_project_registration(&path, name.as_deref()).map_err(state_error)
-                })
-                .await
-                .unwrap_or_else(|error| {
-                    Err(HostError::state(format!(
-                        "Project registration preparation failed: {error}"
-                    )))
-                });
-                let _ = inbox.send(ServerCommand::ProjectRegistrationPrepared {
-                    client_id,
-                    request_id,
-                    result,
-                });
-            },
-        )
-    }
-
-    pub(super) async fn finish_project_registration(
-        &mut self,
-        client_id: u64,
-        request_id: i64,
-        result: HostResult<PreparedProjectRegistration>,
-    ) {
-        if self.require_auth(client_id).is_err() {
-            return;
-        }
-        let result = match result {
-            Ok(prepared) => commit_project_registration(&self.runtime_store, prepared)
-                .await
-                .map_err(state_error)
-                .and_then(|registration| serde_json::to_value(registration).map_err(state_error)),
-            Err(error) => Err(error),
-        };
-        match result {
-            Ok(value) => {
-                self.broadcast_project_state_changed();
-                self.client_write(client_id, ok_response(request_id, value));
-            }
-            Err(error) => self.client_write(client_id, error_response(request_id, &error)),
-        }
-    }
-
-    pub(super) async fn project_register_request(&mut self, payload: &Value) -> HostResult<Value> {
-        let request: ProjectRegisterRequest = parse(payload)?;
-        let result = register_project(&self.runtime_store, &request.path, request.name.as_deref())
-            .await
-            .map_err(state_error)?;
-        self.broadcast_project_state_changed();
-        serde_json::to_value(result).map_err(state_error)
-    }
-
     pub(super) async fn project_rename_request(&mut self, payload: &Value) -> HostResult<Value> {
         let request: ProjectRenameRequest = parse(payload)?;
         let project = rename_project(&self.runtime_store, &request.id, &request.name)

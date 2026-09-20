@@ -21,8 +21,9 @@ use crate::terminal_host::session::SessionDriver;
 
 use super::deferred_read_requests::DeferredReadRequestHandler;
 use super::host_service_requests::required_non_blank;
+use super::project_registration_requests::ProjectRegistrationRequestHandler;
 pub(super) use super::request_payloads::{json_result, parse_payload};
-use super::request_route_policy::{request_route_policy, PostResponseAction};
+use super::request_route_policy::{request_route_policy, DeferredWriteRoute, PostResponseAction};
 use super::runtime_mutation_barrier::conflicts_with_runtime_mutation;
 use super::{ClientKind, ServerActor, ServerCommand};
 
@@ -167,6 +168,24 @@ impl ServerActor {
             )
             .execute_inline(route, payload)
             .await;
+        }
+        if let Some(route) = request_route_policy(request_type).deferred_write {
+            self.require_auth(client_id)?;
+            self.require_request_allowed(client_id, request_type)?;
+            return match route {
+                DeferredWriteRoute::ProjectRegister => {
+                    let result = ProjectRegistrationRequestHandler::new(
+                        self.runtime_store.clone(),
+                        self.deferred_request_scheduler(),
+                    )
+                    .execute_inline(payload)
+                    .await;
+                    if result.is_ok() {
+                        self.broadcast_project_state_changed();
+                    }
+                    result
+                }
+            };
         }
         match request_type {
             "hello" => self.handle_hello(client_id, payload),
@@ -600,10 +619,6 @@ impl ServerActor {
             "hostDirectory.roots" => {
                 self.require_auth(client_id)?;
                 self.host_directory_roots_request()
-            }
-            "project.register" => {
-                self.require_auth(client_id)?;
-                self.project_register_request(payload).await
             }
             "project.rename" => {
                 self.require_auth(client_id)?;
