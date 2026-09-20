@@ -235,6 +235,7 @@ class _WorkspaceEditorSurfaceState
                   ? _languageForPath(filePath)
                   : _plainTextLanguage,
               languageId: _languageIdForPath(filePath),
+              enableNativeSyntax: true,
               tabSize: effectiveTabSize,
               useSpaceAsTab: true,
               scrollbarDecoration: workspaceEditorScrollbarDecoration(),

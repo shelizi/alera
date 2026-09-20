@@ -249,6 +249,7 @@ Widget _editorWidget(code_forge.CodeForgeController controller) => MaterialApp(
       largeFilePerformanceMode: true,
       language: builtinAllLanguages['dart']!,
       languageId: 'dart',
+      enableNativeSyntax: true,
       textStyle: const TextStyle(
         fontFamily: 'JetBrains Mono',
         fontSize: 14,
@@ -274,6 +275,7 @@ Widget _c6pEditorWidget(
       largeFilePerformanceMode: true,
       language: builtinAllLanguages[languageId]!,
       languageId: languageId,
+      enableNativeSyntax: true,
       textStyle: const TextStyle(
         fontFamily: 'JetBrains Mono',
         fontSize: 14,

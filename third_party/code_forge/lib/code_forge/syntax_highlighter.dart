@@ -267,6 +267,17 @@ class SyntaxHighlighter {
     _version++;
   }
 
+  void clearNativeSyntaxCache() {
+    _nativeSpanCacheRevision = -1;
+    _nativeSpanCacheStartLine = -1;
+    _nativeSpanCacheEndLine = -1;
+    _nativeSpansByLine.clear();
+    _grammarCache.clear();
+    _mergedCache.clear();
+    _lineSpanCache.clear();
+    _version++;
+  }
+
   void invalidateLines(Set<int> lines) {
     for (final line in lines) {
       _grammarCache.remove(line);

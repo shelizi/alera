@@ -204,10 +204,15 @@ class CodeForge extends StatefulWidget {
   /// by default if not specified.
   final Mode? language;
 
-  /// Stable language identifier used by the retained native syntax document.
-  /// This is intentionally independent from LSP configuration so viewport
-  /// grammar highlighting can stay enabled when LSP is disabled.
+  /// Stable language identifier for editor language metadata.
+  /// Retained native parsing is independently controlled by
+  /// [enableNativeSyntax].
   final String? languageId;
+
+  /// Whether to create and maintain the retained native syntax document.
+  ///
+  /// Defaults to false so [languageId] alone never starts native parser work.
+  final bool enableNativeSyntax;
 
   /// Additional language modes registered in the same highlighter instance.
   ///
@@ -421,6 +426,7 @@ class CodeForge extends StatefulWidget {
     this.editorTheme,
     this.language,
     this.languageId,
+    this.enableNativeSyntax = false,
     this.filePath,
     this.initialText,
     this.focusNode,
@@ -2955,6 +2961,8 @@ class _CodeForgeState extends State<CodeForge> with TickerProviderStateMixin {
                                                     _controller
                                                         .lspConfig
                                                         ?.languageId,
+                                                enableNativeSyntax:
+                                                    widget.enableNativeSyntax,
                                                 lspConfig:
                                                     _controller.lspConfig,
                                                 semanticTokens: _semanticTokens,
@@ -4422,6 +4430,7 @@ class _CodeField extends LeafRenderObjectWidget {
   final Mode language;
   final List<Mode> extraLanguages;
   final String? languageId;
+  final bool enableNativeSyntax;
   final LspConfig? lspConfig;
   final List<LspSemanticToken>? semanticTokens;
   final int semanticTokensVersion;
@@ -4493,6 +4502,7 @@ class _CodeField extends LeafRenderObjectWidget {
     this.filePath,
     this.textStyle,
     this.languageId,
+    required this.enableNativeSyntax,
     this.lspConfig,
     this.semanticTokens,
     this.semanticTokensVersion = 0,
@@ -4511,6 +4521,7 @@ class _CodeField extends LeafRenderObjectWidget {
       language: language,
       extraLanguages: extraLanguages,
       languageId: languageId,
+      enableNativeSyntax: enableNativeSyntax,
       lspConfig: lspConfig,
       innerPadding: innerPadding,
       vscrollController: vscrollController,
@@ -4570,6 +4581,7 @@ class _CodeField extends LeafRenderObjectWidget {
       ..editorTheme = editorTheme
       ..language = language
       ..extraLanguages = extraLanguages
+      ..enableNativeSyntax = enableNativeSyntax
       ..textStyle = textStyle
       ..innerPadding = innerPadding
       ..readOnly = readOnly
@@ -4687,7 +4699,7 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
   Offset? _pointerDownPosition;
   Offset _currentPosition = Offset.zero;
   bool _enableFolding, _enableGuideLines, _enableGutter, _enableGutterDivider;
-  bool _largeFilePerformanceMode;
+  bool _largeFilePerformanceMode, _enableNativeSyntax;
   bool _isFoldToggleInProgress = false, _lineWrap;
   bool _foldRangesNeedsClear = false;
   Set<int> _foldedLineIndices = {};
@@ -5416,6 +5428,7 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     required bool enableFolding,
     required this._enableGuideLines,
     required this._largeFilePerformanceMode,
+    required bool enableNativeSyntax,
     required this._enableGutter,
     required this._enableGutterDivider,
     required GutterStyle gutterStyle,
@@ -5432,6 +5445,7 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     this._ghostTextStyle,
     this._textDirection = TextDirection.ltr,
   }) : _enableFolding = enableFolding,
+       _enableNativeSyntax = enableNativeSyntax,
        _gutterStyle = gutterStyle,
        _lineWrap = lineWrap,
        _innerPadding = innerPadding,
@@ -5457,12 +5471,16 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
       languageId: languageId,
     );
     final nativeLanguageId = languageId?.trim();
-    if (nativeLanguageId != null && nativeLanguageId.isNotEmpty) {
+    if (_enableNativeSyntax &&
+        nativeLanguageId != null &&
+        nativeLanguageId.isNotEmpty) {
       controller.configureNativeSyntaxDocument(
         languageId: nativeLanguageId,
         documentId: filePath,
         deferInitialParse: _largeFilePerformanceMode,
       );
+    } else {
+      controller.clearNativeSyntaxDocument();
     }
     _layoutMap = LayoutMap();
     _rebuildLayoutMap();
@@ -5881,6 +5899,24 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
   set readOnly(bool value) {
     if (_readOnly == value) return;
     _readOnly = value;
+    markNeedsPaint();
+  }
+
+  set enableNativeSyntax(bool value) {
+    if (_enableNativeSyntax == value) return;
+    _enableNativeSyntax = value;
+    _syntaxHighlighter.clearNativeSyntaxCache();
+    final nativeLanguageId = languageId?.trim();
+    if (value && nativeLanguageId != null && nativeLanguageId.isNotEmpty) {
+      controller.configureNativeSyntaxDocument(
+        languageId: nativeLanguageId,
+        documentId: filePath,
+        deferInitialParse: _largeFilePerformanceMode,
+      );
+    } else {
+      controller.clearNativeSyntaxDocument();
+    }
+    _paragraphCache.clear();
     markNeedsPaint();
   }
 

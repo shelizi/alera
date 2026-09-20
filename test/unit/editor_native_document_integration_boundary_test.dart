@@ -40,13 +40,35 @@ void main() {
     ).readAsStringSync();
 
     expect(codeArea, contains('controller.configureNativeSyntaxDocument('));
+    expect(codeArea, contains('final bool enableNativeSyntax;'));
+    expect(codeArea, contains('this.enableNativeSyntax = false'));
+    expect(codeArea, contains('if (_enableNativeSyntax &&'));
     expect(codeArea, contains('controller.queryNativeSyntaxSpans'));
     expect(syntaxHighlighter, contains('SyntaxSpanResponse'));
     expect(syntaxHighlighter, contains('_nativeSpanCacheRevision'));
     expect(codeArea, contains('.preHighlightLines('));
     expect(workspaceEditor, contains('languageId:'));
     expect(workspaceEditor, contains('_languageIdForPath(filePath)'));
+    expect(workspaceEditor, contains('enableNativeSyntax: true'));
   });
+
+  test(
+    'language metadata alone does not activate the retained native parser',
+    () {
+      final codeArea = File(
+        'third_party/code_forge/lib/code_forge/code_area.dart',
+      ).readAsStringSync();
+      final controller = File(
+        'third_party/code_forge/lib/code_forge/controller.dart',
+      ).readAsStringSync();
+
+      expect(codeArea, contains('this.enableNativeSyntax = false'));
+      expect(codeArea, contains('required bool enableNativeSyntax'));
+      expect(codeArea, contains('if (_enableNativeSyntax &&'));
+      expect(codeArea, contains('..enableNativeSyntax = enableNativeSyntax'));
+      expect(controller, contains('void clearNativeSyntaxDocument()'));
+    },
+  );
 
   test('external editor reload keeps persistent viewport scroll state', () {
     final workspaceEditor = File(

@@ -479,6 +479,12 @@ class CodeForgeController implements DeltaTextInputClient {
     }();
   }
 
+  /// Stops retained native parser state without changing editor language
+  /// metadata. Hosts call this when native syntax is disabled by policy.
+  void clearNativeSyntaxDocument() {
+    _resetNativeSyntaxDocument();
+  }
+
   Future<void> _syncNativeSyntaxDocument() async {
     while (true) {
       final inFlight = _nativeEditorSyncFuture;
