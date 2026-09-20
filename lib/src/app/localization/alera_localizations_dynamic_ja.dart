@@ -1,8 +1,9 @@
 part of 'alera_localizations.dart';
 
-// Pattern-based Traditional Chinese translations for strings that embed
-// runtime values. Lookup order: static table first, then these rules.
-String? _translateDynamicTraditionalChinese(String source) {
+// Pattern-based Japanese translations for strings that embed runtime values.
+// Lookup order: static table first, then these rules. Mirrors the rule set in
+// `_translateDynamicTraditionalChinese`.
+String? _translateDynamicJapanese(String source) {
   final sleepProject = RegExp(
     r'^This closes all tabs and terminal sessions for all (\d+) workspaces in "(.+)"\. Worktrees, branches, and files will be preserved\.(.*)$',
   ).firstMatch(source);
@@ -10,39 +11,38 @@ String? _translateDynamicTraditionalChinese(String source) {
     final suffix = sleepProject.group(3)!;
     var dirtyWarning = '';
     if (suffix == ' One editor has unsaved changes that will be discarded.') {
-      dirtyWarning = ' 有 1 個編輯器包含尚未儲存的變更，將會捨棄。';
+      dirtyWarning = ' 保存していない変更のあるエディターが 1 件あり、その変更は破棄されます。';
     } else {
       final dirtyEditors = RegExp(
         r'^ (\d+) editors have unsaved changes that will be discarded\.$',
       ).firstMatch(suffix);
       if (dirtyEditors != null) {
-        dirtyWarning = ' 有 ${dirtyEditors.group(1)} 個編輯器包含尚未儲存的變更，將會捨棄。';
+        dirtyWarning =
+            ' 保存していない変更のあるエディターが ${dirtyEditors.group(1)} 件あり、その変更は破棄されます。';
       }
     }
-    return '這會關閉「${sleepProject.group(2)}」全部 ${sleepProject.group(1)} 個工作區中的分頁與終端機工作階段。Worktree、分支與檔案會保留。$dirtyWarning';
+    return '「${sleepProject.group(2)}」にある ${sleepProject.group(1)} 個のワークスペースのタブとターミナルセッションをすべて閉じます。Worktree、ブランチ、ファイルは保持されます。$dirtyWarning';
   }
   final sleepProjectFailed = RegExp(r'^Could not sleep project: (.+)$')
       .firstMatch(source);
   if (sleepProjectFailed != null) {
-    return '無法讓專案休眠：${sleepProjectFailed.group(1)}';
+    return 'プロジェクトをスリープできませんでした: ${sleepProjectFailed.group(1)}';
   }
   final diffOverview = RegExp(r'^Diff overview, (\d+) removed, (\d+) added$')
       .firstMatch(source);
   if (diffOverview != null) {
-    return '差異總覽，移除 ${diffOverview.group(1)} 行，新增 ${diffOverview.group(2)} 行';
+    return 'Diff の概要、削除 ${diffOverview.group(1)} 行、追加 ${diffOverview.group(2)} 行';
   }
   final requiredField = RegExp(r'^(.+) is required$').firstMatch(source);
   if (requiredField != null) {
-    final label = AleraLocalizations._lookupTraditionalChinese(
-      requiredField.group(1)!,
-    );
-    return '$label 為必填。';
+    final label = AleraLocalizations._lookupJapanese(requiredField.group(1)!);
+    return '$label は必須です。';
   }
   final agentGroupDescription = RegExp(
     r'^(.+) · (Waiting for input|Blocked|Interrupted|Done \(Unread\)|Done)$',
   ).firstMatch(source);
   if (agentGroupDescription != null) {
-    final state = AleraLocalizations._lookupTraditionalChinese(
+    final state = AleraLocalizations._lookupJapanese(
       agentGroupDescription.group(2)!,
     );
     return '${agentGroupDescription.group(1)} · $state';
@@ -50,141 +50,137 @@ String? _translateDynamicTraditionalChinese(String source) {
   final rebaseCurrentBranchOnto = RegExp(r'^Rebase Current Branch onto (.+)$')
       .firstMatch(source);
   if (rebaseCurrentBranchOnto != null) {
-    return '將目前分支 Rebase 到 ${rebaseCurrentBranchOnto.group(1)}';
+    return '現在のブランチを ${rebaseCurrentBranchOnto.group(1)} に Rebase';
   }
   final autosavePaused = RegExp(r'^Autosave paused: (.+)$').firstMatch(source);
   if (autosavePaused != null) {
-    final detail = AleraLocalizations._lookupTraditionalChinese(
-      autosavePaused.group(1)!,
-    );
-    return '自動儲存已暫停：$detail';
+    final detail = AleraLocalizations._lookupJapanese(autosavePaused.group(1)!);
+    return '自動保存を一時停止しました: $detail';
   }
   final dropCommitMessage = RegExp(
     r'^Removes (.+) "(.+)" from the current branch\. This cannot be undone\.$',
   ).firstMatch(source);
   if (dropCommitMessage != null) {
-    return '這會從目前分支移除 ${dropCommitMessage.group(1)}「${dropCommitMessage.group(2)}」，且無法復原。';
+    return '現在のブランチから ${dropCommitMessage.group(1)}「${dropCommitMessage.group(2)}」を削除します。この操作は元に戻せません。';
   }
   final mergeCommitMessage = RegExp(r'^Merge (.+) into (.+)\?$')
       .firstMatch(source);
   if (mergeCommitMessage != null) {
-    return '要將 ${mergeCommitMessage.group(1)} 合併到 ${mergeCommitMessage.group(2)} 嗎？';
+    return '${mergeCommitMessage.group(1)} を ${mergeCommitMessage.group(2)} にマージしますか？';
   }
   final rebaseCommitMessage = RegExp(
     r'^Rebase (.+) onto (.+) "(.+)"\. This rewrites the current branch history\.$',
   ).firstMatch(source);
   if (rebaseCommitMessage != null) {
-    return '要將 ${rebaseCommitMessage.group(1)} Rebase 到 ${rebaseCommitMessage.group(2)}「${rebaseCommitMessage.group(3)}」。這會重寫目前分支的歷史紀錄。';
+    return '${rebaseCommitMessage.group(1)} を ${rebaseCommitMessage.group(2)}「${rebaseCommitMessage.group(3)}」に Rebase します。現在のブランチの履歴が書き換えられます。';
   }
   final singleDirty = RegExp(r'^(.+) has unsaved changes\.$')
       .firstMatch(source);
   if (singleDirty != null) {
-    return '「${singleDirty.group(1)}」有尚未儲存的變更。';
+    return '「${singleDirty.group(1)}」に保存していない変更があります。';
   }
   final multipleDirty = RegExp(r'^(\d+) editor tabs have unsaved changes\.$')
       .firstMatch(source);
   if (multipleDirty != null) {
-    return '有 ${multipleDirty.group(1)} 個編輯器分頁包含尚未儲存的變更。';
+    return '${multipleDirty.group(1)} 個のエディタータブに保存していない変更があります。';
   }
   final activeAgent = RegExp(
     r'^An agent is actively working in "(.+)"\. Closing will terminate the session\.$',
   ).firstMatch(source);
   if (activeAgent != null) {
-    return '代理程式正在「${activeAgent.group(1)}」中執行工作。關閉後將終止此工作階段。';
+    return 'Agent が「${activeAgent.group(1)}」で作業中です。閉じるとこのセッションは終了します。';
   }
   final runningProcess = RegExp(
     r'^The process "(.+)" is still running in "(.+)"\. Closing will terminate it\.$',
   ).firstMatch(source);
   if (runningProcess != null) {
-    return '程序「${runningProcess.group(1)}」仍在「${runningProcess.group(2)}」中執行。關閉後將終止該程序。';
+    return 'プロセス「${runningProcess.group(1)}」が「${runningProcess.group(2)}」でまだ実行中です。閉じるとそのプロセスは終了します。';
   }
   final runningCommand = RegExp(
     r'^A command is still running in "(.+)"\. Closing will terminate it\.$',
   ).firstMatch(source);
   if (runningCommand != null) {
-    return '「${runningCommand.group(1)}」中仍有命令正在執行。關閉後將終止該命令。';
+    return '「${runningCommand.group(1)}」でコマンドがまだ実行中です。閉じるとそのコマンドは終了します。';
   }
   final busyTerminals = RegExp(
     r'^(\d+) terminal tabs have running processes or active agents\. Closing will terminate them\.$',
   ).firstMatch(source);
   if (busyTerminals != null) {
-    return '有 ${busyTerminals.group(1)} 個終端機分頁仍有執行中程序或作用中代理程式。關閉後將終止它們。';
+    return '${busyTerminals.group(1)} 個のターミナルタブに実行中のプロセスまたはアクティブな Agent があります。閉じるとそれらは終了します。';
   }
   final preservedAttachments = RegExp(
     r'^(\d+) attached (?:item|items) will be preserved\.$',
   ).firstMatch(source);
   if (preservedAttachments != null) {
-    return '將保留 ${preservedAttachments.group(1)} 個附件。';
+    return '${preservedAttachments.group(1)} 件の添付ファイルは保持されます。';
   }
 
   final effortLabel = RegExp(r'^(.+) Effort$').firstMatch(source);
   if (effortLabel != null) {
-    return '推理強度：${effortLabel.group(1)}';
+    return '推論の深さ: ${effortLabel.group(1)}';
   }
   final chunkCount = RegExp(r'^(\d+) (?:Chunk|Chunks)$').firstMatch(source);
   if (chunkCount != null) {
-    return '${chunkCount.group(1)} 個區塊';
+    return '${chunkCount.group(1)} 個のチャンク';
   }
   final retainedLines = RegExp(r'^Kept (\d+)/(\d+) Changed Lines$')
       .firstMatch(source);
   if (retainedLines != null) {
-    return '保留 ${retainedLines.group(1)}/${retainedLines.group(2)} 行變更';
+    return '変更行 ${retainedLines.group(1)}/${retainedLines.group(2)} を保持';
   }
   final chunkPosition = RegExp(r'^Chunk (\d+) of (\d+)$').firstMatch(source);
   if (chunkPosition != null) {
-    return '區塊 ${chunkPosition.group(1)}/${chunkPosition.group(2)}';
+    return 'チャンク ${chunkPosition.group(1)}/${chunkPosition.group(2)}';
   }
   final generatingChunk = RegExp(r'^Generating chunk (\d+) of (\d+)$')
       .firstMatch(source);
   if (generatingChunk != null) {
-    return '正在產生區塊 ${generatingChunk.group(1)}/${generatingChunk.group(2)}';
+    return 'チャンク ${generatingChunk.group(1)}/${generatingChunk.group(2)} を生成しています';
   }
   final repairingChunk = RegExp(r'^Repairing chunk (\d+) of (\d+)$')
       .firstMatch(source);
   if (repairingChunk != null) {
-    return '正在修復區塊 ${repairingChunk.group(1)}/${repairingChunk.group(2)}';
+    return 'チャンク ${repairingChunk.group(1)}/${repairingChunk.group(2)} を修復しています';
   }
   final combiningChunks = RegExp(r'^Combining (\d+) (?:chunk|chunks)$')
       .firstMatch(source);
   if (combiningChunks != null) {
-    return '正在合併 ${combiningChunks.group(1)} 個區塊';
+    return '${combiningChunks.group(1)} 個のチャンクを結合しています';
   }
 
   final shortcutConflict = RegExp(
     r'^(.+) is assigned to "(.+)"\. Reassign it to "(.+)"\?$',
   ).firstMatch(source);
   if (shortcutConflict != null) {
-    final conflictLabel = AleraLocalizations._lookupTraditionalChinese(
+    final conflictLabel = AleraLocalizations._lookupJapanese(
       shortcutConflict.group(2)!,
     );
-    final targetLabel = AleraLocalizations._lookupTraditionalChinese(
+    final targetLabel = AleraLocalizations._lookupJapanese(
       shortcutConflict.group(3)!,
     );
-    return '${shortcutConflict.group(1)} 已指派給「$conflictLabel」。要重新指派給「$targetLabel」嗎？';
+    return '${shortcutConflict.group(1)} は「$conflictLabel」に割り当てられています。「$targetLabel」に割り当て直しますか？';
   }
   final unsupportedKey = RegExp(r'^Unsupported key: (.+)\.$')
       .firstMatch(source);
   if (unsupportedKey != null) {
-    return '不支援的按鍵：${unsupportedKey.group(1)}。';
+    return 'サポートされていないキーです: ${unsupportedKey.group(1)}。';
   }
 
   final sortBy = RegExp(r'^Sort By (.+)$').firstMatch(source);
   if (sortBy != null) {
-    final label = AleraLocalizations._lookupTraditionalChinese(
-      sortBy.group(1)!,
-    );
-    return '依 $label 排序';
+    final label = AleraLocalizations._lookupJapanese(sortBy.group(1)!);
+    return '$label で並べ替え';
   }
   final orphanTerminals = RegExp(r'^(\d+) orphan terminal(?:s)?$')
       .firstMatch(source);
   if (orphanTerminals != null) {
-    return '${orphanTerminals.group(1)} 個孤立終端機';
+    return '孤立したターミナル ${orphanTerminals.group(1)} 件';
   }
   final forceQuitTerminal = RegExp(
     r'^Force-quits (.+)\. Anything running in that terminal is lost\.$',
   ).firstMatch(source);
   if (forceQuitTerminal != null) {
-    return '將強制關閉「${forceQuitTerminal.group(1)}」。該終端機中正在執行的所有工作都會遺失。';
+    return '「${forceQuitTerminal.group(1)}」を強制終了します。そのターミナルで実行中の内容はすべて失われます。';
   }
 
   final usageCount = RegExp(
@@ -192,37 +188,37 @@ String? _translateDynamicTraditionalChinese(String source) {
   ).firstMatch(source);
   if (usageCount != null) {
     final noun = switch (usageCount.group(2)) {
-      'assistant responses' => '則 Assistant 回覆',
-      'transcript sources' => '個逐字稿來源',
-      _ => '則未計價回覆',
+      'assistant responses' => '件の Assistant 応答',
+      'transcript sources' => '件のトランスクリプトソース',
+      _ => '件の未課金の応答',
     };
     return '${usageCount.group(1)} $noun';
   }
   final usageInputShare = RegExp(r'^([0-9.]+%) of input$').firstMatch(source);
   if (usageInputShare != null) {
-    return '占輸入 ${usageInputShare.group(1)}';
+    return '入力の ${usageInputShare.group(1)}';
   }
   final usageScanSummary = RegExp(
     r'^Scanned (\d+) files in (\d+) ms\. Transcript content stays on this host\.$',
   ).firstMatch(source);
   if (usageScanSummary != null) {
-    return '已掃描 ${usageScanSummary.group(1)} 個檔案，耗時 ${usageScanSummary.group(2)} ms。逐字稿內容會保留在此 Host。';
+    return '${usageScanSummary.group(1)} 件のファイルを ${usageScanSummary.group(2)} ms でスキャンしました。トランスクリプトの内容はこの Host に保持されます。';
   }
   final usagePartial = RegExp(r'^(.+) (.+) is partial\.$').firstMatch(source);
   if (usagePartial != null) {
-    return '${usagePartial.group(1)} ${usagePartial.group(2)} 的資料不完整。';
+    return '${usagePartial.group(1)} ${usagePartial.group(2)} のデータは不完全です。';
   }
   final dailyUsageSemantics = RegExp(
     r'^Daily Claude Code, Codex, and Grok Build token usage\. (.+)$',
   ).firstMatch(source);
   if (dailyUsageSemantics != null) {
-    return 'Claude Code、Codex 與 Grok Build 每日 Token 用量。${dailyUsageSemantics.group(1)}';
+    return 'Claude Code、Codex、Grok Build の日次トークン使用量。${dailyUsageSemantics.group(1)}';
   }
 
   final pullRequestCount = RegExp(r'^(Checks|Comments) \((\d+)\)$')
       .firstMatch(source);
   if (pullRequestCount != null) {
-    final label = pullRequestCount.group(1) == 'Checks' ? '檢查' : '留言';
+    final label = pullRequestCount.group(1) == 'Checks' ? 'チェック' : 'コメント';
     return '$label（${pullRequestCount.group(2)}）';
   }
   final checkGroup = RegExp(r'^(\d+) (failing|in progress|successful) Checks?$')
@@ -230,71 +226,71 @@ String? _translateDynamicTraditionalChinese(String source) {
   if (checkGroup != null) {
     final state = switch (checkGroup.group(2)) {
       'failing' => '失敗',
-      'in progress' => '進行中',
+      'in progress' => '実行中',
       _ => '成功',
     };
-    return '${checkGroup.group(1)} 個$state檢查';
+    return '$state のチェック ${checkGroup.group(1)} 件';
   }
 
   final installProviderCli = RegExp(
     r'^Install `(.+)` and ensure it is on your PATH\.$',
   ).firstMatch(source);
   if (installProviderCli != null) {
-    return '請安裝 `${installProviderCli.group(1)}`，並確認它位於 PATH 中。';
+    return '`${installProviderCli.group(1)}` をインストールし、PATH に含まれていることを確認してください。';
   }
   final runProviderAuth = RegExp(r'^Run `(.+)` to sign in, then refresh\.$')
       .firstMatch(source);
   if (runProviderAuth != null) {
-    return '請執行 `${runProviderAuth.group(1)}` 登入，然後重新整理。';
+    return '`${runProviderAuth.group(1)}` を実行してサインインし、再読み込みしてください。';
   }
 
   final accountRuntime = RegExp(r'^Runtime (.+)$').firstMatch(source);
   if (accountRuntime != null) {
-    return '執行環境 ${accountRuntime.group(1)}';
+    return 'Runtime ${accountRuntime.group(1)}';
   }
   final linkIdentityProvider = RegExp(r'^Link (Google|GitHub)$')
       .firstMatch(source);
   if (linkIdentityProvider != null) {
-    return '連結 ${linkIdentityProvider.group(1)}';
+    return '${linkIdentityProvider.group(1)} を関連付け';
   }
   final activeMobileSubscriptions = RegExp(
     r'^(\d+) active mobile subscription\(s\)\.$',
   ).firstMatch(source);
   if (activeMobileSubscriptions != null) {
-    return '${activeMobileSubscriptions.group(1)} 個作用中的行動裝置訂閱。';
+    return '有効なモバイルのサブスクリプションが ${activeMobileSubscriptions.group(1)} 件あります。';
   }
   final transferRuntimeAccount = RegExp(
     r'^Transfer this runtime and its mobile subscriptions to account (.+)\? This installation will sign out\.$',
   ).firstMatch(source);
   if (transferRuntimeAccount != null) {
-    return '要將此執行環境及其行動裝置訂閱移轉到帳號 ${transferRuntimeAccount.group(1)} 嗎？此安裝將會登出。';
+    return 'この Runtime とモバイルのサブスクリプションをアカウント ${transferRuntimeAccount.group(1)} に移管しますか？このインストールはサインアウトされます。';
   }
   final signInFailure = RegExp(r'^Sign in failed: (.+)$').firstMatch(source);
   if (signInFailure != null) {
-    return '登入失敗：${signInFailure.group(1)}';
+    return 'サインインに失敗しました: ${signInFailure.group(1)}';
   }
 
   final resizeMasterList = RegExp(r'^Resize (.+) List$').firstMatch(source);
   if (resizeMasterList != null) {
-    final label = AleraLocalizations._lookupTraditionalChinese(
+    final label = AleraLocalizations._lookupJapanese(
       resizeMasterList.group(1)!,
     );
-    return '調整$label清單大小';
+    return '$label リストのサイズを変更';
   }
 
   final allAutomationFilter = RegExp(r'^All (State|Project|Profile|Tag)$')
       .firstMatch(source);
   if (allAutomationFilter != null) {
-    final label = AleraLocalizations._lookupTraditionalChinese(
+    final label = AleraLocalizations._lookupJapanese(
       allAutomationFilter.group(1)!,
     );
-    return '所有$label';
+    return 'すべての$label';
   }
 
   final unknownPromptVariable = RegExp(r'^Unknown prompt variable: (.+)$')
       .firstMatch(source);
   if (unknownPromptVariable != null) {
-    return '未知的提示詞變數：${unknownPromptVariable.group(1)}';
+    return '不明なプロンプト変数: ${unknownPromptVariable.group(1)}';
   }
 
   final dictationDownloadProgress = RegExp(
@@ -307,96 +303,98 @@ String? _translateDynamicTraditionalChinese(String source) {
     r'^Download interrupted at (.+)\. Resume when ready\.$',
   ).firstMatch(source);
   if (dictationInterrupted != null) {
-    return '下載在 ${dictationInterrupted.group(1)} 時中斷，可在準備好後繼續。';
+    return 'ダウンロードが ${dictationInterrupted.group(1)} で中断しました。準備ができたら再開できます。';
   }
   final dictationDownloadSize = RegExp(
     r'^Download size (\d+(?:\.\d+)? (?:KiB|MiB))\.$',
   ).firstMatch(source);
   if (dictationDownloadSize != null) {
-    return '下載大小 ${dictationDownloadSize.group(1)}。';
+    return 'ダウンロードサイズ ${dictationDownloadSize.group(1)}。';
   }
   final systemRecognitionFailed = RegExp(
     r'^System speech recognition failed: (.+)$',
   ).firstMatch(source);
   if (systemRecognitionFailed != null) {
-    return '系統語音辨識失敗：${systemRecognitionFailed.group(1)}';
+    return 'システムの音声認識に失敗しました: ${systemRecognitionFailed.group(1)}';
   }
   final systemRecognitionStartFailed = RegExp(
     r'^System speech recognition could not start: (.+)$',
   ).firstMatch(source);
   if (systemRecognitionStartFailed != null) {
-    return '無法啟動系統語音辨識：${systemRecognitionStartFailed.group(1)}';
+    return 'システムの音声認識を開始できませんでした: ${systemRecognitionStartFailed.group(1)}';
   }
   final speechProcessingFallback = RegExp(
     r'^The transcript was inserted without speech processing: (.+)$',
   ).firstMatch(source);
   if (speechProcessingFallback != null) {
-    return '語音處理失敗，已插入原始轉錄內容：${speechProcessingFallback.group(1)}';
+    return '音声処理に失敗したため、文字起こし結果をそのまま挿入しました: ${speechProcessingFallback.group(1)}';
   }
 
   final originalPath = RegExp(r'^Original \((.+)\)$').firstMatch(source);
   if (originalPath != null) {
-    return '原始（${originalPath.group(1)}）';
+    return '変更前（${originalPath.group(1)}）';
   }
 
   final runtimeBusyWithSuffix = RegExp(
     r'^The runtime has (.+)\. (Force stop terminates them\.|You can quit and leave the runtime running, or force stop it\.)$',
   ).firstMatch(source);
   if (runtimeBusyWithSuffix != null) {
-    final details = _translateRuntimeBusyItems(runtimeBusyWithSuffix.group(1)!);
+    final details = _translateRuntimeBusyItemsJapanese(
+      runtimeBusyWithSuffix.group(1)!,
+    );
     final suffix = runtimeBusyWithSuffix.group(2)!;
     final translatedSuffix = switch (suffix) {
-      'Force stop terminates them.' => '強制停止會終止這些工作。',
-      _ => '你可以結束 Alera 並讓執行環境保持運作，或強制停止它。',
+      'Force stop terminates them.' => '強制停止するとそれらは終了します。',
+      _ => 'Alera を終了して Runtime を起動したままにすることも、強制停止することもできます。',
     };
-    return '執行環境目前有 $details。$translatedSuffix';
+    return 'Runtime には現在 $detailsがあります。$translatedSuffix';
   }
 
   final runtimeBusy = RegExp(r'^The runtime has (.+)\.$').firstMatch(source);
   if (runtimeBusy != null) {
-    final details = _translateRuntimeBusyItems(runtimeBusy.group(1)!);
-    return '執行環境目前有 $details。';
+    final details = _translateRuntimeBusyItemsJapanese(runtimeBusy.group(1)!);
+    return 'Runtime には現在 $detailsがあります。';
   }
 
   final generatedBranchExists = RegExp(
     r'^(?:Bad state: )?The generated branch "(.+)" already exists\.$',
   ).firstMatch(source);
   if (generatedBranchExists != null) {
-    return '產生的 Branch「${generatedBranchExists.group(1)}」已存在。';
+    return '生成された Branch「${generatedBranchExists.group(1)}」はすでに存在します。';
   }
   final workspaceIdentityUnavailable = RegExp(
     r'^(?:Bad state: )?AI Assist could not generate an available workspace identity\.$',
   ).firstMatch(source);
   if (workspaceIdentityUnavailable != null) {
-    return 'AI Assist 無法產生可用的工作區識別。';
+    return 'AI Assist は利用可能なワークスペースの識別子を生成できませんでした。';
   }
   final retryAgentRequiresUpdate = RegExp(
     r'^(?:Unsupported operation: )?Update Alera on this host before retrying agent launch safely\.$',
   ).firstMatch(source);
   if (retryAgentRequiresUpdate != null) {
-    return '請先更新此 Host 上的 Alera，再安全重試啟動 Agent。';
+    return 'Agent の起動を安全に再試行するには、先にこの Host の Alera を更新してください。';
   }
   final originalAgentLaunchUnavailable = RegExp(
     r'^(?:Bad state: )?The original agent launch identity is unavailable\.$',
   ).firstMatch(source);
   if (originalAgentLaunchUnavailable != null) {
-    return '原始 Agent 啟動識別無法使用。';
+    return '元の Agent 起動識別子は利用できません。';
   }
 
   final globalValue = RegExp(r'^Global \((.+)\)$').firstMatch(source);
   if (globalValue != null) {
     final value = globalValue.group(1)!;
-    final translatedValue = AleraLocalizations._lookupTraditionalChinese(value);
-    return '全域（$translatedValue）';
+    final translatedValue = AleraLocalizations._lookupJapanese(value);
+    return 'グローバル（$translatedValue）';
   }
   final runningTextAction = RegExp(r'^Running (.+)\.$').firstMatch(source);
   if (runningTextAction != null) {
-    return '正在執行「${runningTextAction.group(1)}」。';
+    return '「${runningTextAction.group(1)}」を実行しています。';
   }
   final textActionFailed = RegExp(r'^Text action failed: (.+)$')
       .firstMatch(source);
   if (textActionFailed != null) {
-    return '文字操作失敗：${textActionFailed.group(1)}';
+    return 'テキスト操作に失敗しました: ${textActionFailed.group(1)}';
   }
 
   final editorAvailable = RegExp(
@@ -405,184 +403,186 @@ String? _translateDynamicTraditionalChinese(String source) {
   if (editorAvailable != null) {
     final version = editorAvailable.group(2);
     return version == null
-        ? '${editorAvailable.group(1)} 可使用。'
-        : '${editorAvailable.group(1)} 可使用：$version';
+        ? '${editorAvailable.group(1)} は利用できます。'
+        : '${editorAvailable.group(1)} は利用できます: $version';
   }
   final editorUnavailable = RegExp(
     r'^(Zed|VS Code|Visual Studio Code) is not available\.$',
   ).firstMatch(source);
   if (editorUnavailable != null) {
-    return '${editorUnavailable.group(1)} 無法使用。';
+    return '${editorUnavailable.group(1)} は利用できません。';
   }
   final editorNotFound = RegExp(
     r'^(.+) was not found\. Check Settings > Editor\.$',
   ).firstMatch(source);
   if (editorNotFound != null) {
-    return '找不到 ${editorNotFound.group(1)}。請檢查設定 > 編輯器。';
+    return '${editorNotFound.group(1)} が見つかりません。設定 > エディターを確認してください。';
   }
   final editorVersionFailed = RegExp(
     r'^(.+) was found but its version check failed\.$',
   ).firstMatch(source);
   if (editorVersionFailed != null) {
-    return '找到 ${editorVersionFailed.group(1)}，但版本檢查失敗。';
+    return '${editorVersionFailed.group(1)} は見つかりましたが、バージョン確認に失敗しました。';
   }
   final editorNotStartable = RegExp(
     r'^(.+) could not be started\. Check Settings > Editor\.$',
   ).firstMatch(source);
   if (editorNotStartable != null) {
-    return '無法啟動 ${editorNotStartable.group(1)}。請檢查設定 > 編輯器。';
+    return '${editorNotStartable.group(1)} を起動できませんでした。設定 > エディターを確認してください。';
   }
   final editorStartFailed = RegExp(
     r'^Could not start (.+)\. Configure the executable in Settings > Editor\.$',
   ).firstMatch(source);
   if (editorStartFailed != null) {
-    return '無法啟動 ${editorStartFailed.group(1)}。請在設定 > 編輯器中設定執行檔。';
+    return '${editorStartFailed.group(1)} を起動できませんでした。設定 > エディターで実行ファイルを指定してください。';
   }
   final openPathFailed = RegExp(
     r'^Could not open the requested path in (.+)\. Check Settings > Editor and try again\.$',
   ).firstMatch(source);
   if (openPathFailed != null) {
-    return '無法在 ${openPathFailed.group(1)} 中開啟要求的路徑。請檢查設定 > 編輯器後再試。';
+    return '指定されたパスを ${openPathFailed.group(1)} で開けませんでした。設定 > エディターを確認してからもう一度お試しください。';
   }
   final openTargetMissing = RegExp(
     r'^The requested (.+) file target does not exist\.$',
   ).firstMatch(source);
   if (openTargetMissing != null) {
-    return '要求的 ${openTargetMissing.group(1)} 檔案目標不存在。';
+    return '指定された ${openTargetMissing.group(1)} のファイルターゲットは存在しません。';
   }
   final openTargetOutside = RegExp(
     r'^The requested (.+) file target is outside the active Alera workspace\.$',
   ).firstMatch(source);
   if (openTargetOutside != null) {
-    return '要求的 ${openTargetOutside.group(1)} 檔案目標不在使用中的 Alera 工作區內。';
+    return '指定された ${openTargetOutside.group(1)} のファイルターゲットは、アクティブな Alera ワークスペースの外にあります。';
   }
   final openTargetsInvalid = RegExp(
     r'^(?:The|A) requested (.+) file targets? (?:are invalid|is missing or outside the active Alera workspace)\.$',
   ).firstMatch(source);
   if (openTargetsInvalid != null) {
-    return '要求的 ${openTargetsInvalid.group(1)} 檔案目標無效或不在使用中的 Alera 工作區內。';
+    return '指定された ${openTargetsInvalid.group(1)} のファイルターゲットは無効か、アクティブな Alera ワークスペースの外にあります。';
   }
   final editorPositionInvalid = RegExp(
     r'^(.+) line and column values must be positive\.$',
   ).firstMatch(source);
   if (editorPositionInvalid != null) {
-    return '${editorPositionInvalid.group(1)} 的行與欄值必須為正數。';
+    return '${editorPositionInvalid.group(1)} の行と列の値は正の数である必要があります。';
   }
   final openInEditor = RegExp(r'^Open in (.+)$').firstMatch(source);
   if (openInEditor != null) {
-    return '在 ${openInEditor.group(1)} 中開啟';
+    return '${openInEditor.group(1)} で開く';
   }
   final openChangesInEditor = RegExp(r'^Open Changes in (.+)$')
       .firstMatch(source);
   if (openChangesInEditor != null) {
-    return '在 ${openChangesInEditor.group(1)} 中開啟變更';
+    return '変更を ${openChangesInEditor.group(1)} で開く';
   }
   final couldNotOpenIn = RegExp(
     r'^Could not open (file|item|changed files|workspace) in (.+)\.$',
   ).firstMatch(source);
   if (couldNotOpenIn != null) {
     final noun = switch (couldNotOpenIn.group(1)) {
-      'file' => '檔案',
+      'file' => 'ファイル',
       'item' => '項目',
-      'changed files' => '變更檔案',
-      _ => '工作區',
+      'changed files' => '変更されたファイル',
+      _ => 'ワークスペース',
     };
-    return '無法在 ${couldNotOpenIn.group(2)} 中開啟$noun。';
+    return '$noun を ${couldNotOpenIn.group(2)} で開けませんでした。';
   }
   final workspaceCreatedNoEditor = RegExp(
     r'^Workspace created, but (.+) could not be opened\.$',
   ).firstMatch(source);
   if (workspaceCreatedNoEditor != null) {
-    return '工作區已建立，但無法開啟 ${workspaceCreatedNoEditor.group(1)}。';
+    return 'ワークスペースは作成されましたが、${workspaceCreatedNoEditor.group(1)} を開けませんでした。';
   }
   final customExecutable = RegExp(r'^Custom (.+) Executable$')
       .firstMatch(source);
   if (customExecutable != null) {
-    return '自訂 ${customExecutable.group(1)} 執行檔';
+    return 'カスタムの ${customExecutable.group(1)} 実行ファイル';
   }
   final commandEnvironment = RegExp(
     r'^Off uses the (.+) command from the local command environment\.$',
   ).firstMatch(source);
   if (commandEnvironment != null) {
-    return '關閉時會使用本機命令環境中的 ${commandEnvironment.group(1)} 指令。';
+    return 'オフの場合は、ローカルのコマンド環境にある ${commandEnvironment.group(1)} コマンドを使用します。';
   }
   final executableTitle = RegExp(r'^(Zed|VS Code) Executable$')
       .firstMatch(source);
   if (executableTitle != null) {
-    return '${executableTitle.group(1)} 執行檔';
+    return '${executableTitle.group(1)} の実行ファイル';
   }
   final executablePathDescription = RegExp(
     r'^Full path to the (.+) executable on this machine\.$',
   ).firstMatch(source);
   if (executablePathDescription != null) {
-    return '此機器上 ${executablePathDescription.group(1)} 執行檔的完整路徑。';
+    return 'このマシン上の ${executablePathDescription.group(1)} 実行ファイルのフルパスです。';
   }
   final executablePathHint = RegExp(r'^Path to (.+) or its executable$')
       .firstMatch(source);
   if (executablePathHint != null) {
-    return '${executablePathHint.group(1)} 或其執行檔的路徑';
+    return '${executablePathHint.group(1)} またはその実行ファイルのパス';
   }
   final newWindowPerWorktree = RegExp(
     r'^Open each Alera worktree as a separate (.+) window instead of reusing the last one\.$',
   ).firstMatch(source);
   if (newWindowPerWorktree != null) {
-    return '將每個 Alera worktree 開啟為獨立的 ${newWindowPerWorktree.group(1)} 視窗，而非沿用上一個視窗。';
+    return '各 Alera worktree を、直前のウィンドウを再利用せずに個別の ${newWindowPerWorktree.group(1)} ウィンドウで開きます。';
   }
   final autoOpenInEditor = RegExp(
     r'^After Alera creates a linked workspace, open that workspace in (.+) automatically\.$',
   ).firstMatch(source);
   if (autoOpenInEditor != null) {
-    return 'Alera 建立連結工作區後，自動在 ${autoOpenInEditor.group(1)} 中開啟該工作區。';
+    return 'Alera がリンク済みワークスペースを作成した後、そのワークスペースを ${autoOpenInEditor.group(1)} で自動的に開きます。';
   }
   final checkEditor = RegExp(r'^Check (Zed|VS Code)$').firstMatch(source);
   if (checkEditor != null) {
-    return '檢查 ${checkEditor.group(1)}';
+    return '${checkEditor.group(1)} を確認';
   }
 
   final selectedValue = RegExp(r'^Selected: (.+)$').firstMatch(source);
   if (selectedValue != null) {
-    return '已選取：${selectedValue.group(1)}';
+    return '選択中: ${selectedValue.group(1)}';
   }
   final showingCount = RegExp(r'^Showing (\d+) of (\d+)$').firstMatch(source);
   if (showingCount != null) {
-    return '顯示 ${showingCount.group(1)} / ${showingCount.group(2)}';
+    return '${showingCount.group(2)} 件中 ${showingCount.group(1)} 件を表示';
   }
 
   final interfaceLabel = RegExp(r'^Interface \((.+)\)$').firstMatch(source);
   if (interfaceLabel != null) {
-    return '網路介面（${interfaceLabel.group(1)}）';
+    return 'ネットワークインターフェイス（${interfaceLabel.group(1)}）';
   }
   final expiresMinutesSeconds = RegExp(r'^Expires in (\d+)m (\d+)s$')
       .firstMatch(source);
   if (expiresMinutesSeconds != null) {
-    return '${expiresMinutesSeconds.group(1)} 分 ${expiresMinutesSeconds.group(2)} 秒後到期';
+    return '${expiresMinutesSeconds.group(1)} 分 ${expiresMinutesSeconds.group(2)} 秒後に期限切れ';
   }
   final expiresMinutes = RegExp(r'^Expires in (\d+)m$').firstMatch(source);
   if (expiresMinutes != null) {
-    return '${expiresMinutes.group(1)} 分鐘後到期';
+    return '${expiresMinutes.group(1)} 分後に期限切れ';
   }
   final expiresSeconds = RegExp(r'^Expires in (\d+)s$').firstMatch(source);
   if (expiresSeconds != null) {
-    return '${expiresSeconds.group(1)} 秒後到期';
+    return '${expiresSeconds.group(1)} 秒後に期限切れ';
   }
   final mobileTimestamp = RegExp(r'^(Revoked|Paired|Last seen) (.+)$')
       .firstMatch(source);
   if (mobileTimestamp != null) {
     final label = switch (mobileTimestamp.group(1)) {
-      'Revoked' => '已撤銷',
-      'Paired' => '已配對',
-      _ => '最後上線',
+      'Revoked' => '無効化',
+      'Paired' => 'ペアリング',
+      _ => '最終接続',
     };
     return '$label ${mobileTimestamp.group(2)}';
   }
   if (source == 'Connected through relay') {
-    return '透過 Relay 連線';
+    return 'Relay 経由で接続中';
   }
   final versionLabel = RegExp(
     r'^(Current version|Update version) (.+?)(?: \(build (.+)\))?$',
   ).firstMatch(source);
   if (versionLabel != null) {
-    final prefix = versionLabel.group(1) == 'Current version' ? '目前版本' : '更新版本';
+    final prefix = versionLabel.group(1) == 'Current version'
+        ? '現在のバージョン'
+        : '更新後のバージョン';
     final build = versionLabel.group(3);
     return build == null
         ? '$prefix ${versionLabel.group(2)}'
@@ -590,95 +590,91 @@ String? _translateDynamicTraditionalChinese(String source) {
   }
   final modelPassedTo = RegExp(r'^Model passed to (.+)\.$').firstMatch(source);
   if (modelPassedTo != null) {
-    return '傳給 ${modelPassedTo.group(1)} 的模型。';
-  }
-  final globalSettingValue = RegExp(r'^Global \((.+)\)$').firstMatch(source);
-  if (globalSettingValue != null) {
-    return '全域（${globalSettingValue.group(1)}）';
+    return '${modelPassedTo.group(1)} に渡すモデルです。';
   }
   final usageLabel = RegExp(r'^Usage: (.+)$').firstMatch(source);
   if (usageLabel != null) {
-    return 'Usage：${usageLabel.group(1)}';
+    return 'Usage: ${usageLabel.group(1)}';
   }
   final moveEarlier = RegExp(r'^Move (.+) Earlier$').firstMatch(source);
   if (moveEarlier != null) {
-    return '將 ${moveEarlier.group(1)} 往前移';
+    return '${moveEarlier.group(1)} を前に移動';
   }
   final moveLater = RegExp(r'^Move (.+) Later$').firstMatch(source);
   if (moveLater != null) {
-    return '將 ${moveLater.group(1)} 往後移';
+    return '${moveLater.group(1)} を後ろに移動';
   }
   final downloadingUpdate = RegExp(r'^Downloading update (.+)\.$')
       .firstMatch(source);
   if (downloadingUpdate != null) {
-    return '正在下載更新 ${downloadingUpdate.group(1)}。';
+    return '更新 ${downloadingUpdate.group(1)} をダウンロードしています。';
   }
   final installingUpdate = RegExp(
     r'^Installing update (.+)\. Alera will restart\.$',
   ).firstMatch(source);
   if (installingUpdate != null) {
-    return '正在安裝更新 ${installingUpdate.group(1)}。Alera 將重新啟動。';
+    return '更新 ${installingUpdate.group(1)} をインストールしています。Alera が再起動します。';
   }
   final updateReady = RegExp(r'^Update (.+) is ready to install\.$')
       .firstMatch(source);
   if (updateReady != null) {
-    return '更新 ${updateReady.group(1)} 已可安裝。';
+    return '更新 ${updateReady.group(1)} をインストールできます。';
   }
   final upgradingThrough = RegExp(
     r'^Upgrading through (.+)\. Alera will close and reopen\.$',
   ).firstMatch(source);
   if (upgradingThrough != null) {
-    return '正在透過 ${upgradingThrough.group(1)} 更新。Alera 將關閉後重新開啟。';
+    return '${upgradingThrough.group(1)} を通じて更新しています。Alera は終了後に再度開きます。';
   }
   final packageManagerClose = RegExp(
     r'^Alera will close, let (.+) install the update, and open again\.$',
   ).firstMatch(source);
   if (packageManagerClose != null) {
-    return 'Alera 將關閉，交由 ${packageManagerClose.group(1)} 安裝更新後再重新開啟。';
+    return 'Alera を終了し、${packageManagerClose.group(1)} が更新をインストールした後、再度開きます。';
   }
   final updateInstallFailed = RegExp(r'^Update installation failed: (.+)$')
       .firstMatch(source);
   if (updateInstallFailed != null) {
-    return '更新安裝失敗：${updateInstallFailed.group(1)}';
+    return '更新のインストールに失敗しました: ${updateInstallFailed.group(1)}';
   }
   final packageUpgradeFailed = RegExp(
     r'^The (.+) upgrade could not be started: (.+)$',
   ).firstMatch(source);
   if (packageUpgradeFailed != null) {
-    return '無法啟動 ${packageUpgradeFailed.group(1)} 更新：${packageUpgradeFailed.group(2)}';
+    return '${packageUpgradeFailed.group(1)} による更新を開始できませんでした: ${packageUpgradeFailed.group(2)}';
   }
   final restartFailed = RegExp(r'^Alera could not restart: (.+)$')
       .firstMatch(source);
   if (restartFailed != null) {
-    return 'Alera 無法重新啟動：${restartFailed.group(1)}';
+    return 'Alera を再起動できませんでした: ${restartFailed.group(1)}';
   }
   final desktopUpdateUnavailable = RegExp(
     r'^Desktop updates are not available on (.+)\.$',
   ).firstMatch(source);
   if (desktopUpdateUnavailable != null) {
-    return '${desktopUpdateUnavailable.group(1)} 目前不支援桌面版自動更新。';
+    return '${desktopUpdateUnavailable.group(1)} ではデスクトップ版の自動更新を利用できません。';
   }
 
   return null;
 }
 
-String _translateRuntimeBusyItems(String source) {
+String _translateRuntimeBusyItemsJapanese(String source) {
   return source
       .replaceAllMapped(
         RegExp(r'(\d+) open agent\(s\)'),
-        (match) => '${match.group(1)} 個開啟中的代理程式',
+        (match) => '${match.group(1)} 件の実行中の Agent',
       )
       .replaceAllMapped(
         RegExp(r'(\d+) active terminal session\(s\)'),
-        (match) => '${match.group(1)} 個作用中的終端機工作階段',
+        (match) => '${match.group(1)} 件のアクティブなターミナルセッション',
       )
       .replaceAllMapped(
         RegExp(r'(\d+) active background job\(s\)'),
-        (match) => '${match.group(1)} 個作用中的背景工作',
+        (match) => '${match.group(1)} 件のアクティブなバックグラウンドジョブ',
       )
       .replaceAllMapped(
         RegExp(r'(\d+) active push subscription\(s\)'),
-        (match) => '${match.group(1)} 個作用中的推播訂閱',
+        (match) => '${match.group(1)} 件のアクティブなプッシュ購読',
       )
       .replaceAll(', and ', '、')
       .replaceAll(' and ', '、')

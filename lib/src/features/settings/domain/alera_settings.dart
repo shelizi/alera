@@ -17,7 +17,13 @@ part 'diagnostics_settings.dart';
 part 'editor_settings.dart';
 
 @MappableEnum()
-enum AppLanguage { system, english, traditionalChinese }
+enum AppLanguage {
+  system,
+  english,
+  traditionalChinese,
+  simplifiedChinese,
+  japanese,
+}
 
 /// Mixed ownership: `confirmProjectRemoval`, `confirmWorkspaceRemoval`, and
 /// `autoArchiveWorkspacesAfterDays` are both portable-cloud configuration and
@@ -40,7 +46,8 @@ class const GeneralSettings({
   this.autoArchiveWorkspacesAfterDays = 30,
 }) with GeneralSettingsMappable {
   /// Language used by the Alera interface. System resolves Chinese locales to
-  /// Traditional Chinese and falls back to English for unsupported locales.
+  /// the matching Chinese script, Japanese locales to Japanese, and falls back
+  /// to English for unsupported locales.
   final AppLanguage language;
 
   /// User-configured root directory where new linked workspaces are created.
