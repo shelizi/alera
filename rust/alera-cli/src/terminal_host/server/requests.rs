@@ -30,7 +30,7 @@ use super::workspace_artifact_requests::{
 };
 use super::workspace_relation_requests::WorkspaceRelationRequestHandler;
 use super::workspace_requests::WorkspaceRequestHandler;
-use super::workspace_tab_requests::WorkspaceTabQueryHandler;
+use super::workspace_tab_requests::WorkspaceTabStoreHandler;
 use super::{ClientKind, ServerActor, ServerCommand};
 
 use self::idempotency_receipts::{
@@ -709,7 +709,7 @@ impl ServerActor {
             "tab.list" => {
                 self.require_auth(client_id)?;
                 let workspace_id = require_string_key(payload, "workspaceId")?;
-                let tabs = WorkspaceTabQueryHandler::new(&self.runtime_store)
+                let tabs = WorkspaceTabStoreHandler::new(&self.runtime_store)
                     .list(&workspace_id)
                     .await?;
                 if self.is_mobile_client(client_id) {
@@ -723,7 +723,7 @@ impl ServerActor {
             "tab.find" => {
                 self.require_auth(client_id)?;
                 let id = require_string_key(payload, "id")?;
-                let tab = WorkspaceTabQueryHandler::new(&self.runtime_store)
+                let tab = WorkspaceTabStoreHandler::new(&self.runtime_store)
                     .find(&id)
                     .await?
                     .and_then(|tab| self.workspace_tab_for_client(client_id, tab));
@@ -732,7 +732,7 @@ impl ServerActor {
             "tab.upsert" => {
                 self.require_auth(client_id)?;
                 let mut tab: WorkspaceTabRecord = parse_payload(payload)?;
-                if let Some(stored) = WorkspaceTabQueryHandler::new(&self.runtime_store)
+                if let Some(stored) = WorkspaceTabStoreHandler::new(&self.runtime_store)
                     .find(&tab.id)
                     .await?
                 {
@@ -759,7 +759,7 @@ impl ServerActor {
                 let id = require_string_key(payload, "id")?;
                 let title = require_string_key(payload, "title")?;
                 self.cancel_agent_title_job(&id);
-                let tab = WorkspaceTabQueryHandler::new(&self.runtime_store)
+                let tab = WorkspaceTabStoreHandler::new(&self.runtime_store)
                     .rename(&id, &title)
                     .await?;
                 let workspace_id = tab.workspace_id.clone();

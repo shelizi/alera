@@ -9,6 +9,7 @@ use crate::terminal_host::protocol::{error_response, ok_response};
 use super::agent_title_context::{clean_terminal, parse_title, title_prompt};
 use super::agent_title_state::{is_manual, AgentTitleState};
 use super::ai_assist_requests::{plan_command, run_command};
+use super::workspace_tab_requests::WorkspaceTabStoreHandler;
 use super::{ServerActor, ServerCommand};
 
 pub(super) struct AgentTitleJob {
@@ -28,11 +29,9 @@ impl ServerActor {
         payload: &Value,
     ) -> HostResult<()> {
         let tab_id = super::requests::require_string_key(payload, "tabId")?;
-        let mut tab = self
-            .runtime_store
-            .find_workspace_tab(&tab_id)
-            .await
-            .map_err(|e| HostError::state(e.to_string()))?
+        let mut tab = WorkspaceTabStoreHandler::new(&self.runtime_store)
+            .find(&tab_id)
+            .await?
             .ok_or_else(|| HostError::state("Workspace tab not found."))?;
         if !matches!(tab.kind.as_str(), "terminal" | "codex") {
             return Err(HostError::state(
@@ -86,10 +85,9 @@ impl ServerActor {
             state.attempted = true;
             state.write(&mut tab);
             if !settings.enabled || !settings.auto_generate_agent_titles {
-                self.runtime_store
-                    .upsert_workspace_tab(tab)
-                    .await
-                    .map_err(|e| HostError::state(e.to_string()))?;
+                WorkspaceTabStoreHandler::new(&self.runtime_store)
+                    .upsert(tab)
+                    .await?;
                 return Ok(());
             }
         } else {
@@ -108,10 +106,9 @@ impl ServerActor {
         };
         tab.payload["agentTitleStatus"] = json!("generating");
         let workspace_id = tab.workspace_id.clone();
-        self.runtime_store
-            .upsert_workspace_tab(tab)
-            .await
-            .map_err(|e| HostError::state(e.to_string()))?;
+        WorkspaceTabStoreHandler::new(&self.runtime_store)
+            .upsert(tab)
+            .await?;
         self.agent_title_jobs.insert(tab_id.clone(), job);
         self.broadcast_workspace_tabs_changed(Some(&workspace_id));
         let inbox = self.inbox.clone();
@@ -133,10 +130,15 @@ impl ServerActor {
         );
         if let Err(error) = result {
             self.agent_title_jobs.remove(&tab_id);
-            if let Ok(Some(mut tab)) = self.runtime_store.find_workspace_tab(&tab_id).await {
+            if let Ok(Some(mut tab)) = WorkspaceTabStoreHandler::new(&self.runtime_store)
+                .find(&tab_id)
+                .await
+            {
                 tab.payload["agentTitleStatus"] = json!("failed");
                 let workspace_id = tab.workspace_id.clone();
-                let _ = self.runtime_store.upsert_workspace_tab(tab).await;
+                let _ = WorkspaceTabStoreHandler::new(&self.runtime_store)
+                    .upsert(tab)
+                    .await;
                 self.broadcast_workspace_tabs_changed(Some(&workspace_id));
             }
             return Err(error);
@@ -155,11 +157,9 @@ impl ServerActor {
         let Some(job) = self.agent_title_jobs.get(tab_id).filter(|job| job.id == id) else {
             return Ok(());
         };
-        let tab = self
-            .runtime_store
-            .find_workspace_tab(tab_id)
-            .await
-            .map_err(|e| HostError::state(e.to_string()))?
+        let tab = WorkspaceTabStoreHandler::new(&self.runtime_store)
+            .find(tab_id)
+            .await?
             .ok_or_else(|| HostError::state("The tab was closed."))?;
         if !job_matches(job, &tab) {
             return Err(HostError::state("The conversation or title changed."));
@@ -250,11 +250,9 @@ impl ServerActor {
         job: &AgentTitleJob,
         result: HostResult<String>,
     ) -> HostResult<Value> {
-        let mut tab = self
-            .runtime_store
-            .find_workspace_tab(tab_id)
-            .await
-            .map_err(|e| HostError::state(e.to_string()))?
+        let mut tab = WorkspaceTabStoreHandler::new(&self.runtime_store)
+            .find(tab_id)
+            .await?
             .ok_or_else(|| HostError::state("The tab was closed."))?;
         if !job_matches(job, &tab) {
             return Err(HostError::state(
@@ -277,7 +275,9 @@ impl ServerActor {
             Err(error) => {
                 tab.payload["agentTitleStatus"] = json!("failed");
                 let workspace_id = tab.workspace_id.clone();
-                let _ = self.runtime_store.upsert_workspace_tab(tab).await;
+                let _ = WorkspaceTabStoreHandler::new(&self.runtime_store)
+                    .upsert(tab)
+                    .await;
                 self.broadcast_workspace_tabs_changed(Some(&workspace_id));
                 return Err(error);
             }
@@ -289,10 +289,9 @@ impl ServerActor {
         tab.payload["agentTitleStatus"] = json!("idle");
         tab.payload["agentTitleRevision"] = json!(Uuid::new_v4().to_string());
         let workspace_id = tab.workspace_id.clone();
-        self.runtime_store
-            .upsert_workspace_tab(tab)
-            .await
-            .map_err(|e| HostError::state(e.to_string()))?;
+        WorkspaceTabStoreHandler::new(&self.runtime_store)
+            .upsert(tab)
+            .await?;
         self.broadcast_workspace_tabs_changed(Some(&workspace_id));
         Ok(json!({"title": title}))
     }

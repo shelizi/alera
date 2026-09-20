@@ -2,10 +2,11 @@ use alera_core::runtime::WorkspaceTabRecord;
 use serde_json::Value;
 
 use crate::agent_status::AgentHookEvent;
-use crate::terminal_host::host_error::{HostError, HostResult};
+use crate::terminal_host::host_error::HostResult;
 use crate::terminal_host::orchestration::agent_presence::AgentPresenceState;
 
 use super::agent_title_state::AgentTitleState;
+use super::workspace_tab_requests::WorkspaceTabStoreHandler;
 use super::ServerActor;
 
 #[derive(Default)]
@@ -38,11 +39,9 @@ impl ServerActor {
         &self,
         tab: &mut WorkspaceTabRecord,
     ) -> HostResult<()> {
-        if self
-            .runtime_store
-            .find_workspace_tab(&tab.id)
-            .await
-            .map_err(|e| HostError::state(e.to_string()))?
+        if WorkspaceTabStoreHandler::new(&self.runtime_store)
+            .find(&tab.id)
+            .await?
             .is_none()
         {
             super::agent_title_state::initialize(tab, "");
@@ -137,7 +136,10 @@ impl ServerActor {
         prompt: &str,
         activity: TitleActivity,
     ) {
-        let Ok(Some(mut tab)) = self.runtime_store.find_workspace_tab(tab_id).await else {
+        let Ok(Some(mut tab)) = WorkspaceTabStoreHandler::new(&self.runtime_store)
+            .find(tab_id)
+            .await
+        else {
             return;
         };
         let session_id =
@@ -169,9 +171,8 @@ impl ServerActor {
             return;
         }
         state.write(&mut tab);
-        if self
-            .runtime_store
-            .upsert_workspace_tab(tab.clone())
+        if WorkspaceTabStoreHandler::new(&self.runtime_store)
+            .upsert(tab.clone())
             .await
             .is_err()
         {
@@ -185,7 +186,10 @@ impl ServerActor {
 
     async fn close_agent_title_conversation(&mut self, event: &AgentHookEvent) {
         let tab_id = &event.tab_id;
-        let Ok(Some(mut tab)) = self.runtime_store.find_workspace_tab(tab_id).await else {
+        let Ok(Some(mut tab)) = WorkspaceTabStoreHandler::new(&self.runtime_store)
+            .find(tab_id)
+            .await
+        else {
             return;
         };
         let Some(mut state) = AgentTitleState::read(&tab) else {
@@ -202,7 +206,11 @@ impl ServerActor {
         state.closed = true;
         state.write(&mut tab);
         let workspace_id = tab.workspace_id.clone();
-        if self.runtime_store.upsert_workspace_tab(tab).await.is_ok() {
+        if WorkspaceTabStoreHandler::new(&self.runtime_store)
+            .upsert(tab)
+            .await
+            .is_ok()
+        {
             self.broadcast_workspace_tabs_changed(Some(&workspace_id));
         }
     }
