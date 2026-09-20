@@ -107,6 +107,8 @@ mod deferred_admission_tests;
 mod deferred_admission_tests_delayed_timers;
 #[cfg(test)]
 mod deferred_project_requests_tests;
+mod deferred_read_requests;
+mod deferred_request_scheduler;
 mod deferred_requests;
 #[cfg(test)]
 mod deferred_requests_tests;

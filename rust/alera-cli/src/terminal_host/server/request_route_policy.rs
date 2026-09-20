@@ -25,16 +25,26 @@ pub(super) enum PostResponseAction {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum DeferredReadRoute {
+    ProjectConfigEffective,
+    ProjectBranchesList,
+    WorkspaceRepositoryWebUrl,
+    HostDirectoryList,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct RequestRoutePolicy {
     pub(super) mobile_allowed: bool,
     pub(super) runtime_mutation: RuntimeMutationPolicy,
     pub(super) post_response: PostResponseAction,
+    pub(super) deferred_read: Option<DeferredReadRoute>,
 }
 
 const LOCAL: RequestRoutePolicy = RequestRoutePolicy {
     mobile_allowed: false,
     runtime_mutation: RuntimeMutationPolicy::Available,
     post_response: PostResponseAction::None,
+    deferred_read: None,
 };
 
 const MOBILE: RequestRoutePolicy = RequestRoutePolicy {
@@ -132,6 +142,13 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         }
         "workspace.sleep" => serialized_mobile(SerializedRuntimeMutation::SleepWorkspace),
 
+        "projectConfig.effective" => mobile_deferred(DeferredReadRoute::ProjectConfigEffective),
+        "project.branches.list" => mobile_deferred(DeferredReadRoute::ProjectBranchesList),
+        "workspace.repositoryWebUrl" => {
+            mobile_deferred(DeferredReadRoute::WorkspaceRepositoryWebUrl)
+        }
+        "hostDirectory.list" => mobile_deferred(DeferredReadRoute::HostDirectoryList),
+
         "createOrAttach"
         | "layout.remove"
         | "layout.upsert"
@@ -206,7 +223,6 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         | "configuration.transfer.read"
         | "configuration.transfer.start"
         | "detach"
-        | "hostDirectory.list"
         | "hostDirectory.roots"
         | "layout.find"
         | "linkedReview.find"
@@ -232,13 +248,11 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         | "mobile.workspaceQuickOpen.search"
         | "mobile.workspaceQuickOpen.start"
         | "mobile.workspaceQuickOpen.stop"
-        | "project.branches.list"
         | "project.clone.cancel"
         | "project.clone.list"
         | "project.clone.start"
         | "project.list"
         | "project.remove.preview"
-        | "projectConfig.effective"
         | "resize"
         | "setOutputPaused"
         | "status.get"
@@ -249,7 +263,6 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         | "workspace.find"
         | "workspace.list"
         | "workspace.listAll"
-        | "workspace.repositoryWebUrl"
         | "workspace.storageImpact"
         | "workspaceCascade.preview"
         | "workspaceRelation.list"
@@ -272,6 +285,14 @@ const fn serialized_mobile(kind: SerializedRuntimeMutation) -> RequestRoutePolic
     RequestRoutePolicy {
         mobile_allowed: true,
         ..serialized_local(kind)
+    }
+}
+
+const fn mobile_deferred(route: DeferredReadRoute) -> RequestRoutePolicy {
+    RequestRoutePolicy {
+        mobile_allowed: true,
+        deferred_read: Some(route),
+        ..LOCAL
     }
 }
 
@@ -328,5 +349,30 @@ mod tests {
         let shutdown = request_route_policy("host.shutdown");
         assert!(!shutdown.mobile_allowed);
         assert_eq!(shutdown.post_response, PostResponseAction::Shutdown);
+    }
+
+    #[test]
+    fn deferred_read_routes_are_typed_and_mobile_safe() {
+        let expected = [
+            (
+                "projectConfig.effective",
+                DeferredReadRoute::ProjectConfigEffective,
+            ),
+            (
+                "project.branches.list",
+                DeferredReadRoute::ProjectBranchesList,
+            ),
+            (
+                "workspace.repositoryWebUrl",
+                DeferredReadRoute::WorkspaceRepositoryWebUrl,
+            ),
+            ("hostDirectory.list", DeferredReadRoute::HostDirectoryList),
+        ];
+
+        for (request_type, route) in expected {
+            let policy = request_route_policy(request_type);
+            assert!(policy.mobile_allowed, "{request_type}");
+            assert_eq!(policy.deferred_read, Some(route), "{request_type}");
+        }
     }
 }

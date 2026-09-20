@@ -3,17 +3,16 @@ use std::future::Future;
 use serde_json::Value;
 
 use crate::managed_workspace::ManagedWorkspaceCreateRequest;
-use crate::project_management::list_host_directory;
-use crate::terminal_host::host_error::{HostError, HostResult};
+use crate::terminal_host::host_error::HostResult;
 use crate::terminal_host::protocol::{error_response, ok_response};
 
 use super::automation_policy_requests::load_automation_policy_show;
-use super::deferred_admission::DeferredRequestClass;
-use super::project_requests::{load_effective_project_config, load_project_branches};
+use super::deferred_read_requests::DeferredReadRequestHandler;
+use super::deferred_request_scheduler::DeferredRequestScheduler;
 use super::request_payloads::parse_payload;
+use super::request_route_policy::request_route_policy;
 use super::requests::{require_string_key, validate_mobile_runtime_settings_payload};
-use super::workspace_sidebar_requests::load_workspace_repository_web_url;
-use super::{ServerActor, ServerCommand};
+use super::ServerActor;
 
 impl ServerActor {
     pub(super) fn start_deferred_request<F>(
@@ -26,42 +25,12 @@ impl ServerActor {
     where
         F: Future<Output = HostResult<Value>> + Send + 'static,
     {
-        let inbox = self.inbox.clone();
-        self.deferred_admission.schedule_with_request_id(
-            DeferredRequestClass::Bulk,
-            request_type,
-            Some(client_id),
-            Some(request_id),
-            async move {
-                let result = task.await;
-                let _ = inbox.send(ServerCommand::DeferredRequestFinished {
-                    client_id,
-                    request_id,
-                    result,
-                });
-            },
-        )
+        self.deferred_request_scheduler()
+            .schedule(client_id, request_id, request_type, task)
     }
 
-    pub(super) fn start_deferred_blocking_request<F>(
-        &self,
-        client_id: u64,
-        request_id: i64,
-        request_type: &str,
-        task: F,
-    ) -> HostResult<()>
-    where
-        F: FnOnce() -> HostResult<Value> + Send + 'static,
-    {
-        self.start_deferred_request(client_id, request_id, request_type, async move {
-            tokio::task::spawn_blocking(task)
-                .await
-                .unwrap_or_else(|error| {
-                    Err(HostError::state(format!(
-                        "Deferred request failed: {error}"
-                    )))
-                })
-        })
+    fn deferred_request_scheduler(&self) -> DeferredRequestScheduler {
+        DeferredRequestScheduler::new(self.deferred_admission.clone(), self.inbox.clone())
     }
 
     pub(super) fn finish_deferred_request(
@@ -113,6 +82,16 @@ impl ServerActor {
         )? {
             return Ok(true);
         }
+        if let Some(route) = request_route_policy(request_type).deferred_read {
+            self.require_auth(client_id)?;
+            self.require_request_allowed(client_id, request_type)?;
+            DeferredReadRequestHandler::new(
+                self.runtime_store.clone(),
+                self.deferred_request_scheduler(),
+            )
+            .start(route, client_id, request_id, request_type, payload)?;
+            return Ok(true);
+        }
         match request_type {
             "automation.policy"
                 if payload
@@ -137,62 +116,6 @@ impl ServerActor {
                 self.require_auth(client_id)?;
                 self.require_request_allowed(client_id, request_type)?;
                 self.start_project_registration(client_id, request_id, payload)?;
-                Ok(true)
-            }
-            "projectConfig.effective" => {
-                self.require_auth(client_id)?;
-                self.require_request_allowed(client_id, request_type)?;
-                let project_id = require_string_key(payload, "projectId")?.to_string();
-                let runtime_store = self.runtime_store.clone();
-                self.start_deferred_request(
-                    client_id,
-                    request_id,
-                    request_type,
-                    load_effective_project_config(runtime_store, project_id),
-                )?;
-                Ok(true)
-            }
-            "project.branches.list" => {
-                self.require_auth(client_id)?;
-                self.require_request_allowed(client_id, request_type)?;
-                let project_id = require_string_key(payload, "projectId")?.to_string();
-                let runtime_store = self.runtime_store.clone();
-                self.start_deferred_request(
-                    client_id,
-                    request_id,
-                    request_type,
-                    load_project_branches(runtime_store, project_id),
-                )?;
-                Ok(true)
-            }
-            "workspace.repositoryWebUrl" => {
-                self.require_auth(client_id)?;
-                self.require_request_allowed(client_id, request_type)?;
-                let workspace_id = require_string_key(payload, "workspaceId")?.to_string();
-                let runtime_store = self.runtime_store.clone();
-                self.start_deferred_request(
-                    client_id,
-                    request_id,
-                    request_type,
-                    load_workspace_repository_web_url(runtime_store, workspace_id),
-                )?;
-                Ok(true)
-            }
-            "hostDirectory.list" => {
-                self.require_auth(client_id)?;
-                self.require_request_allowed(client_id, request_type)?;
-                let path = require_string_key(payload, "path")?.to_string();
-                self.start_deferred_blocking_request(
-                    client_id,
-                    request_id,
-                    request_type,
-                    move || {
-                        let entries = list_host_directory(&path)
-                            .map_err(|error| HostError::state(error.to_string()))?;
-                        serde_json::to_value(entries)
-                            .map_err(|error| HostError::state(error.to_string()))
-                    },
-                )?;
                 Ok(true)
             }
             "workspaceSidebar.snapshot" => {
