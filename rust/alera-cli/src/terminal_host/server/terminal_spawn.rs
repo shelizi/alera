@@ -11,6 +11,7 @@ use crate::terminal_host::orchestration::agent_startup_command::{
 use crate::terminal_host::protocol::TerminalHostLaunch;
 use crate::terminal_host::session::Session;
 
+use super::agent_hook_settings::AgentHookSettingsQuery;
 use super::pty_event_forwarder::forward_pty_event;
 use super::terminal_launch_defaults::default_terminal_launch;
 use super::terminal_startup_commands::{
@@ -374,11 +375,7 @@ impl ServerActor {
         }
         self.disarm_terminal_pulse(&session_id);
         self.account_push.damper.reset_session(&session_id);
-        let mut agent_settings = self
-            .runtime_store
-            .agent_status_hook_settings()
-            .await
-            .map_err(|error| HostError::state(error.to_string()))?;
+        let mut agent_settings = AgentHookSettingsQuery::new(&self.runtime_store).load().await?;
         if let Some(agent) = forced_agent_hook {
             agent_settings.set_enabled(agent, true);
         }
