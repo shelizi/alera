@@ -176,9 +176,18 @@ class LspStdioConfig extends LspConfig {
       args ?? [],
       environment: environment,
       workingDirectory: workspacePath,
+      runInShell: _requiresWindowsCommandShell(executable),
     );
     _process.stdout.listen(_handleStdoutData);
     _process.stderr.listen((data) => debugPrint(utf8.decode(data)));
+  }
+
+  static bool _requiresWindowsCommandShell(String executable) {
+    if (!Platform.isWindows) {
+      return false;
+    }
+    final normalized = executable.trim().toLowerCase();
+    return normalized.endsWith('.cmd') || normalized.endsWith('.bat');
   }
 
   int get pid => _process.pid;
@@ -237,7 +246,7 @@ class LspStdioConfig extends LspConfig {
     };
 
     final responseFuture = _responseController.stream.firstWhere(
-      (response) => response['id'] == id,
+      (response) => _isResponseForRequest(response, id),
       orElse: () => throw TimeoutException('No response for request $id'),
     );
 

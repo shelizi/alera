@@ -84,7 +84,7 @@ void main() {
     expect(result, isA<LanguageServerExecutableResolved>());
     expect(
       (result as LanguageServerExecutableResolved).executable,
-      'rust-analyzer-alt',
+      r'C:\second\rust-analyzer-alt.exe',
     );
     expect(
       checkedPaths.any(
@@ -93,6 +93,34 @@ void main() {
       isTrue,
     );
     expect(checkedPaths, isNot(contains('rust-analyzer')));
+  });
+
+  test('bare executable override resolves to its concrete PATH shim', () async {
+    final runtime = CodeForgeLanguageServerRuntime(
+      environmentReader: () => const <String, String>{
+        'Path': r'C:\node\bin',
+        'PATHEXT': '.EXE;.CMD',
+      },
+      isWindows: true,
+      executableExists: (path) =>
+          path.toLowerCase() == r'c:\node\bin\pyright-langserver.cmd',
+      transportFactory: _unexpectedTransportFactory,
+    );
+
+    final result = await runtime.resolveExecutable(
+      provider: provider,
+      settings: const LanguageActivationSettings(
+        enabled: true,
+        executablePath: 'pyright-langserver',
+      ),
+      target: LanguageServerTarget.localWorkspace,
+    );
+
+    expect(result, isA<LanguageServerExecutableResolved>());
+    expect(
+      (result as LanguageServerExecutableResolved).executable,
+      r'C:\node\bin\pyright-langserver.cmd',
+    );
   });
 
   test('provider candidates reject repository-relative executable paths', () {

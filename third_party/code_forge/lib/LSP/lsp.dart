@@ -10,6 +10,11 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 part 'lsp_socket.dart';
 part 'lsp_stdio.dart';
 
+bool _isResponseForRequest(Map<String, dynamic> message, Object id) =>
+    message['id'] == id &&
+    !message.containsKey('method') &&
+    (message.containsKey('result') || message.containsKey('error'));
+
 sealed class LspConfig {
   /// The language ID of the language.
   ///

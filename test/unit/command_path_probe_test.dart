@@ -89,6 +89,15 @@ void main() {
         'PATHEXT': '.COM;.EXE;.BAT;.CMD',
       };
       expect(
+        resolveCommandOnPath(
+          'claude',
+          environment: environment,
+          isWindows: true,
+          executableExists: <String>{r'C:\tools\claude.cmd'}.contains,
+        ),
+        r'C:\tools\claude.cmd',
+      );
+      expect(
         probe(
           'claude',
           environment,
@@ -105,6 +114,38 @@ void main() {
           existing: <String>{r'D:\bin\codex.exe'},
         ),
         isTrue,
+      );
+    });
+
+    test('prefers a PATHEXT shim over an extensionless npm sibling', () {
+      final existing = <String>{
+        r'C:\node\bin\pyright-langserver',
+        r'C:\node\bin\pyright-langserver.cmd',
+      };
+      expect(
+        resolveCommandOnPath(
+          'pyright-langserver',
+          environment: const <String, String>{
+            'Path': r'C:\node\bin',
+            'PATHEXT': '.EXE;.CMD',
+          },
+          isWindows: true,
+          executableExists: existing.contains,
+        ),
+        r'C:\node\bin\pyright-langserver.cmd',
+      );
+    });
+
+    test('returns the exact POSIX executable path from a custom PATH', () {
+      expect(
+        resolveCommandOnPath(
+          'pyright-langserver',
+          environment: const <String, String>{'PATH': '/tmp/node/bin:/usr/bin'},
+          isWindows: false,
+          executableExists: const <String>{'/tmp/node/bin/pyright-langserver'}
+              .contains,
+        ),
+        '/tmp/node/bin/pyright-langserver',
       );
     });
 

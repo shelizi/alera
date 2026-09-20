@@ -131,11 +131,15 @@ final class CodeForgeLanguageServerRuntime
     final environment = _environmentReader();
     final override = settings.executablePath?.trim();
     if (override != null && override.isNotEmpty) {
-      final found = _looksLikePath(override)
-          ? _pathExists(override)
-          : _commandResolves(override, environment);
-      if (found) {
-        return LanguageServerExecutableResolved(override);
+      if (_looksLikePath(override)) {
+        if (_pathExists(override)) {
+          return LanguageServerExecutableResolved(override);
+        }
+      } else {
+        final resolved = _resolveCommand(override, environment);
+        if (resolved != null) {
+          return LanguageServerExecutableResolved(resolved);
+        }
       }
       return LanguageServerExecutableMissing(
         reason: 'Configured executable was not found: $override',
@@ -143,8 +147,9 @@ final class CodeForgeLanguageServerRuntime
     }
 
     for (final candidate in provider.executableCandidates) {
-      if (_commandResolves(candidate, environment)) {
-        return LanguageServerExecutableResolved(candidate);
+      final resolved = _resolveCommand(candidate, environment);
+      if (resolved != null) {
+        return LanguageServerExecutableResolved(resolved);
       }
     }
     final tried = provider.executableCandidates.isEmpty
@@ -238,8 +243,8 @@ final class CodeForgeLanguageServerRuntime
     executableExists: _executableExists,
   );
 
-  bool _commandResolves(String value, Map<String, String> environment) =>
-      commandResolvesOnPath(
+  String? _resolveCommand(String value, Map<String, String> environment) =>
+      resolveCommandOnPath(
         value,
         environment: environment,
         isWindows: _isWindows,

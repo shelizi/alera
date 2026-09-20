@@ -14,12 +14,32 @@ bool commandResolvesOnPath(
   required Map<String, String> environment,
   bool? isWindows,
   bool Function(String path)? executableExists,
+}) =>
+    resolveCommandOnPath(
+      command,
+      environment: environment,
+      isWindows: isWindows,
+      executableExists: executableExists,
+    ) !=
+    null;
+
+/// Resolves [command] to the concrete executable path visible through
+/// [environment]'s PATH/PATHEXT rules.
+///
+/// Returning the concrete path matters when a caller supplies an environment
+/// that differs from the parent process. Process.start does not reliably use
+/// that child environment to locate a bare executable on Windows.
+String? resolveCommandOnPath(
+  String command, {
+  required Map<String, String> environment,
+  bool? isWindows,
+  bool Function(String path)? executableExists,
 }) {
   final name = command.trim();
   // Separators make this a path, not a PATH lookup; the caller is expected to
   // hand over bare command names.
   if (name.isEmpty || name.contains('/') || name.contains(r'\')) {
-    return false;
+    return null;
   }
   final windows = isWindows ?? Platform.isWindows;
   final exists =
@@ -27,7 +47,7 @@ bool commandResolvesOnPath(
       (windows ? _windowsExecutableExists : _posixExecutableExists);
   final pathValue = _pathValue(environment, windows: windows);
   if (pathValue == null || pathValue.isEmpty) {
-    return false;
+    return null;
   }
   final join = windows ? p.windows.join : p.posix.join;
   for (final segment in pathValue.split(windows ? ';' : ':')) {
@@ -41,11 +61,11 @@ bool commandResolvesOnPath(
       windows: windows,
     )) {
       if (exists(join(directory, candidate))) {
-        return true;
+        return join(directory, candidate);
       }
     }
   }
-  return false;
+  return null;
 }
 
 String? _pathValue(Map<String, String> environment, {required bool windows}) {
@@ -92,11 +112,15 @@ List<String> _candidateNames(
             .map((ext) => ext.trim().toLowerCase())
             .where((ext) => ext.startsWith('.') && ext.length > 1)
             .toList(growable: false);
-  final seen = <String>{command.toLowerCase()};
+  final normalizedCommand = command.toLowerCase();
+  if (extensions.any(normalizedCommand.endsWith)) {
+    return <String>[command];
+  }
+  final seen = <String>{normalizedCommand};
   return <String>[
-    command,
     for (final ext in extensions)
       if (seen.add('$command$ext')) '$command$ext',
+    command,
   ];
 }
 
