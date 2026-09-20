@@ -81,6 +81,88 @@ impl<'a> AutomationTagRequestHandler<'a> {
     }
 }
 
+pub(super) struct AutomationCatalogTransferHandler<'a> {
+    runtime_store: &'a RuntimeStore,
+}
+
+pub(super) struct AutomationCatalogImportOutcome {
+    pub(super) value: Value,
+    pub(super) automations_active: bool,
+}
+
+impl<'a> AutomationCatalogTransferHandler<'a> {
+    pub(super) const fn new(runtime_store: &'a RuntimeStore) -> Self {
+        Self { runtime_store }
+    }
+
+    pub(super) async fn export(&self, actor: AutomationActor) -> HostResult<Value> {
+        let bundle = self
+            .runtime_store
+            .export_automation_catalog()
+            .await
+            .map_err(|error| HostError::state(error.to_string()))?;
+        self.runtime_store
+            .insert_automation_audit_event(
+                None,
+                None,
+                "export",
+                actor,
+                None,
+                json!({ "schemaVersion": bundle.schema_version }),
+            )
+            .await
+            .map_err(|error| HostError::state(error.to_string()))?;
+        serde_json::to_value(bundle).map_err(|error| HostError::state(error.to_string()))
+    }
+
+    pub(super) async fn import(
+        &self,
+        payload: &Value,
+        actor: AutomationActor,
+    ) -> HostResult<AutomationCatalogImportOutcome> {
+        let bundle_value = payload
+            .get("bundle")
+            .cloned()
+            .unwrap_or_else(|| payload.clone());
+        let remap = payload.get("remap").cloned().unwrap_or_else(|| json!({}));
+        let mut remap: BTreeMap<String, String> = serde_json::from_value(remap)
+            .map_err(|error| HostError::format(format!("invalid automation remap: {error}")))?;
+        let bundle_value = normalize_portable_import(bundle_value, &remap)?;
+        // Portable keys have already been resolved to local ids. Preserve
+        // those ids through the store's legacy remap path as identity maps.
+        for value in remap.values().cloned().collect::<Vec<_>>() {
+            remap.entry(value.clone()).or_insert(value);
+        }
+        let bundle: AutomationImportBundle = serde_json::from_value(bundle_value)
+            .map_err(|error| HostError::format(format!("invalid automation catalog: {error}")))?;
+        let imported = self
+            .runtime_store
+            .import_automation_catalog(bundle, &remap, actor.clone())
+            .await
+            .map_err(|error| HostError::state(error.to_string()))?;
+        self.runtime_store
+            .insert_automation_audit_event(
+                None,
+                None,
+                "import",
+                actor,
+                None,
+                json!({ "count": imported.len(), "remap": remap }),
+            )
+            .await
+            .map_err(|error| HostError::state(error.to_string()))?;
+        let automations_active = self
+            .runtime_store
+            .has_active_automations()
+            .await
+            .map_err(|error| HostError::state(error.to_string()))?;
+        Ok(AutomationCatalogImportOutcome {
+            value: json!({"items": imported}),
+            automations_active,
+        })
+    }
+}
+
 impl ServerActor {
     pub(super) async fn automation_templates_request(&self, payload: &Value) -> HostResult<Value> {
         AutomationTemplateRequestHandler::new(&self.runtime_store)
@@ -125,23 +207,9 @@ impl ServerActor {
         &self,
         actor: AutomationActor,
     ) -> HostResult<Value> {
-        let bundle = self
-            .runtime_store
-            .export_automation_catalog()
+        AutomationCatalogTransferHandler::new(&self.runtime_store)
+            .export(actor)
             .await
-            .map_err(|error| HostError::state(error.to_string()))?;
-        self.runtime_store
-            .insert_automation_audit_event(
-                None,
-                None,
-                "export",
-                actor,
-                None,
-                json!({ "schemaVersion": bundle.schema_version }),
-            )
-            .await
-            .map_err(|error| HostError::state(error.to_string()))?;
-        serde_json::to_value(bundle).map_err(|error| HostError::state(error.to_string()))
     }
 
     pub(super) async fn automation_import_request(
@@ -149,49 +217,16 @@ impl ServerActor {
         payload: &Value,
         actor: AutomationActor,
     ) -> HostResult<Value> {
-        let bundle_value = payload
-            .get("bundle")
-            .cloned()
-            .unwrap_or_else(|| payload.clone());
-        let remap = payload.get("remap").cloned().unwrap_or_else(|| json!({}));
-        let mut remap: std::collections::BTreeMap<String, String> =
-            serde_json::from_value(remap)
-                .map_err(|error| HostError::format(format!("invalid automation remap: {error}")))?;
-        let bundle_value = normalize_portable_import(bundle_value, &remap)?;
-        // Portable keys have already been resolved to local ids. Preserve
-        // those ids through the store's legacy remap path as identity maps.
-        for value in remap.values().cloned().collect::<Vec<_>>() {
-            remap.entry(value.clone()).or_insert(value);
-        }
-        let bundle: AutomationImportBundle = serde_json::from_value(bundle_value)
-            .map_err(|error| HostError::format(format!("invalid automation catalog: {error}")))?;
-        let imported = self
-            .runtime_store
-            .import_automation_catalog(bundle, &remap, actor.clone())
-            .await
-            .map_err(|error| HostError::state(error.to_string()))?;
-        self.runtime_store
-            .insert_automation_audit_event(
-                None,
-                None,
-                "import",
-                actor,
-                None,
-                json!({ "count": imported.len(), "remap": remap }),
-            )
-            .await
-            .map_err(|error| HostError::state(error.to_string()))?;
-        self.automations_active = self
-            .runtime_store
-            .has_active_automations()
-            .await
-            .map_err(|error| HostError::state(error.to_string()))?;
+        let outcome = AutomationCatalogTransferHandler::new(&self.runtime_store)
+            .import(payload, actor)
+            .await?;
+        self.automations_active = outcome.automations_active;
         self.automation_wake.notify_one();
         self.broadcast_authenticated(crate::terminal_host::protocol::event(
             "automationsChanged",
             json!({}),
         ));
-        Ok(json!({"items": imported}))
+        Ok(outcome.value)
     }
 }
 
@@ -415,11 +450,12 @@ fn remap_value(
 mod tests {
     use std::collections::BTreeMap;
 
-    use alera_core::runtime::RuntimeStore;
+    use alera_core::runtime::{AutomationActor, AutomationActorKind, RuntimeStore};
     use chrono::Utc;
 
     use super::{
-        normalize_portable_import, AutomationTagRequestHandler, AutomationTemplateRequestHandler,
+        normalize_portable_import, AutomationCatalogTransferHandler, AutomationTagRequestHandler,
+        AutomationTemplateRequestHandler,
     };
     use serde_json::json;
 
@@ -468,6 +504,38 @@ mod tests {
         let listed = handler.list().await.unwrap();
         assert_eq!(listed["items"].as_array().unwrap().len(), 1);
         assert_eq!(listed["items"][0]["id"], "tag");
+    }
+
+    #[tokio::test]
+    async fn automation_catalog_transfer_can_be_tested_without_server_actor() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = RuntimeStore::open(dir.path()).await.unwrap();
+        let handler = AutomationCatalogTransferHandler::new(&store);
+        let actor = AutomationActor {
+            kind: AutomationActorKind::LocalCli,
+            id: None,
+            label: None,
+        };
+
+        let exported = handler.export(actor.clone()).await.unwrap();
+        assert_eq!(exported["schemaVersion"], "1");
+        assert_eq!(exported["definitions"], json!([]));
+
+        let imported = handler
+            .import(
+                &json!({
+                    "bundle": {
+                        "schemaVersion": "1",
+                        "definitions": []
+                    },
+                    "remap": {}
+                }),
+                actor,
+            )
+            .await
+            .unwrap();
+        assert_eq!(imported.value["items"], json!([]));
+        assert!(!imported.automations_active);
     }
 
     #[test]
