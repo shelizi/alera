@@ -362,38 +362,11 @@ impl ServerActor {
         .await
         .map_err(|error| HostError::state(error.to_string()))?
         .map_err(|error| HostError::state(error.to_string()))?;
-        if let Ok(Some(tab)) = self.runtime_store.find_workspace_tab(&tab_id).await {
-            if let Some(profile_id) = agent_profile_id(&tab) {
-                launch
-                    .environment
-                    .insert("ALERA_AGENT_PROFILE_ID".to_string(), profile_id.to_string());
-            }
-            if let Some(conversation_id) = tab.payload.get("conversationId").and_then(Value::as_str)
-            {
-                launch.environment.insert(
-                    "ALERA_AGENT_CONVERSATION_ID".to_string(),
-                    conversation_id.to_string(),
-                );
-            }
-            if tab.payload.get("automationOwned").and_then(Value::as_bool) == Some(true) {
-                if let Some(run_id) = tab.payload.get("automationRunId").and_then(Value::as_str) {
-                    // These values come from the host-owned tab record, never
-                    // from a launch request. They bind automation CLI calls to
-                    // the exact PTY that the host created for the run.
-                    launch
-                        .environment
-                        .insert("ALERA_AUTOMATION_RUN_ID".to_string(), run_id.to_string());
-                    launch
-                        .environment
-                        .insert("ALERA_WORKSPACE_ID".to_string(), workspace_id.clone());
-                    launch
-                        .environment
-                        .insert("ALERA_TAB_ID".to_string(), tab_id.clone());
-                    launch
-                        .environment
-                        .insert("ALERA_TERMINAL_SESSION_ID".to_string(), session_id.clone());
-                }
-            }
+        if let Ok(Some(tab)) = WorkspaceTabStoreHandler::new(&self.runtime_store)
+            .find(&tab_id)
+            .await
+        {
+            apply_host_owned_tab_identity(&mut launch, &tab, &workspace_id, &tab_id, &session_id);
         }
         let inbox = self.inbox.clone();
         let reader_session_id = session_id.clone();
@@ -452,13 +425,91 @@ fn spawns_on_create(tab: &WorkspaceTabRecord) -> bool {
         && tab.payload.get("spawnOnCreate").and_then(Value::as_bool) == Some(true)
 }
 
+fn apply_host_owned_tab_identity(
+    launch: &mut TerminalHostLaunch,
+    tab: &WorkspaceTabRecord,
+    workspace_id: &str,
+    tab_id: &str,
+    session_id: &str,
+) {
+    if let Some(profile_id) = agent_profile_id(tab) {
+        launch
+            .environment
+            .insert("ALERA_AGENT_PROFILE_ID".to_string(), profile_id.to_string());
+    }
+    if let Some(conversation_id) = tab.payload.get("conversationId").and_then(Value::as_str) {
+        launch.environment.insert(
+            "ALERA_AGENT_CONVERSATION_ID".to_string(),
+            conversation_id.to_string(),
+        );
+    }
+    if tab.payload.get("automationOwned").and_then(Value::as_bool) == Some(true) {
+        if let Some(run_id) = tab.payload.get("automationRunId").and_then(Value::as_str) {
+            // These values come from the host-owned tab record, never from a
+            // launch request. They bind automation CLI calls to the exact PTY
+            // that the host created for the run.
+            launch
+                .environment
+                .insert("ALERA_AUTOMATION_RUN_ID".to_string(), run_id.to_string());
+            launch
+                .environment
+                .insert("ALERA_WORKSPACE_ID".to_string(), workspace_id.to_string());
+            launch
+                .environment
+                .insert("ALERA_TAB_ID".to_string(), tab_id.to_string());
+            launch.environment.insert(
+                "ALERA_TERMINAL_SESSION_ID".to_string(),
+                session_id.to_string(),
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use alera_core::runtime::{RuntimeStore, WorkspaceTabRecord};
     use chrono::Utc;
     use serde_json::json;
 
-    use super::TerminalStartupTabPersistence;
+    use super::{apply_host_owned_tab_identity, TerminalStartupTabPersistence};
+    use crate::terminal_host::protocol::TerminalHostLaunch;
+
+    #[test]
+    fn host_owned_tab_metadata_populates_terminal_launch_identity_environment() {
+        let now = Utc::now();
+        let tab = WorkspaceTabRecord {
+            id: "tab".into(),
+            workspace_id: "workspace".into(),
+            kind: "terminal".into(),
+            title: "Agent".into(),
+            created_at: now,
+            updated_at: now,
+            payload: json!({
+                "agentProfileId": "profile",
+                "conversationId": "conversation",
+                "automationOwned": true,
+                "automationRunId": "run",
+            }),
+        };
+        let mut launch = TerminalHostLaunch {
+            label: "shell".into(),
+            shell: "shell".into(),
+            arguments: vec![],
+            environment: Default::default(),
+        };
+
+        apply_host_owned_tab_identity(&mut launch, &tab, "workspace", "tab", "session");
+
+        assert_eq!(launch.environment["ALERA_AGENT_PROFILE_ID"], "profile");
+        assert_eq!(
+            launch.environment["ALERA_AGENT_CONVERSATION_ID"],
+            "conversation"
+        );
+        assert_eq!(launch.environment["ALERA_AUTOMATION_RUN_ID"], "run");
+        assert_eq!(launch.environment["ALERA_WORKSPACE_ID"], "workspace");
+        assert_eq!(launch.environment["ALERA_TAB_ID"], "tab");
+        assert_eq!(launch.environment["ALERA_TERMINAL_SESSION_ID"], "session");
+    }
 
     #[tokio::test]
     async fn one_shot_startup_fields_can_be_consumed_without_server_actor() {
