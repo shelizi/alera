@@ -12,9 +12,9 @@ use super::deferred_request_scheduler::DeferredRequestScheduler;
 use super::project_registration_requests::ProjectRegistrationRequestHandler;
 use super::request_payloads::parse_payload;
 use super::request_route_policy::{
-    request_route_policy, AgentQuotaOperation, AiDictationOperation, AiTextOperation,
-    CoalescedReadRoute, DeferredJobRoute, DeferredWriteRoute, MobileDeferredRoute,
-    WorkspaceDeferredOperation,
+    request_route_policy, AgentQuotaOperation, AgentSkillOperation, AiDictationOperation,
+    AiTextOperation, CoalescedReadRoute, DeferredJobRoute, DeferredWriteRoute, MobileDeferredRoute,
+    TerminalDeferredOperation, WorkspaceDeferredOperation,
 };
 use super::requests::{require_string_key, validate_mobile_runtime_settings_payload};
 use super::ServerActor;
@@ -216,6 +216,20 @@ impl ServerActor {
                         true
                     }
                 },
+                DeferredJobRoute::Terminal(operation) => match operation {
+                    TerminalDeferredOperation::Write => {
+                        self.queue_terminal_input(client_id, request_id, payload)?
+                    }
+                    TerminalDeferredOperation::PulseConfigure => {
+                        self.start_terminal_pulse_configuration(client_id, request_id, payload)
+                            .await?;
+                        true
+                    }
+                },
+                DeferredJobRoute::AgentSkill(AgentSkillOperation::Install) => {
+                    self.start_skill_install_request(client_id, request_id, payload)?;
+                    true
+                }
             };
             return Ok(started);
         }
@@ -280,24 +294,6 @@ impl ServerActor {
                 self.require_request_allowed(client_id, request_type)?;
                 self.start_mobile_network_snapshot(client_id, request_id)
                     .await?;
-                Ok(true)
-            }
-            "write" => {
-                self.require_auth(client_id)?;
-                self.require_request_allowed(client_id, request_type)?;
-                self.queue_terminal_input(client_id, request_id, payload)
-            }
-            "terminal.pulse.configure" => {
-                self.require_auth(client_id)?;
-                self.require_request_allowed(client_id, request_type)?;
-                self.start_terminal_pulse_configuration(client_id, request_id, payload)
-                    .await?;
-                Ok(true)
-            }
-            "agentSkill.install" => {
-                self.require_auth(client_id)?;
-                self.require_request_allowed(client_id, request_type)?;
-                self.start_skill_install_request(client_id, request_id, payload)?;
                 Ok(true)
             }
             _ => Ok(false),

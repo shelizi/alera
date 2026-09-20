@@ -86,12 +86,25 @@ pub(super) enum WorkspaceDeferredOperation {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum TerminalDeferredOperation {
+    Write,
+    PulseConfigure,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum AgentSkillOperation {
+    Install,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum DeferredJobRoute {
     CliRegistration(CliRegistrationOperation),
     AgentQuota(AgentQuotaOperation),
     AiText(AiTextOperation),
     AiDictation(AiDictationOperation),
     Workspace(WorkspaceDeferredOperation),
+    Terminal(TerminalDeferredOperation),
+    AgentSkill(AgentSkillOperation),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -231,8 +244,7 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         | "workspaceSection.setForWorkspace"
         | "workspaceTag.create"
         | "workspaceTag.remove"
-        | "workspaceTag.setForWorkspace"
-        | "write" => MOBILE_CONFLICT,
+        | "workspaceTag.setForWorkspace" => MOBILE_CONFLICT,
 
         "project.register" => {
             mobile_conflicting_deferred_write(DeferredWriteRoute::ProjectRegister)
@@ -321,6 +333,15 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         "workspace.storageImpact" => mobile_deferred_job(DeferredJobRoute::Workspace(
             WorkspaceDeferredOperation::StorageImpact,
         )),
+        "write" => mobile_conflicting_deferred_job(DeferredJobRoute::Terminal(
+            TerminalDeferredOperation::Write,
+        )),
+        "terminal.pulse.configure" => local_conflicting_deferred_job(DeferredJobRoute::Terminal(
+            TerminalDeferredOperation::PulseConfigure,
+        )),
+        "agentSkill.install" => {
+            mobile_deferred_job(DeferredJobRoute::AgentSkill(AgentSkillOperation::Install))
+        }
 
         "project.remove" => serialized_mobile(SerializedRuntimeMutation::RemoveProject),
         "tab.remove" => serialized_mobile(SerializedRuntimeMutation::RemoveTab),
@@ -349,7 +370,6 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         | "orchestration.terminalPrune"
         | "project.upsert"
         | "tab.upsert"
-        | "terminal.pulse.configure"
         | "workspace.upsert"
         | "workspaceActivity.remove"
         | "workspaceActivity.upsertAll"
@@ -372,7 +392,6 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         | "agentProfile.launch"
         | "agentProfile.launchIdempotent"
         | "agentProfile.list"
-        | "agentSkill.install"
         | "aiText.cancel"
         | "automation.cancel"
         | "automation.complete"
@@ -821,6 +840,35 @@ mod tests {
             Some(DeferredJobRoute::Workspace(
                 WorkspaceDeferredOperation::StorageImpact
             ))
+        );
+    }
+
+    #[test]
+    fn terminal_and_agent_skill_routes_are_typed_deferred_jobs() {
+        let write = request_route_policy("write");
+        assert!(write.mobile_allowed);
+        assert_eq!(write.runtime_mutation, RuntimeMutationPolicy::Conflicts);
+        assert_eq!(
+            write.deferred_job,
+            Some(DeferredJobRoute::Terminal(TerminalDeferredOperation::Write))
+        );
+
+        let pulse = request_route_policy("terminal.pulse.configure");
+        assert!(!pulse.mobile_allowed);
+        assert_eq!(pulse.runtime_mutation, RuntimeMutationPolicy::Conflicts);
+        assert_eq!(
+            pulse.deferred_job,
+            Some(DeferredJobRoute::Terminal(
+                TerminalDeferredOperation::PulseConfigure
+            ))
+        );
+
+        let install = request_route_policy("agentSkill.install");
+        assert!(install.mobile_allowed);
+        assert_eq!(install.runtime_mutation, RuntimeMutationPolicy::Available);
+        assert_eq!(
+            install.deferred_job,
+            Some(DeferredJobRoute::AgentSkill(AgentSkillOperation::Install))
         );
     }
 }
