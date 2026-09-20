@@ -119,6 +119,88 @@ void main() {
   });
 
   test(
+    'definition follows a single same-file alias to its source target',
+    () async {
+      final transport = _FakeSemanticTransport();
+      final adapter = await _adapter(transport);
+      await adapter.openDocument(
+        language: LanguageId('typescript'),
+        path: r'C:\repo\src\main.ts',
+        text: "import { add } from './lib';\n\nconst value = add(1, 2);\n",
+      );
+      await adapter.openDocument(
+        language: LanguageId('typescript'),
+        path: r'C:\repo\src\lib.ts',
+        text: 'export function add(a: number, b: number) { return a + b; }\n',
+      );
+      transport.queuedResults.addAll(<Object?>[
+        <Object?>[
+          <String, Object?>{
+            'uri': 'file:///C:/repo/src/main.ts',
+            'range': <String, Object?>{
+              'start': <String, int>{'line': 0, 'character': 9},
+              'end': <String, int>{'line': 0, 'character': 12},
+            },
+          },
+        ],
+        <Object?>[
+          <String, Object?>{
+            'uri': 'file:///C:/repo/src/lib.ts',
+            'range': <String, Object?>{
+              'start': <String, int>{'line': 0, 'character': 16},
+              'end': <String, int>{'line': 0, 'character': 19},
+            },
+          },
+        ],
+      ]);
+
+      final locations = await adapter.definition(
+        path: r'C:\repo\src\main.ts',
+        position: const SourcePosition(line: 2, scalarColumn: 15),
+      );
+
+      expect(locations, hasLength(1));
+      expect(locations.single.path.toLowerCase(), r'c:\repo\src\lib.ts');
+      expect(locations.single.range.start.scalarColumn, 16);
+      expect(transport.requests, hasLength(2));
+      expect(
+        (transport.requests.last.params['position'] as Map)['character'],
+        9,
+      );
+    },
+  );
+
+  test('definition alias chasing stops on a same-position cycle', () async {
+    final transport = _FakeSemanticTransport();
+    final adapter = await _adapter(transport);
+    await adapter.openDocument(
+      language: LanguageId('typescript'),
+      path: r'C:\repo\src\main.ts',
+      text: "import { add } from './lib';\n\nconst value = add(1, 2);\n",
+    );
+    final alias = <Object?>[
+      <String, Object?>{
+        'uri': 'file:///C:/repo/src/main.ts',
+        'range': <String, Object?>{
+          'start': <String, int>{'line': 0, 'character': 9},
+          'end': <String, int>{'line': 0, 'character': 12},
+        },
+      },
+    ];
+    transport.queuedResults.addAll(<Object?>[alias, alias]);
+
+    final locations = await adapter.definition(
+      path: r'C:\repo\src\main.ts',
+      position: const SourcePosition(line: 2, scalarColumn: 15),
+    );
+
+    expect(locations, hasLength(1));
+    expect(locations.single.path.toLowerCase(), r'c:\repo\src\main.ts');
+    expect(locations.single.range.start.scalarColumn, 9);
+    expect(transport.requests, hasLength(2));
+  });
+
+  test(
     'references include declaration context and ignore non-file locations',
     () async {
       final transport = _FakeSemanticTransport();
@@ -285,6 +367,7 @@ final class _FakeSemanticTransport implements CodeForgeLanguageServerTransport {
   final List<_RecordedMessage> requests = <_RecordedMessage>[];
   final Completer<int> _exitCode = Completer<int>();
   Object? nextResult;
+  final List<Object?> queuedResults = <Object?>[];
 
   @override
   Future<int> get processExitCode => _exitCode.future;
@@ -320,7 +403,9 @@ final class _FakeSemanticTransport implements CodeForgeLanguageServerTransport {
     required Map<String, dynamic> params,
   }) async {
     requests.add(_RecordedMessage(method, params));
-    return <String, dynamic>{'result': nextResult};
+    return <String, dynamic>{
+      'result': queuedResults.isEmpty ? nextResult : queuedResults.removeAt(0),
+    };
   }
 
   @override

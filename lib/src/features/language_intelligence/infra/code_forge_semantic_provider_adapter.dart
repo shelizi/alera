@@ -143,11 +143,42 @@ final class CodeForgeSemanticProviderAdapter
   Future<List<SourceLocation>> definition({
     required String path,
     required SourcePosition position,
-  }) => _navigationRequest(
-    method: 'textDocument/definition',
-    path: path,
-    position: position,
-  );
+  }) async {
+    const maxAliasHops = 4;
+    var requestPath = path;
+    var locations = await _navigationRequest(
+      method: 'textDocument/definition',
+      path: requestPath,
+      position: position,
+    );
+    final visited = <String>{_definitionPositionKey(requestPath, position)};
+
+    for (var hop = 0; hop < maxAliasHops; hop += 1) {
+      if (locations.length != 1) {
+        return locations;
+      }
+      final target = locations.single;
+      if (_documentKey(target.path) != _documentKey(requestPath)) {
+        return locations;
+      }
+      final targetKey = _definitionPositionKey(target.path, target.range.start);
+      if (!visited.add(targetKey)) {
+        return locations;
+      }
+
+      final next = await _navigationRequest(
+        method: 'textDocument/definition',
+        path: target.path,
+        position: target.range.start,
+      );
+      if (next.isEmpty) {
+        return locations;
+      }
+      locations = next;
+      requestPath = target.path;
+    }
+    return locations;
+  }
 
   @override
   Future<List<SourceLocation>> declaration({
@@ -327,6 +358,9 @@ final class CodeForgeSemanticProviderAdapter
     final normalized = _pathContext.normalize(path);
     return _isWindows ? normalized.toLowerCase() : normalized;
   }
+
+  String _definitionPositionKey(String path, SourcePosition position) =>
+      '${_documentKey(path)}:${position.line}:${position.scalarColumn}';
 }
 
 final class _OpenDocument {

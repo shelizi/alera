@@ -952,6 +952,24 @@ Completed:
   `CodeForgeSemanticProviderAdapter` path. The smoke covered initialize,
   `didOpen`, cross-file definition, references returning both declaration and
   call site, graceful shutdown, and process exit.
+- **F2 / P8 — Python semantic compatibility gate:** validated locally on
+  Windows with `pyright 1.1.414` through the built-in `python.pyright`
+  descriptor and production runtime/adapter path. The smoke covered
+  initialize, `didOpen`, cross-file definition, references, graceful shutdown,
+  and a real npm `.cmd` executable shim.
+- **F6 / P12 — TypeScript/JavaScript shared semantic compatibility gate:**
+  validated locally on Windows with `typescript-language-server 6.0.0` and a
+  disposable TypeScript 5.9.3 workspace. One server session handled both
+  `typescript` and `javascript` documents, including cross-file definition
+  and references. Standard LSP Definition may first return an import alias, so
+  the provider-neutral semantic adapter now follows a bounded single-target
+  same-file definition chain with cycle protection before returning the final
+  target.
+- **Windows executable compatibility:** PATH discovery now returns the concrete
+  executable path, prefers PATHEXT shims over extensionless npm siblings, and
+  starts `.cmd` / `.bat` language-server shims through the Windows shell.
+  This keeps custom per-session PATH environments consistent between readiness
+  probing and real process startup.
 - **G / P13 — extensibility gate:** a synthetic `moon` language is registered
   only through a contribution/descriptor/provider in tests and successfully
   runs generic lazy session startup, document sync, definition, references, and
@@ -961,13 +979,10 @@ Completed:
 Still pending for first-release semantic validation:
 
 - **F1 C#:** real `csharp-ls` startup/definition/references smoke.
-- **F2 Python:** real `pyright-langserver` smoke.
 - **F3 Rust:** real `rust-analyzer` smoke. On the current Windows machine,
   PATH resolves the rustup proxy, but the active stable toolchain does not have
   the `rust-analyzer` component installed, so this lane cannot yet run here.
 - **F5 PHP:** real `phpactor language-server` smoke.
-- **F6 TypeScript/JavaScript:** real shared
-  `typescript-language-server --stdio` smoke across both language ids.
 
 Known status semantics:
 
