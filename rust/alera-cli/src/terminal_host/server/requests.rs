@@ -24,7 +24,8 @@ use super::host_service_requests::required_non_blank;
 use super::project_registration_requests::ProjectRegistrationRequestHandler;
 pub(super) use super::request_payloads::{json_result, parse_payload};
 use super::request_route_policy::{
-    request_route_policy, CoalescedReadRoute, DeferredWriteRoute, PostResponseAction,
+    request_route_policy, CoalescedReadRoute, DeferredWriteRoute, MobileDeferredRoute,
+    PostResponseAction,
 };
 use super::runtime_mutation_barrier::conflicts_with_runtime_mutation;
 use super::{ClientKind, ServerActor, ServerCommand};
@@ -196,6 +197,15 @@ impl ServerActor {
             return match route {
                 CoalescedReadRoute::WorkspaceSidebarSnapshot => {
                     self.workspace_sidebar_snapshot(client_id).await
+                }
+            };
+        }
+        if let Some(route) = route_policy.mobile_deferred {
+            self.require_auth(client_id)?;
+            self.require_request_allowed(client_id, request_type)?;
+            return match route {
+                MobileDeferredRoute::PromptImage(operation) => {
+                    self.execute_mobile_prompt_image_operation(operation, payload)
                 }
             };
         }
@@ -938,26 +948,6 @@ impl ServerActor {
                 self.require_request_allowed(client_id, request_type)?;
                 required_non_blank(payload, "clientMutationId")?;
                 self.launch_agent_profile(Some(client_id), payload).await
-            }
-            "mobile.promptImage.start" => {
-                self.require_auth(client_id)?;
-                self.require_request_allowed(client_id, request_type)?;
-                self.start_mobile_prompt_image_upload(payload)
-            }
-            "mobile.promptImage.chunk" => {
-                self.require_auth(client_id)?;
-                self.require_request_allowed(client_id, request_type)?;
-                self.append_mobile_prompt_image_chunk(payload)
-            }
-            "mobile.promptImage.complete" => {
-                self.require_auth(client_id)?;
-                self.require_request_allowed(client_id, request_type)?;
-                self.complete_mobile_prompt_image_upload(payload)
-            }
-            "mobile.promptImage.cancel" => {
-                self.require_auth(client_id)?;
-                self.require_request_allowed(client_id, request_type)?;
-                self.cancel_mobile_prompt_image_upload(payload)
             }
             "aiText.cancel" => {
                 self.require_auth(client_id)?;

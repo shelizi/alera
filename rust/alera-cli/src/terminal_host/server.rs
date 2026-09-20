@@ -247,6 +247,7 @@ mod workspace_sidebar_requests;
 mod workspace_sidebar_requests_tests;
 
 pub(crate) use disconnect_reason::DisconnectReason;
+pub(crate) use request_route_policy::MobilePromptImageOperation;
 pub use server_command::ServerCommand;
 
 /// Delay before a debounced checkpoint write fires.
@@ -505,13 +506,13 @@ impl ServerActor {
             ServerCommand::MobilePromptImageFinished {
                 client_id,
                 request_id,
-                request_type,
+                operation,
                 upload_id,
                 result,
             } => self.handle_mobile_prompt_image_finished(
                 client_id,
                 request_id,
-                &request_type,
+                operation,
                 upload_id.as_deref(),
                 result,
             ),

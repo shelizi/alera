@@ -43,6 +43,19 @@ pub(super) enum CoalescedReadRoute {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum MobilePromptImageOperation {
+    Start,
+    Chunk,
+    Complete,
+    Cancel,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum MobileDeferredRoute {
+    PromptImage(MobilePromptImageOperation),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct RequestRoutePolicy {
     pub(super) mobile_allowed: bool,
     pub(super) runtime_mutation: RuntimeMutationPolicy,
@@ -50,6 +63,7 @@ pub(super) struct RequestRoutePolicy {
     pub(super) deferred_read: Option<DeferredReadRoute>,
     pub(super) deferred_write: Option<DeferredWriteRoute>,
     pub(super) coalesced_read: Option<CoalescedReadRoute>,
+    pub(super) mobile_deferred: Option<MobileDeferredRoute>,
 }
 
 const LOCAL: RequestRoutePolicy = RequestRoutePolicy {
@@ -59,6 +73,7 @@ const LOCAL: RequestRoutePolicy = RequestRoutePolicy {
     deferred_read: None,
     deferred_write: None,
     coalesced_read: None,
+    mobile_deferred: None,
 };
 
 const MOBILE: RequestRoutePolicy = RequestRoutePolicy {
@@ -155,6 +170,19 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         "workspaceSidebar.snapshot" => {
             mobile_coalesced_read(CoalescedReadRoute::WorkspaceSidebarSnapshot)
         }
+
+        "mobile.promptImage.start" => mobile_deferred_operation(MobileDeferredRoute::PromptImage(
+            MobilePromptImageOperation::Start,
+        )),
+        "mobile.promptImage.chunk" => mobile_deferred_operation(MobileDeferredRoute::PromptImage(
+            MobilePromptImageOperation::Chunk,
+        )),
+        "mobile.promptImage.complete" => mobile_deferred_operation(
+            MobileDeferredRoute::PromptImage(MobilePromptImageOperation::Complete),
+        ),
+        "mobile.promptImage.cancel" => mobile_deferred_operation(MobileDeferredRoute::PromptImage(
+            MobilePromptImageOperation::Cancel,
+        )),
 
         "project.remove" => serialized_mobile(SerializedRuntimeMutation::RemoveProject),
         "tab.remove" => serialized_mobile(SerializedRuntimeMutation::RemoveTab),
@@ -257,10 +285,6 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         | "mobile.promptFile.chunk"
         | "mobile.promptFile.complete"
         | "mobile.promptFile.start"
-        | "mobile.promptImage.cancel"
-        | "mobile.promptImage.chunk"
-        | "mobile.promptImage.complete"
-        | "mobile.promptImage.start"
         | "mobile.relayAuthorization.renew"
         | "mobile.runtimeSettings.get"
         | "mobile.runtimeSettings.update"
@@ -329,6 +353,14 @@ const fn mobile_coalesced_read(route: CoalescedReadRoute) -> RequestRoutePolicy 
     RequestRoutePolicy {
         mobile_allowed: true,
         coalesced_read: Some(route),
+        ..LOCAL
+    }
+}
+
+const fn mobile_deferred_operation(route: MobileDeferredRoute) -> RequestRoutePolicy {
+    RequestRoutePolicy {
+        mobile_allowed: true,
+        mobile_deferred: Some(route),
         ..LOCAL
     }
 }
@@ -432,5 +464,36 @@ mod tests {
             policy.coalesced_read,
             Some(CoalescedReadRoute::WorkspaceSidebarSnapshot)
         );
+    }
+
+    #[test]
+    fn prompt_image_routes_are_typed_mobile_deferred_operations() {
+        let expected = [
+            (
+                "mobile.promptImage.start",
+                MobilePromptImageOperation::Start,
+            ),
+            (
+                "mobile.promptImage.chunk",
+                MobilePromptImageOperation::Chunk,
+            ),
+            (
+                "mobile.promptImage.complete",
+                MobilePromptImageOperation::Complete,
+            ),
+            (
+                "mobile.promptImage.cancel",
+                MobilePromptImageOperation::Cancel,
+            ),
+        ];
+        for (request_type, operation) in expected {
+            let policy = request_route_policy(request_type);
+            assert!(policy.mobile_allowed, "{request_type}");
+            assert_eq!(
+                policy.mobile_deferred,
+                Some(MobileDeferredRoute::PromptImage(operation)),
+                "{request_type}"
+            );
+        }
     }
 }

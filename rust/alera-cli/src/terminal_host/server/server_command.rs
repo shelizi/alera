@@ -150,7 +150,7 @@ pub enum ServerCommand {
     MobilePromptImageFinished {
         client_id: u64,
         request_id: i64,
-        request_type: String,
+        operation: super::MobilePromptImageOperation,
         upload_id: Option<String>,
         result: HostResult<Value>,
     },

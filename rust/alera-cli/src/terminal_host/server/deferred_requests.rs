@@ -11,7 +11,9 @@ use super::deferred_read_requests::DeferredReadRequestHandler;
 use super::deferred_request_scheduler::DeferredRequestScheduler;
 use super::project_registration_requests::ProjectRegistrationRequestHandler;
 use super::request_payloads::parse_payload;
-use super::request_route_policy::{request_route_policy, CoalescedReadRoute, DeferredWriteRoute};
+use super::request_route_policy::{
+    request_route_policy, CoalescedReadRoute, DeferredWriteRoute, MobileDeferredRoute,
+};
 use super::requests::{require_string_key, validate_mobile_runtime_settings_payload};
 use super::ServerActor;
 
@@ -118,6 +120,22 @@ impl ServerActor {
             }
             return Ok(true);
         }
+        if let Some(route) = route_policy.mobile_deferred {
+            self.require_auth(client_id)?;
+            self.require_request_allowed(client_id, request_type)?;
+            match route {
+                MobileDeferredRoute::PromptImage(operation) => {
+                    self.start_mobile_prompt_image_request(
+                        client_id,
+                        request_id,
+                        operation,
+                        request_type,
+                        payload,
+                    )?;
+                }
+            }
+            return Ok(true);
+        }
         match request_type {
             "automation.policy"
                 if payload
@@ -185,20 +203,6 @@ impl ServerActor {
                 self.require_auth(client_id)?;
                 self.require_request_allowed(client_id, request_type)?;
                 self.start_mobile_workspace_file_request(
-                    client_id,
-                    request_id,
-                    request_type,
-                    payload,
-                )?;
-                Ok(true)
-            }
-            "mobile.promptImage.start"
-            | "mobile.promptImage.chunk"
-            | "mobile.promptImage.complete"
-            | "mobile.promptImage.cancel" => {
-                self.require_auth(client_id)?;
-                self.require_request_allowed(client_id, request_type)?;
-                self.start_mobile_prompt_image_request(
                     client_id,
                     request_id,
                     request_type,
