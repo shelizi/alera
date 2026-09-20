@@ -35,6 +35,30 @@ impl<'a> AutomationAgentPolicyStoreHandler<'a> {
     }
 }
 
+struct AutomationProjectPolicyStoreHandler<'a> {
+    runtime_store: &'a RuntimeStore,
+}
+
+impl<'a> AutomationProjectPolicyStoreHandler<'a> {
+    const fn new(runtime_store: &'a RuntimeStore) -> Self {
+        Self { runtime_store }
+    }
+
+    async fn get(&self, project_id: &str) -> HostResult<AutomationProjectPolicy> {
+        self.runtime_store
+            .automation_project_policy(project_id)
+            .await
+            .map_err(state_error)
+    }
+
+    async fn set(&self, policy: AutomationProjectPolicy) -> HostResult<AutomationProjectPolicy> {
+        self.runtime_store
+            .set_automation_project_policy(policy)
+            .await
+            .map_err(state_error)
+    }
+}
+
 impl ServerActor {
     pub(super) async fn automation_policy_request(
         &self,
@@ -79,11 +103,9 @@ impl ServerActor {
                 if let Some(value) = policy {
                     let mut policy = decode_project_policy(value, project_id)?;
                     policy.repo_declared = self.repository_declared_for_project(project_id).await?;
-                    let saved = self
-                        .runtime_store
-                        .set_automation_project_policy(policy)
-                        .await
-                        .map_err(|error| HostError::state(error.to_string()))?;
+                    let saved = AutomationProjectPolicyStoreHandler::new(&self.runtime_store)
+                        .set(policy)
+                        .await?;
                     return serde_json::to_value(saved)
                         .map_err(|error| HostError::state(error.to_string()));
                 }
@@ -211,11 +233,9 @@ impl ServerActor {
                 "managed workspace automations require a git repository project",
             ));
         }
-        let project_policy = self
-            .runtime_store
-            .automation_project_policy(&workspace.project_id)
-            .await
-            .map_err(|error| HostError::state(error.to_string()))?;
+        let project_policy = AutomationProjectPolicyStoreHandler::new(&self.runtime_store)
+            .get(&workspace.project_id)
+            .await?;
         if !repository_declares_automation(&workspace.path, &project.repo_path).await {
             return Err(HostError::state(format!(
                 "repository {} has no automation declaration in alera.toml",
@@ -325,10 +345,9 @@ async fn load_effective_project_policy(
     runtime_store: &RuntimeStore,
     project_id: &str,
 ) -> HostResult<AutomationProjectPolicy> {
-    let mut policy = runtime_store
-        .automation_project_policy(project_id)
-        .await
-        .map_err(|error| HostError::state(error.to_string()))?;
+    let mut policy = AutomationProjectPolicyStoreHandler::new(runtime_store)
+        .get(project_id)
+        .await?;
     policy.repo_declared = repository_declared_for_project(runtime_store, project_id).await?;
     Ok(policy)
 }
@@ -451,7 +470,10 @@ mod tests {
     };
     use chrono::Utc;
 
-    use super::{repository_declares_automation, AutomationAgentPolicyStoreHandler};
+    use super::{
+        repository_declares_automation, AutomationAgentPolicyStoreHandler,
+        AutomationProjectPolicyStoreHandler,
+    };
     use std::fs;
     use std::path::Path;
 
@@ -538,6 +560,36 @@ mod tests {
         assert!(saved.may_execute);
 
         let loaded = handler.get("profile").await.unwrap();
+        assert_eq!(loaded, saved);
+    }
+
+    #[tokio::test]
+    async fn project_policy_store_handler_can_be_tested_without_server_actor() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = RuntimeStore::open(dir.path()).await.unwrap();
+        let handler = AutomationProjectPolicyStoreHandler::new(&store);
+
+        let default = handler.get("project").await.unwrap();
+        assert_eq!(default.project_id, "project");
+        assert!(!default.repo_declared);
+        assert!(!default.local_approved);
+        assert!(!default.restrictive);
+
+        let saved = handler
+            .set(alera_core::runtime::AutomationProjectPolicy {
+                project_id: "project".into(),
+                repo_declared: true,
+                local_approved: true,
+                restrictive: true,
+                updated_at: Utc::now(),
+            })
+            .await
+            .unwrap();
+        assert!(saved.repo_declared);
+        assert!(saved.local_approved);
+        assert!(saved.restrictive);
+
+        let loaded = handler.get("project").await.unwrap();
         assert_eq!(loaded, saved);
     }
 }
