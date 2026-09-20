@@ -51,6 +51,31 @@ impl<'a> WorkspaceRequestHandler<'a> {
                     Some(project_id),
                 )
             }
+            "workspaceCascade.preview" => {
+                let workspace_ids = string_array(payload.get("workspaceIds"));
+                let tag_ids = string_array(payload.get("tagIds"));
+                let include_descendants = payload
+                    .get("includeDescendants")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                let include_tags = payload
+                    .get("includeTags")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                (
+                    json_result(
+                        self.runtime_store
+                            .cascade_preview(
+                                &workspace_ids,
+                                &tag_ids,
+                                include_descendants,
+                                include_tags,
+                            )
+                            .await,
+                    )?,
+                    None,
+                )
+            }
             _ => return Err(HostError::format("Unknown workspace request.")),
         };
         Ok(WorkspaceRequestOutcome {
@@ -58,6 +83,19 @@ impl<'a> WorkspaceRequestHandler<'a> {
             changed_project_id,
         })
     }
+}
+
+fn string_array(value: Option<&Value>) -> Vec<String> {
+    value
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -126,5 +164,20 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(all.value.as_array().unwrap().len(), 1);
+
+        let cascade = handler
+            .execute(
+                "workspaceCascade.preview",
+                &json!({
+                    "workspaceIds": ["w"],
+                    "tagIds": [],
+                    "includeDescendants": false,
+                    "includeTags": false,
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(cascade.changed_project_id.is_none());
+        assert_eq!(cascade.value["workspaceIds"], json!(["w"]));
     }
 }

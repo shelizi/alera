@@ -682,7 +682,11 @@ impl ServerActor {
                 self.require_auth(client_id)?;
                 self.project_clone_cancel_request(payload).await
             }
-            "workspace.list" | "workspace.listAll" | "workspace.find" | "workspace.upsert" => {
+            "workspace.list"
+            | "workspace.listAll"
+            | "workspace.find"
+            | "workspace.upsert"
+            | "workspaceCascade.preview" => {
                 self.require_auth(client_id)?;
                 let outcome = WorkspaceRequestHandler::new(&self.runtime_store)
                     .execute(request_type, payload)
@@ -804,29 +808,6 @@ impl ServerActor {
                     self.broadcast_workspaces_changed(None);
                 }
                 Ok(outcome.value)
-            }
-            "workspaceCascade.preview" => {
-                self.require_auth(client_id)?;
-                let workspace_ids = string_array(payload.get("workspaceIds"));
-                let tag_ids = string_array(payload.get("tagIds"));
-                let include_descendants = payload
-                    .get("includeDescendants")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false);
-                let include_tags = payload
-                    .get("includeTags")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false);
-                json_result(
-                    self.runtime_store
-                        .cascade_preview(
-                            &workspace_ids,
-                            &tag_ids,
-                            include_descendants,
-                            include_tags,
-                        )
-                        .await,
-                )
             }
             "agentProfile.list" => {
                 self.require_auth(client_id)?;
@@ -1058,16 +1039,6 @@ pub(super) fn require_string(payload: &Value, key: &str) -> HostResult<String> {
         _ => Err(HostError::format(
             "createOrAttach requires session metadata.",
         )),
-    }
-}
-
-fn string_array(value: Option<&Value>) -> Vec<String> {
-    match value {
-        Some(Value::Array(items)) => items
-            .iter()
-            .filter_map(|item| item.as_str().map(str::to_string))
-            .collect(),
-        _ => Vec::new(),
     }
 }
 
