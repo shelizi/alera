@@ -1139,6 +1139,70 @@ void main() {
     expect(controller.offset, greaterThan(0));
   });
 
+  testWidgets('diff-only side-by-side selection stays in the active pane', (
+    tester,
+  ) async {
+    String? copiedText;
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'Clipboard.setData') {
+          copiedText =
+              (call.arguments as Map<Object?, Object?>)['text'] as String?;
+        }
+        return null;
+      },
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      ),
+    );
+    final backend = FakeGitBackend()
+      ..gitDiffResult = const GitDiffResult(
+        files: <GitDiffFile>[
+          GitDiffFile(
+            path: 'lib/main.dart',
+            area: .unstaged,
+            status: .modified,
+            lines: <GitDiffLine>[
+              GitDiffLine.hunk('@@ -1,2 +1,2 @@'),
+              GitDiffLine.deletion('-left one'),
+              GitDiffLine.addition('+right one'),
+              GitDiffLine.deletion('-left two'),
+              GitDiffLine.addition('+right two'),
+            ],
+          ),
+        ],
+      );
+
+    await _pumpDiffSurface(
+      tester,
+      backend: backend,
+      tab: _diffTab(filePath: 'lib/main.dart', title: 'main.dart unstaged'),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Switch to Diff Only'));
+    await tester.pump();
+    await tester.tap(find.byTooltip('Switch to Side-by-Side View'));
+    await tester.pump();
+
+    await tester.tap(find.text('right one'));
+    await tester.pump();
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyA);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyC);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pump();
+
+    expect(copiedText, isNotNull);
+    expect(copiedText, contains('right one'));
+    expect(copiedText, contains('right two'));
+    expect(copiedText, isNot(contains('left one')));
+    expect(copiedText, isNot(contains('left two')));
+  });
+
   testWidgets(
     'editable side-by-side selection keeps manual horizontal scroll position',
     (tester) async {

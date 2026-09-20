@@ -170,6 +170,66 @@ class _SingleColumnDiffListState extends State<_SingleColumnDiffList> {
   }
 }
 
+enum _DiffOnlySideBySideSelectionPane { left, right }
+
+class _DiffOnlySideBySideSelectionScope extends InheritedWidget {
+  const _DiffOnlySideBySideSelectionScope({
+    required this.activePane,
+    required super.child,
+  });
+
+  final _DiffOnlySideBySideSelectionPane? activePane;
+
+  static _DiffOnlySideBySideSelectionPane? activePaneOf(
+    BuildContext context,
+  ) => context
+      .dependOnInheritedWidgetOfExactType<_DiffOnlySideBySideSelectionScope>()
+      ?.activePane;
+
+  @override
+  bool updateShouldNotify(_DiffOnlySideBySideSelectionScope oldWidget) =>
+      activePane != oldWidget.activePane;
+}
+
+class _DiffOnlySideBySideSelectionArea extends StatefulWidget {
+  const _DiffOnlySideBySideSelectionArea({
+    required this.contentWidth,
+    required this.child,
+  });
+
+  final double contentWidth;
+  final Widget child;
+
+  @override
+  State<_DiffOnlySideBySideSelectionArea> createState() =>
+      _DiffOnlySideBySideSelectionAreaState();
+}
+
+class _DiffOnlySideBySideSelectionAreaState
+    extends State<_DiffOnlySideBySideSelectionArea> {
+  _DiffOnlySideBySideSelectionPane? _activePane;
+
+  void _handlePointerDown(PointerDownEvent event) {
+    final next = event.localPosition.dx < widget.contentWidth / 2
+        ? _DiffOnlySideBySideSelectionPane.left
+        : _DiffOnlySideBySideSelectionPane.right;
+    if (_activePane == next) return;
+    setState(() => _activePane = next);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Listener(
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: _handlePointerDown,
+      child: _DiffOnlySideBySideSelectionScope(
+        activePane: _activePane,
+        child: SelectionArea(child: widget.child),
+      ),
+    );
+  }
+}
+
 class const _DiffFileList({
   required final GitDiffResult result,
   required final Map<GitDiffFile, _FullFileContents> fullFileContents,
@@ -230,20 +290,29 @@ class const _DiffFileList({
                 ? constraints.maxHeight
                 : null,
           );
+          final list = ListView.builder(
+            padding: const EdgeInsets.only(bottom: AleraTokens.space16),
+            itemCount: rows.length,
+            itemBuilder: (context, index) => rows.rowAt(index).build(context),
+          );
+          final selectableList =
+              !hasEditableSideBySide &&
+                  contentMode == GitDiffContentMode.diffOnly
+              ? _DiffOnlySideBySideSelectionArea(
+                  contentWidth: contentWidth,
+                  child: list,
+                )
+              : list;
           final sideBySideView = SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: SizedBox(
               width: contentWidth,
               height: constraints.maxHeight,
-              child: ListView.builder(
-                padding: const EdgeInsets.only(bottom: AleraTokens.space16),
-                itemCount: rows.length,
-                itemBuilder: (context, index) =>
-                    rows.rowAt(index).build(context),
-              ),
+              child: selectableList,
             ),
           );
-          return hasEditableSideBySide
+          return hasEditableSideBySide ||
+                  contentMode == GitDiffContentMode.diffOnly
               ? sideBySideView
               : SelectionArea(child: sideBySideView);
         },

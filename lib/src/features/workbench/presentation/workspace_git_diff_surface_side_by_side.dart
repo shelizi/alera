@@ -111,7 +111,7 @@ class const _SideBySideCell({
       ),
       _ => (AleraTokens.foregroundMuted, Colors.transparent, ''),
     };
-    return ClipRect(
+    final cell = ClipRect(
       child: DecoratedBox(
         decoration: BoxDecoration(
           color: background,
@@ -171,6 +171,13 @@ class const _SideBySideCell({
         ),
       ),
     );
+    final activePane = _DiffOnlySideBySideSelectionScope.activePaneOf(context);
+    final pane = isLeft
+        ? _DiffOnlySideBySideSelectionPane.left
+        : _DiffOnlySideBySideSelectionPane.right;
+    return activePane != null && activePane != pane
+        ? SelectionContainer.disabled(child: cell)
+        : cell;
   }
 }
 
