@@ -79,11 +79,19 @@ pub(super) enum AiDictationOperation {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum WorkspaceDeferredOperation {
+    CreateManaged,
+    RunSetup,
+    StorageImpact,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum DeferredJobRoute {
     CliRegistration(CliRegistrationOperation),
     AgentQuota(AgentQuotaOperation),
     AiText(AiTextOperation),
     AiDictation(AiDictationOperation),
+    Workspace(WorkspaceDeferredOperation),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -214,7 +222,6 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         | "terminal.restart"
         | "terminate"
         | "workbenchViewPrefs.update"
-        | "workspace.createManaged"
         | "workspace.rename"
         | "workspace.setPinned"
         | "workspaceRelation.link"
@@ -305,6 +312,15 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         "mobile.aiDictation.transcribe" => mobile_deferred_job(DeferredJobRoute::AiDictation(
             AiDictationOperation::MobileTranscribe,
         )),
+        "workspace.createManaged" => mobile_conflicting_deferred_job(DeferredJobRoute::Workspace(
+            WorkspaceDeferredOperation::CreateManaged,
+        )),
+        "workspace.runSetup" => local_conflicting_deferred_job(DeferredJobRoute::Workspace(
+            WorkspaceDeferredOperation::RunSetup,
+        )),
+        "workspace.storageImpact" => mobile_deferred_job(DeferredJobRoute::Workspace(
+            WorkspaceDeferredOperation::StorageImpact,
+        )),
 
         "project.remove" => serialized_mobile(SerializedRuntimeMutation::RemoveProject),
         "tab.remove" => serialized_mobile(SerializedRuntimeMutation::RemoveTab),
@@ -334,7 +350,6 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         | "project.upsert"
         | "tab.upsert"
         | "terminal.pulse.configure"
-        | "workspace.runSetup"
         | "workspace.upsert"
         | "workspaceActivity.remove"
         | "workspaceActivity.upsertAll"
@@ -412,7 +427,6 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         | "workspace.find"
         | "workspace.list"
         | "workspace.listAll"
-        | "workspace.storageImpact"
         | "workspaceCascade.preview"
         | "workspaceRelation.list"
         | "workspaceSection.list"
@@ -471,6 +485,23 @@ const fn mobile_deferred_job(route: DeferredJobRoute) -> RequestRoutePolicy {
 
 const fn local_deferred_job(route: DeferredJobRoute) -> RequestRoutePolicy {
     RequestRoutePolicy {
+        deferred_job: Some(route),
+        ..LOCAL
+    }
+}
+
+const fn mobile_conflicting_deferred_job(route: DeferredJobRoute) -> RequestRoutePolicy {
+    RequestRoutePolicy {
+        mobile_allowed: true,
+        runtime_mutation: RuntimeMutationPolicy::Conflicts,
+        deferred_job: Some(route),
+        ..LOCAL
+    }
+}
+
+const fn local_conflicting_deferred_job(route: DeferredJobRoute) -> RequestRoutePolicy {
+    RequestRoutePolicy {
+        runtime_mutation: RuntimeMutationPolicy::Conflicts,
         deferred_job: Some(route),
         ..LOCAL
     }
@@ -756,6 +787,39 @@ mod tests {
             mobile.deferred_job,
             Some(DeferredJobRoute::AiDictation(
                 AiDictationOperation::MobileTranscribe
+            ))
+        );
+    }
+
+    #[test]
+    fn workspace_deferred_routes_preserve_distinct_policy() {
+        let create = request_route_policy("workspace.createManaged");
+        assert!(create.mobile_allowed);
+        assert_eq!(create.runtime_mutation, RuntimeMutationPolicy::Conflicts);
+        assert_eq!(
+            create.deferred_job,
+            Some(DeferredJobRoute::Workspace(
+                WorkspaceDeferredOperation::CreateManaged
+            ))
+        );
+
+        let setup = request_route_policy("workspace.runSetup");
+        assert!(!setup.mobile_allowed);
+        assert_eq!(setup.runtime_mutation, RuntimeMutationPolicy::Conflicts);
+        assert_eq!(
+            setup.deferred_job,
+            Some(DeferredJobRoute::Workspace(
+                WorkspaceDeferredOperation::RunSetup
+            ))
+        );
+
+        let impact = request_route_policy("workspace.storageImpact");
+        assert!(impact.mobile_allowed);
+        assert_eq!(impact.runtime_mutation, RuntimeMutationPolicy::Available);
+        assert_eq!(
+            impact.deferred_job,
+            Some(DeferredJobRoute::Workspace(
+                WorkspaceDeferredOperation::StorageImpact
             ))
         );
     }

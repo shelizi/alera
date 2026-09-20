@@ -14,6 +14,7 @@ use super::request_payloads::parse_payload;
 use super::request_route_policy::{
     request_route_policy, AgentQuotaOperation, AiDictationOperation, AiTextOperation,
     CoalescedReadRoute, DeferredJobRoute, DeferredWriteRoute, MobileDeferredRoute,
+    WorkspaceDeferredOperation,
 };
 use super::requests::{require_string_key, validate_mobile_runtime_settings_payload};
 use super::ServerActor;
@@ -174,6 +175,47 @@ impl ServerActor {
                             .await?
                     }
                 },
+                DeferredJobRoute::Workspace(operation) => match operation {
+                    WorkspaceDeferredOperation::CreateManaged => {
+                        let mut request: ManagedWorkspaceCreateRequest = parse_payload(payload)?;
+                        request.setup_script_directory = self.setup_script_directory();
+                        self.start_managed_workspace_create(client_id, request_id, request);
+                        true
+                    }
+                    WorkspaceDeferredOperation::RunSetup => {
+                        let workspace_id = require_string_key(payload, "id")?;
+                        let copies_only = payload
+                            .get("copiesOnly")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false);
+                        self.start_workspace_setup(
+                            client_id,
+                            request_id,
+                            workspace_id,
+                            copies_only,
+                        );
+                        true
+                    }
+                    WorkspaceDeferredOperation::StorageImpact => {
+                        let workspace_id = require_string_key(payload, "id")?;
+                        let active_workspace_id = payload
+                            .get("activeWorkspaceId")
+                            .and_then(Value::as_str)
+                            .filter(|value| !value.trim().is_empty())
+                            .map(str::to_string);
+                        self.start_workspace_storage_measurement(
+                            client_id,
+                            request_id,
+                            workspace_id,
+                            active_workspace_id,
+                            payload
+                                .get("closeSessions")
+                                .and_then(Value::as_bool)
+                                .unwrap_or(false),
+                        );
+                        true
+                    }
+                },
             };
             return Ok(started);
         }
@@ -238,46 +280,6 @@ impl ServerActor {
                 self.require_request_allowed(client_id, request_type)?;
                 self.start_mobile_network_snapshot(client_id, request_id)
                     .await?;
-                Ok(true)
-            }
-            "workspace.createManaged" => {
-                self.require_auth(client_id)?;
-                self.require_request_allowed(client_id, request_type)?;
-                let mut request: ManagedWorkspaceCreateRequest = parse_payload(payload)?;
-                request.setup_script_directory = self.setup_script_directory();
-                self.start_managed_workspace_create(client_id, request_id, request);
-                Ok(true)
-            }
-            "workspace.runSetup" => {
-                self.require_auth(client_id)?;
-                self.require_request_allowed(client_id, request_type)?;
-                let workspace_id = require_string_key(payload, "id")?;
-                let copies_only = payload
-                    .get("copiesOnly")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false);
-                self.start_workspace_setup(client_id, request_id, workspace_id, copies_only);
-                Ok(true)
-            }
-            "workspace.storageImpact" => {
-                self.require_auth(client_id)?;
-                self.require_request_allowed(client_id, request_type)?;
-                let workspace_id = require_string_key(payload, "id")?;
-                let active_workspace_id = payload
-                    .get("activeWorkspaceId")
-                    .and_then(Value::as_str)
-                    .filter(|value| !value.trim().is_empty())
-                    .map(str::to_string);
-                self.start_workspace_storage_measurement(
-                    client_id,
-                    request_id,
-                    workspace_id,
-                    active_workspace_id,
-                    payload
-                        .get("closeSessions")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false),
-                );
                 Ok(true)
             }
             "write" => {
