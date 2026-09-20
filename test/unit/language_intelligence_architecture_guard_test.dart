@@ -32,7 +32,7 @@ void main() {
     );
   });
 
-  test('language intelligence domain and application stay Riverpod-free', () {
+  test('language intelligence domain and application stay adapter-free', () {
     final roots = <Directory>[
       Directory('lib/src/features/language_intelligence/domain'),
       Directory('lib/src/features/language_intelligence/application'),
@@ -48,8 +48,15 @@ void main() {
           continue;
         }
         final source = file.readAsStringSync();
-        if (source.contains('package:flutter_riverpod/')) {
-          leaks.add('${file.path}: flutter_riverpod import');
+        for (final forbidden in const <String>[
+          'package:flutter_riverpod/',
+          'package:code_forge/',
+          "import 'dart:io'",
+          'LspStdioConfig',
+        ]) {
+          if (source.contains(forbidden)) {
+            leaks.add('${file.path}: $forbidden');
+          }
         }
       }
     }
@@ -58,8 +65,10 @@ void main() {
       leaks,
       isEmpty,
       reason:
-          'Language Intelligence domain/application code must be directly '
-          'constructable; Riverpod belongs at the composition root.',
+          'Language Intelligence domain/application code must stay directly '
+          'constructable and adapter-neutral. Riverpod belongs at the '
+          'composition root; CodeForge, dart:io, and LSP process details belong '
+          'under infra.',
     );
   });
 }

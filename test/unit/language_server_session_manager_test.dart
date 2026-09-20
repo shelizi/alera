@@ -76,6 +76,10 @@ void main() {
     expect(second.state, LanguageServerSessionState.ready);
     expect(runtime.resolveCalls, 1);
     expect(runtime.startCalls, 1);
+    expect(runtime.startRequests.single.arguments, <String>[
+      '--stdio',
+      '--trace',
+    ]);
     expect(second.activeDocumentCount, 2);
     expect(
       manager.snapshotFor('workspace-a', 'rust-semantic').activeDocumentCount,
@@ -275,6 +279,8 @@ LanguageExtensionRegistry _registry(LanguageId rust) {
       launchPolicy: LanguageProviderLaunchPolicy.lazyOnDemand,
       executableResolutionPolicy:
           LanguageExecutableResolutionPolicy.explicitOverrideThenPath,
+      executableCandidates: const <String>['rust-analyzer'],
+      defaultArguments: const <String>['--stdio'],
     ),
     _FakeProviderAdapter.new,
   );
@@ -287,6 +293,7 @@ LanguageIntelligenceSettings _enabledSettings(LanguageId language) =>
       const LanguageActivationSettings(
         enabled: true,
         semanticProviderId: 'rust-semantic',
+        extraArgs: <String>['--trace'],
       ),
     );
 
@@ -313,6 +320,8 @@ final class _FakeLanguageServerRuntime implements LanguageServerRuntimePort {
   final List<LanguageServerRuntimeSession> stoppedSessions =
       <LanguageServerRuntimeSession>[];
   final List<_FakeRuntimeSession> sessions = <_FakeRuntimeSession>[];
+  final List<LanguageServerRuntimeStartRequest> startRequests =
+      <LanguageServerRuntimeStartRequest>[];
   final Map<LanguageServerRuntimeSession, StreamController<LanguageServerExit>>
   exits =
       <LanguageServerRuntimeSession, StreamController<LanguageServerExit>>{};
@@ -332,6 +341,7 @@ final class _FakeLanguageServerRuntime implements LanguageServerRuntimePort {
     LanguageServerRuntimeStartRequest request,
   ) async {
     startCalls += 1;
+    startRequests.add(request);
     final completer = startCompleter;
     final LanguageServerRuntimeSession session;
     if (completer != null) {

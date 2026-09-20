@@ -18,9 +18,15 @@ final class LanguageProviderDescriptor {
     required this.processScope,
     required this.launchPolicy,
     this.executableResolutionPolicy,
+    Iterable<String> executableCandidates = const <String>[],
+    Iterable<String> defaultArguments = const <String>[],
   }) : id = _requireId(id),
        languages = Set<LanguageId>.unmodifiable(languages),
-       capabilities = Set<LanguageCapability>.unmodifiable(capabilities) {
+       capabilities = Set<LanguageCapability>.unmodifiable(capabilities),
+       executableCandidates = List<String>.unmodifiable(
+         executableCandidates.map(_normalizeExecutableCandidate),
+       ),
+       defaultArguments = List<String>.unmodifiable(defaultArguments) {
     if (this.languages.isEmpty) {
       throw ArgumentError.value(
         languages,
@@ -44,11 +50,29 @@ final class LanguageProviderDescriptor {
   final LanguageProviderProcessScope processScope;
   final LanguageProviderLaunchPolicy launchPolicy;
   final LanguageExecutableResolutionPolicy? executableResolutionPolicy;
+  final List<String> executableCandidates;
+  final List<String> defaultArguments;
 
   static String _requireId(String value) {
+    return _requireNonEmpty(value, 'id');
+  }
+
+  static String _requireNonEmpty(String value, String name) {
     final normalized = value.trim();
     if (normalized.isEmpty) {
-      throw ArgumentError.value(value, 'id', 'Provider id must not be empty.');
+      throw ArgumentError.value(value, name, 'Value must not be empty.');
+    }
+    return normalized;
+  }
+
+  static String _normalizeExecutableCandidate(String value) {
+    final normalized = _requireNonEmpty(value, 'executableCandidates');
+    if (normalized.contains('/') || normalized.contains(r'\')) {
+      throw ArgumentError.value(
+        value,
+        'executableCandidates',
+        'Provider executable candidates must be bare PATH command names.',
+      );
     }
     return normalized;
   }

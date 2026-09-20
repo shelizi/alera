@@ -233,7 +233,10 @@ final class LanguageServerSessionManager {
           executable: resolved.executable,
           workspaceRoot: record.workspaceRoot,
           target: target,
-          arguments: activation.extraArgs,
+          arguments: <String>[
+            ...record.provider.defaultArguments,
+            ...activation.extraArgs,
+          ],
           environment: record.environment,
         ),
       );
