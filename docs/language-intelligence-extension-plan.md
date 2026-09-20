@@ -962,6 +962,15 @@ Completed:
   descriptor and production runtime/adapter path. The smoke covered
   initialize, `didOpen`, cross-file definition into `lib.rs`, references
   spanning the declaration and call sites, graceful shutdown, and process exit.
+- **F5 / P11 — PHP semantic compatibility gate:** PHP now defaults to the
+  cross-platform `php.intelephense` provider while retaining
+  `php.phpactor` as an optional provider. `intelephense 1.18.5` was
+  validated locally on Windows through the production runtime/adapter path,
+  covering initialize, `didOpen`, cross-file definition, references, graceful
+  shutdown, and a real npm `.cmd` executable shim. The current Phpactor
+  release requires Linux/macOS (Windows users are directed to WSL), and its
+  native Windows PHAR fails its required `ext-posix` check, so it is not a
+  portable default for Alera.
 - **F6 / P12 — TypeScript/JavaScript shared semantic compatibility gate:**
   validated locally on Windows with `typescript-language-server 6.0.0` and a
   disposable TypeScript 5.9.3 workspace. One server session handled both
@@ -984,7 +993,6 @@ Completed:
 Still pending for first-release semantic validation:
 
 - **F1 C#:** real `csharp-ls` startup/definition/references smoke.
-- **F5 PHP:** real `phpactor language-server` smoke.
 
 Known status semantics:
 

@@ -12,8 +12,11 @@ final LanguageExtensionContribution phpLanguageExtension =
           displayName: 'PHP',
           fileExtensions: const <String>['php', 'phtml'],
           parserProviderId: 'php.tree-sitter',
-          semanticProviderIds: const <String>['php.phpactor'],
-          defaultSemanticProviderId: 'php.phpactor',
+          semanticProviderIds: const <String>[
+            'php.intelephense',
+            'php.phpactor',
+          ],
+          defaultSemanticProviderId: 'php.intelephense',
           capabilities: builtinLanguageCapabilities,
         ),
       ],
@@ -25,6 +28,18 @@ final LanguageExtensionContribution phpLanguageExtension =
           capabilities: builtinStructuralCapabilities,
           processScope: LanguageProviderProcessScope.document,
           launchPolicy: LanguageProviderLaunchPolicy.explicit,
+        ),
+        LanguageProviderDescriptor(
+          id: 'php.intelephense',
+          kind: LanguageProviderKind.semanticServer,
+          languages: <LanguageId>{LanguageId('php')},
+          capabilities: builtinNavigationCapabilities,
+          processScope: LanguageProviderProcessScope.workspace,
+          launchPolicy: LanguageProviderLaunchPolicy.lazyOnDemand,
+          executableResolutionPolicy:
+              LanguageExecutableResolutionPolicy.explicitOverrideThenPath,
+          executableCandidates: const <String>['intelephense'],
+          defaultArguments: const <String>['--stdio'],
         ),
         LanguageProviderDescriptor(
           id: 'php.phpactor',
