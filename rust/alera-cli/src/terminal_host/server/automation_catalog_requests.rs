@@ -1,4 +1,4 @@
-use alera_core::runtime::{AutomationActor, AutomationImportBundle};
+use alera_core::runtime::{AutomationActor, AutomationImportBundle, RuntimeStore};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use uuid::Uuid;
@@ -7,8 +7,16 @@ use crate::terminal_host::host_error::{HostError, HostResult};
 
 use super::ServerActor;
 
-impl ServerActor {
-    pub(super) async fn automation_templates_request(&self, payload: &Value) -> HostResult<Value> {
+pub(super) struct AutomationTemplateRequestHandler<'a> {
+    runtime_store: &'a RuntimeStore,
+}
+
+impl<'a> AutomationTemplateRequestHandler<'a> {
+    pub(super) const fn new(runtime_store: &'a RuntimeStore) -> Self {
+        Self { runtime_store }
+    }
+
+    pub(super) async fn execute(&self, payload: &Value) -> HostResult<Value> {
         if let Some(value) = payload.get("template") {
             let template = serde_json::from_value(value.clone()).map_err(|error| {
                 HostError::format(format!("invalid automation template: {error}"))
@@ -24,6 +32,14 @@ impl ServerActor {
         Ok(json!({
             "items": self.runtime_store.list_automation_templates().await.map_err(|error| HostError::state(error.to_string()))?,
         }))
+    }
+}
+
+impl ServerActor {
+    pub(super) async fn automation_templates_request(&self, payload: &Value) -> HostResult<Value> {
+        AutomationTemplateRequestHandler::new(&self.runtime_store)
+            .execute(payload)
+            .await
     }
 
     pub(super) async fn automation_tags_request(
@@ -367,8 +383,36 @@ fn remap_value(
 mod tests {
     use std::collections::BTreeMap;
 
-    use super::normalize_portable_import;
+    use alera_core::runtime::RuntimeStore;
+    use chrono::Utc;
+
+    use super::{normalize_portable_import, AutomationTemplateRequestHandler};
     use serde_json::json;
+
+    #[tokio::test]
+    async fn automation_templates_can_be_tested_without_server_actor() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = RuntimeStore::open(dir.path()).await.unwrap();
+        let handler = AutomationTemplateRequestHandler::new(&store);
+        let now = Utc::now().to_rfc3339();
+
+        let saved = handler
+            .execute(&json!({"template": {
+                "id": "template",
+                "name": "Review",
+                "promptTemplate": "Review this change",
+                "createdBy": {"kind": "localCli"},
+                "createdAt": now,
+                "updatedAt": now
+            }}))
+            .await
+            .unwrap();
+        assert_eq!(saved["name"], "Review");
+
+        let listed = handler.execute(&json!({})).await.unwrap();
+        assert_eq!(listed["items"].as_array().unwrap().len(), 1);
+        assert_eq!(listed["items"][0]["id"], "template");
+    }
 
     #[test]
     fn portable_import_requires_explicit_target_remaps() {
