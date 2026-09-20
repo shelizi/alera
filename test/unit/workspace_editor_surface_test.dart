@@ -1,11 +1,13 @@
 import 'package:alera/src/features/language_intelligence/domain/language_id.dart';
 import 'package:alera/src/features/language_intelligence/domain/language_intelligence_settings.dart';
+import 'package:alera/src/features/language_intelligence/domain/source_location.dart';
 import 'package:alera/src/features/language_intelligence/infra/builtin_language_extensions.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_service.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_source_control_scope.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_editor_surface.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path/path.dart' as p;
 
 void main() {
   test('session registration does not consume pending reveal', () {
@@ -126,6 +128,83 @@ void main() {
         originalDisplayText: '    alpha\nother\n',
       ),
       current,
+    );
+  });
+
+  test(
+    'definition cursor maps expanded tabs back to source scalar columns',
+    () {
+      expect(
+        workspaceEditorSourcePositionForDisplayOffset(
+          displayText: '    foo\nbar',
+          sourceText: '\tfoo\nbar',
+          displayScalarOffset: 4,
+          tabSize: 4,
+        ),
+        const SourcePosition(line: 0, scalarColumn: 1),
+      );
+      expect(
+        workspaceEditorSourcePositionForDisplayOffset(
+          displayText: '    foo\n🙂bar',
+          sourceText: '\tfoo\n🙂bar',
+          displayScalarOffset: 9,
+          tabSize: 4,
+        ),
+        const SourcePosition(line: 1, scalarColumn: 1),
+      );
+    },
+  );
+
+  test('definition cursor clamps positions inside expanded tab whitespace', () {
+    expect(
+      workspaceEditorSourcePositionForDisplayOffset(
+        displayText: '    foo',
+        sourceText: '\tfoo',
+        displayScalarOffset: 2,
+        tabSize: 4,
+      ),
+      const SourcePosition(line: 0, scalarColumn: 0),
+    );
+  });
+
+  test('source location becomes a workspace editor reveal target', () {
+    final workspacePath = p.join('C:', 'repo', 'alera');
+    final target = workspaceEditorNavigationTargetForLocation(
+      workspaceId: 'ws-1',
+      workspacePath: workspacePath,
+      location: SourceLocation(
+        workspaceId: 'ws-1',
+        path: p.join(workspacePath, 'lib', 'target.rs'),
+        range: const SourceRange(
+          start: SourcePosition(line: 4, scalarColumn: 2),
+          end: SourcePosition(line: 4, scalarColumn: 8),
+        ),
+      ),
+    );
+
+    expect(target, isNotNull);
+    expect(target!.relativePath, p.join('lib', 'target.rs'));
+    expect(target.reveal.line, 5);
+    expect(target.reveal.column, 3);
+    expect(target.reveal.matchLength, 6);
+  });
+
+  test('source navigation rejects targets outside the current workspace', () {
+    final workspacePath = p.join('C:', 'repo', 'alera');
+    expect(
+      workspaceEditorNavigationTargetForLocation(
+        workspaceId: 'ws-1',
+        workspacePath: workspacePath,
+        location: SourceLocation(
+          workspaceId: 'ws-1',
+          path: p.join('C:', 'sdk', 'library.rs'),
+          range: const SourceRange(
+            start: SourcePosition(line: 0, scalarColumn: 0),
+            end: SourcePosition(line: 0, scalarColumn: 1),
+          ),
+        ),
+      ),
+      isNull,
     );
   });
 

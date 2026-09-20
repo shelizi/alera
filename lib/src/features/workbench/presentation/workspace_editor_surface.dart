@@ -10,10 +10,13 @@ import 'package:alera/src/design_system/forms/alera_text_actions_scope.dart';
 import 'package:alera/src/design_system/icons/alera_file_icon.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:alera/src/design_system/layout/alera_confirm_dialog.dart';
+import 'package:alera/src/design_system/layout/alera_dialog.dart';
 import 'package:alera/src/features/language_intelligence/application/language_intelligence_manager.dart';
 import 'package:alera/src/features/language_intelligence/application/language_provider_registry.dart';
 import 'package:alera/src/features/language_intelligence/application/language_server_runtime.dart';
+import 'package:alera/src/features/language_intelligence/domain/language_capability.dart';
 import 'package:alera/src/features/language_intelligence/domain/language_intelligence_settings.dart';
+import 'package:alera/src/features/language_intelligence/domain/source_location.dart';
 import 'package:alera/src/features/settings/domain/editor_syntax_theme_catalog.dart';
 import 'package:alera/src/features/workbench/application/editor_autosave_controller.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_preview_kind.dart';
@@ -270,7 +273,7 @@ class _WorkspaceEditorSurfaceState
               useSpaceAsTab: true,
               scrollbarDecoration: workspaceEditorScrollbarDecoration(),
               suggestionStyle: _editorOverlayStyle(context),
-              customContextMenuItems: _editorTextActionMenuItems(context),
+              customContextMenuItems: _editorContextMenuItems(context),
               textStyle: Theme.of(context).textTheme.bodyMedium?.copyWith(
                 fontFamily: 'JetBrains Mono',
                 color: rootStyle.color ?? AleraTokens.foreground,

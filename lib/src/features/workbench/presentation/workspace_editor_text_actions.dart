@@ -27,6 +27,26 @@ extension _WorkspaceEditorTextActions on _WorkspaceEditorSurfaceState {
     ];
   }
 
+  List<code_forge.CustomContextMenu>? _editorContextMenuItems(
+    BuildContext context,
+  ) {
+    final items = <code_forge.CustomContextMenu>[];
+    if (_canOfferLanguageNavigation()) {
+      items.add(
+        code_forge.CustomContextMenu(
+          label: context.tr('Go to Definition'),
+          description: '',
+          onPress: () => unawaited(_goToDefinition()),
+        ),
+      );
+    }
+    final textActions = _editorTextActionMenuItems(context);
+    if (textActions != null) {
+      items.addAll(textActions);
+    }
+    return items.isEmpty ? null : items;
+  }
+
   void _openEditorTextActions(
     BuildContext context,
     AleraTextActionsScope scope,
