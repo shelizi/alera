@@ -155,11 +155,9 @@ impl ServerActor {
                     "automation target must resolve to an agent profile",
                 ));
             };
-            let policy = self
-                .runtime_store
-                .automation_agent_policy(&profile_id)
-                .await
-                .map_err(|error| HostError::state(error.to_string()))?;
+            let policy = AutomationAgentPolicyStoreHandler::new(&self.runtime_store)
+                .get(&profile_id)
+                .await?;
             if !policy.may_execute {
                 return Err(HostError::state(format!(
                     "agent profile {profile_id} is not opted in to automation execution"
@@ -171,11 +169,9 @@ impl ServerActor {
                     "managed agent identity has no editing profile",
                 ));
             };
-            let policy = self
-                .runtime_store
-                .automation_agent_policy(profile_id)
-                .await
-                .map_err(|error| HostError::state(error.to_string()))?;
+            let policy = AutomationAgentPolicyStoreHandler::new(&self.runtime_store)
+                .get(profile_id)
+                .await?;
             let allowed = policy.may_activate_or_edit_active;
             if !allowed {
                 return Err(HostError::state(format!(
@@ -290,10 +286,9 @@ pub(super) async fn load_automation_policy_show(
 
     let agent_policy = if let Some(profile_id) = profile_id.as_deref() {
         Some(
-            runtime_store
-                .automation_agent_policy(profile_id)
-                .await
-                .map_err(|error| HostError::state(error.to_string()))?,
+            AutomationAgentPolicyStoreHandler::new(&runtime_store)
+                .get(profile_id)
+                .await?,
         )
     } else {
         None
