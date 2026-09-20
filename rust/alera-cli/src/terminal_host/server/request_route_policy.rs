@@ -111,6 +111,12 @@ pub(super) enum RequestHandlerFamily {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum EarlyDeferredRoute {
+    ConfigurationCloud,
+    AccountCloud,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ConditionalDeferredRoute {
     RuntimeSettingsUpdate(RuntimeSettingsUpdateSurface),
     AutomationPolicyShow,
@@ -496,6 +502,18 @@ pub(super) fn request_handler_family(request_type: &str) -> RequestHandlerFamily
         RequestHandlerFamily::Orchestration
     } else {
         RequestHandlerFamily::Core
+    }
+}
+
+pub(super) fn early_deferred_route(request_type: &str) -> Option<EarlyDeferredRoute> {
+    if request_type.starts_with("configuration.cloud.") {
+        Some(EarlyDeferredRoute::ConfigurationCloud)
+    } else if (request_type.starts_with("account.") && request_type != "account.status")
+        || request_type.starts_with("mobile.cloud")
+    {
+        Some(EarlyDeferredRoute::AccountCloud)
+    } else {
+        None
     }
 }
 
@@ -985,5 +1003,23 @@ mod tests {
             request_handler_family("workspace.list"),
             RequestHandlerFamily::Core
         );
+    }
+
+    #[test]
+    fn cloud_and_account_early_routes_are_classified_once() {
+        assert_eq!(
+            early_deferred_route("configuration.cloud.head"),
+            Some(EarlyDeferredRoute::ConfigurationCloud)
+        );
+        assert_eq!(
+            early_deferred_route("account.signOut"),
+            Some(EarlyDeferredRoute::AccountCloud)
+        );
+        assert_eq!(
+            early_deferred_route("mobile.cloudEnrollment.create"),
+            Some(EarlyDeferredRoute::AccountCloud)
+        );
+        assert_eq!(early_deferred_route("account.status"), None);
+        assert_eq!(early_deferred_route("workspace.list"), None);
     }
 }

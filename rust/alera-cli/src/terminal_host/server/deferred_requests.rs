@@ -12,10 +12,10 @@ use super::deferred_request_scheduler::DeferredRequestScheduler;
 use super::project_registration_requests::ProjectRegistrationRequestHandler;
 use super::request_payloads::parse_payload;
 use super::request_route_policy::{
-    request_route_policy, AgentQuotaOperation, AgentSkillOperation, AiDictationOperation,
-    AiTextOperation, CoalescedReadRoute, ConditionalDeferredRoute, DeferredJobRoute,
-    DeferredWriteRoute, MobileDeferredRoute, RuntimeSettingsUpdateSurface,
-    TerminalDeferredOperation, WorkspaceDeferredOperation,
+    early_deferred_route, request_route_policy, AgentQuotaOperation, AgentSkillOperation,
+    AiDictationOperation, AiTextOperation, CoalescedReadRoute, ConditionalDeferredRoute,
+    DeferredJobRoute, DeferredWriteRoute, EarlyDeferredRoute, MobileDeferredRoute,
+    RuntimeSettingsUpdateSurface, TerminalDeferredOperation, WorkspaceDeferredOperation,
 };
 use super::requests::{require_string_key, validate_mobile_runtime_settings_payload};
 use super::ServerActor;
@@ -61,11 +61,24 @@ impl ServerActor {
         request_type: &str,
         payload: &Value,
     ) -> HostResult<bool> {
-        if self.try_start_configuration_cloud(client_id, request_id, request_type, payload)? {
-            return Ok(true);
-        }
-        if self.try_start_account_request(client_id, request_id, request_type, payload)? {
-            return Ok(true);
+        match early_deferred_route(request_type) {
+            Some(EarlyDeferredRoute::ConfigurationCloud) => {
+                return self.try_start_configuration_cloud(
+                    client_id,
+                    request_id,
+                    request_type,
+                    payload,
+                );
+            }
+            Some(EarlyDeferredRoute::AccountCloud) => {
+                return self.try_start_account_request(
+                    client_id,
+                    request_id,
+                    request_type,
+                    payload,
+                );
+            }
+            None => {}
         }
         let route_policy = request_route_policy(request_type);
         if let Some(ConditionalDeferredRoute::RuntimeSettingsUpdate(surface)) =

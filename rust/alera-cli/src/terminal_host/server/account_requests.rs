@@ -11,6 +11,7 @@ use super::account_push_state::{
 };
 use super::deferred_admission::DeferredRequestClass;
 use super::request_payloads::parse_payload;
+use super::request_route_policy::{early_deferred_route, EarlyDeferredRoute};
 use super::requests::require_string_key;
 use super::{ServerActor, ServerCommand};
 
@@ -94,9 +95,7 @@ impl ServerActor {
         request_type: &str,
         payload: &Value,
     ) -> HostResult<bool> {
-        if (request_type.starts_with("account.") && request_type != "account.status")
-            || request_type.starts_with("mobile.cloud")
-        {
+        if early_deferred_route(request_type) == Some(EarlyDeferredRoute::AccountCloud) {
             return Err(HostError::state(
                 "Alera Cloud is disabled in this privacy portable build.",
             ));

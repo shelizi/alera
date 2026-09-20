@@ -1,4 +1,9 @@
-use super::{account_requests::AccountOperation, requests::require_string_key, ServerActor};
+use super::{
+    account_requests::AccountOperation,
+    request_route_policy::{early_deferred_route, EarlyDeferredRoute},
+    requests::require_string_key,
+    ServerActor,
+};
 use crate::terminal_host::{
     host_error::{HostError, HostResult},
     protocol::event,
@@ -13,7 +18,7 @@ impl ServerActor {
         request: &str,
         payload: &Value,
     ) -> HostResult<bool> {
-        if !request.starts_with("configuration.cloud.") {
+        if early_deferred_route(request) != Some(EarlyDeferredRoute::ConfigurationCloud) {
             return Ok(false);
         }
         return Err(HostError::state(
