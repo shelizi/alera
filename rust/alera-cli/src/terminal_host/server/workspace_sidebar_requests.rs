@@ -315,24 +315,6 @@ impl ServerActor {
         Ok(value)
     }
 
-    pub(super) async fn rename_workspace_request(
-        &mut self,
-        client_id: u64,
-        payload: &Value,
-    ) -> HostResult<Value> {
-        self.require_auth(client_id)?;
-        let workspace_id = string_field(payload, "workspaceId")?;
-        let name = string_field(payload, "name")?;
-        let workspace = self
-            .runtime_store
-            .rename_workspace(workspace_id, name)
-            .await
-            .map_err(state_error)?;
-        let project_id = workspace.project_id.clone();
-        self.broadcast_workspaces_changed(Some(&project_id));
-        serde_json::to_value(workspace).map_err(state_error)
-    }
-
     pub(super) async fn workspace_tag_request(
         &mut self,
         client_id: u64,

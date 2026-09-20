@@ -51,6 +51,21 @@ impl<'a> WorkspaceRequestHandler<'a> {
                     Some(project_id),
                 )
             }
+            "workspace.rename" => {
+                let workspace_id = require_string_key(payload, "workspaceId")?;
+                let name = require_string_key(payload, "name")?;
+                let workspace = self
+                    .runtime_store
+                    .rename_workspace(&workspace_id, &name)
+                    .await
+                    .map_err(|error| HostError::state(error.to_string()))?;
+                let project_id = workspace.project_id.clone();
+                (
+                    serde_json::to_value(workspace)
+                        .map_err(|error| HostError::state(error.to_string()))?,
+                    Some(project_id),
+                )
+            }
             "workspaceCascade.preview" => {
                 let workspace_ids = string_array(payload.get("workspaceIds"));
                 let tag_ids = string_array(payload.get("tagIds"));
@@ -158,6 +173,16 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(found.value["name"], "Workspace");
+
+        let renamed = handler
+            .execute(
+                "workspace.rename",
+                &json!({"workspaceId": "w", "name": "Renamed"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(renamed.changed_project_id.as_deref(), Some("p"));
+        assert_eq!(renamed.value["name"], "Renamed");
 
         let all = handler
             .execute("workspace.listAll", &json!({}))
