@@ -1,0 +1,17 @@
+enum LanguageCapability {
+  syntax,
+  documentSymbols,
+  folding,
+  definition,
+  declaration,
+  typeDefinition,
+  references,
+  implementation,
+  workspaceSymbols,
+  hover,
+  diagnostics,
+  semanticTokens,
+  completion,
+  rename,
+  formatting,
+}
