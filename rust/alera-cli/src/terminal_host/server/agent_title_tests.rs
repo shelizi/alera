@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
-use alera_core::runtime::{RuntimeAiAssistSettings, WorkspaceTabRecord};
+use alera_core::runtime::{RuntimeAiAssistSettings, RuntimeStore, WorkspaceTabRecord};
 use chrono::Utc;
 use serde_json::{json, Value};
 
 use super::actor_test_harness::test_actor;
-use super::agent_title_generation::job_matches;
+use super::agent_title_generation::{job_matches, AgentTitleSettingsQuery};
 use super::agent_title_state::{initialize, is_manual, AgentTitleState, PRIVATE_KEY};
 use super::tab_compatibility::{preserve_host_owned_tab_payload, redact_private_tab_payload};
 
@@ -19,6 +19,83 @@ fn tab() -> WorkspaceTabRecord {
         updated_at: Utc::now(),
         payload: json!({}),
     }
+}
+
+#[tokio::test]
+async fn agent_title_settings_query_can_be_tested_without_server_actor() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = RuntimeStore::open(dir.path()).await.unwrap();
+    store
+        .set_ai_assist_settings(RuntimeAiAssistSettings {
+            enabled: false,
+            auto_generate_agent_titles: false,
+            timeout_seconds: 17,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    let settings = AgentTitleSettingsQuery::new(&store).load().await.unwrap();
+    assert!(!settings.enabled);
+    assert!(!settings.auto_generate_agent_titles);
+    assert_eq!(settings.timeout_seconds, 17);
+}
+
+#[tokio::test]
+async fn manual_generation_rejects_when_ai_assist_is_disabled() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut actor = test_actor(&dir, HashMap::new(), HashMap::new()).await;
+    let mut tab = tab();
+    initialize(&mut tab, "Initial task");
+    let request = json!({
+        "tabId": "tab",
+        "expectedConversationId": tab.payload["agentTitleConversationId"],
+        "expectedRevision": tab.payload["agentTitleRevision"],
+    });
+    actor.runtime_store.upsert_workspace_tab(tab).await.unwrap();
+    actor
+        .runtime_store
+        .set_ai_assist_settings(RuntimeAiAssistSettings {
+            enabled: false,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    let error = actor.request_agent_title(1, 1, &request).await.unwrap_err();
+    assert_eq!(error.to_string(), "AI Assist is disabled.");
+    assert!(actor.agent_title_jobs.is_empty());
+}
+
+#[tokio::test]
+async fn automatic_generation_disabled_marks_the_conversation_attempted_without_starting_a_job() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut actor = test_actor(&dir, HashMap::new(), HashMap::new()).await;
+    let mut tab = tab();
+    initialize(&mut tab, "First task");
+    actor.runtime_store.upsert_workspace_tab(tab).await.unwrap();
+    actor
+        .runtime_store
+        .set_ai_assist_settings(RuntimeAiAssistSettings {
+            auto_generate_agent_titles: false,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    actor
+        .observe_agent_title("tab", "pi", Some("one"), "First task", true)
+        .await;
+
+    assert!(actor.agent_title_jobs.is_empty());
+    let saved = actor
+        .runtime_store
+        .find_workspace_tab("tab")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(AgentTitleState::read(&saved).unwrap().attempted);
+    assert_ne!(saved.payload["agentTitleStatus"], "generating");
 }
 
 #[path = "agent_title_hook_tests.rs"]

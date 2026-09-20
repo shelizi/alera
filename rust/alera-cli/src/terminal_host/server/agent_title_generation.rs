@@ -1,4 +1,4 @@
-use alera_core::runtime::WorkspaceTabRecord;
+use alera_core::runtime::{RuntimeAiAssistSettings, RuntimeStore, WorkspaceTabRecord};
 use serde_json::{json, Value};
 use tokio::sync::oneshot;
 use uuid::Uuid;
@@ -11,6 +11,23 @@ use super::agent_title_state::{is_manual, AgentTitleState};
 use super::ai_assist_requests::{plan_command, run_command};
 use super::workspace_tab_requests::WorkspaceTabStoreHandler;
 use super::{ServerActor, ServerCommand};
+
+pub(super) struct AgentTitleSettingsQuery<'a> {
+    runtime_store: &'a RuntimeStore,
+}
+
+impl<'a> AgentTitleSettingsQuery<'a> {
+    pub(super) const fn new(runtime_store: &'a RuntimeStore) -> Self {
+        Self { runtime_store }
+    }
+
+    pub(super) async fn load(&self) -> HostResult<RuntimeAiAssistSettings> {
+        self.runtime_store
+            .effective_ai_assist_settings()
+            .await
+            .map_err(|error| HostError::state(error.to_string()))
+    }
+}
 
 pub(super) struct AgentTitleJob {
     pub id: String,
@@ -45,11 +62,9 @@ impl ServerActor {
                 "The conversation or title changed. Try again.",
             ));
         }
-        let settings = self
-            .runtime_store
-            .effective_ai_assist_settings()
-            .await
-            .map_err(|e| HostError::state(e.to_string()))?;
+        let settings = AgentTitleSettingsQuery::new(&self.runtime_store)
+            .load()
+            .await?;
         if !settings.enabled {
             return Err(HostError::state("AI Assist is disabled."));
         }
@@ -76,11 +91,9 @@ impl ServerActor {
             if !state.eligible || state.attempted || is_manual(&tab) {
                 return Ok(());
             }
-            let settings = self
-                .runtime_store
-                .effective_ai_assist_settings()
-                .await
-                .map_err(|e| HostError::state(e.to_string()))?;
+            let settings = AgentTitleSettingsQuery::new(&self.runtime_store)
+                .load()
+                .await?;
             // Do not rename an old conversation merely because the setting is enabled later.
             state.attempted = true;
             state.write(&mut tab);
@@ -164,11 +177,9 @@ impl ServerActor {
         if !job_matches(job, &tab) {
             return Err(HostError::state("The conversation or title changed."));
         }
-        let settings = self
-            .runtime_store
-            .effective_ai_assist_settings()
-            .await
-            .map_err(|e| HostError::state(e.to_string()))?;
+        let settings = AgentTitleSettingsQuery::new(&self.runtime_store)
+            .load()
+            .await?;
         if !settings.enabled || (job.automatic && !settings.auto_generate_agent_titles) {
             return Err(HostError::state("Title generation is disabled."));
         }
@@ -259,11 +270,9 @@ impl ServerActor {
                 "The conversation or title changed. The generated title was discarded.",
             ));
         }
-        let settings = self
-            .runtime_store
-            .effective_ai_assist_settings()
-            .await
-            .map_err(|e| HostError::state(e.to_string()))?;
+        let settings = AgentTitleSettingsQuery::new(&self.runtime_store)
+            .load()
+            .await?;
         let result = if !settings.enabled || (job.automatic && !settings.auto_generate_agent_titles)
         {
             Err(HostError::state("Title generation is disabled."))
