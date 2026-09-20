@@ -30,6 +30,7 @@ use super::workspace_artifact_requests::{
 };
 use super::workspace_relation_requests::WorkspaceRelationRequestHandler;
 use super::workspace_requests::WorkspaceRequestHandler;
+use super::workspace_tab_requests::WorkspaceTabQueryHandler;
 use super::{ClientKind, ServerActor, ServerCommand};
 
 use self::idempotency_receipts::{
@@ -705,11 +706,9 @@ impl ServerActor {
             "tab.list" => {
                 self.require_auth(client_id)?;
                 let workspace_id = require_string_key(payload, "workspaceId")?;
-                let tabs = self
-                    .runtime_store
-                    .list_workspace_tabs(&workspace_id)
-                    .await
-                    .map_err(|error| HostError::state(error.to_string()))?;
+                let tabs = WorkspaceTabQueryHandler::new(&self.runtime_store)
+                    .list(&workspace_id)
+                    .await?;
                 if self.is_mobile_client(client_id) {
                     Ok(self.mobile_workspace_tabs_payload(
                         self.workspace_tabs_for_client(client_id, tabs),
@@ -721,11 +720,9 @@ impl ServerActor {
             "tab.find" => {
                 self.require_auth(client_id)?;
                 let id = require_string_key(payload, "id")?;
-                let tab = self
-                    .runtime_store
-                    .find_workspace_tab(&id)
-                    .await
-                    .map_err(|error| HostError::state(error.to_string()))?
+                let tab = WorkspaceTabQueryHandler::new(&self.runtime_store)
+                    .find(&id)
+                    .await?
                     .and_then(|tab| self.workspace_tab_for_client(client_id, tab));
                 Ok(json!(tab))
             }

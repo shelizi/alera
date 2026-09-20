@@ -249,6 +249,7 @@ mod workspace_section_requests_tests;
 mod workspace_sidebar_requests;
 #[cfg(test)]
 mod workspace_sidebar_requests_tests;
+mod workspace_tab_requests;
 
 pub(crate) use disconnect_reason::DisconnectReason;
 pub(crate) use request_route_policy::MobilePromptFileOperation;
