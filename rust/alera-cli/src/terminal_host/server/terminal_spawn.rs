@@ -1,5 +1,5 @@
 use alera_core::agent_descriptor::agent_descriptor;
-use alera_core::runtime::{WorkspaceStatus, WorkspaceTabRecord};
+use alera_core::runtime::{RuntimeStore, WorkspaceStatus, WorkspaceTabRecord};
 use serde_json::Value;
 
 use crate::agent_status::prepare_launch_environment;
@@ -19,10 +19,54 @@ use super::terminal_startup_commands::{
     initial_delivery_mechanism as mechanism, initial_managed_agent_launch, initial_prompt,
     pending_agent_type, tab_agent_type, terminal_session_id,
 };
+use super::workspace_tab_requests::WorkspaceTabStoreHandler;
 use super::ServerActor;
 
 const DEFAULT_TERMINAL_COLS: u16 = 80;
 const DEFAULT_TERMINAL_ROWS: u16 = 24;
+
+struct TerminalStartupTabPersistence<'a> {
+    tabs: WorkspaceTabStoreHandler<'a>,
+}
+
+impl<'a> TerminalStartupTabPersistence<'a> {
+    const fn new(runtime_store: &'a RuntimeStore) -> Self {
+        Self {
+            tabs: WorkspaceTabStoreHandler::new(runtime_store),
+        }
+    }
+
+    async fn consume_initial_command(
+        &self,
+        tab: &WorkspaceTabRecord,
+    ) -> HostResult<Option<WorkspaceTabRecord>> {
+        self.consume_fields(tab, &["initialCommand", "initialCommandOnce"])
+            .await
+    }
+
+    async fn consume_initial_prompt(
+        &self,
+        tab: &WorkspaceTabRecord,
+    ) -> HostResult<Option<WorkspaceTabRecord>> {
+        self.consume_fields(tab, &["initialPrompt", "initialPromptOnce"])
+            .await
+    }
+
+    async fn consume_fields(
+        &self,
+        tab: &WorkspaceTabRecord,
+        fields: &[&str],
+    ) -> HostResult<Option<WorkspaceTabRecord>> {
+        let mut next = tab.clone();
+        let Some(payload) = next.payload.as_object_mut() else {
+            return Ok(None);
+        };
+        for field in fields {
+            payload.remove(*field);
+        }
+        self.tabs.upsert(next).await.map(Some)
+    }
+}
 
 impl ServerActor {
     pub(super) async fn reconcile_spawn_on_create_tabs(&mut self) {
@@ -225,12 +269,11 @@ impl ServerActor {
         &mut self,
         tab: &WorkspaceTabRecord,
     ) -> Option<WorkspaceTabRecord> {
-        let mut next = tab.clone();
-        let payload = next.payload.as_object_mut()?;
-        payload.remove("initialCommand");
-        payload.remove("initialCommandOnce");
-        match self.runtime_store.upsert_workspace_tab(next).await {
-            Ok(saved) => Some(saved),
+        match TerminalStartupTabPersistence::new(&self.runtime_store)
+            .consume_initial_command(tab)
+            .await
+        {
+            Ok(saved) => saved,
             Err(error) => {
                 eprintln!(
                     "failed to clear the one-shot initial command of tab {}: {error}",
@@ -245,12 +288,11 @@ impl ServerActor {
         &mut self,
         tab: &WorkspaceTabRecord,
     ) -> Option<WorkspaceTabRecord> {
-        let mut next = tab.clone();
-        let payload = next.payload.as_object_mut()?;
-        payload.remove("initialPrompt");
-        payload.remove("initialPromptOnce");
-        match self.runtime_store.upsert_workspace_tab(next).await {
-            Ok(saved) => Some(saved),
+        match TerminalStartupTabPersistence::new(&self.runtime_store)
+            .consume_initial_prompt(tab)
+            .await
+        {
+            Ok(saved) => saved,
             Err(error) => {
                 tracing::error!(
                     tab_id = %tab.id,
@@ -408,4 +450,62 @@ impl ServerActor {
 fn spawns_on_create(tab: &WorkspaceTabRecord) -> bool {
     tab.kind == "terminal"
         && tab.payload.get("spawnOnCreate").and_then(Value::as_bool) == Some(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use alera_core::runtime::{RuntimeStore, WorkspaceTabRecord};
+    use chrono::Utc;
+    use serde_json::json;
+
+    use super::TerminalStartupTabPersistence;
+
+    #[tokio::test]
+    async fn one_shot_startup_fields_can_be_consumed_without_server_actor() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = RuntimeStore::open(dir.path()).await.unwrap();
+        let now = Utc::now();
+        let tab = store
+            .upsert_workspace_tab(WorkspaceTabRecord {
+                id: "tab".into(),
+                workspace_id: "workspace".into(),
+                kind: "terminal".into(),
+                title: "Terminal".into(),
+                created_at: now,
+                updated_at: now,
+                payload: json!({
+                    "initialCommand": "echo once",
+                    "initialCommandOnce": true,
+                    "initialPrompt": "prompt once",
+                    "initialPromptOnce": true,
+                    "keep": "value",
+                }),
+            })
+            .await
+            .unwrap();
+        let persistence = TerminalStartupTabPersistence::new(&store);
+
+        let after_command = persistence
+            .consume_initial_command(&tab)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(after_command.payload.get("initialCommand").is_none());
+        assert!(after_command.payload.get("initialCommandOnce").is_none());
+        assert_eq!(after_command.payload["initialPrompt"], "prompt once");
+        assert_eq!(after_command.payload["initialPromptOnce"], true);
+        assert_eq!(after_command.payload["keep"], "value");
+
+        let after_prompt = persistence
+            .consume_initial_prompt(&after_command)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(after_prompt.payload.get("initialPrompt").is_none());
+        assert!(after_prompt.payload.get("initialPromptOnce").is_none());
+        assert_eq!(after_prompt.payload["keep"], "value");
+
+        let stored = store.find_workspace_tab("tab").await.unwrap().unwrap();
+        assert_eq!(stored.payload, after_prompt.payload);
+    }
 }
