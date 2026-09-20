@@ -1,4 +1,5 @@
 import '../domain/language_capability.dart';
+import '../domain/language_extension_contribution.dart';
 import '../domain/language_extension_descriptor.dart';
 import '../domain/language_id.dart';
 import '../domain/language_provider_descriptor.dart';
@@ -17,6 +18,17 @@ final class LanguageExtensionRegistry {
 
   Iterable<LanguageProviderDescriptor> get providers =>
       _providers.values.toList(growable: false);
+
+  void registerContribution(LanguageExtensionContribution contribution) {
+    final staged = _copy();
+    for (final language in contribution.languages) {
+      staged.registerLanguage(language);
+    }
+    for (final provider in contribution.providers) {
+      staged.registerProvider(provider);
+    }
+    _replaceWith(staged);
+  }
 
   void registerLanguage(LanguageExtensionDescriptor descriptor) {
     if (_languages.containsKey(descriptor.id)) {
@@ -121,6 +133,30 @@ final class LanguageExtensionRegistry {
 
   LanguageProviderDescriptor? provider(String providerId) =>
       _providers[providerId.trim()];
+
+  LanguageExtensionRegistry _copy() {
+    final copy = LanguageExtensionRegistry();
+    copy._languages.addAll(_languages);
+    copy._languageIdsByAlias.addAll(_languageIdsByAlias);
+    copy._languageIdsByExtension.addAll(_languageIdsByExtension);
+    copy._providers.addAll(_providers);
+    return copy;
+  }
+
+  void _replaceWith(LanguageExtensionRegistry source) {
+    _languages
+      ..clear()
+      ..addAll(source._languages);
+    _languageIdsByAlias
+      ..clear()
+      ..addAll(source._languageIdsByAlias);
+    _languageIdsByExtension
+      ..clear()
+      ..addAll(source._languageIdsByExtension);
+    _providers
+      ..clear()
+      ..addAll(source._providers);
+  }
 
   static String _extensionForPath(String path) {
     final normalized = path.replaceAll('\\', '/');

@@ -8,6 +8,9 @@ void main() {
       'lib/src/features/workbench/presentation/workspace_editor_surface.dart',
       'lib/src/features/workbench/presentation/workspace_editor_widgets.dart',
       'lib/src/features/workbench/presentation/workspace_editor_outline.dart',
+      'lib/src/features/language_intelligence/application/language_intelligence_manager.dart',
+      'lib/src/features/language_intelligence/application/language_server_session_manager.dart',
+      'lib/src/features/language_intelligence/infra/code_forge_language_server_runtime.dart',
     ];
     final languageLiteral = RegExp(
       r'''['"](?:csharp|python|rust|go|php|typescript|tsx|javascript|jsx)['"]''',
