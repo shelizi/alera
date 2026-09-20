@@ -1,6 +1,8 @@
+use alera_core::runtime::{RuntimeStore, WorkspaceTabRecord};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use super::workspace_tab_requests::WorkspaceTabStoreHandler;
 use super::{ServerActor, ServerCommand};
 use crate::terminal_host::host_error::{HostError, HostResult};
 
@@ -37,6 +39,26 @@ const DEFAULT_DELAY_MS: u64 = 2_000;
 const MIN_DELAY_MS: u64 = 100;
 const MAX_DELAY_MS: u64 = 3_600_000;
 const MAX_INPUT_BYTES: usize = 4_096;
+
+struct TerminalPulsePersistence<'a> {
+    tabs: WorkspaceTabStoreHandler<'a>,
+}
+
+impl<'a> TerminalPulsePersistence<'a> {
+    const fn new(runtime_store: &'a RuntimeStore) -> Self {
+        Self {
+            tabs: WorkspaceTabStoreHandler::new(runtime_store),
+        }
+    }
+
+    async fn find_tab(&self, tab_id: &str) -> HostResult<Option<WorkspaceTabRecord>> {
+        self.tabs.find(tab_id).await
+    }
+
+    async fn upsert_tab(&self, tab: WorkspaceTabRecord) -> HostResult<WorkspaceTabRecord> {
+        self.tabs.upsert(tab).await
+    }
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -112,11 +134,9 @@ impl ServerActor {
         &self,
         tab_id: &str,
     ) -> HostResult<TerminalPulseConfiguration> {
-        let tab = self
-            .runtime_store
-            .find_workspace_tab(tab_id)
-            .await
-            .map_err(|error| HostError::state(error.to_string()))?;
+        let tab = TerminalPulsePersistence::new(&self.runtime_store)
+            .find_tab(tab_id)
+            .await?;
         let Some(value) = tab.and_then(|tab| tab.payload.get(TERMINAL_PULSE_PAYLOAD_KEY).cloned())
         else {
             return Ok(TerminalPulseConfiguration::default());
@@ -129,11 +149,9 @@ impl ServerActor {
         tab_id: &str,
         configuration: &TerminalPulseConfiguration,
     ) -> HostResult<()> {
-        let mut tab = self
-            .runtime_store
-            .find_workspace_tab(tab_id)
-            .await
-            .map_err(|error| HostError::state(error.to_string()))?
+        let mut tab = TerminalPulsePersistence::new(&self.runtime_store)
+            .find_tab(tab_id)
+            .await?
             .ok_or_else(|| HostError::state(format!("terminal tab not found: {tab_id}")))?;
         let payload = tab
             .payload
@@ -145,10 +163,9 @@ impl ServerActor {
                 .map_err(|error| HostError::format(error.to_string()))?,
         );
         tab.updated_at = chrono::Utc::now();
-        self.runtime_store
-            .upsert_workspace_tab(tab)
-            .await
-            .map_err(|error| HostError::state(error.to_string()))?;
+        TerminalPulsePersistence::new(&self.runtime_store)
+            .upsert_tab(tab)
+            .await?;
         Ok(())
     }
 }
