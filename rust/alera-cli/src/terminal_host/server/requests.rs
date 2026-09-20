@@ -729,11 +729,9 @@ impl ServerActor {
             "tab.upsert" => {
                 self.require_auth(client_id)?;
                 let mut tab: WorkspaceTabRecord = parse_payload(payload)?;
-                if let Some(stored) = self
-                    .runtime_store
-                    .find_workspace_tab(&tab.id)
-                    .await
-                    .map_err(|error| HostError::state(error.to_string()))?
+                if let Some(stored) = WorkspaceTabQueryHandler::new(&self.runtime_store)
+                    .find(&tab.id)
+                    .await?
                 {
                     super::tab_compatibility::preserve_host_owned_tab_payload(&stored, &mut tab);
                     if tab.payload["agentTitleRevision"] != stored.payload["agentTitleRevision"] {
