@@ -83,7 +83,12 @@ impl ServerActor {
         self.broadcast_authenticated(event("agentPresenceChanged", json!({"changes": changes})));
     }
 
-    pub(super) fn start_workspace_sidebar_snapshot(&mut self, client_id: u64, request_id: i64) {
+    pub(super) fn start_workspace_sidebar_snapshot(
+        &mut self,
+        client_id: u64,
+        request_id: i64,
+        request_type: &str,
+    ) {
         if !self
             .workspace_sidebar_snapshots
             .register(client_id, request_id)
@@ -94,7 +99,7 @@ impl ServerActor {
         let inbox = self.inbox.clone();
         if let Err(error) = self.deferred_admission.schedule(
             super::deferred_admission::DeferredRequestClass::Bulk,
-            "workspaceSidebar.snapshot",
+            request_type,
             None,
             async move {
                 let result = load_workspace_sidebar_snapshot(&runtime_store).await;

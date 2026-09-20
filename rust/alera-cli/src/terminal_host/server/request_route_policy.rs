@@ -38,12 +38,18 @@ pub(super) enum DeferredWriteRoute {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum CoalescedReadRoute {
+    WorkspaceSidebarSnapshot,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct RequestRoutePolicy {
     pub(super) mobile_allowed: bool,
     pub(super) runtime_mutation: RuntimeMutationPolicy,
     pub(super) post_response: PostResponseAction,
     pub(super) deferred_read: Option<DeferredReadRoute>,
     pub(super) deferred_write: Option<DeferredWriteRoute>,
+    pub(super) coalesced_read: Option<CoalescedReadRoute>,
 }
 
 const LOCAL: RequestRoutePolicy = RequestRoutePolicy {
@@ -52,6 +58,7 @@ const LOCAL: RequestRoutePolicy = RequestRoutePolicy {
     post_response: PostResponseAction::None,
     deferred_read: None,
     deferred_write: None,
+    coalesced_read: None,
 };
 
 const MOBILE: RequestRoutePolicy = RequestRoutePolicy {
@@ -143,6 +150,10 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
 
         "project.register" => {
             mobile_conflicting_deferred_write(DeferredWriteRoute::ProjectRegister)
+        }
+
+        "workspaceSidebar.snapshot" => {
+            mobile_coalesced_read(CoalescedReadRoute::WorkspaceSidebarSnapshot)
         }
 
         "project.remove" => serialized_mobile(SerializedRuntimeMutation::RemoveProject),
@@ -277,7 +288,6 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         | "workspaceCascade.preview"
         | "workspaceRelation.list"
         | "workspaceSection.list"
-        | "workspaceSidebar.snapshot"
         | "workspaceTag.list" => MOBILE,
 
         _ => LOCAL,
@@ -311,6 +321,14 @@ const fn mobile_conflicting_deferred_write(route: DeferredWriteRoute) -> Request
         mobile_allowed: true,
         runtime_mutation: RuntimeMutationPolicy::Conflicts,
         deferred_write: Some(route),
+        ..LOCAL
+    }
+}
+
+const fn mobile_coalesced_read(route: CoalescedReadRoute) -> RequestRoutePolicy {
+    RequestRoutePolicy {
+        mobile_allowed: true,
+        coalesced_read: Some(route),
         ..LOCAL
     }
 }
@@ -403,6 +421,16 @@ mod tests {
         assert_eq!(
             policy.deferred_write,
             Some(DeferredWriteRoute::ProjectRegister)
+        );
+    }
+
+    #[test]
+    fn workspace_sidebar_snapshot_is_a_typed_coalesced_read() {
+        let policy = request_route_policy("workspaceSidebar.snapshot");
+        assert!(policy.mobile_allowed);
+        assert_eq!(
+            policy.coalesced_read,
+            Some(CoalescedReadRoute::WorkspaceSidebarSnapshot)
         );
     }
 }

@@ -23,7 +23,9 @@ use super::deferred_read_requests::DeferredReadRequestHandler;
 use super::host_service_requests::required_non_blank;
 use super::project_registration_requests::ProjectRegistrationRequestHandler;
 pub(super) use super::request_payloads::{json_result, parse_payload};
-use super::request_route_policy::{request_route_policy, DeferredWriteRoute, PostResponseAction};
+use super::request_route_policy::{
+    request_route_policy, CoalescedReadRoute, DeferredWriteRoute, PostResponseAction,
+};
 use super::runtime_mutation_barrier::conflicts_with_runtime_mutation;
 use super::{ClientKind, ServerActor, ServerCommand};
 
@@ -159,7 +161,8 @@ impl ServerActor {
         request_type: &str,
         payload: &Value,
     ) -> HostResult<Value> {
-        if let Some(route) = request_route_policy(request_type).deferred_read {
+        let route_policy = request_route_policy(request_type);
+        if let Some(route) = route_policy.deferred_read {
             self.require_auth(client_id)?;
             self.require_request_allowed(client_id, request_type)?;
             return DeferredReadRequestHandler::new(
@@ -169,7 +172,7 @@ impl ServerActor {
             .execute_inline(route, payload)
             .await;
         }
-        if let Some(route) = request_route_policy(request_type).deferred_write {
+        if let Some(route) = route_policy.deferred_write {
             self.require_auth(client_id)?;
             self.require_request_allowed(client_id, request_type)?;
             return match route {
@@ -184,6 +187,15 @@ impl ServerActor {
                         self.broadcast_project_state_changed();
                     }
                     result
+                }
+            };
+        }
+        if let Some(route) = route_policy.coalesced_read {
+            self.require_auth(client_id)?;
+            self.require_request_allowed(client_id, request_type)?;
+            return match route {
+                CoalescedReadRoute::WorkspaceSidebarSnapshot => {
+                    self.workspace_sidebar_snapshot(client_id).await
                 }
             };
         }
@@ -598,7 +610,6 @@ impl ServerActor {
                 self.workspace_section_request(client_id, request_type, payload)
                     .await
             }
-            "workspaceSidebar.snapshot" => self.workspace_sidebar_snapshot(client_id).await,
             "workbenchViewPrefs.get" => self.workbench_view_prefs(client_id).await,
             "workbenchViewPrefs.update" => {
                 self.update_workbench_view_prefs(client_id, payload).await
