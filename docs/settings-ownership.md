@@ -43,6 +43,7 @@ A field can sit in more than one tier: the `runtimeSettings.update` payload and 
 | `keepComputerAwakeWhileAgentsWork` | local-only |
 | `showTabTitlesInSidebar` | portable |
 | `defaultAgentProfileId` | runtime + portable |
+| `gitBashExecutablePath` | local-only (per-device executable override) |
 | `quotas` (per-host `enabledProviders`, `providerDefaultsVersion`, `claudeDefault*`, `claudeProfiles`, `environment`) | runtime (`agentQuotas` for host `local`) |
 | `quotas.selectedClaudeProfile`, `quotas.unpinnedQuotaKeys` | local-only (merged back from local storage on load) |
 
@@ -70,7 +71,7 @@ A field can sit in more than one tier: the `runtimeSettings.update` payload and 
 
 | Field | Tiers |
 | --- | --- |
-| `tabSize`, `themeName`, `autosaveEnabled`, `autosaveDelaySeconds` | portable |
+| `tabSize`, `themeName`, `autosaveEnabled`, `autosaveDelaySeconds`, `quickOpenExcludedDirectories` | portable |
 | `externalEditor`, `codeOpenTarget`, `externalEditorExecutablePaths`, `externalEditorWorkspaceMode`, `autoOpenNewWorkspacesExternally`, `languageIntelligence` | local-only |
 
 ### `diagnostics`
@@ -86,7 +87,7 @@ A field can sit in more than one tier: the `runtimeSettings.update` payload and 
 | `fontFamily`, `fontSize`, `fontWeight`, `lineHeight`, `paddingX`, `paddingY`, `cursorShape`, `cursorBlink`, `cursorOpacity`, `themeName`, `backgroundOpacity`, `wordSeparators`, `colorOverrides`, `tuiScrollSensitivity`, `clipboardOnSelect`, `allowOsc52Clipboard`, `showComposerByDefault`, `toolbarCorner` | portable |
 | `hostEmptyShutdownDelaySeconds`, `hostDetachedSessionShutdownDelaySeconds`, `hostScrollbackBytes`, `loginShell` (as `resolvedLoginShell`) | runtime (`configure`) |
 | `bufferBudgetMegabytes`, `keepRuntimeOpenOnAppQuit` | runtime (consumed by the workbench buffer owner and the runtime-host quit gate) |
-| `scrollbackLines`, `confirmCloseRunningProcesses` | local-only (`scrollbackLines` also feeds the derived `restoreSnapshotBytes` sent in `configure`) |
+| `scrollbackLines`, `powerShell7ExecutablePath`, `confirmCloseRunningProcesses` | local-only (`scrollbackLines` also feeds the derived `restoreSnapshotBytes` sent in `configure`; executable overrides are per-device) |
 
 ### `keyboard`
 

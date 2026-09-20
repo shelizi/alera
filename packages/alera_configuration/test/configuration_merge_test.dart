@@ -140,6 +140,7 @@ void main() {
         'general': {'workspaceDirectory': '/secret', 'showTrayIcon': true},
         'editor': {
           'tabSize': 2,
+          'quickOpenExcludedDirectories': <String>['target', 'vendor'],
           'externalEditor': 'zed',
           'codeOpenTarget': 'external',
           'externalEditorExecutablePaths': <String, String>{
@@ -165,7 +166,10 @@ void main() {
         },
       });
       expect(result['general'], {'showTrayIcon': true});
-      expect(result['editor'], {'tabSize': 2});
+      expect(result['editor'], {
+        'tabSize': 2,
+        'quickOpenExcludedDirectories': <String>['target', 'vendor'],
+      });
       expect(result['agents'], {'showTabTitlesInSidebar': true});
       expect(result['aiDictation'], {'language': 'es'});
       expect(result['aiTextGeneration'], isEmpty);

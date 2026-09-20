@@ -30,7 +30,13 @@ const desktopPortableFields = <String, List<String>>{
     'showComposerByDefault',
     'toolbarCorner',
   ],
-  'editor': ['tabSize', 'themeName', 'autosaveEnabled', 'autosaveDelaySeconds'],
+  'editor': [
+    'tabSize',
+    'themeName',
+    'autosaveEnabled',
+    'autosaveDelaySeconds',
+    'quickOpenExcludedDirectories',
+  ],
   'keyboard': ['overrides', 'terminalPolicy'],
   'agents': [
     'agentStatusNotificationsEnabled',
