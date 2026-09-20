@@ -68,6 +68,34 @@ class const _SideBySideHeaderRow({
       ),
     );
   }
+
+  @override
+  Widget buildSideBySidePane(BuildContext context, {required bool isLeft}) {
+    final style = Theme.of(context).textTheme.labelSmall?.copyWith(
+      color: AleraTokens.foregroundMuted,
+      fontFamily: 'JetBrains Mono',
+    );
+    return SelectionContainer.disabled(
+      child: DecoratedBox(
+        decoration: const BoxDecoration(
+          color: AleraTokens.surfaceVariant,
+          border: Border(bottom: BorderSide(color: AleraTokens.borderSubtle)),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+            horizontal: AleraTokens.space12,
+            vertical: AleraTokens.space4,
+          ),
+          child: Text(
+            context.tr(isLeft ? oldTitle : newTitle),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: style,
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class const _SideBySideDiffRow({
@@ -84,6 +112,10 @@ class const _SideBySideDiffRow({
       ],
     );
   }
+
+  @override
+  Widget buildSideBySidePane(BuildContext context, {required bool isLeft}) =>
+      _SideBySideCell(line: isLeft ? left : right, isLeft: false);
 }
 
 class const _SideBySideCell({
@@ -171,13 +203,7 @@ class const _SideBySideCell({
         ),
       ),
     );
-    final activePane = _DiffOnlySideBySideSelectionScope.activePaneOf(context);
-    final pane = isLeft
-        ? _DiffOnlySideBySideSelectionPane.left
-        : _DiffOnlySideBySideSelectionPane.right;
-    return activePane != null && activePane != pane
-        ? SelectionContainer.disabled(child: cell)
-        : cell;
+    return cell;
   }
 }
 

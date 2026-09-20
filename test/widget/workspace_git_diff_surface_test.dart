@@ -1238,7 +1238,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      Future<void> expectHorizontalScroll(String key) async {
+      Future<ScrollController> expectHorizontalScroll(String key) async {
         final finder = find.byKey(ValueKey<String>(key));
         expect(finder, findsOneWidget);
         final controller = tester.widget<Scrollbar>(finder).controller!;
@@ -1247,6 +1247,7 @@ void main() {
         controller.jumpTo(controller.position.maxScrollExtent);
         await tester.pump();
         expect(controller.offset, greaterThan(0));
+        return controller;
       }
 
       // Full file + single column.
@@ -1260,12 +1261,44 @@ void main() {
       // Diff only + side-by-side.
       await tester.tap(find.byTooltip('Switch to Side-by-Side View'));
       await tester.pumpAndSettle();
-      await expectHorizontalScroll('git-diff-side-by-side-x-scrollbar');
+      final leftX = await expectHorizontalScroll(
+        'git-diff-side-by-side-left-x-scrollbar',
+      );
+      final rightXFinder = find.byKey(
+        const ValueKey<String>('git-diff-side-by-side-right-x-scrollbar'),
+      );
+      expect(rightXFinder, findsOneWidget);
+      final rightX = tester.widget<Scrollbar>(rightXFinder).controller!;
+      expect(rightX.offset, closeTo(leftX.offset, 0.5));
+
+      final leftYFinder = find.byKey(
+        const ValueKey<String>('git-diff-side-by-side-left-y-scrollbar'),
+      );
+      final rightYFinder = find.byKey(
+        const ValueKey<String>('git-diff-side-by-side-right-y-scrollbar'),
+      );
+      final leftY = tester.widget<Scrollbar>(leftYFinder).controller!;
+      final rightY = tester.widget<Scrollbar>(rightYFinder).controller!;
+      if (leftY.position.maxScrollExtent > 0) {
+        leftY.jumpTo(leftY.position.maxScrollExtent);
+        await tester.pump();
+        expect(rightY.offset, closeTo(leftY.offset, 0.5));
+      }
 
       // Full file + side-by-side.
       await tester.tap(find.byTooltip('Switch to Full File View'));
       await tester.pumpAndSettle();
-      await expectHorizontalScroll('git-diff-side-by-side-x-scrollbar');
+      final fullLeftX = await expectHorizontalScroll(
+        'git-diff-side-by-side-left-x-scrollbar',
+      );
+      final fullRightX = tester
+          .widget<Scrollbar>(
+            find.byKey(
+              const ValueKey<String>('git-diff-side-by-side-right-x-scrollbar'),
+            ),
+          )
+          .controller!;
+      expect(fullRightX.offset, closeTo(fullLeftX.offset, 0.5));
     },
   );
 
@@ -1381,7 +1414,7 @@ void main() {
       ),
       findsNothing,
     );
-    expect(find.byType(SelectionArea), findsOneWidget);
+    expect(find.byType(SelectionArea), findsNWidgets(2));
     expect(files.readCount, 0);
     expect(find.text('Modified'), findsOneWidget);
   });
