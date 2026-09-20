@@ -1,6 +1,5 @@
 use alera_core::runtime::{
-    LinkedReview, Project, ProjectConfig, WorkbenchLayoutRecord, Workspace, WorkspaceTabRecord,
-    WorkspaceTag,
+    LinkedReview, Project, ProjectConfig, WorkbenchLayoutRecord, WorkspaceTabRecord, WorkspaceTag,
 };
 use chrono::{DateTime, Utc};
 use serde_json::{json, Map, Value};
@@ -28,6 +27,7 @@ use super::request_route_policy::{
     PostResponseAction, RequestHandlerFamily, RequestRoutePolicy,
 };
 use super::runtime_mutation_barrier::conflicts_with_runtime_mutation;
+use super::workspace_requests::WorkspaceRequestHandler;
 use super::{ClientKind, ServerActor, ServerCommand};
 
 use self::idempotency_receipts::{
@@ -710,27 +710,15 @@ impl ServerActor {
                 self.broadcast_authenticated(event("projectConfigsChanged", json!({})));
                 Ok(json!({}))
             }
-            "workspace.list" => {
+            "workspace.list" | "workspace.listAll" | "workspace.find" | "workspace.upsert" => {
                 self.require_auth(client_id)?;
-                let project_id = require_string_key(payload, "projectId")?;
-                json_result(self.runtime_store.list_workspaces(&project_id).await)
-            }
-            "workspace.listAll" => {
-                self.require_auth(client_id)?;
-                json_result(self.runtime_store.list_all_workspaces().await)
-            }
-            "workspace.find" => {
-                self.require_auth(client_id)?;
-                let id = require_string_key(payload, "id")?;
-                json_result(self.runtime_store.find_workspace(&id).await)
-            }
-            "workspace.upsert" => {
-                self.require_auth(client_id)?;
-                let workspace: Workspace = parse_payload(payload)?;
-                let project_id = workspace.project_id.clone();
-                let value = json_result(self.runtime_store.upsert_workspace(workspace).await)?;
-                self.broadcast_workspaces_changed(Some(&project_id));
-                Ok(value)
+                let outcome = WorkspaceRequestHandler::new(&self.runtime_store)
+                    .execute(request_type, payload)
+                    .await?;
+                if let Some(project_id) = outcome.changed_project_id.as_deref() {
+                    self.broadcast_workspaces_changed(Some(project_id));
+                }
+                Ok(outcome.value)
             }
             "workspace.setPinned" => self.handle_workspace_pinning(client_id, payload).await,
             "workspace.rename" => self.rename_workspace_request(client_id, payload).await,
