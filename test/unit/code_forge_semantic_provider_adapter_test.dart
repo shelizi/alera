@@ -6,6 +6,7 @@ import 'package:alera/src/features/language_intelligence/domain/language_id.dart
 import 'package:alera/src/features/language_intelligence/domain/language_provider_descriptor.dart';
 import 'package:alera/src/features/language_intelligence/domain/source_location.dart';
 import 'package:alera/src/features/language_intelligence/infra/code_forge_language_server_runtime.dart';
+import 'package:alera/src/features/language_intelligence/infra/code_forge_semantic_adapter_factory.dart';
 import 'package:alera/src/features/language_intelligence/infra/code_forge_semantic_provider_adapter.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -186,6 +187,45 @@ void main() {
       'textDocument/implementation',
     ]);
   });
+
+  test(
+    'production semantic factory binds both narrow ports to one adapter',
+    () async {
+      final transport = _FakeSemanticTransport();
+      final runtime = CodeForgeLanguageServerRuntime(
+        transportFactory: (_) async => transport,
+      );
+      final provider = LanguageProviderDescriptor(
+        id: 'rust-semantic',
+        kind: LanguageProviderKind.semanticServer,
+        languages: <LanguageId>{LanguageId('rust')},
+        capabilities: const <LanguageCapability>{LanguageCapability.definition},
+        processScope: LanguageProviderProcessScope.workspace,
+        launchPolicy: LanguageProviderLaunchPolicy.lazyOnDemand,
+        executableResolutionPolicy:
+            LanguageExecutableResolutionPolicy.explicitOverrideThenPath,
+        executableCandidates: const <String>['test-server'],
+      );
+      final session = await runtime.start(
+        LanguageServerRuntimeStartRequest(
+          provider: provider,
+          executable: 'test-server',
+          workspaceRoot: r'C:\repo',
+          target: LanguageServerTarget.localWorkspace,
+        ),
+      );
+
+      final binding = const CodeForgeSemanticAdapterFactory(isWindows: true)
+          .create(
+            workspaceId: 'workspace-a',
+            provider: provider,
+            session: session,
+          );
+
+      expect(binding.documents, isA<CodeForgeSemanticProviderAdapter>());
+      expect(binding.navigation, same(binding.documents));
+    },
+  );
 }
 
 Future<CodeForgeSemanticProviderAdapter> _adapter(

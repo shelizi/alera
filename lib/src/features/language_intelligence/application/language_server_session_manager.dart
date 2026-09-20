@@ -9,6 +9,20 @@ import 'language_server_runtime.dart';
 
 typedef LanguageServerDelay = Future<void> Function(Duration duration);
 
+final class LanguageServerReadySession {
+  const LanguageServerReadySession({
+    required this.workspaceId,
+    required this.provider,
+    required this.generation,
+    required this.session,
+  });
+
+  final String workspaceId;
+  final LanguageProviderDescriptor provider;
+  final int generation;
+  final LanguageServerRuntimeSession session;
+}
+
 final class LanguageServerSessionManager {
   factory LanguageServerSessionManager({
     required LanguageExtensionRegistry registry,
@@ -164,6 +178,26 @@ final class LanguageServerSessionManager {
         workspaceId: workspaceId,
         providerId: providerId,
       );
+
+  LanguageServerReadySession? readySessionFor(
+    String workspaceId,
+    String providerId,
+  ) {
+    final record =
+        _sessions[_LanguageServerSessionKey(workspaceId, providerId)];
+    final session = record?.session;
+    if (record == null ||
+        session == null ||
+        record.state != LanguageServerSessionState.ready) {
+      return null;
+    }
+    return LanguageServerReadySession(
+      workspaceId: workspaceId,
+      provider: record.provider,
+      generation: record.generation,
+      session: session,
+    );
+  }
 
   Future<void> _ensureReady(_LanguageServerSessionRecord record) async {
     while (true) {
