@@ -58,8 +58,17 @@ impl CliRegistrationOperation {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum AgentQuotaOperation {
+    QuotaSnapshot,
+    UsageSnapshot,
+    FetchClaudeTui,
+    ConsumeCodexResetCredit,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum DeferredJobRoute {
     CliRegistration(CliRegistrationOperation),
+    AgentQuota(AgentQuotaOperation),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -254,6 +263,18 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         "cliRegistration.install" => mobile_deferred_job(DeferredJobRoute::CliRegistration(
             CliRegistrationOperation::Install,
         )),
+        "agentQuota.snapshot" => mobile_deferred_job(DeferredJobRoute::AgentQuota(
+            AgentQuotaOperation::QuotaSnapshot,
+        )),
+        "agentUsage.snapshot" => mobile_deferred_job(DeferredJobRoute::AgentQuota(
+            AgentQuotaOperation::UsageSnapshot,
+        )),
+        "agentQuota.fetchClaudeTui" => mobile_deferred_job(DeferredJobRoute::AgentQuota(
+            AgentQuotaOperation::FetchClaudeTui,
+        )),
+        "agentQuota.consumeCodexResetCredit" => mobile_deferred_job(DeferredJobRoute::AgentQuota(
+            AgentQuotaOperation::ConsumeCodexResetCredit,
+        )),
 
         "project.remove" => serialized_mobile(SerializedRuntimeMutation::RemoveProject),
         "tab.remove" => serialized_mobile(SerializedRuntimeMutation::RemoveTab),
@@ -306,11 +327,7 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         | "agentProfile.launch"
         | "agentProfile.launchIdempotent"
         | "agentProfile.list"
-        | "agentQuota.consumeCodexResetCredit"
-        | "agentQuota.fetchClaudeTui"
-        | "agentQuota.snapshot"
         | "agentSkill.install"
-        | "agentUsage.snapshot"
         | "aiText.agentTitle.generate"
         | "aiText.cancel"
         | "aiText.speechMessage.generate"
@@ -637,6 +654,31 @@ mod tests {
                 "{request_type}"
             );
             assert_eq!(operation.request_type(), request_type);
+        }
+    }
+
+    #[test]
+    fn agent_quota_routes_are_typed_deferred_jobs() {
+        let expected = [
+            ("agentQuota.snapshot", AgentQuotaOperation::QuotaSnapshot),
+            ("agentUsage.snapshot", AgentQuotaOperation::UsageSnapshot),
+            (
+                "agentQuota.fetchClaudeTui",
+                AgentQuotaOperation::FetchClaudeTui,
+            ),
+            (
+                "agentQuota.consumeCodexResetCredit",
+                AgentQuotaOperation::ConsumeCodexResetCredit,
+            ),
+        ];
+        for (request_type, operation) in expected {
+            let policy = request_route_policy(request_type);
+            assert!(policy.mobile_allowed, "{request_type}");
+            assert_eq!(
+                policy.deferred_job,
+                Some(DeferredJobRoute::AgentQuota(operation)),
+                "{request_type}"
+            );
         }
     }
 }

@@ -12,8 +12,8 @@ use super::deferred_request_scheduler::DeferredRequestScheduler;
 use super::project_registration_requests::ProjectRegistrationRequestHandler;
 use super::request_payloads::parse_payload;
 use super::request_route_policy::{
-    request_route_policy, CoalescedReadRoute, DeferredJobRoute, DeferredWriteRoute,
-    MobileDeferredRoute,
+    request_route_policy, AgentQuotaOperation, CoalescedReadRoute, DeferredJobRoute,
+    DeferredWriteRoute, MobileDeferredRoute,
 };
 use super::requests::{require_string_key, validate_mobile_runtime_settings_payload};
 use super::ServerActor;
@@ -128,6 +128,21 @@ impl ServerActor {
                 DeferredJobRoute::CliRegistration(operation) => {
                     self.start_cli_registration_request(client_id, request_id, operation)?;
                 }
+                DeferredJobRoute::AgentQuota(operation) => match operation {
+                    AgentQuotaOperation::QuotaSnapshot => {
+                        self.start_agent_quota_request(client_id, request_id, payload)?;
+                    }
+                    AgentQuotaOperation::UsageSnapshot => {
+                        self.start_agent_usage_request(client_id, request_id, payload)?;
+                    }
+                    AgentQuotaOperation::FetchClaudeTui => {
+                        self.start_agent_quota_claude_tui_request(client_id, request_id, payload)?;
+                    }
+                    AgentQuotaOperation::ConsumeCodexResetCredit => {
+                        self.start_agent_quota_codex_reset_request(client_id, request_id, payload)
+                            .await?;
+                    }
+                },
             }
             return Ok(true);
         }
@@ -274,31 +289,6 @@ impl ServerActor {
                 self.require_auth(client_id)?;
                 self.require_request_allowed(client_id, request_type)?;
                 self.start_terminal_pulse_configuration(client_id, request_id, payload)
-                    .await?;
-                Ok(true)
-            }
-            "agentQuota.snapshot" => {
-                self.require_auth(client_id)?;
-                self.require_request_allowed(client_id, request_type)?;
-                self.start_agent_quota_request(client_id, request_id, payload)?;
-                Ok(true)
-            }
-            "agentUsage.snapshot" => {
-                self.require_auth(client_id)?;
-                self.require_request_allowed(client_id, request_type)?;
-                self.start_agent_usage_request(client_id, request_id, payload)?;
-                Ok(true)
-            }
-            "agentQuota.fetchClaudeTui" => {
-                self.require_auth(client_id)?;
-                self.require_request_allowed(client_id, request_type)?;
-                self.start_agent_quota_claude_tui_request(client_id, request_id, payload)?;
-                Ok(true)
-            }
-            "agentQuota.consumeCodexResetCredit" => {
-                self.require_auth(client_id)?;
-                self.require_request_allowed(client_id, request_type)?;
-                self.start_agent_quota_codex_reset_request(client_id, request_id, payload)
                     .await?;
                 Ok(true)
             }
