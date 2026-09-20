@@ -590,15 +590,19 @@ impl ServerActor {
             }
             "runtimeMetadata.get" => {
                 self.require_auth(client_id)?;
-                let key = require_string_key(payload, "key")?;
-                json_result(self.runtime_store.get_metadata(&key).await)
+                super::runtime_metadata_requests::RuntimeMetadataRequestHandler::new(
+                    &self.runtime_store,
+                )
+                .get(payload)
+                .await
             }
             "runtimeMetadata.set" => {
                 self.require_auth(client_id)?;
-                let key = require_string_key(payload, "key")?;
-                let value = require_string_key(payload, "value")?;
-                json_result(self.runtime_store.set_metadata(&key, &value).await)?;
-                Ok(json!({}))
+                super::runtime_metadata_requests::RuntimeMetadataRequestHandler::new(
+                    &self.runtime_store,
+                )
+                .set(payload)
+                .await
             }
             "runtimeSettings.get" => {
                 self.require_auth(client_id)?;

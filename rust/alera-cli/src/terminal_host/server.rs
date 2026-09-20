@@ -182,6 +182,7 @@ mod request_route_policy;
 mod requests;
 mod resource_requests;
 mod runtime_change_broadcasts;
+mod runtime_metadata_requests;
 mod runtime_mutation_barrier;
 mod runtime_mutation_queue;
 mod runtime_mutation_requests;
