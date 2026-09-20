@@ -16,14 +16,31 @@ struct ProjectRenameRequest {
     name: String,
 }
 
-impl ServerActor {
-    pub(super) async fn project_rename_request(&mut self, payload: &Value) -> HostResult<Value> {
+pub(super) struct ProjectRenameHandler {
+    runtime_store: RuntimeStore,
+}
+
+impl ProjectRenameHandler {
+    pub(super) const fn new(runtime_store: RuntimeStore) -> Self {
+        Self { runtime_store }
+    }
+
+    pub(super) async fn execute(&self, payload: &Value) -> HostResult<Value> {
         let request: ProjectRenameRequest = parse(payload)?;
         let project = rename_project(&self.runtime_store, &request.id, &request.name)
             .await
             .map_err(state_error)?;
-        self.broadcast_authenticated(event("projectsChanged", json!({})));
         serde_json::to_value(project).map_err(state_error)
+    }
+}
+
+impl ServerActor {
+    pub(super) async fn project_rename_request(&mut self, payload: &Value) -> HostResult<Value> {
+        let value = ProjectRenameHandler::new(self.runtime_store.clone())
+            .execute(payload)
+            .await?;
+        self.broadcast_authenticated(event("projectsChanged", json!({})));
+        Ok(value)
     }
 
     pub(super) async fn project_remove_preview_request(
@@ -137,6 +154,44 @@ fn string_key(payload: &Value, key: &str) -> HostResult<String> {
 
 fn state_error(error: impl std::fmt::Display) -> HostError {
     HostError::state(error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use alera_core::runtime::{Project, ProjectKind, RuntimeStore};
+    use chrono::Utc;
+    use serde_json::json;
+
+    use super::ProjectRenameHandler;
+
+    #[tokio::test]
+    async fn rename_can_be_tested_without_server_actor() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = RuntimeStore::open(dir.path()).await.unwrap();
+        let now = Utc::now();
+        store
+            .upsert_project(Project {
+                id: "p".into(),
+                name: "Before".into(),
+                repo_path: "/p".into(),
+                created_at: now,
+                updated_at: now,
+                kind: ProjectKind::Folder,
+            })
+            .await
+            .unwrap();
+
+        let renamed = ProjectRenameHandler::new(store.clone())
+            .execute(&json!({"id": "p", "name": "After"}))
+            .await
+            .unwrap();
+
+        assert_eq!(renamed["name"], "After");
+        assert_eq!(
+            store.find_project("p").await.unwrap().unwrap().name,
+            "After"
+        );
+    }
 }
 
 #[allow(dead_code)]
