@@ -11,6 +11,30 @@ use crate::terminal_host::host_error::{HostError, HostResult};
 use super::terminal_startup_commands::agent_profile_id;
 use super::ServerActor;
 
+struct AutomationAgentPolicyStoreHandler<'a> {
+    runtime_store: &'a RuntimeStore,
+}
+
+impl<'a> AutomationAgentPolicyStoreHandler<'a> {
+    const fn new(runtime_store: &'a RuntimeStore) -> Self {
+        Self { runtime_store }
+    }
+
+    async fn get(&self, profile_id: &str) -> HostResult<AutomationAgentPolicy> {
+        self.runtime_store
+            .automation_agent_policy(profile_id)
+            .await
+            .map_err(state_error)
+    }
+
+    async fn set(&self, policy: AutomationAgentPolicy) -> HostResult<AutomationAgentPolicy> {
+        self.runtime_store
+            .set_automation_agent_policy(policy)
+            .await
+            .map_err(state_error)
+    }
+}
+
 impl ServerActor {
     pub(super) async fn automation_policy_request(
         &self,
@@ -35,19 +59,15 @@ impl ServerActor {
                     .ok_or_else(|| HostError::format("agent policy requires profileId"))?;
                 if let Some(value) = policy {
                     let policy = decode_agent_policy(value, profile_id)?;
-                    let saved = self
-                        .runtime_store
-                        .set_automation_agent_policy(policy)
-                        .await
-                        .map_err(|error| HostError::state(error.to_string()))?;
+                    let saved = AutomationAgentPolicyStoreHandler::new(&self.runtime_store)
+                        .set(policy)
+                        .await?;
                     return serde_json::to_value(saved)
                         .map_err(|error| HostError::state(error.to_string()));
                 }
-                let policy = self
-                    .runtime_store
-                    .automation_agent_policy(profile_id)
-                    .await
-                    .map_err(|error| HostError::state(error.to_string()))?;
+                let policy = AutomationAgentPolicyStoreHandler::new(&self.runtime_store)
+                    .get(profile_id)
+                    .await?;
                 serde_json::to_value(policy).map_err(|error| HostError::state(error.to_string()))
             }
             "project" => {
@@ -425,9 +445,18 @@ fn policy_object(value: &Value, kind: &str) -> HostResult<Map<String, Value>> {
         .ok_or_else(|| HostError::format(format!("{kind} policy must be a JSON object")))
 }
 
+fn state_error(error: impl std::fmt::Display) -> HostError {
+    HostError::state(error.to_string())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::repository_declares_automation;
+    use alera_core::runtime::{
+        AgentProfile, AgentProfileLaunchMode, AutomationAgentPolicy, RuntimeStore,
+    };
+    use chrono::Utc;
+
+    use super::{repository_declares_automation, AutomationAgentPolicyStoreHandler};
     use std::fs;
     use std::path::Path;
 
@@ -467,5 +496,53 @@ mod tests {
             )
             .await
         );
+    }
+
+    #[tokio::test]
+    async fn agent_policy_store_handler_can_be_tested_without_server_actor() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = RuntimeStore::open(dir.path()).await.unwrap();
+        let handler = AutomationAgentPolicyStoreHandler::new(&store);
+        let now = Utc::now();
+        store
+            .upsert_agent_profile(
+                AgentProfile {
+                    id: "profile".into(),
+                    name: "Profile".into(),
+                    sort_order: 0,
+                    agent_type: "codex".into(),
+                    command: "codex".into(),
+                    launch_mode: AgentProfileLaunchMode::Command,
+                    managed_config: None,
+                    custom_prompt: String::new(),
+                    description: String::new(),
+                    quota_group: None,
+                    revision: 0,
+                    created_at: now,
+                    updated_at: now,
+                },
+                None,
+            )
+            .await
+            .unwrap();
+
+        let default = handler.get("profile").await.unwrap();
+        assert!(!default.may_activate_or_edit_active);
+        assert!(!default.may_execute);
+
+        let saved = handler
+            .set(AutomationAgentPolicy {
+                profile_id: "profile".into(),
+                may_activate_or_edit_active: true,
+                may_execute: true,
+                updated_at: Utc::now(),
+            })
+            .await
+            .unwrap();
+        assert!(saved.may_activate_or_edit_active);
+        assert!(saved.may_execute);
+
+        let loaded = handler.get("profile").await.unwrap();
+        assert_eq!(loaded, saved);
     }
 }
