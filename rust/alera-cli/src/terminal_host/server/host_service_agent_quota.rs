@@ -2,6 +2,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::time::{Duration, Instant};
 
+use alera_core::runtime::{RuntimeAgentQuotaSettings, RuntimeStore};
 use serde_json::{json, Value};
 
 use crate::agent_quota::{fetch_agent_quotas, fetch_agent_usage, fetch_claude_tui};
@@ -14,6 +15,25 @@ use super::{ServerActor, ServerCommand};
 
 const AGENT_QUOTA_CACHE_TTL: Duration = Duration::from_secs(15 * 60);
 
+struct AgentQuotaSettingsQuery {
+    runtime_store: RuntimeStore,
+}
+
+impl AgentQuotaSettingsQuery {
+    fn new(runtime_store: &RuntimeStore) -> Self {
+        Self {
+            runtime_store: runtime_store.clone(),
+        }
+    }
+
+    async fn load(&self) -> HostResult<RuntimeAgentQuotaSettings> {
+        self.runtime_store
+            .agent_quota_settings()
+            .await
+            .map_err(|error| HostError::state(error.to_string()))
+    }
+}
+
 impl ServerActor {
     pub(super) fn start_agent_usage_request(
         &mut self,
@@ -24,7 +44,7 @@ impl ServerActor {
         let since_day = required_non_blank(payload, "sinceDay")?;
         let until_day = required_non_blank(payload, "untilDay")?;
         let include_grok = payload.get("includeGrok").and_then(Value::as_bool) == Some(true);
-        let store = self.runtime_store.clone();
+        let settings_query = AgentQuotaSettingsQuery::new(&self.runtime_store);
         let inbox = self.inbox.clone();
         self.deferred_admission.schedule(
             DeferredRequestClass::Bulk,
@@ -32,10 +52,7 @@ impl ServerActor {
             Some(client_id),
             async move {
                 let result = async {
-                    let settings = store
-                        .agent_quota_settings()
-                        .await
-                        .map_err(|error| HostError::state(error.to_string()))?;
+                    let settings = settings_query.load().await?;
                     let claude_profiles = settings.claude_profiles_for_usage();
                     fetch_agent_usage(json!({
                         "sinceDay": since_day,
@@ -85,7 +102,7 @@ impl ServerActor {
                 }
             }
         }
-        let store = self.runtime_store.clone();
+        let settings_query = AgentQuotaSettingsQuery::new(&self.runtime_store);
         let inbox = self.inbox.clone();
         self.deferred_admission.schedule(
             DeferredRequestClass::Bulk,
@@ -93,10 +110,7 @@ impl ServerActor {
             Some(client_id),
             async move {
                 let result = async {
-                    let settings = store
-                        .agent_quota_settings()
-                        .await
-                        .map_err(|error| HostError::state(error.to_string()))?;
+                    let settings = settings_query.load().await?;
                     let providers = if settings.enabled_providers.is_empty() {
                         vec!["__none__".to_string()]
                     } else {
@@ -138,7 +152,7 @@ impl ServerActor {
             .as_ref()
             .map(|(_, signature, _)| *signature)
             .unwrap_or(0);
-        let store = self.runtime_store.clone();
+        let settings_query = AgentQuotaSettingsQuery::new(&self.runtime_store);
         let inbox = self.inbox.clone();
         self.deferred_admission.schedule(
             DeferredRequestClass::Bulk,
@@ -146,10 +160,7 @@ impl ServerActor {
             Some(client_id),
             async move {
                 let result = async {
-                    let settings = store
-                        .agent_quota_settings()
-                        .await
-                        .map_err(|error| HostError::state(error.to_string()))?;
+                    let settings = settings_query.load().await?;
                     let display_name = if account_id == "default" {
                         "Default".to_string()
                     } else {
@@ -392,6 +403,25 @@ fn mark_quota_payload_stale(cached: &Value, error: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn quota_settings_query_can_be_tested_without_server_actor() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = RuntimeStore::open(dir.path()).await.unwrap();
+        store
+            .set_agent_quota_settings(RuntimeAgentQuotaSettings {
+                enabled_providers: vec!["codex".into()],
+                claude_default_enabled: false,
+                ..RuntimeAgentQuotaSettings::default()
+            })
+            .await
+            .unwrap();
+
+        let settings = AgentQuotaSettingsQuery::new(&store).load().await.unwrap();
+
+        assert_eq!(settings.enabled_providers, vec!["codex"]);
+        assert!(!settings.claude_default_enabled);
+    }
 
     #[test]
     fn failed_provider_keeps_previous_snapshot_as_stale() {
