@@ -1,6 +1,44 @@
 use super::*;
 use crate::terminal_host::server::ai_assist_failure_detail::ai_assist_failure_detail;
 
+#[tokio::test]
+async fn workspace_identity_query_loads_project_and_effective_settings_without_server_actor() {
+    use alera_core::runtime::{Project, ProjectKind, RuntimeStore};
+    use chrono::Utc;
+
+    let dir = tempfile::tempdir().unwrap();
+    let store = RuntimeStore::open(dir.path()).await.unwrap();
+    let now = Utc::now();
+    store
+        .upsert_project(Project {
+            id: "project".into(),
+            name: "Project".into(),
+            repo_path: "C:/workspace/project".into(),
+            created_at: now,
+            updated_at: now,
+            kind: ProjectKind::GitRepository,
+        })
+        .await
+        .unwrap();
+    store
+        .set_ai_assist_settings(RuntimeAiAssistSettings {
+            enabled: true,
+            agent: "codex".into(),
+            ..RuntimeAiAssistSettings::default()
+        })
+        .await
+        .unwrap();
+
+    let context = AiAssistWorkspaceIdentityQuery::new(&store)
+        .load("project")
+        .await
+        .unwrap();
+
+    assert_eq!(context.repo_path, "C:/workspace/project");
+    assert!(context.settings.enabled);
+    assert_eq!(context.settings.agent, "codex");
+}
+
 #[test]
 fn custom_command_uses_stdin_without_placeholder() {
     let plan = plan_custom_command("agent --quiet", "hello").unwrap();

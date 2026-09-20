@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
-use alera_core::runtime::RuntimeAiAssistSettings;
+use alera_core::runtime::{RuntimeAiAssistSettings, RuntimeStore};
 use serde_json::{json, Value};
 use tokio::sync::oneshot;
 
@@ -45,6 +45,41 @@ pub(super) struct AiAssistCommandPlan {
     pub(super) temporary_directory: Option<PathBuf>,
 }
 
+struct AiAssistWorkspaceIdentityContext {
+    repo_path: String,
+    settings: RuntimeAiAssistSettings,
+}
+
+struct AiAssistWorkspaceIdentityQuery {
+    runtime_store: RuntimeStore,
+}
+
+impl AiAssistWorkspaceIdentityQuery {
+    fn new(runtime_store: &RuntimeStore) -> Self {
+        Self {
+            runtime_store: runtime_store.clone(),
+        }
+    }
+
+    async fn load(&self, project_id: &str) -> HostResult<AiAssistWorkspaceIdentityContext> {
+        let project = self
+            .runtime_store
+            .find_project(project_id)
+            .await
+            .map_err(|error| HostError::state(error.to_string()))?
+            .ok_or_else(|| HostError::state(format!("Project not found: {project_id}")))?;
+        let settings = self
+            .runtime_store
+            .effective_ai_assist_settings()
+            .await
+            .map_err(|error| HostError::state(error.to_string()))?;
+        Ok(AiAssistWorkspaceIdentityContext {
+            repo_path: project.repo_path,
+            settings,
+        })
+    }
+}
+
 impl ServerActor {
     pub(super) fn start_ai_assist_workspace_identity(
         &mut self,
@@ -55,7 +90,7 @@ impl ServerActor {
         let operation_id = required_non_blank(payload, "operationId")?;
         let project_id = required_non_blank(payload, "projectId")?;
         let initial_prompt = required_non_blank(payload, "prompt")?;
-        let project = self.runtime_store.clone();
+        let query = AiAssistWorkspaceIdentityQuery::new(&self.runtime_store);
         let inbox = self.inbox.clone();
         let (cancel_tx, cancel_rx) = oneshot::channel();
         let mut active = active_generations()
@@ -71,19 +106,11 @@ impl ServerActor {
         let task_operation_id = operation_id.clone();
         let task = async move {
             let result = async {
-                let project_record = project
-                    .find_project(&project_id)
-                    .await
-                    .map_err(|error| HostError::state(error.to_string()))?
-                    .ok_or_else(|| HostError::state(format!("Project not found: {project_id}")))?;
-                let settings = project
-                    .effective_ai_assist_settings()
-                    .await
-                    .map_err(|error| HostError::state(error.to_string()))?;
+                let context = query.load(&project_id).await?;
                 generate_workspace_identity(
-                    &project_record.repo_path,
+                    &context.repo_path,
                     &initial_prompt,
-                    settings,
+                    context.settings,
                     cancel_rx,
                 )
                 .await
