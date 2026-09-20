@@ -7,9 +7,12 @@ import 'package:alera/src/design_system/forms/alera_text_field.dart';
 import 'package:alera/src/design_system/layout/alera_settings_group.dart';
 import 'package:alera/src/design_system/menus/alera_menu_item.dart';
 import 'package:alera/src/design_system/surfaces/alera_panel.dart';
+import 'package:alera/src/features/language_intelligence/application/language_intelligence_status_port.dart';
+import 'package:alera/src/features/language_intelligence/application/language_provider_registry.dart';
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
 import 'package:alera/src/features/settings/domain/editor_syntax_theme_catalog.dart';
 import 'package:alera/src/features/settings/presentation/panes/external_editor_settings_group.dart';
+import 'package:alera/src/features/settings/presentation/panes/language_intelligence_settings_group.dart';
 import 'package:alera/src/features/settings/presentation/panes/terminal_theme_picker.dart';
 import 'package:alera/src/features/settings/presentation/rows/settings_rows.dart';
 import 'package:flutter/material.dart';
@@ -17,6 +20,8 @@ import 'package:flutter/material.dart';
 class const EditorSettingsPane({
   super.key,
   required final EditorSettings settings,
+  required final LanguageExtensionRegistry languageRegistry,
+  required final LanguageIntelligenceStatusPort languageStatusPort,
   required final ValueChanged<EditorSettings Function(EditorSettings)>
   onChanged,
 }) extends StatelessWidget {
@@ -97,6 +102,13 @@ class const EditorSettingsPane({
               ),
             ),
           ],
+        ),
+        const SizedBox(height: AleraTokens.space16),
+        LanguageIntelligenceSettingsGroup(
+          settings: settings,
+          registry: languageRegistry,
+          statusPort: languageStatusPort,
+          onChanged: onChanged,
         ),
         const SizedBox(height: AleraTokens.space16),
         ExternalEditorSettingsGroup(settings: settings, onChanged: onChanged),

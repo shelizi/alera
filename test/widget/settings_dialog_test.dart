@@ -9,6 +9,11 @@ import 'package:alera/src/features/ai_assist/application/ai_assist_providers.dar
 import 'package:alera/src/features/ai_assist/application/ai_assist_registry.dart';
 import 'package:alera/src/features/ai_assist/application/ai_assist_model_discovery_service.dart';
 import 'package:alera/src/features/ai_assist/domain/ai_assist_settings.dart';
+import 'package:alera/src/features/language_intelligence/application/language_intelligence_status_port.dart';
+import 'package:alera/src/features/language_intelligence/domain/language_id.dart';
+import 'package:alera/src/features/language_intelligence/domain/language_intelligence_settings.dart';
+import 'package:alera/src/features/language_intelligence/domain/language_intelligence_status.dart';
+import 'package:alera/src/features/language_intelligence/domain/language_provider_descriptor.dart';
 import 'package:alera/src/features/projects/application/project_repository.dart';
 import 'package:alera/src/features/projects/application/project_config_service.dart';
 import 'package:alera/src/features/projects/domain/project.dart';

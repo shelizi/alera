@@ -13,6 +13,7 @@ export 'package:alera/src/features/settings/application/github_star_controller.d
     show GitHubStarController, GitHubStarState, gitHubStarControllerProvider;
 export 'package:alera/src/features/settings/application/settings_controller.dart'
     show SettingsController, settingsControllerProvider;
+export 'package:alera/src/features/language_intelligence/application/language_intelligence_providers.dart';
 export 'package:alera/src/features/updater/application/update_controller.dart'
     show AleraUpdateController, aleraUpdateControllerProvider;
 export 'package:alera/src/features/workbench/application/workbench_controller.dart'

@@ -350,6 +350,24 @@ const List<SettingsSearchEntry> editorSearchEntries = <SettingsSearchEntry>[
       '.vs',
     ],
   ),
+  SettingsSearchEntry(
+    title: 'Language Intelligence',
+    description: 'Enable project-aware definition and reference navigation per language.',
+    keywords: <String>[
+      'language server',
+      'lsp',
+      'definition',
+      'references',
+      'semantic',
+      'csharp',
+      'python',
+      'rust',
+      'golang',
+      'php',
+      'typescript',
+      'javascript',
+    ],
+  ),
 ];
 
 const List<SettingsSearchEntry> aiAssistSearchEntries = <SettingsSearchEntry>[

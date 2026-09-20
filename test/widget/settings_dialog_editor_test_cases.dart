@@ -151,4 +151,96 @@ void _registerSettingsDialogEditorTests() {
       EditorSettings.defaultQuickOpenExcludedDirectories,
     );
   });
+
+  testWidgets(
+    'enables semantic intelligence per language from editor settings',
+    (tester) async {
+      final container = await _pumpSettingsDialog(
+        tester,
+        initialSectionId: 'editor',
+        locale: const Locale('en'),
+        extraOverrides: <dynamic>[
+          languageIntelligenceStatusPortProvider.overrideWithValue(
+            const _ReadyLanguageIntelligenceStatusPort(),
+          ),
+        ],
+      );
+
+      await tester.ensureVisible(find.text('Language Intelligence'));
+      await tester.pump();
+
+      for (final language in <String>[
+        'C#',
+        'Python',
+        'Rust',
+        'Go',
+        'PHP',
+        'TypeScript',
+        'JavaScript',
+      ]) {
+        expect(find.text(language), findsOneWidget);
+      }
+      expect(
+        container
+            .read(settingsControllerProvider)
+            .editor
+            .languageIntelligence
+            .forLanguage(LanguageId('rust'))
+            .enabled,
+        isFalse,
+      );
+
+      final rustEnabledSwitch = find.byKey(
+        const ValueKey<String>('language-intelligence-rust-enabled'),
+      );
+      await tester.ensureVisible(rustEnabledSwitch);
+      await tester.tap(rustEnabledSwitch);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      expect(
+        container
+            .read(settingsControllerProvider)
+            .editor
+            .languageIntelligence
+            .forLanguage(LanguageId('rust'))
+            .enabled,
+        isTrue,
+      );
+      expect(find.text('Status: Ready'), findsOneWidget);
+      expect(find.text('fake-language-server'), findsOneWidget);
+
+      final executable = find.byKey(
+        const ValueKey<String>('language-intelligence-rust-executable'),
+      );
+      await tester.ensureVisible(executable);
+      await tester.enterText(executable, r'C:\Tools\rust-analyzer.exe');
+      await tester.testTextInput.receiveAction(.done);
+      await tester.pump(const Duration(milliseconds: 50));
+
+      expect(
+        container
+            .read(settingsControllerProvider)
+            .editor
+            .languageIntelligence
+            .forLanguage(LanguageId('rust'))
+            .executablePath,
+        r'C:\Tools\rust-analyzer.exe',
+      );
+    },
+  );
+}
+
+final class _ReadyLanguageIntelligenceStatusPort
+    implements LanguageIntelligenceStatusPort {
+  const _ReadyLanguageIntelligenceStatusPort();
+
+  @override
+  Future<LanguageIntelligenceProviderStatus> resolve({
+    required LanguageProviderDescriptor provider,
+    required LanguageActivationSettings settings,
+  }) async => const LanguageIntelligenceProviderStatus(
+    kind: LanguageIntelligenceStatusKind.ready,
+    executable: 'fake-language-server',
+  );
 }

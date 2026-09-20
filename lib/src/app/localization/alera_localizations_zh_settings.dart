@@ -365,4 +365,17 @@ const Map<String, String> _traditionalChineseSettings = <String, String>{
   'Text action applied.': '已套用文字操作。',
   'Text action was canceled.': '已取消文字操作。',
   'No matching options': '沒有符合的選項',
+  'Language Intelligence': '語言智慧',
+  'Enable project-aware definition and reference navigation per language. Semantic servers stay off until you enable them.':
+      '依語言啟用專案感知的定義與引用導覽。語意伺服器預設關閉，只有你啟用後才會使用。',
+  'Semantic navigation is disabled until you enable this language.':
+      '此語言啟用前，不會使用語意導覽。',
+  'Semantic Server': '語意伺服器',
+  'Executable Override': '執行檔覆寫',
+  'Leave blank to use the provider command from PATH on this device.':
+      '留空會使用這台裝置 PATH 中的 Provider 指令。',
+  'Status': '狀態',
+  'Ready': '就緒',
+  'Missing': '缺少',
+  'Check Again': '重新檢查',
 };

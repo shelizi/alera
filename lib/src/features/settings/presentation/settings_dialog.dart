@@ -146,6 +146,10 @@ class _SettingsDialogState extends ConsumerState<SettingsDialog> {
   Widget build(BuildContext context) {
     final settings = ref.watch(settingsControllerProvider);
     final controller = ref.read(settingsControllerProvider.notifier);
+    final languageRegistry = ref.watch(languageExtensionRegistryProvider);
+    final languageStatusPort = ref.watch(
+      languageIntelligenceStatusPortProvider,
+    );
     final screen = MediaQuery.sizeOf(context);
     final dialogWidth = (screen.width * _kDialogWidthFraction).clamp(
       _kDialogMinWidth,
@@ -335,6 +339,8 @@ class _SettingsDialogState extends ConsumerState<SettingsDialog> {
         onReset: controller.resetEditorSettings,
         builder: (_) => EditorSettingsPane(
           settings: settings.editor,
+          languageRegistry: languageRegistry,
+          languageStatusPort: languageStatusPort,
           onChanged: (editor) => controller.updateEditor(editor),
         ),
       ),
