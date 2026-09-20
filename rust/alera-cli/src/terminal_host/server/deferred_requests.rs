@@ -12,8 +12,8 @@ use super::deferred_request_scheduler::DeferredRequestScheduler;
 use super::project_registration_requests::ProjectRegistrationRequestHandler;
 use super::request_payloads::parse_payload;
 use super::request_route_policy::{
-    request_route_policy, AgentQuotaOperation, AiTextOperation, CoalescedReadRoute,
-    DeferredJobRoute, DeferredWriteRoute, MobileDeferredRoute,
+    request_route_policy, AgentQuotaOperation, AiDictationOperation, AiTextOperation,
+    CoalescedReadRoute, DeferredJobRoute, DeferredWriteRoute, MobileDeferredRoute,
 };
 use super::requests::{require_string_key, validate_mobile_runtime_settings_payload};
 use super::ServerActor;
@@ -124,39 +124,58 @@ impl ServerActor {
         if let Some(route) = route_policy.deferred_job {
             self.require_auth(client_id)?;
             self.require_request_allowed(client_id, request_type)?;
-            match route {
+            let started = match route {
                 DeferredJobRoute::CliRegistration(operation) => {
                     self.start_cli_registration_request(client_id, request_id, operation)?;
+                    true
                 }
                 DeferredJobRoute::AgentQuota(operation) => match operation {
                     AgentQuotaOperation::QuotaSnapshot => {
                         self.start_agent_quota_request(client_id, request_id, payload)?;
+                        true
                     }
                     AgentQuotaOperation::UsageSnapshot => {
                         self.start_agent_usage_request(client_id, request_id, payload)?;
+                        true
                     }
                     AgentQuotaOperation::FetchClaudeTui => {
                         self.start_agent_quota_claude_tui_request(client_id, request_id, payload)?;
+                        true
                     }
                     AgentQuotaOperation::ConsumeCodexResetCredit => {
                         self.start_agent_quota_codex_reset_request(client_id, request_id, payload)
                             .await?;
+                        true
                     }
                 },
                 DeferredJobRoute::AiText(operation) => match operation {
                     AiTextOperation::AgentTitle => {
                         self.request_agent_title(client_id, request_id, payload)
                             .await?;
+                        true
                     }
                     AiTextOperation::WorkspaceIdentity => {
                         self.start_ai_assist_workspace_identity(client_id, request_id, payload)?;
+                        true
                     }
                     AiTextOperation::SpeechMessage => {
                         self.start_ai_assist_speech_message(client_id, request_id, payload)?;
+                        true
                     }
                 },
-            }
-            return Ok(true);
+                DeferredJobRoute::AiDictation(operation) => match operation {
+                    AiDictationOperation::LocalTranscribe => {
+                        self.start_ai_dictation(client_id, request_id, payload)
+                            .await?;
+                        true
+                    }
+                    AiDictationOperation::MobileTranscribe => {
+                        self.try_start_mobile_ai_dictation(client_id, request_id, payload)
+                            .await?
+                    }
+                },
+            };
+            return Ok(started);
         }
         if let Some(route) = route_policy.mobile_deferred {
             self.require_auth(client_id)?;
@@ -220,18 +239,6 @@ impl ServerActor {
                 self.start_mobile_network_snapshot(client_id, request_id)
                     .await?;
                 Ok(true)
-            }
-            "aiDictation.transcribe" => {
-                self.require_authenticated_local_request(client_id, request_type)?;
-                self.start_ai_dictation(client_id, request_id, payload)
-                    .await?;
-                Ok(true)
-            }
-            "mobile.aiDictation.transcribe" => {
-                self.require_auth(client_id)?;
-                self.require_request_allowed(client_id, request_type)?;
-                self.try_start_mobile_ai_dictation(client_id, request_id, payload)
-                    .await
             }
             "workspace.createManaged" => {
                 self.require_auth(client_id)?;

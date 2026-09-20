@@ -73,10 +73,17 @@ pub(super) enum AiTextOperation {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum AiDictationOperation {
+    LocalTranscribe,
+    MobileTranscribe,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum DeferredJobRoute {
     CliRegistration(CliRegistrationOperation),
     AgentQuota(AgentQuotaOperation),
     AiText(AiTextOperation),
+    AiDictation(AiDictationOperation),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -292,6 +299,12 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         "aiText.speechMessage.generate" => {
             mobile_deferred_job(DeferredJobRoute::AiText(AiTextOperation::SpeechMessage))
         }
+        "aiDictation.transcribe" => local_deferred_job(DeferredJobRoute::AiDictation(
+            AiDictationOperation::LocalTranscribe,
+        )),
+        "mobile.aiDictation.transcribe" => mobile_deferred_job(DeferredJobRoute::AiDictation(
+            AiDictationOperation::MobileTranscribe,
+        )),
 
         "project.remove" => serialized_mobile(SerializedRuntimeMutation::RemoveProject),
         "tab.remove" => serialized_mobile(SerializedRuntimeMutation::RemoveTab),
@@ -377,7 +390,6 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         | "linkedReview.find"
         | "mobile.aiDictation.cancel"
         | "mobile.aiDictation.capabilities"
-        | "mobile.aiDictation.transcribe"
         | "mobile.cloudEnrollment.create"
         | "mobile.cloudSubscriptions.refresh"
         | "mobile.relayAuthorization.renew"
@@ -452,6 +464,13 @@ const fn mobile_coalesced_read(route: CoalescedReadRoute) -> RequestRoutePolicy 
 const fn mobile_deferred_job(route: DeferredJobRoute) -> RequestRoutePolicy {
     RequestRoutePolicy {
         mobile_allowed: true,
+        deferred_job: Some(route),
+        ..LOCAL
+    }
+}
+
+const fn local_deferred_job(route: DeferredJobRoute) -> RequestRoutePolicy {
+    RequestRoutePolicy {
         deferred_job: Some(route),
         ..LOCAL
     }
@@ -718,5 +737,26 @@ mod tests {
                 "{request_type}"
             );
         }
+    }
+
+    #[test]
+    fn ai_dictation_routes_are_typed_deferred_jobs() {
+        let local = request_route_policy("aiDictation.transcribe");
+        assert!(!local.mobile_allowed);
+        assert_eq!(
+            local.deferred_job,
+            Some(DeferredJobRoute::AiDictation(
+                AiDictationOperation::LocalTranscribe
+            ))
+        );
+
+        let mobile = request_route_policy("mobile.aiDictation.transcribe");
+        assert!(mobile.mobile_allowed);
+        assert_eq!(
+            mobile.deferred_job,
+            Some(DeferredJobRoute::AiDictation(
+                AiDictationOperation::MobileTranscribe
+            ))
+        );
     }
 }
