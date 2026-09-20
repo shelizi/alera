@@ -2,6 +2,8 @@ use std::io::Read;
 
 use git2::Repository;
 
+use crate::api::workspace_files::decode_workspace_text_bytes;
+
 use super::{
     git_diff_render::diff_lines_from_patch, side_by_side_projection, GitChangeArea,
     GitChangeStatus, GitDiffFile, GitError, GitErrorKind, GitPathContext,
@@ -112,9 +114,10 @@ pub(super) fn read_untracked_text_up_to(
     if bytes.contains(&0) {
         return Ok(binary_untracked_text(is_executable));
     }
-    let Ok(content) = String::from_utf8(bytes) else {
+    let Ok(decoded) = decode_workspace_text_bytes(bytes, None) else {
         return Ok(binary_untracked_text(is_executable));
     };
+    let content = decoded.content;
     let added = count_text_lines(&content);
     Ok(UntrackedText {
         content: Some(content),
