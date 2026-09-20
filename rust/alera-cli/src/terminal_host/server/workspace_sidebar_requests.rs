@@ -1,6 +1,6 @@
 use alera_core::{
     git as core_git,
-    runtime::{RuntimeStore, SharedWorkbenchPrefsWriter, SharedWorkbenchViewPrefs, WorkspaceTag},
+    runtime::{RuntimeStore, SharedWorkbenchPrefsWriter, WorkspaceTag},
 };
 use chrono::Utc;
 use serde::Deserialize;
@@ -11,15 +11,9 @@ use crate::terminal_host::host_error::{HostError, HostResult};
 use crate::terminal_host::protocol::{error_response, event, ok_response};
 
 use super::request_payloads::{json_result, parse_payload, require_string_key};
+use super::workbench_view_prefs_requests::WorkbenchViewPrefsRequestHandler;
 use super::workspace_activity_requests::WorkspaceActivityRequestHandler;
 use super::{ServerActor, ServerCommand};
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct UpdateViewPrefsRequest {
-    prefs: SharedWorkbenchViewPrefs,
-    expected_revision: Option<i64>,
-}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -265,13 +259,9 @@ impl ServerActor {
 
     pub(super) async fn workbench_view_prefs(&self, client_id: u64) -> HostResult<Value> {
         self.require_auth(client_id)?;
-        serde_json::to_value(
-            self.runtime_store
-                .shared_workbench_view_prefs()
-                .await
-                .map_err(state_error)?,
-        )
-        .map_err(state_error)
+        WorkbenchViewPrefsRequestHandler::new(&self.runtime_store)
+            .get()
+            .await
     }
 
     pub(super) async fn workspace_activity(&self, client_id: u64) -> HostResult<Value> {
@@ -313,38 +303,16 @@ impl ServerActor {
         payload: &Value,
     ) -> HostResult<Value> {
         self.require_auth(client_id)?;
-        let mut compatible = payload.clone();
-        let current = self
-            .runtime_store
-            .shared_workbench_view_prefs()
-            .await
-            .map_err(state_error)?;
-        let current_json = serde_json::to_value(current.prefs).map_err(state_error)?;
-        if let Some(prefs) = compatible.get_mut("prefs").and_then(Value::as_object_mut) {
-            for key in [
-                "sectionSort",
-                "collapsedSectionIds",
-                "othersSectionCollapsed",
-            ] {
-                if !prefs.contains_key(key) {
-                    prefs.insert(key.to_string(), current_json[key].clone());
-                }
-            }
-        }
-        let request: UpdateViewPrefsRequest =
-            serde_json::from_value(compatible).map_err(format_error)?;
         let writer = if self.is_mobile_client(client_id) {
             SharedWorkbenchPrefsWriter::Mobile
         } else {
             SharedWorkbenchPrefsWriter::Desktop
         };
-        let value = self
-            .runtime_store
-            .update_shared_workbench_view_prefs(request.prefs, request.expected_revision, writer)
-            .await
-            .map_err(state_error)?;
+        let value = WorkbenchViewPrefsRequestHandler::new(&self.runtime_store)
+            .update(payload, writer)
+            .await?;
         self.broadcast_authenticated(event("workbenchViewPrefsChanged", json!({})));
-        serde_json::to_value(value).map_err(state_error)
+        Ok(value)
     }
 
     pub(super) async fn rename_workspace_request(

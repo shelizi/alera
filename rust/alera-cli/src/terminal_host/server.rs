@@ -237,6 +237,7 @@ mod wire_fixture_tests_requests;
 mod wire_fixture_tests_requests_workspace;
 #[cfg(test)]
 mod wire_fixture_tests_stream;
+mod workbench_view_prefs_requests;
 mod workspace_activity_requests;
 mod workspace_artifact_requests;
 #[cfg(test)]
