@@ -1,5 +1,5 @@
 use alera_core::agent_descriptor::agent_descriptor;
-use alera_core::runtime::{RuntimeStore, WorkspaceStatus, WorkspaceTabRecord};
+use alera_core::runtime::{RuntimeStore, Workspace, WorkspaceStatus, WorkspaceTabRecord};
 use serde_json::Value;
 
 use crate::agent_status::prepare_launch_environment;
@@ -68,9 +68,52 @@ impl<'a> TerminalStartupTabPersistence<'a> {
     }
 }
 
+struct TerminalSpawnPersistence<'a> {
+    runtime_store: &'a RuntimeStore,
+    tabs: WorkspaceTabStoreHandler<'a>,
+}
+
+impl<'a> TerminalSpawnPersistence<'a> {
+    const fn new(runtime_store: &'a RuntimeStore) -> Self {
+        Self {
+            runtime_store,
+            tabs: WorkspaceTabStoreHandler::new(runtime_store),
+        }
+    }
+
+    async fn list_workspaces(&self) -> HostResult<Vec<Workspace>> {
+        self.runtime_store
+            .list_all_workspaces()
+            .await
+            .map_err(|error| HostError::state(error.to_string()))
+    }
+
+    async fn find_workspace(&self, workspace_id: &str) -> HostResult<Option<Workspace>> {
+        self.runtime_store
+            .find_workspace(workspace_id)
+            .await
+            .map_err(|error| HostError::state(error.to_string()))
+    }
+
+    async fn list_tabs(&self, workspace_id: &str) -> HostResult<Vec<WorkspaceTabRecord>> {
+        self.tabs.list(workspace_id).await
+    }
+
+    async fn upsert_tab(&self, tab: WorkspaceTabRecord) -> HostResult<WorkspaceTabRecord> {
+        self.tabs.upsert(tab).await
+    }
+
+    async fn remove_tab(&self, tab_id: &str) -> HostResult<()> {
+        self.tabs.remove(tab_id).await
+    }
+}
+
 impl ServerActor {
     pub(super) async fn reconcile_spawn_on_create_tabs(&mut self) {
-        let workspaces = match self.runtime_store.list_all_workspaces().await {
+        let workspaces = match TerminalSpawnPersistence::new(&self.runtime_store)
+            .list_workspaces()
+            .await
+        {
             Ok(workspaces) => workspaces,
             Err(error) => {
                 tracing::error!("failed to list workspaces for terminal reconciliation: {error}");
@@ -78,7 +121,10 @@ impl ServerActor {
             }
         };
         for workspace in workspaces {
-            let tabs = match self.runtime_store.list_workspace_tabs(&workspace.id).await {
+            let tabs = match TerminalSpawnPersistence::new(&self.runtime_store)
+                .list_tabs(&workspace.id)
+                .await
+            {
                 Ok(tabs) => tabs,
                 Err(error) => {
                     tracing::error!(
@@ -95,7 +141,9 @@ impl ServerActor {
                         tab.id,
                         error.wire_message()
                     );
-                    let _ = self.runtime_store.remove_workspace_tab(&tab.id).await;
+                    let _ = TerminalSpawnPersistence::new(&self.runtime_store)
+                        .remove_tab(&tab.id)
+                        .await;
                     self.terminate_sessions_for_tab(&tab.id).await;
                 }
             }
@@ -107,15 +155,15 @@ impl ServerActor {
         mut tab: WorkspaceTabRecord,
     ) -> HostResult<WorkspaceTabRecord> {
         self.initialize_agent_title_if_new(&mut tab).await?;
-        let saved = self
-            .runtime_store
-            .upsert_workspace_tab(tab)
-            .await
-            .map_err(|error| HostError::state(error.to_string()))?;
+        let saved = TerminalSpawnPersistence::new(&self.runtime_store)
+            .upsert_tab(tab)
+            .await?;
         let saved = match self.ensure_spawn_on_create_terminal(&saved).await {
             Ok(rewritten) => rewritten.unwrap_or(saved),
             Err(error) => {
-                let _ = self.runtime_store.remove_workspace_tab(&saved.id).await;
+                let _ = TerminalSpawnPersistence::new(&self.runtime_store)
+                    .remove_tab(&saved.id)
+                    .await;
                 self.terminate_sessions_for_tab(&saved.id).await;
                 return Err(error);
             }
@@ -139,11 +187,9 @@ impl ServerActor {
         }
         let rearmed = self.rearm_terminal_after_ready_prompt(tab).await?;
         let tab = rearmed.as_ref().unwrap_or(tab);
-        let workspace = self
-            .runtime_store
+        let workspace = TerminalSpawnPersistence::new(&self.runtime_store)
             .find_workspace(&tab.workspace_id)
-            .await
-            .map_err(|error| HostError::state(error.to_string()))?
+            .await?
             .ok_or_else(|| {
                 HostError::state(format!("workspace not found: {}", tab.workspace_id))
             })?;
@@ -471,8 +517,43 @@ mod tests {
     use chrono::Utc;
     use serde_json::json;
 
-    use super::{apply_host_owned_tab_identity, TerminalStartupTabPersistence};
+    use super::{
+        apply_host_owned_tab_identity, TerminalSpawnPersistence, TerminalStartupTabPersistence,
+    };
     use crate::terminal_host::protocol::TerminalHostLaunch;
+
+    #[tokio::test]
+    async fn spawn_persistence_can_be_tested_without_server_actor() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = RuntimeStore::open(dir.path()).await.unwrap();
+        let persistence = TerminalSpawnPersistence::new(&store);
+
+        assert!(persistence.list_workspaces().await.unwrap().is_empty());
+        assert!(persistence
+            .find_workspace("workspace")
+            .await
+            .unwrap()
+            .is_none());
+
+        let now = Utc::now();
+        let saved = persistence
+            .upsert_tab(WorkspaceTabRecord {
+                id: "tab".into(),
+                workspace_id: "workspace".into(),
+                kind: "terminal".into(),
+                title: "Terminal".into(),
+                created_at: now,
+                updated_at: now,
+                payload: json!({"spawnOnCreate": true}),
+            })
+            .await
+            .unwrap();
+        assert_eq!(saved.id, "tab");
+        assert_eq!(persistence.list_tabs("workspace").await.unwrap().len(), 1);
+
+        persistence.remove_tab("tab").await.unwrap();
+        assert!(persistence.list_tabs("workspace").await.unwrap().is_empty());
+    }
 
     #[test]
     fn host_owned_tab_metadata_populates_terminal_launch_identity_environment() {
