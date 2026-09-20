@@ -85,11 +85,10 @@ final class LanguageServerSessionManager {
       );
     }
 
-    final registration = _registry.provider(providerId);
-    if (registration == null) {
+    final provider = _registry.provider(providerId);
+    if (provider == null) {
       throw StateError('Language provider $providerId is not registered.');
     }
-    final provider = registration.descriptor;
     if (provider.kind != LanguageProviderKind.semanticServer) {
       throw StateError(
         'Language provider $providerId is not a semantic server.',

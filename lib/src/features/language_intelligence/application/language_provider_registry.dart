@@ -3,33 +3,19 @@ import '../domain/language_extension_descriptor.dart';
 import '../domain/language_id.dart';
 import '../domain/language_provider_descriptor.dart';
 
-abstract interface class LanguageProviderAdapter {}
-
-typedef LanguageProviderFactory = LanguageProviderAdapter Function();
-
-final class LanguageProviderRegistration {
-  const LanguageProviderRegistration({
-    required this.descriptor,
-    required this.create,
-  });
-
-  final LanguageProviderDescriptor descriptor;
-  final LanguageProviderFactory create;
-}
-
 final class LanguageExtensionRegistry {
   final Map<LanguageId, LanguageExtensionDescriptor> _languages =
       <LanguageId, LanguageExtensionDescriptor>{};
   final Map<String, LanguageId> _languageIdsByAlias = <String, LanguageId>{};
   final Map<String, LanguageId> _languageIdsByExtension =
       <String, LanguageId>{};
-  final Map<String, LanguageProviderRegistration> _providers =
-      <String, LanguageProviderRegistration>{};
+  final Map<String, LanguageProviderDescriptor> _providers =
+      <String, LanguageProviderDescriptor>{};
 
   Iterable<LanguageExtensionDescriptor> get languages =>
       _languages.values.toList(growable: false);
 
-  Iterable<LanguageProviderRegistration> get providers =>
+  Iterable<LanguageProviderDescriptor> get providers =>
       _providers.values.toList(growable: false);
 
   void registerLanguage(LanguageExtensionDescriptor descriptor) {
@@ -63,10 +49,7 @@ final class LanguageExtensionRegistry {
     }
   }
 
-  void registerProvider(
-    LanguageProviderDescriptor descriptor,
-    LanguageProviderFactory factory,
-  ) {
+  void registerProvider(LanguageProviderDescriptor descriptor) {
     if (_providers.containsKey(descriptor.id)) {
       throw StateError(
         'Language provider ${descriptor.id} is already registered.',
@@ -102,10 +85,7 @@ final class LanguageExtensionRegistry {
       }
     }
 
-    _providers[descriptor.id] = LanguageProviderRegistration(
-      descriptor: descriptor,
-      create: factory,
-    );
+    _providers[descriptor.id] = descriptor;
   }
 
   LanguageExtensionDescriptor? languageForId(String idOrAlias) {
@@ -128,18 +108,18 @@ final class LanguageExtensionRegistry {
     return languageId == null ? null : _languages[languageId];
   }
 
-  List<LanguageProviderRegistration> providersFor(
+  List<LanguageProviderDescriptor> providersFor(
     LanguageId language,
     LanguageCapability capability,
-  ) => List<LanguageProviderRegistration>.unmodifiable(
+  ) => List<LanguageProviderDescriptor>.unmodifiable(
     _providers.values.where(
-      (registration) =>
-          registration.descriptor.languages.contains(language) &&
-          registration.descriptor.capabilities.contains(capability),
+      (descriptor) =>
+          descriptor.languages.contains(language) &&
+          descriptor.capabilities.contains(capability),
     ),
   );
 
-  LanguageProviderRegistration? provider(String providerId) =>
+  LanguageProviderDescriptor? provider(String providerId) =>
       _providers[providerId.trim()];
 
   static String _extensionForPath(String path) {

@@ -280,7 +280,6 @@ LanguageExtensionRegistry _registry(LanguageId rust) {
           LanguageExecutableResolutionPolicy.explicitOverrideThenPath,
       executableCandidates: const <String>['rust-analyzer'],
     ),
-    _UnusedProviderAdapter.new,
   );
   return registry;
 }
@@ -298,8 +297,6 @@ Future<void> _flushAsync() async {
   await Future<void>.delayed(Duration.zero);
   await Future<void>.delayed(Duration.zero);
 }
-
-final class _UnusedProviderAdapter implements LanguageProviderAdapter {}
 
 final class _FakeRuntimeSession implements LanguageServerRuntimeSession {
   const _FakeRuntimeSession(this.id);

@@ -282,7 +282,6 @@ LanguageExtensionRegistry _registry(LanguageId rust) {
       executableCandidates: const <String>['rust-analyzer'],
       defaultArguments: const <String>['--stdio'],
     ),
-    _FakeProviderAdapter.new,
   );
   return registry;
 }
@@ -301,8 +300,6 @@ Future<void> _flushAsync() async {
   await Future<void>.delayed(Duration.zero);
   await Future<void>.delayed(Duration.zero);
 }
-
-final class _FakeProviderAdapter implements LanguageProviderAdapter {}
 
 final class _FakeRuntimeSession implements LanguageServerRuntimeSession {
   const _FakeRuntimeSession(this.id);

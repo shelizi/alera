@@ -42,7 +42,7 @@ void main() {
       expect(registry.languageForPath('/repo/README.md'), isNull);
     });
 
-    test('filters registered providers without eagerly creating them', () {
+    test('filters registered provider metadata by capability', () {
       final registry = LanguageExtensionRegistry();
       final rust = LanguageExtensionDescriptor(
         id: LanguageId('rust'),
@@ -58,7 +58,6 @@ void main() {
       );
       registry.registerLanguage(rust);
 
-      var created = 0;
       registry.registerProvider(
         LanguageProviderDescriptor(
           id: 'rust-semantic',
@@ -73,10 +72,6 @@ void main() {
           executableResolutionPolicy:
               LanguageExecutableResolutionPolicy.explicitOverrideThenPath,
         ),
-        () {
-          created += 1;
-          return _FakeLanguageProvider();
-        },
       );
 
       final definitionProviders = registry.providersFor(
@@ -88,10 +83,7 @@ void main() {
         registry.providersFor(rust.id, LanguageCapability.documentSymbols),
         isEmpty,
       );
-      expect(created, 0);
-
-      expect(definitionProviders.single.create(), isA<_FakeLanguageProvider>());
-      expect(created, 1);
+      expect(definitionProviders.single.id, 'rust-semantic');
     });
 
     test('rejects ambiguous language and provider registrations', () {
@@ -129,7 +121,6 @@ void main() {
             processScope: LanguageProviderProcessScope.workspace,
             launchPolicy: LanguageProviderLaunchPolicy.lazyOnDemand,
           ),
-          _FakeLanguageProvider.new,
         ),
         throwsStateError,
       );
@@ -179,5 +170,3 @@ void main() {
     },
   );
 }
-
-final class _FakeLanguageProvider implements LanguageProviderAdapter {}

@@ -255,7 +255,7 @@ final class LanguageIntelligenceManager {
     if (document == null) {
       return const <SourceLocation>[];
     }
-    final provider = _registry.provider(document.providerId)?.descriptor;
+    final provider = _registry.provider(document.providerId);
     if (provider == null || !provider.capabilities.contains(capability)) {
       return const <SourceLocation>[];
     }
