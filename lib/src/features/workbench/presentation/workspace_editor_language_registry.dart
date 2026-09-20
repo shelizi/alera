@@ -2,6 +2,13 @@ part of 'workspace_editor_surface.dart';
 
 Mode get _plainTextLanguage => builtinAllLanguages['plaintext']!;
 
+String workspaceEditorSyntaxLanguageIdForPath({
+  required String filePath,
+  required LanguageExtensionRegistry registry,
+}) =>
+    registry.syntaxLanguageIdForPath(filePath) ??
+    _legacyLanguageIdForPath(filePath);
+
 bool workspaceEditorNativeSyntaxEnabled({
   required String filePath,
   required LanguageExtensionRegistry registry,
@@ -22,12 +29,21 @@ bool workspaceEditorNativeSyntaxEnabled({
       .structuralParserEnabled;
 }
 
-Mode _languageForPath(String filePath) {
-  final languageId = _languageIdForPath(filePath);
-  return builtinAllLanguages[languageId] ?? _plainTextLanguage;
+Mode _languageForPath({
+  required String filePath,
+  required LanguageExtensionRegistry registry,
+  required String syntaxLanguageId,
+}) {
+  final registeredLanguage = registry.languageForPath(filePath);
+  return builtinAllLanguages[syntaxLanguageId] ??
+      (registeredLanguage == null
+          ? null
+          : builtinAllLanguages[registeredLanguage.id.value]) ??
+      builtinAllLanguages[_legacyLanguageIdForPath(filePath)] ??
+      _plainTextLanguage;
 }
 
-String _languageIdForPath(String filePath) {
+String _legacyLanguageIdForPath(String filePath) {
   final extension = p.extension(filePath).toLowerCase();
   final basename = p.basename(filePath).toLowerCase();
   final byName = _languageIdsByBasename[basename];

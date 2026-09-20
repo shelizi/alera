@@ -38,6 +38,19 @@ void main() {
       }
       expect(registry.languageForId('C#')?.id.value, 'csharp');
       expect(registry.languageForId('golang')?.id.value, 'go');
+      expect(registry.syntaxLanguageIdForPath(r'C:\repo\script.csx'), 'csharp');
+      expect(registry.syntaxLanguageIdForPath('/repo/stubs.pyi'), 'python');
+      expect(registry.syntaxLanguageIdForPath('/repo/template.phtml'), 'php');
+      expect(
+        registry.syntaxLanguageIdForPath('/repo/module.mts'),
+        'typescript',
+      );
+      expect(
+        registry.syntaxLanguageIdForPath('/repo/module.cts'),
+        'typescript',
+      );
+      expect(registry.syntaxLanguageIdForPath('/repo/component.tsx'), 'tsx');
+      expect(registry.syntaxLanguageIdForPath('/repo/component.jsx'), 'jsx');
     },
   );
 

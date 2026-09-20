@@ -97,6 +97,31 @@ void main() {
     );
   });
 
+  test('editor syntax ids use extension descriptors before the legacy map', () {
+    final registry = createBuiltinLanguageExtensionRegistry();
+    final cases = <String, String>{
+      'script.csx': 'csharp',
+      'stub.pyi': 'python',
+      'template.phtml': 'php',
+      'module.mts': 'typescript',
+      'module.cts': 'typescript',
+      'component.tsx': 'tsx',
+      'component.jsx': 'jsx',
+      'legacy.dart': 'dart',
+    };
+
+    for (final entry in cases.entries) {
+      expect(
+        workspaceEditorSyntaxLanguageIdForPath(
+          filePath: entry.key,
+          registry: registry,
+        ),
+        entry.value,
+        reason: entry.key,
+      );
+    }
+  });
+
   test('semantic source text preserves unchanged raw tabs', () {
     expect(
       workspaceEditorEncodeSemanticSourceText(

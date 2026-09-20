@@ -120,6 +120,20 @@ final class LanguageExtensionRegistry {
     return languageId == null ? null : _languages[languageId];
   }
 
+  String? syntaxLanguageIdForPath(String path) {
+    final extension = _extensionForPath(path);
+    final languageId = _languageIdsByExtension[extension];
+    if (languageId == null) {
+      return null;
+    }
+    final language = _languages[languageId];
+    if (language == null) {
+      return null;
+    }
+    return language.syntaxLanguageIdsByExtension[extension] ??
+        language.id.value;
+  }
+
   List<LanguageProviderDescriptor> providersFor(
     LanguageId language,
     LanguageCapability capability,

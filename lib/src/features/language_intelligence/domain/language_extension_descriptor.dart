@@ -7,6 +7,7 @@ final class LanguageExtensionDescriptor {
     required String displayName,
     Iterable<String> fileExtensions = const <String>[],
     Iterable<String> aliases = const <String>[],
+    Map<String, String> syntaxLanguageIdsByExtension = const <String, String>{},
     String? parserProviderId,
     this.structuralParserDefaultEnabled = false,
     Iterable<String> semanticProviderIds = const <String>[],
@@ -17,6 +18,14 @@ final class LanguageExtensionDescriptor {
          fileExtensions.map(_normalizeExtension),
        ),
        aliases = Set<String>.unmodifiable(aliases.map(_normalizeAlias)),
+       syntaxLanguageIdsByExtension = Map<String, String>.unmodifiable(
+         syntaxLanguageIdsByExtension.map(
+           (extension, languageId) => MapEntry(
+             _normalizeExtension(extension),
+             _normalizeSyntaxLanguageId(languageId),
+           ),
+         ),
+       ),
        parserProviderId = _normalizeOptionalId(parserProviderId),
        semanticProviderIds = List<String>.unmodifiable(
          semanticProviderIds.map(
@@ -27,6 +36,17 @@ final class LanguageExtensionDescriptor {
          defaultSemanticProviderId,
        ),
        capabilities = Set<LanguageCapability>.unmodifiable(capabilities) {
+    final unknownSyntaxExtensions = this.syntaxLanguageIdsByExtension.keys
+        .where((extension) => !this.fileExtensions.contains(extension))
+        .toList(growable: false);
+    if (unknownSyntaxExtensions.isNotEmpty) {
+      throw ArgumentError.value(
+        syntaxLanguageIdsByExtension,
+        'syntaxLanguageIdsByExtension',
+        'Syntax language overrides must reference declared file extensions: '
+            '$unknownSyntaxExtensions.',
+      );
+    }
     final defaultProvider = this.defaultSemanticProviderId;
     if (defaultProvider != null &&
         !this.semanticProviderIds.contains(defaultProvider)) {
@@ -42,6 +62,7 @@ final class LanguageExtensionDescriptor {
   final String displayName;
   final Set<String> fileExtensions;
   final Set<String> aliases;
+  final Map<String, String> syntaxLanguageIdsByExtension;
   final String? parserProviderId;
   final bool structuralParserDefaultEnabled;
   final List<String> semanticProviderIds;
@@ -58,6 +79,9 @@ final class LanguageExtensionDescriptor {
 
   static String _normalizeAlias(String value) =>
       _requireNonEmpty(value, 'aliases').toLowerCase();
+
+  static String _normalizeSyntaxLanguageId(String value) =>
+      _requireNonEmpty(value, 'syntaxLanguageIdsByExtension').toLowerCase();
 
   static String _requireNonEmpty(String value, String name) {
     final normalized = value.trim();

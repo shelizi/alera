@@ -42,6 +42,35 @@ void main() {
       expect(registry.languageForPath('/repo/README.md'), isNull);
     });
 
+    test('resolves descriptor-owned syntax language ids by extension', () {
+      final registry = LanguageExtensionRegistry();
+      final typescript = LanguageExtensionDescriptor(
+        id: LanguageId('typescript'),
+        displayName: 'TypeScript',
+        fileExtensions: const <String>['ts', 'tsx'],
+        syntaxLanguageIdsByExtension: const <String, String>{'.tsx': 'TSX'},
+        capabilities: const <LanguageCapability>{LanguageCapability.syntax},
+      );
+      registry.registerLanguage(typescript);
+
+      expect(registry.syntaxLanguageIdForPath('/repo/main.ts'), 'typescript');
+      expect(registry.syntaxLanguageIdForPath('/repo/view.TSX'), 'tsx');
+      expect(registry.syntaxLanguageIdForPath('/repo/readme.md'), isNull);
+    });
+
+    test('rejects syntax language overrides for undeclared extensions', () {
+      expect(
+        () => LanguageExtensionDescriptor(
+          id: LanguageId('typescript'),
+          displayName: 'TypeScript',
+          fileExtensions: const <String>['ts'],
+          syntaxLanguageIdsByExtension: const <String, String>{'tsx': 'tsx'},
+          capabilities: const <LanguageCapability>{LanguageCapability.syntax},
+        ),
+        throwsArgumentError,
+      );
+    });
+
     test('filters registered provider metadata by capability', () {
       final registry = LanguageExtensionRegistry();
       final rust = LanguageExtensionDescriptor(

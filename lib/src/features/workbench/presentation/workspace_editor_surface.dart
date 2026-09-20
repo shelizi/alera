@@ -225,9 +225,14 @@ class _WorkspaceEditorSurfaceState
     final effectiveThemeName =
         editorSyntaxThemeEntryForName(editorSettings.themeName)?.name ??
         EditorSyntaxThemeNames.alera;
+    final languageRegistry = ref.watch(languageExtensionRegistryProvider);
+    final syntaxLanguageId = workspaceEditorSyntaxLanguageIdForPath(
+      filePath: filePath,
+      registry: languageRegistry,
+    );
     final enableNativeSyntax = workspaceEditorNativeSyntaxEnabled(
       filePath: filePath,
-      registry: ref.watch(languageExtensionRegistryProvider),
+      registry: languageRegistry,
       settings: editorSettings.languageIntelligence,
     );
     final performanceProfile = workspaceEditorPerformanceProfile(
@@ -270,9 +275,13 @@ class _WorkspaceEditorSurfaceState
               enableGutterDivider: false,
               editorTheme: editorTheme,
               language: performanceProfile.syntaxHighlighting
-                  ? _languageForPath(filePath)
+                  ? _languageForPath(
+                      filePath: filePath,
+                      registry: languageRegistry,
+                      syntaxLanguageId: syntaxLanguageId,
+                    )
                   : _plainTextLanguage,
-              languageId: _languageIdForPath(filePath),
+              languageId: syntaxLanguageId,
               enableNativeSyntax: enableNativeSyntax,
               tabSize: effectiveTabSize,
               useSpaceAsTab: true,
