@@ -88,6 +88,32 @@ void main() {
   });
 
   test(
+    'enabled language falls back to its declared default semantic provider',
+    () async {
+      final manager = LanguageServerSessionManager(
+        registry: registry,
+        runtime: runtime,
+      );
+
+      final snapshot = await manager.attachDocument(
+        workspaceId: 'workspace-a',
+        workspaceRoot: r'C:\repo',
+        language: rust,
+        documentId: r'C:\repo\src\main.rs',
+        settings: LanguageIntelligenceSettings().withLanguage(
+          rust,
+          const LanguageActivationSettings(enabled: true),
+        ),
+        target: LanguageServerTarget.localWorkspace,
+      );
+
+      expect(snapshot.state, LanguageServerSessionState.ready);
+      expect(snapshot.providerId, 'rust-semantic');
+      expect(runtime.startCalls, 1);
+    },
+  );
+
+  test(
     'last document schedules idle stop and new activity cancels it',
     () async {
       final delay = _ControlledDelay();
@@ -141,6 +167,49 @@ void main() {
       );
     },
   );
+
+  test('settings detach stops immediately only after the shared provider is unused', () async {
+    final delay = _ControlledDelay();
+    final manager = LanguageServerSessionManager(
+      registry: registry,
+      runtime: runtime,
+      idleShutdownDelay: const Duration(seconds: 30),
+      delay: delay.call,
+    );
+    final settings = _enabledSettings(rust);
+    for (final document in <String>['main.rs', 'lib.rs']) {
+      await manager.attachDocument(
+        workspaceId: 'workspace-a',
+        workspaceRoot: r'C:\repo',
+        language: rust,
+        documentId: document,
+        settings: settings,
+        target: LanguageServerTarget.localWorkspace,
+      );
+    }
+
+    await manager.releaseDocument(
+      workspaceId: 'workspace-a',
+      providerId: 'rust-semantic',
+      documentId: 'main.rs',
+      stopWhenUnused: true,
+    );
+    expect(runtime.stopCalls, 0);
+
+    await manager.releaseDocument(
+      workspaceId: 'workspace-a',
+      providerId: 'rust-semantic',
+      documentId: 'lib.rs',
+      stopWhenUnused: true,
+    );
+
+    expect(runtime.stopCalls, 1);
+    expect(delay.pending, 0);
+    expect(
+      manager.snapshotFor('workspace-a', 'rust-semantic').state,
+      LanguageServerSessionState.available,
+    );
+  });
 
   test('missing executable is explicit and never calls start', () async {
     runtime.resolution = const LanguageServerExecutableMissing(

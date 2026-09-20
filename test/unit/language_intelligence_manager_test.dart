@@ -127,6 +127,27 @@ void main() {
   });
 
   test(
+    'enabled document uses the language default provider when none is selected',
+    () async {
+      final state = await manager.openDocument(
+        workspaceId: 'workspace-a',
+        workspaceRoot: r'C:\repo',
+        path: r'C:\repo\src\main.rs',
+        text: 'fn main() {}',
+        settings: LanguageIntelligenceSettings().withLanguage(
+          rust,
+          const LanguageActivationSettings(enabled: true),
+        ),
+        target: LanguageServerTarget.localWorkspace,
+      );
+
+      expect(state.providerId, 'rust-semantic');
+      expect(state.semanticReady, isTrue);
+      expect(semanticFactory.created, hasLength(1));
+    },
+  );
+
+  test(
     'provider generation change recreates binding and resyncs latest documents',
     () async {
       final settings = _enabledSettings(rust);
@@ -240,6 +261,7 @@ void main() {
 
       expect(state.session?.state, LanguageServerSessionState.disabled);
       expect(binding.documents.closes, <String>[r'C:\repo\src\main.rs']);
+      expect(runtime.stopCalls, 1);
       expect(
         sessions
             .snapshotFor('workspace-a', 'rust-semantic')
@@ -306,6 +328,7 @@ final class _FakeRuntimeSession implements LanguageServerRuntimeSession {
 
 final class _FakeRuntime implements LanguageServerRuntimePort {
   int startCalls = 0;
+  int stopCalls = 0;
   final List<_FakeRuntimeSession> sessions = <_FakeRuntimeSession>[];
   final Map<LanguageServerRuntimeSession, StreamController<LanguageServerExit>>
   exits =
@@ -336,6 +359,7 @@ final class _FakeRuntime implements LanguageServerRuntimePort {
 
   @override
   Future<void> stop(LanguageServerRuntimeSession session) async {
+    stopCalls += 1;
     await exits[session]?.close();
   }
 

@@ -134,6 +134,30 @@ final class LanguageExtensionRegistry {
   LanguageProviderDescriptor? provider(String providerId) =>
       _providers[providerId.trim()];
 
+  LanguageProviderDescriptor? semanticProviderFor(
+    LanguageId language, {
+    String? preferredProviderId,
+  }) {
+    final languageDescriptor = _languages[language];
+    if (languageDescriptor == null) {
+      return null;
+    }
+    final preferred = preferredProviderId?.trim();
+    final providerId = preferred != null && preferred.isNotEmpty
+        ? preferred
+        : languageDescriptor.defaultSemanticProviderId;
+    if (providerId == null) {
+      return null;
+    }
+    final provider = _providers[providerId];
+    if (provider == null ||
+        provider.kind != LanguageProviderKind.semanticServer ||
+        !provider.languages.contains(language)) {
+      return null;
+    }
+    return provider;
+  }
+
   LanguageExtensionRegistry _copy() {
     final copy = LanguageExtensionRegistry();
     copy._languages.addAll(_languages);

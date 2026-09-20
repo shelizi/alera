@@ -77,28 +77,17 @@ final class LanguageServerSessionManager {
     Map<String, String> environment = const <String, String>{},
   }) async {
     final activation = settings.forLanguage(language);
-    final providerId = activation.semanticProviderId?.trim();
-    if (!activation.enabled || providerId == null || providerId.isEmpty) {
+    final provider = _registry.semanticProviderFor(
+      language,
+      preferredProviderId: activation.semanticProviderId,
+    );
+    if (!activation.enabled || provider == null) {
       return LanguageServerSessionSnapshot.disabled(
         workspaceId: workspaceId,
-        providerId: providerId ?? '',
+        providerId: provider?.id ?? activation.semanticProviderId?.trim() ?? '',
       );
     }
-
-    final provider = _registry.provider(providerId);
-    if (provider == null) {
-      throw StateError('Language provider $providerId is not registered.');
-    }
-    if (provider.kind != LanguageProviderKind.semanticServer) {
-      throw StateError(
-        'Language provider $providerId is not a semantic server.',
-      );
-    }
-    if (!provider.languages.contains(language)) {
-      throw StateError(
-        'Language provider $providerId does not support $language.',
-      );
-    }
+    final providerId = provider.id;
 
     final key = _LanguageServerSessionKey(workspaceId, providerId);
     final record = _sessions.putIfAbsent(
@@ -134,6 +123,7 @@ final class LanguageServerSessionManager {
     required String workspaceId,
     required String providerId,
     required String documentId,
+    bool stopWhenUnused = false,
   }) async {
     final record =
         _sessions[_LanguageServerSessionKey(workspaceId, providerId)];
@@ -142,6 +132,15 @@ final class LanguageServerSessionManager {
     }
     record.documents.remove(documentId);
     if (record.documents.isNotEmpty) {
+      return;
+    }
+    if (stopWhenUnused) {
+      record.idleGeneration += 1;
+      await _stopRecord(
+        record,
+        finalState: LanguageServerSessionState.available,
+      );
+      record.restartAttempts = 0;
       return;
     }
     if (record.session == null && record.startFuture == null) {

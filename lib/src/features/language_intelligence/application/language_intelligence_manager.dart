@@ -68,13 +68,17 @@ final class LanguageIntelligenceManager {
     }
 
     final activation = settings.forLanguage(language);
-    final providerId = activation.semanticProviderId?.trim();
+    final semanticProvider = _registry.semanticProviderFor(
+      language,
+      preferredProviderId: activation.semanticProviderId,
+    );
+    final providerId = semanticProvider?.id;
     final key = _DocumentKey(workspaceId, path);
     final previous = _documents[key];
-    if (!activation.enabled || providerId == null || providerId.isEmpty) {
+    if (!activation.enabled || providerId == null) {
       if (previous != null) {
         _documents.remove(key);
-        await _detachTrackedDocument(previous);
+        await _detachTrackedDocument(previous, stopWhenUnused: true);
       }
       final snapshot = await _sessions.attachDocument(
         workspaceId: workspaceId,
@@ -94,7 +98,7 @@ final class LanguageIntelligenceManager {
 
     if (previous != null && previous.providerId != providerId) {
       _documents.remove(key);
-      await _detachTrackedDocument(previous);
+      await _detachTrackedDocument(previous, stopWhenUnused: true);
     }
     final snapshot = await _sessions.attachDocument(
       workspaceId: workspaceId,
@@ -332,7 +336,10 @@ final class LanguageIntelligenceManager {
     cache.syncedRevisions[document.key] = document.revision;
   }
 
-  Future<void> _detachTrackedDocument(_TrackedDocument document) async {
+  Future<void> _detachTrackedDocument(
+    _TrackedDocument document, {
+    bool stopWhenUnused = false,
+  }) async {
     final bindingKey = _BindingKey(
       document.key.workspaceId,
       document.providerId,
@@ -348,6 +355,7 @@ final class LanguageIntelligenceManager {
         workspaceId: document.key.workspaceId,
         providerId: document.providerId,
         documentId: document.path,
+        stopWhenUnused: stopWhenUnused,
       );
       final stillUsed = _documents.values.any(
         (candidate) =>
