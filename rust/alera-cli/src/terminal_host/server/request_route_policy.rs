@@ -97,6 +97,19 @@ pub(super) enum AgentSkillOperation {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum RuntimeSettingsUpdateSurface {
+    Local,
+    Mobile,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ConditionalDeferredRoute {
+    RuntimeSettingsUpdate(RuntimeSettingsUpdateSurface),
+    AutomationPolicyShow,
+    MobileNetworkSnapshot,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum DeferredJobRoute {
     CliRegistration(CliRegistrationOperation),
     AgentQuota(AgentQuotaOperation),
@@ -148,6 +161,7 @@ pub(super) struct RequestRoutePolicy {
     pub(super) coalesced_read: Option<CoalescedReadRoute>,
     pub(super) deferred_job: Option<DeferredJobRoute>,
     pub(super) mobile_deferred: Option<MobileDeferredRoute>,
+    pub(super) conditional_deferred: Option<ConditionalDeferredRoute>,
 }
 
 const LOCAL: RequestRoutePolicy = RequestRoutePolicy {
@@ -159,6 +173,7 @@ const LOCAL: RequestRoutePolicy = RequestRoutePolicy {
     coalesced_read: None,
     deferred_job: None,
     mobile_deferred: None,
+    conditional_deferred: None,
 };
 
 const MOBILE: RequestRoutePolicy = RequestRoutePolicy {
@@ -342,6 +357,18 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         "agentSkill.install" => {
             mobile_deferred_job(DeferredJobRoute::AgentSkill(AgentSkillOperation::Install))
         }
+        "runtimeSettings.update" => conditional_deferred(
+            ConditionalDeferredRoute::RuntimeSettingsUpdate(RuntimeSettingsUpdateSurface::Local),
+        ),
+        "mobile.runtimeSettings.update" => mobile_conditional_deferred(
+            ConditionalDeferredRoute::RuntimeSettingsUpdate(RuntimeSettingsUpdateSurface::Mobile),
+        ),
+        "automation.policy" => {
+            mobile_conditional_deferred(ConditionalDeferredRoute::AutomationPolicyShow)
+        }
+        "mobile.status.get" => {
+            mobile_conditional_deferred(ConditionalDeferredRoute::MobileNetworkSnapshot)
+        }
 
         "project.remove" => serialized_mobile(SerializedRuntimeMutation::RemoveProject),
         "tab.remove" => serialized_mobile(SerializedRuntimeMutation::RemoveTab),
@@ -401,7 +428,6 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         | "automation.heartbeat"
         | "automation.list"
         | "automation.pause"
-        | "automation.policy"
         | "automation.purge"
         | "automation.runs"
         | "automation.runShow"
@@ -428,8 +454,6 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         | "mobile.cloudSubscriptions.refresh"
         | "mobile.relayAuthorization.renew"
         | "mobile.runtimeSettings.get"
-        | "mobile.runtimeSettings.update"
-        | "mobile.status.get"
         | "mobile.workspaceQuickOpen.stop"
         | "project.clone.cancel"
         | "project.clone.list"
@@ -526,6 +550,20 @@ const fn local_conflicting_deferred_job(route: DeferredJobRoute) -> RequestRoute
     }
 }
 
+const fn conditional_deferred(route: ConditionalDeferredRoute) -> RequestRoutePolicy {
+    RequestRoutePolicy {
+        conditional_deferred: Some(route),
+        ..LOCAL
+    }
+}
+
+const fn mobile_conditional_deferred(route: ConditionalDeferredRoute) -> RequestRoutePolicy {
+    RequestRoutePolicy {
+        mobile_allowed: true,
+        ..conditional_deferred(route)
+    }
+}
+
 const fn mobile_deferred_operation(route: MobileDeferredRoute) -> RequestRoutePolicy {
     RequestRoutePolicy {
         mobile_allowed: true,
@@ -540,9 +578,11 @@ mod tests {
 
     #[test]
     fn combines_mobile_and_runtime_mutation_policy() {
+        let create_managed = request_route_policy("workspace.createManaged");
+        assert!(create_managed.mobile_allowed);
         assert_eq!(
-            request_route_policy("workspace.createManaged"),
-            MOBILE_CONFLICT
+            create_managed.runtime_mutation,
+            RuntimeMutationPolicy::Conflicts
         );
         assert_eq!(
             request_route_policy("workspace.removeManaged").runtime_mutation,
@@ -869,6 +909,41 @@ mod tests {
         assert_eq!(
             install.deferred_job,
             Some(DeferredJobRoute::AgentSkill(AgentSkillOperation::Install))
+        );
+    }
+
+    #[test]
+    fn payload_dependent_routes_keep_typed_identity_and_mobile_policy() {
+        let local_settings = request_route_policy("runtimeSettings.update");
+        assert!(!local_settings.mobile_allowed);
+        assert_eq!(
+            local_settings.conditional_deferred,
+            Some(ConditionalDeferredRoute::RuntimeSettingsUpdate(
+                RuntimeSettingsUpdateSurface::Local
+            ))
+        );
+
+        let mobile_settings = request_route_policy("mobile.runtimeSettings.update");
+        assert!(mobile_settings.mobile_allowed);
+        assert_eq!(
+            mobile_settings.conditional_deferred,
+            Some(ConditionalDeferredRoute::RuntimeSettingsUpdate(
+                RuntimeSettingsUpdateSurface::Mobile
+            ))
+        );
+
+        let automation = request_route_policy("automation.policy");
+        assert!(automation.mobile_allowed);
+        assert_eq!(
+            automation.conditional_deferred,
+            Some(ConditionalDeferredRoute::AutomationPolicyShow)
+        );
+
+        let status = request_route_policy("mobile.status.get");
+        assert!(status.mobile_allowed);
+        assert_eq!(
+            status.conditional_deferred,
+            Some(ConditionalDeferredRoute::MobileNetworkSnapshot)
         );
     }
 }

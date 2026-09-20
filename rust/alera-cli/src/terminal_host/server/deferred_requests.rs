@@ -13,7 +13,8 @@ use super::project_registration_requests::ProjectRegistrationRequestHandler;
 use super::request_payloads::parse_payload;
 use super::request_route_policy::{
     request_route_policy, AgentQuotaOperation, AgentSkillOperation, AiDictationOperation,
-    AiTextOperation, CoalescedReadRoute, DeferredJobRoute, DeferredWriteRoute, MobileDeferredRoute,
+    AiTextOperation, CoalescedReadRoute, ConditionalDeferredRoute, DeferredJobRoute,
+    DeferredWriteRoute, MobileDeferredRoute, RuntimeSettingsUpdateSurface,
     TerminalDeferredOperation, WorkspaceDeferredOperation,
 };
 use super::requests::{require_string_key, validate_mobile_runtime_settings_payload};
@@ -66,18 +67,20 @@ impl ServerActor {
         if self.try_start_account_request(client_id, request_id, request_type, payload)? {
             return Ok(true);
         }
-        if (request_type == "runtimeSettings.update"
-            || request_type == "mobile.runtimeSettings.update")
-            && payload.get("automation").is_some()
+        let route_policy = request_route_policy(request_type);
+        if let Some(ConditionalDeferredRoute::RuntimeSettingsUpdate(surface)) =
+            route_policy.conditional_deferred
         {
-            self.require_auth(client_id)?;
-            self.require_request_allowed(client_id, request_type)?;
-            if request_type == "mobile.runtimeSettings.update" {
-                validate_mobile_runtime_settings_payload(payload)?;
+            if payload.get("automation").is_some() {
+                self.require_auth(client_id)?;
+                self.require_request_allowed(client_id, request_type)?;
+                if surface == RuntimeSettingsUpdateSurface::Mobile {
+                    validate_mobile_runtime_settings_payload(payload)?;
+                }
+                self.start_autostart_reconcile_update(client_id, request_id, payload)
+                    .await?;
+                return Ok(true);
             }
-            self.start_autostart_reconcile_update(client_id, request_id, payload)
-                .await?;
-            return Ok(true);
         }
         if self.try_start_serialized_runtime_mutation(
             client_id,
@@ -87,7 +90,6 @@ impl ServerActor {
         )? {
             return Ok(true);
         }
-        let route_policy = request_route_policy(request_type);
         if let Some(route) = route_policy.deferred_read {
             self.require_auth(client_id)?;
             self.require_request_allowed(client_id, request_type)?;
@@ -267,8 +269,8 @@ impl ServerActor {
             }
             return Ok(true);
         }
-        match request_type {
-            "automation.policy"
+        match route_policy.conditional_deferred {
+            Some(ConditionalDeferredRoute::AutomationPolicyShow)
                 if payload
                     .get("kind")
                     .and_then(Value::as_str)
@@ -287,7 +289,7 @@ impl ServerActor {
                 )?;
                 Ok(true)
             }
-            "mobile.status.get"
+            Some(ConditionalDeferredRoute::MobileNetworkSnapshot)
                 if payload.get("includeNetworkStatus").and_then(Value::as_bool) != Some(false) =>
             {
                 self.require_auth(client_id)?;
