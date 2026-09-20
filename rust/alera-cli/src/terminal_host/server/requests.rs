@@ -6,7 +6,7 @@ use crate::mobile_access::{
     prepare_mobile_pairing_offer_settings_resolved, MobileDevicePairRequest,
     MobilePairingCreateRequest, MobileSettingsUpdateRequest,
 };
-use crate::ssh_bootstrap::{build_ssh_bootstrap_plan, SshTargetBootstrapRequest};
+use crate::ssh_bootstrap::SshTargetBootstrapRequest;
 use crate::terminal_host::host_error::{HostError, HostResult};
 use crate::terminal_host::protocol::{
     error_response, event, int_or, ok_response, TerminalHostConfig,
@@ -24,6 +24,7 @@ use super::request_route_policy::{
     PostResponseAction, RequestHandlerFamily, RequestRoutePolicy,
 };
 use super::runtime_mutation_barrier::conflicts_with_runtime_mutation;
+use super::ssh_bootstrap_plan_requests::SshBootstrapPlanRequestHandler;
 use super::workspace_artifact_requests::{
     WorkspaceArtifactChange, WorkspaceArtifactRequestHandler,
 };
@@ -887,7 +888,9 @@ impl ServerActor {
             "sshTarget.bootstrap.plan" => {
                 self.require_auth(client_id)?;
                 let request: SshTargetBootstrapRequest = parse_payload(payload)?;
-                json_result(build_ssh_bootstrap_plan(&self.runtime_store, &request).await)
+                SshBootstrapPlanRequestHandler::new(&self.runtime_store)
+                    .build(&request)
+                    .await
             }
             "sshTarget.bootstrap.start" => {
                 self.require_auth(client_id)?;
