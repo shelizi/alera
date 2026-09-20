@@ -103,6 +103,14 @@ pub(super) enum RuntimeSettingsUpdateSurface {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum RequestHandlerFamily {
+    Core,
+    Configuration,
+    Automation,
+    Orchestration,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ConditionalDeferredRoute {
     RuntimeSettingsUpdate(RuntimeSettingsUpdateSurface),
     AutomationPolicyShow,
@@ -476,6 +484,18 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         | "workspaceTag.list" => MOBILE,
 
         _ => LOCAL,
+    }
+}
+
+pub(super) fn request_handler_family(request_type: &str) -> RequestHandlerFamily {
+    if request_type.starts_with("configuration.") {
+        RequestHandlerFamily::Configuration
+    } else if request_type.starts_with("automation.") {
+        RequestHandlerFamily::Automation
+    } else if request_type.starts_with("orchestration.") {
+        RequestHandlerFamily::Orchestration
+    } else {
+        RequestHandlerFamily::Core
     }
 }
 
@@ -944,6 +964,26 @@ mod tests {
         assert_eq!(
             status.conditional_deferred,
             Some(ConditionalDeferredRoute::MobileNetworkSnapshot)
+        );
+    }
+
+    #[test]
+    fn handler_family_is_resolved_once_by_the_route_registry() {
+        assert_eq!(
+            request_handler_family("configuration.snapshot"),
+            RequestHandlerFamily::Configuration
+        );
+        assert_eq!(
+            request_handler_family("automation.list"),
+            RequestHandlerFamily::Automation
+        );
+        assert_eq!(
+            request_handler_family("orchestration.status"),
+            RequestHandlerFamily::Orchestration
+        );
+        assert_eq!(
+            request_handler_family("workspace.list"),
+            RequestHandlerFamily::Core
         );
     }
 }

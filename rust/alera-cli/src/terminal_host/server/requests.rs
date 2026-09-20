@@ -24,8 +24,8 @@ use super::host_service_requests::required_non_blank;
 use super::project_registration_requests::ProjectRegistrationRequestHandler;
 pub(super) use super::request_payloads::{json_result, parse_payload};
 use super::request_route_policy::{
-    request_route_policy, CoalescedReadRoute, DeferredWriteRoute, MobileDeferredRoute,
-    PostResponseAction,
+    request_handler_family, request_route_policy, CoalescedReadRoute, DeferredWriteRoute,
+    MobileDeferredRoute, PostResponseAction, RequestHandlerFamily,
 };
 use super::runtime_mutation_barrier::conflicts_with_runtime_mutation;
 use super::{ClientKind, ServerActor, ServerCommand};
@@ -107,7 +107,8 @@ impl ServerActor {
                             return;
                         }
                     }
-                    if request_type.starts_with("orchestration.") {
+                    if request_handler_family(&request_type) == RequestHandlerFamily::Orchestration
+                    {
                         match self
                             .handle_orchestration_request(client_id, id, &request_type, &payload)
                             .await
@@ -243,12 +244,20 @@ impl ServerActor {
         request_type: &str,
         payload: &Value,
     ) -> HostResult<Value> {
-        match request_type {
-            request if request.starts_with("configuration.") => {
-                self.handle_configuration_request(client_id, request, payload)
-                    .await
+        match request_handler_family(request_type) {
+            RequestHandlerFamily::Configuration => {
+                return self
+                    .handle_configuration_request(client_id, request_type, payload)
+                    .await;
             }
-
+            RequestHandlerFamily::Automation => {
+                return self
+                    .handle_automation_request(client_id, request_type, payload)
+                    .await;
+            }
+            RequestHandlerFamily::Core | RequestHandlerFamily::Orchestration => {}
+        }
+        match request_type {
             "mobile.workspaceQuickOpen.stop" => self.stop_mobile_workspace_quick_open(payload),
             "configure" => {
                 self.require_auth(client_id)?;
@@ -576,10 +585,6 @@ impl ServerActor {
             "resources.snapshot" => {
                 self.require_auth(client_id)?;
                 self.handle_resource_snapshot(payload)
-            }
-            _ if request_type.starts_with("automation.") => {
-                self.handle_automation_request(client_id, request_type, payload)
-                    .await
             }
             "shellEnvironment.reload" => {
                 self.require_auth(client_id)?;
