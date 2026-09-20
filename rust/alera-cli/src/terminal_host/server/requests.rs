@@ -1,7 +1,4 @@
-use alera_core::runtime::{
-    LinkedReview, Project, ProjectConfig, WorkbenchLayoutRecord, WorkspaceTabRecord, WorkspaceTag,
-};
-use chrono::{DateTime, Utc};
+use alera_core::runtime::{LinkedReview, WorkbenchLayoutRecord, WorkspaceTabRecord, WorkspaceTag};
 use serde_json::{json, Map, Value};
 
 use crate::mobile_access::{
@@ -21,7 +18,8 @@ use crate::terminal_host::session::SessionDriver;
 use super::deferred_read_requests::DeferredReadRequestHandler;
 use super::host_service_requests::required_non_blank;
 use super::project_registration_requests::ProjectRegistrationRequestHandler;
-pub(super) use super::request_payloads::{json_result, parse_payload};
+use super::project_requests::{ProjectStoreChange, ProjectStoreRequestHandler};
+pub(super) use super::request_payloads::{json_result, parse_payload, require_string_key};
 use super::request_route_policy::{
     request_route_policy, CoalescedReadRoute, DeferredWriteRoute, MobileDeferredRoute,
     PostResponseAction, RequestHandlerFamily, RequestRoutePolicy,
@@ -41,15 +39,6 @@ mod runtime_settings_validation;
 pub(super) use runtime_settings_validation::validate_mobile_runtime_settings_payload;
 #[cfg(test)]
 pub(super) use runtime_settings_validation::validate_text_actions_settings;
-
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ProjectConfigUpsertRequest {
-    project_id: String,
-    config: ProjectConfig,
-    #[serde(default)]
-    updated_at: Option<DateTime<Utc>>,
-}
 
 impl ServerActor {
     /// Parse and dispatch one client line, then write the response. Malformed
@@ -644,9 +633,26 @@ impl ServerActor {
                 self.require_auth(client_id)?;
                 Ok(self.agent_presence_items())
             }
-            "project.list" => {
+            "project.list"
+            | "project.upsert"
+            | "projectConfig.find"
+            | "projectConfig.list"
+            | "projectConfig.upsert"
+            | "projectConfig.remove" => {
                 self.require_auth(client_id)?;
-                json_result(self.runtime_store.list_projects().await)
+                let outcome = ProjectStoreRequestHandler::new(&self.runtime_store)
+                    .execute(request_type, payload)
+                    .await?;
+                match outcome.change {
+                    Some(ProjectStoreChange::Projects) => {
+                        self.broadcast_authenticated(event("projectsChanged", json!({})))
+                    }
+                    Some(ProjectStoreChange::ProjectConfigs) => {
+                        self.broadcast_authenticated(event("projectConfigsChanged", json!({})))
+                    }
+                    None => {}
+                }
+                Ok(outcome.value)
             }
             "hostDirectory.roots" => {
                 self.require_auth(client_id)?;
@@ -671,44 +677,6 @@ impl ServerActor {
             "project.clone.cancel" => {
                 self.require_auth(client_id)?;
                 self.project_clone_cancel_request(payload).await
-            }
-            "project.upsert" => {
-                self.require_auth(client_id)?;
-                let project: Project = parse_payload(payload)?;
-                let value = json_result(self.runtime_store.upsert_project(project).await)?;
-                self.broadcast_authenticated(event("projectsChanged", json!({})));
-                Ok(value)
-            }
-            "projectConfig.find" => {
-                self.require_auth(client_id)?;
-                let project_id = require_string_key(payload, "projectId")?;
-                json_result(self.runtime_store.find_project_config(&project_id).await)
-            }
-            "projectConfig.list" => {
-                self.require_auth(client_id)?;
-                json_result(self.runtime_store.list_project_configs().await)
-            }
-            "projectConfig.upsert" => {
-                self.require_auth(client_id)?;
-                let request: ProjectConfigUpsertRequest = parse_payload(payload)?;
-                let value = json_result(
-                    self.runtime_store
-                        .upsert_project_config(
-                            &request.project_id,
-                            request.config,
-                            request.updated_at.unwrap_or_else(Utc::now),
-                        )
-                        .await,
-                )?;
-                self.broadcast_authenticated(event("projectConfigsChanged", json!({})));
-                Ok(value)
-            }
-            "projectConfig.remove" => {
-                self.require_auth(client_id)?;
-                let project_id = require_string_key(payload, "projectId")?;
-                json_result(self.runtime_store.remove_project_config(&project_id).await)?;
-                self.broadcast_authenticated(event("projectConfigsChanged", json!({})));
-                Ok(json!({}))
             }
             "workspace.list" | "workspace.listAll" | "workspace.find" | "workspace.upsert" => {
                 self.require_auth(client_id)?;
@@ -1162,13 +1130,6 @@ pub(super) fn require_string(payload: &Value, key: &str) -> HostResult<String> {
         _ => Err(HostError::format(
             "createOrAttach requires session metadata.",
         )),
-    }
-}
-
-pub(super) fn require_string_key(payload: &Value, key: &str) -> HostResult<String> {
-    match payload.get(key) {
-        Some(Value::String(value)) if !value.trim().is_empty() => Ok(value.clone()),
-        _ => Err(HostError::format(format!("{key} is required."))),
     }
 }
 

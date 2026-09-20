@@ -1,5 +1,6 @@
 use alera_core::git as core_git;
-use alera_core::runtime::{ProjectConfig, RuntimeStore};
+use alera_core::runtime::{Project, ProjectConfig, RuntimeStore};
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -7,6 +8,7 @@ use crate::project_management::{effective_project_config, host_directory_roots, 
 use crate::terminal_host::host_error::{HostError, HostResult};
 use crate::terminal_host::protocol::event;
 
+use super::request_payloads::{json_result, parse_payload, require_string_key};
 use super::ServerActor;
 
 #[derive(Debug, Deserialize)]
@@ -16,12 +18,92 @@ struct ProjectRenameRequest {
     name: String,
 }
 
-pub(super) struct ProjectRenameHandler {
-    runtime_store: RuntimeStore,
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProjectConfigUpsertRequest {
+    project_id: String,
+    config: ProjectConfig,
+    #[serde(default)]
+    updated_at: Option<DateTime<Utc>>,
 }
 
-impl ProjectRenameHandler {
-    pub(super) const fn new(runtime_store: RuntimeStore) -> Self {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ProjectStoreChange {
+    Projects,
+    ProjectConfigs,
+}
+
+pub(super) struct ProjectStoreRequestOutcome {
+    pub(super) value: Value,
+    pub(super) change: Option<ProjectStoreChange>,
+}
+
+pub(super) struct ProjectStoreRequestHandler<'a> {
+    runtime_store: &'a RuntimeStore,
+}
+
+impl<'a> ProjectStoreRequestHandler<'a> {
+    pub(super) const fn new(runtime_store: &'a RuntimeStore) -> Self {
+        Self { runtime_store }
+    }
+
+    pub(super) async fn execute(
+        &self,
+        request_type: &str,
+        payload: &Value,
+    ) -> HostResult<ProjectStoreRequestOutcome> {
+        let (value, change) = match request_type {
+            "project.list" => (json_result(self.runtime_store.list_projects().await)?, None),
+            "project.upsert" => {
+                let project: Project = parse_payload(payload)?;
+                (
+                    json_result(self.runtime_store.upsert_project(project).await)?,
+                    Some(ProjectStoreChange::Projects),
+                )
+            }
+            "projectConfig.find" => {
+                let project_id = require_string_key(payload, "projectId")?;
+                (
+                    json_result(self.runtime_store.find_project_config(&project_id).await)?,
+                    None,
+                )
+            }
+            "projectConfig.list" => (
+                json_result(self.runtime_store.list_project_configs().await)?,
+                None,
+            ),
+            "projectConfig.upsert" => {
+                let request: ProjectConfigUpsertRequest = parse_payload(payload)?;
+                (
+                    json_result(
+                        self.runtime_store
+                            .upsert_project_config(
+                                &request.project_id,
+                                request.config,
+                                request.updated_at.unwrap_or_else(Utc::now),
+                            )
+                            .await,
+                    )?,
+                    Some(ProjectStoreChange::ProjectConfigs),
+                )
+            }
+            "projectConfig.remove" => {
+                let project_id = require_string_key(payload, "projectId")?;
+                json_result(self.runtime_store.remove_project_config(&project_id).await)?;
+                (json!({}), Some(ProjectStoreChange::ProjectConfigs))
+            }
+            _ => return Err(HostError::format("Unknown project store request.")),
+        };
+        Ok(ProjectStoreRequestOutcome { value, change })
+    }
+}
+
+pub(super) struct ProjectRenameHandler<'a> {
+    runtime_store: &'a RuntimeStore,
+}
+
+impl<'a> ProjectRenameHandler<'a> {
+    pub(super) const fn new(runtime_store: &'a RuntimeStore) -> Self {
         Self { runtime_store }
     }
 
@@ -36,7 +118,7 @@ impl ProjectRenameHandler {
 
 impl ServerActor {
     pub(super) async fn project_rename_request(&mut self, payload: &Value) -> HostResult<Value> {
-        let value = ProjectRenameHandler::new(self.runtime_store.clone())
+        let value = ProjectRenameHandler::new(&self.runtime_store)
             .execute(payload)
             .await?;
         self.broadcast_authenticated(event("projectsChanged", json!({})));
@@ -158,11 +240,75 @@ fn state_error(error: impl std::fmt::Display) -> HostError {
 
 #[cfg(test)]
 mod tests {
-    use alera_core::runtime::{Project, ProjectKind, RuntimeStore};
+    use alera_core::runtime::{Project, ProjectConfig, ProjectKind, RuntimeStore};
     use chrono::Utc;
     use serde_json::json;
 
-    use super::ProjectRenameHandler;
+    use super::{ProjectRenameHandler, ProjectStoreChange, ProjectStoreRequestHandler};
+
+    #[tokio::test]
+    async fn project_store_requests_can_be_tested_without_server_actor() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = RuntimeStore::open(dir.path()).await.unwrap();
+        let now = Utc::now();
+        let handler = ProjectStoreRequestHandler::new(&store);
+
+        let upserted = handler
+            .execute(
+                "project.upsert",
+                &json!({
+                    "id": "p",
+                    "name": "Project",
+                    "repoPath": "/p",
+                    "createdAt": now,
+                    "updatedAt": now,
+                    "kind": "folder",
+                }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(upserted.change, Some(ProjectStoreChange::Projects));
+        assert_eq!(upserted.value["id"], "p");
+
+        let listed = handler.execute("project.list", &json!({})).await.unwrap();
+        assert!(listed.change.is_none());
+        assert_eq!(listed.value.as_array().unwrap().len(), 1);
+
+        let config = ProjectConfig {
+            git_hosting_provider: Some("github".into()),
+            ..ProjectConfig::default()
+        };
+        let config_upserted = handler
+            .execute(
+                "projectConfig.upsert",
+                &json!({"projectId": "p", "config": config, "updatedAt": now}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            config_upserted.change,
+            Some(ProjectStoreChange::ProjectConfigs)
+        );
+
+        let found = handler
+            .execute("projectConfig.find", &json!({"projectId": "p"}))
+            .await
+            .unwrap();
+        assert_eq!(found.value["gitHostingProvider"], "github");
+
+        let configs = handler
+            .execute("projectConfig.list", &json!({}))
+            .await
+            .unwrap();
+        assert_eq!(configs.value["p"]["gitHostingProvider"], "github");
+
+        let removed = handler
+            .execute("projectConfig.remove", &json!({"projectId": "p"}))
+            .await
+            .unwrap();
+        assert_eq!(removed.change, Some(ProjectStoreChange::ProjectConfigs));
+        assert_eq!(removed.value, json!({}));
+    }
 
     #[tokio::test]
     async fn rename_can_be_tested_without_server_actor() {
@@ -181,7 +327,7 @@ mod tests {
             .await
             .unwrap();
 
-        let renamed = ProjectRenameHandler::new(store.clone())
+        let renamed = ProjectRenameHandler::new(&store)
             .execute(&json!({"id": "p", "name": "After"}))
             .await
             .unwrap();

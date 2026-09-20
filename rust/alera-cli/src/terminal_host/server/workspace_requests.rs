@@ -3,7 +3,7 @@ use serde_json::Value;
 
 use crate::terminal_host::host_error::{HostError, HostResult};
 
-use super::requests::{json_result, parse_payload, require_string_key};
+use super::request_payloads::{json_result, parse_payload, require_string_key};
 
 pub(super) struct WorkspaceRequestHandler<'a> {
     runtime_store: &'a RuntimeStore,
