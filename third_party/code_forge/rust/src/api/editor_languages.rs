@@ -20,9 +20,19 @@ struct NativeLanguageRegistration {
 
 const NATIVE_LANGUAGE_REGISTRY: &[NativeLanguageRegistration] = &[
     NativeLanguageRegistration {
+        canonical_id: "csharp",
+        aliases: &["cs"],
+        build: csharp_language,
+    },
+    NativeLanguageRegistration {
         canonical_id: "dart",
         aliases: &[],
         build: dart_language,
+    },
+    NativeLanguageRegistration {
+        canonical_id: "go",
+        aliases: &[],
+        build: go_language,
     },
     NativeLanguageRegistration {
         canonical_id: "rust",
@@ -48,6 +58,11 @@ const NATIVE_LANGUAGE_REGISTRY: &[NativeLanguageRegistration] = &[
         canonical_id: "python",
         aliases: &["py"],
         build: python_language,
+    },
+    NativeLanguageRegistration {
+        canonical_id: "php",
+        aliases: &[],
+        build: php_language,
     },
     NativeLanguageRegistration {
         canonical_id: "json",
@@ -85,10 +100,24 @@ pub(crate) fn resolve_native_language(language_id: &str) -> NativeLanguageResolu
     }
 }
 
+fn csharp_language() -> (Language, String) {
+    (
+        tree_sitter_c_sharp::LANGUAGE.into(),
+        tree_sitter_c_sharp::HIGHLIGHTS_QUERY.to_string(),
+    )
+}
+
 fn dart_language() -> (Language, String) {
     (
         tree_sitter_dart::LANGUAGE.into(),
         tree_sitter_dart::HIGHLIGHTS_QUERY.to_string(),
+    )
+}
+
+fn go_language() -> (Language, String) {
+    (
+        tree_sitter_go::LANGUAGE.into(),
+        tree_sitter_go::HIGHLIGHTS_QUERY.to_string(),
     )
 }
 
@@ -140,6 +169,13 @@ fn python_language() -> (Language, String) {
     )
 }
 
+fn php_language() -> (Language, String) {
+    (
+        tree_sitter_php::LANGUAGE_PHP.into(),
+        tree_sitter_php::HIGHLIGHTS_QUERY.to_string(),
+    )
+}
+
 fn json_language() -> (Language, String) {
     (
         tree_sitter_json::LANGUAGE.into(),
@@ -151,6 +187,7 @@ fn json_language() -> (Language, String) {
 mod tests {
     use super::*;
     use std::collections::HashSet;
+    use tree_sitter::{Parser, Query};
 
     #[test]
     fn native_language_aliases_resolve_to_canonical_ids() {
@@ -174,8 +211,8 @@ mod tests {
 
     #[test]
     fn unsupported_language_keeps_normalized_metadata_without_a_parser() {
-        let resolved = resolve_native_language("  CSharp  ");
-        assert_eq!(resolved.canonical_id, "csharp");
+        let resolved = resolve_native_language("  Kotlin  ");
+        assert_eq!(resolved.canonical_id, "kotlin");
         assert!(resolved.descriptor.is_none());
     }
 
@@ -194,6 +231,48 @@ mod tests {
             assert_eq!(descriptor.canonical_id, registration.canonical_id);
             assert_eq!(descriptor.aliases, registration.aliases);
             assert!(!descriptor.highlight_query.is_empty());
+        }
+    }
+
+    #[test]
+    fn first_wave_expansion_grammars_parse_representative_source() {
+        for (language_id, canonical_id, source) in [
+            (
+                "cs",
+                "csharp",
+                "namespace Demo; class Greeter { string Hello() => \"hi\"; }",
+            ),
+            (
+                "go",
+                "go",
+                "package demo\nfunc add(a int, b int) int { return a + b }",
+            ),
+            (
+                "php",
+                "php",
+                "<?php class Greeter { public function hello(): string { return 'hi'; } }",
+            ),
+        ] {
+            let resolved = resolve_native_language(language_id);
+            assert_eq!(resolved.canonical_id, canonical_id);
+            let descriptor = resolved
+                .descriptor
+                .expect("first-wave structural grammar must resolve");
+            assert!(!descriptor.highlight_query.is_empty());
+            Query::new(&descriptor.language, &descriptor.highlight_query)
+                .expect("registered highlight query must compile");
+
+            let mut parser = Parser::new();
+            parser
+                .set_language(&descriptor.language)
+                .expect("registered grammar must configure the parser");
+            let tree = parser
+                .parse(source, None)
+                .expect("representative source must parse");
+            assert!(
+                !tree.root_node().has_error(),
+                "{canonical_id} representative source must parse without errors"
+            );
         }
     }
 }
