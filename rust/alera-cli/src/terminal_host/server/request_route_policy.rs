@@ -167,6 +167,7 @@ pub(super) enum MobileDeferredRoute {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct RequestRoutePolicy {
+    pub(super) handler_family: RequestHandlerFamily,
     pub(super) mobile_allowed: bool,
     pub(super) runtime_mutation: RuntimeMutationPolicy,
     pub(super) post_response: PostResponseAction,
@@ -179,6 +180,7 @@ pub(super) struct RequestRoutePolicy {
 }
 
 const LOCAL: RequestRoutePolicy = RequestRoutePolicy {
+    handler_family: RequestHandlerFamily::Core,
     mobile_allowed: false,
     runtime_mutation: RuntimeMutationPolicy::Available,
     post_response: PostResponseAction::None,
@@ -232,13 +234,16 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         } else {
             RuntimeMutationPolicy::Conflicts
         };
-        return RequestRoutePolicy {
-            runtime_mutation,
-            ..LOCAL
-        };
+        return with_handler_family(
+            RequestRoutePolicy {
+                runtime_mutation,
+                ..LOCAL
+            },
+            request_handler_family(request_type),
+        );
     }
 
-    match request_type {
+    let policy = match request_type {
         "host.restart" => RequestRoutePolicy {
             mobile_allowed: true,
             post_response: PostResponseAction::Restart,
@@ -490,7 +495,8 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         | "workspaceTag.list" => MOBILE,
 
         _ => LOCAL,
-    }
+    };
+    with_handler_family(policy, request_handler_family(request_type))
 }
 
 pub(super) fn request_handler_family(request_type: &str) -> RequestHandlerFamily {
@@ -502,6 +508,16 @@ pub(super) fn request_handler_family(request_type: &str) -> RequestHandlerFamily
         RequestHandlerFamily::Orchestration
     } else {
         RequestHandlerFamily::Core
+    }
+}
+
+const fn with_handler_family(
+    policy: RequestRoutePolicy,
+    handler_family: RequestHandlerFamily,
+) -> RequestRoutePolicy {
+    RequestRoutePolicy {
+        handler_family,
+        ..policy
     }
 }
 

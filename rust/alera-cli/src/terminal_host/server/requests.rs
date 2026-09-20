@@ -24,8 +24,8 @@ use super::host_service_requests::required_non_blank;
 use super::project_registration_requests::ProjectRegistrationRequestHandler;
 pub(super) use super::request_payloads::{json_result, parse_payload};
 use super::request_route_policy::{
-    request_handler_family, request_route_policy, CoalescedReadRoute, DeferredWriteRoute,
-    MobileDeferredRoute, PostResponseAction, RequestHandlerFamily,
+    request_route_policy, CoalescedReadRoute, DeferredWriteRoute, MobileDeferredRoute,
+    PostResponseAction, RequestHandlerFamily, RequestRoutePolicy,
 };
 use super::runtime_mutation_barrier::conflicts_with_runtime_mutation;
 use super::{ClientKind, ServerActor, ServerCommand};
@@ -107,8 +107,7 @@ impl ServerActor {
                             return;
                         }
                     }
-                    if request_handler_family(&request_type) == RequestHandlerFamily::Orchestration
-                    {
+                    if route_policy.handler_family == RequestHandlerFamily::Orchestration {
                         match self
                             .handle_orchestration_request(client_id, id, &request_type, &payload)
                             .await
@@ -232,7 +231,7 @@ impl ServerActor {
             _ => {
                 self.require_auth(client_id)?;
                 self.require_request_allowed(client_id, request_type)?;
-                self.handle_authenticated_request(client_id, request_type, payload)
+                self.handle_authenticated_request(client_id, request_type, payload, route_policy)
                     .await
             }
         }
@@ -243,8 +242,9 @@ impl ServerActor {
         client_id: u64,
         request_type: &str,
         payload: &Value,
+        route_policy: RequestRoutePolicy,
     ) -> HostResult<Value> {
-        match request_handler_family(request_type) {
+        match route_policy.handler_family {
             RequestHandlerFamily::Configuration => {
                 return self
                     .handle_configuration_request(client_id, request_type, payload)
@@ -1313,6 +1313,7 @@ mod tests;
 mod dedicated_host_error_tests {
     use crate::terminal_host::host_error::OutcomeClass;
     use crate::terminal_host::server::actor_test_harness::{mobile_client, test_actor};
+    use crate::terminal_host::server::request_route_policy::request_route_policy;
     use serde_json::json;
     use std::collections::HashMap;
 
@@ -1328,7 +1329,12 @@ mod dedicated_host_error_tests {
         .await;
 
         let error = actor
-            .handle_authenticated_request(1, "host.shutdown", &json!({}))
+            .handle_authenticated_request(
+                1,
+                "host.shutdown",
+                &json!({}),
+                request_route_policy("host.shutdown"),
+            )
             .await
             .unwrap_err();
         assert_eq!(error.outcome_class(), OutcomeClass::Unauthorized);
