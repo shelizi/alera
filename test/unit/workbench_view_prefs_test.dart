@@ -56,7 +56,7 @@ void main() {
         rightSidebarVisible: false,
         rightSidebarWidth: 360,
         sidebarWidth: 360,
-        activeContextPanelTab: .explorer,
+        activeContextPanelTab: .references,
         explorerMode: .showAll,
         showHiddenFiles: true,
         quickOpenIncludeGitignored: true,
@@ -80,7 +80,10 @@ void main() {
       expect(restored.rightSidebarVisible, isFalse);
       expect(restored.rightSidebarWidth, 360);
       expect(restored.sidebarWidth, 360);
-      expect(restored.activeContextPanelTab, WorkbenchContextPanelTab.explorer);
+      expect(
+        restored.activeContextPanelTab,
+        WorkbenchContextPanelTab.references,
+      );
       expect(restored.explorerMode, WorkspaceExplorerMode.showAll);
       expect(restored.showHiddenFiles, isTrue);
       expect(restored.quickOpenIncludeGitignored, isTrue);

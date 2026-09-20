@@ -3,11 +3,13 @@ import 'package:alera/src/design_system/buttons/alera_icon_button.dart';
 import 'package:alera/src/design_system/feedback/alera_empty_state.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:alera/src/features/pull_requests/presentation/workspace_pull_requests_panel.dart';
+import 'package:alera/src/features/workbench/application/workspace_references_controller.dart';
 import 'package:alera/src/features/workbench/domain/workbench_view_prefs.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_source_control_scope.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_explorer.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_git_diff_panel.dart';
+import 'package:alera/src/features/workbench/presentation/workspace_references_panel.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_search_panel.dart';
 import 'package:flutter/material.dart';
 
@@ -34,6 +36,7 @@ class const WorkspaceContextSidebar({
   required final OpenGitCommitDiffTabCallback onOpenGitCommitDiff,
   final Future<void> Function(String branch)? onSwitchBranch,
   required final ValueChanged<WorkspaceSearchMatchTarget> onOpenSearchMatch,
+  final Future<void> Function(WorkspaceReferenceMatch match)? onOpenReference,
   required final Future<void> Function(
     String oldRelativePath,
     String newRelativePath,
@@ -83,6 +86,11 @@ class const WorkspaceContextSidebar({
                         workspace: workspace,
                         onOpenMatch: onOpenSearchMatch,
                       ),
+                      WorkbenchContextPanelTab.references =>
+                        WorkspaceReferencesPanel(
+                          workspace: workspace,
+                          onOpenReference: onOpenReference,
+                        ),
                       WorkbenchContextPanelTab.gitDiff =>
                         sourceControlScope == null
                             ? const AleraEmptyState(
@@ -208,6 +216,14 @@ class const _CollapsedContextRail({
           ),
           const SizedBox(height: AleraTokens.space6),
           _ContextTabButton(
+            tab: .references,
+            activeTab: activeTab,
+            tooltip: 'References',
+            icon: AleraIcons.listView,
+            onPressed: () => onOpenTab(.references),
+          ),
+          const SizedBox(height: AleraTokens.space6),
+          _ContextTabButton(
             tab: .gitDiff,
             activeTab: activeTab,
             tooltip: 'Source Control',
@@ -269,6 +285,14 @@ class const _ContextTabHeader({
                 tooltip: 'Search',
                 icon: AleraIcons.search,
                 onPressed: () => onSetActiveTab(.search),
+              ),
+              const SizedBox(width: AleraTokens.space6),
+              _ContextTabButton(
+                tab: .references,
+                activeTab: activeTab,
+                tooltip: 'References',
+                icon: AleraIcons.listView,
+                onPressed: () => onSetActiveTab(.references),
               ),
               const SizedBox(width: AleraTokens.space6),
               _ContextTabButton(

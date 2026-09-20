@@ -246,6 +246,22 @@ final class LanguageIntelligenceManager {
     ),
   );
 
+  String? providerIdFor({
+    required String workspaceId,
+    required String path,
+    required LanguageCapability capability,
+  }) {
+    final document = _documents[_DocumentKey(workspaceId, path)];
+    if (document == null) {
+      return null;
+    }
+    final provider = _registry.provider(document.providerId);
+    if (provider == null || !provider.capabilities.contains(capability)) {
+      return null;
+    }
+    return document.providerId;
+  }
+
   Future<List<SourceLocation>> _navigate({
     required String workspaceId,
     required String path,

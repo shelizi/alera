@@ -272,6 +272,23 @@ class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody> {
                                     );
                               }());
                             },
+                            onOpenReference: (match) async {
+                              final tab = await controller.openEditorTab(
+                                workspace: workspace,
+                                relativePath: match.relativePath,
+                                preview: false,
+                              );
+                              ref
+                                  .read(editorSessionRegistryProvider)
+                                  .reveal(
+                                    tab.id,
+                                    WorkspaceEditorRevealTarget(
+                                      line: match.line,
+                                      column: match.column,
+                                      matchLength: match.matchLength,
+                                    ),
+                                  );
+                            },
                             onPathMoved:
                                 (oldRelativePath, newRelativePath) async {
                                   await controller.syncFileTabsAfterPathMove(

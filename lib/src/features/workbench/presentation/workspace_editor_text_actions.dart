@@ -31,12 +31,21 @@ extension _WorkspaceEditorTextActions on _WorkspaceEditorSurfaceState {
     BuildContext context,
   ) {
     final items = <code_forge.CustomContextMenu>[];
-    if (_canOfferLanguageNavigation()) {
+    if (_canOfferLanguageNavigation(LanguageCapability.definition)) {
       items.add(
         code_forge.CustomContextMenu(
           label: context.tr('Go to Definition'),
           description: '',
           onPress: () => unawaited(_goToDefinition()),
+        ),
+      );
+    }
+    if (_canOfferLanguageNavigation(LanguageCapability.references)) {
+      items.add(
+        code_forge.CustomContextMenu(
+          label: context.tr('Find References'),
+          description: '',
+          onPress: () => unawaited(_findReferences()),
         ),
       );
     }

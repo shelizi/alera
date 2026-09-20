@@ -134,6 +134,8 @@ class WorkbenchContextPanelTabMapper
         return WorkbenchContextPanelTab.explorer;
       case r'search':
         return WorkbenchContextPanelTab.search;
+      case r'references':
+        return WorkbenchContextPanelTab.references;
       case r'gitDiff':
         return WorkbenchContextPanelTab.gitDiff;
       case r'pullRequests':
@@ -150,6 +152,8 @@ class WorkbenchContextPanelTabMapper
         return r'explorer';
       case WorkbenchContextPanelTab.search:
         return r'search';
+      case WorkbenchContextPanelTab.references:
+        return r'references';
       case WorkbenchContextPanelTab.gitDiff:
         return r'gitDiff';
       case WorkbenchContextPanelTab.pullRequests:

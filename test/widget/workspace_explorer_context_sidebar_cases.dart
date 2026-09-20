@@ -54,6 +54,7 @@ void _registerWorkspaceExplorerContextSidebarTests() {
 
       expect(find.byTooltip('Explorer'), findsOneWidget);
       expect(find.byTooltip('Search'), findsOneWidget);
+      expect(find.byTooltip('References'), findsOneWidget);
       expect(find.byTooltip('Source Control'), findsOneWidget);
       expect(find.byTooltip('Pull Request'), findsOneWidget);
       expect(find.text('Source Control Unavailable'), findsOneWidget);
@@ -113,6 +114,7 @@ void _registerWorkspaceExplorerContextSidebarTests() {
       await tester.pumpAndSettle();
 
       expect(find.byTooltip('Expand panel'), findsOneWidget);
+      expect(find.byTooltip('References'), findsOneWidget);
       expect(find.byTooltip('Source Control'), findsOneWidget);
       expect(find.byTooltip('Pull Request'), findsOneWidget);
 
@@ -173,6 +175,70 @@ void _registerWorkspaceExplorerContextSidebarTests() {
       );
     },
   );
+
+  testWidgets('context sidebar hosts the references result surface', (
+    tester,
+  ) async {
+    final service = _FakeWorkspaceFileService();
+    await tester.pumpWidget(
+      _withWorkspaceFiles(
+        service,
+        child: MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 360,
+              height: 520,
+              child: WorkspaceContextSidebar(
+                workspace: _workspace(),
+                prefs: WorkbenchViewPrefs.defaults.copyWith(
+                  activeContextPanelTab: .references,
+                ),
+                onToggleVisible: () {},
+                onResize: (_) {},
+                onSetContextPanelTab: (_) {},
+                onSetExplorerMode: (_) {},
+                onSetShowHiddenFiles: (_) {},
+                onSetGitDiffViewMode: (_) {},
+                onSetGitDiffGroupMode: (_) {},
+                onOpenFile: (_) {},
+                onOpenGitDiff: ({
+                  relativePath,
+                  area,
+                  gitDiffRoot,
+                  required scope,
+                  bool preview = false,
+                }) async {},
+                onOpenGitCommitDiff: ({
+                  relativePath,
+                  oldPath,
+                  required scope,
+                  gitDiffRoot,
+                  required commitOid,
+                  parentOid,
+                  required compareRef,
+                  subject,
+                  message,
+                  bool preview = false,
+                }) async {},
+                onOpenSearchMatch: (_) {},
+                onPathMoved: (_, _) async {},
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byTooltip('References'), findsOneWidget);
+    expect(find.text('Find References'), findsOneWidget);
+    expect(
+      find.text(
+        'Run Find References from an editor to show project references here.',
+      ),
+      findsOneWidget,
+    );
+  });
 
   testWidgets(
     'context sidebar loads the next workspace explorer without manual refresh',
@@ -289,6 +355,7 @@ void _registerWorkspaceExplorerContextSidebarTests() {
     expect(find.byTooltip('Expand panel'), findsOneWidget);
     expect(find.byTooltip('Explorer'), findsOneWidget);
     expect(find.byTooltip('Search'), findsOneWidget);
+    expect(find.byTooltip('References'), findsOneWidget);
     expect(find.byTooltip('Source Control'), findsOneWidget);
     expect(find.byIcon(AleraIcons.gitBranch), findsOneWidget);
     expect(
@@ -297,6 +364,10 @@ void _registerWorkspaceExplorerContextSidebarTests() {
     );
     expect(
       tester.getTopLeft(find.byTooltip('Search')).dy,
+      lessThan(tester.getTopLeft(find.byTooltip('References')).dy),
+    );
+    expect(
+      tester.getTopLeft(find.byTooltip('References')).dy,
       lessThan(tester.getTopLeft(find.byTooltip('Source Control')).dy),
     );
     expect(find.byType(WorkspaceExplorer), findsNothing);

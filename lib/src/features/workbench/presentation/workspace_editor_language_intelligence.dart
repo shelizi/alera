@@ -35,7 +35,7 @@ extension _WorkspaceEditorLanguageIntelligence on _WorkspaceEditorSurfaceState {
         : LanguageServerTarget.remoteWorkspace;
   }
 
-  bool _canOfferLanguageNavigation() {
+  bool _canOfferLanguageNavigation(LanguageCapability capability) {
     final filePath = widget.tab.filePath;
     if (filePath == null ||
         _loading ||
@@ -61,13 +61,13 @@ extension _WorkspaceEditorLanguageIntelligence on _WorkspaceEditorSurfaceState {
       language.id,
       preferredProviderId: activation.semanticProviderId,
     );
-    return provider?.capabilities.contains(LanguageCapability.definition) ??
-        false;
+    return provider?.capabilities.contains(capability) ?? false;
   }
 
   Future<void> _goToDefinition() async {
     final filePath = widget.tab.filePath;
-    if (filePath == null || !_canOfferLanguageNavigation()) {
+    if (filePath == null ||
+        !_canOfferLanguageNavigation(LanguageCapability.definition)) {
       return;
     }
     await _flushLanguageIntelligenceDocumentSync();
@@ -145,6 +145,53 @@ extension _WorkspaceEditorLanguageIntelligence on _WorkspaceEditorSurfaceState {
       return;
     }
     await _openDefinitionChoice(choice);
+  }
+
+  Future<void> _findReferences() async {
+    final filePath = widget.tab.filePath;
+    if (filePath == null ||
+        !_canOfferLanguageNavigation(LanguageCapability.references)) {
+      return;
+    }
+    await _flushLanguageIntelligenceDocumentSync();
+    if (!mounted || widget.tab.filePath != filePath) {
+      return;
+    }
+    if (_languageIntelligenceDocumentPath == null) {
+      await _refreshLanguageIntelligenceDocument();
+    }
+    final sourcePath = _languageIntelligenceDocumentPath;
+    if (!mounted || sourcePath == null || widget.tab.filePath != filePath) {
+      _showToast('Language server is not ready');
+      return;
+    }
+
+    final String sourceText;
+    try {
+      sourceText = await _languageIntelligenceSourceText(filePath);
+    } catch (_) {
+      _showToast('Language server is not ready');
+      return;
+    }
+    final position = workspaceEditorSourcePositionForDisplayOffset(
+      displayText: _controller.text,
+      sourceText: sourceText,
+      displayScalarOffset: _controller.selection.extentOffset,
+      tabSize: _currentEditorTabSize(),
+    );
+
+    final workbench = ref.read(workbenchControllerProvider.notifier);
+    workbench.setRightSidebarVisible(true);
+    workbench.setContextPanelTab(.references);
+    await ref
+        .read(
+          workspaceReferencesControllerProvider(widget.workspace.id).notifier,
+        )
+        .search(
+          workspacePath: widget.workspace.path,
+          sourcePath: sourcePath,
+          position: position,
+        );
   }
 
   Future<_WorkspaceEditorDefinitionChoice?> _pickDefinitionChoice(

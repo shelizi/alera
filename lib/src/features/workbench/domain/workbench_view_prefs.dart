@@ -10,7 +10,13 @@ enum WorkbenchGroupBy { none, project, section }
 enum WorkbenchSortBy { name, recent, activity }
 
 @MappableEnum()
-enum WorkbenchContextPanelTab { explorer, search, gitDiff, pullRequests }
+enum WorkbenchContextPanelTab {
+  explorer,
+  search,
+  references,
+  gitDiff,
+  pullRequests,
+}
 
 @MappableEnum()
 enum WorkspaceExplorerMode { hideIgnored, showAll }
