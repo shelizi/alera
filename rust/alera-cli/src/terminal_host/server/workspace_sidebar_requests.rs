@@ -11,6 +11,7 @@ use crate::terminal_host::host_error::{HostError, HostResult};
 use crate::terminal_host::protocol::{error_response, event, ok_response};
 
 use super::request_payloads::{json_result, parse_payload, require_string_key};
+use super::workspace_activity_requests::WorkspaceActivityRequestHandler;
 use super::{ServerActor, ServerCommand};
 
 #[derive(Debug, Deserialize)]
@@ -275,13 +276,9 @@ impl ServerActor {
 
     pub(super) async fn workspace_activity(&self, client_id: u64) -> HostResult<Value> {
         self.require_auth(client_id)?;
-        serde_json::to_value(
-            self.runtime_store
-                .list_workspace_activity()
-                .await
-                .map_err(state_error)?,
-        )
-        .map_err(state_error)
+        WorkspaceActivityRequestHandler::new(&self.runtime_store)
+            .list()
+            .await
     }
 
     pub(super) async fn upsert_workspace_activity(
@@ -290,14 +287,11 @@ impl ServerActor {
         payload: &Value,
     ) -> HostResult<Value> {
         self.require_auth(client_id)?;
-        let entries = serde_json::from_value(payload.clone()).map_err(format_error)?;
-        let value = self
-            .runtime_store
-            .record_workspace_activity_batch(entries)
-            .await
-            .map_err(state_error)?;
+        let value = WorkspaceActivityRequestHandler::new(&self.runtime_store)
+            .upsert_all(payload)
+            .await?;
         self.broadcast_authenticated(event("workspaceActivityChanged", json!({})));
-        serde_json::to_value(value).map_err(state_error)
+        Ok(value)
     }
 
     pub(super) async fn remove_workspace_activity(
@@ -306,13 +300,11 @@ impl ServerActor {
         payload: &Value,
     ) -> HostResult<Value> {
         self.require_auth(client_id)?;
-        let workspace_id = string_field(payload, "workspaceId")?;
-        self.runtime_store
-            .remove_workspace_activity(workspace_id)
-            .await
-            .map_err(state_error)?;
+        let value = WorkspaceActivityRequestHandler::new(&self.runtime_store)
+            .remove(payload)
+            .await?;
         self.broadcast_authenticated(event("workspaceActivityChanged", json!({})));
-        Ok(json!({}))
+        Ok(value)
     }
 
     pub(super) async fn update_workbench_view_prefs(
