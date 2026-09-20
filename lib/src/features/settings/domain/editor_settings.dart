@@ -37,7 +37,8 @@ class const _LegacyEditorSettingsHook() extends MappingHook {
 /// Mixed ownership: `tabSize`, `themeName`, `autosaveEnabled`,
 /// `autosaveDelaySeconds`, and `quickOpenExcludedDirectories` are
 /// portable-cloud configuration; the external editor and code-open fields are
-/// local-only UI prefs.
+/// local-only UI prefs. `languageIntelligence` is also local-only because it
+/// may contain per-device executable paths.
 @MappableClass(hook: _LegacyEditorSettingsHook())
 class const EditorSettings({
   this.tabSize = 4,
@@ -50,6 +51,7 @@ class const EditorSettings({
   this.externalEditorExecutablePaths = const <String, String>{},
   this.externalEditorWorkspaceMode = ExternalEditorWorkspaceMode.newWindow,
   this.autoOpenNewWorkspacesExternally = false,
+  this.languageIntelligence = LanguageIntelligenceSettings.defaults,
 }) with EditorSettingsMappable {
   static const int minAutosaveDelaySeconds = 1;
   static const int maxAutosaveDelaySeconds = 60;
@@ -106,6 +108,10 @@ class const EditorSettings({
 
   final ExternalEditorWorkspaceMode externalEditorWorkspaceMode;
   final bool autoOpenNewWorkspacesExternally;
+
+  /// Per-language parser/semantic activation and local executable overrides.
+  /// Semantic providers are opt-in and every language defaults to disabled.
+  final LanguageIntelligenceSettings languageIntelligence;
 
   /// Clamps persisted values before they are used to construct a timer.
   int get effectiveAutosaveDelaySeconds => autosaveDelaySeconds

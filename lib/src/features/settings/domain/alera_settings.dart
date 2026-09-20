@@ -3,6 +3,7 @@ import 'package:alera/src/features/ai_assist/domain/ai_assist_settings.dart';
 import 'package:alera/src/features/ai_dictation/domain/ai_dictation_settings.dart';
 import 'package:alera/src/features/external_editor/domain/external_editor_launcher.dart';
 import 'package:alera/src/features/keyboard/domain/keyboard_shortcut_settings.dart';
+import 'package:alera/src/features/language_intelligence/domain/language_intelligence_settings.dart';
 import 'package:alera/src/features/settings/domain/editor_syntax_theme_catalog.dart';
 import 'package:alera/src/features/settings/domain/terminal_theme_catalog.dart';
 import 'package:alera/src/features/text_actions/domain/text_actions_settings.dart';

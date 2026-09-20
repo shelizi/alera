@@ -2,6 +2,7 @@ import 'package:alera/src/features/ai_assist/domain/ai_assist_settings.dart';
 import 'package:alera/src/features/ai_dictation/domain/ai_dictation_settings.dart';
 import 'package:alera/src/features/keyboard/domain/keyboard_action.dart';
 import 'package:alera/src/features/keyboard/domain/keyboard_shortcut_settings.dart';
+import 'package:alera/src/features/language_intelligence/domain/language_intelligence_settings.dart';
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
 import 'package:alera/src/features/settings/domain/settings_ownership.dart';
 import 'package:alera/src/features/text_actions/domain/text_actions_settings.dart';
@@ -10,6 +11,29 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('settings ownership maps', () {
+    test('language intelligence settings stay local-only', () {
+      final settings = AleraSettings.defaults.copyWith(
+        editor: AleraSettings.defaults.editor.copyWith(
+          languageIntelligence: const LanguageIntelligenceSettings(
+            languages: <String, LanguageActivationSettings>{
+              'rust': LanguageActivationSettings(
+                enabled: true,
+                semanticProviderId: 'rust.rust-analyzer',
+                executablePath: r'C:\Tools\rust-analyzer.exe',
+              ),
+            },
+          ),
+        ),
+      );
+
+      final serializedEditor = settings.toMap()['editor']! as Map;
+      final portableEditor =
+          settings.toPortableConfigurationMap()['editor']! as Map;
+
+      expect(serializedEditor['languageIntelligence'], isA<Map>());
+      expect(portableEditor, isNot(contains('languageIntelligence')));
+    });
+
     test(
       'runtime, portable, and local-only contracts cover every persisted field',
       () {
@@ -82,6 +106,7 @@ void main() {
         );
         expect((portable['aiDictation']! as Map)['localModelId'], isNull);
         expect((portable['editor']! as Map)['externalEditor'], isNull);
+        expect((portable['editor']! as Map)['languageIntelligence'], isNull);
         expect((portable['terminal']! as Map)['scrollbackLines'], isNull);
         expect((portable['terminal']! as Map)['loginShell'], isNull);
         expect((portable['diagnostics']), isNull);
@@ -189,6 +214,7 @@ const _classifiedFieldPaths = <String>{
   'editor.externalEditorExecutablePaths',
   'editor.externalEditorWorkspaceMode',
   'editor.autoOpenNewWorkspacesExternally',
+  'editor.languageIntelligence',
   'diagnostics.logLevel',
   'diagnostics.crashReportingEnabled',
   'terminal.fontFamily',
@@ -295,6 +321,15 @@ AleraSettings _populatedSettings() {
     editor: AleraSettings.defaults.editor.copyWith(
       tabSize: 2,
       externalEditorExecutablePaths: <String, String>{'zed': '/usr/bin/zed'},
+      languageIntelligence: const LanguageIntelligenceSettings(
+        languages: <String, LanguageActivationSettings>{
+          'rust': LanguageActivationSettings(
+            enabled: true,
+            semanticProviderId: 'rust.rust-analyzer',
+            executablePath: r'C:\Tools\rust-analyzer.exe',
+          ),
+        },
+      ),
     ),
     terminal: AleraSettings.defaults.terminal.copyWith(
       fontSize: 16,

@@ -1,6 +1,8 @@
 import 'package:alera/src/features/ai_assist/domain/ai_assist_settings.dart';
 import 'package:alera/src/features/keyboard/domain/keyboard_action.dart';
 import 'package:alera/src/features/keyboard/domain/keyboard_shortcut_settings.dart';
+import 'package:alera/src/features/language_intelligence/domain/language_id.dart';
+import 'package:alera/src/features/language_intelligence/domain/language_intelligence_settings.dart';
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
 import 'package:alera/src/features/settings/domain/editor_syntax_theme_catalog.dart';
 import 'package:alera/src/features/settings/domain/terminal_theme_catalog.dart';
@@ -43,6 +45,17 @@ void main() {
           autosaveEnabled: true,
           autosaveDelaySeconds: 3,
           quickOpenExcludedDirectories: <String>['generated', 'cache'],
+          languageIntelligence: LanguageIntelligenceSettings(
+            languages: <String, LanguageActivationSettings>{
+              'rust': LanguageActivationSettings(
+                enabled: true,
+                structuralParserEnabled: true,
+                semanticProviderId: 'rust.rust-analyzer',
+                executablePath: r'C:\Tools\rust-analyzer.exe',
+                extraArgs: <String>['--log-file', 'ra.log'],
+              ),
+            },
+          ),
         ),
         aiAssist: AiAssistSettings(
           agent: .agy,
@@ -126,6 +139,24 @@ void main() {
         'generated',
         'cache',
       ]);
+      final rustLanguageIntelligence = restored.editor.languageIntelligence
+          .forLanguage(LanguageId('rust'));
+      expect(rustLanguageIntelligence.enabled, isTrue);
+      expect(rustLanguageIntelligence.structuralParserEnabled, isTrue);
+      expect(rustLanguageIntelligence.semanticProviderId, 'rust.rust-analyzer');
+      expect(
+        rustLanguageIntelligence.executablePath,
+        r'C:\Tools\rust-analyzer.exe',
+      );
+      expect(rustLanguageIntelligence.extraArgs, <String>[
+        '--log-file',
+        'ra.log',
+      ]);
+      expect(
+        ((encoded['editor']! as Map)['languageIntelligence']
+            as Map)['languages'],
+        containsPair('rust', isA<Map>()),
+      );
       expect(restored.aiAssist.agent, AiAssistAgent.agy);
       expect(restored.aiAssist.modelFor(.agy), 'Gemini 3.5 Flash (Medium)');
       expect(
@@ -160,5 +191,25 @@ void main() {
         'Mod+Shift+W',
       ]);
     });
+
+    test(
+      'older editor json without language intelligence uses disabled defaults',
+      () {
+        final encoded = Map<String, Object?>.from(
+          AleraSettings.defaults.toMap(),
+        );
+        final editor = Map<String, Object?>.from(encoded['editor']! as Map);
+        editor.remove('languageIntelligence');
+        encoded['editor'] = editor;
+
+        final restored = AleraSettings.fromJson(encoded);
+
+        expect(restored.editor.languageIntelligence.languages, isEmpty);
+        expect(
+          restored.editor.languageIntelligence.forLanguage(LanguageId('rust')),
+          LanguageActivationSettings.defaults,
+        );
+      },
+    );
   });
 }

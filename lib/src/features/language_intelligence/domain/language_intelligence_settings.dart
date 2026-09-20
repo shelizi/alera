@@ -1,14 +1,17 @@
+import 'package:dart_mappable/dart_mappable.dart';
+
 import 'language_id.dart';
 
-final class LanguageActivationSettings {
-  const LanguageActivationSettings({
-    this.enabled = false,
-    this.structuralParserEnabled = false,
-    this.semanticProviderId,
-    this.executablePath,
-    this.extraArgs = const <String>[],
-  });
+part 'language_intelligence_settings.mapper.dart';
 
+@MappableClass()
+class const LanguageActivationSettings({
+  this.enabled = false,
+  this.structuralParserEnabled = false,
+  this.semanticProviderId,
+  this.executablePath,
+  this.extraArgs = const <String>[],
+}) with LanguageActivationSettingsMappable {
   final bool enabled;
   final bool structuralParserEnabled;
   final String? semanticProviderId;
@@ -17,33 +20,37 @@ final class LanguageActivationSettings {
 
   static const LanguageActivationSettings defaults =
       LanguageActivationSettings();
+
+  factory fromJson(Map<String, Object?> json) =>
+      LanguageActivationSettingsMapper.fromMap(Map<String, dynamic>.from(json));
 }
 
-final class LanguageIntelligenceSettings {
-  factory LanguageIntelligenceSettings({
-    Map<LanguageId, LanguageActivationSettings> languages =
-        const <LanguageId, LanguageActivationSettings>{},
-  }) => LanguageIntelligenceSettings._(
-    Map<LanguageId, LanguageActivationSettings>.unmodifiable(languages),
-  );
-
-  const LanguageIntelligenceSettings._(this.languages);
-
-  final Map<LanguageId, LanguageActivationSettings> languages;
+@MappableClass()
+class const LanguageIntelligenceSettings({
+  this.languages = const <String, LanguageActivationSettings>{},
+}) with LanguageIntelligenceSettingsMappable {
+  /// Persisted by canonical string language id so settings remain stable even
+  /// when the runtime [LanguageId] value object evolves.
+  final Map<String, LanguageActivationSettings> languages;
 
   LanguageActivationSettings forLanguage(LanguageId language) =>
-      languages[language] ?? LanguageActivationSettings.defaults;
+      languages[language.value] ?? LanguageActivationSettings.defaults;
 
   LanguageIntelligenceSettings withLanguage(
     LanguageId language,
     LanguageActivationSettings settings,
   ) => LanguageIntelligenceSettings(
-    languages: <LanguageId, LanguageActivationSettings>{
+    languages: <String, LanguageActivationSettings>{
       ...languages,
-      language: settings,
+      language.value: settings,
     },
   );
 
-  static final LanguageIntelligenceSettings defaults =
+  static const LanguageIntelligenceSettings defaults =
       LanguageIntelligenceSettings();
+
+  factory fromJson(Map<String, Object?> json) =>
+      LanguageIntelligenceSettingsMapper.fromMap(
+        Map<String, dynamic>.from(json),
+      );
 }

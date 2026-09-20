@@ -2245,6 +2245,7 @@ class EditorSettingsMapper extends ClassMapperBase<EditorSettings> {
       ExternalEditorKindMapper.ensureInitialized();
       CodeOpenTargetMapper.ensureInitialized();
       ExternalEditorWorkspaceModeMapper.ensureInitialized();
+      LanguageIntelligenceSettingsMapper.ensureInitialized();
     }
     return _instance!;
   }
@@ -2334,6 +2335,16 @@ class EditorSettingsMapper extends ClassMapperBase<EditorSettings> {
         opt: true,
         def: false,
       );
+  static LanguageIntelligenceSettings _$languageIntelligence(
+    EditorSettings v,
+  ) => v.languageIntelligence;
+  static const Field<EditorSettings, LanguageIntelligenceSettings>
+  _f$languageIntelligence = Field(
+    'languageIntelligence',
+    _$languageIntelligence,
+    opt: true,
+    def: LanguageIntelligenceSettings.defaults,
+  );
 
   @override
   final MappableFields<EditorSettings> fields = const {
@@ -2347,6 +2358,7 @@ class EditorSettingsMapper extends ClassMapperBase<EditorSettings> {
     #externalEditorExecutablePaths: _f$externalEditorExecutablePaths,
     #externalEditorWorkspaceMode: _f$externalEditorWorkspaceMode,
     #autoOpenNewWorkspacesExternally: _f$autoOpenNewWorkspacesExternally,
+    #languageIntelligence: _f$languageIntelligence,
   };
 
   @override
@@ -2365,6 +2377,7 @@ class EditorSettingsMapper extends ClassMapperBase<EditorSettings> {
       autoOpenNewWorkspacesExternally: data.dec(
         _f$autoOpenNewWorkspacesExternally,
       ),
+      languageIntelligence: data.dec(_f$languageIntelligence),
     );
   }
 
@@ -2434,6 +2447,12 @@ abstract class EditorSettingsCopyWith<$R, $In extends EditorSettings, $Out>
   get quickOpenExcludedDirectories;
   MapCopyWith<$R, String, String, ObjectCopyWith<$R, String, String>>
   get externalEditorExecutablePaths;
+  LanguageIntelligenceSettingsCopyWith<
+    $R,
+    LanguageIntelligenceSettings,
+    LanguageIntelligenceSettings
+  >
+  get languageIntelligence;
   $R call({
     int? tabSize,
     String? themeName,
@@ -2445,6 +2464,7 @@ abstract class EditorSettingsCopyWith<$R, $In extends EditorSettings, $Out>
     Map<String, String>? externalEditorExecutablePaths,
     ExternalEditorWorkspaceMode? externalEditorWorkspaceMode,
     bool? autoOpenNewWorkspacesExternally,
+    LanguageIntelligenceSettings? languageIntelligence,
   });
   EditorSettingsCopyWith<$R2, $In, $Out2> $chain<$R2, $Out2>(
     Then<$Out2, $R2> t,
@@ -2474,6 +2494,15 @@ class _EditorSettingsCopyWithImpl<$R, $Out>
     (v) => call(externalEditorExecutablePaths: v),
   );
   @override
+  LanguageIntelligenceSettingsCopyWith<
+    $R,
+    LanguageIntelligenceSettings,
+    LanguageIntelligenceSettings
+  >
+  get languageIntelligence => $value.languageIntelligence.copyWith.$chain(
+    (v) => call(languageIntelligence: v),
+  );
+  @override
   $R call({
     int? tabSize,
     String? themeName,
@@ -2485,6 +2514,7 @@ class _EditorSettingsCopyWithImpl<$R, $Out>
     Map<String, String>? externalEditorExecutablePaths,
     ExternalEditorWorkspaceMode? externalEditorWorkspaceMode,
     bool? autoOpenNewWorkspacesExternally,
+    LanguageIntelligenceSettings? languageIntelligence,
   }) => $apply(
     FieldCopyWithData({
       if (tabSize != null) #tabSize: tabSize,
@@ -2502,6 +2532,8 @@ class _EditorSettingsCopyWithImpl<$R, $Out>
         #externalEditorWorkspaceMode: externalEditorWorkspaceMode,
       if (autoOpenNewWorkspacesExternally != null)
         #autoOpenNewWorkspacesExternally: autoOpenNewWorkspacesExternally,
+      if (languageIntelligence != null)
+        #languageIntelligence: languageIntelligence,
     }),
   );
   @override
@@ -2530,6 +2562,10 @@ class _EditorSettingsCopyWithImpl<$R, $Out>
     autoOpenNewWorkspacesExternally: data.get(
       #autoOpenNewWorkspacesExternally,
       or: $value.autoOpenNewWorkspacesExternally,
+    ),
+    languageIntelligence: data.get(
+      #languageIntelligence,
+      or: $value.languageIntelligence,
     ),
   );
 

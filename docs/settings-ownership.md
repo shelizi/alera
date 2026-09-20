@@ -71,7 +71,7 @@ A field can sit in more than one tier: the `runtimeSettings.update` payload and 
 | Field | Tiers |
 | --- | --- |
 | `tabSize`, `themeName`, `autosaveEnabled`, `autosaveDelaySeconds` | portable |
-| `externalEditor`, `codeOpenTarget`, `externalEditorExecutablePaths`, `externalEditorWorkspaceMode`, `autoOpenNewWorkspacesExternally` | local-only |
+| `externalEditor`, `codeOpenTarget`, `externalEditorExecutablePaths`, `externalEditorWorkspaceMode`, `autoOpenNewWorkspacesExternally`, `languageIntelligence` | local-only |
 
 ### `diagnostics`
 
