@@ -1,3 +1,4 @@
+use super::editor_languages::resolve_native_language;
 use super::rope::RopeBridge;
 use flutter_rust_bridge::frb;
 use ropey::Rope as RustRope;
@@ -8,7 +9,7 @@ use std::sync::{
     Arc, Mutex,
 };
 use tree_sitter::{
-    InputEdit, Language, ParseOptions, Parser, Point, Query, QueryCursor, StreamingIterator, Tree,
+    InputEdit, ParseOptions, Parser, Point, Query, QueryCursor, StreamingIterator, Tree,
 };
 
 const NATIVE_PARSE_CANCELLED_ERROR: &str = "native editor parse cancelled";
@@ -127,11 +128,6 @@ pub struct NativeEditorDocumentInfo {
     pub closed: bool,
 }
 
-struct NativeLanguage {
-    language: Language,
-    highlight_query: String,
-}
-
 struct NativeEditorDocumentState {
     document_id: String,
     revision: u64,
@@ -226,8 +222,9 @@ impl NativeEditorDocument {
         cancellation: Option<&NativeParseCancellation>,
     ) -> Result<Self, String> {
         ensure_parse_not_cancelled(cancellation)?;
-        let normalized_language_id = normalize_language_id(&language_id);
-        let native_language = native_language(&normalized_language_id)?;
+        let resolved_language = resolve_native_language(&language_id);
+        let normalized_language_id = resolved_language.canonical_id;
+        let native_language = resolved_language.descriptor;
 
         let (parser, tree, query) = if let Some(native_language) = native_language {
             let mut parser = Parser::new();
@@ -1114,65 +1111,6 @@ fn line_content_end_char(rope: &RustRope, line: usize) -> usize {
     line_start + content_len
 }
 
-fn normalize_language_id(language_id: &str) -> String {
-    match language_id.trim().to_lowercase().as_str() {
-        "js" | "jsx" => "javascript".to_string(),
-        "ts" => "typescript".to_string(),
-        "py" => "python".to_string(),
-        "rs" => "rust".to_string(),
-        "jsonc" => "json".to_string(),
-        other => other.to_string(),
-    }
-}
-
-fn native_language(language_id: &str) -> Result<Option<NativeLanguage>, String> {
-    let language = match language_id {
-        "dart" => NativeLanguage {
-            language: tree_sitter_dart::LANGUAGE.into(),
-            highlight_query: tree_sitter_dart::HIGHLIGHTS_QUERY.to_string(),
-        },
-        "rust" => NativeLanguage {
-            language: tree_sitter_rust::LANGUAGE.into(),
-            highlight_query: tree_sitter_rust::HIGHLIGHTS_QUERY.to_string(),
-        },
-        "javascript" => NativeLanguage {
-            language: tree_sitter_javascript::LANGUAGE.into(),
-            highlight_query: format!(
-                "{}\n{}",
-                tree_sitter_javascript::HIGHLIGHT_QUERY,
-                tree_sitter_javascript::JSX_HIGHLIGHT_QUERY
-            ),
-        },
-        "typescript" => NativeLanguage {
-            language: tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
-            highlight_query: format!(
-                "{}\n{}",
-                tree_sitter_javascript::HIGHLIGHT_QUERY,
-                tree_sitter_typescript::HIGHLIGHTS_QUERY
-            ),
-        },
-        "tsx" => NativeLanguage {
-            language: tree_sitter_typescript::LANGUAGE_TSX.into(),
-            highlight_query: format!(
-                "{}\n{}\n{}",
-                tree_sitter_javascript::HIGHLIGHT_QUERY,
-                tree_sitter_javascript::JSX_HIGHLIGHT_QUERY,
-                tree_sitter_typescript::HIGHLIGHTS_QUERY
-            ),
-        },
-        "python" => NativeLanguage {
-            language: tree_sitter_python::LANGUAGE.into(),
-            highlight_query: tree_sitter_python::HIGHLIGHTS_QUERY.to_string(),
-        },
-        "json" => NativeLanguage {
-            language: tree_sitter_json::LANGUAGE.into(),
-            highlight_query: tree_sitter_json::HIGHLIGHTS_QUERY.to_string(),
-        },
-        _ => return Ok(None),
-    };
-    Ok(Some(language))
-}
-
 fn normalize_scope(name: &str) -> Option<&'static str> {
     let root = name.split('.').next().unwrap_or(name);
     match root {
@@ -1197,6 +1135,7 @@ fn normalize_scope(name: &str) -> Option<&'static str> {
 mod tests {
     use super::*;
     use std::time::Instant;
+    use tree_sitter::Language;
 
     fn char_offset(text: &str, needle: &str) -> usize {
         let byte_offset = text.find(needle).expect("needle must exist");
