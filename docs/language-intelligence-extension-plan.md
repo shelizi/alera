@@ -957,6 +957,11 @@ Completed:
   descriptor and production runtime/adapter path. The smoke covered
   initialize, `didOpen`, cross-file definition, references, graceful shutdown,
   and a real npm `.cmd` executable shim.
+- **F3 / P9 — Rust semantic compatibility gate:** validated locally on Windows
+  with `rust-analyzer 1.97.1` through the built-in `rust.rust-analyzer`
+  descriptor and production runtime/adapter path. The smoke covered
+  initialize, `didOpen`, cross-file definition into `lib.rs`, references
+  spanning the declaration and call sites, graceful shutdown, and process exit.
 - **F6 / P12 — TypeScript/JavaScript shared semantic compatibility gate:**
   validated locally on Windows with `typescript-language-server 6.0.0` and a
   disposable TypeScript 5.9.3 workspace. One server session handled both
@@ -979,9 +984,6 @@ Completed:
 Still pending for first-release semantic validation:
 
 - **F1 C#:** real `csharp-ls` startup/definition/references smoke.
-- **F3 Rust:** real `rust-analyzer` smoke. On the current Windows machine,
-  PATH resolves the rustup proxy, but the active stable toolchain does not have
-  the `rust-analyzer` component installed, so this lane cannot yet run here.
 - **F5 PHP:** real `phpactor language-server` smoke.
 
 Known status semantics:
