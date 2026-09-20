@@ -38,6 +38,13 @@ impl<'a> WorkspaceTabStoreHandler<'a> {
             .await
             .map_err(state_error)
     }
+
+    pub(super) async fn remove(&self, id: &str) -> HostResult<()> {
+        self.runtime_store
+            .remove_workspace_tab(id)
+            .await
+            .map_err(state_error)
+    }
 }
 
 fn state_error(error: impl std::fmt::Display) -> HostError {
@@ -112,5 +119,8 @@ mod tests {
             handler.find("tab").await.unwrap().unwrap().payload["state"],
             "ready"
         );
+
+        handler.remove("tab").await.unwrap();
+        assert!(handler.find("tab").await.unwrap().is_none());
     }
 }
