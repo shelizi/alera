@@ -43,6 +43,26 @@ pub(super) enum CoalescedReadRoute {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum CliRegistrationOperation {
+    Status,
+    Install,
+}
+
+impl CliRegistrationOperation {
+    pub(super) const fn request_type(self) -> &'static str {
+        match self {
+            Self::Status => "cliRegistration.status",
+            Self::Install => "cliRegistration.install",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum DeferredJobRoute {
+    CliRegistration(CliRegistrationOperation),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum MobilePromptImageOperation {
     Start,
     Chunk,
@@ -81,6 +101,7 @@ pub(super) struct RequestRoutePolicy {
     pub(super) deferred_read: Option<DeferredReadRoute>,
     pub(super) deferred_write: Option<DeferredWriteRoute>,
     pub(super) coalesced_read: Option<CoalescedReadRoute>,
+    pub(super) deferred_job: Option<DeferredJobRoute>,
     pub(super) mobile_deferred: Option<MobileDeferredRoute>,
 }
 
@@ -91,6 +112,7 @@ const LOCAL: RequestRoutePolicy = RequestRoutePolicy {
     deferred_read: None,
     deferred_write: None,
     coalesced_read: None,
+    deferred_job: None,
     mobile_deferred: None,
 };
 
@@ -226,6 +248,13 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
             MobileDeferredRoute::WorkspaceFile(MobileWorkspaceFileOperation::PromptAttachmentRead),
         ),
 
+        "cliRegistration.status" => mobile_deferred_job(DeferredJobRoute::CliRegistration(
+            CliRegistrationOperation::Status,
+        )),
+        "cliRegistration.install" => mobile_deferred_job(DeferredJobRoute::CliRegistration(
+            CliRegistrationOperation::Install,
+        )),
+
         "project.remove" => serialized_mobile(SerializedRuntimeMutation::RemoveProject),
         "tab.remove" => serialized_mobile(SerializedRuntimeMutation::RemoveTab),
         "workspace.removeManaged" => {
@@ -303,8 +332,6 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         | "automation.templates"
         | "automation.trash"
         | "automation.wait"
-        | "cliRegistration.install"
-        | "cliRegistration.status"
         | "configuration.apply"
         | "configuration.published"
         | "configuration.snapshot"
@@ -387,6 +414,14 @@ const fn mobile_coalesced_read(route: CoalescedReadRoute) -> RequestRoutePolicy 
     RequestRoutePolicy {
         mobile_allowed: true,
         coalesced_read: Some(route),
+        ..LOCAL
+    }
+}
+
+const fn mobile_deferred_job(route: DeferredJobRoute) -> RequestRoutePolicy {
+    RequestRoutePolicy {
+        mobile_allowed: true,
+        deferred_job: Some(route),
         ..LOCAL
     }
 }
@@ -584,6 +619,24 @@ mod tests {
                 Some(MobileDeferredRoute::WorkspaceFile(operation)),
                 "{request_type}"
             );
+        }
+    }
+
+    #[test]
+    fn cli_registration_routes_are_typed_deferred_jobs() {
+        let expected = [
+            ("cliRegistration.status", CliRegistrationOperation::Status),
+            ("cliRegistration.install", CliRegistrationOperation::Install),
+        ];
+        for (request_type, operation) in expected {
+            let policy = request_route_policy(request_type);
+            assert!(policy.mobile_allowed, "{request_type}");
+            assert_eq!(
+                policy.deferred_job,
+                Some(DeferredJobRoute::CliRegistration(operation)),
+                "{request_type}"
+            );
+            assert_eq!(operation.request_type(), request_type);
         }
     }
 }

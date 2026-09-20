@@ -12,7 +12,8 @@ use super::deferred_request_scheduler::DeferredRequestScheduler;
 use super::project_registration_requests::ProjectRegistrationRequestHandler;
 use super::request_payloads::parse_payload;
 use super::request_route_policy::{
-    request_route_policy, CoalescedReadRoute, DeferredWriteRoute, MobileDeferredRoute,
+    request_route_policy, CoalescedReadRoute, DeferredJobRoute, DeferredWriteRoute,
+    MobileDeferredRoute,
 };
 use super::requests::{require_string_key, validate_mobile_runtime_settings_payload};
 use super::ServerActor;
@@ -116,6 +117,16 @@ impl ServerActor {
             match route {
                 CoalescedReadRoute::WorkspaceSidebarSnapshot => {
                     self.start_workspace_sidebar_snapshot(client_id, request_id, request_type);
+                }
+            }
+            return Ok(true);
+        }
+        if let Some(route) = route_policy.deferred_job {
+            self.require_auth(client_id)?;
+            self.require_request_allowed(client_id, request_type)?;
+            match route {
+                DeferredJobRoute::CliRegistration(operation) => {
+                    self.start_cli_registration_request(client_id, request_id, operation)?;
                 }
             }
             return Ok(true);
@@ -289,16 +300,6 @@ impl ServerActor {
                 self.require_request_allowed(client_id, request_type)?;
                 self.start_agent_quota_codex_reset_request(client_id, request_id, payload)
                     .await?;
-                Ok(true)
-            }
-            "cliRegistration.status" | "cliRegistration.install" => {
-                self.require_auth(client_id)?;
-                self.require_request_allowed(client_id, request_type)?;
-                self.start_cli_registration_request(
-                    client_id,
-                    request_id,
-                    request_type.ends_with("install"),
-                )?;
                 Ok(true)
             }
             "agentSkill.install" => {
