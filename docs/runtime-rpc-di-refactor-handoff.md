@@ -6,11 +6,12 @@ Updated: 2026-09-20
 
 - Worktree: `.worktrees/runtime-rpc-route-registry`
 - Branch: `refactor/runtime-rpc-route-registry`
-- Current HEAD when this handoff was written: `4d8ce75d` (`refactor(runtime): reuse automation agent policy handler`)
+- Code checkpoint immediately before the handoff docs: `4d8ce75d` (`refactor(runtime): reuse automation agent policy handler`)
+- First handoff-doc commit: `85f2f575` (`docs(runtime): hand off remaining DI refactor`)
 - Worktree was clean before adding this handoff document.
 - Current `main`: `e414d78c4222fff69f32a6ecf413162bb2662ebc`
 - Merge base with `main`: `3d8a1f8a59c927f8f494d7808f92e810d3b234e2`
-- Divergence at handoff: `main` has 11 unique commits and this branch has 45 unique commits (`git rev-list --left-right --count main...HEAD`).
+- Divergence at the code checkpoint before the handoff-doc commit: `main` had 11 unique commits and this branch had 45 unique code commits (`git rev-list --left-right --count main...HEAD`).
 - Do not merge blindly. Reconcile current `main` before final integration and re-run current-head tests afterwards.
 
 ## Goal and architecture rules
@@ -73,9 +74,94 @@ Do not redo these. They already have constructor-injected handlers or store help
 - runtime settings store handler: `3e5e3854`
 - automation agent policy handler: `7c71823e`, `4d8ce75d`
 
-At current HEAD, `requests.rs` has no direct `RuntimeStore` I/O. The only `self.runtime_store` references in the central dispatcher are the two explicit `clone()` calls used to construct deferred handlers. That is a valid composition-root boundary and does not need to be removed just to reach zero textual references.
+The central dispatcher is much thinner, but it still has some direct `RuntimeStore` usage. An earlier audit used `rg "self\\.runtime_store\\."`, which missed accesses split across lines (for example `self` on one line and `.runtime_store` on the next). Use `rg -n "runtime_store" ...` for the handoff audit instead.
+
+Current categories in `requests.rs` are mixed:
+
+- valid composition-root injection into deferred/domain handlers;
+- actor-owned transaction/lifecycle persistence such as terminal idempotency receipts;
+- **still-unextracted request families**, especially mobile access and SSH bootstrap-plan lookup.
+
+Do not pursue a textual goal of zero `runtime_store` references. The remaining work below is ordered by architectural value, not grep count.
 
 ## Remaining work
+
+### P0 - Direct request-family persistence still worth extracting
+
+These are higher priority than the older P1 audit list because they are still visible on the central request path and have clear data/effect boundaries.
+
+#### 0.1 Automation project policy persistence
+
+File:
+
+- `rust/alera-cli/src/terminal_host/server/automation_policy_requests.rs`
+
+The branch already extracted `AutomationAgentPolicyStoreHandler`, but the project-policy side still directly uses `RuntimeStore` for:
+
+- `set_automation_project_policy(...)` in `kind = "project"` handling;
+- `automation_project_policy(...)` in effective-policy loading;
+- workspace/project lookups used to evaluate policy context;
+- automation-run lookup in live actor resolution.
+
+Recommended first batch:
+
+- add a narrow `AutomationProjectPolicyStoreHandler` for project-policy get/set only;
+- add direct handler tests that do not construct a full `ServerActor`;
+- keep authorization, live target identity, managed-agent actor resolution and repository declaration checks in the actor/domain flow.
+
+Only after that batch is green should the receiver consider a separate context loader for run/workspace/project reads. Do not combine all policy dependencies into a general `AutomationDependencies` bag.
+
+Focused validation:
+
+```text
+cargo test --manifest-path rust/alera-cli/Cargo.toml automation_policy_requests::tests::
+cargo test --manifest-path rust/alera-cli/Cargo.toml terminal_host::server::requests::tests::
+```
+
+#### 0.2 Mobile access request family
+
+File:
+
+- `rust/alera-cli/src/terminal_host/server/requests.rs`
+
+Still-visible direct storage/helper calls include:
+
+- `mobile.settings.update`
+- `mobile.pairing.create` / `pairing.create`
+- `mobile.pairing.cancel`
+- `mobile.device.list`
+- `mobile.device.pair`
+- `mobile.device.revoke`
+- `mobile.device.delete`
+- `mobile.device.rename`
+
+The request layer currently calls `mobile_access_settings`, pairing helpers and device CRUD helpers with `&self.runtime_store` directly.
+
+Recommended split:
+
+- first extract a narrow mobile device/pairing persistence handler for list/rename/delete/revoke/pair/cancel;
+- keep auth and broadcasts in `ServerActor`;
+- keep `dispose_mobile_clients_for_device(...)` actor-owned;
+- treat settings update and pairing-create separately because they cross the persisted-settings / gateway lifecycle boundary.
+
+For `mobile.settings.update` and pairing-create, pin failure/rollback semantics before moving code. `restart_mobile_gateway()` and `apply_mobile_gateway_settings(...)` must remain in the actor/lifecycle owner unless a tested transaction coordinator replaces them.
+
+Existing regression starting points include `mobile_relay_presence_tests.rs`, mobile allowlist tests in `requests/tests.rs`, and lifecycle wire fixtures.
+
+#### 0.3 SSH bootstrap plan lookup
+
+`sshTarget.list/upsert/remove` already use `SshTargetRequestHandler`, but `sshTarget.bootstrap.plan` still calls:
+
+```text
+build_ssh_bootstrap_plan(&self.runtime_store, ...)
+```
+
+This is a small, safe follow-up:
+
+- either extend the existing SSH request handler with a plan-query capability;
+- or add a narrow bootstrap-plan handler.
+
+Keep `bootstrap.start`, `bootstrap.cancel` and `bootstrap.jobs` in `ServerActor`; they own live job lifecycle. Existing regression coverage is in `server_ssh_bootstrap_tests.rs`.
 
 ### P1 - Small, safe follow-up batches
 
@@ -224,7 +310,7 @@ The branch subsequently advanced from `aa049eac` to `4d8ce75d` with additional D
 2. Verify HEAD and clean status; if HEAD differs from the value above, read the newer commits before changing anything.
 3. Read `skills/alera-di-architecture/SKILL.md` and `references/review-checklist.md`.
 4. Inspect `git log --oneline main..HEAD` and current `main` divergence.
-5. Start with **P1.1 agent hook settings** or **P1.2 agent-title tab persistence**; keep the batch small.
+5. Start with **P0.1 automation project policy get/set**. The next strong candidate is the low-risk subset of **P0.2 mobile device/pairing persistence**. Keep every batch small.
 6. For each batch:
    - add a direct handler/helper unit test where possible;
    - run the focused module tests;
@@ -240,9 +326,9 @@ The branch subsequently advanced from `aa049eac` to `4d8ce75d` with additional D
 git status --short --branch
 git log --oneline --decorate main..HEAD
 git rev-list --left-right --count main...HEAD
-rg -n "self\.runtime_store\." rust/alera-cli/src/terminal_host/server -g "*.rs" -g "!*test*.rs"
-rg -n "self\.runtime_store\." rust/alera-cli/src/terminal_host/server/requests.rs
+rg -n "runtime_store" rust/alera-cli/src/terminal_host/server -g "*.rs" -g "!*test*.rs"
+rg -n "runtime_store" rust/alera-cli/src/terminal_host/server/requests.rs
 git diff --check
 ```
 
-Remember: direct `RuntimeStore` use inside a narrow constructor-injected handler is expected. Audit for broad actor ownership, not for a global textual goal of zero `RuntimeStore` references.
+Remember: direct `RuntimeStore` use inside a narrow constructor-injected handler is expected. Audit for broad actor ownership, not for a global textual goal of zero `RuntimeStore` references. Also avoid the narrower `self.runtime_store.` grep as the sole audit because multiline field access can evade it.
