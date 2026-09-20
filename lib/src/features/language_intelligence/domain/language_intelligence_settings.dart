@@ -33,8 +33,14 @@ class const LanguageIntelligenceSettings({
   /// when the runtime [LanguageId] value object evolves.
   final Map<String, LanguageActivationSettings> languages;
 
-  LanguageActivationSettings forLanguage(LanguageId language) =>
-      languages[language.value] ?? LanguageActivationSettings.defaults;
+  LanguageActivationSettings forLanguage(
+    LanguageId language, {
+    bool structuralParserDefaultEnabled = false,
+  }) =>
+      languages[language.value] ??
+      LanguageActivationSettings(
+        structuralParserEnabled: structuralParserDefaultEnabled,
+      );
 
   LanguageIntelligenceSettings withLanguage(
     LanguageId language,

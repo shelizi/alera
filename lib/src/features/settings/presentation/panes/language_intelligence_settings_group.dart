@@ -36,7 +36,11 @@ class const LanguageIntelligenceSettingsGroup({
             language: language,
             registry: registry,
             statusPort: statusPort,
-            activation: settings.languageIntelligence.forLanguage(language.id),
+            activation: settings.languageIntelligence.forLanguage(
+              language.id,
+              structuralParserDefaultEnabled:
+                  language.structuralParserDefaultEnabled,
+            ),
             onChanged: (activation) => onChanged(
               (current) => current.copyWith(
                 languageIntelligence: current.languageIntelligence.withLanguage(
@@ -201,6 +205,23 @@ class _LanguageIntelligenceLanguageSettingState
                 ),
               ),
             ],
+          ),
+          const SizedBox(height: AleraTokens.space12),
+          _LabeledLanguageControl(
+            label: 'Structural Parser',
+            helperText: 'Retained parser for syntax, outline, folding, and structural editing.',
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Switch(
+                key: ValueKey<String>(
+                  'language-intelligence-${widget.language.id.value}-parser',
+                ),
+                value: widget.activation.structuralParserEnabled,
+                onChanged: (enabled) => widget.onChanged(
+                  widget.activation.copyWith(structuralParserEnabled: enabled),
+                ),
+              ),
+            ),
           ),
           if (widget.activation.enabled) ...<Widget>[
             const SizedBox(height: AleraTokens.space12),

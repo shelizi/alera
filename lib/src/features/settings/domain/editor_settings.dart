@@ -110,7 +110,8 @@ class const EditorSettings({
   final bool autoOpenNewWorkspacesExternally;
 
   /// Per-language parser/semantic activation and local executable overrides.
-  /// Semantic providers are opt-in and every language defaults to disabled.
+  /// Semantic providers are opt-in. Structural parser defaults come from the
+  /// registered language descriptor and remain independently configurable.
   final LanguageIntelligenceSettings languageIntelligence;
 
   /// Clamps persisted values before they are used to construct a timer.

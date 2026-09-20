@@ -8,6 +8,7 @@ final class LanguageExtensionDescriptor {
     Iterable<String> fileExtensions = const <String>[],
     Iterable<String> aliases = const <String>[],
     String? parserProviderId,
+    this.structuralParserDefaultEnabled = false,
     Iterable<String> semanticProviderIds = const <String>[],
     String? defaultSemanticProviderId,
     Iterable<LanguageCapability> capabilities = const <LanguageCapability>{},
@@ -42,6 +43,7 @@ final class LanguageExtensionDescriptor {
   final Set<String> fileExtensions;
   final Set<String> aliases;
   final String? parserProviderId;
+  final bool structuralParserDefaultEnabled;
   final List<String> semanticProviderIds;
   final String? defaultSemanticProviderId;
   final Set<LanguageCapability> capabilities;

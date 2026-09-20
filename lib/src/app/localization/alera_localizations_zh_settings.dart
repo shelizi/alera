@@ -371,6 +371,9 @@ const Map<String, String> _traditionalChineseSettings = <String, String>{
   'Semantic navigation is disabled until you enable this language.':
       '此語言啟用前，不會使用語意導覽。',
   'Semantic Server': '語意伺服器',
+  'Structural Parser': '結構解析器',
+  'Retained parser for syntax, outline, folding, and structural editing.':
+      '保留式解析器，用於語法、程式大綱、摺疊與結構化編輯。',
   'Executable Override': '執行檔覆寫',
   'Leave blank to use the provider command from PATH on this device.':
       '留空會使用這台裝置 PATH 中的 Provider 指令。',

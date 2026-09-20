@@ -2,6 +2,26 @@ part of 'workspace_editor_surface.dart';
 
 Mode get _plainTextLanguage => builtinAllLanguages['plaintext']!;
 
+bool workspaceEditorNativeSyntaxEnabled({
+  required String filePath,
+  required LanguageExtensionRegistry registry,
+  required LanguageIntelligenceSettings settings,
+}) {
+  final language = registry.languageForPath(filePath);
+  if (language == null) {
+    return true;
+  }
+  if (language.parserProviderId == null) {
+    return false;
+  }
+  return settings
+      .forLanguage(
+        language.id,
+        structuralParserDefaultEnabled: language.structuralParserDefaultEnabled,
+      )
+      .structuralParserEnabled;
+}
+
 Mode _languageForPath(String filePath) {
   final languageId = _languageIdForPath(filePath);
   return builtinAllLanguages[languageId] ?? _plainTextLanguage;

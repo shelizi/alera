@@ -1,3 +1,6 @@
+import 'package:alera/src/features/language_intelligence/domain/language_id.dart';
+import 'package:alera/src/features/language_intelligence/domain/language_intelligence_settings.dart';
+import 'package:alera/src/features/language_intelligence/infra/builtin_language_extensions.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_service.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_source_control_scope.dart';
@@ -25,6 +28,71 @@ void main() {
 
     expect(registry.takePendingReveal('tab-b'), target);
     expect(registry.takePendingReveal('tab-b'), isNull);
+  });
+
+  test('native parser policy preserves legacy parsers and opts new grammars in explicitly', () {
+    final registry = createBuiltinLanguageExtensionRegistry();
+    final defaults = LanguageIntelligenceSettings.defaults;
+
+    expect(
+      workspaceEditorNativeSyntaxEnabled(
+        filePath: 'lib/main.rs',
+        registry: registry,
+        settings: defaults,
+      ),
+      isTrue,
+    );
+    expect(
+      workspaceEditorNativeSyntaxEnabled(
+        filePath: 'src/main.py',
+        registry: registry,
+        settings: defaults,
+      ),
+      isTrue,
+    );
+    expect(
+      workspaceEditorNativeSyntaxEnabled(
+        filePath: 'src/main.cs',
+        registry: registry,
+        settings: defaults,
+      ),
+      isFalse,
+    );
+    expect(
+      workspaceEditorNativeSyntaxEnabled(
+        filePath: 'lib/main.dart',
+        registry: registry,
+        settings: defaults,
+      ),
+      isTrue,
+      reason: 'non-catalog legacy native languages preserve the old policy',
+    );
+
+    final overrides = defaults
+        .withLanguage(
+          LanguageId('rust'),
+          const LanguageActivationSettings(structuralParserEnabled: false),
+        )
+        .withLanguage(
+          LanguageId('csharp'),
+          const LanguageActivationSettings(structuralParserEnabled: true),
+        );
+    expect(
+      workspaceEditorNativeSyntaxEnabled(
+        filePath: 'lib/main.rs',
+        registry: registry,
+        settings: overrides,
+      ),
+      isFalse,
+    );
+    expect(
+      workspaceEditorNativeSyntaxEnabled(
+        filePath: 'src/main.cs',
+        registry: registry,
+        settings: overrides,
+      ),
+      isTrue,
+    );
   });
 
   test('reveal range maps raw tab columns to expanded editor columns', () {

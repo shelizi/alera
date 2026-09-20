@@ -150,6 +150,12 @@ void main() {
         LanguageIntelligenceSettings.defaults.forLanguage(rust).enabled,
         isFalse,
       );
+      expect(
+        LanguageIntelligenceSettings.defaults
+            .forLanguage(rust, structuralParserDefaultEnabled: true)
+            .structuralParserEnabled,
+        isTrue,
+      );
     },
   );
 

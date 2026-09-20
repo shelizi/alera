@@ -13,6 +13,7 @@ final LanguageExtensionContribution rustLanguageExtension =
           fileExtensions: const <String>['rs'],
           aliases: const <String>['rs'],
           parserProviderId: 'rust.tree-sitter',
+          structuralParserDefaultEnabled: true,
           semanticProviderIds: const <String>['rust.rust-analyzer'],
           defaultSemanticProviderId: 'rust.rust-analyzer',
           capabilities: builtinLanguageCapabilities,

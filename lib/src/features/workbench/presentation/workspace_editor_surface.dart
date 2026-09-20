@@ -10,6 +10,8 @@ import 'package:alera/src/design_system/forms/alera_text_actions_scope.dart';
 import 'package:alera/src/design_system/icons/alera_file_icon.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:alera/src/design_system/layout/alera_confirm_dialog.dart';
+import 'package:alera/src/features/language_intelligence/application/language_provider_registry.dart';
+import 'package:alera/src/features/language_intelligence/domain/language_intelligence_settings.dart';
 import 'package:alera/src/features/settings/domain/editor_syntax_theme_catalog.dart';
 import 'package:alera/src/features/workbench/application/editor_autosave_controller.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_preview_kind.dart';
@@ -192,6 +194,11 @@ class _WorkspaceEditorSurfaceState
     final effectiveThemeName =
         editorSyntaxThemeEntryForName(editorSettings.themeName)?.name ??
         EditorSyntaxThemeNames.alera;
+    final enableNativeSyntax = workspaceEditorNativeSyntaxEnabled(
+      filePath: filePath,
+      registry: ref.watch(languageExtensionRegistryProvider),
+      settings: editorSettings.languageIntelligence,
+    );
     final performanceProfile = workspaceEditorPerformanceProfile(
       lineCount: _controller.lineCount,
       contentLength: _document.currentText?.length ?? 0,
@@ -235,7 +242,7 @@ class _WorkspaceEditorSurfaceState
                   ? _languageForPath(filePath)
                   : _plainTextLanguage,
               languageId: _languageIdForPath(filePath),
-              enableNativeSyntax: true,
+              enableNativeSyntax: enableNativeSyntax,
               tabSize: effectiveTabSize,
               useSpaceAsTab: true,
               scrollbarDecoration: workspaceEditorScrollbarDecoration(),

@@ -13,6 +13,7 @@ final LanguageExtensionContribution pythonLanguageExtension =
           fileExtensions: const <String>['py', 'pyw', 'pyi'],
           aliases: const <String>['py'],
           parserProviderId: 'python.tree-sitter',
+          structuralParserDefaultEnabled: true,
           semanticProviderIds: const <String>['python.pyright'],
           defaultSemanticProviderId: 'python.pyright',
           capabilities: builtinLanguageCapabilities,

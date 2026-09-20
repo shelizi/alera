@@ -189,6 +189,39 @@ void _registerSettingsDialogEditorTests() {
             .enabled,
         isFalse,
       );
+      expect(
+        container
+            .read(settingsControllerProvider)
+            .editor
+            .languageIntelligence
+            .forLanguage(
+              LanguageId('rust'),
+              structuralParserDefaultEnabled: true,
+            )
+            .structuralParserEnabled,
+        isTrue,
+      );
+      final rustParserSwitch = find.byKey(
+        const ValueKey<String>('language-intelligence-rust-parser'),
+      );
+      await tester.ensureVisible(rustParserSwitch);
+      expect(tester.widget<Switch>(rustParserSwitch).value, isTrue);
+      final csharpParserSwitch = find.byKey(
+        const ValueKey<String>('language-intelligence-csharp-parser'),
+      );
+      await tester.ensureVisible(csharpParserSwitch);
+      expect(tester.widget<Switch>(csharpParserSwitch).value, isFalse);
+      await tester.tap(csharpParserSwitch);
+      await tester.pump();
+      expect(
+        container
+            .read(settingsControllerProvider)
+            .editor
+            .languageIntelligence
+            .forLanguage(LanguageId('csharp'))
+            .structuralParserEnabled,
+        isTrue,
+      );
 
       final rustEnabledSwitch = find.byKey(
         const ValueKey<String>('language-intelligence-rust-enabled'),

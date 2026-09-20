@@ -13,6 +13,7 @@ final LanguageExtensionContribution typescriptJavascriptLanguageExtension =
           fileExtensions: const <String>['ts', 'tsx', 'mts', 'cts'],
           aliases: const <String>['ts'],
           parserProviderId: 'typescript.tree-sitter',
+          structuralParserDefaultEnabled: true,
           semanticProviderIds: const <String>[
             'typescript-javascript.typescript-language-server',
           ],
@@ -26,6 +27,7 @@ final LanguageExtensionContribution typescriptJavascriptLanguageExtension =
           fileExtensions: const <String>['js', 'jsx', 'mjs', 'cjs'],
           aliases: const <String>['js'],
           parserProviderId: 'javascript.tree-sitter',
+          structuralParserDefaultEnabled: true,
           semanticProviderIds: const <String>[
             'typescript-javascript.typescript-language-server',
           ],

@@ -77,6 +77,27 @@ void main() {
     },
   );
 
+  test('structural parser defaults preserve existing languages and opt in new grammars', () {
+    final registry = createBuiltinLanguageExtensionRegistry();
+    final expected = <String, bool>{
+      'csharp': false,
+      'python': true,
+      'rust': true,
+      'go': false,
+      'php': false,
+      'typescript': true,
+      'javascript': true,
+    };
+
+    for (final entry in expected.entries) {
+      expect(
+        registry.languageForId(entry.key)?.structuralParserDefaultEnabled,
+        entry.value,
+        reason: entry.key,
+      );
+    }
+  });
+
   test('semantic engines remain opt-in even when built-in providers exist', () {
     final registry = createBuiltinLanguageExtensionRegistry();
     for (final language in registry.languages) {
