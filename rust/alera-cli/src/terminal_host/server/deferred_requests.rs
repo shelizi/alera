@@ -12,8 +12,8 @@ use super::deferred_request_scheduler::DeferredRequestScheduler;
 use super::project_registration_requests::ProjectRegistrationRequestHandler;
 use super::request_payloads::parse_payload;
 use super::request_route_policy::{
-    request_route_policy, AgentQuotaOperation, CoalescedReadRoute, DeferredJobRoute,
-    DeferredWriteRoute, MobileDeferredRoute,
+    request_route_policy, AgentQuotaOperation, AiTextOperation, CoalescedReadRoute,
+    DeferredJobRoute, DeferredWriteRoute, MobileDeferredRoute,
 };
 use super::requests::{require_string_key, validate_mobile_runtime_settings_payload};
 use super::ServerActor;
@@ -143,6 +143,18 @@ impl ServerActor {
                             .await?;
                     }
                 },
+                DeferredJobRoute::AiText(operation) => match operation {
+                    AiTextOperation::AgentTitle => {
+                        self.request_agent_title(client_id, request_id, payload)
+                            .await?;
+                    }
+                    AiTextOperation::WorkspaceIdentity => {
+                        self.start_ai_assist_workspace_identity(client_id, request_id, payload)?;
+                    }
+                    AiTextOperation::SpeechMessage => {
+                        self.start_ai_assist_speech_message(client_id, request_id, payload)?;
+                    }
+                },
             }
             return Ok(true);
         }
@@ -220,25 +232,6 @@ impl ServerActor {
                 self.require_request_allowed(client_id, request_type)?;
                 self.try_start_mobile_ai_dictation(client_id, request_id, payload)
                     .await
-            }
-            "aiText.agentTitle.generate" => {
-                self.require_auth(client_id)?;
-                self.require_request_allowed(client_id, request_type)?;
-                self.request_agent_title(client_id, request_id, payload)
-                    .await?;
-                Ok(true)
-            }
-            "aiText.workspaceIdentity.generate" => {
-                self.require_auth(client_id)?;
-                self.require_request_allowed(client_id, request_type)?;
-                self.start_ai_assist_workspace_identity(client_id, request_id, payload)?;
-                Ok(true)
-            }
-            "aiText.speechMessage.generate" => {
-                self.require_auth(client_id)?;
-                self.require_request_allowed(client_id, request_type)?;
-                self.start_ai_assist_speech_message(client_id, request_id, payload)?;
-                Ok(true)
             }
             "workspace.createManaged" => {
                 self.require_auth(client_id)?;

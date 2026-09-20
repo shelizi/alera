@@ -66,9 +66,17 @@ pub(super) enum AgentQuotaOperation {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum AiTextOperation {
+    AgentTitle,
+    WorkspaceIdentity,
+    SpeechMessage,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum DeferredJobRoute {
     CliRegistration(CliRegistrationOperation),
     AgentQuota(AgentQuotaOperation),
+    AiText(AiTextOperation),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -275,6 +283,15 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         "agentQuota.consumeCodexResetCredit" => mobile_deferred_job(DeferredJobRoute::AgentQuota(
             AgentQuotaOperation::ConsumeCodexResetCredit,
         )),
+        "aiText.agentTitle.generate" => {
+            mobile_deferred_job(DeferredJobRoute::AiText(AiTextOperation::AgentTitle))
+        }
+        "aiText.workspaceIdentity.generate" => {
+            mobile_deferred_job(DeferredJobRoute::AiText(AiTextOperation::WorkspaceIdentity))
+        }
+        "aiText.speechMessage.generate" => {
+            mobile_deferred_job(DeferredJobRoute::AiText(AiTextOperation::SpeechMessage))
+        }
 
         "project.remove" => serialized_mobile(SerializedRuntimeMutation::RemoveProject),
         "tab.remove" => serialized_mobile(SerializedRuntimeMutation::RemoveTab),
@@ -328,10 +345,7 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         | "agentProfile.launchIdempotent"
         | "agentProfile.list"
         | "agentSkill.install"
-        | "aiText.agentTitle.generate"
         | "aiText.cancel"
-        | "aiText.speechMessage.generate"
-        | "aiText.workspaceIdentity.generate"
         | "automation.cancel"
         | "automation.complete"
         | "automation.context"
@@ -677,6 +691,30 @@ mod tests {
             assert_eq!(
                 policy.deferred_job,
                 Some(DeferredJobRoute::AgentQuota(operation)),
+                "{request_type}"
+            );
+        }
+    }
+
+    #[test]
+    fn ai_text_routes_are_typed_deferred_jobs() {
+        let expected = [
+            ("aiText.agentTitle.generate", AiTextOperation::AgentTitle),
+            (
+                "aiText.workspaceIdentity.generate",
+                AiTextOperation::WorkspaceIdentity,
+            ),
+            (
+                "aiText.speechMessage.generate",
+                AiTextOperation::SpeechMessage,
+            ),
+        ];
+        for (request_type, operation) in expected {
+            let policy = request_route_policy(request_type);
+            assert!(policy.mobile_allowed, "{request_type}");
+            assert_eq!(
+                policy.deferred_job,
+                Some(DeferredJobRoute::AiText(operation)),
                 "{request_type}"
             );
         }
