@@ -907,3 +907,71 @@ A contracts/registry
 ```
 
 This order deliberately spends the first batch on the extension boundary. Once it is stable, every new language becomes much cheaper and no longer requires invasive editor changes.
+
+## 25. Implementation status — 2026-09-21
+
+The generic architecture is now implemented on
+`feature/language-intelligence-phase-a`.
+
+Completed:
+
+- **A — contracts / registry:** string-backed language ids, language/provider
+  descriptors, capability-based lookup, sparse per-language settings, and
+  provider-neutral source locations are in place.
+- **B / P1 — structural parser activation:** language metadata no longer has to
+  imply parser activation; retained native parser activation is controlled by
+  the language policy/descriptor path.
+- **P2 — first-wave parser expansion:** C#, Go, and PHP Tree-sitter grammars are
+  registered alongside the existing Dart/Rust/JavaScript/TypeScript/TSX/Python/
+  JSON grammars. Representative C#/Go/PHP sources and highlight queries are
+  covered by native tests.
+- **C / P3 — semantic process/session owner:** semantic providers are lazy,
+  workspace-scoped, shared across documents, bounded-restart, and stop when
+  detached/disabled according to the session policy.
+- **P4 — CodeForge semantic adapter:** document sync, UTF-16/scalar conversion,
+  definition/reference normalization, URI/path normalization, and provider-
+  neutral navigation are implemented.
+- **Language-server client-request compatibility:** the standalone runtime now
+  answers server-initiated requests before and after initialization instead of
+  relying on `CodeForgeController`. This includes
+  `workspace/configuration`, dynamic registration, progress/refresh requests,
+  workspace folders, safe rejection of workspace edits/show-document, and
+  JSON-RPC method-not-found for unsupported requests.
+- **D / P6 — generic navigation:** Go to Definition can open/reveal cross-file
+  targets, multiple definitions can be selected, and Find References has a
+  workspace-scoped grouped result panel with exact-range navigation and stale-
+  query suppression. These paths are capability/provider driven and do not
+  branch on concrete language ids.
+- **E / P5 — Settings UX:** each first-wave language has optional semantic
+  enablement, provider selection, executable override, and status display.
+- **F4 / P10 — Go semantic compatibility gate:** validated locally on Windows
+  with `gopls v0.21.1` through the production
+  `CodeForgeLanguageServerRuntime` +
+  `CodeForgeSemanticProviderAdapter` path. The smoke covered initialize,
+  `didOpen`, cross-file definition, references returning both declaration and
+  call site, graceful shutdown, and process exit.
+- **G / P13 — extensibility gate:** a synthetic `moon` language is registered
+  only through a contribution/descriptor/provider in tests and successfully
+  runs generic lazy session startup, document sync, definition, references, and
+  detach. The architecture guard also covers the Definition/References editor
+  integration surfaces.
+
+Still pending for first-release semantic validation:
+
+- **F1 C#:** real `csharp-ls` startup/definition/references smoke.
+- **F2 Python:** real `pyright-langserver` smoke.
+- **F3 Rust:** real `rust-analyzer` smoke. On the current Windows machine,
+  PATH resolves the rustup proxy, but the active stable toolchain does not have
+  the `rust-analyzer` component installed, so this lane cannot yet run here.
+- **F5 PHP:** real `phpactor language-server` smoke.
+- **F6 TypeScript/JavaScript:** real shared
+  `typescript-language-server --stdio` smoke across both language ids.
+
+Known status semantics:
+
+- Settings **Ready** currently means that the configured executable resolves
+  from the explicit override/PATH probe; it intentionally does **not** start a
+  language server just to verify readiness, preserving lazy-start behavior.
+- A PATH shim/proxy can therefore still fail when the first real session is
+  started. Runtime initialization errors are captured by the workspace session
+  state as **Failed** with the underlying error.
