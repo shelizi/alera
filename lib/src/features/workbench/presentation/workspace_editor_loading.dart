@@ -6,10 +6,13 @@ extension _WorkspaceEditorLoading on _WorkspaceEditorSurfaceState {
   }) async {
     _autosave.cancelPending();
     _clearPendingDocumentSnapshot();
+    _resetLanguageIntelligenceSource();
     final requestId = ++_loadRequestId;
     final workspacePath = widget.workspace.path;
     final filePath = widget.tab.filePath;
     if (filePath == null) {
+      unawaited(_closeLanguageIntelligenceDocument());
+      _resetLanguageIntelligenceSource();
       if (mounted) {
         _setEditorState(() {
           _loading = false;
@@ -58,6 +61,9 @@ extension _WorkspaceEditorLoading on _WorkspaceEditorSurfaceState {
         _applyPendingReveal();
         _autosave.notifyStateChanged();
         _scheduleOutlineRefresh(immediate: true);
+        if (_loadError == null) {
+          unawaited(_refreshLanguageIntelligenceDocument());
+        }
       }
     }
   }
@@ -109,6 +115,7 @@ extension _WorkspaceEditorLoading on _WorkspaceEditorSurfaceState {
       _applyPendingReveal();
       _autosave.notifyStateChanged();
       _scheduleOutlineRefresh(immediate: true);
+      unawaited(_refreshLanguageIntelligenceDocument());
       return;
     }
     _loading = true;

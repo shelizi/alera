@@ -105,6 +105,155 @@ final class LanguageServerRuntimeProvider
 String _$languageServerRuntimeHash() =>
     r'33e6955213d7e4638b0a0816d83b6a6b66c00634';
 
+@ProviderFor(languageSemanticAdapterFactory)
+final languageSemanticAdapterFactoryProvider =
+    LanguageSemanticAdapterFactoryProvider._();
+
+final class LanguageSemanticAdapterFactoryProvider
+    extends
+        $FunctionalProvider<
+          LanguageSemanticAdapterFactory,
+          LanguageSemanticAdapterFactory,
+          LanguageSemanticAdapterFactory
+        >
+    with $Provider<LanguageSemanticAdapterFactory> {
+  LanguageSemanticAdapterFactoryProvider._()
+    : super(
+        from: null,
+        argument: null,
+        retry: null,
+        name: r'languageSemanticAdapterFactoryProvider',
+        isAutoDispose: false,
+        dependencies: null,
+        $allTransitiveDependencies: null,
+      );
+
+  @override
+  String debugGetCreateSourceHash() => _$languageSemanticAdapterFactoryHash();
+
+  @$internal
+  @override
+  $ProviderElement<LanguageSemanticAdapterFactory> $createElement(
+    $ProviderPointer pointer,
+  ) => $ProviderElement(pointer);
+
+  @override
+  LanguageSemanticAdapterFactory create(Ref ref) {
+    return languageSemanticAdapterFactory(ref);
+  }
+
+  /// {@macro riverpod.override_with_value}
+  Override overrideWithValue(LanguageSemanticAdapterFactory value) {
+    return $ProviderOverride(
+      origin: this,
+      providerOverride: $SyncValueProvider<LanguageSemanticAdapterFactory>(
+        value,
+      ),
+    );
+  }
+}
+
+String _$languageSemanticAdapterFactoryHash() =>
+    r'3c0f349f8592cac9afdbb12a5dd443cb85818ebe';
+
+@ProviderFor(languageServerSessionManager)
+final languageServerSessionManagerProvider =
+    LanguageServerSessionManagerProvider._();
+
+final class LanguageServerSessionManagerProvider
+    extends
+        $FunctionalProvider<
+          LanguageServerSessionManager,
+          LanguageServerSessionManager,
+          LanguageServerSessionManager
+        >
+    with $Provider<LanguageServerSessionManager> {
+  LanguageServerSessionManagerProvider._()
+    : super(
+        from: null,
+        argument: null,
+        retry: null,
+        name: r'languageServerSessionManagerProvider',
+        isAutoDispose: false,
+        dependencies: null,
+        $allTransitiveDependencies: null,
+      );
+
+  @override
+  String debugGetCreateSourceHash() => _$languageServerSessionManagerHash();
+
+  @$internal
+  @override
+  $ProviderElement<LanguageServerSessionManager> $createElement(
+    $ProviderPointer pointer,
+  ) => $ProviderElement(pointer);
+
+  @override
+  LanguageServerSessionManager create(Ref ref) {
+    return languageServerSessionManager(ref);
+  }
+
+  /// {@macro riverpod.override_with_value}
+  Override overrideWithValue(LanguageServerSessionManager value) {
+    return $ProviderOverride(
+      origin: this,
+      providerOverride: $SyncValueProvider<LanguageServerSessionManager>(value),
+    );
+  }
+}
+
+String _$languageServerSessionManagerHash() =>
+    r'dfcdf8ca3f8329b2d5a91008f5cb978823685cb3';
+
+@ProviderFor(languageIntelligenceManager)
+final languageIntelligenceManagerProvider =
+    LanguageIntelligenceManagerProvider._();
+
+final class LanguageIntelligenceManagerProvider
+    extends
+        $FunctionalProvider<
+          LanguageIntelligenceManager,
+          LanguageIntelligenceManager,
+          LanguageIntelligenceManager
+        >
+    with $Provider<LanguageIntelligenceManager> {
+  LanguageIntelligenceManagerProvider._()
+    : super(
+        from: null,
+        argument: null,
+        retry: null,
+        name: r'languageIntelligenceManagerProvider',
+        isAutoDispose: false,
+        dependencies: null,
+        $allTransitiveDependencies: null,
+      );
+
+  @override
+  String debugGetCreateSourceHash() => _$languageIntelligenceManagerHash();
+
+  @$internal
+  @override
+  $ProviderElement<LanguageIntelligenceManager> $createElement(
+    $ProviderPointer pointer,
+  ) => $ProviderElement(pointer);
+
+  @override
+  LanguageIntelligenceManager create(Ref ref) {
+    return languageIntelligenceManager(ref);
+  }
+
+  /// {@macro riverpod.override_with_value}
+  Override overrideWithValue(LanguageIntelligenceManager value) {
+    return $ProviderOverride(
+      origin: this,
+      providerOverride: $SyncValueProvider<LanguageIntelligenceManager>(value),
+    );
+  }
+}
+
+String _$languageIntelligenceManagerHash() =>
+    r'1ae207a1d7ab54781be5a52e6d5a580c313db1b9';
+
 @ProviderFor(languageIntelligenceStatusPort)
 final languageIntelligenceStatusPortProvider =
     LanguageIntelligenceStatusPortProvider._();

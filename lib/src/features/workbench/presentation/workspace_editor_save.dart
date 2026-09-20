@@ -30,6 +30,11 @@ extension _WorkspaceEditorSave on _WorkspaceEditorSurfaceState {
         contentBeingSaved,
         documentVersionBeingSaved,
       );
+      _acceptLanguageIntelligenceSaved(saved);
+      await _notifyLanguageIntelligenceSaved(
+        saved: saved,
+        savedDocumentVersion: documentVersionBeingSaved,
+      );
       _autosave.resume();
       _showToast('File saved');
     } catch (error) {
@@ -77,6 +82,11 @@ extension _WorkspaceEditorSave on _WorkspaceEditorSurfaceState {
         contentBeingSaved,
         documentVersionBeingSaved,
       );
+      _acceptLanguageIntelligenceSaved(saved);
+      await _notifyLanguageIntelligenceSaved(
+        saved: saved,
+        savedDocumentVersion: documentVersionBeingSaved,
+      );
     } finally {
       if (mounted) {
         _setEditorState(() => _saving = false);
@@ -105,6 +115,7 @@ extension _WorkspaceEditorSave on _WorkspaceEditorSurfaceState {
     _document.updateCurrentText(loadedText);
     _replaceControllerText(loadedText);
     _undoController.clear();
+    unawaited(_refreshLanguageIntelligenceDocument());
     if (mounted) {
       _setEditorState(() {});
       _showToast('Changes discarded');
@@ -139,6 +150,11 @@ extension _WorkspaceEditorSave on _WorkspaceEditorSurfaceState {
         saved,
         contentBeingSaved,
         documentVersionBeingSaved,
+      );
+      _acceptLanguageIntelligenceSaved(saved);
+      await _notifyLanguageIntelligenceSaved(
+        saved: saved,
+        savedDocumentVersion: documentVersionBeingSaved,
       );
       _autosave.resume();
       _showToast('File overwritten');
@@ -263,6 +279,7 @@ extension _WorkspaceEditorSave on _WorkspaceEditorSurfaceState {
       widget.onKeepPreview?.call();
     }
     _autosave.notifyTextChanged();
+    _scheduleLanguageIntelligenceDocumentSync();
     final currentProfile = workspaceEditorPerformanceProfile(
       lineCount: lineCount,
       contentLength: contentLength,

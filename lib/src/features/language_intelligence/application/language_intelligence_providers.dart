@@ -1,10 +1,14 @@
 import 'package:alera/src/features/language_intelligence/infra/builtin_language_extensions.dart';
 import 'package:alera/src/features/language_intelligence/infra/code_forge_language_server_runtime.dart';
+import 'package:alera/src/features/language_intelligence/infra/code_forge_semantic_adapter_factory.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
+import 'language_intelligence_manager.dart';
 import 'language_intelligence_status_port.dart';
 import 'language_provider_registry.dart';
+import 'language_semantic_adapter_factory.dart';
 import 'language_server_runtime.dart';
+import 'language_server_session_manager.dart';
 
 part 'language_intelligence_providers.g.dart';
 
@@ -15,6 +19,25 @@ LanguageExtensionRegistry languageExtensionRegistry(Ref ref) =>
 @Riverpod(keepAlive: true)
 LanguageServerRuntimePort languageServerRuntime(Ref ref) =>
     CodeForgeLanguageServerRuntime();
+
+@Riverpod(keepAlive: true)
+LanguageSemanticAdapterFactory languageSemanticAdapterFactory(Ref ref) =>
+    const CodeForgeSemanticAdapterFactory();
+
+@Riverpod(keepAlive: true)
+LanguageServerSessionManager languageServerSessionManager(Ref ref) =>
+    LanguageServerSessionManager(
+      registry: ref.watch(languageExtensionRegistryProvider),
+      runtime: ref.watch(languageServerRuntimeProvider),
+    );
+
+@Riverpod(keepAlive: true)
+LanguageIntelligenceManager languageIntelligenceManager(Ref ref) =>
+    LanguageIntelligenceManager(
+      registry: ref.watch(languageExtensionRegistryProvider),
+      sessions: ref.watch(languageServerSessionManagerProvider),
+      semanticAdapterFactory: ref.watch(languageSemanticAdapterFactoryProvider),
+    );
 
 @Riverpod(keepAlive: true)
 LanguageIntelligenceStatusPort languageIntelligenceStatusPort(Ref ref) =>

@@ -10,7 +10,9 @@ import 'package:alera/src/design_system/forms/alera_text_actions_scope.dart';
 import 'package:alera/src/design_system/icons/alera_file_icon.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:alera/src/design_system/layout/alera_confirm_dialog.dart';
+import 'package:alera/src/features/language_intelligence/application/language_intelligence_manager.dart';
 import 'package:alera/src/features/language_intelligence/application/language_provider_registry.dart';
+import 'package:alera/src/features/language_intelligence/application/language_server_runtime.dart';
 import 'package:alera/src/features/language_intelligence/domain/language_intelligence_settings.dart';
 import 'package:alera/src/features/settings/domain/editor_syntax_theme_catalog.dart';
 import 'package:alera/src/features/workbench/application/editor_autosave_controller.dart';
@@ -33,6 +35,7 @@ import 'package:re_highlight/languages/all.dart';
 import 'package:re_highlight/re_highlight.dart';
 
 part 'workspace_editor_language_registry.dart';
+part 'workspace_editor_language_intelligence.dart';
 part 'workspace_editor_widgets.dart';
 part 'workspace_editor_focus.dart';
 part 'workspace_editor_reveal.dart';
@@ -68,6 +71,7 @@ class _WorkspaceEditorSurfaceState
   late final EditorSessionRegistry _editorSessions;
   late final EditorSessionHandle _sessionHandle;
   late final EditorAutosaveController _autosave;
+  late final LanguageIntelligenceManager _languageIntelligence;
   late EditorDocumentSession _document;
   Object? _loadError;
   bool _loading = true;
@@ -78,6 +82,11 @@ class _WorkspaceEditorSurfaceState
   int _loadRequestId = 0;
   late int _lastObservedDocumentVersion;
   Timer? _documentSnapshotDebounceTimer;
+  Timer? _languageIntelligenceSyncTimer;
+  _WorkspaceEditorSemanticSourceSnapshot? _languageSemanticSource;
+  String? _languageIntelligenceWorkspaceId;
+  String? _languageIntelligenceDocumentPath;
+  int _languageIntelligenceSyncGeneration = 0;
   Timer? _outlineRefreshTimer;
   bool _hasPendingDocumentSnapshot = false;
   bool _suppressControllerChangeHandling = false;
@@ -105,6 +114,7 @@ class _WorkspaceEditorSurfaceState
     _focusNode = WorkspaceEditorFocusNode();
     _workspaceFiles = ref.read(workspaceFileServiceProvider);
     _editorSessions = ref.read(editorSessionRegistryProvider);
+    _languageIntelligence = ref.read(languageIntelligenceManagerProvider);
     _sessionHandle = EditorSessionHandle(
       isDirty: _isDirty,
       save: _save,
@@ -126,10 +136,19 @@ class _WorkspaceEditorSurfaceState
     );
     ref.listenManual(
       settingsControllerProvider.select((settings) => settings.editor),
-      (previous, next) => _autosave.updateSettings(
-        enabled: next.autosaveEnabled,
-        debounce: next.autosaveDebounce,
-      ),
+      (previous, next) {
+        _autosave.updateSettings(
+          enabled: next.autosaveEnabled,
+          debounce: next.autosaveDebounce,
+        );
+        if (previous?.languageIntelligence != next.languageIntelligence) {
+          unawaited(
+            _refreshLanguageIntelligenceDocument(
+              settings: next.languageIntelligence,
+            ),
+          );
+        }
+      },
     );
     _registerSession(widget.tab.id);
     _restoreDocumentOrLoad();
@@ -141,6 +160,8 @@ class _WorkspaceEditorSurfaceState
     if (oldWidget.tab.id != widget.tab.id ||
         oldWidget.workspace.path != widget.workspace.path ||
         oldWidget.tab.filePath != widget.tab.filePath) {
+      unawaited(_closeLanguageIntelligenceDocument());
+      _resetLanguageIntelligenceSource();
       _autosave.cancelPending();
       _flushPendingDocumentSnapshot(refreshState: false, notifyAutosave: false);
       _materializeNativeDirtySnapshot();
@@ -159,6 +180,8 @@ class _WorkspaceEditorSurfaceState
 
   @override
   void dispose() {
+    _languageIntelligenceSyncTimer?.cancel();
+    unawaited(_closeLanguageIntelligenceDocument());
     _outlineRefreshTimer?.cancel();
     _flushPendingDocumentSnapshot(refreshState: false, notifyAutosave: false);
     _materializeNativeDirtySnapshot();

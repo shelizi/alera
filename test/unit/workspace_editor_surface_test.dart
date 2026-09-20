@@ -95,6 +95,40 @@ void main() {
     );
   });
 
+  test('semantic source text preserves unchanged raw tabs', () {
+    expect(
+      workspaceEditorEncodeSemanticSourceText(
+        currentDisplayText: '    alpha\n    beta\n',
+        originalRawText: '\talpha\n\tbeta\n',
+        originalDisplayText: '    alpha\n    beta\n',
+      ),
+      '\talpha\n\tbeta\n',
+    );
+  });
+
+  test('semantic source text preserves raw tabs around changed lines', () {
+    expect(
+      workspaceEditorEncodeSemanticSourceText(
+        currentDisplayText: '    alpha\n    beta changed\n    gamma\n',
+        originalRawText: '\talpha\n\tbeta\n\tgamma\n',
+        originalDisplayText: '    alpha\n    beta\n    gamma\n',
+      ),
+      '\talpha\n    beta changed\n\tgamma\n',
+    );
+  });
+
+  test('semantic source text falls back when original snapshots disagree', () {
+    const current = '    alpha\nchanged\n';
+    expect(
+      workspaceEditorEncodeSemanticSourceText(
+        currentDisplayText: current,
+        originalRawText: '\talpha\n',
+        originalDisplayText: '    alpha\nother\n',
+      ),
+      current,
+    );
+  });
+
   test('reveal range maps raw tab columns to expanded editor columns', () {
     final range = workspaceEditorDisplayRevealRange(
       rawText: '\tfoo\n',
