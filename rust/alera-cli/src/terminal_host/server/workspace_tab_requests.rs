@@ -24,6 +24,13 @@ impl<'a> WorkspaceTabQueryHandler<'a> {
             .await
             .map_err(state_error)
     }
+
+    pub(super) async fn rename(&self, id: &str, title: &str) -> HostResult<WorkspaceTabRecord> {
+        self.runtime_store
+            .rename_workspace_tab(id, title)
+            .await
+            .map_err(state_error)
+    }
 }
 
 fn state_error(error: impl std::fmt::Display) -> HostError {
@@ -32,7 +39,9 @@ fn state_error(error: impl std::fmt::Display) -> HostError {
 
 #[cfg(test)]
 mod tests {
-    use alera_core::runtime::RuntimeStore;
+    use alera_core::runtime::{RuntimeStore, WorkspaceTabRecord};
+    use chrono::Utc;
+    use serde_json::json;
 
     use super::WorkspaceTabQueryHandler;
 
@@ -44,5 +53,30 @@ mod tests {
 
         assert!(handler.list("workspace").await.unwrap().is_empty());
         assert!(handler.find("tab").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn tab_rename_can_be_tested_without_server_actor() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = RuntimeStore::open(dir.path()).await.unwrap();
+        let now = Utc::now();
+        store
+            .upsert_workspace_tab(WorkspaceTabRecord {
+                id: "tab".into(),
+                workspace_id: "workspace".into(),
+                kind: "terminal".into(),
+                title: "Before".into(),
+                created_at: now,
+                updated_at: now,
+                payload: json!({}),
+            })
+            .await
+            .unwrap();
+        let handler = WorkspaceTabQueryHandler::new(&store);
+
+        let renamed = handler.rename("tab", "After").await.unwrap();
+
+        assert_eq!(renamed.title, "After");
+        assert_eq!(handler.find("tab").await.unwrap().unwrap().title, "After");
     }
 }

@@ -758,11 +758,9 @@ impl ServerActor {
                 let id = require_string_key(payload, "id")?;
                 let title = require_string_key(payload, "title")?;
                 self.cancel_agent_title_job(&id);
-                let tab = self
-                    .runtime_store
-                    .rename_workspace_tab(&id, &title)
-                    .await
-                    .map_err(|error| HostError::state(error.to_string()))?;
+                let tab = WorkspaceTabQueryHandler::new(&self.runtime_store)
+                    .rename(&id, &title)
+                    .await?;
                 let workspace_id = tab.workspace_id.clone();
                 let tab = self.workspace_tab_for_client(client_id, tab);
                 self.broadcast_workspace_tabs_changed(Some(&workspace_id));
