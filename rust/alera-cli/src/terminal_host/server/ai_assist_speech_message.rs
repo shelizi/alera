@@ -1,4 +1,4 @@
-use alera_core::runtime::RuntimeAiAssistSettings;
+use alera_core::runtime::{RuntimeAiAssistSettings, RuntimeStore};
 use serde_json::{json, Value};
 use tokio::sync::oneshot;
 
@@ -8,6 +8,58 @@ use super::ai_assist_model_defaults::default_model;
 use super::ai_assist_requests::{active_generations, plan_command, run_command, SUPPORTED_AGENTS};
 use super::host_service_requests::required_non_blank;
 use super::{ServerActor, ServerCommand};
+
+struct AiAssistSpeechContext {
+    workspace_path: String,
+    settings: RuntimeAiAssistSettings,
+}
+
+struct AiAssistSpeechQuery {
+    runtime_store: RuntimeStore,
+}
+
+impl AiAssistSpeechQuery {
+    fn new(runtime_store: &RuntimeStore) -> Self {
+        Self {
+            runtime_store: runtime_store.clone(),
+        }
+    }
+
+    async fn load(
+        &self,
+        workspace_id: Option<&str>,
+        tab_id: Option<&str>,
+    ) -> HostResult<AiAssistSpeechContext> {
+        let resolved_workspace_id = if let Some(workspace_id) = workspace_id {
+            workspace_id.to_string()
+        } else {
+            let tab_id = tab_id.expect("validated tab id");
+            self.runtime_store
+                .find_workspace_tab(tab_id)
+                .await
+                .map_err(|error| HostError::state(error.to_string()))?
+                .ok_or_else(|| HostError::state(format!("Workspace tab not found: {tab_id}")))?
+                .workspace_id
+        };
+        let workspace = self
+            .runtime_store
+            .find_workspace(&resolved_workspace_id)
+            .await
+            .map_err(|error| HostError::state(error.to_string()))?
+            .ok_or_else(|| {
+                HostError::state(format!("Workspace not found: {resolved_workspace_id}"))
+            })?;
+        let settings = self
+            .runtime_store
+            .effective_ai_assist_settings()
+            .await
+            .map_err(|error| HostError::state(error.to_string()))?;
+        Ok(AiAssistSpeechContext {
+            workspace_path: workspace.path,
+            settings,
+        })
+    }
+}
 
 impl ServerActor {
     pub(super) fn start_ai_assist_speech_message(
@@ -27,7 +79,7 @@ impl ServerActor {
         if workspace_id.is_none() && tab_id.is_none() {
             return Err(HostError::format("workspaceId or tabId is required."));
         }
-        let store = self.runtime_store.clone();
+        let query = AiAssistSpeechQuery::new(&self.runtime_store);
         let inbox = self.inbox.clone();
         let (cancel_tx, cancel_rx) = oneshot::channel();
         let mut active = active_generations()
@@ -43,31 +95,17 @@ impl ServerActor {
         let task_operation_id = operation_id.clone();
         let task = async move {
             let result = async {
-                let resolved_workspace_id = if let Some(workspace_id) = workspace_id {
-                    workspace_id
-                } else {
-                    let tab_id = tab_id.expect("validated tab id");
-                    store
-                        .find_workspace_tab(&tab_id)
-                        .await
-                        .map_err(|error| HostError::state(error.to_string()))?
-                        .ok_or_else(|| {
-                            HostError::state(format!("Workspace tab not found: {tab_id}"))
-                        })?
-                        .workspace_id
-                };
-                let workspace = store
-                    .find_workspace(&resolved_workspace_id)
-                    .await
-                    .map_err(|error| HostError::state(error.to_string()))?
-                    .ok_or_else(|| {
-                        HostError::state(format!("Workspace not found: {resolved_workspace_id}"))
-                    })?;
-                let settings = store
-                    .effective_ai_assist_settings()
-                    .await
-                    .map_err(|error| HostError::state(error.to_string()))?;
-                generate_speech_message(&workspace.path, &text, &mode, settings, cancel_rx).await
+                let context = query
+                    .load(workspace_id.as_deref(), tab_id.as_deref())
+                    .await?;
+                generate_speech_message(
+                    &context.workspace_path,
+                    &text,
+                    &mode,
+                    context.settings,
+                    cancel_rx,
+                )
+                .await
             }
             .await;
             if let Ok(mut active) = active_generations().lock() {
@@ -182,9 +220,86 @@ fn speech_message_prompt(text: &str, mode: &str, instructions: &str) -> String {
 mod tests {
     use std::collections::HashMap;
 
-    use alera_core::runtime::{RuntimeAiAssistPromptSettings, RuntimeAiAssistSettings};
+    use alera_core::runtime::{
+        Project, ProjectKind, RuntimeAiAssistPromptSettings, RuntimeAiAssistSettings, RuntimeStore,
+        Workspace, WorkspaceKind, WorkspaceStatus, WorkspaceTabRecord,
+    };
+    use chrono::Utc;
+    use serde_json::json;
 
-    use super::{selected_agent_and_model, speech_message_prompt};
+    use super::{selected_agent_and_model, speech_message_prompt, AiAssistSpeechQuery};
+
+    #[tokio::test]
+    async fn speech_query_resolves_tab_workspace_and_settings_without_server_actor() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = RuntimeStore::open(dir.path()).await.unwrap();
+        let now = Utc::now();
+        store
+            .upsert_project(Project {
+                id: "project".into(),
+                name: "Project".into(),
+                repo_path: "C:/workspace/project".into(),
+                created_at: now,
+                updated_at: now,
+                kind: ProjectKind::GitRepository,
+            })
+            .await
+            .unwrap();
+        store
+            .upsert_workspace(Workspace {
+                id: "workspace".into(),
+                instance_id: String::new(),
+                host_id: String::new(),
+                project_id: "project".into(),
+                name: "Workspace".into(),
+                branch: None,
+                path: "C:/workspace/project".into(),
+                created_at: now,
+                updated_at: now,
+                kind: WorkspaceKind::Main,
+                status: WorkspaceStatus::Active,
+                source_branch: None,
+                reuses_existing_branch: false,
+                is_pinned: false,
+                tag_ids: vec![],
+                tag_names: vec![],
+                section_id: None,
+                parent_workspace_id: None,
+                child_count: 0,
+                archived_at: None,
+            })
+            .await
+            .unwrap();
+        store
+            .upsert_workspace_tab(WorkspaceTabRecord {
+                id: "tab".into(),
+                workspace_id: "workspace".into(),
+                kind: "terminal".into(),
+                title: "Terminal".into(),
+                created_at: now,
+                updated_at: now,
+                payload: json!({}),
+            })
+            .await
+            .unwrap();
+        store
+            .set_ai_assist_settings(RuntimeAiAssistSettings {
+                enabled: true,
+                agent: "claude".into(),
+                ..RuntimeAiAssistSettings::default()
+            })
+            .await
+            .unwrap();
+
+        let context = AiAssistSpeechQuery::new(&store)
+            .load(None, Some("tab"))
+            .await
+            .unwrap();
+
+        assert_eq!(context.workspace_path, "C:/workspace/project");
+        assert!(context.settings.enabled);
+        assert_eq!(context.settings.agent, "claude");
+    }
 
     #[test]
     fn speech_prompt_preserves_mode_and_instructions() {
