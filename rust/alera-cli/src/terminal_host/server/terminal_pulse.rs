@@ -1,4 +1,4 @@
-use alera_core::runtime::{RuntimeStore, WorkspaceTabRecord};
+use alera_core::runtime::{RuntimeStore, Workspace, WorkspaceTabRecord};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -41,14 +41,23 @@ const MAX_DELAY_MS: u64 = 3_600_000;
 const MAX_INPUT_BYTES: usize = 4_096;
 
 struct TerminalPulsePersistence<'a> {
+    runtime_store: &'a RuntimeStore,
     tabs: WorkspaceTabStoreHandler<'a>,
 }
 
 impl<'a> TerminalPulsePersistence<'a> {
     const fn new(runtime_store: &'a RuntimeStore) -> Self {
         Self {
+            runtime_store,
             tabs: WorkspaceTabStoreHandler::new(runtime_store),
         }
+    }
+
+    async fn find_workspace(&self, workspace_id: &str) -> HostResult<Option<Workspace>> {
+        self.runtime_store
+            .find_workspace(workspace_id)
+            .await
+            .map_err(|error| HostError::state(error.to_string()))
     }
 
     async fn find_tab(&self, tab_id: &str) -> HostResult<Option<WorkspaceTabRecord>> {

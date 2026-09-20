@@ -29,6 +29,11 @@ async fn pulse_persistence_can_be_tested_without_server_actor() {
         .unwrap();
     let persistence = TerminalPulsePersistence::new(&store);
 
+    assert!(persistence
+        .find_workspace("workspace")
+        .await
+        .unwrap()
+        .is_none());
     let mut tab = persistence.find_tab("tab").await.unwrap().unwrap();
     tab.payload[TERMINAL_PULSE_PAYLOAD_KEY] = json!({
         "command": "R",
