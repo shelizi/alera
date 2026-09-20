@@ -8,7 +8,81 @@ use crate::terminal_host::{
     host_error::{HostError, HostResult},
     protocol::event,
 };
+use alera_core::runtime::RuntimeStore;
 use serde_json::{json, Value};
+
+pub(super) struct ConfigurationStoreRequestHandler<'a> {
+    runtime_store: &'a RuntimeStore,
+}
+
+impl<'a> ConfigurationStoreRequestHandler<'a> {
+    pub(super) const fn new(runtime_store: &'a RuntimeStore) -> Self {
+        Self { runtime_store }
+    }
+
+    pub(super) async fn execute(&self, request: &str, payload: &Value) -> HostResult<Value> {
+        let store = self.runtime_store;
+        let result: anyhow::Result<Value> = async {
+            match request {
+                "configuration.settings.get" => store.configuration_settings().await,
+                "configuration.settings.seed" => {
+                    store.configuration_seed(payload["settings"].clone()).await
+                }
+                "configuration.settings.update" => {
+                    let supported: Option<Vec<String>> = payload
+                        .get("supportedKeyboardActionIds")
+                        .map(|value| serde_json::from_value(value.clone()))
+                        .transpose()?;
+                    store
+                        .configuration_update_settings_for_client(
+                            payload["settings"].clone(),
+                            supported.as_deref(),
+                        )
+                        .await?;
+                    Ok(json!({}))
+                }
+                "configuration.snapshot" => {
+                    store
+                        .configuration_snapshot(&require_string_key(payload, "accountId")?)
+                        .await
+                }
+                "configuration.apply" => {
+                    if let Some(items) = payload["document"]
+                        .pointer("/shared/agentProfiles/items")
+                        .and_then(Value::as_object)
+                    {
+                        for item in items.values() {
+                            super::declared_catalog_requests::profile_from_payload(item)?;
+                        }
+                    }
+                    store
+                        .configuration_apply(
+                            &require_string_key(payload, "accountId")?,
+                            &require_string_key(payload, "expectedFingerprint")?,
+                            &payload["document"],
+                            &payload["base"],
+                            &payload["pending"],
+                        )
+                        .await?;
+                    Ok(json!({}))
+                }
+                "configuration.published" => {
+                    store
+                        .configuration_published(
+                            &require_string_key(payload, "accountId")?,
+                            &require_string_key(payload, "operationId")?,
+                            &payload["revision"],
+                        )
+                        .await?;
+                    Ok(json!({}))
+                }
+                _ => anyhow::bail!("Unknown configuration request."),
+            }
+        }
+        .await;
+        result.map_err(|error| HostError::state(error.to_string()))
+    }
+}
 
 impl ServerActor {
     pub(super) fn try_start_configuration_cloud(
@@ -69,66 +143,9 @@ impl ServerActor {
                 return Err(HostError::state("Configuration account changed."));
             }
         }
-        let store = &self.runtime_store;
-        let result: anyhow::Result<Value> = async {
-            match request.as_str() {
-                "configuration.settings.get" => store.configuration_settings().await,
-                "configuration.settings.seed" => {
-                    store.configuration_seed(payload["settings"].clone()).await
-                }
-                "configuration.settings.update" => {
-                    let supported: Option<Vec<String>> = payload
-                        .get("supportedKeyboardActionIds")
-                        .map(|value| serde_json::from_value(value.clone()))
-                        .transpose()?;
-                    store
-                        .configuration_update_settings_for_client(
-                            payload["settings"].clone(),
-                            supported.as_deref(),
-                        )
-                        .await?;
-                    Ok(json!({}))
-                }
-                "configuration.snapshot" => {
-                    store
-                        .configuration_snapshot(&require_string_key(&payload, "accountId")?)
-                        .await
-                }
-                "configuration.apply" => {
-                    if let Some(items) = payload["document"]
-                        .pointer("/shared/agentProfiles/items")
-                        .and_then(Value::as_object)
-                    {
-                        for item in items.values() {
-                            super::declared_catalog_requests::profile_from_payload(item)?;
-                        }
-                    }
-                    store
-                        .configuration_apply(
-                            &require_string_key(&payload, "accountId")?,
-                            &require_string_key(&payload, "expectedFingerprint")?,
-                            &payload["document"],
-                            &payload["base"],
-                            &payload["pending"],
-                        )
-                        .await?;
-                    Ok(json!({}))
-                }
-                "configuration.published" => {
-                    store
-                        .configuration_published(
-                            &require_string_key(&payload, "accountId")?,
-                            &require_string_key(&payload, "operationId")?,
-                            &payload["revision"],
-                        )
-                        .await?;
-                    Ok(json!({}))
-                }
-                _ => anyhow::bail!("Unknown configuration request."),
-            }
-        }
-        .await;
-        let value = result.map_err(|e| HostError::state(e.to_string()))?;
+        let value = ConfigurationStoreRequestHandler::new(&self.runtime_store)
+            .execute(&request, &payload)
+            .await?;
         if matches!(
             request.as_str(),
             "configuration.apply" | "configuration.settings.update"
@@ -210,4 +227,38 @@ fn transfer_number(payload: &Value, key: &str) -> anyhow::Result<usize> {
         .as_u64()
         .and_then(|v| usize::try_from(v).ok())
         .ok_or_else(|| anyhow::anyhow!("Invalid configuration transfer {key}."))
+}
+
+#[cfg(test)]
+mod tests {
+    use alera_core::runtime::RuntimeStore;
+    use serde_json::json;
+
+    use super::ConfigurationStoreRequestHandler;
+
+    #[tokio::test]
+    async fn configuration_settings_can_be_tested_without_server_actor() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = RuntimeStore::open(dir.path()).await.unwrap();
+        let handler = ConfigurationStoreRequestHandler::new(&store);
+
+        let before = handler
+            .execute("configuration.settings.get", &json!({}))
+            .await
+            .unwrap();
+        handler
+            .execute(
+                "configuration.settings.update",
+                &json!({"settings": {"terminal": {"fontSize": 19}}}),
+            )
+            .await
+            .unwrap();
+        let after = handler
+            .execute("configuration.settings.get", &json!({}))
+            .await
+            .unwrap();
+
+        assert_ne!(before, after);
+        assert_eq!(after["terminal"]["fontSize"], 19);
+    }
 }
