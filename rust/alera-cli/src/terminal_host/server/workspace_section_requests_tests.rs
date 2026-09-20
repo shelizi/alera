@@ -1,12 +1,59 @@
 use std::collections::HashMap;
 
-use alera_core::runtime::{Project, ProjectKind, Workspace};
+use alera_core::runtime::{Project, ProjectKind, RuntimeStore, Workspace};
 use chrono::Utc;
 use serde_json::json;
 
 use super::actor_test_harness::{local_client, mobile_client, test_actor};
 use super::mobile_gateway_surface::{mobile_request_allowed, MOBILE_HELLO_CAPABILITIES};
+use super::workspace_section_requests::WorkspaceSectionRequestHandler;
 use crate::terminal_host::client::ClientHandle;
+
+#[tokio::test]
+async fn section_persistence_can_be_tested_without_server_actor() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = RuntimeStore::open(dir.path()).await.unwrap();
+    let now = Utc::now();
+    store
+        .upsert_project(Project {
+            id: "p".into(),
+            name: "Project".into(),
+            repo_path: "/p".into(),
+            created_at: now,
+            updated_at: now,
+            kind: ProjectKind::Folder,
+        })
+        .await
+        .unwrap();
+    store
+        .upsert_workspace(
+            serde_json::from_value(json!({
+                "id": "w", "instanceId": "instance", "hostId": "local", "projectId": "p", "name": "Workspace", "path": "/p",
+                "createdAt": now, "updatedAt": now, "kind": "main", "status": "active", "reusesExistingBranch": false,
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let handler = WorkspaceSectionRequestHandler::new(store.clone());
+    let created = handler
+        .execute(
+            "workspaceSection.create",
+            &json!({"workspaceId": "w", "name": "Work"}),
+        )
+        .await
+        .unwrap();
+    assert!(created.changed);
+    assert_eq!(created.value["name"], "Work");
+
+    let listed = handler
+        .execute("workspaceSection.list", &json!({}))
+        .await
+        .unwrap();
+    assert!(!listed.changed);
+    assert_eq!(listed.value.as_array().unwrap().len(), 1);
+}
 
 #[tokio::test]
 async fn sections_publish_to_desktop_and_mobile_and_preserve_legacy_preferences() {
