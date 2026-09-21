@@ -517,6 +517,7 @@ class const _DiffFileList({
   final Map<String, _EditableWorkingTreeDocument> editableDocuments = const {},
   final void Function(GitDiffFile file, String text)? onEditableChanged,
   final void Function(GitDiffFile file)? onEditableSave,
+  required final _DiffSyntaxStyle Function(String filePath) syntaxForPath,
 }) extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
@@ -550,6 +551,7 @@ class const _DiffFileList({
         onEditableChanged: onEditableChanged,
         onEditableSave: onEditableSave,
         editableViewportHeight: editableViewportHeight,
+        syntaxForPath: syntaxForPath,
       );
     }
 
@@ -646,14 +648,35 @@ class _DiffLineRowSpan implements _DiffRowSpan {
 class _DiffRowsBuilder {
   final List<_DiffRowSpan> _spans = <_DiffRowSpan>[];
   final List<_DiffRow> _pending = <_DiffRow>[];
+  _DiffSyntaxStyle? _syntax;
 
-  void add(_DiffRow row) => _pending.add(row);
+  set syntax(_DiffSyntaxStyle? value) {
+    if (identical(_syntax, value)) return;
+    _flushPending();
+    _syntax = value;
+  }
 
-  void addAll(Iterable<_DiffRow> rows) => _pending.addAll(rows);
+  _DiffRow _scopedRow(_DiffRow row) {
+    final syntax = _syntax;
+    return syntax == null
+        ? row
+        : _DiffSyntaxScopedRow(row: row, syntax: syntax);
+  }
+
+  _DiffRowSpan _scopedSpan(_DiffRowSpan span) {
+    final syntax = _syntax;
+    return syntax == null
+        ? span
+        : _DiffSyntaxScopedRowSpan(span: span, syntax: syntax);
+  }
+
+  void add(_DiffRow row) => _pending.add(_scopedRow(row));
+
+  void addAll(Iterable<_DiffRow> rows) => _pending.addAll(rows.map(_scopedRow));
 
   void addSpans(Iterable<_DiffRowSpan> spans) {
     _flushPending();
-    _spans.addAll(spans.where((span) => span.length > 0));
+    _spans.addAll(spans.where((span) => span.length > 0).map(_scopedSpan));
   }
 
   void _flushPending() {
@@ -717,12 +740,15 @@ class _DiffRows {
     void Function(GitDiffFile file, String text)? onEditableChanged,
     void Function(GitDiffFile file)? onEditableSave,
     double? editableViewportHeight,
+    required _DiffSyntaxStyle Function(String filePath) syntaxForPath,
   }) {
     final items = _DiffRowsBuilder();
     if (result.truncated) {
       items.add(const _BannerRow('Diff truncated for preview.'));
     }
     for (final file in result.files) {
+      final syntax = syntaxForPath(file.path);
+      items.syntax = syntax;
       items.add(_FileHeaderRow(file, sourceLabel: sourceLabel));
       if (file.isBinary && isWorkspaceImageFilePath(file.path)) {
         items.add(
@@ -763,6 +789,7 @@ class _DiffRows {
             _WidgetDiffRow(
               _EditableWorkingTreeDiff(
                 file: file,
+                syntax: syntax,
                 baseline: contents?.oldDecoded?.content ?? '',
                 document: editable,
                 whitespaceMode: whitespaceMode,
@@ -965,6 +992,20 @@ class const _DiffLine({required final GitDiffLine line})
         Colors.transparent,
       ),
     };
+    final syntax = _DiffSyntaxScope.maybeOf(context);
+    final syntaxHighlighted =
+        syntax != null &&
+        (line.kind == GitDiffLineKind.addition ||
+            line.kind == GitDiffLineKind.deletion ||
+            line.kind == GitDiffLineKind.context);
+    final marker = syntaxHighlighted && line.text.isNotEmpty
+        ? line.text.substring(0, 1)
+        : '';
+    final content = syntaxHighlighted ? _extractContent(line.text) : line.text;
+    final baseStyle = AleraTokens.monoStyle.copyWith(
+      fontSize: 12,
+      color: syntax?.textStyle.color ?? color,
+    );
     return DecoratedBox(
       decoration: BoxDecoration(color: background),
       child: Padding(
@@ -972,12 +1013,22 @@ class const _DiffLine({required final GitDiffLine line})
           horizontal: AleraTokens.space12,
           vertical: AleraTokens.space2,
         ),
-        child: Text(
-          line.text,
+        child: Text.rich(
+          syntaxHighlighted
+              ? TextSpan(
+                  style: baseStyle,
+                  children: <InlineSpan>[
+                    TextSpan(
+                      text: marker,
+                      style: TextStyle(color: color),
+                    ),
+                    syntax.lineSpan(content),
+                  ],
+                )
+              : TextSpan(text: line.text, style: baseStyle),
           maxLines: 1,
           overflow: .visible,
           softWrap: false,
-          style: AleraTokens.monoStyle.copyWith(fontSize: 12, color: color),
         ),
       ),
     );

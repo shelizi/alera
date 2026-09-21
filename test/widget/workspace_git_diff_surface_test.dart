@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:alera/src/app/providers.dart'
     show WorkbenchController, workbenchControllerProvider;
@@ -41,6 +40,23 @@ part 'workspace_git_diff_surface_open_path_cases.dart';
 part 'workspace_git_diff_surface_reading_diff_cases.dart';
 part 'workspace_git_diff_surface_reading_diff_support.dart';
 part 'workspace_git_diff_surface_test_support.dart';
+
+Set<Color> _textSpanColors(InlineSpan span) {
+  final colors = <Color>{};
+
+  void collect(InlineSpan current) {
+    if (current case final TextSpan textSpan) {
+      final color = textSpan.style?.color;
+      if (color != null) colors.add(color);
+      for (final child in textSpan.children ?? const <InlineSpan>[]) {
+        collect(child);
+      }
+    }
+  }
+
+  collect(span);
+  return colors;
+}
 
 void main() {
   _registerWorkspaceGitDiffSurfacePullRequestTests();
@@ -946,6 +962,66 @@ void main() {
     expect(files.writes.single.expectedContentToken, 'token-1');
     expect(files.writes.single.overwriteIfChanged, isFalse);
     expect(files.writes.single.encoding, native.WorkspaceTextEncoding.utf8);
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('editable side-by-side syntax highlights both panes', (
+    tester,
+  ) async {
+    const oldCode = 'const int oldValue = 1;\n';
+    const newCode = 'const int newValue = 2;\n';
+    final backend = FakeGitBackend()
+      ..gitDiffResult = const GitDiffResult(
+        files: <GitDiffFile>[
+          GitDiffFile(
+            path: 'lib/main.dart',
+            area: .unstaged,
+            status: .modified,
+            lines: <GitDiffLine>[
+              GitDiffLine.hunk('@@ -1,1 +1,1 @@'),
+              GitDiffLine.deletion('-const int oldValue = 1;'),
+              GitDiffLine.addition('+const int newValue = 2;'),
+            ],
+          ),
+        ],
+      )
+      ..diffBlobBytesBySide[(filePath: 'lib/main.dart', oldSide: true)] =
+          Uint8List.fromList(oldCode.codeUnits)
+      ..diffBlobBytesBySide[(filePath: 'lib/main.dart', oldSide: false)] =
+          Uint8List.fromList(newCode.codeUnits);
+    final files = _EditableDiffFileService(content: newCode);
+
+    await _pumpDiffSurface(
+      tester,
+      backend: backend,
+      workspaceFileService: files,
+      tab: _diffTab(filePath: 'lib/main.dart', title: 'main.dart unstaged'),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Switch to Side-by-Side View'));
+    await tester.pumpAndSettle();
+
+    final original = find.byKey(
+      const ValueKey<String>('git-diff-working-tree-original-lib/main.dart'),
+    );
+    final editor = find.byKey(
+      const ValueKey<String>('git-diff-working-tree-editor-lib/main.dart'),
+    );
+    final originalField = tester.widget<TextField>(original);
+    final editorField = tester.widget<TextField>(editor);
+    final originalSpan = originalField.controller!.buildTextSpan(
+      context: tester.element(original),
+      style: originalField.style,
+      withComposing: false,
+    );
+    final editorSpan = editorField.controller!.buildTextSpan(
+      context: tester.element(editor),
+      style: editorField.style,
+      withComposing: false,
+    );
+
+    expect(_textSpanColors(originalSpan).length, greaterThan(1));
+    expect(_textSpanColors(editorSpan).length, greaterThan(1));
   });
 
   testWidgets('editable side-by-side shows x scrollbars and syncs x/y scroll', (
@@ -1373,6 +1449,8 @@ void main() {
   );
 
   testWidgets('staged side-by-side diff stays read only', (tester) async {
+    const oldCode = 'const int oldValue = 1;\n';
+    const stagedCode = 'const int stagedValue = 2;\n';
     final backend = FakeGitBackend()
       ..gitDiffResult = const GitDiffResult(
         files: <GitDiffFile>[
@@ -1382,16 +1460,16 @@ void main() {
             status: .modified,
             lines: <GitDiffLine>[
               GitDiffLine.hunk('@@ -1,1 +1,1 @@'),
-              GitDiffLine.deletion('-old line'),
-              GitDiffLine.addition('+staged line'),
+              GitDiffLine.deletion('-const int oldValue = 1;'),
+              GitDiffLine.addition('+const int stagedValue = 2;'),
             ],
           ),
         ],
       )
       ..diffBlobBytesBySide[(filePath: 'lib/main.dart', oldSide: true)] =
-          Uint8List.fromList('old line\n'.codeUnits)
+          Uint8List.fromList(oldCode.codeUnits)
       ..diffBlobBytesBySide[(filePath: 'lib/main.dart', oldSide: false)] =
-          Uint8List.fromList('staged line\n'.codeUnits);
+          Uint8List.fromList(stagedCode.codeUnits);
     final files = _EditableDiffFileService(content: 'workspace line\n');
 
     await _pumpDiffSurface(
@@ -1417,5 +1495,16 @@ void main() {
     expect(find.byType(SelectionArea), findsNWidgets(2));
     expect(files.readCount, 0);
     expect(find.text('Modified'), findsOneWidget);
+    for (final code in <String>[
+      'const int oldValue = 1;',
+      'const int stagedValue = 2;',
+    ]) {
+      final textFinder = find.byWidgetPredicate(
+        (widget) => widget is Text && widget.textSpan?.toPlainText() == code,
+      );
+      expect(textFinder, findsOneWidget);
+      final text = tester.widget<Text>(textFinder);
+      expect(_textSpanColors(text.textSpan!).length, greaterThan(1));
+    }
   });
 }

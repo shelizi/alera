@@ -275,7 +275,7 @@ class _WorkspaceEditorSurfaceState
               enableGutterDivider: false,
               editorTheme: editorTheme,
               language: performanceProfile.syntaxHighlighting
-                  ? _languageForPath(
+                  ? workspaceEditorSyntaxModeForPath(
                       filePath: filePath,
                       registry: languageRegistry,
                       syntaxLanguageId: syntaxLanguageId,

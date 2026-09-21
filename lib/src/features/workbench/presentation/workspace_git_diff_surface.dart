@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:math' as math;
-import 'dart:typed_data';
 
 import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/providers.dart';
@@ -10,6 +9,7 @@ import 'package:alera/src/design_system/icons/alera_file_icon.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:alera/src/design_system/layout/alera_confirm_dialog.dart';
 import 'package:alera/src/features/ai_assist/application/ai_assist_errors.dart';
+import 'package:alera/src/features/language_intelligence/application/language_provider_registry.dart';
 import 'package:alera/src/features/reading_diff/application/reading_diff_providers.dart';
 import 'package:alera/src/features/reading_diff/application/reading_diff_generation_progress.dart';
 import 'package:alera/src/features/reading_diff/domain/reading_diff_models.dart';
@@ -17,6 +17,7 @@ import 'package:alera/src/features/reading_diff/presentation/reading_diff_confir
 import 'package:alera/src/features/reading_diff/presentation/reading_diff_failure_view.dart';
 import 'package:alera/src/features/reading_diff/presentation/reading_diff_generation_progress_view.dart';
 import 'package:alera/src/features/reading_diff/presentation/reading_diff_view.dart';
+import 'package:alera/src/features/settings/domain/editor_syntax_theme_catalog.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_open_coordinator_provider.dart';
 import 'package:alera/src/features/workbench/application/workspace_text_encoding.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_preview_kind.dart';
@@ -24,6 +25,7 @@ import 'package:alera/src/features/workbench/domain/workbench_view_prefs.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_source_control_scope.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
+import 'package:alera/src/features/workbench/presentation/workspace_editor_surface.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_git_diff_image_row.dart';
 import 'package:alera/src/rust/api/workspace_files.dart' as native;
 import 'package:alera/src/shared/infra/git/git_backend.dart';
@@ -32,10 +34,13 @@ import 'package:alera/src/shared/infra/git/git_providers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
+import 'package:code_forge/code_forge/syntax_highlighter.dart'
+    as code_forge_syntax;
 
 part 'workspace_git_diff_surface_rows.dart';
 part 'workspace_git_diff_surface_bar.dart';
 part 'workspace_git_diff_surface_loading.dart';
+part 'workspace_git_diff_surface_syntax.dart';
 part 'workspace_git_diff_surface_full_file.dart';
 part 'workspace_git_diff_surface_side_by_side.dart';
 part 'workspace_git_diff_surface_editable.dart';
@@ -77,6 +82,8 @@ class _WorkspaceGitDiffSurfaceState
   int _encodingGeneration = 0;
   final Map<String, _EditableWorkingTreeDocument> _editableDocuments =
       <String, _EditableWorkingTreeDocument>{};
+  final Map<String, _DiffSyntaxStyle> _diffSyntaxStyles =
+      <String, _DiffSyntaxStyle>{};
   final Set<String> _fullFilePreviewLimitedPaths = <String>{};
 
   GitDiffContentMode get _effectiveContentMode {
@@ -224,7 +231,31 @@ class _WorkspaceGitDiffSurfaceState
       ref.read(readingDiffServiceProvider).cancel(activeRequest);
     }
     _editableDocuments.clear();
+    for (final syntax in _diffSyntaxStyles.values) {
+      syntax.dispose();
+    }
+    _diffSyntaxStyles.clear();
     super.dispose();
+  }
+
+  _DiffSyntaxStyle _diffSyntaxStyleForPath({
+    required String filePath,
+    required String themeName,
+    required LanguageExtensionRegistry registry,
+  }) {
+    final languageId = workspaceEditorSyntaxLanguageIdForPath(
+      filePath: filePath,
+      registry: registry,
+    );
+    final cacheKey = '$themeName\u0000$languageId\u0000$filePath';
+    return _diffSyntaxStyles.putIfAbsent(
+      cacheKey,
+      () => _DiffSyntaxStyle.forPath(
+        filePath: filePath,
+        themeName: themeName,
+        registry: registry,
+      ),
+    );
   }
 
   @override
@@ -237,6 +268,12 @@ class _WorkspaceGitDiffSurfaceState
         (settings) => settings.aiAssist.enabled,
       ),
     );
+    final editorThemeName = ref.watch(
+      settingsControllerProvider.select(
+        (settings) => settings.editor.themeName,
+      ),
+    );
+    final languageRegistry = ref.watch(languageExtensionRegistryProvider);
     return DecoratedBox(
       decoration: const BoxDecoration(color: AleraTokens.bg),
       child: Column(
@@ -341,6 +378,11 @@ class _WorkspaceGitDiffSurfaceState
                         contentMode: contentMode,
                         presentationMode: presentationMode,
                         whitespaceMode: _whitespaceMode,
+                        syntaxForPath: (path) => _diffSyntaxStyleForPath(
+                          filePath: path,
+                          themeName: editorThemeName,
+                          registry: languageRegistry,
+                        ),
                       );
                     },
                   ),

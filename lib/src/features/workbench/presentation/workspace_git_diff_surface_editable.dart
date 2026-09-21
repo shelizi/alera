@@ -412,6 +412,7 @@ extension _WorkspaceGitDiffEditable on _WorkspaceGitDiffSurfaceState {
 class _EditableWorkingTreeDiff extends StatefulWidget {
   const _EditableWorkingTreeDiff({
     required this.file,
+    required this.syntax,
     required this.baseline,
     required this.document,
     required this.whitespaceMode,
@@ -421,6 +422,7 @@ class _EditableWorkingTreeDiff extends StatefulWidget {
   });
 
   final GitDiffFile file;
+  final _DiffSyntaxStyle syntax;
   final String baseline;
   final _EditableWorkingTreeDocument document;
   final GitDiffWhitespaceMode whitespaceMode;
@@ -614,7 +616,8 @@ class _DiffOverviewPainter extends CustomPainter {
 }
 
 class _EditableWorkingTreeDiffState extends State<_EditableWorkingTreeDiff> {
-  late final TextEditingController _controller;
+  late final _DiffSyntaxTextEditingController _leftController;
+  late final _DiffSyntaxTextEditingController _controller;
   late final ScrollController _leftHorizontalController;
   late final ScrollController _rightHorizontalController;
   late final ScrollController _leftVerticalController;
@@ -625,7 +628,14 @@ class _EditableWorkingTreeDiffState extends State<_EditableWorkingTreeDiff> {
   @override
   void initState() {
     super.initState();
-    _controller = TextEditingController(text: widget.document.currentText);
+    _leftController = _DiffSyntaxTextEditingController(
+      text: widget.baseline,
+      syntax: widget.syntax,
+    );
+    _controller = _DiffSyntaxTextEditingController(
+      text: widget.document.currentText,
+      syntax: widget.syntax,
+    );
     _leftHorizontalController = ScrollController();
     _rightHorizontalController = ScrollController();
     _leftVerticalController = ScrollController();
@@ -639,6 +649,17 @@ class _EditableWorkingTreeDiffState extends State<_EditableWorkingTreeDiff> {
   @override
   void didUpdateWidget(covariant _EditableWorkingTreeDiff oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.syntax, widget.syntax)) {
+      _leftController.updateSyntax(widget.syntax);
+      _controller.updateSyntax(widget.syntax);
+    }
+    if (oldWidget.baseline != widget.baseline &&
+        _leftController.text != widget.baseline) {
+      _leftController.value = TextEditingValue(
+        text: widget.baseline,
+        selection: const TextSelection.collapsed(offset: 0),
+      );
+    }
     if (_controller.text != widget.document.currentText &&
         oldWidget.document.currentText != widget.document.currentText) {
       _controller.value = TextEditingValue(
@@ -656,6 +677,7 @@ class _EditableWorkingTreeDiffState extends State<_EditableWorkingTreeDiff> {
     _rightHorizontalController.dispose();
     _leftVerticalController.dispose();
     _rightVerticalController.dispose();
+    _leftController.dispose();
     _controller.dispose();
     super.dispose();
   }
@@ -896,45 +918,93 @@ class _EditableWorkingTreeDiffState extends State<_EditableWorkingTreeDiff> {
                                   notificationPredicate: (notification) =>
                                       notification.metrics.axis ==
                                       Axis.vertical,
-                                  child: SingleChildScrollView(
-                                    controller: _leftVerticalController,
-                                    padding: const EdgeInsets.all(
-                                      AleraTokens.space8,
+                                  child: AnimatedBuilder(
+                                    animation: _leftVerticalController,
+                                    child: TextField(
+                                      key: ValueKey<String>(
+                                        'git-diff-working-tree-original-${widget.file.path}',
+                                      ),
+                                      controller: _leftController,
+                                      scrollController: _leftVerticalController,
+                                      expands: true,
+                                      maxLines: null,
+                                      minLines: null,
+                                      readOnly: true,
+                                      enableInteractiveSelection: true,
+                                      keyboardType: TextInputType.multiline,
+                                      style: textStyle,
+                                      decoration: const InputDecoration(
+                                        border: InputBorder.none,
+                                        filled: false,
+                                        contentPadding: EdgeInsets.all(
+                                          AleraTokens.space8,
+                                        ),
+                                      ),
                                     ),
-                                    child: Stack(
-                                      fit: StackFit.passthrough,
-                                      children: <Widget>[
-                                        for (final lineIndex
-                                            in changes.oldChangedLines)
-                                          Positioned(
-                                            key: ValueKey<String>(
-                                              'git-diff-working-tree-original-deletion-${widget.file.path}-$lineIndex',
-                                            ),
-                                            left: 0,
-                                            right: 0,
-                                            top: lineIndex * lineHeight,
-                                            height: lineHeight,
-                                            child: IgnorePointer(
-                                              child: DecoratedBox(
-                                                decoration: BoxDecoration(
-                                                  color: AleraTokens.error
-                                                      .withValues(alpha: 0.08),
-                                                  border: const Border(
-                                                    left: BorderSide(
-                                                      color: AleraTokens.error,
-                                                      width: 3,
+                                    builder: (context, child) {
+                                      final scrollOffset =
+                                          _leftVerticalController.hasClients
+                                          ? _leftVerticalController.offset
+                                          : 0.0;
+                                      final firstVisible = math.max(
+                                        0,
+                                        ((scrollOffset - AleraTokens.space8) /
+                                                    lineHeight)
+                                                .floor() -
+                                            1,
+                                      );
+                                      final lastVisible = math.min(
+                                        lineCount - 1,
+                                        ((scrollOffset +
+                                                    constraints.maxHeight -
+                                                    AleraTokens.space8) /
+                                                lineHeight)
+                                            .ceil(),
+                                      );
+                                      return Stack(
+                                        clipBehavior: Clip.hardEdge,
+                                        children: <Widget>[
+                                          Positioned.fill(child: child!),
+                                          if (lastVisible >= firstVisible)
+                                            for (
+                                              var lineIndex = firstVisible;
+                                              lineIndex <= lastVisible;
+                                              lineIndex += 1
+                                            )
+                                              if (changes.oldChangedLines
+                                                  .contains(lineIndex))
+                                                Positioned(
+                                                  key: ValueKey<String>(
+                                                    'git-diff-working-tree-original-deletion-${widget.file.path}-$lineIndex',
+                                                  ),
+                                                  left: 0,
+                                                  right: 0,
+                                                  top:
+                                                      AleraTokens.space8 +
+                                                      lineIndex * lineHeight -
+                                                      scrollOffset,
+                                                  height: lineHeight,
+                                                  child: IgnorePointer(
+                                                    child: DecoratedBox(
+                                                      decoration: BoxDecoration(
+                                                        color: AleraTokens.error
+                                                            .withValues(
+                                                              alpha: 0.08,
+                                                            ),
+                                                        border: const Border(
+                                                          left: BorderSide(
+                                                            color: AleraTokens
+                                                                .error,
+                                                            width: 3,
+                                                          ),
+                                                        ),
+                                                      ),
                                                     ),
                                                   ),
                                                 ),
-                                              ),
-                                            ),
-                                          ),
-                                        SelectableText(
-                                          widget.baseline,
-                                          style: textStyle,
-                                        ),
-                                      ],
-                                    ),
+                                        ],
+                                      );
+                                    },
                                   ),
                                 ),
                               ),

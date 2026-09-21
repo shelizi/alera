@@ -143,6 +143,13 @@ class const _SideBySideCell({
       ),
       _ => (AleraTokens.foregroundMuted, Colors.transparent, ''),
     };
+    final syntax = _DiffSyntaxScope.maybeOf(context);
+    final codeStyle =
+        syntax?.textStyle ??
+        AleraTokens.monoStyle.copyWith(
+          fontSize: 12,
+          color: AleraTokens.foreground,
+        );
     final cell = ClipRect(
       child: DecoratedBox(
         decoration: BoxDecoration(
@@ -187,15 +194,15 @@ class const _SideBySideCell({
               ),
               const SizedBox(width: AleraTokens.space6),
               Expanded(
-                child: Text(
-                  line?.text ?? '',
+                child: Text.rich(
+                  syntax?.lineSpan(
+                        line?.text ?? '',
+                        lineIndex: math.max((line?.lineNumber ?? 1) - 1, 0),
+                      ) ??
+                      TextSpan(text: line?.text ?? '', style: codeStyle),
                   maxLines: 1,
                   overflow: TextOverflow.visible,
                   softWrap: false,
-                  style: AleraTokens.monoStyle.copyWith(
-                    fontSize: 12,
-                    color: color,
-                  ),
                 ),
               ),
             ],

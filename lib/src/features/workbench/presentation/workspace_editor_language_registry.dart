@@ -29,7 +29,7 @@ bool workspaceEditorNativeSyntaxEnabled({
       .structuralParserEnabled;
 }
 
-Mode _languageForPath({
+Mode workspaceEditorSyntaxModeForPath({
   required String filePath,
   required LanguageExtensionRegistry registry,
   required String syntaxLanguageId,
