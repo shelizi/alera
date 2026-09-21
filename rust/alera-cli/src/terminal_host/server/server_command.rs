@@ -137,20 +137,20 @@ pub enum ServerCommand {
     MobileWorkspaceFileFinished {
         client_id: u64,
         request_id: i64,
-        request_type: String,
+        operation: super::MobileWorkspaceFileOperation,
         result: HostResult<Value>,
     },
     MobilePromptFileFinished {
         client_id: u64,
         request_id: i64,
-        request_type: String,
+        operation: super::MobilePromptFileOperation,
         upload_id: Option<String>,
         result: HostResult<Value>,
     },
     MobilePromptImageFinished {
         client_id: u64,
         request_id: i64,
-        request_type: String,
+        operation: super::MobilePromptImageOperation,
         upload_id: Option<String>,
         result: HostResult<Value>,
     },

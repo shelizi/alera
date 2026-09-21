@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 
 use alera_core::agent_descriptor::{agent_descriptor, AGENT_DESCRIPTORS};
-use alera_core::runtime::{AgentProfile, AgentProfileLaunchMode, RuntimeStoreError, SshTarget};
+use alera_core::runtime::{AgentProfile, AgentProfileLaunchMode};
 use chrono::Utc;
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -15,41 +15,22 @@ use crate::terminal_host::orchestration::managed_agent_launch::build_managed_age
 use crate::terminal_host::orchestration::managed_launch_shell_rendering::managed_launch_preview;
 use crate::terminal_host::protocol::event;
 
+use super::agent_profile_catalog_requests::AgentProfileCatalogRequestHandler;
 use super::requests::require_string_key;
+use super::ssh_target_requests::SshTargetRequestHandler;
 use super::ServerActor;
 
 impl ServerActor {
     pub(super) async fn ssh_target_list(&mut self) -> HostResult<Value> {
-        let targets = self
-            .runtime_store
-            .list_ssh_targets()
+        SshTargetRequestHandler::new(&self.runtime_store)
+            .list()
             .await
-            .map_err(|error| HostError::state(error.to_string()))?;
-        serde_json::to_value(targets).map_err(|error| HostError::format(error.to_string()))
     }
 
     pub(super) async fn ssh_target_upsert(&mut self, payload: &Value) -> HostResult<Value> {
-        let mut target: SshTarget = serde_json::from_value(payload.clone())
-            .map_err(|error| HostError::format(error.to_string()))?;
-        // An omitted installDir means "leave it alone", not "clear it": the app
-        // only sends it when the user edited the bootstrap location.
-        if payload.get("installDir").is_none() {
-            if let Some(existing) = self
-                .runtime_store
-                .find_ssh_target(&target.id)
-                .await
-                .map_err(|error| HostError::state(error.to_string()))?
-            {
-                target.install_dir = existing.install_dir;
-            }
-        }
-        let stored = self
-            .runtime_store
-            .upsert_ssh_target(target)
-            .await
-            .map_err(|error| HostError::state(error.to_string()))?;
-        let value =
-            serde_json::to_value(stored).map_err(|error| HostError::format(error.to_string()))?;
+        let value = SshTargetRequestHandler::new(&self.runtime_store)
+            .upsert(payload)
+            .await?;
         self.broadcast_authenticated(event("sshTargetsChanged", json!({})));
         Ok(value)
     }
@@ -57,23 +38,17 @@ impl ServerActor {
     pub(super) async fn ssh_target_remove(&mut self, payload: &Value) -> HostResult<Value> {
         let id = require_string_key(payload, "id")?;
         self.cancel_ssh_bootstrap_job_before_remove(&id).await?;
-        self.runtime_store
-            .remove_ssh_target(&id)
-            .await
-            .map_err(|error| HostError::state(error.to_string()))?;
+        SshTargetRequestHandler::new(&self.runtime_store)
+            .remove(&id)
+            .await?;
         self.broadcast_authenticated(event("sshTargetsChanged", json!({})));
         Ok(json!({}))
     }
 
     pub(super) async fn agent_profile_list(&mut self) -> HostResult<Value> {
-        let profiles = self
-            .runtime_store
-            .list_agent_profiles()
+        AgentProfileCatalogRequestHandler::new(&self.runtime_store)
+            .list()
             .await
-            .map_err(|error| HostError::state(error.to_string()))?;
-        let items =
-            serde_json::to_value(profiles).map_err(|error| HostError::format(error.to_string()))?;
-        Ok(json!({ "kind": "agentProfiles", "items": items, "filters": {} }))
     }
 
     pub(super) async fn agent_profile_upsert(&mut self, payload: &Value) -> HostResult<Value> {
@@ -84,13 +59,9 @@ impl ServerActor {
             optional_revision(payload, "expectedRevision")?
         };
         let profile = profile_from_payload(payload)?;
-        let stored = self
-            .runtime_store
-            .upsert_agent_profile(profile, expected_revision)
-            .await
-            .map_err(agent_profile_store_error)?;
-        let value =
-            serde_json::to_value(stored).map_err(|error| HostError::format(error.to_string()))?;
+        let value = AgentProfileCatalogRequestHandler::new(&self.runtime_store)
+            .upsert(profile, expected_revision)
+            .await?;
         self.broadcast_authenticated(event("agentProfilesChanged", json!({})));
         Ok(value)
     }
@@ -126,19 +97,11 @@ impl ServerActor {
                 Ok((id.clone(), revision))
             })
             .collect::<HostResult<HashMap<_, _>>>()?;
-        let profiles = self
-            .runtime_store
-            .reorder_agent_profiles(&profile_ids, &expected_revisions)
-            .await
-            .map_err(agent_profile_store_error)?;
-        let items =
-            serde_json::to_value(profiles).map_err(|error| HostError::format(error.to_string()))?;
+        let value = AgentProfileCatalogRequestHandler::new(&self.runtime_store)
+            .reorder(&profile_ids, &expected_revisions)
+            .await?;
         self.broadcast_authenticated(event("agentProfilesChanged", json!({})));
-        Ok(json!({
-            "kind": "agentProfiles",
-            "items": items,
-            "filters": {}
-        }))
+        Ok(value)
     }
 
     pub(super) async fn agent_profile_removal_impact(
@@ -147,25 +110,9 @@ impl ServerActor {
     ) -> HostResult<Value> {
         let id = require_profile_string(payload, "id")?;
         let expected_revision = required_revision(payload, "expectedRevision")?;
-        let impact = self
-            .runtime_store
-            .agent_profile_removal_impact(&id, expected_revision)
+        AgentProfileCatalogRequestHandler::new(&self.runtime_store)
+            .removal_impact(&id, expected_revision)
             .await
-            .map_err(agent_profile_store_error)?;
-        let reference_count = impact.reference_count();
-        let blocking_reference_count =
-            impact.automation_ids.len() + impact.execution_policy_run_ids.len() + impact.tabs.len();
-        let mut value =
-            serde_json::to_value(impact).map_err(|error| HostError::format(error.to_string()))?;
-        let object = value
-            .as_object_mut()
-            .ok_or_else(|| HostError::format("Agent profile removal impact must be an object."))?;
-        object.insert("referenceCount".into(), json!(reference_count));
-        object.insert(
-            "blockingReferenceCount".into(),
-            json!(blocking_reference_count),
-        );
-        Ok(value)
     }
 
     pub(super) async fn agent_profile_remove(&mut self, payload: &Value) -> HostResult<Value> {
@@ -176,11 +123,9 @@ impl ServerActor {
                 "Agent profile removal requires explicit confirmation.",
             ));
         }
-        let removed = self
-            .runtime_store
-            .remove_agent_profile(&id, expected_revision)
-            .await
-            .map_err(agent_profile_store_error)?;
+        let removed = AgentProfileCatalogRequestHandler::new(&self.runtime_store)
+            .remove(&id, expected_revision)
+            .await?;
         if removed {
             self.broadcast_authenticated(event("agentProfilesChanged", json!({})));
             self.broadcast_authenticated(event("runtimeSettingsChanged", json!({})));
@@ -254,26 +199,6 @@ fn optional_revision(payload: &Value, key: &str) -> HostResult<Option<i64>> {
             .map(Some)
             .ok_or_else(|| HostError::format(format!("{key} must be a non-negative integer."))),
     }
-}
-
-fn agent_profile_store_error(error: anyhow::Error) -> HostError {
-    if let Some(RuntimeStoreError::AgentProfileRevisionConflict {
-        profile_id,
-        expected,
-        current,
-    }) = error.downcast_ref::<RuntimeStoreError>()
-    {
-        return HostError::conflict(
-            "agent_profile_revision_conflict",
-            error.to_string(),
-            json!({
-                "profileId": profile_id,
-                "expectedRevision": expected,
-                "currentRevision": current,
-            }),
-        );
-    }
-    HostError::state(error.to_string())
 }
 
 fn require_profile_string(payload: &Value, key: &str) -> HostResult<String> {

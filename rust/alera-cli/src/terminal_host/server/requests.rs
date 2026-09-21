@@ -1,27 +1,35 @@
-use alera_core::runtime::{
-    LinkedReview, Project, ProjectConfig, WorkbenchLayoutRecord, Workspace, WorkspaceTabRecord,
-    WorkspaceTag,
-};
-use chrono::{DateTime, Utc};
+use alera_core::runtime::WorkspaceTabRecord;
 use serde_json::{json, Map, Value};
 
 use crate::mobile_access::{
-    apply_mobile_settings_update_resolved, cancel_mobile_pairing_offer,
-    create_mobile_pairing_offer_for_settings, delete_mobile_device, list_mobile_devices,
-    pair_mobile_device, prepare_mobile_pairing_offer_settings_resolved, rename_mobile_device,
-    revoke_mobile_device, MobileDevicePairRequest, MobilePairingCreateRequest,
-    MobileSettingsUpdateRequest,
+    apply_mobile_settings_update_resolved, prepare_mobile_pairing_offer_settings_resolved,
+    MobileDevicePairRequest, MobilePairingCreateRequest, MobileSettingsUpdateRequest,
 };
-use crate::ssh_bootstrap::{build_ssh_bootstrap_plan, SshTargetBootstrapRequest};
+use crate::ssh_bootstrap::SshTargetBootstrapRequest;
 use crate::terminal_host::host_error::{HostError, HostResult};
 use crate::terminal_host::protocol::{
     error_response, event, int_or, ok_response, TerminalHostConfig,
 };
 use crate::terminal_host::session::SessionDriver;
 
+use super::deferred_read_requests::DeferredReadRequestHandler;
 use super::host_service_requests::required_non_blank;
-pub(super) use super::request_payloads::{json_result, parse_payload};
+use super::mobile_device_pairing_requests::MobileDevicePairingRequestHandler;
+use super::project_registration_requests::ProjectRegistrationRequestHandler;
+use super::project_requests::{ProjectStoreChange, ProjectStoreRequestHandler};
+pub(super) use super::request_payloads::{json_result, parse_payload, require_string_key};
+use super::request_route_policy::{
+    request_route_policy, CoalescedReadRoute, DeferredWriteRoute, MobileDeferredRoute,
+    PostResponseAction, RequestHandlerFamily, RequestRoutePolicy,
+};
 use super::runtime_mutation_barrier::conflicts_with_runtime_mutation;
+use super::ssh_bootstrap_plan_requests::SshBootstrapPlanRequestHandler;
+use super::workspace_artifact_requests::{
+    WorkspaceArtifactChange, WorkspaceArtifactRequestHandler,
+};
+use super::workspace_relation_requests::WorkspaceRelationRequestHandler;
+use super::workspace_requests::WorkspaceRequestHandler;
+use super::workspace_tab_requests::WorkspaceTabStoreHandler;
 use super::{ClientKind, ServerActor, ServerCommand};
 
 use self::idempotency_receipts::{
@@ -31,19 +39,11 @@ use self::idempotency_receipts::{
 
 pub(super) mod idempotency_receipts;
 mod runtime_settings;
+mod runtime_settings_store;
 mod runtime_settings_validation;
 pub(super) use runtime_settings_validation::validate_mobile_runtime_settings_payload;
 #[cfg(test)]
 pub(super) use runtime_settings_validation::validate_text_actions_settings;
-
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ProjectConfigUpsertRequest {
-    project_id: String,
-    config: ProjectConfig,
-    #[serde(default)]
-    updated_at: Option<DateTime<Utc>>,
-}
 
 impl ServerActor {
     /// Parse and dispatch one client line, then write the response. Malformed
@@ -67,8 +67,10 @@ impl ServerActor {
         let request_id = obj.get("id").and_then(Value::as_i64);
         let outcome: HostResult<Value> = match extract_request(obj) {
             Ok((request_type, payload)) => {
-                restart_after_response = request_type == "host.restart";
-                shutdown_after_response = request_type == "host.shutdown";
+                let route_policy = request_route_policy(&request_type);
+                restart_after_response = route_policy.post_response == PostResponseAction::Restart;
+                shutdown_after_response =
+                    route_policy.post_response == PostResponseAction::Shutdown;
                 if let Some(id) = request_id {
                     if self.mutation_queue.has_runtime_mutations()
                         && conflicts_with_runtime_mutation(&request_type)
@@ -99,7 +101,7 @@ impl ServerActor {
                             return;
                         }
                     }
-                    if request_type.starts_with("orchestration.") {
+                    if route_policy.handler_family == RequestHandlerFamily::Orchestration {
                         match self
                             .handle_orchestration_request(client_id, id, &request_type, &payload)
                             .await
@@ -154,6 +156,59 @@ impl ServerActor {
         request_type: &str,
         payload: &Value,
     ) -> HostResult<Value> {
+        let route_policy = request_route_policy(request_type);
+        if let Some(route) = route_policy.deferred_read {
+            self.require_auth(client_id)?;
+            self.require_request_allowed(client_id, request_type)?;
+            return DeferredReadRequestHandler::new(
+                self.runtime_store.clone(),
+                self.deferred_request_scheduler(),
+            )
+            .execute_inline(route, payload)
+            .await;
+        }
+        if let Some(route) = route_policy.deferred_write {
+            self.require_auth(client_id)?;
+            self.require_request_allowed(client_id, request_type)?;
+            return match route {
+                DeferredWriteRoute::ProjectRegister => {
+                    let result = ProjectRegistrationRequestHandler::new(
+                        self.runtime_store.clone(),
+                        self.deferred_request_scheduler(),
+                    )
+                    .execute_inline(payload)
+                    .await;
+                    if result.is_ok() {
+                        self.broadcast_project_state_changed();
+                    }
+                    result
+                }
+            };
+        }
+        if let Some(route) = route_policy.coalesced_read {
+            self.require_auth(client_id)?;
+            self.require_request_allowed(client_id, request_type)?;
+            return match route {
+                CoalescedReadRoute::WorkspaceSidebarSnapshot => {
+                    self.workspace_sidebar_snapshot(client_id).await
+                }
+            };
+        }
+        if let Some(route) = route_policy.mobile_deferred {
+            self.require_auth(client_id)?;
+            self.require_request_allowed(client_id, request_type)?;
+            return match route {
+                MobileDeferredRoute::PromptImage(operation) => {
+                    self.execute_mobile_prompt_image_operation(operation, payload)
+                }
+                MobileDeferredRoute::PromptFile(operation) => {
+                    self.execute_mobile_prompt_file_operation(operation, payload)
+                }
+                MobileDeferredRoute::WorkspaceFile(_) => Err(HostError::state(format!(
+                    "Unknown terminal host request: {request_type}"
+                ))),
+            };
+        }
         match request_type {
             "hello" => self.handle_hello(client_id, payload),
             "mobile.relayAuthorization.renew" => Err(HostError::state(
@@ -162,7 +217,9 @@ impl ServerActor {
             "mobile.hello" => self.handle_mobile_hello(client_id, payload).await,
             "mobile.device.pair" if self.is_mobile_client(client_id) => {
                 let request: MobileDevicePairRequest = parse_payload(payload)?;
-                let value = json_result(pair_mobile_device(&self.runtime_store, request).await)?;
+                let value = MobileDevicePairingRequestHandler::new(&self.runtime_store)
+                    .pair_device(request)
+                    .await?;
                 self.broadcast_authenticated(event("mobileDevicesChanged", json!({})));
                 self.broadcast_authenticated(event("mobilePairingsChanged", json!({})));
                 Ok(value)
@@ -170,7 +227,7 @@ impl ServerActor {
             _ => {
                 self.require_auth(client_id)?;
                 self.require_request_allowed(client_id, request_type)?;
-                self.handle_authenticated_request(client_id, request_type, payload)
+                self.handle_authenticated_request(client_id, request_type, payload, route_policy)
                     .await
             }
         }
@@ -181,13 +238,22 @@ impl ServerActor {
         client_id: u64,
         request_type: &str,
         payload: &Value,
+        route_policy: RequestRoutePolicy,
     ) -> HostResult<Value> {
-        match request_type {
-            request if request.starts_with("configuration.") => {
-                self.handle_configuration_request(client_id, request, payload)
-                    .await
+        match route_policy.handler_family {
+            RequestHandlerFamily::Configuration => {
+                return self
+                    .handle_configuration_request(client_id, request_type, payload)
+                    .await;
             }
-
+            RequestHandlerFamily::Automation => {
+                return self
+                    .handle_automation_request(client_id, request_type, payload)
+                    .await;
+            }
+            RequestHandlerFamily::Core | RequestHandlerFamily::Orchestration => {}
+        }
+        match request_type {
             "mobile.workspaceQuickOpen.stop" => self.stop_mobile_workspace_quick_open(payload),
             "configure" => {
                 self.require_auth(client_id)?;
@@ -516,10 +582,6 @@ impl ServerActor {
                 self.require_auth(client_id)?;
                 self.handle_resource_snapshot(payload)
             }
-            _ if request_type.starts_with("automation.") => {
-                self.handle_automation_request(client_id, request_type, payload)
-                    .await
-            }
             "shellEnvironment.reload" => {
                 self.require_auth(client_id)?;
                 let (path_count, variable_count) =
@@ -531,15 +593,19 @@ impl ServerActor {
             }
             "runtimeMetadata.get" => {
                 self.require_auth(client_id)?;
-                let key = require_string_key(payload, "key")?;
-                json_result(self.runtime_store.get_metadata(&key).await)
+                super::runtime_metadata_requests::RuntimeMetadataRequestHandler::new(
+                    &self.runtime_store,
+                )
+                .get(payload)
+                .await
             }
             "runtimeMetadata.set" => {
                 self.require_auth(client_id)?;
-                let key = require_string_key(payload, "key")?;
-                let value = require_string_key(payload, "value")?;
-                json_result(self.runtime_store.set_metadata(&key, &value).await)?;
-                Ok(json!({}))
+                super::runtime_metadata_requests::RuntimeMetadataRequestHandler::new(
+                    &self.runtime_store,
+                )
+                .set(payload)
+                .await
             }
             "runtimeSettings.get" => {
                 self.require_auth(client_id)?;
@@ -565,7 +631,6 @@ impl ServerActor {
                 self.workspace_section_request(client_id, request_type, payload)
                     .await
             }
-            "workspaceSidebar.snapshot" => self.workspace_sidebar_snapshot(client_id).await,
             "workbenchViewPrefs.get" => self.workbench_view_prefs(client_id).await,
             "workbenchViewPrefs.update" => {
                 self.update_workbench_view_prefs(client_id, payload).await
@@ -579,21 +644,30 @@ impl ServerActor {
                 self.require_auth(client_id)?;
                 Ok(self.agent_presence_items())
             }
-            "project.list" => {
+            "project.list"
+            | "project.upsert"
+            | "projectConfig.find"
+            | "projectConfig.list"
+            | "projectConfig.upsert"
+            | "projectConfig.remove" => {
                 self.require_auth(client_id)?;
-                json_result(self.runtime_store.list_projects().await)
+                let outcome = ProjectStoreRequestHandler::new(&self.runtime_store)
+                    .execute(request_type, payload)
+                    .await?;
+                match outcome.change {
+                    Some(ProjectStoreChange::Projects) => {
+                        self.broadcast_authenticated(event("projectsChanged", json!({})))
+                    }
+                    Some(ProjectStoreChange::ProjectConfigs) => {
+                        self.broadcast_authenticated(event("projectConfigsChanged", json!({})))
+                    }
+                    None => {}
+                }
+                Ok(outcome.value)
             }
             "hostDirectory.roots" => {
                 self.require_auth(client_id)?;
                 self.host_directory_roots_request()
-            }
-            "hostDirectory.list" => {
-                self.require_auth(client_id)?;
-                self.host_directory_list_request(payload)
-            }
-            "project.register" => {
-                self.require_auth(client_id)?;
-                self.project_register_request(payload).await
             }
             "project.rename" => {
                 self.require_auth(client_id)?;
@@ -615,87 +689,28 @@ impl ServerActor {
                 self.require_auth(client_id)?;
                 self.project_clone_cancel_request(payload).await
             }
-            "project.branches.list" => {
+            "workspace.list"
+            | "workspace.listAll"
+            | "workspace.find"
+            | "workspace.upsert"
+            | "workspace.rename"
+            | "workspace.setPinned"
+            | "workspaceCascade.preview" => {
                 self.require_auth(client_id)?;
-                self.project_branches_request(payload).await
-            }
-            "project.upsert" => {
-                self.require_auth(client_id)?;
-                let project: Project = parse_payload(payload)?;
-                let value = json_result(self.runtime_store.upsert_project(project).await)?;
-                self.broadcast_authenticated(event("projectsChanged", json!({})));
-                Ok(value)
-            }
-            "projectConfig.find" => {
-                self.require_auth(client_id)?;
-                let project_id = require_string_key(payload, "projectId")?;
-                json_result(self.runtime_store.find_project_config(&project_id).await)
-            }
-            "projectConfig.effective" => {
-                self.require_auth(client_id)?;
-                self.project_effective_config_request(payload).await
-            }
-            "projectConfig.list" => {
-                self.require_auth(client_id)?;
-                json_result(self.runtime_store.list_project_configs().await)
-            }
-            "projectConfig.upsert" => {
-                self.require_auth(client_id)?;
-                let request: ProjectConfigUpsertRequest = parse_payload(payload)?;
-                let value = json_result(
-                    self.runtime_store
-                        .upsert_project_config(
-                            &request.project_id,
-                            request.config,
-                            request.updated_at.unwrap_or_else(Utc::now),
-                        )
-                        .await,
-                )?;
-                self.broadcast_authenticated(event("projectConfigsChanged", json!({})));
-                Ok(value)
-            }
-            "projectConfig.remove" => {
-                self.require_auth(client_id)?;
-                let project_id = require_string_key(payload, "projectId")?;
-                json_result(self.runtime_store.remove_project_config(&project_id).await)?;
-                self.broadcast_authenticated(event("projectConfigsChanged", json!({})));
-                Ok(json!({}))
-            }
-            "workspace.list" => {
-                self.require_auth(client_id)?;
-                let project_id = require_string_key(payload, "projectId")?;
-                json_result(self.runtime_store.list_workspaces(&project_id).await)
-            }
-            "workspace.listAll" => {
-                self.require_auth(client_id)?;
-                json_result(self.runtime_store.list_all_workspaces().await)
-            }
-            "workspace.find" => {
-                self.require_auth(client_id)?;
-                let id = require_string_key(payload, "id")?;
-                json_result(self.runtime_store.find_workspace(&id).await)
-            }
-            "workspace.upsert" => {
-                self.require_auth(client_id)?;
-                let workspace: Workspace = parse_payload(payload)?;
-                let project_id = workspace.project_id.clone();
-                let value = json_result(self.runtime_store.upsert_workspace(workspace).await)?;
-                self.broadcast_workspaces_changed(Some(&project_id));
-                Ok(value)
-            }
-            "workspace.setPinned" => self.handle_workspace_pinning(client_id, payload).await,
-            "workspace.rename" => self.rename_workspace_request(client_id, payload).await,
-            "workspace.repositoryWebUrl" => {
-                self.workspace_repository_web_url(client_id, payload).await
+                let outcome = WorkspaceRequestHandler::new(&self.runtime_store)
+                    .execute(request_type, payload)
+                    .await?;
+                if let Some(project_id) = outcome.changed_project_id.as_deref() {
+                    self.broadcast_workspaces_changed(Some(project_id));
+                }
+                Ok(outcome.value)
             }
             "tab.list" => {
                 self.require_auth(client_id)?;
                 let workspace_id = require_string_key(payload, "workspaceId")?;
-                let tabs = self
-                    .runtime_store
-                    .list_workspace_tabs(&workspace_id)
-                    .await
-                    .map_err(|error| HostError::state(error.to_string()))?;
+                let tabs = WorkspaceTabStoreHandler::new(&self.runtime_store)
+                    .list(&workspace_id)
+                    .await?;
                 if self.is_mobile_client(client_id) {
                     Ok(self.mobile_workspace_tabs_payload(
                         self.workspace_tabs_for_client(client_id, tabs),
@@ -707,22 +722,18 @@ impl ServerActor {
             "tab.find" => {
                 self.require_auth(client_id)?;
                 let id = require_string_key(payload, "id")?;
-                let tab = self
-                    .runtime_store
-                    .find_workspace_tab(&id)
-                    .await
-                    .map_err(|error| HostError::state(error.to_string()))?
+                let tab = WorkspaceTabStoreHandler::new(&self.runtime_store)
+                    .find(&id)
+                    .await?
                     .and_then(|tab| self.workspace_tab_for_client(client_id, tab));
                 Ok(json!(tab))
             }
             "tab.upsert" => {
                 self.require_auth(client_id)?;
                 let mut tab: WorkspaceTabRecord = parse_payload(payload)?;
-                if let Some(stored) = self
-                    .runtime_store
-                    .find_workspace_tab(&tab.id)
-                    .await
-                    .map_err(|error| HostError::state(error.to_string()))?
+                if let Some(stored) = WorkspaceTabStoreHandler::new(&self.runtime_store)
+                    .find(&tab.id)
+                    .await?
                 {
                     super::tab_compatibility::preserve_host_owned_tab_payload(&stored, &mut tab);
                     if tab.payload["agentTitleRevision"] != stored.payload["agentTitleRevision"] {
@@ -747,156 +758,55 @@ impl ServerActor {
                 let id = require_string_key(payload, "id")?;
                 let title = require_string_key(payload, "title")?;
                 self.cancel_agent_title_job(&id);
-                let tab = self
-                    .runtime_store
-                    .rename_workspace_tab(&id, &title)
-                    .await
-                    .map_err(|error| HostError::state(error.to_string()))?;
+                let tab = WorkspaceTabStoreHandler::new(&self.runtime_store)
+                    .rename(&id, &title)
+                    .await?;
                 let workspace_id = tab.workspace_id.clone();
                 let tab = self.workspace_tab_for_client(client_id, tab);
                 self.broadcast_workspace_tabs_changed(Some(&workspace_id));
                 Ok(json!(tab))
             }
-            "linkedReview.find" => {
+            "linkedReview.find"
+            | "linkedReview.upsert"
+            | "linkedReview.remove"
+            | "layout.find"
+            | "layout.upsert"
+            | "layout.remove" => {
                 self.require_auth(client_id)?;
-                let workspace_id = require_string_key(payload, "workspaceId")?;
-                json_result(self.runtime_store.find_linked_review(&workspace_id).await)
+                let outcome = WorkspaceArtifactRequestHandler::new(&self.runtime_store)
+                    .execute(request_type, payload)
+                    .await?;
+                match outcome.change {
+                    Some(WorkspaceArtifactChange::LinkedReviews) => {
+                        self.broadcast_authenticated(event("linkedReviewsChanged", json!({})))
+                    }
+                    Some(WorkspaceArtifactChange::WorkbenchLayouts) => {
+                        self.broadcast_authenticated(event("workbenchLayoutsChanged", json!({})))
+                    }
+                    None => {}
+                }
+                Ok(outcome.value)
             }
-            "linkedReview.upsert" => {
-                self.require_auth(client_id)?;
-                let review: LinkedReview = parse_payload(payload)?;
-                let value = json_result(self.runtime_store.upsert_linked_review(review).await)?;
-                self.broadcast_authenticated(event("linkedReviewsChanged", json!({})));
-                Ok(value)
+            "workspaceTag.list"
+            | "workspaceTag.create"
+            | "workspaceTag.setForWorkspace"
+            | "workspaceTag.upsert"
+            | "workspaceTag.remove"
+            | "workspaceTag.assign"
+            | "workspaceTag.unassign" => {
+                self.workspace_tag_request(client_id, request_type, payload)
+                    .await
             }
-            "linkedReview.remove" => {
+            "workspaceRelation.list" | "workspaceRelation.link" | "workspaceRelation.unlink" => {
                 self.require_auth(client_id)?;
-                let workspace_id = require_string_key(payload, "workspaceId")?;
-                json_result(self.runtime_store.remove_linked_review(&workspace_id).await)?;
-                self.broadcast_authenticated(event("linkedReviewsChanged", json!({})));
-                Ok(json!({}))
-            }
-            "layout.find" => {
-                self.require_auth(client_id)?;
-                let workspace_id = require_string_key(payload, "workspaceId")?;
-                json_result(
-                    self.runtime_store
-                        .find_workbench_layout(&workspace_id)
-                        .await,
-                )
-            }
-            "layout.upsert" => {
-                self.require_auth(client_id)?;
-                let layout: WorkbenchLayoutRecord = parse_payload(payload)?;
-                let value = json_result(self.runtime_store.upsert_workbench_layout(layout).await)?;
-                self.broadcast_authenticated(event("workbenchLayoutsChanged", json!({})));
-                Ok(value)
-            }
-            "layout.remove" => {
-                self.require_auth(client_id)?;
-                let workspace_id = require_string_key(payload, "workspaceId")?;
-                json_result(
-                    self.runtime_store
-                        .remove_workbench_layout(&workspace_id)
-                        .await,
-                )?;
-                self.broadcast_authenticated(event("workbenchLayoutsChanged", json!({})));
-                Ok(json!({}))
-            }
-            "workspaceTag.list" => {
-                self.require_auth(client_id)?;
-                json_result(self.runtime_store.list_tags().await)
-            }
-            "workspaceTag.create" => self.create_workspace_tag(client_id, payload).await,
-            "workspaceTag.setForWorkspace" => self.set_tags_for_workspace(client_id, payload).await,
-            "workspaceTag.upsert" => {
-                self.require_auth(client_id)?;
-                let tag: WorkspaceTag = parse_payload(payload)?;
-                let value = json_result(self.runtime_store.upsert_tag(tag).await)?;
-                self.broadcast_authenticated(event("workspaceTagsChanged", json!({})));
-                self.broadcast_workspaces_changed(None);
-                Ok(value)
-            }
-            "workspaceTag.remove" => {
-                self.require_auth(client_id)?;
-                let id = require_string_key(payload, "id")?;
-                json_result(self.runtime_store.remove_tag(&id).await)?;
-                self.broadcast_authenticated(event("workspaceTagsChanged", json!({})));
-                self.broadcast_workspaces_changed(None);
-                Ok(json!({}))
-            }
-            "workspaceTag.assign" => {
-                self.require_auth(client_id)?;
-                let workspace_id = require_string_key(payload, "workspaceId")?;
-                let tag_id = require_string_key(payload, "tagId")?;
-                json_result(self.runtime_store.assign_tag(&workspace_id, &tag_id).await)?;
-                self.broadcast_workspaces_changed(None);
-                Ok(json!({}))
-            }
-            "workspaceTag.unassign" => {
-                self.require_auth(client_id)?;
-                let workspace_id = require_string_key(payload, "workspaceId")?;
-                let tag_id = require_string_key(payload, "tagId")?;
-                json_result(
-                    self.runtime_store
-                        .unassign_tag(&workspace_id, &tag_id)
-                        .await,
-                )?;
-                self.broadcast_workspaces_changed(None);
-                Ok(json!({}))
-            }
-            "workspaceRelation.list" => {
-                self.require_auth(client_id)?;
-                json_result(self.runtime_store.list_relations().await)
-            }
-            "workspaceRelation.link" => {
-                self.require_auth(client_id)?;
-                let parent_id = require_string_key(payload, "parentWorkspaceId")?;
-                let child_id = require_string_key(payload, "childWorkspaceId")?;
-                let value = json_result(
-                    self.runtime_store
-                        .link_workspaces(&parent_id, &child_id)
-                        .await,
-                )?;
-                self.broadcast_authenticated(event("workspaceRelationsChanged", json!({})));
-                self.broadcast_workspaces_changed(None);
-                Ok(value)
-            }
-            "workspaceRelation.unlink" => {
-                self.require_auth(client_id)?;
-                let parent_id = require_string_key(payload, "parentWorkspaceId")?;
-                let child_id = require_string_key(payload, "childWorkspaceId")?;
-                json_result(
-                    self.runtime_store
-                        .unlink_workspaces(&parent_id, &child_id)
-                        .await,
-                )?;
-                self.broadcast_authenticated(event("workspaceRelationsChanged", json!({})));
-                self.broadcast_workspaces_changed(None);
-                Ok(json!({}))
-            }
-            "workspaceCascade.preview" => {
-                self.require_auth(client_id)?;
-                let workspace_ids = string_array(payload.get("workspaceIds"));
-                let tag_ids = string_array(payload.get("tagIds"));
-                let include_descendants = payload
-                    .get("includeDescendants")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false);
-                let include_tags = payload
-                    .get("includeTags")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false);
-                json_result(
-                    self.runtime_store
-                        .cascade_preview(
-                            &workspace_ids,
-                            &tag_ids,
-                            include_descendants,
-                            include_tags,
-                        )
-                        .await,
-                )
+                let outcome = WorkspaceRelationRequestHandler::new(&self.runtime_store)
+                    .execute(request_type, payload)
+                    .await?;
+                if outcome.changed {
+                    self.broadcast_authenticated(event("workspaceRelationsChanged", json!({})));
+                    self.broadcast_workspaces_changed(None);
+                }
+                Ok(outcome.value)
             }
             "agentProfile.list" => {
                 self.require_auth(client_id)?;
@@ -913,26 +823,6 @@ impl ServerActor {
                 self.require_request_allowed(client_id, request_type)?;
                 required_non_blank(payload, "clientMutationId")?;
                 self.launch_agent_profile(Some(client_id), payload).await
-            }
-            "mobile.promptImage.start" => {
-                self.require_auth(client_id)?;
-                self.require_request_allowed(client_id, request_type)?;
-                self.start_mobile_prompt_image_upload(payload)
-            }
-            "mobile.promptImage.chunk" => {
-                self.require_auth(client_id)?;
-                self.require_request_allowed(client_id, request_type)?;
-                self.append_mobile_prompt_image_chunk(payload)
-            }
-            "mobile.promptImage.complete" => {
-                self.require_auth(client_id)?;
-                self.require_request_allowed(client_id, request_type)?;
-                self.complete_mobile_prompt_image_upload(payload)
-            }
-            "mobile.promptImage.cancel" => {
-                self.require_auth(client_id)?;
-                self.require_request_allowed(client_id, request_type)?;
-                self.cancel_mobile_prompt_image_upload(payload)
             }
             "aiText.cancel" => {
                 self.require_auth(client_id)?;
@@ -997,7 +887,9 @@ impl ServerActor {
             "sshTarget.bootstrap.plan" => {
                 self.require_auth(client_id)?;
                 let request: SshTargetBootstrapRequest = parse_payload(payload)?;
-                json_result(build_ssh_bootstrap_plan(&self.runtime_store, &request).await)
+                SshBootstrapPlanRequestHandler::new(&self.runtime_store)
+                    .build(&request)
+                    .await
             }
             "sshTarget.bootstrap.start" => {
                 self.require_auth(client_id)?;
@@ -1020,11 +912,9 @@ impl ServerActor {
             "mobile.settings.update" => {
                 self.require_auth(client_id)?;
                 let request: MobileSettingsUpdateRequest = parse_payload(payload)?;
-                let current = self
-                    .runtime_store
-                    .mobile_access_settings()
-                    .await
-                    .map_err(|error| HostError::state(error.to_string()))?;
+                let current = MobileDevicePairingRequestHandler::new(&self.runtime_store)
+                    .load_access_settings()
+                    .await?;
                 let next = apply_mobile_settings_update_resolved(current.clone(), request)
                     .await
                     .map_err(|error| HostError::state(error.to_string()))?;
@@ -1037,11 +927,9 @@ impl ServerActor {
             "mobile.pairing.create" | "pairing.create" => {
                 self.require_auth(client_id)?;
                 let request: MobilePairingCreateRequest = parse_payload(payload)?;
-                let current = self
-                    .runtime_store
-                    .mobile_access_settings()
-                    .await
-                    .map_err(|error| HostError::state(error.to_string()))?;
+                let current = MobileDevicePairingRequestHandler::new(&self.runtime_store)
+                    .load_access_settings()
+                    .await?;
                 let (next, endpoint) =
                     prepare_mobile_pairing_offer_settings_resolved(current.clone(), &request)
                         .await
@@ -1054,22 +942,18 @@ impl ServerActor {
                 } else {
                     self.apply_mobile_gateway_settings(current, next).await?
                 };
-                let value = json_result(
-                    create_mobile_pairing_offer_for_settings(
-                        &self.runtime_store,
-                        &settings,
-                        &request,
-                        endpoint,
-                    )
-                    .await,
-                )?;
+                let value = MobileDevicePairingRequestHandler::new(&self.runtime_store)
+                    .create_pairing_offer_for_settings(&settings, &request, endpoint)
+                    .await?;
                 self.broadcast_authenticated(event("mobilePairingsChanged", json!({})));
                 Ok(value)
             }
             "mobile.pairing.cancel" => {
                 self.require_auth(client_id)?;
                 let id = require_string_key(payload, "id")?;
-                json_result(cancel_mobile_pairing_offer(&self.runtime_store, &id).await)?;
+                MobileDevicePairingRequestHandler::new(&self.runtime_store)
+                    .cancel_pairing(&id)
+                    .await?;
                 self.broadcast_authenticated(event("mobilePairingsChanged", json!({})));
                 Ok(json!({}))
             }
@@ -1079,12 +963,16 @@ impl ServerActor {
                     .get("includeRevoked")
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
-                json_result(list_mobile_devices(&self.runtime_store, include_revoked).await)
+                MobileDevicePairingRequestHandler::new(&self.runtime_store)
+                    .list_devices(include_revoked)
+                    .await
             }
             "mobile.device.pair" => {
                 self.require_auth(client_id)?;
                 let request: MobileDevicePairRequest = parse_payload(payload)?;
-                let value = json_result(pair_mobile_device(&self.runtime_store, request).await)?;
+                let value = MobileDevicePairingRequestHandler::new(&self.runtime_store)
+                    .pair_device(request)
+                    .await?;
                 self.broadcast_authenticated(event("mobileDevicesChanged", json!({})));
                 self.broadcast_authenticated(event("mobilePairingsChanged", json!({})));
                 Ok(value)
@@ -1092,7 +980,9 @@ impl ServerActor {
             "mobile.device.revoke" => {
                 self.require_auth(client_id)?;
                 let id = require_string_key(payload, "id")?;
-                json_result(revoke_mobile_device(&self.runtime_store, &id).await)?;
+                MobileDevicePairingRequestHandler::new(&self.runtime_store)
+                    .revoke_device(&id)
+                    .await?;
                 self.dispose_mobile_clients_for_device(&id).await;
                 self.broadcast_authenticated(event("mobileDevicesChanged", json!({})));
                 Ok(json!({}))
@@ -1100,7 +990,9 @@ impl ServerActor {
             "mobile.device.delete" => {
                 self.require_auth(client_id)?;
                 let id = require_string_key(payload, "id")?;
-                json_result(delete_mobile_device(&self.runtime_store, &id).await)?;
+                MobileDevicePairingRequestHandler::new(&self.runtime_store)
+                    .delete_device(&id)
+                    .await?;
                 self.broadcast_authenticated(event("mobileDevicesChanged", json!({})));
                 Ok(json!({}))
             }
@@ -1108,9 +1000,9 @@ impl ServerActor {
                 self.require_auth(client_id)?;
                 let id = require_string_key(payload, "id")?;
                 let display_name = require_string_key(payload, "displayName")?;
-                let value = json_result(
-                    rename_mobile_device(&self.runtime_store, &id, &display_name).await,
-                )?;
+                let value = MobileDevicePairingRequestHandler::new(&self.runtime_store)
+                    .rename_device(&id, &display_name)
+                    .await?;
                 self.broadcast_authenticated(event("mobileDevicesChanged", json!({})));
                 Ok(value)
             }
@@ -1148,23 +1040,6 @@ pub(super) fn require_string(payload: &Value, key: &str) -> HostResult<String> {
         _ => Err(HostError::format(
             "createOrAttach requires session metadata.",
         )),
-    }
-}
-
-pub(super) fn require_string_key(payload: &Value, key: &str) -> HostResult<String> {
-    match payload.get(key) {
-        Some(Value::String(value)) if !value.trim().is_empty() => Ok(value.clone()),
-        _ => Err(HostError::format(format!("{key} is required."))),
-    }
-}
-
-fn string_array(value: Option<&Value>) -> Vec<String> {
-    match value {
-        Some(Value::Array(items)) => items
-            .iter()
-            .filter_map(|item| item.as_str().map(str::to_string))
-            .collect(),
-        _ => Vec::new(),
     }
 }
 
@@ -1287,6 +1162,7 @@ mod tests;
 mod dedicated_host_error_tests {
     use crate::terminal_host::host_error::OutcomeClass;
     use crate::terminal_host::server::actor_test_harness::{mobile_client, test_actor};
+    use crate::terminal_host::server::request_route_policy::request_route_policy;
     use serde_json::json;
     use std::collections::HashMap;
 
@@ -1302,7 +1178,12 @@ mod dedicated_host_error_tests {
         .await;
 
         let error = actor
-            .handle_authenticated_request(1, "host.shutdown", &json!({}))
+            .handle_authenticated_request(
+                1,
+                "host.shutdown",
+                &json!({}),
+                request_route_policy("host.shutdown"),
+            )
             .await
             .unwrap_err();
         assert_eq!(error.outcome_class(), OutcomeClass::Unauthorized);

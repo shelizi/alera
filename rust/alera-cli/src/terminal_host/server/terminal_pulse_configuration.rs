@@ -12,7 +12,7 @@ use super::super::deferred_admission::{DeferredAdmission, DeferredRequestClass};
 use super::watcher::GitConfigEnvironment;
 use super::{
     terminal_pulse_state, PendingTerminalPulseConfiguration, ServerActor, ServerCommand,
-    TerminalPulseConfiguration, WorkspacePulseWatcher,
+    TerminalPulseConfiguration, TerminalPulsePersistence, WorkspacePulseWatcher,
 };
 
 const WATCHER_START_TIMEOUT: Duration = Duration::from_secs(8);
@@ -54,11 +54,9 @@ impl ServerActor {
             )
         };
         let workspace_root = if armed {
-            let workspace = self
-                .runtime_store
+            let workspace = TerminalPulsePersistence::new(&self.runtime_store)
                 .find_workspace(&workspace_id)
-                .await
-                .map_err(|error| HostError::state(error.to_string()))?
+                .await?
                 .ok_or_else(|| HostError::state(format!("workspace not found: {workspace_id}")))?;
             Some(PathBuf::from(workspace.path))
         } else {

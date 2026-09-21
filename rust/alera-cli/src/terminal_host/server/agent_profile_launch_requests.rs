@@ -3,17 +3,18 @@ use alera_core::runtime::{AgentProfileLaunchReceiptOutcome, WorkspaceStatus, Wor
 use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
 
-use crate::terminal_host::host_error::{HostError, HostResult};
-use crate::terminal_host::orchestration::agent_profile_launch_snapshot::{
-    AgentInitialDeliveryMechanismV1, AgentInitialDeliveryReplayV1, AgentProfileLaunchSnapshotV1,
-    AGENT_PROFILE_LAUNCH_SNAPSHOT_KEY,
-};
 use super::agent_prompt_composition::compose_agent_prompt;
 use super::client_delivery::LocalClientRole;
 use super::host_service_requests::required_non_blank;
 use super::orchestration_profile_spawn::launch_for_profile;
 use super::tab_compatibility::redact_private_tab_payload;
+use super::workspace_tab_requests::WorkspaceTabStoreHandler;
 use super::{ClientKind, ServerActor};
+use crate::terminal_host::host_error::{HostError, HostResult};
+use crate::terminal_host::orchestration::agent_profile_launch_snapshot::{
+    AgentInitialDeliveryMechanismV1, AgentInitialDeliveryReplayV1, AgentProfileLaunchSnapshotV1,
+    AGENT_PROFILE_LAUNCH_SNAPSHOT_KEY,
+};
 
 const CLIENT_MUTATION_ID_MAX_BYTES: usize = 128;
 
@@ -212,7 +213,10 @@ impl ServerActor {
             AgentProfileLaunchReceiptOutcome::Created => {}
         }
         if let Err(error) = self.ensure_spawn_on_create_terminal(&tab).await {
-            if let Err(cleanup_error) = self.runtime_store.remove_workspace_tab(&tab.id).await {
+            if let Err(cleanup_error) = WorkspaceTabStoreHandler::new(&self.runtime_store)
+                .remove(&tab.id)
+                .await
+            {
                 tracing::error!(
                     tab_id = %tab.id,
                     "failed to roll back agent profile launch receipt: {cleanup_error}"
@@ -268,7 +272,10 @@ impl ServerActor {
         }
         let tab_id = session.tab_id.clone();
         let instance_id = session.instance_id();
-        let Ok(Some(mut tab)) = self.runtime_store.find_workspace_tab(&tab_id).await else {
+        let Ok(Some(mut tab)) = WorkspaceTabStoreHandler::new(&self.runtime_store)
+            .find(&tab_id)
+            .await
+        else {
             return;
         };
         let Some(pending) = tab.payload.get("pendingAgentPrompt").cloned() else {
@@ -312,7 +319,10 @@ impl ServerActor {
         tab.payload["pendingAgentPrompt"] = Value::Null;
         tab.updated_at = chrono::Utc::now();
         let workspace_id = tab.workspace_id.clone();
-        if let Err(error) = self.runtime_store.upsert_workspace_tab(tab).await {
+        if let Err(error) = WorkspaceTabStoreHandler::new(&self.runtime_store)
+            .upsert(tab)
+            .await
+        {
             tracing::error!(tab_id = %tab_id, "failed to clear pending agent prompt: {error}");
         }
         self.broadcast_workspace_tabs_changed(Some(&workspace_id));

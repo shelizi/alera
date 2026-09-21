@@ -43,6 +43,8 @@ mod account_requests_tests;
 #[cfg(test)]
 mod actor_test_harness;
 mod agent_hook_events;
+mod agent_hook_settings;
+mod agent_profile_catalog_requests;
 mod agent_profile_launch_requests;
 mod agent_prompt_composition;
 #[cfg(test)]
@@ -107,6 +109,8 @@ mod deferred_admission_tests;
 mod deferred_admission_tests_delayed_timers;
 #[cfg(test)]
 mod deferred_project_requests_tests;
+mod deferred_read_requests;
+mod deferred_request_scheduler;
 mod deferred_requests;
 #[cfg(test)]
 mod deferred_requests_tests;
@@ -128,6 +132,7 @@ mod lifecycle;
 #[cfg(test)]
 mod managed_workspace_cleanup_tests;
 mod managed_workspace_requests;
+mod mobile_device_pairing_requests;
 mod mobile_gateway_replacement;
 mod mobile_gateway_surface;
 mod mobile_hello_requests;
@@ -164,6 +169,7 @@ mod output_resume_tests;
 mod project_clone_requests;
 #[cfg(test)]
 mod project_contract_tests;
+mod project_registration_requests;
 mod project_requests;
 mod prompt_file_requests;
 mod prompt_file_store;
@@ -175,11 +181,14 @@ mod pty_events_session_lifecycle;
 mod push_delivery;
 mod remote_relay;
 mod request_payloads;
+mod request_route_policy;
 mod requests;
 mod resource_requests;
 mod runtime_change_broadcasts;
+mod runtime_metadata_requests;
 mod runtime_mutation_barrier;
 mod runtime_mutation_queue;
+mod runtime_mutation_requests;
 mod runtime_mutations;
 mod server_command;
 #[cfg(test)]
@@ -201,6 +210,8 @@ mod session_termination;
 #[cfg(test)]
 mod session_termination_tests;
 mod ssh_bootstrap_jobs;
+mod ssh_bootstrap_plan_requests;
+mod ssh_target_requests;
 mod tab_compatibility;
 #[cfg(test)]
 mod tab_compatibility_tests;
@@ -231,17 +242,25 @@ mod wire_fixture_tests_requests;
 mod wire_fixture_tests_requests_workspace;
 #[cfg(test)]
 mod wire_fixture_tests_stream;
+mod workbench_view_prefs_requests;
+mod workspace_activity_requests;
+mod workspace_artifact_requests;
 #[cfg(test)]
 mod workspace_contract_tests;
-mod workspace_pinning;
+mod workspace_relation_requests;
+mod workspace_requests;
 mod workspace_section_requests;
 #[cfg(test)]
 mod workspace_section_requests_tests;
 mod workspace_sidebar_requests;
 #[cfg(test)]
 mod workspace_sidebar_requests_tests;
+mod workspace_tab_requests;
 
 pub(crate) use disconnect_reason::DisconnectReason;
+pub(crate) use request_route_policy::MobilePromptFileOperation;
+pub(crate) use request_route_policy::MobilePromptImageOperation;
+pub(crate) use request_route_policy::MobileWorkspaceFileOperation;
 pub use server_command::ServerCommand;
 
 /// Delay before a debounced checkpoint write fires.
@@ -476,37 +495,34 @@ impl ServerActor {
             ServerCommand::MobileWorkspaceFileFinished {
                 client_id,
                 request_id,
-                request_type,
+                operation,
                 result,
-            } => self.handle_mobile_workspace_file_finished(
-                client_id,
-                request_id,
-                &request_type,
-                result,
-            ),
+            } => {
+                self.handle_mobile_workspace_file_finished(client_id, request_id, operation, result)
+            }
             ServerCommand::MobilePromptFileFinished {
                 client_id,
                 request_id,
-                request_type,
+                operation,
                 upload_id,
                 result,
             } => self.handle_mobile_prompt_file_finished(
                 client_id,
                 request_id,
-                &request_type,
+                operation,
                 upload_id.as_deref(),
                 result,
             ),
             ServerCommand::MobilePromptImageFinished {
                 client_id,
                 request_id,
-                request_type,
+                operation,
                 upload_id,
                 result,
             } => self.handle_mobile_prompt_image_finished(
                 client_id,
                 request_id,
-                &request_type,
+                operation,
                 upload_id.as_deref(),
                 result,
             ),

@@ -1,24 +1,15 @@
 use alera_core::git as core_git;
-use alera_core::runtime::{ProjectConfig, RuntimeStore};
+use alera_core::runtime::{Project, ProjectConfig, RuntimeStore};
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::project_management::{
-    commit_project_registration, effective_project_config, host_directory_roots,
-    list_host_directory, prepare_project_registration, register_project, rename_project,
-    PreparedProjectRegistration,
-};
+use crate::project_management::{effective_project_config, host_directory_roots, rename_project};
 use crate::terminal_host::host_error::{HostError, HostResult};
-use crate::terminal_host::protocol::{error_response, event, ok_response};
+use crate::terminal_host::protocol::event;
 
-use super::{ServerActor, ServerCommand};
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ProjectRegisterRequest {
-    path: String,
-    name: Option<String>,
-}
+use super::request_payloads::{json_result, parse_payload, require_string_key};
+use super::ServerActor;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -27,81 +18,111 @@ struct ProjectRenameRequest {
     name: String,
 }
 
-impl ServerActor {
-    pub(super) fn start_project_registration(
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProjectConfigUpsertRequest {
+    project_id: String,
+    config: ProjectConfig,
+    #[serde(default)]
+    updated_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ProjectStoreChange {
+    Projects,
+    ProjectConfigs,
+}
+
+pub(super) struct ProjectStoreRequestOutcome {
+    pub(super) value: Value,
+    pub(super) change: Option<ProjectStoreChange>,
+}
+
+pub(super) struct ProjectStoreRequestHandler<'a> {
+    runtime_store: &'a RuntimeStore,
+}
+
+impl<'a> ProjectStoreRequestHandler<'a> {
+    pub(super) const fn new(runtime_store: &'a RuntimeStore) -> Self {
+        Self { runtime_store }
+    }
+
+    pub(super) async fn execute(
         &self,
-        client_id: u64,
-        request_id: i64,
+        request_type: &str,
         payload: &Value,
-    ) -> HostResult<()> {
-        let request: ProjectRegisterRequest = parse(payload)?;
-        let path = request.path;
-        let name = request.name;
-        let inbox = self.inbox.clone();
-        self.deferred_admission.schedule(
-            super::deferred_admission::DeferredRequestClass::Bulk,
-            "project.register",
-            Some(client_id),
-            async move {
-                let result = tokio::task::spawn_blocking(move || {
-                    prepare_project_registration(&path, name.as_deref()).map_err(state_error)
-                })
-                .await
-                .unwrap_or_else(|error| {
-                    Err(HostError::state(format!(
-                        "Project registration preparation failed: {error}"
-                    )))
-                });
-                let _ = inbox.send(ServerCommand::ProjectRegistrationPrepared {
-                    client_id,
-                    request_id,
-                    result,
-                });
-            },
-        )
-    }
-
-    pub(super) async fn finish_project_registration(
-        &mut self,
-        client_id: u64,
-        request_id: i64,
-        result: HostResult<PreparedProjectRegistration>,
-    ) {
-        if self.require_auth(client_id).is_err() {
-            return;
-        }
-        let result = match result {
-            Ok(prepared) => commit_project_registration(&self.runtime_store, prepared)
-                .await
-                .map_err(state_error)
-                .and_then(|registration| serde_json::to_value(registration).map_err(state_error)),
-            Err(error) => Err(error),
-        };
-        match result {
-            Ok(value) => {
-                self.broadcast_project_state_changed();
-                self.client_write(client_id, ok_response(request_id, value));
+    ) -> HostResult<ProjectStoreRequestOutcome> {
+        let (value, change) = match request_type {
+            "project.list" => (json_result(self.runtime_store.list_projects().await)?, None),
+            "project.upsert" => {
+                let project: Project = parse_payload(payload)?;
+                (
+                    json_result(self.runtime_store.upsert_project(project).await)?,
+                    Some(ProjectStoreChange::Projects),
+                )
             }
-            Err(error) => self.client_write(client_id, error_response(request_id, &error)),
-        }
+            "projectConfig.find" => {
+                let project_id = require_string_key(payload, "projectId")?;
+                (
+                    json_result(self.runtime_store.find_project_config(&project_id).await)?,
+                    None,
+                )
+            }
+            "projectConfig.list" => (
+                json_result(self.runtime_store.list_project_configs().await)?,
+                None,
+            ),
+            "projectConfig.upsert" => {
+                let request: ProjectConfigUpsertRequest = parse_payload(payload)?;
+                (
+                    json_result(
+                        self.runtime_store
+                            .upsert_project_config(
+                                &request.project_id,
+                                request.config,
+                                request.updated_at.unwrap_or_else(Utc::now),
+                            )
+                            .await,
+                    )?,
+                    Some(ProjectStoreChange::ProjectConfigs),
+                )
+            }
+            "projectConfig.remove" => {
+                let project_id = require_string_key(payload, "projectId")?;
+                json_result(self.runtime_store.remove_project_config(&project_id).await)?;
+                (json!({}), Some(ProjectStoreChange::ProjectConfigs))
+            }
+            _ => return Err(HostError::format("Unknown project store request.")),
+        };
+        Ok(ProjectStoreRequestOutcome { value, change })
+    }
+}
+
+pub(super) struct ProjectRenameHandler<'a> {
+    runtime_store: &'a RuntimeStore,
+}
+
+impl<'a> ProjectRenameHandler<'a> {
+    pub(super) const fn new(runtime_store: &'a RuntimeStore) -> Self {
+        Self { runtime_store }
     }
 
-    pub(super) async fn project_register_request(&mut self, payload: &Value) -> HostResult<Value> {
-        let request: ProjectRegisterRequest = parse(payload)?;
-        let result = register_project(&self.runtime_store, &request.path, request.name.as_deref())
-            .await
-            .map_err(state_error)?;
-        self.broadcast_project_state_changed();
-        serde_json::to_value(result).map_err(state_error)
-    }
-
-    pub(super) async fn project_rename_request(&mut self, payload: &Value) -> HostResult<Value> {
+    pub(super) async fn execute(&self, payload: &Value) -> HostResult<Value> {
         let request: ProjectRenameRequest = parse(payload)?;
         let project = rename_project(&self.runtime_store, &request.id, &request.name)
             .await
             .map_err(state_error)?;
-        self.broadcast_authenticated(event("projectsChanged", json!({})));
         serde_json::to_value(project).map_err(state_error)
+    }
+}
+
+impl ServerActor {
+    pub(super) async fn project_rename_request(&mut self, payload: &Value) -> HostResult<Value> {
+        let value = ProjectRenameHandler::new(&self.runtime_store)
+            .execute(payload)
+            .await?;
+        self.broadcast_authenticated(event("projectsChanged", json!({})));
+        Ok(value)
     }
 
     pub(super) async fn project_remove_preview_request(
@@ -144,26 +165,8 @@ impl ServerActor {
         }))
     }
 
-    pub(super) async fn project_effective_config_request(
-        &self,
-        payload: &Value,
-    ) -> HostResult<Value> {
-        let project_id = string_key(payload, "projectId")?;
-        load_effective_project_config(self.runtime_store.clone(), project_id).await
-    }
-
     pub(super) fn host_directory_roots_request(&self) -> HostResult<Value> {
         Ok(json!({ "roots": host_directory_roots() }))
-    }
-
-    pub(super) fn host_directory_list_request(&self, payload: &Value) -> HostResult<Value> {
-        let path = string_key(payload, "path")?;
-        serde_json::to_value(list_host_directory(&path).map_err(state_error)?).map_err(state_error)
-    }
-
-    pub(super) async fn project_branches_request(&self, payload: &Value) -> HostResult<Value> {
-        let project_id = string_key(payload, "projectId")?;
-        load_project_branches(self.runtime_store.clone(), project_id).await
     }
 
     pub(super) fn broadcast_project_state_changed(&self) {
@@ -233,6 +236,108 @@ fn string_key(payload: &Value, key: &str) -> HostResult<String> {
 
 fn state_error(error: impl std::fmt::Display) -> HostError {
     HostError::state(error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use alera_core::runtime::{Project, ProjectConfig, ProjectKind, RuntimeStore};
+    use chrono::Utc;
+    use serde_json::json;
+
+    use super::{ProjectRenameHandler, ProjectStoreChange, ProjectStoreRequestHandler};
+
+    #[tokio::test]
+    async fn project_store_requests_can_be_tested_without_server_actor() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = RuntimeStore::open(dir.path()).await.unwrap();
+        let now = Utc::now();
+        let handler = ProjectStoreRequestHandler::new(&store);
+
+        let upserted = handler
+            .execute(
+                "project.upsert",
+                &json!({
+                    "id": "p",
+                    "name": "Project",
+                    "repoPath": "/p",
+                    "createdAt": now,
+                    "updatedAt": now,
+                    "kind": "folder",
+                }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(upserted.change, Some(ProjectStoreChange::Projects));
+        assert_eq!(upserted.value["id"], "p");
+
+        let listed = handler.execute("project.list", &json!({})).await.unwrap();
+        assert!(listed.change.is_none());
+        assert_eq!(listed.value.as_array().unwrap().len(), 1);
+
+        let config = ProjectConfig {
+            git_hosting_provider: Some("github".into()),
+            ..ProjectConfig::default()
+        };
+        let config_upserted = handler
+            .execute(
+                "projectConfig.upsert",
+                &json!({"projectId": "p", "config": config, "updatedAt": now}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            config_upserted.change,
+            Some(ProjectStoreChange::ProjectConfigs)
+        );
+
+        let found = handler
+            .execute("projectConfig.find", &json!({"projectId": "p"}))
+            .await
+            .unwrap();
+        assert_eq!(found.value["gitHostingProvider"], "github");
+
+        let configs = handler
+            .execute("projectConfig.list", &json!({}))
+            .await
+            .unwrap();
+        assert_eq!(configs.value["p"]["gitHostingProvider"], "github");
+
+        let removed = handler
+            .execute("projectConfig.remove", &json!({"projectId": "p"}))
+            .await
+            .unwrap();
+        assert_eq!(removed.change, Some(ProjectStoreChange::ProjectConfigs));
+        assert_eq!(removed.value, json!({}));
+    }
+
+    #[tokio::test]
+    async fn rename_can_be_tested_without_server_actor() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = RuntimeStore::open(dir.path()).await.unwrap();
+        let now = Utc::now();
+        store
+            .upsert_project(Project {
+                id: "p".into(),
+                name: "Before".into(),
+                repo_path: "/p".into(),
+                created_at: now,
+                updated_at: now,
+                kind: ProjectKind::Folder,
+            })
+            .await
+            .unwrap();
+
+        let renamed = ProjectRenameHandler::new(&store)
+            .execute(&json!({"id": "p", "name": "After"}))
+            .await
+            .unwrap();
+
+        assert_eq!(renamed["name"], "After");
+        assert_eq!(
+            store.find_project("p").await.unwrap().unwrap().name,
+            "After"
+        );
+    }
 }
 
 #[allow(dead_code)]

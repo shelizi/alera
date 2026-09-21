@@ -92,6 +92,84 @@ async fn configuration_mobile_surface_never_exposes_cloud_credentials_or_setting
 }
 
 #[tokio::test]
+async fn configuration_snapshot_transfer_requires_owner_and_streams_store_snapshot() {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    use chrono::Utc;
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut actor = test_actor(&dir, HashMap::new(), HashMap::new()).await;
+    actor
+        .runtime_store
+        .set_alera_account(&alera_core::runtime::LocalAleraAccount {
+            account_id: "a".into(),
+            email: "a@example.test".into(),
+            providers: vec![],
+            runtime_id: "host".into(),
+            cloud_base_url: "https://example.test".into(),
+            signed_in_at: Utc::now(),
+            access_token_expires_at: Utc::now(),
+            push_subscription_count: 0,
+        })
+        .await
+        .unwrap();
+    actor
+        .runtime_store
+        .configuration_update_settings(json!({"terminal": {"fontSize": 23}}))
+        .await
+        .unwrap();
+    let expected = actor
+        .runtime_store
+        .configuration_snapshot("a")
+        .await
+        .unwrap();
+
+    let error = actor
+        .handle_configuration_request(
+            7,
+            "configuration.transfer.start",
+            &json!({"accountId":"b","action":"snapshot"}),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "The selected account does not own this runtime."
+    );
+
+    let start = actor
+        .handle_configuration_request(
+            7,
+            "configuration.transfer.start",
+            &json!({"accountId":"a","action":"snapshot"}),
+        )
+        .await
+        .unwrap();
+    let transfer_id = start["transferId"].as_str().unwrap();
+    let total = start["size"].as_u64().unwrap() as usize;
+    let mut bytes = Vec::with_capacity(total);
+    while bytes.len() < total {
+        let chunk = actor
+            .handle_configuration_request(
+                7,
+                "configuration.transfer.read",
+                &json!({
+                    "accountId":"a",
+                    "transferId":transfer_id,
+                    "offset":bytes.len(),
+                }),
+            )
+            .await
+            .unwrap();
+        bytes.extend(STANDARD.decode(chunk["data"].as_str().unwrap()).unwrap());
+    }
+    assert_eq!(bytes.len(), total);
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&bytes).unwrap(),
+        expected
+    );
+}
+
+#[tokio::test]
 async fn configuration_transfer_keeps_cas_and_account_checks_at_commit() {
     use base64::{engine::general_purpose::STANDARD, Engine};
     use chrono::Utc;

@@ -6,11 +6,14 @@ use crate::agent_status::{
 };
 use crate::terminal_host::orchestration::agent_presence::AgentPresenceState;
 
-use super::ServerActor;
+use super::{agent_hook_settings::AgentHookSettingsQuery, ServerActor};
 
 impl ServerActor {
     pub(super) async fn handle_agent_hook_event(&mut self, mut event: AgentHookEvent) {
-        let Ok(settings) = self.runtime_store.agent_status_hook_settings().await else {
+        let Ok(settings) = AgentHookSettingsQuery::new(&self.runtime_store)
+            .load()
+            .await
+        else {
             return;
         };
         let Some(session) = self.sessions.get(&event.terminal_session_id) else {

@@ -11,6 +11,7 @@ use crate::terminal_host::host_error::{HostError, HostResult};
 use super::prompt_image_store::{
     PromptImageStore, MAX_PROMPT_IMAGE_CHUNK_BYTES, MAX_PROMPT_IMAGE_STORE_BYTES,
 };
+use super::request_route_policy::MobilePromptImageOperation;
 use super::requests::require_string_key;
 use super::{ServerActor, ServerCommand};
 
@@ -25,11 +26,11 @@ impl ServerActor {
         &self,
         client_id: u64,
         request_id: i64,
+        operation: MobilePromptImageOperation,
         request_type: &str,
         payload: &Value,
     ) -> HostResult<()> {
         let runtime_dir = self.runtime_dir.clone();
-        let request_type = request_type.to_string();
         let upload_id = payload
             .get("uploadId")
             .and_then(Value::as_str)
@@ -38,12 +39,11 @@ impl ServerActor {
         let inbox = self.inbox.clone();
         self.deferred_admission.schedule(
             super::deferred_admission::DeferredRequestClass::Bulk,
-            request_type.clone(),
+            request_type,
             Some(client_id),
             async move {
-                let operation = request_type.clone();
                 let result = tokio::task::spawn_blocking(move || {
-                    handle_prompt_image_request(runtime_dir, &request_type, &payload)
+                    handle_prompt_image_request(runtime_dir, operation, &payload)
                 })
                 .await
                 .map_err(|error| {
@@ -53,7 +53,7 @@ impl ServerActor {
                 let _ = inbox.send(ServerCommand::MobilePromptImageFinished {
                     client_id,
                     request_id,
-                    request_type: operation,
+                    operation,
                     upload_id,
                     result,
                 });
@@ -65,20 +65,20 @@ impl ServerActor {
         &mut self,
         client_id: u64,
         request_id: i64,
-        request_type: &str,
+        operation: MobilePromptImageOperation,
         requested_upload_id: Option<&str>,
         result: HostResult<Value>,
     ) {
         if matches!(
-            request_type,
-            "mobile.promptImage.complete" | "mobile.promptImage.cancel"
+            operation,
+            MobilePromptImageOperation::Complete | MobilePromptImageOperation::Cancel
         ) {
             if let Some(upload_id) = requested_upload_id {
                 self.remove_mobile_prompt_image_upload(client_id, upload_id);
             }
         }
         if !self.clients.contains_key(&client_id) {
-            self.cleanup_orphaned_prompt_image_start(request_type, &result);
+            self.cleanup_orphaned_prompt_image_start(operation, &result);
             return;
         }
         let response = match &result {
@@ -86,10 +86,10 @@ impl ServerActor {
             Err(error) => crate::terminal_host::protocol::error_response(request_id, error),
         };
         if !self.try_client_write(client_id, response) {
-            self.cleanup_orphaned_prompt_image_start(request_type, &result);
+            self.cleanup_orphaned_prompt_image_start(operation, &result);
             return;
         }
-        if result.is_err() || request_type != "mobile.promptImage.start" {
+        if result.is_err() || operation != MobilePromptImageOperation::Start {
             return;
         }
         if let Some(upload_id) = result
@@ -112,8 +112,12 @@ impl ServerActor {
         self.schedule_prompt_image_cleanup(upload_ids.into_iter().collect());
     }
 
-    fn cleanup_orphaned_prompt_image_start(&self, request_type: &str, result: &HostResult<Value>) {
-        if request_type != "mobile.promptImage.start" {
+    fn cleanup_orphaned_prompt_image_start(
+        &self,
+        operation: MobilePromptImageOperation,
+        result: &HostResult<Value>,
+    ) {
+        if operation != MobilePromptImageOperation::Start {
             return;
         }
         let Some(upload_id) = result
@@ -162,47 +166,23 @@ impl ServerActor {
         }
     }
 
-    pub(super) fn start_mobile_prompt_image_upload(&self, payload: &Value) -> HostResult<Value> {
-        handle_prompt_image_request(
-            self.runtime_dir.clone(),
-            "mobile.promptImage.start",
-            payload,
-        )
-    }
-
-    pub(super) fn append_mobile_prompt_image_chunk(&self, payload: &Value) -> HostResult<Value> {
-        handle_prompt_image_request(
-            self.runtime_dir.clone(),
-            "mobile.promptImage.chunk",
-            payload,
-        )
-    }
-
-    pub(super) fn complete_mobile_prompt_image_upload(&self, payload: &Value) -> HostResult<Value> {
-        handle_prompt_image_request(
-            self.runtime_dir.clone(),
-            "mobile.promptImage.complete",
-            payload,
-        )
-    }
-
-    pub(super) fn cancel_mobile_prompt_image_upload(&self, payload: &Value) -> HostResult<Value> {
-        handle_prompt_image_request(
-            self.runtime_dir.clone(),
-            "mobile.promptImage.cancel",
-            payload,
-        )
+    pub(super) fn execute_mobile_prompt_image_operation(
+        &self,
+        operation: MobilePromptImageOperation,
+        payload: &Value,
+    ) -> HostResult<Value> {
+        handle_prompt_image_request(self.runtime_dir.clone(), operation, payload)
     }
 }
 
 pub(super) fn handle_prompt_image_request(
     runtime_dir: PathBuf,
-    request_type: &str,
+    operation: MobilePromptImageOperation,
     payload: &Value,
 ) -> HostResult<Value> {
     let store = PromptImageStore::in_runtime_dir(&runtime_dir);
-    match request_type {
-        "mobile.promptImage.start" => {
+    match operation {
+        MobilePromptImageOperation::Start => {
             let format = require_string_key(payload, "format")?;
             let declared_bytes = payload
                 .get("sizeBytes")
@@ -219,7 +199,7 @@ pub(super) fn handle_prompt_image_request(
                 "maxStoreBytes": MAX_PROMPT_IMAGE_STORE_BYTES,
             }))
         }
-        "mobile.promptImage.chunk" => {
+        MobilePromptImageOperation::Chunk => {
             let upload_id = require_string_key(payload, "uploadId")?;
             let offset = payload
                 .get("offset")
@@ -241,21 +221,20 @@ pub(super) fn handle_prompt_image_request(
             })?;
             Ok(json!({"nextOffset": next_offset}))
         }
-        "mobile.promptImage.complete" => {
+        MobilePromptImageOperation::Complete => {
             let upload_id = require_string_key(payload, "uploadId")?;
             let path = with_upload_gate(&upload_id, || {
                 store.complete(&upload_id).map_err(prompt_image_error)
             })?;
             Ok(json!({"path": path}))
         }
-        "mobile.promptImage.cancel" => {
+        MobilePromptImageOperation::Cancel => {
             let upload_id = require_string_key(payload, "uploadId")?;
             with_upload_gate(&upload_id, || {
                 store.cancel(&upload_id).map_err(prompt_image_error)
             })?;
             Ok(json!({}))
         }
-        _ => Err(HostError::state("Unsupported prompt image operation.")),
     }
 }
 

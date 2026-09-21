@@ -8,6 +8,7 @@ use crate::terminal_host::host_error::{HostError, HostResult};
 use crate::terminal_host::protocol::{error_response, event, ok_response};
 
 use super::deferred_admission::DeferredRequestClass;
+use super::request_route_policy::CliRegistrationOperation;
 use super::{ServerActor, ServerCommand};
 
 impl ServerActor {
@@ -87,25 +88,22 @@ impl ServerActor {
         &mut self,
         client_id: u64,
         request_id: i64,
-        install: bool,
+        operation: CliRegistrationOperation,
     ) -> HostResult<()> {
         let runtime_dir = self.runtime_dir.clone();
         let inbox = self.inbox.clone();
         self.deferred_admission.schedule(
             DeferredRequestClass::Bulk,
-            if install {
-                "cliRegistration.install"
-            } else {
-                "cliRegistration.status"
-            },
+            operation.request_type(),
             Some(client_id),
             async move {
-                let result = if install {
-                    install_cli_registration(&runtime_dir)
+                let result = match operation {
+                    CliRegistrationOperation::Install => install_cli_registration(&runtime_dir)
                         .await
-                        .map_err(|error| HostError::state(error.to_string()))
-                } else {
-                    Ok(cli_registration_status(&runtime_dir).await)
+                        .map_err(|error| HostError::state(error.to_string())),
+                    CliRegistrationOperation::Status => {
+                        Ok(cli_registration_status(&runtime_dir).await)
+                    }
                 }
                 .and_then(|value| {
                     serde_json::to_value(value).map_err(|error| HostError::state(error.to_string()))

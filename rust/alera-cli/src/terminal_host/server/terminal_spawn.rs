@@ -1,5 +1,5 @@
 use alera_core::agent_descriptor::agent_descriptor;
-use alera_core::runtime::{WorkspaceStatus, WorkspaceTabRecord};
+use alera_core::runtime::{RuntimeStore, Workspace, WorkspaceStatus, WorkspaceTabRecord};
 use serde_json::Value;
 
 use crate::agent_status::prepare_launch_environment;
@@ -11,6 +11,7 @@ use crate::terminal_host::orchestration::agent_startup_command::{
 use crate::terminal_host::protocol::TerminalHostLaunch;
 use crate::terminal_host::session::Session;
 
+use super::agent_hook_settings::AgentHookSettingsQuery;
 use super::pty_event_forwarder::forward_pty_event;
 use super::terminal_launch_defaults::default_terminal_launch;
 use super::terminal_startup_commands::{
@@ -19,14 +20,101 @@ use super::terminal_startup_commands::{
     initial_delivery_mechanism as mechanism, initial_managed_agent_launch, initial_prompt,
     pending_agent_type, tab_agent_type, terminal_session_id,
 };
+use super::workspace_tab_requests::WorkspaceTabStoreHandler;
 use super::ServerActor;
 
 const DEFAULT_TERMINAL_COLS: u16 = 80;
 const DEFAULT_TERMINAL_ROWS: u16 = 24;
 
+struct TerminalStartupTabPersistence<'a> {
+    tabs: WorkspaceTabStoreHandler<'a>,
+}
+
+impl<'a> TerminalStartupTabPersistence<'a> {
+    const fn new(runtime_store: &'a RuntimeStore) -> Self {
+        Self {
+            tabs: WorkspaceTabStoreHandler::new(runtime_store),
+        }
+    }
+
+    async fn consume_initial_command(
+        &self,
+        tab: &WorkspaceTabRecord,
+    ) -> HostResult<Option<WorkspaceTabRecord>> {
+        self.consume_fields(tab, &["initialCommand", "initialCommandOnce"])
+            .await
+    }
+
+    async fn consume_initial_prompt(
+        &self,
+        tab: &WorkspaceTabRecord,
+    ) -> HostResult<Option<WorkspaceTabRecord>> {
+        self.consume_fields(tab, &["initialPrompt", "initialPromptOnce"])
+            .await
+    }
+
+    async fn consume_fields(
+        &self,
+        tab: &WorkspaceTabRecord,
+        fields: &[&str],
+    ) -> HostResult<Option<WorkspaceTabRecord>> {
+        let mut next = tab.clone();
+        let Some(payload) = next.payload.as_object_mut() else {
+            return Ok(None);
+        };
+        for field in fields {
+            payload.remove(*field);
+        }
+        self.tabs.upsert(next).await.map(Some)
+    }
+}
+
+struct TerminalSpawnPersistence<'a> {
+    runtime_store: &'a RuntimeStore,
+    tabs: WorkspaceTabStoreHandler<'a>,
+}
+
+impl<'a> TerminalSpawnPersistence<'a> {
+    const fn new(runtime_store: &'a RuntimeStore) -> Self {
+        Self {
+            runtime_store,
+            tabs: WorkspaceTabStoreHandler::new(runtime_store),
+        }
+    }
+
+    async fn list_workspaces(&self) -> HostResult<Vec<Workspace>> {
+        self.runtime_store
+            .list_all_workspaces()
+            .await
+            .map_err(|error| HostError::state(error.to_string()))
+    }
+
+    async fn find_workspace(&self, workspace_id: &str) -> HostResult<Option<Workspace>> {
+        self.runtime_store
+            .find_workspace(workspace_id)
+            .await
+            .map_err(|error| HostError::state(error.to_string()))
+    }
+
+    async fn list_tabs(&self, workspace_id: &str) -> HostResult<Vec<WorkspaceTabRecord>> {
+        self.tabs.list(workspace_id).await
+    }
+
+    async fn upsert_tab(&self, tab: WorkspaceTabRecord) -> HostResult<WorkspaceTabRecord> {
+        self.tabs.upsert(tab).await
+    }
+
+    async fn remove_tab(&self, tab_id: &str) -> HostResult<()> {
+        self.tabs.remove(tab_id).await
+    }
+}
+
 impl ServerActor {
     pub(super) async fn reconcile_spawn_on_create_tabs(&mut self) {
-        let workspaces = match self.runtime_store.list_all_workspaces().await {
+        let workspaces = match TerminalSpawnPersistence::new(&self.runtime_store)
+            .list_workspaces()
+            .await
+        {
             Ok(workspaces) => workspaces,
             Err(error) => {
                 tracing::error!("failed to list workspaces for terminal reconciliation: {error}");
@@ -34,7 +122,10 @@ impl ServerActor {
             }
         };
         for workspace in workspaces {
-            let tabs = match self.runtime_store.list_workspace_tabs(&workspace.id).await {
+            let tabs = match TerminalSpawnPersistence::new(&self.runtime_store)
+                .list_tabs(&workspace.id)
+                .await
+            {
                 Ok(tabs) => tabs,
                 Err(error) => {
                     tracing::error!(
@@ -51,7 +142,9 @@ impl ServerActor {
                         tab.id,
                         error.wire_message()
                     );
-                    let _ = self.runtime_store.remove_workspace_tab(&tab.id).await;
+                    let _ = TerminalSpawnPersistence::new(&self.runtime_store)
+                        .remove_tab(&tab.id)
+                        .await;
                     self.terminate_sessions_for_tab(&tab.id).await;
                 }
             }
@@ -63,15 +156,15 @@ impl ServerActor {
         mut tab: WorkspaceTabRecord,
     ) -> HostResult<WorkspaceTabRecord> {
         self.initialize_agent_title_if_new(&mut tab).await?;
-        let saved = self
-            .runtime_store
-            .upsert_workspace_tab(tab)
-            .await
-            .map_err(|error| HostError::state(error.to_string()))?;
+        let saved = TerminalSpawnPersistence::new(&self.runtime_store)
+            .upsert_tab(tab)
+            .await?;
         let saved = match self.ensure_spawn_on_create_terminal(&saved).await {
             Ok(rewritten) => rewritten.unwrap_or(saved),
             Err(error) => {
-                let _ = self.runtime_store.remove_workspace_tab(&saved.id).await;
+                let _ = TerminalSpawnPersistence::new(&self.runtime_store)
+                    .remove_tab(&saved.id)
+                    .await;
                 self.terminate_sessions_for_tab(&saved.id).await;
                 return Err(error);
             }
@@ -95,11 +188,9 @@ impl ServerActor {
         }
         let rearmed = self.rearm_terminal_after_ready_prompt(tab).await?;
         let tab = rearmed.as_ref().unwrap_or(tab);
-        let workspace = self
-            .runtime_store
+        let workspace = TerminalSpawnPersistence::new(&self.runtime_store)
             .find_workspace(&tab.workspace_id)
-            .await
-            .map_err(|error| HostError::state(error.to_string()))?
+            .await?
             .ok_or_else(|| {
                 HostError::state(format!("workspace not found: {}", tab.workspace_id))
             })?;
@@ -225,12 +316,11 @@ impl ServerActor {
         &mut self,
         tab: &WorkspaceTabRecord,
     ) -> Option<WorkspaceTabRecord> {
-        let mut next = tab.clone();
-        let payload = next.payload.as_object_mut()?;
-        payload.remove("initialCommand");
-        payload.remove("initialCommandOnce");
-        match self.runtime_store.upsert_workspace_tab(next).await {
-            Ok(saved) => Some(saved),
+        match TerminalStartupTabPersistence::new(&self.runtime_store)
+            .consume_initial_command(tab)
+            .await
+        {
+            Ok(saved) => saved,
             Err(error) => {
                 eprintln!(
                     "failed to clear the one-shot initial command of tab {}: {error}",
@@ -245,12 +335,11 @@ impl ServerActor {
         &mut self,
         tab: &WorkspaceTabRecord,
     ) -> Option<WorkspaceTabRecord> {
-        let mut next = tab.clone();
-        let payload = next.payload.as_object_mut()?;
-        payload.remove("initialPrompt");
-        payload.remove("initialPromptOnce");
-        match self.runtime_store.upsert_workspace_tab(next).await {
-            Ok(saved) => Some(saved),
+        match TerminalStartupTabPersistence::new(&self.runtime_store)
+            .consume_initial_prompt(tab)
+            .await
+        {
+            Ok(saved) => saved,
             Err(error) => {
                 tracing::error!(
                     tab_id = %tab.id,
@@ -286,11 +375,7 @@ impl ServerActor {
         }
         self.disarm_terminal_pulse(&session_id);
         self.account_push.damper.reset_session(&session_id);
-        let mut agent_settings = self
-            .runtime_store
-            .agent_status_hook_settings()
-            .await
-            .map_err(|error| HostError::state(error.to_string()))?;
+        let mut agent_settings = AgentHookSettingsQuery::new(&self.runtime_store).load().await?;
         if let Some(agent) = forced_agent_hook {
             agent_settings.set_enabled(agent, true);
         }
@@ -320,38 +405,11 @@ impl ServerActor {
         .await
         .map_err(|error| HostError::state(error.to_string()))?
         .map_err(|error| HostError::state(error.to_string()))?;
-        if let Ok(Some(tab)) = self.runtime_store.find_workspace_tab(&tab_id).await {
-            if let Some(profile_id) = agent_profile_id(&tab) {
-                launch
-                    .environment
-                    .insert("ALERA_AGENT_PROFILE_ID".to_string(), profile_id.to_string());
-            }
-            if let Some(conversation_id) = tab.payload.get("conversationId").and_then(Value::as_str)
-            {
-                launch.environment.insert(
-                    "ALERA_AGENT_CONVERSATION_ID".to_string(),
-                    conversation_id.to_string(),
-                );
-            }
-            if tab.payload.get("automationOwned").and_then(Value::as_bool) == Some(true) {
-                if let Some(run_id) = tab.payload.get("automationRunId").and_then(Value::as_str) {
-                    // These values come from the host-owned tab record, never
-                    // from a launch request. They bind automation CLI calls to
-                    // the exact PTY that the host created for the run.
-                    launch
-                        .environment
-                        .insert("ALERA_AUTOMATION_RUN_ID".to_string(), run_id.to_string());
-                    launch
-                        .environment
-                        .insert("ALERA_WORKSPACE_ID".to_string(), workspace_id.clone());
-                    launch
-                        .environment
-                        .insert("ALERA_TAB_ID".to_string(), tab_id.clone());
-                    launch
-                        .environment
-                        .insert("ALERA_TERMINAL_SESSION_ID".to_string(), session_id.clone());
-                }
-            }
+        if let Ok(Some(tab)) = WorkspaceTabStoreHandler::new(&self.runtime_store)
+            .find(&tab_id)
+            .await
+        {
+            apply_host_owned_tab_identity(&mut launch, &tab, &workspace_id, &tab_id, &session_id);
         }
         let inbox = self.inbox.clone();
         let reader_session_id = session_id.clone();
@@ -408,4 +466,175 @@ impl ServerActor {
 fn spawns_on_create(tab: &WorkspaceTabRecord) -> bool {
     tab.kind == "terminal"
         && tab.payload.get("spawnOnCreate").and_then(Value::as_bool) == Some(true)
+}
+
+fn apply_host_owned_tab_identity(
+    launch: &mut TerminalHostLaunch,
+    tab: &WorkspaceTabRecord,
+    workspace_id: &str,
+    tab_id: &str,
+    session_id: &str,
+) {
+    if let Some(profile_id) = agent_profile_id(tab) {
+        launch
+            .environment
+            .insert("ALERA_AGENT_PROFILE_ID".to_string(), profile_id.to_string());
+    }
+    if let Some(conversation_id) = tab.payload.get("conversationId").and_then(Value::as_str) {
+        launch.environment.insert(
+            "ALERA_AGENT_CONVERSATION_ID".to_string(),
+            conversation_id.to_string(),
+        );
+    }
+    if tab.payload.get("automationOwned").and_then(Value::as_bool) == Some(true) {
+        if let Some(run_id) = tab.payload.get("automationRunId").and_then(Value::as_str) {
+            // These values come from the host-owned tab record, never from a
+            // launch request. They bind automation CLI calls to the exact PTY
+            // that the host created for the run.
+            launch
+                .environment
+                .insert("ALERA_AUTOMATION_RUN_ID".to_string(), run_id.to_string());
+            launch
+                .environment
+                .insert("ALERA_WORKSPACE_ID".to_string(), workspace_id.to_string());
+            launch
+                .environment
+                .insert("ALERA_TAB_ID".to_string(), tab_id.to_string());
+            launch.environment.insert(
+                "ALERA_TERMINAL_SESSION_ID".to_string(),
+                session_id.to_string(),
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alera_core::runtime::{RuntimeStore, WorkspaceTabRecord};
+    use chrono::Utc;
+    use serde_json::json;
+
+    use super::{
+        apply_host_owned_tab_identity, TerminalSpawnPersistence, TerminalStartupTabPersistence,
+    };
+    use crate::terminal_host::protocol::TerminalHostLaunch;
+
+    #[tokio::test]
+    async fn spawn_persistence_can_be_tested_without_server_actor() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = RuntimeStore::open(dir.path()).await.unwrap();
+        let persistence = TerminalSpawnPersistence::new(&store);
+
+        assert!(persistence.list_workspaces().await.unwrap().is_empty());
+        assert!(persistence
+            .find_workspace("workspace")
+            .await
+            .unwrap()
+            .is_none());
+
+        let now = Utc::now();
+        let saved = persistence
+            .upsert_tab(WorkspaceTabRecord {
+                id: "tab".into(),
+                workspace_id: "workspace".into(),
+                kind: "terminal".into(),
+                title: "Terminal".into(),
+                created_at: now,
+                updated_at: now,
+                payload: json!({"spawnOnCreate": true}),
+            })
+            .await
+            .unwrap();
+        assert_eq!(saved.id, "tab");
+        assert_eq!(persistence.list_tabs("workspace").await.unwrap().len(), 1);
+
+        persistence.remove_tab("tab").await.unwrap();
+        assert!(persistence.list_tabs("workspace").await.unwrap().is_empty());
+    }
+
+    #[test]
+    fn host_owned_tab_metadata_populates_terminal_launch_identity_environment() {
+        let now = Utc::now();
+        let tab = WorkspaceTabRecord {
+            id: "tab".into(),
+            workspace_id: "workspace".into(),
+            kind: "terminal".into(),
+            title: "Agent".into(),
+            created_at: now,
+            updated_at: now,
+            payload: json!({
+                "agentProfileId": "profile",
+                "conversationId": "conversation",
+                "automationOwned": true,
+                "automationRunId": "run",
+            }),
+        };
+        let mut launch = TerminalHostLaunch {
+            label: "shell".into(),
+            shell: "shell".into(),
+            arguments: vec![],
+            environment: Default::default(),
+        };
+
+        apply_host_owned_tab_identity(&mut launch, &tab, "workspace", "tab", "session");
+
+        assert_eq!(launch.environment["ALERA_AGENT_PROFILE_ID"], "profile");
+        assert_eq!(
+            launch.environment["ALERA_AGENT_CONVERSATION_ID"],
+            "conversation"
+        );
+        assert_eq!(launch.environment["ALERA_AUTOMATION_RUN_ID"], "run");
+        assert_eq!(launch.environment["ALERA_WORKSPACE_ID"], "workspace");
+        assert_eq!(launch.environment["ALERA_TAB_ID"], "tab");
+        assert_eq!(launch.environment["ALERA_TERMINAL_SESSION_ID"], "session");
+    }
+
+    #[tokio::test]
+    async fn one_shot_startup_fields_can_be_consumed_without_server_actor() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = RuntimeStore::open(dir.path()).await.unwrap();
+        let now = Utc::now();
+        let tab = store
+            .upsert_workspace_tab(WorkspaceTabRecord {
+                id: "tab".into(),
+                workspace_id: "workspace".into(),
+                kind: "terminal".into(),
+                title: "Terminal".into(),
+                created_at: now,
+                updated_at: now,
+                payload: json!({
+                    "initialCommand": "echo once",
+                    "initialCommandOnce": true,
+                    "initialPrompt": "prompt once",
+                    "initialPromptOnce": true,
+                    "keep": "value",
+                }),
+            })
+            .await
+            .unwrap();
+        let persistence = TerminalStartupTabPersistence::new(&store);
+
+        let after_command = persistence
+            .consume_initial_command(&tab)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(after_command.payload.get("initialCommand").is_none());
+        assert!(after_command.payload.get("initialCommandOnce").is_none());
+        assert_eq!(after_command.payload["initialPrompt"], "prompt once");
+        assert_eq!(after_command.payload["initialPromptOnce"], true);
+        assert_eq!(after_command.payload["keep"], "value");
+
+        let after_prompt = persistence
+            .consume_initial_prompt(&after_command)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(after_prompt.payload.get("initialPrompt").is_none());
+        assert!(after_prompt.payload.get("initialPromptOnce").is_none());
+        assert_eq!(after_prompt.payload["keep"], "value");
+
+        let stored = store.find_workspace_tab("tab").await.unwrap().unwrap();
+        assert_eq!(stored.payload, after_prompt.payload);
+    }
 }

@@ -1,10 +1,45 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
+use alera_core::runtime::RuntimeStore;
 use serde_json::json;
 
 use super::actor_test_harness::{local_client, test_actor};
+use super::workspace_sidebar_requests::{WorkspaceTagChange, WorkspaceTagRequestHandler};
 use crate::terminal_host::client::ClientHandle;
+use crate::terminal_host::host_error::HostError;
+
+#[tokio::test]
+async fn workspace_tag_rules_can_be_tested_without_server_actor() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = RuntimeStore::open(dir.path()).await.unwrap();
+    let handler = WorkspaceTagRequestHandler::new(&store);
+
+    let created = handler
+        .execute("workspaceTag.create", &json!({"name": "Urgent"}))
+        .await
+        .unwrap();
+    assert_eq!(created.change, WorkspaceTagChange::Tags);
+    let created_id = created.value["id"].as_str().unwrap().to_string();
+
+    let listed = handler
+        .execute("workspaceTag.list", &json!({}))
+        .await
+        .unwrap();
+    assert_eq!(listed.change, WorkspaceTagChange::None);
+    assert_eq!(listed.value.as_array().unwrap().len(), 1);
+
+    match handler
+        .execute("workspaceTag.create", &json!({"name": "urgent"}))
+        .await
+    {
+        Err(HostError::Conflict { code, details, .. }) => {
+            assert_eq!(code, "workspace_tag_name_conflict");
+            assert_eq!(details["existingTagId"], created_id);
+        }
+        other => panic!("expected a typed duplicate-tag conflict, got {other:?}"),
+    }
+}
 
 #[tokio::test]
 async fn workspace_sidebar_snapshot_is_deferred_so_control_requests_can_advance() {

@@ -1,4 +1,4 @@
-use alera_core::runtime::WorkspaceTabRecord;
+use alera_core::runtime::{RuntimeAiAssistSettings, RuntimeStore, WorkspaceTabRecord};
 use serde_json::{json, Value};
 use tokio::sync::oneshot;
 use uuid::Uuid;
@@ -9,7 +9,25 @@ use crate::terminal_host::protocol::{error_response, ok_response};
 use super::agent_title_context::{clean_terminal, parse_title, title_prompt};
 use super::agent_title_state::{is_manual, AgentTitleState};
 use super::ai_assist_requests::{plan_command, run_command};
+use super::workspace_tab_requests::WorkspaceTabStoreHandler;
 use super::{ServerActor, ServerCommand};
+
+pub(super) struct AgentTitleSettingsQuery<'a> {
+    runtime_store: &'a RuntimeStore,
+}
+
+impl<'a> AgentTitleSettingsQuery<'a> {
+    pub(super) const fn new(runtime_store: &'a RuntimeStore) -> Self {
+        Self { runtime_store }
+    }
+
+    pub(super) async fn load(&self) -> HostResult<RuntimeAiAssistSettings> {
+        self.runtime_store
+            .effective_ai_assist_settings()
+            .await
+            .map_err(|error| HostError::state(error.to_string()))
+    }
+}
 
 pub(super) struct AgentTitleJob {
     pub id: String,
@@ -28,11 +46,9 @@ impl ServerActor {
         payload: &Value,
     ) -> HostResult<()> {
         let tab_id = super::requests::require_string_key(payload, "tabId")?;
-        let mut tab = self
-            .runtime_store
-            .find_workspace_tab(&tab_id)
-            .await
-            .map_err(|e| HostError::state(e.to_string()))?
+        let mut tab = WorkspaceTabStoreHandler::new(&self.runtime_store)
+            .find(&tab_id)
+            .await?
             .ok_or_else(|| HostError::state("Workspace tab not found."))?;
         if !matches!(tab.kind.as_str(), "terminal" | "codex") {
             return Err(HostError::state(
@@ -46,11 +62,9 @@ impl ServerActor {
                 "The conversation or title changed. Try again.",
             ));
         }
-        let settings = self
-            .runtime_store
-            .effective_ai_assist_settings()
-            .await
-            .map_err(|e| HostError::state(e.to_string()))?;
+        let settings = AgentTitleSettingsQuery::new(&self.runtime_store)
+            .load()
+            .await?;
         if !settings.enabled {
             return Err(HostError::state("AI Assist is disabled."));
         }
@@ -77,19 +91,16 @@ impl ServerActor {
             if !state.eligible || state.attempted || is_manual(&tab) {
                 return Ok(());
             }
-            let settings = self
-                .runtime_store
-                .effective_ai_assist_settings()
-                .await
-                .map_err(|e| HostError::state(e.to_string()))?;
+            let settings = AgentTitleSettingsQuery::new(&self.runtime_store)
+                .load()
+                .await?;
             // Do not rename an old conversation merely because the setting is enabled later.
             state.attempted = true;
             state.write(&mut tab);
             if !settings.enabled || !settings.auto_generate_agent_titles {
-                self.runtime_store
-                    .upsert_workspace_tab(tab)
-                    .await
-                    .map_err(|e| HostError::state(e.to_string()))?;
+                WorkspaceTabStoreHandler::new(&self.runtime_store)
+                    .upsert(tab)
+                    .await?;
                 return Ok(());
             }
         } else {
@@ -108,10 +119,9 @@ impl ServerActor {
         };
         tab.payload["agentTitleStatus"] = json!("generating");
         let workspace_id = tab.workspace_id.clone();
-        self.runtime_store
-            .upsert_workspace_tab(tab)
-            .await
-            .map_err(|e| HostError::state(e.to_string()))?;
+        WorkspaceTabStoreHandler::new(&self.runtime_store)
+            .upsert(tab)
+            .await?;
         self.agent_title_jobs.insert(tab_id.clone(), job);
         self.broadcast_workspace_tabs_changed(Some(&workspace_id));
         let inbox = self.inbox.clone();
@@ -133,10 +143,15 @@ impl ServerActor {
         );
         if let Err(error) = result {
             self.agent_title_jobs.remove(&tab_id);
-            if let Ok(Some(mut tab)) = self.runtime_store.find_workspace_tab(&tab_id).await {
+            if let Ok(Some(mut tab)) = WorkspaceTabStoreHandler::new(&self.runtime_store)
+                .find(&tab_id)
+                .await
+            {
                 tab.payload["agentTitleStatus"] = json!("failed");
                 let workspace_id = tab.workspace_id.clone();
-                let _ = self.runtime_store.upsert_workspace_tab(tab).await;
+                let _ = WorkspaceTabStoreHandler::new(&self.runtime_store)
+                    .upsert(tab)
+                    .await;
                 self.broadcast_workspace_tabs_changed(Some(&workspace_id));
             }
             return Err(error);
@@ -155,20 +170,16 @@ impl ServerActor {
         let Some(job) = self.agent_title_jobs.get(tab_id).filter(|job| job.id == id) else {
             return Ok(());
         };
-        let tab = self
-            .runtime_store
-            .find_workspace_tab(tab_id)
-            .await
-            .map_err(|e| HostError::state(e.to_string()))?
+        let tab = WorkspaceTabStoreHandler::new(&self.runtime_store)
+            .find(tab_id)
+            .await?
             .ok_or_else(|| HostError::state("The tab was closed."))?;
         if !job_matches(job, &tab) {
             return Err(HostError::state("The conversation or title changed."));
         }
-        let settings = self
-            .runtime_store
-            .effective_ai_assist_settings()
-            .await
-            .map_err(|e| HostError::state(e.to_string()))?;
+        let settings = AgentTitleSettingsQuery::new(&self.runtime_store)
+            .load()
+            .await?;
         if !settings.enabled || (job.automatic && !settings.auto_generate_agent_titles) {
             return Err(HostError::state("Title generation is disabled."));
         }
@@ -250,22 +261,18 @@ impl ServerActor {
         job: &AgentTitleJob,
         result: HostResult<String>,
     ) -> HostResult<Value> {
-        let mut tab = self
-            .runtime_store
-            .find_workspace_tab(tab_id)
-            .await
-            .map_err(|e| HostError::state(e.to_string()))?
+        let mut tab = WorkspaceTabStoreHandler::new(&self.runtime_store)
+            .find(tab_id)
+            .await?
             .ok_or_else(|| HostError::state("The tab was closed."))?;
         if !job_matches(job, &tab) {
             return Err(HostError::state(
                 "The conversation or title changed. The generated title was discarded.",
             ));
         }
-        let settings = self
-            .runtime_store
-            .effective_ai_assist_settings()
-            .await
-            .map_err(|e| HostError::state(e.to_string()))?;
+        let settings = AgentTitleSettingsQuery::new(&self.runtime_store)
+            .load()
+            .await?;
         let result = if !settings.enabled || (job.automatic && !settings.auto_generate_agent_titles)
         {
             Err(HostError::state("Title generation is disabled."))
@@ -277,7 +284,9 @@ impl ServerActor {
             Err(error) => {
                 tab.payload["agentTitleStatus"] = json!("failed");
                 let workspace_id = tab.workspace_id.clone();
-                let _ = self.runtime_store.upsert_workspace_tab(tab).await;
+                let _ = WorkspaceTabStoreHandler::new(&self.runtime_store)
+                    .upsert(tab)
+                    .await;
                 self.broadcast_workspace_tabs_changed(Some(&workspace_id));
                 return Err(error);
             }
@@ -289,10 +298,9 @@ impl ServerActor {
         tab.payload["agentTitleStatus"] = json!("idle");
         tab.payload["agentTitleRevision"] = json!(Uuid::new_v4().to_string());
         let workspace_id = tab.workspace_id.clone();
-        self.runtime_store
-            .upsert_workspace_tab(tab)
-            .await
-            .map_err(|e| HostError::state(e.to_string()))?;
+        WorkspaceTabStoreHandler::new(&self.runtime_store)
+            .upsert(tab)
+            .await?;
         self.broadcast_workspace_tabs_changed(Some(&workspace_id));
         Ok(json!({"title": title}))
     }

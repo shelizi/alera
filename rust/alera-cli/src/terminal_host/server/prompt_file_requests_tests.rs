@@ -83,7 +83,7 @@ fn disconnected_upload_results_release_their_store_reservation() {
         .expect("append");
     let complete_result = handle_prompt_file_request(
         directory.path().to_path_buf(),
-        "mobile.promptFile.complete",
+        MobilePromptFileOperation::Complete,
         &json!({"uploadId": reservation.upload_id}),
     )
     .expect("complete");
@@ -113,7 +113,7 @@ async fn orphaned_start_cleanup_respects_deferred_io_budget() {
     actor.handle_mobile_prompt_file_finished(
         1,
         1,
-        "mobile.promptFile.start",
+        MobilePromptFileOperation::Start,
         None,
         Ok(json!({"uploadId": orphaned.upload_id})),
     );
@@ -161,7 +161,7 @@ async fn disconnected_upload_cleanup_respects_deferred_io_budget() {
     actor.handle_mobile_prompt_file_finished(
         1,
         1,
-        "mobile.promptFile.start",
+        MobilePromptFileOperation::Start,
         None,
         Ok(json!({"uploadId": disconnected.upload_id})),
     );
@@ -207,7 +207,7 @@ async fn acknowledged_uploads_are_tracked_until_cancelled_or_disconnected() {
     actor.handle_mobile_prompt_file_finished(
         1,
         1,
-        "mobile.promptFile.start",
+        MobilePromptFileOperation::Start,
         None,
         Ok(json!({"uploadId": cancelled.upload_id})),
     );
@@ -215,7 +215,7 @@ async fn acknowledged_uploads_are_tracked_until_cancelled_or_disconnected() {
     actor.handle_mobile_prompt_file_finished(
         1,
         2,
-        "mobile.promptFile.cancel",
+        MobilePromptFileOperation::Cancel,
         Some(&cancelled.upload_id),
         Ok(json!({})),
     );
@@ -228,20 +228,20 @@ async fn acknowledged_uploads_are_tracked_until_cancelled_or_disconnected() {
     actor.handle_mobile_prompt_file_finished(
         1,
         3,
-        "mobile.promptFile.start",
+        MobilePromptFileOperation::Start,
         None,
         Ok(json!({"uploadId": incomplete.upload_id})),
     );
     let complete_result = handle_prompt_file_request(
         directory.path().to_path_buf(),
-        "mobile.promptFile.complete",
+        MobilePromptFileOperation::Complete,
         &json!({"uploadId": incomplete.upload_id}),
     );
     assert!(complete_result.is_err());
     actor.handle_mobile_prompt_file_finished(
         1,
         4,
-        "mobile.promptFile.complete",
+        MobilePromptFileOperation::Complete,
         Some(&incomplete.upload_id),
         complete_result,
     );
@@ -255,7 +255,7 @@ async fn acknowledged_uploads_are_tracked_until_cancelled_or_disconnected() {
     actor.handle_mobile_prompt_file_finished(
         1,
         5,
-        "mobile.promptFile.start",
+        MobilePromptFileOperation::Start,
         None,
         Ok(json!({"uploadId": disconnected.upload_id})),
     );

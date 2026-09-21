@@ -1,11 +1,53 @@
 use std::fs;
 use std::path::Path;
 
+use alera_core::runtime::{RuntimeStore, WorkspaceTabRecord};
+use chrono::Utc;
 use git2::Repository;
 use notify::event::{CreateKind, ModifyKind, RenameMode};
 use notify::{Event, EventKind};
+use serde_json::json;
 
 use super::*;
+
+#[tokio::test]
+async fn pulse_persistence_can_be_tested_without_server_actor() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = RuntimeStore::open(dir.path()).await.unwrap();
+    let now = Utc::now();
+    store
+        .upsert_workspace_tab(WorkspaceTabRecord {
+            id: "tab".into(),
+            workspace_id: "workspace".into(),
+            kind: "terminal".into(),
+            title: "Terminal".into(),
+            created_at: now,
+            updated_at: now,
+            payload: json!({"keep": "value"}),
+        })
+        .await
+        .unwrap();
+    let persistence = TerminalPulsePersistence::new(&store);
+
+    assert!(persistence
+        .find_workspace("workspace")
+        .await
+        .unwrap()
+        .is_none());
+    let mut tab = persistence.find_tab("tab").await.unwrap().unwrap();
+    tab.payload[TERMINAL_PULSE_PAYLOAD_KEY] = json!({
+        "command": "R",
+        "appendEnter": false,
+        "delayMs": 250,
+    });
+    let saved = persistence.upsert_tab(tab).await.unwrap();
+
+    assert_eq!(saved.payload["keep"], "value");
+    assert_eq!(
+        persistence.find_tab("tab").await.unwrap().unwrap().payload[TERMINAL_PULSE_PAYLOAD_KEY],
+        json!({"command": "R", "appendEnter": false, "delayMs": 250})
+    );
+}
 
 #[test]
 fn tracked_and_untracked_events_are_relevant_but_ignored_files_are_not() {

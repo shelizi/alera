@@ -16,6 +16,7 @@ use crate::terminal_host::host_error::{HostError, HostResult};
 use crate::terminal_host::protocol::{error_response, ok_response};
 
 use super::mobile_workspace_file_paths::prompt_attachment_root;
+use super::request_route_policy::MobileWorkspaceFileOperation;
 use super::requests::{optional_string_key, require_string_key};
 use super::{ServerActor, ServerCommand};
 
@@ -24,12 +25,12 @@ impl ServerActor {
         &self,
         client_id: u64,
         request_id: i64,
+        operation: MobileWorkspaceFileOperation,
         request_type: &str,
         payload: &Value,
     ) -> HostResult<()> {
         let runtime_store = self.runtime_store.clone();
         let runtime_dir = self.runtime_dir.clone();
-        let request_type_str = request_type.to_string();
         let payload = payload.clone();
         let inbox = self.inbox.clone();
         self.deferred_admission.schedule(
@@ -37,18 +38,17 @@ impl ServerActor {
             request_type,
             Some(client_id),
             async move {
-                let operation = request_type_str.clone();
                 let result = handle_mobile_workspace_file_request(
                     runtime_store,
                     runtime_dir,
-                    &request_type_str,
+                    operation,
                     &payload,
                 )
                 .await;
                 let _ = inbox.send(ServerCommand::MobileWorkspaceFileFinished {
                     client_id,
                     request_id,
-                    request_type: operation,
+                    operation,
                     result,
                 });
             },
@@ -60,11 +60,11 @@ impl ServerActor {
         &self,
         client_id: u64,
         request_id: i64,
-        request_type: &str,
+        operation: MobileWorkspaceFileOperation,
         result: HostResult<Value>,
     ) {
         if !self.clients.contains_key(&client_id) {
-            cleanup_orphaned_workspace_file_result(request_type, &result);
+            cleanup_orphaned_workspace_file_result(operation, &result);
             return;
         }
         let response = match &result {
@@ -72,7 +72,7 @@ impl ServerActor {
             Err(error) => error_response(request_id, error),
         };
         if !self.try_client_write(client_id, response) {
-            cleanup_orphaned_workspace_file_result(request_type, &result);
+            cleanup_orphaned_workspace_file_result(operation, &result);
         }
     }
 
@@ -89,11 +89,11 @@ impl ServerActor {
 async fn handle_mobile_workspace_file_request(
     runtime_store: RuntimeStore,
     runtime_dir: PathBuf,
-    request_type: &str,
+    operation: MobileWorkspaceFileOperation,
     payload: &Value,
 ) -> HostResult<Value> {
-    match request_type {
-        "mobile.workspaceQuickOpen.start" => {
+    match operation {
+        MobileWorkspaceFileOperation::QuickOpenStart => {
             let workspace = workspace_for_mobile_file_request(&runtime_store, payload).await?;
             let root = mobile_workspace_file_root(&runtime_store, payload, &workspace).await?;
             spawn_blocking_workspace("Quick Open indexing", move || {
@@ -104,27 +104,33 @@ async fn handle_mobile_workspace_file_request(
                         .map(|value| (*value).to_string())
                         .collect(),
                 )
-                    .map_err(workspace_file_error)
-                    .map(|session| {
-                        json!({
-                            "sessionId": session.id,
-                            "indexedFileCount": session.indexed_file_count,
-                        })
+                .map_err(workspace_file_error)
+                .map(|session| {
+                    json!({
+                        "sessionId": session.id,
+                        "indexedFileCount": session.indexed_file_count,
                     })
+                })
             })
             .await
         }
-        "mobile.workspaceQuickOpen.search" => search_mobile_workspace_quick_open(payload).await,
-        "mobile.workspaceFile.read" => read_mobile_workspace_file(&runtime_store, payload).await,
-        "mobile.promptAttachment.read" => read_mobile_prompt_attachment(runtime_dir, payload).await,
-        _ => Err(HostError::state(
-            "Unsupported mobile workspace file operation.",
-        )),
+        MobileWorkspaceFileOperation::QuickOpenSearch => {
+            search_mobile_workspace_quick_open(payload).await
+        }
+        MobileWorkspaceFileOperation::WorkspaceFileRead => {
+            read_mobile_workspace_file(&runtime_store, payload).await
+        }
+        MobileWorkspaceFileOperation::PromptAttachmentRead => {
+            read_mobile_prompt_attachment(runtime_dir, payload).await
+        }
     }
 }
 
-fn cleanup_orphaned_workspace_file_result(request_type: &str, result: &HostResult<Value>) {
-    if request_type != "mobile.workspaceQuickOpen.start" {
+fn cleanup_orphaned_workspace_file_result(
+    operation: MobileWorkspaceFileOperation,
+    result: &HostResult<Value>,
+) {
+    if operation != MobileWorkspaceFileOperation::QuickOpenStart {
         return;
     }
     if let Some(session_id) = result
@@ -383,6 +389,7 @@ mod platform_tests;
 #[cfg(test)]
 mod tests {
     use super::super::actor_test_harness::test_actor;
+    use super::super::request_route_policy::MobileWorkspaceFileOperation;
     use super::{
         absolute_workspace_file_target, prompt_attachment_root, validated_mobile_workspace_root,
     };
@@ -470,6 +477,7 @@ mod tests {
         let started = actor.start_mobile_workspace_file_request(
             1,
             1,
+            MobileWorkspaceFileOperation::WorkspaceFileRead,
             "mobile.workspaceFile.read",
             &json!({
                 "workspaceId": "missing",
