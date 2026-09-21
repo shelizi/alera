@@ -11,6 +11,7 @@ Alera should support language-specific code intelligence without making every la
 The first supported language set is:
 
 - C#
+- Dart
 - Python
 - Rust
 - Go
@@ -79,7 +80,7 @@ The implementation can reuse substantial existing work rather than creating a se
 - structural bracket/selection queries;
 - stale-revision rejection and explicit close.
 
-Current built-in Tree-sitter grammars cover Dart, Rust, JavaScript/JSX, TypeScript/TSX, Python, and JSON/JSONC. C#, Go, and PHP are not yet in the native grammar registry.
+Current built-in Tree-sitter grammars cover Dart, Rust, JavaScript/JSX, TypeScript/TSX, Python, JSON/JSONC, C#, Go, and PHP.
 
 Relevant current implementation:
 
@@ -417,6 +418,7 @@ If a simpler first UI is preferred, expose one top-level language toggle first a
 
 ```text
 [ ] C#
+[x] Dart        provider: dart.analysis-server   status: Ready
 [x] Rust        provider: <selected provider>   status: Ready
 [x] Python      provider: <selected provider>   status: Missing executable
 [ ] Go
@@ -756,6 +758,7 @@ F3 Rust
 F4 Go
 F5 PHP
 F6 TypeScript + JavaScript
+F7 Dart
 ```
 
 Each lane validates:
@@ -809,8 +812,9 @@ After Phase A establishes the contracts, these can proceed mostly in parallel:
 | P11 | PHP semantic provider lane | A, P3/P4 |
 | P12 | TS/JS shared semantic provider lane | A, P3/P4 |
 | P13 | Extensibility + architecture guards | A, integration complete |
+| P14 | Dart semantic provider lane | A, P3/P4 |
 
-P1, P3, and P5 can start in parallel once A is merged. Language rollout lanes P7-P12 can then run independently against the stable provider contract.
+P1, P3, and P5 can start in parallel once A is merged. Language rollout lanes P7-P12 and P14 can then run independently against the stable provider contract.
 
 ## 21. Testing strategy
 
@@ -880,7 +884,7 @@ Measure separately:
 
 The architecture is ready when all of the following are true:
 
-1. C#, Python, Rust, Go, PHP, TypeScript and JavaScript are represented only through registry descriptors/provider modules, not editor `switch` statements.
+1. C#, Dart, Python, Rust, Go, PHP, TypeScript and JavaScript are represented only through registry descriptors/provider modules, not editor `switch` statements.
 2. Every language can be independently enabled/disabled in Settings.
 3. Disabled semantic engines spawn no language-server process.
 4. Enabling an engine starts it lazily when needed and shares it across tabs in the workspace.
@@ -893,7 +897,7 @@ The architecture is ready when all of the following are true:
 
 ## 24. Recommended implementation order
 
-Do not begin by wiring seven language servers directly into `WorkspaceEditorSurface`.
+Do not begin by wiring eight language servers directly into `WorkspaceEditorSurface`.
 
 The safe order is:
 
@@ -985,6 +989,12 @@ Completed:
   the provider-neutral semantic adapter now follows a bounded single-target
   same-file definition chain with cycle protection before returning the final
   target.
+- **F7 / P14 — Dart semantic compatibility gate:** validated locally on Windows
+  with Dart SDK `3.13.2` through the built-in `dart.analysis-server`
+  descriptor and production runtime/adapter path. The smoke covered
+  `dart language-server --protocol=lsp`, initialize, `didOpen`, cross-file
+  definition, references spanning declaration and call site, graceful
+  shutdown, and the Windows `dart.bat` executable shim.
 - **Windows executable compatibility:** PATH discovery now returns the concrete
   executable path, prefers PATHEXT shims over extensionless npm siblings, and
   starts `.cmd` / `.bat` language-server shims through the Windows shell.
@@ -996,8 +1006,8 @@ Completed:
   detach. The architecture guard also covers the Definition/References editor
   integration surfaces.
 
-All first-release semantic validation lanes are now complete for C#, Python,
-Rust, Go, PHP, TypeScript, and JavaScript.
+All first-release semantic validation lanes are now complete for C#, Dart,
+Python, Rust, Go, PHP, TypeScript, and JavaScript.
 
 Known status semantics:
 

@@ -17,7 +17,7 @@ void main() {
       'lib/src/features/language_intelligence/infra/code_forge_language_server_runtime.dart',
     ];
     final languageLiteral = RegExp(
-      r'''['"](?:csharp|python|rust|go|php|typescript|tsx|javascript|jsx)['"]''',
+      r'''['"](?:csharp|dart|python|rust|go|php|typescript|tsx|javascript|jsx)['"]''',
     );
 
     final leaks = <String>[];

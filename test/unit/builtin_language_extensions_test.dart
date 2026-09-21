@@ -15,6 +15,7 @@ void main() {
       final cases = <String, String>{
         r'C:\repo\Program.cs': 'csharp',
         r'C:\repo\script.csx': 'csharp',
+        '/repo/main.dart': 'dart',
         '/repo/main.py': 'python',
         '/repo/stubs.pyi': 'python',
         '/repo/lib.rs': 'rust',
@@ -37,6 +38,7 @@ void main() {
         );
       }
       expect(registry.languageForId('C#')?.id.value, 'csharp');
+      expect(registry.languageForId('dartlang')?.id.value, 'dart');
       expect(registry.languageForId('golang')?.id.value, 'go');
       expect(registry.syntaxLanguageIdForPath(r'C:\repo\script.csx'), 'csharp');
       expect(registry.syntaxLanguageIdForPath('/repo/stubs.pyi'), 'python');
@@ -60,6 +62,7 @@ void main() {
       final registry = createBuiltinLanguageExtensionRegistry();
       final ids = <String>{
         'csharp',
+        'dart',
         'python',
         'rust',
         'go',
@@ -94,6 +97,7 @@ void main() {
     final registry = createBuiltinLanguageExtensionRegistry();
     final expected = <String, bool>{
       'csharp': false,
+      'dart': true,
       'python': true,
       'rust': true,
       'go': false,
@@ -128,6 +132,10 @@ void main() {
       final registry = createBuiltinLanguageExtensionRegistry();
       final expected = <String, ({List<String> commands, List<String> args})>{
         'csharp.csharp-ls': (commands: <String>['csharp-ls'], args: <String>[]),
+        'dart.analysis-server': (
+          commands: <String>['dart'],
+          args: <String>['language-server', '--protocol=lsp'],
+        ),
         'python.pyright': (
           commands: <String>['pyright-langserver'],
           args: <String>['--stdio'],

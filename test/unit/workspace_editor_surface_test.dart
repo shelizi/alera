@@ -67,6 +67,15 @@ void main() {
         settings: defaults,
       ),
       isTrue,
+      reason: 'Dart keeps its existing native parser enabled by descriptor',
+    );
+    expect(
+      workspaceEditorNativeSyntaxEnabled(
+        filePath: 'config/app.json',
+        registry: registry,
+        settings: defaults,
+      ),
+      isTrue,
       reason: 'non-catalog legacy native languages preserve the old policy',
     );
 

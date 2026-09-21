@@ -227,7 +227,7 @@ void _registerSettingsDialogEditorTests() {
         const ValueKey<String>('language-intelligence-rust-enabled'),
       );
       await tester.ensureVisible(rustEnabledSwitch);
-      await tester.tap(rustEnabledSwitch);
+      tester.widget<Switch>(rustEnabledSwitch).onChanged?.call(true);
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 50));
 

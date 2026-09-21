@@ -1,6 +1,7 @@
 import '../application/language_provider_registry.dart';
 import '../domain/language_extension_contribution.dart';
 import 'languages/csharp_language_extension.dart';
+import 'languages/dart_language_extension.dart';
 import 'languages/go_language_extension.dart';
 import 'languages/php_language_extension.dart';
 import 'languages/python_language_extension.dart';
@@ -10,6 +11,7 @@ import 'languages/typescript_javascript_language_extension.dart';
 List<LanguageExtensionContribution> get builtinLanguageExtensions =>
     <LanguageExtensionContribution>[
       csharpLanguageExtension,
+      dartLanguageExtension,
       pythonLanguageExtension,
       rustLanguageExtension,
       goLanguageExtension,
