@@ -375,8 +375,8 @@ const Map<String, String> _traditionalChineseSettings = <String, String>{
   'Retained parser for syntax, outline, folding, and structural editing.':
       '保留式解析器，用於語法、程式大綱、摺疊與結構化編輯。',
   'Executable Override': '執行檔覆寫',
-  'Leave blank to use the provider command from PATH on this device.':
-      '留空會使用這台裝置 PATH 中的 Provider 指令。',
+  'Leave blank to use PATH first, then Alera-managed installation when supported.':
+      '留空會先使用這台裝置 PATH 中的 Provider 指令；若支援，找不到時再使用 Alera 管理的安裝。',
   'Status': '狀態',
   'Ready': '就緒',
   'Missing': '缺少',

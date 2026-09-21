@@ -1,6 +1,37 @@
 part of 'app_localizations_test.dart';
 
 void registerAppLocalizationTailTests() {
+  test('traditional Chinese localizes language server prerequisite guidance', () {
+    final l10n = AleraLocalizations(const Locale('zh', 'TW'));
+    expect(
+      l10n.translate(
+        'node and npm were not found on PATH. Alera can install '
+        'pyright-langserver automatically after Node.js and npm are available. '
+        'Install Node.js, make sure `node --version` and `npm --version` work '
+        'on PATH, then choose Check Again. No executable was otherwise found '
+        'for python.pyright; tried pyright-langserver.',
+      ),
+      allOf(
+        contains('Node.js／npm'),
+        contains('pyright-langserver'),
+        contains('重新檢查'),
+      ),
+    );
+    expect(
+      l10n.translate(
+        'dotnet was found, but no usable .NET SDK was detected. Alera can '
+        'install csharp-ls automatically after a .NET SDK is available. '
+        'Install the .NET SDK (runtime-only is not enough), make sure '
+        '`dotnet --list-sdks` lists an SDK, then choose Check Again.',
+      ),
+      allOf(
+        contains('.NET SDK'),
+        contains('csharp-ls'),
+        contains('只有 Runtime 不足'),
+      ),
+    );
+  });
+
   test('traditional Chinese localizes agent usage chrome', () {
     final l10n = AleraLocalizations(const Locale('zh', 'TW'));
     expect(l10n.translate('Usage'), '用量');

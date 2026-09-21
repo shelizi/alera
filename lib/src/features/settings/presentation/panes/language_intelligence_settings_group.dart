@@ -251,7 +251,7 @@ class _LanguageIntelligenceLanguageSettingState
             const SizedBox(height: AleraTokens.space12),
             _LabeledLanguageControl(
               label: 'Executable Override',
-              helperText: 'Leave blank to use the provider command from PATH on this device.',
+              helperText: 'Leave blank to use PATH first, then Alera-managed installation when supported.',
               child: AleraTextField(
                 key: ValueKey<String>(
                   'language-intelligence-${widget.language.id.value}-executable',
@@ -349,33 +349,34 @@ class const _LanguageIntelligenceStatusLine({
         final detail = waiting
             ? null
             : status.executable ?? status.detail?.trim();
-        return Row(
+        return Column(
+          crossAxisAlignment: .stretch,
           children: <Widget>[
-            Text(
-              '${context.tr('Status')}: ${context.tr(label)}',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: _statusColor(status?.kind),
-                fontWeight: .w500,
-              ),
-            ),
-            if (detail != null && detail.isNotEmpty) ...<Widget>[
-              const SizedBox(width: AleraTokens.space8),
-              Expanded(
-                child: Text(
-                  detail,
-                  maxLines: 2,
-                  overflow: .ellipsis,
+            Row(
+              children: <Widget>[
+                Text(
+                  '${context.tr('Status')}: ${context.tr(label)}',
                   style: theme.textTheme.bodySmall?.copyWith(
-                    color: AleraTokens.foregroundMuted,
+                    color: _statusColor(status?.kind),
+                    fontWeight: .w500,
                   ),
                 ),
-              ),
-            ] else
-              const Spacer(),
-            if (onRetry != null && !waiting)
-              TextButton(
-                onPressed: onRetry,
-                child: Text(context.tr('Check Again')),
+                const Spacer(),
+                if (onRetry != null && !waiting)
+                  TextButton(
+                    onPressed: onRetry,
+                    child: Text(context.tr('Check Again')),
+                  ),
+              ],
+            ),
+            if (detail != null && detail.isNotEmpty)
+              Text(
+                context.tr(detail),
+                maxLines: 4,
+                overflow: .ellipsis,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: AleraTokens.foregroundMuted,
+                ),
               ),
           ],
         );
