@@ -5,9 +5,11 @@ import 'package:code_forge/code_forge.dart';
 
 import '../../../shared/infra/process/command_path_probe.dart';
 import '../application/language_server_runtime.dart';
+import '../application/managed_language_server_installer.dart';
 import '../domain/language_capability.dart';
 import '../domain/language_intelligence_settings.dart';
 import '../domain/language_provider_descriptor.dart';
+import 'managed_language_server_installer.dart';
 
 typedef CodeForgeEnvironmentReader = Map<String, String> Function();
 typedef CodeForgeExecutableExists = bool Function(String path);
@@ -87,11 +89,19 @@ final class CodeForgeLanguageServerRuntime
     bool? isWindows,
     CodeForgeExecutableExists? executableExists,
     CodeForgeLanguageServerTransportFactory? transportFactory,
+    ManagedLanguageServerInstallerPort? managedInstaller,
   }) => CodeForgeLanguageServerRuntime._(
     environmentReader: environmentReader ?? _platformEnvironment,
     isWindows: isWindows ?? Platform.isWindows,
     executableExists: executableExists,
     transportFactory: transportFactory ?? _startCodeForgeTransport,
+    managedInstaller:
+        managedInstaller ??
+        ManagedLanguageServerInstaller(
+          environmentReader: environmentReader ?? _platformEnvironment,
+          isWindows: isWindows ?? Platform.isWindows,
+          executableExists: executableExists,
+        ),
   );
 
   const CodeForgeLanguageServerRuntime._({
@@ -99,12 +109,14 @@ final class CodeForgeLanguageServerRuntime
     required this._isWindows,
     required this._executableExists,
     required this._transportFactory,
+    required this._managedInstaller,
   });
 
   final CodeForgeEnvironmentReader _environmentReader;
   final bool _isWindows;
   final CodeForgeExecutableExists? _executableExists;
   final CodeForgeLanguageServerTransportFactory _transportFactory;
+  final ManagedLanguageServerInstallerPort _managedInstaller;
 
   @override
   Future<LanguageServerExecutableResolution> resolveExecutable({
@@ -152,12 +164,24 @@ final class CodeForgeLanguageServerRuntime
         return LanguageServerExecutableResolved(resolved);
       }
     }
-    final tried = provider.executableCandidates.isEmpty
-        ? 'no executable candidates were configured'
-        : 'tried ${provider.executableCandidates.join(', ')}';
-    return LanguageServerExecutableMissing(
-      reason: 'No executable found for ${provider.id}; $tried.',
-    );
+    final managed = await _managedInstaller.ensureInstalled(provider);
+    switch (managed) {
+      case ManagedLanguageServerInstalled(:final executable):
+        if (_pathExists(executable)) {
+          return LanguageServerExecutableResolved(executable);
+        }
+        throw StateError(
+          'Managed language server ${provider.id} reported an executable that '
+          'does not exist: $executable',
+        );
+      case ManagedLanguageServerUnavailable(:final reason):
+        final tried = provider.executableCandidates.isEmpty
+            ? 'no executable candidates were configured'
+            : 'tried ${provider.executableCandidates.join(', ')}';
+        return LanguageServerExecutableMissing(
+          reason: 'No executable found for ${provider.id}; $tried. $reason',
+        );
+    }
   }
 
   @override

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:alera/src/features/language_intelligence/application/language_server_runtime.dart';
+import 'package:alera/src/features/language_intelligence/application/managed_language_server_installer.dart';
 import 'package:alera/src/features/language_intelligence/domain/language_capability.dart';
 import 'package:alera/src/features/language_intelligence/domain/language_id.dart';
 import 'package:alera/src/features/language_intelligence/domain/language_intelligence_settings.dart';
@@ -122,6 +123,73 @@ void main() {
       r'C:\node\bin\pyright-langserver.cmd',
     );
   });
+
+  test('PATH miss falls back to the managed language server', () async {
+    final managed = _FakeManagedInstaller(
+      result: const ManagedLanguageServerInstalled(
+        executable: r'C:\Alera\language-servers\rust-analyzer.exe',
+        version: '1.97.1',
+      ),
+    );
+    final runtime = CodeForgeLanguageServerRuntime(
+      environmentReader: () => const <String, String>{
+        'Path': r'C:\empty',
+        'PATHEXT': '.EXE;.CMD',
+      },
+      isWindows: true,
+      executableExists: (path) =>
+          path == r'C:\Alera\language-servers\rust-analyzer.exe',
+      managedInstaller: managed,
+      transportFactory: _unexpectedTransportFactory,
+    );
+
+    final result = await runtime.resolveExecutable(
+      provider: provider,
+      settings: const LanguageActivationSettings(enabled: true),
+      target: LanguageServerTarget.localWorkspace,
+    );
+
+    expect(result, isA<LanguageServerExecutableResolved>());
+    expect(
+      (result as LanguageServerExecutableResolved).executable,
+      r'C:\Alera\language-servers\rust-analyzer.exe',
+    );
+    expect(managed.calls, 1);
+  });
+
+  test(
+    'invalid explicit override does not auto-install a replacement',
+    () async {
+      final managed = _FakeManagedInstaller(
+        result: const ManagedLanguageServerInstalled(
+          executable: r'C:\Alera\language-servers\rust-analyzer.exe',
+          version: '1.97.1',
+        ),
+      );
+      final runtime = CodeForgeLanguageServerRuntime(
+        environmentReader: () => const <String, String>{
+          'Path': r'C:\empty',
+          'PATHEXT': '.EXE;.CMD',
+        },
+        isWindows: true,
+        executableExists: (_) => false,
+        managedInstaller: managed,
+        transportFactory: _unexpectedTransportFactory,
+      );
+
+      final result = await runtime.resolveExecutable(
+        provider: provider,
+        settings: const LanguageActivationSettings(
+          enabled: true,
+          executablePath: r'C:\missing\rust-analyzer.exe',
+        ),
+        target: LanguageServerTarget.localWorkspace,
+      );
+
+      expect(result, isA<LanguageServerExecutableMissing>());
+      expect(managed.calls, 0);
+    },
+  );
 
   test('provider candidates reject repository-relative executable paths', () {
     expect(
@@ -325,6 +393,22 @@ void main() {
       expect(transport.disposeCalls, 1);
     },
   );
+}
+
+final class _FakeManagedInstaller
+    implements ManagedLanguageServerInstallerPort {
+  _FakeManagedInstaller({required this.result});
+
+  final ManagedLanguageServerInstallResult result;
+  int calls = 0;
+
+  @override
+  Future<ManagedLanguageServerInstallResult> ensureInstalled(
+    LanguageProviderDescriptor provider,
+  ) async {
+    calls += 1;
+    return result;
+  }
 }
 
 Future<CodeForgeLanguageServerTransport> _unexpectedTransportFactory(

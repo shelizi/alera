@@ -624,15 +624,39 @@ Rules:
 
 ## 17. Security and trust boundary
 
-Initial delivery should **not** auto-download or auto-execute arbitrary extension binaries.
+Managed acquisition is allowed only for Alera-curated semantic providers. A
+workspace/project must never be able to supply an arbitrary package, URL,
+version, executable, or post-install command for automatic execution.
 
 Executable resolution order can be:
 
 1. explicit per-device user override;
 2. known executable on `PATH`;
-3. unavailable state with setup guidance.
+3. Alera-managed pinned provider install;
+4. unavailable state with setup guidance.
 
-Future managed downloads need a separate signed-package/update design and should not be mixed into the first navigation implementation.
+Managed provider acquisition rules:
+
+- the provider id must map to an Alera-owned catalog entry;
+- package/module/tool versions are pinned in source control;
+- npm installs run with lifecycle scripts disabled and require lockfile SRI
+  integrity metadata for every curated package;
+- Go installs use the public checksum database, rust-analyzer uses rustup's
+  signed/checksummed distribution metadata, and .NET tools use NuGet/dotnet
+  package integrity;
+- after installation Alera records the executable SHA-256 and verifies it
+  before every reuse; a mismatch forces a clean reinstall;
+- installation uses an application-support `language-servers/` directory,
+  not the project tree;
+- concurrent requests for the same provider share one install operation and a
+  filesystem lock prevents competing processes from installing over each
+  other;
+- acquisition failures are surfaced as Missing/Failed provider state without
+  making the editor unusable.
+
+The initial managed catalog covers C# (`csharp-ls`), Go (`gopls`), Python
+(`pyright`), Rust (`rust-analyzer`), PHP (`intelephense`), and TypeScript /
+JavaScript (`typescript-language-server` + `typescript`).
 
 Project configuration may identify a language/provider preference, but should not be able to provide an arbitrary command line that executes automatically on project open.
 
