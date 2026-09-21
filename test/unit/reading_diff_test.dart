@@ -22,6 +22,11 @@ void main() {
     const model = AiAssistModel(
       id: 'model',
       label: 'Model',
+      thinkingLevels: <AiThinkingLevel>[
+        AiThinkingLevel(id: 'low', label: 'Low'),
+        AiThinkingLevel(id: 'medium', label: 'Medium'),
+        AiThinkingLevel(id: 'high', label: 'High'),
+      ],
       defaultThinkingLevel: 'medium',
     );
     expect(
@@ -39,6 +44,18 @@ void main() {
         model,
       ),
       'high',
+    );
+    expect(
+      effectiveReadingDiffEffort(
+        const AiAssistSettings(
+          selectedThinkingByOperation: <AiAssistOperation, Map<String, String>>{
+            AiAssistOperation.readingDiff: <String, String>{'model': 'max'},
+          },
+        ),
+        .readingDiff,
+        model,
+      ),
+      'medium',
     );
   });
 

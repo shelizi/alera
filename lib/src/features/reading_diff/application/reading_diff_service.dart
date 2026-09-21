@@ -335,9 +335,14 @@ String? effectiveReadingDiffEffort(
   AiAssistSettings settings,
   AiAssistOperation operation,
   AiAssistModel model,
-) =>
-    settings.thinkingForOperation(operation, model.id) ??
-    model.defaultThinkingLevel;
+) {
+  final configured = settings.thinkingForOperation(operation, model.id);
+  if (configured != null &&
+      model.thinkingLevels.any((level) => level.id == configured)) {
+    return configured;
+  }
+  return model.defaultThinkingLevel;
+}
 
 Future<String> buildReadingDiffCacheKey({
   required String rubricVersion,
