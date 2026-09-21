@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:alera/src/shared/infra/process/process_runner.dart';
 import 'package:path/path.dart' as p;
+import 'package:url_launcher/url_launcher.dart' show launchUrl;
 
 enum WorkspaceFolderPlatform { macos, windows, linux, other }
 
@@ -19,16 +20,19 @@ class WorkspaceFolderOpener({
   WorkspaceFolderPlatform? platform,
   Future<bool> Function(String path)? directoryExists,
   Future<FileSystemEntityType> Function(String path)? entityType,
+  Future<bool> Function(Uri uri)? launchUri,
 }) {
   this
     : _platform = platform ?? currentWorkspaceFolderPlatform(),
       _directoryExists =
           directoryExists ?? ((path) async => Directory(path).exists()),
-      _entityType = entityType ?? FileSystemEntity.type;
+      _entityType = entityType ?? FileSystemEntity.type,
+      _launchUri = launchUri ?? ((uri) => launchUrl(uri));
 
   final WorkspaceFolderPlatform _platform;
   final Future<bool> Function(String path) _directoryExists;
   final Future<FileSystemEntityType> Function(String path) _entityType;
+  final Future<bool> Function(Uri uri) _launchUri;
 
   String get fileManagerLabel {
     switch (_platform) {
@@ -117,6 +121,17 @@ class WorkspaceFolderOpener({
       return const WorkspaceFolderOpenResult.failure('Path was not found.');
     }
 
+    if (_platform == WorkspaceFolderPlatform.windows) {
+      try {
+        final launched = await _launchUri(
+          Uri.file(_windowsExplorerPath(normalized), windows: true),
+        );
+        if (launched) {
+          return const WorkspaceFolderOpenResult.success();
+        }
+      } catch (_) {}
+    }
+
     final commands = _defaultApplicationCommandsForPlatform(normalized);
     for (final command in commands) {
       try {
@@ -200,12 +215,7 @@ class WorkspaceFolderOpener({
           _WorkspaceFolderOpenCommand('open', <String>[path]),
         ];
       case WorkspaceFolderPlatform.windows:
-        return <_WorkspaceFolderOpenCommand>[
-          _WorkspaceFolderOpenCommand('rundll32.exe', <String>[
-            'url.dll,FileProtocolHandler',
-            _windowsExplorerPath(path),
-          ]),
-        ];
+        return const <_WorkspaceFolderOpenCommand>[];
       case WorkspaceFolderPlatform.linux:
         return <_WorkspaceFolderOpenCommand>[
           _WorkspaceFolderOpenCommand('xdg-open', <String>[path]),

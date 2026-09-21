@@ -430,10 +430,15 @@ void main() {
 
   test('opens a file with the default app on Windows', () async {
     final processRunner = _FakeProcessRunner();
+    final launchedUris = <Uri>[];
     final opener = WorkspaceFolderOpener(
       processRunner: processRunner,
       platform: .windows,
       entityType: (_) async => FileSystemEntityType.file,
+      launchUri: (uri) async {
+        launchedUris.add(uri);
+        return true;
+      },
     );
 
     final result = await opener.openWithDefaultApplication(
@@ -441,13 +446,35 @@ void main() {
     );
 
     expect(result.ok, isTrue);
-    expect(processRunner.calls, <_ProcessCall>[
-      const _ProcessCall('rundll32.exe', <String>[
-        'url.dll,FileProtocolHandler',
-        r'C:\repo\My File.txt',
-      ]),
+    expect(launchedUris, <Uri>[
+      Uri.file(r'C:\repo\My File.txt', windows: true),
     ]);
+    expect(processRunner.calls, isEmpty);
   });
+
+  test(
+    'reports a failure when Windows cannot launch the default app',
+    () async {
+      final processRunner = _FakeProcessRunner();
+      final opener = WorkspaceFolderOpener(
+        processRunner: processRunner,
+        platform: .windows,
+        entityType: (_) async => FileSystemEntityType.file,
+        launchUri: (_) async => false,
+      );
+
+      final result = await opener.openWithDefaultApplication(
+        r'C:\repo\note.txt',
+      );
+
+      expect(result.ok, isFalse);
+      expect(
+        result.message,
+        'Could not open item with the system default application.',
+      );
+      expect(processRunner.calls, isEmpty);
+    },
+  );
 
   test('falls back to gio for default app opening on Linux', () async {
     final processRunner = _FakeProcessRunner(exitCodes: <int>[1, 0]);
