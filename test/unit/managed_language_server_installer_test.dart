@@ -45,7 +45,8 @@ void main() {
       final installed = first as ManagedLanguageServerInstalled;
       expect(installed.version, '1.1.414');
       expect(await File(installed.executable).exists(), isTrue);
-      expect(runner.calls, 1);
+      expect(runner.installCalls, 1);
+      expect(runner.probeCalls, 2);
 
       final marker = File(
         p.join(
@@ -64,7 +65,8 @@ void main() {
 
       final second = await installer.ensureInstalled(provider);
       expect(second, isA<ManagedLanguageServerInstalled>());
-      expect(runner.calls, 1);
+      expect(runner.installCalls, 1);
+      expect(runner.probeCalls, 2);
     },
   );
 
@@ -74,11 +76,12 @@ void main() {
     final first = await installer.ensureInstalled(
       provider,
     ) as ManagedLanguageServerInstalled;
-    expect(runner.calls, 1);
+    expect(runner.installCalls, 1);
 
     await File(first.executable).writeAsString('tampered', flush: true);
     await installer.ensureInstalled(provider);
-    expect(runner.calls, 2);
+    expect(runner.installCalls, 2);
+    expect(runner.probeCalls, 4);
   });
 
   test('concurrent requests share one install operation', () async {
@@ -89,14 +92,15 @@ void main() {
     final first = installer.ensureInstalled(provider);
     final second = installer.ensureInstalled(provider);
     await runner.started.future;
-    expect(runner.calls, 1);
+    expect(runner.installCalls, 1);
 
     gate.complete();
     final results = await Future.wait(
       <Future<ManagedLanguageServerInstallResult>>[first, second],
     );
     expect(results, everyElement(isA<ManagedLanguageServerInstalled>()));
-    expect(runner.calls, 1);
+    expect(runner.installCalls, 1);
+    expect(runner.probeCalls, 2);
   });
 
   test(
@@ -115,9 +119,65 @@ void main() {
       expect(result, isA<ManagedLanguageServerUnavailable>());
       expect(
         (result as ManagedLanguageServerUnavailable).reason,
-        contains('npm/Node.js'),
+        allOf(contains('node and npm'), contains('Check Again')),
       );
-      expect(runner.calls, 0);
+      expect(runner.installCalls, 0);
+      expect(runner.probeCalls, 0);
+    },
+  );
+
+  test(
+    'broken node probe stops before npm install and explains recovery',
+    () async {
+      final runner = _FakeNpmInstallRunner(failNodeProbe: true);
+      final installer = _installer(temp, runner);
+
+      final result = await installer.ensureInstalled(provider);
+
+      expect(result, isA<ManagedLanguageServerUnavailable>());
+      expect(
+        (result as ManagedLanguageServerUnavailable).reason,
+        allOf(contains('node --version'), contains('Check Again')),
+      );
+      expect(runner.installCalls, 0);
+      expect(runner.probeCalls, 1);
+    },
+  );
+
+  test(
+    'dotnet runtime without an SDK is reported before tool install',
+    () async {
+      final csharp = LanguageProviderDescriptor(
+        id: 'csharp.csharp-ls',
+        kind: LanguageProviderKind.semanticServer,
+        languages: <LanguageId>{LanguageId('csharp')},
+        capabilities: const <LanguageCapability>{LanguageCapability.definition},
+        processScope: LanguageProviderProcessScope.workspace,
+        launchPolicy: LanguageProviderLaunchPolicy.lazyOnDemand,
+        executableResolutionPolicy:
+            LanguageExecutableResolutionPolicy.explicitOverrideThenPath,
+        executableCandidates: const <String>['csharp-ls'],
+      );
+      final runner = _CallbackProcessRunner((request) async {
+        expect(request.arguments, const <String>['--list-sdks']);
+        return ProcessResult(1, 0, '', '');
+      });
+      final installer = ManagedLanguageServerInstaller(
+        environmentReader: () => const <String, String>{'PATH': '/tools'},
+        isWindows: false,
+        executableExists: (path) => path == '/tools/dotnet',
+        supportDirectory: () async => temp,
+        processRunner: runner,
+      );
+
+      final result = await installer.ensureInstalled(csharp);
+
+      expect(result, isA<ManagedLanguageServerUnavailable>());
+      expect(
+        (result as ManagedLanguageServerUnavailable).reason,
+        allOf(contains('.NET SDK'), contains('dotnet --list-sdks')),
+      );
+      expect(runner.calls, 1);
     },
   );
 
@@ -147,22 +207,32 @@ ManagedLanguageServerInstaller _installer(
 ) => ManagedLanguageServerInstaller(
   environmentReader: () => const <String, String>{'PATH': '/tools'},
   isWindows: false,
-  executableExists: (path) => path == '/tools/npm' || File(path).existsSync(),
+  executableExists: (path) =>
+      path == '/tools/node' || path == '/tools/npm' || File(path).existsSync(),
   supportDirectory: () async => support,
   processRunner: runner,
 );
 
 final class _FakeNpmInstallRunner
     implements ManagedLanguageServerProcessRunner {
-  _FakeNpmInstallRunner({this.gate});
+  _FakeNpmInstallRunner({this.gate, this.failNodeProbe = false});
 
   final Completer<void>? gate;
+  final bool failNodeProbe;
   final Completer<void> started = Completer<void>();
-  int calls = 0;
+  int probeCalls = 0;
+  int installCalls = 0;
 
   @override
   Future<ProcessResult> run(ManagedLanguageServerProcessRequest request) async {
-    calls += 1;
+    if (request.arguments case ['--version']) {
+      probeCalls += 1;
+      if (request.executable.endsWith('/node') && failNodeProbe) {
+        return ProcessResult(1, 1, '', 'broken node');
+      }
+      return ProcessResult(1, 0, '1.0.0', '');
+    }
+    installCalls += 1;
     if (!started.isCompleted) started.complete();
     await gate?.future;
     final prefixIndex = request.arguments.indexOf('--prefix');
@@ -187,5 +257,20 @@ final class _FakeNpmInstallRunner
       flush: true,
     );
     return ProcessResult(1, 0, '', '');
+  }
+}
+
+final class _CallbackProcessRunner
+    implements ManagedLanguageServerProcessRunner {
+  _CallbackProcessRunner(this.callback);
+
+  final Future<ProcessResult> Function(ManagedLanguageServerProcessRequest)
+  callback;
+  int calls = 0;
+
+  @override
+  Future<ProcessResult> run(ManagedLanguageServerProcessRequest request) {
+    calls += 1;
+    return callback(request);
   }
 }

@@ -262,6 +262,37 @@ void _registerSettingsDialogEditorTests() {
       );
     },
   );
+
+  testWidgets('shows environment setup guidance for a missing prerequisite', (
+    tester,
+  ) async {
+    await _pumpSettingsDialog(
+      tester,
+      initialSectionId: 'editor',
+      locale: const Locale('en'),
+      extraOverrides: <dynamic>[
+        languageIntelligenceStatusPortProvider.overrideWithValue(
+          const _MissingLanguageIntelligenceStatusPort(),
+        ),
+      ],
+    );
+
+    final rustEnabledSwitch = find.byKey(
+      const ValueKey<String>('language-intelligence-rust-enabled'),
+    );
+    await tester.ensureVisible(rustEnabledSwitch);
+    tester.widget<Switch>(rustEnabledSwitch).onChanged?.call(true);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    expect(find.text('Status: Missing'), findsOneWidget);
+    expect(find.textContaining('Install Node.js'), findsOneWidget);
+    expect(find.text('Check Again'), findsOneWidget);
+    expect(
+      tester.widget<Text>(find.textContaining('Install Node.js')).maxLines,
+      4,
+    );
+  });
 }
 
 final class _ReadyLanguageIntelligenceStatusPort
@@ -275,5 +306,21 @@ final class _ReadyLanguageIntelligenceStatusPort
   }) async => const LanguageIntelligenceProviderStatus(
     kind: LanguageIntelligenceStatusKind.ready,
     executable: 'fake-language-server',
+  );
+}
+
+final class _MissingLanguageIntelligenceStatusPort
+    implements LanguageIntelligenceStatusPort {
+  const _MissingLanguageIntelligenceStatusPort();
+
+  @override
+  Future<LanguageIntelligenceProviderStatus> resolve({
+    required LanguageProviderDescriptor provider,
+    required LanguageActivationSettings settings,
+  }) async => const LanguageIntelligenceProviderStatus(
+    kind: LanguageIntelligenceStatusKind.missing,
+    detail:
+        'Node.js was not found. Install Node.js, make sure node and npm work '
+        'on PATH, then choose Check Again.',
   );
 }

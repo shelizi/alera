@@ -651,6 +651,11 @@ Managed provider acquisition rules:
 - concurrent requests for the same provider share one install operation and a
   filesystem lock prevents competing processes from installing over each
   other;
+- Alera does not bootstrap ecosystem runtimes as part of semantic-server
+  acquisition. Before installing a missing managed provider it preflights the
+  required local environment: Node.js + npm, Go, a real .NET SDK (not only the
+  runtime), or rustup. Missing/broken prerequisites remain a `Missing` state
+  with actionable setup guidance and a `Check Again` path;
 - acquisition failures are surfaced as Missing/Failed provider state without
   making the editor unusable.
 

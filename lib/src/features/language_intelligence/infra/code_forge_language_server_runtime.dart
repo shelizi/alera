@@ -179,7 +179,9 @@ final class CodeForgeLanguageServerRuntime
             ? 'no executable candidates were configured'
             : 'tried ${provider.executableCandidates.join(', ')}';
         return LanguageServerExecutableMissing(
-          reason: 'No executable found for ${provider.id}; $tried. $reason',
+          reason:
+              '$reason No executable was otherwise found for ${provider.id}; '
+              '$tried.',
         );
     }
   }

@@ -3,6 +3,46 @@ part of 'alera_localizations.dart';
 // Pattern-based Traditional Chinese translations for strings that embed
 // runtime values. Lookup order: static table first, then these rules.
 String? _translateDynamicTraditionalChinese(String source) {
+  if (source.contains('Alera can install ') &&
+      source.contains('then choose Check Again.')) {
+    final server = RegExp(r'Alera can install (.+?) automatically after')
+        .firstMatch(source)
+        ?.group(1);
+    if (source.contains('Node.js and npm are available')) {
+      final prefix = source.startsWith('Node.js was found but')
+          ? '已找到 Node.js，但無法執行 `node --version`。'
+          : source.startsWith('npm was found but')
+          ? '已找到 npm，但無法執行 `npm --version`。'
+          : '找不到可用的 Node.js／npm 環境。';
+      return '$prefix Alera 可在 Node.js 與 npm 可用後自動安裝 '
+          '${server ?? '語意伺服器'}。請先安裝 Node.js，確認 `node --version` '
+          '與 `npm --version` 可從 PATH 執行，再按「重新檢查」。';
+    }
+    if (source.contains('the Go toolchain is available')) {
+      final prefix = source.startsWith('Go was found but')
+          ? '已找到 Go，但無法執行 `go version`。'
+          : '找不到可用的 Go 工具鏈。';
+      return '$prefix Alera 可在 Go 工具鏈可用後自動安裝 '
+          '${server ?? '語意伺服器'}。請先安裝 Go，確認 `go version` 可從 '
+          'PATH 執行，再按「重新檢查」。';
+    }
+    if (source.contains('a .NET SDK is available')) {
+      final prefix = source.startsWith('dotnet was found')
+          ? '已找到 dotnet，但沒有偵測到可用的 .NET SDK。'
+          : '找不到可用的 .NET SDK。';
+      return '$prefix Alera 可在 .NET SDK 可用後自動安裝 '
+          '${server ?? '語意伺服器'}。請安裝 .NET SDK（只有 Runtime 不足），'
+          '確認 `dotnet --list-sdks` 能列出 SDK，再按「重新檢查」。';
+    }
+    if (source.contains('after rustup is available')) {
+      final prefix = source.startsWith('rustup was found but')
+          ? '已找到 rustup，但無法執行 `rustup --version`。'
+          : '找不到可用的 rustup。';
+      return '$prefix Alera 可在 rustup 可用後自動安裝 '
+          '${server ?? '語意伺服器'}。請先安裝 rustup，確認 `rustup --version` '
+          '可從 PATH 執行，再按「重新檢查」。';
+    }
+  }
   final sleepProject = RegExp(
     r'^This closes all tabs and terminal sessions for all (\d+) workspaces in "(.+)"\. Worktrees, branches, and files will be preserved\.(.*)$',
   ).firstMatch(source);

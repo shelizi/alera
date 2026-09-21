@@ -59,6 +59,17 @@ final class ManagedLanguageServerInstallException implements Exception {
   String toString() => 'ManagedLanguageServerInstallException: $message';
 }
 
+final class _ManagedPrerequisiteProbe {
+  const _ManagedPrerequisiteProbe.ready(this.executable) : reason = null;
+
+  const _ManagedPrerequisiteProbe.unavailable(this.reason) : executable = null;
+
+  final String? executable;
+  final String? reason;
+
+  bool get isReady => executable != null;
+}
+
 final class ManagedLanguageServerInstaller
     implements ManagedLanguageServerInstallerPort {
   ManagedLanguageServerInstaller({
@@ -139,12 +150,13 @@ final class ManagedLanguageServerInstaller
       }
 
       final environment = Map<String, String>.of(_environmentReader());
-      final prerequisite = _resolvePrerequisite(recipe, environment);
-      if (prerequisite == null) {
+      final prerequisiteProbe = await _probePrerequisite(recipe, environment);
+      if (!prerequisiteProbe.isReady) {
         return ManagedLanguageServerUnavailable(
-          reason: _missingPrerequisiteReason(recipe),
+          reason: prerequisiteProbe.reason!,
         );
       }
+      final prerequisite = prerequisiteProbe.executable!;
 
       if (await installDirectory.exists()) {
         await installDirectory.delete(recursive: true);
@@ -239,39 +251,161 @@ final class ManagedLanguageServerInstaller
   File _markerFile(String installDirectory) =>
       File(p.join(installDirectory, '.alera-managed-language-server.json'));
 
-  String? _resolvePrerequisite(
+  Future<_ManagedPrerequisiteProbe> _probePrerequisite(
     ManagedLanguageServerRecipe recipe,
     Map<String, String> environment,
-  ) {
-    final candidate = switch (recipe.kind) {
-      ManagedLanguageServerInstallKind.npm => 'npm',
-      ManagedLanguageServerInstallKind.go => 'go',
-      ManagedLanguageServerInstallKind.dotnetTool => 'dotnet',
-      ManagedLanguageServerInstallKind.rustupComponent => 'rustup',
-    };
-    return resolveCommandOnPath(
-      candidate,
-      environment: environment,
-      isWindows: _isWindows,
-      executableExists: _executableExists,
-    );
+  ) async {
+    switch (recipe.kind) {
+      case ManagedLanguageServerInstallKind.npm:
+        final node = _resolveEnvironmentCommand('node', environment);
+        final npm = _resolveEnvironmentCommand('npm', environment);
+        if (node == null || npm == null) {
+          final missing = <String>[
+            if (node == null) 'node',
+            if (npm == null) 'npm',
+          ].join(' and ');
+          return _ManagedPrerequisiteProbe.unavailable(
+            '$missing ${node == null && npm == null ? 'were' : 'was'} not '
+            'found on PATH. ${_npmSetupGuidance(recipe)}',
+          );
+        }
+        final nodeResult = await _runEnvironmentProbe(
+          executable: node,
+          arguments: const <String>['--version'],
+          environment: environment,
+        );
+        if (!_probeSucceeded(nodeResult)) {
+          return _ManagedPrerequisiteProbe.unavailable(
+            'Node.js was found but `node --version` could not run. '
+            '${_npmSetupGuidance(recipe)}',
+          );
+        }
+        final npmResult = await _runEnvironmentProbe(
+          executable: npm,
+          arguments: const <String>['--version'],
+          environment: environment,
+        );
+        if (!_probeSucceeded(npmResult)) {
+          return _ManagedPrerequisiteProbe.unavailable(
+            'npm was found but `npm --version` could not run. '
+            '${_npmSetupGuidance(recipe)}',
+          );
+        }
+        return _ManagedPrerequisiteProbe.ready(npm);
+      case ManagedLanguageServerInstallKind.go:
+        final go = _resolveEnvironmentCommand('go', environment);
+        if (go == null) {
+          return _ManagedPrerequisiteProbe.unavailable(
+            _goSetupGuidance(recipe),
+          );
+        }
+        final result = await _runEnvironmentProbe(
+          executable: go,
+          arguments: const <String>['version'],
+          environment: environment,
+        );
+        if (!_probeSucceeded(result)) {
+          return _ManagedPrerequisiteProbe.unavailable(
+            'Go was found but `go version` could not run. '
+            '${_goSetupGuidance(recipe)}',
+          );
+        }
+        return _ManagedPrerequisiteProbe.ready(go);
+      case ManagedLanguageServerInstallKind.dotnetTool:
+        final dotnet = _resolveEnvironmentCommand('dotnet', environment);
+        if (dotnet == null) {
+          return _ManagedPrerequisiteProbe.unavailable(
+            _dotnetSetupGuidance(recipe),
+          );
+        }
+        final result = await _runEnvironmentProbe(
+          executable: dotnet,
+          arguments: const <String>['--list-sdks'],
+          environment: environment,
+        );
+        if (!_probeSucceeded(result) ||
+            result!.stdout.toString().trim().isEmpty) {
+          return _ManagedPrerequisiteProbe.unavailable(
+            'dotnet was found, but no usable .NET SDK was detected. '
+            '${_dotnetSetupGuidance(recipe)}',
+          );
+        }
+        return _ManagedPrerequisiteProbe.ready(dotnet);
+      case ManagedLanguageServerInstallKind.rustupComponent:
+        final rustup = _resolveEnvironmentCommand('rustup', environment);
+        if (rustup == null) {
+          return _ManagedPrerequisiteProbe.unavailable(
+            _rustupSetupGuidance(recipe),
+          );
+        }
+        final result = await _runEnvironmentProbe(
+          executable: rustup,
+          arguments: const <String>['--version'],
+          environment: environment,
+        );
+        if (!_probeSucceeded(result)) {
+          return _ManagedPrerequisiteProbe.unavailable(
+            'rustup was found but `rustup --version` could not run. '
+            '${_rustupSetupGuidance(recipe)}',
+          );
+        }
+        return _ManagedPrerequisiteProbe.ready(rustup);
+    }
   }
 
-  String _missingPrerequisiteReason(ManagedLanguageServerRecipe recipe) =>
-      switch (recipe.kind) {
-        ManagedLanguageServerInstallKind.npm =>
-          'Managed ${recipe.providerId} requires npm/Node.js, but npm was not '
-              'found on PATH.',
-        ManagedLanguageServerInstallKind.go =>
-          'Managed ${recipe.providerId} requires the Go toolchain, but go was '
-              'not found on PATH.',
-        ManagedLanguageServerInstallKind.dotnetTool =>
-          'Managed ${recipe.providerId} requires the .NET SDK, but dotnet was '
-              'not found on PATH.',
-        ManagedLanguageServerInstallKind.rustupComponent =>
-          'Managed ${recipe.providerId} requires rustup, but rustup was not '
-              'found on PATH.',
-      };
+  String? _resolveEnvironmentCommand(
+    String candidate,
+    Map<String, String> environment,
+  ) => resolveCommandOnPath(
+    candidate,
+    environment: environment,
+    isWindows: _isWindows,
+    executableExists: _executableExists,
+  );
+
+  Future<ProcessResult?> _runEnvironmentProbe({
+    required String executable,
+    required List<String> arguments,
+    required Map<String, String> environment,
+  }) async {
+    try {
+      return await _processRunner
+          .run(
+            ManagedLanguageServerProcessRequest(
+              executable: executable,
+              arguments: arguments,
+              environment: environment,
+              runInShell: _requiresShell(executable),
+            ),
+          )
+          .timeout(const Duration(seconds: 5));
+    } on Object {
+      return null;
+    }
+  }
+
+  static bool _probeSucceeded(ProcessResult? result) =>
+      result != null && result.exitCode == 0;
+
+  String _npmSetupGuidance(ManagedLanguageServerRecipe recipe) =>
+      'Alera can install ${recipe.executableName} automatically after Node.js '
+      'and npm are available. Install Node.js, make sure `node --version` and '
+      '`npm --version` work on PATH, then choose Check Again.';
+
+  String _goSetupGuidance(ManagedLanguageServerRecipe recipe) =>
+      'Alera can install ${recipe.executableName} automatically after the Go '
+      'toolchain is available. Install Go, make sure `go version` works on '
+      'PATH, then choose Check Again.';
+
+  String _dotnetSetupGuidance(ManagedLanguageServerRecipe recipe) =>
+      'Alera can install ${recipe.executableName} automatically after a .NET '
+      'SDK is available. Install the .NET SDK (runtime-only is not enough), '
+      'make sure `dotnet --list-sdks` lists an SDK, then choose Check Again.';
+
+  String _rustupSetupGuidance(ManagedLanguageServerRecipe recipe) =>
+      'Alera can install ${recipe.executableName} automatically after rustup '
+      'is available. Install rustup, make sure `rustup --version` works on '
+      'PATH, then choose Check Again.';
 
   Future<void> _installRecipe(
     ManagedLanguageServerRecipe recipe, {
