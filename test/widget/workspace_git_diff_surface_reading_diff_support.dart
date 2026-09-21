@@ -113,14 +113,17 @@ class _CachedReadingDiffService(FakeGitBackend backend)
       );
 
   final ReadingDiffResult result = _readingDiffResult();
+  final List<ReadingDiffRequest> prepared = <ReadingDiffRequest>[];
 
   @override
-  Future<ReadingDiffPreparation> prepare(ReadingDiffRequest request) async =>
-      _preparation(
-        request,
-        cacheKey: 'cached-reading-diff',
-        cachedResult: result,
-      );
+  Future<ReadingDiffPreparation> prepare(ReadingDiffRequest request) async {
+    prepared.add(request);
+    return _preparation(
+      request,
+      cacheKey: 'cached-reading-diff',
+      cachedResult: result,
+    );
+  }
 
   @override
   Future<ReadingDiffResult> generate(

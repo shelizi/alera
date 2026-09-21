@@ -337,10 +337,16 @@ void _registerWorkspaceGitDiffSurfaceReadingDiffTests() {
             ),
           ],
         );
+      final controller = _GitDiffSurfaceTestController(
+        initialViewPrefs: WorkbenchViewPrefs.defaults.copyWith(
+          gitDiffContentMode: GitDiffContentMode.diffOnly,
+        ),
+      );
       final settingsController = _MutableSettingsController(.defaults);
       await _pumpDiffSurface(
         tester,
         backend: backend,
+        controller: controller,
         readingDiffService: _CachedReadingDiffService(backend),
         settingsController: settingsController,
       );
@@ -357,11 +363,127 @@ void _registerWorkspaceGitDiffSurfaceReadingDiffTests() {
       await tester.tap(find.byTooltip('Show Original Diff'));
       await tester.pumpAndSettle();
       expect(find.byTooltip('Show Reading Diff'), findsOneWidget);
-      expect(find.text('+snapshot-value'), findsOneWidget);
+      expect(find.text('+new'), findsOneWidget);
+      expect(find.text('+snapshot-value'), findsNothing);
     },
   );
 
-  testWidgets('failed regeneration preserves the prior original snapshot', (
+  testWidgets('reading diff survives presentation and content mode changes', (
+    tester,
+  ) async {
+    final backend = FakeGitBackend()
+      ..gitDiffResult = const GitDiffResult(
+        files: <GitDiffFile>[
+          GitDiffFile(
+            path: 'lib/main.dart',
+            area: .unstaged,
+            status: .modified,
+            lines: <GitDiffLine>[GitDiffLine.addition('+new')],
+            added: 1,
+            removed: 1,
+          ),
+        ],
+      )
+      ..diffBlobBytesBySide[(filePath: 'lib/main.dart', oldSide: true)] =
+          Uint8List.fromList('old\n'.codeUnits)
+      ..diffBlobBytesBySide[(filePath: 'lib/main.dart', oldSide: false)] =
+          Uint8List.fromList('new\n'.codeUnits);
+    final controller = _GitDiffSurfaceTestController(
+      initialViewPrefs: WorkbenchViewPrefs.defaults.copyWith(
+        gitDiffContentMode: GitDiffContentMode.diffOnly,
+      ),
+    );
+    final service = _CachedReadingDiffService(backend);
+    await _pumpDiffSurface(
+      tester,
+      backend: backend,
+      controller: controller,
+      readingDiffService: service,
+      tab: _diffTab(filePath: 'lib/main.dart', title: 'main.dart'),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Generate Reading Diff'));
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('Show Original Diff'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Show Original Diff'));
+    await tester.pumpAndSettle();
+    expect(find.text('+new'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Switch to Side-by-Side View'));
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('Switch to Single-Column View'), findsOneWidget);
+    expect(find.byTooltip('Show Reading Diff'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Switch to Full File View'));
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('Switch to Diff Only'), findsOneWidget);
+    expect(find.byTooltip('Show Reading Diff'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Show Reading Diff'));
+    await tester.pumpAndSettle();
+    expect(find.text('Overview'), findsOneWidget);
+    expect(find.text('Update the value.'), findsOneWidget);
+  });
+
+  testWidgets(
+    'diff mode switches do not cancel active reading diff generation',
+    (tester) async {
+      final backend = FakeGitBackend()
+        ..gitDiffResult = const GitDiffResult(
+          files: <GitDiffFile>[
+            GitDiffFile(
+              path: 'lib/main.dart',
+              area: .unstaged,
+              status: .modified,
+              lines: <GitDiffLine>[GitDiffLine.addition('+new')],
+              added: 1,
+              removed: 1,
+            ),
+          ],
+        )
+        ..diffBlobBytesBySide[(filePath: 'lib/main.dart', oldSide: true)] =
+            Uint8List.fromList('old\n'.codeUnits)
+        ..diffBlobBytesBySide[(filePath: 'lib/main.dart', oldSide: false)] =
+            Uint8List.fromList('new\n'.codeUnits);
+      final controller = _GitDiffSurfaceTestController(
+        initialViewPrefs: WorkbenchViewPrefs.defaults.copyWith(
+          gitDiffContentMode: GitDiffContentMode.diffOnly,
+        ),
+      );
+      final service = _BlockingReadingDiffService(backend);
+      await _pumpDiffSurface(
+        tester,
+        backend: backend,
+        controller: controller,
+        readingDiffService: service,
+        tab: _diffTab(filePath: 'lib/main.dart', title: 'main.dart'),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Generate Reading Diff'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Generate Reading Diff').last);
+      await tester.pump();
+      expect(find.byTooltip('Cancel Reading Diff'), findsOneWidget);
+
+      await tester.tap(find.byTooltip('Switch to Side-by-Side View'));
+      await tester.pump();
+      expect(service.canceled, isEmpty);
+      expect(find.byTooltip('Cancel Reading Diff'), findsOneWidget);
+
+      await tester.tap(find.byTooltip('Switch to Full File View'));
+      await tester.pump();
+      await tester.pump();
+      expect(service.canceled, isEmpty);
+      expect(find.byTooltip('Cancel Reading Diff'), findsOneWidget);
+
+      await tester.tap(find.byTooltip('Cancel Reading Diff'));
+      await tester.pumpAndSettle();
+      expect(service.canceled, hasLength(1));
+    },
+  );
+
+  testWidgets('failed regeneration preserves the prior reading diff result', (
     tester,
   ) async {
     final backend = FakeGitBackend()
@@ -377,11 +499,18 @@ void _registerWorkspaceGitDiffSurfaceReadingDiffTests() {
           ),
         ],
       );
+    final controller = _GitDiffSurfaceTestController(
+      initialViewPrefs: WorkbenchViewPrefs.defaults.copyWith(
+        gitDiffContentMode: GitDiffContentMode.diffOnly,
+      ),
+    );
     final service = _RegenerationFailureReadingDiffService(backend);
     await _pumpDiffSurface(
       tester,
       backend: backend,
+      controller: controller,
       readingDiffService: service,
+      tab: _diffTab(filePath: 'lib/main.dart', title: 'main.dart'),
     );
     await tester.pumpAndSettle();
     await tester.tap(find.byTooltip('Generate Reading Diff'));
@@ -395,7 +524,59 @@ void _registerWorkspaceGitDiffSurfaceReadingDiffTests() {
 
     await tester.tap(find.byTooltip('Show Original Diff'));
     await tester.pumpAndSettle();
-    expect(find.text('+snapshot-value'), findsOneWidget);
+    expect(find.text('+new'), findsOneWidget);
+    expect(find.text('+snapshot-value'), findsNothing);
     expect(find.text('+replacement-snapshot'), findsNothing);
+
+    await tester.tap(find.byTooltip('Show Reading Diff'));
+    await tester.pumpAndSettle();
+    expect(find.text('Overview'), findsOneWidget);
+    expect(find.text('Update the value.'), findsOneWidget);
+  });
+
+  testWidgets('reading diff generation supports all-changes scope', (
+    tester,
+  ) async {
+    const file = GitDiffFile(
+      path: 'lib/main.dart',
+      area: .unstaged,
+      status: .modified,
+      lines: <GitDiffLine>[GitDiffLine.addition('+new')],
+      added: 1,
+      removed: 1,
+    );
+    final backend = FakeGitBackend()
+      ..gitStatusResult = const GitStatusResult(
+        entries: <GitChangeEntry>[
+          GitChangeEntry(
+            path: 'lib/main.dart',
+            area: .unstaged,
+            status: .modified,
+          ),
+        ],
+      )
+      ..gitDiffAllPageResult = const GitDiffPage(files: <GitDiffFile>[file]);
+    final service = _CachedReadingDiffService(backend);
+    await _pumpDiffSurface(
+      tester,
+      backend: backend,
+      readingDiffService: service,
+      tab: _diffTab(
+        scope: .all,
+        filePath: null,
+        area: null,
+        title: 'all changes',
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Generate Reading Diff'));
+    await tester.pumpAndSettle();
+
+    expect(service.prepared, hasLength(1));
+    expect(service.prepared.single.filePath, isNull);
+    expect(service.prepared.single.oldPath, isNull);
+    expect(service.prepared.single.area, isNull);
+    expect(find.byTooltip('Show Original Diff'), findsOneWidget);
   });
 }

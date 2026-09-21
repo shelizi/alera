@@ -12,6 +12,7 @@ import 'package:alera/src/features/ai_assist/application/ai_assist_errors.dart';
 import 'package:alera/src/features/language_intelligence/application/language_provider_registry.dart';
 import 'package:alera/src/features/reading_diff/application/reading_diff_providers.dart';
 import 'package:alera/src/features/reading_diff/application/reading_diff_generation_progress.dart';
+import 'package:alera/src/features/reading_diff/application/reading_diff_service.dart';
 import 'package:alera/src/features/reading_diff/domain/reading_diff_models.dart';
 import 'package:alera/src/features/reading_diff/presentation/reading_diff_confirmation_dialog.dart';
 import 'package:alera/src/features/reading_diff/presentation/reading_diff_failure_view.dart';
@@ -85,6 +86,7 @@ class _WorkspaceGitDiffSurfaceState
   final Map<String, _DiffSyntaxStyle> _diffSyntaxStyles =
       <String, _DiffSyntaxStyle>{};
   final Set<String> _fullFilePreviewLimitedPaths = <String>{};
+  late final ReadingDiffService _readingDiffService;
 
   GitDiffContentMode get _effectiveContentMode {
     return _overrideContentMode ??
@@ -119,7 +121,7 @@ class _WorkspaceGitDiffSurfaceState
       // In minimal test harnesses workbenchControllerProvider.notifier might not be wired.
     }
     if (next == GitDiffContentMode.fullFile && _loadedResult != null) {
-      _load(preserveEditableDocuments: true);
+      _load(preserveEditableDocuments: true, preserveReadingDiff: true);
     }
   }
 
@@ -179,6 +181,7 @@ class _WorkspaceGitDiffSurfaceState
   @override
   void initState() {
     super.initState();
+    _readingDiffService = ref.read(readingDiffServiceProvider);
     _whitespaceMode = _persistedWhitespaceMode();
     ref.listenManual<String>(
       workbenchControllerProvider.select(
@@ -228,7 +231,7 @@ class _WorkspaceGitDiffSurfaceState
   void dispose() {
     final activeRequest = _activeReadingDiffRequest;
     if (activeRequest != null) {
-      ref.read(readingDiffServiceProvider).cancel(activeRequest);
+      _readingDiffService.cancel(activeRequest);
     }
     _editableDocuments.clear();
     for (final syntax in _diffSyntaxStyles.values) {
@@ -330,11 +333,6 @@ class _WorkspaceGitDiffSurfaceState
           Expanded(
             child: _showReadingDiff && _readingDiffResult != null
                 ? ReadingDiffView(result: _readingDiffResult!)
-                : _readingDiffOriginalSnapshot != null
-                ? ReadingDiffText(
-                    diff: _readingDiffOriginalSnapshot!,
-                    failureLabel: 'original diff snapshot',
-                  )
                 : FutureBuilder<GitDiffResult>(
                     future: _future,
                     builder: (context, snapshot) {
@@ -346,6 +344,13 @@ class _WorkspaceGitDiffSurfaceState
                       if (snapshot.hasError && result == null) {
                         return const _DiffMessage(
                           message: 'Could not load diff.',
+                        );
+                      }
+                      if (result == null &&
+                          _readingDiffOriginalSnapshot != null) {
+                        return ReadingDiffText(
+                          diff: _readingDiffOriginalSnapshot!,
+                          failureLabel: 'original diff snapshot',
                         );
                       }
                       if (result == null || result.files.isEmpty) {

@@ -24,10 +24,15 @@ extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
     }
   }
 
-  void _load({bool preserveEditableDocuments = false}) {
+  void _load({
+    bool preserveEditableDocuments = false,
+    bool preserveReadingDiff = false,
+  }) {
     final loadGeneration = ++_diffLoadGeneration;
     final readingDiffCompletion = _readingDiffCompletion;
-    if (readingDiffCompletion != null && !readingDiffCompletion.isCompleted) {
+    if (!preserveReadingDiff &&
+        readingDiffCompletion != null &&
+        !readingDiffCompletion.isCompleted) {
       _cancelReadingDiff();
       unawaited(
         readingDiffCompletion.future.then((_) {
@@ -35,6 +40,7 @@ extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
             _loadNow(
               loadGeneration,
               preserveEditableDocuments: preserveEditableDocuments,
+              preserveReadingDiff: false,
             );
           }
         }),
@@ -44,11 +50,18 @@ extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
     _loadNow(
       loadGeneration,
       preserveEditableDocuments: preserveEditableDocuments,
+      preserveReadingDiff: preserveReadingDiff,
     );
   }
 
-  void _loadNow(int loadGeneration, {required bool preserveEditableDocuments}) {
-    _readingDiffGeneration += 1;
+  void _loadNow(
+    int loadGeneration, {
+    required bool preserveEditableDocuments,
+    required bool preserveReadingDiff,
+  }) {
+    if (!preserveReadingDiff) {
+      _readingDiffGeneration += 1;
+    }
     final backend = ref.read(gitBackendProvider);
     final scope = widget.tab.gitDiffScope;
     final filePath = widget.tab.filePath;
@@ -109,14 +122,16 @@ extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
       if (!preserveEditableDocuments) {
         _editableDocuments.clear();
       }
-      _readingDiffResult = null;
-      _readingDiffOriginalSnapshot = null;
-      _showReadingDiff = false;
-      _readingDiffBusy = false;
-      _readingDiffProgress = null;
-      _readingDiffError = null;
-      _readingDiffAgentLabel = null;
-      _readingDiffModel = null;
+      if (!preserveReadingDiff) {
+        _readingDiffResult = null;
+        _readingDiffOriginalSnapshot = null;
+        _showReadingDiff = false;
+        _readingDiffBusy = false;
+        _readingDiffProgress = null;
+        _readingDiffError = null;
+        _readingDiffAgentLabel = null;
+        _readingDiffModel = null;
+      }
       _future = nextFuture;
     });
     unawaited(
