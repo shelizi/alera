@@ -1,5 +1,6 @@
 import 'package:alera/src/features/ai_assist/application/ai_assist_prompt.dart';
 import 'package:alera/src/features/ai_assist/domain/ai_assist_settings.dart';
+import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 import 'package:alera/src/features/text_actions/application/text_action_prompt.dart';
 import 'package:alera/src/features/text_actions/application/text_action_replacement.dart';
 import 'package:alera/src/features/text_actions/domain/text_actions_mutations.dart';
@@ -221,6 +222,7 @@ void main() {
     );
 
     expect(first.effectiveAgent(settings), AiAssistAgent.claude);
+    expect(first.effectiveAgentType(settings), AgentType.claude);
     expect(first.effectiveModel(settings), 'claude-sonnet-4-6');
     expect(
       first.reasoningFor(settings, model: first.effectiveModel(settings)),

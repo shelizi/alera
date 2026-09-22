@@ -145,8 +145,9 @@ class _TextActionsScopeState extends ConsumerState<TextActionsScope> {
       if (currentAction == null || !currentAction.enabled) {
         return;
       }
-      final agent = currentAction.effectiveAgent(currentSettings.aiAssist);
-      final agentType = agent.agentType;
+      final agentType = currentAction.effectiveAgentType(
+        currentSettings.aiAssist,
+      );
       final model = currentAction.effectiveModel(currentSettings.aiAssist);
       final reasoning = currentAction.reasoningFor(
         currentSettings.aiAssist,

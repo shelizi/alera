@@ -1,4 +1,5 @@
 import 'package:alera/src/features/ai_assist/domain/ai_assist_settings.dart';
+import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 import 'package:dart_mappable/dart_mappable.dart';
 
 part 'text_actions_settings.mapper.dart';
@@ -30,12 +31,17 @@ class const TextAction({
     return agentOverride ?? settings.agent;
   }
 
+  AgentType? effectiveAgentType(AiAssistSettings settings) {
+    return agentOverride?.agentType ?? settings.agentType;
+  }
+
   String? effectiveModel(AiAssistSettings settings) {
     final override = modelOverride?.trim();
     if (override != null && override.isNotEmpty) {
       return override;
     }
-    return settings.modelFor(effectiveAgent(settings));
+    final agentType = effectiveAgentType(settings);
+    return agentType == null ? null : settings.modelForType(agentType);
   }
 
   String? reasoningFor(AiAssistSettings settings, {required String? model}) {
