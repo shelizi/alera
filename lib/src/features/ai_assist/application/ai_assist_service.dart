@@ -74,12 +74,18 @@ class CliAiAssistService({
         throw const AiAssistCanceledException();
       }
       final agent = request.settings.agentFor(request.operation);
-      final model = modelForAgent(
-        agent,
-        request.settings.modelForOperation(request.operation) ??
-            defaultModelIdForAgent(agent, request.settings),
-        extraModels: discoveredModelsForAgent(request.settings, agent),
-      );
+      final agentType = agent.agentType;
+      final model = agentType == null
+          ? const AiAssistModel(id: 'custom', label: 'Custom')
+          : modelForAgentType(
+              agentType,
+              request.settings.modelForOperation(request.operation) ??
+                  defaultModelIdForAgentType(agentType, request.settings),
+              extraModels: discoveredModelsForAgentType(
+                request.settings,
+                agentType,
+              ),
+            );
       final result = await runner.run(
         AiAssistAgentRunRequest(
           settings: request.settings,

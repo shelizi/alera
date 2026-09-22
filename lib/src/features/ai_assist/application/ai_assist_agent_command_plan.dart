@@ -13,7 +13,8 @@ extension on CliAiAssistAgentRunner {
     if (agent == AiAssistAgent.custom) {
       return _planCustomCommand(settings.customCommand, request.prompt);
     }
-    final spec = aiAssistCapabilityFor(agent.agentType);
+    final agentType = agent.agentType!;
+    final spec = aiAssistCapabilityFor(agentType);
     if (spec == null) {
       throw AiAssistException('${agent.label} does not support AI Assist.');
     }
@@ -24,12 +25,12 @@ extension on CliAiAssistAgentRunner {
         '${spec.label} cannot guarantee read-only repository access for this task.',
       );
     }
-    final model = modelForAgent(
-      agent,
+    final model = modelForAgentType(
+      agentType,
       request.model ??
-          settings.modelFor(agent) ??
-          defaultModelIdForAgent(agent, settings),
-      extraModels: discoveredModelsForAgent(settings, agent),
+          modelIdForAgentType(settings, agentType) ??
+          defaultModelIdForAgentType(agentType, settings),
+      extraModels: discoveredModelsForAgentType(settings, agentType),
     );
     final thinking =
         request.reasoning ??

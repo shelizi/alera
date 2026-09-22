@@ -438,29 +438,50 @@ List<AiAssistModel> discoveredModelsForAgent(
       .toList(growable: false);
 }
 
-List<AiAssistModel> modelsForAgent(
-  AiAssistAgent agent,
+String? modelIdForAgentType(AiAssistSettings settings, AgentType agentType) {
+  final agent = aiAssistAgentForType(agentType);
+  return agent == null ? null : settings.modelFor(agent);
+}
+
+List<AiAssistModel> discoveredModelsForAgentType(
+  AiAssistSettings settings,
+  AgentType agentType,
+) {
+  final agent = aiAssistAgentForType(agentType);
+  return agent == null
+      ? const <AiAssistModel>[]
+      : discoveredModelsForAgent(settings, agent);
+}
+
+List<AiAssistModel> modelsForAgentType(
+  AgentType agentType,
   AiAssistSettings settings,
 ) {
-  final spec = aiAssistCapabilityFor(agent.agentType);
+  final spec = aiAssistCapabilityFor(agentType);
   if (spec == null) {
     return const <AiAssistModel>[];
   }
   return _uniqueModels(<AiAssistModel>[
     if (spec.modelCanInherit)
       const AiAssistModel(id: '', label: 'Agent Default'),
-    ...discoveredModelsForAgent(settings, agent),
+    ...discoveredModelsForAgentType(settings, agentType),
     ...spec.models,
   ]);
 }
 
-String defaultModelIdForAgent(AiAssistAgent agent, AiAssistSettings settings) {
-  final spec = aiAssistCapabilityFor(agent.agentType);
+String defaultModelIdForAgentType(
+  AgentType agentType,
+  AiAssistSettings settings,
+) {
+  final spec = aiAssistCapabilityFor(agentType);
   if (spec == null) {
     return 'custom';
   }
   if (!spec.modelCanInherit) {
-    final discoveredDefault = settings.discoveredDefaultModelFor(agent);
+    final agent = aiAssistAgentForType(agentType);
+    final discoveredDefault = agent == null
+        ? null
+        : settings.discoveredDefaultModelFor(agent);
     if (discoveredDefault != null) {
       return discoveredDefault;
     }
@@ -468,12 +489,12 @@ String defaultModelIdForAgent(AiAssistAgent agent, AiAssistSettings settings) {
   return spec.defaultModelId ?? '';
 }
 
-AiAssistModel modelForAgent(
-  AiAssistAgent agent,
+AiAssistModel modelForAgentType(
+  AgentType agentType,
   String? modelId, {
   List<AiAssistModel> extraModels = const <AiAssistModel>[],
 }) {
-  final spec = aiAssistCapabilityFor(agent.agentType);
+  final spec = aiAssistCapabilityFor(agentType);
   if (spec == null) {
     return const AiAssistModel(id: 'custom', label: 'Custom');
   }
@@ -487,6 +508,35 @@ AiAssistModel modelForAgent(
     (model) => model.id == id,
     orElse: () => AiAssistModel(id: id, label: labelFromModelId(id)),
   );
+}
+
+List<AiAssistModel> modelsForAgent(
+  AiAssistAgent agent,
+  AiAssistSettings settings,
+) {
+  final agentType = agent.agentType;
+  return agentType == null
+      ? const <AiAssistModel>[]
+      : modelsForAgentType(agentType, settings);
+}
+
+String defaultModelIdForAgent(AiAssistAgent agent, AiAssistSettings settings) {
+  final agentType = agent.agentType;
+  return agentType == null
+      ? 'custom'
+      : defaultModelIdForAgentType(agentType, settings);
+}
+
+AiAssistModel modelForAgent(
+  AiAssistAgent agent,
+  String? modelId, {
+  List<AiAssistModel> extraModels = const <AiAssistModel>[],
+}) {
+  final agentType = agent.agentType;
+  if (agentType == null) {
+    return const AiAssistModel(id: 'custom', label: 'Custom');
+  }
+  return modelForAgentType(agentType, modelId, extraModels: extraModels);
 }
 
 List<AiAssistModel> parseLineModels(String stdout) {

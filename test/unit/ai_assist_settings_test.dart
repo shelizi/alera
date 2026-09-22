@@ -100,6 +100,21 @@ void main() {
     expect(prompt.agentType, AgentType.devin);
   });
 
+  test('AI Assist model helpers accept canonical AgentType', () {
+    const settings = AiAssistSettings(
+      selectedModelByAgent: <AiAssistAgent, String>{
+        AiAssistAgent.devin: 'gpt-5-5-high',
+      },
+    );
+
+    expect(modelIdForAgentType(settings, AgentType.devin), 'gpt-5-5-high');
+    expect(modelsForAgentType(AgentType.devin, settings), isNotEmpty);
+    expect(
+      defaultModelIdForAgentType(AgentType.devin, settings),
+      isA<String>(),
+    );
+  });
+
   test('parses Devin model-list output', () {
     final models = parseDevinModels('''
 GPT-5.5 (gpt-5.5)
