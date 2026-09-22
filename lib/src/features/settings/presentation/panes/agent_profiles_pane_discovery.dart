@@ -6,7 +6,7 @@ extension _AgentProfilesPaneDiscovery on _AgentProfilesSettingsPaneState {
     if (discovered != null) {
       return discovered;
     }
-    final spec = aiAssistAgentSpecs[aiAssistAgentForType(adapter)];
+    final spec = aiAssistCapabilityFor(adapter);
     return <ManagedAgentOption>[
       for (final model in spec?.models ?? const <AiAssistModel>[])
         ManagedAgentOption(model.id, model.label),
@@ -27,8 +27,7 @@ extension _AgentProfilesPaneDiscovery on _AgentProfilesSettingsPaneState {
   }
 
   bool _canDiscoverModels(AgentType adapter) {
-    return aiAssistAgentSpecs[aiAssistAgentForType(adapter)]?.modelsCommand !=
-        null;
+    return aiAssistCapabilityFor(adapter)?.modelsCommand != null;
   }
 
   bool _canDiscoverPersonas(AgentType adapter) {

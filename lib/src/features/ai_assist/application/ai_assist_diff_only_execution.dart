@@ -12,14 +12,14 @@ class const AiAssistDiffOnlyExecution({
 });
 
 bool supportsDiffOnlyAiAssistAgent(AiAssistAgent agent) {
-  return switch (aiAssistAgentSpecs[agent]?.diffOnlyAccess) {
+  return switch (aiAssistCapabilityFor(agent.agentType)?.diffOnlyAccess) {
     AiAssistDiffOnlyAccess.toolFree ||
     AiAssistDiffOnlyAccess.codexRestrictedFilesystem => true,
     AiAssistDiffOnlyAccess.unsupported || null => false,
   };
 }
 
-List<AiAssistAgent> get diffOnlyAiAssistAgents => aiAssistAgentSpecs.values
+List<AiAssistAgent> get diffOnlyAiAssistAgents => aiAssistCapabilities.values
     .where((spec) => spec.diffOnlyAccess != AiAssistDiffOnlyAccess.unsupported)
     .map((spec) => spec.agent)
     .toList(growable: false);
@@ -69,7 +69,7 @@ void requireDiffOnlyAiAssistAgent(AiAssistAgent agent) {
 }
 
 AiAssistDiffOnlyExecution planDiffOnlyAiAssistExecution({
-  required AiAssistAgentSpec spec,
+  required AiAssistCapability spec,
   required List<String> arguments,
   required Map<String, String> environment,
   String? codexAuthCredentialsStore,

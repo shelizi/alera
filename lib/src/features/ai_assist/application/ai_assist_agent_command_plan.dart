@@ -13,7 +13,7 @@ extension on CliAiAssistAgentRunner {
     if (agent == AiAssistAgent.custom) {
       return _planCustomCommand(settings.customCommand, request.prompt);
     }
-    final spec = aiAssistAgentSpecs[agent];
+    final spec = aiAssistCapabilityFor(agent.agentType);
     if (spec == null) {
       throw AiAssistException('${agent.label} does not support AI Assist.');
     }

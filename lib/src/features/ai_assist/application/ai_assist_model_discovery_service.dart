@@ -34,7 +34,7 @@ class CliAiAssistModelDiscoveryService({
 
   @override
   Future<AiAssistModelDiscoveryResult> discover(AiAssistAgent agent) async {
-    final spec = aiAssistAgentSpecs[agent];
+    final spec = aiAssistCapabilityFor(agent.agentType);
     if (spec == null) {
       return AiAssistModelDiscoveryResult(
         success: false,
@@ -97,7 +97,7 @@ class CliAiAssistModelDiscoveryService({
     }
   }
 
-  AiAssistModelDiscoveryResult _staticResult(AiAssistAgentSpec spec) {
+  AiAssistModelDiscoveryResult _staticResult(AiAssistCapability spec) {
     return AiAssistModelDiscoveryResult(
       success: true,
       agent: spec.agent,
@@ -107,7 +107,7 @@ class CliAiAssistModelDiscoveryService({
   }
 
   AiAssistModelDiscoveryResult _finalize(
-    AiAssistAgentSpec spec,
+    AiAssistCapability spec,
     ProcessRunOutput output,
   ) {
     if (output.exitCode != 0) {

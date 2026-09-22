@@ -52,17 +52,19 @@ void main() {
   });
 
   test('AI Assist registry is the complete selectable-agent source', () {
-    final registered = aiAssistAgentSpecs.keys.toSet();
+    final registered = aiAssistCapabilities.values
+        .map((capability) => capability.agent)
+        .toSet();
     final nonCustom = AiAssistAgent.values
         .where((agent) => agent != AiAssistAgent.custom)
         .toSet();
 
     expect(registered, nonCustom);
     expect(selectableAiAssistAgents, <AiAssistAgent>[
-      ...aiAssistAgentSpecs.keys,
+      ...aiAssistCapabilities.values.map((capability) => capability.agent),
       AiAssistAgent.custom,
     ]);
-    for (final spec in aiAssistAgentSpecs.values) {
+    for (final spec in aiAssistCapabilities.values) {
       expect(aiAssistAgentForType(spec.agent.agentType!), spec.agent);
     }
   });
@@ -82,6 +84,14 @@ void main() {
     },
   );
 
+  test('AI Assist capability lookup uses AgentType directly', () {
+    expect(
+      aiAssistCapabilityFor(AgentType.codex),
+      same(aiAssistCapabilities[AgentType.codex]),
+    );
+    expect(aiAssistCapabilityFor(null), isNull);
+  });
+
   test('parses Devin model-list output', () {
     final models = parseDevinModels('''
 GPT-5.5 (gpt-5.5)
@@ -100,7 +110,7 @@ Claude Sonnet 4.6 (claude-sonnet-4.6)
   });
 
   test('registers Devin non-interactive AI Assist command contract', () {
-    final spec = aiAssistAgentSpecs[AiAssistAgent.devin]!;
+    final spec = aiAssistCapabilities[AgentType.devin]!;
 
     expect(spec.binary, 'devin');
     expect(spec.modelsCommand, <String>['models', 'list']);

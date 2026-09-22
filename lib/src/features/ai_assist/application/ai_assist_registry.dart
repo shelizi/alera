@@ -54,6 +54,7 @@ AiAssistModel modelFromDiscovered(AiAssistDiscoveredModel model) {
 
 abstract interface class AiAssistCapability {
   AgentType get agentType;
+  AiAssistAgent get agent;
   String get id;
   String get label;
   String get binary;
@@ -394,14 +395,11 @@ aiAssistCapabilities = <AgentType, AiAssistAgentSpec>{
   AgentType.fx: fxAiAssistAgentSpec,
 };
 
-final Map<AiAssistAgent, AiAssistAgentSpec> aiAssistAgentSpecs =
-    <AiAssistAgent, AiAssistAgentSpec>{
-      for (final entry in aiAssistCapabilities.entries)
-        aiAssistAgentForType(entry.key)!: entry.value,
-    };
+AiAssistCapability? aiAssistCapabilityFor(AgentType? agentType) =>
+    agentType == null ? null : aiAssistCapabilities[agentType];
 
 List<AiAssistAgent> get selectableAiAssistAgents => <AiAssistAgent>[
-  ...aiAssistAgentSpecs.keys,
+  ...aiAssistCapabilities.values.map((capability) => capability.agent),
   AiAssistAgent.custom,
 ];
 
@@ -444,7 +442,7 @@ List<AiAssistModel> modelsForAgent(
   AiAssistAgent agent,
   AiAssistSettings settings,
 ) {
-  final spec = aiAssistAgentSpecs[agent];
+  final spec = aiAssistCapabilityFor(agent.agentType);
   if (spec == null) {
     return const <AiAssistModel>[];
   }
@@ -457,7 +455,7 @@ List<AiAssistModel> modelsForAgent(
 }
 
 String defaultModelIdForAgent(AiAssistAgent agent, AiAssistSettings settings) {
-  final spec = aiAssistAgentSpecs[agent];
+  final spec = aiAssistCapabilityFor(agent.agentType);
   if (spec == null) {
     return 'custom';
   }
@@ -475,7 +473,7 @@ AiAssistModel modelForAgent(
   String? modelId, {
   List<AiAssistModel> extraModels = const <AiAssistModel>[],
 }) {
-  final spec = aiAssistAgentSpecs[agent];
+  final spec = aiAssistCapabilityFor(agent.agentType);
   if (spec == null) {
     return const AiAssistModel(id: 'custom', label: 'Custom');
   }

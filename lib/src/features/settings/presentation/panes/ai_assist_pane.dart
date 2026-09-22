@@ -65,7 +65,7 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
   Widget build(BuildContext context) {
     final settings = widget.settings;
     final agent = settings.agent;
-    final spec = aiAssistAgentSpecs[agent];
+    final spec = aiAssistCapabilityFor(agent.agentType);
     final models = modelsForAgent(agent, settings);
     final model = modelForAgent(
       agent,
@@ -281,7 +281,7 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
       settings.modelFor(agent) ?? defaultModelIdForAgent(agent, settings),
       extraModels: discoveredModelsForAgent(settings, agent),
     );
-    final spec = aiAssistAgentSpecs[agent];
+    final spec = aiAssistCapabilityFor(agent.agentType);
     final discovery = _discovery[agent] ?? const _AiAssistModelDiscoveryState();
     return <Widget>[
       AiAssistPromptAgentRow(
@@ -395,7 +395,7 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
   }
 
   void _autoDiscoverAgent(AiAssistAgent agent) {
-    final spec = aiAssistAgentSpecs[agent];
+    final spec = aiAssistCapabilityFor(agent.agentType);
     if (spec?.modelsCommand == null ||
         _autoDiscovered.contains(agent) ||
         (_discovery[agent]?.loading ?? false)) {
@@ -406,7 +406,7 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
   }
 
   Future<void> _discoverModels(AiAssistAgent agent) async {
-    final spec = aiAssistAgentSpecs[agent];
+    final spec = aiAssistCapabilityFor(agent.agentType);
     if (spec?.modelsCommand == null) {
       return;
     }

@@ -34,7 +34,7 @@ class ReadingDiffService({
     }
     final operation = AiAssistOperation.readingDiff;
     final agent = readingDiffAgentForSettings(request.settings);
-    final spec = aiAssistAgentSpecs[agent];
+    final spec = aiAssistCapabilityFor(agent.agentType);
     if (spec == null && agent != AiAssistAgent.custom) {
       throw AiAssistException('${agent.label} does not support AI Assist.');
     }
