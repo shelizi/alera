@@ -418,16 +418,6 @@ List<AiAssistModel> parseDevinModels(String stdout) {
   return models;
 }
 
-List<AiAssistModel> discoveredModelsForAgent(
-  AiAssistSettings settings,
-  AiAssistAgent agent,
-) {
-  return settings
-      .discoveredModelsFor(agent)
-      .map(modelFromDiscovered)
-      .toList(growable: false);
-}
-
 String? modelIdForAgentType(AiAssistSettings settings, AgentType agentType) {
   return settings.modelForType(agentType);
 }
@@ -494,35 +484,6 @@ AiAssistModel modelForAgentType(
     (model) => model.id == id,
     orElse: () => AiAssistModel(id: id, label: labelFromModelId(id)),
   );
-}
-
-List<AiAssistModel> modelsForAgent(
-  AiAssistAgent agent,
-  AiAssistSettings settings,
-) {
-  final agentType = agent.agentType;
-  return agentType == null
-      ? const <AiAssistModel>[]
-      : modelsForAgentType(agentType, settings);
-}
-
-String defaultModelIdForAgent(AiAssistAgent agent, AiAssistSettings settings) {
-  final agentType = agent.agentType;
-  return agentType == null
-      ? 'custom'
-      : defaultModelIdForAgentType(agentType, settings);
-}
-
-AiAssistModel modelForAgent(
-  AiAssistAgent agent,
-  String? modelId, {
-  List<AiAssistModel> extraModels = const <AiAssistModel>[],
-}) {
-  final agentType = agent.agentType;
-  if (agentType == null) {
-    return const AiAssistModel(id: 'custom', label: 'Custom');
-  }
-  return modelForAgentType(agentType, modelId, extraModels: extraModels);
 }
 
 List<AiAssistModel> parseLineModels(String stdout) {

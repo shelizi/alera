@@ -31,18 +31,27 @@ class const TextActionEditor({
   @override
   Widget build(BuildContext context) {
     final agent = agentOverride ?? aiAssistSettings.agent;
-    final models = modelsForAgent(agent, aiAssistSettings);
-    final globalModelId =
-        aiAssistSettings.modelFor(agent) ??
-        defaultModelIdForAgent(agent, aiAssistSettings);
+    final agentType = agent.agentType;
+    final models = agentType == null
+        ? const <AiAssistModel>[]
+        : modelsForAgentType(agentType, aiAssistSettings);
+    final globalModelId = agentType == null
+        ? 'custom'
+        : aiAssistSettings.modelForType(agentType) ??
+              defaultModelIdForAgentType(agentType, aiAssistSettings);
     final effectiveModelId = modelOverride?.trim().isNotEmpty == true
         ? modelOverride
         : globalModelId;
-    final model = modelForAgent(
-      agent,
-      effectiveModelId,
-      extraModels: discoveredModelsForAgent(aiAssistSettings, agent),
-    );
+    final model = agentType == null
+        ? const AiAssistModel(id: 'custom', label: 'Custom')
+        : modelForAgentType(
+            agentType,
+            effectiveModelId,
+            extraModels: discoveredModelsForAgentType(
+              aiAssistSettings,
+              agentType,
+            ),
+          );
     final reasoningLevels = model.thinkingLevels;
     final reasoningValue = reasoningByModel[model.id];
     final inheritedReasoning =

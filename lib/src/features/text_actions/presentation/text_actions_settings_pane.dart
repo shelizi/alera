@@ -141,10 +141,16 @@ class _TextActionsSettingsPaneState extends State<TextActionsSettingsPane> {
       }),
       onReasoningChanged: (value) {
         final agent = _agentOverride ?? widget.aiAssistSettings.agent;
+        final agentType = agent.agentType;
         final modelId = _modelOverride?.trim().isNotEmpty == true
             ? _modelOverride!.trim()
-            : widget.aiAssistSettings.modelFor(agent) ??
-                  defaultModelIdForAgent(agent, widget.aiAssistSettings);
+            : agentType == null
+            ? 'custom'
+            : widget.aiAssistSettings.modelForType(agentType) ??
+                  defaultModelIdForAgentType(
+                    agentType,
+                    widget.aiAssistSettings,
+                  );
         if (modelId.isEmpty) {
           return;
         }

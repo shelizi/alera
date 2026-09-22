@@ -184,7 +184,7 @@ class const AiAssistPromptModelRow({
       if (selected != null &&
           selected.isNotEmpty &&
           !models.any((model) => model.id == selected))
-        modelForAgent(agent, selected),
+        modelForAgentType(agent.agentType!, selected),
     ];
     return AleraSettingRow(
       title: 'Model',

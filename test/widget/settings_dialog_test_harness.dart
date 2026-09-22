@@ -104,10 +104,10 @@ class const _FakeAiAssistModelDiscoveryService()
   ];
 
   @override
-  Future<AiAssistModelDiscoveryResult> discover(AiAssistAgent agent) async {
+  Future<AiAssistModelDiscoveryResult> discover(dynamic agentType) async {
     return AiAssistModelDiscoveryResult(
       success: true,
-      agent: agent,
+      agentType: agentType,
       models: _models,
       defaultModelId: _models.first.id,
     );

@@ -65,13 +65,19 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
   Widget build(BuildContext context) {
     final settings = widget.settings;
     final agent = settings.agent;
-    final spec = aiAssistCapabilityFor(agent.agentType);
-    final models = modelsForAgent(agent, settings);
-    final model = modelForAgent(
-      agent,
-      settings.modelFor(agent) ?? defaultModelIdForAgent(agent, settings),
-      extraModels: discoveredModelsForAgent(settings, agent),
-    );
+    final agentType = agent.agentType;
+    final spec = aiAssistCapabilityFor(agentType);
+    final models = agentType == null
+        ? const <AiAssistModel>[]
+        : modelsForAgentType(agentType, settings);
+    final model = agentType == null
+        ? const AiAssistModel(id: 'custom', label: 'Custom')
+        : modelForAgentType(
+            agentType,
+            settings.modelForType(agentType) ??
+                defaultModelIdForAgentType(agentType, settings),
+            extraModels: discoveredModelsForAgentType(settings, agentType),
+          );
     final thinkingLevels = model.thinkingLevels;
     final discovery = _discovery[agent] ?? const _AiAssistModelDiscoveryState();
     final canDiscoverModels = spec?.modelsCommand != null;
@@ -279,12 +285,15 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
     final effectivePromptModel = usesReadingDiffFallback
         ? null
         : promptSettings.model;
-    final inheritedModel = modelForAgent(
-      agent,
-      settings.modelFor(agent) ?? defaultModelIdForAgent(agent, settings),
-      extraModels: discoveredModelsForAgent(settings, agent),
-    );
-    final spec = aiAssistCapabilityFor(agent.agentType);
+    final inheritedModel = agentType == null
+        ? const AiAssistModel(id: 'custom', label: 'Custom')
+        : modelForAgentType(
+            agentType,
+            settings.modelForType(agentType) ??
+                defaultModelIdForAgentType(agentType, settings),
+            extraModels: discoveredModelsForAgentType(settings, agentType),
+          );
+    final spec = aiAssistCapabilityFor(agentType);
     final discovery = _discovery[agent] ?? const _AiAssistModelDiscoveryState();
     return <Widget>[
       AiAssistPromptAgentRow(
@@ -306,7 +315,7 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
         AiAssistPromptModelRow(
           operation: operation,
           agent: agent,
-          models: modelsForAgent(agent, settings),
+          models: modelsForAgentType(agentType!, settings),
           inheritedModel: inheritedModel,
           value: effectivePromptModel,
           discovering: discovery.loading,
