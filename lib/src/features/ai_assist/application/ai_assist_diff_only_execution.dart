@@ -21,7 +21,7 @@ bool supportsDiffOnlyAiAssistAgent(AiAssistAgent agent) {
 
 List<AiAssistAgent> get diffOnlyAiAssistAgents => aiAssistCapabilities.values
     .where((spec) => spec.diffOnlyAccess != AiAssistDiffOnlyAccess.unsupported)
-    .map((spec) => spec.agent)
+    .map((spec) => aiAssistAgentForType(spec.agentType)!)
     .toList(growable: false);
 
 Set<AiAssistAgent> aiAssistAgentsForModelDiscovery(
@@ -76,7 +76,7 @@ AiAssistDiffOnlyExecution planDiffOnlyAiAssistExecution({
 }) {
   switch (spec.diffOnlyAccess) {
     case AiAssistDiffOnlyAccess.unsupported:
-      requireDiffOnlyAiAssistAgent(spec.agent);
+      requireDiffOnlyAiAssistAgent(aiAssistAgentForType(spec.agentType)!);
       throw StateError('Unreachable diff-only agent policy.');
     case AiAssistDiffOnlyAccess.toolFree:
       return AiAssistDiffOnlyExecution(

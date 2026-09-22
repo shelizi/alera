@@ -100,7 +100,7 @@ class CliAiAssistModelDiscoveryService({
   AiAssistModelDiscoveryResult _staticResult(AiAssistCapability spec) {
     return AiAssistModelDiscoveryResult(
       success: true,
-      agent: spec.agent,
+      agent: aiAssistAgentForType(spec.agentType)!,
       models: spec.models,
       defaultModelId: spec.defaultModelId,
     );
@@ -114,7 +114,7 @@ class CliAiAssistModelDiscoveryService({
       final detail = aiAssistProcessFailureDetail(output.stdout, output.stderr);
       return AiAssistModelDiscoveryResult(
         success: false,
-        agent: spec.agent,
+        agent: aiAssistAgentForType(spec.agentType)!,
         models: spec.models,
         defaultModelId: spec.defaultModelId,
         error: detail == null
@@ -133,7 +133,7 @@ class CliAiAssistModelDiscoveryService({
       }
       return AiAssistModelDiscoveryResult(
         success: false,
-        agent: spec.agent,
+        agent: aiAssistAgentForType(spec.agentType)!,
         models: const <AiAssistModel>[],
         defaultModelId: spec.defaultModelId,
         error: '${spec.label} returned no available models.',
@@ -148,7 +148,7 @@ class CliAiAssistModelDiscoveryService({
         : models.first.id;
     return AiAssistModelDiscoveryResult(
       success: true,
-      agent: spec.agent,
+      agent: aiAssistAgentForType(spec.agentType)!,
       models: models,
       defaultModelId: defaultModelId,
     );

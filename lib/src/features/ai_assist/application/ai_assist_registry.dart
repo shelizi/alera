@@ -54,7 +54,6 @@ AiAssistModel modelFromDiscovered(AiAssistDiscoveredModel model) {
 
 abstract interface class AiAssistCapability {
   AgentType get agentType;
-  AiAssistAgent get agent;
   String get id;
   String get label;
   String get binary;
@@ -113,8 +112,6 @@ class const AiAssistAgentSpec({
 
   @override
   String get binary => descriptor.defaultCommand;
-
-  AiAssistAgent get agent => aiAssistAgentForType(agentType)!;
 }
 
 const List<AiThinkingLevel> basicThinkingLevels = <AiThinkingLevel>[
@@ -399,7 +396,7 @@ AiAssistCapability? aiAssistCapabilityFor(AgentType? agentType) =>
     agentType == null ? null : aiAssistCapabilities[agentType];
 
 List<AiAssistAgent> get selectableAiAssistAgents => <AiAssistAgent>[
-  ...aiAssistCapabilities.values.map((capability) => capability.agent),
+  ...aiAssistCapabilities.keys.map((type) => aiAssistAgentForType(type)!),
   AiAssistAgent.custom,
 ];
 
