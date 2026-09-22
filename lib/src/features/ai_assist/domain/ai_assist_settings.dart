@@ -50,6 +50,15 @@ enum AiAssistAgent(this.agentType) {
   String get label => agentType == null
       ? 'Custom Command'
       : agentDescriptorFor(agentType!).displayName;
+
+  static AiAssistAgent? fromAgentType(AgentType agentType) {
+    for (final agent in AiAssistAgent.values) {
+      if (agent.agentType == agentType) {
+        return agent;
+      }
+    }
+    return null;
+  }
 }
 
 @MappableClass()
@@ -127,6 +136,11 @@ class const AiAssistSettings({
     return value == null || value.isEmpty ? null : value;
   }
 
+  String? modelForType(AgentType agentType) {
+    final agent = AiAssistAgent.fromAgentType(agentType);
+    return agent == null ? null : modelFor(agent);
+  }
+
   String? thinkingForModel(String? model) {
     if (model == null || model.trim().isEmpty) {
       return null;
@@ -173,9 +187,21 @@ class const AiAssistSettings({
     return discoveredModelsByAgent[agent] ?? const <AiAssistDiscoveredModel>[];
   }
 
+  List<AiAssistDiscoveredModel> discoveredModelsForType(AgentType agentType) {
+    final agent = AiAssistAgent.fromAgentType(agentType);
+    return agent == null
+        ? const <AiAssistDiscoveredModel>[]
+        : discoveredModelsFor(agent);
+  }
+
   String? discoveredDefaultModelFor(AiAssistAgent agent) {
     final value = discoveredDefaultModelByAgent[agent]?.trim();
     return value == null || value.isEmpty ? null : value;
+  }
+
+  String? discoveredDefaultModelForType(AgentType agentType) {
+    final agent = AiAssistAgent.fromAgentType(agentType);
+    return agent == null ? null : discoveredDefaultModelFor(agent);
   }
 
   static const AiAssistSettings defaults = AiAssistSettings();

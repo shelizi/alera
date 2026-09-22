@@ -401,12 +401,7 @@ List<AiAssistAgent> get selectableAiAssistAgents => <AiAssistAgent>[
 ];
 
 AiAssistAgent? aiAssistAgentForType(AgentType type) {
-  for (final agent in AiAssistAgent.values) {
-    if (agent.agentType == type) {
-      return agent;
-    }
-  }
-  return null;
+  return AiAssistAgent.fromAgentType(type);
 }
 
 List<AiAssistModel> parseDevinModels(String stdout) {
@@ -436,18 +431,17 @@ List<AiAssistModel> discoveredModelsForAgent(
 }
 
 String? modelIdForAgentType(AiAssistSettings settings, AgentType agentType) {
-  final agent = aiAssistAgentForType(agentType);
-  return agent == null ? null : settings.modelFor(agent);
+  return settings.modelForType(agentType);
 }
 
 List<AiAssistModel> discoveredModelsForAgentType(
   AiAssistSettings settings,
   AgentType agentType,
 ) {
-  final agent = aiAssistAgentForType(agentType);
-  return agent == null
-      ? const <AiAssistModel>[]
-      : discoveredModelsForAgent(settings, agent);
+  return settings
+      .discoveredModelsForType(agentType)
+      .map(modelFromDiscovered)
+      .toList(growable: false);
 }
 
 List<AiAssistModel> modelsForAgentType(
@@ -475,10 +469,7 @@ String defaultModelIdForAgentType(
     return 'custom';
   }
   if (!spec.modelCanInherit) {
-    final agent = aiAssistAgentForType(agentType);
-    final discoveredDefault = agent == null
-        ? null
-        : settings.discoveredDefaultModelFor(agent);
+    final discoveredDefault = settings.discoveredDefaultModelForType(agentType);
     if (discoveredDefault != null) {
       return discoveredDefault;
     }

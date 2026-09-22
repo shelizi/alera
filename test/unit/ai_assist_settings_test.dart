@@ -105,8 +105,22 @@ void main() {
       selectedModelByAgent: <AiAssistAgent, String>{
         AiAssistAgent.devin: 'gpt-5-5-high',
       },
+      discoveredModelsByAgent: <AiAssistAgent, List<AiAssistDiscoveredModel>>{
+        AiAssistAgent.devin: <AiAssistDiscoveredModel>[
+          AiAssistDiscoveredModel(id: 'gpt-5-5-high', label: 'GPT-5.5 High'),
+        ],
+      },
+      discoveredDefaultModelByAgent: <AiAssistAgent, String>{
+        AiAssistAgent.devin: 'gpt-5-5-high',
+      },
     );
 
+    expect(settings.modelForType(AgentType.devin), 'gpt-5-5-high');
+    expect(settings.discoveredModelsForType(AgentType.devin), hasLength(1));
+    expect(
+      settings.discoveredDefaultModelForType(AgentType.devin),
+      'gpt-5-5-high',
+    );
     expect(modelIdForAgentType(settings, AgentType.devin), 'gpt-5-5-high');
     expect(modelsForAgentType(AgentType.devin, settings), isNotEmpty);
     expect(
