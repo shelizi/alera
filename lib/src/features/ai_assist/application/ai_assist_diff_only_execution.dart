@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 import 'package:alera/src/features/ai_assist/application/ai_assist_errors.dart';
 import 'package:alera/src/features/ai_assist/application/ai_assist_registry.dart';
 import 'package:alera/src/features/ai_assist/domain/ai_assist_settings.dart';
@@ -12,11 +13,33 @@ class const AiAssistDiffOnlyExecution({
 });
 
 bool supportsDiffOnlyAiAssistAgent(AiAssistAgent agent) {
-  return switch (aiAssistCapabilityFor(agent.agentType)?.diffOnlyAccess) {
+  return supportsDiffOnlyAiAssistAgentType(agent.agentType);
+}
+
+bool supportsDiffOnlyAiAssistAgentType(AgentType? agentType) {
+  return switch (aiAssistCapabilityFor(agentType)?.diffOnlyAccess) {
     AiAssistDiffOnlyAccess.toolFree ||
     AiAssistDiffOnlyAccess.codexRestrictedFilesystem => true,
     AiAssistDiffOnlyAccess.unsupported || null => false,
   };
+}
+
+void requireDiffOnlyAiAssistAgentType(AgentType? agentType) {
+  if (supportsDiffOnlyAiAssistAgentType(agentType)) {
+    return;
+  }
+  final supported = aiAssistCapabilities.values
+      .where(
+        (spec) => spec.diffOnlyAccess != AiAssistDiffOnlyAccess.unsupported,
+      )
+      .map((spec) => spec.label)
+      .join(', ');
+  final label = agentType == null
+      ? 'Custom Command'
+      : agentDisplayName(agentType);
+  throw AiAssistException(
+    '$label cannot guarantee diff-only access. Choose one of: $supported.',
+  );
 }
 
 List<AiAssistAgent> get diffOnlyAiAssistAgents => aiAssistCapabilities.values
@@ -57,15 +80,7 @@ String? readingDiffModelForSettings(
 }
 
 void requireDiffOnlyAiAssistAgent(AiAssistAgent agent) {
-  if (supportsDiffOnlyAiAssistAgent(agent)) {
-    return;
-  }
-  final supported = diffOnlyAiAssistAgents
-      .map((agent) => agent.label)
-      .join(', ');
-  throw AiAssistException(
-    '${agent.label} cannot guarantee diff-only access. Choose one of: $supported.',
-  );
+  requireDiffOnlyAiAssistAgentType(agent.agentType);
 }
 
 AiAssistDiffOnlyExecution planDiffOnlyAiAssistExecution({
@@ -76,7 +91,7 @@ AiAssistDiffOnlyExecution planDiffOnlyAiAssistExecution({
 }) {
   switch (spec.diffOnlyAccess) {
     case AiAssistDiffOnlyAccess.unsupported:
-      requireDiffOnlyAiAssistAgent(aiAssistAgentForType(spec.agentType)!);
+      requireDiffOnlyAiAssistAgentType(spec.agentType);
       throw StateError('Unreachable diff-only agent policy.');
     case AiAssistDiffOnlyAccess.toolFree:
       return AiAssistDiffOnlyExecution(

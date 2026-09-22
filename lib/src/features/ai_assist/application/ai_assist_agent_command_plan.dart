@@ -6,17 +6,23 @@ extension on CliAiAssistAgentRunner {
     Map<String, String> environment,
   ) async {
     final settings = request.settings;
-    final agent = request.agent ?? settings.agent;
+    final useCustomCommand =
+        request.useCustomCommand ||
+        (request.agentType == null && settings.agent == AiAssistAgent.custom);
+    final agentType = useCustomCommand
+        ? null
+        : request.agentType ?? settings.agentType;
     if (request.accessPolicy == AgentTaskAccessPolicy.diffOnly) {
-      requireDiffOnlyAiAssistAgent(agent);
+      requireDiffOnlyAiAssistAgentType(agentType);
     }
-    if (agent == AiAssistAgent.custom) {
+    if (useCustomCommand || agentType == null) {
       return _planCustomCommand(settings.customCommand, request.prompt);
     }
-    final agentType = agent.agentType!;
     final spec = aiAssistCapabilityFor(agentType);
     if (spec == null) {
-      throw AiAssistException('${agent.label} does not support AI Assist.');
+      throw AiAssistException(
+        '${agentDisplayName(agentType)} does not support AI Assist.',
+      );
     }
     if (request.outputContract != AgentTaskOutputContract.plainText &&
         request.accessPolicy == AgentTaskAccessPolicy.repositoryReadOnly &&
@@ -46,7 +52,7 @@ extension on CliAiAssistAgentRunner {
     Directory? promptDirectory;
     File? outputFile;
     final environmentOverrides = <String, String>{};
-    if (agent == AiAssistAgent.fx) {
+    if (agentType == AgentType.fx) {
       environmentOverrides.addAll(<String, String>{
         'FX_PERMISSION_MODE': 'ask',
         'FX_AUTO_UPGRADE': '0',
@@ -67,7 +73,7 @@ extension on CliAiAssistAgentRunner {
         );
         await promptFile.writeAsString(request.prompt, flush: true);
         deliveredPrompt = promptFile.path;
-        if (agent == AiAssistAgent.grok) {
+        if (agentType == AgentType.grok) {
           final grokHome = Directory(p.join(promptDirectory.path, 'grok-home'));
           await grokHome.create();
           await _copyGrokRuntimeConfiguration(

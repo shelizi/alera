@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 import 'package:alera/src/features/ai_assist/application/ai_assist_diff_only_execution.dart';
 import 'package:alera/src/features/ai_assist/application/ai_assist_errors.dart';
 import 'package:alera/src/features/ai_assist/application/ai_assist_prompt.dart';
@@ -23,7 +24,8 @@ class const AiAssistAgentRunRequest({
   required final String prompt,
   required final String runId,
   required final String? workingDirectory,
-  final AiAssistAgent? agent,
+  final AgentType? agentType,
+  final bool useCustomCommand = false,
   final String? model,
   final String? reasoning,
   final String Function(String) cleanOutput = cleanGeneratedText,
@@ -74,9 +76,11 @@ class CliAiAssistAgentRunner({
     Future<int>? processExit;
     try {
       var environment = await commandEnvironmentResolver.environment();
-      final requestedAgent = request.agent ?? request.settings.agent;
+      final requestedAgentType =
+          request.agentType ?? request.settings.agentType;
       if (request.accessPolicy == AgentTaskAccessPolicy.diffOnly &&
-          requestedAgent == AiAssistAgent.codex) {
+          !request.useCustomCommand &&
+          requestedAgentType == AgentType.codex) {
         final missing = codexDiffOnlyEnvironmentVariableNames
             .where((name) => !environment.containsKey(name))
             .toList(growable: false);

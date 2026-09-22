@@ -9,6 +9,7 @@ import 'package:alera/src/features/ai_assist/application/ai_assist_registry.dart
 import 'package:alera/src/features/ai_assist/application/ai_assist_service.dart';
 import 'package:alera/src/features/ai_assist/application/ai_assist_model_discovery_service.dart';
 import 'package:alera/src/features/ai_assist/domain/ai_assist_settings.dart';
+import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 import 'package:alera/src/shared/infra/git/git_diff_models.dart';
 import 'package:alera/src/shared/infra/process/command_environment_resolver.dart';
 import 'package:alera/src/shared/infra/process/process_runner.dart';

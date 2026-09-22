@@ -281,7 +281,7 @@ class ReadingDiffService({
         prompt: prompt,
         runId: runId,
         workingDirectory: preparation.request.workspacePath,
-        agent: preparation.agent,
+        agentType: preparation.agent.agentType,
         model: preparation.model,
         reasoning: preparation.effort,
         accessPolicy: preparation.accessPolicy,
