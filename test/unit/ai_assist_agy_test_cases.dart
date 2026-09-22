@@ -121,7 +121,7 @@ gemini-3.1-pro-low
     );
     final service = CliAiAssistModelDiscoveryService(processRunner: runner);
 
-    final result = await service.discover(.agy);
+    final result = await service.discover(AgentType.agy);
 
     expect(result.success, isTrue);
     expect(result.defaultModelId, isNull);
@@ -142,7 +142,7 @@ gemini-3.1-pro-low
       ),
     );
 
-    await service.discover(.agy);
+    await service.discover(AgentType.agy);
 
     expect(runner.environment, containsPair('PATH', '/shell/bin:/usr/bin'));
   });

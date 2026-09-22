@@ -93,7 +93,7 @@ void _registerFxAiAssistTests() {
     );
     final service = CliAiAssistModelDiscoveryService(processRunner: runner);
 
-    final result = await service.discover(.fx);
+    final result = await service.discover(AgentType.fx);
 
     expect(result.success, isTrue);
     expect(result.defaultModelId, isNull);

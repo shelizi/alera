@@ -417,7 +417,7 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
     try {
       result = await ref
           .read(aiAssistModelDiscoveryServiceProvider)
-          .discover(agent);
+          .discover(agent.agentType!);
     } catch (error) {
       if (!mounted) {
         return;

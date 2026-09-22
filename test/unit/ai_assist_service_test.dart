@@ -304,7 +304,7 @@ openai-codex    gpt-5.5                 272K     128K     yes       yes
       );
       final service = CliAiAssistModelDiscoveryService(processRunner: runner);
 
-      final result = await service.discover(.pi);
+      final result = await service.discover(AgentType.pi);
 
       expect(result.success, isTrue);
       expect(result.models.map((model) => model.id), <String>[
@@ -317,7 +317,7 @@ openai-codex    gpt-5.5                 272K     128K     yes       yes
       final runner = _FakeProcessRunner(stdout: 'unused');
       final service = CliAiAssistModelDiscoveryService(processRunner: runner);
 
-      final result = await service.discover(.amp);
+      final result = await service.discover(AgentType.amp);
 
       expect(result.success, isTrue);
       expect(result.defaultModelId, 'smart');
@@ -330,7 +330,7 @@ openai-codex    gpt-5.5                 272K     128K     yes       yes
         final runner = _FakeProcessRunner(stdout: 'unparseable output');
         final service = CliAiAssistModelDiscoveryService(processRunner: runner);
 
-        final result = await service.discover(.cursor);
+        final result = await service.discover(AgentType.cursor);
 
         expect(result.success, isTrue);
         expect(result.defaultModelId, 'auto');
@@ -346,7 +346,7 @@ openai-codex    gpt-5.5                 272K     128K     yes       yes
       );
       final service = CliAiAssistModelDiscoveryService(processRunner: runner);
 
-      final result = await service.discover(.agy);
+      final result = await service.discover(AgentType.agy);
 
       expect(result.success, isFalse);
       expect(result.error, 'Antigravity model discovery failed: auth expired');

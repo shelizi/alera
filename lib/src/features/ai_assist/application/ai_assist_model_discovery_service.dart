@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 import 'package:alera/src/features/ai_assist/application/ai_assist_registry.dart';
 import 'package:alera/src/features/ai_assist/application/ai_assist_process_failure.dart';
 import 'package:alera/src/features/ai_assist/domain/ai_assist_settings.dart';
@@ -12,14 +13,14 @@ const int aiAssistModelDiscoveryMaxOutputBytes = 4 * 1024 * 1024;
 
 class const AiAssistModelDiscoveryResult({
   required final bool success,
-  required final AiAssistAgent agent,
+  required final AgentType agentType,
   required final List<AiAssistModel> models,
   required final String? defaultModelId,
   final String? error,
 });
 
 abstract interface class AiAssistModelDiscoveryService {
-  Future<AiAssistModelDiscoveryResult> discover(AiAssistAgent agent);
+  Future<AiAssistModelDiscoveryResult> discover(AgentType agentType);
 }
 
 class CliAiAssistModelDiscoveryService({
@@ -33,15 +34,15 @@ class CliAiAssistModelDiscoveryService({
   final CommandEnvironmentResolver commandEnvironmentResolver;
 
   @override
-  Future<AiAssistModelDiscoveryResult> discover(AiAssistAgent agent) async {
-    final spec = aiAssistCapabilityFor(agent.agentType);
+  Future<AiAssistModelDiscoveryResult> discover(AgentType agentType) async {
+    final spec = aiAssistCapabilityFor(agentType);
     if (spec == null) {
       return AiAssistModelDiscoveryResult(
         success: false,
-        agent: agent,
+        agentType: agentType,
         models: const <AiAssistModel>[],
         defaultModelId: 'custom',
-        error: '${agent.label} does not support AI Assist.',
+        error: '${agentDisplayName(agentType)} does not support AI Assist.',
       );
     }
     if (spec.modelsCommand == null) {
@@ -58,7 +59,7 @@ class CliAiAssistModelDiscoveryService({
     } catch (_) {
       return AiAssistModelDiscoveryResult(
         success: false,
-        agent: agent,
+        agentType: agentType,
         models: spec.models,
         defaultModelId: spec.defaultModelId,
         error:
@@ -80,7 +81,7 @@ class CliAiAssistModelDiscoveryService({
     } on TimeoutException catch (error) {
       return AiAssistModelDiscoveryResult(
         success: false,
-        agent: agent,
+        agentType: agentType,
         models: spec.models,
         defaultModelId: spec.defaultModelId,
         error: error.message,
@@ -89,7 +90,7 @@ class CliAiAssistModelDiscoveryService({
       process.kill();
       return AiAssistModelDiscoveryResult(
         success: false,
-        agent: agent,
+        agentType: agentType,
         models: spec.models,
         defaultModelId: spec.defaultModelId,
         error: '${spec.label} returned too much model data.',
@@ -100,7 +101,7 @@ class CliAiAssistModelDiscoveryService({
   AiAssistModelDiscoveryResult _staticResult(AiAssistCapability spec) {
     return AiAssistModelDiscoveryResult(
       success: true,
-      agent: aiAssistAgentForType(spec.agentType)!,
+      agentType: spec.agentType,
       models: spec.models,
       defaultModelId: spec.defaultModelId,
     );
@@ -114,7 +115,7 @@ class CliAiAssistModelDiscoveryService({
       final detail = aiAssistProcessFailureDetail(output.stdout, output.stderr);
       return AiAssistModelDiscoveryResult(
         success: false,
-        agent: aiAssistAgentForType(spec.agentType)!,
+        agentType: spec.agentType,
         models: spec.models,
         defaultModelId: spec.defaultModelId,
         error: detail == null
@@ -133,7 +134,7 @@ class CliAiAssistModelDiscoveryService({
       }
       return AiAssistModelDiscoveryResult(
         success: false,
-        agent: aiAssistAgentForType(spec.agentType)!,
+        agentType: spec.agentType,
         models: const <AiAssistModel>[],
         defaultModelId: spec.defaultModelId,
         error: '${spec.label} returned no available models.',
@@ -148,7 +149,7 @@ class CliAiAssistModelDiscoveryService({
         : models.first.id;
     return AiAssistModelDiscoveryResult(
       success: true,
-      agent: aiAssistAgentForType(spec.agentType)!,
+      agentType: spec.agentType,
       models: models,
       defaultModelId: defaultModelId,
     );

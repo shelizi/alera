@@ -54,8 +54,8 @@ extension _AgentProfilesPaneDiscovery on _AgentProfilesSettingsPaneState {
   }
 
   Future<void> _discoverModels(AgentType adapter) async {
-    final agent = aiAssistAgentForType(adapter);
-    if (agent == null || !_loadingModels.add(adapter)) {
+    if (aiAssistCapabilityFor(adapter) == null ||
+        !_loadingModels.add(adapter)) {
       return;
     }
     _setDiscoveryState(() {
@@ -64,7 +64,7 @@ extension _AgentProfilesPaneDiscovery on _AgentProfilesSettingsPaneState {
     try {
       final result = await ref
           .read(aiAssistModelDiscoveryServiceProvider)
-          .discover(agent);
+          .discover(adapter);
       if (!mounted) {
         return;
       }
