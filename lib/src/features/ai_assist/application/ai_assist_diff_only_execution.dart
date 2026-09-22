@@ -51,7 +51,7 @@ Set<AgentType> aiAssistAgentTypesForModelDiscovery(
   for (final operation in operations)
     if (operation == AiAssistOperation.readingDiff)
       readingDiffAgentTypeForSettings(settings)
-    else if (settings.agentFor(operation).agentType case final agentType?)
+    else if (settings.agentTypeFor(operation) case final agentType?)
       agentType,
 };
 

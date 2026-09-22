@@ -181,6 +181,10 @@ class const AiAssistSettings({
     return promptSettingsFor(operation).agent ?? agent;
   }
 
+  AgentType? agentTypeFor(AiAssistOperation operation) {
+    return agentFor(operation).agentType;
+  }
+
   String? modelForOperation(AiAssistOperation operation) {
     final promptSettings = promptSettingsFor(operation);
     final override = promptSettings.model?.trim();

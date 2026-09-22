@@ -226,10 +226,13 @@ Claude Sonnet 4.6 (claude-sonnet-4.6)
     );
 
     expect(settings.agentFor(.commitMessage), AiAssistAgent.claude);
+    expect(settings.agentTypeFor(.commitMessage), AgentType.claude);
     expect(settings.modelForOperation(.commitMessage), 'sonnet');
     expect(settings.agentFor(.pullRequestDetails), AiAssistAgent.codex);
+    expect(settings.agentTypeFor(.pullRequestDetails), AgentType.codex);
     expect(settings.modelForOperation(.pullRequestDetails), 'gpt-pull-request');
     expect(settings.agentFor(.readingDiff), AiAssistAgent.opencode);
+    expect(settings.agentTypeFor(.readingDiff), AgentType.opencode);
     expect(settings.modelForOperation(.readingDiff), 'provider/reading-model');
     expect(settings.modelForOperation(.workspaceIdentity), 'gpt-global');
   });

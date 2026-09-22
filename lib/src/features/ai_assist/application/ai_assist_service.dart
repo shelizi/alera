@@ -73,8 +73,7 @@ class CliAiAssistService({
       if (_canceled.contains(key)) {
         throw const AiAssistCanceledException();
       }
-      final agent = request.settings.agentFor(request.operation);
-      final agentType = agent.agentType;
+      final agentType = request.settings.agentTypeFor(request.operation);
       final model = agentType == null
           ? const AiAssistModel(id: 'custom', label: 'Custom')
           : modelForAgentType(
