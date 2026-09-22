@@ -269,7 +269,9 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
   ) {
     final promptSettings = settings.promptSettingsFor(operation);
     final isReadingDiff = operation == AiAssistOperation.readingDiff;
-    final globalSupported = supportsDiffOnlyAiAssistAgentType(settings.agentType);
+    final globalSupported = supportsDiffOnlyAiAssistAgentType(
+      settings.agentType,
+    );
     final agentType = isReadingDiff
         ? readingDiffAgentTypeForSettings(settings)
         : settings.agentFor(operation).agentType;
@@ -302,11 +304,11 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
         globalAgent: settings.agent,
         value: effectivePromptAgent,
         allowedAgents: isReadingDiff
-            ? diffOnlyAiAssistAgentTypes
-                  .map(AiAssistAgent.fromAgentType)
-                  .whereType<AiAssistAgent>()
-                  .toList(growable: false)
-            : selectableAiAssistAgents,
+            ? AiAssistAgent.optionsForTypes(
+                diffOnlyAiAssistAgentTypes,
+                includeCustom: false,
+              )
+            : null,
         allowGlobal: !isReadingDiff || globalSupported,
         allowCustom: operation != AiAssistOperation.speechMessage,
         onChanged: (agent) =>

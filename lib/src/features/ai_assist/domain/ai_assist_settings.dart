@@ -59,6 +59,14 @@ enum AiAssistAgent(this.agentType) {
     }
     return null;
   }
+
+  static List<AiAssistAgent> optionsForTypes(
+    Iterable<AgentType> agentTypes, {
+    bool includeCustom = true,
+  }) => <AiAssistAgent>[
+    ...agentTypes.map(fromAgentType).whereType<AiAssistAgent>(),
+    if (includeCustom) AiAssistAgent.custom,
+  ];
 }
 
 @MappableClass()

@@ -24,7 +24,9 @@ class const AiAssistAgentRow({
         key: ValueKey<String>('ai-assist-agent-${value.key}'),
         value: value,
         entries: <AleraDropdownFieldEntry<AiAssistAgent>>[
-          for (final agent in selectableAiAssistAgents)
+          for (final agent in AiAssistAgent.optionsForTypes(
+            selectableAiAssistAgentTypes,
+          ))
             AleraDropdownFieldEntry<AiAssistAgent>(
               value: agent,
               label: agent.label,
@@ -136,7 +138,9 @@ class const AiAssistPromptAgentRow({
 }) extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
-    final agents = allowedAgents ?? selectableAiAssistAgents;
+    final agents =
+        allowedAgents ??
+        AiAssistAgent.optionsForTypes(selectableAiAssistAgentTypes);
     return AleraSettingRow(
       title: 'Agent',
       description: 'Override the global agent for this prompt.',

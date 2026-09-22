@@ -60,12 +60,12 @@ void main() {
         .toSet();
 
     expect(registered, nonCustom);
-    expect(selectableAiAssistAgents, <AiAssistAgent>[
-      ...aiAssistCapabilities.keys.map((type) => AiAssistAgent.fromAgentType(type)!),
-      AiAssistAgent.custom,
-    ]);
+    expect(selectableAiAssistAgentTypes, aiAssistCapabilities.keys.toList());
     for (final spec in aiAssistCapabilities.values) {
-      expect(AiAssistAgent.fromAgentType(spec.agentType)?.agentType, spec.agentType);
+      expect(
+        AiAssistAgent.fromAgentType(spec.agentType)?.agentType,
+        spec.agentType,
+      );
     }
   });
 

@@ -395,12 +395,8 @@ aiAssistCapabilities = <AgentType, AiAssistCapability>{
 AiAssistCapability? aiAssistCapabilityFor(AgentType? agentType) =>
     agentType == null ? null : aiAssistCapabilities[agentType];
 
-List<AiAssistAgent> get selectableAiAssistAgents => <AiAssistAgent>[
-  ...aiAssistCapabilities.keys
-      .map(AiAssistAgent.fromAgentType)
-      .whereType<AiAssistAgent>(),
-  AiAssistAgent.custom,
-];
+List<AgentType> get selectableAiAssistAgentTypes =>
+    aiAssistCapabilities.keys.toList(growable: false);
 
 List<AiAssistModel> parseDevinModels(String stdout) {
   final models = <AiAssistModel>[];
