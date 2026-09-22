@@ -7,6 +7,8 @@ import 'package:alera/src/features/ai_assist/application/ai_assist_diff_only_exe
 import 'package:alera/src/features/ai_assist/application/ai_assist_registry.dart';
 import 'package:alera/src/features/ai_assist/application/ai_assist_model_discovery_service.dart';
 import 'package:alera/src/features/ai_assist/domain/ai_assist_settings.dart';
+import 'package:alera/src/features/ai_assist/presentation/ai_assist_agent_choice.dart';
+import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 import 'package:alera/src/features/settings/presentation/panes/ai_assist_setting_rows.dart';
 import 'package:alera/src/features/settings/presentation/panes/ai_assist_custom_command_dialog.dart';
 import 'package:alera/src/features/settings/presentation/rows/settings_rows.dart';
@@ -36,9 +38,9 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
         AiAssistOperation.speechMessage,
       ];
 
-  final Map<AiAssistAgent, _AiAssistModelDiscoveryState> _discovery =
-      <AiAssistAgent, _AiAssistModelDiscoveryState>{};
-  final Set<AiAssistAgent> _autoDiscovered = <AiAssistAgent>{};
+  final Map<AgentType, _AiAssistModelDiscoveryState> _discovery =
+      <AgentType, _AiAssistModelDiscoveryState>{};
+  final Set<AgentType> _autoDiscovered = <AgentType>{};
 
   @override
   void initState() {
@@ -64,8 +66,10 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
   @override
   Widget build(BuildContext context) {
     final settings = widget.settings;
-    final agent = settings.agent;
-    final agentType = agent.agentType;
+    final agentType = settings.agentType;
+    final agentChoice = agentType == null
+        ? const AiAssistAgentChoice.custom()
+        : AiAssistAgentChoice.agent(agentType);
     final spec = aiAssistCapabilityFor(agentType);
     final models = agentType == null
         ? const <AiAssistModel>[]
@@ -79,7 +83,9 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
             extraModels: discoveredModelsForAgentType(settings, agentType),
           );
     final thinkingLevels = model.thinkingLevels;
-    final discovery = _discovery[agent] ?? const _AiAssistModelDiscoveryState();
+    final discovery = agentType == null
+        ? const _AiAssistModelDiscoveryState()
+        : _discovery[agentType] ?? const _AiAssistModelDiscoveryState();
     final canDiscoverModels = spec?.modelsCommand != null;
     return Column(
       crossAxisAlignment: .stretch,
@@ -108,10 +114,10 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
                 ),
               ),
               AiAssistAgentRow(
-                value: agent,
+                value: agentChoice,
                 onChanged: (value) => unawaited(_selectAgent(value)),
               ),
-              if (agent == AiAssistAgent.custom)
+              if (agentType == null)
                 SettingsTextRow(
                   title: 'Custom Command',
                   description: 'Use {prompt} to pass the prompt as an argument; otherwise Alera sends it on stdin.',
@@ -123,23 +129,23 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
                 )
               else if (spec != null)
                 AiAssistModelRow(
-                  agent: agent,
+                  agentType: agentType,
                   models: models,
                   value: model.id,
                   canDiscoverModels: canDiscoverModels,
                   discovering: discovery.loading,
                   discoveryError: discovery.error,
                   onRefreshModels: canDiscoverModels
-                      ? () => unawaited(_discoverModels(agent))
+                      ? () => unawaited(_discoverModels(agentType))
                       : null,
                   onChanged: (value) => widget.onChanged((settings) {
                     final selectedModels = <String, String>{
                       ...settings.selectedModelByAgent,
                     };
                     if (value.trim().isEmpty) {
-                      selectedModels.remove(agent.key);
+                      selectedModels.remove(agentType.key);
                     } else {
-                      selectedModels[agent.key] = value;
+                      selectedModels[agentType.key] = value;
                     }
                     return settings.copyWith(
                       selectedModelByAgent: selectedModels,
@@ -162,7 +168,7 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
                     ),
                   ),
                 ),
-              if (agent != AiAssistAgent.custom &&
+              if (agentType != null &&
                   _configuredOperations.any(
                     (operation) => settings.agentTypeFor(operation) == null,
                   ))
@@ -274,16 +280,16 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
     final agentType = isReadingDiff
         ? readingDiffAgentTypeForSettings(settings)
         : settings.agentTypeFor(operation);
-    final agent = agentType == null
-        ? AiAssistAgent.custom
-        : AiAssistAgent.fromAgentType(agentType)!;
-    final configuredAgent = promptSettings.agent ?? settings.agent;
+    final effectiveChoice = agentType == null
+        ? const AiAssistAgentChoice.custom()
+        : AiAssistAgentChoice.agent(agentType);
+    final configuredAgentType = promptSettings.agentType ?? settings.agentType;
     final usesReadingDiffFallback =
         isReadingDiff &&
-        !supportsDiffOnlyAiAssistAgentType(configuredAgent.agentType);
-    final effectivePromptAgent = usesReadingDiffFallback
-        ? agent
-        : promptSettings.agent;
+        !supportsDiffOnlyAiAssistAgentType(configuredAgentType);
+    final promptChoice = usesReadingDiffFallback
+        ? effectiveChoice
+        : _choiceForPersistedAgent(promptSettings.agent);
     final effectivePromptModel = usesReadingDiffFallback
         ? null
         : promptSettings.model;
@@ -296,27 +302,26 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
             extraModels: discoveredModelsForAgentType(settings, agentType),
           );
     final spec = aiAssistCapabilityFor(agentType);
-    final discovery = _discovery[agent] ?? const _AiAssistModelDiscoveryState();
+    final discovery = agentType == null
+        ? const _AiAssistModelDiscoveryState()
+        : _discovery[agentType] ?? const _AiAssistModelDiscoveryState();
     return <Widget>[
       AiAssistPromptAgentRow(
         operation: operation,
-        globalAgent: settings.agent,
-        value: effectivePromptAgent,
-        allowedAgents: isReadingDiff
-            ? AiAssistAgent.optionsForTypes(
-                diffOnlyAiAssistAgentTypes,
-                includeCustom: false,
-              )
-            : null,
+        globalAgent: settings.agentType == null
+            ? const AiAssistAgentChoice.custom()
+            : AiAssistAgentChoice.agent(settings.agentType!),
+        value: promptChoice,
+        allowedAgentTypes: isReadingDiff ? diffOnlyAiAssistAgentTypes : null,
         allowGlobal: !isReadingDiff || globalSupported,
         allowCustom: operation != AiAssistOperation.speechMessage,
-        onChanged: (agent) =>
-            unawaited(_selectAgent(agent, operation: operation)),
+        onChanged: (choice) =>
+            unawaited(_selectAgent(choice, operation: operation)),
       ),
-      if (agent != AiAssistAgent.custom)
+      if (agentType != null)
         AiAssistPromptModelRow(
           operation: operation,
-          agent: agent,
+          agentType: agentType,
           models: modelsForAgentType(agentType!, settings),
           inheritedModel: inheritedModel,
           value: effectivePromptModel,
@@ -324,12 +329,15 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
           discoveryError: discovery.error,
           onRefreshModels: spec?.modelsCommand == null
               ? null
-              : () => unawaited(_discoverModels(agent)),
+              : () => unawaited(_discoverModels(agentType)),
           onChanged: (model) => widget.onChanged(
             (settings) => _withPromptSettings(
               settings,
               operation,
-              AiAssistPromptSettings(agent: effectivePromptAgent, model: model),
+              AiAssistPromptSettings(
+                agent: _persistedAgentForChoice(promptChoice),
+                model: model,
+              ),
             ),
           ),
         ),
@@ -337,12 +345,11 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
   }
 
   Future<void> _selectAgent(
-    AiAssistAgent? agent, {
+    AiAssistAgentChoice choice, {
     AiAssistOperation? operation,
   }) async {
     String? command;
-    if (agent == AiAssistAgent.custom &&
-        widget.settings.customCommand.trim().isEmpty) {
+    if (choice.isCustom && widget.settings.customCommand.trim().isEmpty) {
       command = await showDialog<String>(
         context: context,
         builder: (_) => const AiAssistCustomCommandDialog(),
@@ -352,18 +359,22 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
     widget.onChanged((settings) {
       if (command != null) settings = settings.copyWith(customCommand: command);
       if (operation == null) {
-        return _withGlobalAgent(settings, agent!);
+        return _withGlobalAgent(settings, choice);
       }
-      final previousAgent = settings.agentFor(operation);
+      final previousAgentType = settings.agentTypeFor(operation);
       final usesFallback =
           operation == AiAssistOperation.readingDiff &&
-          !supportsDiffOnlyAiAssistAgentType(previousAgent.agentType);
+          !supportsDiffOnlyAiAssistAgentType(previousAgentType);
+      final selectedAgent = _persistedAgentForChoice(choice);
+      final selectedAgentType = choice.isGlobal
+          ? settings.agentType
+          : choice.agentType;
       return _withPromptSettings(
         settings,
         operation,
         AiAssistPromptSettings(
-          agent: agent,
-          model: !usesFallback && previousAgent == (agent ?? settings.agent)
+          agent: selectedAgent,
+          model: !usesFallback && previousAgentType == selectedAgentType
               ? settings.promptSettingsFor(operation).model
               : null,
         ),
@@ -389,13 +400,16 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
 
   AiAssistSettings _withGlobalAgent(
     AiAssistSettings settings,
-    AiAssistAgent agent,
+    AiAssistAgentChoice choice,
   ) {
     final updated = <AiAssistOperation, AiAssistPromptSettings>{
       for (final entry in settings.promptSettingsByOperation.entries)
         if (entry.value.agent != null) entry.key: entry.value,
     };
-    return settings.copyWith(agent: agent, promptSettingsByOperation: updated);
+    return settings.copyWith(
+      agent: _persistedAgentForChoice(choice)!,
+      promptSettingsByOperation: updated,
+    );
   }
 
   void _autoDiscoverConfiguredAgents() {
@@ -407,43 +421,40 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
       _configuredOperations,
     );
     for (final agentType in agentTypes) {
-      final agent = AiAssistAgent.fromAgentType(agentType);
-      if (agent != null) {
-        _autoDiscoverAgent(agent);
-      }
+      _autoDiscoverAgent(agentType);
     }
   }
 
-  void _autoDiscoverAgent(AiAssistAgent agent) {
-    final spec = aiAssistCapabilityFor(agent.agentType);
+  void _autoDiscoverAgent(AgentType agentType) {
+    final spec = aiAssistCapabilityFor(agentType);
     if (spec?.modelsCommand == null ||
-        _autoDiscovered.contains(agent) ||
-        (_discovery[agent]?.loading ?? false)) {
+        _autoDiscovered.contains(agentType) ||
+        (_discovery[agentType]?.loading ?? false)) {
       return;
     }
-    _autoDiscovered.add(agent);
-    unawaited(_discoverModels(agent));
+    _autoDiscovered.add(agentType);
+    unawaited(_discoverModels(agentType));
   }
 
-  Future<void> _discoverModels(AiAssistAgent agent) async {
-    final spec = aiAssistCapabilityFor(agent.agentType);
+  Future<void> _discoverModels(AgentType agentType) async {
+    final spec = aiAssistCapabilityFor(agentType);
     if (spec?.modelsCommand == null) {
       return;
     }
     setState(() {
-      _discovery[agent] = const _AiAssistModelDiscoveryState(loading: true);
+      _discovery[agentType] = const _AiAssistModelDiscoveryState(loading: true);
     });
     final AiAssistModelDiscoveryResult result;
     try {
       result = await ref
           .read(aiAssistModelDiscoveryServiceProvider)
-          .discover(agent.agentType!);
+          .discover(agentType);
     } catch (error) {
       if (!mounted) {
         return;
       }
       setState(() {
-        _discovery[agent] = _AiAssistModelDiscoveryState(
+        _discovery[agentType] = _AiAssistModelDiscoveryState(
           error: error.toString(),
         );
       });
@@ -454,7 +465,9 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
     }
     if (!result.success) {
       setState(() {
-        _discovery[agent] = _AiAssistModelDiscoveryState(error: result.error);
+        _discovery[agentType] = _AiAssistModelDiscoveryState(
+          error: result.error,
+        );
       });
       return;
     }
@@ -463,14 +476,14 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
         ...latest.discoveredDefaultModelByAgent,
       };
       if (result.defaultModelId == null) {
-        discoveredDefaults.remove(agent.key);
+        discoveredDefaults.remove(agentType.key);
       } else {
-        discoveredDefaults[agent.key] = result.defaultModelId!;
+        discoveredDefaults[agentType.key] = result.defaultModelId!;
       }
       return latest.copyWith(
         discoveredModelsByAgent: <String, List<AiAssistDiscoveredModel>>{
           ...latest.discoveredModelsByAgent,
-          agent.key: <AiAssistDiscoveredModel>[
+          agentType.key: <AiAssistDiscoveredModel>[
             for (final model in result.models) model.toDiscovered(),
           ],
         },
@@ -478,8 +491,22 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
       );
     });
     setState(() {
-      _discovery[agent] = const _AiAssistModelDiscoveryState();
+      _discovery[agentType] = const _AiAssistModelDiscoveryState();
     });
+  }
+
+  AiAssistAgentChoice _choiceForPersistedAgent(AiAssistAgent? agent) {
+    if (agent == null) return const AiAssistAgentChoice.global();
+    final type = agent.agentType;
+    return type == null
+        ? const AiAssistAgentChoice.custom()
+        : AiAssistAgentChoice.agent(type);
+  }
+
+  AiAssistAgent? _persistedAgentForChoice(AiAssistAgentChoice choice) {
+    if (choice.isGlobal) return null;
+    if (choice.isCustom) return AiAssistAgent.custom;
+    return AiAssistAgent.fromAgentType(choice.agentType!);
   }
 }
 

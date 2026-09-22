@@ -7,30 +7,34 @@ import 'package:alera/src/design_system/forms/alera_text_actions_scope.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:alera/src/features/ai_assist/application/ai_assist_registry.dart';
 import 'package:alera/src/features/ai_assist/domain/ai_assist_settings.dart';
+import 'package:alera/src/features/ai_assist/presentation/ai_assist_agent_choice.dart';
+import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 import 'package:alera/src/features/settings/presentation/rows/settings_rows.dart';
 import 'package:flutter/material.dart';
 
 class const AiAssistAgentRow({
   super.key,
-  required final AiAssistAgent value,
-  required final ValueChanged<AiAssistAgent> onChanged,
+  required final AiAssistAgentChoice value,
+  required final ValueChanged<AiAssistAgentChoice> onChanged,
 }) extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return AleraSettingRow(
       title: 'Agent',
       description: 'CLI used for AI Assist jobs.',
-      child: AleraDropdownField<AiAssistAgent>(
+      child: AleraDropdownField<AiAssistAgentChoice>(
         key: ValueKey<String>('ai-assist-agent-${value.key}'),
         value: value,
-        entries: <AleraDropdownFieldEntry<AiAssistAgent>>[
-          for (final agent in AiAssistAgent.optionsForTypes(
-            selectableAiAssistAgentTypes,
-          ))
-            AleraDropdownFieldEntry<AiAssistAgent>(
-              value: agent,
-              label: agent.label,
+        entries: <AleraDropdownFieldEntry<AiAssistAgentChoice>>[
+          for (final agentType in selectableAiAssistAgentTypes)
+            AleraDropdownFieldEntry<AiAssistAgentChoice>(
+              value: AiAssistAgentChoice.agent(agentType),
+              label: aiAssistCapabilityFor(agentType)!.label,
             ),
+          const AleraDropdownFieldEntry<AiAssistAgentChoice>(
+            value: AiAssistAgentChoice.custom(),
+            label: 'Custom Command',
+          ),
         ],
         onChanged: onChanged,
       ),
@@ -40,7 +44,7 @@ class const AiAssistAgentRow({
 
 class const AiAssistModelRow({
   super.key,
-  required final AiAssistAgent agent,
+  required final AgentType agentType,
   required final List<AiAssistModel> models,
   required final String value,
   required final bool canDiscoverModels,
@@ -55,7 +59,8 @@ class const AiAssistModelRow({
     if (!known) {
       return SettingsTextRow(
         title: 'Model',
-        description: 'Model passed to ${agent.label}.',
+        description:
+            'Model passed to ${aiAssistCapabilityFor(agentType)!.label}.',
         value: value,
         onChanged: onChanged,
       );
@@ -63,13 +68,13 @@ class const AiAssistModelRow({
     return AleraSettingRow(
       title: 'Model',
       description: discoveryError == null
-          ? 'Model passed to ${agent.label}.'
+          ? 'Model passed to ${aiAssistCapabilityFor(agentType)!.label}.'
           : discoveryError!,
       child: Row(
         children: <Widget>[
           Expanded(
             child: AleraDropdownField<String>(
-              key: ValueKey<String>('ai-assist-model-${agent.key}-$value'),
+              key: ValueKey<String>('ai-assist-model-${agentType.key}-$value'),
               value: value,
               entries: <AleraDropdownFieldEntry<String>>[
                 for (final model in models)
@@ -129,38 +134,41 @@ class const AiAssistThinkingRow({
 class const AiAssistPromptAgentRow({
   super.key,
   required final AiAssistOperation operation,
-  required final AiAssistAgent globalAgent,
-  required final AiAssistAgent? value,
-  final List<AiAssistAgent>? allowedAgents,
+  required final AiAssistAgentChoice globalAgent,
+  required final AiAssistAgentChoice value,
+  final List<AgentType>? allowedAgentTypes,
   final bool allowGlobal = true,
-  required final ValueChanged<AiAssistAgent?> onChanged,
+  required final ValueChanged<AiAssistAgentChoice> onChanged,
   final bool allowCustom = true,
 }) extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
-    final agents =
-        allowedAgents ??
-        AiAssistAgent.optionsForTypes(selectableAiAssistAgentTypes);
+    final agentTypes = allowedAgentTypes ?? selectableAiAssistAgentTypes;
+    final globalLabel = globalAgent.isCustom
+        ? 'Custom Command'
+        : aiAssistCapabilityFor(globalAgent.agentType)!.label;
     return AleraSettingRow(
       title: 'Agent',
       description: 'Override the global agent for this prompt.',
-      child: AleraDropdownField<AiAssistAgent?>(
-        key: ValueKey<String>(
-          'ai-assist-${operation.key}-agent-${value?.key ?? 'global'}',
-        ),
+      child: AleraDropdownField<AiAssistAgentChoice>(
+        key: ValueKey<String>('ai-assist-${operation.key}-agent-${value.key}'),
         value: value,
-        entries: <AleraDropdownFieldEntry<AiAssistAgent?>>[
+        entries: <AleraDropdownFieldEntry<AiAssistAgentChoice>>[
           if (allowGlobal)
-            AleraDropdownFieldEntry<AiAssistAgent?>(
-              value: null,
-              label: 'Global (${globalAgent.label})',
+            AleraDropdownFieldEntry<AiAssistAgentChoice>(
+              value: const AiAssistAgentChoice.global(),
+              label: 'Global ($globalLabel)',
             ),
-          for (final agent in agents)
-            if (allowCustom || agent != AiAssistAgent.custom)
-              AleraDropdownFieldEntry<AiAssistAgent?>(
-                value: agent,
-                label: agent.label,
-              ),
+          for (final agentType in agentTypes)
+            AleraDropdownFieldEntry<AiAssistAgentChoice>(
+              value: AiAssistAgentChoice.agent(agentType),
+              label: aiAssistCapabilityFor(agentType)!.label,
+            ),
+          if (allowCustom)
+            const AleraDropdownFieldEntry<AiAssistAgentChoice>(
+              value: AiAssistAgentChoice.custom(),
+              label: 'Custom Command',
+            ),
         ],
         onChanged: onChanged,
       ),
@@ -171,7 +179,7 @@ class const AiAssistPromptAgentRow({
 class const AiAssistPromptModelRow({
   super.key,
   required final AiAssistOperation operation,
-  required final AiAssistAgent agent,
+  required final AgentType agentType,
   required final List<AiAssistModel> models,
   required final AiAssistModel inheritedModel,
   required final String? value,
@@ -188,7 +196,7 @@ class const AiAssistPromptModelRow({
       if (selected != null &&
           selected.isNotEmpty &&
           !models.any((model) => model.id == selected))
-        modelForAgentType(agent.agentType!, selected),
+        modelForAgentType(agentType, selected),
     ];
     return AleraSettingRow(
       title: 'Model',

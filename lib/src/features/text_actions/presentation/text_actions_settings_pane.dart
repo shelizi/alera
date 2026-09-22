@@ -8,6 +8,7 @@ import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:alera/src/design_system/layout/alera_confirm_dialog.dart';
 import 'package:alera/src/design_system/layout/alera_master_detail.dart';
 import 'package:alera/src/features/ai_assist/domain/ai_assist_settings.dart';
+import 'package:alera/src/features/ai_assist/presentation/ai_assist_agent_choice.dart';
 import 'package:alera/src/features/ai_assist/application/ai_assist_registry.dart';
 import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 import 'package:alera/src/features/text_actions/domain/text_actions_mutations.dart';
@@ -36,8 +37,7 @@ class _TextActionsSettingsPaneState extends State<TextActionsSettingsPane> {
   String? _selectedId;
   bool _creatingNew = false;
   bool _enabled = true;
-  TextActionAgentSelection _agentSelection =
-      const TextActionAgentSelection.global();
+  AiAssistAgentChoice _agentSelection = const AiAssistAgentChoice.global();
   String? _modelOverride;
   Map<String, String> _reasoningByModel = <String, String>{};
   String? _error;
@@ -197,7 +197,7 @@ class _TextActionsSettingsPaneState extends State<TextActionsSettingsPane> {
       _nameController.clear();
       _promptController.clear();
       _enabled = true;
-      _agentSelection = const TextActionAgentSelection.global();
+      _agentSelection = const AiAssistAgentChoice.global();
       _modelOverride = null;
       _reasoningByModel = <String, String>{};
       _error = null;
@@ -238,17 +238,15 @@ class _TextActionsSettingsPaneState extends State<TextActionsSettingsPane> {
     return selected.agentType ?? widget.aiAssistSettings.agentType;
   }
 
-  TextActionAgentSelection _selectionForPersistedAgent(AiAssistAgent? agent) {
-    if (agent == null) return const TextActionAgentSelection.global();
+  AiAssistAgentChoice _selectionForPersistedAgent(AiAssistAgent? agent) {
+    if (agent == null) return const AiAssistAgentChoice.global();
     final type = agent.agentType;
     return type == null
-        ? const TextActionAgentSelection.custom()
-        : TextActionAgentSelection.agent(type);
+        ? const AiAssistAgentChoice.custom()
+        : AiAssistAgentChoice.agent(type);
   }
 
-  AiAssistAgent? _persistedAgentForSelection(
-    TextActionAgentSelection selection,
-  ) {
+  AiAssistAgent? _persistedAgentForSelection(AiAssistAgentChoice selection) {
     if (selection.isCustom) return AiAssistAgent.custom;
     final type = selection.agentType;
     return type == null ? null : AiAssistAgent.fromAgentType(type);

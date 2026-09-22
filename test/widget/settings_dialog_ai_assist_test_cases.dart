@@ -96,11 +96,11 @@ void _registerSettingsDialogAiAssistTests() {
       find.byKey(const ValueKey<String>('ai-assist-agent-codex')),
     );
     await tester.pumpAndSettle();
-    expect(find.byType(AleraDropdownEntry<AiAssistAgent>), findsWidgets);
+    expect(find.byType(AleraDropdownEntry<AiAssistAgentChoice>), findsWidgets);
     expect(
       tester
-          .widgetList<AleraDropdownEntry<AiAssistAgent>>(
-            find.byType(AleraDropdownEntry<AiAssistAgent>),
+          .widgetList<AleraDropdownEntry<AiAssistAgentChoice>>(
+            find.byType(AleraDropdownEntry<AiAssistAgentChoice>),
           )
           .first
           .enabled,
