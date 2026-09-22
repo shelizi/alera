@@ -9,9 +9,10 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 import 'rope.dart';
 
-// These functions are ignored because they are not marked as `pub`: `advance_point`, `append_capture_spans`, `apply_edit`, `bounded_rope_text`, `collect_document_symbols`, `collect_folding_ranges`, `ensure_parse_not_cancelled`, `find_structural_matching_bracket`, `find_structural_selection_range`, `first_identifier_child`, `is_foldable_node_kind`, `line_content_end_char`, `native_language`, `normalize_language_id`, `normalize_scope`, `open_with_rope`, `parse_rope`, `point_for_char`, `symbol_kind_for_node`, `symbol_name_node`
-// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `NativeEditorDocumentState`, `NativeLanguage`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`
+// These functions are ignored because they are not marked as `pub`: `advance_point`, `append_capture_spans`, `apply_edit`, `begin`, `bounded_rope_text`, `collect_document_symbols`, `collect_folding_ranges`, `complete`, `ensure_parse_not_cancelled`, `find_structural_matching_bracket`, `find_structural_selection_range`, `first_identifier_child`, `is_foldable_node_kind`, `line_content_end_char`, `normalize_scope`, `open_with_rope`, `parse_rope`, `point_for_char`, `snapshot`, `symbol_kind_for_node`, `symbol_name_node`, `update`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `NativeEditorDocumentState`, `NativeParseProgressState`, `NativeParseProgressTracker`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`
+// These functions are ignored (category: IgnoreBecauseOwnerTyShouldIgnore): `default`, `default`
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<NativeEditorDocument>>
 abstract class NativeEditorDocument implements RustOpaqueInterface {
@@ -77,6 +78,8 @@ abstract class NativeEditorDocument implements RustOpaqueInterface {
         cancellation: cancellation,
       );
 
+  NativeParseProgress parseProgress();
+
   /// Returns a bounded document outline from the already-retained Tree-sitter tree.
   /// Only declaration metadata and short symbol names cross FFI; the document text
   /// itself remains owned by the retained native Rope.
@@ -126,6 +129,8 @@ abstract class NativeParseCancellation implements RustOpaqueInterface {
       .crateApiEditorDocumentNativeParseCancellationCreate();
 
   bool isCancelled();
+
+  NativeParseProgress progress();
 }
 
 class BracketMatchResponse {
@@ -407,6 +412,27 @@ class NativeFoldingRange {
           runtimeType == other.runtimeType &&
           startLine == other.startLine &&
           endLine == other.endLine;
+}
+
+class NativeParseProgress {
+  final BigInt currentByteOffset;
+  final BigInt totalBytes;
+
+  const NativeParseProgress({
+    required this.currentByteOffset,
+    required this.totalBytes,
+  });
+
+  @override
+  int get hashCode => currentByteOffset.hashCode ^ totalBytes.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is NativeParseProgress &&
+          runtimeType == other.runtimeType &&
+          currentByteOffset == other.currentByteOffset &&
+          totalBytes == other.totalBytes;
 }
 
 class NativeSyntaxSpan {

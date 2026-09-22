@@ -247,6 +247,8 @@ class _WorkspaceEditorSurfaceState
             StructuralParserActivityState.unsupported,
         },
         revision: status.revision,
+        currentByteOffset: status.currentByteOffset,
+        totalBytes: status.totalBytes,
         detail: status.error,
       ),
     );

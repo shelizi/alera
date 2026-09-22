@@ -5,7 +5,7 @@ use ropey::Rope as RustRope;
 use std::cmp::{max, min};
 use std::ops::ControlFlow;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc, Mutex,
 };
 use tree_sitter::{
@@ -128,6 +128,53 @@ pub struct NativeEditorDocumentInfo {
     pub closed: bool,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NativeParseProgress {
+    pub current_byte_offset: usize,
+    pub total_bytes: usize,
+}
+
+#[derive(Default)]
+#[frb(ignore)]
+struct NativeParseProgressState {
+    current_byte_offset: AtomicUsize,
+    total_bytes: AtomicUsize,
+}
+
+#[derive(Clone, Default)]
+#[frb(ignore)]
+struct NativeParseProgressTracker {
+    state: Arc<NativeParseProgressState>,
+}
+
+impl NativeParseProgressTracker {
+    fn begin(&self, total_bytes: usize) {
+        self.state.total_bytes.store(total_bytes, Ordering::Release);
+        self.state.current_byte_offset.store(0, Ordering::Release);
+    }
+
+    fn update(&self, current_byte_offset: usize) {
+        let total = self.state.total_bytes.load(Ordering::Acquire);
+        self.state
+            .current_byte_offset
+            .fetch_max(min(current_byte_offset, total), Ordering::AcqRel);
+    }
+
+    fn complete(&self) {
+        let total = self.state.total_bytes.load(Ordering::Acquire);
+        self.state
+            .current_byte_offset
+            .store(total, Ordering::Release);
+    }
+
+    fn snapshot(&self) -> NativeParseProgress {
+        NativeParseProgress {
+            current_byte_offset: self.state.current_byte_offset.load(Ordering::Acquire),
+            total_bytes: self.state.total_bytes.load(Ordering::Acquire),
+        }
+    }
+}
+
 struct NativeEditorDocumentState {
     document_id: String,
     revision: u64,
@@ -142,12 +189,14 @@ struct NativeEditorDocumentState {
 #[frb(opaque)]
 pub struct NativeEditorDocument {
     state: Mutex<NativeEditorDocumentState>,
+    parse_progress: NativeParseProgressTracker,
 }
 
 #[derive(Clone)]
 #[frb(opaque)]
 pub struct NativeParseCancellation {
     cancelled: Arc<AtomicBool>,
+    parse_progress: NativeParseProgressTracker,
 }
 
 impl NativeParseCancellation {
@@ -155,6 +204,7 @@ impl NativeParseCancellation {
     pub fn create() -> Self {
         Self {
             cancelled: Arc::new(AtomicBool::new(false)),
+            parse_progress: NativeParseProgressTracker::default(),
         }
     }
 
@@ -166,6 +216,11 @@ impl NativeParseCancellation {
     #[frb(sync)]
     pub fn is_cancelled(&self) -> bool {
         self.cancelled.load(Ordering::Acquire)
+    }
+
+    #[frb(sync)]
+    pub fn progress(&self) -> NativeParseProgress {
+        self.parse_progress.snapshot()
     }
 }
 
@@ -222,6 +277,9 @@ impl NativeEditorDocument {
         cancellation: Option<&NativeParseCancellation>,
     ) -> Result<Self, String> {
         ensure_parse_not_cancelled(cancellation)?;
+        let parse_progress = cancellation
+            .map(|value| value.parse_progress.clone())
+            .unwrap_or_default();
         let resolved_language = resolve_native_language(&language_id);
         let normalized_language_id = resolved_language.canonical_id;
         let native_language = resolved_language.descriptor;
@@ -231,7 +289,7 @@ impl NativeEditorDocument {
             parser
                 .set_language(&native_language.language)
                 .map_err(|error| format!("failed to configure parser: {error}"))?;
-            let tree = parse_rope(&mut parser, &rope, None, cancellation)?;
+            let tree = parse_rope(&mut parser, &rope, None, cancellation, &parse_progress)?;
             ensure_parse_not_cancelled(cancellation)?;
             let query = Query::new(&native_language.language, &native_language.highlight_query)
                 .map_err(|error| format!("failed to compile highlight query: {error}"))?;
@@ -252,6 +310,7 @@ impl NativeEditorDocument {
                 query,
                 closed: false,
             }),
+            parse_progress,
         })
     }
 
@@ -280,7 +339,7 @@ impl NativeEditorDocument {
         }
 
         for edit in edits {
-            apply_edit(&mut state, edit)?;
+            apply_edit(&mut state, edit, &self.parse_progress)?;
         }
         state.revision = new_revision;
 
@@ -289,6 +348,11 @@ impl NativeEditorDocument {
             revision: state.revision,
             applied: true,
         })
+    }
+
+    #[frb(sync)]
+    pub fn parse_progress(&self) -> NativeParseProgress {
+        self.parse_progress.snapshot()
     }
 
     /// Returns syntax captures only for the requested viewport plus fixed overscan.
@@ -948,6 +1012,7 @@ fn is_foldable_node_kind(kind: &str) -> bool {
 fn apply_edit(
     state: &mut NativeEditorDocumentState,
     edit: EditorDocumentEdit,
+    parse_progress: &NativeParseProgressTracker,
 ) -> Result<(), String> {
     let len_chars = state.rope.len_chars();
     if edit.start > edit.end || edit.end > len_chars {
@@ -990,7 +1055,13 @@ fn apply_edit(
 
     if let Some(parser) = state.parser.as_mut() {
         let previous_tree = state.tree.as_ref();
-        state.tree = Some(parse_rope(parser, &state.rope, previous_tree, None)?);
+        state.tree = Some(parse_rope(
+            parser,
+            &state.rope,
+            previous_tree,
+            None,
+            parse_progress,
+        )?);
     }
 
     Ok(())
@@ -1011,8 +1082,10 @@ fn parse_rope(
     rope: &RustRope,
     old_tree: Option<&Tree>,
     cancellation: Option<&NativeParseCancellation>,
+    progress_tracker: &NativeParseProgressTracker,
 ) -> Result<Tree, String> {
     ensure_parse_not_cancelled(cancellation)?;
+    progress_tracker.begin(rope.len_bytes());
     let mut input = |byte_offset, _position| {
         if byte_offset >= rope.len_bytes() {
             return &[][..];
@@ -1021,22 +1094,21 @@ fn parse_rope(
         &chunk.as_bytes()[byte_offset - chunk_byte_idx..]
     };
 
-    let tree = if let Some(cancellation) = cancellation {
-        let mut progress = |_state: &tree_sitter::ParseState| {
-            if cancellation.is_cancelled() {
-                ControlFlow::Break(())
-            } else {
-                ControlFlow::Continue(())
-            }
-        };
-        let options = ParseOptions::new().progress_callback(&mut progress);
-        parser.parse_with_options(&mut input, old_tree, Some(options))
-    } else {
-        parser.parse_with_options(&mut input, old_tree, None)
+    let mut progress = |state: &tree_sitter::ParseState| {
+        progress_tracker.update(state.current_byte_offset());
+        if cancellation.is_some_and(NativeParseCancellation::is_cancelled) {
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(())
+        }
     };
+    let options = ParseOptions::new().progress_callback(&mut progress);
+    let tree = parser.parse_with_options(&mut input, old_tree, Some(options));
 
     ensure_parse_not_cancelled(cancellation)?;
-    tree.ok_or_else(|| "tree-sitter parser returned no tree".to_string())
+    let tree = tree.ok_or_else(|| "tree-sitter parser returned no tree".to_string())?;
+    progress_tracker.complete();
+    Ok(tree)
 }
 
 fn point_for_char(rope: &RustRope, char_offset: usize) -> Point {
@@ -1228,11 +1300,53 @@ mod tests {
         let language: Language = tree_sitter_rust::LANGUAGE.into();
         let mut parser = Parser::new();
         parser.set_language(&language).unwrap();
-        let result = parse_rope(&mut parser, &rope, None, Some(&cancellation));
+        let result = parse_rope(
+            &mut parser,
+            &rope,
+            None,
+            Some(&cancellation),
+            &cancellation.parse_progress,
+        );
         cancel_thread.join().unwrap();
 
         assert_eq!(result.unwrap_err(), NATIVE_PARSE_CANCELLED_ERROR);
         assert!(cancellation.is_cancelled());
+        let progress = cancellation.progress();
+        assert!(progress.total_bytes > 0);
+        assert!(progress.current_byte_offset <= progress.total_bytes);
+    }
+
+    #[test]
+    fn reports_completed_byte_progress_for_initial_and_incremental_parse() {
+        let text = "fn main() {\n    let value = 1;\n}\n";
+        let document = NativeEditorDocument::open(
+            "doc-progress".to_string(),
+            1,
+            text.to_string(),
+            "rust".to_string(),
+        )
+        .unwrap();
+
+        let initial = document.parse_progress();
+        assert_eq!(initial.current_byte_offset, text.len());
+        assert_eq!(initial.total_bytes, text.len());
+
+        let start = char_offset(text, "1");
+        document
+            .apply_edits(
+                1,
+                2,
+                vec![EditorDocumentEdit {
+                    start,
+                    end: start + 1,
+                    replacement: "123".to_string(),
+                }],
+            )
+            .unwrap();
+
+        let updated = document.parse_progress();
+        assert_eq!(updated.current_byte_offset, updated.total_bytes);
+        assert_eq!(updated.total_bytes, text.len() + 2);
     }
 
     #[test]

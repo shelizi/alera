@@ -1,5 +1,7 @@
+use flutter_rust_bridge::frb;
 use tree_sitter::Language;
 
+#[frb(ignore)]
 pub(crate) struct NativeLanguageDescriptor {
     pub canonical_id: &'static str,
     pub aliases: &'static [&'static str],
@@ -7,6 +9,7 @@ pub(crate) struct NativeLanguageDescriptor {
     pub highlight_query: String,
 }
 
+#[frb(ignore)]
 pub(crate) struct NativeLanguageResolution {
     pub canonical_id: String,
     pub descriptor: Option<NativeLanguageDescriptor>,
@@ -71,6 +74,7 @@ const NATIVE_LANGUAGE_REGISTRY: &[NativeLanguageRegistration] = &[
     },
 ];
 
+#[frb(ignore)]
 pub(crate) fn resolve_native_language(language_id: &str) -> NativeLanguageResolution {
     let normalized = language_id.trim().to_lowercase();
     let registration = NATIVE_LANGUAGE_REGISTRY.iter().find(|registration| {

@@ -52,6 +52,8 @@ void main() {
         documentId: 'lib.rs',
         state: StructuralParserActivityState.parsing,
         revision: 7,
+        currentByteOffset: 256,
+        totalBytes: 1024,
       ),
     );
 
@@ -74,6 +76,9 @@ void main() {
     expect(parser!.state, StructuralParserActivityState.parsing);
     expect(parser.activeDocumentCount, 2);
     expect(parser.revision, 7);
+    expect(parser.currentByteOffset, 256);
+    expect(parser.totalBytes, 1024);
+    expect(parser.progressFraction, 0.25);
   });
 
   test('publishes changes and removes closed parser documents', () async {

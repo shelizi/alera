@@ -223,6 +223,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   NativeFoldingRange dco_decode_native_folding_range(dynamic raw);
 
   @protected
+  NativeParseProgress dco_decode_native_parse_progress(dynamic raw);
+
+  @protected
   NativeSyntaxSpan dco_decode_native_syntax_span(dynamic raw);
 
   @protected
@@ -488,6 +491,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   NativeFoldingRange sse_decode_native_folding_range(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  NativeParseProgress sse_decode_native_parse_progress(
     SseDeserializer deserializer,
   );
 
@@ -808,6 +816,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_native_folding_range(
     NativeFoldingRange self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_native_parse_progress(
+    NativeParseProgress self,
     SseSerializer serializer,
   );
 

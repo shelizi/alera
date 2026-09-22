@@ -324,6 +324,10 @@ class const _LanguageIntelligenceRuntimeStatus({
   Widget build(BuildContext context) {
     final parserStatus = parser;
     final semanticServer = server;
+    final parserProgress =
+        parserStatus?.state == StructuralParserActivityState.parsing
+        ? parserStatus?.progressFraction
+        : null;
 
     return Column(
       crossAxisAlignment: .stretch,
@@ -356,11 +360,9 @@ class const _LanguageIntelligenceRuntimeStatus({
         _RuntimeStatusRow(
           label: 'Parser',
           value: _parserLabel(parser, parserEnabled),
-          detail: parserStatus == null
-              ? null
-              : '${parserStatus.activeDocumentCount} active document(s)'
-                    '${parserStatus.revision == null ? '' : ', revision ${parserStatus.revision}'}',
+          detail: _parserDetail(parserStatus),
           busy: parser?.state == StructuralParserActivityState.parsing,
+          progress: parserProgress,
         ),
       ],
     );
@@ -418,6 +420,35 @@ class const _LanguageIntelligenceRuntimeStatus({
       StructuralParserActivityState.failed => 'Failed',
     };
   }
+
+  static String? _parserDetail(StructuralParserActivitySnapshot? snapshot) {
+    if (snapshot == null) return null;
+    final parts = <String>[];
+    if (snapshot.state == StructuralParserActivityState.parsing &&
+        snapshot.currentByteOffset != null &&
+        snapshot.totalBytes != null &&
+        snapshot.totalBytes! > 0) {
+      parts.add(
+        '${_formatBytes(snapshot.currentByteOffset!)} / '
+        '${_formatBytes(snapshot.totalBytes!)}',
+      );
+    }
+    parts.add('${snapshot.activeDocumentCount} active document(s)');
+    if (snapshot.revision != null) {
+      parts.add('revision ${snapshot.revision}');
+    }
+    return parts.join(' · ');
+  }
+
+  static String _formatBytes(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    final kib = bytes / 1024;
+    if (kib < 1024) return '${kib.toStringAsFixed(kib < 10 ? 1 : 0)} KB';
+    final mib = kib / 1024;
+    if (mib < 1024) return '${mib.toStringAsFixed(mib < 10 ? 1 : 0)} MB';
+    final gib = mib / 1024;
+    return '${gib.toStringAsFixed(gib < 10 ? 1 : 0)} GB';
+  }
 }
 
 class const _RuntimeStatusRow({
@@ -425,6 +456,7 @@ class const _RuntimeStatusRow({
   required final String value,
   final String? detail,
   final bool busy = false,
+  final double? progress,
 }) extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
@@ -434,7 +466,16 @@ class const _RuntimeStatusRow({
       child: Row(
         children: <Widget>[
           SizedBox(width: 170, child: Text(context.tr(label))),
-          if (busy) ...<Widget>[
+          if (progress != null) ...<Widget>[
+            SizedBox.square(
+              dimension: 12,
+              child: CircularProgressIndicator(
+                strokeWidth: 1.5,
+                value: progress!.clamp(0.0, 1.0),
+              ),
+            ),
+            const SizedBox(width: AleraTokens.space8),
+          ] else if (busy) ...<Widget>[
             const SizedBox.square(
               dimension: 12,
               child: CircularProgressIndicator(strokeWidth: 1.5),
@@ -448,6 +489,16 @@ class const _RuntimeStatusRow({
               fontWeight: .w500,
             ),
           ),
+          if (progress != null) ...<Widget>[
+            const SizedBox(width: AleraTokens.space4),
+            Text(
+              '${(progress!.clamp(0.0, 1.0) * 100).round()}%',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: AleraTokens.foregroundMuted,
+                fontFeatures: const <FontFeature>[FontFeature.tabularFigures()],
+              ),
+            ),
+          ],
           if (detail != null && detail!.trim().isNotEmpty) ...<Widget>[
             const SizedBox(width: AleraTokens.space8),
             Expanded(

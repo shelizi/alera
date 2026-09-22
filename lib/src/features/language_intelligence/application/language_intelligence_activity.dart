@@ -36,6 +36,8 @@ final class StructuralParserDocumentSnapshot {
     required this.documentId,
     required this.state,
     this.revision,
+    this.currentByteOffset,
+    this.totalBytes,
     this.detail,
   });
 
@@ -43,7 +45,16 @@ final class StructuralParserDocumentSnapshot {
   final String documentId;
   final StructuralParserActivityState state;
   final int? revision;
+  final int? currentByteOffset;
+  final int? totalBytes;
   final String? detail;
+
+  double? get progressFraction {
+    final current = currentByteOffset;
+    final total = totalBytes;
+    if (current == null || total == null || total <= 0) return null;
+    return (current / total).clamp(0.0, 1.0);
+  }
 }
 
 final class SemanticServerActivitySnapshot {
@@ -72,6 +83,8 @@ final class StructuralParserActivitySnapshot {
     required this.state,
     required this.activeDocumentCount,
     this.revision,
+    this.currentByteOffset,
+    this.totalBytes,
     this.detail,
   });
 
@@ -79,7 +92,16 @@ final class StructuralParserActivitySnapshot {
   final StructuralParserActivityState state;
   final int activeDocumentCount;
   final int? revision;
+  final int? currentByteOffset;
+  final int? totalBytes;
   final String? detail;
+
+  double? get progressFraction {
+    final current = currentByteOffset;
+    final total = totalBytes;
+    if (current == null || total == null || total <= 0) return null;
+    return (current / total).clamp(0.0, 1.0);
+  }
 }
 
 final class LanguageIntelligenceActivitySnapshot {
@@ -143,11 +165,23 @@ final class LanguageIntelligenceActivitySnapshot {
     );
     final representative = documents.first;
     int? highestRevision;
+    var progressCurrent = 0;
+    var progressTotal = 0;
+    var hasProgress = false;
     for (final document in documents) {
       final revision = document.revision;
       if (revision != null &&
           (highestRevision == null || revision > highestRevision)) {
         highestRevision = revision;
+      }
+      if (document.state == StructuralParserActivityState.parsing) {
+        final total = document.totalBytes;
+        final current = document.currentByteOffset;
+        if (total != null && total > 0 && current != null) {
+          hasProgress = true;
+          progressTotal += total;
+          progressCurrent += current.clamp(0, total);
+        }
       }
     }
     return StructuralParserActivitySnapshot(
@@ -155,6 +189,8 @@ final class LanguageIntelligenceActivitySnapshot {
       state: representative.state,
       activeDocumentCount: documents.length,
       revision: highestRevision,
+      currentByteOffset: hasProgress ? progressCurrent : null,
+      totalBytes: hasProgress ? progressTotal : null,
       detail: _firstNonEmpty(documents.map((document) => document.detail)),
     );
   }

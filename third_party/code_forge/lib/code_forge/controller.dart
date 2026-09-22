@@ -80,11 +80,22 @@ class CodeForgeNativeSyntaxStatus {
     this.languageId,
     this.documentId,
     this.revision,
+    this.currentByteOffset,
+    this.totalBytes,
     this.error,
   });
   final CodeForgeNativeSyntaxState state;
   final String? languageId, documentId, error;
   final int? revision;
+  final int? currentByteOffset;
+  final int? totalBytes;
+
+  double? get progressFraction {
+    final current = currentByteOffset;
+    final total = totalBytes;
+    if (current == null || total == null || total <= 0) return null;
+    return (current / total).clamp(0.0, 1.0);
+  }
 }
 
 /// Controller for the [CodeForge] code editor widget.
@@ -185,6 +196,7 @@ class CodeForgeController implements DeltaTextInputClient {
   _queuedCompletionRequest;
   NativeEditorDocument? _nativeEditorDocument;
   NativeParseCancellation? _nativeEditorParseCancellation;
+  Timer? _nativeSyntaxProgressTimer;
   Future<void>? _nativeEditorOpenFuture;
   Future<void>? _nativeEditorSyncFuture;
   final List<CodeForgeDocumentEditDelta> _pendingNativeEditorEdits = [];
@@ -423,6 +435,55 @@ class CodeForgeController implements DeltaTextInputClient {
   /// Opens one retained native syntax document from the current logical text.
   /// The full text crosses FFI only here; subsequent updates are Unicode-scalar
   /// edit deltas emitted by [_commitDocumentEdit].
+  void _startNativeSyntaxProgressPolling({
+    required int generation,
+    required int revision,
+    required NativeParseProgress Function() readProgress,
+  }) {
+    _stopNativeSyntaxProgressPolling();
+
+    void publish() {
+      if (_isDisposed || generation != _nativeEditorGeneration) {
+        _stopNativeSyntaxProgressPolling();
+        return;
+      }
+      try {
+        final progress = readProgress();
+        final current = progress.currentByteOffset.toInt();
+        final total = progress.totalBytes.toInt();
+        if (total <= 0) return;
+        final previous = nativeSyntaxStatus.value;
+        if (previous.state == CodeForgeNativeSyntaxState.parsing &&
+            previous.currentByteOffset == current &&
+            previous.totalBytes == total) {
+          return;
+        }
+        nativeSyntaxStatus.value = CodeForgeNativeSyntaxStatus(
+          state: CodeForgeNativeSyntaxState.parsing,
+          languageId: _nativeEditorLanguageId,
+          documentId: _nativeEditorDocumentId,
+          revision: revision,
+          currentByteOffset: current,
+          totalBytes: total,
+        );
+      } catch (_) {
+        // The parse lifecycle remains authoritative. A transient progress read
+        // must never disable native syntax or turn telemetry into a failure.
+      }
+    }
+
+    publish();
+    _nativeSyntaxProgressTimer = Timer.periodic(
+      const Duration(milliseconds: 75),
+      (_) => publish(),
+    );
+  }
+
+  void _stopNativeSyntaxProgressPolling() {
+    _nativeSyntaxProgressTimer?.cancel();
+    _nativeSyntaxProgressTimer = null;
+  }
+
   void configureNativeSyntaxDocument({
     required String languageId,
     String? documentId,
@@ -439,6 +500,7 @@ class CodeForgeController implements DeltaTextInputClient {
     }
 
     final generation = ++_nativeEditorGeneration;
+    _stopNativeSyntaxProgressPolling();
     final previousCancellation = _nativeEditorParseCancellation;
     _nativeEditorParseCancellation = null;
     previousCancellation?.cancel();
@@ -481,6 +543,11 @@ class CodeForgeController implements DeltaTextInputClient {
           return;
         }
         _nativeEditorParseCancellation = cancellation;
+        _startNativeSyntaxProgressPolling(
+          generation: generation,
+          revision: initialRevision,
+          readProgress: cancellation.progress,
+        );
         final document = await NativeEditorDocument.openFromRopeCancellable(
           documentId: resolvedDocumentId,
           revision: BigInt.from(initialRevision),
@@ -495,7 +562,9 @@ class CodeForgeController implements DeltaTextInputClient {
         if (identical(_nativeEditorParseCancellation, cancellation)) {
           _nativeEditorParseCancellation = null;
         }
+        _stopNativeSyntaxProgressPolling();
         final info = document.info();
+        final progress = document.parseProgress();
         _nativeEditorDocument = document;
         _nativeEditorRevision = info.revision.toInt();
         _nativeEditorParserSupported = info.parserSupported;
@@ -509,12 +578,15 @@ class CodeForgeController implements DeltaTextInputClient {
           languageId: normalizedLanguageId,
           documentId: resolvedDocumentId,
           revision: _nativeEditorRevision,
+          currentByteOffset: progress.currentByteOffset.toInt(),
+          totalBytes: progress.totalBytes.toInt(),
         );
       } catch (error) {
         if (generation != _nativeEditorGeneration) return;
         if (identical(_nativeEditorParseCancellation, cancellation)) {
           _nativeEditorParseCancellation = null;
         }
+        _stopNativeSyntaxProgressPolling();
         _disableNativeSyntaxDocument(error);
       }
     }();
@@ -599,19 +671,29 @@ class CodeForgeController implements DeltaTextInputClient {
         documentId: _nativeEditorDocumentId,
         revision: batch.last.newRevision,
       );
-      final result = await document.applyEdits(
-        expectedRevision: BigInt.from(nativeRevisionBeforeApply),
-        newRevision: BigInt.from(batch.last.newRevision),
-        edits: batch
-            .map(
-              (edit) => EditorDocumentEdit(
-                start: BigInt.from(edit.start),
-                end: BigInt.from(edit.end),
-                replacement: edit.replacement,
-              ),
-            )
-            .toList(growable: false),
+      _startNativeSyntaxProgressPolling(
+        generation: generation,
+        revision: batch.last.newRevision,
+        readProgress: document.parseProgress,
       );
+      late final EditorDocumentRevision result;
+      try {
+        result = await document.applyEdits(
+          expectedRevision: BigInt.from(nativeRevisionBeforeApply),
+          newRevision: BigInt.from(batch.last.newRevision),
+          edits: batch
+              .map(
+                (edit) => EditorDocumentEdit(
+                  start: BigInt.from(edit.start),
+                  end: BigInt.from(edit.end),
+                  replacement: edit.replacement,
+                ),
+              )
+              .toList(growable: false),
+        );
+      } finally {
+        _stopNativeSyntaxProgressPolling();
+      }
       if (generation != _nativeEditorGeneration) return;
       if (!result.applied ||
           result.revision.toInt() != batch.last.newRevision) {
@@ -625,11 +707,14 @@ class CodeForgeController implements DeltaTextInputClient {
       }
       _nativeEditorRevision = result.revision.toInt();
       _pendingNativeEditorEdits.removeRange(0, batch.length);
+      final progress = document.parseProgress();
       nativeSyntaxStatus.value = CodeForgeNativeSyntaxStatus(
         state: CodeForgeNativeSyntaxState.ready,
         languageId: _nativeEditorLanguageId,
         documentId: _nativeEditorDocumentId,
         revision: _nativeEditorRevision,
+        currentByteOffset: progress.currentByteOffset.toInt(),
+        totalBytes: progress.totalBytes.toInt(),
       );
     }
   }
@@ -1066,6 +1151,7 @@ class CodeForgeController implements DeltaTextInputClient {
 
   void _disableNativeSyntaxDocument(Object error) {
     debugPrint('CodeForge native syntax fallback: $error');
+    _stopNativeSyntaxProgressPolling();
     final parseCancellation = _nativeEditorParseCancellation;
     _nativeEditorParseCancellation = null;
     parseCancellation?.cancel();
@@ -3107,6 +3193,7 @@ class CodeForgeController implements DeltaTextInputClient {
 
   void _resetNativeSyntaxDocument() {
     _nativeEditorGeneration++;
+    _stopNativeSyntaxProgressPolling();
     final parseCancellation = _nativeEditorParseCancellation;
     _nativeEditorParseCancellation = null;
     parseCancellation?.cancel();
@@ -5488,6 +5575,7 @@ class CodeForgeController implements DeltaTextInputClient {
   void dispose() {
     _isDisposed = true;
     _nativeEditorGeneration++;
+    _stopNativeSyntaxProgressPolling();
     final parseCancellation = _nativeEditorParseCancellation;
     _nativeEditorParseCancellation = null;
     parseCancellation?.cancel();

@@ -293,6 +293,47 @@ void _registerSettingsDialogEditorTests() {
       4,
     );
   });
+
+  testWidgets('shows determinate structural parser byte progress', (
+    tester,
+  ) async {
+    final activity = LanguageIntelligenceActivityStore();
+    addTearDown(activity.dispose);
+    activity.reportStructuralParserDocument(
+      StructuralParserDocumentSnapshot(
+        language: LanguageId('rust'),
+        documentId: 'lib/main.rs',
+        state: StructuralParserActivityState.parsing,
+        revision: 7,
+        currentByteOffset: 512 * 1024,
+        totalBytes: 2 * 1024 * 1024,
+      ),
+    );
+
+    await _pumpSettingsDialog(
+      tester,
+      initialSectionId: 'editor',
+      locale: const Locale('en'),
+      extraOverrides: <dynamic>[
+        languageIntelligenceActivityProvider.overrideWithValue(activity),
+      ],
+    );
+
+    final rustParserSwitch = find.byKey(
+      const ValueKey<String>('language-intelligence-rust-parser'),
+    );
+    await tester.ensureVisible(rustParserSwitch);
+    await tester.pump();
+
+    expect(find.text('25%'), findsOneWidget);
+    expect(find.textContaining('512 KB / 2.0 MB'), findsOneWidget);
+    expect(
+      find.byWidgetPredicate(
+        (widget) => widget is CircularProgressIndicator && widget.value == 0.25,
+      ),
+      findsOneWidget,
+    );
+  });
 }
 
 final class _ReadyLanguageIntelligenceStatusPort

@@ -18,6 +18,8 @@ void main() {
       expect(controller, contains('NativeParseCancellation.create()'));
       expect(controller, contains('previousCancellation?.cancel()'));
       expect(controller, contains('parseCancellation?.cancel()'));
+      expect(controller, contains('readProgress: cancellation.progress'));
+      expect(controller, contains('readProgress: document.parseProgress'));
       expect(controller, contains('.applyEdits('));
       expect(controller, contains('queryNativeSyntaxSpans('));
       expect(controller, contains('.close()'));
@@ -54,6 +56,16 @@ void main() {
     );
     expect(workspaceEditor, contains('workspaceEditorNativeSyntaxEnabled('));
     expect(workspaceEditor, contains('enableNativeSyntax: enableNativeSyntax'));
+    expect(
+      workspaceEditor,
+      contains('currentByteOffset: status.currentByteOffset'),
+    );
+    expect(workspaceEditor, contains('totalBytes: status.totalBytes'));
+
+    final activity = File(
+      'lib/src/features/language_intelligence/application/language_intelligence_activity.dart',
+    ).readAsStringSync();
+    expect(activity, contains('double? get progressFraction'));
   });
 
   test(
