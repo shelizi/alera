@@ -20,7 +20,7 @@ The codebase currently recognizes 15 distinct agent or provider identifiers acro
 | `pi` | Pi | `rust/alera-cli/src/terminal_host/orchestration/agent_registry.rs:94` / `lib/src/features/agent_status/domain/agent_status.dart:24` | Spawnable Adapter, Hook, Status, AI Assist |
 | `amp` | Amp | `rust/alera-cli/src/terminal_host/orchestration/agent_registry.rs:101` / `lib/src/features/agent_status/domain/agent_status.dart:25` | Spawnable Adapter, Hook, Status, AI Assist |
 | `grok` | Grok Build | `rust/alera-cli/src/terminal_host/orchestration/agent_registry.rs:108` / `lib/src/features/agent_status/domain/agent_status.dart:26` | Spawnable Adapter, Hook, Status, Quota, Usage, AI Assist |
-| `devin` | Devin | `rust/alera-cli/src/terminal_host/orchestration/agent_registry.rs:115` / `lib/src/features/agent_status/domain/agent_status.dart:27` | Spawnable Adapter, Hook, Status, Quota |
+| `devin` | Devin | `rust/alera-cli/src/terminal_host/orchestration/agent_registry.rs:115` / `lib/src/features/agent_status/domain/agent_status.dart:27` | Spawnable Adapter, Hook, Status, Quota, AI Assist |
 | `fx` | fx | `rust/alera-cli/src/terminal_host/orchestration/agent_registry.rs:122` / `lib/src/features/agent_status/domain/agent_status.dart:28` | Spawnable Adapter, Status (Herdr Socket), AI Assist |
 | `kimi` | Kimi | `rust/alera-core/src/runtime/agent_quota_settings_models.rs:40` / `lib/src/features/settings/domain/agent_quota_settings.dart:7` | Quota Provider |
 | `minimax` | MiniMax | `rust/alera-core/src/runtime/agent_quota_settings_models.rs:44` / `lib/src/features/settings/domain/agent_quota_settings.dart:11` | Quota Provider |

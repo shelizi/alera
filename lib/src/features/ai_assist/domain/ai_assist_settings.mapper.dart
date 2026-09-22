@@ -113,6 +113,8 @@ class AiAssistAgentMapper extends EnumMapper<AiAssistAgent> {
         return AiAssistAgent.amp;
       case r'grok':
         return AiAssistAgent.grok;
+      case r'devin':
+        return AiAssistAgent.devin;
       case r'fx':
         return AiAssistAgent.fx;
       case r'custom':
@@ -145,6 +147,8 @@ class AiAssistAgentMapper extends EnumMapper<AiAssistAgent> {
         return r'amp';
       case AiAssistAgent.grok:
         return r'grok';
+      case AiAssistAgent.devin:
+        return r'devin';
       case AiAssistAgent.fx:
         return r'fx';
       case AiAssistAgent.custom:

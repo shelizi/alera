@@ -1,4 +1,6 @@
+import 'package:alera/src/features/agent_profiles/domain/agent_descriptor_registry.dart';
 import 'package:alera/src/features/agent_status/domain/agent_status.dart';
+import 'package:alera/src/features/ai_assist/application/ai_assist_registry.dart';
 import 'package:alera/src/features/ai_assist/domain/ai_assist_settings.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -26,6 +28,7 @@ void main() {
     expect(AiAssistAgent.pi.agentType, AgentType.pi);
     expect(AiAssistAgent.amp.agentType, AgentType.amp);
     expect(AiAssistAgent.grok.agentType, AgentType.grok);
+    expect(AiAssistAgent.devin.agentType, AgentType.devin);
     expect(AiAssistAgent.fx.agentType, AgentType.fx);
     expect(AiAssistAgent.custom.agentType, isNull);
     expect(
@@ -41,9 +44,84 @@ void main() {
         'Pi',
         'Amp',
         'Grok Build',
+        'Devin',
         'fx',
         'Custom Command',
       ]),
+    );
+  });
+
+  test('AI Assist registry is the complete selectable-agent source', () {
+    final registered = aiAssistAgentSpecs.keys.toSet();
+    final nonCustom = AiAssistAgent.values
+        .where((agent) => agent != AiAssistAgent.custom)
+        .toSet();
+
+    expect(registered, nonCustom);
+    expect(selectableAiAssistAgents, <AiAssistAgent>[
+      ...aiAssistAgentSpecs.keys,
+      AiAssistAgent.custom,
+    ]);
+    for (final spec in aiAssistAgentSpecs.values) {
+      expect(aiAssistAgentForType(spec.agent.agentType!), spec.agent);
+    }
+  });
+
+  test(
+    'AI Assist capabilities reuse the canonical agent descriptor identity',
+    () {
+      for (final entry in aiAssistCapabilities.entries) {
+        final descriptor = agentDescriptorFor(entry.key);
+        final capability = entry.value;
+
+        expect(capability.agentType, entry.key);
+        expect(capability.id, descriptor.id);
+        expect(capability.label, descriptor.displayName);
+        expect(capability.binary, descriptor.defaultCommand);
+      }
+    },
+  );
+
+  test('parses Devin model-list output', () {
+    final models = parseDevinModels('''
+GPT-5.5 (gpt-5.5)
+  gpt-5-5-low      GPT-5.5 Low Thinking  [272K context]
+  gpt-5-5-high     GPT-5.5 High Thinking  [272K context]
+
+Claude Sonnet 4.6 (claude-sonnet-4.6)
+  claude-sonnet-4-6  Claude Sonnet 4.6  [200K context]
+''');
+
+    expect(models.map((model) => (model.id, model.label)), <(String, String)>[
+      ('gpt-5-5-low', 'GPT-5.5 Low Thinking'),
+      ('gpt-5-5-high', 'GPT-5.5 High Thinking'),
+      ('claude-sonnet-4-6', 'Claude Sonnet 4.6'),
+    ]);
+  });
+
+  test('registers Devin non-interactive AI Assist command contract', () {
+    final spec = aiAssistAgentSpecs[AiAssistAgent.devin]!;
+
+    expect(spec.binary, 'devin');
+    expect(spec.modelsCommand, <String>['models', 'list']);
+    expect(spec.modelCanInherit, isTrue);
+    expect(
+      spec.buildArgs(
+        prompt: 'Summarize the change',
+        model: 'gpt-5-5-high',
+        thinkingLevel: null,
+        timeoutSeconds: 120,
+      ),
+      <String>[
+        '--print',
+        '--permission-mode',
+        'auto',
+        '--respect-workspace-trust',
+        'false',
+        '--model',
+        'gpt-5-5-high',
+        'Summarize the change',
+      ],
     );
   });
 

@@ -12,8 +12,7 @@ const List<AiThinkingLevel> grokThinkingLevels = <AiThinkingLevel>[
 ];
 
 final AiAssistAgentSpec grokAiAssistAgentSpec = AiAssistAgentSpec(
-  agent: .grok,
-  binary: 'grok',
+  agentType: .grok,
   promptDelivery: .promptFile,
   modelsCommand: const <String>['models'],
   parseModels: parseGrokModels,

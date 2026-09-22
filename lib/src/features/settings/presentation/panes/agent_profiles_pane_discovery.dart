@@ -6,7 +6,7 @@ extension _AgentProfilesPaneDiscovery on _AgentProfilesSettingsPaneState {
     if (discovered != null) {
       return discovered;
     }
-    final spec = aiAssistAgentSpecs[_aiAssistAgent(adapter)];
+    final spec = aiAssistAgentSpecs[aiAssistAgentForType(adapter)];
     return <ManagedAgentOption>[
       for (final model in spec?.models ?? const <AiAssistModel>[])
         ManagedAgentOption(model.id, model.label),
@@ -27,7 +27,8 @@ extension _AgentProfilesPaneDiscovery on _AgentProfilesSettingsPaneState {
   }
 
   bool _canDiscoverModels(AgentType adapter) {
-    return aiAssistAgentSpecs[_aiAssistAgent(adapter)]?.modelsCommand != null;
+    return aiAssistAgentSpecs[aiAssistAgentForType(adapter)]?.modelsCommand !=
+        null;
   }
 
   bool _canDiscoverPersonas(AgentType adapter) {
@@ -54,7 +55,7 @@ extension _AgentProfilesPaneDiscovery on _AgentProfilesSettingsPaneState {
   }
 
   Future<void> _discoverModels(AgentType adapter) async {
-    final agent = _aiAssistAgent(adapter);
+    final agent = aiAssistAgentForType(adapter);
     if (agent == null || !_loadingModels.add(adapter)) {
       return;
     }
@@ -126,15 +127,6 @@ extension _AgentProfilesPaneDiscovery on _AgentProfilesSettingsPaneState {
       }
     }
   }
-}
-
-AiAssistAgent? _aiAssistAgent(AgentType adapter) {
-  for (final agent in AiAssistAgent.values) {
-    if (agent.agentType == adapter) {
-      return agent;
-    }
-  }
-  return null;
 }
 
 String _titleFromId(String value) {

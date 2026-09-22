@@ -1,12 +1,8 @@
 part of 'ai_assist_registry.dart';
 
-AiAssistAgentSpec openCodeAiAssistSpec({
-  required AiAssistAgent agent,
-  required String binary,
-}) {
+AiAssistAgentSpec openCodeAiAssistSpec({required AgentType agentType}) {
   return AiAssistAgentSpec(
-    agent: agent,
-    binary: binary,
+    agentType: agentType,
     promptDelivery: .stdin,
     modelsCommand: const <String>['models'],
     parseModels: parseLineModels,

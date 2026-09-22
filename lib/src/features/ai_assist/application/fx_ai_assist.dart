@@ -1,8 +1,7 @@
 part of 'ai_assist_registry.dart';
 
 final AiAssistAgentSpec fxAiAssistAgentSpec = AiAssistAgentSpec(
-  agent: .fx,
-  binary: 'fx',
+  agentType: .fx,
   promptDelivery: .stdin,
   modelsCommand: const <String>['models', '--json'],
   parseModels: parseFxModels,

@@ -106,6 +106,7 @@ void _registerSettingsDialogAiAssistTests() {
           .enabled,
       isTrue,
     );
+    expect(find.text('Devin'), findsOneWidget);
     await tester.tap(find.text('Antigravity').last);
     await tester.pump(const Duration(milliseconds: 50));
 

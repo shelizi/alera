@@ -1,3 +1,4 @@
+import 'package:alera/src/features/agent_profiles/domain/agent_descriptor_registry.dart';
 import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 import 'package:dart_mappable/dart_mappable.dart';
 
@@ -27,45 +28,28 @@ enum AiAssistOperation(this.key) {
 }
 
 @MappableEnum()
-enum AiAssistAgent(this.key) {
-  codex('codex'),
-  claude('claude'),
-  copilot('copilot'),
-  cursor('cursor'),
-  agy('agy'),
-  opencode('opencode'),
-  opencode2('opencode2'),
-  pi('pi'),
-  amp('amp'),
-  grok('grok'),
-  fx('fx'),
-  custom('custom');
+enum AiAssistAgent(this.agentType) {
+  codex(AgentType.codex),
+  claude(AgentType.claude),
+  copilot(AgentType.copilot),
+  cursor(AgentType.cursor),
+  agy(AgentType.agy),
+  opencode(AgentType.opencode),
+  opencode2(AgentType.opencode2),
+  pi(AgentType.pi),
+  amp(AgentType.amp),
+  grok(AgentType.grok),
+  devin(AgentType.devin),
+  fx(AgentType.fx),
+  custom(null);
 
-  final String key;
+  final AgentType? agentType;
 
-  String get label => switch (this) {
-    AiAssistAgent.codex => 'Codex',
-    AiAssistAgent.claude => 'Claude Code',
-    AiAssistAgent.copilot => 'GitHub Copilot',
-    AiAssistAgent.cursor => 'Cursor',
-    AiAssistAgent.agy => 'Antigravity',
-    AiAssistAgent.opencode => 'OpenCode',
-    AiAssistAgent.opencode2 => 'OpenCode 2',
-    AiAssistAgent.pi => 'Pi',
-    AiAssistAgent.amp => 'Amp',
-    AiAssistAgent.grok => 'Grok Build',
-    AiAssistAgent.fx => 'fx',
-    AiAssistAgent.custom => 'Custom Command',
-  };
+  String get key => agentType?.key ?? 'custom';
 
-  AgentType? get agentType {
-    for (final type in AgentType.values) {
-      if (type.name == name) {
-        return type;
-      }
-    }
-    return null;
-  }
+  String get label => agentType == null
+      ? 'Custom Command'
+      : agentDescriptorFor(agentType!).displayName;
 }
 
 @MappableClass()

@@ -1,5 +1,8 @@
 import 'dart:convert';
 
+import 'package:alera/src/features/agent_profiles/domain/agent_descriptor_registry.dart';
+import 'package:alera/src/features/agent_profiles/domain/agent_descriptor_snapshot.dart';
+import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 import 'package:alera/src/features/ai_assist/domain/ai_assist_settings.dart';
 
 part 'grok_ai_assist.dart';
@@ -49,9 +52,34 @@ AiAssistModel modelFromDiscovered(AiAssistDiscoveredModel model) {
   );
 }
 
+abstract interface class AiAssistCapability {
+  AgentType get agentType;
+  String get id;
+  String get label;
+  String get binary;
+  AiPromptDelivery get promptDelivery;
+  List<String>? get modelsCommand;
+  List<AiAssistModel> Function(String stdout) get parseModels;
+  List<AiAssistModel> get models;
+  String? get defaultModelId;
+  bool get modelCanInherit;
+  AiNativeStructuredOutput get nativeStructuredOutput;
+  bool get supportsRepositoryRead;
+  bool get readOnlyGuarantee;
+  AiAssistDiffOnlyAccess get diffOnlyAccess;
+  List<String> get diffOnlyArgs;
+  int get maxPromptBytes;
+  List<String> Function({
+    required String prompt,
+    required String model,
+    String? thinkingLevel,
+    required int timeoutSeconds,
+  })
+  get buildArgs;
+}
+
 class const AiAssistAgentSpec({
-  required final AiAssistAgent agent,
-  required final String binary,
+  required final AgentType agentType,
   required final AiPromptDelivery promptDelivery,
   required final List<String>? modelsCommand,
   required final List<AiAssistModel> Function(String stdout) parseModels,
@@ -73,8 +101,19 @@ class const AiAssistAgentSpec({
       AiAssistDiffOnlyAccess.unsupported,
   final List<String> diffOnlyArgs = const <String>[],
   final int maxPromptBytes = 1024 * 1024,
-}) {
-  String get label => agent.label;
+}) implements AiAssistCapability {
+  AgentDescriptorSnapshot get descriptor => agentDescriptorFor(agentType);
+
+  @override
+  String get id => descriptor.id;
+
+  @override
+  String get label => descriptor.displayName;
+
+  @override
+  String get binary => descriptor.defaultCommand;
+
+  AiAssistAgent get agent => aiAssistAgentForType(agentType)!;
 }
 
 const List<AiThinkingLevel> basicThinkingLevels = <AiThinkingLevel>[
@@ -103,12 +142,11 @@ const List<AiThinkingLevel> onOffThinkingLevels = <AiThinkingLevel>[
   AiThinkingLevel(id: 'off', label: 'Off'),
 ];
 
-final Map<AiAssistAgent, AiAssistAgentSpec>
-aiAssistAgentSpecs = <AiAssistAgent, AiAssistAgentSpec>{
-  AiAssistAgent.claude: claudeAiAssistAgentSpec,
-  AiAssistAgent.codex: AiAssistAgentSpec(
-    agent: .codex,
-    binary: 'codex',
+final Map<AgentType, AiAssistAgentSpec>
+aiAssistCapabilities = <AgentType, AiAssistAgentSpec>{
+  AgentType.claude: claudeAiAssistAgentSpec,
+  AgentType.codex: AiAssistAgentSpec(
+    agentType: .codex,
     promptDelivery: .stdin,
     modelsCommand: const <String>['debug', 'models'],
     parseModels: parseCodexModels,
@@ -156,9 +194,8 @@ aiAssistAgentSpecs = <AiAssistAgent, AiAssistAgentSpec>{
           if (thinkingLevel != null) 'model_reasoning_effort=$thinkingLevel',
         ].where((arg) => arg.isNotEmpty).toList(growable: false),
   ),
-  AiAssistAgent.copilot: AiAssistAgentSpec(
-    agent: .copilot,
-    binary: 'copilot',
+  AgentType.copilot: AiAssistAgentSpec(
+    agentType: .copilot,
     promptDelivery: .argv,
     modelsCommand: null,
     parseModels: parseLineModels,
@@ -205,9 +242,8 @@ aiAssistAgentSpecs = <AiAssistAgent, AiAssistAgentSpec>{
           if (thinkingLevel != null) ...<String>['--effort', thinkingLevel],
         ],
   ),
-  AiAssistAgent.cursor: AiAssistAgentSpec(
-    agent: .cursor,
-    binary: 'cursor-agent',
+  AgentType.cursor: AiAssistAgentSpec(
+    agentType: .cursor,
     promptDelivery: .argv,
     modelsCommand: const <String>['--list-models'],
     parseModels: parseCursorModels,
@@ -232,9 +268,8 @@ aiAssistAgentSpecs = <AiAssistAgent, AiAssistAgentSpec>{
           prompt,
         ],
   ),
-  AiAssistAgent.agy: AiAssistAgentSpec(
-    agent: .agy,
-    binary: 'agy',
+  AgentType.agy: AiAssistAgentSpec(
+    agentType: .agy,
     promptDelivery: .stdin,
     modelsCommand: const <String>['models'],
     parseModels: parseAgyModels,
@@ -255,17 +290,10 @@ aiAssistAgentSpecs = <AiAssistAgent, AiAssistAgentSpec>{
           if (model.trim().isNotEmpty) ...<String>['--model', model],
         ],
   ),
-  AiAssistAgent.opencode: openCodeAiAssistSpec(
-    agent: .opencode,
-    binary: 'opencode',
-  ),
-  AiAssistAgent.opencode2: openCodeAiAssistSpec(
-    agent: .opencode2,
-    binary: 'opencode2',
-  ),
-  AiAssistAgent.pi: AiAssistAgentSpec(
-    agent: .pi,
-    binary: 'pi',
+  AgentType.opencode: openCodeAiAssistSpec(agentType: .opencode),
+  AgentType.opencode2: openCodeAiAssistSpec(agentType: .opencode2),
+  AgentType.pi: AiAssistAgentSpec(
+    agentType: .pi,
     promptDelivery: .stdin,
     modelsCommand: const <String>['--list-models'],
     parseModels: parsePiModels,
@@ -299,9 +327,8 @@ aiAssistAgentSpecs = <AiAssistAgent, AiAssistAgentSpec>{
           if (thinkingLevel != null) ...<String>['--thinking', thinkingLevel],
         ],
   ),
-  AiAssistAgent.amp: AiAssistAgentSpec(
-    agent: .amp,
-    binary: 'amp',
+  AgentType.amp: AiAssistAgentSpec(
+    agentType: .amp,
     promptDelivery: .stdin,
     modelsCommand: null,
     parseModels: parseLineModels,
@@ -338,9 +365,70 @@ aiAssistAgentSpecs = <AiAssistAgent, AiAssistAgentSpec>{
           if (thinkingLevel != null) ...<String>['--effort', thinkingLevel],
         ],
   ),
-  AiAssistAgent.grok: grokAiAssistAgentSpec,
-  AiAssistAgent.fx: fxAiAssistAgentSpec,
+  AgentType.grok: grokAiAssistAgentSpec,
+  AgentType.devin: AiAssistAgentSpec(
+    agentType: .devin,
+    promptDelivery: .argv,
+    modelsCommand: const <String>['models', 'list'],
+    parseModels: parseDevinModels,
+    models: const <AiAssistModel>[],
+    defaultModelId: null,
+    modelCanInherit: true,
+    supportsRepositoryRead: true,
+    buildArgs:
+        ({
+          required model,
+          thinkingLevel,
+          required prompt,
+          required timeoutSeconds,
+        }) => <String>[
+          '--print',
+          '--permission-mode',
+          'auto',
+          '--respect-workspace-trust',
+          'false',
+          if (model.trim().isNotEmpty) ...<String>['--model', model],
+          prompt,
+        ],
+  ),
+  AgentType.fx: fxAiAssistAgentSpec,
 };
+
+final Map<AiAssistAgent, AiAssistAgentSpec> aiAssistAgentSpecs =
+    <AiAssistAgent, AiAssistAgentSpec>{
+      for (final entry in aiAssistCapabilities.entries)
+        aiAssistAgentForType(entry.key)!: entry.value,
+    };
+
+List<AiAssistAgent> get selectableAiAssistAgents => <AiAssistAgent>[
+  ...aiAssistAgentSpecs.keys,
+  AiAssistAgent.custom,
+];
+
+AiAssistAgent? aiAssistAgentForType(AgentType type) {
+  for (final agent in AiAssistAgent.values) {
+    if (agent.agentType == type) {
+      return agent;
+    }
+  }
+  return null;
+}
+
+List<AiAssistModel> parseDevinModels(String stdout) {
+  final models = <AiAssistModel>[];
+  final seen = <String>{};
+  final modelLine = RegExp(
+    r'^\s{2}([A-Za-z0-9][A-Za-z0-9._-]*)\s{2,}(.+?)\s{2,}\[',
+  );
+  for (final line in const LineSplitter().convert(stdout)) {
+    final match = modelLine.firstMatch(line);
+    if (match == null) continue;
+    final id = match.group(1)!;
+    if (!seen.add(id)) continue;
+    models.add(AiAssistModel(id: id, label: match.group(2)!.trim()));
+  }
+  return models;
+}
 
 List<AiAssistModel> discoveredModelsForAgent(
   AiAssistSettings settings,

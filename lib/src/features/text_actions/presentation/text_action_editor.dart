@@ -108,7 +108,7 @@ class const TextActionEditor({
                       value: null,
                       label: 'Global (${aiAssistSettings.agent.label})',
                     ),
-                    for (final candidate in AiAssistAgent.values)
+                    for (final candidate in selectableAiAssistAgents)
                       AleraDropdownFieldEntry<AiAssistAgent?>(
                         value: candidate,
                         label: candidate.label,

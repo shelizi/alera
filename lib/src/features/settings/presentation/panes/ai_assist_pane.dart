@@ -290,7 +290,7 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
         value: effectivePromptAgent,
         allowedAgents: isReadingDiff
             ? diffOnlyAiAssistAgents
-            : AiAssistAgent.values,
+            : selectableAiAssistAgents,
         allowGlobal: !isReadingDiff || globalSupported,
         allowCustom: operation != AiAssistOperation.speechMessage,
         onChanged: (agent) =>
