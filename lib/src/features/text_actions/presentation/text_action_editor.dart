@@ -8,7 +8,6 @@ import 'package:alera/src/design_system/layout/alera_settings_group.dart';
 import 'package:alera/src/features/ai_assist/application/ai_assist_registry.dart';
 import 'package:alera/src/features/ai_assist/domain/ai_assist_settings.dart';
 import 'package:alera/src/features/ai_assist/presentation/ai_assist_agent_choice.dart';
-import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 import 'package:alera/src/features/settings/presentation/rows/settings_rows.dart';
 import 'package:flutter/material.dart';
 
@@ -120,7 +119,8 @@ class const TextActionEditor({
                   entries: <AleraDropdownFieldEntry<AiAssistAgentChoice>>[
                     AleraDropdownFieldEntry<AiAssistAgentChoice>(
                       value: const AiAssistAgentChoice.global(),
-                      label: 'Global (${aiAssistSettings.agent.label})',
+                      label:
+                          'Global (${aiAssistSettings.agentType == null ? 'Custom Command' : aiAssistCapabilityFor(aiAssistSettings.agentType)!.label})',
                     ),
                     for (final candidate in selectableAiAssistAgentTypes)
                       AleraDropdownFieldEntry<AiAssistAgentChoice>(

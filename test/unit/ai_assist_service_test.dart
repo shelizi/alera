@@ -133,7 +133,7 @@ Body line.
         const AiAssistRequest(
           operation: .pullRequestDetails,
           workspacePath: '/repo',
-          settings: AiAssistSettings(agent: .agy),
+          settings: AiAssistSettings(agent: 'agy'),
           baseBranch: 'main',
           headBranch: 'feature/ai-pr',
         ),
@@ -157,7 +157,7 @@ Body line.
           const AiAssistRequest(
             operation: .pullRequestDetails,
             workspacePath: '/repo',
-            settings: AiAssistSettings(agent: .agy),
+            settings: AiAssistSettings(agent: 'agy'),
           ),
         ),
         throwsA(
@@ -199,7 +199,7 @@ Body line.
           const AiAssistRequest(
             operation: .commitMessage,
             workspacePath: '/repo',
-            settings: AiAssistSettings(agent: .agy),
+            settings: AiAssistSettings(agent: 'agy'),
           ),
         );
 
@@ -231,7 +231,7 @@ Body line.
         const AiAssistRequest(
           operation: .commitMessage,
           workspacePath: '/repo',
-          settings: AiAssistSettings(agent: .amp),
+          settings: AiAssistSettings(agent: 'amp'),
         ),
       );
 
@@ -278,7 +278,7 @@ Body line.
         const AiAssistRequest(
           operation: .commitMessage,
           workspacePath: '/repo',
-          settings: AiAssistSettings(agent: .opencode),
+          settings: AiAssistSettings(agent: 'opencode'),
         ),
       );
 
@@ -407,7 +407,7 @@ openai-codex    gpt-5.5                 272K     128K     yes       yes
           const AiAssistRequest(
             operation: .commitMessage,
             workspacePath: '/repo',
-            settings: AiAssistSettings(agent: .agy),
+            settings: AiAssistSettings(agent: 'agy'),
           ),
         ),
         throwsA(
@@ -450,7 +450,7 @@ openai-codex    gpt-5.5                 272K     128K     yes       yes
           const AiAssistRequest(
             operation: .commitMessage,
             workspacePath: '/repo',
-            settings: AiAssistSettings(agent: .agy),
+            settings: AiAssistSettings(agent: 'agy'),
           ),
         );
         await untilCalled(() => runner.started);
@@ -494,7 +494,7 @@ openai-codex    gpt-5.5                 272K     128K     yes       yes
         const AiAssistRequest(
           operation: .commitMessage,
           workspacePath: '/repo',
-          settings: AiAssistSettings(agent: .agy),
+          settings: AiAssistSettings(agent: 'agy'),
         ),
       );
       await untilCalled(() => runner.started);
@@ -506,7 +506,7 @@ openai-codex    gpt-5.5                 272K     128K     yes       yes
           const AiAssistRequest(
             operation: .commitMessage,
             workspacePath: '/repo',
-            settings: AiAssistSettings(agent: .agy),
+            settings: AiAssistSettings(agent: 'agy'),
           ),
         ),
         throwsA(
@@ -547,7 +547,7 @@ openai-codex    gpt-5.5                 272K     128K     yes       yes
         const AiAssistRequest(
           operation: .commitMessage,
           workspacePath: '/repo',
-          settings: AiAssistSettings(agent: .agy),
+          settings: AiAssistSettings(agent: 'agy'),
         ),
       );
       await untilCalled(() => git.diffStarted);
@@ -598,7 +598,7 @@ openai-codex    gpt-5.5                 272K     128K     yes       yes
           const AiAssistRequest(
             operation: .commitMessage,
             workspacePath: '/repo',
-            settings: AiAssistSettings(agent: .copilot),
+            settings: AiAssistSettings(agent: 'copilot'),
           ),
         ),
         throwsA(

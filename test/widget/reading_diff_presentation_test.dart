@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:alera/src/app/localization/alera_localizations.dart';
+import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 import 'package:alera/src/features/reading_diff/application/reading_diff_generation_progress.dart';
 import 'package:alera/src/features/reading_diff/domain/reading_diff_models.dart';
 import 'package:alera/src/features/reading_diff/presentation/reading_diff_confirmation_dialog.dart';
@@ -256,7 +257,7 @@ ReadingDiffPreparation _preparation() {
         ),
       ],
     ),
-    agent: .agy,
+    agentType: AgentType.agy,
     model: 'agent-model',
     effort: 'medium',
     accessPolicy: .diffOnly,

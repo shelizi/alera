@@ -42,7 +42,7 @@ void _registerFxAiAssistTests() {
         const AiAssistRequest(
           operation: .commitMessage,
           workspacePath: '/repo',
-          settings: AiAssistSettings(agent: .fx),
+          settings: AiAssistSettings(agent: 'fx'),
         ),
       );
 
@@ -76,7 +76,7 @@ void _registerFxAiAssistTests() {
         operation: .commitMessage,
         workspacePath: '/repo',
         settings: AiAssistSettings(
-          agent: .fx,
+          agent: 'fx',
           selectedModelByAgent: <String, String>{'fx': 'xai/grok-4.1-fast'},
         ),
       ),

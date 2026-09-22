@@ -110,10 +110,7 @@ void _registerSettingsDialogAiAssistTests() {
     await tester.tap(find.text('Antigravity').last);
     await tester.pump(const Duration(milliseconds: 50));
 
-    expect(
-      container.read(settingsControllerProvider).aiAssist.agent,
-      AiAssistAgent.agy,
-    );
+    expect(container.read(settingsControllerProvider).aiAssist.agent, 'agy');
     await tester.pump(const Duration(milliseconds: 50));
     expect(
       container

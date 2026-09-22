@@ -322,7 +322,7 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
         AiAssistPromptModelRow(
           operation: operation,
           agentType: agentType,
-          models: modelsForAgentType(agentType!, settings),
+          models: modelsForAgentType(agentType, settings),
           inheritedModel: inheritedModel,
           value: effectivePromptModel,
           discovering: discovery.loading,
@@ -495,18 +495,18 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
     });
   }
 
-  AiAssistAgentChoice _choiceForPersistedAgent(AiAssistAgent? agent) {
-    if (agent == null) return const AiAssistAgentChoice.global();
-    final type = agent.agentType;
-    return type == null
+  AiAssistAgentChoice _choiceForPersistedAgent(String? agentId) {
+    if (agentId == null) return const AiAssistAgentChoice.global();
+    final type = aiAssistAgentTypeForId(agentId);
+    return isCustomAiAssistAgentId(agentId)
         ? const AiAssistAgentChoice.custom()
-        : AiAssistAgentChoice.agent(type);
+        : AiAssistAgentChoice.agent(type!);
   }
 
-  AiAssistAgent? _persistedAgentForChoice(AiAssistAgentChoice choice) {
+  String? _persistedAgentForChoice(AiAssistAgentChoice choice) {
     if (choice.isGlobal) return null;
-    if (choice.isCustom) return AiAssistAgent.custom;
-    return AiAssistAgent.fromAgentType(choice.agentType!);
+    if (choice.isCustom) return aiAssistCustomAgentId;
+    return aiAssistAgentIdForType(choice.agentType!);
   }
 }
 

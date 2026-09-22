@@ -74,96 +74,6 @@ extension AiAssistOperationMapperExtension on AiAssistOperation {
   }
 }
 
-class AiAssistAgentMapper extends EnumMapper<AiAssistAgent> {
-  AiAssistAgentMapper._();
-
-  static AiAssistAgentMapper? _instance;
-  static AiAssistAgentMapper ensureInitialized() {
-    if (_instance == null) {
-      MapperContainer.globals.use(_instance = AiAssistAgentMapper._());
-    }
-    return _instance!;
-  }
-
-  static AiAssistAgent fromValue(dynamic value) {
-    ensureInitialized();
-    return MapperContainer.globals.fromValue(value);
-  }
-
-  @override
-  AiAssistAgent decode(dynamic value) {
-    switch (value) {
-      case r'codex':
-        return AiAssistAgent.codex;
-      case r'claude':
-        return AiAssistAgent.claude;
-      case r'copilot':
-        return AiAssistAgent.copilot;
-      case r'cursor':
-        return AiAssistAgent.cursor;
-      case r'agy':
-        return AiAssistAgent.agy;
-      case r'opencode':
-        return AiAssistAgent.opencode;
-      case r'opencode2':
-        return AiAssistAgent.opencode2;
-      case r'pi':
-        return AiAssistAgent.pi;
-      case r'amp':
-        return AiAssistAgent.amp;
-      case r'grok':
-        return AiAssistAgent.grok;
-      case r'devin':
-        return AiAssistAgent.devin;
-      case r'fx':
-        return AiAssistAgent.fx;
-      case r'custom':
-        return AiAssistAgent.custom;
-      default:
-        throw MapperException.unknownEnumValue(value);
-    }
-  }
-
-  @override
-  dynamic encode(AiAssistAgent self) {
-    switch (self) {
-      case AiAssistAgent.codex:
-        return r'codex';
-      case AiAssistAgent.claude:
-        return r'claude';
-      case AiAssistAgent.copilot:
-        return r'copilot';
-      case AiAssistAgent.cursor:
-        return r'cursor';
-      case AiAssistAgent.agy:
-        return r'agy';
-      case AiAssistAgent.opencode:
-        return r'opencode';
-      case AiAssistAgent.opencode2:
-        return r'opencode2';
-      case AiAssistAgent.pi:
-        return r'pi';
-      case AiAssistAgent.amp:
-        return r'amp';
-      case AiAssistAgent.grok:
-        return r'grok';
-      case AiAssistAgent.devin:
-        return r'devin';
-      case AiAssistAgent.fx:
-        return r'fx';
-      case AiAssistAgent.custom:
-        return r'custom';
-    }
-  }
-}
-
-extension AiAssistAgentMapperExtension on AiAssistAgent {
-  String toValue() {
-    AiAssistAgentMapper.ensureInitialized();
-    return MapperContainer.globals.toValue<AiAssistAgent>(this) as String;
-  }
-}
-
 class AiAssistDiscoveredThinkingLevelMapper
     extends ClassMapperBase<AiAssistDiscoveredThinkingLevel> {
   AiAssistDiscoveredThinkingLevelMapper._();
@@ -549,7 +459,6 @@ class AiAssistPromptSettingsMapper
   static AiAssistPromptSettingsMapper ensureInitialized() {
     if (_instance == null) {
       MapperContainer.globals.use(_instance = AiAssistPromptSettingsMapper._());
-      AiAssistAgentMapper.ensureInitialized();
     }
     return _instance!;
   }
@@ -557,11 +466,12 @@ class AiAssistPromptSettingsMapper
   @override
   final String id = 'AiAssistPromptSettings';
 
-  static AiAssistAgent? _$agent(AiAssistPromptSettings v) => v.agent;
-  static const Field<AiAssistPromptSettings, AiAssistAgent> _f$agent = Field(
+  static String? _$agent(AiAssistPromptSettings v) => v.agent;
+  static const Field<AiAssistPromptSettings, String> _f$agent = Field(
     'agent',
     _$agent,
     opt: true,
+    hook: AiAssistAgentIdHook(),
   );
   static String? _$model(AiAssistPromptSettings v) => v.model;
   static const Field<AiAssistPromptSettings, String> _f$model = Field(
@@ -653,7 +563,7 @@ abstract class AiAssistPromptSettingsCopyWith<
   $Out
 >
     implements ClassCopyWith<$R, $In, $Out> {
-  $R call({AiAssistAgent? agent, String? model});
+  $R call({String? agent, String? model});
   AiAssistPromptSettingsCopyWith<$R2, $In, $Out2> $chain<$R2, $Out2>(
     Then<$Out2, $R2> t,
   );
@@ -694,7 +604,6 @@ class AiAssistSettingsMapper extends ClassMapperBase<AiAssistSettings> {
   static AiAssistSettingsMapper ensureInitialized() {
     if (_instance == null) {
       MapperContainer.globals.use(_instance = AiAssistSettingsMapper._());
-      AiAssistAgentMapper.ensureInitialized();
       AiAssistOperationMapper.ensureInitialized();
       AiAssistDiscoveredModelMapper.ensureInitialized();
       AiAssistPromptSettingsMapper.ensureInitialized();
@@ -720,16 +629,16 @@ class AiAssistSettingsMapper extends ClassMapperBase<AiAssistSettings> {
     opt: true,
     def: true,
   );
-  static AiAssistAgent _$agent(AiAssistSettings v) => v.agent;
-  static const Field<AiAssistSettings, AiAssistAgent> _f$agent = Field(
+  static String _$agent(AiAssistSettings v) => v.agent;
+  static const Field<AiAssistSettings, String> _f$agent = Field(
     'agent',
     _$agent,
     opt: true,
-    def: AiAssistAgent.codex,
+    def: 'codex',
+    hook: AiAssistAgentIdHook(),
   );
-  static Map<String, String> _$selectedModelByAgent(
-    AiAssistSettings v,
-  ) => v.selectedModelByAgent;
+  static Map<String, String> _$selectedModelByAgent(AiAssistSettings v) =>
+      v.selectedModelByAgent;
   static const Field<AiAssistSettings, Map<String, String>>
   _f$selectedModelByAgent = Field(
     'selectedModelByAgent',
@@ -759,8 +668,9 @@ class AiAssistSettingsMapper extends ClassMapperBase<AiAssistSettings> {
     opt: true,
     def: const <AiAssistOperation, Map<String, String>>{},
   );
-  static Map<String, List<AiAssistDiscoveredModel>>
-  _$discoveredModelsByAgent(AiAssistSettings v) => v.discoveredModelsByAgent;
+  static Map<String, List<AiAssistDiscoveredModel>> _$discoveredModelsByAgent(
+    AiAssistSettings v,
+  ) => v.discoveredModelsByAgent;
   static const Field<
     AiAssistSettings,
     Map<String, List<AiAssistDiscoveredModel>>
@@ -954,7 +864,7 @@ abstract class AiAssistSettingsCopyWith<$R, $In extends AiAssistSettings, $Out>
   $R call({
     bool? enabled,
     bool? autoGenerateAgentTitles,
-    AiAssistAgent? agent,
+    String? agent,
     Map<String, String>? selectedModelByAgent,
     Map<String, String>? selectedThinkingByModel,
     Map<AiAssistOperation, Map<String, String>>? selectedThinkingByOperation,
@@ -1054,7 +964,7 @@ class _AiAssistSettingsCopyWithImpl<$R, $Out>
   $R call({
     bool? enabled,
     bool? autoGenerateAgentTitles,
-    AiAssistAgent? agent,
+    String? agent,
     Map<String, String>? selectedModelByAgent,
     Map<String, String>? selectedThinkingByModel,
     Map<AiAssistOperation, Map<String, String>>? selectedThinkingByOperation,

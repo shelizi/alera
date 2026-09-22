@@ -299,7 +299,7 @@ AleraSettings _populatedSettings() {
       ),
     ),
     aiAssist: const AiAssistSettings(
-      agent: AiAssistAgent.claude,
+      agent: 'claude',
       discoveredModelsByAgent: <String, List<AiAssistDiscoveredModel>>{
         'claude': <AiAssistDiscoveredModel>[
           AiAssistDiscoveredModel(id: 'opus', label: 'Opus'),

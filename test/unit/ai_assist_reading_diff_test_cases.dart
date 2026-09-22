@@ -3,17 +3,17 @@ part of 'ai_assist_service_test.dart';
 void _registerAiAssistReadingDiffTests() {
   test('falls back to Codex for an unsupported inherited reading agent', () {
     expect(
-      readingDiffAgentTypeForSettings(const AiAssistSettings(agent: .cursor)),
+      readingDiffAgentTypeForSettings(const AiAssistSettings(agent: 'cursor')),
       AgentType.codex,
     );
     expect(
       readingDiffAgentTypeForSettings(
         const AiAssistSettings(
-          agent: .cursor,
+          agent: 'cursor',
           promptSettingsByOperation:
               <AiAssistOperation, AiAssistPromptSettings>{
                 AiAssistOperation.readingDiff: AiAssistPromptSettings(
-                  agent: .claude,
+                  agent: 'claude',
                 ),
               },
         ),
@@ -21,7 +21,7 @@ void _registerAiAssistReadingDiffTests() {
       AgentType.claude,
     );
     const settings = AiAssistSettings(
-      agent: .cursor,
+      agent: 'cursor',
       selectedModelByAgent: <String, String>{
         'cursor': 'cursor-composer',
         'codex': 'gpt-codex',
@@ -320,9 +320,9 @@ ERROR: {
   });
 
   test('uses prompt JSON fallback for tool-free AI Assist agents', () async {
-    for (final agent in const <AiAssistAgent>[
-      AiAssistAgent.copilot,
-      AiAssistAgent.pi,
+    for (final agentType in const <AgentType>[
+      AgentType.copilot,
+      AgentType.pi,
     ]) {
       final process = _FakeProcessRunner(
         stdout: 'Generating...\n```json\n{"version":1,"remove":[],"replace":[],"fold":[],"summary":"Keep behavior."}\n```',
@@ -336,9 +336,9 @@ ERROR: {
         AgentTaskRunRequest(
           settings: const AiAssistSettings(),
           prompt: 'Plan this diff with the embedded schema.',
-          runId: 'reading-diff-${agent.key}',
+          runId: 'reading-diff-${agentType.key}',
           workingDirectory: '/repo',
-          agentType: agent.agentType,
+          agentType: agentType,
           accessPolicy: .diffOnly,
           outputContract: .readingDiffPlanV1,
           outputSchema: '{"type":"object"}',
@@ -347,7 +347,7 @@ ERROR: {
 
       expect(process.arguments, isNot(contains('--json-schema')));
       expect(process.arguments, isNot(contains('--output-schema')));
-      if (agent == AiAssistAgent.copilot) {
+      if (agentType == AgentType.copilot) {
         expect(process.arguments, contains('--available-tools='));
         expect(process.arguments, contains('--excluded-tools=*'));
       } else {
@@ -360,14 +360,15 @@ ERROR: {
   });
 
   test('rejects agents that cannot guarantee diff-only access', () async {
-    for (final agent in const <AiAssistAgent>[
-      AiAssistAgent.custom,
-      AiAssistAgent.cursor,
-      AiAssistAgent.agy,
-      AiAssistAgent.opencode,
-      AiAssistAgent.opencode2,
-      AiAssistAgent.amp,
+    for (final candidate in const <(String, AgentType?, bool)>[
+      ('custom', null, true),
+      ('cursor', AgentType.cursor, false),
+      ('agy', AgentType.agy, false),
+      ('opencode', AgentType.opencode, false),
+      ('opencode2', AgentType.opencode2, false),
+      ('amp', AgentType.amp, false),
     ]) {
+      final (agentId, agentType, useCustomCommand) = candidate;
       final process = _FakeProcessRunner(stdout: 'unused');
       final runner = CliAgentTaskRunner(
         processRunner: process,
@@ -379,10 +380,10 @@ ERROR: {
           AgentTaskRunRequest(
             settings: const AiAssistSettings(customCommand: 'custom-agent'),
             prompt: 'Plan this diff.',
-            runId: 'reading-diff-rejected-${agent.key}',
+            runId: 'reading-diff-rejected-$agentId',
             workingDirectory: '/repo',
-            agentType: agent.agentType,
-            useCustomCommand: agent == AiAssistAgent.custom,
+            agentType: agentType,
+            useCustomCommand: useCustomCommand,
             accessPolicy: .diffOnly,
             outputContract: .readingDiffPlanV1,
             outputSchema: '{"type":"object"}',

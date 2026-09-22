@@ -105,10 +105,7 @@ void main() {
     await tester.tap(saveButton);
     await tester.pumpAndSettle();
 
-    expect(
-      settings.textActions.actions.single.agentOverride,
-      AiAssistAgent.devin,
-    );
+    expect(settings.textActions.actions.single.agentOverride, 'devin');
   });
 
   testWidgets('renders saved order and enabled state', (tester) async {

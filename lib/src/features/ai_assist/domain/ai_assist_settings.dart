@@ -1,4 +1,3 @@
-import 'package:alera/src/features/agent_profiles/domain/agent_descriptor_registry.dart';
 import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 import 'package:dart_mappable/dart_mappable.dart';
 
@@ -27,46 +26,36 @@ enum AiAssistOperation(this.key) {
   };
 }
 
-@MappableEnum()
-enum AiAssistAgent(this.agentType) {
-  codex(AgentType.codex),
-  claude(AgentType.claude),
-  copilot(AgentType.copilot),
-  cursor(AgentType.cursor),
-  agy(AgentType.agy),
-  opencode(AgentType.opencode),
-  opencode2(AgentType.opencode2),
-  pi(AgentType.pi),
-  amp(AgentType.amp),
-  grok(AgentType.grok),
-  devin(AgentType.devin),
-  fx(AgentType.fx),
-  custom(null);
+const String aiAssistCustomAgentId = 'custom';
 
-  final AgentType? agentType;
+String aiAssistAgentIdForType(AgentType type) => type.key;
 
-  String get key => agentType?.key ?? 'custom';
+bool isCustomAiAssistAgentId(String? id) => id == aiAssistCustomAgentId;
 
-  String get label => agentType == null
-      ? 'Custom Command'
-      : agentDescriptorFor(agentType!).displayName;
+AgentType? aiAssistAgentTypeForId(String? id) {
+  if (id == null || id == aiAssistCustomAgentId) return null;
+  for (final type in AgentType.values) {
+    if (type.key == id) return type;
+  }
+  throw StateError('Unknown AI Assist agent id: $id');
+}
 
-  static AiAssistAgent? fromAgentType(AgentType agentType) {
-    for (final agent in AiAssistAgent.values) {
-      if (agent.agentType == agentType) {
-        return agent;
-      }
+class const AiAssistAgentIdHook() extends MappingHook {
+  @override
+  Object? beforeDecode(Object? value) {
+    if (value is String) {
+      aiAssistAgentTypeForId(value);
     }
-    return null;
+    return value;
   }
 
-  static List<AiAssistAgent> optionsForTypes(
-    Iterable<AgentType> agentTypes, {
-    bool includeCustom = true,
-  }) => <AiAssistAgent>[
-    ...agentTypes.map(fromAgentType).whereType<AiAssistAgent>(),
-    if (includeCustom) AiAssistAgent.custom,
-  ];
+  @override
+  Object? beforeEncode(Object? value) {
+    if (value is String) {
+      aiAssistAgentTypeForId(value);
+    }
+    return value;
+  }
 }
 
 @MappableClass()
@@ -94,10 +83,13 @@ class const AiAssistDiscoveredModel({
 @MappableClass()
 class const AiAssistPromptSettings({this.agent, this.model})
     with AiAssistPromptSettingsMappable {
-  final AiAssistAgent? agent;
+  @MappableField(hook: AiAssistAgentIdHook())
+  final String? agent;
   final String? model;
 
-  AgentType? get agentType => agent?.agentType;
+  AgentType? get agentType => aiAssistAgentTypeForId(agent);
+
+  bool get usesCustomAgent => isCustomAiAssistAgentId(agent);
 
   bool get inheritsAgent => agent == null;
 
@@ -108,7 +100,7 @@ class const AiAssistPromptSettings({this.agent, this.model})
 class const AiAssistSettings({
   this.enabled = true,
   this.autoGenerateAgentTitles = true,
-  this.agent = AiAssistAgent.codex,
+  this.agent = 'codex',
   this.selectedModelByAgent = const <String, String>{},
   this.selectedThinkingByModel = const <String, String>{},
   this.selectedThinkingByOperation =
@@ -124,7 +116,8 @@ class const AiAssistSettings({
 }) with AiAssistSettingsMappable {
   final bool enabled;
   final bool autoGenerateAgentTitles;
-  final AiAssistAgent agent;
+  @MappableField(hook: AiAssistAgentIdHook())
+  final String agent;
   final Map<String, String> selectedModelByAgent;
   final Map<String, String> selectedThinkingByModel;
   final Map<AiAssistOperation, Map<String, String>> selectedThinkingByOperation;
@@ -136,10 +129,12 @@ class const AiAssistSettings({
   promptSettingsByOperation;
   final int timeoutSeconds;
 
-  AgentType? get agentType => agent.agentType;
+  AgentType? get agentType => aiAssistAgentTypeForId(agent);
+
+  bool get usesCustomAgent => isCustomAiAssistAgentId(agent);
 
   String? modelForType(AgentType agentType) {
-    final value = selectedModelByAgent[agentType.name]?.trim();
+    final value = selectedModelByAgent[agentType.key]?.trim();
     return value == null || value.isEmpty ? null : value;
   }
 
@@ -172,13 +167,9 @@ class const AiAssistSettings({
         const AiAssistPromptSettings();
   }
 
-  AiAssistAgent agentFor(AiAssistOperation operation) {
-    return promptSettingsFor(operation).agent ?? agent;
-  }
-
   AgentType? agentTypeFor(AiAssistOperation operation) {
     final override = promptSettingsFor(operation).agent;
-    return override == null ? agentType : override.agentType;
+    return override == null ? agentType : aiAssistAgentTypeForId(override);
   }
 
   String? modelForOperation(AiAssistOperation operation) {
@@ -192,12 +183,12 @@ class const AiAssistSettings({
   }
 
   List<AiAssistDiscoveredModel> discoveredModelsForType(AgentType agentType) {
-    return discoveredModelsByAgent[agentType.name] ??
+    return discoveredModelsByAgent[agentType.key] ??
         const <AiAssistDiscoveredModel>[];
   }
 
   String? discoveredDefaultModelForType(AgentType agentType) {
-    final value = discoveredDefaultModelByAgent[agentType.name]?.trim();
+    final value = discoveredDefaultModelByAgent[agentType.key]?.trim();
     return value == null || value.isEmpty ? null : value;
   }
 

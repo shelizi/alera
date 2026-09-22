@@ -63,7 +63,7 @@ Available models:
         const AiAssistRequest(
           operation: .commitMessage,
           workspacePath: '/repo',
-          settings: AiAssistSettings(agent: .grok),
+          settings: AiAssistSettings(agent: 'grok'),
         ),
       );
 
@@ -104,7 +104,7 @@ Available models:
         operation: .commitMessage,
         workspacePath: '/repo',
         settings: AiAssistSettings(
-          agent: .grok,
+          agent: 'grok',
           selectedThinkingByModel: <String, String>{'grok-4.6': 'high'},
         ),
       ),
@@ -123,7 +123,7 @@ Available models:
         operation: .commitMessage,
         workspacePath: '/repo',
         settings: AiAssistSettings(
-          agent: .grok,
+          agent: 'grok',
           selectedThinkingByOperation: <AiAssistOperation, Map<String, String>>{
             AiAssistOperation.commitMessage: <String, String>{
               'grok-4.6': 'high',
@@ -146,7 +146,7 @@ Available models:
         operation: .commitMessage,
         workspacePath: '/repo',
         settings: AiAssistSettings(
-          agent: .grok,
+          agent: 'grok',
           selectedThinkingByModel: <String, String>{'grok-4.6': 'max'},
         ),
       ),
@@ -171,7 +171,7 @@ Available models:
         const AiAssistRequest(
           operation: .commitMessage,
           workspacePath: '/repo',
-          settings: AiAssistSettings(agent: .grok),
+          settings: AiAssistSettings(agent: 'grok'),
         ),
       ),
       throwsA(isA<AiAssistException>()),

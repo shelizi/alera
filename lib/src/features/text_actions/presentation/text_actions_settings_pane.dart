@@ -226,7 +226,7 @@ class _TextActionsSettingsPaneState extends State<TextActionsSettingsPane> {
       action.name,
       action.prompt,
       action.enabled,
-      action.agentOverride?.key,
+      action.agentOverride,
       action.modelOverride,
       action.reasoningByModel,
     ].toString();
@@ -238,18 +238,18 @@ class _TextActionsSettingsPaneState extends State<TextActionsSettingsPane> {
     return selected.agentType ?? widget.aiAssistSettings.agentType;
   }
 
-  AiAssistAgentChoice _selectionForPersistedAgent(AiAssistAgent? agent) {
-    if (agent == null) return const AiAssistAgentChoice.global();
-    final type = agent.agentType;
-    return type == null
+  AiAssistAgentChoice _selectionForPersistedAgent(String? agentId) {
+    if (agentId == null) return const AiAssistAgentChoice.global();
+    final type = aiAssistAgentTypeForId(agentId);
+    return isCustomAiAssistAgentId(agentId)
         ? const AiAssistAgentChoice.custom()
-        : AiAssistAgentChoice.agent(type);
+        : AiAssistAgentChoice.agent(type!);
   }
 
-  AiAssistAgent? _persistedAgentForSelection(AiAssistAgentChoice selection) {
-    if (selection.isCustom) return AiAssistAgent.custom;
+  String? _persistedAgentForSelection(AiAssistAgentChoice selection) {
+    if (selection.isCustom) return aiAssistCustomAgentId;
     final type = selection.agentType;
-    return type == null ? null : AiAssistAgent.fromAgentType(type);
+    return type == null ? null : aiAssistAgentIdForType(type);
   }
 
   void _save() {

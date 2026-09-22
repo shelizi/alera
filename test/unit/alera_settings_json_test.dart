@@ -59,7 +59,7 @@ void main() {
           ),
         ),
         aiAssist: AiAssistSettings(
-          agent: .agy,
+          agent: 'agy',
           selectedModelByAgent: <String, String>{
             'agy': 'Gemini 3.5 Flash (Medium)',
           },
@@ -158,7 +158,7 @@ void main() {
             as Map)['languages'],
         containsPair('rust', isA<Map>()),
       );
-      expect(restored.aiAssist.agent, AiAssistAgent.agy);
+      expect(restored.aiAssist.agent, 'agy');
       expect(
         restored.aiAssist.modelForType(AgentType.agy),
         'Gemini 3.5 Flash (Medium)',

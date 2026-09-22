@@ -270,14 +270,14 @@ void main() {
 
       final loaded = await repository.load();
 
-      expect(loaded.aiAssist.agent, AiAssistAgent.claude);
+      expect(loaded.aiAssist.agent, 'claude');
       expect(
         loaded.aiAssist.instructionsFor(.workspaceIdentity),
         'Use feature branches.',
       );
       expect(
-        loaded.aiAssist.agentFor(.workspaceIdentity),
-        AiAssistAgent.claude,
+        loaded.aiAssist.agentTypeFor(.workspaceIdentity),
+        AgentType.claude,
       );
       expect(loaded.aiAssist.modelForOperation(.workspaceIdentity), 'opus');
       expect(

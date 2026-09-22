@@ -62,7 +62,7 @@ Gemini 3.5 Flash (Medium)
         const AiAssistRequest(
           operation: .commitMessage,
           workspacePath: '/repo',
-          settings: AiAssistSettings(agent: .agy),
+          settings: AiAssistSettings(agent: 'agy'),
         ),
       );
 
@@ -98,7 +98,7 @@ Gemini 3.5 Flash (Medium)
         operation: .commitMessage,
         workspacePath: '/repo',
         settings: AiAssistSettings(
-          agent: .agy,
+          agent: 'agy',
           selectedModelByAgent: <String, String>{'agy': 'gemini-3.1-pro-low'},
         ),
       ),

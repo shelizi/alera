@@ -57,7 +57,7 @@ Map<String, Object?> runtimeAiAssistSettings(AiAssistSettings settings) {
   return <String, Object?>{
     'enabled': settings.enabled,
     'autoGenerateAgentTitles': settings.autoGenerateAgentTitles,
-    'agent': settings.agent.key,
+    'agent': settings.agent,
     'selectedModelByAgent': <String, String>{
       for (final entry in settings.selectedModelByAgent.entries)
         entry.key: entry.value,
@@ -75,7 +75,7 @@ Map<String, Object?> runtimeAiAssistSettings(AiAssistSettings settings) {
     'promptSettingsByOperation': <String, Map<String, Object?>>{
       for (final entry in settings.promptSettingsByOperation.entries)
         entry.key.key: <String, Object?>{
-          if (entry.value.agent != null) 'agent': entry.value.agent!.key,
+          if (entry.value.agent != null) 'agent': entry.value.agent!,
           if (entry.value.model?.trim().isNotEmpty == true)
             'model': entry.value.model!.trim(),
         },

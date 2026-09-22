@@ -174,7 +174,7 @@ void main() {
       const ai = AiAssistSettings.defaults;
 
       expect(ai.enabled, isTrue);
-      expect(ai.agent, AiAssistAgent.codex);
+      expect(ai.agent, 'codex');
       expect(ai.timeoutSeconds, 120);
       expect(ai.customCommand, isEmpty);
       expect(ai.modelForType(AgentType.codex), isNull);

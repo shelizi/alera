@@ -23,11 +23,11 @@ void _registerAiAssistPromptOverrideTests() {
         operation: .commitMessage,
         workspacePath: '/repo',
         settings: AiAssistSettings(
-          agent: .agy,
+          agent: 'agy',
           promptSettingsByOperation:
               <AiAssistOperation, AiAssistPromptSettings>{
                 AiAssistOperation.commitMessage: AiAssistPromptSettings(
-                  agent: .amp,
+                  agent: 'amp',
                   model: 'rush',
                 ),
               },

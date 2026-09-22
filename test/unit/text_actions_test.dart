@@ -64,7 +64,7 @@ void main() {
           name: 'Translate',
           prompt: 'Translate to Spanish.',
           enabled: false,
-          agentOverride: .claude,
+          agentOverride: 'claude',
           modelOverride: 'claude-sonnet-4-6',
           reasoningByModel: <String, String>{'claude-sonnet-4-6': 'high'},
         ),
@@ -74,6 +74,26 @@ void main() {
     final decoded = TextActionsSettings.fromJson(settings.toMap());
 
     expect(decoded.toMap(), settings.toMap());
+  });
+
+  test('rejects unknown persisted text-action agent overrides', () {
+    expect(
+      () => TextActionsSettings.fromJson(<String, Object?>{
+        'actions': <Object?>[
+          <String, Object?>{
+            'id': 'unknown-agent',
+            'name': 'Unknown Agent',
+            'prompt': 'Improve.',
+            'agentOverride': 'unknown',
+          },
+        ],
+      }),
+      throwsA(
+        predicate<Object>(
+          (error) => error.toString().contains('Unknown AI Assist agent id'),
+        ),
+      ),
+    );
   });
 
   test('reports inheritance and decodes an individual action', () {
@@ -86,7 +106,7 @@ void main() {
       id: 'overridden',
       name: 'Overridden',
       prompt: 'Improve.',
-      agentOverride: .claude,
+      agentOverride: 'claude',
       modelOverride: 'claude-sonnet-4-6',
     );
 
@@ -216,12 +236,11 @@ void main() {
 
   test('action inherits global agent, model, and reasoning by default', () {
     const settings = AiAssistSettings(
-      agent: .claude,
+      agent: 'claude',
       selectedModelByAgent: <String, String>{'claude': 'claude-sonnet-4-6'},
       selectedThinkingByModel: <String, String>{'claude-sonnet-4-6': 'medium'},
     );
 
-    expect(first.effectiveAgent(settings), AiAssistAgent.claude);
     expect(first.effectiveAgentType(settings), AgentType.claude);
     expect(first.effectiveModel(settings), 'claude-sonnet-4-6');
     expect(

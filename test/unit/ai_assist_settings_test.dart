@@ -18,21 +18,15 @@ void main() {
         'Speech Messages',
       ],
     );
-    expect(AiAssistAgent.codex.agentType, AgentType.codex);
-    expect(AiAssistAgent.claude.agentType, AgentType.claude);
-    expect(AiAssistAgent.copilot.agentType, AgentType.copilot);
-    expect(AiAssistAgent.cursor.agentType, AgentType.cursor);
-    expect(AiAssistAgent.agy.agentType, AgentType.agy);
-    expect(AiAssistAgent.opencode.agentType, AgentType.opencode);
-    expect(AiAssistAgent.opencode2.agentType, AgentType.opencode2);
-    expect(AiAssistAgent.pi.agentType, AgentType.pi);
-    expect(AiAssistAgent.amp.agentType, AgentType.amp);
-    expect(AiAssistAgent.grok.agentType, AgentType.grok);
-    expect(AiAssistAgent.devin.agentType, AgentType.devin);
-    expect(AiAssistAgent.fx.agentType, AgentType.fx);
-    expect(AiAssistAgent.custom.agentType, isNull);
+    for (final type in AgentType.values) {
+      expect(aiAssistAgentTypeForId(aiAssistAgentIdForType(type)), type);
+    }
+    expect(aiAssistAgentTypeForId(aiAssistCustomAgentId), isNull);
+    expect(isCustomAiAssistAgentId(aiAssistCustomAgentId), isTrue);
     expect(
-      AiAssistAgent.values.map((agent) => agent.label),
+      selectableAiAssistAgentTypes.map(
+        (type) => agentDescriptorFor(type).displayName,
+      ),
       containsAll(<String>[
         'Codex',
         'Claude Code',
@@ -46,26 +40,14 @@ void main() {
         'Grok Build',
         'Devin',
         'fx',
-        'Custom Command',
       ]),
     );
   });
 
   test('AI Assist registry is the complete selectable-agent source', () {
-    final registered = aiAssistCapabilities.values
-        .map((capability) => AiAssistAgent.fromAgentType(capability.agentType)!)
-        .toSet();
-    final nonCustom = AiAssistAgent.values
-        .where((agent) => agent != AiAssistAgent.custom)
-        .toSet();
-
-    expect(registered, nonCustom);
     expect(selectableAiAssistAgentTypes, aiAssistCapabilities.keys.toList());
     for (final spec in aiAssistCapabilities.values) {
-      expect(
-        AiAssistAgent.fromAgentType(spec.agentType)?.agentType,
-        spec.agentType,
-      );
+      expect(aiAssistAgentTypeForId(spec.id), spec.agentType);
     }
   });
 
@@ -94,7 +76,7 @@ void main() {
 
   test('AI Assist settings expose canonical AgentType identity', () {
     const settings = AiAssistSettings();
-    const prompt = AiAssistPromptSettings(agent: AiAssistAgent.devin);
+    const prompt = AiAssistPromptSettings(agent: 'devin');
 
     expect(settings.agentType, AgentType.codex);
     expect(prompt.agentType, AgentType.devin);
@@ -146,6 +128,28 @@ void main() {
     });
   });
 
+  test('rejects unknown persisted AI Assist agent ids', () {
+    final unknownAgent = throwsA(
+      predicate<Object>(
+        (error) => error.toString().contains('Unknown AI Assist agent id'),
+      ),
+    );
+
+    expect(
+      () => AiAssistSettings.fromJson(<String, Object?>{'agent': 'unknown'}),
+      unknownAgent,
+    );
+    expect(
+      () => AiAssistSettings.fromJson(<String, Object?>{
+        'agent': 'codex',
+        'promptSettingsByOperation': <String, Object?>{
+          'commitMessage': <String, Object?>{'agent': 'unknown'},
+        },
+      }),
+      unknownAgent,
+    );
+  });
+
   test('parses Devin model-list output', () {
     final models = parseDevinModels('''
 GPT-5.5 (gpt-5.5)
@@ -191,7 +195,7 @@ Claude Sonnet 4.6 (claude-sonnet-4.6)
 
   test('round-trips settings through the generated mapper', () {
     const settings = AiAssistSettings(
-      agent: .custom,
+      agent: 'custom',
       customCommand: 'generate',
       selectedModelByAgent: <String, String>{'codex': 'gpt-5'},
       selectedThinkingByOperation: <AiAssistOperation, Map<String, String>>{
@@ -199,7 +203,7 @@ Claude Sonnet 4.6 (claude-sonnet-4.6)
       },
       promptSettingsByOperation: <AiAssistOperation, AiAssistPromptSettings>{
         AiAssistOperation.commitMessage: AiAssistPromptSettings(
-          agent: .claude,
+          agent: 'claude',
           model: 'opus',
         ),
       },
@@ -210,28 +214,32 @@ Claude Sonnet 4.6 (claude-sonnet-4.6)
 
   test('resolves prompt agent and model overrides independently', () {
     const settings = AiAssistSettings(
-      agent: .codex,
+      agent: 'codex',
       selectedModelByAgent: <String, String>{
         'codex': 'gpt-global',
         'claude': 'sonnet',
         'opencode': 'provider/reading-model',
       },
       promptSettingsByOperation: <AiAssistOperation, AiAssistPromptSettings>{
-        AiAssistOperation.commitMessage: AiAssistPromptSettings(agent: .claude),
+        AiAssistOperation.commitMessage: AiAssistPromptSettings(
+          agent: 'claude',
+        ),
         AiAssistOperation.pullRequestDetails: AiAssistPromptSettings(
           model: 'gpt-pull-request',
         ),
-        AiAssistOperation.readingDiff: AiAssistPromptSettings(agent: .opencode),
+        AiAssistOperation.readingDiff: AiAssistPromptSettings(
+          agent: 'opencode',
+        ),
       },
     );
 
-    expect(settings.agentFor(.commitMessage), AiAssistAgent.claude);
+    expect(settings.promptSettingsFor(.commitMessage).agent, 'claude');
     expect(settings.agentTypeFor(.commitMessage), AgentType.claude);
     expect(settings.modelForOperation(.commitMessage), 'sonnet');
-    expect(settings.agentFor(.pullRequestDetails), AiAssistAgent.codex);
+    expect(settings.promptSettingsFor(.pullRequestDetails).agent, isNull);
     expect(settings.agentTypeFor(.pullRequestDetails), AgentType.codex);
     expect(settings.modelForOperation(.pullRequestDetails), 'gpt-pull-request');
-    expect(settings.agentFor(.readingDiff), AiAssistAgent.opencode);
+    expect(settings.promptSettingsFor(.readingDiff).agent, 'opencode');
     expect(settings.agentTypeFor(.readingDiff), AgentType.opencode);
     expect(settings.modelForOperation(.readingDiff), 'provider/reading-model');
     expect(settings.modelForOperation(.workspaceIdentity), 'gpt-global');
@@ -254,7 +262,7 @@ Claude Sonnet 4.6 (claude-sonnet-4.6)
 
   test('reports whether prompt settings inherit each global value', () {
     const inherited = AiAssistPromptSettings(model: '  ');
-    const overridden = AiAssistPromptSettings(agent: .claude, model: 'sonnet');
+    const overridden = AiAssistPromptSettings(agent: 'claude', model: 'sonnet');
 
     expect(inherited.inheritsAgent, isTrue);
     expect(inherited.inheritsModel, isTrue);

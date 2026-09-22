@@ -14,14 +14,14 @@ void main() {
       autoGenerateAgentTitles: false,
       promptSettingsByOperation: {
         AiAssistOperation.agentTitle: AiAssistPromptSettings(
-          agent: .pi,
+          agent: 'pi',
           model: 'model',
         ),
       },
     );
     final decoded = AiAssistSettings.fromJson(settings.toMap());
     expect(decoded.autoGenerateAgentTitles, isFalse);
-    expect(decoded.agentFor(.agentTitle), AiAssistAgent.pi);
+    expect(decoded.promptSettingsFor(.agentTitle).agent, 'pi');
     expect(decoded.modelForOperation(.agentTitle), 'model');
   });
 

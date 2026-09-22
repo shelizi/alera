@@ -83,7 +83,7 @@ void main() {
       expect(client.updates, isEmpty);
       expect(
         container.read(settingsControllerProvider).aiAssist.agent,
-        AiAssistAgent.codex,
+        'codex',
       );
 
       await selectCustom();
@@ -118,8 +118,10 @@ void main() {
       final saved = container.read(settingsControllerProvider).aiAssist;
       expect(saved.customCommand, command);
       expect(
-        operation == null ? saved.agent : saved.agentFor(operation),
-        AiAssistAgent.custom,
+        operation == null
+            ? saved.agent
+            : saved.promptSettingsFor(operation).agent,
+        aiAssistCustomAgentId,
       );
       expect(cache.settings.aiAssist, saved);
       expect(tester.takeException(), isNull);
@@ -153,9 +155,9 @@ class _LegacyRuntimeClient implements RuntimeHostClient {
     final settings = payload['aiTextGeneration']! as Map<String, Object?>;
     final ai = AiAssistSettings.fromJson(settings);
     final custom =
-        ai.agent == AiAssistAgent.custom ||
+        ai.usesCustomAgent ||
         ai.promptSettingsByOperation.values.any(
-          (prompt) => prompt.agent == AiAssistAgent.custom,
+          (prompt) => prompt.usesCustomAgent,
         );
     if (custom && ai.customCommand.trim().isEmpty) {
       throw StateError('Custom command is required');

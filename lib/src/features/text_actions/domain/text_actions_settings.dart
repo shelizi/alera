@@ -19,7 +19,8 @@ class const TextAction({
   final String name;
   final String prompt;
   final bool enabled;
-  final AiAssistAgent? agentOverride;
+  @MappableField(hook: AiAssistAgentIdHook())
+  final String? agentOverride;
   final String? modelOverride;
   final Map<String, String> reasoningByModel;
 
@@ -27,12 +28,10 @@ class const TextAction({
 
   bool get inheritsModel => modelOverride?.trim().isNotEmpty != true;
 
-  AiAssistAgent effectiveAgent(AiAssistSettings settings) {
-    return agentOverride ?? settings.agent;
-  }
-
   AgentType? effectiveAgentType(AiAssistSettings settings) {
-    return agentOverride?.agentType ?? settings.agentType;
+    return agentOverride == null
+        ? settings.agentType
+        : aiAssistAgentTypeForId(agentOverride);
   }
 
   String? effectiveModel(AiAssistSettings settings) {
