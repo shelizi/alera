@@ -99,9 +99,7 @@ Gemini 3.5 Flash (Medium)
         workspacePath: '/repo',
         settings: AiAssistSettings(
           agent: .agy,
-          selectedModelByAgent: <AiAssistAgent, String>{
-            AiAssistAgent.agy: 'gemini-3.1-pro-low',
-          },
+          selectedModelByAgent: <String, String>{'agy': 'gemini-3.1-pro-low'},
         ),
       ),
     );

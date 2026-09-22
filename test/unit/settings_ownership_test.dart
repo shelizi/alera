@@ -300,14 +300,12 @@ AleraSettings _populatedSettings() {
     ),
     aiAssist: const AiAssistSettings(
       agent: AiAssistAgent.claude,
-      discoveredModelsByAgent: <AiAssistAgent, List<AiAssistDiscoveredModel>>{
-        AiAssistAgent.claude: <AiAssistDiscoveredModel>[
+      discoveredModelsByAgent: <String, List<AiAssistDiscoveredModel>>{
+        'claude': <AiAssistDiscoveredModel>[
           AiAssistDiscoveredModel(id: 'opus', label: 'Opus'),
         ],
       },
-      discoveredDefaultModelByAgent: <AiAssistAgent, String>{
-        AiAssistAgent.claude: 'opus',
-      },
+      discoveredDefaultModelByAgent: <String, String>{'claude': 'opus'},
     ),
     aiDictation: const AiDictationSettings(
       language: 'es',

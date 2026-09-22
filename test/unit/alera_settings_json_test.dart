@@ -59,8 +59,8 @@ void main() {
         ),
         aiAssist: AiAssistSettings(
           agent: .agy,
-          selectedModelByAgent: <AiAssistAgent, String>{
-            AiAssistAgent.agy: 'Gemini 3.5 Flash (Medium)',
+          selectedModelByAgent: <String, String>{
+            'agy': 'Gemini 3.5 Flash (Medium)',
           },
           instructionsByOperation: <AiAssistOperation, String>{
             AiAssistOperation.commitMessage: 'Use conventional commits.',

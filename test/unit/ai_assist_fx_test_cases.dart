@@ -77,9 +77,7 @@ void _registerFxAiAssistTests() {
         workspacePath: '/repo',
         settings: AiAssistSettings(
           agent: .fx,
-          selectedModelByAgent: <AiAssistAgent, String>{
-            AiAssistAgent.fx: 'xai/grok-4.1-fast',
-          },
+          selectedModelByAgent: <String, String>{'fx': 'xai/grok-4.1-fast'},
         ),
       ),
     );

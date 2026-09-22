@@ -102,17 +102,13 @@ void main() {
 
   test('AI Assist model helpers accept canonical AgentType', () {
     const settings = AiAssistSettings(
-      selectedModelByAgent: <AiAssistAgent, String>{
-        AiAssistAgent.devin: 'gpt-5-5-high',
-      },
-      discoveredModelsByAgent: <AiAssistAgent, List<AiAssistDiscoveredModel>>{
-        AiAssistAgent.devin: <AiAssistDiscoveredModel>[
+      selectedModelByAgent: <String, String>{'devin': 'gpt-5-5-high'},
+      discoveredModelsByAgent: <String, List<AiAssistDiscoveredModel>>{
+        'devin': <AiAssistDiscoveredModel>[
           AiAssistDiscoveredModel(id: 'gpt-5-5-high', label: 'GPT-5.5 High'),
         ],
       },
-      discoveredDefaultModelByAgent: <AiAssistAgent, String>{
-        AiAssistAgent.devin: 'gpt-5-5-high',
-      },
+      discoveredDefaultModelByAgent: <String, String>{'devin': 'gpt-5-5-high'},
     );
 
     expect(settings.modelForType(AgentType.devin), 'gpt-5-5-high');
@@ -127,6 +123,27 @@ void main() {
       defaultModelIdForAgentType(AgentType.devin, settings),
       isA<String>(),
     );
+  });
+
+  test('keeps legacy agent-keyed settings JSON wire compatible', () {
+    final settings = AiAssistSettings.fromJson(<String, Object?>{
+      'agent': 'devin',
+      'selectedModelByAgent': <String, String>{'devin': 'gpt-5-5-high'},
+      'discoveredModelsByAgent': <String, Object?>{
+        'devin': <Object?>[
+          <String, Object?>{'id': 'gpt-5-5-high', 'label': 'GPT-5.5 High'},
+        ],
+      },
+      'discoveredDefaultModelByAgent': <String, String>{
+        'devin': 'gpt-5-5-high',
+      },
+    });
+
+    expect(settings.modelForType(AgentType.devin), 'gpt-5-5-high');
+    expect(settings.discoveredModelsForType(AgentType.devin), hasLength(1));
+    expect(settings.toMap()['selectedModelByAgent'], <String, String>{
+      'devin': 'gpt-5-5-high',
+    });
   });
 
   test('parses Devin model-list output', () {
@@ -176,9 +193,7 @@ Claude Sonnet 4.6 (claude-sonnet-4.6)
     const settings = AiAssistSettings(
       agent: .custom,
       customCommand: 'generate',
-      selectedModelByAgent: <AiAssistAgent, String>{
-        AiAssistAgent.codex: 'gpt-5',
-      },
+      selectedModelByAgent: <String, String>{'codex': 'gpt-5'},
       selectedThinkingByOperation: <AiAssistOperation, Map<String, String>>{
         AiAssistOperation.commitMessage: <String, String>{'gpt-5': 'high'},
       },
@@ -196,10 +211,10 @@ Claude Sonnet 4.6 (claude-sonnet-4.6)
   test('resolves prompt agent and model overrides independently', () {
     const settings = AiAssistSettings(
       agent: .codex,
-      selectedModelByAgent: <AiAssistAgent, String>{
-        AiAssistAgent.codex: 'gpt-global',
-        AiAssistAgent.claude: 'sonnet',
-        AiAssistAgent.opencode: 'provider/reading-model',
+      selectedModelByAgent: <String, String>{
+        'codex': 'gpt-global',
+        'claude': 'sonnet',
+        'opencode': 'provider/reading-model',
       },
       promptSettingsByOperation: <AiAssistOperation, AiAssistPromptSettings>{
         AiAssistOperation.commitMessage: AiAssistPromptSettings(agent: .claude),

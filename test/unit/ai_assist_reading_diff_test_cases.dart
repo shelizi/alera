@@ -22,9 +22,9 @@ void _registerAiAssistReadingDiffTests() {
     );
     const settings = AiAssistSettings(
       agent: .cursor,
-      selectedModelByAgent: <AiAssistAgent, String>{
-        AiAssistAgent.cursor: 'cursor-composer',
-        AiAssistAgent.codex: 'gpt-codex',
+      selectedModelByAgent: <String, String>{
+        'cursor': 'cursor-composer',
+        'codex': 'gpt-codex',
       },
     );
     expect(

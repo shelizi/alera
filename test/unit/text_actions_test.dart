@@ -197,9 +197,7 @@ void main() {
 
   test('action reasoning overrides the global model reasoning', () {
     const settings = AiAssistSettings(
-      selectedModelByAgent: <AiAssistAgent, String>{
-        AiAssistAgent.codex: 'gpt-5.5',
-      },
+      selectedModelByAgent: <String, String>{'codex': 'gpt-5.5'},
       selectedThinkingByModel: <String, String>{'gpt-5.5': 'low'},
     );
     const action = TextAction(
@@ -218,9 +216,7 @@ void main() {
   test('action inherits global agent, model, and reasoning by default', () {
     const settings = AiAssistSettings(
       agent: .claude,
-      selectedModelByAgent: <AiAssistAgent, String>{
-        AiAssistAgent.claude: 'claude-sonnet-4-6',
-      },
+      selectedModelByAgent: <String, String>{'claude': 'claude-sonnet-4-6'},
       selectedThinkingByModel: <String, String>{'claude-sonnet-4-6': 'medium'},
     );
 

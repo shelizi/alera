@@ -60,7 +60,7 @@ Map<String, Object?> runtimeAiAssistSettings(AiAssistSettings settings) {
     'agent': settings.agent.key,
     'selectedModelByAgent': <String, String>{
       for (final entry in settings.selectedModelByAgent.entries)
-        entry.key.key: entry.value,
+        entry.key: entry.value,
     },
     'selectedThinkingByModel': settings.selectedThinkingByModel,
     'selectedThinkingByOperation': <String, Map<String, String>>{

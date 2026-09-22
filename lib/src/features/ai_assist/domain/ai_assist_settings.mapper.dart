@@ -727,15 +727,15 @@ class AiAssistSettingsMapper extends ClassMapperBase<AiAssistSettings> {
     opt: true,
     def: AiAssistAgent.codex,
   );
-  static Map<AiAssistAgent, String> _$selectedModelByAgent(
+  static Map<String, String> _$selectedModelByAgent(
     AiAssistSettings v,
   ) => v.selectedModelByAgent;
-  static const Field<AiAssistSettings, Map<AiAssistAgent, String>>
+  static const Field<AiAssistSettings, Map<String, String>>
   _f$selectedModelByAgent = Field(
     'selectedModelByAgent',
     _$selectedModelByAgent,
     opt: true,
-    def: const <AiAssistAgent, String>{},
+    def: const <String, String>{},
   );
   static Map<String, String> _$selectedThinkingByModel(AiAssistSettings v) =>
       v.selectedThinkingByModel;
@@ -759,27 +759,27 @@ class AiAssistSettingsMapper extends ClassMapperBase<AiAssistSettings> {
     opt: true,
     def: const <AiAssistOperation, Map<String, String>>{},
   );
-  static Map<AiAssistAgent, List<AiAssistDiscoveredModel>>
+  static Map<String, List<AiAssistDiscoveredModel>>
   _$discoveredModelsByAgent(AiAssistSettings v) => v.discoveredModelsByAgent;
   static const Field<
     AiAssistSettings,
-    Map<AiAssistAgent, List<AiAssistDiscoveredModel>>
+    Map<String, List<AiAssistDiscoveredModel>>
   >
   _f$discoveredModelsByAgent = Field(
     'discoveredModelsByAgent',
     _$discoveredModelsByAgent,
     opt: true,
-    def: const <AiAssistAgent, List<AiAssistDiscoveredModel>>{},
+    def: const <String, List<AiAssistDiscoveredModel>>{},
   );
-  static Map<AiAssistAgent, String> _$discoveredDefaultModelByAgent(
+  static Map<String, String> _$discoveredDefaultModelByAgent(
     AiAssistSettings v,
   ) => v.discoveredDefaultModelByAgent;
-  static const Field<AiAssistSettings, Map<AiAssistAgent, String>>
+  static const Field<AiAssistSettings, Map<String, String>>
   _f$discoveredDefaultModelByAgent = Field(
     'discoveredDefaultModelByAgent',
     _$discoveredDefaultModelByAgent,
     opt: true,
-    def: const <AiAssistAgent, String>{},
+    def: const <String, String>{},
   );
   static String _$customCommand(AiAssistSettings v) => v.customCommand;
   static const Field<AiAssistSettings, String> _f$customCommand = Field(
@@ -914,7 +914,7 @@ extension AiAssistSettingsValueCopy<$R, $Out>
 
 abstract class AiAssistSettingsCopyWith<$R, $In extends AiAssistSettings, $Out>
     implements ClassCopyWith<$R, $In, $Out> {
-  MapCopyWith<$R, AiAssistAgent, String, ObjectCopyWith<$R, String, String>>
+  MapCopyWith<$R, String, String, ObjectCopyWith<$R, String, String>>
   get selectedModelByAgent;
   MapCopyWith<$R, String, String, ObjectCopyWith<$R, String, String>>
   get selectedThinkingByModel;
@@ -927,7 +927,7 @@ abstract class AiAssistSettingsCopyWith<$R, $In extends AiAssistSettings, $Out>
   get selectedThinkingByOperation;
   MapCopyWith<
     $R,
-    AiAssistAgent,
+    String,
     List<AiAssistDiscoveredModel>,
     ObjectCopyWith<
       $R,
@@ -936,7 +936,7 @@ abstract class AiAssistSettingsCopyWith<$R, $In extends AiAssistSettings, $Out>
     >
   >
   get discoveredModelsByAgent;
-  MapCopyWith<$R, AiAssistAgent, String, ObjectCopyWith<$R, String, String>>
+  MapCopyWith<$R, String, String, ObjectCopyWith<$R, String, String>>
   get discoveredDefaultModelByAgent;
   MapCopyWith<$R, AiAssistOperation, String, ObjectCopyWith<$R, String, String>>
   get instructionsByOperation;
@@ -955,11 +955,11 @@ abstract class AiAssistSettingsCopyWith<$R, $In extends AiAssistSettings, $Out>
     bool? enabled,
     bool? autoGenerateAgentTitles,
     AiAssistAgent? agent,
-    Map<AiAssistAgent, String>? selectedModelByAgent,
+    Map<String, String>? selectedModelByAgent,
     Map<String, String>? selectedThinkingByModel,
     Map<AiAssistOperation, Map<String, String>>? selectedThinkingByOperation,
-    Map<AiAssistAgent, List<AiAssistDiscoveredModel>>? discoveredModelsByAgent,
-    Map<AiAssistAgent, String>? discoveredDefaultModelByAgent,
+    Map<String, List<AiAssistDiscoveredModel>>? discoveredModelsByAgent,
+    Map<String, String>? discoveredDefaultModelByAgent,
     String? customCommand,
     Map<AiAssistOperation, String>? instructionsByOperation,
     Map<AiAssistOperation, AiAssistPromptSettings>? promptSettingsByOperation,
@@ -979,7 +979,7 @@ class _AiAssistSettingsCopyWithImpl<$R, $Out>
   late final ClassMapperBase<AiAssistSettings> $mapper =
       AiAssistSettingsMapper.ensureInitialized();
   @override
-  MapCopyWith<$R, AiAssistAgent, String, ObjectCopyWith<$R, String, String>>
+  MapCopyWith<$R, String, String, ObjectCopyWith<$R, String, String>>
   get selectedModelByAgent => MapCopyWith(
     $value.selectedModelByAgent,
     (v, t) => ObjectCopyWith(v, $identity, t),
@@ -1007,7 +1007,7 @@ class _AiAssistSettingsCopyWithImpl<$R, $Out>
   @override
   MapCopyWith<
     $R,
-    AiAssistAgent,
+    String,
     List<AiAssistDiscoveredModel>,
     ObjectCopyWith<
       $R,
@@ -1021,7 +1021,7 @@ class _AiAssistSettingsCopyWithImpl<$R, $Out>
     (v) => call(discoveredModelsByAgent: v),
   );
   @override
-  MapCopyWith<$R, AiAssistAgent, String, ObjectCopyWith<$R, String, String>>
+  MapCopyWith<$R, String, String, ObjectCopyWith<$R, String, String>>
   get discoveredDefaultModelByAgent => MapCopyWith(
     $value.discoveredDefaultModelByAgent,
     (v, t) => ObjectCopyWith(v, $identity, t),
@@ -1055,11 +1055,11 @@ class _AiAssistSettingsCopyWithImpl<$R, $Out>
     bool? enabled,
     bool? autoGenerateAgentTitles,
     AiAssistAgent? agent,
-    Map<AiAssistAgent, String>? selectedModelByAgent,
+    Map<String, String>? selectedModelByAgent,
     Map<String, String>? selectedThinkingByModel,
     Map<AiAssistOperation, Map<String, String>>? selectedThinkingByOperation,
-    Map<AiAssistAgent, List<AiAssistDiscoveredModel>>? discoveredModelsByAgent,
-    Map<AiAssistAgent, String>? discoveredDefaultModelByAgent,
+    Map<String, List<AiAssistDiscoveredModel>>? discoveredModelsByAgent,
+    Map<String, String>? discoveredDefaultModelByAgent,
     String? customCommand,
     Map<AiAssistOperation, String>? instructionsByOperation,
     Map<AiAssistOperation, AiAssistPromptSettings>? promptSettingsByOperation,

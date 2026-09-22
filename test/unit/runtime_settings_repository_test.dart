@@ -233,15 +233,11 @@ void main() {
       final legacyRepository = _MemorySettingsRepository();
       legacyRepository.settings = AleraSettings.defaults.copyWith(
         aiAssist: const AiAssistSettings(
-          discoveredModelsByAgent:
-              <AiAssistAgent, List<AiAssistDiscoveredModel>>{
-                AiAssistAgent.codex: <AiAssistDiscoveredModel>[
-                  AiAssistDiscoveredModel(
-                    id: 'local-model',
-                    label: 'Local Model',
-                  ),
-                ],
-              },
+          discoveredModelsByAgent: <String, List<AiAssistDiscoveredModel>>{
+            'codex': <AiAssistDiscoveredModel>[
+              AiAssistDiscoveredModel(id: 'local-model', label: 'Local Model'),
+            ],
+          },
         ),
       );
       final client = _RecordingRuntimeHostClient();

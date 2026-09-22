@@ -109,13 +109,13 @@ class const AiAssistSettings({
   this.enabled = true,
   this.autoGenerateAgentTitles = true,
   this.agent = AiAssistAgent.codex,
-  this.selectedModelByAgent = const <AiAssistAgent, String>{},
+  this.selectedModelByAgent = const <String, String>{},
   this.selectedThinkingByModel = const <String, String>{},
   this.selectedThinkingByOperation =
       const <AiAssistOperation, Map<String, String>>{},
   this.discoveredModelsByAgent =
-      const <AiAssistAgent, List<AiAssistDiscoveredModel>>{},
-  this.discoveredDefaultModelByAgent = const <AiAssistAgent, String>{},
+      const <String, List<AiAssistDiscoveredModel>>{},
+  this.discoveredDefaultModelByAgent = const <String, String>{},
   this.customCommand = '',
   this.instructionsByOperation = const <AiAssistOperation, String>{},
   this.promptSettingsByOperation =
@@ -125,12 +125,11 @@ class const AiAssistSettings({
   final bool enabled;
   final bool autoGenerateAgentTitles;
   final AiAssistAgent agent;
-  final Map<AiAssistAgent, String> selectedModelByAgent;
+  final Map<String, String> selectedModelByAgent;
   final Map<String, String> selectedThinkingByModel;
   final Map<AiAssistOperation, Map<String, String>> selectedThinkingByOperation;
-  final Map<AiAssistAgent, List<AiAssistDiscoveredModel>>
-  discoveredModelsByAgent;
-  final Map<AiAssistAgent, String> discoveredDefaultModelByAgent;
+  final Map<String, List<AiAssistDiscoveredModel>> discoveredModelsByAgent;
+  final Map<String, String> discoveredDefaultModelByAgent;
   final String customCommand;
   final Map<AiAssistOperation, String> instructionsByOperation;
   final Map<AiAssistOperation, AiAssistPromptSettings>
@@ -140,7 +139,7 @@ class const AiAssistSettings({
   AgentType? get agentType => agent.agentType;
 
   String? modelFor(AiAssistAgent agent) {
-    final value = selectedModelByAgent[agent]?.trim();
+    final value = selectedModelByAgent[agent.key]?.trim();
     return value == null || value.isEmpty ? null : value;
   }
 
@@ -192,7 +191,8 @@ class const AiAssistSettings({
   }
 
   List<AiAssistDiscoveredModel> discoveredModelsFor(AiAssistAgent agent) {
-    return discoveredModelsByAgent[agent] ?? const <AiAssistDiscoveredModel>[];
+    return discoveredModelsByAgent[agent.key] ??
+        const <AiAssistDiscoveredModel>[];
   }
 
   List<AiAssistDiscoveredModel> discoveredModelsForType(AgentType agentType) {
@@ -203,7 +203,7 @@ class const AiAssistSettings({
   }
 
   String? discoveredDefaultModelFor(AiAssistAgent agent) {
-    final value = discoveredDefaultModelByAgent[agent]?.trim();
+    final value = discoveredDefaultModelByAgent[agent.key]?.trim();
     return value == null || value.isEmpty ? null : value;
   }
 

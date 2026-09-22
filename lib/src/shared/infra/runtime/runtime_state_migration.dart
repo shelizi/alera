@@ -186,13 +186,13 @@ final class RuntimeStateMigration({
       'agent': settings.agent.key,
       'selectedModelByAgent': <String, String>{
         for (final entry in settings.selectedModelByAgent.entries)
-          entry.key.key: entry.value,
+          entry.key: entry.value,
       },
       'selectedThinkingByModel': settings.selectedThinkingByModel,
       'customCommand': settings.customCommand,
       'instructionsByOperation': <String, String>{
         for (final entry in settings.instructionsByOperation.entries)
-          entry.key.key: entry.value,
+          entry.key: entry.value,
       },
       'timeoutSeconds': settings.timeoutSeconds,
     };

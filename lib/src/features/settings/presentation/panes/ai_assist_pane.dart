@@ -133,13 +133,13 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
                       ? () => unawaited(_discoverModels(agent))
                       : null,
                   onChanged: (value) => widget.onChanged((settings) {
-                    final selectedModels = <AiAssistAgent, String>{
+                    final selectedModels = <String, String>{
                       ...settings.selectedModelByAgent,
                     };
                     if (value.trim().isEmpty) {
                       selectedModels.remove(agent);
                     } else {
-                      selectedModels[agent] = value;
+                      selectedModels[agent.key] = value;
                     }
                     return settings.copyWith(
                       selectedModelByAgent: selectedModels,
@@ -460,18 +460,18 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
       return;
     }
     widget.onChanged((latest) {
-      final discoveredDefaults = <AiAssistAgent, String>{
+      final discoveredDefaults = <String, String>{
         ...latest.discoveredDefaultModelByAgent,
       };
       if (result.defaultModelId == null) {
         discoveredDefaults.remove(agent);
       } else {
-        discoveredDefaults[agent] = result.defaultModelId!;
+        discoveredDefaults[agent.key] = result.defaultModelId!;
       }
       return latest.copyWith(
-        discoveredModelsByAgent: <AiAssistAgent, List<AiAssistDiscoveredModel>>{
+        discoveredModelsByAgent: <String, List<AiAssistDiscoveredModel>>{
           ...latest.discoveredModelsByAgent,
-          agent: <AiAssistDiscoveredModel>[
+          agent.key: <AiAssistDiscoveredModel>[
             for (final model in result.models) model.toDiscovered(),
           ],
         },
