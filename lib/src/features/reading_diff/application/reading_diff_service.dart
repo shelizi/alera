@@ -3,6 +3,7 @@ import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:alera/src/features/agent_profiles/domain/agent_descriptor_registry.dart';
+import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 import 'package:alera/src/features/ai_assist/application/ai_assist_agent_runner.dart';
 import 'package:alera/src/features/ai_assist/application/ai_assist_diff_only_execution.dart';
 import 'package:alera/src/features/ai_assist/application/ai_assist_errors.dart';
@@ -96,7 +97,7 @@ class ReadingDiffService({
     final cacheKey = await buildReadingDiffCacheKey(
       rubricVersion: compiler.rubricVersion,
       schemaVersion: compiler.schemaVersion,
-      agent: agent,
+      agentType: agentType,
       model: model.id,
       effort: effort,
       instructions: instructions,
@@ -340,7 +341,7 @@ String? effectiveReadingDiffEffort(
 Future<String> buildReadingDiffCacheKey({
   required String rubricVersion,
   required int schemaVersion,
-  required AiAssistAgent agent,
+  required AgentType? agentType,
   required String model,
   required String? effort,
   required String instructions,
@@ -350,13 +351,11 @@ Future<String> buildReadingDiffCacheKey({
   final identity = jsonEncode(<String, Object?>{
     'rubricVersion': rubricVersion,
     'schemaVersion': schemaVersion,
-    'agent': agent.key,
+    'agent': agentType?.name ?? 'custom',
     'model': model,
     'effort': effort,
     'instructions': instructions,
-    'customCommand': agent == AiAssistAgent.custom
-        ? customCommand.trim()
-        : null,
+    'customCommand': agentType == null ? customCommand.trim() : null,
   });
   return Isolate.run(() => _hashReadingDiffCacheKey(identity, rawDiff));
 }

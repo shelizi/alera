@@ -92,8 +92,8 @@ class CliAiAssistService({
           prompt: prompt,
           runId: key,
           workingDirectory: request.workspacePath,
-          agentType: agent.agentType,
-          useCustomCommand: agent == AiAssistAgent.custom,
+          agentType: agentType,
+          useCustomCommand: agentType == null,
           model: model.id,
           reasoning: request.settings.thinkingForOperation(
             request.operation,

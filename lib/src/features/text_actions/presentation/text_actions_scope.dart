@@ -146,6 +146,7 @@ class _TextActionsScopeState extends ConsumerState<TextActionsScope> {
         return;
       }
       final agent = currentAction.effectiveAgent(currentSettings.aiAssist);
+      final agentType = agent.agentType;
       final model = currentAction.effectiveModel(currentSettings.aiAssist);
       final reasoning = currentAction.reasoningFor(
         currentSettings.aiAssist,
@@ -162,8 +163,8 @@ class _TextActionsScopeState extends ConsumerState<TextActionsScope> {
               ),
               runId: runId,
               workingDirectory: activeWorkspacePath,
-              agentType: agent.agentType,
-              useCustomCommand: agent == AiAssistAgent.custom,
+              agentType: agentType,
+              useCustomCommand: agentType == null,
               model: model,
               reasoning: reasoning,
             ),

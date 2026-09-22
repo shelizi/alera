@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 import 'package:alera/src/features/ai_assist/application/ai_assist_agent_runner.dart';
 import 'package:alera/src/features/ai_assist/application/ai_assist_errors.dart';
 import 'package:alera/src/features/ai_assist/application/ai_assist_registry.dart';
@@ -199,7 +200,7 @@ void main() {
       Future<String> key(String command) => buildReadingDiffCacheKey(
         rubricVersion: 'rubric-v1',
         schemaVersion: 1,
-        agent: .custom,
+        agentType: null,
         model: 'custom',
         effort: null,
         instructions: '',
