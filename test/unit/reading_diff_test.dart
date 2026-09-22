@@ -112,7 +112,7 @@ void main() {
       request: request,
       rawDiff: .fromList(<int>[1]),
       compiler: compiler,
-      agent: .codex,
+      agentType: AgentType.codex,
       model: 'agent-model',
       effort: 'medium',
       accessPolicy: .diffOnly,

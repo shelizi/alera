@@ -199,7 +199,7 @@ ReadingDiffPreparation _preparation(
       ),
     ],
   ),
-  agent: .codex,
+  agentType: AgentType.codex,
   model: 'gpt-5.5',
   effort: 'low',
   accessPolicy: .diffOnly,

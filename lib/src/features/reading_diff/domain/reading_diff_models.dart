@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 import 'package:alera/src/features/ai_assist/application/ai_assist_agent_runner.dart';
 import 'package:alera/src/features/ai_assist/domain/ai_assist_settings.dart';
 import 'package:alera/src/rust/api/reading_diff.dart' as rust;
@@ -21,7 +22,7 @@ class const ReadingDiffPreparation({
   required final ReadingDiffRequest request,
   required final Uint8List rawDiff,
   required final rust.ReadingDiffPreparation compiler,
-  required final AiAssistAgent agent,
+  required final AgentType agentType,
   required final String model,
   required final String? effort,
   required final AgentTaskAccessPolicy accessPolicy,

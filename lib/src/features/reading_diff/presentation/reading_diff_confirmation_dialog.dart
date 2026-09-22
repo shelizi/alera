@@ -3,6 +3,7 @@ import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:alera/src/design_system/layout/alera_dialog.dart';
 import 'package:alera/src/features/ai_assist/application/ai_assist_agent_runner.dart';
+import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 import 'package:alera/src/features/reading_diff/domain/reading_diff_models.dart';
 import 'package:flutter/material.dart';
 
@@ -60,7 +61,7 @@ class const ReadingDiffConfirmationDialog({
                     const SizedBox(height: AleraTokens.space16),
                     _ReadingDiffDetail(
                       label: 'Agent',
-                      value: preparation.agent.label,
+                      value: agentDisplayName(preparation.agentType),
                     ),
                     _ReadingDiffDetail(
                       label: 'Model',

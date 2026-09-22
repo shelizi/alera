@@ -9,6 +9,7 @@ import 'package:alera/src/design_system/icons/alera_file_icon.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:alera/src/design_system/layout/alera_confirm_dialog.dart';
 import 'package:alera/src/features/ai_assist/application/ai_assist_errors.dart';
+import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 import 'package:alera/src/features/language_intelligence/application/language_provider_registry.dart';
 import 'package:alera/src/features/reading_diff/application/reading_diff_providers.dart';
 import 'package:alera/src/features/reading_diff/application/reading_diff_generation_progress.dart';
@@ -482,7 +483,7 @@ class _WorkspaceGitDiffSurfaceState
         return;
       }
       setState(() {
-        _readingDiffAgentLabel = preparation.agent.label;
+        _readingDiffAgentLabel = agentDisplayName(preparation.agentType);
         _readingDiffModel = preparation.model;
       });
       if (preparation.cachedResult == null) {

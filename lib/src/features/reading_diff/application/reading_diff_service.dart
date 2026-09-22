@@ -93,7 +93,6 @@ class ReadingDiffService({
         '${agentDescriptorFor(agentType).displayName} cannot receive diff chunk ${oversizedChunk + 1} within its safe prompt limit.',
       );
     }
-    final agent = AiAssistAgent.fromAgentType(agentType)!;
     final cacheKey = await buildReadingDiffCacheKey(
       rubricVersion: compiler.rubricVersion,
       schemaVersion: compiler.schemaVersion,
@@ -108,7 +107,7 @@ class ReadingDiffService({
       request: request,
       rawDiff: rawDiff,
       compiler: compiler,
-      agent: agent,
+      agentType: agentType,
       model: model.id,
       effort: effort,
       accessPolicy: .diffOnly,
@@ -142,7 +141,7 @@ class ReadingDiffService({
     _canceled.remove(lane);
     final compiled = <rust.ReadingDiffCompiledChunk>[];
     final chunkSummaries = <ReadingDiffChunkSummary>[];
-    var agentLabel = preparation.agent.label;
+    var agentLabel = agentDescriptorFor(preparation.agentType).displayName;
     try {
       for (final chunk in preparation.compiler.chunks) {
         _throwIfCanceled(lane);
@@ -286,7 +285,7 @@ class ReadingDiffService({
         prompt: prompt,
         runId: runId,
         workingDirectory: preparation.request.workspacePath,
-        agentType: preparation.agent.agentType,
+        agentType: preparation.agentType,
         model: preparation.model,
         reasoning: preparation.effort,
         accessPolicy: preparation.accessPolicy,
