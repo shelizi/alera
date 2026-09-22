@@ -87,28 +87,41 @@ class _WorkspaceMarkdownViewerSurfaceState
     } else if (_loadError case final loadError?) {
       content = _MarkdownViewerMessage(message: _messageFor(loadError));
     } else {
-      content = SelectionArea(
-        contextMenuBuilder: AleraTextSelectionToolbar.selectableRegion,
-        child: SingleChildScrollView(
-          key: PageStorageKey<String>(
-            'markdown-viewer-scroll:${widget.workspace.id}:${widget.tab.id}:$filePath',
-          ),
-          padding: const EdgeInsets.all(AleraTokens.space24),
-          child: GptMarkdownTheme(
-            gptThemeData: GptMarkdownThemeData(
-              brightness: .dark,
-              linkColor: AleraTokens.info,
-              highlightColor: AleraTokens.accentSubtle,
+      content = ScrollbarTheme(
+        data: Theme.of(context).scrollbarTheme.copyWith(
+          thumbVisibility: WidgetStateProperty.all(true),
+        ),
+        child: SelectionArea(
+          contextMenuBuilder: AleraTextSelectionToolbar.selectableRegion,
+          child: SingleChildScrollView(
+            key: PageStorageKey<String>(
+              'markdown-viewer-scroll:${widget.workspace.id}:${widget.tab.id}:$filePath',
             ),
-            child: DefaultTextStyle(
-              style:
-                  Theme.of(context).textTheme.bodyMedium
-                      ?.copyWith(color: AleraTokens.foreground, height: 1.45) ??
-                  const TextStyle(color: AleraTokens.foreground, height: 1.45),
-              child: GptMarkdown(
-                _content ?? '',
-                imageBuilder: _buildImage,
-                onLinkTap: (url, _) => unawaited(_openLink(url)),
+            padding: const EdgeInsets.all(AleraTokens.space24),
+            child: GptMarkdownTheme(
+              gptThemeData: GptMarkdownThemeData(
+                brightness: .dark,
+                linkColor: AleraTokens.info,
+                highlightColor: AleraTokens.accentSubtle,
+              ),
+              child: DefaultTextStyle(
+                style:
+                    Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: AleraTokens.foreground,
+                      height: 1.45,
+                    ) ??
+                    const TextStyle(
+                      color: AleraTokens.foreground,
+                      height: 1.45,
+                    ),
+                child: GptMarkdown(
+                  _content ?? '',
+                  styleSheet: const GptMarkdownStyleSheet(
+                    latex: LatexStyle(scrollBlockHorizontally: true),
+                  ),
+                  imageBuilder: _buildImage,
+                  onLinkTap: (url, _) => unawaited(_openLink(url)),
+                ),
               ),
             ),
           ),

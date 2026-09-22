@@ -355,6 +355,47 @@ void main() {
     expect(_markdownScrollOffset(tester), closeTo(offsetBeforeSwitch, 0.5));
   });
 
+  testWidgets('keeps horizontal overflow controls visible in markdown preview', (
+    tester,
+  ) async {
+    final registry = EditorSessionRegistry();
+    final service = _FakeWorkspaceFileService(
+      '''
+```text
+${List<String>.filled(220, 'wide').join('_')}
+```
+
+\\[
+${List<String>.filled(80, r'\frac{a}{b}').join(' + ')}
+\\]
+''',
+    );
+
+    await tester.pumpWidget(
+      _surface(registry: registry, workspaceFiles: service),
+    );
+    await tester.pumpAndSettle();
+
+    final scrollbarTheme = tester.widget<ScrollbarTheme>(
+      find.byType(ScrollbarTheme),
+    );
+    expect(
+      scrollbarTheme.data.thumbVisibility?.resolve(const <WidgetState>{}),
+      isTrue,
+    );
+
+    final horizontalPositions = tester
+        .stateList<ScrollableState>(find.byType(Scrollable))
+        .map((state) => state.position)
+        .where((position) => position.axis == Axis.horizontal)
+        .toList(growable: false);
+    expect(horizontalPositions, isNotEmpty);
+    expect(
+      horizontalPositions.any((position) => position.maxScrollExtent > 0),
+      isTrue,
+    );
+  });
+
   testWidgets('refresh reloads disk content while the editor buffer is clean', (
     tester,
   ) async {
