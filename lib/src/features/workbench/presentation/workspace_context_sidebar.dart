@@ -52,8 +52,11 @@ class const WorkspaceContextSidebar({
         color: AleraTokens.surfaceVariant,
         border: Border(left: BorderSide(color: AleraTokens.borderSubtle)),
       ),
-      child: prefs.rightSidebarVisible
-          ? _ResizableRightSidebar(
+      child: Stack(
+        children: <Widget>[
+          Offstage(
+            offstage: !prefs.rightSidebarVisible,
+            child: _ResizableRightSidebar(
               persistedWidth: prefs.rightSidebarWidth,
               onPersistWidth: onResize,
               child: Column(
@@ -64,78 +67,98 @@ class const WorkspaceContextSidebar({
                     onToggleVisible: onToggleVisible,
                   ),
                   Expanded(
-                    child: switch (activeTab) {
-                      WorkbenchContextPanelTab.explorer => WorkspaceExplorer(
-                        key: ValueKey<String>(
-                          'workspace-explorer:${workspace.id}:${workspace.path}',
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: <Widget>[
+                        _PersistentWorkspaceExplorerHost(
+                          active:
+                              prefs.rightSidebarVisible &&
+                              activeTab == WorkbenchContextPanelTab.explorer,
+                          workspaceIdentity:
+                              '${workspace.id}:${workspace.path}',
+                          child: WorkspaceExplorer(
+                            key: ValueKey<String>(
+                              'workspace-explorer:${workspace.id}:${workspace.path}',
+                            ),
+                            workspace: workspace,
+                            mode: prefs.explorerMode,
+                            onModeChanged: onSetExplorerMode,
+                            showHiddenFiles: prefs.showHiddenFiles,
+                            onShowHiddenFilesChanged: onSetShowHiddenFiles,
+                            onOpenFile: onOpenFile,
+                            onOpenFilePermanently: onOpenFilePermanently,
+                            onOpenFileInAlera: onOpenFileInAlera,
+                            focusedSourceControlRoot: focusedSourceControlRoot,
+                            onFocusSourceControlFolder:
+                                onFocusSourceControlFolder,
+                            onClearSourceControlRoot: onClearSourceControlRoot,
+                            onPathMoved: onPathMoved,
+                          ),
                         ),
-                        workspace: workspace,
-                        mode: prefs.explorerMode,
-                        onModeChanged: onSetExplorerMode,
-                        showHiddenFiles: prefs.showHiddenFiles,
-                        onShowHiddenFilesChanged: onSetShowHiddenFiles,
-                        onOpenFile: onOpenFile,
-                        onOpenFilePermanently: onOpenFilePermanently,
-                        onOpenFileInAlera: onOpenFileInAlera,
-                        focusedSourceControlRoot: focusedSourceControlRoot,
-                        onFocusSourceControlFolder: onFocusSourceControlFolder,
-                        onClearSourceControlRoot: onClearSourceControlRoot,
-                        onPathMoved: onPathMoved,
-                      ),
-                      WorkbenchContextPanelTab.search => WorkspaceSearchPanel(
-                        workspace: workspace,
-                        onOpenMatch: onOpenSearchMatch,
-                      ),
-                      WorkbenchContextPanelTab.references =>
-                        WorkspaceReferencesPanel(
-                          workspace: workspace,
-                          onOpenReference: onOpenReference,
-                        ),
-                      WorkbenchContextPanelTab.gitDiff =>
-                        sourceControlScope == null
-                            ? const AleraEmptyState(
-                                icon: AleraIcons.gitBranch,
-                                title: 'Source Control Unavailable',
-                                message: 'This workspace is not connected to a Git repository, so there are no changes to show.',
-                              )
-                            : WorkspaceGitDiffPanel(
-                                workspace: workspace,
-                                sourceControlScope: sourceControlScope,
-                                viewMode: prefs.gitDiffViewMode,
-                                onViewModeChanged: onSetGitDiffViewMode,
-                                groupMode: prefs.gitDiffGroupMode,
-                                onGroupModeChanged: onSetGitDiffGroupMode,
-                                onOpenGitDiff: onOpenGitDiff,
-                                onOpenGitCommitDiff: onOpenGitCommitDiff,
-                                onSwitchBranch: onSwitchBranch,
-                                onOpenFile: onOpenFilePermanently ?? onOpenFile,
-                                onRevealInExplorer: onRevealInExplorer,
-                                onClearSourceControlRoot:
-                                    sourceControlScope.isWorkspaceRoot
-                                    ? null
-                                    : onClearSourceControlRoot,
-                              ),
-                      WorkbenchContextPanelTab.pullRequests =>
-                        sourceControlScope == null
-                            ? const AleraEmptyState(
-                                icon: AleraIcons.gitPullRequest,
-                                title: 'Pull Request Unavailable',
-                                message: 'This workspace is not connected to a Git repository, so there are no Pull Requests to show.',
-                              )
-                            : WorkspacePullRequestsPanel(
-                                key: ValueKey<String>(
-                                  'workspace-pull-requests:${workspace.id}:${sourceControlScope.path}',
-                                ),
-                                workspace: workspace,
-                                repoPath: sourceControlScope.path,
-                                gitDiffRoot: sourceControlScope.relativeRoot,
-                              ),
-                    },
+                        switch (activeTab) {
+                          WorkbenchContextPanelTab.explorer =>
+                            const SizedBox.shrink(),
+                          WorkbenchContextPanelTab.search =>
+                            WorkspaceSearchPanel(
+                              workspace: workspace,
+                              onOpenMatch: onOpenSearchMatch,
+                            ),
+                          WorkbenchContextPanelTab.references =>
+                            WorkspaceReferencesPanel(
+                              workspace: workspace,
+                              onOpenReference: onOpenReference,
+                            ),
+                          WorkbenchContextPanelTab.gitDiff =>
+                            sourceControlScope == null
+                                ? const AleraEmptyState(
+                                    icon: AleraIcons.gitBranch,
+                                    title: 'Source Control Unavailable',
+                                    message: 'This workspace is not connected to a Git repository, so there are no changes to show.',
+                                  )
+                                : WorkspaceGitDiffPanel(
+                                    workspace: workspace,
+                                    sourceControlScope: sourceControlScope,
+                                    viewMode: prefs.gitDiffViewMode,
+                                    onViewModeChanged: onSetGitDiffViewMode,
+                                    groupMode: prefs.gitDiffGroupMode,
+                                    onGroupModeChanged: onSetGitDiffGroupMode,
+                                    onOpenGitDiff: onOpenGitDiff,
+                                    onOpenGitCommitDiff: onOpenGitCommitDiff,
+                                    onSwitchBranch: onSwitchBranch,
+                                    onOpenFile:
+                                        onOpenFilePermanently ?? onOpenFile,
+                                    onRevealInExplorer: onRevealInExplorer,
+                                    onClearSourceControlRoot:
+                                        sourceControlScope.isWorkspaceRoot
+                                        ? null
+                                        : onClearSourceControlRoot,
+                                  ),
+                          WorkbenchContextPanelTab.pullRequests =>
+                            sourceControlScope == null
+                                ? const AleraEmptyState(
+                                    icon: AleraIcons.gitPullRequest,
+                                    title: 'Pull Request Unavailable',
+                                    message: 'This workspace is not connected to a Git repository, so there are no Pull Requests to show.',
+                                  )
+                                : WorkspacePullRequestsPanel(
+                                    key: ValueKey<String>(
+                                      'workspace-pull-requests:${workspace.id}:${sourceControlScope.path}',
+                                    ),
+                                    workspace: workspace,
+                                    repoPath: sourceControlScope.path,
+                                    gitDiffRoot:
+                                        sourceControlScope.relativeRoot,
+                                  ),
+                        },
+                      ],
+                    ),
                   ),
                 ],
               ),
-            )
-          : _CollapsedContextRail(
+            ),
+          ),
+          if (!prefs.rightSidebarVisible)
+            _CollapsedContextRail(
               activeTab: activeTab,
               onOpenTab: (tab) {
                 onSetContextPanelTab(tab);
@@ -143,7 +166,42 @@ class const WorkspaceContextSidebar({
               },
               onToggleVisible: onToggleVisible,
             ),
+        ],
+      ),
     );
+  }
+}
+
+class const _PersistentWorkspaceExplorerHost({
+  required final bool active,
+  required final String workspaceIdentity,
+  required final Widget child,
+}) extends StatefulWidget {
+  @override
+  State<_PersistentWorkspaceExplorerHost> createState() =>
+      _PersistentWorkspaceExplorerHostState();
+}
+
+class _PersistentWorkspaceExplorerHostState
+    extends State<_PersistentWorkspaceExplorerHost> {
+  late bool _mounted = widget.active;
+
+  @override
+  void didUpdateWidget(covariant _PersistentWorkspaceExplorerHost oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.workspaceIdentity != widget.workspaceIdentity) {
+      _mounted = widget.active;
+    } else if (widget.active) {
+      _mounted = true;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_mounted) {
+      return const SizedBox.shrink();
+    }
+    return Offstage(offstage: !widget.active, child: widget.child);
   }
 }
 

@@ -304,6 +304,170 @@ void _registerWorkspaceExplorerContextSidebarTests() {
     },
   );
 
+  testWidgets(
+    'context sidebar preserves explorer expansion selection and scroll position across tabs',
+    (tester) async {
+      final service = _FakeWorkspaceFileService()
+        ..childrenByDirectory[''] = <native.WorkspaceFileEntry>[
+          for (var index = 0; index < 24; index += 1)
+            _file('file_${index.toString().padLeft(2, '0')}.dart'),
+          _directory('src', hasChildrenHint: true),
+        ]
+        ..childrenByDirectory['src'] = <native.WorkspaceFileEntry>[
+          _file('src/main.dart'),
+        ];
+
+      Widget buildSidebar(
+        WorkbenchContextPanelTab activeTab, {
+        bool visible = true,
+      }) {
+        return _withWorkspaceFiles(
+          service,
+          child: MaterialApp(
+            home: Scaffold(
+              body: SizedBox(
+                width: 360,
+                height: 520,
+                child: WorkspaceContextSidebar(
+                  workspace: _workspace(),
+                  prefs: WorkbenchViewPrefs.defaults.copyWith(
+                    activeContextPanelTab: activeTab,
+                    rightSidebarVisible: visible,
+                  ),
+                  onToggleVisible: () {},
+                  onResize: (_) {},
+                  onSetContextPanelTab: (_) {},
+                  onSetExplorerMode: (_) {},
+                  onSetShowHiddenFiles: (_) {},
+                  onSetGitDiffViewMode: (_) {},
+                  onSetGitDiffGroupMode: (_) {},
+                  onOpenFile: (_) {},
+                  onOpenGitDiff: ({
+                    relativePath,
+                    area,
+                    gitDiffRoot,
+                    required scope,
+                    bool preview = false,
+                  }) async {},
+                  onOpenGitCommitDiff: ({
+                    relativePath,
+                    oldPath,
+                    required scope,
+                    gitDiffRoot,
+                    required commitOid,
+                    parentOid,
+                    required compareRef,
+                    subject,
+                    message,
+                    bool preview = false,
+                  }) async {},
+                  onOpenSearchMatch: (_) {},
+                  onPathMoved: (_, _) async {},
+                ),
+              ),
+            ),
+          ),
+        );
+      }
+
+      await tester.pumpWidget(buildSidebar(.explorer));
+      await tester.pumpAndSettle();
+
+      final explorerScrollable = find.byType(Scrollable).first;
+      await tester.scrollUntilVisible(
+        find.text('src'),
+        240,
+        scrollable: explorerScrollable,
+      );
+      await tester.tap(find.text('src'));
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.text('main.dart'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('main.dart'));
+      await tester.pump();
+
+      final beforePixels = tester
+          .state<ScrollableState>(explorerScrollable)
+          .position
+          .pixels;
+      expect(beforePixels, greaterThan(0));
+      final beforeTop = tester.getTopLeft(find.text('main.dart')).dy;
+      expect(
+        find.ancestor(
+          of: find.text('main.dart'),
+          matching: find.byWidgetPredicate(
+            (widget) =>
+                widget is DecoratedBox &&
+                widget.decoration is BoxDecoration &&
+                (widget.decoration as BoxDecoration).color ==
+                    AleraTokens.surfaceElevated,
+          ),
+        ),
+        findsOneWidget,
+      );
+
+      await tester.pumpWidget(buildSidebar(.search));
+      await tester.pumpAndSettle();
+      expect(find.text('main.dart'), findsNothing);
+
+      await tester.pumpWidget(buildSidebar(.explorer));
+      await tester.pumpAndSettle();
+
+      expect(find.text('main.dart'), findsOneWidget);
+      final restoredScrollable = find.byType(Scrollable).first;
+      final afterPixels = tester
+          .state<ScrollableState>(restoredScrollable)
+          .position
+          .pixels;
+      final afterTop = tester.getTopLeft(find.text('main.dart')).dy;
+      expect(afterPixels, closeTo(beforePixels, 0.01));
+      expect(afterTop, closeTo(beforeTop, 0.01));
+      expect(
+        find.ancestor(
+          of: find.text('main.dart'),
+          matching: find.byWidgetPredicate(
+            (widget) =>
+                widget is DecoratedBox &&
+                widget.decoration is BoxDecoration &&
+                (widget.decoration as BoxDecoration).color ==
+                    AleraTokens.surfaceElevated,
+          ),
+        ),
+        findsOneWidget,
+      );
+      await tester.pumpWidget(buildSidebar(.explorer, visible: false));
+      await tester.pumpAndSettle();
+      expect(find.text('main.dart'), findsNothing);
+
+      await tester.pumpWidget(buildSidebar(.explorer));
+      await tester.pumpAndSettle();
+
+      expect(find.text('main.dart'), findsOneWidget);
+      final afterCollapseScrollable = find.byType(Scrollable).first;
+      expect(
+        tester.state<ScrollableState>(afterCollapseScrollable).position.pixels,
+        closeTo(beforePixels, 0.01),
+      );
+      expect(
+        tester.getTopLeft(find.text('main.dart')).dy,
+        closeTo(beforeTop, 0.01),
+      );
+      expect(
+        find.ancestor(
+          of: find.text('main.dart'),
+          matching: find.byWidgetPredicate(
+            (widget) =>
+                widget is DecoratedBox &&
+                widget.decoration is BoxDecoration &&
+                (widget.decoration as BoxDecoration).color ==
+                    AleraTokens.surfaceElevated,
+          ),
+        ),
+        findsOneWidget,
+      );
+    },
+  );
+
   testWidgets('context sidebar uses rail only while collapsed', (tester) async {
     final service = _FakeWorkspaceFileService();
 
