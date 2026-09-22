@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:isolate';
 import 'dart:typed_data';
 
+import 'package:alera/src/features/agent_profiles/domain/agent_descriptor_registry.dart';
 import 'package:alera/src/features/ai_assist/application/ai_assist_agent_runner.dart';
 import 'package:alera/src/features/ai_assist/application/ai_assist_diff_only_execution.dart';
 import 'package:alera/src/features/ai_assist/application/ai_assist_errors.dart';
@@ -33,17 +34,19 @@ class ReadingDiffService({
       throw const AiAssistException('AI Assist is disabled.');
     }
     final operation = AiAssistOperation.readingDiff;
-    final agent = readingDiffAgentForSettings(request.settings);
-    final spec = aiAssistCapabilityFor(agent.agentType);
-    if (spec == null && agent != AiAssistAgent.custom) {
-      throw AiAssistException('${agent.label} does not support AI Assist.');
+    final agentType = readingDiffAgentTypeForSettings(request.settings);
+    final spec = aiAssistCapabilityFor(agentType);
+    if (spec == null) {
+      throw AiAssistException(
+        '${agentDescriptorFor(agentType).displayName} does not support AI Assist.',
+      );
     }
-    requireDiffOnlyAiAssistAgent(agent);
-    final model = modelForAgent(
-      agent,
-      readingDiffModelForSettings(request.settings, agent) ??
-          defaultModelIdForAgent(agent, request.settings),
-      extraModels: discoveredModelsForAgent(request.settings, agent),
+    requireDiffOnlyAiAssistAgentType(agentType);
+    final model = modelForAgentType(
+      agentType,
+      readingDiffModelForSettingsType(request.settings, agentType) ??
+          defaultModelIdForAgentType(agentType, request.settings),
+      extraModels: discoveredModelsForAgentType(request.settings, agentType),
     );
     final effort = effectiveReadingDiffEffort(
       request.settings,
@@ -67,7 +70,7 @@ class ReadingDiffService({
     if (rawDiff.isEmpty) {
       throw const AiAssistException('No diff is available to read.');
     }
-    final promptLimit = _promptLimit(agent, request.settings, spec);
+    final promptLimit = _promptLimit(spec);
     final chunkLimit = _chunkLimit(promptLimit);
     final rust.ReadingDiffPreparation compiler;
     try {
@@ -86,9 +89,10 @@ class ReadingDiffService({
     );
     if (oversizedChunk != null) {
       throw AiAssistException(
-        '${agent.label} cannot receive diff chunk ${oversizedChunk + 1} within its safe prompt limit.',
+        '${agentDescriptorFor(agentType).displayName} cannot receive diff chunk ${oversizedChunk + 1} within its safe prompt limit.',
       );
     }
+    final agent = AiAssistAgent.fromAgentType(agentType)!;
     final cacheKey = await buildReadingDiffCacheKey(
       rubricVersion: compiler.rubricVersion,
       schemaVersion: compiler.schemaVersion,
@@ -313,18 +317,7 @@ class ReadingDiffService({
 const int _defaultReadingDiffChunkBytes = 160 * 1024;
 const int _argvPromptBytes = 24000;
 
-int _promptLimit(
-  AiAssistAgent agent,
-  AiAssistSettings settings,
-  AiAssistCapability? spec,
-) {
-  if (agent == AiAssistAgent.custom) {
-    return settings.customCommand.contains('{prompt}')
-        ? _argvPromptBytes
-        : 1024 * 1024;
-  }
-  return spec?.maxPromptBytes ?? _argvPromptBytes;
-}
+int _promptLimit(AiAssistCapability spec) => spec.maxPromptBytes;
 
 int _chunkLimit(int promptLimit) {
   final conservativeLimit = (promptLimit - 8192) ~/ 4;

@@ -197,19 +197,19 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
     AiAssistSettings settings,
     AiAssistOperation operation,
   ) {
-    final agent = operation == AiAssistOperation.readingDiff
-        ? readingDiffAgentForSettings(settings)
-        : settings.agentFor(operation);
-    if (agent == AiAssistAgent.custom) {
+    final agentType = operation == AiAssistOperation.readingDiff
+        ? readingDiffAgentTypeForSettings(settings)
+        : settings.agentFor(operation).agentType;
+    if (agentType == null) {
       return const <Widget>[];
     }
-    final model = modelForAgent(
-      agent,
+    final model = modelForAgentType(
+      agentType,
       (operation == AiAssistOperation.readingDiff
-              ? readingDiffModelForSettings(settings, agent)
+              ? readingDiffModelForSettingsType(settings, agentType)
               : settings.modelForOperation(operation)) ??
-          defaultModelIdForAgent(agent, settings),
-      extraModels: discoveredModelsForAgent(settings, agent),
+          defaultModelIdForAgentType(agentType, settings),
+      extraModels: discoveredModelsForAgentType(settings, agentType),
     );
     if (model.thinkingLevels.isEmpty) {
       return const <Widget>[];
@@ -264,9 +264,12 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
     final promptSettings = settings.promptSettingsFor(operation);
     final isReadingDiff = operation == AiAssistOperation.readingDiff;
     final globalSupported = supportsDiffOnlyAiAssistAgent(settings.agent);
-    final agent = isReadingDiff
-        ? readingDiffAgentForSettings(settings)
-        : settings.agentFor(operation);
+    final agentType = isReadingDiff
+        ? readingDiffAgentTypeForSettings(settings)
+        : settings.agentFor(operation).agentType;
+    final agent = agentType == null
+        ? AiAssistAgent.custom
+        : AiAssistAgent.fromAgentType(agentType)!;
     final configuredAgent = promptSettings.agent ?? settings.agent;
     final usesReadingDiffFallback =
         isReadingDiff && !supportsDiffOnlyAiAssistAgent(configuredAgent);
@@ -388,12 +391,15 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
     if (!mounted || !widget.settings.enabled) {
       return;
     }
-    final agents = aiAssistAgentsForModelDiscovery(
+    final agentTypes = aiAssistAgentTypesForModelDiscovery(
       widget.settings,
       _configuredOperations,
     );
-    for (final agent in agents) {
-      _autoDiscoverAgent(agent);
+    for (final agentType in agentTypes) {
+      final agent = AiAssistAgent.fromAgentType(agentType);
+      if (agent != null) {
+        _autoDiscoverAgent(agent);
+      }
     }
   }
 

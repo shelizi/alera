@@ -3,11 +3,11 @@ part of 'ai_assist_service_test.dart';
 void _registerAiAssistReadingDiffTests() {
   test('falls back to Codex for an unsupported inherited reading agent', () {
     expect(
-      readingDiffAgentForSettings(const AiAssistSettings(agent: .cursor)),
-      AiAssistAgent.codex,
+      readingDiffAgentTypeForSettings(const AiAssistSettings(agent: .cursor)),
+      AgentType.codex,
     );
     expect(
-      readingDiffAgentForSettings(
+      readingDiffAgentTypeForSettings(
         const AiAssistSettings(
           agent: .cursor,
           promptSettingsByOperation:
@@ -18,7 +18,7 @@ void _registerAiAssistReadingDiffTests() {
               },
         ),
       ),
-      AiAssistAgent.claude,
+      AgentType.claude,
     );
     const settings = AiAssistSettings(
       agent: .cursor,
@@ -28,18 +28,18 @@ void _registerAiAssistReadingDiffTests() {
       },
     );
     expect(
-      readingDiffModelForSettings(
+      readingDiffModelForSettingsType(
         settings,
-        readingDiffAgentForSettings(settings),
+        readingDiffAgentTypeForSettings(settings),
       ),
       'gpt-codex',
     );
     expect(
-      aiAssistAgentsForModelDiscovery(settings, const <AiAssistOperation>[
+      aiAssistAgentTypesForModelDiscovery(settings, const <AiAssistOperation>[
         AiAssistOperation.commitMessage,
         AiAssistOperation.readingDiff,
       ]),
-      <AiAssistAgent>{AiAssistAgent.cursor, AiAssistAgent.codex},
+      <AgentType>{AgentType.cursor, AgentType.codex},
     );
   });
 

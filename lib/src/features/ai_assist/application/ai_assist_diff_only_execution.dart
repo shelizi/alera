@@ -47,36 +47,37 @@ List<AgentType> get diffOnlyAiAssistAgentTypes => aiAssistCapabilities.values
     .map((spec) => spec.agentType)
     .toList(growable: false);
 
-Set<AiAssistAgent> aiAssistAgentsForModelDiscovery(
+Set<AgentType> aiAssistAgentTypesForModelDiscovery(
   AiAssistSettings settings,
   Iterable<AiAssistOperation> operations,
-) => <AiAssistAgent>{
-  settings.agent,
+) => <AgentType>{
+  if (settings.agentType case final agentType?) agentType,
   for (final operation in operations)
-    operation == AiAssistOperation.readingDiff
-        ? readingDiffAgentForSettings(settings)
-        : settings.agentFor(operation),
+    if (operation == AiAssistOperation.readingDiff)
+      readingDiffAgentTypeForSettings(settings)
+    else if (settings.agentFor(operation).agentType case final agentType?)
+      agentType,
 };
 
-AiAssistAgent readingDiffAgentForSettings(AiAssistSettings settings) {
+AgentType readingDiffAgentTypeForSettings(AiAssistSettings settings) {
   final prompt = settings.promptSettingsFor(.readingDiff);
-  final configured = prompt.agent ?? settings.agent;
-  if (supportsDiffOnlyAiAssistAgent(configured)) {
-    return configured;
+  final configured = prompt.agentType ?? settings.agentType;
+  if (supportsDiffOnlyAiAssistAgentType(configured)) {
+    return configured!;
   }
-  return AiAssistAgent.codex;
+  return AgentType.codex;
 }
 
-String? readingDiffModelForSettings(
+String? readingDiffModelForSettingsType(
   AiAssistSettings settings,
-  AiAssistAgent agent,
+  AgentType agentType,
 ) {
   final prompt = settings.promptSettingsFor(.readingDiff);
-  final configuredAgent = prompt.agent ?? settings.agent;
-  if (configuredAgent != agent) {
-    return settings.modelFor(agent);
+  final configuredAgentType = prompt.agentType ?? settings.agentType;
+  if (configuredAgentType != agentType) {
+    return settings.modelForType(agentType);
   }
-  return prompt.model ?? settings.modelFor(agent);
+  return prompt.model ?? settings.modelForType(agentType);
 }
 
 void requireDiffOnlyAiAssistAgent(AiAssistAgent agent) {
