@@ -2,7 +2,7 @@ part of 'ai_assist_agent_runner.dart';
 
 extension on CliAiAssistAgentRunner {
   Future<_AiAssistAgentCommandPlan> _planCommand(
-    AiAssistAgentRunRequest request,
+    AgentTaskRunRequest request,
     Map<String, String> environment,
   ) async {
     final settings = request.settings;

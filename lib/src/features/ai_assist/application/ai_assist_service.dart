@@ -87,7 +87,7 @@ class CliAiAssistService({
               ),
             );
       final result = await runner.run(
-        AiAssistAgentRunRequest(
+        AgentTaskRunRequest(
           settings: request.settings,
           prompt: prompt,
           runId: key,

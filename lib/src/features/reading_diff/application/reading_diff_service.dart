@@ -269,7 +269,7 @@ class ReadingDiffService({
     }
   }
 
-  Future<AiAssistAgentRunResult> _runPlan(
+  Future<AgentTaskRunResult> _runPlan(
     ReadingDiffPreparation preparation,
     String lane,
     int chunkIndex,
@@ -280,7 +280,7 @@ class ReadingDiffService({
     final runId = '$lane::chunk-$chunkIndex${repair ? '-repair' : ''}';
     _activeRunByLane[lane] = runId;
     final result = await runner.run(
-      AiAssistAgentRunRequest(
+      AgentTaskRunRequest(
         settings: preparation.request.settings,
         prompt: prompt,
         runId: runId,

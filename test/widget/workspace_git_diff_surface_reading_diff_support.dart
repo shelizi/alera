@@ -81,7 +81,7 @@ class const _FailingReadingDiffRunner() implements AgentTaskRunner {
   void cancel(String runId) {}
 
   @override
-  Future<AiAssistAgentRunResult> run(AiAssistAgentRunRequest request) {
+  Future<AgentTaskRunResult> run(AgentTaskRunRequest request) {
     throw const AiAssistException(
       'Codex failed: Invalid schema for response format.',
     );

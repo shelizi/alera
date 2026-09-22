@@ -19,7 +19,7 @@ enum AgentTaskAccessPolicy { repositoryReadOnly, diffOnly }
 
 enum AgentTaskOutputContract { plainText, readingDiffPlanV1 }
 
-class const AiAssistAgentRunRequest({
+class const AgentTaskRunRequest({
   required final AiAssistSettings settings,
   required final String prompt,
   required final String runId,
@@ -36,13 +36,13 @@ class const AiAssistAgentRunRequest({
   final String? outputSchema,
 });
 
-class const AiAssistAgentRunResult({
+class const AgentTaskRunResult({
   required final String text,
   required final String agentLabel,
 });
 
 abstract interface class AgentTaskRunner {
-  Future<AiAssistAgentRunResult> run(AiAssistAgentRunRequest request);
+  Future<AgentTaskRunResult> run(AgentTaskRunRequest request);
 
   void cancel(String runId);
 }
@@ -63,7 +63,7 @@ class CliAiAssistAgentRunner({
   final Set<String> _canceled = <String>{};
 
   @override
-  Future<AiAssistAgentRunResult> run(AiAssistAgentRunRequest request) async {
+  Future<AgentTaskRunResult> run(AgentTaskRunRequest request) async {
     if (_pending.contains(request.runId) ||
         _running.containsKey(request.runId)) {
       throw const AiAssistException('Generation is already running.');
@@ -158,7 +158,7 @@ class CliAiAssistAgentRunner({
       if (text.trim().isEmpty) {
         throw AiAssistException('${plan.label} returned no text.');
       }
-      return AiAssistAgentRunResult(text: text, agentLabel: plan.label);
+      return AgentTaskRunResult(text: text, agentLabel: plan.label);
     } finally {
       _pending.remove(request.runId);
       _running.remove(request.runId);

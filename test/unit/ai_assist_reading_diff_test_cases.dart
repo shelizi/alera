@@ -63,7 +63,7 @@ void _registerAiAssistReadingDiffTests() {
       );
 
       final result = await runner.run(
-        const AiAssistAgentRunRequest(
+        const AgentTaskRunRequest(
           settings: AiAssistSettings(),
           prompt: 'Plan this diff.',
           runId: 'reading-diff-codex',
@@ -122,7 +122,7 @@ void _registerAiAssistReadingDiffTests() {
       );
 
       await runner.run(
-        const AiAssistAgentRunRequest(
+        const AgentTaskRunRequest(
           settings: AiAssistSettings(),
           prompt: 'Plan this diff.',
           runId: 'reading-diff-codex-keyring',
@@ -177,7 +177,7 @@ ERROR: {
 
     await expectLater(
       runner.run(
-        const AiAssistAgentRunRequest(
+        const AgentTaskRunRequest(
           settings: AiAssistSettings(),
           prompt: 'Plan this diff.',
           runId: 'reading-diff-codex-error',
@@ -214,7 +214,7 @@ ERROR: {
       );
 
       await runner.run(
-        const AiAssistAgentRunRequest(
+        const AgentTaskRunRequest(
           settings: AiAssistSettings(),
           prompt: 'Plan this diff.',
           runId: 'reading-diff-codex-hydrated',
@@ -248,7 +248,7 @@ ERROR: {
     );
 
     final result = await runner.run(
-      const AiAssistAgentRunRequest(
+      const AgentTaskRunRequest(
         settings: AiAssistSettings(),
         prompt: 'Plan this diff.',
         runId: 'reading-diff-claude',
@@ -294,7 +294,7 @@ ERROR: {
     );
 
     final result = await runner.run(
-      const AiAssistAgentRunRequest(
+      const AgentTaskRunRequest(
         settings: AiAssistSettings(),
         prompt: 'Plan this diff.',
         runId: 'reading-diff-grok',
@@ -333,7 +333,7 @@ ERROR: {
       );
 
       final result = await runner.run(
-        AiAssistAgentRunRequest(
+        AgentTaskRunRequest(
           settings: const AiAssistSettings(),
           prompt: 'Plan this diff with the embedded schema.',
           runId: 'reading-diff-${agent.key}',
@@ -376,7 +376,7 @@ ERROR: {
 
       await expectLater(
         runner.run(
-          AiAssistAgentRunRequest(
+          AgentTaskRunRequest(
             settings: const AiAssistSettings(customCommand: 'custom-agent'),
             prompt: 'Plan this diff.',
             runId: 'reading-diff-rejected-${agent.key}',
@@ -413,7 +413,7 @@ ERROR: {
 
     await expectLater(
       runner.run(
-        const AiAssistAgentRunRequest(
+        const AgentTaskRunRequest(
           settings: AiAssistSettings(),
           prompt: 'Plan this diff.',
           runId: 'reading-diff-stderr',

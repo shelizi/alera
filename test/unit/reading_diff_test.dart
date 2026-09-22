@@ -424,7 +424,7 @@ class _UnusedAgentTaskRunner implements AgentTaskRunner {
   void cancel(String runId) {}
 
   @override
-  Future<AiAssistAgentRunResult> run(AiAssistAgentRunRequest request) {
+  Future<AgentTaskRunResult> run(AgentTaskRunRequest request) {
     throw StateError('The runner should not be used.');
   }
 }

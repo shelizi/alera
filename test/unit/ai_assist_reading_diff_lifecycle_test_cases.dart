@@ -13,7 +13,7 @@ void _registerAiAssistReadingDiffLifecycleTests() {
       commandEnvironmentResolver: const _FakeCommandEnvironmentResolver(),
     );
     final run = runner.run(
-      const AiAssistAgentRunRequest(
+      const AgentTaskRunRequest(
         settings: AiAssistSettings(timeoutSeconds: 0),
         prompt: 'Plan this diff.',
         runId: 'reading-diff-timeout-cleanup',
@@ -54,7 +54,7 @@ void _registerAiAssistReadingDiffLifecycleTests() {
         commandEnvironmentResolver: const _FakeCommandEnvironmentResolver(),
       );
       final run = runner.run(
-        const AiAssistAgentRunRequest(
+        const AgentTaskRunRequest(
           settings: AiAssistSettings(),
           prompt: 'Plan this diff.',
           runId: 'reading-diff-startup-cancel-cleanup',

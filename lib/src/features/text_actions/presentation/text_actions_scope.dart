@@ -154,7 +154,7 @@ class _TextActionsScopeState extends ConsumerState<TextActionsScope> {
       final result = await ref
           .read(aiAssistAgentRunnerProvider)
           .run(
-            AiAssistAgentRunRequest(
+            AgentTaskRunRequest(
               settings: currentSettings.aiAssist,
               prompt: buildTextActionPrompt(
                 instruction: currentAction.prompt,
