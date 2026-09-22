@@ -5,12 +5,14 @@ import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/forms/alera_dropdown_field.dart';
 import 'package:alera/src/design_system/forms/alera_text_field.dart';
 import 'package:alera/src/design_system/layout/alera_settings_group.dart';
+import 'package:alera/src/features/language_intelligence/application/language_intelligence_activity.dart';
 import 'package:alera/src/features/language_intelligence/application/language_intelligence_status_port.dart';
 import 'package:alera/src/features/language_intelligence/application/language_provider_registry.dart';
 import 'package:alera/src/features/language_intelligence/domain/language_extension_descriptor.dart';
 import 'package:alera/src/features/language_intelligence/domain/language_intelligence_settings.dart';
 import 'package:alera/src/features/language_intelligence/domain/language_intelligence_status.dart';
 import 'package:alera/src/features/language_intelligence/domain/language_provider_descriptor.dart';
+import 'package:alera/src/features/language_intelligence/domain/language_server_session_state.dart';
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
 import 'package:flutter/material.dart';
 
@@ -19,6 +21,7 @@ class const LanguageIntelligenceSettingsGroup({
   required final EditorSettings settings,
   required final LanguageExtensionRegistry registry,
   required final LanguageIntelligenceStatusPort statusPort,
+  required final LanguageIntelligenceActivityPort activity,
   required final ValueChanged<EditorSettings Function(EditorSettings)>
   onChanged,
 }) extends StatelessWidget {
@@ -36,6 +39,7 @@ class const LanguageIntelligenceSettingsGroup({
             language: language,
             registry: registry,
             statusPort: statusPort,
+            activity: activity,
             activation: settings.languageIntelligence.forLanguage(
               language.id,
               structuralParserDefaultEnabled:
@@ -61,6 +65,7 @@ class _LanguageIntelligenceLanguageSetting extends StatefulWidget {
     required this.language,
     required this.registry,
     required this.statusPort,
+    required this.activity,
     required this.activation,
     required this.onChanged,
   });
@@ -68,6 +73,7 @@ class _LanguageIntelligenceLanguageSetting extends StatefulWidget {
   final LanguageExtensionDescriptor language;
   final LanguageExtensionRegistry registry;
   final LanguageIntelligenceStatusPort statusPort;
+  final LanguageIntelligenceActivityPort activity;
   final LanguageActivationSettings activation;
   final ValueChanged<LanguageActivationSettings> onChanged;
 
@@ -80,6 +86,9 @@ class _LanguageIntelligenceLanguageSettingState
     extends State<_LanguageIntelligenceLanguageSetting> {
   late final TextEditingController _executableController;
   Future<LanguageIntelligenceProviderStatus>? _statusFuture;
+  late LanguageIntelligenceActivitySnapshot _activity;
+  StreamSubscription<LanguageIntelligenceActivitySnapshot>?
+  _activitySubscription;
 
   @override
   void initState() {
@@ -87,6 +96,10 @@ class _LanguageIntelligenceLanguageSettingState
     _executableController = TextEditingController(
       text: widget.activation.executablePath ?? '',
     );
+    _activity = widget.activity.snapshot;
+    _activitySubscription = widget.activity.changes.listen((snapshot) {
+      if (mounted) setState(() => _activity = snapshot);
+    });
     _refreshStatus();
   }
 
@@ -104,6 +117,7 @@ class _LanguageIntelligenceLanguageSettingState
 
   @override
   void dispose() {
+    _activitySubscription?.cancel();
     _executableController.dispose();
     super.dispose();
   }
@@ -264,6 +278,16 @@ class _LanguageIntelligenceLanguageSettingState
             ),
           ],
           const SizedBox(height: AleraTokens.space8),
+          _LanguageIntelligenceRuntimeStatus(
+            acquisition: provider == null
+                ? null
+                : _activity.acquisitionFor(provider.id),
+            server: provider == null ? null : _activity.serverFor(provider.id),
+            parser: _activity.parserFor(widget.language.id),
+            semanticEnabled: widget.activation.enabled && provider != null,
+            parserEnabled: widget.activation.structuralParserEnabled,
+          ),
+          const SizedBox(height: AleraTokens.space8),
           _LanguageIntelligenceStatusLine(
             key: ValueKey<String>(
               'language-intelligence-${widget.language.id.value}-status',
@@ -286,6 +310,160 @@ class _LanguageIntelligenceLanguageSettingState
       return fallback;
     }
     return provider.executableCandidates.first;
+  }
+}
+
+class const _LanguageIntelligenceRuntimeStatus({
+  required final ManagedLanguageServerAcquisitionSnapshot? acquisition,
+  required final SemanticServerActivitySnapshot? server,
+  required final StructuralParserActivitySnapshot? parser,
+  required final bool semanticEnabled,
+  required final bool parserEnabled,
+}) extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    final parserStatus = parser;
+    final semanticServer = server;
+
+    return Column(
+      crossAxisAlignment: .stretch,
+      children: <Widget>[
+        _RuntimeStatusRow(
+          label: 'Download',
+          value: _acquisitionLabel(acquisition, server, semanticEnabled),
+          detail: acquisition?.detail,
+          busy:
+              acquisition?.state ==
+                  ManagedLanguageServerAcquisitionState.checking ||
+              acquisition?.state ==
+                  ManagedLanguageServerAcquisitionState.installing ||
+              acquisition?.state ==
+                  ManagedLanguageServerAcquisitionState.verifying,
+        ),
+        _RuntimeStatusRow(
+          label: 'Semantic Server',
+          value: _serverLabel(server, semanticEnabled),
+          detail: semanticServer == null
+              ? null
+              : '${semanticServer.activeDocumentCount} active document(s)'
+                    '${semanticServer.restartAttempts > 0 ? ', restart ${semanticServer.restartAttempts}' : ''}',
+          busy:
+              server?.state == LanguageServerSessionState.resolvingExecutable ||
+              server?.state == LanguageServerSessionState.starting ||
+              server?.state == LanguageServerSessionState.initializing ||
+              server?.state == LanguageServerSessionState.stopping,
+        ),
+        _RuntimeStatusRow(
+          label: 'Parser',
+          value: _parserLabel(parser, parserEnabled),
+          detail: parserStatus == null
+              ? null
+              : '${parserStatus.activeDocumentCount} active document(s)'
+                    '${parserStatus.revision == null ? '' : ', revision ${parserStatus.revision}'}',
+          busy: parser?.state == StructuralParserActivityState.parsing,
+        ),
+      ],
+    );
+  }
+
+  static String _acquisitionLabel(
+    ManagedLanguageServerAcquisitionSnapshot? snapshot,
+    SemanticServerActivitySnapshot? server,
+    bool enabled,
+  ) {
+    if (snapshot == null) {
+      if (!enabled) return 'Idle';
+      if (server?.executable != null) return 'Not needed';
+      return 'Waiting';
+    }
+    return switch (snapshot.state) {
+      ManagedLanguageServerAcquisitionState.checking => 'Checking',
+      ManagedLanguageServerAcquisitionState.installing => 'Installing',
+      ManagedLanguageServerAcquisitionState.verifying => 'Verifying',
+      ManagedLanguageServerAcquisitionState.ready =>
+        snapshot.version == null ? 'Ready' : 'Ready 繚 ${snapshot.version}',
+      ManagedLanguageServerAcquisitionState.missing => 'Unavailable',
+      ManagedLanguageServerAcquisitionState.failed => 'Failed',
+    };
+  }
+
+  static String _serverLabel(
+    SemanticServerActivitySnapshot? snapshot,
+    bool enabled,
+  ) {
+    if (snapshot == null) return enabled ? 'Waiting for document' : 'Disabled';
+    return switch (snapshot.state) {
+      LanguageServerSessionState.disabled => 'Disabled',
+      LanguageServerSessionState.available => 'Idle',
+      LanguageServerSessionState.resolvingExecutable => 'Resolving',
+      LanguageServerSessionState.starting => 'Starting',
+      LanguageServerSessionState.initializing => 'Initializing',
+      LanguageServerSessionState.ready => 'Running',
+      LanguageServerSessionState.stopping => 'Stopping',
+      LanguageServerSessionState.missingExecutable => 'Missing',
+      LanguageServerSessionState.failed => 'Failed',
+    };
+  }
+
+  static String _parserLabel(
+    StructuralParserActivitySnapshot? snapshot,
+    bool enabled,
+  ) {
+    if (!enabled) return 'Disabled';
+    if (snapshot == null) return 'Waiting for document';
+    return switch (snapshot.state) {
+      StructuralParserActivityState.parsing => 'Parsing',
+      StructuralParserActivityState.ready => 'Ready',
+      StructuralParserActivityState.unsupported => 'Unsupported',
+      StructuralParserActivityState.failed => 'Failed',
+    };
+  }
+}
+
+class const _RuntimeStatusRow({
+  required final String label,
+  required final String value,
+  final String? detail,
+  final bool busy = false,
+}) extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: AleraTokens.space4),
+      child: Row(
+        children: <Widget>[
+          SizedBox(width: 170, child: Text(context.tr(label))),
+          if (busy) ...<Widget>[
+            const SizedBox.square(
+              dimension: 12,
+              child: CircularProgressIndicator(strokeWidth: 1.5),
+            ),
+            const SizedBox(width: AleraTokens.space8),
+          ],
+          Text(
+            context.tr(value),
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: AleraTokens.foreground,
+              fontWeight: .w500,
+            ),
+          ),
+          if (detail != null && detail!.trim().isNotEmpty) ...<Widget>[
+            const SizedBox(width: AleraTokens.space8),
+            Expanded(
+              child: Text(
+                context.tr(detail!),
+                maxLines: 2,
+                overflow: .ellipsis,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: AleraTokens.foregroundMuted,
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
   }
 }
 

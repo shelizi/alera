@@ -11,6 +11,7 @@ import 'package:alera/src/design_system/icons/alera_file_icon.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:alera/src/design_system/layout/alera_confirm_dialog.dart';
 import 'package:alera/src/design_system/layout/alera_dialog.dart';
+import 'package:alera/src/features/language_intelligence/application/language_intelligence_activity.dart';
 import 'package:alera/src/features/language_intelligence/application/language_intelligence_manager.dart';
 import 'package:alera/src/features/language_intelligence/application/language_provider_registry.dart';
 import 'package:alera/src/features/language_intelligence/application/language_server_runtime.dart';
@@ -76,6 +77,7 @@ class _WorkspaceEditorSurfaceState
   late final EditorSessionHandle _sessionHandle;
   late final EditorAutosaveController _autosave;
   late final LanguageIntelligenceManager _languageIntelligence;
+  late final LanguageIntelligenceActivityReporter _languageActivity;
   late EditorDocumentSession _document;
   Object? _loadError;
   bool _loading = true;
@@ -105,6 +107,7 @@ class _WorkspaceEditorSurfaceState
   void initState() {
     super.initState();
     _controller = code_forge.CodeForgeController();
+    _controller.nativeSyntaxStatus.addListener(_handleNativeSyntaxStatus);
     _lastObservedDocumentVersion = _controller.documentVersion;
     _applyEditorSettings(
       normalizeWorkspaceEditorTabSize(
@@ -119,6 +122,7 @@ class _WorkspaceEditorSurfaceState
     _workspaceFiles = ref.read(workspaceFileServiceProvider);
     _editorSessions = ref.read(editorSessionRegistryProvider);
     _languageIntelligence = ref.read(languageIntelligenceManagerProvider);
+    _languageActivity = ref.read(languageIntelligenceActivityProvider);
     _sessionHandle = EditorSessionHandle(
       isDirty: _isDirty,
       save: _save,
@@ -168,6 +172,7 @@ class _WorkspaceEditorSurfaceState
     if (oldWidget.tab.id != widget.tab.id ||
         oldWidget.workspace.path != widget.workspace.path ||
         oldWidget.tab.filePath != widget.tab.filePath) {
+      _removeNativeSyntaxActivityForPath(oldWidget.tab.filePath);
       unawaited(_closeLanguageIntelligenceDocument());
       _resetLanguageIntelligenceSource();
       _autosave.cancelPending();
@@ -198,6 +203,8 @@ class _WorkspaceEditorSurfaceState
     _focusNode.suppressThirdPartyListeners();
     _focusNode.unfocus();
     _controller.removeListener(_handleControllerChanged);
+    _removeNativeSyntaxActivityForPath(widget.tab.filePath);
+    _controller.nativeSyntaxStatus.removeListener(_handleNativeSyntaxStatus);
     _findController.dispose();
     _undoController.dispose();
     _controller.dispose();
@@ -205,6 +212,58 @@ class _WorkspaceEditorSurfaceState
     _horizontalScrollController.dispose();
     _focusNode.dispose();
     super.dispose();
+  }
+
+  void _handleNativeSyntaxStatus() {
+    final status = _controller.nativeSyntaxStatus.value;
+    final filePath = widget.tab.filePath;
+    if (filePath == null) return;
+    final language = ref
+        .read(languageExtensionRegistryProvider)
+        .languageForPath(filePath)
+        ?.id;
+    if (language == null) return;
+    if (status.state == code_forge.CodeForgeNativeSyntaxState.disabled) {
+      _languageActivity.removeStructuralParserDocument(
+        language: language,
+        documentId: filePath,
+      );
+      return;
+    }
+    _languageActivity.reportStructuralParserDocument(
+      StructuralParserDocumentSnapshot(
+        language: language,
+        documentId: filePath,
+        state: switch (status.state) {
+          code_forge.CodeForgeNativeSyntaxState.parsing =>
+            StructuralParserActivityState.parsing,
+          code_forge.CodeForgeNativeSyntaxState.ready =>
+            StructuralParserActivityState.ready,
+          code_forge.CodeForgeNativeSyntaxState.unsupported =>
+            StructuralParserActivityState.unsupported,
+          code_forge.CodeForgeNativeSyntaxState.failed =>
+            StructuralParserActivityState.failed,
+          code_forge.CodeForgeNativeSyntaxState.disabled =>
+            StructuralParserActivityState.unsupported,
+        },
+        revision: status.revision,
+        detail: status.error,
+      ),
+    );
+  }
+
+  void _removeNativeSyntaxActivityForPath(String? filePath) {
+    if (filePath == null) return;
+    final language = ref
+        .read(languageExtensionRegistryProvider)
+        .languageForPath(filePath)
+        ?.id;
+    if (language != null) {
+      _languageActivity.removeStructuralParserDocument(
+        language: language,
+        documentId: filePath,
+      );
+    }
   }
 
   @override

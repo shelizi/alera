@@ -7,6 +7,7 @@ import 'package:alera/src/design_system/forms/alera_text_field.dart';
 import 'package:alera/src/design_system/layout/alera_settings_group.dart';
 import 'package:alera/src/design_system/menus/alera_menu_item.dart';
 import 'package:alera/src/design_system/surfaces/alera_panel.dart';
+import 'package:alera/src/features/language_intelligence/application/language_intelligence_activity.dart';
 import 'package:alera/src/features/language_intelligence/application/language_intelligence_status_port.dart';
 import 'package:alera/src/features/language_intelligence/application/language_provider_registry.dart';
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
@@ -22,6 +23,7 @@ class const EditorSettingsPane({
   required final EditorSettings settings,
   required final LanguageExtensionRegistry languageRegistry,
   required final LanguageIntelligenceStatusPort languageStatusPort,
+  required final LanguageIntelligenceActivityPort languageActivity,
   required final ValueChanged<EditorSettings Function(EditorSettings)>
   onChanged,
 }) extends StatelessWidget {
@@ -108,6 +110,7 @@ class const EditorSettingsPane({
           settings: settings,
           registry: languageRegistry,
           statusPort: languageStatusPort,
+          activity: languageActivity,
           onChanged: onChanged,
         ),
         const SizedBox(height: AleraTokens.space16),

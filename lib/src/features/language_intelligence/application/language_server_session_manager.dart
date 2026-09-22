@@ -4,6 +4,7 @@ import '../domain/language_id.dart';
 import '../domain/language_intelligence_settings.dart';
 import '../domain/language_provider_descriptor.dart';
 import '../domain/language_server_session_state.dart';
+import 'language_intelligence_activity.dart';
 import 'language_provider_registry.dart';
 import 'language_server_runtime.dart';
 
@@ -31,6 +32,7 @@ final class LanguageServerSessionManager {
     Duration restartBackoff = const Duration(seconds: 1),
     int maxRestartAttempts = 2,
     LanguageServerDelay delay = _defaultDelay,
+    LanguageIntelligenceActivityReporter? activityReporter,
   }) {
     if (maxRestartAttempts < 0) {
       throw ArgumentError.value(
@@ -46,6 +48,7 @@ final class LanguageServerSessionManager {
       restartBackoff: restartBackoff,
       maxRestartAttempts: maxRestartAttempts,
       delay: delay,
+      activityReporter: activityReporter,
     );
   }
 
@@ -56,6 +59,7 @@ final class LanguageServerSessionManager {
     required this._restartBackoff,
     required this._maxRestartAttempts,
     required this._delay,
+    required this._activityReporter,
   });
 
   final LanguageExtensionRegistry _registry;
@@ -64,6 +68,7 @@ final class LanguageServerSessionManager {
   final Duration _restartBackoff;
   final int _maxRestartAttempts;
   final LanguageServerDelay _delay;
+  final LanguageIntelligenceActivityReporter? _activityReporter;
   final Map<_LanguageServerSessionKey, _LanguageServerSessionRecord> _sessions =
       <_LanguageServerSessionKey, _LanguageServerSessionRecord>{};
 
@@ -115,6 +120,7 @@ final class LanguageServerSessionManager {
       record.restartAttempts = 0;
     }
 
+    _report(record);
     await _ensureReady(record);
     return record.snapshot;
   }
@@ -131,6 +137,7 @@ final class LanguageServerSessionManager {
       return;
     }
     record.documents.remove(documentId);
+    _report(record);
     if (record.documents.isNotEmpty) {
       return;
     }
@@ -141,6 +148,7 @@ final class LanguageServerSessionManager {
         finalState: LanguageServerSessionState.available,
       );
       record.restartAttempts = 0;
+      _report(record);
       return;
     }
     if (record.session == null && record.startFuture == null) {
@@ -165,6 +173,7 @@ final class LanguageServerSessionManager {
     record.restartGeneration += 1;
     record.restartAttempts = 0;
     await _stopRecord(record, finalState: LanguageServerSessionState.disabled);
+    _report(record);
   }
 
   LanguageServerSessionSnapshot snapshotFor(
@@ -236,6 +245,7 @@ final class LanguageServerSessionManager {
     record
       ..state = LanguageServerSessionState.resolvingExecutable
       ..lastError = null;
+    _report(record);
     try {
       final resolution = await _runtime.resolveExecutable(
         provider: record.provider,
@@ -252,12 +262,14 @@ final class LanguageServerSessionManager {
           ..state = LanguageServerSessionState.missingExecutable
           ..lastError = resolution.reason
           ..executable = null;
+        _report(record);
         return;
       }
       final resolved = resolution as LanguageServerExecutableResolved;
       record
         ..executable = resolved.executable
         ..state = LanguageServerSessionState.starting;
+      _report(record);
 
       final session = await _runtime.start(
         LanguageServerRuntimeStartRequest(
@@ -282,6 +294,7 @@ final class LanguageServerSessionManager {
         ..session = session
         ..state = LanguageServerSessionState.ready
         ..lastError = null;
+      _report(record);
       await record.exitSubscription?.cancel();
       record.exitSubscription = _runtime
           .observeExit(session)
@@ -299,6 +312,7 @@ final class LanguageServerSessionManager {
       record
         ..state = LanguageServerSessionState.failed
         ..lastError = error.toString();
+      _report(record);
       _scheduleRestartIfNeeded(record);
     }
   }
@@ -335,6 +349,7 @@ final class LanguageServerSessionManager {
       }
     }
     record.state = finalState;
+    _report(record);
   }
 
   Future<void> _handleExit(
@@ -352,6 +367,7 @@ final class LanguageServerSessionManager {
       ..generation += 1
       ..state = LanguageServerSessionState.failed
       ..lastError = _describeExit(exit);
+    _report(record);
     await record.exitSubscription?.cancel();
     record.exitSubscription = null;
     _scheduleRestartIfNeeded(record);
@@ -395,6 +411,9 @@ final class LanguageServerSessionManager {
 
   static Future<void> _defaultDelay(Duration duration) =>
       Future<void>.delayed(duration);
+
+  void _report(_LanguageServerSessionRecord record) =>
+      _activityReporter?.reportServerSession(record.snapshot);
 }
 
 final class _LanguageServerSessionKey {

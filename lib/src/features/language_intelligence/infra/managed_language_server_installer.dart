@@ -7,6 +7,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import '../../../shared/infra/process/command_path_probe.dart';
+import '../application/language_intelligence_activity.dart';
 import '../application/managed_language_server_installer.dart';
 import '../domain/language_provider_descriptor.dart';
 import 'managed_language_server_catalog.dart';
@@ -79,6 +80,7 @@ final class ManagedLanguageServerInstaller
     ManagedLanguageServerSupportDirectory? supportDirectory,
     ManagedLanguageServerProcessRunner? processRunner,
     Map<String, ManagedLanguageServerRecipe>? recipes,
+    LanguageIntelligenceActivityReporter? activityReporter,
   }) : _environmentReader = environmentReader ?? _platformEnvironment,
        _isWindows = isWindows ?? Platform.isWindows,
        _executableExists = executableExists,
@@ -86,7 +88,8 @@ final class ManagedLanguageServerInstaller
            supportDirectory ?? (() => getApplicationSupportDirectory()),
        _processRunner =
            processRunner ?? const DefaultManagedLanguageServerProcessRunner(),
-       _recipes = recipes ?? managedLanguageServerRecipes;
+       _recipes = recipes ?? managedLanguageServerRecipes,
+       _activityReporter = activityReporter;
 
   final ManagedLanguageServerEnvironmentReader _environmentReader;
   final bool _isWindows;
@@ -94,6 +97,7 @@ final class ManagedLanguageServerInstaller
   final ManagedLanguageServerSupportDirectory _supportDirectory;
   final ManagedLanguageServerProcessRunner _processRunner;
   final Map<String, ManagedLanguageServerRecipe> _recipes;
+  final LanguageIntelligenceActivityReporter? _activityReporter;
   final Map<String, Future<ManagedLanguageServerInstallResult>> _inFlight =
       <String, Future<ManagedLanguageServerInstallResult>>{};
 
@@ -103,6 +107,13 @@ final class ManagedLanguageServerInstaller
   ) {
     final recipe = _recipes[provider.id];
     if (recipe == null) {
+      _report(
+        providerId: provider.id,
+        state: ManagedLanguageServerAcquisitionState.missing,
+        detail:
+            'Alera has no managed download recipe for ${provider.id}; '
+            'configure an executable or install it on PATH.',
+      );
       return Future<ManagedLanguageServerInstallResult>.value(
         ManagedLanguageServerUnavailable(
           reason:
@@ -114,13 +125,35 @@ final class ManagedLanguageServerInstaller
     final existing = _inFlight[recipe.providerId];
     if (existing != null) return existing;
 
-    final install = _ensureRecipe(recipe);
+    final install = _ensureRecipeWithReporting(recipe);
     _inFlight[recipe.providerId] = install;
     return install.whenComplete(() {
       if (identical(_inFlight[recipe.providerId], install)) {
         _inFlight.remove(recipe.providerId);
       }
     });
+  }
+
+  Future<ManagedLanguageServerInstallResult> _ensureRecipeWithReporting(
+    ManagedLanguageServerRecipe recipe,
+  ) async {
+    _report(
+      providerId: recipe.providerId,
+      state: ManagedLanguageServerAcquisitionState.checking,
+      version: recipe.version,
+      detail: 'Checking managed language server ${recipe.version}.',
+    );
+    try {
+      return await _ensureRecipe(recipe);
+    } catch (error) {
+      _report(
+        providerId: recipe.providerId,
+        state: ManagedLanguageServerAcquisitionState.failed,
+        version: recipe.version,
+        detail: error.toString(),
+      );
+      rethrow;
+    }
   }
 
   Future<ManagedLanguageServerInstallResult> _ensureRecipe(
@@ -143,6 +176,13 @@ final class ManagedLanguageServerInstaller
       );
       final executable = _managedExecutablePath(installDirectory.path, recipe);
       if (await _isValidInstall(recipe, executable)) {
+        _report(
+          providerId: recipe.providerId,
+          state: ManagedLanguageServerAcquisitionState.ready,
+          version: recipe.version,
+          executable: executable,
+          detail: 'Managed language server is installed and verified.',
+        );
         return ManagedLanguageServerInstalled(
           executable: executable,
           version: recipe.version,
@@ -152,6 +192,12 @@ final class ManagedLanguageServerInstaller
       final environment = Map<String, String>.of(_environmentReader());
       final prerequisiteProbe = await _probePrerequisite(recipe, environment);
       if (!prerequisiteProbe.isReady) {
+        _report(
+          providerId: recipe.providerId,
+          state: ManagedLanguageServerAcquisitionState.missing,
+          version: recipe.version,
+          detail: prerequisiteProbe.reason,
+        );
         return ManagedLanguageServerUnavailable(
           reason: prerequisiteProbe.reason!,
         );
@@ -162,6 +208,13 @@ final class ManagedLanguageServerInstaller
         await installDirectory.delete(recursive: true);
       }
       await installDirectory.create(recursive: true);
+
+      _report(
+        providerId: recipe.providerId,
+        state: ManagedLanguageServerAcquisitionState.installing,
+        version: recipe.version,
+        detail: 'Downloading / installing from ${recipe.source}.',
+      );
 
       try {
         await _installRecipe(
@@ -177,6 +230,12 @@ final class ManagedLanguageServerInstaller
             'creating $executable.',
           );
         }
+        _report(
+          providerId: recipe.providerId,
+          state: ManagedLanguageServerAcquisitionState.verifying,
+          version: recipe.version,
+          detail: 'Verifying package integrity and executable checksum.',
+        );
         if (recipe.kind == ManagedLanguageServerInstallKind.npm) {
           await _validateNpmLockIntegrity(installDirectory, recipe);
         }
@@ -197,6 +256,13 @@ final class ManagedLanguageServerInstaller
           }),
           flush: true,
         );
+        _report(
+          providerId: recipe.providerId,
+          state: ManagedLanguageServerAcquisitionState.ready,
+          version: recipe.version,
+          executable: executable,
+          detail: 'Managed language server is installed and verified.',
+        );
         return ManagedLanguageServerInstalled(
           executable: executable,
           version: recipe.version,
@@ -211,6 +277,24 @@ final class ManagedLanguageServerInstaller
       await lock.unlock();
       await lock.close();
     }
+  }
+
+  void _report({
+    required String providerId,
+    required ManagedLanguageServerAcquisitionState state,
+    String? version,
+    String? executable,
+    String? detail,
+  }) {
+    _activityReporter?.reportManagedServerAcquisition(
+      ManagedLanguageServerAcquisitionSnapshot(
+        providerId: providerId,
+        state: state,
+        version: version,
+        executable: executable,
+        detail: detail,
+      ),
+    );
   }
 
   Future<bool> _isValidInstall(

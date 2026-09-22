@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:code_forge/code_forge.dart';
 
 import '../../../shared/infra/process/command_path_probe.dart';
+import '../application/language_intelligence_activity.dart';
 import '../application/language_server_runtime.dart';
 import '../application/managed_language_server_installer.dart';
 import '../domain/language_capability.dart';
@@ -90,6 +91,7 @@ final class CodeForgeLanguageServerRuntime
     CodeForgeExecutableExists? executableExists,
     CodeForgeLanguageServerTransportFactory? transportFactory,
     ManagedLanguageServerInstallerPort? managedInstaller,
+    LanguageIntelligenceActivityReporter? activityReporter,
   }) => CodeForgeLanguageServerRuntime._(
     environmentReader: environmentReader ?? _platformEnvironment,
     isWindows: isWindows ?? Platform.isWindows,
@@ -101,6 +103,7 @@ final class CodeForgeLanguageServerRuntime
           environmentReader: environmentReader ?? _platformEnvironment,
           isWindows: isWindows ?? Platform.isWindows,
           executableExists: executableExists,
+          activityReporter: activityReporter,
         ),
   );
 

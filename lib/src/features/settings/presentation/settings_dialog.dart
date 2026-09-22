@@ -150,6 +150,7 @@ class _SettingsDialogState extends ConsumerState<SettingsDialog> {
     final languageStatusPort = ref.watch(
       languageIntelligenceStatusPortProvider,
     );
+    final languageActivity = ref.watch(languageIntelligenceActivityProvider);
     final screen = MediaQuery.sizeOf(context);
     final dialogWidth = (screen.width * _kDialogWidthFraction).clamp(
       _kDialogMinWidth,
@@ -341,6 +342,7 @@ class _SettingsDialogState extends ConsumerState<SettingsDialog> {
           settings: settings.editor,
           languageRegistry: languageRegistry,
           languageStatusPort: languageStatusPort,
+          languageActivity: languageActivity,
           onChanged: (editor) => controller.updateEditor(editor),
         ),
       ),

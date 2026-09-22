@@ -48,7 +48,10 @@ void main() {
     expect(syntaxHighlighter, contains('_nativeSpanCacheRevision'));
     expect(codeArea, contains('.preHighlightLines('));
     expect(workspaceEditor, contains('languageId:'));
-    expect(workspaceEditor, contains('_languageIdForPath(filePath)'));
+    expect(
+      workspaceEditor,
+      contains('workspaceEditorSyntaxLanguageIdForPath('),
+    );
     expect(workspaceEditor, contains('workspaceEditorNativeSyntaxEnabled('));
     expect(workspaceEditor, contains('enableNativeSyntax: enableNativeSyntax'));
   });

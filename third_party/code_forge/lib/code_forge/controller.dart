@@ -66,6 +66,27 @@ class CodeForgeDocumentSymbols {
   });
 }
 
+enum CodeForgeNativeSyntaxState {
+  disabled,
+  parsing,
+  ready,
+  unsupported,
+  failed,
+}
+
+class CodeForgeNativeSyntaxStatus {
+  const CodeForgeNativeSyntaxStatus({
+    required this.state,
+    this.languageId,
+    this.documentId,
+    this.revision,
+    this.error,
+  });
+  final CodeForgeNativeSyntaxState state;
+  final String? languageId, documentId, error;
+  final int? revision;
+}
+
 /// Controller for the [CodeForge] code editor widget.
 ///
 /// This controller manages the text content, selection state, and various
@@ -171,6 +192,12 @@ class CodeForgeController implements DeltaTextInputClient {
   int _nativeEditorRevision = -1, _nativeEditorGeneration = 0;
   bool? _nativeEditorParserSupported;
   bool _nativeEditorFailed = false;
+  final ValueNotifier<CodeForgeNativeSyntaxStatus> nativeSyntaxStatus =
+      ValueNotifier<CodeForgeNativeSyntaxStatus>(
+        const CodeForgeNativeSyntaxStatus(
+          state: CodeForgeNativeSyntaxState.disabled,
+        ),
+      );
 
   CodeForgeController({this.lspConfig}) {
     if (lspConfig != null) {
@@ -423,13 +450,19 @@ class CodeForgeController implements DeltaTextInputClient {
     _nativeEditorLanguageId = normalizedLanguageId;
     _nativeEditorDocumentId = resolvedDocumentId;
     _nativeEditorRevision = _currentVersion;
+    final initialRevision = _currentVersion;
     _nativeEditorParserSupported = null;
     _nativeEditorFailed = false;
+    nativeSyntaxStatus.value = CodeForgeNativeSyntaxStatus(
+      state: CodeForgeNativeSyntaxState.parsing,
+      languageId: normalizedLanguageId,
+      documentId: resolvedDocumentId,
+      revision: initialRevision,
+    );
     if (previous != null) {
       unawaited(previous.close().catchError((_) {}));
     }
 
-    final initialRevision = _currentVersion;
     // Keep the parse baseline immutable while large-file admission is deferred.
     // Ropey cloning is copy-on-write, so this remains cheap while ensuring the
     // queued deltas below are applied exactly once from [initialRevision].
@@ -469,6 +502,14 @@ class CodeForgeController implements DeltaTextInputClient {
         if (!info.parserSupported) {
           _pendingNativeEditorEdits.clear();
         }
+        nativeSyntaxStatus.value = CodeForgeNativeSyntaxStatus(
+          state: info.parserSupported
+              ? CodeForgeNativeSyntaxState.ready
+              : CodeForgeNativeSyntaxState.unsupported,
+          languageId: normalizedLanguageId,
+          documentId: resolvedDocumentId,
+          revision: _nativeEditorRevision,
+        );
       } catch (error) {
         if (generation != _nativeEditorGeneration) return;
         if (identical(_nativeEditorParseCancellation, cancellation)) {
@@ -552,6 +593,12 @@ class CodeForgeController implements DeltaTextInputClient {
       }
 
       final nativeRevisionBeforeApply = _nativeEditorRevision;
+      nativeSyntaxStatus.value = CodeForgeNativeSyntaxStatus(
+        state: CodeForgeNativeSyntaxState.parsing,
+        languageId: _nativeEditorLanguageId,
+        documentId: _nativeEditorDocumentId,
+        revision: batch.last.newRevision,
+      );
       final result = await document.applyEdits(
         expectedRevision: BigInt.from(nativeRevisionBeforeApply),
         newRevision: BigInt.from(batch.last.newRevision),
@@ -578,6 +625,12 @@ class CodeForgeController implements DeltaTextInputClient {
       }
       _nativeEditorRevision = result.revision.toInt();
       _pendingNativeEditorEdits.removeRange(0, batch.length);
+      nativeSyntaxStatus.value = CodeForgeNativeSyntaxStatus(
+        state: CodeForgeNativeSyntaxState.ready,
+        languageId: _nativeEditorLanguageId,
+        documentId: _nativeEditorDocumentId,
+        revision: _nativeEditorRevision,
+      );
     }
   }
 
@@ -1018,6 +1071,13 @@ class CodeForgeController implements DeltaTextInputClient {
     parseCancellation?.cancel();
     _nativeEditorFailed = true;
     _nativeEditorParserSupported = false;
+    nativeSyntaxStatus.value = CodeForgeNativeSyntaxStatus(
+      state: CodeForgeNativeSyntaxState.failed,
+      languageId: _nativeEditorLanguageId,
+      documentId: _nativeEditorDocumentId,
+      revision: _nativeEditorRevision < 0 ? null : _nativeEditorRevision,
+      error: error.toString(),
+    );
     _pendingNativeEditorEdits.clear();
     final document = _nativeEditorDocument;
     _nativeEditorDocument = null;
@@ -3060,6 +3120,9 @@ class CodeForgeController implements DeltaTextInputClient {
     _nativeEditorRevision = -1;
     _nativeEditorParserSupported = null;
     _nativeEditorFailed = false;
+    nativeSyntaxStatus.value = const CodeForgeNativeSyntaxStatus(
+      state: CodeForgeNativeSyntaxState.disabled,
+    );
     if (document != null) {
       unawaited(document.close().catchError((_) {}));
     }
@@ -5433,6 +5496,7 @@ class CodeForgeController implements DeltaTextInputClient {
     _nativeEditorSyncFuture = null;
     _nativeEditorLanguageId = null;
     _nativeEditorDocumentId = null;
+    nativeSyntaxStatus.dispose();
     final nativeEditorDocument = _nativeEditorDocument;
     _nativeEditorDocument = null;
     if (nativeEditorDocument != null) {

@@ -1,8 +1,10 @@
 import 'package:alera/src/features/language_intelligence/infra/builtin_language_extensions.dart';
 import 'package:alera/src/features/language_intelligence/infra/code_forge_language_server_runtime.dart';
 import 'package:alera/src/features/language_intelligence/infra/code_forge_semantic_adapter_factory.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart' show Provider;
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
+import 'language_intelligence_activity.dart';
 import 'language_intelligence_manager.dart';
 import 'language_intelligence_status_port.dart';
 import 'language_provider_registry.dart';
@@ -16,9 +18,18 @@ part 'language_intelligence_providers.g.dart';
 LanguageExtensionRegistry languageExtensionRegistry(Ref ref) =>
     createBuiltinLanguageExtensionRegistry();
 
+final languageIntelligenceActivityProvider =
+    Provider<LanguageIntelligenceActivityStore>((ref) {
+      final store = LanguageIntelligenceActivityStore();
+      ref.onDispose(store.dispose);
+      return store;
+    });
+
 @Riverpod(keepAlive: true)
 LanguageServerRuntimePort languageServerRuntime(Ref ref) =>
-    CodeForgeLanguageServerRuntime();
+    CodeForgeLanguageServerRuntime(
+      activityReporter: ref.watch(languageIntelligenceActivityProvider),
+    );
 
 @Riverpod(keepAlive: true)
 LanguageSemanticAdapterFactory languageSemanticAdapterFactory(Ref ref) =>
@@ -29,6 +40,7 @@ LanguageServerSessionManager languageServerSessionManager(Ref ref) =>
     LanguageServerSessionManager(
       registry: ref.watch(languageExtensionRegistryProvider),
       runtime: ref.watch(languageServerRuntimeProvider),
+      activityReporter: ref.watch(languageIntelligenceActivityProvider),
     );
 
 @Riverpod(keepAlive: true)
