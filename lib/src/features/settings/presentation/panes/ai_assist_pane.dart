@@ -137,7 +137,7 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
                       ...settings.selectedModelByAgent,
                     };
                     if (value.trim().isEmpty) {
-                      selectedModels.remove(agent);
+                      selectedModels.remove(agent.key);
                     } else {
                       selectedModels[agent.key] = value;
                     }
@@ -164,8 +164,7 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
                 ),
               if (agent != AiAssistAgent.custom &&
                   _configuredOperations.any(
-                    (operation) =>
-                        settings.agentFor(operation) == AiAssistAgent.custom,
+                    (operation) => settings.agentTypeFor(operation) == null,
                   ))
                 SettingsTextRow(
                   title: 'Custom Command',
@@ -205,7 +204,7 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
   ) {
     final agentType = operation == AiAssistOperation.readingDiff
         ? readingDiffAgentTypeForSettings(settings)
-        : settings.agentFor(operation).agentType;
+        : settings.agentTypeFor(operation);
     if (agentType == null) {
       return const <Widget>[];
     }
@@ -274,7 +273,7 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
     );
     final agentType = isReadingDiff
         ? readingDiffAgentTypeForSettings(settings)
-        : settings.agentFor(operation).agentType;
+        : settings.agentTypeFor(operation);
     final agent = agentType == null
         ? AiAssistAgent.custom
         : AiAssistAgent.fromAgentType(agentType)!;
@@ -464,7 +463,7 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
         ...latest.discoveredDefaultModelByAgent,
       };
       if (result.defaultModelId == null) {
-        discoveredDefaults.remove(agent);
+        discoveredDefaults.remove(agent.key);
       } else {
         discoveredDefaults[agent.key] = result.defaultModelId!;
       }

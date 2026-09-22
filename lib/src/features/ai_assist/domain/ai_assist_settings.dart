@@ -177,7 +177,8 @@ class const AiAssistSettings({
   }
 
   AgentType? agentTypeFor(AiAssistOperation operation) {
-    return agentFor(operation).agentType;
+    final override = promptSettingsFor(operation).agent;
+    return override == null ? agentType : override.agentType;
   }
 
   String? modelForOperation(AiAssistOperation operation) {
