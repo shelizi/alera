@@ -1,5 +1,6 @@
 import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/design_system/forms/alera_text_field.dart';
+import 'package:alera/src/features/ai_assist/domain/ai_assist_settings.dart';
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
 import 'package:alera/src/features/text_actions/domain/text_actions_settings.dart';
 import 'package:alera/src/features/text_actions/presentation/text_action_list_row.dart';
@@ -54,6 +55,59 @@ void main() {
     expect(
       settings.textActions.actions.single.prompt,
       'Improve the selected text.',
+    );
+  });
+
+  testWidgets('saves an agent type override through the compatibility schema', (
+    tester,
+  ) async {
+    var settings = AleraSettings.defaults;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: StatefulBuilder(
+            builder: (context, setState) => TextActionsSettingsPane(
+              settings: settings.textActions,
+              aiAssistSettings: settings.aiAssist,
+              onChanged: (next) => setState(() {
+                settings = settings.copyWith(
+                  textActions: next(settings.textActions),
+                );
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('New Action'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byWidgetPredicate(
+        (widget) =>
+            widget is TextField && widget.decoration?.labelText == 'Name',
+      ),
+      'Typed agent',
+    );
+    await tester.enterText(
+      find.byWidgetPredicate(
+        (widget) =>
+            widget is TextField && widget.decoration?.labelText == 'Prompt',
+      ),
+      'Use Devin.',
+    );
+    await tester.tap(find.text('Global (Codex)').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Devin').last);
+    await tester.pumpAndSettle();
+    final saveButton = find.text('Save');
+    await tester.ensureVisible(saveButton);
+    await tester.tap(saveButton);
+    await tester.pumpAndSettle();
+
+    expect(
+      settings.textActions.actions.single.agentOverride,
+      AiAssistAgent.devin,
     );
   });
 

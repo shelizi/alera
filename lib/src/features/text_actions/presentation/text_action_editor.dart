@@ -7,6 +7,7 @@ import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:alera/src/design_system/layout/alera_settings_group.dart';
 import 'package:alera/src/features/ai_assist/application/ai_assist_registry.dart';
 import 'package:alera/src/features/ai_assist/domain/ai_assist_settings.dart';
+import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 import 'package:alera/src/features/settings/presentation/rows/settings_rows.dart';
 import 'package:flutter/material.dart';
 
@@ -15,13 +16,13 @@ class const TextActionEditor({
   required final TextEditingController nameController,
   required final TextEditingController promptController,
   required final bool enabled,
-  required final AiAssistAgent? agentOverride,
+  required final TextActionAgentSelection agentSelection,
   required final String? modelOverride,
   required final Map<String, String> reasoningByModel,
   required final AiAssistSettings aiAssistSettings,
   required final String? error,
   required final ValueChanged<bool> onEnabledChanged,
-  required final ValueChanged<AiAssistAgent?> onAgentChanged,
+  required final ValueChanged<TextActionAgentSelection> onAgentChanged,
   required final ValueChanged<String?> onModelChanged,
   required final ValueChanged<String?> onReasoningChanged,
   required final VoidCallback onSave,
@@ -30,8 +31,11 @@ class const TextActionEditor({
 }) extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
-    final agent = agentOverride ?? aiAssistSettings.agent;
-    final agentType = agent.agentType;
+    final agentType = switch (agentSelection) {
+      TextActionAgentSelection(:final agentType?) => agentType,
+      TextActionAgentSelection(isCustom: true) => null,
+      _ => aiAssistSettings.agentType,
+    };
     final models = agentType == null
         ? const <AiAssistModel>[]
         : modelsForAgentType(agentType, aiAssistSettings);
@@ -110,21 +114,23 @@ class const TextActionEditor({
               AleraSettingRow(
                 title: 'Agent',
                 description: 'Inherit the global AI Assist agent by default.',
-                child: AleraDropdownField<AiAssistAgent?>(
-                  value: agentOverride,
-                  entries: <AleraDropdownFieldEntry<AiAssistAgent?>>[
-                    AleraDropdownFieldEntry<AiAssistAgent?>(
-                      value: null,
+                child: AleraDropdownField<TextActionAgentSelection>(
+                  value: agentSelection,
+                  entries: <AleraDropdownFieldEntry<TextActionAgentSelection>>[
+                    AleraDropdownFieldEntry<TextActionAgentSelection>(
+                      value: const TextActionAgentSelection.global(),
                       label: 'Global (${aiAssistSettings.agent.label})',
                     ),
-                    for (final candidate in AiAssistAgent.optionsForTypes(
-                      selectableAiAssistAgentTypes,
-                    ))
-                      AleraDropdownFieldEntry<AiAssistAgent?>(
-                        value: candidate,
-                        label: candidate.label,
+                    for (final candidate in selectableAiAssistAgentTypes)
+                      AleraDropdownFieldEntry<TextActionAgentSelection>(
+                        value: TextActionAgentSelection.agent(candidate),
+                        label: aiAssistCapabilityFor(candidate)!.label,
                         localizeLabel: false,
                       ),
+                    const AleraDropdownFieldEntry<TextActionAgentSelection>(
+                      value: TextActionAgentSelection.custom(),
+                      label: 'Custom Command',
+                    ),
                   ],
                   onChanged: onAgentChanged,
                 ),
@@ -208,4 +214,24 @@ class const TextActionEditor({
       ),
     );
   }
+}
+
+class TextActionAgentSelection {
+  const TextActionAgentSelection.global() : agentType = null, isCustom = false;
+
+  const TextActionAgentSelection.agent(this.agentType) : isCustom = false;
+
+  const TextActionAgentSelection.custom() : agentType = null, isCustom = true;
+
+  final AgentType? agentType;
+  final bool isCustom;
+
+  @override
+  bool operator ==(Object other) =>
+      other is TextActionAgentSelection &&
+      other.agentType == agentType &&
+      other.isCustom == isCustom;
+
+  @override
+  int get hashCode => Object.hash(agentType, isCustom);
 }

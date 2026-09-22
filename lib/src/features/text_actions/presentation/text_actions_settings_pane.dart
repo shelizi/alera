@@ -9,6 +9,7 @@ import 'package:alera/src/design_system/layout/alera_confirm_dialog.dart';
 import 'package:alera/src/design_system/layout/alera_master_detail.dart';
 import 'package:alera/src/features/ai_assist/domain/ai_assist_settings.dart';
 import 'package:alera/src/features/ai_assist/application/ai_assist_registry.dart';
+import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 import 'package:alera/src/features/text_actions/domain/text_actions_mutations.dart';
 import 'package:alera/src/features/text_actions/domain/text_actions_settings.dart';
 import 'package:alera/src/features/text_actions/presentation/text_action_editor.dart';
@@ -35,7 +36,8 @@ class _TextActionsSettingsPaneState extends State<TextActionsSettingsPane> {
   String? _selectedId;
   bool _creatingNew = false;
   bool _enabled = true;
-  AiAssistAgent? _agentOverride;
+  TextActionAgentSelection _agentSelection =
+      const TextActionAgentSelection.global();
   String? _modelOverride;
   Map<String, String> _reasoningByModel = <String, String>{};
   String? _error;
@@ -124,14 +126,14 @@ class _TextActionsSettingsPaneState extends State<TextActionsSettingsPane> {
       nameController: _nameController,
       promptController: _promptController,
       enabled: _enabled,
-      agentOverride: _agentOverride,
+      agentSelection: _agentSelection,
       modelOverride: _modelOverride,
       reasoningByModel: _reasoningByModel,
       aiAssistSettings: widget.aiAssistSettings,
       error: _error,
       onEnabledChanged: (value) => setState(() => _enabled = value),
       onAgentChanged: (value) => setState(() {
-        _agentOverride = value;
+        _agentSelection = value;
         _modelOverride = null;
         _error = null;
       }),
@@ -140,8 +142,7 @@ class _TextActionsSettingsPaneState extends State<TextActionsSettingsPane> {
         _error = null;
       }),
       onReasoningChanged: (value) {
-        final agent = _agentOverride ?? widget.aiAssistSettings.agent;
-        final agentType = agent.agentType;
+        final agentType = _effectiveAgentType;
         final modelId = _modelOverride?.trim().isNotEmpty == true
             ? _modelOverride!.trim()
             : agentType == null
@@ -196,7 +197,7 @@ class _TextActionsSettingsPaneState extends State<TextActionsSettingsPane> {
       _nameController.clear();
       _promptController.clear();
       _enabled = true;
-      _agentOverride = null;
+      _agentSelection = const TextActionAgentSelection.global();
       _modelOverride = null;
       _reasoningByModel = <String, String>{};
       _error = null;
@@ -212,7 +213,7 @@ class _TextActionsSettingsPaneState extends State<TextActionsSettingsPane> {
     _nameController.text = action.name;
     _promptController.text = action.prompt;
     _enabled = action.enabled;
-    _agentOverride = action.agentOverride;
+    _agentSelection = _selectionForPersistedAgent(action.agentOverride);
     _modelOverride = action.modelOverride;
     _reasoningByModel = <String, String>{...action.reasoningByModel};
     _error = null;
@@ -231,13 +232,35 @@ class _TextActionsSettingsPaneState extends State<TextActionsSettingsPane> {
     ].toString();
   }
 
+  AgentType? get _effectiveAgentType {
+    final selected = _agentSelection;
+    if (selected.isCustom) return null;
+    return selected.agentType ?? widget.aiAssistSettings.agentType;
+  }
+
+  TextActionAgentSelection _selectionForPersistedAgent(AiAssistAgent? agent) {
+    if (agent == null) return const TextActionAgentSelection.global();
+    final type = agent.agentType;
+    return type == null
+        ? const TextActionAgentSelection.custom()
+        : TextActionAgentSelection.agent(type);
+  }
+
+  AiAssistAgent? _persistedAgentForSelection(
+    TextActionAgentSelection selection,
+  ) {
+    if (selection.isCustom) return AiAssistAgent.custom;
+    final type = selection.agentType;
+    return type == null ? null : AiAssistAgent.fromAgentType(type);
+  }
+
   void _save() {
     final action = TextAction(
       id: _selectedId ?? const Uuid().v4(),
       name: _nameController.text.trim(),
       prompt: _promptController.text.trim(),
       enabled: _enabled,
-      agentOverride: _agentOverride,
+      agentOverride: _persistedAgentForSelection(_agentSelection),
       modelOverride: _modelOverride?.trim().isEmpty == true
           ? null
           : _modelOverride?.trim(),
