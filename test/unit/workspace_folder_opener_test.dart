@@ -140,8 +140,9 @@ void main() {
     ]);
   });
 
-  test('opens a file containing folder in Explorer on Windows', () async {
+  test('selects a file in Explorer on Windows', () async {
     final processRunner = _FakeProcessRunner();
+    final revealedPaths = <String>[];
     final directory = await Directory.systemTemp.createTemp(
       'alera-reveal-item-',
     );
@@ -155,16 +156,17 @@ void main() {
     final opener = WorkspaceFolderOpener(
       processRunner: processRunner,
       platform: .windows,
+      revealWindowsFile: (path) async {
+        revealedPaths.add(path);
+        return true;
+      },
     );
 
     final result = await opener.reveal(file.path);
 
     expect(result.ok, isTrue);
-    expect(processRunner.calls, <_ProcessCall>[
-      _ProcessCall('explorer.exe', <String>[
-        directory.path.replaceAll('/', r'\'),
-      ]),
-    ]);
+    expect(revealedPaths, <String>[file.path.replaceAll('/', r'\')]);
+    expect(processRunner.calls, isEmpty);
   });
 
   test(
@@ -196,13 +198,14 @@ void main() {
   );
 
   test(
-    'opens the containing folder for an extended-length Windows file',
+    'falls back to the containing folder for an extended-length Windows file',
     () async {
       final processRunner = _FakeProcessRunner();
       final opener = WorkspaceFolderOpener(
         processRunner: processRunner,
         platform: .windows,
         entityType: (_) async => FileSystemEntityType.file,
+        revealWindowsFile: (_) async => false,
       );
 
       final result = await opener.reveal(
@@ -234,35 +237,33 @@ void main() {
     ]);
   });
 
-  test(
-    'normalizes Windows file paths before opening the containing folder',
-    () async {
-      final processRunner = _FakeProcessRunner();
-      final directory = await Directory.systemTemp.createTemp(
-        'alera-reveal-item-',
-      );
-      final file = File('${directory.path}/note.txt');
-      await file.writeAsString('note');
-      addTearDown(() async {
-        if (await directory.exists()) {
-          await directory.delete(recursive: true);
-        }
-      });
-      final opener = WorkspaceFolderOpener(
-        processRunner: processRunner,
-        platform: .windows,
-      );
+  test('falls back to the normalized containing folder on Windows', () async {
+    final processRunner = _FakeProcessRunner();
+    final directory = await Directory.systemTemp.createTemp(
+      'alera-reveal-item-',
+    );
+    final file = File('${directory.path}/note.txt');
+    await file.writeAsString('note');
+    addTearDown(() async {
+      if (await directory.exists()) {
+        await directory.delete(recursive: true);
+      }
+    });
+    final opener = WorkspaceFolderOpener(
+      processRunner: processRunner,
+      platform: .windows,
+      revealWindowsFile: (_) async => false,
+    );
 
-      final result = await opener.reveal(file.path.replaceAll(r'\', '/'));
+    final result = await opener.reveal(file.path.replaceAll(r'\', '/'));
 
-      expect(result.ok, isTrue);
-      expect(processRunner.calls, <_ProcessCall>[
-        _ProcessCall('explorer.exe', <String>[
-          directory.path.replaceAll('/', r'\'),
-        ]),
-      ]);
-    },
-  );
+    expect(result.ok, isTrue);
+    expect(processRunner.calls, <_ProcessCall>[
+      _ProcessCall('explorer.exe', <String>[
+        directory.path.replaceAll('/', r'\'),
+      ]),
+    ]);
+  });
 
   test('reveals an item via FileManager1.ShowItems on Linux', () async {
     final processRunner = _FakeProcessRunner();

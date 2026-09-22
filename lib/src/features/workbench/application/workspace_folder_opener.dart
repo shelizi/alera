@@ -21,18 +21,21 @@ class WorkspaceFolderOpener({
   Future<bool> Function(String path)? directoryExists,
   Future<FileSystemEntityType> Function(String path)? entityType,
   Future<bool> Function(Uri uri)? launchUri,
+  Future<bool> Function(String path)? revealWindowsFile,
 }) {
   this
     : _platform = platform ?? currentWorkspaceFolderPlatform(),
       _directoryExists =
           directoryExists ?? ((path) async => Directory(path).exists()),
       _entityType = entityType ?? FileSystemEntity.type,
-      _launchUri = launchUri ?? ((uri) => launchUrl(uri));
+      _launchUri = launchUri ?? ((uri) => launchUrl(uri)),
+      _revealWindowsFile = revealWindowsFile ?? _revealFileInWindowsExplorer;
 
   final WorkspaceFolderPlatform _platform;
   final Future<bool> Function(String path) _directoryExists;
   final Future<FileSystemEntityType> Function(String path) _entityType;
   final Future<bool> Function(Uri uri) _launchUri;
+  final Future<bool> Function(String path) _revealWindowsFile;
 
   String get fileManagerLabel {
     switch (_platform) {
@@ -86,6 +89,15 @@ class WorkspaceFolderOpener({
     final entityType = await _entityType(normalized);
     if (entityType == FileSystemEntityType.notFound) {
       return const WorkspaceFolderOpenResult.failure('Path was not found.');
+    }
+
+    if (_platform == WorkspaceFolderPlatform.windows &&
+        entityType != FileSystemEntityType.directory) {
+      try {
+        if (await _revealWindowsFile(_windowsExplorerPath(normalized))) {
+          return const WorkspaceFolderOpenResult.success();
+        }
+      } catch (_) {}
     }
 
     final commands = entityType == FileSystemEntityType.directory
@@ -182,10 +194,9 @@ class WorkspaceFolderOpener({
           _WorkspaceFolderOpenCommand('open', <String>['-R', path]),
         ];
       case WorkspaceFolderPlatform.windows:
-        // Alera's ProcessRunner reaches Windows commands through cmd.exe. When
-        // Explorer's `/select,<path>` switch is quoted as one shell argument,
-        // Explorer can return success while ignoring the target. Opening the
-        // containing directory uses the same reliable path as folder actions.
+        // Native Explorer selection is attempted before this fallback. Keep
+        // opening the containing directory here in case Explorer cannot be
+        // started directly.
         return <_WorkspaceFolderOpenCommand>[
           _WorkspaceFolderOpenCommand('explorer.exe', <String>[
             _windowsExplorerParentPath(path),
@@ -233,6 +244,13 @@ class WorkspaceFolderOpener({
         ? path
         : File(path).parent.path;
   }
+}
+
+Future<bool> _revealFileInWindowsExplorer(String path) async {
+  await Process.start('explorer.exe', <String>[
+    '/select,$path',
+  ], mode: ProcessStartMode.detached);
+  return true;
 }
 
 String _windowsExplorerPath(String path) {
