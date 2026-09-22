@@ -42,9 +42,9 @@ void requireDiffOnlyAiAssistAgentType(AgentType? agentType) {
   );
 }
 
-List<AiAssistAgent> get diffOnlyAiAssistAgents => aiAssistCapabilities.values
+List<AgentType> get diffOnlyAiAssistAgentTypes => aiAssistCapabilities.values
     .where((spec) => spec.diffOnlyAccess != AiAssistDiffOnlyAccess.unsupported)
-    .map((spec) => aiAssistAgentForType(spec.agentType)!)
+    .map((spec) => spec.agentType)
     .toList(growable: false);
 
 Set<AiAssistAgent> aiAssistAgentsForModelDiscovery(

@@ -53,7 +53,7 @@ void main() {
 
   test('AI Assist registry is the complete selectable-agent source', () {
     final registered = aiAssistCapabilities.values
-        .map((capability) => aiAssistAgentForType(capability.agentType)!)
+        .map((capability) => AiAssistAgent.fromAgentType(capability.agentType)!)
         .toSet();
     final nonCustom = AiAssistAgent.values
         .where((agent) => agent != AiAssistAgent.custom)
@@ -61,11 +61,11 @@ void main() {
 
     expect(registered, nonCustom);
     expect(selectableAiAssistAgents, <AiAssistAgent>[
-      ...aiAssistCapabilities.keys.map((type) => aiAssistAgentForType(type)!),
+      ...aiAssistCapabilities.keys.map((type) => AiAssistAgent.fromAgentType(type)!),
       AiAssistAgent.custom,
     ]);
     for (final spec in aiAssistCapabilities.values) {
-      expect(aiAssistAgentForType(spec.agentType)?.agentType, spec.agentType);
+      expect(AiAssistAgent.fromAgentType(spec.agentType)?.agentType, spec.agentType);
     }
   });
 

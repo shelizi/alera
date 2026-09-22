@@ -316,7 +316,7 @@ const int _argvPromptBytes = 24000;
 int _promptLimit(
   AiAssistAgent agent,
   AiAssistSettings settings,
-  AiAssistAgentSpec? spec,
+  AiAssistCapability? spec,
 ) {
   if (agent == AiAssistAgent.custom) {
     return settings.customCommand.contains('{prompt}')
