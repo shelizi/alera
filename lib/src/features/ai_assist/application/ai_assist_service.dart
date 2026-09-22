@@ -39,20 +39,20 @@ class CliAiAssistService({
   required final GitBackend gitBackend,
   required final ProcessRunner processRunner,
   CommandEnvironmentResolver? commandEnvironmentResolver,
-  AiAssistAgentRunner? runner,
+  AgentTaskRunner? runner,
 }) implements AiAssistService {
   this
     : commandEnvironmentResolver =
           commandEnvironmentResolver ?? UserCommandEnvironmentResolver(),
       runner =
           runner ??
-          CliAiAssistAgentRunner(
+          CliAgentTaskRunner(
             processRunner: processRunner,
             commandEnvironmentResolver: commandEnvironmentResolver,
           );
 
   final CommandEnvironmentResolver commandEnvironmentResolver;
-  final AiAssistAgentRunner runner;
+  final AgentTaskRunner runner;
   final Set<String> _pending = <String>{};
   final Set<String> _canceled = <String>{};
 

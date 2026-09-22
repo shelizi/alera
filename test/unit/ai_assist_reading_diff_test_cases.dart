@@ -49,7 +49,7 @@ void _registerAiAssistReadingDiffTests() {
       final process = _FakeProcessRunner(
         stdout: '{"version":1,"remove":[],"replace":[],"fold":[],"summary":"Keep behavior."}',
       );
-      final runner = CliAiAssistAgentRunner(
+      final runner = CliAgentTaskRunner(
         processRunner: process,
         commandEnvironmentResolver: const _FakeCommandEnvironmentResolver(
           value: <String, String>{
@@ -108,7 +108,7 @@ void _registerAiAssistReadingDiffTests() {
       final process = _FakeProcessRunner(
         stdout: '{"version":1,"remove":[],"replace":[],"fold":[],"summary":"Keep behavior."}',
       );
-      final runner = CliAiAssistAgentRunner(
+      final runner = CliAgentTaskRunner(
         processRunner: process,
         commandEnvironmentResolver: _FakeCommandEnvironmentResolver(
           value: <String, String>{
@@ -170,7 +170,7 @@ ERROR: {
 ''',
       exitCode: 1,
     );
-    final runner = CliAiAssistAgentRunner(
+    final runner = CliAgentTaskRunner(
       processRunner: process,
       commandEnvironmentResolver: const _FakeCommandEnvironmentResolver(),
     );
@@ -203,7 +203,7 @@ ERROR: {
       final process = _FakeProcessRunner(
         stdout: '{"version":1,"remove":[],"replace":[],"fold":[],"summary":"Keep behavior."}',
       );
-      final runner = CliAiAssistAgentRunner(
+      final runner = CliAgentTaskRunner(
         processRunner: process,
         commandEnvironmentResolver: const _FakeCommandEnvironmentResolver(
           variableValues: <String, String>{
@@ -242,7 +242,7 @@ ERROR: {
     final process = _FakeProcessRunner(
       stdout: '{"structured_output":{"version":1,"remove":[],"replace":[],"fold":[],"summary":"Keep behavior."}}',
     );
-    final runner = CliAiAssistAgentRunner(
+    final runner = CliAgentTaskRunner(
       processRunner: process,
       commandEnvironmentResolver: const _FakeCommandEnvironmentResolver(),
     );
@@ -286,7 +286,7 @@ ERROR: {
     final process = _FakeProcessRunner(
       stdout: '{"version":1,"remove":[],"replace":[],"fold":[],"summary":"Keep behavior."}',
     );
-    final runner = CliAiAssistAgentRunner(
+    final runner = CliAgentTaskRunner(
       processRunner: process,
       commandEnvironmentResolver: _FakeCommandEnvironmentResolver(
         value: <String, String>{'PATH': '/usr/bin', 'HOME': userHome.path},
@@ -327,7 +327,7 @@ ERROR: {
       final process = _FakeProcessRunner(
         stdout: 'Generating...\n```json\n{"version":1,"remove":[],"replace":[],"fold":[],"summary":"Keep behavior."}\n```',
       );
-      final runner = CliAiAssistAgentRunner(
+      final runner = CliAgentTaskRunner(
         processRunner: process,
         commandEnvironmentResolver: const _FakeCommandEnvironmentResolver(),
       );
@@ -369,7 +369,7 @@ ERROR: {
       AiAssistAgent.amp,
     ]) {
       final process = _FakeProcessRunner(stdout: 'unused');
-      final runner = CliAiAssistAgentRunner(
+      final runner = CliAgentTaskRunner(
         processRunner: process,
         commandEnvironmentResolver: const _FakeCommandEnvironmentResolver(),
       );
@@ -406,7 +406,7 @@ ERROR: {
       stderr: '{"error":{"message":"subscription quota exceeded"}}',
       exitCode: 1,
     );
-    final runner = CliAiAssistAgentRunner(
+    final runner = CliAgentTaskRunner(
       processRunner: process,
       commandEnvironmentResolver: const _FakeCommandEnvironmentResolver(),
     );

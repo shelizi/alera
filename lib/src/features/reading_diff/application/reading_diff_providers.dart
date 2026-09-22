@@ -9,6 +9,6 @@ part 'reading_diff_providers.g.dart';
 ReadingDiffService readingDiffService(Ref ref) {
   return ReadingDiffService(
     gitBackend: ref.read(gitBackendProvider),
-    runner: ref.read(aiAssistAgentRunnerProvider),
+    runner: ref.read(agentTaskRunnerProvider),
   );
 }

@@ -8,8 +8,8 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 part 'ai_assist_providers.g.dart';
 
 @Riverpod(keepAlive: true)
-AiAssistAgentRunner aiAssistAgentRunner(Ref ref) {
-  return CliAiAssistAgentRunner(processRunner: ref.read(processRunnerProvider));
+AgentTaskRunner agentTaskRunner(Ref ref) {
+  return CliAgentTaskRunner(processRunner: ref.read(processRunnerProvider));
 }
 
 @Riverpod(keepAlive: true)
@@ -17,7 +17,7 @@ AiAssistService aiAssistService(Ref ref) {
   return CliAiAssistService(
     gitBackend: ref.read(gitBackendProvider),
     processRunner: ref.read(processRunnerProvider),
-    runner: ref.read(aiAssistAgentRunnerProvider),
+    runner: ref.read(agentTaskRunnerProvider),
   );
 }
 

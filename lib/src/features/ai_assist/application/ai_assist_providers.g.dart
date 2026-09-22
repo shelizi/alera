@@ -9,53 +9,47 @@ part of 'ai_assist_providers.dart';
 // GENERATED CODE - DO NOT MODIFY BY HAND
 // ignore_for_file: type=lint, type=warning
 
-@ProviderFor(aiAssistAgentRunner)
-final aiAssistAgentRunnerProvider = AiAssistAgentRunnerProvider._();
+@ProviderFor(agentTaskRunner)
+final agentTaskRunnerProvider = AgentTaskRunnerProvider._();
 
-final class AiAssistAgentRunnerProvider
+final class AgentTaskRunnerProvider
     extends
-        $FunctionalProvider<
-          AiAssistAgentRunner,
-          AiAssistAgentRunner,
-          AiAssistAgentRunner
-        >
-    with $Provider<AiAssistAgentRunner> {
-  AiAssistAgentRunnerProvider._()
+        $FunctionalProvider<AgentTaskRunner, AgentTaskRunner, AgentTaskRunner>
+    with $Provider<AgentTaskRunner> {
+  AgentTaskRunnerProvider._()
     : super(
         from: null,
         argument: null,
         retry: null,
-        name: r'aiAssistAgentRunnerProvider',
+        name: r'agentTaskRunnerProvider',
         isAutoDispose: false,
         dependencies: null,
         $allTransitiveDependencies: null,
       );
 
   @override
-  String debugGetCreateSourceHash() => _$aiAssistAgentRunnerHash();
+  String debugGetCreateSourceHash() => _$agentTaskRunnerHash();
 
   @$internal
   @override
-  $ProviderElement<AiAssistAgentRunner> $createElement(
-    $ProviderPointer pointer,
-  ) => $ProviderElement(pointer);
+  $ProviderElement<AgentTaskRunner> $createElement($ProviderPointer pointer) =>
+      $ProviderElement(pointer);
 
   @override
-  AiAssistAgentRunner create(Ref ref) {
-    return aiAssistAgentRunner(ref);
+  AgentTaskRunner create(Ref ref) {
+    return agentTaskRunner(ref);
   }
 
   /// {@macro riverpod.override_with_value}
-  Override overrideWithValue(AiAssistAgentRunner value) {
+  Override overrideWithValue(AgentTaskRunner value) {
     return $ProviderOverride(
       origin: this,
-      providerOverride: $SyncValueProvider<AiAssistAgentRunner>(value),
+      providerOverride: $SyncValueProvider<AgentTaskRunner>(value),
     );
   }
 }
 
-String _$aiAssistAgentRunnerHash() =>
-    r'c28bff8a2f12f56b45a21131170eb3f19323e84a';
+String _$agentTaskRunnerHash() => r'c28bff8a2f12f56b45a21131170eb3f19323e84a';
 
 @ProviderFor(aiAssistService)
 final aiAssistServiceProvider = AiAssistServiceProvider._();

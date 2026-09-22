@@ -8,7 +8,7 @@ void _registerAiAssistReadingDiffLifecycleTests() {
       exitCodeCompleter: exit,
       completeExitOnKill: false,
     );
-    final runner = CliAiAssistAgentRunner(
+    final runner = CliAgentTaskRunner(
       processRunner: process,
       commandEnvironmentResolver: const _FakeCommandEnvironmentResolver(),
     );
@@ -49,7 +49,7 @@ void _registerAiAssistReadingDiffLifecycleTests() {
         completeExitOnKill: false,
         startReturnGate: startReturnGate,
       );
-      final runner = CliAiAssistAgentRunner(
+      final runner = CliAgentTaskRunner(
         processRunner: process,
         commandEnvironmentResolver: const _FakeCommandEnvironmentResolver(),
       );

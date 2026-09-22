@@ -152,7 +152,7 @@ class _TextActionsScopeState extends ConsumerState<TextActionsScope> {
         model: model,
       );
       final result = await ref
-          .read(aiAssistAgentRunnerProvider)
+          .read(agentTaskRunnerProvider)
           .run(
             AgentTaskRunRequest(
               settings: currentSettings.aiAssist,

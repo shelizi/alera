@@ -1,6 +1,6 @@
 part of 'ai_assist_agent_runner.dart';
 
-extension on CliAiAssistAgentRunner {
+extension on CliAgentTaskRunner {
   Future<_AiAssistAgentCommandPlan> _planCommand(
     AgentTaskRunRequest request,
     Map<String, String> environment,

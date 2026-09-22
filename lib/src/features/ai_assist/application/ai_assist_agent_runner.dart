@@ -47,12 +47,10 @@ abstract interface class AgentTaskRunner {
   void cancel(String runId);
 }
 
-abstract interface class AiAssistAgentRunner implements AgentTaskRunner {}
-
-class CliAiAssistAgentRunner({
+class CliAgentTaskRunner({
   required final ProcessRunner processRunner,
   CommandEnvironmentResolver? commandEnvironmentResolver,
-}) implements AiAssistAgentRunner {
+}) implements AgentTaskRunner {
   this
     : commandEnvironmentResolver =
           commandEnvironmentResolver ?? UserCommandEnvironmentResolver();
