@@ -269,7 +269,7 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
   ) {
     final promptSettings = settings.promptSettingsFor(operation);
     final isReadingDiff = operation == AiAssistOperation.readingDiff;
-    final globalSupported = supportsDiffOnlyAiAssistAgent(settings.agent);
+    final globalSupported = supportsDiffOnlyAiAssistAgentType(settings.agentType);
     final agentType = isReadingDiff
         ? readingDiffAgentTypeForSettings(settings)
         : settings.agentFor(operation).agentType;
@@ -278,7 +278,8 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
         : AiAssistAgent.fromAgentType(agentType)!;
     final configuredAgent = promptSettings.agent ?? settings.agent;
     final usesReadingDiffFallback =
-        isReadingDiff && !supportsDiffOnlyAiAssistAgent(configuredAgent);
+        isReadingDiff &&
+        !supportsDiffOnlyAiAssistAgentType(configuredAgent.agentType);
     final effectivePromptAgent = usesReadingDiffFallback
         ? agent
         : promptSettings.agent;
@@ -355,7 +356,7 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
       final previousAgent = settings.agentFor(operation);
       final usesFallback =
           operation == AiAssistOperation.readingDiff &&
-          !supportsDiffOnlyAiAssistAgent(previousAgent);
+          !supportsDiffOnlyAiAssistAgentType(previousAgent.agentType);
       return _withPromptSettings(
         settings,
         operation,

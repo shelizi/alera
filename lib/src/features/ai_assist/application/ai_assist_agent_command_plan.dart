@@ -8,7 +8,7 @@ extension on CliAiAssistAgentRunner {
     final settings = request.settings;
     final useCustomCommand =
         request.useCustomCommand ||
-        (request.agentType == null && settings.agent == AiAssistAgent.custom);
+        (request.agentType == null && settings.agentType == null);
     final agentType = useCustomCommand
         ? null
         : request.agentType ?? settings.agentType;

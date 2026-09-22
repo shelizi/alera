@@ -12,10 +12,6 @@ class const AiAssistDiffOnlyExecution({
   required final Map<String, String> environment,
 });
 
-bool supportsDiffOnlyAiAssistAgent(AiAssistAgent agent) {
-  return supportsDiffOnlyAiAssistAgentType(agent.agentType);
-}
-
 bool supportsDiffOnlyAiAssistAgentType(AgentType? agentType) {
   return switch (aiAssistCapabilityFor(agentType)?.diffOnlyAccess) {
     AiAssistDiffOnlyAccess.toolFree ||
@@ -78,10 +74,6 @@ String? readingDiffModelForSettingsType(
     return settings.modelForType(agentType);
   }
   return prompt.model ?? settings.modelForType(agentType);
-}
-
-void requireDiffOnlyAiAssistAgent(AiAssistAgent agent) {
-  requireDiffOnlyAiAssistAgentType(agent.agentType);
 }
 
 AiAssistDiffOnlyExecution planDiffOnlyAiAssistExecution({
