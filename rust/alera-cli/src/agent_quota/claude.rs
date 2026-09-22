@@ -263,32 +263,9 @@ async fn fetch_claude_oauth(
     let mut buckets = Vec::new();
     if let Some(limits) = data.get("limits").and_then(Value::as_array) {
         for limit in limits {
-            if limit.get("is_active").and_then(Value::as_bool) == Some(false) {
-                continue;
+            if let Some(bucket) = map_claude_oauth_model_limit(limit) {
+                buckets.push(bucket);
             }
-            let Some(used_percent) = limit.get("percent").and_then(numeric) else {
-                continue;
-            };
-            let name = limit
-                .get("scope")
-                .and_then(|value| value.get("model"))
-                .and_then(|value| value.get("display_name"))
-                .and_then(Value::as_str)
-                .or_else(|| {
-                    limit
-                        .get("scope")
-                        .and_then(|value| value.get("model"))
-                        .and_then(|value| value.get("id"))
-                        .and_then(Value::as_str)
-                })
-                .unwrap_or("Model");
-            buckets.push(QuotaBucket {
-                name: format!("{name} Weekly"),
-                used_percent: used_percent.clamp(0.0, 100.0),
-                window_minutes: Some(WEEKLY_WINDOW_MINUTES),
-                resets_at: limit.get("resets_at").and_then(claude_reset_millis),
-                reset_description: None,
-            });
         }
     }
     if windows.is_empty() && buckets.is_empty() {
@@ -425,6 +402,25 @@ fn map_claude_oauth_window(
         used_percent: used_percent.clamp(0.0, 100.0),
         window_minutes: Some(minutes),
         resets_at: value.get("resets_at").and_then(claude_reset_millis),
+        reset_description: None,
+    })
+}
+
+fn map_claude_oauth_model_limit(limit: &Value) -> Option<QuotaBucket> {
+    if limit.get("is_active").and_then(Value::as_bool) == Some(false) {
+        return None;
+    }
+    let used_percent = limit.get("percent").and_then(numeric)?;
+    let model = limit.get("scope")?.get("model")?;
+    let name = model
+        .get("display_name")
+        .and_then(Value::as_str)
+        .or_else(|| model.get("id").and_then(Value::as_str))?;
+    Some(QuotaBucket {
+        name: format!("{name} Weekly"),
+        used_percent: used_percent.clamp(0.0, 100.0),
+        window_minutes: Some(WEEKLY_WINDOW_MINUTES),
+        resets_at: limit.get("resets_at").and_then(claude_reset_millis),
         reset_description: None,
     })
 }

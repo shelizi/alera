@@ -87,7 +87,7 @@ String _formatQuotaAmount(AgentQuotaAmount amount) {
 String _windowReadingLabel(AgentQuotaProviderId provider, String label) {
   if (provider == AgentQuotaProviderId.claude &&
       label.toLowerCase().contains('fable')) {
-    return 'F';
+    return 'Fable';
   }
   return _shortWindowLabel(label);
 }
@@ -98,7 +98,7 @@ String _bucketReadingLabel(
 ) {
   final lower = bucket.name.toLowerCase();
   if (provider == AgentQuotaProviderId.claude && lower.contains('fable')) {
-    return 'F';
+    return 'Fable';
   }
   if (provider == AgentQuotaProviderId.agy) {
     final group = lower.contains('gemini') ? 'G' : 'C/G';

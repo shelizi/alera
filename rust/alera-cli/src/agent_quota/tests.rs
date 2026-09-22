@@ -145,6 +145,33 @@ fn maps_claude_oauth_usage_windows() {
 }
 
 #[test]
+fn claude_model_limits_skip_unscoped_weekly_all_and_keep_fable() {
+    let weekly_all = json!({
+        "is_active": true,
+        "kind": "weekly_all",
+        "percent": 48,
+        "scope": null,
+    });
+    assert!(map_claude_oauth_model_limit(&weekly_all).is_none());
+
+    let fable = json!({
+        "is_active": true,
+        "kind": "weekly_model",
+        "percent": 31,
+        "scope": {
+            "model": {
+                "id": "claude-fable",
+                "display_name": "Fable"
+            }
+        }
+    });
+    let bucket = map_claude_oauth_model_limit(&fable).expect("Fable model quota");
+    assert_eq!(bucket.name, "Fable Weekly");
+    assert_eq!(bucket.used_percent, 31.0);
+    assert_eq!(bucket.window_minutes, Some(WEEKLY_WINDOW_MINUTES));
+}
+
+#[test]
 fn parses_claude_auth_status_without_exposing_credentials() {
     assert_eq!(
         parse_claude_auth_status(br#"{"loggedIn":true,"authMethod":"oauth"}"#),

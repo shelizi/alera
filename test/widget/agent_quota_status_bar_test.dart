@@ -66,7 +66,7 @@ void main() {
     );
 
     expect(find.text('5H'), findsOneWidget);
-    expect(find.text('F'), findsOneWidget);
+    expect(find.text('Fable'), findsOneWidget);
     expect(find.text('G·5H'), findsOneWidget);
     expect(find.text('G·W'), findsOneWidget);
     expect(find.text('C/G·5H'), findsOneWidget);
