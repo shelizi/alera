@@ -119,7 +119,7 @@ void _registerSettingsDialogAiAssistTests() {
       container
           .read(settingsControllerProvider)
           .aiAssist
-          .discoveredModelsFor(.agy)
+          .discoveredModelsForType(AgentType.agy)
           .map((model) => model.id),
       contains('gpt-5.5'),
     );

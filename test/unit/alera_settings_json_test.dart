@@ -1,4 +1,5 @@
 import 'package:alera/src/features/ai_assist/domain/ai_assist_settings.dart';
+import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 import 'package:alera/src/features/keyboard/domain/keyboard_action.dart';
 import 'package:alera/src/features/keyboard/domain/keyboard_shortcut_settings.dart';
 import 'package:alera/src/features/language_intelligence/domain/language_id.dart';
@@ -158,7 +159,10 @@ void main() {
         containsPair('rust', isA<Map>()),
       );
       expect(restored.aiAssist.agent, AiAssistAgent.agy);
-      expect(restored.aiAssist.modelFor(.agy), 'Gemini 3.5 Flash (Medium)');
+      expect(
+        restored.aiAssist.modelForType(AgentType.agy),
+        'Gemini 3.5 Flash (Medium)',
+      );
       expect(
         restored.aiAssist.instructionsFor(.commitMessage),
         'Use conventional commits.',

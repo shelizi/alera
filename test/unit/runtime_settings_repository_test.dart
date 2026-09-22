@@ -1,5 +1,6 @@
 import 'package:alera/src/features/settings/application/settings_repository.dart';
 import 'package:alera/src/features/ai_assist/domain/ai_assist_settings.dart';
+import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
 import 'package:alera/src/features/settings/infra/runtime_settings_repository.dart';
 import 'package:alera/src/features/text_actions/domain/text_actions_settings.dart';
@@ -284,7 +285,7 @@ void main() {
         'high',
       );
       expect(
-        loaded.aiAssist.discoveredModelsFor(.codex).single.id,
+        loaded.aiAssist.discoveredModelsForType(AgentType.codex).single.id,
         'local-model',
       );
     },

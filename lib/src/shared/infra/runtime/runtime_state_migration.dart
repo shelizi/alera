@@ -192,7 +192,7 @@ final class RuntimeStateMigration({
       'customCommand': settings.customCommand,
       'instructionsByOperation': <String, String>{
         for (final entry in settings.instructionsByOperation.entries)
-          entry.key: entry.value,
+          entry.key.key: entry.value,
       },
       'timeoutSeconds': settings.timeoutSeconds,
     };

@@ -1,4 +1,6 @@
+import 'package:alera/src/features/ai_assist/application/ai_assist_registry.dart';
 import 'package:alera/src/features/ai_assist/domain/ai_assist_settings.dart';
+import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 import 'package:alera/src/features/external_editor/domain/external_editor_launcher.dart';
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
 import 'package:alera/src/features/settings/domain/editor_syntax_theme_catalog.dart';
@@ -175,15 +177,8 @@ void main() {
       expect(ai.agent, AiAssistAgent.codex);
       expect(ai.timeoutSeconds, 120);
       expect(ai.customCommand, isEmpty);
-      expect(ai.modelFor(.codex), isNull);
-      expect(
-        AiAssistAgent.values
-            .where((agent) => agent != AiAssistAgent.custom)
-            .map((agent) => agent.agentType)
-            .whereType<Object>()
-            .length,
-        11,
-      );
+      expect(ai.modelForType(AgentType.codex), isNull);
+      expect(selectableAiAssistAgentTypes.length, 12);
     });
 
     test('small settings fragments round-trip through json', () {

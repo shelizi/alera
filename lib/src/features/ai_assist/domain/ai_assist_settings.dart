@@ -138,14 +138,9 @@ class const AiAssistSettings({
 
   AgentType? get agentType => agent.agentType;
 
-  String? modelFor(AiAssistAgent agent) {
-    final value = selectedModelByAgent[agent.key]?.trim();
-    return value == null || value.isEmpty ? null : value;
-  }
-
   String? modelForType(AgentType agentType) {
-    final agent = AiAssistAgent.fromAgentType(agentType);
-    return agent == null ? null : modelFor(agent);
+    final value = selectedModelByAgent[agentType.name]?.trim();
+    return value == null || value.isEmpty ? null : value;
   }
 
   String? thinkingForModel(String? model) {
@@ -191,29 +186,18 @@ class const AiAssistSettings({
     if (override != null && override.isNotEmpty) {
       return override;
     }
-    return modelFor(agentFor(operation));
-  }
-
-  List<AiAssistDiscoveredModel> discoveredModelsFor(AiAssistAgent agent) {
-    return discoveredModelsByAgent[agent.key] ??
-        const <AiAssistDiscoveredModel>[];
+    final agentType = agentTypeFor(operation);
+    return agentType == null ? null : modelForType(agentType);
   }
 
   List<AiAssistDiscoveredModel> discoveredModelsForType(AgentType agentType) {
-    final agent = AiAssistAgent.fromAgentType(agentType);
-    return agent == null
-        ? const <AiAssistDiscoveredModel>[]
-        : discoveredModelsFor(agent);
-  }
-
-  String? discoveredDefaultModelFor(AiAssistAgent agent) {
-    final value = discoveredDefaultModelByAgent[agent.key]?.trim();
-    return value == null || value.isEmpty ? null : value;
+    return discoveredModelsByAgent[agentType.name] ??
+        const <AiAssistDiscoveredModel>[];
   }
 
   String? discoveredDefaultModelForType(AgentType agentType) {
-    final agent = AiAssistAgent.fromAgentType(agentType);
-    return agent == null ? null : discoveredDefaultModelFor(agent);
+    final value = discoveredDefaultModelByAgent[agentType.name]?.trim();
+    return value == null || value.isEmpty ? null : value;
   }
 
   static const AiAssistSettings defaults = AiAssistSettings();
