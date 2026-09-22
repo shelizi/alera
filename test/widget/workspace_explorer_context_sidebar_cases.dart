@@ -240,6 +240,128 @@ void _registerWorkspaceExplorerContextSidebarTests() {
     );
   });
 
+  testWidgets('context sidebar preserves explorer state across tab switches', (
+    tester,
+  ) async {
+    final service = _FakeWorkspaceFileService()
+      ..childrenByDirectory[''] = <native.WorkspaceFileEntry>[
+        _directory('src', hasChildrenHint: true),
+        for (var index = 0; index < 30; index++) _file('file_$index.dart'),
+      ]
+      ..childrenByDirectory['src'] = <native.WorkspaceFileEntry>[
+        _file('src/main.dart'),
+      ];
+    var activeTab = WorkbenchContextPanelTab.explorer;
+
+    await tester.pumpWidget(
+      _withWorkspaceFiles(
+        service,
+        child: MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 360,
+              height: 520,
+              child: StatefulBuilder(
+                builder: (context, setHarnessState) {
+                  return WorkspaceContextSidebar(
+                    workspace: _workspace(),
+                    prefs: WorkbenchViewPrefs.defaults.copyWith(
+                      activeContextPanelTab: activeTab,
+                    ),
+                    onToggleVisible: () {},
+                    onResize: (_) {},
+                    onSetContextPanelTab: (tab) {
+                      setHarnessState(() => activeTab = tab);
+                    },
+                    onSetExplorerMode: (_) {},
+                    onSetShowHiddenFiles: (_) {},
+                    onSetGitDiffViewMode: (_) {},
+                    onSetGitDiffGroupMode: (_) {},
+                    onOpenFile: (_) {},
+                    onOpenGitDiff: ({
+                      relativePath,
+                      area,
+                      gitDiffRoot,
+                      required scope,
+                      bool preview = false,
+                    }) async {},
+                    onOpenGitCommitDiff: ({
+                      relativePath,
+                      oldPath,
+                      required scope,
+                      gitDiffRoot,
+                      required commitOid,
+                      parentOid,
+                      required compareRef,
+                      subject,
+                      message,
+                      bool preview = false,
+                    }) async {},
+                    onOpenSearchMatch: (_) {},
+                    onPathMoved: (_, _) async {},
+                  );
+                },
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('src'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('main.dart'));
+    await tester.pump();
+
+    final explorerFinder = find.byType(WorkspaceExplorer);
+    final explorerState = tester.state(explorerFinder);
+    final scrollableFinder = find
+        .descendant(of: explorerFinder, matching: find.byType(Scrollable))
+        .last;
+    await tester.drag(scrollableFinder, const Offset(0, -180));
+    await tester.pumpAndSettle();
+    final scrollBeforeSwitch = tester
+        .state<ScrollableState>(scrollableFinder)
+        .position
+        .pixels;
+    expect(scrollBeforeSwitch, greaterThan(0));
+
+    await tester.tap(find.byTooltip('Search'));
+    await tester.pumpAndSettle();
+
+    final hiddenExplorerFinder = find.byType(
+      WorkspaceExplorer,
+      skipOffstage: false,
+    );
+    expect(find.byType(WorkspaceExplorer), findsNothing);
+    expect(hiddenExplorerFinder, findsOneWidget);
+    expect(tester.state(hiddenExplorerFinder), same(explorerState));
+
+    await tester.tap(find.byTooltip('Explorer'));
+    await tester.pumpAndSettle();
+
+    final restoredExplorerFinder = find.byType(WorkspaceExplorer);
+    expect(tester.state(restoredExplorerFinder), same(explorerState));
+    final restoredScrollableFinder = find
+        .descendant(
+          of: restoredExplorerFinder,
+          matching: find.byType(Scrollable),
+        )
+        .last;
+    expect(
+      tester.state<ScrollableState>(restoredScrollableFinder).position.pixels,
+      closeTo(scrollBeforeSwitch, 0.1),
+    );
+
+    await tester.drag(
+      restoredScrollableFinder,
+      Offset(0, scrollBeforeSwitch + 32),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('main.dart'), findsOneWidget);
+  });
+
   testWidgets(
     'context sidebar loads the next workspace explorer without manual refresh',
     (tester) async {
