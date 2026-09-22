@@ -92,6 +92,14 @@ void main() {
     expect(aiAssistCapabilityFor(null), isNull);
   });
 
+  test('AI Assist settings expose canonical AgentType identity', () {
+    const settings = AiAssistSettings();
+    const prompt = AiAssistPromptSettings(agent: AiAssistAgent.devin);
+
+    expect(settings.agentType, AgentType.codex);
+    expect(prompt.agentType, AgentType.devin);
+  });
+
   test('parses Devin model-list output', () {
     final models = parseDevinModels('''
 GPT-5.5 (gpt-5.5)

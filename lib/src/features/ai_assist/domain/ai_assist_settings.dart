@@ -80,6 +80,8 @@ class const AiAssistPromptSettings({this.agent, this.model})
   final AiAssistAgent? agent;
   final String? model;
 
+  AgentType? get agentType => agent?.agentType;
+
   bool get inheritsAgent => agent == null;
 
   bool get inheritsModel => model == null || model!.trim().isEmpty;
@@ -117,6 +119,8 @@ class const AiAssistSettings({
   final Map<AiAssistOperation, AiAssistPromptSettings>
   promptSettingsByOperation;
   final int timeoutSeconds;
+
+  AgentType? get agentType => agent.agentType;
 
   String? modelFor(AiAssistAgent agent) {
     final value = selectedModelByAgent[agent]?.trim();
