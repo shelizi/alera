@@ -69,7 +69,7 @@ class CliAgentTaskRunner({
     _canceled.remove(request.runId);
     _pending.add(request.runId);
 
-    _AiAssistAgentCommandPlan? plan;
+    _AgentTaskCommandPlan? plan;
     Directory? isolatedDirectory;
     Future<int>? processExit;
     try {

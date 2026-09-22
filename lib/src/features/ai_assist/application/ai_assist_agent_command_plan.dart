@@ -1,7 +1,7 @@
 part of 'ai_assist_agent_runner.dart';
 
 extension on CliAgentTaskRunner {
-  Future<_AiAssistAgentCommandPlan> _planCommand(
+  Future<_AgentTaskCommandPlan> _planCommand(
     AgentTaskRunRequest request,
     Map<String, String> environment,
   ) async {
@@ -150,7 +150,7 @@ extension on CliAgentTaskRunner {
       args = execution.arguments;
       exactEnvironment = execution.environment;
     }
-    return _AiAssistAgentCommandPlan(
+    return _AgentTaskCommandPlan(
       binary: spec.binary,
       args: args,
       stdinPayload: spec.promptDelivery == AiPromptDelivery.stdin
@@ -206,7 +206,7 @@ extension on CliAgentTaskRunner {
     }
   }
 
-  _AiAssistAgentCommandPlan _planCustomCommand(String template, String prompt) {
+  _AgentTaskCommandPlan _planCustomCommand(String template, String prompt) {
     final tokens = _tokenizeCommandTemplate(template);
     if (tokens.isEmpty) {
       throw const AiAssistException('Custom command is empty.');
@@ -215,7 +215,7 @@ extension on CliAgentTaskRunner {
     final substituted = tokens
         .map((token) => token.replaceAll('{prompt}', prompt))
         .toList(growable: false);
-    return _AiAssistAgentCommandPlan(
+    return _AgentTaskCommandPlan(
       binary: substituted.first,
       args: substituted.skip(1).toList(growable: false),
       stdinPayload: usesPlaceholder ? null : prompt,
@@ -247,7 +247,7 @@ Future<void> _deleteTemporaryDirectory(Directory directory) async {
   }
 }
 
-class const _AiAssistAgentCommandPlan({
+class const _AgentTaskCommandPlan({
   required final String binary,
   required final List<String> args,
   required final String? stdinPayload,
