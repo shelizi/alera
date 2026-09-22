@@ -11,7 +11,7 @@ const List<AiThinkingLevel> grokThinkingLevels = <AiThinkingLevel>[
   AiThinkingLevel(id: 'max', label: 'Max'),
 ];
 
-final AiAssistAgentSpec grokAiAssistAgentSpec = AiAssistAgentSpec(
+final AiAssistCapability grokAiAssistAgentSpec = AiAssistCapabilitySpec(
   agentType: .grok,
   promptDelivery: .promptFile,
   modelsCommand: const <String>['models'],

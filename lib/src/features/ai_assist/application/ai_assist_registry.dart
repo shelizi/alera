@@ -78,7 +78,7 @@ abstract interface class AiAssistCapability {
   get buildArgs;
 }
 
-class const AiAssistAgentSpec({
+class const AiAssistCapabilitySpec({
   required final AgentType agentType,
   required final AiPromptDelivery promptDelivery,
   required final List<String>? modelsCommand,
@@ -140,10 +140,10 @@ const List<AiThinkingLevel> onOffThinkingLevels = <AiThinkingLevel>[
   AiThinkingLevel(id: 'off', label: 'Off'),
 ];
 
-final Map<AgentType, AiAssistAgentSpec>
-aiAssistCapabilities = <AgentType, AiAssistAgentSpec>{
+final Map<AgentType, AiAssistCapability>
+aiAssistCapabilities = <AgentType, AiAssistCapability>{
   AgentType.claude: claudeAiAssistAgentSpec,
-  AgentType.codex: AiAssistAgentSpec(
+  AgentType.codex: AiAssistCapabilitySpec(
     agentType: .codex,
     promptDelivery: .stdin,
     modelsCommand: const <String>['debug', 'models'],
@@ -192,7 +192,7 @@ aiAssistCapabilities = <AgentType, AiAssistAgentSpec>{
           if (thinkingLevel != null) 'model_reasoning_effort=$thinkingLevel',
         ].where((arg) => arg.isNotEmpty).toList(growable: false),
   ),
-  AgentType.copilot: AiAssistAgentSpec(
+  AgentType.copilot: AiAssistCapabilitySpec(
     agentType: .copilot,
     promptDelivery: .argv,
     modelsCommand: null,
@@ -240,7 +240,7 @@ aiAssistCapabilities = <AgentType, AiAssistAgentSpec>{
           if (thinkingLevel != null) ...<String>['--effort', thinkingLevel],
         ],
   ),
-  AgentType.cursor: AiAssistAgentSpec(
+  AgentType.cursor: AiAssistCapabilitySpec(
     agentType: .cursor,
     promptDelivery: .argv,
     modelsCommand: const <String>['--list-models'],
@@ -266,7 +266,7 @@ aiAssistCapabilities = <AgentType, AiAssistAgentSpec>{
           prompt,
         ],
   ),
-  AgentType.agy: AiAssistAgentSpec(
+  AgentType.agy: AiAssistCapabilitySpec(
     agentType: .agy,
     promptDelivery: .stdin,
     modelsCommand: const <String>['models'],
@@ -290,7 +290,7 @@ aiAssistCapabilities = <AgentType, AiAssistAgentSpec>{
   ),
   AgentType.opencode: openCodeAiAssistSpec(agentType: .opencode),
   AgentType.opencode2: openCodeAiAssistSpec(agentType: .opencode2),
-  AgentType.pi: AiAssistAgentSpec(
+  AgentType.pi: AiAssistCapabilitySpec(
     agentType: .pi,
     promptDelivery: .stdin,
     modelsCommand: const <String>['--list-models'],
@@ -325,7 +325,7 @@ aiAssistCapabilities = <AgentType, AiAssistAgentSpec>{
           if (thinkingLevel != null) ...<String>['--thinking', thinkingLevel],
         ],
   ),
-  AgentType.amp: AiAssistAgentSpec(
+  AgentType.amp: AiAssistCapabilitySpec(
     agentType: .amp,
     promptDelivery: .stdin,
     modelsCommand: null,
@@ -364,7 +364,7 @@ aiAssistCapabilities = <AgentType, AiAssistAgentSpec>{
         ],
   ),
   AgentType.grok: grokAiAssistAgentSpec,
-  AgentType.devin: AiAssistAgentSpec(
+  AgentType.devin: AiAssistCapabilitySpec(
     agentType: .devin,
     promptDelivery: .argv,
     modelsCommand: const <String>['models', 'list'],

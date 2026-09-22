@@ -1,6 +1,6 @@
 part of 'ai_assist_registry.dart';
 
-final AiAssistAgentSpec claudeAiAssistAgentSpec = AiAssistAgentSpec(
+final AiAssistCapability claudeAiAssistAgentSpec = AiAssistCapabilitySpec(
   agentType: .claude,
   promptDelivery: .stdin,
   modelsCommand: null,
