@@ -4,6 +4,8 @@ final class _DiffSyntaxStyle {
   _DiffSyntaxStyle._({
     required this.languageId,
     required this.themeName,
+    required this.language,
+    required this.editorTheme,
     required this.textStyle,
     required code_forge_syntax.SyntaxHighlighter highlighter,
   }) : _highlighter = highlighter;
@@ -17,6 +19,11 @@ final class _DiffSyntaxStyle {
       filePath: filePath,
       registry: registry,
     );
+    final language = workspaceEditorSyntaxModeForPath(
+      filePath: filePath,
+      registry: registry,
+      syntaxLanguageId: languageId,
+    );
     final editorTheme = editorSyntaxThemeForName(themeName);
     final rootStyle = editorSyntaxRootStyleForName(themeName);
     final textStyle = AleraTokens.monoStyle.copyWith(
@@ -27,13 +34,11 @@ final class _DiffSyntaxStyle {
     return _DiffSyntaxStyle._(
       languageId: languageId,
       themeName: themeName,
+      language: language,
+      editorTheme: editorTheme,
       textStyle: textStyle,
       highlighter: code_forge_syntax.SyntaxHighlighter(
-        language: workspaceEditorSyntaxModeForPath(
-          filePath: filePath,
-          registry: registry,
-          syntaxLanguageId: languageId,
-        ),
+        language: language,
         languageId: languageId,
         editorTheme: editorTheme,
         baseTextStyle: textStyle,
@@ -43,6 +48,8 @@ final class _DiffSyntaxStyle {
 
   final String languageId;
   final String themeName;
+  final dynamic language;
+  final Map<String, TextStyle> editorTheme;
   final TextStyle textStyle;
   final code_forge_syntax.SyntaxHighlighter _highlighter;
 

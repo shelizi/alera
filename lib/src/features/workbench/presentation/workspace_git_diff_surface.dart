@@ -36,6 +36,7 @@ import 'package:alera/src/shared/infra/git/git_providers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
+import 'package:code_forge/code_forge.dart' as code_forge;
 import 'package:code_forge/code_forge/syntax_highlighter.dart'
     as code_forge_syntax;
 

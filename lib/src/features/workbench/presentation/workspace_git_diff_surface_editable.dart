@@ -201,6 +201,382 @@ int _textLineCount(String text) {
   return count;
 }
 
+enum _EditableLineDiffKind { equal, deletion, addition }
+
+final class _EditableLineDiffStep {
+  const _EditableLineDiffStep({
+    required this.kind,
+    this.oldIndex,
+    this.newIndex,
+  });
+
+  final _EditableLineDiffKind kind;
+  final int? oldIndex;
+  final int? newIndex;
+}
+
+final class _EditableDiffSpacer {
+  const _EditableDiffSpacer({required this.afterLine, required this.count});
+
+  final int afterLine;
+  final int count;
+}
+
+final class _EditableDiffAlignment {
+  const _EditableDiffAlignment({
+    required this.oldChangedLines,
+    required this.newChangedLines,
+    required this.oldSpacers,
+    required this.newSpacers,
+    required this.added,
+    required this.removed,
+    required this.visualLineCount,
+  });
+
+  final Set<int> oldChangedLines;
+  final Set<int> newChangedLines;
+  final List<_EditableDiffSpacer> oldSpacers;
+  final List<_EditableDiffSpacer> newSpacers;
+  final int added;
+  final int removed;
+  final int visualLineCount;
+
+  _EditableDiffLineChanges get changes => _EditableDiffLineChanges(
+    oldChangedLines: oldChangedLines,
+    newChangedLines: newChangedLines,
+  );
+}
+
+const int _editableDiffMaxMyersDistance = 2048;
+
+_EditableDiffAlignment _editableDiffAlignment(
+  String baseline,
+  String current,
+  GitDiffWhitespaceMode whitespaceMode,
+) {
+  final oldLines = _splitFullFileLines(baseline);
+  final newLines = _splitFullFileLines(current);
+  final normalizedOld = oldLines
+      .map((line) => _normalizeLiveDiffLine(line, whitespaceMode))
+      .toList(growable: false);
+  final normalizedNew = newLines
+      .map((line) => _normalizeLiveDiffLine(line, whitespaceMode))
+      .toList(growable: false);
+  final steps =
+      _myersEditableLineDiff(normalizedOld, normalizedNew) ??
+      _coarseEditableLineDiff(normalizedOld, normalizedNew);
+
+  final oldChanged = <int>{};
+  final newChanged = <int>{};
+  final oldSpacers = <_EditableDiffSpacer>[];
+  final newSpacers = <_EditableDiffSpacer>[];
+  var oldCursor = 0;
+  var newCursor = 0;
+  var pendingOld = 0;
+  var pendingNew = 0;
+  var added = 0;
+  var removed = 0;
+
+  void flushChangeRun() {
+    if (pendingOld == 0 && pendingNew == 0) return;
+    added += pendingNew;
+    removed += pendingOld;
+    if (pendingNew > pendingOld) {
+      oldSpacers.add(
+        _EditableDiffSpacer(
+          afterLine: oldCursor - 1,
+          count: pendingNew - pendingOld,
+        ),
+      );
+    } else if (pendingOld > pendingNew) {
+      newSpacers.add(
+        _EditableDiffSpacer(
+          afterLine: newCursor - 1,
+          count: pendingOld - pendingNew,
+        ),
+      );
+    }
+    pendingOld = 0;
+    pendingNew = 0;
+  }
+
+  for (final step in steps) {
+    switch (step.kind) {
+      case _EditableLineDiffKind.equal:
+        flushChangeRun();
+        oldCursor += 1;
+        newCursor += 1;
+      case _EditableLineDiffKind.deletion:
+        oldChanged.add(step.oldIndex!);
+        oldCursor += 1;
+        pendingOld += 1;
+      case _EditableLineDiffKind.addition:
+        newChanged.add(step.newIndex!);
+        newCursor += 1;
+        pendingNew += 1;
+    }
+  }
+  flushChangeRun();
+
+  final oldVisualCount =
+      oldLines.length +
+      oldSpacers.fold<int>(0, (sum, item) => sum + item.count);
+  final newVisualCount =
+      newLines.length +
+      newSpacers.fold<int>(0, (sum, item) => sum + item.count);
+  return _EditableDiffAlignment(
+    oldChangedLines: oldChanged,
+    newChangedLines: newChanged,
+    oldSpacers: oldSpacers,
+    newSpacers: newSpacers,
+    added: added,
+    removed: removed,
+    visualLineCount: math.max(oldVisualCount, newVisualCount),
+  );
+}
+
+List<_EditableLineDiffStep>? _myersEditableLineDiff(
+  List<String> oldLines,
+  List<String> newLines,
+) {
+  final oldLength = oldLines.length;
+  final newLength = newLines.length;
+  if (oldLength == 0) {
+    return <_EditableLineDiffStep>[
+      for (var index = 0; index < newLength; index += 1)
+        _EditableLineDiffStep(
+          kind: _EditableLineDiffKind.addition,
+          newIndex: index,
+        ),
+    ];
+  }
+  if (newLength == 0) {
+    return <_EditableLineDiffStep>[
+      for (var index = 0; index < oldLength; index += 1)
+        _EditableLineDiffStep(
+          kind: _EditableLineDiffKind.deletion,
+          oldIndex: index,
+        ),
+    ];
+  }
+
+  final maxDistance = math.min(
+    oldLength + newLength,
+    _editableDiffMaxMyersDistance,
+  );
+  var frontier = <int, int>{1: 0};
+  final trace = <Map<int, int>>[];
+  for (var distance = 0; distance <= maxDistance; distance += 1) {
+    final next = <int, int>{};
+    for (var diagonal = -distance; diagonal <= distance; diagonal += 2) {
+      final down = frontier[diagonal + 1] ?? -1;
+      final right = frontier[diagonal - 1] ?? -1;
+      var oldIndex =
+          diagonal == -distance || (diagonal != distance && right < down)
+          ? math.max(0, down)
+          : math.max(0, right + 1);
+      var newIndex = oldIndex - diagonal;
+      while (oldIndex < oldLength &&
+          newIndex < newLength &&
+          oldLines[oldIndex] == newLines[newIndex]) {
+        oldIndex += 1;
+        newIndex += 1;
+      }
+      next[diagonal] = oldIndex;
+      if (oldIndex >= oldLength && newIndex >= newLength) {
+        trace.add(next);
+        return _backtrackEditableLineDiff(trace, oldLength, newLength);
+      }
+    }
+    trace.add(next);
+    frontier = next;
+  }
+  return null;
+}
+
+List<_EditableLineDiffStep> _backtrackEditableLineDiff(
+  List<Map<int, int>> trace,
+  int oldLength,
+  int newLength,
+) {
+  final reversed = <_EditableLineDiffStep>[];
+  var oldIndex = oldLength;
+  var newIndex = newLength;
+  for (var distance = trace.length - 1; distance > 0; distance -= 1) {
+    final previous = trace[distance - 1];
+    final diagonal = oldIndex - newIndex;
+    final down = previous[diagonal + 1] ?? -1;
+    final right = previous[diagonal - 1] ?? -1;
+    final previousDiagonal =
+        diagonal == -distance || (diagonal != distance && right < down)
+        ? diagonal + 1
+        : diagonal - 1;
+    final previousOld = previous[previousDiagonal] ?? 0;
+    final previousNew = previousOld - previousDiagonal;
+
+    while (oldIndex > previousOld && newIndex > previousNew) {
+      oldIndex -= 1;
+      newIndex -= 1;
+      reversed.add(
+        _EditableLineDiffStep(
+          kind: _EditableLineDiffKind.equal,
+          oldIndex: oldIndex,
+          newIndex: newIndex,
+        ),
+      );
+    }
+    if (oldIndex == previousOld) {
+      newIndex -= 1;
+      reversed.add(
+        _EditableLineDiffStep(
+          kind: _EditableLineDiffKind.addition,
+          newIndex: newIndex,
+        ),
+      );
+    } else {
+      oldIndex -= 1;
+      reversed.add(
+        _EditableLineDiffStep(
+          kind: _EditableLineDiffKind.deletion,
+          oldIndex: oldIndex,
+        ),
+      );
+    }
+  }
+  while (oldIndex > 0 && newIndex > 0) {
+    oldIndex -= 1;
+    newIndex -= 1;
+    reversed.add(
+      _EditableLineDiffStep(
+        kind: _EditableLineDiffKind.equal,
+        oldIndex: oldIndex,
+        newIndex: newIndex,
+      ),
+    );
+  }
+  while (oldIndex > 0) {
+    oldIndex -= 1;
+    reversed.add(
+      _EditableLineDiffStep(
+        kind: _EditableLineDiffKind.deletion,
+        oldIndex: oldIndex,
+      ),
+    );
+  }
+  while (newIndex > 0) {
+    newIndex -= 1;
+    reversed.add(
+      _EditableLineDiffStep(
+        kind: _EditableLineDiffKind.addition,
+        newIndex: newIndex,
+      ),
+    );
+  }
+  return reversed.reversed.toList(growable: false);
+}
+
+List<_EditableLineDiffStep> _coarseEditableLineDiff(
+  List<String> oldLines,
+  List<String> newLines,
+) {
+  var prefix = 0;
+  while (prefix < oldLines.length &&
+      prefix < newLines.length &&
+      oldLines[prefix] == newLines[prefix]) {
+    prefix += 1;
+  }
+  var oldSuffix = oldLines.length;
+  var newSuffix = newLines.length;
+  while (oldSuffix > prefix &&
+      newSuffix > prefix &&
+      oldLines[oldSuffix - 1] == newLines[newSuffix - 1]) {
+    oldSuffix -= 1;
+    newSuffix -= 1;
+  }
+  return <_EditableLineDiffStep>[
+    for (var index = 0; index < prefix; index += 1)
+      _EditableLineDiffStep(
+        kind: _EditableLineDiffKind.equal,
+        oldIndex: index,
+        newIndex: index,
+      ),
+    for (var index = prefix; index < oldSuffix; index += 1)
+      _EditableLineDiffStep(
+        kind: _EditableLineDiffKind.deletion,
+        oldIndex: index,
+      ),
+    for (var index = prefix; index < newSuffix; index += 1)
+      _EditableLineDiffStep(
+        kind: _EditableLineDiffKind.addition,
+        newIndex: index,
+      ),
+    for (var offset = 0; offset < oldLines.length - oldSuffix; offset += 1)
+      _EditableLineDiffStep(
+        kind: _EditableLineDiffKind.equal,
+        oldIndex: oldSuffix + offset,
+        newIndex: newSuffix + offset,
+      ),
+  ];
+}
+
+List<(int, int)> _editableChangedLineRanges(Set<int> lines) {
+  if (lines.isEmpty) return const <(int, int)>[];
+  final sorted = lines.toList(growable: false)..sort();
+  final result = <(int, int)>[];
+  var start = sorted.first;
+  var end = start;
+  for (final line in sorted.skip(1)) {
+    if (line == end + 1) {
+      end = line;
+      continue;
+    }
+    result.add((start, end));
+    start = line;
+    end = line;
+  }
+  result.add((start, end));
+  return result;
+}
+
+List<({int afterLine, String content})> _editableSpacerRanges(
+  List<_EditableDiffSpacer> spacers,
+) => <({int afterLine, String content})>[
+  for (final spacer in spacers)
+    (
+      afterLine: spacer.afterLine,
+      content: List<String>.filled(spacer.count, '').join('\n'),
+    ),
+];
+
+@visibleForTesting
+({
+  List<({int afterLine, int count})> oldSpacers,
+  List<({int afterLine, int count})> newSpacers,
+  int added,
+  int removed,
+  int visualLineCount,
+})
+workspaceEditableDiffAlignmentForTesting({
+  required String baseline,
+  required String current,
+  GitDiffWhitespaceMode whitespaceMode = GitDiffWhitespaceMode.normal,
+}) {
+  final alignment = _editableDiffAlignment(baseline, current, whitespaceMode);
+  return (
+    oldSpacers: <({int afterLine, int count})>[
+      for (final spacer in alignment.oldSpacers)
+        (afterLine: spacer.afterLine, count: spacer.count),
+    ],
+    newSpacers: <({int afterLine, int count})>[
+      for (final spacer in alignment.newSpacers)
+        (afterLine: spacer.afterLine, count: spacer.count),
+    ],
+    added: alignment.added,
+    removed: alignment.removed,
+    visualLineCount: alignment.visualLineCount,
+  );
+}
+
 String _widestDiffLineCandidate(String text) {
   if (text.isEmpty) return ' ';
   var bestStart = 0;
@@ -616,70 +992,179 @@ class _DiffOverviewPainter extends CustomPainter {
 }
 
 class _EditableWorkingTreeDiffState extends State<_EditableWorkingTreeDiff> {
-  late final _DiffSyntaxTextEditingController _leftController;
-  late final _DiffSyntaxTextEditingController _controller;
+  code_forge.CodeForgeController? _leftController;
+  code_forge.CodeForgeController? _controller;
+  code_forge.UndoRedoController? _leftUndoController;
+  code_forge.UndoRedoController? _undoController;
+  late final _DiffSyntaxTextEditingController _leftFallbackController;
+  late final _DiffSyntaxTextEditingController _fallbackController;
+  late final FocusNode _leftFocusNode;
+  late final FocusNode _rightFocusNode;
   late final ScrollController _leftHorizontalController;
   late final ScrollController _rightHorizontalController;
   late final ScrollController _leftVerticalController;
   late final ScrollController _rightVerticalController;
+  late _EditableDiffAlignment _alignment;
   var _syncingHorizontal = false;
   var _syncingVertical = false;
+  var _syncingControllerText = false;
 
   @override
   void initState() {
     super.initState();
-    _leftController = _DiffSyntaxTextEditingController(
+    _leftFallbackController = _DiffSyntaxTextEditingController(
       text: widget.baseline,
       syntax: widget.syntax,
     );
-    _controller = _DiffSyntaxTextEditingController(
+    _fallbackController = _DiffSyntaxTextEditingController(
       text: widget.document.currentText,
       syntax: widget.syntax,
     );
+    try {
+      _leftController = code_forge.CodeForgeController()
+        ..text = widget.baseline;
+      _controller = code_forge.CodeForgeController()
+        ..text = widget.document.currentText;
+      _leftUndoController = code_forge.UndoRedoController();
+      _undoController = code_forge.UndoRedoController();
+    } on StateError {
+      _leftController = null;
+      _controller = null;
+      _leftUndoController = null;
+      _undoController = null;
+    }
+    _leftFocusNode = FocusNode();
+    _rightFocusNode = FocusNode();
     _leftHorizontalController = ScrollController();
     _rightHorizontalController = ScrollController();
     _leftVerticalController = ScrollController();
     _rightVerticalController = ScrollController();
+    _alignment = _editableDiffAlignment(
+      widget.baseline,
+      widget.document.currentText,
+      widget.whitespaceMode,
+    );
+    _controller?.addListener(_handleEditableControllerChanged);
     _leftHorizontalController.addListener(_syncHorizontalFromLeft);
     _rightHorizontalController.addListener(_syncHorizontalFromRight);
     _leftVerticalController.addListener(_syncVerticalFromLeft);
     _rightVerticalController.addListener(_syncVerticalFromRight);
+    _applyAlignmentDecorations();
   }
 
   @override
   void didUpdateWidget(covariant _EditableWorkingTreeDiff oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (!identical(oldWidget.syntax, widget.syntax)) {
-      _leftController.updateSyntax(widget.syntax);
-      _controller.updateSyntax(widget.syntax);
+      _leftFallbackController.updateSyntax(widget.syntax);
+      _fallbackController.updateSyntax(widget.syntax);
     }
     if (oldWidget.baseline != widget.baseline &&
-        _leftController.text != widget.baseline) {
-      _leftController.value = TextEditingValue(
-        text: widget.baseline,
-        selection: const TextSelection.collapsed(offset: 0),
-      );
+        _leftDisplayedText != widget.baseline) {
+      _replaceDisplayedText(isLeft: true, text: widget.baseline);
     }
-    if (_controller.text != widget.document.currentText &&
+    if (_editableDisplayedText != widget.document.currentText &&
         oldWidget.document.currentText != widget.document.currentText) {
-      _controller.value = TextEditingValue(
-        text: widget.document.currentText,
-        selection: TextSelection.collapsed(
-          offset: widget.document.currentText.length,
-        ),
-      );
+      _replaceDisplayedText(isLeft: false, text: widget.document.currentText);
+    }
+    if (oldWidget.baseline != widget.baseline ||
+        oldWidget.document.currentText != widget.document.currentText ||
+        oldWidget.whitespaceMode != widget.whitespaceMode) {
+      _refreshAlignment(notify: false);
     }
   }
 
   @override
   void dispose() {
+    _controller?.removeListener(_handleEditableControllerChanged);
     _leftHorizontalController.dispose();
     _rightHorizontalController.dispose();
     _leftVerticalController.dispose();
     _rightVerticalController.dispose();
-    _leftController.dispose();
-    _controller.dispose();
+    _leftFocusNode.dispose();
+    _rightFocusNode.dispose();
+    _leftUndoController?.dispose();
+    _undoController?.dispose();
+    _leftController?.dispose();
+    _controller?.dispose();
+    _leftFallbackController.dispose();
+    _fallbackController.dispose();
     super.dispose();
+  }
+
+  bool get _usesCodeForge => _controller != null && _leftController != null;
+  String get _leftDisplayedText =>
+      _leftController?.text ?? _leftFallbackController.text;
+  String get _editableDisplayedText =>
+      _controller?.text ?? _fallbackController.text;
+
+  void _replaceDisplayedText({required bool isLeft, required String text}) {
+    _syncingControllerText = true;
+    try {
+      if (isLeft) {
+        final controller = _leftController;
+        if (controller != null) {
+          controller.text = text;
+        }
+        if (_leftFallbackController.text != text) {
+          _leftFallbackController.text = text;
+        }
+      } else {
+        final controller = _controller;
+        if (controller != null) {
+          controller.text = text;
+        }
+        if (_fallbackController.text != text) {
+          _fallbackController.text = text;
+        }
+      }
+    } finally {
+      _syncingControllerText = false;
+    }
+  }
+
+  void _handleEditableControllerChanged() {
+    if (_syncingControllerText) return;
+    final text = _controller?.text ?? _fallbackController.text;
+    if (text == widget.document.currentText) return;
+    if (_fallbackController.text != text) {
+      _fallbackController.text = text;
+    }
+    widget.onChanged(text);
+    _refreshAlignment();
+  }
+
+  void _handleFallbackChanged(String text) {
+    if (_syncingControllerText || text == widget.document.currentText) return;
+    widget.onChanged(text);
+    _refreshAlignment();
+  }
+
+  void _refreshAlignment({bool notify = true}) {
+    _alignment = _editableDiffAlignment(
+      widget.baseline,
+      _editableDisplayedText,
+      widget.whitespaceMode,
+    );
+    _applyAlignmentDecorations();
+    if (notify && mounted) setState(() {});
+  }
+
+  void _applyAlignmentDecorations() {
+    if (!_usesCodeForge) return;
+    const spacerColor = Colors.transparent;
+    _leftController!.setGitDiffDecorations(
+      addedRanges: _editableChangedLineRanges(_alignment.oldChangedLines),
+      removedRanges: _editableSpacerRanges(_alignment.oldSpacers),
+      addedColor: AleraTokens.error,
+      removedColor: spacerColor,
+    );
+    _controller!.setGitDiffDecorations(
+      addedRanges: _editableChangedLineRanges(_alignment.newChangedLines),
+      removedRanges: _editableSpacerRanges(_alignment.newSpacers),
+      addedColor: AleraTokens.success,
+      removedColor: spacerColor,
+    );
   }
 
   void _syncHorizontalFromLeft() => _syncScrollOffset(
@@ -752,58 +1237,145 @@ class _EditableWorkingTreeDiffState extends State<_EditableWorkingTreeDiff> {
       painter.layout();
       maxWidth = math.max(maxWidth, painter.width);
     }
-    // The candidate selection uses display-column estimates for tabs/fallback
-    // glyphs, so leave a small safety margin without paying a TextPainter
-    // layout for every line in the file.
     return maxWidth * 1.08 + AleraTokens.space24;
   }
 
   @override
   Widget build(BuildContext context) {
-    final useSourceDiff =
-        widget.document.currentText == widget.document.loaded.displayContent;
-    final stats = useSourceDiff
-        ? _LiveDiffStats(
-            added:
-                widget.file.added ??
-                widget.file.lines
-                    .where((line) => line.kind == GitDiffLineKind.addition)
-                    .length,
-            removed:
-                widget.file.removed ??
-                widget.file.lines
-                    .where((line) => line.kind == GitDiffLineKind.deletion)
-                    .length,
-          )
-        : _liveDiffStats(
-            widget.baseline,
-            widget.document.currentText,
-            widget.whitespaceMode,
-          );
-    final changes = _editableDiffLineChanges(
-      widget.file,
-      widget.baseline,
-      widget.document.currentText,
-      widget.whitespaceMode,
-      useSourceDiff: useSourceDiff,
+    final stats = _LiveDiffStats(
+      added: _alignment.added,
+      removed: _alignment.removed,
     );
     const lineHeight = 18.0;
-    final lineCount = math.max(
-      _textLineCount(widget.baseline),
-      _textLineCount(widget.document.currentText),
+    final fallbackHeight = (_alignment.visualLineCount * lineHeight + 72).clamp(
+      260.0,
+      620.0,
     );
-    final fallbackHeight = (lineCount * 18.0 + 72).clamp(260.0, 620.0);
     final viewportHeight = widget.viewportHeight;
     final height =
         viewportHeight != null && viewportHeight.isFinite && viewportHeight > 0
         ? viewportHeight
         : fallbackHeight;
-    final textStyle = AleraTokens.monoStyle.copyWith(
-      fontSize: 12,
-      color: AleraTokens.foreground,
-      height: 1.5,
-    );
-    final sharedContentWidth = _sharedContentWidth(context, textStyle);
+    final textStyle = widget.syntax.textStyle;
+
+    Widget buildPane({required bool isLeft}) {
+      final horizontalController = isLeft
+          ? _leftHorizontalController
+          : _rightHorizontalController;
+      final verticalController = isLeft
+          ? _leftVerticalController
+          : _rightVerticalController;
+      final focusNode = isLeft ? _leftFocusNode : _rightFocusNode;
+      final side = isLeft ? 'original' : 'editor';
+      if (!_usesCodeForge) {
+        final fallbackController = isLeft
+            ? _leftFallbackController
+            : _fallbackController;
+        return LayoutBuilder(
+          builder: (context, constraints) {
+            final contentWidth = math.max(
+              constraints.maxWidth,
+              _sharedContentWidth(context, textStyle),
+            );
+            return Scrollbar(
+              key: ValueKey<String>(
+                'git-diff-working-tree-$side-x-scrollbar-${widget.file.path}',
+              ),
+              controller: horizontalController,
+              thumbVisibility: true,
+              scrollbarOrientation: ScrollbarOrientation.bottom,
+              notificationPredicate: (notification) =>
+                  notification.metrics.axis == Axis.horizontal,
+              child: SingleChildScrollView(
+                controller: horizontalController,
+                scrollDirection: Axis.horizontal,
+                physics: const _NoImplicitHorizontalScrollPhysics(),
+                child: SizedBox(
+                  width: contentWidth,
+                  height: constraints.maxHeight,
+                  child: Scrollbar(
+                    key: ValueKey<String>(
+                      'git-diff-working-tree-$side-y-scrollbar-${widget.file.path}',
+                    ),
+                    controller: verticalController,
+                    thumbVisibility: true,
+                    notificationPredicate: (notification) =>
+                        notification.metrics.axis == Axis.vertical,
+                    child: TextField(
+                      key: ValueKey<String>(
+                        'git-diff-working-tree-$side-${widget.file.path}',
+                      ),
+                      controller: fallbackController,
+                      focusNode: focusNode,
+                      scrollController: verticalController,
+                      expands: true,
+                      maxLines: null,
+                      minLines: null,
+                      readOnly: isLeft,
+                      enableInteractiveSelection: true,
+                      keyboardType: TextInputType.multiline,
+                      style: textStyle,
+                      decoration: const InputDecoration(
+                        border: InputBorder.none,
+                        filled: false,
+                        contentPadding: EdgeInsets.all(AleraTokens.space8),
+                      ),
+                      onChanged: isLeft ? null : _handleFallbackChanged,
+                    ),
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      }
+      final controller = isLeft ? _leftController! : _controller!;
+      final undoController = isLeft ? _leftUndoController! : _undoController!;
+      return Scrollbar(
+        key: ValueKey<String>(
+          'git-diff-working-tree-$side-x-scrollbar-${widget.file.path}',
+        ),
+        controller: horizontalController,
+        thumbVisibility: true,
+        scrollbarOrientation: ScrollbarOrientation.bottom,
+        notificationPredicate: (notification) =>
+            notification.metrics.axis == Axis.horizontal,
+        child: Scrollbar(
+          key: ValueKey<String>(
+            'git-diff-working-tree-$side-y-scrollbar-${widget.file.path}',
+          ),
+          controller: verticalController,
+          thumbVisibility: true,
+          notificationPredicate: (notification) =>
+              notification.metrics.axis == Axis.vertical,
+          child: code_forge.CodeForge(
+            key: ValueKey<String>(
+              'git-diff-working-tree-$side-${widget.file.path}',
+            ),
+            controller: controller,
+            undoController: undoController,
+            verticalScrollController: verticalController,
+            horizontalScrollController: horizontalController,
+            focusNode: focusNode,
+            readOnly: isLeft,
+            autoFocus: false,
+            lineWrap: false,
+            enableFolding: false,
+            enableGuideLines: false,
+            enableGutter: true,
+            enableGutterDivider: false,
+            enableLocalSuggestions: false,
+            enableNativeSyntax: false,
+            language: widget.syntax.language,
+            languageId: widget.syntax.languageId,
+            editorTheme: widget.syntax.editorTheme,
+            textStyle: textStyle,
+            innerPadding: const EdgeInsets.all(AleraTokens.space8),
+          ),
+        ),
+      );
+    }
+
     return CallbackShortcuts(
       bindings: <ShortcutActivator, VoidCallback>{
         const SingleActivator(LogicalKeyboardKey.keyS, control: true):
@@ -878,278 +1450,24 @@ class _EditableWorkingTreeDiffState extends State<_EditableWorkingTreeDiff> {
                 crossAxisAlignment: .stretch,
                 children: <Widget>[
                   Expanded(
-                    child: LayoutBuilder(
-                      builder: (context, constraints) {
-                        final contentWidth = math.max(
-                          constraints.maxWidth,
-                          sharedContentWidth,
-                        );
-                        return DecoratedBox(
-                          decoration: const BoxDecoration(
-                            border: Border(
-                              right: BorderSide(
-                                color: AleraTokens.borderSubtle,
-                              ),
-                            ),
-                          ),
-                          child: Scrollbar(
-                            key: ValueKey<String>(
-                              'git-diff-working-tree-original-x-scrollbar-${widget.file.path}',
-                            ),
-                            controller: _leftHorizontalController,
-                            thumbVisibility: true,
-                            scrollbarOrientation: ScrollbarOrientation.bottom,
-                            notificationPredicate: (notification) =>
-                                notification.metrics.axis == Axis.horizontal,
-                            child: SingleChildScrollView(
-                              controller: _leftHorizontalController,
-                              scrollDirection: Axis.horizontal,
-                              physics:
-                                  const _NoImplicitHorizontalScrollPhysics(),
-                              child: SizedBox(
-                                width: contentWidth,
-                                height: constraints.maxHeight,
-                                child: Scrollbar(
-                                  key: ValueKey<String>(
-                                    'git-diff-working-tree-original-y-scrollbar-${widget.file.path}',
-                                  ),
-                                  controller: _leftVerticalController,
-                                  thumbVisibility: true,
-                                  notificationPredicate: (notification) =>
-                                      notification.metrics.axis ==
-                                      Axis.vertical,
-                                  child: AnimatedBuilder(
-                                    animation: _leftVerticalController,
-                                    child: TextField(
-                                      key: ValueKey<String>(
-                                        'git-diff-working-tree-original-${widget.file.path}',
-                                      ),
-                                      controller: _leftController,
-                                      scrollController: _leftVerticalController,
-                                      expands: true,
-                                      maxLines: null,
-                                      minLines: null,
-                                      readOnly: true,
-                                      enableInteractiveSelection: true,
-                                      keyboardType: TextInputType.multiline,
-                                      style: textStyle,
-                                      decoration: const InputDecoration(
-                                        border: InputBorder.none,
-                                        filled: false,
-                                        contentPadding: EdgeInsets.all(
-                                          AleraTokens.space8,
-                                        ),
-                                      ),
-                                    ),
-                                    builder: (context, child) {
-                                      final scrollOffset =
-                                          _leftVerticalController.hasClients
-                                          ? _leftVerticalController.offset
-                                          : 0.0;
-                                      final firstVisible = math.max(
-                                        0,
-                                        ((scrollOffset - AleraTokens.space8) /
-                                                    lineHeight)
-                                                .floor() -
-                                            1,
-                                      );
-                                      final lastVisible = math.min(
-                                        lineCount - 1,
-                                        ((scrollOffset +
-                                                    constraints.maxHeight -
-                                                    AleraTokens.space8) /
-                                                lineHeight)
-                                            .ceil(),
-                                      );
-                                      return Stack(
-                                        clipBehavior: Clip.hardEdge,
-                                        children: <Widget>[
-                                          Positioned.fill(child: child!),
-                                          if (lastVisible >= firstVisible)
-                                            for (
-                                              var lineIndex = firstVisible;
-                                              lineIndex <= lastVisible;
-                                              lineIndex += 1
-                                            )
-                                              if (changes.oldChangedLines
-                                                  .contains(lineIndex))
-                                                Positioned(
-                                                  key: ValueKey<String>(
-                                                    'git-diff-working-tree-original-deletion-${widget.file.path}-$lineIndex',
-                                                  ),
-                                                  left: 0,
-                                                  right: 0,
-                                                  top:
-                                                      AleraTokens.space8 +
-                                                      lineIndex * lineHeight -
-                                                      scrollOffset,
-                                                  height: lineHeight,
-                                                  child: IgnorePointer(
-                                                    child: DecoratedBox(
-                                                      decoration: BoxDecoration(
-                                                        color: AleraTokens.error
-                                                            .withValues(
-                                                              alpha: 0.08,
-                                                            ),
-                                                        border: const Border(
-                                                          left: BorderSide(
-                                                            color: AleraTokens
-                                                                .error,
-                                                            width: 3,
-                                                          ),
-                                                        ),
-                                                      ),
-                                                    ),
-                                                  ),
-                                                ),
-                                        ],
-                                      );
-                                    },
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
-                        );
-                      },
+                    child: DecoratedBox(
+                      decoration: const BoxDecoration(
+                        border: Border(
+                          right: BorderSide(color: AleraTokens.borderSubtle),
+                        ),
+                      ),
+                      child: buildPane(isLeft: true),
                     ),
                   ),
-                  Expanded(
-                    child: LayoutBuilder(
-                      builder: (context, constraints) {
-                        final contentWidth = math.max(
-                          constraints.maxWidth,
-                          sharedContentWidth,
-                        );
-                        return Scrollbar(
-                          key: ValueKey<String>(
-                            'git-diff-working-tree-editor-x-scrollbar-${widget.file.path}',
-                          ),
-                          controller: _rightHorizontalController,
-                          thumbVisibility: true,
-                          scrollbarOrientation: ScrollbarOrientation.bottom,
-                          notificationPredicate: (notification) =>
-                              notification.metrics.axis == Axis.horizontal,
-                          child: SingleChildScrollView(
-                            controller: _rightHorizontalController,
-                            scrollDirection: Axis.horizontal,
-                            physics: const _NoImplicitHorizontalScrollPhysics(),
-                            child: SizedBox(
-                              width: contentWidth,
-                              height: constraints.maxHeight,
-                              child: Scrollbar(
-                                key: ValueKey<String>(
-                                  'git-diff-working-tree-editor-y-scrollbar-${widget.file.path}',
-                                ),
-                                controller: _rightVerticalController,
-                                thumbVisibility: true,
-                                notificationPredicate: (notification) =>
-                                    notification.metrics.axis == Axis.vertical,
-                                child: AnimatedBuilder(
-                                  animation: _rightVerticalController,
-                                  child: TextField(
-                                    key: ValueKey<String>(
-                                      'git-diff-working-tree-editor-${widget.file.path}',
-                                    ),
-                                    controller: _controller,
-                                    scrollController: _rightVerticalController,
-                                    expands: true,
-                                    maxLines: null,
-                                    minLines: null,
-                                    keyboardType: TextInputType.multiline,
-                                    style: textStyle,
-                                    decoration: const InputDecoration(
-                                      border: InputBorder.none,
-                                      filled: false,
-                                      contentPadding: EdgeInsets.all(
-                                        AleraTokens.space8,
-                                      ),
-                                    ),
-                                    onChanged: (text) {
-                                      setState(() {});
-                                      widget.onChanged(text);
-                                    },
-                                  ),
-                                  builder: (context, child) {
-                                    final scrollOffset =
-                                        _rightVerticalController.hasClients
-                                        ? _rightVerticalController.offset
-                                        : 0.0;
-                                    final firstVisible = math.max(
-                                      0,
-                                      ((scrollOffset - AleraTokens.space8) /
-                                                  lineHeight)
-                                              .floor() -
-                                          1,
-                                    );
-                                    final lastVisible = math.min(
-                                      lineCount - 1,
-                                      ((scrollOffset +
-                                                  constraints.maxHeight -
-                                                  AleraTokens.space8) /
-                                              lineHeight)
-                                          .ceil(),
-                                    );
-                                    return Stack(
-                                      clipBehavior: Clip.hardEdge,
-                                      children: <Widget>[
-                                        Positioned.fill(child: child!),
-                                        if (lastVisible >= firstVisible)
-                                          for (
-                                            var lineIndex = firstVisible;
-                                            lineIndex <= lastVisible;
-                                            lineIndex += 1
-                                          )
-                                            if (changes.newChangedLines
-                                                .contains(lineIndex))
-                                              Positioned(
-                                                key: ValueKey<String>(
-                                                  'git-diff-working-tree-editor-addition-${widget.file.path}-$lineIndex',
-                                                ),
-                                                left: 0,
-                                                right: 0,
-                                                top:
-                                                    AleraTokens.space8 +
-                                                    lineIndex * lineHeight -
-                                                    scrollOffset,
-                                                height: lineHeight,
-                                                child: IgnorePointer(
-                                                  child: DecoratedBox(
-                                                    decoration: BoxDecoration(
-                                                      color: AleraTokens.success
-                                                          .withValues(
-                                                            alpha: 0.08,
-                                                          ),
-                                                      border: const Border(
-                                                        left: BorderSide(
-                                                          color: AleraTokens
-                                                              .success,
-                                                          width: 3,
-                                                        ),
-                                                      ),
-                                                    ),
-                                                  ),
-                                                ),
-                                              ),
-                                      ],
-                                    );
-                                  },
-                                ),
-                              ),
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-                  ),
+                  Expanded(child: buildPane(isLeft: false)),
                   SizedBox(
                     width: _DiffOverviewRuler.width,
                     child: _DiffOverviewRuler(
                       key: ValueKey<String>(
                         'git-diff-working-tree-overview-${widget.file.path}',
                       ),
-                      changes: changes,
-                      lineCount: lineCount,
+                      changes: _alignment.changes,
+                      lineCount: math.max(_alignment.visualLineCount, 1),
                       scrollController: _rightVerticalController,
                     ),
                   ),

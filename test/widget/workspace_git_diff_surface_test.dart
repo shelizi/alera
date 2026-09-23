@@ -906,38 +906,17 @@ void main() {
     );
     expect(editor, findsOneWidget);
     expect(original, findsOneWidget);
-    expect(tester.widget<TextField>(original).readOnly, isTrue);
+    final originalEditor = tester.widget<TextField>(original);
+    final workspaceEditor = tester.widget<TextField>(editor);
+    expect(originalEditor.readOnly, isTrue);
+    expect(workspaceEditor.readOnly, isFalse);
     expect(find.text('Workspace · Editable'), findsOneWidget);
     expect(tester.getSize(editor).height, greaterThan(400));
-    expect(
-      find.byKey(
-        const ValueKey<String>(
-          'git-diff-working-tree-original-deletion-lib/main.dart-0',
-        ),
-      ),
-      findsOneWidget,
-    );
-    final rightHighlight = find.byKey(
-      const ValueKey<String>(
-        'git-diff-working-tree-editor-addition-lib/main.dart-0',
-      ),
-    );
-    expect(rightHighlight, findsOneWidget);
-    final rightHighlightStack = tester.widget<Stack>(
-      find.ancestor(of: rightHighlight, matching: find.byType(Stack)).first,
-    );
-    expect(
-      rightHighlightStack.children.last.key,
-      const ValueKey<String>(
-        'git-diff-working-tree-editor-addition-lib/main.dart-0',
-      ),
-    );
+    expect(originalEditor.controller!.text, 'old line\n');
+    expect(workspaceEditor.controller!.text, 'new line\n');
 
-    final originalController = tester.widget<TextField>(original).controller!;
-    final originalEditable = tester.widget<EditableText>(
-      find.descendant(of: original, matching: find.byType(EditableText)),
-    );
-    originalEditable.focusNode.requestFocus();
+    final originalController = originalEditor.controller!;
+    originalEditor.focusNode!.requestFocus();
     originalController.selection = const TextSelection(
       baseOffset: 0,
       extentOffset: 8,
@@ -1020,7 +999,6 @@ void main() {
       style: editorField.style,
       withComposing: false,
     );
-
     expect(_textSpanColors(originalSpan).length, greaterThan(1));
     expect(_textSpanColors(editorSpan).length, greaterThan(1));
   });
@@ -1426,13 +1404,10 @@ void main() {
       final editor = tester.widget<TextField>(editorFinder);
       final controller = editor.controller!;
       final rightX = tester.widget<Scrollbar>(rightXFinder).controller!;
-      final editable = tester.widget<EditableText>(
-        find.descendant(of: editorFinder, matching: find.byType(EditableText)),
-      );
 
-      editable.focusNode.requestFocus();
+      editor.focusNode!.requestFocus();
       await tester.pump();
-      expect(editable.focusNode.hasFocus, isTrue);
+      expect(editor.focusNode!.hasFocus, isTrue);
       rightX.jumpTo(180);
       await tester.pump();
       expect(rightX.offset, closeTo(180, 0.5));
@@ -1448,6 +1423,30 @@ void main() {
       expect(rightX.offset, closeTo(180, 0.5));
     },
   );
+
+  test('editable side-by-side alignment inserts visual spacers only', () {
+    final insertion = workspaceEditableDiffAlignmentForTesting(
+      baseline: 'first\nlast\n',
+      current: 'first\ninserted one\ninserted two\nlast\n',
+    );
+    expect(insertion.oldSpacers, <({int afterLine, int count})>[
+      (afterLine: 0, count: 2),
+    ]);
+    expect(insertion.newSpacers, isEmpty);
+    expect(insertion.added, 2);
+    expect(insertion.removed, 0);
+
+    final deletion = workspaceEditableDiffAlignmentForTesting(
+      baseline: 'first\nremoved one\nremoved two\nlast\n',
+      current: 'first\nlast\n',
+    );
+    expect(deletion.oldSpacers, isEmpty);
+    expect(deletion.newSpacers, <({int afterLine, int count})>[
+      (afterLine: 0, count: 2),
+    ]);
+    expect(deletion.added, 0);
+    expect(deletion.removed, 2);
+  });
 
   testWidgets('staged side-by-side diff stays read only', (tester) async {
     const oldCode = 'const int oldValue = 1;\n';
