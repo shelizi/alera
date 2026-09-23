@@ -7,9 +7,144 @@ import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_source_control_scope.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_editor_surface.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 
 void main() {
+  test('editor comment syntax follows the active language', () {
+    expect(
+      workspaceEditorCommentSyntaxForPath(
+        filePath: 'lib/main.dart',
+        languageId: 'dart',
+      )?.linePrefix,
+      '//',
+    );
+    expect(
+      workspaceEditorCommentSyntaxForPath(
+        filePath: 'script.py',
+        languageId: 'python',
+      )?.linePrefix,
+      '#',
+    );
+    expect(
+      workspaceEditorCommentSyntaxForPath(
+        filePath: 'query.sql',
+        languageId: 'sql',
+      )?.linePrefix,
+      '--',
+    );
+    expect(
+      workspaceEditorCommentSyntaxForPath(
+        filePath: 'index.html',
+        languageId: 'xml',
+      )?.blockStart,
+      '<!--',
+    );
+    expect(
+      workspaceEditorCommentSyntaxForPath(
+        filePath: 'theme.css',
+        languageId: 'css',
+      )?.blockStart,
+      '/*',
+    );
+    expect(
+      workspaceEditorCommentSyntaxForPath(
+        filePath: 'Cargo.toml',
+        languageId: 'ini',
+      )?.linePrefix,
+      '#',
+      reason: 'TOML shares the INI highlighter but uses hash comments',
+    );
+    expect(
+      workspaceEditorCommentSyntaxForPath(
+        filePath: 'notes.txt',
+        languageId: 'plaintext',
+      ),
+      isNull,
+    );
+  });
+
+  test('line comment toggle preserves indentation and caret', () {
+    const source = '  final value = 1;\nnext';
+    final edit = workspaceEditorToggleCommentEdit(
+      text: source,
+      selection: const TextSelection.collapsed(offset: 8),
+      syntax: const WorkspaceEditorCommentSyntax.line('//'),
+    );
+
+    expect(edit, isNotNull);
+    expect(
+      source.replaceRange(edit!.start, edit.end, edit.replacement),
+      '  // final value = 1;\nnext',
+    );
+    expect(edit.selection, const TextSelection.collapsed(offset: 11));
+  });
+
+  test(
+    'line comment toggle removes comments when every selected line has one',
+    () {
+      const source = '  // alpha\n    // beta\ngamma';
+      final edit = workspaceEditorToggleCommentEdit(
+        text: source,
+        selection: const TextSelection(baseOffset: 2, extentOffset: 22),
+        syntax: const WorkspaceEditorCommentSyntax.line('//'),
+      );
+
+      expect(edit, isNotNull);
+      expect(
+        source.replaceRange(edit!.start, edit.end, edit.replacement),
+        '  alpha\n    beta\ngamma',
+      );
+    },
+  );
+
+  test('multi-line comment excludes a trailing unselected line boundary', () {
+    const source = 'alpha\n  beta\ngamma\n';
+    final gammaStart = source.indexOf('gamma');
+    final edit = workspaceEditorToggleCommentEdit(
+      text: source,
+      selection: TextSelection(baseOffset: 0, extentOffset: gammaStart),
+      syntax: const WorkspaceEditorCommentSyntax.line('#'),
+    );
+
+    expect(edit, isNotNull);
+    expect(
+      source.replaceRange(edit!.start, edit.end, edit.replacement),
+      '# alpha\n  # beta\ngamma\n',
+    );
+  });
+
+  test('block-only languages comment each selected line and toggle back', () {
+    const source = '.card {\n  color: red;\n}\n';
+    final commentEdit = workspaceEditorToggleCommentEdit(
+      text: source,
+      selection: const TextSelection(baseOffset: 0, extentOffset: 24),
+      syntax: const WorkspaceEditorCommentSyntax.block('/*', '*/'),
+    );
+    expect(commentEdit, isNotNull);
+    final commented = source.replaceRange(
+      commentEdit!.start,
+      commentEdit.end,
+      commentEdit.replacement,
+    );
+    expect(commented, '/* .card { */\n  /* color: red; */\n/* } */\n');
+
+    final uncommentEdit = workspaceEditorToggleCommentEdit(
+      text: commented,
+      selection: TextSelection(baseOffset: 0, extentOffset: commented.length),
+      syntax: const WorkspaceEditorCommentSyntax.block('/*', '*/'),
+    );
+    expect(uncommentEdit, isNotNull);
+    expect(
+      commented.replaceRange(
+        uncommentEdit!.start,
+        uncommentEdit.end,
+        uncommentEdit.replacement,
+      ),
+      source,
+    );
+  });
+
   test('session registration does not consume pending reveal', () {
     final registry = EditorSessionRegistry();
     const target = WorkspaceEditorRevealTarget(

@@ -7,6 +7,7 @@ import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/buttons/alera_icon_button.dart';
 import 'package:alera/src/design_system/feedback/alera_toast.dart';
 import 'package:alera/src/design_system/forms/alera_text_actions_scope.dart';
+import 'package:alera/src/design_system/forms/alera_text_field.dart';
 import 'package:alera/src/design_system/icons/alera_file_icon.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:alera/src/design_system/layout/alera_confirm_dialog.dart';
@@ -33,6 +34,7 @@ import 'package:alera/src/shared/infra/git/git_providers.dart';
 import 'package:code_forge/code_forge.dart' as code_forge;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:path/path.dart' as p;
@@ -40,6 +42,7 @@ import 'package:re_highlight/languages/all.dart';
 import 'package:re_highlight/re_highlight.dart';
 
 part 'workspace_editor_language_registry.dart';
+part 'workspace_editor_comments.dart';
 part 'workspace_editor_language_intelligence.dart';
 part 'workspace_editor_widgets.dart';
 part 'workspace_editor_focus.dart';
@@ -48,6 +51,7 @@ part 'workspace_editor_loading.dart';
 part 'workspace_editor_outline.dart';
 part 'workspace_editor_save.dart';
 part 'workspace_editor_text_actions.dart';
+part 'workspace_editor_find.dart';
 
 class const WorkspaceEditorSurface({
   super.key,
@@ -311,48 +315,81 @@ class _WorkspaceEditorSurfaceState
         children: <Widget>[
           Listener(
             onPointerDown: _captureEditorPointerDown,
-            child: code_forge.CodeForge(
-              key: ValueKey<String>(
-                workspaceEditorCodeForgeKey(
-                  tabId: widget.tab.id,
+            child: CallbackShortcuts(
+              bindings: <ShortcutActivator, VoidCallback>{
+                const SingleActivator(
+                  LogicalKeyboardKey.slash,
+                  control: true,
+                ): () => _toggleEditorComment(
                   filePath: filePath,
-                  themeName: effectiveThemeName,
+                  languageId: syntaxLanguageId,
                 ),
-              ),
-              controller: _controller,
-              undoController: _undoController,
-              findController: _findController,
-              verticalScrollController: _verticalScrollController,
-              horizontalScrollController: _horizontalScrollController,
-              focusNode: _focusNode,
-              autoFocus: widget.autofocus,
-              lineWrap: performanceProfile.lineWrap,
-              enableLocalSuggestions: false,
-              enableGuideLines: performanceProfile.guideLines,
-              enableFolding: performanceProfile.folding,
-              largeFilePerformanceMode:
-                  performanceProfile.largeFilePerformanceMode,
-              enableGutter: true,
-              enableGutterDivider: false,
-              editorTheme: editorTheme,
-              language: performanceProfile.syntaxHighlighting
-                  ? workspaceEditorSyntaxModeForPath(
-                      filePath: filePath,
-                      registry: languageRegistry,
-                      syntaxLanguageId: syntaxLanguageId,
-                    )
-                  : _plainTextLanguage,
-              languageId: syntaxLanguageId,
-              enableNativeSyntax: enableNativeSyntax,
-              tabSize: effectiveTabSize,
-              useSpaceAsTab: true,
-              scrollbarDecoration: workspaceEditorScrollbarDecoration(),
-              suggestionStyle: _editorOverlayStyle(context),
-              customContextMenuItems: _editorContextMenuItems(context),
-              textStyle: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                fontFamily: 'JetBrains Mono',
-                color: rootStyle.color ?? AleraTokens.foreground,
-                height: 1.35,
+                const SingleActivator(
+                  LogicalKeyboardKey.slash,
+                  meta: true,
+                ): () => _toggleEditorComment(
+                  filePath: filePath,
+                  languageId: syntaxLanguageId,
+                ),
+                const SingleActivator(
+                  LogicalKeyboardKey.f3,
+                ): _findController.next,
+                const SingleActivator(
+                  LogicalKeyboardKey.f3,
+                  shift: true,
+                ): _findController.previous,
+              },
+              child: code_forge.CodeForge(
+                key: ValueKey<String>(
+                  workspaceEditorCodeForgeKey(
+                    tabId: widget.tab.id,
+                    filePath: filePath,
+                    themeName: effectiveThemeName,
+                  ),
+                ),
+                controller: _controller,
+                undoController: _undoController,
+                findController: _findController,
+                verticalScrollController: _verticalScrollController,
+                horizontalScrollController: _horizontalScrollController,
+                focusNode: _focusNode,
+                autoFocus: widget.autofocus,
+                lineWrap: performanceProfile.lineWrap,
+                enableLocalSuggestions: false,
+                enableGuideLines: performanceProfile.guideLines,
+                enableFolding: performanceProfile.folding,
+                largeFilePerformanceMode:
+                    performanceProfile.largeFilePerformanceMode,
+                enableGutter: true,
+                enableGutterDivider: false,
+                editorTheme: editorTheme,
+                language: performanceProfile.syntaxHighlighting
+                    ? workspaceEditorSyntaxModeForPath(
+                        filePath: filePath,
+                        registry: languageRegistry,
+                        syntaxLanguageId: syntaxLanguageId,
+                      )
+                    : _plainTextLanguage,
+                languageId: syntaxLanguageId,
+                enableNativeSyntax: enableNativeSyntax,
+                tabSize: effectiveTabSize,
+                useSpaceAsTab: true,
+                keyboardShotcuts: workspaceEditorKeyboardShortcutsForPlatform(
+                  defaultTargetPlatform,
+                ),
+                finderBuilder: (context, findController) =>
+                    _WorkspaceEditorFindBar(
+                      controller: findController,
+                      onClose: _closeEditorFind,
+                    ),
+                scrollbarDecoration: workspaceEditorScrollbarDecoration(),
+                suggestionStyle: _editorOverlayStyle(context),
+                customContextMenuItems: _editorContextMenuItems(context),
+                textStyle: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  fontFamily: 'JetBrains Mono',
+                  color: rootStyle.color ?? AleraTokens.foreground,
+                  height: 1.35,
+                ),
               ),
             ),
           ),
