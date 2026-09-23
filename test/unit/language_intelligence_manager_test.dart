@@ -202,6 +202,56 @@ void main() {
   );
 
   test(
+    'manual restart immediately rebinds and reopens tracked documents',
+    () async {
+      final settings = _enabledSettings(rust);
+      await manager.openDocument(
+        workspaceId: 'workspace-a',
+        workspaceRoot: r'C:\repo',
+        path: r'C:\repo\src\main.rs',
+        text: 'fn main() {}',
+        settings: settings,
+        target: LanguageServerTarget.localWorkspace,
+      );
+      await manager.openDocument(
+        workspaceId: 'workspace-a',
+        workspaceRoot: r'C:\repo',
+        path: r'C:\repo\src\lib.rs',
+        text: 'pub fn helper() {}',
+        settings: settings,
+        target: LanguageServerTarget.localWorkspace,
+      );
+      await manager.replaceDocument(
+        workspaceId: 'workspace-a',
+        path: r'C:\repo\src\main.rs',
+        text: 'fn main() { helper(); }',
+      );
+
+      final restarted = await manager.restartProvider(
+        workspaceId: 'workspace-a',
+        providerId: 'rust-semantic',
+      );
+
+      expect(restarted, isTrue);
+      expect(runtime.stopCalls, 1);
+      expect(runtime.startCalls, 2);
+      expect(semanticFactory.created, hasLength(2));
+      final binding = semanticFactory.created.last;
+      expect(binding.documents.opens, hasLength(2));
+      expect(
+        binding.documents.opens
+            .firstWhere((open) => open.path.endsWith('main.rs'))
+            .text,
+        'fn main() { helper(); }',
+      );
+      expect(await manager.restartWorkspace('workspace-a'), 1);
+      expect(runtime.startCalls, 3);
+      expect(semanticFactory.created, hasLength(3));
+      expect(semanticFactory.created.last.documents.opens, hasLength(2));
+    },
+  );
+
+  test(
     'close detaches the document and removes an unused semantic binding',
     () async {
       await manager.openDocument(

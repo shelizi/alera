@@ -77,14 +77,16 @@ final class CodeForgeLanguageServerSession
   const CodeForgeLanguageServerSession._(
     this.transport,
     this.serverRequestSubscription,
+    this.progressController,
   );
 
   final CodeForgeLanguageServerTransport transport;
   final StreamSubscription<Map<String, dynamic>> serverRequestSubscription;
+  final StreamController<LanguageServerWorkProgress> progressController;
 }
 
 final class CodeForgeLanguageServerRuntime
-    implements LanguageServerRuntimePort {
+    implements LanguageServerRuntimePort, LanguageServerProgressRuntimePort {
   factory CodeForgeLanguageServerRuntime({
     CodeForgeEnvironmentReader? environmentReader,
     bool? isWindows,
@@ -224,21 +226,27 @@ final class CodeForgeLanguageServerRuntime
         capabilities: request.provider.capabilities,
       ),
     );
-    final serverRequestSubscription = _listenForServerRequests(
+    final progressController = StreamController<LanguageServerWorkProgress>(
+      sync: true,
+    );
+    final serverRequestSubscription = _listenForServerMessages(
       transport,
       workspaceRoot: request.workspaceRoot,
       isWindows: _isWindows,
+      progressSink: progressController.sink,
     );
     try {
       await transport.initialize();
     } catch (_) {
       await serverRequestSubscription.cancel();
+      unawaited(progressController.close());
       _disposeQuietly(transport);
       rethrow;
     }
     return CodeForgeLanguageServerSession._(
       transport,
       serverRequestSubscription,
+      progressController,
     );
   }
 
@@ -246,6 +254,14 @@ final class CodeForgeLanguageServerRuntime
   Stream<LanguageServerExit> observeExit(LanguageServerRuntimeSession session) {
     final codeForgeSession = _requireSession(session);
     return _observeTransportExit(codeForgeSession.transport);
+  }
+
+  @override
+  Stream<LanguageServerWorkProgress> observeProgress(
+    LanguageServerRuntimeSession session,
+  ) {
+    final codeForgeSession = _requireSession(session);
+    return codeForgeSession.progressController.stream;
   }
 
   @override
@@ -263,6 +279,7 @@ final class CodeForgeLanguageServerRuntime
       // Best-effort graceful exit; dispose below is the final process cleanup.
     }
     await codeForgeSession.serverRequestSubscription.cancel();
+    unawaited(codeForgeSession.progressController.close());
     _disposeQuietly(transport);
   }
 
@@ -315,13 +332,21 @@ final class CodeForgeLanguageServerRuntime
     }
   }
 
-  static StreamSubscription<Map<String, dynamic>> _listenForServerRequests(
+  static StreamSubscription<Map<String, dynamic>> _listenForServerMessages(
     CodeForgeLanguageServerTransport transport, {
     required String workspaceRoot,
     required bool isWindows,
+    required StreamSink<LanguageServerWorkProgress> progressSink,
   }) => transport.responses.listen((message) {
     final id = message['id'];
     final method = message['method'];
+    if (method == r'$/progress') {
+      final progress = _decodeWorkProgress(message);
+      if (progress != null) {
+        progressSink.add(progress);
+      }
+      return;
+    }
     if (id == null || method is! String) {
       return;
     }
@@ -336,6 +361,29 @@ final class CodeForgeLanguageServerRuntime
       ),
     );
   });
+
+  static LanguageServerWorkProgress? _decodeWorkProgress(
+    Map<String, dynamic> message,
+  ) {
+    final params = message['params'];
+    if (params is! Map) return null;
+    final token = params['token'];
+    final value = params['value'];
+    if (token == null || value is! Map) return null;
+    final kind = value['kind']?.toString();
+    if (kind != 'begin' && kind != 'report' && kind != 'end') return null;
+    final rawPercentage = value['percentage'];
+    final percentage = rawPercentage is num
+        ? rawPercentage.toDouble().clamp(0.0, 100.0)
+        : null;
+    return LanguageServerWorkProgress(
+      token: token.toString(),
+      title: value['title']?.toString(),
+      message: value['message']?.toString(),
+      percentage: percentage,
+      done: kind == 'end',
+    );
+  }
 
   static Future<void> _respondToServerRequest(
     CodeForgeLanguageServerTransport transport, {

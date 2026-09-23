@@ -186,6 +186,49 @@ final class LanguageIntelligenceManager {
     await _detachTrackedDocument(document);
   }
 
+  Future<bool> restartProvider({
+    required String workspaceId,
+    required String providerId,
+  }) async {
+    final restarted = await _sessions.restartProvider(
+      workspaceId: workspaceId,
+      providerId: providerId,
+    );
+    if (!restarted) return false;
+
+    _bindings.remove(_BindingKey(workspaceId, providerId));
+    _TrackedDocument? document;
+    for (final candidate in _documents.values) {
+      if (candidate.key.workspaceId == workspaceId &&
+          candidate.providerId == providerId) {
+        document = candidate;
+        break;
+      }
+    }
+    if (document != null) {
+      await _ensureBinding(document);
+    }
+    return true;
+  }
+
+  Future<int> restartWorkspace(String workspaceId) async {
+    final providerIds = _documents.values
+        .where((document) => document.key.workspaceId == workspaceId)
+        .map((document) => document.providerId)
+        .toSet()
+        .toList(growable: false);
+    var restarted = 0;
+    for (final providerId in providerIds) {
+      if (await restartProvider(
+        workspaceId: workspaceId,
+        providerId: providerId,
+      )) {
+        restarted += 1;
+      }
+    }
+    return restarted;
+  }
+
   Future<List<SourceLocation>> definition({
     required String workspaceId,
     required String path,

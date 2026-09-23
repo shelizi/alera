@@ -176,6 +176,49 @@ final class LanguageServerSessionManager {
     _report(record);
   }
 
+  Future<bool> restartProvider({
+    required String workspaceId,
+    required String providerId,
+  }) async {
+    final record =
+        _sessions[_LanguageServerSessionKey(workspaceId, providerId)];
+    if (record == null ||
+        record.activation == null ||
+        record.target == null ||
+        record.documents.isEmpty) {
+      return false;
+    }
+    record
+      ..idleGeneration += 1
+      ..restartGeneration += 1
+      ..restartAttempts = 0;
+    await _stopRecord(record, finalState: LanguageServerSessionState.available);
+    await _ensureReady(record);
+    return true;
+  }
+
+  Future<int> restartWorkspace(String workspaceId) async {
+    final providerIds = _sessions.values
+        .where(
+          (record) =>
+              record.key.workspaceId == workspaceId &&
+              record.activation != null &&
+              record.target != null,
+        )
+        .map((record) => record.key.providerId)
+        .toList(growable: false);
+    var restarted = 0;
+    for (final providerId in providerIds) {
+      if (await restartProvider(
+        workspaceId: workspaceId,
+        providerId: providerId,
+      )) {
+        restarted += 1;
+      }
+    }
+    return restarted;
+  }
+
   LanguageServerSessionSnapshot snapshotFor(
     String workspaceId,
     String providerId,
@@ -295,6 +338,7 @@ final class LanguageServerSessionManager {
         ..state = LanguageServerSessionState.ready
         ..lastError = null;
       _report(record);
+      await _listenForProgress(record, session);
       await record.exitSubscription?.cancel();
       record.exitSubscription = _runtime
           .observeExit(session)
@@ -340,6 +384,12 @@ final class LanguageServerSessionManager {
     record.session = null;
     await record.exitSubscription?.cancel();
     record.exitSubscription = null;
+    await record.progressSubscription?.cancel();
+    record.progressSubscription = null;
+    _activityReporter?.clearServerProgress(
+      workspaceId: record.key.workspaceId,
+      providerId: record.key.providerId,
+    );
     if (session != null) {
       record.state = LanguageServerSessionState.stopping;
       try {
@@ -370,7 +420,51 @@ final class LanguageServerSessionManager {
     _report(record);
     await record.exitSubscription?.cancel();
     record.exitSubscription = null;
+    await record.progressSubscription?.cancel();
+    record.progressSubscription = null;
+    _activityReporter?.clearServerProgress(
+      workspaceId: record.key.workspaceId,
+      providerId: record.key.providerId,
+    );
     _scheduleRestartIfNeeded(record);
+  }
+
+  Future<void> _listenForProgress(
+    _LanguageServerSessionRecord record,
+    LanguageServerRuntimeSession session,
+  ) async {
+    await record.progressSubscription?.cancel();
+    record.progressSubscription = null;
+    _activityReporter?.clearServerProgress(
+      workspaceId: record.key.workspaceId,
+      providerId: record.key.providerId,
+    );
+    final runtime = _runtime;
+    if (runtime is! LanguageServerProgressRuntimePort) return;
+    final progressRuntime = runtime as LanguageServerProgressRuntimePort;
+    record.progressSubscription = progressRuntime
+        .observeProgress(session)
+        .listen((event) {
+          if (!identical(record.session, session)) return;
+          if (event.done) {
+            _activityReporter?.removeServerProgress(
+              workspaceId: record.key.workspaceId,
+              providerId: record.key.providerId,
+              token: event.token,
+            );
+            return;
+          }
+          _activityReporter?.reportServerProgress(
+            LanguageServerProgressSnapshot(
+              workspaceId: record.key.workspaceId,
+              providerId: record.key.providerId,
+              token: event.token,
+              title: event.title,
+              message: event.message,
+              percentage: event.percentage,
+            ),
+          );
+        });
   }
 
   void _scheduleRestartIfNeeded(_LanguageServerSessionRecord record) {
@@ -449,6 +543,7 @@ final class _LanguageServerSessionRecord {
   Map<String, String> environment = const <String, String>{};
   LanguageServerRuntimeSession? session;
   StreamSubscription<LanguageServerExit>? exitSubscription;
+  StreamSubscription<LanguageServerWorkProgress>? progressSubscription;
   Future<void>? startFuture;
   int generation = 0;
   int idleGeneration = 0;

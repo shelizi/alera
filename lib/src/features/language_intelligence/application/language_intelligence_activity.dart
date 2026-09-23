@@ -77,6 +77,24 @@ final class SemanticServerActivitySnapshot {
   final String? lastError;
 }
 
+final class LanguageServerProgressSnapshot {
+  const LanguageServerProgressSnapshot({
+    required this.workspaceId,
+    required this.providerId,
+    required this.token,
+    this.title,
+    this.message,
+    this.percentage,
+  });
+
+  final String workspaceId;
+  final String providerId;
+  final String token;
+  final String? title;
+  final String? message;
+  final double? percentage;
+}
+
 final class StructuralParserActivitySnapshot {
   const StructuralParserActivitySnapshot({
     required this.language,
@@ -108,16 +126,19 @@ final class LanguageIntelligenceActivitySnapshot {
   const LanguageIntelligenceActivitySnapshot._({
     required this.acquisitions,
     required this.serverSessions,
+    required this.serverProgress,
     required this.parserDocuments,
   });
 
   const LanguageIntelligenceActivitySnapshot.empty()
     : acquisitions = const <String, ManagedLanguageServerAcquisitionSnapshot>{},
       serverSessions = const <String, LanguageServerSessionSnapshot>{},
+      serverProgress = const <String, LanguageServerProgressSnapshot>{},
       parserDocuments = const <String, StructuralParserDocumentSnapshot>{};
 
   final Map<String, ManagedLanguageServerAcquisitionSnapshot> acquisitions;
   final Map<String, LanguageServerSessionSnapshot> serverSessions;
+  final Map<String, LanguageServerProgressSnapshot> serverProgress;
   final Map<String, StructuralParserDocumentSnapshot> parserDocuments;
 
   ManagedLanguageServerAcquisitionSnapshot? acquisitionFor(String providerId) =>
@@ -152,6 +173,12 @@ final class LanguageIntelligenceActivitySnapshot {
       lastError: _firstNonEmpty(sessions.map((session) => session.lastError)),
     );
   }
+
+  List<LanguageServerProgressSnapshot> progressForWorkspace(
+    String workspaceId,
+  ) => serverProgress.values
+      .where((progress) => progress.workspaceId == workspaceId)
+      .toList(growable: false);
 
   StructuralParserActivitySnapshot? parserFor(LanguageId language) {
     final documents = parserDocuments.values
@@ -237,6 +264,19 @@ abstract interface class LanguageIntelligenceActivityReporter {
 
   void reportServerSession(LanguageServerSessionSnapshot snapshot);
 
+  void reportServerProgress(LanguageServerProgressSnapshot snapshot);
+
+  void removeServerProgress({
+    required String workspaceId,
+    required String providerId,
+    required String token,
+  });
+
+  void clearServerProgress({
+    required String workspaceId,
+    required String providerId,
+  });
+
   void reportStructuralParserDocument(
     StructuralParserDocumentSnapshot snapshot,
   );
@@ -259,6 +299,8 @@ final class LanguageIntelligenceActivityStore
       <String, ManagedLanguageServerAcquisitionSnapshot>{};
   final Map<String, LanguageServerSessionSnapshot> _serverSessions =
       <String, LanguageServerSessionSnapshot>{};
+  final Map<String, LanguageServerProgressSnapshot> _serverProgress =
+      <String, LanguageServerProgressSnapshot>{};
   final Map<String, StructuralParserDocumentSnapshot> _parserDocuments =
       <String, StructuralParserDocumentSnapshot>{};
   bool _disposed = false;
@@ -273,6 +315,10 @@ final class LanguageIntelligenceActivityStore
         serverSessions: Map<String, LanguageServerSessionSnapshot>.unmodifiable(
           _serverSessions,
         ),
+        serverProgress:
+            Map<String, LanguageServerProgressSnapshot>.unmodifiable(
+              _serverProgress,
+            ),
         parserDocuments:
             Map<String, StructuralParserDocumentSnapshot>.unmodifiable(
               _parserDocuments,
@@ -294,6 +340,55 @@ final class LanguageIntelligenceActivityStore
   void reportServerSession(LanguageServerSessionSnapshot snapshot) {
     _serverSessions[_serverKey(snapshot.workspaceId, snapshot.providerId)] =
         snapshot;
+    _publish();
+  }
+
+  @override
+  void reportServerProgress(LanguageServerProgressSnapshot snapshot) {
+    final key = _serverProgressKey(
+      snapshot.workspaceId,
+      snapshot.providerId,
+      snapshot.token,
+    );
+    final previous = _serverProgress[key];
+    _serverProgress[key] = LanguageServerProgressSnapshot(
+      workspaceId: snapshot.workspaceId,
+      providerId: snapshot.providerId,
+      token: snapshot.token,
+      title: snapshot.title ?? previous?.title,
+      message: snapshot.message ?? previous?.message,
+      percentage: snapshot.percentage ?? previous?.percentage,
+    );
+    _publish();
+  }
+
+  @override
+  void removeServerProgress({
+    required String workspaceId,
+    required String providerId,
+    required String token,
+  }) {
+    if (_serverProgress.remove(
+          _serverProgressKey(workspaceId, providerId, token),
+        ) !=
+        null) {
+      _publish();
+    }
+  }
+
+  @override
+  void clearServerProgress({
+    required String workspaceId,
+    required String providerId,
+  }) {
+    final prefix = '$workspaceId\u0000$providerId\u0000';
+    final keys = _serverProgress.keys
+        .where((key) => key.startsWith(prefix))
+        .toList(growable: false);
+    if (keys.isEmpty) return;
+    for (final key in keys) {
+      _serverProgress.remove(key);
+    }
     _publish();
   }
 
@@ -329,6 +424,12 @@ final class LanguageIntelligenceActivityStore
 
   static String _serverKey(String workspaceId, String providerId) =>
       '$workspaceId\u0000$providerId';
+
+  static String _serverProgressKey(
+    String workspaceId,
+    String providerId,
+    String token,
+  ) => '$workspaceId\u0000$providerId\u0000$token';
 
   static String _parserKey(LanguageId language, String documentId) =>
       '${language.value}\u0000$documentId';

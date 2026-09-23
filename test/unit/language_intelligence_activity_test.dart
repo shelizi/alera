@@ -121,4 +121,56 @@ void main() {
     );
     expect(emitted[2].parserFor(python), isNull);
   });
+
+  test('merges and clears workspace language-server progress', () {
+    final store = LanguageIntelligenceActivityStore();
+    addTearDown(store.dispose);
+
+    store.reportServerProgress(
+      const LanguageServerProgressSnapshot(
+        workspaceId: 'workspace-a',
+        providerId: 'rust.rust-analyzer',
+        token: 'index',
+        title: 'Indexing',
+        percentage: 10,
+      ),
+    );
+    store.reportServerProgress(
+      const LanguageServerProgressSnapshot(
+        workspaceId: 'workspace-a',
+        providerId: 'rust.rust-analyzer',
+        token: 'index',
+        message: 'Scanning crates',
+        percentage: 55,
+      ),
+    );
+    store.reportServerProgress(
+      const LanguageServerProgressSnapshot(
+        workspaceId: 'workspace-b',
+        providerId: 'go.gopls',
+        token: 'load',
+        title: 'Loading workspace',
+      ),
+    );
+
+    final workspaceA = store.snapshot.progressForWorkspace('workspace-a');
+    expect(workspaceA, hasLength(1));
+    expect(workspaceA.single.title, 'Indexing');
+    expect(workspaceA.single.message, 'Scanning crates');
+    expect(workspaceA.single.percentage, 55);
+
+    store.removeServerProgress(
+      workspaceId: 'workspace-a',
+      providerId: 'rust.rust-analyzer',
+      token: 'index',
+    );
+    expect(store.snapshot.progressForWorkspace('workspace-a'), isEmpty);
+    expect(store.snapshot.progressForWorkspace('workspace-b'), hasLength(1));
+
+    store.clearServerProgress(
+      workspaceId: 'workspace-b',
+      providerId: 'go.gopls',
+    );
+    expect(store.snapshot.progressForWorkspace('workspace-b'), isEmpty);
+  });
 }

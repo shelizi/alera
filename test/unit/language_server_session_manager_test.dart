@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:alera/src/features/language_intelligence/application/language_intelligence_activity.dart';
 import 'package:alera/src/features/language_intelligence/application/language_provider_registry.dart';
 import 'package:alera/src/features/language_intelligence/application/language_server_runtime.dart';
 import 'package:alera/src/features/language_intelligence/application/language_server_session_manager.dart';
@@ -318,6 +319,63 @@ void main() {
       LanguageServerSessionState.failed,
     );
   });
+
+  test(
+    'reports LSP progress and manual restart starts a fresh session',
+    () async {
+      final activity = LanguageIntelligenceActivityStore();
+      addTearDown(activity.dispose);
+      final manager = LanguageServerSessionManager(
+        registry: registry,
+        runtime: runtime,
+        activityReporter: activity,
+      );
+
+      await manager.attachDocument(
+        workspaceId: 'workspace-a',
+        workspaceRoot: r'C:\repo',
+        language: rust,
+        documentId: 'main.rs',
+        settings: _enabledSettings(rust),
+        target: LanguageServerTarget.localWorkspace,
+      );
+
+      runtime.emitProgressLatest(
+        const LanguageServerWorkProgress(
+          token: 'index',
+          title: 'Indexing',
+          message: 'Scanning crates',
+          percentage: 40,
+        ),
+      );
+      await _flushAsync();
+      final progress = activity.snapshot.progressForWorkspace('workspace-a');
+      expect(progress, hasLength(1));
+      expect(progress.single.providerId, 'rust-semantic');
+      expect(progress.single.title, 'Indexing');
+      expect(progress.single.percentage, 40);
+
+      runtime.emitProgressLatest(
+        const LanguageServerWorkProgress(token: 'index', done: true),
+      );
+      await _flushAsync();
+      expect(activity.snapshot.progressForWorkspace('workspace-a'), isEmpty);
+
+      expect(
+        await manager.restartProvider(
+          workspaceId: 'workspace-a',
+          providerId: 'rust-semantic',
+        ),
+        isTrue,
+      );
+      expect(runtime.stopCalls, 1);
+      expect(runtime.startCalls, 2);
+      expect(
+        manager.snapshotFor('workspace-a', 'rust-semantic').state,
+        LanguageServerSessionState.ready,
+      );
+    },
+  );
 }
 
 LanguageExtensionRegistry _registry(LanguageId rust) {
@@ -376,7 +434,8 @@ final class _FakeRuntimeSession implements LanguageServerRuntimeSession {
   final String id;
 }
 
-final class _FakeLanguageServerRuntime implements LanguageServerRuntimePort {
+final class _FakeLanguageServerRuntime
+    implements LanguageServerRuntimePort, LanguageServerProgressRuntimePort {
   LanguageServerExecutableResolution resolution =
       const LanguageServerExecutableResolved(r'C:\tools\server.exe');
   Completer<LanguageServerRuntimeSession>? startCompleter;
@@ -391,6 +450,15 @@ final class _FakeLanguageServerRuntime implements LanguageServerRuntimePort {
   final Map<LanguageServerRuntimeSession, StreamController<LanguageServerExit>>
   exits =
       <LanguageServerRuntimeSession, StreamController<LanguageServerExit>>{};
+  final Map<
+    LanguageServerRuntimeSession,
+    StreamController<LanguageServerWorkProgress>
+  >
+  progress =
+      <
+        LanguageServerRuntimeSession,
+        StreamController<LanguageServerWorkProgress>
+      >{};
 
   @override
   Future<LanguageServerExecutableResolution> resolveExecutable({
@@ -420,6 +488,9 @@ final class _FakeLanguageServerRuntime implements LanguageServerRuntimePort {
       sessions.add(session);
     }
     exits[session] = StreamController<LanguageServerExit>.broadcast();
+    progress[session] = StreamController<LanguageServerWorkProgress>.broadcast(
+      sync: true,
+    );
     return session;
   }
 
@@ -429,15 +500,25 @@ final class _FakeLanguageServerRuntime implements LanguageServerRuntimePort {
   ) => exits[session]!.stream;
 
   @override
+  Stream<LanguageServerWorkProgress> observeProgress(
+    LanguageServerRuntimeSession session,
+  ) => progress[session]!.stream;
+
+  @override
   Future<void> stop(LanguageServerRuntimeSession session) async {
     stopCalls += 1;
     stoppedSessions.add(session);
     await exits[session]?.close();
+    await progress[session]?.close();
   }
 
   void crashLatest({required int exitCode}) {
     final session = sessions.last;
     exits[session]!.add(LanguageServerExit(exitCode: exitCode));
+  }
+
+  void emitProgressLatest(LanguageServerWorkProgress event) {
+    progress[sessions.last]!.add(event);
   }
 }
 

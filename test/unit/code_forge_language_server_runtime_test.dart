@@ -343,6 +343,104 @@ void main() {
     await runtime.stop(session);
   });
 
+  test('LSP work-done progress notifications are exposed in order', () async {
+    final transport = _FakeTransport();
+    final runtime = CodeForgeLanguageServerRuntime(
+      transportFactory: (_) async => transport,
+    );
+    final session = await runtime.start(
+      LanguageServerRuntimeStartRequest(
+        provider: provider,
+        executable: 'rust-analyzer',
+        workspaceRoot: r'C:\repo',
+        target: LanguageServerTarget.localWorkspace,
+      ),
+    );
+    final progressFuture = runtime.observeProgress(session).take(3).toList();
+
+    transport.emit(<String, dynamic>{
+      'jsonrpc': '2.0',
+      'method': r'$/progress',
+      'params': <String, dynamic>{
+        'token': 'index',
+        'value': <String, dynamic>{
+          'kind': 'begin',
+          'title': 'Indexing',
+          'percentage': 10,
+        },
+      },
+    });
+    transport.emit(<String, dynamic>{
+      'jsonrpc': '2.0',
+      'method': r'$/progress',
+      'params': <String, dynamic>{
+        'token': 'index',
+        'value': <String, dynamic>{
+          'kind': 'report',
+          'message': 'Scanning crates',
+          'percentage': 55,
+        },
+      },
+    });
+    transport.emit(<String, dynamic>{
+      'jsonrpc': '2.0',
+      'method': r'$/progress',
+      'params': <String, dynamic>{
+        'token': 'index',
+        'value': <String, dynamic>{'kind': 'end', 'message': 'Done'},
+      },
+    });
+
+    final progress = await progressFuture;
+    expect(progress, hasLength(3));
+    expect(progress[0].token, 'index');
+    expect(progress[0].title, 'Indexing');
+    expect(progress[0].percentage, 10);
+    expect(progress[0].done, isFalse);
+    expect(progress[1].message, 'Scanning crates');
+    expect(progress[1].percentage, 55);
+    expect(progress[2].done, isTrue);
+
+    await runtime.stop(session);
+  });
+
+  test(
+    'progress emitted during initialize is buffered until observed',
+    () async {
+      final transport = _FakeTransport(
+        initializationNotification: <String, dynamic>{
+          'jsonrpc': '2.0',
+          'method': r'$/progress',
+          'params': <String, dynamic>{
+            'token': 'startup-index',
+            'value': <String, dynamic>{
+              'kind': 'begin',
+              'title': 'Loading workspace',
+              'percentage': 5,
+            },
+          },
+        },
+      );
+      final runtime = CodeForgeLanguageServerRuntime(
+        transportFactory: (_) async => transport,
+      );
+      final session = await runtime.start(
+        LanguageServerRuntimeStartRequest(
+          provider: provider,
+          executable: 'rust-analyzer',
+          workspaceRoot: r'C:\repo',
+          target: LanguageServerTarget.localWorkspace,
+        ),
+      );
+
+      final progress = await runtime.observeProgress(session).first;
+      expect(progress.token, 'startup-index');
+      expect(progress.title, 'Loading workspace');
+      expect(progress.percentage, 5);
+      await runtime.stop(session);
+    },
+  );
+
   test(
     'initialization failure disposes transport and does not return a session',
     () async {
@@ -416,10 +514,15 @@ Future<CodeForgeLanguageServerTransport> _unexpectedTransportFactory(
 ) => throw StateError('transport must not be started');
 
 final class _FakeTransport implements CodeForgeLanguageServerTransport {
-  _FakeTransport({this.initializeError, this.initializationRequest});
+  _FakeTransport({
+    this.initializeError,
+    this.initializationRequest,
+    this.initializationNotification,
+  });
 
   final Object? initializeError;
   final Map<String, dynamic>? initializationRequest;
+  final Map<String, dynamic>? initializationNotification;
   final Completer<int> exitCode = Completer<int>();
   final StreamController<Map<String, dynamic>> _responses =
       StreamController<Map<String, dynamic>>.broadcast();
@@ -439,6 +542,10 @@ final class _FakeTransport implements CodeForgeLanguageServerTransport {
     initializeCalls += 1;
     final error = initializeError;
     if (error != null) throw error;
+    final notification = initializationNotification;
+    if (notification != null) {
+      _responses.add(notification);
+    }
     final request = initializationRequest;
     if (request != null) {
       _initializationReply = Completer<void>();

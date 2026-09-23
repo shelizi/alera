@@ -64,10 +64,60 @@ extension _WorkspaceEditorLanguageIntelligence on _WorkspaceEditorSurfaceState {
     return provider?.capabilities.contains(capability) ?? false;
   }
 
+  void _showLanguageNavigationUnavailable(LanguageCapability capability) {
+    final filePath = widget.tab.filePath;
+    if (filePath == null) return;
+    if (_languageServerTarget(widget.workspace) !=
+        LanguageServerTarget.localWorkspace) {
+      _showToast('Language servers are not available for remote workspaces.');
+      return;
+    }
+    final registry = ref.read(languageExtensionRegistryProvider);
+    final language = registry.languageForPath(filePath);
+    if (language == null) {
+      _showToast('No language intelligence is registered for this file.');
+      return;
+    }
+    final activation = ref
+        .read(settingsControllerProvider)
+        .editor
+        .languageIntelligence
+        .forLanguage(language.id);
+    if (!activation.enabled) {
+      _showToast(
+        '${language.displayName} semantic navigation is disabled. '
+        'Enable it in Settings > Language Intelligence.',
+      );
+      return;
+    }
+    final provider = registry.semanticProviderFor(
+      language.id,
+      preferredProviderId: activation.semanticProviderId,
+    );
+    if (provider == null) {
+      _showToast(
+        'No semantic language server is configured for this language.',
+      );
+      return;
+    }
+    if (!provider.capabilities.contains(capability)) {
+      _showToast(
+        capability == LanguageCapability.definition
+            ? 'The selected language server does not support Go to Definition.'
+            : 'The selected language server does not support Find References.',
+      );
+      return;
+    }
+    _showToast('Language server is not ready');
+  }
+
   Future<void> _goToDefinition() async {
     final filePath = widget.tab.filePath;
-    if (filePath == null ||
-        !_canOfferLanguageNavigation(LanguageCapability.definition)) {
+    if (filePath == null) {
+      return;
+    }
+    if (!_canOfferLanguageNavigation(LanguageCapability.definition)) {
+      _showLanguageNavigationUnavailable(LanguageCapability.definition);
       return;
     }
     await _flushLanguageIntelligenceDocumentSync();
@@ -149,8 +199,11 @@ extension _WorkspaceEditorLanguageIntelligence on _WorkspaceEditorSurfaceState {
 
   Future<void> _findReferences() async {
     final filePath = widget.tab.filePath;
-    if (filePath == null ||
-        !_canOfferLanguageNavigation(LanguageCapability.references)) {
+    if (filePath == null) {
+      return;
+    }
+    if (!_canOfferLanguageNavigation(LanguageCapability.references)) {
+      _showLanguageNavigationUnavailable(LanguageCapability.references);
       return;
     }
     await _flushLanguageIntelligenceDocumentSync();

@@ -30,6 +30,28 @@ final class LanguageServerExit {
   final Object? error;
 }
 
+final class LanguageServerWorkProgress {
+  const LanguageServerWorkProgress({
+    required this.token,
+    this.title,
+    this.message,
+    this.percentage,
+    this.done = false,
+  });
+
+  final String token;
+  final String? title;
+  final String? message;
+  final double? percentage;
+  final bool done;
+}
+
+abstract interface class LanguageServerProgressRuntimePort {
+  Stream<LanguageServerWorkProgress> observeProgress(
+    LanguageServerRuntimeSession session,
+  );
+}
+
 final class LanguageServerRuntimeStartRequest {
   LanguageServerRuntimeStartRequest({
     required this.provider,
