@@ -77,6 +77,24 @@ void main() {
     expect(normalizeWorkspaceEditorTabSize(12), 8);
   });
 
+  test('uses the platform primary modifier for editor find', () {
+    final windows = workspaceEditorKeyboardShortcutsForPlatform(
+      TargetPlatform.windows,
+    ).showFindBar;
+    final macos = workspaceEditorKeyboardShortcutsForPlatform(
+      TargetPlatform.macOS,
+    ).showFindBar;
+
+    expect(windows, isA<SingleActivator>());
+    expect(macos, isA<SingleActivator>());
+    final windowsActivator = windows as SingleActivator;
+    final macosActivator = macos as SingleActivator;
+    expect(windowsActivator.control, isTrue);
+    expect(windowsActivator.meta, isFalse);
+    expect(macosActivator.control, isFalse);
+    expect(macosActivator.meta, isTrue);
+  });
+
   testWidgets('suppresses stale focus callbacks during editor teardown', (
     tester,
   ) async {

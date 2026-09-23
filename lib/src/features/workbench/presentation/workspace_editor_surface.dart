@@ -331,64 +331,61 @@ class _WorkspaceEditorSurfaceState
                   filePath: filePath,
                   languageId: syntaxLanguageId,
                 ),
-                const SingleActivator(
-                  LogicalKeyboardKey.f3,
-                ): _findController.next,
-                const SingleActivator(
-                  LogicalKeyboardKey.f3,
-                  shift: true,
-                ): _findController.previous,
               },
-              child: code_forge.CodeForge(
-                key: ValueKey<String>(
-                  workspaceEditorCodeForgeKey(
-                    tabId: widget.tab.id,
-                    filePath: filePath,
-                    themeName: effectiveThemeName,
-                  ),
-                ),
-                controller: _controller,
-                undoController: _undoController,
-                findController: _findController,
-                verticalScrollController: _verticalScrollController,
-                horizontalScrollController: _horizontalScrollController,
-                focusNode: _focusNode,
-                autoFocus: widget.autofocus,
-                lineWrap: performanceProfile.lineWrap,
-                enableLocalSuggestions: false,
-                enableGuideLines: performanceProfile.guideLines,
-                enableFolding: performanceProfile.folding,
-                largeFilePerformanceMode:
-                    performanceProfile.largeFilePerformanceMode,
-                enableGutter: true,
-                enableGutterDivider: false,
-                editorTheme: editorTheme,
-                language: performanceProfile.syntaxHighlighting
-                    ? workspaceEditorSyntaxModeForPath(
-                        filePath: filePath,
-                        registry: languageRegistry,
-                        syntaxLanguageId: syntaxLanguageId,
-                      )
-                    : _plainTextLanguage,
-                languageId: syntaxLanguageId,
-                enableNativeSyntax: enableNativeSyntax,
-                tabSize: effectiveTabSize,
-                useSpaceAsTab: true,
-                keyboardShotcuts: workspaceEditorKeyboardShortcutsForPlatform(
-                  defaultTargetPlatform,
-                ),
-                finderBuilder: (context, findController) =>
-                    _WorkspaceEditorFindBar(
-                      controller: findController,
-                      onClose: _closeEditorFind,
+              child: Focus(
+                canRequestFocus: false,
+                onKeyEvent: _handleEditorFindNavigationKey,
+                child: code_forge.CodeForge(
+                  key: ValueKey<String>(
+                    workspaceEditorCodeForgeKey(
+                      tabId: widget.tab.id,
+                      filePath: filePath,
+                      themeName: effectiveThemeName,
                     ),
-                scrollbarDecoration: workspaceEditorScrollbarDecoration(),
-                suggestionStyle: _editorOverlayStyle(context),
-                customContextMenuItems: _editorContextMenuItems(context),
-                textStyle: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  fontFamily: 'JetBrains Mono',
-                  color: rootStyle.color ?? AleraTokens.foreground,
-                  height: 1.35,
+                  ),
+                  controller: _controller,
+                  undoController: _undoController,
+                  findController: _findController,
+                  verticalScrollController: _verticalScrollController,
+                  horizontalScrollController: _horizontalScrollController,
+                  focusNode: _focusNode,
+                  autoFocus: widget.autofocus,
+                  lineWrap: performanceProfile.lineWrap,
+                  enableLocalSuggestions: false,
+                  enableGuideLines: performanceProfile.guideLines,
+                  enableFolding: performanceProfile.folding,
+                  largeFilePerformanceMode:
+                      performanceProfile.largeFilePerformanceMode,
+                  enableGutter: true,
+                  enableGutterDivider: false,
+                  editorTheme: editorTheme,
+                  language: performanceProfile.syntaxHighlighting
+                      ? workspaceEditorSyntaxModeForPath(
+                          filePath: filePath,
+                          registry: languageRegistry,
+                          syntaxLanguageId: syntaxLanguageId,
+                        )
+                      : _plainTextLanguage,
+                  languageId: syntaxLanguageId,
+                  enableNativeSyntax: enableNativeSyntax,
+                  tabSize: effectiveTabSize,
+                  useSpaceAsTab: true,
+                  keyboardShotcuts: workspaceEditorKeyboardShortcutsForPlatform(
+                    Theme.of(context).platform,
+                  ),
+                  finderBuilder: (context, findController) =>
+                      _WorkspaceEditorFindBar(
+                        controller: findController,
+                        onClose: _closeEditorFind,
+                      ),
+                  scrollbarDecoration: workspaceEditorScrollbarDecoration(),
+                  suggestionStyle: _editorOverlayStyle(context),
+                  customContextMenuItems: _editorContextMenuItems(context),
+                  textStyle: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    fontFamily: 'JetBrains Mono',
+                    color: rootStyle.color ?? AleraTokens.foreground,
+                    height: 1.35,
+                  ),
                 ),
               ),
             ),
