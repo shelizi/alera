@@ -96,6 +96,9 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
   DateTime? _lastOpenedFileAt;
   ExternalEditorKind? _pickedExternalEditorKind;
   final TextEditingController _filterController = TextEditingController();
+  final FocusNode _explorerFocusNode = FocusNode(
+    debugLabel: 'workspace-explorer',
+  );
   bool _filterVisible = false;
 
   @override
@@ -138,6 +141,7 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
   void dispose() {
     unawaited(_stopNativeWatcher());
     _filterController.dispose();
+    _explorerFocusNode.dispose();
     _controller.dispose();
     super.dispose();
   }
@@ -185,45 +189,60 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
           ),
         const Divider(height: 1, color: AleraTokens.borderSubtle),
         Expanded(
-          child: _ExplorerBackgroundMenu(
-            shouldSuppress: _consumeBackgroundMenuSuppression,
-            onAction: _handleBackgroundAction,
-            child: _loading && _controller.visibleNodes.isEmpty
-                ? const Center(child: CircularProgressIndicator())
-                : tree.DirectoryTreeTheme(
-                    data: const tree.DirectoryTreeThemeData(
-                      rowHeight: AleraTokens.space32,
-                      indent: AleraTokens.space16,
-                      selectionColor: AleraTokens.surfaceElevated,
-                      focusColor: AleraTokens.surfaceElevated,
-                      hoverColor: AleraTokens.surface,
-                      roundedCorners: false,
-                    ),
-                    child: tree.DirectoryTreeView(
-                      controller: _controller,
-                      padding: const .symmetric(vertical: AleraTokens.space4),
-                      expanderSize: AleraTokens.space24,
-                      expanderGap: 0,
-                      expanderBuilder: _buildExpander,
-                      contextMenuDelegate: _ExplorerMenuDelegate(
-                        fileManagerLabel: _folderOpener.fileManagerLabel,
-                        canOpenInAlera: widget.onOpenFileInAlera != null,
-                        canFocusSourceControlFolders:
-                            widget.onFocusSourceControlFolder != null,
-                        externalEditor: resolvedEditor,
-                        installedExternalEditors: installedEditors,
-                        onExternalEditorPicked: (kind) =>
-                            _pickedExternalEditorKind = kind,
-                        isFocusedSourceControlRoot: (node) {
-                          return _entryByNodeId[node.id]?.relativePath ==
-                              widget.focusedSourceControlRoot;
-                        },
-                        onMenuOpening: _suppressBackgroundMenuOnce,
-                        onAction: _handleMenuAction,
-                      ),
-                      nodeBuilder: _buildNode,
-                    ),
-                  ),
+          child: CallbackShortcuts(
+            bindings: <ShortcutActivator, VoidCallback>{
+              const SingleActivator(LogicalKeyboardKey.keyV, control: true):
+                  _handlePasteShortcut,
+            },
+            child: Focus(
+              focusNode: _explorerFocusNode,
+              child: Listener(
+                behavior: .translucent,
+                onPointerDown: (_) => _explorerFocusNode.requestFocus(),
+                child: _ExplorerBackgroundMenu(
+                  shouldSuppress: _consumeBackgroundMenuSuppression,
+                  onAction: _handleBackgroundAction,
+                  child: _loading && _controller.visibleNodes.isEmpty
+                      ? const Center(child: CircularProgressIndicator())
+                      : tree.DirectoryTreeTheme(
+                          data: const tree.DirectoryTreeThemeData(
+                            rowHeight: AleraTokens.space32,
+                            indent: AleraTokens.space16,
+                            selectionColor: AleraTokens.surfaceElevated,
+                            focusColor: AleraTokens.surfaceElevated,
+                            hoverColor: AleraTokens.surface,
+                            roundedCorners: false,
+                          ),
+                          child: tree.DirectoryTreeView(
+                            controller: _controller,
+                            padding: const .symmetric(
+                              vertical: AleraTokens.space4,
+                            ),
+                            expanderSize: AleraTokens.space24,
+                            expanderGap: 0,
+                            expanderBuilder: _buildExpander,
+                            contextMenuDelegate: _ExplorerMenuDelegate(
+                              fileManagerLabel: _folderOpener.fileManagerLabel,
+                              canOpenInAlera: widget.onOpenFileInAlera != null,
+                              canFocusSourceControlFolders:
+                                  widget.onFocusSourceControlFolder != null,
+                              externalEditor: resolvedEditor,
+                              installedExternalEditors: installedEditors,
+                              onExternalEditorPicked: (kind) =>
+                                  _pickedExternalEditorKind = kind,
+                              isFocusedSourceControlRoot: (node) {
+                                return _entryByNodeId[node.id]?.relativePath ==
+                                    widget.focusedSourceControlRoot;
+                              },
+                              onMenuOpening: _suppressBackgroundMenuOnce,
+                              onAction: _handleMenuAction,
+                            ),
+                            nodeBuilder: _buildNode,
+                          ),
+                        ),
+                ),
+              ),
+            ),
           ),
         ),
       ],
@@ -486,6 +505,10 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
 
   void _select(tree.VisibleNode node) {
     _controller.selection.selectOnly(node.id);
+  }
+
+  void _handlePasteShortcut() {
+    unawaited(_paste(_pasteTargetDirectory()));
   }
 
   bool get _isFilterVisible =>

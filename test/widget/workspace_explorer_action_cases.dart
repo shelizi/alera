@@ -134,6 +134,83 @@ void _registerWorkspaceExplorerActionTests() {
     expect(service.clearedClipboardSequences, <int>[42]);
   });
 
+  testWidgets('Ctrl+V pastes external files into the selected directory', (
+    tester,
+  ) async {
+    if (!Platform.isWindows) return;
+    final service = _FakeWorkspaceFileService()
+      ..childrenByDirectory[''] = <native.WorkspaceFileEntry>[
+        _directory('dest', hasChildrenHint: false),
+      ]
+      ..systemClipboard = const WorkspaceFileClipboardPayload(
+        paths: <String>[r'C:\outside\one.txt'],
+        operation: WorkspaceFileClipboardOperation.copy,
+        sequenceNumber: 42,
+      );
+    await _pumpExplorer(tester, service);
+
+    await tester.tap(find.text('dest'));
+    await tester.pumpAndSettle();
+    await _pressExplorerPasteShortcut(tester);
+
+    expect(service.importedClipboardCalls, hasLength(1));
+    expect(
+      service.importedClipboardCalls.single.targetParentRelativePath,
+      'dest',
+    );
+  });
+
+  testWidgets('Ctrl+V pastes external files beside a selected file', (
+    tester,
+  ) async {
+    if (!Platform.isWindows) return;
+    final service = _FakeWorkspaceFileService()
+      ..childrenByDirectory[''] = <native.WorkspaceFileEntry>[
+        _directory('src', hasChildrenHint: true),
+      ]
+      ..childrenByDirectory['src'] = <native.WorkspaceFileEntry>[
+        _file('src/readme.md'),
+      ]
+      ..systemClipboard = const WorkspaceFileClipboardPayload(
+        paths: <String>[r'C:\outside\one.txt'],
+        operation: WorkspaceFileClipboardOperation.copy,
+        sequenceNumber: 42,
+      );
+    await _pumpExplorer(tester, service);
+
+    await tester.tap(find.text('src'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('readme.md'));
+    await tester.pumpAndSettle();
+    await _pressExplorerPasteShortcut(tester);
+
+    expect(service.importedClipboardCalls, hasLength(1));
+    expect(
+      service.importedClipboardCalls.single.targetParentRelativePath,
+      'src',
+    );
+  });
+
+  testWidgets('Ctrl+V pastes external files at root when nothing is selected', (
+    tester,
+  ) async {
+    if (!Platform.isWindows) return;
+    final service = _FakeWorkspaceFileService()
+      ..systemClipboard = const WorkspaceFileClipboardPayload(
+        paths: <String>[r'C:\outside\one.txt'],
+        operation: WorkspaceFileClipboardOperation.copy,
+        sequenceNumber: 42,
+      );
+    await _pumpExplorer(tester, service);
+
+    await tester.tapAt(const Offset(250, 220));
+    await tester.pump();
+    await _pressExplorerPasteShortcut(tester);
+
+    expect(service.importedClipboardCalls, hasLength(1));
+    expect(service.importedClipboardCalls.single.targetParentRelativePath, '');
+  });
+
   testWidgets('context menu copies relative paths and duplicates entries', (
     tester,
   ) async {
@@ -378,4 +455,11 @@ void _registerWorkspaceExplorerActionTests() {
     expect(service.createdFiles, <String>['created.dart']);
     expect(tester.takeException(), isNull);
   });
+}
+
+Future<void> _pressExplorerPasteShortcut(WidgetTester tester) async {
+  await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+  await tester.sendKeyEvent(LogicalKeyboardKey.keyV);
+  await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+  await tester.pumpAndSettle();
 }

@@ -1,6 +1,19 @@
 part of 'workspace_explorer.dart';
 
 extension _WorkspaceExplorerActions on _WorkspaceExplorerState {
+  String _pasteTargetDirectory() {
+    for (final entryByNodeId in _entryByNodeId.entries) {
+      if (!_controller.selection.isSelected(entryByNodeId.key)) {
+        continue;
+      }
+      final entry = entryByNodeId.value;
+      return _isDirectoryEntry(entry)
+          ? entry.relativePath
+          : _parentPath(entry.relativePath);
+    }
+    return '';
+  }
+
   Future<void> _handleMenuAction(
     BuildContext context,
     tree.VisibleNode node,
