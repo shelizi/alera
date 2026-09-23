@@ -9,6 +9,23 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 
 void main() {
+  test('CodeForge shift pointer selection preserves its anchor', () {
+    expect(
+      code_forge.codeForgeShiftPointerSelection(
+        selection: const TextSelection.collapsed(offset: 1),
+        targetOffset: 7,
+      ),
+      const TextSelection(baseOffset: 1, extentOffset: 7),
+    );
+    expect(
+      code_forge.codeForgeShiftPointerSelection(
+        selection: const TextSelection(baseOffset: 8, extentOffset: 3),
+        targetOffset: 1,
+      ),
+      const TextSelection(baseOffset: 8, extentOffset: 1),
+    );
+  });
+
   test('preserves Dart regex semantics and scalar match offsets', () {
     final ranges = code_forge.computeRegexSearchRanges((
       text: 'a😀 Foo foo\nfoo_bar',

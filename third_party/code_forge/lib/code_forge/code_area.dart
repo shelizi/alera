@@ -27,6 +27,17 @@ const String _wordCharPattern =
     r'[\w\u0600-\u06FF\u08A0-\u08FF\u0590-\u05FF'
     r'\u3040-\u309F\u30A0-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uAC00-\uD7AF\uF900-\uFAFF]';
 
+@visibleForTesting
+TextSelection codeForgeShiftPointerSelection({
+  required TextSelection selection,
+  required int targetOffset,
+}) {
+  return TextSelection(
+    baseOffset: selection.baseOffset,
+    extentOffset: targetOffset,
+  );
+}
+
 bool isLargeFileAsciiViewportCandidate(
   String text, {
   int minChars = kLargeFileParagraphProfileMinChars,
@@ -12997,8 +13008,8 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
           _selectWordAtOffset(textOffset);
         };
 
-        _dragStartOffset = textOffset;
         final isAltClick = HardwareKeyboard.instance.isAltPressed;
+        final isShiftClick = HardwareKeyboard.instance.isShiftPressed;
         _onetap.onTap = () {
           if (_openedLspActionFromBulbTap) {
             _openedLspActionFromBulbTap = false;
@@ -13018,11 +13029,21 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
         };
 
         if (isAltClick) {
+          _dragStartOffset = textOffset;
           final line = controller.getLineAtOffset(textOffset);
           final lineStart = controller.getLineStartOffset(line);
           final character = textOffset - lineStart;
           controller.addMultiCursor(line, character);
+        } else if (isShiftClick) {
+          final selection = controller.selection;
+          controller.clearMultiCursors();
+          _dragStartOffset = selection.baseOffset;
+          controller.selection = codeForgeShiftPointerSelection(
+            selection: selection,
+            targetOffset: textOffset,
+          );
         } else {
+          _dragStartOffset = textOffset;
           controller.clearMultiCursors();
           controller.selection = TextSelection.collapsed(offset: textOffset);
         }
