@@ -15,6 +15,8 @@ class const _GitDiffTree({
   required final ExternalEditorSpec? externalEditor,
   required final List<ExternalEditorSpec> installedExternalEditors,
   required final ValueChanged<String> onRevealInExplorer,
+  required final void Function(String path, {required bool isDirectory})
+  onAddToGitIgnore,
   required final ValueChanged<GitChangeEntry> onStage,
   required final ValueChanged<GitChangeEntry> onUnstage,
   required final ValueChanged<GitChangeEntry> onDiscard,
@@ -125,6 +127,8 @@ class _GitDiffTreeState extends State<_GitDiffTree> {
           externalEditor: widget.externalEditor,
           installedExternalEditors: widget.installedExternalEditors,
           onRevealInExplorer: () => widget.onRevealInExplorer(entry.path),
+          onAddToGitIgnore: () =>
+              widget.onAddToGitIgnore(entry.path, isDirectory: false),
           onStage: widget.onStage,
           onUnstage: widget.onUnstage,
           onDiscard: widget.onDiscard,
@@ -173,6 +177,8 @@ class _GitDiffTreeState extends State<_GitDiffTree> {
         onTap: () => widget.onToggleTreeNode(_treeNodeKey(row.path)),
         onOpenFile: null,
         onRevealInExplorer: () => widget.onRevealInExplorer(row.path),
+        onAddToGitIgnore: () =>
+            widget.onAddToGitIgnore(row.path, isDirectory: true),
         onStage: () {
           if (widget.unified) {
             widget.onStagePath?.call(row.path);
@@ -231,6 +237,7 @@ class const _GitDiffDirectoryRow({
   required final VoidCallback onTap,
   final VoidCallback? onOpenFile,
   required final VoidCallback onRevealInExplorer,
+  required final VoidCallback onAddToGitIgnore,
   required final VoidCallback onStage,
   required final VoidCallback onUnstage,
   required final VoidCallback onDiscard,
@@ -313,6 +320,7 @@ class const _GitDiffDirectoryRow({
       installedExternalEditors: const <ExternalEditorSpec>[],
       onOpenExternally: null,
       onRevealInExplorer: onRevealInExplorer,
+      onAddToGitIgnore: onAddToGitIgnore,
       onStage: onStage,
       onUnstage: onUnstage,
       onDiscard: onDiscard,
@@ -327,6 +335,7 @@ class const _GitDiffFileRow({
   required final VoidCallback onTap,
   required final bool busy,
   final VoidCallback? onOpenFile,
+  final VoidCallback? onAddToGitIgnore,
   final ValueChanged<ExternalEditorKind>? onOpenExternally,
   required final ExternalEditorSpec? externalEditor,
   required final List<ExternalEditorSpec> installedExternalEditors,
@@ -440,6 +449,7 @@ class const _GitDiffFileRow({
       installedExternalEditors: installedExternalEditors,
       onOpenExternally: onOpenExternally,
       onRevealInExplorer: onRevealInExplorer,
+      onAddToGitIgnore: onAddToGitIgnore,
       onStage: () => onStage(entry),
       onUnstage: () => onUnstage(entry),
       onDiscard: () => onDiscard(entry),

@@ -4,6 +4,7 @@ enum _GitChangeContextAction {
   openFile,
   openExternally,
   revealInExplorer,
+  addToGitIgnore,
   stage,
   unstage,
   discard,
@@ -22,6 +23,7 @@ Future<void> _showGitChangeContextMenu(
   required List<ExternalEditorSpec> installedExternalEditors,
   required ValueChanged<ExternalEditorKind>? onOpenExternally,
   required VoidCallback onRevealInExplorer,
+  required VoidCallback? onAddToGitIgnore,
   required VoidCallback onStage,
   required VoidCallback onUnstage,
   required VoidCallback onDiscard,
@@ -54,6 +56,12 @@ Future<void> _showGitChangeContextMenu(
         label: 'Reveal in Explorer',
         leading: Icon(AleraIcons.copyFiles, size: 16),
       ),
+      if (onAddToGitIgnore != null)
+        const AleraDropdownEntry<_GitChangeContextAction>(
+          value: .addToGitIgnore,
+          label: 'Add to .gitignore',
+          leading: Icon(AleraIcons.file, size: 16),
+        ),
       if (canStage || canUnstage || canDiscard)
         const PopupMenuDivider(height: AleraTokens.space8),
       if (canUnstage)
@@ -92,6 +100,8 @@ Future<void> _showGitChangeContextMenu(
       }
     case _GitChangeContextAction.revealInExplorer:
       onRevealInExplorer();
+    case _GitChangeContextAction.addToGitIgnore:
+      onAddToGitIgnore?.call();
     case _GitChangeContextAction.stage:
       onStage();
     case _GitChangeContextAction.unstage:
@@ -99,4 +109,75 @@ Future<void> _showGitChangeContextMenu(
     case _GitChangeContextAction.discard:
       onDiscard();
   }
+}
+
+extension _WorkspaceGitDiffPanelGitIgnore on _WorkspaceGitDiffPanelState {
+  Future<void> _addToGitIgnore(String path, {required bool isDirectory}) async {
+    try {
+      final pattern = _gitIgnorePattern(path, isDirectory: isDirectory);
+      final gitIgnore = File(
+        '${widget.sourceControlScope.path}${Platform.pathSeparator}.gitignore',
+      );
+      final added = await _appendGitIgnorePattern(gitIgnore, pattern);
+      if (added) {
+        try {
+          await _notifier.refresh();
+        } on Object {
+          // The source-control watcher will refresh again after the file write.
+        }
+      }
+      if (!mounted) {
+        return;
+      }
+      AleraToast.show(
+        context,
+        message: added ? 'Added to .gitignore' : 'Already in .gitignore',
+        tone: .success,
+      );
+    } catch (error) {
+      if (mounted) {
+        AleraToast.show(context, message: _messageFor(error), tone: .error);
+      }
+    }
+  }
+}
+
+String _gitIgnorePattern(String path, {required bool isDirectory}) {
+  final normalized = path
+      .replaceAll('\\', '/')
+      .split('/')
+      .where((segment) => segment.isNotEmpty)
+      .join('/');
+  final escaped = normalized.replaceAllMapped(
+    RegExp(r'[\\*?\[\]#! ]'),
+    (match) => '\\${match.group(0)}',
+  );
+  return '/$escaped${isDirectory ? '/' : ''}';
+}
+
+Future<bool> _appendGitIgnorePattern(File file, String pattern) async {
+  if (!await file.exists()) {
+    await file.writeAsString('$pattern\n', flush: true);
+    return true;
+  }
+
+  final content = await file.readAsString();
+  final alreadyPresent = content
+      .split(RegExp(r'\r?\n'))
+      .any((line) => line == pattern);
+  if (alreadyPresent) {
+    return false;
+  }
+
+  final newline = content.contains('\r\n') ? '\r\n' : '\n';
+  final separator =
+      content.isEmpty || content.endsWith('\n') || content.endsWith('\r')
+      ? ''
+      : newline;
+  await file.writeAsString(
+    '$separator$pattern$newline',
+    mode: FileMode.append,
+    flush: true,
+  );
+  return true;
 }

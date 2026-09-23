@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
@@ -284,6 +285,7 @@ class _WorkspaceGitDiffPanelState extends ConsumerState<WorkspaceGitDiffPanel> {
                       externalEditor: resolvedEditor,
                       installedExternalEditors: installedEditors,
                       onRevealInExplorer: _revealInExplorer,
+                      onAddToGitIgnore: _addToGitIgnore,
                       onStage: _stageEntry,
                       onUnstage: _unstageEntry,
                       onDiscard: _discardEntry,
