@@ -114,17 +114,17 @@ Future<void> _showGitChangeContextMenu(
 extension _WorkspaceGitDiffPanelGitIgnore on _WorkspaceGitDiffPanelState {
   Future<void> _addToGitIgnore(String path, {required bool isDirectory}) async {
     try {
-      final pattern = _gitIgnorePattern(path, isDirectory: isDirectory);
-      final gitIgnore = File(
-        '${widget.sourceControlScope.path}${Platform.pathSeparator}.gitignore',
+      final added = await addWorkspacePathToGitIgnore(
+        rootPath: widget.sourceControlScope.path,
+        path: path,
+        isDirectory: isDirectory,
       );
-      final added = await _appendGitIgnorePattern(gitIgnore, pattern);
       if (added) {
-        try {
-          await _notifier.refresh();
-        } on Object {
-          // The source-control watcher will refresh again after the file write.
-        }
+        // Do not block the context-menu action on a full source-control reload.
+        // The watcher will refresh after the file write, while this best-effort
+        // refresh keeps the UI responsive on platforms where watcher delivery
+        // is delayed or unavailable.
+        unawaited(_notifier.refresh().catchError((_) {}));
       }
       if (!mounted) {
         return;
@@ -140,44 +140,4 @@ extension _WorkspaceGitDiffPanelGitIgnore on _WorkspaceGitDiffPanelState {
       }
     }
   }
-}
-
-String _gitIgnorePattern(String path, {required bool isDirectory}) {
-  final normalized = path
-      .replaceAll('\\', '/')
-      .split('/')
-      .where((segment) => segment.isNotEmpty)
-      .join('/');
-  final escaped = normalized.replaceAllMapped(
-    RegExp(r'[\\*?\[\]#! ]'),
-    (match) => '\\${match.group(0)}',
-  );
-  return '/$escaped${isDirectory ? '/' : ''}';
-}
-
-Future<bool> _appendGitIgnorePattern(File file, String pattern) async {
-  if (!await file.exists()) {
-    await file.writeAsString('$pattern\n', flush: true);
-    return true;
-  }
-
-  final content = await file.readAsString();
-  final alreadyPresent = content
-      .split(RegExp(r'\r?\n'))
-      .any((line) => line == pattern);
-  if (alreadyPresent) {
-    return false;
-  }
-
-  final newline = content.contains('\r\n') ? '\r\n' : '\n';
-  final separator =
-      content.isEmpty || content.endsWith('\n') || content.endsWith('\r')
-      ? ''
-      : newline;
-  await file.writeAsString(
-    '$separator$pattern$newline',
-    mode: FileMode.append,
-    flush: true,
-  );
-  return true;
 }
