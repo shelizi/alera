@@ -31,6 +31,22 @@ It runs the authoritative exporter, verifies Release identity and ZIP contents, 
    - Known harmless local history may remain under `docs/history-session/`.
    - `tool/release/build_windows_release.ps1` is a local incremental Release-build helper, not the publishing authority for this workflow. Do not substitute it for the tracked Final-Link exporter below.
 
+### Required desktop version bump before every formal publish
+
+- Every formal Windows Final-Link publish must advance the desktop version first unless the user explicitly supplies a target version.
+- Read the current `pubspec.yaml` version in `major.minor.patch+build` form.
+- Default bump rule: increment `patch` by 1 and increment `build` by 1. Example: `0.82.1+258` -> `0.82.2+259`.
+- Update `tool/release/prepared_release.json` in the same change:
+  - `sourceSha` = the local `main` HEAD before the version-bump commit;
+  - `desktop.artifactVersion` and `desktop.releaseVersion` = the new semantic version;
+  - `desktop.buildNumber` = the new build number;
+  - `desktop.tag` = `v<new version>`;
+  - `desktop.previousTag` = `v<previous version>`;
+  - leave mobile fields unchanged unless the user explicitly requests a mobile release.
+- Commit only these release metadata changes as `release: v<new version>` before running the Final-Link publisher.
+- Use the resulting release commit as the intended local `main` HEAD for package identity checks and publication.
+- Never republish the same desktop version as the current stable package unless the user explicitly asks for a rebuild of an existing version.
+
 3. Build/export with the tracked Final-Link exporter.
 
 ```powershell
