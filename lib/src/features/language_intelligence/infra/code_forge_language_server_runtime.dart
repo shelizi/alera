@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:code_forge/code_forge.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 
 import '../../../shared/infra/process/command_path_probe.dart';
 import '../application/language_intelligence_activity.dart';
@@ -14,6 +16,7 @@ import 'managed_language_server_installer.dart';
 
 typedef CodeForgeEnvironmentReader = Map<String, String> Function();
 typedef CodeForgeExecutableExists = bool Function(String path);
+typedef CodeForgeSupportDirectory = Future<Directory> Function();
 typedef CodeForgeLanguageServerTransportFactory =
     Future<CodeForgeLanguageServerTransport> Function(
       CodeForgeLanguageServerLaunchSpec spec,
@@ -26,9 +29,13 @@ final class CodeForgeLanguageServerLaunchSpec {
     required this.bootstrapLanguageId,
     required Iterable<String> arguments,
     required Map<String, String> environment,
+    Map<String, dynamic> initializationOptions = const <String, dynamic>{},
     required Iterable<LanguageCapability> capabilities,
   }) : arguments = List<String>.unmodifiable(arguments),
        environment = Map<String, String>.unmodifiable(environment),
+       initializationOptions = Map<String, dynamic>.unmodifiable(
+         initializationOptions,
+       ),
        capabilities = Set<LanguageCapability>.unmodifiable(capabilities);
 
   final String executable;
@@ -36,6 +43,7 @@ final class CodeForgeLanguageServerLaunchSpec {
   final String bootstrapLanguageId;
   final List<String> arguments;
   final Map<String, String> environment;
+  final Map<String, dynamic> initializationOptions;
   final Set<LanguageCapability> capabilities;
 }
 
@@ -86,12 +94,16 @@ final class CodeForgeLanguageServerSession
 }
 
 final class CodeForgeLanguageServerRuntime
-    implements LanguageServerRuntimePort, LanguageServerProgressRuntimePort {
+    implements
+        LanguageServerRuntimePort,
+        LanguageServerProgressRuntimePort,
+        LanguageServerWorkspaceStorageRuntimePort {
   factory CodeForgeLanguageServerRuntime({
     CodeForgeEnvironmentReader? environmentReader,
     bool? isWindows,
     CodeForgeExecutableExists? executableExists,
     CodeForgeLanguageServerTransportFactory? transportFactory,
+    CodeForgeSupportDirectory? supportDirectory,
     ManagedLanguageServerInstallerPort? managedInstaller,
     LanguageIntelligenceActivityReporter? activityReporter,
   }) => CodeForgeLanguageServerRuntime._(
@@ -99,6 +111,7 @@ final class CodeForgeLanguageServerRuntime
     isWindows: isWindows ?? Platform.isWindows,
     executableExists: executableExists,
     transportFactory: transportFactory ?? _startCodeForgeTransport,
+    supportDirectory: supportDirectory ?? getApplicationSupportDirectory,
     managedInstaller:
         managedInstaller ??
         ManagedLanguageServerInstaller(
@@ -114,6 +127,7 @@ final class CodeForgeLanguageServerRuntime
     required this._isWindows,
     required this._executableExists,
     required this._transportFactory,
+    required this._supportDirectory,
     required this._managedInstaller,
   });
 
@@ -121,6 +135,7 @@ final class CodeForgeLanguageServerRuntime
   final bool _isWindows;
   final CodeForgeExecutableExists? _executableExists;
   final CodeForgeLanguageServerTransportFactory _transportFactory;
+  final CodeForgeSupportDirectory _supportDirectory;
   final ManagedLanguageServerInstallerPort _managedInstaller;
 
   @override
@@ -215,6 +230,7 @@ final class CodeForgeLanguageServerRuntime
     if (languageIds.isEmpty) {
       throw StateError('Provider ${request.provider.id} has no languages.');
     }
+    final initializationOptions = await _initializationOptionsFor(request);
 
     final transport = await _transportFactory(
       CodeForgeLanguageServerLaunchSpec(
@@ -223,6 +239,7 @@ final class CodeForgeLanguageServerRuntime
         bootstrapLanguageId: languageIds.first,
         arguments: request.arguments,
         environment: request.environment,
+        initializationOptions: initializationOptions,
         capabilities: request.provider.capabilities,
       ),
     );
@@ -248,6 +265,81 @@ final class CodeForgeLanguageServerRuntime
       serverRequestSubscription,
       progressController,
     );
+  }
+
+  @override
+  Future<void> clearWorkspaceStorage({
+    required String workspaceId,
+    required LanguageProviderDescriptor provider,
+  }) async {
+    if (!_usesAleraManagedWorkspaceStorage(provider.id)) return;
+    final directory = await _workspaceStorageDirectory(
+      workspaceId: workspaceId,
+      providerId: provider.id,
+      create: false,
+    );
+    if (await directory.exists()) {
+      await directory.delete(recursive: true);
+    }
+  }
+
+  Future<Map<String, dynamic>> _initializationOptionsFor(
+    LanguageServerRuntimeStartRequest request,
+  ) async {
+    if (!_usesAleraManagedWorkspaceStorage(request.provider.id)) {
+      return const <String, dynamic>{};
+    }
+    final workspaceStorage = await _workspaceStorageDirectory(
+      workspaceId: request.workspaceId,
+      providerId: request.provider.id,
+      create: true,
+    );
+    final globalStorage = await _globalStorageDirectory(
+      providerId: request.provider.id,
+      create: true,
+    );
+    return <String, dynamic>{
+      'storagePath': workspaceStorage.path,
+      'globalStoragePath': globalStorage.path,
+    };
+  }
+
+  Future<Directory> _workspaceStorageDirectory({
+    required String workspaceId,
+    required String providerId,
+    required bool create,
+  }) async {
+    final support = await _supportDirectory();
+    final directory = Directory(
+      p.join(
+        support.path,
+        'language-index',
+        'v1',
+        'workspaces',
+        _languageIndexSafeSegment(workspaceId),
+        _languageIndexSafeSegment(providerId),
+      ),
+    );
+    if (create) await directory.create(recursive: true);
+    return directory;
+  }
+
+  Future<Directory> _globalStorageDirectory({
+    required String providerId,
+    required bool create,
+  }) async {
+    final support = await _supportDirectory();
+    final directory = Directory(
+      p.join(
+        support.path,
+        'language-index',
+        'v1',
+        'global',
+        _languageIndexSafeSegment(providerId),
+      ),
+    );
+    if (create) await directory.create(recursive: true);
+    return directory;
   }
 
   @override
@@ -470,6 +562,7 @@ Future<CodeForgeLanguageServerTransport> _startCodeForgeTransport(
     languageId: spec.bootstrapLanguageId,
     args: spec.arguments,
     environment: spec.environment,
+    initializationOptions: spec.initializationOptions,
     capabilities: _codeForgeCapabilities(spec.capabilities),
   );
   return _LspStdioCodeForgeTransport(config);
@@ -556,3 +649,9 @@ final class _LspStdioCodeForgeTransport
   @override
   void dispose() => _config.dispose();
 }
+
+bool _usesAleraManagedWorkspaceStorage(String providerId) =>
+    providerId == 'php.intelephense';
+
+String _languageIndexSafeSegment(String value) =>
+    value.replaceAll(RegExp(r'[^A-Za-z0-9._+-]'), '_');

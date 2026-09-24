@@ -54,6 +54,7 @@ abstract interface class LanguageServerProgressRuntimePort {
 
 final class LanguageServerRuntimeStartRequest {
   LanguageServerRuntimeStartRequest({
+    this.workspaceId = '',
     required this.provider,
     required this.executable,
     required this.workspaceRoot,
@@ -63,12 +64,20 @@ final class LanguageServerRuntimeStartRequest {
   }) : arguments = List<String>.unmodifiable(arguments),
        environment = Map<String, String>.unmodifiable(environment);
 
+  final String workspaceId;
   final LanguageProviderDescriptor provider;
   final String executable;
   final String workspaceRoot;
   final LanguageServerTarget target;
   final List<String> arguments;
   final Map<String, String> environment;
+}
+
+abstract interface class LanguageServerWorkspaceStorageRuntimePort {
+  Future<void> clearWorkspaceStorage({
+    required String workspaceId,
+    required LanguageProviderDescriptor provider,
+  });
 }
 
 abstract interface class LanguageServerRuntimePort {

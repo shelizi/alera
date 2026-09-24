@@ -1,4 +1,7 @@
 import 'dart:async';
+import 'dart:io';
+
+import 'package:path/path.dart' as p;
 
 import 'package:alera/src/features/language_intelligence/application/language_server_runtime.dart';
 import 'package:alera/src/features/language_intelligence/application/managed_language_server_installer.dart';
@@ -463,6 +466,84 @@ void main() {
       expect(transport.disposeCalls, 1);
     },
   );
+
+  test('Intelephense receives persistent Alera storage paths and workspace cache can be cleared', () async {
+    final support = Directory(
+      p.join('build', 'test-language-index', 'intelephense-storage'),
+    );
+    if (await support.exists()) {
+      await support.delete(recursive: true);
+    }
+    await support.create(recursive: true);
+    addTearDown(() async {
+      if (await support.exists()) {
+        await support.delete(recursive: true);
+      }
+    });
+    final transport = _FakeTransport();
+    CodeForgeLanguageServerLaunchSpec? captured;
+    final runtime = CodeForgeLanguageServerRuntime(
+      supportDirectory: () async => support,
+      transportFactory: (spec) async {
+        captured = spec;
+        return transport;
+      },
+    );
+    final phpProvider = LanguageProviderDescriptor(
+      id: 'php.intelephense',
+      kind: LanguageProviderKind.semanticServer,
+      languages: <LanguageId>{LanguageId('php')},
+      capabilities: const <LanguageCapability>{LanguageCapability.definition},
+      processScope: LanguageProviderProcessScope.workspace,
+      launchPolicy: LanguageProviderLaunchPolicy.lazyOnDemand,
+      executableResolutionPolicy:
+          LanguageExecutableResolutionPolicy.explicitOverrideThenPath,
+      executableCandidates: const <String>['intelephense'],
+      defaultArguments: const <String>['--stdio'],
+    );
+
+    final session = await runtime.start(
+      LanguageServerRuntimeStartRequest(
+        workspaceId: 'workspace-a',
+        provider: phpProvider,
+        executable: 'intelephense',
+        workspaceRoot: 'repo-root',
+        target: LanguageServerTarget.localWorkspace,
+      ),
+    );
+
+    final workspaceStorage = p.join(
+      support.path,
+      'language-index',
+      'v1',
+      'workspaces',
+      'workspace-a',
+      'php.intelephense',
+    );
+    final globalStorage = p.join(
+      support.path,
+      'language-index',
+      'v1',
+      'global',
+      'php.intelephense',
+    );
+    expect(captured!.initializationOptions, <String, dynamic>{
+      'storagePath': workspaceStorage,
+      'globalStoragePath': globalStorage,
+    });
+    expect(await Directory(workspaceStorage).exists(), isTrue);
+    expect(await Directory(globalStorage).exists(), isTrue);
+    await File(p.join(workspaceStorage, 'index.marker')).writeAsString('x');
+
+    await runtime.clearWorkspaceStorage(
+      workspaceId: 'workspace-a',
+      provider: phpProvider,
+    );
+
+    expect(await Directory(workspaceStorage).exists(), isFalse);
+    expect(await Directory(globalStorage).exists(), isTrue);
+    await runtime.stop(session);
+  });
 
   test(
     'stop is graceful and observeExit normalizes the process result',

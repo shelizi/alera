@@ -72,6 +72,75 @@ final class LanguageServerSessionManager {
   final Map<_LanguageServerSessionKey, _LanguageServerSessionRecord> _sessions =
       <_LanguageServerSessionKey, _LanguageServerSessionRecord>{};
 
+  Future<LanguageServerSessionSnapshot> prewarmLanguage({
+    required String workspaceId,
+    required String workspaceRoot,
+    required LanguageId language,
+    required LanguageIntelligenceSettings settings,
+    required LanguageServerTarget target,
+    Map<String, String> environment = const <String, String>{},
+  }) async {
+    final activation = settings.forLanguage(language);
+    final provider = _registry.semanticProviderFor(
+      language,
+      preferredProviderId: activation.semanticProviderId,
+    );
+    if (!activation.enabled || provider == null) {
+      return LanguageServerSessionSnapshot.disabled(
+        workspaceId: workspaceId,
+        providerId: provider?.id ?? activation.semanticProviderId?.trim() ?? '',
+      );
+    }
+    final record = _recordFor(
+      workspaceId: workspaceId,
+      workspaceRoot: workspaceRoot,
+      provider: provider,
+    );
+    record
+      ..activation = activation
+      ..target = target
+      ..environment = Map<String, String>.unmodifiable(environment)
+      ..prewarmed = true
+      ..idleGeneration += 1;
+    if (record.state == LanguageServerSessionState.disabled) {
+      record.state = LanguageServerSessionState.available;
+      record.restartAttempts = 0;
+    }
+
+    _report(record);
+    await _ensureReady(record);
+    return record.snapshot;
+  }
+
+  void retainWorkspacePrewarms({
+    required String workspaceId,
+    required Set<String> providerIds,
+  }) {
+    for (final record in _sessions.values) {
+      if (record.key.workspaceId != workspaceId ||
+          !record.prewarmed ||
+          providerIds.contains(record.key.providerId)) {
+        continue;
+      }
+      _releasePrewarm(record);
+    }
+  }
+
+  void releaseProviderPrewarm({
+    required String workspaceId,
+    required String providerId,
+  }) {
+    final record =
+        _sessions[_LanguageServerSessionKey(workspaceId, providerId)];
+    if (record == null || !record.prewarmed) return;
+    _releasePrewarm(record);
+  }
+
+  void releaseWorkspacePrewarm(String workspaceId) => retainWorkspacePrewarms(
+    workspaceId: workspaceId,
+    providerIds: const <String>{},
+  );
+
   Future<LanguageServerSessionSnapshot> attachDocument({
     required String workspaceId,
     required String workspaceRoot,
@@ -92,22 +161,11 @@ final class LanguageServerSessionManager {
         providerId: provider?.id ?? activation.semanticProviderId?.trim() ?? '',
       );
     }
-    final providerId = provider.id;
-
-    final key = _LanguageServerSessionKey(workspaceId, providerId);
-    final record = _sessions.putIfAbsent(
-      key,
-      () => _LanguageServerSessionRecord(
-        key: key,
-        workspaceRoot: workspaceRoot,
-        provider: provider,
-      ),
+    final record = _recordFor(
+      workspaceId: workspaceId,
+      workspaceRoot: workspaceRoot,
+      provider: provider,
     );
-    if (record.workspaceRoot != workspaceRoot) {
-      throw StateError(
-        'Workspace $workspaceId changed root while provider $providerId was active.',
-      );
-    }
 
     record
       ..activation = activation
@@ -138,7 +196,7 @@ final class LanguageServerSessionManager {
     }
     record.documents.remove(documentId);
     _report(record);
-    if (record.documents.isNotEmpty) {
+    if (record.hasDemand) {
       return;
     }
     if (stopWhenUnused) {
@@ -169,6 +227,7 @@ final class LanguageServerSessionManager {
       return;
     }
     record.documents.clear();
+    record.prewarmed = false;
     record.idleGeneration += 1;
     record.restartGeneration += 1;
     record.restartAttempts = 0;
@@ -185,7 +244,7 @@ final class LanguageServerSessionManager {
     if (record == null ||
         record.activation == null ||
         record.target == null ||
-        record.documents.isEmpty) {
+        !record.hasDemand) {
       return false;
     }
     record
@@ -215,6 +274,44 @@ final class LanguageServerSessionManager {
       )) {
         restarted += 1;
       }
+    }
+    return restarted;
+  }
+
+  Future<int> reindexWorkspace(String workspaceId) async {
+    final records = _sessions.values
+        .where(
+          (record) =>
+              record.key.workspaceId == workspaceId &&
+              record.activation != null &&
+              record.target != null &&
+              record.hasDemand,
+        )
+        .toList(growable: false);
+    var restarted = 0;
+    for (final record in records) {
+      record
+        ..idleGeneration += 1
+        ..restartGeneration += 1
+        ..restartAttempts = 0;
+      await _stopRecord(
+        record,
+        finalState: LanguageServerSessionState.available,
+      );
+      final runtime = _runtime;
+      try {
+        if (runtime is LanguageServerWorkspaceStorageRuntimePort) {
+          final storageRuntime =
+              runtime as LanguageServerWorkspaceStorageRuntimePort;
+          await storageRuntime.clearWorkspaceStorage(
+            workspaceId: workspaceId,
+            provider: record.provider,
+          );
+        }
+      } finally {
+        await _ensureReady(record);
+      }
+      restarted += 1;
     }
     return restarted;
   }
@@ -316,6 +413,7 @@ final class LanguageServerSessionManager {
 
       final session = await _runtime.start(
         LanguageServerRuntimeStartRequest(
+          workspaceId: record.key.workspaceId,
           provider: record.provider,
           executable: resolved.executable,
           workspaceRoot: record.workspaceRoot,
@@ -366,8 +464,7 @@ final class LanguageServerSessionManager {
     int idleGeneration,
   ) async {
     await _delay(_idleShutdownDelay);
-    if (idleGeneration != record.idleGeneration ||
-        record.documents.isNotEmpty) {
+    if (idleGeneration != record.idleGeneration || record.hasDemand) {
       return;
     }
     await _stopRecord(record, finalState: LanguageServerSessionState.available);
@@ -468,8 +565,7 @@ final class LanguageServerSessionManager {
   }
 
   void _scheduleRestartIfNeeded(_LanguageServerSessionRecord record) {
-    if (record.documents.isEmpty ||
-        record.restartAttempts >= _maxRestartAttempts) {
+    if (!record.hasDemand || record.restartAttempts >= _maxRestartAttempts) {
       return;
     }
     record.restartAttempts += 1;
@@ -483,7 +579,7 @@ final class LanguageServerSessionManager {
   ) async {
     await _delay(_scaleDuration(_restartBackoff, record.restartAttempts));
     if (restartGeneration != record.restartGeneration ||
-        record.documents.isEmpty ||
+        !record.hasDemand ||
         record.state != LanguageServerSessionState.failed) {
       return;
     }
@@ -505,6 +601,40 @@ final class LanguageServerSessionManager {
 
   static Future<void> _defaultDelay(Duration duration) =>
       Future<void>.delayed(duration);
+
+  _LanguageServerSessionRecord _recordFor({
+    required String workspaceId,
+    required String workspaceRoot,
+    required LanguageProviderDescriptor provider,
+  }) {
+    final providerId = provider.id;
+    final key = _LanguageServerSessionKey(workspaceId, providerId);
+    final record = _sessions.putIfAbsent(
+      key,
+      () => _LanguageServerSessionRecord(
+        key: key,
+        workspaceRoot: workspaceRoot,
+        provider: provider,
+      ),
+    );
+    if (record.workspaceRoot != workspaceRoot) {
+      throw StateError(
+        'Workspace $workspaceId changed root while provider $providerId was active.',
+      );
+    }
+    return record;
+  }
+
+  void _releasePrewarm(_LanguageServerSessionRecord record) {
+    record.prewarmed = false;
+    _report(record);
+    if (record.hasDemand ||
+        (record.session == null && record.startFuture == null)) {
+      return;
+    }
+    final idleGeneration = ++record.idleGeneration;
+    unawaited(_stopAfterIdle(record, idleGeneration));
+  }
 
   void _report(_LanguageServerSessionRecord record) =>
       _activityReporter?.reportServerSession(record.snapshot);
@@ -537,6 +667,7 @@ final class _LanguageServerSessionRecord {
   final String workspaceRoot;
   final LanguageProviderDescriptor provider;
   final Set<String> documents = <String>{};
+  bool prewarmed = false;
   LanguageServerSessionState state = LanguageServerSessionState.available;
   LanguageActivationSettings? activation;
   LanguageServerTarget? target;
@@ -551,6 +682,8 @@ final class _LanguageServerSessionRecord {
   int restartAttempts = 0;
   String? executable;
   String? lastError;
+
+  bool get hasDemand => prewarmed || documents.isNotEmpty;
 
   LanguageServerSessionSnapshot get snapshot => LanguageServerSessionSnapshot(
     workspaceId: key.workspaceId,

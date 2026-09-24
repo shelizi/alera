@@ -102,14 +102,14 @@ class _LanguageIntelligenceStatusBarControlState
     try {
       final restarted = await ref
           .read(languageIntelligenceManagerProvider)
-          .restartWorkspace(workspaceId);
+          .reindexWorkspace(workspaceId);
       if (!mounted) return;
       AleraToast.show(
         context,
         message: restarted == 0
             ? 'No active language servers were found for this workspace.'
             : 'Restarted $restarted language server(s). '
-                  'Workspace indexing will run again.',
+                  'Managed persistent index data was cleared where supported.',
       );
     } catch (error) {
       if (mounted) {

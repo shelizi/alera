@@ -49,6 +49,39 @@ void main() {
     },
   );
 
+  test(
+    'workspace reindex clears managed storage and restarts prewarmed server',
+    () async {
+      final manager = LanguageServerSessionManager(
+        registry: registry,
+        runtime: runtime,
+      );
+      final settings = _enabledSettings(rust);
+
+      await manager.prewarmLanguage(
+        workspaceId: 'workspace-a',
+        workspaceRoot: 'repo-root',
+        language: rust,
+        settings: settings,
+        target: LanguageServerTarget.localWorkspace,
+      );
+
+      final restarted = await manager.reindexWorkspace('workspace-a');
+
+      expect(restarted, 1);
+      expect(runtime.stopCalls, 1);
+      expect(runtime.clearStorageCalls, 1);
+      expect(runtime.clearedWorkspaces, <String>['workspace-a']);
+      expect(runtime.clearedProviders, <String>['rust-semantic']);
+      expect(runtime.startCalls, 2);
+      expect(runtime.startRequests.last.workspaceId, 'workspace-a');
+      expect(
+        manager.snapshotFor('workspace-a', 'rust-semantic').state,
+        LanguageServerSessionState.ready,
+      );
+    },
+  );
+
   test('enabled documents share one lazy workspace provider session', () async {
     final manager = LanguageServerSessionManager(
       registry: registry,
@@ -87,6 +120,60 @@ void main() {
       2,
     );
   });
+
+  test(
+    'workspace prewarm keeps a zero-document session alive until lease release',
+    () async {
+      final delay = _ControlledDelay();
+      final manager = LanguageServerSessionManager(
+        registry: registry,
+        runtime: runtime,
+        idleShutdownDelay: const Duration(seconds: 30),
+        delay: delay.call,
+      );
+      final settings = _enabledSettings(rust);
+
+      final prewarmed = await manager.prewarmLanguage(
+        workspaceId: 'workspace-a',
+        workspaceRoot: r'C:\repo',
+        language: rust,
+        settings: settings,
+        target: LanguageServerTarget.localWorkspace,
+      );
+
+      expect(prewarmed.state, LanguageServerSessionState.ready);
+      expect(prewarmed.activeDocumentCount, 0);
+      expect(runtime.startCalls, 1);
+
+      await manager.attachDocument(
+        workspaceId: 'workspace-a',
+        workspaceRoot: r'C:\repo',
+        language: rust,
+        documentId: 'main.rs',
+        settings: settings,
+        target: LanguageServerTarget.localWorkspace,
+      );
+      expect(runtime.startCalls, 1);
+
+      await manager.releaseDocument(
+        workspaceId: 'workspace-a',
+        providerId: 'rust-semantic',
+        documentId: 'main.rs',
+      );
+      expect(delay.pending, 0);
+
+      manager.releaseWorkspacePrewarm('workspace-a');
+      expect(delay.pending, 1);
+      delay.completeNext();
+      await _flushAsync();
+
+      expect(runtime.stopCalls, 1);
+      expect(
+        manager.snapshotFor('workspace-a', 'rust-semantic').state,
+        LanguageServerSessionState.available,
+      );
+    },
+  );
 
   test(
     'enabled language falls back to its declared default semantic provider',
@@ -435,13 +522,19 @@ final class _FakeRuntimeSession implements LanguageServerRuntimeSession {
 }
 
 final class _FakeLanguageServerRuntime
-    implements LanguageServerRuntimePort, LanguageServerProgressRuntimePort {
+    implements
+        LanguageServerRuntimePort,
+        LanguageServerProgressRuntimePort,
+        LanguageServerWorkspaceStorageRuntimePort {
   LanguageServerExecutableResolution resolution =
       const LanguageServerExecutableResolved(r'C:\tools\server.exe');
   Completer<LanguageServerRuntimeSession>? startCompleter;
   int resolveCalls = 0;
   int startCalls = 0;
   int stopCalls = 0;
+  int clearStorageCalls = 0;
+  final List<String> clearedWorkspaces = <String>[];
+  final List<String> clearedProviders = <String>[];
   final List<LanguageServerRuntimeSession> stoppedSessions =
       <LanguageServerRuntimeSession>[];
   final List<_FakeRuntimeSession> sessions = <_FakeRuntimeSession>[];
@@ -468,6 +561,16 @@ final class _FakeLanguageServerRuntime
   }) async {
     resolveCalls += 1;
     return resolution;
+  }
+
+  @override
+  Future<void> clearWorkspaceStorage({
+    required String workspaceId,
+    required LanguageProviderDescriptor provider,
+  }) async {
+    clearStorageCalls += 1;
+    clearedWorkspaces.add(workspaceId);
+    clearedProviders.add(provider.id);
   }
 
   @override

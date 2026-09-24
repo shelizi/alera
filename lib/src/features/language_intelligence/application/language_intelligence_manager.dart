@@ -52,6 +52,95 @@ final class LanguageIntelligenceManager {
       <_DocumentKey, _TrackedDocument>{};
   final Map<_BindingKey, _SemanticBindingCache> _bindings =
       <_BindingKey, _SemanticBindingCache>{};
+  final Map<String, int> _prewarmGenerations = <String, int>{};
+  final Map<String, Set<String>> _desiredPrewarmProviders =
+      <String, Set<String>>{};
+
+  Future<void> prewarmWorkspace({
+    required String workspaceId,
+    required String workspaceRoot,
+    required LanguageIntelligenceSettings settings,
+    required LanguageServerTarget target,
+    Map<String, String> environment = const <String, String>{},
+    int maxConcurrency = 3,
+  }) async {
+    if (maxConcurrency <= 0) {
+      throw ArgumentError.value(
+        maxConcurrency,
+        'maxConcurrency',
+        'Prewarm concurrency must be positive.',
+      );
+    }
+
+    final languagesByProvider = <String, LanguageId>{};
+    for (final language in _registry.languages) {
+      final activation = settings.forLanguage(language.id);
+      if (!activation.enabled) continue;
+      final provider = _registry.semanticProviderFor(
+        language.id,
+        preferredProviderId: activation.semanticProviderId,
+      );
+      if (provider == null) continue;
+      languagesByProvider.putIfAbsent(provider.id, () => language.id);
+    }
+
+    final generation = (_prewarmGenerations[workspaceId] ?? 0) + 1;
+    _prewarmGenerations[workspaceId] = generation;
+    final desiredProviders = Set<String>.unmodifiable(languagesByProvider.keys);
+    _desiredPrewarmProviders[workspaceId] = desiredProviders;
+    _sessions.retainWorkspacePrewarms(
+      workspaceId: workspaceId,
+      providerIds: desiredProviders,
+    );
+
+    final plans = languagesByProvider.entries.toList(growable: false);
+    if (plans.isEmpty) return;
+
+    var nextIndex = 0;
+    Future<void> worker() async {
+      while (_prewarmGenerations[workspaceId] == generation) {
+        final index = nextIndex;
+        if (index >= plans.length) return;
+        nextIndex += 1;
+        final plan = plans[index];
+        try {
+          await _sessions.prewarmLanguage(
+            workspaceId: workspaceId,
+            workspaceRoot: workspaceRoot,
+            language: plan.value,
+            settings: settings,
+            target: target,
+            environment: environment,
+          );
+        } on Object {
+          // Workspace prewarm is opportunistic. Individual provider failures are
+          // already represented by the session snapshot and must not block peers.
+        }
+        if (_prewarmGenerations[workspaceId] != generation &&
+            !(_desiredPrewarmProviders[workspaceId]?.contains(plan.key) ??
+                false)) {
+          _sessions.releaseProviderPrewarm(
+            workspaceId: workspaceId,
+            providerId: plan.key,
+          );
+        }
+      }
+    }
+
+    final workerCount = maxConcurrency < plans.length
+        ? maxConcurrency
+        : plans.length;
+    await Future.wait<void>(
+      List<Future<void>>.generate(workerCount, (_) => worker()),
+    );
+  }
+
+  void releaseWorkspacePrewarm(String workspaceId) {
+    _prewarmGenerations[workspaceId] =
+        (_prewarmGenerations[workspaceId] ?? 0) + 1;
+    _desiredPrewarmProviders.remove(workspaceId);
+    _sessions.releaseWorkspacePrewarm(workspaceId);
+  }
 
   Future<LanguageIntelligenceDocumentState> openDocument({
     required String workspaceId,
@@ -225,6 +314,21 @@ final class LanguageIntelligenceManager {
       )) {
         restarted += 1;
       }
+    }
+    return restarted;
+  }
+
+  Future<int> reindexWorkspace(String workspaceId) async {
+    final restarted = await _sessions.reindexWorkspace(workspaceId);
+    if (restarted == 0) return 0;
+    _bindings.keys
+        .where((key) => key.workspaceId == workspaceId)
+        .toList(growable: false)
+        .forEach(_bindings.remove);
+    for (final document in _documents.values.where(
+      (document) => document.key.workspaceId == workspaceId,
+    )) {
+      await _ensureBinding(document);
     }
     return restarted;
   }

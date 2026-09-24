@@ -147,6 +147,65 @@ void main() {
     },
   );
 
+  test('workspace prewarm bounds concurrent language-server startup', () async {
+    final languages = <LanguageId>[
+      rust,
+      LanguageId('python'),
+      LanguageId('go'),
+      LanguageId('typescript'),
+    ];
+    final multiRegistry = _multiProviderRegistry(languages);
+    final multiRuntime = _FakeRuntime();
+    final startGate = Completer<void>();
+    multiRuntime.startGate = startGate;
+    final multiSessions = LanguageServerSessionManager(
+      registry: multiRegistry,
+      runtime: multiRuntime,
+    );
+    final multiManager = LanguageIntelligenceManager(
+      registry: multiRegistry,
+      sessions: multiSessions,
+      semanticAdapterFactory: _FakeSemanticFactory(),
+    );
+    var settings = LanguageIntelligenceSettings.defaults;
+    for (final language in languages) {
+      settings = settings.withLanguage(
+        language,
+        LanguageActivationSettings(
+          enabled: true,
+          semanticProviderId: '${language.value}-semantic',
+        ),
+      );
+    }
+
+    final prewarm = multiManager.prewarmWorkspace(
+      workspaceId: 'workspace-a',
+      workspaceRoot: r'C:\repo',
+      settings: settings,
+      target: LanguageServerTarget.localWorkspace,
+      maxConcurrency: 2,
+    );
+    await _flushAsync();
+    await _flushAsync();
+
+    expect(multiRuntime.startCalls, 2);
+    expect(multiRuntime.maxConcurrentStarts, 2);
+
+    startGate.complete();
+    await prewarm;
+
+    expect(multiRuntime.startCalls, 4);
+    expect(multiRuntime.maxConcurrentStarts, 2);
+    for (final language in languages) {
+      final snapshot = multiSessions.snapshotFor(
+        'workspace-a',
+        '${language.value}-semantic',
+      );
+      expect(snapshot.state, LanguageServerSessionState.ready);
+      expect(snapshot.activeDocumentCount, 0);
+    }
+  });
+
   test(
     'provider generation change recreates binding and resyncs latest documents',
     () async {
@@ -356,6 +415,45 @@ LanguageExtensionRegistry _registry(LanguageId rust) {
   return registry;
 }
 
+LanguageExtensionRegistry _multiProviderRegistry(
+  Iterable<LanguageId> languages,
+) {
+  final registry = LanguageExtensionRegistry();
+  for (final language in languages) {
+    final providerId = '${language.value}-semantic';
+    registry.registerLanguage(
+      LanguageExtensionDescriptor(
+        id: language,
+        displayName: language.value,
+        fileExtensions: <String>[language.value],
+        semanticProviderIds: <String>[providerId],
+        defaultSemanticProviderId: providerId,
+        capabilities: const <LanguageCapability>{
+          LanguageCapability.definition,
+          LanguageCapability.references,
+        },
+      ),
+    );
+    registry.registerProvider(
+      LanguageProviderDescriptor(
+        id: providerId,
+        kind: LanguageProviderKind.semanticServer,
+        languages: <LanguageId>{language},
+        capabilities: const <LanguageCapability>{
+          LanguageCapability.definition,
+          LanguageCapability.references,
+        },
+        processScope: LanguageProviderProcessScope.workspace,
+        launchPolicy: LanguageProviderLaunchPolicy.lazyOnDemand,
+        executableResolutionPolicy:
+            LanguageExecutableResolutionPolicy.explicitOverrideThenPath,
+        executableCandidates: <String>[providerId],
+      ),
+    );
+  }
+  return registry;
+}
+
 LanguageIntelligenceSettings _enabledSettings(LanguageId language) =>
     LanguageIntelligenceSettings().withLanguage(
       language,
@@ -377,8 +475,11 @@ final class _FakeRuntimeSession implements LanguageServerRuntimeSession {
 }
 
 final class _FakeRuntime implements LanguageServerRuntimePort {
+  Completer<void>? startGate;
   int startCalls = 0;
   int stopCalls = 0;
+  int concurrentStarts = 0;
+  int maxConcurrentStarts = 0;
   final List<_FakeRuntimeSession> sessions = <_FakeRuntimeSession>[];
   final Map<LanguageServerRuntimeSession, StreamController<LanguageServerExit>>
   exits =
@@ -396,10 +497,22 @@ final class _FakeRuntime implements LanguageServerRuntimePort {
     LanguageServerRuntimeStartRequest request,
   ) async {
     startCalls += 1;
-    final session = _FakeRuntimeSession('session-$startCalls');
-    sessions.add(session);
-    exits[session] = StreamController<LanguageServerExit>.broadcast();
-    return session;
+    concurrentStarts += 1;
+    if (concurrentStarts > maxConcurrentStarts) {
+      maxConcurrentStarts = concurrentStarts;
+    }
+    try {
+      final gate = startGate;
+      if (gate != null) {
+        await gate.future;
+      }
+      final session = _FakeRuntimeSession('session-$startCalls');
+      sessions.add(session);
+      exits[session] = StreamController<LanguageServerExit>.broadcast();
+      return session;
+    } finally {
+      concurrentStarts -= 1;
+    }
   }
 
   @override
