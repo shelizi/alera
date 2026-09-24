@@ -539,7 +539,9 @@ void main() {
           discard: () async {
             dirty = false;
           },
-          reload: () => reloadCount += 1,
+          reload: () async {
+            reloadCount += 1;
+          },
         );
         registry.register('tab-1', handle);
 

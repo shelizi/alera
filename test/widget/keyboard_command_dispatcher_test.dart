@@ -211,7 +211,9 @@ void main() {
             isDirty: () => false,
             save: () async {},
             discard: () async {},
-            reload: () => reloadCount += 1,
+            reload: () async {
+              reloadCount += 1;
+            },
           ),
         );
 
@@ -267,7 +269,9 @@ void main() {
               discardCount += 1;
               dirty = false;
             },
-            reload: () => reloadCount += 1,
+            reload: () async {
+              reloadCount += 1;
+            },
           ),
         );
 

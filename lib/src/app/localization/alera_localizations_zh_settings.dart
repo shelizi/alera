@@ -231,6 +231,8 @@ const Map<String, String> _traditionalChineseSettings = <String, String>{
   'Tab Size': 'Tab 寬度',
   'Control dependency and build directories that Quick Open never indexes.':
       '管理快速開啟永遠不建立索引的套件庫與建置目錄。',
+  'Manage dependency and build directory names excluded from indexing.':
+      '管理要從索引排除的相依套件與建置目錄名稱。',
   'Excluded Directory Names': '排除的目錄名稱',
   'These directory names are never indexed, even when Git-ignored files are included. Matching is case-insensitive.':
       '即使包含 Git 忽略檔案，這些目錄名稱也永遠不會建立索引；比對不分大小寫。',
@@ -688,7 +690,6 @@ const Map<String, String> _traditionalChineseSettings = <String, String>{
   'Auto-Generate Agent Titles': '自動產生 Agent 標題',
   'Name new agent conversations from their first prompt or recent context.':
       '依第一個 Prompt 或最近 Context 為新的 Agent 對話命名。',
-  'Custom Command': '自訂指令',
   'Use {prompt} to pass the prompt as an argument; otherwise Alera sends it on stdin.':
       '使用 {prompt} 將 Prompt 當作參數傳入；否則 Alera 會透過 stdin 傳送。',
   'Used by prompts that override the global agent with custom command.':
@@ -816,13 +817,14 @@ const Map<String, String> _traditionalChineseSettings = <String, String>{
   'Reload Shell Environment': '重新載入 Shell 環境',
   'Re-read the login shell PATH so tools installed since the runtime started resolve in new terminals.':
       '重新讀取 Login Shell 的 PATH，讓 Runtime 啟動後新安裝的工具可在新終端機中解析。',
-  'Reload': '重新載入',
   'Scrollback Lines': '回捲行數',
   'Maximum terminal history retained per session.': '每個工作階段保留的終端機歷史最大行數。',
   'Host Scrollback Size': 'Host 回捲大小',
   'Maximum host-side terminal output retained per session.':
       '每個工作階段在 Host 端保留的終端機輸出上限。',
   'Terminal Memory Budget': '終端機記憶體預算',
+  'Output Refresh FPS': '輸出更新 FPS',
+  'Refresh rate used during sustained terminal output.': '終端機持續輸出時使用的更新頻率。',
   'Word Separators': '單字分隔字元',
   'Characters that break double-click word selection.': '雙擊選取單字時視為分隔的字元。',
   'Color Overrides': '色彩覆寫',
@@ -976,11 +978,14 @@ const Map<String, String> _traditionalChineseSettings = <String, String>{
   'Scan with the Alera mobile app': '使用 Alera 行動版 App 掃描',
   'No matching options': '沒有符合的選項',
   'Language Intelligence': '語言智慧',
+  'Enable project-aware definition and reference navigation per language.':
+      '依語言啟用具專案感知的定義與參照導覽。',
   'Enable project-aware definition and reference navigation per language. Semantic servers stay off until you enable them.':
       '依語言啟用專案感知的定義與引用導覽。語意伺服器預設關閉，只有你啟用後才會使用。',
   'Semantic navigation is disabled until you enable this language.':
       '此語言啟用前，不會使用語意導覽。',
   'Semantic Server': '語意伺服器',
+  'Parser': '解析器',
   'Structural Parser': '結構解析器',
   'Retained parser for syntax, outline, folding, and structural editing.':
       '保留式解析器，用於語法、程式大綱、摺疊與結構化編輯。',

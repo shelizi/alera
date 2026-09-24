@@ -258,12 +258,12 @@ void registerAppLocalizationTailTests() {
     expect(l10n.translate('Open with Default Application'), '使用預設應用程式開啟');
     expect(l10n.translate('Refresh Outline'), '重新整理大綱');
     expect(l10n.translate('Diff Overview'), '差異總覽');
-    expect(l10n.translate('All Branches'), '所有分支');
+    expect(l10n.translate('All Branches'), '所有 Branch');
     expect(l10n.translate('Waiting for input'), '等待輸入');
     expect(l10n.translate('Done (Unread)'), '完成（未讀）');
     expect(l10n.translate('Copy Commit Hash'), '複製 Commit Hash');
-    expect(l10n.translate('Current Branch'), '目前分支');
-    expect(l10n.translate('Create Branch Here'), '在此建立分支');
+    expect(l10n.translate('Current Branch'), '目前 Branch');
+    expect(l10n.translate('Create Branch Here'), '在此建立 Branch');
     expect(l10n.translate('File changed on disk'), '檔案已在磁碟上變更');
   });
 
@@ -284,9 +284,9 @@ void registerAppLocalizationTailTests() {
     );
     expect(
       l10n.translate('Rebase Current Branch onto feature/demo'),
-      '將目前分支 Rebase 到 feature/demo',
+      '將目前 Branch Rebase 到 feature/demo',
     );
-    expect(l10n.translate('Branch Name is required'), '分支名稱 為必填。');
+    expect(l10n.translate('Branch Name is required'), 'Branch 名稱為必填');
     expect(
       l10n.translate('Autosave paused: File changed on disk'),
       '自動儲存已暫停：檔案已在磁碟上變更',
@@ -337,6 +337,9 @@ void registerAppLocalizationTailTests() {
       'px',
       'MB',
       's',
+      // Language choices intentionally keep their native self-labels.
+      '简体中文',
+      '日本語',
     };
 
     final missing = <String>{};

@@ -76,7 +76,7 @@ String? _translateDynamicTraditionalChinese(String source) {
     final label = AleraLocalizations._lookupTraditionalChinese(
       requiredField.group(1)!,
     );
-    return '$label 為必填。';
+    return '${label}為必填';
   }
   final agentGroupDescription = RegExp(
     r'^(.+) · (Waiting for input|Blocked|Interrupted|Done \(Unread\)|Done)$',
@@ -90,7 +90,7 @@ String? _translateDynamicTraditionalChinese(String source) {
   final rebaseCurrentBranchOnto = RegExp(r'^Rebase Current Branch onto (.+)$')
       .firstMatch(source);
   if (rebaseCurrentBranchOnto != null) {
-    return '將目前分支 Rebase 到 ${rebaseCurrentBranchOnto.group(1)}';
+    return '將目前 Branch Rebase 到 ${rebaseCurrentBranchOnto.group(1)}';
   }
   final autosavePaused = RegExp(r'^Autosave paused: (.+)$').firstMatch(source);
   if (autosavePaused != null) {
@@ -814,14 +814,6 @@ String? _translateDynamicTraditionalChinese(String source) {
     return '${mobileDriver.group(1)!} 正在操作此終端機';
   }
 
-  final requiredField = RegExp(r'^(.+) is required$').firstMatch(source);
-  if (requiredField != null) {
-    final field = requiredField.group(1)!;
-    final translatedField =
-        AleraLocalizations._traditionalChinese[field] ?? field;
-    return '$translatedField為必填';
-  }
-
   final selectedValue = RegExp(r'^Selected: (.+)$').firstMatch(source);
   if (selectedValue != null) {
     return '已選取：${selectedValue.group(1)}';
@@ -834,19 +826,6 @@ String? _translateDynamicTraditionalChinese(String source) {
   final interfaceLabel = RegExp(r'^Interface \((.+)\)$').firstMatch(source);
   if (interfaceLabel != null) {
     return '網路介面（${interfaceLabel.group(1)}）';
-  }
-  final expiresMinutesSeconds = RegExp(r'^Expires in (\d+)m (\d+)s$')
-      .firstMatch(source);
-  if (expiresMinutesSeconds != null) {
-    return '${expiresMinutesSeconds.group(1)} 分 ${expiresMinutesSeconds.group(2)} 秒後到期';
-  }
-  final expiresMinutes = RegExp(r'^Expires in (\d+)m$').firstMatch(source);
-  if (expiresMinutes != null) {
-    return '${expiresMinutes.group(1)} 分鐘後到期';
-  }
-  final expiresSeconds = RegExp(r'^Expires in (\d+)s$').firstMatch(source);
-  if (expiresSeconds != null) {
-    return '${expiresSeconds.group(1)} 秒後到期';
   }
   final mobileTimestamp = RegExp(r'^(Revoked|Paired|Last seen) (.+)$')
       .firstMatch(source);
@@ -871,25 +850,9 @@ String? _translateDynamicTraditionalChinese(String source) {
         ? '$prefix ${versionLabel.group(2)}'
         : '$prefix ${versionLabel.group(2)}（Build $build）';
   }
-  final modelPassedTo = RegExp(r'^Model passed to (.+)\.$').firstMatch(source);
-  if (modelPassedTo != null) {
-    return '傳給 ${modelPassedTo.group(1)} 的模型。';
-  }
   final globalSettingValue = RegExp(r'^Global \((.+)\)$').firstMatch(source);
   if (globalSettingValue != null) {
     return '全域（${globalSettingValue.group(1)}）';
-  }
-  final usageLabel = RegExp(r'^Usage: (.+)$').firstMatch(source);
-  if (usageLabel != null) {
-    return 'Usage：${usageLabel.group(1)}';
-  }
-  final moveEarlier = RegExp(r'^Move (.+) Earlier$').firstMatch(source);
-  if (moveEarlier != null) {
-    return '將 ${moveEarlier.group(1)} 往前移';
-  }
-  final moveLater = RegExp(r'^Move (.+) Later$').firstMatch(source);
-  if (moveLater != null) {
-    return '將 ${moveLater.group(1)} 往後移';
   }
   final downloadingUpdate = RegExp(r'^Downloading update (.+)\.$')
       .firstMatch(source);

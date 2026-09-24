@@ -431,8 +431,8 @@ void main() {
       expect(l10n.translate('Launch Mode'), '啟動模式');
       expect(l10n.translate('Custom Command'), '自訂命令');
       expect(l10n.translate('Support Alera'), '支持 Alera');
-      expect(l10n.translate('No quota providers enabled'), '尚未啟用任何配額 Provider');
-      expect(l10n.translate('Interface (Ethernet)'), '網路介面（Ethernet）');
+      expect(l10n.translate('No quota providers enabled'), '尚未啟用配額 Provider');
+      expect(l10n.translate('Interface (Ethernet)'), '介面（Ethernet）');
       expect(l10n.translate('Expires in 2m 5s'), '2 分 5 秒後到期');
       expect(
         l10n.translate('Current version 1.2.3 (build 45)'),
