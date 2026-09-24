@@ -108,6 +108,7 @@ void main() {
         expect((portable['editor']! as Map)['externalEditor'], isNull);
         expect((portable['editor']! as Map)['languageIntelligence'], isNull);
         expect((portable['terminal']! as Map)['scrollbackLines'], isNull);
+        expect((portable['terminal']! as Map)['outputRefreshFps'], isNull);
         expect((portable['terminal']! as Map)['loginShell'], isNull);
         expect((portable['diagnostics']), isNull);
         expect((portable['general']! as Map)['showTrayIcon'], isFalse);
@@ -233,6 +234,7 @@ const _classifiedFieldPaths = <String>{
   'terminal.wordSeparators',
   'terminal.colorOverrides',
   'terminal.scrollbackLines',
+  'terminal.outputRefreshFps',
   'terminal.tuiScrollSensitivity',
   'terminal.clipboardOnSelect',
   'terminal.allowOsc52Clipboard',
@@ -335,6 +337,7 @@ AleraSettings _populatedSettings() {
     terminal: AleraSettings.defaults.terminal.copyWith(
       fontSize: 16,
       scrollbackLines: 1234,
+      outputRefreshFps: 35,
       loginShell: true,
       wordSeparators: ' /',
     ),

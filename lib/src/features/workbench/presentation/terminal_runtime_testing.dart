@@ -248,7 +248,22 @@ int terminalOutputFlushCountForTesting(TerminalSessionHandle session) {
 
 @visibleForTesting
 Duration get terminalOutputMinFlushIntervalForTesting =>
-    _terminalOutputMinFlushInterval;
+    _terminalOutputFlushIntervalForFps(
+      TerminalSettings.defaults.outputRefreshFps,
+    );
+
+@visibleForTesting
+Duration terminalOutputFlushIntervalForFpsForTesting(int fps) =>
+    _terminalOutputFlushIntervalForFps(fps);
+
+@visibleForTesting
+Duration terminalOutputFlushIntervalForSessionForTesting(
+  TerminalSessionHandle session,
+) {
+  return _terminalOutputFlushIntervalForFps(
+    (session as _XtermTerminalSessionHandle)._settings.outputRefreshFps,
+  );
+}
 
 @visibleForTesting
 Duration get terminalOutputAdaptiveIdleResetIntervalForTesting =>

@@ -29,7 +29,12 @@ extension _XtermTerminalSessionSync on _XtermTerminalSessionHandle {
   }
 
   void applySettings(TerminalSettings settings) {
+    final outputRefreshFpsChanged =
+        _settings.outputRefreshFps != settings.outputRefreshFps;
     _settings = settings;
+    if (outputRefreshFpsChanged) {
+      _pump.outputRefreshFpsChanged();
+    }
     if (!settings.clipboardOnSelect) {
       _selectionCopyTimer?.cancel();
       _selectionCopyTimer = null;

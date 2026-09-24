@@ -87,7 +87,7 @@ A field can sit in more than one tier: the `runtimeSettings.update` payload and 
 | `fontFamily`, `fontSize`, `fontWeight`, `lineHeight`, `paddingX`, `paddingY`, `cursorShape`, `cursorBlink`, `cursorOpacity`, `themeName`, `backgroundOpacity`, `wordSeparators`, `colorOverrides`, `tuiScrollSensitivity`, `clipboardOnSelect`, `allowOsc52Clipboard`, `showComposerByDefault`, `toolbarCorner` | portable |
 | `hostEmptyShutdownDelaySeconds`, `hostDetachedSessionShutdownDelaySeconds`, `hostScrollbackBytes`, `loginShell` (as `resolvedLoginShell`) | runtime (`configure`) |
 | `bufferBudgetMegabytes`, `keepRuntimeOpenOnAppQuit` | runtime (consumed by the workbench buffer owner and the runtime-host quit gate) |
-| `scrollbackLines`, `powerShell7ExecutablePath`, `confirmCloseRunningProcesses` | local-only (`scrollbackLines` also feeds the derived `restoreSnapshotBytes` sent in `configure`; executable overrides are per-device) |
+| `scrollbackLines`, `outputRefreshFps`, `powerShell7ExecutablePath`, `confirmCloseRunningProcesses` | local-only (`scrollbackLines` also feeds the derived `restoreSnapshotBytes` sent in `configure`; output refresh is device-performance-specific; executable overrides are per-device) |
 
 ### `keyboard`
 

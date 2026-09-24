@@ -126,6 +126,12 @@ const List<SettingsSearchEntry> terminalSearchEntries = <SettingsSearchEntry>[
     groupId: 'advanced',
   ),
   SettingsSearchEntry(
+    title: 'Output Refresh FPS',
+    description: 'Refresh rate used during sustained terminal output.',
+    keywords: <String>['fps', 'refresh', 'performance', 'smooth', 'cpu'],
+    groupId: 'advanced',
+  ),
+  SettingsSearchEntry(
     title: 'Word Separators',
     description: 'Characters that break double-click word selection.',
     keywords: <String>['boundary', 'selection', 'double click'],

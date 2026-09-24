@@ -84,8 +84,7 @@ Duration _terminalOutputAdaptiveSample({
   return asyncUiApplyTime ?? wallTime;
 }
 
-/// Floor on the gap between two flushes, so a process writing without pause
-/// cannot drive the frame loop at full vsync.
+/// Converts the configured sustained-output FPS to the floor between flushes.
 ///
 /// Measured on Linux: a frame costs roughly the same whether it changes one
 /// line or a whole screen, because the fixed per-frame cost dominates - the GTK
@@ -93,10 +92,15 @@ Duration _terminalOutputAdaptiveSample({
 /// the platform thread (`gdk_cairo_draw_from_gl`), which no GDK setting avoids.
 /// CPU therefore tracks the frame count almost linearly: 30 fps of streaming
 /// output cost 48% of a core against 31% at 20 fps, with a bare frame costing
-/// ~6 ms of CPU on its own. Nobody reads text scrolling at 60 Hz, so sustained
-/// output uses the measured 20 fps cadence.
+/// ~6 ms of CPU on its own. The default therefore remains the measured 20 fps,
+/// while power users can tune the sustained-output cadence per device.
 ///
-/// This is a floor on cadence, not a delay on arrival: a terminal that has been
-/// quiet flushes on the very next frame, so echo latency while typing is
-/// unchanged.
-const Duration _terminalOutputMinFlushInterval = Duration(milliseconds: 50);
+/// This remains only a sustained-output floor: a quiet terminal flushes on the
+/// next frame, and interactive input can explicitly promote the next live
+/// output flush to the next frame.
+Duration _terminalOutputFlushIntervalForFps(int fps) {
+  final normalizedFps = fps.clamp(5, 120).toInt();
+  return Duration(
+    microseconds: (Duration.microsecondsPerSecond / normalizedFps).round(),
+  );
+}

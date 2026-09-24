@@ -28,6 +28,7 @@ void main() {
       expect(terminal.wordSeparators, isNull);
       expect(terminal.colorOverrides.isEmpty, isTrue);
       expect(terminal.scrollbackLines, 10000);
+      expect(terminal.outputRefreshFps, 20);
       expect(terminal.tuiScrollSensitivity, 1);
       expect(terminal.clipboardOnSelect, isFalse);
       expect(terminal.allowOsc52Clipboard, isFalse);
@@ -310,6 +311,7 @@ void main() {
         'wordSeparators': ' /',
         'colorOverrides': <String, Object?>{'cursor': '#abcdef'},
         'scrollbackLines': 15000,
+        'outputRefreshFps': 45,
         'tuiScrollSensitivity': 4,
         'clipboardOnSelect': true,
         'allowOsc52Clipboard': true,
@@ -329,6 +331,7 @@ void main() {
       expect(restored.wordSeparators, ' /');
       expect(restored.colorOverrides.cursor, '#abcdef');
       expect(restored.scrollbackLines, 15000);
+      expect(restored.outputRefreshFps, 45);
       expect(restored.tuiScrollSensitivity, 4);
       expect(restored.clipboardOnSelect, isTrue);
       expect(restored.allowOsc52Clipboard, isTrue);

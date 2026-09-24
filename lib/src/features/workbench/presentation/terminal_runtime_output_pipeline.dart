@@ -41,7 +41,7 @@ class _TerminalOutputPipeline {
   bool flushScheduled = false;
 
   /// Set while a flush is waiting out the cadence floor rather than the next
-  /// frame. See `_terminalOutputMinFlushInterval`.
+  /// frame. See `_terminalOutputFlushIntervalForFps`.
   Timer? flushTimer;
 
   /// Time since the last flush was *requested*. Not started until the first

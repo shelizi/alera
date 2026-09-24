@@ -57,8 +57,8 @@ class const TerminalColorOverrides({
 /// Mixed ownership: the appearance fields are portable-cloud configuration;
 /// the `host*` fields, `bufferBudgetMegabytes`, `keepRuntimeOpenOnAppQuit`,
 /// and `loginShell` are runtime operational settings delivered through the
-/// runtime-host `configure` request; `scrollbackLines` and
-/// `confirmCloseRunningProcesses` are local-only UI prefs.
+/// runtime-host `configure` request; `scrollbackLines`, `outputRefreshFps`,
+/// and `confirmCloseRunningProcesses` are local-only UI prefs.
 @MappableClass(hook: _LegacyKeepRuntimeOpenHook())
 class const TerminalSettings({
   required this.fontFamily,
@@ -75,6 +75,7 @@ class const TerminalSettings({
   this.wordSeparators,
   this.colorOverrides = const TerminalColorOverrides(),
   required this.scrollbackLines,
+  this.outputRefreshFps = 20,
   this.tuiScrollSensitivity = 1,
   this.clipboardOnSelect = false,
   this.allowOsc52Clipboard = false,
@@ -103,6 +104,7 @@ class const TerminalSettings({
   final String? wordSeparators;
   final TerminalColorOverrides colorOverrides;
   final int scrollbackLines;
+  final int outputRefreshFps;
   final int tuiScrollSensitivity;
   final bool clipboardOnSelect;
   final bool allowOsc52Clipboard;
@@ -157,6 +159,7 @@ class const TerminalSettings({
     themeName: TerminalThemeNames.aleraDark,
     backgroundOpacity: 1,
     scrollbackLines: 10000,
+    outputRefreshFps: 20,
     tuiScrollSensitivity: 1,
     clipboardOnSelect: false,
     allowOsc52Clipboard: false,

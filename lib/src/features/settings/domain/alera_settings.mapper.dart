@@ -2828,6 +2828,13 @@ class TerminalSettingsMapper extends ClassMapperBase<TerminalSettings> {
     'scrollbackLines',
     _$scrollbackLines,
   );
+  static int _$outputRefreshFps(TerminalSettings v) => v.outputRefreshFps;
+  static const Field<TerminalSettings, int> _f$outputRefreshFps = Field(
+    'outputRefreshFps',
+    _$outputRefreshFps,
+    opt: true,
+    def: 20,
+  );
   static int _$tuiScrollSensitivity(TerminalSettings v) =>
       v.tuiScrollSensitivity;
   static const Field<TerminalSettings, int> _f$tuiScrollSensitivity = Field(
@@ -2950,6 +2957,7 @@ class TerminalSettingsMapper extends ClassMapperBase<TerminalSettings> {
     #wordSeparators: _f$wordSeparators,
     #colorOverrides: _f$colorOverrides,
     #scrollbackLines: _f$scrollbackLines,
+    #outputRefreshFps: _f$outputRefreshFps,
     #tuiScrollSensitivity: _f$tuiScrollSensitivity,
     #clipboardOnSelect: _f$clipboardOnSelect,
     #allowOsc52Clipboard: _f$allowOsc52Clipboard,
@@ -2984,6 +2992,7 @@ class TerminalSettingsMapper extends ClassMapperBase<TerminalSettings> {
       wordSeparators: data.dec(_f$wordSeparators),
       colorOverrides: data.dec(_f$colorOverrides),
       scrollbackLines: data.dec(_f$scrollbackLines),
+      outputRefreshFps: data.dec(_f$outputRefreshFps),
       tuiScrollSensitivity: data.dec(_f$tuiScrollSensitivity),
       clipboardOnSelect: data.dec(_f$clipboardOnSelect),
       allowOsc52Clipboard: data.dec(_f$allowOsc52Clipboard),
@@ -3085,6 +3094,7 @@ abstract class TerminalSettingsCopyWith<$R, $In extends TerminalSettings, $Out>
     String? wordSeparators,
     TerminalColorOverrides? colorOverrides,
     int? scrollbackLines,
+    int? outputRefreshFps,
     int? tuiScrollSensitivity,
     bool? clipboardOnSelect,
     bool? allowOsc52Clipboard,
@@ -3136,6 +3146,7 @@ class _TerminalSettingsCopyWithImpl<$R, $Out>
     Object? wordSeparators = $none,
     TerminalColorOverrides? colorOverrides,
     int? scrollbackLines,
+    int? outputRefreshFps,
     int? tuiScrollSensitivity,
     bool? clipboardOnSelect,
     bool? allowOsc52Clipboard,
@@ -3165,6 +3176,7 @@ class _TerminalSettingsCopyWithImpl<$R, $Out>
       if (wordSeparators != $none) #wordSeparators: wordSeparators,
       if (colorOverrides != null) #colorOverrides: colorOverrides,
       if (scrollbackLines != null) #scrollbackLines: scrollbackLines,
+      if (outputRefreshFps != null) #outputRefreshFps: outputRefreshFps,
       if (tuiScrollSensitivity != null)
         #tuiScrollSensitivity: tuiScrollSensitivity,
       if (clipboardOnSelect != null) #clipboardOnSelect: clipboardOnSelect,
@@ -3210,6 +3222,10 @@ class _TerminalSettingsCopyWithImpl<$R, $Out>
     wordSeparators: data.get(#wordSeparators, or: $value.wordSeparators),
     colorOverrides: data.get(#colorOverrides, or: $value.colorOverrides),
     scrollbackLines: data.get(#scrollbackLines, or: $value.scrollbackLines),
+    outputRefreshFps: data.get(
+      #outputRefreshFps,
+      or: $value.outputRefreshFps,
+    ),
     tuiScrollSensitivity: data.get(
       #tuiScrollSensitivity,
       or: $value.tuiScrollSensitivity,

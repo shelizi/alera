@@ -342,6 +342,21 @@ class const TerminalSettingsPane({
                 ),
               ),
               SettingsIntegerRow(
+                title: 'Output Refresh FPS',
+                description:
+                    'Refresh rate used while terminal output is continuously '
+                    'streaming. Higher values look smoother but use more CPU. '
+                    'Interactive input can still refresh on the next frame.',
+                value: settings.outputRefreshFps,
+                min: 5,
+                max: 120,
+                step: 5,
+                suffix: 'FPS',
+                onChanged: (value) => onChanged(
+                  (settings) => settings.copyWith(outputRefreshFps: value),
+                ),
+              ),
+              SettingsIntegerRow(
                 title: 'Terminal Memory Budget',
                 description:
                     'Ceiling for terminal scrollback held in the app. Over it, '

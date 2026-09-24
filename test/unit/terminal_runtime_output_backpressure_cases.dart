@@ -773,6 +773,74 @@ void _registerTerminalRuntimeOutputBackpressureTests() {
     },
   );
 
+  test('converts configurable terminal output FPS to flush cadence', () {
+    expect(
+      terminalOutputFlushIntervalForFpsForTesting(20),
+      const Duration(milliseconds: 50),
+    );
+    expect(
+      terminalOutputFlushIntervalForFpsForTesting(40),
+      const Duration(milliseconds: 25),
+    );
+    expect(
+      terminalOutputFlushIntervalForFpsForTesting(120),
+      const Duration(microseconds: 8333),
+    );
+    expect(
+      terminalOutputFlushIntervalForFpsForTesting(1),
+      const Duration(milliseconds: 200),
+    );
+  });
+
+  test('runtime updates sustained output FPS for existing sessions', () {
+    final runtime = XtermTerminalRuntime(
+      initialSettings: TerminalSettings.defaults.copyWith(outputRefreshFps: 10),
+      ptySessionFactory: _FakeTerminalPtySessionFactory(),
+      shellLaunchesBuilder: () => <GhosttyTerminalShellLaunch>[
+        _launch('shell', shell: '/bin/sh'),
+      ],
+    );
+    addTearDown(runtime.dispose);
+    final session = runtime.sessionFor(workspace: _workspace(), tab: _tab());
+
+    expect(
+      terminalOutputFlushIntervalForSessionForTesting(session),
+      const Duration(milliseconds: 100),
+    );
+
+    runtime.updateSettings(
+      TerminalSettings.defaults.copyWith(outputRefreshFps: 40),
+    );
+
+    expect(
+      terminalOutputFlushIntervalForSessionForTesting(session),
+      const Duration(milliseconds: 25),
+    );
+  });
+
+  test('interactive input promotes deferred output to the next frame', () {
+    final runtime = XtermTerminalRuntime(
+      ptySessionFactory: _FakeTerminalPtySessionFactory(),
+      shellLaunchesBuilder: () => <GhosttyTerminalShellLaunch>[
+        _launch('shell', shell: '/bin/sh'),
+      ],
+    );
+    addTearDown(runtime.dispose);
+    final session = runtime.sessionFor(workspace: _workspace(), tab: _tab());
+    final visibility = acquireTerminalVisibilityForTesting(session);
+    addTearDown(visibility.dispose);
+
+    queueTerminalOutputForTesting(session, 'first\r\n');
+    flushTerminalOutputForTesting(session);
+    queueTerminalOutputForTesting(session, 'background\r\n');
+    expect(terminalOutputFlushDeferredForTesting(session), isTrue);
+
+    feedTerminalInputForTesting(session, 'x');
+
+    expect(terminalOutputFlushDeferredForTesting(session), isFalse);
+    expect(terminalOutputFlushScheduledForTesting(session), isTrue);
+  });
+
   test('a deferred flush is dropped when the terminal goes hidden', () async {
     final runtime = XtermTerminalRuntime(
       ptySessionFactory: _FakeTerminalPtySessionFactory(),

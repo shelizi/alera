@@ -30,6 +30,7 @@ void _registerSettingsDialogTerminalTests() {
     await tapStepper(AleraIcons.chevronUp, 7);
     await tapStepper(AleraIcons.chevronUp, 8);
     await tapStepper(AleraIcons.chevronUp, 9);
+    await tapStepper(AleraIcons.chevronUp, 10);
 
     Future<void> setSwatchColor(int index, Color color) async {
       final swatch = find.byType(AleraColorSwatch).at(index);
@@ -61,6 +62,7 @@ void _registerSettingsDialogTerminalTests() {
     );
     expect(after.scrollbackLines, greaterThan(before.scrollbackLines));
     expect(after.hostScrollbackBytes, greaterThan(before.hostScrollbackBytes));
+    expect(after.outputRefreshFps, greaterThan(before.outputRefreshFps));
     expect(after.colorOverrides.background, '#223344');
     expect(after.colorOverrides.cursor, '#445566');
     expect(after.colorOverrides.selection, '#667788');
@@ -136,6 +138,7 @@ void _registerSettingsDialogTerminalTests() {
     expect(find.text('Copy On Select'), findsOneWidget);
     expect(find.text('Allow OSC 52 Clipboard Writes'), findsOneWidget);
     expect(find.text('Scrollback Lines'), findsOneWidget);
+    expect(find.text('Output Refresh FPS'), findsOneWidget);
 
     await tester.enterText(find.byType(TextField).first, 'cursor');
     await tester.pump();

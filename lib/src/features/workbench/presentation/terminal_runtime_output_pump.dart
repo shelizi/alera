@@ -6,6 +6,7 @@ part of 'terminal_runtime.dart';
 abstract interface class _TerminalSessionOutputHost {
   bool get isDisposed;
   bool get isOutputVisible;
+  int get outputRefreshFps;
 
   /// Applies one ordered output chunk.
   ///
@@ -29,8 +30,12 @@ class _TerminalSessionOutputPump {
   final _TerminalOutputPipeline pipeline = _TerminalOutputPipeline();
   bool _hiddenCatchUpScheduled = false;
   int? _writeInFlightGeneration;
+  int _interactiveInputGeneration = 0;
+  int _servedInteractiveInputGeneration = 0;
 
   bool get _writeInFlight => _writeInFlightGeneration != null;
+  bool get _interactiveFlushRequested =>
+      _servedInteractiveInputGeneration != _interactiveInputGeneration;
   int _writeGeneration = 0;
   // Start conservatively before this session has any parse-time samples.
   // Local profiling of ANSI/TUI-heavy output measured ~25 ms at 64 KiB,
@@ -41,6 +46,38 @@ class _TerminalSessionOutputPump {
   void capAdaptiveBudgetForReveal() {
     if (_adaptiveChunkBudget > _terminalOutputInitialAdaptiveCharsPerFrame) {
       _adaptiveChunkBudget = _terminalOutputInitialAdaptiveCharsPerFrame;
+    }
+  }
+
+  /// Promotes the next visible live-output flush to the next frame.
+  ///
+  /// Sustained terminal output intentionally runs at a lower cadence to avoid
+  /// spending a large share of a CPU core on rendering. That cadence should
+  /// not make a keyboard echo feel sluggish, though: if input arrives while a
+  /// configured cadence timer is pending, replace that timer with the next
+  /// vsync.
+  ///
+  /// Generations make this safe when input races an asynchronous parser-worker
+  /// apply. A write that was already in flight before the input cannot consume
+  /// the newly requested low-latency flush.
+  void markInteractiveInput() {
+    if (_host.isDisposed) {
+      return;
+    }
+    _interactiveInputGeneration += 1;
+    if (_writeInFlight || !_host.isOutputVisible || pipeline.pending.isEmpty) {
+      return;
+    }
+    _scheduleUrgentVisibleFlush();
+  }
+
+  void outputRefreshFpsChanged() {
+    if (_host.isDisposed || pipeline.flushTimer == null) {
+      return;
+    }
+    pipeline.cancelDeferredFlush();
+    if (_host.isOutputVisible && pipeline.pending.isNotEmpty) {
+      scheduleFlush();
     }
   }
 
@@ -91,6 +128,12 @@ class _TerminalSessionOutputPump {
       } else {
         scheduleFlush();
       }
+      return;
+    }
+    if (source == _TerminalOutputSource.live &&
+        _interactiveFlushRequested &&
+        _host.isOutputVisible) {
+      _scheduleUrgentVisibleFlush();
       return;
     }
     scheduleFlush();
@@ -147,28 +190,26 @@ class _TerminalSessionOutputPump {
       return;
     }
     final clock = pipeline.sinceFlushRequest;
+    final minFlushInterval = _terminalOutputFlushIntervalForFps(
+      _host.outputRefreshFps,
+    );
     // An unstarted clock means nothing has been flushed yet, so the first
     // chunk goes out on the next frame rather than waiting for a cadence it
     // has not used up.
-    final sinceLastFlush = clock.isRunning
-        ? clock.elapsed
-        : _terminalOutputMinFlushInterval;
-    if (sinceLastFlush >= _terminalOutputMinFlushInterval) {
+    final sinceLastFlush = clock.isRunning ? clock.elapsed : minFlushInterval;
+    if (sinceLastFlush >= minFlushInterval) {
       _requestFrame();
       return;
     }
     pipeline.flushScheduled = true;
-    pipeline.flushTimer = Timer(
-      _terminalOutputMinFlushInterval - sinceLastFlush,
-      () {
-        pipeline.flushTimer = null;
-        pipeline.flushScheduled = false;
-        if (_host.isDisposed || !_host.isOutputVisible) {
-          return;
-        }
-        _requestFrame();
-      },
-    );
+    pipeline.flushTimer = Timer(minFlushInterval - sinceLastFlush, () {
+      pipeline.flushTimer = null;
+      pipeline.flushScheduled = false;
+      if (_host.isDisposed || !_host.isOutputVisible) {
+        return;
+      }
+      _requestFrame();
+    });
   }
 
   void _requestFrame() {
@@ -223,6 +264,7 @@ class _TerminalSessionOutputPump {
     final frame = StringBuffer();
     var written = 0;
     var restoreWritten = 0;
+    var liveWritten = 0;
     while (pending.isNotEmpty && written < chunkBudget) {
       final segment = pending.first;
       final head = segment.head;
@@ -234,6 +276,8 @@ class _TerminalSessionOutputPump {
         written += available;
         if (segment.source == _TerminalOutputSource.restore) {
           restoreWritten += available;
+        } else if (segment.source == _TerminalOutputSource.live) {
+          liveWritten += available;
         }
         continue;
       }
@@ -249,10 +293,15 @@ class _TerminalSessionOutputPump {
       written += consumed;
       if (segment.source == _TerminalOutputSource.restore) {
         restoreWritten += consumed;
+      } else if (segment.source == _TerminalOutputSource.live) {
+        liveWritten += consumed;
       }
     }
     if (written == 0) {
       return;
+    }
+    if (liveWritten > 0 && _interactiveFlushRequested) {
+      _servedInteractiveInputGeneration = _interactiveInputGeneration;
     }
     final shouldAdapt = adaptBudget && written >= chunkBudget - 1;
     final blockingClock = shouldAdapt ? (Stopwatch()..start()) : null;
@@ -337,7 +386,11 @@ class _TerminalSessionOutputPump {
       return;
     }
     if (_host.isOutputVisible) {
-      scheduleFlush();
+      if (_interactiveFlushRequested) {
+        _scheduleUrgentVisibleFlush();
+      } else {
+        scheduleFlush();
+      }
       return;
     }
     if (pipeline.liveLength > _terminalOutputHiddenCatchUpTargetChars) {

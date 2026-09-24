@@ -42,6 +42,7 @@ extension _XtermTerminalAttachment on _XtermTerminalSessionHandle {
   }
 
   void _handleTerminalInput(String data) {
+    _pump.markInteractiveInput();
     _ptySession?.writeBytes(utf8.encode(data));
   }
 

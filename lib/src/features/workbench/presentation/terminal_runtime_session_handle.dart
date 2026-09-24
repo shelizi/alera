@@ -285,6 +285,9 @@ class _XtermTerminalSessionHandle(
   bool get isOutputVisible => _visibility.isOutputVisible;
 
   @override
+  int get outputRefreshFps => _settings.outputRefreshFps;
+
+  @override
   Future<Duration>? writeToTerminal(String data) {
     if (data.isEmpty || _disposed) {
       return null;
