@@ -344,7 +344,7 @@ class CodeForgeController implements DeltaTextInputClient {
                 }
 
                 if (!_isDisposed) {
-                  semanticTokens.value = (tokens, _semanticTokensVersion++);
+                  publishSemanticTokens(tokens);
                 }
               }
             }
@@ -1374,8 +1374,22 @@ class CodeForgeController implements DeltaTextInputClient {
 
   int get documentVersion => _currentVersion;
 
-  void publishSemanticTokens(List<LspSemanticToken> tokens) {
-    semanticTokens.value = (tokens, _semanticTokensVersion++);
+  /// The inclusive line range the publish with [version] covered, so lines in
+  /// it that received no token can drop their stale spans.
+  ({int version, int startLine, int endLine})? semanticTokensCoverage;
+
+  void publishSemanticTokens(
+    List<LspSemanticToken> tokens, {
+    int? startLine,
+    int? endLine,
+  }) {
+    final version = _semanticTokensVersion++;
+    semanticTokensCoverage = (
+      version: version,
+      startLine: startLine ?? 0,
+      endLine: endLine ?? lineCount - 1,
+    );
+    semanticTokens.value = (tokens, version);
   }
 
   /// A [ValueNotifier] used to for showing code suggestions.
