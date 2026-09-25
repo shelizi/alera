@@ -88,6 +88,7 @@ class const _CollapsedQuotaBar({
   required final VoidCallback onRefresh,
   required final AgentQuotaPinToggle onTogglePinned,
   final VoidCallback? onOpenUsage,
+  required final String? Function(AgentQuotaSnapshot snapshot) profileLabelFor,
   final Widget? trailing,
 }) extends StatelessWidget {
   @override
@@ -98,11 +99,7 @@ class const _CollapsedQuotaBar({
               .map(
                 (snapshot) => _quotaTooltip(
                   snapshot,
-                  profileLabel:
-                      snapshot.provider == AgentQuotaProviderId.claude ||
-                          snapshot.provider == AgentQuotaProviderId.opencode
-                      ? snapshot.displayName
-                      : null,
+                  profileLabel: profileLabelFor(snapshot),
                 ),
               )
               .join('\n\n');
@@ -123,9 +120,7 @@ class const _CollapsedQuotaBar({
                 onOpenUsage: onOpenUsage,
                 profileLabels: <String, String>{
                   for (final snapshot in snapshots)
-                    if (snapshot.provider == AgentQuotaProviderId.claude ||
-                        snapshot.provider == AgentQuotaProviderId.opencode)
-                      snapshot.key: snapshot.displayName,
+                    snapshot.key: ?profileLabelFor(snapshot),
                 },
               ),
               child: Padding(

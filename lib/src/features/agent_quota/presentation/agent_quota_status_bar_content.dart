@@ -35,6 +35,15 @@ class const AgentQuotaStatusBarContent({
   Widget build(BuildContext context) {
     final enabled = _enabledSnapshots();
     final pinned = _pinnedSnapshots(enabled);
+    final showClaudeDefaultLabel =
+        enabled
+            .where(
+              (snapshot) => snapshot.provider == AgentQuotaProviderId.claude,
+            )
+            .length >
+        1;
+    String? profileLabelFor(AgentQuotaSnapshot snapshot) =>
+        _claudeProfileLabel(snapshot, showDefault: showClaudeDefaultLabel);
     return Container(
       height: AleraTokens.statusBarHeight,
       decoration: const BoxDecoration(
@@ -54,6 +63,7 @@ class const AgentQuotaStatusBarContent({
               onRefresh: onRefresh,
               onTogglePinned: onTogglePinned,
               onOpenUsage: onOpenUsage,
+              profileLabelFor: profileLabelFor,
               trailing: trailing,
             );
           }
@@ -90,7 +100,7 @@ class const AgentQuotaStatusBarContent({
                 error: error,
                 onTogglePinned: onTogglePinned,
                 onOpenUsage: onOpenUsage,
-                profileLabelFor: _claudeProfileLabel,
+                profileLabelFor: profileLabelFor,
               ),
               const VerticalDivider(width: 1, color: AleraTokens.borderSubtle),
               Expanded(
@@ -101,7 +111,7 @@ class const AgentQuotaStatusBarContent({
                       for (final snapshot in pinned)
                         _QuotaProviderSummary(
                           snapshot: snapshot,
-                          profileLabel: _claudeProfileLabel(snapshot),
+                          profileLabel: profileLabelFor(snapshot),
                           compact: compact,
                           hostId: hostId,
                           actions: actions,
@@ -193,7 +203,12 @@ class const AgentQuotaStatusBarContent({
     return visible;
   }
 
-  String? _claudeProfileLabel(AgentQuotaSnapshot snapshot) {
+  // A lone default account needs no label; it only disambiguates between
+  // several Claude accounts.
+  String? _claudeProfileLabel(
+    AgentQuotaSnapshot snapshot, {
+    required bool showDefault,
+  }) {
     if (snapshot.provider == AgentQuotaProviderId.opencode) {
       return snapshot.accountId == 'go' ? 'Go' : 'Zen';
     }
@@ -201,7 +216,7 @@ class const AgentQuotaStatusBarContent({
       return null;
     }
     if (snapshot.accountId == 'default') {
-      return 'Default';
+      return showDefault ? 'Default' : null;
     }
     for (final profile in settings.claudeProfiles) {
       if (profile.profile == snapshot.accountId) {

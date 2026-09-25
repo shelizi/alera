@@ -73,3 +73,9 @@ AgentQuotaBucket _bucket(
     resetDescription: resetDescription,
   );
 }
+
+Finder _claudeProviderIcon() => find.byWidgetPredicate(
+  (widget) =>
+      widget is AgentQuotaProviderIcon &&
+      widget.provider == AgentQuotaProviderId.claude,
+);

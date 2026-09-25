@@ -222,9 +222,10 @@ void main() {
       ),
     );
 
+    expect(find.text('Default'), findsNothing);
     expect(
       tester.getCenter(find.text('G·W')).dx,
-      lessThan(tester.getCenter(find.text('Default')).dx),
+      lessThan(tester.getCenter(_claudeProviderIcon()).dx),
     );
   });
 
