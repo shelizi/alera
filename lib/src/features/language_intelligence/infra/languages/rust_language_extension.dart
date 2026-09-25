@@ -16,7 +16,7 @@ final LanguageExtensionContribution rustLanguageExtension =
           structuralParserDefaultEnabled: true,
           semanticProviderIds: const <String>['rust.rust-analyzer'],
           defaultSemanticProviderId: 'rust.rust-analyzer',
-          capabilities: builtinLanguageCapabilities,
+          capabilities: builtinImplementationLanguageCapabilities,
         ),
       ],
       providers: <LanguageProviderDescriptor>[
@@ -32,7 +32,7 @@ final LanguageExtensionContribution rustLanguageExtension =
           id: 'rust.rust-analyzer',
           kind: LanguageProviderKind.semanticServer,
           languages: <LanguageId>{LanguageId('rust')},
-          capabilities: builtinNavigationCapabilities,
+          capabilities: builtinImplementationNavigationCapabilities,
           processScope: LanguageProviderProcessScope.workspace,
           launchPolicy: LanguageProviderLaunchPolicy.lazyOnDemand,
           executableResolutionPolicy:

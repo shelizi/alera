@@ -2,7 +2,17 @@
 # console window on Windows, and neither the Flutter runner (GUI subsystem) nor
 # the terminal-host sidecar (detached) has one. Every spawn therefore has to go
 # through the helpers in `alera_core::child_process`, which set CREATE_NO_WINDOW.
+#
+# `std` canonicalization returns the verbatim `\\?\E:\...` form on Windows. A
+# path in that form never compares equal to the plain form git2, file URIs, or
+# the Dart side produce, and `cmd.exe` refuses it as a working directory and
+# runs in `C:\Windows` instead. `dunce::canonicalize` keeps the plain form
+# whenever it is representable and is `std` on other platforms, so every
+# canonical path in the workspace comes out spelled the same way.
 disallowed-methods = [
     { path = "std::process::Command::new", reason = "build the command, then call alera_core::child_process::suppress_console_window" },
     { path = "tokio::process::Command::new", reason = "build the command, then call alera_core::child_process::suppress_console_window_async" },
+    { path = "std::fs::canonicalize", reason = "use dunce::canonicalize so Windows paths never come out in the verbatim form" },
+    { path = "std::path::Path::canonicalize", reason = "use dunce::canonicalize so Windows paths never come out in the verbatim form" },
+    { path = "tokio::fs::canonicalize", reason = "use dunce::canonicalize (inside spawn_blocking if needed) so Windows paths never come out in the verbatim form" },
 ]

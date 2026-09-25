@@ -323,7 +323,7 @@ fn quick_open_relative_path(
         if !include_internal_symlinks {
             return Ok(None);
         }
-        let canonical = match fs::canonicalize(path) {
+        let canonical = match dunce::canonicalize(path) {
             Ok(canonical) => canonical,
             Err(_) => return Ok(None),
         };

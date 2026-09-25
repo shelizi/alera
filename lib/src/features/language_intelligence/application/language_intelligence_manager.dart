@@ -428,7 +428,9 @@ final class LanguageIntelligenceManager {
     }
     final binding = await _ensureBinding(document);
     if (binding == null) {
-      return const <SourceLocation>[];
+      // An empty list would read as "nothing found" while the server is still
+      // starting or failed to start; callers must be able to tell them apart.
+      throw LanguageServerNotReadyException(providerId: document.providerId);
     }
     await _syncDocument(binding, document);
     return invoke(binding.binding.navigation);

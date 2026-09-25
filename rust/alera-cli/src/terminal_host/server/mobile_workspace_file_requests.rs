@@ -1,4 +1,3 @@
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use alera_core::runtime::{RuntimeStore, Workspace};
@@ -221,7 +220,7 @@ async fn read_mobile_prompt_attachment(runtime_dir: PathBuf, payload: &Value) ->
         .and_then(Value::as_u64)
         .unwrap_or(alera_core::workspace_files::MAX_REMOTE_READ_BYTES);
     spawn_blocking_workspace("Prompt attachment read", move || {
-        let canonical_path = fs::canonicalize(&requested_path)
+        let canonical_path = dunce::canonicalize(&requested_path)
             .map_err(|_| HostError::state("Prompt attachment is unavailable."))?;
         let root = prompt_attachment_root(&runtime_dir, &canonical_path)?;
         let root =
@@ -276,12 +275,12 @@ async fn mobile_workspace_file_root(
     let roots = known_workspace_paths(runtime_store).await?;
     let display_candidate = candidate.clone();
     spawn_blocking_workspace("Workspace root validation", move || {
-        let candidate_root = fs::canonicalize(&candidate).map_err(|error| {
+        let candidate_root = dunce::canonicalize(&candidate).map_err(|error| {
             HostError::state(format!("Codex working directory is unavailable: {error}"))
         })?;
         let roots = roots
             .iter()
-            .filter_map(|path| fs::canonicalize(path).ok())
+            .filter_map(|path| dunce::canonicalize(path).ok())
             .collect();
         if !candidate_root.is_dir() {
             return Err(HostError::state(format!(
@@ -322,7 +321,7 @@ fn absolute_workspace_file_target(
     requested: &str,
     roots: Vec<String>,
 ) -> HostResult<(WorkspaceFileRoot, String)> {
-    let candidate = fs::canonicalize(requested)
+    let candidate = dunce::canonicalize(requested)
         .map_err(|_| HostError::state("Workspace file is unavailable."))?;
     let root = roots
         .into_iter()
@@ -409,8 +408,8 @@ mod tests {
         std::fs::write(&attachment, b"attachment").unwrap();
         std::fs::write(&unrelated, b"private").unwrap();
 
-        let attachment = std::fs::canonicalize(attachment).unwrap();
-        let unrelated = std::fs::canonicalize(unrelated).unwrap();
+        let attachment = dunce::canonicalize(attachment).unwrap();
+        let unrelated = dunce::canonicalize(unrelated).unwrap();
         assert!(prompt_attachment_root(runtime.path(), &attachment).is_ok());
         assert!(prompt_attachment_root(runtime.path(), &unrelated).is_err());
     }
@@ -438,7 +437,7 @@ mod tests {
         let file = nested.join("lib/main.dart");
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
         std::fs::write(&file, b"void main() {}").unwrap();
-        let nested_canonical = std::fs::canonicalize(&nested).unwrap();
+        let nested_canonical = dunce::canonicalize(&nested).unwrap();
 
         let (root, relative) = absolute_workspace_file_target(
             &file.to_string_lossy(),

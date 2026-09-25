@@ -90,7 +90,7 @@ fn path_str(path: &Path) -> String {
 
 fn canonical(path: &str) -> String {
     let target = Path::new(path);
-    std::fs::canonicalize(target)
+    dunce::canonicalize(target)
         .unwrap_or_else(|_| target.to_path_buf())
         .to_string_lossy()
         .trim_end_matches('/')

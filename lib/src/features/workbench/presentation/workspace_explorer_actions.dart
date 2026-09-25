@@ -188,7 +188,11 @@ extension _WorkspaceExplorerActions on _WorkspaceExplorerState {
     int? systemSequenceNumber;
     try {
       systemSequenceNumber = await _workspaceFiles.writeSystemFileClipboard(
-        paths: <String>[_absolutePath(entry.relativePath)],
+        // Windows Explorer does not accept verbatim `\\?\` paths on the
+        // system file clipboard.
+        paths: <String>[
+          userVisibleWorkspacePath(_absolutePath(entry.relativePath)),
+        ],
         operation: cut
             ? WorkspaceFileClipboardOperation.cut
             : WorkspaceFileClipboardOperation.copy,
@@ -252,8 +256,8 @@ extension _WorkspaceExplorerActions on _WorkspaceExplorerState {
       return false;
     }
     return p.equals(
-      p.normalize(payload.paths.single),
-      p.normalize(_absolutePath(clipboard.relativePath)),
+      comparablePath(payload.paths.single),
+      comparablePath(_absolutePath(clipboard.relativePath)),
     );
   }
 
@@ -311,14 +315,16 @@ extension _WorkspaceExplorerActions on _WorkspaceExplorerState {
 
     if (moveSources) {
       for (var index = 0; index < clipboard.paths.length; index++) {
-        final source = p.normalize(clipboard.paths[index]);
-        final workspace = p.normalize(widget.workspace.path);
-        if (!p.isWithin(workspace, source)) {
+        // Paths cut in the OS file manager never carry the `\\?\` prefix a
+        // stored workspace root may have.
+        final relative = workspaceRelativePath(
+          workspacePath: widget.workspace.path,
+          filePath: clipboard.paths[index],
+        );
+        if (relative == null || relative == '.') {
           continue;
         }
-        final oldRelativePath = p
-            .relative(source, from: workspace)
-            .replaceAll('\\', '/');
+        final oldRelativePath = relative.replaceAll('\\', '/');
         await widget.onPathMoved(oldRelativePath, imported[index].relativePath);
         if (!mounted) {
           return;

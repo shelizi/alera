@@ -3222,10 +3222,7 @@ class _TerminalSettingsCopyWithImpl<$R, $Out>
     wordSeparators: data.get(#wordSeparators, or: $value.wordSeparators),
     colorOverrides: data.get(#colorOverrides, or: $value.colorOverrides),
     scrollbackLines: data.get(#scrollbackLines, or: $value.scrollbackLines),
-    outputRefreshFps: data.get(
-      #outputRefreshFps,
-      or: $value.outputRefreshFps,
-    ),
+    outputRefreshFps: data.get(#outputRefreshFps, or: $value.outputRefreshFps),
     tuiScrollSensitivity: data.get(
       #tuiScrollSensitivity,
       or: $value.tuiScrollSensitivity,

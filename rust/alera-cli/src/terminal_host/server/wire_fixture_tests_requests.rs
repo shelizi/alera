@@ -195,7 +195,7 @@ async fn project_register_response_matches_shared_fixture() {
             json!({"event": "workspaceTabsChanged", "payload": {}}),
         ]
     );
-    let canonical = std::fs::canonicalize(&project_dir)
+    let canonical = dunce::canonicalize(&project_dir)
         .unwrap()
         .to_string_lossy()
         .to_string();

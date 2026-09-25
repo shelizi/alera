@@ -327,8 +327,10 @@ GhosttyTerminalShellLaunch _launchInWorkingDirectory(
       ),
     );
   }
+  // Git Bash, WSL and nu on Windows cannot `cd` into a verbatim path either;
+  // on POSIX hosts this leaves the directory untouched.
   final execCommand = StringBuffer(
-    'cd ${_shQuote(workingDirectory)} || true; exec ',
+    'cd ${_shQuote(withoutWindowsPathPrefix(workingDirectory))} || true; exec ',
   )..write(_shQuote(launch.shell));
   for (final argument in launch.arguments) {
     execCommand
@@ -344,21 +346,10 @@ GhosttyTerminalShellLaunch _launchInWorkingDirectory(
   );
 }
 
-String _windowsShellWorkingDirectory(String workingDirectory) {
-  const extendedUncPrefix = r'\\?\UNC\';
-  if (workingDirectory.startsWith(extendedUncPrefix)) {
-    return r'\\' + workingDirectory.substring(extendedUncPrefix.length);
-  }
-
-  const extendedPathPrefix = r'\\?\';
-  if (workingDirectory.startsWith(extendedPathPrefix)) {
-    final path = workingDirectory.substring(extendedPathPrefix.length);
-    if (RegExp(r'^[A-Za-z]:\\').hasMatch(path)) {
-      return path;
-    }
-  }
-  return workingDirectory;
-}
+// cmd and PowerShell launches are Windows shells whatever the host running the
+// test is, so they always use Windows path rules.
+String _windowsShellWorkingDirectory(String workingDirectory) =>
+    withoutWindowsPathPrefix(workingDirectory, pathContext: p.windows);
 
 @visibleForTesting
 GhosttyTerminalShellLaunch launchInWorkingDirectoryForTesting(

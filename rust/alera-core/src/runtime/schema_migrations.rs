@@ -29,6 +29,45 @@ impl RuntimeStore {
         Ok(())
     }
 
+    /// Rewrites project and workspace roots stored in the Windows verbatim form
+    /// (`\\?\E:\...`, from `std::fs::canonicalize`) to the plain form. `cmd.exe`
+    /// refuses a verbatim current directory and silently runs in `C:\Windows`,
+    /// and every client comparing these roots against paths from git, file
+    /// URIs, or pickers would otherwise have to special-case the prefix.
+    /// `dunce::simplified` keeps a path verbatim when the plain form would be
+    /// ambiguous (too long, reserved names) and is the identity elsewhere, so
+    /// this is a no-op outside Windows. Like feature retirement, only the host
+    /// holding exclusive runtime ownership may run it.
+    pub async fn normalize_verbatim_root_paths(&self) -> Result<()> {
+        let mut transaction = self.pool().begin().await?;
+        for (table, column) in [("projects", "repoPath"), ("workspaces", "path")] {
+            let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+                "SELECT id, {column} FROM {table}"
+            )))
+            .fetch_all(&mut *transaction)
+            .await?;
+            for row in rows {
+                let id: String = row.try_get("id")?;
+                let stored: String = row.try_get(column)?;
+                let plain = dunce::simplified(std::path::Path::new(&stored))
+                    .to_string_lossy()
+                    .into_owned();
+                if plain == stored {
+                    continue;
+                }
+                sqlx::query(sqlx::AssertSqlSafe(format!(
+                    "UPDATE {table} SET {column} = ? WHERE id = ?"
+                )))
+                .bind(plain)
+                .bind(id)
+                .execute(&mut *transaction)
+                .await?;
+            }
+        }
+        transaction.commit().await?;
+        Ok(())
+    }
+
     pub(super) async fn ensure_column(
         &self,
         table: &str,

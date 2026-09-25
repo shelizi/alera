@@ -47,13 +47,13 @@ fn copy_rule_inner(
     workspace: &Workspace,
     rule: &WorktreeCopyRule,
 ) -> Result<()> {
-    let project_root = std::fs::canonicalize(&project.repo_path)?;
-    let workspace_root = std::fs::canonicalize(&workspace.path)?;
+    let project_root = dunce::canonicalize(&project.repo_path)?;
+    let workspace_root = dunce::canonicalize(&workspace.path)?;
     let source_path = join_config_path(&project_root, &rule.from);
     let target_path = join_config_path(&workspace_root, rule.destination());
     reject_symlink(&source_path, "Source is a symlink")?;
     let source_metadata = std::fs::metadata(&source_path).context("Source does not exist")?;
-    let source_canonical = std::fs::canonicalize(&source_path)?;
+    let source_canonical = dunce::canonicalize(&source_path)?;
     if !is_within_or_equal(&project_root, &source_canonical) {
         bail!("Source escapes the project root");
     }
@@ -111,7 +111,7 @@ fn prepare_target(target_path: &Path, workspace_root: &Path, overwrite: bool) ->
 
 fn copy_directory(source_path: &Path, target_path: &Path, workspace_root: &Path) -> Result<()> {
     std::fs::create_dir_all(target_path)?;
-    let target_canonical = std::fs::canonicalize(target_path)?;
+    let target_canonical = dunce::canonicalize(target_path)?;
     if !is_within_or_equal(workspace_root, &target_canonical) {
         bail!("Destination escapes the workspace root");
     }
@@ -143,7 +143,7 @@ fn validate_destination_parent(target_path: &Path, workspace_root: &Path) -> Res
             if !current.is_dir() {
                 bail!("Destination parent is not a directory");
             }
-            let canonical = std::fs::canonicalize(&current)?;
+            let canonical = dunce::canonicalize(&current)?;
             if !is_within_or_equal(workspace_root, &canonical) {
                 bail!("Destination escapes the workspace root");
             }
@@ -175,7 +175,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let raw_workspace_root = dir.path().join("workspace");
         std::fs::create_dir(&raw_workspace_root).unwrap();
-        let workspace_root = std::fs::canonicalize(&raw_workspace_root).unwrap();
+        let workspace_root = dunce::canonicalize(&raw_workspace_root).unwrap();
         let target = workspace_root.join("copied.env");
         let outside = dir.path().join("outside.env");
         std::os::unix::fs::symlink(&outside, &target).unwrap();

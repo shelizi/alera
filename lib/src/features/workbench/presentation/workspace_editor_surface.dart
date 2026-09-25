@@ -14,6 +14,7 @@ import 'package:alera/src/design_system/layout/alera_confirm_dialog.dart';
 import 'package:alera/src/design_system/layout/alera_dialog.dart';
 import 'package:alera/src/features/language_intelligence/application/language_intelligence_activity.dart';
 import 'package:alera/src/features/language_intelligence/application/language_intelligence_manager.dart';
+import 'package:alera/src/features/language_intelligence/application/language_navigation_port.dart';
 import 'package:alera/src/features/language_intelligence/application/language_provider_registry.dart';
 import 'package:alera/src/features/language_intelligence/application/language_server_runtime.dart';
 import 'package:alera/src/features/language_intelligence/domain/language_capability.dart';
@@ -26,6 +27,7 @@ import 'package:alera/src/features/workbench/application/workspace_file_service.
 import 'package:alera/src/features/workbench/application/workspace_references_controller.dart';
 import 'package:alera/src/features/workbench/application/workspace_text_encoding.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
+import 'package:alera/src/features/workbench/domain/workspace_relative_path.dart';
 import 'package:alera/src/features/workbench/domain/workspace_source_control_scope.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/rust/api/workspace_files.dart' as native;
@@ -136,6 +138,8 @@ class _WorkspaceEditorSurfaceState
       reload: _reloadFromDiskAfterExternalChange,
       runNavigationCommand: (command) => switch (command) {
         EditorSessionNavigationCommand.goToDefinition => _goToDefinition(),
+        EditorSessionNavigationCommand.goToImplementation =>
+          _goToImplementation(),
         EditorSessionNavigationCommand.findReferences => _findReferences(),
       },
     );
@@ -810,11 +814,9 @@ String workspaceEditorDisplayPath({
   if (!p.isAbsolute(filePath)) {
     return filePath;
   }
-  final workspacePath = p.normalize(workspace.path);
-  final normalizedFilePath = p.normalize(filePath);
-  if (p.equals(normalizedFilePath, workspacePath) ||
-      p.isWithin(workspacePath, normalizedFilePath)) {
-    return p.relative(normalizedFilePath, from: workspacePath);
-  }
-  return filePath;
+  return workspaceRelativePath(
+        workspacePath: workspace.path,
+        filePath: filePath,
+      ) ??
+      filePath;
 }

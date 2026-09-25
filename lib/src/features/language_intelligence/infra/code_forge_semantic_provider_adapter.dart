@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:io';
 
+import 'package:alera/src/shared/infra/files/path_identity.dart';
 import 'package:path/path.dart' as p;
 
 import '../application/language_document_session_port.dart';
@@ -9,6 +11,18 @@ import '../domain/source_location.dart';
 import 'code_forge_language_server_runtime.dart';
 
 typedef CodeForgeSourceTextReader = Future<String> Function(String path);
+
+/// Upper bound for one navigation request; large workspaces can take several
+/// seconds for a first references query while the server warms up.
+const Duration navigationRequestTimeout = Duration(seconds: 30);
+
+// JSON-RPC ContentModified (-32801) and ServerCancelled (-32802).
+const Set<int> _retryableNavigationErrorCodes = <int>{-32801, -32802};
+const List<Duration> _navigationRetryDelays = <Duration>[
+  Duration(milliseconds: 300),
+  Duration(milliseconds: 800),
+  Duration(seconds: 2),
+];
 
 final class CodeForgeSemanticProviderAdapter
     implements LanguageDocumentSessionPort, LanguageNavigationPort {
@@ -166,11 +180,16 @@ final class CodeForgeSemanticProviderAdapter
         return locations;
       }
 
-      final next = await _navigationRequest(
-        method: 'textDocument/definition',
-        path: target.path,
-        position: target.range.start,
-      );
+      final List<SourceLocation> next;
+      try {
+        next = await _navigationRequest(
+          method: 'textDocument/definition',
+          path: target.path,
+          position: target.range.start,
+        );
+      } on LanguageServerRequestException {
+        return locations;
+      }
       if (next.isEmpty) {
         return locations;
       }
@@ -237,18 +256,38 @@ final class CodeForgeSemanticProviderAdapter
       position.scalarColumn,
     );
     final normalizedPath = _pathContext.normalize(path);
-    final response = await _transport.sendRequest(
-      method: method,
-      params: <String, dynamic>{
-        'textDocument': <String, dynamic>{'uri': _fileUri(normalizedPath)},
-        'position': <String, int>{
-          'line': position.line,
-          'character': utf16Character,
-        },
-        ...extraParams,
+    final params = <String, dynamic>{
+      'textDocument': <String, dynamic>{'uri': _fileUri(normalizedPath)},
+      'position': <String, int>{
+        'line': position.line,
+        'character': utf16Character,
       },
-    );
-    return _normalizeLocations(response['result']);
+      ...extraParams,
+    };
+    for (var attempt = 0; ; attempt += 1) {
+      // The stdio transport waits indefinitely for a reply, so a server that
+      // never answers would leave the command silently pending.
+      final response = await _transport
+          .sendRequest(method: method, params: params)
+          .timeout(navigationRequestTimeout);
+      final error = response['error'];
+      if (error is! Map) {
+        return _normalizeLocations(response['result']);
+      }
+      final code = error['code'] is int ? error['code'] as int : null;
+      // rust-analyzer and gopls answer ContentModified or ServerCancelled
+      // while they are still indexing; LSP defines both as "ask again".
+      if (_retryableNavigationErrorCodes.contains(code) &&
+          attempt < _navigationRetryDelays.length) {
+        await Future<void>.delayed(_navigationRetryDelays[attempt]);
+        continue;
+      }
+      throw LanguageServerRequestException(
+        method: method,
+        code: code,
+        message: error['message']?.toString() ?? 'Unknown error',
+      );
+    }
   }
 
   Future<List<SourceLocation>> _normalizeLocations(Object? result) async {
@@ -355,7 +394,9 @@ final class CodeForgeSemanticProviderAdapter
   }
 
   String _documentKey(String path) {
-    final normalized = _pathContext.normalize(path);
+    // Editor paths keep the stored `\\?\` root while server locations do not;
+    // both must resolve to the same open document.
+    final normalized = comparablePath(path, pathContext: _pathContext);
     return _isWindows ? normalized.toLowerCase() : normalized;
   }
 

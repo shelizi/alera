@@ -200,7 +200,7 @@ impl PromptFileStore {
             .map_err(io_error)?;
         let final_path = self.final_path(upload_id, &metadata.display_name);
         std::fs::rename(&partial, &final_path).map_err(io_error)?;
-        let path = std::fs::canonicalize(final_path).map_err(io_error)?;
+        let path = dunce::canonicalize(final_path).map_err(io_error)?;
         Ok(path.to_string_lossy().into_owned())
     }
 

@@ -15,7 +15,7 @@ final LanguageExtensionContribution goLanguageExtension =
           parserProviderId: 'go.tree-sitter',
           semanticProviderIds: const <String>['go.gopls'],
           defaultSemanticProviderId: 'go.gopls',
-          capabilities: builtinLanguageCapabilities,
+          capabilities: builtinImplementationLanguageCapabilities,
         ),
       ],
       providers: <LanguageProviderDescriptor>[
@@ -31,7 +31,7 @@ final LanguageExtensionContribution goLanguageExtension =
           id: 'go.gopls',
           kind: LanguageProviderKind.semanticServer,
           languages: <LanguageId>{LanguageId('go')},
-          capabilities: builtinNavigationCapabilities,
+          capabilities: builtinImplementationNavigationCapabilities,
           processScope: LanguageProviderProcessScope.workspace,
           launchPolicy: LanguageProviderLaunchPolicy.lazyOnDemand,
           executableResolutionPolicy:

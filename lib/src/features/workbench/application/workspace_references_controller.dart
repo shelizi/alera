@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:alera/src/features/language_intelligence/application/language_intelligence_manager.dart';
 import 'package:alera/src/features/language_intelligence/application/language_intelligence_providers.dart';
 import 'package:alera/src/features/language_intelligence/domain/language_capability.dart';
 import 'package:alera/src/features/language_intelligence/domain/source_location.dart';
 import 'package:alera/src/features/workbench/application/retired_workspace_invalidation.dart';
 import 'package:alera/src/features/workbench/application/workbench_providers.dart';
+import 'package:alera/src/features/workbench/domain/workspace_relative_path.dart';
 import 'package:path/path.dart' as p;
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
@@ -146,7 +149,9 @@ class WorkspaceReferencesController extends _$WorkspaceReferencesController {
       state = state.copyWith(
         loading: false,
         result: null,
-        error: error.toString(),
+        error: error is TimeoutException
+            ? 'Language server did not respond'
+            : error.toString(),
       );
     }
   }
@@ -172,10 +177,13 @@ class WorkspaceReferencesController extends _$WorkspaceReferencesController {
             ? location.path
             : p.join(root, location.path),
       );
-      if (!p.equals(root, absolutePath) && !p.isWithin(root, absolutePath)) {
+      final relativePath = workspaceRelativePath(
+        workspacePath: root,
+        filePath: absolutePath,
+      );
+      if (relativePath == null) {
         continue;
       }
-      final relativePath = p.relative(absolutePath, from: root);
       locationsByPath
           .putIfAbsent(relativePath, () => <SourceLocation>[])
           .add(location);

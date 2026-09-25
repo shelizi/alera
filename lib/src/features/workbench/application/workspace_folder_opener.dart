@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:alera/src/shared/infra/files/path_identity.dart';
 import 'package:alera/src/shared/infra/process/process_runner.dart';
 import 'package:path/path.dart' as p;
 import 'package:url_launcher/url_launcher.dart' show launchUrl;
@@ -253,21 +254,10 @@ Future<bool> _revealFileInWindowsExplorer(String path) async {
   return true;
 }
 
-String _windowsExplorerPath(String path) {
-  final normalized = path.replaceAll('/', r'\');
-  const extendedUncPrefix = r'\\?\UNC\';
-  const extendedPrefix = r'\\?\';
-  if (normalized.startsWith(extendedUncPrefix)) {
-    return r'\\' + normalized.substring(extendedUncPrefix.length);
-  }
-  if (normalized.startsWith(extendedPrefix)) {
-    final unprefixed = normalized.substring(extendedPrefix.length);
-    if (RegExp(r'^[A-Za-z]:\\').hasMatch(unprefixed)) {
-      return unprefixed;
-    }
-  }
-  return normalized;
-}
+String _windowsExplorerPath(String path) => withoutWindowsPathPrefix(
+  path.replaceAll('/', r'\'),
+  pathContext: p.windows,
+);
 
 String _windowsExplorerParentPath(String path) {
   return p.windows.dirname(_windowsExplorerPath(path));

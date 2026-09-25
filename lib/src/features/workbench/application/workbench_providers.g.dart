@@ -832,7 +832,7 @@ final class TerminalHostWarmupCoordinatorProvider
 }
 
 String _$terminalHostWarmupCoordinatorHash() =>
-    r'd1d9d291861301c30538537da0e091f97289ec5c';
+    r'46fd66e777911d99d1f8a8f26fd7696ce60d8995';
 
 @ProviderFor(terminalShellStartupPreparer)
 final terminalShellStartupPreparerProvider =
@@ -924,4 +924,4 @@ final class TerminalRuntimeExitCoordinatorProvider
 }
 
 String _$terminalRuntimeExitCoordinatorHash() =>
-    r'fdfa362cb274aa23a5556cacb4a9d12afb7f38d7';
+    r'5460c93433591ced101aa79f79e2052753fc1354';

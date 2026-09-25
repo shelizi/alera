@@ -108,7 +108,8 @@ pub fn render_merman_workspace_file(
 }
 
 fn workspace_root(path: &str) -> Result<PathBuf, MermanViewerError> {
-    let root = fs::canonicalize(path).map_err(|error| MermanViewerError::from_io(error, path))?;
+    let root =
+        dunce::canonicalize(path).map_err(|error| MermanViewerError::from_io(error, path))?;
     if !root.is_dir() {
         return Err(MermanViewerError::new(
             MermanViewerErrorKind::NotFound,
@@ -121,7 +122,7 @@ fn workspace_root(path: &str) -> Result<PathBuf, MermanViewerError> {
 fn resolve_existing(root: &Path, relative_path: &str) -> Result<PathBuf, MermanViewerError> {
     let normalized = normalize_relative_path(relative_path)?;
     let candidate = root.join(&normalized);
-    let canonical = fs::canonicalize(&candidate)
+    let canonical = dunce::canonicalize(&candidate)
         .map_err(|error| MermanViewerError::from_io(error, relative_path))?;
     if canonical != root && !canonical.starts_with(root) {
         return Err(MermanViewerError::new(

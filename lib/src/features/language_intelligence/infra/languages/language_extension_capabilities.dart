@@ -18,3 +18,18 @@ const Set<LanguageCapability> builtinLanguageCapabilities =
       ...builtinStructuralCapabilities,
       ...builtinNavigationCapabilities,
     };
+
+/// Navigation for servers verified to answer `textDocument/implementation`.
+/// Pyright and the free intelephense tier reject or ignore it, so they keep
+/// [builtinNavigationCapabilities].
+const Set<LanguageCapability> builtinImplementationNavigationCapabilities =
+    <LanguageCapability>{
+      ...builtinNavigationCapabilities,
+      LanguageCapability.implementation,
+    };
+
+const Set<LanguageCapability> builtinImplementationLanguageCapabilities =
+    <LanguageCapability>{
+      ...builtinStructuralCapabilities,
+      ...builtinImplementationNavigationCapabilities,
+    };

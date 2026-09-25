@@ -20,7 +20,7 @@ final LanguageExtensionContribution typescriptJavascriptLanguageExtension =
           ],
           defaultSemanticProviderId:
               'typescript-javascript.typescript-language-server',
-          capabilities: builtinLanguageCapabilities,
+          capabilities: builtinImplementationLanguageCapabilities,
         ),
         LanguageExtensionDescriptor(
           id: LanguageId('javascript'),
@@ -35,7 +35,7 @@ final LanguageExtensionContribution typescriptJavascriptLanguageExtension =
           ],
           defaultSemanticProviderId:
               'typescript-javascript.typescript-language-server',
-          capabilities: builtinLanguageCapabilities,
+          capabilities: builtinImplementationLanguageCapabilities,
         ),
       ],
       providers: <LanguageProviderDescriptor>[
@@ -62,7 +62,7 @@ final LanguageExtensionContribution typescriptJavascriptLanguageExtension =
             LanguageId('typescript'),
             LanguageId('javascript'),
           },
-          capabilities: builtinNavigationCapabilities,
+          capabilities: builtinImplementationNavigationCapabilities,
           processScope: LanguageProviderProcessScope.sharedWorkspaceFamily,
           launchPolicy: LanguageProviderLaunchPolicy.lazyOnDemand,
           executableResolutionPolicy:

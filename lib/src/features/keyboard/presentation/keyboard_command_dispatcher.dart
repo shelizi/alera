@@ -66,6 +66,8 @@ class const KeyboardCommandDispatcher({
         _saveActiveEditor();
       case KeyboardActionId.goToDefinition:
         _runActiveEditorNavigation(.goToDefinition);
+      case KeyboardActionId.goToImplementation:
+        _runActiveEditorNavigation(.goToImplementation);
       case KeyboardActionId.findReferences:
         _runActiveEditorNavigation(.findReferences);
       case KeyboardActionId.reloadDocument:

@@ -303,7 +303,7 @@ impl PromptImageStore {
             return Err(PromptImageStoreError::Missing);
         }
         std::fs::rename(&partial_path, &final_path).map_err(io_error)?;
-        let absolute_path = std::fs::canonicalize(&final_path).map_err(io_error)?;
+        let absolute_path = dunce::canonicalize(&final_path).map_err(io_error)?;
         Ok(absolute_path.to_string_lossy().into_owned())
     }
 

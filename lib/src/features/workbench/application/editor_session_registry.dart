@@ -390,7 +390,11 @@ class const EditorSessionHandle({
   runNavigationCommand,
 });
 
-enum EditorSessionNavigationCommand { goToDefinition, findReferences }
+enum EditorSessionNavigationCommand {
+  goToDefinition,
+  goToImplementation,
+  findReferences,
+}
 
 class const WorkspaceEditorRevealTarget({
   required final int line,

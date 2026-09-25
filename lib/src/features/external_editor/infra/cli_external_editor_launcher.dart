@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:alera/src/features/external_editor/domain/external_editor_launch_result.dart';
 import 'package:alera/src/features/external_editor/domain/external_editor_launcher.dart';
 import 'package:alera/src/features/external_editor/domain/external_editor_spec.dart';
+import 'package:alera/src/shared/infra/files/path_identity.dart';
 import 'package:alera/src/shared/infra/process/command_path_probe.dart';
 import 'package:alera/src/shared/infra/process/process_runner.dart';
 import 'package:path/path.dart' as p;
@@ -302,17 +303,14 @@ String _expandEnvironmentVars(String value, Map<String, String> environment) {
   );
 }
 
+// Editors are launched with a Windows-style path whenever the value is one,
+// whatever the host, so prefixes follow Windows rules. A prefixed path with no
+// plain spelling cannot be handed to an editor CLI and is rejected.
 String? _externalProcessPath(String value) {
-  const extendedUncPrefix = '\\\\?\\UNC\\';
-  const extendedPrefix = '\\\\?\\';
-  if (value.startsWith(extendedUncPrefix)) {
-    return '\\\\${value.substring(extendedUncPrefix.length)}';
-  }
-  if (value.startsWith(extendedPrefix)) {
-    final unprefixed = value.substring(extendedPrefix.length);
-    return RegExp(r'^[A-Za-z]:[\\/]').hasMatch(unprefixed) ? unprefixed : null;
-  }
-  return value;
+  final plain = withoutWindowsPathPrefix(value, pathContext: p.windows);
+  return hasUnresolvedWindowsPathPrefix(plain, pathContext: p.windows)
+      ? null
+      : plain;
 }
 
 p.Context _pathContextFor(String value) =>

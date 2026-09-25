@@ -7,6 +7,7 @@ import 'package:alera/src/features/workbench/application/workbench_repository.da
 import 'package:alera/src/features/workbench/application/worktree_setup_service.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_creation_result.dart';
+import 'package:alera/src/shared/infra/files/path_identity.dart';
 import 'package:alera/src/shared/infra/git/git_backend.dart';
 import 'package:alera/src/shared/infra/git/git_exception.dart';
 import 'package:alera/src/shared/infra/git/git_worktree_entry.dart';
@@ -374,19 +375,9 @@ class WorkspaceService._(
     } catch (_) {
       resolved = path;
     }
-    var canonical = p.canonicalize(resolved);
-    if (Platform.isWindows) {
-      // Stored project paths can carry the verbatim `\\?\` prefix while
-      // libgit2 reports plain `E:\...` workdir paths. Without stripping, the
-      // same directory compares as two distinct paths and reconciliation
-      // adopts the main worktree as a duplicate linked workspace.
-      if (canonical.startsWith(r'\\?\UNC\')) {
-        canonical = '\\${canonical.substring(r'\\?\UNC\'.length)}';
-      } else if (canonical.startsWith(r'\\?\') ||
-          canonical.startsWith(r'\\.\')) {
-        canonical = canonical.substring(4);
-      }
-    }
-    return canonical;
+    // Stored project paths can carry the verbatim prefix while libgit2 reports
+    // plain workdir paths; otherwise reconciliation adopts the main worktree
+    // as a duplicate linked workspace.
+    return p.canonicalize(withoutWindowsPathPrefix(resolved));
   }
 }

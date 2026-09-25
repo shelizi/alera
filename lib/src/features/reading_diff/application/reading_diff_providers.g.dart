@@ -55,4 +55,4 @@ final class ReadingDiffServiceProvider
 }
 
 String _$readingDiffServiceHash() =>
-    r'bf42911c35f86d6d9a2bd68f749c0fa6ed565bff';
+    r'b279584eea5f37c7612c58b9bdeb3128e8b1c7ed';

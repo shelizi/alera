@@ -27,6 +27,11 @@ pub async fn run_terminal_host_server(
     let history = TerminalHostHistoryRepository::open(&runtime_dir).await?;
     let runtime_store = RuntimeStore::open(&runtime_dir).await?;
     runtime_store.retire_removed_features().await?;
+    // Best effort: an unnormalized root still works for most callers, while a
+    // host that refuses to start takes every terminal down with it.
+    if let Err(error) = runtime_store.normalize_verbatim_root_paths().await {
+        tracing::warn!(%error, "could not normalize verbatim workspace root paths");
+    }
     crate::hosted_review_retention::reconcile(&runtime_store).await;
 
     crate::automation_autostart::reconcile_runtime_autostart(&runtime_store, &runtime_dir).await;

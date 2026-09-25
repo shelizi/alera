@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:alera/src/features/language_intelligence/domain/language_id.dart';
 import 'package:alera/src/features/language_intelligence/domain/language_intelligence_settings.dart';
 import 'package:alera/src/features/language_intelligence/domain/source_location.dart';
@@ -357,6 +359,25 @@ void main() {
     expect(target.reveal.column, 3);
     expect(target.reveal.matchLength, 6);
   });
+
+  test('source navigation accepts server locations under a verbatim root', () {
+    // Language servers report `e:\...` while the runtime stored the root as
+    // `\\?\E:\...`; every result used to be dropped as outside the workspace.
+    final target = workspaceEditorNavigationTargetForLocation(
+      workspaceId: 'ws-1',
+      workspacePath: r'\\?\E:\Repo\Alera',
+      location: const SourceLocation(
+        workspaceId: 'ws-1',
+        path: r'e:\repo\alera\lib\target.rs',
+        range: SourceRange(
+          start: SourcePosition(line: 0, scalarColumn: 0),
+          end: SourcePosition(line: 0, scalarColumn: 1),
+        ),
+      ),
+    );
+
+    expect(target?.relativePath, r'lib\target.rs');
+  }, skip: !Platform.isWindows);
 
   test('source navigation rejects targets outside the current workspace', () {
     final workspacePath = p.join('C:', 'repo', 'alera');

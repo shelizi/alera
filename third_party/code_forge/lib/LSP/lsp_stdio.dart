@@ -179,7 +179,11 @@ class LspStdioConfig extends LspConfig {
       runInShell: _requiresWindowsCommandShell(executable),
     );
     _process.stdout.listen(_handleStdoutData);
-    _process.stderr.listen((data) => debugPrint(utf8.decode(data)));
+    // Chunks can split a multi-byte character, and Windows servers may write
+    // the console code page instead of UTF-8.
+    _process.stderr.listen(
+      (data) => debugPrint(utf8.decode(data, allowMalformed: true)),
+    );
   }
 
   static bool _requiresWindowsCommandShell(String executable) {

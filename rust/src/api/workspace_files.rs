@@ -802,13 +802,13 @@ pub fn delete_workspace_entry(
 }
 
 fn workspace_root(workspace_path: &str) -> Result<PathBuf, WorkspaceFileError> {
-    fs::canonicalize(workspace_path)
+    dunce::canonicalize(workspace_path)
         .map_err(|error| WorkspaceFileError::from_io(error, workspace_path))
 }
 
 fn resolve_existing(root: &Path, relative_path: &str) -> Result<PathBuf, WorkspaceFileError> {
     let path = root.join(relative_components(relative_path)?);
-    let canonical = fs::canonicalize(&path)
+    let canonical = dunce::canonicalize(&path)
         .map_err(|error| WorkspaceFileError::from_io(error, relative_path))?;
     if !canonical.starts_with(root) {
         return Err(WorkspaceFileError::new(
@@ -827,7 +827,7 @@ fn resolve_existing_no_follow(
     let parent = path.parent().ok_or_else(|| {
         WorkspaceFileError::new(WorkspaceFileErrorKind::InvalidPath, relative_path)
     })?;
-    let canonical_parent = fs::canonicalize(parent)
+    let canonical_parent = dunce::canonicalize(parent)
         .map_err(|error| WorkspaceFileError::from_io(error, relative_path))?;
     if !canonical_parent.starts_with(root) {
         return Err(WorkspaceFileError::new(
@@ -861,7 +861,7 @@ fn ensure_inside_existing_parent(
             destination.to_string_lossy(),
         )
     })?;
-    let canonical_parent = fs::canonicalize(parent)
+    let canonical_parent = dunce::canonicalize(parent)
         .map_err(|error| WorkspaceFileError::from_io(error, parent.to_string_lossy()))?;
     if !canonical_parent.starts_with(root) {
         return Err(WorkspaceFileError::new(
@@ -1092,11 +1092,11 @@ fn unique_copy_destination(initial: &Path) -> PathBuf {
 }
 
 fn ensure_not_descendant(source: &Path, destination: &Path) -> Result<(), WorkspaceFileError> {
-    let canonical_source = fs::canonicalize(source)
+    let canonical_source = dunce::canonicalize(source)
         .map_err(|error| WorkspaceFileError::from_io(error, source.to_string_lossy()))?;
     let canonical_parent = destination
         .parent()
-        .and_then(|parent| fs::canonicalize(parent).ok())
+        .and_then(|parent| dunce::canonicalize(parent).ok())
         .unwrap_or_else(|| destination.to_path_buf());
     if canonical_parent.starts_with(&canonical_source) {
         return Err(WorkspaceFileError::new(

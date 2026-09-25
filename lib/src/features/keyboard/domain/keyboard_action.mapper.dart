@@ -106,6 +106,8 @@ class KeyboardActionIdMapper extends EnumMapper<KeyboardActionId> {
         return KeyboardActionId.saveFile;
       case r'goToDefinition':
         return KeyboardActionId.goToDefinition;
+      case r'goToImplementation':
+        return KeyboardActionId.goToImplementation;
       case r'findReferences':
         return KeyboardActionId.findReferences;
       case r'reloadDocument':
@@ -182,6 +184,8 @@ class KeyboardActionIdMapper extends EnumMapper<KeyboardActionId> {
         return r'saveFile';
       case KeyboardActionId.goToDefinition:
         return r'goToDefinition';
+      case KeyboardActionId.goToImplementation:
+        return r'goToImplementation';
       case KeyboardActionId.findReferences:
         return r'findReferences';
       case KeyboardActionId.reloadDocument:

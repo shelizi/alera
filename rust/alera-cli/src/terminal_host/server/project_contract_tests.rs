@@ -174,7 +174,7 @@ async fn clone_start_rejects_non_terminal_same_destination_but_allows_other_dest
     let dir = tempfile::tempdir().unwrap();
     let mut actor = test_actor(&dir, HashMap::new(), HashMap::new()).await;
     actor.deferred_admission = Arc::new(DeferredAdmission::paused_with_limits(1, 4, 0));
-    let parent_path = std::fs::canonicalize(dir.path())
+    let parent_path = dunce::canonicalize(dir.path())
         .unwrap()
         .to_string_lossy()
         .to_string();
@@ -224,7 +224,7 @@ async fn clone_start_allows_terminal_job_for_same_destination() {
     let dir = tempfile::tempdir().unwrap();
     let mut actor = test_actor(&dir, HashMap::new(), HashMap::new()).await;
     actor.deferred_admission = Arc::new(DeferredAdmission::paused_with_limits(1, 4, 0));
-    let parent_path = std::fs::canonicalize(dir.path())
+    let parent_path = dunce::canonicalize(dir.path())
         .unwrap()
         .to_string_lossy()
         .to_string();

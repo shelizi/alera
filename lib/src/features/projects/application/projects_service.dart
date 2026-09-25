@@ -2,6 +2,7 @@ import 'package:alera/src/features/projects/application/project_repository.dart'
 import 'package:alera/src/features/projects/application/project_service.dart';
 import 'package:alera/src/features/projects/domain/project.dart';
 import 'package:alera/src/features/projects/infra/runtime_project_management_client.dart';
+import 'package:alera/src/shared/infra/files/path_identity.dart';
 import 'package:path/path.dart' as p;
 import 'package:uuid/uuid.dart';
 
@@ -45,7 +46,7 @@ class ProjectsService({
 
     final existing = await _projectRepository.listAll();
     for (final candidate in existing) {
-      if (p.equals(candidate.repoPath, normalized)) {
+      if (isSamePath(candidate.repoPath, normalized)) {
         return candidate;
       }
     }
@@ -81,7 +82,7 @@ class ProjectsService({
     }
     final existing = await _projectRepository.listAll();
     for (final candidate in existing) {
-      if (p.equals(candidate.repoPath, normalizedDestination)) {
+      if (isSamePath(candidate.repoPath, normalizedDestination)) {
         throw StateError(
           'Project already registered at: $normalizedDestination',
         );

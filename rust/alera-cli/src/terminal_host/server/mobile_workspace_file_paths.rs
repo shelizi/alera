@@ -1,4 +1,3 @@
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::terminal_host::host_error::{HostError, HostResult};
@@ -16,13 +15,15 @@ pub(super) fn prompt_attachment_root(
         "codex-attachments",
     ]
     .into_iter()
-    .filter_map(|name| fs::canonicalize(runtime_dir.join(name)).ok())
+    .filter_map(|name| dunce::canonicalize(runtime_dir.join(name)).ok())
     .find(|root| canonical_path.starts_with(root))
     .ok_or_else(|| HostError::state("Prompt attachment path is outside the runtime store."))
 }
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
 
     #[test]
@@ -34,7 +35,8 @@ mod tests {
             let path = root.join("file.txt");
             fs::write(&path, b"retained").unwrap();
             assert_eq!(
-                prompt_attachment_root(runtime.path(), &path.canonicalize().unwrap()).is_ok(),
+                prompt_attachment_root(runtime.path(), &dunce::canonicalize(&path).unwrap())
+                    .is_ok(),
                 directory == "codex-attachments"
             );
         }
@@ -49,6 +51,8 @@ mod tests {
         fs::create_dir(&root).unwrap();
         let path = root.join("escape");
         std::os::unix::fs::symlink(outside.path(), &path).unwrap();
-        assert!(prompt_attachment_root(runtime.path(), &path.canonicalize().unwrap()).is_err());
+        assert!(
+            prompt_attachment_root(runtime.path(), &dunce::canonicalize(&path).unwrap()).is_err()
+        );
     }
 }

@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import '../../../shared/infra/files/path_identity.dart';
 import '../domain/language_id.dart';
 import '../domain/language_intelligence_settings.dart';
 import '../domain/language_provider_descriptor.dart';
@@ -617,7 +618,9 @@ final class LanguageServerSessionManager {
         provider: provider,
       ),
     );
-    if (record.workspaceRoot != workspaceRoot) {
+    // The runtime rewrites legacy verbatim roots to their plain spelling, so
+    // the same directory can arrive in both forms during one session.
+    if (!isSamePath(record.workspaceRoot, workspaceRoot)) {
       throw StateError(
         'Workspace $workspaceId changed root while provider $providerId was active.',
       );

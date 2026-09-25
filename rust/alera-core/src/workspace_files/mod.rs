@@ -88,7 +88,7 @@ pub fn open_workspace_file_root(
 ) -> Result<WorkspaceFileRoot, WorkspaceFileError> {
     let directory = Dir::open_ambient_dir(workspace_path, ambient_authority())
         .map_err(|error| WorkspaceFileError::from_io(error, workspace_path))?;
-    let canonical_path = fs::canonicalize(workspace_path)
+    let canonical_path = dunce::canonicalize(workspace_path)
         .map_err(|error| WorkspaceFileError::from_io(error, workspace_path))?;
     // Authorization uses this path, so prove it still names the held directory.
     let opened_handle = Handle::from_file(
@@ -274,7 +274,7 @@ fn range_is_probably_utf8(bytes: &[u8], allow_incomplete_suffix: bool) -> bool {
 pub(super) fn workspace_root(value: &str) -> Result<PathBuf, WorkspaceFileError> {
     let path = PathBuf::from(value);
     let root =
-        fs::canonicalize(&path).map_err(|error| WorkspaceFileError::from_io(error, value))?;
+        dunce::canonicalize(&path).map_err(|error| WorkspaceFileError::from_io(error, value))?;
     if !root.is_dir() {
         return Err(WorkspaceFileError::new(
             WorkspaceFileErrorKind::InvalidPath,
@@ -436,10 +436,10 @@ mod tests {
     #[test]
     fn relative_paths_preserve_literal_backslashes_in_file_names() {
         let workspace = tempfile::tempdir().unwrap();
-        let root = fs::canonicalize(workspace.path()).unwrap();
+        let root = dunce::canonicalize(workspace.path()).unwrap();
         let literal = root.join("foo\\bar.txt");
         fs::write(&literal, b"literal").unwrap();
-        let canonical = fs::canonicalize(&literal).unwrap();
+        let canonical = dunce::canonicalize(&literal).unwrap();
 
         assert_eq!(relative_string(&root, &canonical).unwrap(), "foo\\bar.txt");
         let range =

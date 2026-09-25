@@ -58,7 +58,7 @@ extension WorkspaceServiceLinkedOps on WorkspaceService {
     final workspacePath = _resolveWorkspacePath(project, pathSlug);
     if (workspaces.any(
       (workspace) =>
-          workspace.isActive && p.equals(workspace.path, workspacePath),
+          workspace.isActive && isSamePath(workspace.path, workspacePath),
     )) {
       throw WorkspaceException(
         'A workspace already exists at "$workspacePath"',

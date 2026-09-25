@@ -71,7 +71,7 @@ fn discover_repository_directory(
     budget: &mut PromptBudget,
 ) {
     let directory = workspace.join(".codex").join("prompts");
-    let Ok(canonical) = fs::canonicalize(&directory) else {
+    let Ok(canonical) = dunce::canonicalize(&directory) else {
         return;
     };
     if !canonical.starts_with(workspace) {

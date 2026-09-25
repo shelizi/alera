@@ -54,7 +54,7 @@ pub(super) fn prepare_codex(
 
     let config_path = codex_home.join("config.toml");
     let source_config = std::fs::read_to_string(&config_path).unwrap_or_default();
-    let canonical_hooks_path = std::fs::canonicalize(&hooks_path).unwrap_or(hooks_path.clone());
+    let canonical_hooks_path = dunce::canonicalize(&hooks_path).unwrap_or(hooks_path.clone());
     let managed_trust = trust
         .into_iter()
         .map(|(label, index, command)| {

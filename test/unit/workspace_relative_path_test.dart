@@ -7,14 +7,61 @@ void main() {
   final windows = p.Context(style: p.Style.windows);
 
   test('strips Windows verbatim prefixes from user-visible paths', () {
-    expect(userVisibleWorkspacePath(r'\\?\C:\repo\alera'), r'C:\repo\alera');
+    String visible(String path) =>
+        userVisibleWorkspacePath(path, pathContext: windows);
+    expect(visible(r'\\?\C:\repo\alera'), r'C:\repo\alera');
+    expect(visible(r'\\?\UNC\server\share\repo'), r'\\server\share\repo');
+    expect(visible(r'\\.\C:\repo\alera'), r'C:\repo\alera');
+    expect(visible(r'C:\repo\alera'), r'C:\repo\alera');
+  });
+
+  test('keeps a leading verbatim-looking segment on POSIX', () {
+    // On POSIX `\\?\` is ordinary filename text, not a path prefix.
     expect(
-      userVisibleWorkspacePath(r'\\?\UNC\server\share\repo'),
-      r'\\server\share\repo',
+      userVisibleWorkspacePath(r'\\?\C:\repo', pathContext: posix),
+      r'\\?\C:\repo',
     );
-    expect(userVisibleWorkspacePath(r'\\.\C:\repo\alera'), r'C:\repo\alera');
-    expect(userVisibleWorkspacePath(r'C:\repo\alera'), r'C:\repo\alera');
-    expect(userVisibleWorkspacePath('/repo/alera'), '/repo/alera');
+    expect(
+      userVisibleWorkspacePath('/repo/alera', pathContext: posix),
+      '/repo/alera',
+    );
+  });
+
+  test('relativizes against a verbatim Windows root', () {
+    // The runtime stored roots as `\\?\E:\...`; language servers, pickers and
+    // file URIs report the plain, often lowercase, drive form.
+    expect(
+      workspaceRelativePath(
+        workspacePath: r'\\?\E:\Work\Repo',
+        filePath: r'e:\work\repo\src\main.py',
+        pathContext: windows,
+      ),
+      r'src\main.py',
+    );
+    expect(
+      workspaceRelativePath(
+        workspacePath: r'E:\Work\Repo',
+        filePath: r'\\?\E:\Work\Repo\src\main.py',
+        pathContext: windows,
+      ),
+      r'src\main.py',
+    );
+    expect(
+      workspaceRelativePath(
+        workspacePath: r'\\?\UNC\server\share\repo',
+        filePath: r'\\server\share\repo\lib\a.dart',
+        pathContext: windows,
+      ),
+      r'lib\a.dart',
+    );
+    expect(
+      workspaceRelativePath(
+        workspacePath: r'\\?\E:\Work\Repo',
+        filePath: r'e:\work\repo-other\main.py',
+        pathContext: windows,
+      ),
+      isNull,
+    );
   });
 
   test('returns null for a non-absolute file path', () {

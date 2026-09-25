@@ -220,3 +220,81 @@ async fn feature_retirement_rolls_back_schema_and_data_when_tab_cleanup_fails() 
         .is_none());
     store.pool().close().await;
 }
+
+#[tokio::test]
+async fn verbatim_root_paths_are_normalized_only_where_the_platform_allows() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = RuntimeStore::open(dir.path()).await.unwrap();
+    let now = Utc::now().to_rfc3339();
+    for (id, path) in [
+        ("verbatim", r"\\?\E:\Work\Repo"),
+        ("plain", r"E:\Work\Plain"),
+        ("posix", "/home/user/repo"),
+    ] {
+        sqlx::query(
+            "INSERT INTO projects (id, name, repoPath, createdAt, updatedAt, kind) \
+             VALUES (?, ?, ?, ?, ?, 'local')",
+        )
+        .bind(id)
+        .bind(id)
+        .bind(path)
+        .bind(&now)
+        .bind(&now)
+        .execute(store.pool())
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO workspaces (id, instanceId, hostId, projectId, name, path, \
+             createdAt, updatedAt, kind, status) \
+             VALUES (?, ?, 'local', ?, ?, ?, ?, ?, 'main', 'active')",
+        )
+        .bind(id)
+        .bind(id)
+        .bind(id)
+        .bind(id)
+        .bind(path)
+        .bind(&now)
+        .bind(&now)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    }
+
+    store.normalize_verbatim_root_paths().await.unwrap();
+    store.normalize_verbatim_root_paths().await.unwrap();
+
+    let stored = |table: &'static str, column: &'static str, id: &'static str| {
+        let pool = store.pool().clone();
+        async move {
+            sqlx::query_scalar::<_, String>(sqlx::AssertSqlSafe(format!(
+                "SELECT {column} FROM {table} WHERE id = ?"
+            )))
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    // On POSIX a leading `\\?\` is ordinary filename text and must survive.
+    let expected_verbatim = if cfg!(windows) {
+        r"E:\Work\Repo"
+    } else {
+        r"\\?\E:\Work\Repo"
+    };
+    assert_eq!(
+        stored("projects", "repoPath", "verbatim").await,
+        expected_verbatim
+    );
+    assert_eq!(
+        stored("workspaces", "path", "verbatim").await,
+        expected_verbatim
+    );
+    assert_eq!(
+        stored("projects", "repoPath", "plain").await,
+        r"E:\Work\Plain"
+    );
+    assert_eq!(
+        stored("workspaces", "path", "posix").await,
+        "/home/user/repo"
+    );
+}

@@ -53,7 +53,7 @@ impl GitPathContext {
 }
 
 fn canonicalize_lossy(path: &Path) -> PathBuf {
-    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+    dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 fn path_to_repo_string(path: &Path) -> String {

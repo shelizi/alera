@@ -202,7 +202,7 @@ pub fn host_directory_roots() -> Vec<HostDirectoryRoot> {
 
 pub fn list_host_directory(raw_path: &str) -> Result<HostDirectoryListing> {
     let path = validate_existing_directory(raw_path)?;
-    let canonical = std::fs::canonicalize(&path)
+    let canonical = dunce::canonicalize(&path)
         .with_context(|| format!("Could not open directory: {}", path.display()))?;
     let mut entries = Vec::new();
     for item in std::fs::read_dir(&canonical)
@@ -282,7 +282,7 @@ pub fn validate_clone_destination(parent_path: &str, directory_name: &str) -> Re
     if name.is_empty() || name == "." || name == ".." || Path::new(name).components().count() != 1 {
         bail!("Clone directory name must be a single path segment.");
     }
-    let parent = std::fs::canonicalize(parent)?;
+    let parent = dunce::canonicalize(parent)?;
     let destination = parent.join(name);
     if destination.exists() {
         bail!(
@@ -294,7 +294,7 @@ pub fn validate_clone_destination(parent_path: &str, directory_name: &str) -> Re
 }
 
 pub fn remove_owned_clone_destination(parent_path: &str, destination_path: &str) -> Result<()> {
-    let parent = std::fs::canonicalize(parent_path)?;
+    let parent = dunce::canonicalize(parent_path)?;
     let destination = PathBuf::from(destination_path);
     if destination.parent() != Some(parent.as_path()) || destination.file_name().is_none() {
         bail!("Refusing to clean an unsafe clone destination.");
@@ -386,14 +386,22 @@ fn normalized_project_name(requested_name: Option<&str>, path: &Path) -> Result<
         .ok_or_else(|| anyhow!("Project name cannot be derived from the selected path."))
 }
 
+// `std::fs::canonicalize` returns the verbatim `\\?\E:\...` form on Windows,
+// which every consumer of a stored repo path (Dart path comparisons, child
+// process cwds, cmd.exe) would otherwise have to special-case. `dunce` keeps
+// the plain form whenever it is representable and is `std` elsewhere.
 fn canonical_string(path: &Path) -> Result<String> {
-    Ok(std::fs::canonicalize(path)?.to_string_lossy().to_string())
+    Ok(dunce::canonicalize(path)?.to_string_lossy().to_string())
 }
 
 fn paths_equal(left: &str, right: &str) -> bool {
     #[cfg(windows)]
     {
-        left.eq_ignore_ascii_case(right)
+        // Rows registered before `canonical_string` used `dunce` still carry
+        // the verbatim prefix and must match the plain form of the same path.
+        let left = dunce::simplified(Path::new(left));
+        let right = dunce::simplified(Path::new(right));
+        left.as_os_str().eq_ignore_ascii_case(right.as_os_str())
     }
     #[cfg(not(windows))]
     {

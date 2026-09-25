@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:alera/src/features/workbench/domain/external_terminal_launcher.dart';
+import 'package:alera/src/shared/infra/files/path_identity.dart';
 import 'package:alera/src/shared/infra/runtime/alera_cli_sidecar.dart';
 import 'package:alera/src/shared/infra/process/process_runner.dart';
 import 'package:path/path.dart' as p;
@@ -160,7 +161,11 @@ ExternalTerminalInvocation buildExternalTerminalInvocation({
     '--handle',
     request.terminalSessionId,
   ];
-  final workingDirectory = cli.workingDirectory ?? request.workspacePath;
+  // wt.exe and child processes do not accept a verbatim working directory.
+  final workingDirectory = withoutWindowsPathPrefix(
+    cli.workingDirectory ?? request.workspacePath,
+    pathContext: operatingSystem == 'windows' ? p.windows : p.posix,
+  );
 
   return switch (operatingSystem) {
     'windows' => ExternalTerminalInvocation(
@@ -218,7 +223,11 @@ ExternalTerminalInvocation buildGitBashExternalTerminalInvocation({
     '--handle',
     request.terminalSessionId,
   ];
-  final workingDirectory = cli.workingDirectory ?? request.workspacePath;
+  // Git Bash is Windows-only; `cd //?/E:/...` fails and aborts the attach.
+  final workingDirectory = withoutWindowsPathPrefix(
+    cli.workingDirectory ?? request.workspacePath,
+    pathContext: p.windows,
+  );
   final executable = _gitBashPath(cli.executable);
   final command = <String>[
     'cd ${_posixShellQuote(_gitBashPath(workingDirectory))}',

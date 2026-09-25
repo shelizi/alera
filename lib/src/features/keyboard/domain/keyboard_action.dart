@@ -61,6 +61,7 @@ enum KeyboardActionId {
   replaceInFiles,
   saveFile,
   goToDefinition,
+  goToImplementation,
   findReferences,
   reloadDocument,
   newTerminalTab,
@@ -290,6 +291,20 @@ const List<KeybindingDefinition> keybindingDefinitions = <KeybindingDefinition>[
     description: 'Open the definition for the symbol at the editor cursor.',
     defaultBindings: .uniform(<String>['F12']),
     searchKeywords: <String>['editor', 'symbol', 'definition', 'navigation'],
+  ),
+  KeybindingDefinition(
+    id: .goToImplementation,
+    label: 'Go to Implementation',
+    group: .editor,
+    description:
+        'Open the implementations for the symbol at the editor cursor.',
+    defaultBindings: .uniform(<String>['Mod+F12']),
+    searchKeywords: <String>[
+      'editor',
+      'symbol',
+      'implementation',
+      'navigation',
+    ],
   ),
   KeybindingDefinition(
     id: .findReferences,

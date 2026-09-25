@@ -195,7 +195,7 @@ final class CodexRuntimeHomeServiceProvider
 }
 
 String _$codexRuntimeHomeServiceHash() =>
-    r'e7553a6f61517cc4be09609542c63f5ceb02379e';
+    r'9b60955887db571a219c1d95b4c908549f9b15e5';
 
 @ProviderFor(claudeRuntimeHomeService)
 final claudeRuntimeHomeServiceProvider = ClaudeRuntimeHomeServiceProvider._();
@@ -243,7 +243,7 @@ final class ClaudeRuntimeHomeServiceProvider
 }
 
 String _$claudeRuntimeHomeServiceHash() =>
-    r'd0f129b9d6de54f89081871cbd91f823c31892af';
+    r'41bf0523f0cf1e97f06d504c048b7df2c2177fd7';
 
 @ProviderFor(agentRuntimeOverlayService)
 final agentRuntimeOverlayServiceProvider =
@@ -613,7 +613,7 @@ final class AgentHookInstallerCoordinatorProvider
 }
 
 String _$agentHookInstallerCoordinatorHash() =>
-    r'507acc68a9b40d767638a3945577ae6faf52845a';
+    r'0207645c1b072b7b98e875ec5514a53af1e2a234';
 
 @ProviderFor(agentStatusNotificationPresenter)
 final agentStatusNotificationPresenterProvider =

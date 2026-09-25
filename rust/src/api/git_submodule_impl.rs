@@ -366,10 +366,9 @@ fn open_submodule(
     let parent_workdir = parent
         .workdir()
         .ok_or_else(|| GitError::new(GitErrorKind::NotARepository, "bare parent repository"))?;
-    let parent_root =
-        std::fs::canonicalize(parent_workdir).unwrap_or_else(|_| parent_workdir.into());
+    let parent_root = dunce::canonicalize(parent_workdir).unwrap_or_else(|_| parent_workdir.into());
     let candidate = parent_workdir.join(relative_path);
-    let candidate_root = std::fs::canonicalize(&candidate).map_err(|_| {
+    let candidate_root = dunce::canonicalize(&candidate).map_err(|_| {
         GitError::new(
             GitErrorKind::NotARepository,
             format!("Submodule Is Not Initialized: {}", resolved.workspace_path),

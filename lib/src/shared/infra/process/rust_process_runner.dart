@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:alera/src/rust/api/process.dart' as rust;
+import 'package:alera/src/shared/infra/files/path_identity.dart';
 import 'package:alera/src/shared/infra/process/process_runner.dart';
 
 /// [ProcessRunner] backed by the Rust crate through flutter_rust_bridge. This is
@@ -24,7 +25,7 @@ class const RustProcessRunner() implements ProcessRunner {
       final result = await rust.processRun(
         executable: executable,
         arguments: arguments,
-        workingDirectory: workingDirectory,
+        workingDirectory: _shellWorkingDirectory(workingDirectory),
         environment: environment,
       );
       return ProcessRunOutput(
@@ -50,7 +51,7 @@ class const RustProcessRunner() implements ProcessRunner {
       rust.processStart(
         executable: executable,
         arguments: arguments,
-        workingDirectory: workingDirectory,
+        workingDirectory: _shellWorkingDirectory(workingDirectory),
         environment: environment,
         includeParentEnvironment: includeParentEnvironment,
       ),
@@ -150,3 +151,10 @@ class _ProcessSession(final String _executable, final List<String> _arguments) {
     unawaited(_stderr.close());
   }
 }
+
+// Every command runs through the platform shell, and `cmd.exe` refuses a
+// verbatim working directory and silently runs in `C:\Windows`.
+String? _shellWorkingDirectory(String? workingDirectory) =>
+    workingDirectory == null
+    ? null
+    : withoutWindowsPathPrefix(workingDirectory);

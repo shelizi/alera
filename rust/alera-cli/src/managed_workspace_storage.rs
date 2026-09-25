@@ -79,7 +79,7 @@ pub async fn validate_workspace_storage_path(
 }
 
 fn is_host_owned_workspace_path(root: &Path, target: &Path) -> Result<bool> {
-    let root = match std::fs::canonicalize(root) {
+    let root = match dunce::canonicalize(root) {
         Ok(root) => root,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(error) => return Err(error).context("Could not resolve managed workspace root"),
@@ -95,7 +95,7 @@ fn is_host_owned_workspace_path(root: &Path, target: &Path) -> Result<bool> {
     {
         return Ok(false);
     }
-    let resolved = match std::fs::canonicalize(target) {
+    let resolved = match dunce::canonicalize(target) {
         Ok(path) => path,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             let Some(parent) = target.parent() else {
@@ -104,7 +104,7 @@ fn is_host_owned_workspace_path(root: &Path, target: &Path) -> Result<bool> {
             let Some(name) = target.file_name() else {
                 return Ok(false);
             };
-            match std::fs::canonicalize(parent) {
+            match dunce::canonicalize(parent) {
                 Ok(parent) => parent.join(name),
                 Err(_) => return Ok(false),
             }

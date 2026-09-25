@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:alera/src/features/language_intelligence/application/language_navigation_port.dart';
 import 'package:alera/src/features/language_intelligence/application/language_server_runtime.dart';
 import 'package:alera/src/features/language_intelligence/domain/language_capability.dart';
 import 'package:alera/src/features/language_intelligence/domain/language_id.dart';
@@ -308,7 +309,86 @@ void main() {
       expect(binding.navigation, same(binding.documents));
     },
   );
+
+  group('navigation errors', () {
+    Map<String, dynamic> error(int code) => <String, dynamic>{
+      'error': <String, dynamic>{'code': code, 'message': 'content modified'},
+    };
+    const position = SourcePosition(line: 0, scalarColumn: 1);
+
+    Future<CodeForgeSemanticProviderAdapter> opened(
+      _FakeSemanticTransport transport,
+    ) async {
+      final adapter = await _adapter(transport);
+      await adapter.openDocument(
+        language: LanguageId('rust'),
+        path: _mainPath,
+        text: 'fn main() {}\n',
+      );
+      return adapter;
+    }
+
+    test('retries while the server is still indexing', () async {
+      final transport = _FakeSemanticTransport()
+        ..queuedResponses.addAll(<Map<String, dynamic>>[
+          error(-32801),
+          <String, dynamic>{'result': <Object?>[]},
+        ]);
+      final adapter = await opened(transport);
+
+      final locations = await adapter.references(
+        path: _mainPath,
+        position: position,
+      );
+
+      expect(locations, isEmpty);
+      expect(transport.requests, hasLength(2));
+    });
+
+    test('gives up after the retry budget and reports the error', () async {
+      final transport = _FakeSemanticTransport()
+        ..queuedResponses.addAll(
+          List<Map<String, dynamic>>.generate(4, (_) => error(-32802)),
+        );
+      final adapter = await opened(transport);
+
+      await expectLater(
+        adapter.references(path: _mainPath, position: position),
+        throwsA(
+          isA<LanguageServerRequestException>().having(
+            (e) => e.code,
+            'code',
+            -32802,
+          ),
+        ),
+      );
+      expect(transport.requests, hasLength(4));
+    });
+
+    test('reports an unsupported method without retrying', () async {
+      final transport = _FakeSemanticTransport()
+        ..queuedResponses.add(error(-32601));
+      final adapter = await opened(transport);
+
+      await expectLater(
+        adapter.implementation(
+          path: _mainPath,
+          position: position,
+        ),
+        throwsA(
+          isA<LanguageServerRequestException>().having(
+            (e) => e.methodNotSupported,
+            'methodNotSupported',
+            isTrue,
+          ),
+        ),
+      );
+      expect(transport.requests, hasLength(1));
+    });
+  });
 }
+
+const String _mainPath = r'C:\repo\src\main.rs';
 
 Future<CodeForgeSemanticProviderAdapter> _adapter(
   _FakeSemanticTransport transport, {
@@ -368,6 +448,7 @@ final class _FakeSemanticTransport implements CodeForgeLanguageServerTransport {
   final Completer<int> _exitCode = Completer<int>();
   Object? nextResult;
   final List<Object?> queuedResults = <Object?>[];
+  final List<Map<String, dynamic>> queuedResponses = <Map<String, dynamic>>[];
 
   @override
   Future<int> get processExitCode => _exitCode.future;
@@ -403,6 +484,9 @@ final class _FakeSemanticTransport implements CodeForgeLanguageServerTransport {
     required Map<String, dynamic> params,
   }) async {
     requests.add(_RecordedMessage(method, params));
+    if (queuedResponses.isNotEmpty) {
+      return queuedResponses.removeAt(0);
+    }
     return <String, dynamic>{
       'result': queuedResults.isEmpty ? nextResult : queuedResults.removeAt(0),
     };

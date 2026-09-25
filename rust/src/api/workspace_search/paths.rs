@@ -17,7 +17,7 @@ pub(super) fn safe_regular_file_metadata(
             relative_path,
         ));
     }
-    let canonical = fs::canonicalize(path)
+    let canonical = dunce::canonicalize(path)
         .map_err(|error| WorkspaceSearchError::from_io(error, relative_path))?;
     if !canonical.starts_with(root) {
         return Err(WorkspaceSearchError::new(
@@ -50,7 +50,7 @@ pub(super) fn should_walk_entry(root: &Path, path: &Path) -> bool {
 pub(super) fn workspace_root(path: &str) -> Result<PathBuf, WorkspaceSearchError> {
     let root = PathBuf::from(path);
     let canonical =
-        fs::canonicalize(&root).map_err(|error| WorkspaceSearchError::from_io(error, path))?;
+        dunce::canonicalize(&root).map_err(|error| WorkspaceSearchError::from_io(error, path))?;
     if !canonical.is_dir() {
         return Err(WorkspaceSearchError::new(
             WorkspaceSearchErrorKind::InvalidPath,

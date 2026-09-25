@@ -113,7 +113,7 @@ final class WorkspaceReferencesControllerProvider
 }
 
 String _$workspaceReferencesControllerHash() =>
-    r'e69538ce35aa3615aa255650f8d3603523e27733';
+    r'25784aef941997719bdbf099e3a9462bcc8ec0f0';
 
 final class WorkspaceReferencesControllerFamily extends $Family
     with

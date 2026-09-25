@@ -368,11 +368,11 @@ fn existing_worktree_admin_names(repo: &Repository) -> std::collections::HashSet
 
 fn canonical(path: &str) -> String {
     let target = Path::new(path);
-    if let Ok(resolved) = std::fs::canonicalize(target) {
+    if let Ok(resolved) = dunce::canonicalize(target) {
         return resolved.to_string_lossy().trim_end_matches('/').to_string();
     }
     if let (Some(parent), Some(name)) = (target.parent(), target.file_name()) {
-        if let Ok(resolved_parent) = std::fs::canonicalize(parent) {
+        if let Ok(resolved_parent) = dunce::canonicalize(parent) {
             return resolved_parent
                 .join(name)
                 .to_string_lossy()

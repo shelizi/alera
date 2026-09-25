@@ -1259,7 +1259,7 @@ fn repo_relative_path(
     workspace_path: &str,
     workspace_relative_path: &str,
 ) -> Result<String, GitError> {
-    let workspace = std::fs::canonicalize(workspace_path).map_err(GitError::from_io)?;
+    let workspace = dunce::canonicalize(workspace_path).map_err(GitError::from_io)?;
     repo_relative_path_from_workspace(repo, workspace_path, &workspace, workspace_relative_path)
 }
 
@@ -1267,7 +1267,7 @@ fn workspace_repo_relative_path(
     repo: &Repository,
     workspace_path: &str,
 ) -> Result<String, GitError> {
-    let workspace = std::fs::canonicalize(workspace_path).map_err(GitError::from_io)?;
+    let workspace = dunce::canonicalize(workspace_path).map_err(GitError::from_io)?;
     repo_relative_path_from_workspace(repo, workspace_path, &workspace, "")
 }
 
@@ -1280,7 +1280,7 @@ fn repo_relative_path_from_workspace(
     let workdir = repo
         .workdir()
         .ok_or_else(|| GitError::new(GitErrorKind::NotARepository, workspace_path))?;
-    let workdir = std::fs::canonicalize(workdir).map_err(GitError::from_io)?;
+    let workdir = dunce::canonicalize(workdir).map_err(GitError::from_io)?;
     let target = workspace.join(relative_path(workspace_relative_path)?);
     let relative = target
         .strip_prefix(&workdir)
@@ -1319,8 +1319,8 @@ fn scoped_pathspecs(
     let workdir = repo
         .workdir()
         .ok_or_else(|| GitError::new(GitErrorKind::NotARepository, workspace_path))?;
-    let workdir = std::fs::canonicalize(workdir).map_err(GitError::from_io)?;
-    let workspace = std::fs::canonicalize(workspace_path).map_err(GitError::from_io)?;
+    let workdir = dunce::canonicalize(workdir).map_err(GitError::from_io)?;
+    let workspace = dunce::canonicalize(workspace_path).map_err(GitError::from_io)?;
     let target = match file_path {
         Some(file_path) => workspace.join(relative_path(file_path)?),
         None => workspace,
@@ -1367,7 +1367,7 @@ fn relative_path(path: &str) -> Result<PathBuf, GitError> {
 }
 
 fn delete_workspace_relative_path(workspace_path: &str, relative: &str) -> Result<(), GitError> {
-    let root = std::fs::canonicalize(workspace_path).map_err(GitError::from_io)?;
+    let root = dunce::canonicalize(workspace_path).map_err(GitError::from_io)?;
     let path = root.join(relative_path(relative)?);
     if !path.starts_with(&root) {
         return Err(GitError::new(GitErrorKind::Internal, relative));

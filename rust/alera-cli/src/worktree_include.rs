@@ -40,7 +40,7 @@ pub(crate) fn expand_worktree_include(project_root: &Path) -> Result<Vec<Worktre
     let Some(workdir) = repository.workdir() else {
         anyhow::bail!("{WORKTREE_INCLUDE_FILE} requires a work tree");
     };
-    let workdir = std::fs::canonicalize(workdir)?;
+    let workdir = dunce::canonicalize(workdir)?;
     let index = repository.index()?;
     let mut files = BTreeSet::new();
     collect_ignored_matches(&repository, &workdir, &index, &matcher, &plan, &mut files)?;

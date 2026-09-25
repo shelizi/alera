@@ -40,6 +40,15 @@ extension _WorkspaceEditorTextActions on _WorkspaceEditorSurfaceState {
         ),
       );
     }
+    if (_canOfferLanguageNavigation(LanguageCapability.implementation)) {
+      items.add(
+        code_forge.CustomContextMenu(
+          label: context.tr('Go to Implementation'),
+          description: '',
+          onPress: () => unawaited(_goToImplementation()),
+        ),
+      );
+    }
     if (_canOfferLanguageNavigation(LanguageCapability.references)) {
       items.add(
         code_forge.CustomContextMenu(

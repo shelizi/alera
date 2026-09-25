@@ -16,7 +16,7 @@ final LanguageExtensionContribution dartLanguageExtension =
           structuralParserDefaultEnabled: true,
           semanticProviderIds: const <String>['dart.analysis-server'],
           defaultSemanticProviderId: 'dart.analysis-server',
-          capabilities: builtinLanguageCapabilities,
+          capabilities: builtinImplementationLanguageCapabilities,
         ),
       ],
       providers: <LanguageProviderDescriptor>[
@@ -32,7 +32,7 @@ final LanguageExtensionContribution dartLanguageExtension =
           id: 'dart.analysis-server',
           kind: LanguageProviderKind.semanticServer,
           languages: <LanguageId>{LanguageId('dart')},
-          capabilities: builtinNavigationCapabilities,
+          capabilities: builtinImplementationNavigationCapabilities,
           processScope: LanguageProviderProcessScope.workspace,
           launchPolicy: LanguageProviderLaunchPolicy.lazyOnDemand,
           executableResolutionPolicy:

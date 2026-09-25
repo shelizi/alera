@@ -114,7 +114,7 @@ fn resolves_into(path: &Path, dir: &Path) -> bool {
 }
 
 fn canonicalize_existing(path: &Path) -> PathBuf {
-    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+    dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 #[cfg(test)]

@@ -49,7 +49,7 @@ final class AgentTaskRunnerProvider
   }
 }
 
-String _$agentTaskRunnerHash() => r'c28bff8a2f12f56b45a21131170eb3f19323e84a';
+String _$agentTaskRunnerHash() => r'b08c994e45267a719ac4e635a7113c0d2997f8e0';
 
 @ProviderFor(aiAssistService)
 final aiAssistServiceProvider = AiAssistServiceProvider._();
@@ -91,7 +91,7 @@ final class AiAssistServiceProvider
   }
 }
 
-String _$aiAssistServiceHash() => r'e09183626cfcac5376420083d6e456c824d9198d';
+String _$aiAssistServiceHash() => r'cbd7e5f1e6d3244cec9f5ff0470f78a688640d79';
 
 @ProviderFor(aiAssistModelDiscoveryService)
 final aiAssistModelDiscoveryServiceProvider =

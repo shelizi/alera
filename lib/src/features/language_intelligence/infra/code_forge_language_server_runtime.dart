@@ -5,6 +5,7 @@ import 'package:code_forge/code_forge.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import '../../../shared/infra/files/path_identity.dart';
 import '../../../shared/infra/process/command_path_probe.dart';
 import '../application/language_intelligence_activity.dart';
 import '../application/language_server_runtime.dart';
@@ -558,7 +559,9 @@ Future<CodeForgeLanguageServerTransport> _startCodeForgeTransport(
 ) async {
   final config = await LspStdioConfig.start(
     executable: spec.executable,
-    workspacePath: spec.workspaceRoot,
+    // `.cmd` servers start through `cmd.exe`, which cannot use a verbatim
+    // working directory.
+    workspacePath: withoutWindowsPathPrefix(spec.workspaceRoot),
     languageId: spec.bootstrapLanguageId,
     args: spec.arguments,
     environment: spec.environment,

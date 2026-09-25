@@ -15,7 +15,7 @@ final LanguageExtensionContribution csharpLanguageExtension =
           parserProviderId: 'csharp.tree-sitter',
           semanticProviderIds: const <String>['csharp.csharp-ls'],
           defaultSemanticProviderId: 'csharp.csharp-ls',
-          capabilities: builtinLanguageCapabilities,
+          capabilities: builtinImplementationLanguageCapabilities,
         ),
       ],
       providers: <LanguageProviderDescriptor>[
@@ -31,7 +31,7 @@ final LanguageExtensionContribution csharpLanguageExtension =
           id: 'csharp.csharp-ls',
           kind: LanguageProviderKind.semanticServer,
           languages: <LanguageId>{LanguageId('csharp')},
-          capabilities: builtinNavigationCapabilities,
+          capabilities: builtinImplementationNavigationCapabilities,
           processScope: LanguageProviderProcessScope.workspace,
           launchPolicy: LanguageProviderLaunchPolicy.lazyOnDemand,
           executableResolutionPolicy:

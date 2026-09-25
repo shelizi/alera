@@ -101,23 +101,59 @@ extension _WorkspaceEditorLanguageIntelligence on _WorkspaceEditorSurfaceState {
       return;
     }
     if (!provider.capabilities.contains(capability)) {
-      _showToast(
-        capability == LanguageCapability.definition
-            ? 'The selected language server does not support Go to Definition.'
-            : 'The selected language server does not support Find References.',
-      );
+      _showLanguageNavigationUnsupported(capability);
       return;
     }
     _showToast('Language server is not ready');
   }
 
-  Future<void> _goToDefinition() async {
+  void _showLanguageNavigationUnsupported(LanguageCapability capability) {
+    _showToast(switch (capability) {
+      LanguageCapability.definition =>
+        'The selected language server does not support Go to Definition.',
+      LanguageCapability.implementation =>
+        'The selected language server does not support Go to Implementation.',
+      _ => 'The selected language server does not support Find References.',
+    });
+  }
+
+  Future<void> _goToDefinition() => _goToSourceLocations(
+    capability: LanguageCapability.definition,
+    query: _languageIntelligence.definition,
+    pickerTitle: 'Definitions',
+    emptyMessage: 'No definition found',
+    outsideMessage: 'Definition is outside the current workspace',
+    openFailedMessage: 'Could not open definition',
+  );
+
+  Future<void> _goToImplementation() => _goToSourceLocations(
+    capability: LanguageCapability.implementation,
+    query: _languageIntelligence.implementation,
+    pickerTitle: 'Implementations',
+    emptyMessage: 'No implementation found',
+    outsideMessage: 'Implementation is outside the current workspace',
+    openFailedMessage: 'Could not open implementation',
+  );
+
+  Future<void> _goToSourceLocations({
+    required LanguageCapability capability,
+    required Future<List<SourceLocation>> Function({
+      required String workspaceId,
+      required String path,
+      required SourcePosition position,
+    })
+    query,
+    required String pickerTitle,
+    required String emptyMessage,
+    required String outsideMessage,
+    required String openFailedMessage,
+  }) async {
     final filePath = widget.tab.filePath;
     if (filePath == null) {
       return;
     }
-    if (!_canOfferLanguageNavigation(LanguageCapability.definition)) {
-      _showLanguageNavigationUnavailable(LanguageCapability.definition);
+    if (!_canOfferLanguageNavigation(capability)) {
+      _showLanguageNavigationUnavailable(capability);
       return;
     }
     await _flushLanguageIntelligenceDocumentSync();
@@ -149,11 +185,21 @@ extension _WorkspaceEditorLanguageIntelligence on _WorkspaceEditorSurfaceState {
 
     final List<SourceLocation> locations;
     try {
-      locations = await _languageIntelligence.definition(
+      locations = await query(
         workspaceId: widget.workspace.id,
         path: sourcePath,
         position: position,
       );
+    } on TimeoutException {
+      _showToast('Language server did not respond');
+      return;
+    } on LanguageServerRequestException catch (error) {
+      if (error.methodNotSupported) {
+        _showLanguageNavigationUnsupported(capability);
+      } else {
+        _showToast('Language server request failed', tone: .error);
+      }
+      return;
     } catch (_) {
       _showToast('Language server is not ready');
       return;
@@ -180,21 +226,17 @@ extension _WorkspaceEditorLanguageIntelligence on _WorkspaceEditorSurfaceState {
       }
     }
     if (choices.isEmpty) {
-      _showToast(
-        locations.isEmpty
-            ? 'No definition found'
-            : 'Definition is outside the current workspace',
-      );
+      _showToast(locations.isEmpty ? emptyMessage : outsideMessage);
       return;
     }
 
     final choice = choices.length == 1
         ? choices.first
-        : await _pickDefinitionChoice(choices);
+        : await _pickDefinitionChoice(choices, title: pickerTitle);
     if (choice == null || !mounted) {
       return;
     }
-    await _openDefinitionChoice(choice);
+    await _openDefinitionChoice(choice, failedMessage: openFailedMessage);
   }
 
   Future<void> _findReferences() async {
@@ -248,8 +290,9 @@ extension _WorkspaceEditorLanguageIntelligence on _WorkspaceEditorSurfaceState {
   }
 
   Future<_WorkspaceEditorDefinitionChoice?> _pickDefinitionChoice(
-    List<_WorkspaceEditorDefinitionChoice> choices,
-  ) {
+    List<_WorkspaceEditorDefinitionChoice> choices, {
+    required String title,
+  }) {
     final height = choices.length > 5 ? 360.0 : 88.0 + choices.length * 52.0;
     return showDialog<_WorkspaceEditorDefinitionChoice>(
       context: context,
@@ -264,7 +307,7 @@ extension _WorkspaceEditorLanguageIntelligence on _WorkspaceEditorSurfaceState {
               crossAxisAlignment: .stretch,
               children: <Widget>[
                 Text(
-                  dialogContext.tr('Definitions'),
+                  dialogContext.tr(title),
                   style: Theme.of(dialogContext).textTheme.titleMedium,
                 ),
                 const SizedBox(height: AleraTokens.space12),
@@ -325,8 +368,9 @@ extension _WorkspaceEditorLanguageIntelligence on _WorkspaceEditorSurfaceState {
   }
 
   Future<void> _openDefinitionChoice(
-    _WorkspaceEditorDefinitionChoice choice,
-  ) async {
+    _WorkspaceEditorDefinitionChoice choice, {
+    required String failedMessage,
+  }) async {
     try {
       final tab = await ref
           .read(workbenchControllerProvider.notifier)
@@ -340,7 +384,7 @@ extension _WorkspaceEditorLanguageIntelligence on _WorkspaceEditorSurfaceState {
       }
       _editorSessions.reveal(tab.id, choice.target.reveal);
     } catch (_) {
-      _showToast('Could not open definition', tone: .error);
+      _showToast(failedMessage, tone: .error);
     }
   }
 
@@ -742,7 +786,11 @@ workspaceEditorNavigationTargetForLocation({
   final targetPath = p.normalize(
     p.isAbsolute(location.path) ? location.path : p.join(root, location.path),
   );
-  if (!p.equals(root, targetPath) && !p.isWithin(root, targetPath)) {
+  final relativePath = workspaceRelativePath(
+    workspacePath: root,
+    filePath: targetPath,
+  );
+  if (relativePath == null) {
     return null;
   }
   final start = location.range.start;
@@ -751,7 +799,7 @@ workspaceEditorNavigationTargetForLocation({
       ? (end.scalarColumn - start.scalarColumn).clamp(1, 1 << 30)
       : 1;
   return WorkspaceEditorSourceNavigationTarget(
-    relativePath: p.relative(targetPath, from: root),
+    relativePath: relativePath,
     reveal: WorkspaceEditorRevealTarget(
       line: start.line + 1,
       column: start.scalarColumn + 1,

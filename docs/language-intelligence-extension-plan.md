@@ -977,6 +977,7 @@ Completed:
   Go to Definition and Find References through the generic keyboard command
   registry. These paths are capability/provider driven and do not branch on
   concrete language ids.
+- **Go to Implementation:** `Mod+F12` and the editor context menu route to `textDocument/implementation` for providers that declare `LanguageCapability.implementation`. Verified on Windows against fixture projects: csharp-ls 0.28.0, the Dart analysis server, rust-analyzer, gopls and typescript-language-server 6.0.0 each return the two implementations of an interface method. Pyright 1.1.414 rejects the method (`-32601`) and intelephense 1.18.5 (free tier) advertises no `implementationProvider`, so those two keep definition and references only; phpactor is undeclared until it is verified. Navigation now reports a server that is still starting as not ready, a server that never answers within 30 seconds as not responding, and a JSON-RPC error as a failure, instead of an empty result. Result locations are matched to the workspace through `path_identity.dart`, because servers report `e:\...` while legacy roots were stored as `\\?\E:\...`, which previously discarded every result.
 - **E / P5 — Settings UX:** each first-wave language has optional semantic
   enablement, provider selection, executable override, and status display.
 - **F4 / P10 — Go semantic compatibility gate:** validated locally on Windows

@@ -8,6 +8,25 @@ fn clone_destination_rejects_nested_names() {
 }
 
 #[test]
+fn canonical_string_never_returns_a_verbatim_prefix() {
+    let dir = tempfile::tempdir().unwrap();
+    let canonical = canonical_string(dir.path()).unwrap();
+    assert!(!canonical.starts_with(r"\\?\"), "{canonical}");
+}
+
+#[cfg(windows)]
+#[test]
+fn paths_equal_matches_legacy_verbatim_rows() {
+    assert!(paths_equal(r"\\?\E:\Work\Repo", r"e:\work\repo"));
+    assert!(!paths_equal(r"\\?\E:\Work\Repo", r"E:\Work\Other"));
+    // `dunce` deliberately keeps UNC paths verbatim, so both rows must agree.
+    assert!(paths_equal(
+        r"\\?\UNC\server\share\repo",
+        r"\\?\unc\Server\Share\repo"
+    ));
+}
+
+#[test]
 fn cleanup_never_removes_outside_parent() {
     let parent = tempfile::tempdir().unwrap();
     let outside = tempfile::tempdir().unwrap();
