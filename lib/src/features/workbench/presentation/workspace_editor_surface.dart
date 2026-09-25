@@ -385,6 +385,8 @@ class _WorkspaceEditorSurfaceState
                   scrollbarDecoration: workspaceEditorScrollbarDecoration(),
                   suggestionStyle: _editorOverlayStyle(context),
                   customContextMenuItems: _editorContextMenuItems(context),
+                  onNavigationClick: (_) =>
+                      unawaited(_goToImplementationOrDefinition()),
                   textStyle: Theme.of(context).textTheme.bodyMedium?.copyWith(
                     fontFamily: 'JetBrains Mono',
                     color: rootStyle.color ?? AleraTokens.foreground,

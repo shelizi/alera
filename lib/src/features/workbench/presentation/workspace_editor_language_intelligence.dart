@@ -135,7 +135,26 @@ extension _WorkspaceEditorLanguageIntelligence on _WorkspaceEditorSurfaceState {
     openFailedMessage: 'Could not open implementation',
   );
 
+  /// Ctrl/Cmd+click: implementations when the server has any for the symbol,
+  /// otherwise its definition, so the gesture still goes somewhere on a plain
+  /// call, a variable, or a server without implementation support.
+  Future<void> _goToImplementationOrDefinition() {
+    if (!_canOfferLanguageNavigation(LanguageCapability.implementation)) {
+      return _goToDefinition();
+    }
+    return _goToSourceLocations(
+      capability: LanguageCapability.implementation,
+      query: _languageIntelligence.implementation,
+      pickerTitle: 'Implementations',
+      emptyMessage: 'No implementation found',
+      outsideMessage: 'Implementation is outside the current workspace',
+      openFailedMessage: 'Could not open implementation',
+      whenNone: _goToDefinition,
+    );
+  }
+
   Future<void> _goToSourceLocations({
+    Future<void> Function()? whenNone,
     required LanguageCapability capability,
     required Future<List<SourceLocation>> Function({
       required String workspaceId,
@@ -194,7 +213,9 @@ extension _WorkspaceEditorLanguageIntelligence on _WorkspaceEditorSurfaceState {
       _showToast('Language server did not respond');
       return;
     } on LanguageServerRequestException catch (error) {
-      if (error.methodNotSupported) {
+      if (error.methodNotSupported && whenNone != null) {
+        await whenNone();
+      } else if (error.methodNotSupported) {
         _showLanguageNavigationUnsupported(capability);
       } else {
         _showToast('Language server request failed', tone: .error);
@@ -226,6 +247,10 @@ extension _WorkspaceEditorLanguageIntelligence on _WorkspaceEditorSurfaceState {
       }
     }
     if (choices.isEmpty) {
+      if (locations.isEmpty && whenNone != null) {
+        await whenNone();
+        return;
+      }
       _showToast(locations.isEmpty ? emptyMessage : outsideMessage);
       return;
     }

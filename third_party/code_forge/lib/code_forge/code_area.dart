@@ -38,6 +38,21 @@ TextSelection codeForgeShiftPointerSelection({
   );
 }
 
+/// Whether [platform]'s go-to modifier is held: Cmd on macOS (where Ctrl+click
+/// is a secondary click), Ctrl everywhere else.
+@visibleForTesting
+bool codeForgeIsNavigationModifierPressed({
+  required TargetPlatform platform,
+  required bool controlPressed,
+  required bool metaPressed,
+}) => platform == TargetPlatform.macOS ? metaPressed : controlPressed;
+
+bool _isNavigationModifierPressed() => codeForgeIsNavigationModifierPressed(
+  platform: defaultTargetPlatform,
+  controlPressed: HardwareKeyboard.instance.isControlPressed,
+  metaPressed: HardwareKeyboard.instance.isMetaPressed,
+);
+
 bool isLargeFileAsciiViewportCandidate(
   String text, {
   int minChars = kLargeFileParagraphProfileMinChars,
@@ -411,6 +426,12 @@ class CodeForge extends StatefulWidget {
   /// Include custom items in the context menu (The menu appearson right click).
   final List<CustomContextMenu>? customContextMenuItems;
 
+  /// Called with the text offset of a primary click made while holding the
+  /// platform navigation modifier (Cmd on macOS, Ctrl elsewhere). The caret is
+  /// moved to that offset before the callback runs. When null, such a click
+  /// behaves like a plain click.
+  final ValueChanged<int>? onNavigationClick;
+
   /// If set to true, deleting the first line of a folded block will delete the entire folded region,
   /// else only the first line gets deleted and the rest of the block stays safe.
   /// Defauts to false.
@@ -449,6 +470,7 @@ class CodeForge extends StatefulWidget {
     this.keyboardShotcuts = const CodeForgeKeyboardShortcuts(),
     this.customCodeSnippets,
     this.customContextMenuItems,
+    this.onNavigationClick,
     this.readOnly = false,
     this.autoFocus = false,
     this.lineWrap = false,
@@ -3039,6 +3061,8 @@ class _CodeForgeState extends State<CodeForge> with TickerProviderStateMixin {
                                                 onHoverSetByTap: () {
                                                   _hoverSetByTap = true;
                                                 },
+                                                onNavigationClick:
+                                                    widget.onNavigationClick,
                                                 gutterBuilder:
                                                     widget.gutterBuilder,
                                               ),
@@ -4470,6 +4494,7 @@ class _CodeField extends LeafRenderObjectWidget {
   final String? filePath;
   final MatchHighlightStyle? matchHighlightStyle;
   final VoidCallback? onHoverSetByTap;
+  final ValueChanged<int>? onNavigationClick;
   final TextDirection textDirection;
   final GutterBuilder? gutterBuilder;
 
@@ -4521,6 +4546,7 @@ class _CodeField extends LeafRenderObjectWidget {
     this.ghostTextStyle,
     this.matchHighlightStyle,
     this.onHoverSetByTap,
+    this.onNavigationClick,
   });
 
   @override
@@ -4569,6 +4595,7 @@ class _CodeField extends LeafRenderObjectWidget {
       ghostTextStyle: ghostTextStyle,
       filePath: filePath,
       onHoverSetByTap: onHoverSetByTap,
+      onNavigationClick: onNavigationClick,
       textDirection: textDirection,
     );
   }
@@ -4587,6 +4614,7 @@ class _CodeField extends LeafRenderObjectWidget {
       });
     }
     renderObject
+      ..onNavigationClick = onNavigationClick
       ..updateDiagnostics(diagnostics)
       ..updateScreenWidth()
       ..editorTheme = editorTheme
@@ -4628,6 +4656,7 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
   final BuildContext context;
   final LspConfig? lspConfig;
   final VoidCallback? onHoverSetByTap;
+  ValueChanged<int>? onNavigationClick;
   final Map<int, double> _lineWidthCache = {};
   final Map<int, String> _lineTextCache = {};
   final Map<int, ({int version, bool eligible})>
@@ -5451,6 +5480,7 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     this.filePath,
     this.matchHighlightStyle,
     this.onHoverSetByTap,
+    this.onNavigationClick,
     EdgeInsets? innerPadding,
     this._textStyle,
     this._ghostTextStyle,
@@ -8026,12 +8056,44 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
   }
 
   @override
+  void attach(PipelineOwner owner) {
+    super.attach(owner);
+    HardwareKeyboard.instance.addHandler(_handleNavigationModifierKey);
+  }
+
+  @override
   void detach() {
+    HardwareKeyboard.instance.removeHandler(_handleNavigationModifierKey);
     _bracketHighlightResumeTimer?.cancel();
     _resizeTimer?.cancel();
     _layoutDebounceTimer?.cancel();
     _foldComputeTimer?.cancel();
     super.detach();
+  }
+
+  /// Text offset under the mouse from the last hover, or -1 off the text.
+  int _hoverTextOffset = -1;
+
+  static final Set<LogicalKeyboardKey> _navigationModifierKeys =
+      <LogicalKeyboardKey>{
+        LogicalKeyboardKey.control,
+        LogicalKeyboardKey.controlLeft,
+        LogicalKeyboardKey.controlRight,
+        LogicalKeyboardKey.meta,
+        LogicalKeyboardKey.metaLeft,
+        LogicalKeyboardKey.metaRight,
+      };
+
+  // The mouse tracker only re-reads [cursor] when the pointer moves, so a
+  // modifier pressed over a still mouse would leave the text cursor showing.
+  // Never consumes the key: Ctrl+C and every other shortcut still see it.
+  bool _handleNavigationModifierKey(KeyEvent event) {
+    if (onNavigationClick != null &&
+        _hoverTextOffset >= 0 &&
+        _navigationModifierKeys.contains(event.logicalKey)) {
+      RendererBinding.instance.mouseTracker.updateAllDevices();
+    }
+    return false;
   }
 
   double get _ghostTextExtraHeight => _ghostTextLineCount * _lineHeight;
@@ -12828,6 +12890,7 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     final textOffset = _getTextOffsetFromPosition(contentPosition);
 
     if (event is PointerHoverEvent) {
+      _hoverTextOffset = textOffset;
       if (hoverNotifier.value == null) {
         _hoverTimer?.cancel();
       }
@@ -13010,6 +13073,12 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
 
         final isAltClick = HardwareKeyboard.instance.isAltPressed;
         final isShiftClick = HardwareKeyboard.instance.isShiftPressed;
+        final navigationClick = onNavigationClick;
+        final isNavigationClick =
+            navigationClick != null &&
+            !isAltClick &&
+            !isShiftClick &&
+            _isNavigationModifierPressed();
         _onetap.onTap = () {
           if (_openedLspActionFromBulbTap) {
             _openedLspActionFromBulbTap = false;
@@ -13028,7 +13097,14 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
           }
         };
 
-        if (isAltClick) {
+        if (isNavigationClick) {
+          // No drag anchor: moving the mouse after a navigation click must not
+          // start a selection from the clicked symbol.
+          _dragStartOffset = null;
+          controller.clearMultiCursors();
+          controller.selection = TextSelection.collapsed(offset: textOffset);
+          navigationClick(textOffset);
+        } else if (isAltClick) {
           _dragStartOffset = textOffset;
           final line = controller.getLineAtOffset(textOffset);
           final lineStart = controller.getLineStartOffset(line);
@@ -13286,6 +13362,12 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
       }
     }
 
+    if (onNavigationClick != null &&
+        _isOffsetOverWord(_hoverTextOffset) &&
+        _isNavigationModifierPressed()) {
+      return SystemMouseCursors.click;
+    }
+
     return SystemMouseCursors.text;
   }
 
@@ -13295,6 +13377,7 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
   @override
   PointerExitEventListener? get onExit => (event) {
     _hoverTimer?.cancel();
+    _hoverTextOffset = -1;
   };
 
   @override

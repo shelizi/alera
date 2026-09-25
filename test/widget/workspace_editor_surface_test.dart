@@ -26,6 +26,30 @@ void main() {
     );
   });
 
+  test('navigation click uses Cmd on macOS and Ctrl elsewhere', () {
+    bool pressed(
+      TargetPlatform platform, {
+      bool ctrl = false,
+      bool meta = false,
+    }) => code_forge.codeForgeIsNavigationModifierPressed(
+      platform: platform,
+      controlPressed: ctrl,
+      metaPressed: meta,
+    );
+
+    // On macOS Ctrl+click is the secondary click, so only Cmd navigates.
+    expect(pressed(TargetPlatform.macOS, meta: true), isTrue);
+    expect(pressed(TargetPlatform.macOS, ctrl: true), isFalse);
+    for (final platform in <TargetPlatform>[
+      TargetPlatform.windows,
+      TargetPlatform.linux,
+    ]) {
+      expect(pressed(platform, ctrl: true), isTrue, reason: platform.name);
+      expect(pressed(platform, meta: true), isFalse, reason: platform.name);
+    }
+    expect(pressed(TargetPlatform.windows), isFalse);
+  });
+
   test('preserves Dart regex semantics and scalar match offsets', () {
     final ranges = code_forge.computeRegexSearchRanges((
       text: 'a😀 Foo foo\nfoo_bar',
