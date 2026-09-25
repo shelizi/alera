@@ -65,6 +65,14 @@ void main() {
     expect(result.readLines, [0, 1, 2]);
   });
 
+  test('treats only printable ASCII as fixed-column text', () {
+    expect(code_forge.codeForgeIsPrintableAscii(''), isTrue);
+    expect(code_forge.codeForgeIsPrintableAscii('def f(a): ~'), isTrue);
+    expect(code_forge.codeForgeIsPrintableAscii('\tindent'), isFalse);
+    expect(code_forge.codeForgeIsPrintableAscii('name = "中文"'), isFalse);
+    expect(code_forge.codeForgeIsPrintableAscii('café'), isFalse);
+  });
+
   test('ignores closers without a matching opener', () {
     final result = scan([') + wrap(', '    1,', ')'], 0);
 

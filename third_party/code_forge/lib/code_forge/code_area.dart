@@ -91,6 +91,17 @@ bool codeForgeScanBracketFolds({
   return false;
 }
 
+/// Whether every code unit of [text] is printable ASCII (space to `~`), so a
+/// verified fixed-width font advances it by exactly one column per character.
+@visibleForTesting
+bool codeForgeIsPrintableAscii(String text) {
+  for (int i = 0; i < text.length; i++) {
+    final codeUnit = text.codeUnitAt(i);
+    if (codeUnit < 0x20 || codeUnit > 0x7e) return false;
+  }
+  return true;
+}
+
 bool _isNavigationModifierPressed() => codeForgeIsNavigationModifierPressed(
   platform: defaultTargetPlatform,
   controlPressed: HardwareKeyboard.instance.isControlPressed,
@@ -4708,6 +4719,7 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
   final Map<int, ({int version, int start, int contentLength, bool safeAscii})>
   _largeFileNativeLineInfoCache = {};
   bool _largeFileFixedAsciiColumnWidthMeasured = false;
+  double? _singleRowParagraphHeight;
   double? _largeFileFixedAsciiColumnWidth;
   String? _largeFileBufferAsciiEligibilityText;
   bool _largeFileBufferAsciiEligible = false;
@@ -5362,6 +5374,21 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     return unitWidth;
   }
 
+  /// The wrapped height of a printable-ASCII line that cannot wrap, without
+  /// shaping or highlighting it. Walking wrapped heights down to a restored
+  /// scroll position otherwise shapes and highlights every line above it in
+  /// one frame. Painting a line replaces this with its real paragraph height.
+  double? _singleRowWrappedHeightFor(String text) {
+    if (isRTL || !_wrapWidth.isFinite || !codeForgeIsPrintableAscii(text)) {
+      return null;
+    }
+    final columnWidth = _getLargeFileFixedAsciiColumnWidth();
+    if (columnWidth == null) return null;
+    // One spare column absorbs any advance drift in highlighted styles.
+    if ((text.length + 1) * columnWidth > _wrapWidth) return null;
+    return _singleRowParagraphHeight ??= _buildParagraph('M').height;
+  }
+
   double? _largeFileAsciiColumnWidthForLine(int lineIndex, String text) {
     if (!_largeFilePerformanceMode || _lineWrap || isRTL || _enableFolding) {
       return null;
@@ -5900,6 +5927,7 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     );
     _largeFileFixedAsciiColumnWidthMeasured = false;
     _largeFileFixedAsciiColumnWidth = null;
+    _singleRowParagraphHeight = null;
 
     _gutterPadding = fontSize;
     if (_enableGutter) {
@@ -8354,6 +8382,13 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     }
 
     final lineText = controller.getLineText(lineIndex);
+
+    final singleRowHeight = _singleRowWrappedHeightFor(lineText);
+    if (singleRowHeight != null) {
+      _lineHeightCache[lineIndex] = singleRowHeight;
+      _lineTextCache[lineIndex] = lineText;
+      return singleRowHeight;
+    }
 
     final para = _buildHighlightedParagraph(
       lineIndex,
