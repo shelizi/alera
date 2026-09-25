@@ -785,6 +785,9 @@ extension _WorkspaceGitDiffEditable on _WorkspaceGitDiffSurfaceState {
   }
 }
 
+/// About half a second at 60 Hz, matching the editor tab's restore window.
+const int _editableDiffScrollRestoreAttempts = 30;
+
 class _EditableWorkingTreeDiff extends StatefulWidget {
   const _EditableWorkingTreeDiff({
     required this.file,
@@ -795,6 +798,7 @@ class _EditableWorkingTreeDiff extends StatefulWidget {
     this.viewportHeight,
     required this.onChanged,
     required this.onSave,
+    this.scrollStorageKey,
   });
 
   final GitDiffFile file;
@@ -805,6 +809,11 @@ class _EditableWorkingTreeDiff extends StatefulWidget {
   final double? viewportHeight;
   final ValueChanged<String> onChanged;
   final VoidCallback onSave;
+
+  /// Where this file's pane offsets live in the route's [PageStorage]. The
+  /// panes are CodeForge editors with their own controllers, so they are saved
+  /// and restored explicitly rather than through a [PageStorageKey].
+  final String? scrollStorageKey;
 
   @override
   State<_EditableWorkingTreeDiff> createState() =>
@@ -1008,6 +1017,7 @@ class _EditableWorkingTreeDiffState extends State<_EditableWorkingTreeDiff> {
   var _syncingHorizontal = false;
   var _syncingVertical = false;
   var _syncingControllerText = false;
+  var _restoredScroll = false;
 
   @override
   void initState() {
@@ -1072,6 +1082,70 @@ class _EditableWorkingTreeDiffState extends State<_EditableWorkingTreeDiff> {
         oldWidget.whitespaceMode != widget.whitespaceMode) {
       _refreshAlignment(notify: false);
     }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_restoredScroll) return;
+    _restoredScroll = true;
+    final key = widget.scrollStorageKey;
+    final saved = key == null
+        ? null
+        : PageStorage.maybeOf(context)?.readState(context, identifier: key);
+    if (saved is List<double?>) {
+      _scheduleScrollRestore(saved, attempt: 0);
+    }
+  }
+
+  @override
+  void deactivate() {
+    // Before children unmount: dispose() would find the panes detached.
+    final key = widget.scrollStorageKey;
+    if (key != null) {
+      PageStorage.maybeOf(context)?.writeState(context, <double?>[
+        for (final controller in _paneControllers)
+          controller.hasClients ? controller.offset : null,
+      ], identifier: key);
+    }
+    super.deactivate();
+  }
+
+  List<ScrollController> get _paneControllers => <ScrollController>[
+    _leftVerticalController,
+    _rightVerticalController,
+    _leftHorizontalController,
+    _rightHorizontalController,
+  ];
+
+  void _scheduleScrollRestore(List<double?> offsets, {required int attempt}) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      var done = true;
+      final controllers = _paneControllers;
+      for (var i = 0; i < controllers.length && i < offsets.length; i++) {
+        final offset = offsets[i];
+        final controller = controllers[i];
+        if (offset == null) continue;
+        if (!controller.hasClients ||
+            !controller.position.hasContentDimensions) {
+          done = false;
+          continue;
+        }
+        final position = controller.position;
+        final target = offset
+            .clamp(position.minScrollExtent, position.maxScrollExtent)
+            .toDouble();
+        if (position.pixels != target) controller.jumpTo(target);
+        if (target != offset) done = false;
+      }
+      // The editors lay a long file out over several frames; until then the
+      // extent is short and the offset would be clamped short.
+      if (!done && attempt < _editableDiffScrollRestoreAttempts) {
+        _scheduleScrollRestore(offsets, attempt: attempt + 1);
+        WidgetsBinding.instance.scheduleFrame();
+      }
+    });
   }
 
   @override
