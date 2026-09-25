@@ -185,6 +185,7 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
               controller: _filterController,
               hintText: 'Filter files...',
               dense: true,
+              autofocus: true,
               onChanged: _onFilterChanged,
             ),
           ),

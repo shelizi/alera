@@ -37,6 +37,9 @@ class const _GitDiffGroups({
     // Rows must stay lazy: eagerly inflating thousands of entries is what
     // stalls the desktop UI when a workspace reports a large change set.
     return CustomScrollView(
+      // The panel is rebuilt whenever its sidebar tab comes back, so the
+      // offset lives in the route's PageStorage, one entry per repository.
+      key: PageStorageKey<String>('git-diff-changes:$workspacePath'),
       slivers: <Widget>[
         SliverPadding(
           padding: const EdgeInsets.symmetric(vertical: AleraTokens.space6),

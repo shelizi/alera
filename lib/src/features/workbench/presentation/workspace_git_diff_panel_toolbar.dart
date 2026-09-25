@@ -203,6 +203,7 @@ class const _SourceControlToolbar({
               controller: filterController,
               hintText: 'Filter files...',
               dense: true,
+              autofocus: true,
               onChanged: (_) => onFilterChanged(),
             ),
           ],

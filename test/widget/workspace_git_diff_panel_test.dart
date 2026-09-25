@@ -1260,6 +1260,39 @@ void main() {
     );
   });
 
+  testWidgets('restores the change list offset when the panel comes back', (
+    tester,
+  ) async {
+    final backend = FakeGitBackend()
+      ..gitStatusResult = GitStatusResult(
+        entries: <GitChangeEntry>[
+          for (var index = 0; index < 80; index++)
+            GitChangeEntry(
+              path: 'lib/file_$index.dart',
+              area: .unstaged,
+              status: .modified,
+            ),
+        ],
+      );
+
+    await _pumpPanel(tester, backend: backend);
+    await tester.pumpAndSettle();
+    final changeList = find.byKey(
+      const PageStorageKey<String>('git-diff-changes:/tmp/project'),
+    );
+    await tester.drag(changeList, const Offset(0, -600));
+    await tester.pumpAndSettle();
+    final scrolledOffset = _scrollOffset(tester, changeList);
+    expect(scrolledOffset, greaterThan(0));
+
+    await _pumpPanel(tester, backend: backend, showPanel: false);
+    await tester.pumpAndSettle();
+    await _pumpPanel(tester, backend: backend);
+    await tester.pumpAndSettle();
+
+    expect(_scrollOffset(tester, changeList), scrolledOffset);
+  });
+
   testWidgets('filter narrows visible files without flattening groups', (
     tester,
   ) async {
@@ -1286,6 +1319,8 @@ void main() {
 
     await tester.tap(find.byTooltip('Search Files'));
     await tester.pumpAndSettle();
+
+    expect(_filterEditable(tester).focusNode.hasFocus, isTrue);
 
     await tester.enterText(_filterField(), 'visible');
     await tester.pumpAndSettle();
@@ -1410,6 +1445,7 @@ Future<void> _pumpPanel(
   ValueChanged<String>? onRevealInExplorer,
   VoidCallback? onClearSourceControlRoot,
   double width = 420,
+  bool showPanel = true,
 }) {
   final resolvedWorkspace = workspace ?? _workspace();
   return tester.pumpWidget(
@@ -1453,41 +1489,44 @@ Future<void> _pumpPanel(
           body: SizedBox(
             width: width,
             height: 520,
-            child: WorkspaceGitDiffPanel(
-              workspace: resolvedWorkspace,
-              sourceControlScope:
-                  sourceControlScope ?? _sourceControlScope(resolvedWorkspace),
-              viewMode: viewMode,
-              onViewModeChanged: (_) {},
-              groupMode: groupMode,
-              onGroupModeChanged: (_) {},
-              onOpenGitDiff:
-                  onOpenGitDiff ??
-                  ({
-                    area,
-                    relativePath,
-                    gitDiffRoot,
-                    required scope,
-                    bool preview = false,
-                  }) async {},
-              onOpenGitCommitDiff:
-                  onOpenGitCommitDiff ??
-                  ({
-                    relativePath,
-                    oldPath,
-                    required scope,
-                    gitDiffRoot,
-                    required commitOid,
-                    parentOid,
-                    required compareRef,
-                    subject,
-                    message,
-                    bool preview = false,
-                  }) async {},
-              onOpenFile: onOpenFile,
-              onRevealInExplorer: onRevealInExplorer,
-              onClearSourceControlRoot: onClearSourceControlRoot,
-            ),
+            child: !showPanel
+                ? const SizedBox.shrink()
+                : WorkspaceGitDiffPanel(
+                    workspace: resolvedWorkspace,
+                    sourceControlScope:
+                        sourceControlScope ??
+                        _sourceControlScope(resolvedWorkspace),
+                    viewMode: viewMode,
+                    onViewModeChanged: (_) {},
+                    groupMode: groupMode,
+                    onGroupModeChanged: (_) {},
+                    onOpenGitDiff:
+                        onOpenGitDiff ??
+                        ({
+                          area,
+                          relativePath,
+                          gitDiffRoot,
+                          required scope,
+                          bool preview = false,
+                        }) async {},
+                    onOpenGitCommitDiff:
+                        onOpenGitCommitDiff ??
+                        ({
+                          relativePath,
+                          oldPath,
+                          required scope,
+                          gitDiffRoot,
+                          required commitOid,
+                          parentOid,
+                          required compareRef,
+                          subject,
+                          message,
+                          bool preview = false,
+                        }) async {},
+                    onOpenFile: onOpenFile,
+                    onRevealInExplorer: onRevealInExplorer,
+                    onClearSourceControlRoot: onClearSourceControlRoot,
+                  ),
           ),
         ),
       ),
@@ -1580,6 +1619,21 @@ Finder _filterField() {
     (widget) =>
         widget is TextField && widget.decoration?.hintText == 'Filter files...',
   );
+}
+
+EditableText _filterEditable(WidgetTester tester) {
+  return tester.widget<EditableText>(
+    find.descendant(of: _filterField(), matching: find.byType(EditableText)),
+  );
+}
+
+double _scrollOffset(WidgetTester tester, Finder scrollView) {
+  return tester
+      .state<ScrollableState>(
+        find.descendant(of: scrollView, matching: find.byType(Scrollable)),
+      )
+      .position
+      .pixels;
 }
 
 EditableText _messageEditable(WidgetTester tester) {
