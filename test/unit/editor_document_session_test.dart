@@ -51,4 +51,24 @@ void main() {
     expect(document.isDirty, isTrue);
     expect(document.contentToken, '12:2');
   });
+
+  test('keeps the remembered view across tab switches but not across files', () {
+    final document = EditorDocumentSession()
+      ..attachFile(workspacePath: '/repo', relativePath: 'lib/a.dart');
+    const view = EditorViewState(
+      verticalOffset: 1840,
+      horizontalOffset: 12,
+      selectionBase: 420,
+      selectionExtent: 431,
+    );
+    document.viewState = view;
+
+    // Reattaching the same file (the tab coming back) keeps the view.
+    document.attachFile(workspacePath: '/repo', relativePath: 'lib/a.dart');
+    expect(document.viewState, same(view));
+
+    // A tab reused for another file must not scroll that file to A's offset.
+    document.clearSnapshot();
+    expect(document.viewState, isNull);
+  });
 }

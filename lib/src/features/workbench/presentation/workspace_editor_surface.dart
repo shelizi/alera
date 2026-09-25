@@ -180,6 +180,8 @@ class _WorkspaceEditorSurfaceState
     if (oldWidget.tab.id != widget.tab.id ||
         oldWidget.workspace.path != widget.workspace.path ||
         oldWidget.tab.filePath != widget.tab.filePath) {
+      // `_document` still belongs to the tab being left.
+      _rememberEditorViewState();
       _removeNativeSyntaxActivityForPath(oldWidget.tab.filePath);
       unawaited(_closeLanguageIntelligenceDocument());
       _resetLanguageIntelligenceSource();
@@ -201,6 +203,7 @@ class _WorkspaceEditorSurfaceState
 
   @override
   void dispose() {
+    _rememberEditorViewState();
     _languageIntelligenceSyncTimer?.cancel();
     unawaited(_closeLanguageIntelligenceDocument());
     _outlineRefreshTimer?.cancel();

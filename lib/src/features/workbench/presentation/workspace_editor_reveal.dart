@@ -22,9 +22,40 @@ extension _WorkspaceEditorReveal on _WorkspaceEditorSurfaceState {
     return controller.hasClients ? controller.offset : null;
   }
 
+  /// Records where the user is in this tab before the surface goes away, so
+  /// switching back restores it instead of starting at the top.
+  void _rememberEditorViewState() {
+    if (_loading || _loadError != null || widget.tab.filePath == null) {
+      return;
+    }
+    final selection = _controller.selection;
+    _document.viewState = EditorViewState(
+      verticalOffset: _editorScrollOffset(_verticalScrollController),
+      horizontalOffset: _editorScrollOffset(_horizontalScrollController),
+      selectionBase: selection.isValid ? selection.baseOffset : null,
+      selectionExtent: selection.isValid ? selection.extentOffset : null,
+    );
+  }
+
+  /// The remembered position for this tab, unless a pending reveal (Go to
+  /// Definition, search result) asked to land somewhere specific.
+  _WorkspaceEditorScrollPosition? _rememberedEditorScrollPosition() {
+    final view = _document.viewState;
+    if (view == null || _document.pendingReveal != null) {
+      return null;
+    }
+    return _WorkspaceEditorScrollPosition(
+      verticalOffset: view.verticalOffset,
+      horizontalOffset: view.horizontalOffset,
+      selectionBase: view.selectionBase,
+      selectionExtent: view.selectionExtent,
+    );
+  }
+
   void _scheduleEditorScrollRestore(
     _WorkspaceEditorScrollPosition scrollPosition, {
     required int requestId,
+    int attempt = 0,
   }) {
     SchedulerBinding.instance.addPostFrameCallback((_) {
       if (!mounted ||
@@ -33,20 +64,51 @@ extension _WorkspaceEditorReveal on _WorkspaceEditorSurfaceState {
           _loadError != null) {
         return;
       }
-      _restoreEditorScrollOffset(
+      if (attempt == 0) {
+        _restoreEditorSelection(scrollPosition);
+      }
+      final verticalDone = _restoreEditorScrollOffset(
         _verticalScrollController,
         scrollPosition.verticalOffset,
       );
-      _restoreEditorScrollOffset(
+      final horizontalDone = _restoreEditorScrollOffset(
         _horizontalScrollController,
         scrollPosition.horizontalOffset,
       );
+      // The editor can take several frames to lay out a long document; until
+      // then the extent is too short and the offset would be clamped short.
+      if ((!verticalDone || !horizontalDone) &&
+          attempt < _workspaceEditorScrollRestoreAttempts) {
+        _scheduleEditorScrollRestore(
+          scrollPosition,
+          requestId: requestId,
+          attempt: attempt + 1,
+        );
+        SchedulerBinding.instance.scheduleFrame();
+      }
     });
   }
 
-  void _restoreEditorScrollOffset(ScrollController controller, double? offset) {
-    if (offset == null || !controller.hasClients) {
+  void _restoreEditorSelection(_WorkspaceEditorScrollPosition position) {
+    final base = position.selectionBase;
+    final extent = position.selectionExtent;
+    if (base == null || extent == null) {
       return;
+    }
+    final length = _controller.length;
+    _controller.selection = TextSelection(
+      baseOffset: base.clamp(0, length).toInt(),
+      extentOffset: extent.clamp(0, length).toInt(),
+    );
+  }
+
+  /// Returns whether [offset] was reached (or nothing is left to restore).
+  bool _restoreEditorScrollOffset(ScrollController controller, double? offset) {
+    if (offset == null) {
+      return true;
+    }
+    if (!controller.hasClients) {
+      return false;
     }
     final position = controller.position;
     final target = offset
@@ -55,6 +117,7 @@ extension _WorkspaceEditorReveal on _WorkspaceEditorSurfaceState {
     if (position.pixels != target) {
       controller.jumpTo(target);
     }
+    return target == offset;
   }
 
   void _revealOrDefer(WorkspaceEditorRevealTarget target) {
@@ -110,9 +173,15 @@ extension _WorkspaceEditorReveal on _WorkspaceEditorSurfaceState {
   }
 }
 
+/// About half a second at 60 Hz: enough for a large native document to lay
+/// out, short enough that a document that shrank does not keep retrying.
+const int _workspaceEditorScrollRestoreAttempts = 30;
+
 class const _WorkspaceEditorScrollPosition({
   final double? verticalOffset,
   final double? horizontalOffset,
+  final int? selectionBase,
+  final int? selectionExtent,
 });
 
 @visibleForTesting

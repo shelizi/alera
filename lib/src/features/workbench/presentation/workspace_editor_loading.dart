@@ -112,6 +112,10 @@ extension _WorkspaceEditorLoading on _WorkspaceEditorSurfaceState {
       _replaceControllerText(_document.currentText ?? '');
       _loadError = _document.loadError;
       _loading = false;
+      final remembered = _rememberedEditorScrollPosition();
+      if (remembered != null) {
+        _scheduleEditorScrollRestore(remembered, requestId: _loadRequestId);
+      }
       _applyPendingReveal();
       _autosave.notifyStateChanged();
       _scheduleOutlineRefresh(immediate: true);
@@ -120,7 +124,8 @@ extension _WorkspaceEditorLoading on _WorkspaceEditorSurfaceState {
     }
     _loading = true;
     _loadError = null;
-    unawaited(_load());
+    // Native-backed documents keep no text snapshot and reload on return.
+    unawaited(_load(restoreScrollPosition: _rememberedEditorScrollPosition()));
   }
 
   bool _isCurrentLoadRequest(

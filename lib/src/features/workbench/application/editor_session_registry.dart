@@ -402,7 +402,17 @@ class const WorkspaceEditorRevealTarget({
   required final int matchLength,
 });
 
+/// Where the user left an editor tab, so switching back does not jump to the
+/// top. Offsets are editor display offsets, clamped again on restore.
+class const EditorViewState({
+  final double? verticalOffset,
+  final double? horizontalOffset,
+  final int? selectionBase,
+  final int? selectionExtent,
+});
+
 class EditorDocumentSession({final VoidCallback? _onChanged}) {
+  EditorViewState? viewState;
   String? workspacePath;
   String? relativePath;
   String? loadedRawText;
@@ -525,6 +535,7 @@ class EditorDocumentSession({final VoidCallback? _onChanged}) {
   }
 
   void clearSnapshot() {
+    viewState = null;
     loadedRawText = null;
     loadedText = null;
     currentText = null;
