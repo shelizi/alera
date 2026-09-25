@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:ffi' show Abi;
 import 'dart:io';
 
 import 'package:crypto/crypto.dart';
@@ -11,6 +12,7 @@ import '../application/language_intelligence_activity.dart';
 import '../application/managed_language_server_installer.dart';
 import '../domain/language_provider_descriptor.dart';
 import 'managed_language_server_catalog.dart';
+import 'managed_language_server_release_download.dart';
 
 typedef ManagedLanguageServerEnvironmentReader = Map<String, String> Function();
 typedef ManagedLanguageServerExecutableExists = bool Function(String path);
@@ -81,6 +83,8 @@ final class ManagedLanguageServerInstaller
     ManagedLanguageServerProcessRunner? processRunner,
     Map<String, ManagedLanguageServerRecipe>? recipes,
     LanguageIntelligenceActivityReporter? activityReporter,
+    ManagedLanguageServerDownloadPort? download,
+    ManagedLanguageServerPlatform? platform,
   }) : _environmentReader = environmentReader ?? _platformEnvironment,
        _isWindows = isWindows ?? Platform.isWindows,
        _executableExists = executableExists,
@@ -89,7 +93,9 @@ final class ManagedLanguageServerInstaller
        _processRunner =
            processRunner ?? const DefaultManagedLanguageServerProcessRunner(),
        _recipes = recipes ?? managedLanguageServerRecipes,
-       _activityReporter = activityReporter;
+       _activityReporter = activityReporter,
+       _download = download ?? HttpManagedLanguageServerDownload(),
+       _platform = platform ?? managedLanguageServerPlatformFor(Abi.current());
 
   final ManagedLanguageServerEnvironmentReader _environmentReader;
   final bool _isWindows;
@@ -98,6 +104,8 @@ final class ManagedLanguageServerInstaller
   final ManagedLanguageServerProcessRunner _processRunner;
   final Map<String, ManagedLanguageServerRecipe> _recipes;
   final LanguageIntelligenceActivityReporter? _activityReporter;
+  final ManagedLanguageServerDownloadPort _download;
+  final ManagedLanguageServerPlatform? _platform;
   final Map<String, Future<ManagedLanguageServerInstallResult>> _inFlight =
       <String, Future<ManagedLanguageServerInstallResult>>{};
 
@@ -415,6 +423,16 @@ final class ManagedLanguageServerInstaller
           );
         }
         return _ManagedPrerequisiteProbe.ready(dotnet);
+      case ManagedLanguageServerInstallKind.githubRelease:
+        final asset = _releaseAssetFor(recipe);
+        if (asset == null) {
+          return _ManagedPrerequisiteProbe.unavailable(
+            'Alera has no ${recipe.executableName} ${recipe.version} build '
+            'for this platform. Install ${recipe.executableName} on PATH or '
+            'choose another language server.',
+          );
+        }
+        return _ManagedPrerequisiteProbe.ready(asset.url);
       case ManagedLanguageServerInstallKind.rustupComponent:
         final rustup = _resolveEnvironmentCommand('rustup', environment);
         if (rustup == null) {
@@ -519,6 +537,14 @@ final class ManagedLanguageServerInstaller
           prerequisite: prerequisite,
           installDirectory: installDirectory,
           environment: environment,
+        );
+      case ManagedLanguageServerInstallKind.githubRelease:
+        await installManagedReleaseAsset(
+          asset: _releaseAssetFor(recipe)!,
+          installDirectory: installDirectory,
+          executableFileName: _managedExecutableRelativePath(recipe),
+          download: _download,
+          setExecutableMode: !_isWindows,
         );
       case ManagedLanguageServerInstallKind.rustupComponent:
         await _installRustupComponent(
@@ -762,6 +788,13 @@ final class ManagedLanguageServerInstaller
       );
     }
     return _isWindows ? '${recipe.executableName}.exe' : recipe.executableName;
+  }
+
+  ManagedLanguageServerReleaseAsset? _releaseAssetFor(
+    ManagedLanguageServerRecipe recipe,
+  ) {
+    final platform = _platform;
+    return platform == null ? null : recipe.releaseAssets[platform];
   }
 
   bool _requiresShell(String executable) {

@@ -14,9 +14,17 @@ final LanguageExtensionContribution pythonLanguageExtension =
           aliases: const <String>['py'],
           parserProviderId: 'python.tree-sitter',
           structuralParserDefaultEnabled: true,
-          semanticProviderIds: const <String>['python.pyright'],
-          defaultSemanticProviderId: 'python.pyright',
-          capabilities: builtinLanguageCapabilities,
+          // Measured on a 7,000-file project: pyrefly is the only one that
+          // resolves overrides reached through untyped call sites and returns
+          // exactly the implementations; ty is the fastest but still 0.0.x;
+          // pyright stays for low-memory machines and has no implementation.
+          semanticProviderIds: const <String>[
+            'python.pyrefly',
+            'python.ty',
+            'python.pyright',
+          ],
+          defaultSemanticProviderId: 'python.pyrefly',
+          capabilities: builtinImplementationLanguageCapabilities,
         ),
       ],
       providers: <LanguageProviderDescriptor>[
@@ -27,6 +35,30 @@ final LanguageExtensionContribution pythonLanguageExtension =
           capabilities: builtinStructuralCapabilities,
           processScope: LanguageProviderProcessScope.document,
           launchPolicy: LanguageProviderLaunchPolicy.explicit,
+        ),
+        LanguageProviderDescriptor(
+          id: 'python.pyrefly',
+          kind: LanguageProviderKind.semanticServer,
+          languages: <LanguageId>{LanguageId('python')},
+          capabilities: builtinImplementationNavigationCapabilities,
+          processScope: LanguageProviderProcessScope.workspace,
+          launchPolicy: LanguageProviderLaunchPolicy.lazyOnDemand,
+          executableResolutionPolicy:
+              LanguageExecutableResolutionPolicy.explicitOverrideThenPath,
+          executableCandidates: const <String>['pyrefly'],
+          defaultArguments: const <String>['lsp'],
+        ),
+        LanguageProviderDescriptor(
+          id: 'python.ty',
+          kind: LanguageProviderKind.semanticServer,
+          languages: <LanguageId>{LanguageId('python')},
+          capabilities: builtinImplementationNavigationCapabilities,
+          processScope: LanguageProviderProcessScope.workspace,
+          launchPolicy: LanguageProviderLaunchPolicy.lazyOnDemand,
+          executableResolutionPolicy:
+              LanguageExecutableResolutionPolicy.explicitOverrideThenPath,
+          executableCandidates: const <String>['ty'],
+          defaultArguments: const <String>['server'],
         ),
         LanguageProviderDescriptor(
           id: 'python.pyright',

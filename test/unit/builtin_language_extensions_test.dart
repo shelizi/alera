@@ -136,6 +136,11 @@ void main() {
           commands: <String>['dart'],
           args: <String>['language-server', '--protocol=lsp'],
         ),
+        'python.pyrefly': (
+          commands: <String>['pyrefly'],
+          args: <String>['lsp'],
+        ),
+        'python.ty': (commands: <String>['ty'], args: <String>['server']),
         'python.pyright': (
           commands: <String>['pyright-langserver'],
           args: <String>['--stdio'],

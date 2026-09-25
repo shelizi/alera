@@ -1,4 +1,41 @@
-enum ManagedLanguageServerInstallKind { npm, go, dotnetTool, rustupComponent }
+enum ManagedLanguageServerInstallKind {
+  npm,
+  go,
+  dotnetTool,
+  rustupComponent,
+
+  /// A prebuilt binary from an upstream release, pinned per platform by URL
+  /// and SHA-256. Needs no toolchain on the user's machine.
+  githubRelease,
+}
+
+/// Desktop targets Alera ships for; a release recipe without an asset for the
+/// current one reports the server as unavailable instead of guessing.
+enum ManagedLanguageServerPlatform {
+  windowsX64,
+  windowsArm64,
+  macosX64,
+  macosArm64,
+  linuxX64,
+  linuxArm64,
+}
+
+final class ManagedLanguageServerReleaseAsset {
+  const ManagedLanguageServerReleaseAsset({
+    required this.url,
+    required this.sha256,
+    required this.archiveMember,
+  });
+
+  final String url;
+
+  /// Pinned here rather than fetched next to the asset: a checksum served by
+  /// the same origin as the archive adds no protection against that origin.
+  final String sha256;
+
+  /// Path of the executable inside the archive; layouts differ per project.
+  final String archiveMember;
+}
 
 final class ManagedLanguageServerPackage {
   const ManagedLanguageServerPackage({
@@ -23,6 +60,11 @@ final class ManagedLanguageServerRecipe {
     this.dotnetPackage,
     this.rustupToolchain,
     this.rustupComponent,
+    this.releaseAssets =
+        const <
+          ManagedLanguageServerPlatform,
+          ManagedLanguageServerReleaseAsset
+        >{},
   });
 
   final String providerId;
@@ -36,6 +78,8 @@ final class ManagedLanguageServerRecipe {
   final String? dotnetPackage;
   final String? rustupToolchain;
   final String? rustupComponent;
+  final Map<ManagedLanguageServerPlatform, ManagedLanguageServerReleaseAsset>
+  releaseAssets;
 }
 
 /// Curated language-server versions validated by Alera. The acquisition layer
@@ -75,6 +119,106 @@ const managedLanguageServerRecipes = <String, ManagedLanguageServerRecipe>{
     integrityPolicy:
         'npm package-lock SRI verification with lifecycle scripts disabled '
         'plus Alera SHA-256 verification before every reuse.',
+  ),
+  'python.pyrefly': ManagedLanguageServerRecipe(
+    providerId: 'python.pyrefly',
+    version: '1.3.1',
+    kind: ManagedLanguageServerInstallKind.githubRelease,
+    executableName: 'pyrefly',
+    source: 'https://github.com/facebook/pyrefly/releases/tag/1.3.1',
+    integrityPolicy:
+        'Per-platform archive SHA-256 pinned in this catalog (checked against '
+        'the published .sha256) plus Alera SHA-256 verification before '
+        'every reuse.',
+    releaseAssets:
+        <ManagedLanguageServerPlatform, ManagedLanguageServerReleaseAsset>{
+          ManagedLanguageServerPlatform.windowsX64:
+              ManagedLanguageServerReleaseAsset(
+                url: 'https://github.com/facebook/pyrefly/releases/download/1.3.1/pyrefly-windows-x86_64.zip',
+                sha256: 'd10bb909b9007d076fe7cb1f7164e26ab4287ca08e4df624fffaee7360f44baa',
+                archiveMember: 'pyrefly.exe',
+              ),
+          ManagedLanguageServerPlatform.windowsArm64:
+              ManagedLanguageServerReleaseAsset(
+                url: 'https://github.com/facebook/pyrefly/releases/download/1.3.1/pyrefly-windows-arm64.zip',
+                sha256: 'e92c6ee9078d7bbcdb3a22d6be44e0335ddce1e0f9ea9b0eea8fcdd9ce07010e',
+                archiveMember: 'pyrefly.exe',
+              ),
+          ManagedLanguageServerPlatform.macosX64:
+              ManagedLanguageServerReleaseAsset(
+                url: 'https://github.com/facebook/pyrefly/releases/download/1.3.1/pyrefly-macos-x86_64.tar.gz',
+                sha256: '497d5743ff54f1b4a444f72a4147d7b85fa8cf20bf87123304b00b6173254545',
+                archiveMember: 'pyrefly',
+              ),
+          ManagedLanguageServerPlatform.macosArm64:
+              ManagedLanguageServerReleaseAsset(
+                url: 'https://github.com/facebook/pyrefly/releases/download/1.3.1/pyrefly-macos-arm64.tar.gz',
+                sha256: '3c7294e86efb53d6bc46619fd17002266731a79894a668b8e9db2ec189e746d2',
+                archiveMember: 'pyrefly',
+              ),
+          ManagedLanguageServerPlatform.linuxX64:
+              ManagedLanguageServerReleaseAsset(
+                url: 'https://github.com/facebook/pyrefly/releases/download/1.3.1/pyrefly-linux-x86_64.tar.gz',
+                sha256: '4cf87ce9d0041e7edbc533fef0246b5992831f3f68efdbf4b6f5001912b4cf22',
+                archiveMember: 'pyrefly',
+              ),
+          ManagedLanguageServerPlatform.linuxArm64:
+              ManagedLanguageServerReleaseAsset(
+                url: 'https://github.com/facebook/pyrefly/releases/download/1.3.1/pyrefly-linux-arm64.tar.gz',
+                sha256: '80ecd49f9c2d2efe6a601c67b5bb73607da2990dfa615f3435109e2a1af5e506',
+                archiveMember: 'pyrefly',
+              ),
+        },
+  ),
+  'python.ty': ManagedLanguageServerRecipe(
+    providerId: 'python.ty',
+    version: '0.0.84',
+    kind: ManagedLanguageServerInstallKind.githubRelease,
+    executableName: 'ty',
+    source: 'https://github.com/astral-sh/ty/releases/tag/0.0.84',
+    integrityPolicy:
+        'Per-platform archive SHA-256 pinned in this catalog (checked against '
+        'the published .sha256) plus Alera SHA-256 verification before '
+        'every reuse.',
+    releaseAssets:
+        <ManagedLanguageServerPlatform, ManagedLanguageServerReleaseAsset>{
+          ManagedLanguageServerPlatform.windowsX64:
+              ManagedLanguageServerReleaseAsset(
+                url: 'https://github.com/astral-sh/ty/releases/download/0.0.84/ty-x86_64-pc-windows-msvc.zip',
+                sha256: 'e4b3c7cd30ff8b4ee4c2a62621f293341ad3c89fb3e7c6e4d2686150a4dbcf08',
+                archiveMember: 'ty.exe',
+              ),
+          ManagedLanguageServerPlatform.windowsArm64:
+              ManagedLanguageServerReleaseAsset(
+                url: 'https://github.com/astral-sh/ty/releases/download/0.0.84/ty-aarch64-pc-windows-msvc.zip',
+                sha256: '5310f17fc594e29e525ccd0eaa27b719b2af2a88ec7be38092af7036eaab5235',
+                archiveMember: 'ty.exe',
+              ),
+          ManagedLanguageServerPlatform.macosX64:
+              ManagedLanguageServerReleaseAsset(
+                url: 'https://github.com/astral-sh/ty/releases/download/0.0.84/ty-x86_64-apple-darwin.tar.gz',
+                sha256: '3891e5509d306721cee4dd4e69b94535dbd96371af7ec3b734ee65f25b167ae4',
+                archiveMember: 'ty-x86_64-apple-darwin/ty',
+              ),
+          ManagedLanguageServerPlatform.macosArm64:
+              ManagedLanguageServerReleaseAsset(
+                url: 'https://github.com/astral-sh/ty/releases/download/0.0.84/ty-aarch64-apple-darwin.tar.gz',
+                sha256: 'c65c09f27bcef726c0b043dcee8d0f1e578bd1936799e5bc447235cbc3e19d91',
+                archiveMember: 'ty-aarch64-apple-darwin/ty',
+              ),
+          ManagedLanguageServerPlatform.linuxX64:
+              ManagedLanguageServerReleaseAsset(
+                url: 'https://github.com/astral-sh/ty/releases/download/0.0.84/ty-x86_64-unknown-linux-gnu.tar.gz',
+                sha256: '336bb36b7e917d844b8b16925d373b4614b326e452c881ff4ed6bc5904b65185',
+                archiveMember: 'ty-x86_64-unknown-linux-gnu/ty',
+              ),
+          ManagedLanguageServerPlatform.linuxArm64:
+              ManagedLanguageServerReleaseAsset(
+                url: 'https://github.com/astral-sh/ty/releases/download/0.0.84/ty-aarch64-unknown-linux-gnu.tar.gz',
+                sha256: 'd575243e0586742ae0e9186441358bd7e57e8160e319b3afb781430126762a39',
+                archiveMember: 'ty-aarch64-unknown-linux-gnu/ty',
+              ),
+        },
   ),
   'rust.rust-analyzer': ManagedLanguageServerRecipe(
     providerId: 'rust.rust-analyzer',
