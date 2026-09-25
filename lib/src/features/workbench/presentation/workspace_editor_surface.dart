@@ -202,8 +202,16 @@ class _WorkspaceEditorSurfaceState
   }
 
   @override
-  void dispose() {
+  void deactivate() {
+    // The framework unmounts children before calling dispose(), so by then the
+    // editor's Scrollable has detached from the scroll controllers and every
+    // offset reads as absent. deactivate() still runs with them attached.
     _rememberEditorViewState();
+    super.deactivate();
+  }
+
+  @override
+  void dispose() {
     _languageIntelligenceSyncTimer?.cancel();
     unawaited(_closeLanguageIntelligenceDocument());
     _outlineRefreshTimer?.cancel();
