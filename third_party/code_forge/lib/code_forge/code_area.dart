@@ -47,6 +47,50 @@ bool codeForgeIsNavigationModifierPressed({
   required bool metaPressed,
 }) => platform == TargetPlatform.macOS ? metaPressed : controlPressed;
 
+/// Pairs brackets from [startLine] onward, reporting every pair that spans
+/// lines through [onRange]. Returns true when the brackets opened on
+/// [startLine] have all closed and at least one of them spans lines.
+///
+/// The scan stops as soon as nothing opened on [startLine] is still open: no
+/// later line can extend a fold that starts there, and scanning on made this
+/// O(document) per visible line for code like `def f(a):`.
+@visibleForTesting
+bool codeForgeScanBracketFolds({
+  required int startLine,
+  required int endLineExclusive,
+  required String Function(int line) lineAt,
+  required void Function(int startLine, int endLine) onRange,
+}) {
+  const openers = {'{', '[', '('};
+  const closerToOpener = {'}': '{', ']': '[', ')': '('};
+  final Map<String, List<int>> stacks = {'{': [], '[': [], '(': []};
+  bool foundForStartLine = false;
+
+  for (int i = startLine; i < endLineExclusive; i++) {
+    final checkLine = lineAt(i);
+    for (int c = 0; c < checkLine.length; c++) {
+      final ch = checkLine[c];
+      if (openers.contains(ch)) {
+        stacks[ch]!.add(i);
+      } else if (closerToOpener.containsKey(ch)) {
+        final stack = stacks[closerToOpener[ch]!]!;
+        if (stack.isNotEmpty) {
+          final start = stack.removeLast();
+          if (i > start) {
+            onRange(start, i);
+            if (start == startLine) foundForStartLine = true;
+          }
+        }
+      }
+    }
+
+    if (!stacks.values.any((s) => s.contains(startLine))) {
+      return foundForStartLine;
+    }
+  }
+  return false;
+}
+
 bool _isNavigationModifierPressed() => codeForgeIsNavigationModifierPressed(
   platform: defaultTargetPlatform,
   controlPressed: HardwareKeyboard.instance.isControlPressed,
@@ -6336,8 +6380,10 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     }
 
     final dirtyRange = controller.dirtyRegion;
+    int? dirtyEditLine;
     if (dirtyRange != null) {
       final editLine = controller.getLineAtOffset(dirtyRange.start);
+      dirtyEditLine = editLine;
       if (trackFullDocumentText) {
         final safeEnd = dirtyRange.end.clamp(dirtyRange.start, newText!.length);
         final insertedText = newText.substring(dirtyRange.start, safeEnd);
@@ -6399,7 +6445,13 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
       _lineTextCache.clear();
       _lineWidthCache.clear();
       _paragraphCache.clear();
-      _lineHeightCache.clear();
+      // Lines above the edit keep their text and wrap width, so their heights
+      // stay valid. Clearing them made the wrapped visible-range walk reshape
+      // every line from the top on each Enter while scrolled down.
+      final keepHeightsBefore = dirtyEditLine == null
+          ? 0
+          : min(dirtyEditLine, startInvalidation);
+      _lineHeightCache.removeWhere((line, _) => line >= keepHeightsBefore);
       _indentGuideCache.clear();
       _indentEndLineCache.clear();
       _diagnosticPathCache.clear();
@@ -6704,7 +6756,6 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
 
   FoldRange? _computeFoldRangeForLine(int lineIndex) {
     const openers = {'{', '[', '('};
-    const closerToOpener = {'}': '{', ']': '[', ')': '('};
     if (!enableFolding) return null;
 
     final line = controller.getLineText(lineIndex);
@@ -6713,40 +6764,17 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
       return null;
     }
 
-    final Map<String, List<_BracketEntry>> stacks = {'{': [], '[': [], '(': []};
-    bool foundForLineIndex = false;
-
     final maxScan = controller.lineCount <= 10000
         ? controller.lineCount
         : min(lineIndex + 10000, controller.lineCount);
-    for (int i = lineIndex; i < maxScan; i++) {
-      final checkLine = controller.getLineText(i);
-      for (int c = 0; c < checkLine.length; c++) {
-        final ch = checkLine[c];
-        if (openers.contains(ch)) {
-          stacks[ch]!.add(_BracketEntry(ch, i));
-        } else if (closerToOpener.containsKey(ch)) {
-          final opener = closerToOpener[ch]!;
-          final stack = stacks[opener]!;
-          if (stack.isNotEmpty) {
-            final entry = stack.removeLast();
-            final start = entry.line;
-            final end = i;
-            if (end > start) {
-              _foldRanges.putIfAbsent(start, () => FoldRange(start, end));
-              if (start == lineIndex) {
-                foundForLineIndex = true;
-              }
-            }
-          }
-        }
-      }
-
-      if (foundForLineIndex &&
-          !stacks.values.any((s) => s.any((e) => e.line == lineIndex))) {
-        return _foldRanges[lineIndex];
-      }
-    }
+    final closedWithFold = codeForgeScanBracketFolds(
+      startLine: lineIndex,
+      endLineExclusive: maxScan,
+      lineAt: controller.getLineText,
+      onRange: (start, end) =>
+          _foldRanges.putIfAbsent(start, () => FoldRange(start, end)),
+    );
+    if (closedWithFold) return _foldRanges[lineIndex];
 
     if (_foldRanges.containsKey(lineIndex)) {
       final cachedFold = _foldRanges[lineIndex];
@@ -13382,12 +13410,6 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
 
   @override
   bool get validForMouseTracker => true;
-}
-
-class _BracketEntry {
-  final String char;
-  final int line;
-  _BracketEntry(this.char, this.line);
 }
 
 class _SnippetSuggestion {
