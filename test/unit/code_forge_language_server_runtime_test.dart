@@ -572,6 +572,55 @@ void main() {
       expect(transport.disposeCalls, 1);
     },
   );
+
+  test(
+    'an exit subscription can be cancelled while the process is running',
+    () async {
+      // Stopping a session cancels this subscription before disposing the
+      // process; a cancel that waits for the exit deadlocks the stop.
+      final transport = _FakeTransport();
+      final runtime = CodeForgeLanguageServerRuntime(
+        transportFactory: (_) async => transport,
+      );
+      final session = await runtime.start(
+        LanguageServerRuntimeStartRequest(
+          provider: provider,
+          executable: 'rust-analyzer',
+          workspaceRoot: r'C:\repo',
+          target: LanguageServerTarget.localWorkspace,
+        ),
+      );
+      final subscription = runtime.observeExit(session).listen((_) {});
+
+      await subscription.cancel().timeout(const Duration(seconds: 1));
+      await runtime.stop(session).timeout(const Duration(seconds: 1));
+
+      expect(transport.exitCode.isCompleted, isTrue);
+      expect(transport.disposeCalls, 1);
+    },
+  );
+
+  test('stop disposes a server that never answers shutdown', () async {
+    final transport = _FakeTransport()..shutdownHangs = true;
+    final runtime = CodeForgeLanguageServerRuntime(
+      transportFactory: (_) async => transport,
+      shutdownTimeout: const Duration(milliseconds: 50),
+    );
+    final session = await runtime.start(
+      LanguageServerRuntimeStartRequest(
+        provider: provider,
+        executable: 'rust-analyzer',
+        workspaceRoot: r'C:\repo',
+        target: LanguageServerTarget.localWorkspace,
+      ),
+    );
+
+    await runtime.stop(session).timeout(const Duration(seconds: 2));
+
+    expect(transport.shutdownCalls, 1);
+    expect(transport.exitCalls, 1);
+    expect(transport.disposeCalls, 1);
+  });
 }
 
 final class _FakeManagedInstaller
@@ -635,9 +684,13 @@ final class _FakeTransport implements CodeForgeLanguageServerTransport {
     }
   }
 
+  /// When set, `shutdown` never answers, like a server busy indexing.
+  bool shutdownHangs = false;
+
   @override
   Future<void> shutdown() async {
     shutdownCalls += 1;
+    if (shutdownHangs) await Completer<void>().future;
   }
 
   @override

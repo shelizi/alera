@@ -107,6 +107,7 @@ final class CodeForgeLanguageServerRuntime
     CodeForgeSupportDirectory? supportDirectory,
     ManagedLanguageServerInstallerPort? managedInstaller,
     LanguageIntelligenceActivityReporter? activityReporter,
+    Duration shutdownTimeout = const Duration(seconds: 5),
   }) => CodeForgeLanguageServerRuntime._(
     environmentReader: environmentReader ?? _platformEnvironment,
     isWindows: isWindows ?? Platform.isWindows,
@@ -121,6 +122,7 @@ final class CodeForgeLanguageServerRuntime
           executableExists: executableExists,
           activityReporter: activityReporter,
         ),
+    shutdownTimeout: shutdownTimeout,
   );
 
   const CodeForgeLanguageServerRuntime._({
@@ -130,6 +132,7 @@ final class CodeForgeLanguageServerRuntime
     required this._transportFactory,
     required this._supportDirectory,
     required this._managedInstaller,
+    required this._shutdownTimeout,
   });
 
   final CodeForgeEnvironmentReader _environmentReader;
@@ -138,6 +141,10 @@ final class CodeForgeLanguageServerRuntime
   final CodeForgeLanguageServerTransportFactory _transportFactory;
   final CodeForgeSupportDirectory _supportDirectory;
   final ManagedLanguageServerInstallerPort _managedInstaller;
+
+  /// A server busy indexing may never answer `shutdown`; the process is
+  /// disposed regardless once this elapses.
+  final Duration _shutdownTimeout;
 
   @override
   Future<LanguageServerExecutableResolution> resolveExecutable({
@@ -362,9 +369,10 @@ final class CodeForgeLanguageServerRuntime
     final codeForgeSession = _requireSession(session);
     final transport = codeForgeSession.transport;
     try {
-      await transport.shutdown();
+      await transport.shutdown().timeout(_shutdownTimeout);
     } catch (_) {
-      // A crashed or already-stopped server cannot answer shutdown.
+      // A crashed, already-stopped or unresponsive server cannot answer
+      // shutdown in time; dispose below still ends the process.
     }
     try {
       await transport.exitServer();
@@ -406,16 +414,19 @@ final class CodeForgeLanguageServerRuntime
     return session;
   }
 
+  // Not an `async*` generator: cancelling a generator suspended at an `await`
+  // completes only once that await resumes, and this one resumes when the
+  // process exits. Stopping a session cancels this subscription before it
+  // kills the process, so the cancel deadlocked and the server was never
+  // stopped (Reindex Workspace spun forever and every restart leaked one).
   static Stream<LanguageServerExit> _observeTransportExit(
     CodeForgeLanguageServerTransport transport,
-  ) async* {
-    try {
-      final exitCode = await transport.processExitCode;
-      yield LanguageServerExit(exitCode: exitCode);
-    } catch (error) {
-      yield LanguageServerExit(error: error);
-    }
-  }
+  ) => Stream<LanguageServerExit>.fromFuture(
+    transport.processExitCode.then(
+      (exitCode) => LanguageServerExit(exitCode: exitCode),
+      onError: (Object error) => LanguageServerExit(error: error),
+    ),
+  );
 
   static void _disposeQuietly(CodeForgeLanguageServerTransport transport) {
     try {
