@@ -90,6 +90,7 @@ class _WorkspaceGitDiffPanelState extends ConsumerState<WorkspaceGitDiffPanel> {
   final TextEditingController _messageController = TextEditingController();
   final FocusNode _messageFocusNode = FocusNode();
   final TextEditingController _filterController = TextEditingController();
+  final FocusNode _filterFocusNode = FocusNode(debugLabel: 'git-diff-filter');
   final Set<String> _collapsedSections = <String>{};
   final Set<String> _collapsedTreeNodes = <String>{};
   final Set<String> _expandedSubmodules = <String>{};
@@ -176,6 +177,7 @@ class _WorkspaceGitDiffPanelState extends ConsumerState<WorkspaceGitDiffPanel> {
     _messageController.dispose();
     _messageFocusNode.dispose();
     _filterController.dispose();
+    _filterFocusNode.dispose();
     super.dispose();
   }
 
@@ -212,6 +214,7 @@ class _WorkspaceGitDiffPanelState extends ConsumerState<WorkspaceGitDiffPanel> {
           messageController: _messageController,
           messageFocusNode: _messageFocusNode,
           filterController: _filterController,
+          filterFocusNode: _filterFocusNode,
           viewMode: widget.viewMode,
           groupMode: widget.groupMode,
           state: state,

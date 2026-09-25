@@ -61,10 +61,15 @@ void _registerWorkspaceExplorerModeTests() {
         service,
         child: MaterialApp(
           home: Scaffold(
-            body: SizedBox(
-              width: 320,
-              height: 480,
-              child: const _WorkspaceExplorerModeHarness(),
+            body: Column(
+              children: <Widget>[
+                const TextField(key: Key('focused-elsewhere')),
+                SizedBox(
+                  width: 320,
+                  height: 480,
+                  child: const _WorkspaceExplorerModeHarness(),
+                ),
+              ],
             ),
           ),
         ),
@@ -75,6 +80,10 @@ void _registerWorkspaceExplorerModeTests() {
     expect(find.text('main.dart'), findsOneWidget);
     expect(find.text('README.md'), findsOneWidget);
     expect(find.text('Filter files...'), findsNothing);
+    // autofocus alone yields to an already focused node, as the terminal or
+    // editor usually is in the app.
+    await tester.tap(find.byKey(const Key('focused-elsewhere')));
+    await tester.pump();
 
     await tester.tap(find.byTooltip('Search Files'));
     await tester.pump();
