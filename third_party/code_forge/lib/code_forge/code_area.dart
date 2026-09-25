@@ -4850,10 +4850,14 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
   void updateSemanticTokens(List<LspSemanticToken> tokens, int version) {
     if (version < _lastAppliedSemanticVersion) return;
     _lastAppliedSemanticVersion = version;
+    final coverage = controller.semanticTokensCoverage;
     _syntaxHighlighter.updateSemanticTokens(
       tokens,
       controller.getLineText,
       controller.lineCount,
+      coveredLines: coverage != null && coverage.version == version
+          ? (startLine: coverage.startLine, endLine: coverage.endLine)
+          : null,
     );
     _paragraphCache.clear();
     _bracketCache.clear();
@@ -5087,7 +5091,11 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
           return;
         }
 
-        controller.publishSemanticTokens(tokens);
+        controller.publishSemanticTokens(
+          tokens,
+          startLine: startLine,
+          endLine: endLine,
+        );
       } catch (e) {
         debugPrint('Error fetching visible semantic tokens: $e');
       }
@@ -6419,11 +6427,18 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
         final removedLength = max(insertedText.length - delta, 0);
         final oldEnd = dirtyRange.start + removedLength;
         final deletedText = previousText.substring(dirtyRange.start, oldEnd);
+        // Semantic spans are stored per line in UTF-16 columns, while the
+        // dirty range is a document offset in Unicode scalars.
+        final editLineText = controller.getLineText(editLine);
+        final editColumn = CodeForgeController.scalarToUtf16Offset(
+          editLineText,
+          dirtyRange.start - controller.getLineStartOffset(editLine),
+        );
 
         _syntaxHighlighter.applyDocumentEdit(
           editLine,
-          dirtyRange.start,
-          oldEnd,
+          editColumn,
+          editColumn + deletedText.length,
           insertedText,
           deletedText,
           newText,

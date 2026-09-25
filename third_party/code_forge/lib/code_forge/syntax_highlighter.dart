@@ -97,11 +97,17 @@ class SyntaxHighlighter {
     _semanticMapping = getSemanticMapping(languageId ?? '');
   }
 
+  /// Replaces the semantic spans of the lines the server answered for.
+  ///
+  /// [coveredLines] is the inclusive line range the tokens were requested
+  /// for; a line in it that received no token loses its previous spans. When
+  /// it is null only lines that received a token are replaced.
   void updateSemanticTokens(
     List<LspSemanticToken> tokens,
     String Function(int) getLineText,
-    int lineCount,
-  ) {
+    int lineCount, {
+    ({int startLine, int endLine})? coveredLines,
+  }) {
     final updatedLineSemanticSpans = <int, List<SemanticWordSpan>>{};
     final lineCache = <int, String>{};
 
@@ -139,6 +145,12 @@ class SyntaxHighlighter {
       spans.sort((a, b) => a.startChar.compareTo(b.startChar));
     }
 
+    if (coveredLines != null) {
+      _lineSemanticSpans.removeWhere(
+        (line, _) =>
+            line >= coveredLines.startLine && line <= coveredLines.endLine,
+      );
+    }
     for (final entry in updatedLineSemanticSpans.entries) {
       _lineSemanticSpans[entry.key] = entry.value;
     }
@@ -150,6 +162,11 @@ class SyntaxHighlighter {
     _version++;
   }
 
+  /// Moves the cached semantic spans along with a document edit so they stay
+  /// on their words until the language server answers with fresh tokens.
+  ///
+  /// [editStart] and [oldEnd] are line-relative UTF-16 columns on
+  /// [editLine]; [oldEnd] may exceed the line when [deletedText] spans lines.
   void applyDocumentEdit(
     int editLine,
     int editStart,
@@ -159,103 +176,96 @@ class SyntaxHighlighter {
     String fullText,
   ) {
     _documentVersion++;
-    final insertedLineBreaks = '\n'.allMatches(insertedText).length;
-    final deletedLineBreaks = '\n'.allMatches(deletedText).length;
-    final lineBreakDelta = insertedLineBreaks - deletedLineBreaks;
-    final isPureInsertion = oldEnd == editStart;
-    final isPureDeletion = insertedText.isEmpty && oldEnd > editStart;
-    if (lineBreakDelta != 0 && (isPureInsertion || isPureDeletion)) {
-      final shiftedSemanticSpans = <int, List<SemanticWordSpan>>{};
-      for (final entry in _lineSemanticSpans.entries) {
-        final lineIndex = entry.key;
-        if (lineIndex > editLine) {
-          shiftedSemanticSpans[lineIndex + lineBreakDelta] = entry.value;
-        } else {
-          shiftedSemanticSpans[lineIndex] = entry.value;
-        }
-      }
-
-      _lineSemanticSpans
-        ..clear()
-        ..addAll(shiftedSemanticSpans);
-      _grammarCache.removeWhere((line, _) => line >= editLine);
-      _mergedCache.removeWhere((line, _) => line >= editLine);
-      _isEditing = false;
-    } else if (insertedText.isNotEmpty || deletedText.isNotEmpty) {
-      final lineSemanticSpans = _lineSemanticSpans[editLine];
-      if (lineSemanticSpans != null && lineSemanticSpans.isNotEmpty) {
-        final updatedLineSemanticSpans = <SemanticWordSpan>[];
-        final insertedLength = insertedText.length;
-        final deletedLength = deletedText.length;
-        final shiftDelta = insertedLength - deletedLength;
-        final insertedEnd = editStart + insertedLength;
-
-        for (final span in lineSemanticSpans) {
-          if (span.endChar <= editStart) {
-            updatedLineSemanticSpans.add(span);
-            continue;
-          }
-
-          if (span.startChar >= oldEnd) {
-            updatedLineSemanticSpans.add(
-              SemanticWordSpan(
-                startChar: span.startChar + shiftDelta,
-                endChar: span.endChar + shiftDelta,
-                word: span.word,
-                style: span.style,
-              ),
-            );
-            continue;
-          }
-
-          if (span.startChar < editStart) {
-            final leftEnd = editStart.clamp(span.startChar, span.endChar);
-            if (leftEnd > span.startChar) {
-              updatedLineSemanticSpans.add(
-                SemanticWordSpan(
-                  startChar: span.startChar,
-                  endChar: leftEnd,
-                  word: span.word.substring(0, leftEnd - span.startChar),
-                  style: span.style,
-                ),
-              );
-            }
-          }
-
-          if (span.endChar > oldEnd) {
-            final rightStart = insertedEnd;
-            final rightEnd = span.endChar + shiftDelta;
-            if (rightEnd > rightStart) {
-              final rightWordStart =
-                  (span.word.length - (span.endChar - oldEnd)).clamp(
-                    0,
-                    span.word.length,
-                  );
-              updatedLineSemanticSpans.add(
-                SemanticWordSpan(
-                  startChar: rightStart,
-                  endChar: rightEnd,
-                  word: span.word.substring(rightWordStart),
-                  style: span.style,
-                ),
-              );
-            }
-          }
-        }
-
-        updatedLineSemanticSpans.sort(
-          (a, b) => a.startChar == b.startChar
-              ? a.endChar.compareTo(b.endChar)
-              : a.startChar.compareTo(b.startChar),
-        );
-        _lineSemanticSpans[editLine] = updatedLineSemanticSpans;
-      }
-
-      _isEditing = false;
-    } else {
+    if (insertedText.isEmpty && deletedText.isEmpty) {
       _isEditing = true;
+      _lineSpanCache.clear();
+      _version++;
+      return;
     }
 
+    final deletedLines = deletedText.split('\n');
+    final insertedLines = insertedText.split('\n');
+    final deletedLineBreaks = deletedLines.length - 1;
+    final insertedLineBreaks = insertedLines.length - 1;
+    final lineBreakDelta = insertedLineBreaks - deletedLineBreaks;
+    // Where the deleted range ended and the inserted text ends, as
+    // (line, character) positions in the old and new document respectively.
+    final deletedEndLine = editLine + deletedLineBreaks;
+    final deletedEndChar = deletedLineBreaks == 0
+        ? editStart + deletedText.length
+        : deletedLines.last.length;
+    final insertedEndLine = editLine + insertedLineBreaks;
+    final insertedEndChar = insertedLineBreaks == 0
+        ? editStart + insertedText.length
+        : insertedLines.last.length;
+
+    final shiftedSemanticSpans = <int, List<SemanticWordSpan>>{};
+    void addSpan(int line, SemanticWordSpan span) {
+      shiftedSemanticSpans.putIfAbsent(line, () => []).add(span);
+    }
+
+    for (final entry in _lineSemanticSpans.entries) {
+      final lineIndex = entry.key;
+      if (lineIndex < editLine) {
+        shiftedSemanticSpans[lineIndex] = entry.value;
+        continue;
+      }
+      if (lineIndex > deletedEndLine) {
+        shiftedSemanticSpans[lineIndex + lineBreakDelta] = entry.value;
+        continue;
+      }
+
+      for (final span in entry.value) {
+        // Part of the span before the edit stays where it is.
+        if (lineIndex == editLine && span.startChar < editStart) {
+          final leftEnd = span.endChar < editStart ? span.endChar : editStart;
+          addSpan(
+            editLine,
+            leftEnd == span.endChar
+                ? span
+                : SemanticWordSpan(
+                    startChar: span.startChar,
+                    endChar: leftEnd,
+                    word: span.word.substring(0, leftEnd - span.startChar),
+                    style: span.style,
+                  ),
+          );
+        }
+        // Part of the span after the deleted range follows the inserted text.
+        if (lineIndex == deletedEndLine && span.endChar > deletedEndChar) {
+          final rightStart = span.startChar > deletedEndChar
+              ? span.startChar
+              : deletedEndChar;
+          final shift = insertedEndChar - deletedEndChar;
+          addSpan(
+            insertedEndLine,
+            SemanticWordSpan(
+              startChar: rightStart + shift,
+              endChar: span.endChar + shift,
+              word: span.word.substring(rightStart - span.startChar),
+              style: span.style,
+            ),
+          );
+        }
+      }
+    }
+
+    for (final spans in shiftedSemanticSpans.values) {
+      spans.sort(
+        (a, b) => a.startChar == b.startChar
+            ? a.endChar.compareTo(b.endChar)
+            : a.startChar.compareTo(b.startChar),
+      );
+    }
+    _lineSemanticSpans
+      ..clear()
+      ..addAll(shiftedSemanticSpans);
+
+    if (lineBreakDelta != 0) {
+      _grammarCache.removeWhere((line, _) => line >= editLine);
+      _mergedCache.removeWhere((line, _) => line >= editLine);
+    }
+    _isEditing = false;
     _lineSpanCache.clear();
     _version++;
   }
@@ -381,15 +391,11 @@ class SyntaxHighlighter {
     final children = <TextSpan>[];
     int currentPos = 0; // UTF‑16 index
 
+    // Semantic spans are kept in the UTF-16 columns LSP reports by default,
+    // which are also Dart string indices.
     final utf16SemanticRanges = semanticSpans.map((span) {
-      final start = _scalarToUtf16Index(
-        lineText,
-        span.startChar,
-      ).clamp(0, lineText.length);
-      final end = _scalarToUtf16Index(
-        lineText,
-        span.endChar,
-      ).clamp(0, lineText.length);
+      final start = span.startChar.clamp(0, lineText.length);
+      final end = span.endChar.clamp(0, lineText.length);
       return (start: start, end: end, style: span.style);
     }).toList();
 
