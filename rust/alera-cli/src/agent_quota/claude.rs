@@ -406,10 +406,9 @@ fn map_claude_oauth_window(
     })
 }
 
+// `is_active` marks the limit currently binding the account, not whether the
+// limit applies: an unused Fable weekly limit arrives with `is_active: false`.
 fn map_claude_oauth_model_limit(limit: &Value) -> Option<QuotaBucket> {
-    if limit.get("is_active").and_then(Value::as_bool) == Some(false) {
-        return None;
-    }
     let used_percent = limit.get("percent").and_then(numeric)?;
     let model = limit.get("scope")?.get("model")?;
     let name = model

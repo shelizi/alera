@@ -172,6 +172,36 @@ fn claude_model_limits_skip_unscoped_weekly_all_and_keep_fable() {
 }
 
 #[test]
+fn claude_model_limits_keep_inactive_scoped_fable() {
+    // Shape observed from `/api/oauth/usage`: an unused scoped limit is not the
+    // binding one, so it arrives inactive.
+    let fable = json!({
+        "kind": "weekly_scoped",
+        "group": "weekly",
+        "percent": 0,
+        "severity": "normal",
+        "resets_at": "2026-10-01T03:00:00+00:00",
+        "scope": {
+            "model": { "id": null, "display_name": "Fable" },
+            "surface": null
+        },
+        "is_active": false
+    });
+    let bucket = map_claude_oauth_model_limit(&fable).expect("inactive Fable quota");
+    assert_eq!(bucket.name, "Fable Weekly");
+    assert_eq!(bucket.used_percent, 0.0);
+    assert!(bucket.resets_at.is_some());
+
+    let inactive_weekly_all = json!({
+        "kind": "weekly_all",
+        "percent": 5,
+        "scope": null,
+        "is_active": false
+    });
+    assert!(map_claude_oauth_model_limit(&inactive_weekly_all).is_none());
+}
+
+#[test]
 fn parses_claude_auth_status_without_exposing_credentials() {
     assert_eq!(
         parse_claude_auth_status(br#"{"loggedIn":true,"authMethod":"oauth"}"#),
