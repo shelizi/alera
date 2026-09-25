@@ -200,11 +200,16 @@ double _readOnlyDiffContentWidth(
 class _DiffHorizontalViewport extends StatefulWidget {
   const _DiffHorizontalViewport({
     required this.scrollbarKey,
+    required this.scrollStorageKey,
     required this.contentWidth,
     required this.child,
   });
 
   final String scrollbarKey;
+
+  /// Identifies this scroll view's offset in the route's [PageStorage], so a
+  /// diff tab rebuilt after a tab switch returns to where it was.
+  final String scrollStorageKey;
   final double contentWidth;
   final Widget child;
 
@@ -237,10 +242,13 @@ class _DiffHorizontalViewportState extends State<_DiffHorizontalViewport> {
       scrollbarOrientation: ScrollbarOrientation.bottom,
       notificationPredicate: (notification) =>
           notification.metrics.axis == Axis.horizontal,
-      child: SingleChildScrollView(
-        controller: _scrollController,
-        scrollDirection: Axis.horizontal,
-        child: SizedBox(width: widget.contentWidth, child: widget.child),
+      child: KeyedSubtree(
+        key: PageStorageKey<String>(widget.scrollStorageKey),
+        child: SingleChildScrollView(
+          controller: _scrollController,
+          scrollDirection: Axis.horizontal,
+          child: SizedBox(width: widget.contentWidth, child: widget.child),
+        ),
       ),
     );
   }
@@ -248,12 +256,15 @@ class _DiffHorizontalViewportState extends State<_DiffHorizontalViewport> {
 
 class _ReadOnlySideBySideDiffList extends StatefulWidget {
   const _ReadOnlySideBySideDiffList({
+    super.key,
     required this.rows,
     required this.contentWidth,
+    required this.scrollStorageKey,
   });
 
   final _DiffRows rows;
   final double contentWidth;
+  final String scrollStorageKey;
 
   @override
   State<_ReadOnlySideBySideDiffList> createState() =>
@@ -379,14 +390,24 @@ class _ReadOnlySideBySideDiffListState
             scrollbarOrientation: ScrollbarOrientation.bottom,
             notificationPredicate: (notification) =>
                 notification.metrics.axis == Axis.horizontal,
-            child: SingleChildScrollView(
-              controller: horizontalController,
-              scrollDirection: Axis.horizontal,
-              physics: const _NoImplicitHorizontalScrollPhysics(),
-              child: SizedBox(
-                width: contentWidth,
-                height: constraints.maxHeight,
-                child: SelectionArea(child: list),
+            child: KeyedSubtree(
+              key: PageStorageKey<String>('${widget.scrollStorageKey}:$side:h'),
+              child: SingleChildScrollView(
+                controller: horizontalController,
+                scrollDirection: Axis.horizontal,
+                physics: const _NoImplicitHorizontalScrollPhysics(),
+                child: SizedBox(
+                  width: contentWidth,
+                  height: constraints.maxHeight,
+                  child: SelectionArea(
+                    child: KeyedSubtree(
+                      key: PageStorageKey<String>(
+                        '${widget.scrollStorageKey}:$side:v',
+                      ),
+                      child: list,
+                    ),
+                  ),
+                ),
               ),
             ),
           ),
@@ -425,16 +446,19 @@ class _ReadOnlySideBySideDiffListState
 
 class _SingleColumnDiffList extends StatefulWidget {
   const _SingleColumnDiffList({
+    super.key,
     required this.rows,
     required this.overview,
     required this.selectionEnabled,
     required this.contentWidth,
+    required this.scrollStorageKey,
   });
 
   final _DiffRows rows;
   final _SingleColumnDiffOverviewProjection overview;
   final bool selectionEnabled;
   final double contentWidth;
+  final String scrollStorageKey;
 
   @override
   State<_SingleColumnDiffList> createState() => _SingleColumnDiffListState();
@@ -463,19 +487,23 @@ class _SingleColumnDiffListState extends State<_SingleColumnDiffList> {
         Expanded(
           child: LayoutBuilder(
             builder: (context, constraints) {
-              final list = ListView.builder(
-                key: const ValueKey<String>('git-diff-single-column-list'),
-                controller: _scrollController,
-                padding: const EdgeInsets.only(bottom: AleraTokens.space16),
-                itemCount: widget.rows.length,
-                itemBuilder: (context, index) =>
-                    widget.rows.rowAt(index).build(context),
+              final list = KeyedSubtree(
+                key: PageStorageKey<String>('${widget.scrollStorageKey}:v'),
+                child: ListView.builder(
+                  key: const ValueKey<String>('git-diff-single-column-list'),
+                  controller: _scrollController,
+                  padding: const EdgeInsets.only(bottom: AleraTokens.space16),
+                  itemCount: widget.rows.length,
+                  itemBuilder: (context, index) =>
+                      widget.rows.rowAt(index).build(context),
+                ),
               );
               final selectable = widget.selectionEnabled
                   ? SelectionArea(child: list)
                   : list;
               return _DiffHorizontalViewport(
                 scrollbarKey: 'git-diff-single-column-x-scrollbar',
+                scrollStorageKey: '${widget.scrollStorageKey}:h',
                 contentWidth: math.max(
                   constraints.maxWidth,
                   widget.contentWidth,
@@ -518,9 +546,15 @@ class const _DiffFileList({
   final void Function(GitDiffFile file, String text)? onEditableChanged,
   final void Function(GitDiffFile file)? onEditableSave,
   required final _DiffSyntaxStyle Function(String filePath) syntaxForPath,
+  // Scopes remembered scroll offsets to one diff tab. The modes are part of
+  // the key so switching unified/side-by-side or diff-only/full-file does not
+  // restore an offset measured against a different layout.
+  required final String scrollStorageId,
 }) extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
+    final scrollStorageKey =
+        '$scrollStorageId:${presentationMode.name}:${contentMode.name}';
     final hasEditableSideBySide =
         presentationMode == GitDiffPresentationMode.sideBySide &&
         contentMode == GitDiffContentMode.fullFile &&
@@ -552,6 +586,7 @@ class const _DiffFileList({
         onEditableSave: onEditableSave,
         editableViewportHeight: editableViewportHeight,
         syntaxForPath: syntaxForPath,
+        scrollStorageKey: scrollStorageKey,
       );
     }
 
@@ -565,22 +600,32 @@ class const _DiffFileList({
           );
           if (hasEditableSideBySide) {
             final contentWidth = math.max(constraints.maxWidth, 720.0);
-            final list = ListView.builder(
-              padding: const EdgeInsets.only(bottom: AleraTokens.space16),
-              itemCount: rows.length,
-              itemBuilder: (context, index) => rows.rowAt(index).build(context),
+            final list = KeyedSubtree(
+              key: PageStorageKey<String>('$scrollStorageKey:editable:v'),
+              child: ListView.builder(
+                padding: const EdgeInsets.only(bottom: AleraTokens.space16),
+                itemCount: rows.length,
+                itemBuilder: (context, index) =>
+                    rows.rowAt(index).build(context),
+              ),
             );
-            return SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: SizedBox(
-                width: contentWidth,
-                height: constraints.maxHeight,
-                child: list,
+            return KeyedSubtree(
+              key: PageStorageKey<String>('$scrollStorageKey:editable:h'),
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: SizedBox(
+                  width: contentWidth,
+                  height: constraints.maxHeight,
+                  child: list,
+                ),
               ),
             );
           }
+          // Keyed per mode: a mode switch gets a fresh list and controllers.
           return _ReadOnlySideBySideDiffList(
+            key: ValueKey<String>(scrollStorageKey),
             rows: rows,
+            scrollStorageKey: scrollStorageKey,
             contentWidth: _readOnlyDiffContentWidth(
               context,
               result: result,
@@ -594,9 +639,12 @@ class const _DiffFileList({
       );
     }
     final rows = buildRows();
+    // Keyed per mode: a mode switch gets a fresh list and controllers.
     return _SingleColumnDiffList(
+      key: ValueKey<String>(scrollStorageKey),
       rows: rows,
       selectionEnabled: true,
+      scrollStorageKey: scrollStorageKey,
       contentWidth: _readOnlyDiffContentWidth(
         context,
         result: result,
@@ -741,6 +789,7 @@ class _DiffRows {
     void Function(GitDiffFile file)? onEditableSave,
     double? editableViewportHeight,
     required _DiffSyntaxStyle Function(String filePath) syntaxForPath,
+    String? scrollStorageKey,
   }) {
     final items = _DiffRowsBuilder();
     if (result.truncated) {
@@ -796,6 +845,9 @@ class _DiffRows {
                 viewportHeight: editableViewportHeight,
                 onChanged: (text) => onEditableChanged(file, text),
                 onSave: () => onEditableSave(file),
+                scrollStorageKey: scrollStorageKey == null
+                    ? null
+                    : '$scrollStorageKey:file:${file.path}',
               ),
             ),
           );

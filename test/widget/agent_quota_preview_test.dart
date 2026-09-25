@@ -2,6 +2,7 @@ import 'package:alera/src/app/theme/alera_dark_theme.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:alera/src/features/agent_quota/domain/agent_quota.dart';
+import 'package:alera/src/features/agent_quota/presentation/agent_quota_provider_icon.dart';
 import 'package:alera/src/features/agent_quota/presentation/agent_quota_status_bar_content.dart';
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
 import 'package:flutter/material.dart';
@@ -56,7 +57,16 @@ void main() {
     final mouse = await tester.createGesture(kind: .mouse);
     addTearDown(mouse.removePointer);
     await mouse.addPointer(location: .zero);
-    await mouse.moveTo(tester.getCenter(find.text('Default')));
+    expect(find.text('Default'), findsNothing);
+    await mouse.moveTo(
+      tester.getCenter(
+        find.byWidgetPredicate(
+          (widget) =>
+              widget is AgentQuotaProviderIcon &&
+              widget.provider == AgentQuotaProviderId.claude,
+        ),
+      ),
+    );
     await tester.pump(AleraTokens.durationMid);
     await tester.pumpAndSettle();
     expect(find.text('Try With TUI'), findsNothing);

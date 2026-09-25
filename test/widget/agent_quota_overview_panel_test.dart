@@ -320,7 +320,8 @@ void main() {
     await tester.tap(find.text('2 agent quotas - Local'), kind: .mouse);
     await tester.pumpAndSettle();
 
-    expect(find.text('Claude Code Default'), findsOneWidget);
+    expect(find.text('Claude Code'), findsOneWidget);
+    expect(find.text('Claude Code Default'), findsNothing);
     expect(find.text('Antigravity'), findsOneWidget);
     expect(find.byTooltip('Unpin From Status Bar'), findsOneWidget);
     expect(find.byTooltip('Pin To Status Bar'), findsOneWidget);

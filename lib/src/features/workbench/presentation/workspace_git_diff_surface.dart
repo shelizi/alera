@@ -385,6 +385,8 @@ class _WorkspaceGitDiffSurfaceState
                         contentMode: contentMode,
                         presentationMode: presentationMode,
                         whitespaceMode: _whitespaceMode,
+                        scrollStorageId:
+                            'git-diff:${widget.workspace.id}:${widget.tab.id}',
                         syntaxForPath: (path) => _diffSyntaxStyleForPath(
                           filePath: path,
                           themeName: editorThemeName,
