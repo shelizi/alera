@@ -97,6 +97,7 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
   DateTime? _lastOpenedFileAt;
   ExternalEditorKind? _pickedExternalEditorKind;
   final TextEditingController _filterController = TextEditingController();
+  final FocusNode _filterFocusNode = FocusNode(debugLabel: 'explorer-filter');
   final FocusNode _explorerFocusNode = FocusNode(
     debugLabel: 'workspace-explorer',
   );
@@ -142,6 +143,7 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
   void dispose() {
     unawaited(_stopNativeWatcher());
     _filterController.dispose();
+    _filterFocusNode.dispose();
     _explorerFocusNode.dispose();
     _controller.dispose();
     super.dispose();
@@ -183,9 +185,9 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
             ),
             child: AleraSearchField(
               controller: _filterController,
+              focusNode: _filterFocusNode,
               hintText: 'Filter files...',
               dense: true,
-              autofocus: true,
               onChanged: _onFilterChanged,
             ),
           ),
@@ -520,6 +522,13 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
     setState(() {
       _filterVisible = !_isFilterVisible;
     });
+    if (_isFilterVisible) {
+      // autofocus is skipped while the terminal or editor holds focus, so the
+      // field asks for it once it has been mounted.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _isFilterVisible) _filterFocusNode.requestFocus();
+      });
+    }
   }
 
   void _onFilterChanged(String value) {

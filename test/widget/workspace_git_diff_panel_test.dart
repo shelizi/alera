@@ -1316,6 +1316,11 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(_filterField(), findsNothing);
+    // autofocus alone yields to an already focused field, as the terminal or
+    // editor usually is in the app.
+    await tester.tap(_messageField());
+    await tester.pumpAndSettle();
+    expect(_messageEditable(tester).focusNode.hasFocus, isTrue);
 
     await tester.tap(find.byTooltip('Search Files'));
     await tester.pumpAndSettle();

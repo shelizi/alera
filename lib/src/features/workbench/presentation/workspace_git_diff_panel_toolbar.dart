@@ -4,6 +4,7 @@ class const _SourceControlToolbar({
   required final TextEditingController messageController,
   required final FocusNode messageFocusNode,
   required final TextEditingController filterController,
+  required final FocusNode filterFocusNode,
   required final GitDiffViewMode viewMode,
   required final GitDiffGroupMode groupMode,
   required final AsyncValue<WorkspaceSourceControlState> state,
@@ -201,9 +202,9 @@ class const _SourceControlToolbar({
             const SizedBox(height: AleraTokens.space8),
             AleraSearchField(
               controller: filterController,
+              focusNode: filterFocusNode,
               hintText: 'Filter files...',
               dense: true,
-              autofocus: true,
               onChanged: (_) => onFilterChanged(),
             ),
           ],
