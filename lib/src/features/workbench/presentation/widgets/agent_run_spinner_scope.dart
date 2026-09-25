@@ -1,17 +1,27 @@
+import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
-/// One ticker for every agent spinner under this scope.
+/// How often the shared spinner advances. A 14 px arc reads as smooth at a
+/// dozen steps per second, and every step costs a full-window frame: the
+/// Windows Impeller backend re-rasterizes the whole window for any dirty
+/// region, so a per-vsync spinner kept an otherwise idle app at ~45 frames
+/// per second while an agent worked.
+@visibleForTesting
+const Duration agentRunSpinnerFrameInterval = Duration(milliseconds: 83);
+
+/// One animation clock for every agent spinner under this scope.
 ///
 /// A `CircularProgressIndicator` owns a private `AnimationController` and
 /// rebuilds itself every frame, so a sidebar with twenty working agents ran
-/// twenty tickers and twenty per-frame rebuilds. Sharing one animation and
-/// painting it keeps the cost to one ticker and N paints, with no build or
+/// twenty tickers and twenty per-frame rebuilds. Sharing one clock and
+/// painting it keeps the cost to one timer and N paints, with no build or
 /// layout work in the list.
 ///
-/// The ticker is reference counted by the mounted spinners, so an idle sidebar
-/// schedules no frames at all.
+/// The clock is reference counted by the mounted spinners, so an idle sidebar
+/// schedules no frames at all, and it stops while the window is hidden.
 class const AgentRunSpinnerScope({super.key, required final Widget child})
     extends StatefulWidget {
   static _AgentRunSpinnerScopeState? _maybeStateOf(BuildContext context) {
@@ -25,41 +35,75 @@ class const AgentRunSpinnerScope({super.key, required final Widget child})
 }
 
 class _AgentRunSpinnerScopeState extends State<AgentRunSpinnerScope>
-    with SingleTickerProviderStateMixin {
-  // Built eagerly, never lazily: a `late final` would construct a ticker
-  // inside dispose() when no spinner ever mounted, which is unsafe.
-  late final AnimationController _controller;
-  int _spinners = 0;
+    with WidgetsBindingObserver {
+  static const int _periodMilliseconds = 1400;
 
-  Animation<double> get animation => _controller;
+  final ValueNotifier<double> _progress = ValueNotifier<double>(0);
+  final Stopwatch _clock = Stopwatch();
+  Timer? _timer;
+  int _spinners = 0;
+  bool _windowVisible = true;
+  bool _tickersEnabled = true;
+
+  ValueListenable<double> get progress => _progress;
+
+  @visibleForTesting
+  bool get isRunning => _timer != null;
 
   @override
   void initState() {
     super.initState();
-    _controller = AnimationController(
-      duration: const Duration(milliseconds: 1400),
-      vsync: this,
-    );
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Same rule a ticker follows: an offstage route or a disabled subtree
+    // must not keep producing frames.
+    _tickersEnabled = TickerMode.valuesOf(context).enabled;
+    _syncTimer();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _windowVisible =
+        state == AppLifecycleState.resumed ||
+        state == AppLifecycleState.inactive;
+    _syncTimer();
   }
 
   void _acquire() {
     _spinners += 1;
-    if (_spinners == 1 && !_controller.isAnimating) {
-      _controller.repeat();
-    }
+    _syncTimer();
   }
 
   void _release() {
-    _spinners -= 1;
-    if (_spinners <= 0) {
-      _spinners = 0;
-      _controller.stop();
+    _spinners = math.max(0, _spinners - 1);
+    _syncTimer();
+  }
+
+  void _syncTimer() {
+    final shouldRun = _spinners > 0 && _windowVisible && _tickersEnabled;
+    if (shouldRun && _timer == null) {
+      _clock.start();
+      _timer = Timer.periodic(agentRunSpinnerFrameInterval, (_) {
+        final phase = _clock.elapsedMilliseconds % _periodMilliseconds;
+        _progress.value = phase / _periodMilliseconds;
+      });
+    } else if (!shouldRun && _timer != null) {
+      _timer!.cancel();
+      _timer = null;
+      _clock.stop();
     }
   }
 
   @override
   void dispose() {
-    _controller.dispose();
+    WidgetsBinding.instance.removeObserver(this);
+    _timer?.cancel();
+    _timer = null;
+    _progress.dispose();
     super.dispose();
   }
 
@@ -72,7 +116,7 @@ class _AgentRunSpinnerScopeState extends State<AgentRunSpinnerScope>
 /// A plain [InheritedWidget], deliberately not an `InheritedNotifier`: the
 /// latter rebuilds every dependent on each tick, which is the cost this scope
 /// exists to remove. The scope identity is stable, so dependents never rebuild
-/// and repaint off the shared ticker instead.
+/// and repaint off the shared clock instead.
 class const _AgentRunSpinnerAnimation({
   required final _AgentRunSpinnerScopeState scope,
   required super.child,
@@ -131,7 +175,7 @@ class _AgentRunSharedSpinnerState extends State<AgentRunSharedSpinner> {
       child: CustomPaint(
         size: .square(widget.size),
         painter: AgentRunSpinnerPainter(
-          progress: scope.animation,
+          progress: scope.progress,
           color: widget.color,
           strokeWidth: widget.strokeWidth,
         ),
@@ -140,9 +184,9 @@ class _AgentRunSharedSpinnerState extends State<AgentRunSharedSpinner> {
   }
 }
 
-/// Draws the indeterminate arc for one agent run off a shared ticker.
+/// Draws the indeterminate arc for one agent run off a shared clock.
 class AgentRunSpinnerPainter({
-  required final Animation<double> progress,
+  required final ValueListenable<double> progress,
   required final Color color,
   required final double strokeWidth,
 }) extends CustomPainter {
