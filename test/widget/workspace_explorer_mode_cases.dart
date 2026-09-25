@@ -81,6 +81,19 @@ void _registerWorkspaceExplorerModeTests() {
 
     expect(find.text('Filter files...'), findsOneWidget);
     expect(find.byTooltip('Hide File Filter'), findsOneWidget);
+    await tester.pump();
+    expect(
+      tester
+          .widget<EditableText>(
+            find.descendant(
+              of: find.byType(TextField).last,
+              matching: find.byType(EditableText),
+            ),
+          )
+          .focusNode
+          .hasFocus,
+      isTrue,
+    );
 
     await tester.enterText(find.byType(TextField).last, 'main');
     await tester.pump();
