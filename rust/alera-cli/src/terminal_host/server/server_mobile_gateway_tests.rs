@@ -13,7 +13,9 @@ async fn mobile_gateway_rebinds_same_port_after_releasing_old_listener() {
     let port = port_probe.local_addr().unwrap().port();
     drop(port_probe);
     let dir = tempfile::tempdir().unwrap();
-    let history = TerminalHostHistoryRepository::open(dir.path()).await.unwrap();
+    let history = TerminalHostHistoryRepository::open(dir.path())
+        .await
+        .unwrap();
     let runtime_store = RuntimeStore::open(dir.path()).await.unwrap();
     let (inbox, _rx) = mpsc::unbounded_channel();
     let current = MobileAccessSettings {

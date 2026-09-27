@@ -177,7 +177,6 @@ impl ServerActor {
             }
         }
     }
-
 }
 
 fn requested_local_role(payload: &Value) -> LocalClientRole {
@@ -244,7 +243,9 @@ mod tests {
     #[tokio::test]
     async fn control_bursts_survive_a_saturated_terminal_queue() {
         let dir = tempfile::tempdir().unwrap();
-        let history = TerminalHostHistoryRepository::open(dir.path()).await.unwrap();
+        let history = TerminalHostHistoryRepository::open(dir.path())
+            .await
+            .unwrap();
         let runtime_store = RuntimeStore::open(dir.path()).await.unwrap();
         let account_push = super::account_push_state::AccountPushState::new(
             dir.path().to_path_buf(),

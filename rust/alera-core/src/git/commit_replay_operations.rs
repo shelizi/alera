@@ -248,10 +248,7 @@ fn finish_rebase<'repo>(
     signature: &Signature<'_>,
     operation: &str,
 ) -> Result<(), GitError> {
-    loop {
-        let Some(next) = rebase.next() else {
-            break;
-        };
+    while let Some(next) = rebase.next() {
         let should_commit = match next {
             Ok(operation_entry) => {
                 let has_conflicts = match repo.index() {

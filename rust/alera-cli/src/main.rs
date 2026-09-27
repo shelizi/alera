@@ -58,7 +58,7 @@ mod worktree_include;
 mod worktree_setup;
 mod worktree_setup_script;
 use std::future::Future;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use alera_core::runtime::{

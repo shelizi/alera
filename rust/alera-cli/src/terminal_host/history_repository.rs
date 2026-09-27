@@ -48,7 +48,7 @@ enum FlushSnapshot {
         revision: u64,
     },
     Persist {
-        checkpoint: Option<(u64, TerminalHostCheckpoint)>,
+        checkpoint: Option<(u64, Box<TerminalHostCheckpoint>)>,
         outputs: Vec<(i64, u64, Vec<u8>)>,
         trim_revision: Option<u64>,
         max_bytes: usize,
@@ -76,7 +76,7 @@ impl SessionPersistenceState {
                 self.checkpoint
                     .as_ref()
                     .cloned()
-                    .map(|checkpoint| (revision, checkpoint))
+                    .map(|checkpoint| (revision, Box::new(checkpoint)))
             }),
             outputs: self
                 .outputs
@@ -402,7 +402,9 @@ impl TerminalHostHistoryRepository {
                     .store
                     .persist_session(
                         session_id,
-                        checkpoint.as_ref().map(|(_, checkpoint)| checkpoint),
+                        checkpoint
+                            .as_ref()
+                            .map(|(_, checkpoint)| checkpoint.as_ref()),
                         &output_rows,
                     )
                     .await?;
@@ -430,7 +432,6 @@ impl TerminalHostHistoryRepository {
             FlushSnapshot::Delete { revision } => {
                 if state.delete_revision == Some(*revision) {
                     sessions.remove(session_id);
-                    return;
                 }
             }
             FlushSnapshot::Persist {

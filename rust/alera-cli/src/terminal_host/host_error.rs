@@ -151,6 +151,7 @@ pub type HostResult<T> = Result<T, HostError>;
 impl OutcomeClass {
     /// Classify a host result, including the success class that has no
     /// `HostError` variant.
+    #[cfg(test)]
     pub fn from_result<T>(result: &HostResult<T>) -> Self {
         match result {
             Ok(_) => OutcomeClass::Ok,

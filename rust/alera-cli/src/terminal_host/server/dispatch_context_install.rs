@@ -15,9 +15,7 @@ use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use alera_core::agent_descriptor::AgentDescriptor;
 use alera_core::git::GitBaseDrift;
-use alera_core::runtime::{
-    OrchestrationDispatchStatus, OrchestrationTask, WorkspaceTabRecord,
-};
+use alera_core::runtime::{OrchestrationDispatchStatus, OrchestrationTask, WorkspaceTabRecord};
 use serde_json::{json, Value};
 
 use crate::terminal_host::host_error::{HostError, HostResult};
@@ -187,11 +185,9 @@ impl ServerActor {
         let path = self.dispatch_context_path(handle);
         let gate = dispatch_context_gate(&path)?;
         let generation = {
-            let mut generation = gate
-                .lock()
-                .map_err(|error| {
-                    HostError::state(format!("dispatch context gate failed: {error}"))
-                })?;
+            let mut generation = gate.lock().map_err(|error| {
+                HostError::state(format!("dispatch context gate failed: {error}"))
+            })?;
             *generation = generation.wrapping_add(1);
             *generation
         };

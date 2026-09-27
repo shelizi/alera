@@ -60,6 +60,7 @@ pub async fn measure_workspace_storage(
     })
 }
 
+#[cfg(test)]
 pub async fn validate_workspace_storage_path(
     store: &RuntimeStore,
     workspace_id: &str,

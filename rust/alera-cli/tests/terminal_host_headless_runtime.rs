@@ -355,18 +355,23 @@ fn runtime_hook_receiver_detects_every_enabled_agent() {
         let store = RuntimeStore::open(dir.path()).await.unwrap();
         store
             .set_agent_status_hook_settings(&RuntimeAgentStatusHookSettings {
-                codex: true,
-                claude: true,
-                copilot: true,
-                cursor: true,
-                agy: true,
-                opencode: true,
-                opencode2: true,
-                pi: true,
-                amp: true,
-                grok: true,
-                devin: true,
-                fx: true,
+                values: [
+                    "codex",
+                    "claude",
+                    "copilot",
+                    "cursor",
+                    "agy",
+                    "opencode",
+                    "opencode2",
+                    "pi",
+                    "amp",
+                    "grok",
+                    "devin",
+                    "fx",
+                ]
+                .into_iter()
+                .map(|agent| (agent.to_string(), true))
+                .collect(),
             })
             .await
             .unwrap();

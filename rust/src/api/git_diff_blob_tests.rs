@@ -114,8 +114,7 @@ fn git_diff_blob_bytes_resolves_commit_diff_sides() {
     std::fs::write(repo.path().join("logo.png"), &new_bytes).expect("modify image");
     run_git(repo.path(), &["add", "logo.png"]);
     run_git(repo.path(), &["commit", "-m", "modify image"]);
-    let history =
-        git_history(path_str(repo.path()), Some(5), None, None, None).unwrap();
+    let history = git_history(path_str(repo.path()), Some(5), None, None, None).unwrap();
     let commit_oid = history.items[0].id.clone();
 
     let old_side = git_diff_blob_bytes(

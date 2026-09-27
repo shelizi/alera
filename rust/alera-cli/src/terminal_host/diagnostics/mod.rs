@@ -9,6 +9,8 @@ pub mod panic_hook;
 pub mod redaction;
 pub mod rotating_writer;
 pub mod sentry_error_layer;
+// Kept for re-enabling crash reporting; the portable privacy build does not initialize Sentry.
+#[allow(dead_code)]
 pub mod sentry_reporting;
 
 use jsonl_layer::JsonlLayer;

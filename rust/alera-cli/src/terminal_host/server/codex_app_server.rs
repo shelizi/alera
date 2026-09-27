@@ -71,12 +71,8 @@ impl CodexAppServer {
         inbox: UnboundedSender<ServerCommand>,
         cwd: Option<&str>,
     ) -> HostResult<Self> {
-        let mut command = windowless_async_shell_command(
-            "codex",
-            &["app-server".to_string()],
-            cwd,
-            None,
-        );
+        let mut command =
+            windowless_async_shell_command("codex", &["app-server".to_string()], cwd, None);
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

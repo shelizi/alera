@@ -1,5 +1,7 @@
 use std::borrow::Cow;
 
+// Kept for re-enabling Sentry crash reporting; the portable privacy build does not call it.
+#[allow(dead_code)]
 pub(crate) const RUNTIME_SURFACE: &str = "runtime";
 
 pub(crate) fn version() -> &'static str {
@@ -13,6 +15,8 @@ pub(crate) fn build() -> Option<&'static str> {
     }
 }
 
+// Kept for re-enabling Sentry crash reporting; the portable privacy build does not call it.
+#[allow(dead_code)]
 pub(crate) fn release() -> Cow<'static, str> {
     match build() {
         Some(build) => Cow::Owned(format!("alera-runtime@{}+{build}", version())),

@@ -30,7 +30,9 @@ pub use managed_workspace_removal::{
     remove_managed_workspace, validate_managed_workspace_removal,
     workspace_has_active_automation_owner,
 };
-pub use managed_workspace_storage::{measure_workspace_storage, validate_workspace_storage_path};
+pub use managed_workspace_storage::measure_workspace_storage;
+#[cfg(test)]
+pub use managed_workspace_storage::validate_workspace_storage_path;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -295,7 +297,7 @@ pub async fn switch_managed_workspace_branch(
             }) {
                 let _ = core_git::checkout_branch(&workspace_path, previous);
             }
-            Err(error.into())
+            Err(error)
         }
     }
 }

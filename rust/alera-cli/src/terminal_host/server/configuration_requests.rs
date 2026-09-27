@@ -11,6 +11,8 @@ use crate::terminal_host::{
 use alera_core::runtime::RuntimeStore;
 use serde_json::{json, Value};
 
+const CLOUD_CONFIGURATION_SYNC_ENABLED: bool = false;
+
 pub(super) struct ConfigurationStoreRequestHandler<'a> {
     runtime_store: &'a RuntimeStore,
 }
@@ -110,9 +112,14 @@ impl ServerActor {
         if early_deferred_route(request) != Some(EarlyDeferredRoute::ConfigurationCloud) {
             return Ok(false);
         }
-        return Err(HostError::state(
-            "Alera Cloud configuration sync is disabled in this privacy portable build.",
-        ));
+        // The privacy portable build keeps the upstream sync path compiled so it
+        // can be re-enabled, but never reaches the cloud.
+        if !CLOUD_CONFIGURATION_SYNC_ENABLED {
+            return Err(HostError::state(
+                "Alera Cloud configuration sync is disabled in this privacy portable build.",
+            ));
+        }
+        self.require_authenticated_local_request(client_id, request)?;
         let account = require_string_key(payload, "accountId")?;
         let action = request
             .trim_start_matches("configuration.cloud.")

@@ -5,6 +5,8 @@ pub(crate) mod ai_dictation_capabilities;
 pub(crate) mod alera_account;
 pub mod buffer;
 pub mod client;
+// Kept for re-enabling cloud services; the portable privacy build does not call it.
+#[allow(dead_code)]
 mod client_budget;
 pub mod control_file;
 pub mod demand_driven_ticker;
@@ -18,10 +20,17 @@ pub mod orchestration;
 pub mod protocol;
 #[path = "../push_notifications/mod.rs"]
 pub(crate) mod push_notifications;
+// The relay modules are kept for re-enabling cloud services; the portable
+// privacy build does not start the Internet relay.
+#[allow(dead_code)]
 mod relay_connection;
+#[allow(dead_code)]
 pub mod relay_crypto;
+#[allow(dead_code)]
 mod relay_runtime;
+#[allow(dead_code)]
 mod relay_runtime_auth;
+#[allow(dead_code)]
 pub mod relay_wire;
 pub mod resources;
 pub(crate) mod restart;

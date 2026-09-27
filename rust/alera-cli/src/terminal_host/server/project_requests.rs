@@ -109,7 +109,7 @@ impl<'a> ProjectRenameHandler<'a> {
 
     pub(super) async fn execute(&self, payload: &Value) -> HostResult<Value> {
         let request: ProjectRenameRequest = parse(payload)?;
-        let project = rename_project(&self.runtime_store, &request.id, &request.name)
+        let project = rename_project(self.runtime_store, &request.id, &request.name)
             .await
             .map_err(state_error)?;
         serde_json::to_value(project).map_err(state_error)
@@ -238,6 +238,11 @@ fn state_error(error: impl std::fmt::Display) -> HostError {
     HostError::state(error.to_string())
 }
 
+#[allow(dead_code)]
+fn _assert_project_config_is_serializable(config: ProjectConfig) -> Value {
+    serde_json::to_value(config).unwrap_or(Value::Null)
+}
+
 #[cfg(test)]
 mod tests {
     use alera_core::runtime::{Project, ProjectConfig, ProjectKind, RuntimeStore};
@@ -338,9 +343,4 @@ mod tests {
             "After"
         );
     }
-}
-
-#[allow(dead_code)]
-fn _assert_project_config_is_serializable(config: ProjectConfig) -> Value {
-    serde_json::to_value(config).unwrap_or(Value::Null)
 }

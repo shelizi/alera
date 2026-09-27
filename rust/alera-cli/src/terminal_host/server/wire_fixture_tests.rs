@@ -25,8 +25,7 @@ fn wire_fixture(name: &str) -> Value {
         .join(name);
     let text = std::fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
-    serde_json::from_str(&text)
-        .unwrap_or_else(|error| panic!("{}: {error}", path.display()))
+    serde_json::from_str(&text).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
 }
 
 /// The stored record behind the tab fixtures. Host-owned recovery keys
@@ -154,7 +153,10 @@ async fn unauthenticated_response_matches_shared_fixture() {
     .await;
 
     assert!(events.is_empty());
-    assert_eq!(response, wire_fixture("response.error.unauthenticated.json"));
+    assert_eq!(
+        response,
+        wire_fixture("response.error.unauthenticated.json")
+    );
 }
 
 #[tokio::test]
@@ -328,7 +330,10 @@ async fn tab_upsert_round_trip_matches_shared_fixtures() {
     let (response, events) = exchange(&mut actor, 1, &request, &mut receiver).await;
 
     assert_eq!(response, wire_fixture("response.tab.upsert.desktop.json"));
-    assert_eq!(events, vec![wire_fixture("event.workspace_tabs_changed.json")]);
+    assert_eq!(
+        events,
+        vec![wire_fixture("event.workspace_tabs_changed.json")]
+    );
     // Projection redaction is wire-only: storage must keep the recovery keys
     // the client could never have sent back.
     let stored = actor

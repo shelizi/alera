@@ -7,7 +7,7 @@ use alera_core::runtime::RuntimeAgentStatusHookSettings;
 use super::fx_herdr_receiver::fx_herdr_socket_path;
 use super::integration_config::prepare_enabled_integrations;
 #[cfg(unix)]
-use alera_core::agent_descriptor::{AGENT_DESCRIPTORS, AgentHookStrategy};
+use alera_core::agent_descriptor::{AgentHookStrategy, AGENT_DESCRIPTORS};
 
 pub fn prepare_launch_environment(
     runtime_dir: &Path,
@@ -444,8 +444,7 @@ mod tests {
             "workspace-1",
             "tab-1",
             &RuntimeAgentStatusHookSettings {
-                fx: true,
-                ..RuntimeAgentStatusHookSettings::default()
+                values: std::collections::HashMap::from([("fx".to_string(), true)]),
             },
             &mut environment,
         )

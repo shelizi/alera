@@ -160,10 +160,12 @@ async fn fetch_grok() -> QuotaSnapshot {
     }
     let billing_url = format!("{base}/billing");
     let mut usage = fetch_grok_billing(&client, &billing_url, &auth).await;
-    if matches!(usage, Ok(None)) && !refresh_attempted && auth.can_refresh() {
-        if refresh_grok_auth(&client, &auth_path, &mut auth).await.is_ok() {
-            usage = fetch_grok_billing(&client, &billing_url, &auth).await;
-        }
+    if matches!(usage, Ok(None))
+        && !refresh_attempted
+        && auth.can_refresh()
+        && refresh_grok_auth(&client, &auth_path, &mut auth).await.is_ok()
+    {
+        usage = fetch_grok_billing(&client, &billing_url, &auth).await;
     }
     let default_data = match usage {
         Ok(Some(value)) => value,

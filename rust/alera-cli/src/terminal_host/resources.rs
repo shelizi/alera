@@ -80,6 +80,7 @@ pub fn seal_shell_process(pid: u32) -> Option<ShellProcess> {
 /// as child processes, which makes a shell's own threads read as its
 /// descendants: the kill walk would then signal the shell before the root killer
 /// runs, and `descendants` would stop meaning what its name says.
+#[cfg(unix)]
 pub fn sweep_process_topology() -> ProcessIndex {
     let mut system = System::new();
     system.refresh_processes_specifics(

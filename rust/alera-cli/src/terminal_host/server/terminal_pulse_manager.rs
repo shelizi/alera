@@ -149,10 +149,7 @@ impl TerminalPulseManager {
         }
     }
 
-    pub(in crate::terminal_host::server) fn remove_unused_watcher(
-        &mut self,
-        workspace_id: &str,
-    ) {
+    pub(in crate::terminal_host::server) fn remove_unused_watcher(&mut self, workspace_id: &str) {
         if !self
             .rules
             .values()

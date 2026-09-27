@@ -375,7 +375,9 @@ impl ServerActor {
         }
         self.disarm_terminal_pulse(&session_id);
         self.account_push.damper.reset_session(&session_id);
-        let mut agent_settings = AgentHookSettingsQuery::new(&self.runtime_store).load().await?;
+        let mut agent_settings = AgentHookSettingsQuery::new(&self.runtime_store)
+            .load()
+            .await?;
         if let Some(agent) = forced_agent_hook {
             agent_settings.set_enabled(agent, true);
         }
@@ -453,14 +455,13 @@ impl ServerActor {
             tab_id.to_string(),
             &self.history,
             max_bytes,
-    )
-    .await
-    {
-        return (restored.buffer.to_bytes(), restored.output_stream_range().1);
+        )
+        .await
+        {
+            return (restored.buffer.to_bytes(), restored.output_stream_range().1);
+        }
+        (Vec::new(), 0)
     }
-    (Vec::new(), 0)
-}
-
 }
 
 fn spawns_on_create(tab: &WorkspaceTabRecord) -> bool {

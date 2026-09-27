@@ -50,8 +50,12 @@ impl ServerActor {
             }
             DispatchInstallOrigin::Coordinator { run_id } => {
                 if !self.coordinators.contains_key(run_id) {
-                    self.abort_spawn_install(&id, dispatch_id.as_deref(), "coordinator run stopped")
-                        .await;
+                    self.abort_spawn_install(
+                        &id,
+                        dispatch_id.as_deref(),
+                        "coordinator run stopped",
+                    )
+                    .await;
                     return;
                 }
             }
@@ -169,12 +173,7 @@ impl ServerActor {
 
     /// Drops a parked spawn whose requester or coordinator run went away
     /// while the context install ran.
-    async fn abort_spawn_install(
-        &mut self,
-        handle: &str,
-        dispatch_id: Option<&str>,
-        reason: &str,
-    ) {
+    async fn abort_spawn_install(&mut self, handle: &str, dispatch_id: Option<&str>, reason: &str) {
         if let Some(dispatch_id) = dispatch_id {
             let _ = self
                 .runtime_store
@@ -201,10 +200,7 @@ impl ServerActor {
                 self.client_write(client_id, error_response(request_id, &error));
             }
             DispatchInstallOrigin::Coordinator { .. } => {
-                self.coordinator_log(&format!(
-                    "worker spawn failed: {}",
-                    error.wire_message()
-                ));
+                self.coordinator_log(&format!("worker spawn failed: {}", error.wire_message()));
             }
             DispatchInstallOrigin::Internal => {}
         }

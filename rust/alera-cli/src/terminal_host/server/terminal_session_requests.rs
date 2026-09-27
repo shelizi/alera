@@ -63,7 +63,6 @@ impl ServerActor {
                 .and_then(Value::as_bool)
                 .unwrap_or(false)
             {
-                let tab = tab;
                 let run_id = tab
                     .payload
                     .get("automationRunId")

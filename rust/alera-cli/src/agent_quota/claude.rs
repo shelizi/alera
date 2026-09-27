@@ -353,7 +353,7 @@ async fn read_macos_keychain_password(service: &str) -> KeychainRead {
             .await
             .unwrap_or_else(|| "user".to_string()),
     };
-    let mut command = windowless_async_command("security");
+    let mut command = alera_core::child_process::windowless_async_command("security");
     command
         .args([
             "find-generic-password",

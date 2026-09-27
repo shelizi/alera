@@ -1,17 +1,24 @@
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(unix)]
+use std::path::PathBuf;
 
+#[cfg(any(unix, test))]
 use serde_json::{json, Value};
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::terminal_host::server::ServerCommand;
 
+#[cfg(any(unix, test))]
 use super::AgentHookEvent;
 
+#[cfg(unix)]
 const MAX_REQUEST_BYTES: u64 = 16 * 1024;
 
+#[cfg(unix)]
 pub fn fx_herdr_socket_path(runtime_dir: &Path) -> PathBuf {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
     let direct = runtime_dir.join("fx-herdr.sock");
     if direct.to_string_lossy().len() <= 90 {
         return direct;
@@ -77,6 +84,7 @@ pub async fn start_fx_herdr_receiver(
     Ok(())
 }
 
+#[cfg(any(unix, test))]
 fn fx_herdr_response(line: &str, inbox: &UnboundedSender<ServerCommand>) -> Value {
     let Ok(request) = serde_json::from_str::<Value>(line) else {
         return json!({"id": Value::Null, "error": "invalid request"});
@@ -92,6 +100,7 @@ fn fx_herdr_response(line: &str, inbox: &UnboundedSender<ServerCommand>) -> Valu
     json!({"id": id, "result": {}})
 }
 
+#[cfg(any(unix, test))]
 fn fx_event(method: &str, params: &serde_json::Map<String, Value>) -> Option<AgentHookEvent> {
     let pane_id = non_blank(params.get("pane_id"))?;
     match method {
@@ -132,6 +141,7 @@ fn fx_event(method: &str, params: &serde_json::Map<String, Value>) -> Option<Age
     }
 }
 
+#[cfg(any(unix, test))]
 fn non_blank(value: Option<&Value>) -> Option<&str> {
     value?
         .as_str()

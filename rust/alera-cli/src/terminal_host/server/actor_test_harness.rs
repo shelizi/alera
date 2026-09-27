@@ -76,7 +76,9 @@ pub(super) async fn test_actor(
     clients: HashMap<u64, ClientState>,
     sessions: HashMap<String, Session>,
 ) -> ServerActor {
-    let history = TerminalHostHistoryRepository::open(dir.path()).await.unwrap();
+    let history = TerminalHostHistoryRepository::open(dir.path())
+        .await
+        .unwrap();
     let runtime_store = RuntimeStore::open(dir.path()).await.unwrap();
     let account_push = AccountPushState::new(dir.path().to_path_buf(), runtime_store.clone())
         .await

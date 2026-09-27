@@ -167,6 +167,7 @@ impl ServerActor {
     }
 }
 
+#[cfg(test)]
 fn cancel_orphaned_start(runtime_dir: &std::path::Path, result: &HostResult<Value>) {
     let Some(upload_id) = result
         .as_ref()

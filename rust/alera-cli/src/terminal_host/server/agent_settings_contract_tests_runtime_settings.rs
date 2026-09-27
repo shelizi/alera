@@ -32,10 +32,7 @@ async fn runtime_settings_update_reapplies_the_same_values_idempotently() {
         assert_eq!(response["payload"]["confirmProjectRemoval"], false);
         assert!(response["payload"]["automation"].is_object(), "{response}");
     }
-    assert_eq!(
-        actor.runtime_store.confirm_project_removal().await.unwrap(),
-        false
-    );
+    assert!(!actor.runtime_store.confirm_project_removal().await.unwrap());
 }
 
 #[tokio::test]
@@ -79,9 +76,8 @@ async fn runtime_settings_update_validates_the_full_payload_before_writing() {
             .is_some_and(|error| error.contains("Unsupported runtime setting")),
         "{rejected}"
     );
-    assert_eq!(
-        actor.runtime_store.confirm_project_removal().await.unwrap(),
-        false,
+    assert!(
+        !actor.runtime_store.confirm_project_removal().await.unwrap(),
         "an invalid later key must not partially commit the valid key"
     );
     assert_eq!(
@@ -126,9 +122,8 @@ async fn runtime_settings_update_checks_expected_revision_and_preserves_lww_with
     assert_eq!(conflict["errorCode"], "runtime_settings_revision_conflict");
     assert_eq!(conflict["errorDetails"]["expectedRevision"], 0);
     assert_eq!(conflict["errorDetails"]["actualRevision"], 1);
-    assert_eq!(
-        actor.runtime_store.confirm_project_removal().await.unwrap(),
-        false,
+    assert!(
+        !actor.runtime_store.confirm_project_removal().await.unwrap(),
         "a stale revision must not write any keys"
     );
 
@@ -188,8 +183,5 @@ async fn mobile_runtime_settings_update_rejects_desktop_only_keys() {
         "{response}"
     );
     // The allowlist rejects the payload before any key is applied.
-    assert_eq!(
-        actor.runtime_store.confirm_project_removal().await.unwrap(),
-        true
-    );
+    assert!(actor.runtime_store.confirm_project_removal().await.unwrap());
 }

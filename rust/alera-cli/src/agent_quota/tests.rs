@@ -38,18 +38,14 @@ fn parses_tui_used_and_remaining_percentages() {
     );
     assert_eq!(snapshot.status, "ok");
     assert_eq!(snapshot.windows.len(), 2);
-    assert!(
-        snapshot
-            .windows
-            .iter()
-            .any(|window| window.used_percent == 20.0)
-    );
-    assert!(
-        snapshot
-            .windows
-            .iter()
-            .any(|window| window.used_percent == 65.0)
-    );
+    assert!(snapshot
+        .windows
+        .iter()
+        .any(|window| window.used_percent == 20.0));
+    assert!(snapshot
+        .windows
+        .iter()
+        .any(|window| window.used_percent == 65.0));
 }
 
 #[test]
@@ -255,11 +251,9 @@ fn each_available_credential_gap_says_something_different() {
 #[cfg(target_os = "macos")]
 #[test]
 fn unreadable_credential_gap_explains_keychain_access() {
-    assert!(
-        ClaudeCredentialGap::Unreadable
-            .message()
-            .contains("keychain")
-    );
+    assert!(ClaudeCredentialGap::Unreadable
+        .message()
+        .contains("keychain"));
 }
 
 #[test]
@@ -356,12 +350,10 @@ fn parses_decorated_agy_groups_and_split_reset_descriptions() {
         .find(|bucket| bucket.name == "Claude And GPT Models - Weekly")
         .expect("Claude and GPT weekly quota");
     assert_eq!(claude_weekly.used_percent, 93.0);
-    assert!(
-        claude_weekly
-            .reset_description
-            .as_deref()
-            .is_some_and(|description| description.contains("2d 20h"))
-    );
+    assert!(claude_weekly
+        .reset_description
+        .as_deref()
+        .is_some_and(|description| description.contains("2d 20h")));
     assert_eq!(
         snapshot
             .buckets

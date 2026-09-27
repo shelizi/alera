@@ -6,7 +6,9 @@ use crate::ssh_bootstrap::SshTargetBootstrapProgress;
 #[tokio::test]
 async fn stale_ssh_bootstrap_progress_is_not_broadcast() {
     let dir = tempfile::tempdir().unwrap();
-    let history = TerminalHostHistoryRepository::open(dir.path()).await.unwrap();
+    let history = TerminalHostHistoryRepository::open(dir.path())
+        .await
+        .unwrap();
     let runtime_store = RuntimeStore::open(dir.path()).await.unwrap();
     let (inbox, _rx) = mpsc::unbounded_channel();
     let (handle, mut out_rx) = ClientHandle::test_channels();

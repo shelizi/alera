@@ -19,6 +19,8 @@ use crate::terminal_host::server::{DisconnectReason, ServerCommand};
 #[derive(Debug, Clone)]
 pub enum ClientFrame {
     Budgeted {
+        // Read only by the Internet relay writer, which the portable privacy build does not start.
+        #[allow(dead_code)]
         reservation: Arc<super::client_budget::FrameReservation>,
         frame: Box<ClientFrame>,
     },

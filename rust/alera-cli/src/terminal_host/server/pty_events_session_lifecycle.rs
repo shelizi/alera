@@ -95,11 +95,7 @@ impl ServerActor {
         self.flush_all_output(session_id);
         if let Some(mut session) = self.sessions.remove(session_id) {
             session
-                .terminate(
-                    true,
-                    &self.history,
-                    self.config.scrollback_bytes as usize,
-                )
+                .terminate(true, &self.history, self.config.scrollback_bytes as usize)
                 .await;
         }
         self.broadcast_workspace_tabs_changed(Some(&workspace_id));

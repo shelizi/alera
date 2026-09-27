@@ -37,8 +37,9 @@ impl ServerActor {
                         client_id,
                         request_id,
                     } => Some((*client_id, *request_id)),
-                    DispatchInstallOrigin::Coordinator { .. }
-                    | DispatchInstallOrigin::Internal => None,
+                    DispatchInstallOrigin::Coordinator { .. } | DispatchInstallOrigin::Internal => {
+                        None
+                    }
                 };
                 if inject {
                     if request_target
@@ -201,10 +202,7 @@ impl ServerActor {
         };
         self.client_write(
             client_id,
-            error_response(
-                request_id,
-                &HostError::state("dispatch context superseded"),
-            ),
+            error_response(request_id, &HostError::state("dispatch context superseded")),
         );
     }
 }

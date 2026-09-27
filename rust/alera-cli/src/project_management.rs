@@ -96,7 +96,7 @@ pub async fn commit_project_registration(
     for project in store.list_projects().await? {
         if paths_equal(&project.repo_path, &prepared.canonical_path) {
             let branch = (project.kind == ProjectKind::GitRepository)
-                .then(|| prepared.branch.as_deref())
+                .then_some(prepared.branch.as_deref())
                 .flatten();
             let main_workspace = ensure_main_workspace(store, &project, branch).await?;
             return Ok(ProjectRegistration {

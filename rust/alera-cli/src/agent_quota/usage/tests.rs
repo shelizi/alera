@@ -4,8 +4,8 @@ use chrono::{Local, TimeZone};
 use serde_json::json;
 
 use super::aggregation::UsageAggregator;
-use super::pricing::{PricingState, parse_rate_table};
-use super::transcripts::{CodexScanState, parse_claude_line, parse_codex_line};
+use super::pricing::{parse_rate_table, PricingState};
+use super::transcripts::{parse_claude_line, parse_codex_line, CodexScanState};
 use super::*;
 
 #[test]
@@ -55,18 +55,16 @@ fn parses_and_deduplicates_claude_usage() {
 #[test]
 fn codex_uses_deltas_and_drops_fork_history() {
     let mut state = CodexScanState::default();
-    assert!(
-        parse_codex_line(
-            &json!({
-                "timestamp": "2026-08-10T12:00:00Z",
-                "type": "session_meta",
-                "payload": {"id": "child", "forked_from_id": "parent"}
-            })
-            .to_string(),
-            &mut state
-        )
-        .is_none()
-    );
+    assert!(parse_codex_line(
+        &json!({
+            "timestamp": "2026-08-10T12:00:00Z",
+            "type": "session_meta",
+            "payload": {"id": "child", "forked_from_id": "parent"}
+        })
+        .to_string(),
+        &mut state
+    )
+    .is_none());
     parse_codex_line(
         &json!({
             "timestamp": "2026-08-10T12:00:00.010Z",

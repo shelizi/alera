@@ -22,17 +22,15 @@ mod path_identities;
 mod manager;
 
 #[cfg(test)]
-use watcher::event_is_relevant;
-pub(super) use watcher::WorkspacePulseWatcher;
+pub(super) use manager::TerminalPulseRule;
+pub(super) use manager::{PendingTerminalPulseConfiguration, TerminalPulseManager};
 #[cfg(test)]
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(test)]
 use std::sync::Arc;
-pub(super) use manager::{
-    PendingTerminalPulseConfiguration, TerminalPulseManager,
-};
 #[cfg(test)]
-pub(super) use manager::TerminalPulseRule;
+use watcher::event_is_relevant;
+pub(super) use watcher::WorkspacePulseWatcher;
 
 pub(super) const TERMINAL_PULSE_PAYLOAD_KEY: &str = "terminalPulse";
 const DEFAULT_DELAY_MS: u64 = 2_000;

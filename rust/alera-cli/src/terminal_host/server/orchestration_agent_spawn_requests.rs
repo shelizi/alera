@@ -394,6 +394,7 @@ impl ServerActor {
         true
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) async fn coordinator_spawn_predispatched_worker(
         &mut self,
         run_id: &str,

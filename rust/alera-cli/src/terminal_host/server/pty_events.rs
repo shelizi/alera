@@ -127,7 +127,9 @@ impl ServerActor {
                 Err(_) => return,
             };
             if let Some(dispatch) = dispatch {
-                let _ = runtime_store.record_orchestration_activity(&dispatch.id).await;
+                let _ = runtime_store
+                    .record_orchestration_activity(&dispatch.id)
+                    .await;
             }
         };
         if let Err(error) = self.deferred_admission.schedule(

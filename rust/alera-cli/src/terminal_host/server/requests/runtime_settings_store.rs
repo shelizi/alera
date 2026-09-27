@@ -72,7 +72,7 @@ impl<'a> RuntimeSettingsStoreHandler<'a> {
                 {
                     Some(value) => {
                         write_runtime_metadata(
-                            &mut *transaction,
+                            &mut transaction,
                             "settings.general.workspaceDirectory",
                             value,
                             &updated_at,
@@ -81,7 +81,7 @@ impl<'a> RuntimeSettingsStoreHandler<'a> {
                     }
                     None => {
                         delete_runtime_metadata(
-                            &mut *transaction,
+                            &mut transaction,
                             "settings.general.workspaceDirectory",
                         )
                         .await?;
@@ -90,7 +90,7 @@ impl<'a> RuntimeSettingsStoreHandler<'a> {
             }
             if let Some(value) = update.confirm_project_removal {
                 write_runtime_metadata(
-                    &mut *transaction,
+                    &mut transaction,
                     "settings.general.confirmProjectRemoval",
                     if value { "true" } else { "false" },
                     &updated_at,
@@ -99,7 +99,7 @@ impl<'a> RuntimeSettingsStoreHandler<'a> {
             }
             if let Some(value) = update.confirm_workspace_removal {
                 write_runtime_metadata(
-                    &mut *transaction,
+                    &mut transaction,
                     "settings.general.confirmWorkspaceRemoval",
                     if value { "true" } else { "false" },
                     &updated_at,
@@ -108,7 +108,7 @@ impl<'a> RuntimeSettingsStoreHandler<'a> {
             }
             if let Some(value) = update.auto_archive_workspaces_after_days {
                 write_runtime_metadata(
-                    &mut *transaction,
+                    &mut transaction,
                     "settings.general.autoArchiveWorkspacesAfterDays",
                     &value.to_string(),
                     &updated_at,
@@ -123,7 +123,7 @@ impl<'a> RuntimeSettingsStoreHandler<'a> {
                 {
                     Some(value) => {
                         write_runtime_metadata(
-                            &mut *transaction,
+                            &mut transaction,
                             "settings.agents.defaultAgentProfileId",
                             value,
                             &updated_at,
@@ -132,7 +132,7 @@ impl<'a> RuntimeSettingsStoreHandler<'a> {
                     }
                     None => {
                         delete_runtime_metadata(
-                            &mut *transaction,
+                            &mut transaction,
                             "settings.agents.defaultAgentProfileId",
                         )
                         .await?;
@@ -142,7 +142,7 @@ impl<'a> RuntimeSettingsStoreHandler<'a> {
             if let Some(value) = &update.agent_status_hooks {
                 let encoded = serde_json::to_string(value).map_err(state_error)?;
                 write_runtime_metadata(
-                    &mut *transaction,
+                    &mut transaction,
                     "settings.agents.agentStatusHooks",
                     &encoded,
                     &updated_at,
@@ -153,7 +153,7 @@ impl<'a> RuntimeSettingsStoreHandler<'a> {
                 let encoded =
                     serde_json::to_string(&value.clone().normalized()).map_err(state_error)?;
                 write_runtime_metadata(
-                    &mut *transaction,
+                    &mut transaction,
                     "settings.agents.quotas",
                     &encoded,
                     &updated_at,
@@ -163,7 +163,7 @@ impl<'a> RuntimeSettingsStoreHandler<'a> {
             if let Some(value) = &update.mobile_push_notifications {
                 let encoded = serde_json::to_string(value).map_err(state_error)?;
                 write_runtime_metadata(
-                    &mut *transaction,
+                    &mut transaction,
                     "settings.mobile.pushNotifications",
                     &encoded,
                     &updated_at,
@@ -174,7 +174,7 @@ impl<'a> RuntimeSettingsStoreHandler<'a> {
                 let encoded =
                     serde_json::to_string(&value.clone().normalized()).map_err(state_error)?;
                 write_runtime_metadata(
-                    &mut *transaction,
+                    &mut transaction,
                     "settings.aiTextGeneration",
                     &encoded,
                     &updated_at,
@@ -185,7 +185,7 @@ impl<'a> RuntimeSettingsStoreHandler<'a> {
                 let encoded =
                     serde_json::to_string(&value.clone().normalized()).map_err(state_error)?;
                 write_runtime_metadata(
-                    &mut *transaction,
+                    &mut transaction,
                     "settings.textActions",
                     &encoded,
                     &updated_at,
@@ -195,7 +195,7 @@ impl<'a> RuntimeSettingsStoreHandler<'a> {
             if let Some(value) = &update.automation {
                 let encoded = serde_json::to_string(value).map_err(state_error)?;
                 write_runtime_metadata(
-                    &mut *transaction,
+                    &mut transaction,
                     "settings.automation",
                     &encoded,
                     &updated_at,
@@ -204,7 +204,7 @@ impl<'a> RuntimeSettingsStoreHandler<'a> {
             }
             if update.has_settings() {
                 write_runtime_metadata(
-                    &mut *transaction,
+                    &mut transaction,
                     RUNTIME_SETTINGS_REVISION_KEY,
                     &next_revision.to_string(),
                     &updated_at,

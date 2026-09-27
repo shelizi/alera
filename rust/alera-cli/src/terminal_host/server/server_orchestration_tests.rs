@@ -9,7 +9,9 @@ use alera_core::runtime::{
 #[tokio::test]
 async fn run_stop_clears_persisted_run_without_in_memory_ticker() {
     let dir = tempfile::tempdir().unwrap();
-    let history = TerminalHostHistoryRepository::open(dir.path()).await.unwrap();
+    let history = TerminalHostHistoryRepository::open(dir.path())
+        .await
+        .unwrap();
     let runtime_store = RuntimeStore::open(dir.path()).await.unwrap();
     let run = runtime_store
         .create_orchestration_coordinator_run("coordinate", Some("coord"), 1000)
@@ -86,7 +88,9 @@ async fn run_stop_clears_persisted_run_without_in_memory_ticker() {
 #[tokio::test]
 async fn terminal_exit_fails_active_orchestration_dispatch() {
     let dir = tempfile::tempdir().unwrap();
-    let history = TerminalHostHistoryRepository::open(dir.path()).await.unwrap();
+    let history = TerminalHostHistoryRepository::open(dir.path())
+        .await
+        .unwrap();
     let runtime_store = RuntimeStore::open(dir.path()).await.unwrap();
     let task = runtime_store
         .create_orchestration_task(NewOrchestrationTask {
@@ -176,7 +180,9 @@ async fn terminal_exit_fails_active_orchestration_dispatch() {
 #[tokio::test]
 async fn host_dispose_fails_active_orchestration_dispatch() {
     let dir = tempfile::tempdir().unwrap();
-    let history = TerminalHostHistoryRepository::open(dir.path()).await.unwrap();
+    let history = TerminalHostHistoryRepository::open(dir.path())
+        .await
+        .unwrap();
     let runtime_store = RuntimeStore::open(dir.path()).await.unwrap();
     let task = runtime_store
         .create_orchestration_task(NewOrchestrationTask {
@@ -290,7 +296,9 @@ async fn host_dispose_fails_active_orchestration_dispatch() {
 #[tokio::test]
 async fn coordinator_does_not_spawn_worker_tab_for_cli_only_client() {
     let dir = tempfile::tempdir().unwrap();
-    let history = TerminalHostHistoryRepository::open(dir.path()).await.unwrap();
+    let history = TerminalHostHistoryRepository::open(dir.path())
+        .await
+        .unwrap();
     let runtime_store = RuntimeStore::open(dir.path()).await.unwrap();
     runtime_store
         .create_orchestration_task(NewOrchestrationTask {

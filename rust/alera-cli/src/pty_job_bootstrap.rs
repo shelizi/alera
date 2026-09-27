@@ -49,11 +49,11 @@ fn run_inner() -> Result<i32, String> {
     // This process is already attached to ConPTY and its Job Object. The shell
     // must inherit both, so CREATE_NO_WINDOW from the normal command boundary
     // is intentionally not applicable here.
-    #[allow(clippy::disallowed_methods)]
     let resolved =
         alera_core::process_shell::resolve_windows_executable(&request.shell, None, None);
-    let is_batch = resolved.to_lowercase().ends_with(".cmd")
-        || resolved.to_lowercase().ends_with(".bat");
+    let is_batch =
+        resolved.to_lowercase().ends_with(".cmd") || resolved.to_lowercase().ends_with(".bat");
+    #[allow(clippy::disallowed_methods)]
     let mut command = if is_batch {
         let mut cmd = Command::new("cmd.exe");
         cmd.args(["/c", &resolved]);

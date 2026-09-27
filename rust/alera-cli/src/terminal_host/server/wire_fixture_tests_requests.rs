@@ -94,7 +94,7 @@ pub(super) async fn next_frame(receiver: &mut UnboundedReceiver<ClientFrame>) ->
 /// compares field-for-field.
 pub(super) fn pin_fixture_placeholders(actual: &mut Value, fixture: &Value, paths: &[&str]) {
     for path in paths {
-        let mut expected = &*fixture;
+        let mut expected = fixture;
         let mut slot = &mut *actual;
         for segment in path.split('.') {
             expected = expected

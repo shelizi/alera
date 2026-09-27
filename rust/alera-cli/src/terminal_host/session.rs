@@ -222,13 +222,7 @@ impl Session {
             .map_err(|error| HostError::state(format!("PTY setup worker failed: {error}")))??
         };
         #[cfg(not(windows))]
-        let spawned = spawn_pty(
-            launch.clone(),
-            id.clone(),
-            &working_directory,
-            cols,
-            rows,
-        )?;
+        let spawned = spawn_pty(launch.clone(), id.clone(), &working_directory, cols, rows)?;
         let SpawnedPty {
             child,
             master,

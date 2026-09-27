@@ -5,6 +5,8 @@ use tokio::sync::oneshot;
 use crate::terminal_host::client::ClientHandle;
 
 use crate::terminal_host::protocol::event;
+// Kept for re-enabling the Internet relay; the portable privacy build does not start it.
+#[allow(unused_imports)]
 use crate::terminal_host::relay_runtime;
 
 use super::{client_delivery, ClientKind, ClientState, ServerActor, ServerCommand};

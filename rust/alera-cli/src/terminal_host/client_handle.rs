@@ -67,6 +67,8 @@ impl ClientHandle {
         })
     }
 
+    // Kept for re-enabling cloud services; the portable privacy build does not call it.
+    #[allow(dead_code)]
     pub(crate) fn with_budget(mut self, budget: client_budget::ClientBudget) -> Self {
         self.budget = Some(budget);
         self

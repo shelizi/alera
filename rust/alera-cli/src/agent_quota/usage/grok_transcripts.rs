@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use super::transcripts::{UsageRecord, positive_int};
+use super::transcripts::{positive_int, UsageRecord};
 use super::{UsageProvider, UsageRequest, UsageSourceConfig, UsageTokenTotals};
 
 pub(super) fn grok_usage_source(

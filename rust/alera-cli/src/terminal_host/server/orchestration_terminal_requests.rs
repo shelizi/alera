@@ -208,11 +208,7 @@ impl ServerActor {
             return Ok(false);
         };
         session
-            .terminate(
-                true,
-                &self.history,
-                self.config.scrollback_bytes as usize,
-            )
+            .terminate(true, &self.history, self.config.scrollback_bytes as usize)
             .await;
         Ok(true)
     }

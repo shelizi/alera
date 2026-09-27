@@ -12,9 +12,7 @@ impl RuntimeStore {
             workspace_directory: self.get_workspace_directory().await?,
             confirm_project_removal: self.confirm_project_removal().await?,
             confirm_workspace_removal: self.confirm_workspace_removal().await?,
-            auto_archive_workspaces_after_days: self
-                .auto_archive_workspaces_after_days()
-                .await?,
+            auto_archive_workspaces_after_days: self.auto_archive_workspaces_after_days().await?,
             default_agent_profile_id: self.default_agent_profile_id().await?,
             agent_status_hooks: self.agent_status_hook_settings().await?,
             agent_quotas: self.agent_quota_settings().await?,

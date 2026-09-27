@@ -13,10 +13,14 @@ use super::{account_requests, push_delivery, runtime_mutations, ClientKind, Disc
 /// Messages processed serially by the single server actor. Every state mutation
 /// happens here, which keeps session/client transitions deterministic.
 pub enum ServerCommand {
+    // The Relay* variants are kept for re-enabling cloud services; the
+    // portable privacy build never constructs them.
+    #[allow(dead_code)]
     RelayActivity {
         generation: u64,
         at: chrono::DateTime<chrono::Utc>,
     },
+    #[allow(dead_code)]
     RelayStatus {
         generation: u64,
         payload: Value,
@@ -26,6 +30,7 @@ pub enum ServerCommand {
         handle: ClientHandle,
         kind: ClientKind,
     },
+    #[allow(dead_code)]
     RelayClientConnected {
         id: u64,
         handle: ClientHandle,
@@ -35,6 +40,7 @@ pub enum ServerCommand {
         id: u64,
         line: String,
     },
+    #[allow(dead_code)]
     RelayClientLine {
         id: u64,
         line: String,

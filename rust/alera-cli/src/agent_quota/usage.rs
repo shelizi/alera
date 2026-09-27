@@ -15,18 +15,18 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use chrono::{NaiveDate, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use self::aggregation::UsageAggregator;
 use self::grok_transcripts::{grok_usage_source, parse_grok_line};
-use self::pricing::{PricingState, RateTable, load_rates};
+use self::pricing::{load_rates, PricingState, RateTable};
 use self::transcripts::{
-    CodexScanState, UsageRecord, might_carry_usage, parse_claude_line, parse_codex_line,
+    might_carry_usage, parse_claude_line, parse_codex_line, CodexScanState, UsageRecord,
 };
-use super::{ClaudeProfileRequest, home_dir, shell_environment_value};
+use super::{home_dir, shell_environment_value, ClaudeProfileRequest};
 
 const MAX_WINDOW_DAYS: i64 = 90;
 const MTIME_SLACK_MILLIS: i64 = 36 * 60 * 60 * 1000;

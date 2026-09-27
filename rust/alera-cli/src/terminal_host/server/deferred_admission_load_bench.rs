@@ -73,7 +73,7 @@ fn wait_stats(samples: &[WaitSample]) -> WaitStats {
     assert!(!samples.is_empty());
     let mut values: Vec<f64> = samples.iter().map(|sample| sample.wait_ms).collect();
     values.sort_by(f64::total_cmp);
-    let p90_index = (values.len() * 90 + 99) / 100 - 1;
+    let p90_index = (values.len() * 90).div_ceil(100) - 1;
     WaitStats {
         min_ms: values[0],
         median_ms: median(&values),

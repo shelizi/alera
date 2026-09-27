@@ -227,12 +227,10 @@ mod tests {
             migrated.provider_defaults_version,
             CURRENT_PROVIDER_DEFAULTS_VERSION
         );
-        assert!(
-            migrated
-                .enabled_providers
-                .iter()
-                .any(|provider| provider == "devin")
-        );
+        assert!(migrated
+            .enabled_providers
+            .iter()
+            .any(|provider| provider == "devin"));
     }
 
     #[test]
@@ -244,12 +242,10 @@ mod tests {
         .expect("current settings");
         let normalized = settings.normalized();
 
-        assert!(
-            !normalized
-                .enabled_providers
-                .iter()
-                .any(|provider| provider == "devin")
-        );
+        assert!(!normalized
+            .enabled_providers
+            .iter()
+            .any(|provider| provider == "devin"));
     }
 
     #[test]
@@ -283,16 +279,12 @@ mod tests {
 
     #[test]
     fn default_quota_providers_use_canonical_agy_id() {
-        assert!(
-            RuntimeAgentQuotaSettings::default()
-                .enabled_providers
-                .contains(&"agy".to_string())
-        );
-        assert!(
-            !RuntimeAgentQuotaSettings::default()
-                .enabled_providers
-                .contains(&"antigravity".to_string())
-        );
+        assert!(RuntimeAgentQuotaSettings::default()
+            .enabled_providers
+            .contains(&"agy".to_string()));
+        assert!(!RuntimeAgentQuotaSettings::default()
+            .enabled_providers
+            .contains(&"antigravity".to_string()));
     }
 
     #[test]
