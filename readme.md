@@ -11,7 +11,7 @@
 
 <p align="center">
   <strong>The native, performance-first agentic development environment.</strong><br/>
-  Run Claude Code, Codex, Grok Build, Amp, Antigravity, OpenCode, Copilot, Cursor, fx or any other CLI agent side-by-side, each in its own Git worktree, all tracked in one place.<br/>
+  Run Claude Code, Codex, Grok Build, Amp, Antigravity, OpenCode, Copilot, Cursor, Devin, fx or any other CLI agent side-by-side, each in its own Git worktree, all tracked in one place.<br/>
   Built with <strong>Flutter + Rust + Ghostty</strong>. No Electron. No bundled Chromium. Available for <strong>macOS, Windows, and Linux</strong>.
 </p>
 
@@ -47,7 +47,8 @@ Alera takes the opposite bet:
 - **Native performance.** Flutter for a fast, consistent desktop UI. Rust for the PTY and process layer (`portable_pty`). Ghostty's VTE engine for terminal parsing. No Electron, no embedded browser, no JS event loop in the hot path
 - **See what your agents are doing.** Lifecycle hooks for the most popular CLI agents stream their activity into Alera so you can tell, at a glance, which terminals are idle, working, or waiting on you
 - **Take attention with you.** Optional Alera accounts and Firebase push can notify a subscribed phone when an agent waits, blocks, or reaches an orchestration decision, even after the desktop UI closes
-- **Track agent quotas.** A bottom status bar shows local or remote quota usage for Claude Code and CCS profiles, Codex, Kimi, Grok Build, Antigravity, MiniMax, and Z.ai
+- **Track agent quotas.** A bottom status bar shows local or remote quota usage for Claude Code and CCS profiles, Codex, Cursor, Devin, OpenCode, Kimi, Grok Build, Antigravity, MiniMax, and Z.ai
+- **Edit code with language intelligence.** A built-in editor with go to definition, implementations, and references for C#, Dart, Go, PHP, Python, Rust, TypeScript, and JavaScript, plus one-click handoff to Zed or VS Code
 - **See what they cost.** A Resource Manager in the status bar attributes live CPU and memory to each project, workspace, and terminal tab, so you can tell which agent is eating the machine
 - **Never lose a terminal again.** Terminal sessions persist across restarts. Close the app, reboot the machine, come back, and your scrollback, processes, and layout are still there
 
@@ -67,10 +68,11 @@ Alera works with **any CLI agent**. The agents below ship with first-class integ
   <a href="https://docs.github.com/en/copilot/how-tos/set-up/install-copilot-cli"><kbd><img src="assets/agents/copilot.svg" width="16" valign="middle" /> GitHub Copilot</kbd></a> &nbsp;
   <a href="https://pi.dev"><kbd><img src="assets/agents/pi.svg" width="16" valign="middle" /> Pi</kbd></a> &nbsp;
   <a href="https://x.ai/cli"><kbd><img src="assets/agents/grok.png" width="16" valign="middle" /> Grok Build</kbd></a> &nbsp;
+  <a href="https://devin.ai"><kbd><img src="assets/agents/devin.svg" width="16" valign="middle" /> Devin</kbd></a> &nbsp;
   <a href="https://fx.sh"><kbd><img src="assets/agents/fx.svg" width="16" valign="middle" /> fx</kbd></a>
 </p>
 
-Anything else that runs in a terminal (Gemini CLI, Goose, Kimi, Crush, Continue, Aider, your own scripts) works out of the box. Activity tracking is incrementally rolling out per agent.
+OpenCode v1 and OpenCode 2 are separate agent types that can run side by side. Anything else that runs in a terminal (Gemini CLI, Goose, Kimi, Crush, Continue, Aider, your own scripts) works out of the box. Activity tracking is incrementally rolling out per agent.
 
 ---
 
@@ -88,17 +90,19 @@ Group workspaces by project, keep a flat list, or organize them into custom **Se
 
 Every workspace is a worktree. Less branch juggling, fewer "wait, what was I working on?" moments. Switching contexts is instant, and your agents never collide on the same files.
 
+Worktrees created outside Alera (from the Git CLI or another tool) are detected and imported as workspaces automatically, and branch or path changes stay in sync. Idle workspaces can be put to sleep to release their terminals, and workspaces with no open tabs, no running agent, and no activity for 30 days (configurable, or off) are archived into a per-project **Archived** section. Pinned and default workspaces are never archived.
+
 ### 🤖 Multi-agent terminals
 
-Open multiple terminals per workspace, organised in tabs. Run Claude Code in one, Codex in another, Amp in a third, all in parallel and all visible at the same time. Each terminal is a full PTY backed by Rust (`portable_pty`) and parsed by Ghostty's VTE.
+Open multiple terminals per workspace, organised in tabs. Run Claude Code in one, Codex in another, Amp in a third, all in parallel and all visible at the same time. Each terminal is a full PTY backed by Rust (`portable_pty`) and parsed by Ghostty's VTE. The new-tab menu lists the agent CLIs detected on your machine, and sidebar rows and project headers show per-state agent counts.
 
 ### 📡 Live agent activity tracking
 
-Managed lifecycle hooks for Claude, Codex, Grok Build, Amp, OpenCode, Antigravity, Cursor, Copilot, Pi and fx stream agent events into Alera. You can see which agents are **idle, working, or waiting on input** without staring at every terminal.
+Managed lifecycle hooks for Claude, Codex, Grok Build, Amp, OpenCode, Antigravity, Cursor, Copilot, Pi, Devin and fx stream agent events into Alera. You can see which agents are **idle, working, or waiting on input** without staring at every terminal.
 
 ### 📊 Agent quota tracking
 
-A bottom status bar keeps provider quota usage in sight while agents run: Claude Code and CCS profiles, Codex, Kimi, Grok Build, Antigravity, MiniMax, and Z.ai, resolved locally or remotely. Hover for the detailed breakdown, and know before an agent stalls that you're about to hit a limit.
+A bottom status bar keeps provider quota usage in sight while agents run: Claude Code and CCS profiles, Codex, Cursor, Devin, OpenCode, Kimi, Grok Build, Antigravity, MiniMax, and Z.ai, resolved locally or remotely. Hover for the detailed breakdown, and know before an agent stalls that you're about to hit a limit.
 
 ### 🧮 Resource Manager
 
@@ -114,19 +118,31 @@ Close Alera. Reboot. Reopen. Your terminals, their scrollback, their layouts, an
 
 ### 🎨 Terminal customization
 
-Per-terminal configuration: font, size, theme, behaviour. Built on top of the same engine that powers Ghostty for predictable, high-fidelity rendering.
+Per-terminal configuration: font, size, theme, behaviour, and output refresh rate (5-120 fps). Built on top of the same engine that powers Ghostty for predictable, high-fidelity rendering. On Windows, PowerShell 7 is detected from standard install locations, Scoop, and `PATH`, with a custom path override. Alera asks before closing a tab that still has running processes or agents, and any terminal tab can be reopened in a native terminal (Windows Terminal or Git Bash, Terminal.app, or `x-terminal-emulator`).
 
 ### 🎙️ AI dictation
 
 Dictate into terminals, workspace prompts, Source Control, and pull request fields. Desktop can transcribe locally with checksum-verified Whisper models, through the experimental realtime API included with a Codex subscription, or through an OpenAI-compatible audio transcription API with a custom model and base URL. API tokens use the system credential store with a private mode-`0600` file fallback when the Linux keyring is unavailable, and Settings includes an integrated recording test. Mobile can use on-device Whisper, offline system recognition, call an OpenAI-compatible API directly with a token stored securely on the phone, or send reviewed audio to the paired runtime for Whisper, Codex subscription, or OpenAI-compatible transcription. Recordings can be reviewed before transcription, and completed transcripts can optionally be cleaned up or summarized through the selected AI Assist subscription.
 
+### 📝 Code editor & language intelligence
+
+Open and edit files in workspace tabs, with syntax highlighting for more than a hundred file types, in-file find and replace, comment toggling (`Mod+/`), optional autosave, and text encoding selection (UTF-8, UTF-16, Big5, GBK, Shift-JIS, EUC-JP, EUC-KR, Windows-1252, and more). Files changed on disk reload automatically when there are no unsaved edits, and `F5` reloads a document on demand.
+
+Language intelligence is opt-in per language and covers C#, Dart, Go, PHP, Python, Rust, TypeScript, and JavaScript. Tree-sitter parsing supplies symbols and folding, and a language server adds go to definition, `Mod`+click to implementations, and a References panel (`Shift+F12`). Language servers (`csharp-ls`, `gopls`, `pyrefly`, `ty`, `pyright`, `rust-analyzer`, `intelephense`, `typescript-language-server`) can be installed automatically at pinned, checksum-verified versions, and the status bar shows indexing progress with a Reindex action.
+
+### 🧭 External editors
+
+Prefer your own editor? Workspaces, explorer items, changed files, and pull request comment locations can open in **Zed** (default) or **VS Code**, jumping to the exact line. Set the default code-open target to Alera or the external editor, choose new-window or reuse-window mode, and optionally open every new workspace in the external editor automatically.
+
 ### 🗃️ File explorer, search & previews
 
-Browse workspace folders in a tree-based explorer with a git-ignored toggle and inline rename. Search and replace across the workspace with regex and include/exclude patterns. Preview Markdown, PDFs, Mermaid diagrams, and images in dedicated tabs, right next to your terminals.
+Browse workspace folders in a tree-based explorer with a file filter, a git-ignored toggle, a Windows hidden-items toggle, and inline rename. On Windows, copy and cut share the file clipboard with File Explorer. Quick Open can optionally index git-ignored files. Search and replace across the workspace with regex and include/exclude patterns. Preview Markdown, PDFs, Mermaid diagrams, and images in dedicated tabs, right next to your terminals.
 
 ### 🔀 Visual source control
 
-Review structured diffs side-by-side or unified, with per-file and aggregated views. Stage, commit, amend, stash, and discard visually, with AI-powered commit message suggestions. A collapsible commit history graph (with a draggable divider) shows HEAD and upstream at a glance, and submodules get lazy read-only status and diff inspection.
+Review structured diffs side-by-side or unified, with per-file and aggregated views, syntax highlighting, a full-file view, whitespace modes, and an overview ruler. The working-tree side of a side-by-side diff is editable and saves straight to disk. Stage, commit, amend, stash, and discard visually, with AI-powered commit message suggestions. Submodules get lazy read-only status and diff inspection.
+
+The commit graph opens as a main-area tab that walks all branches or a single branch perspective. Context menus on commits and refs cover checkout, cherry-pick, revert, reset (soft, mixed, hard), merge, rebase, tags, branch management, pull and push, and creating a new linked worktree from any commit or branch.
 
 ### ✅ Pull requests & checks
 
@@ -136,9 +152,13 @@ Work with pull requests and merge requests per worktree on GitHub, GitHub Enterp
 
 One codebase, three real desktops. Native window chrome, native keyboard shortcuts (⌘ on macOS, Ctrl elsewhere), dark-mode-first UI built on the Alera design system. No Electron, no embedded browser, no 400 MB install.
 
+### 🌐 Localized interface
+
+The app is available in English, Traditional Chinese, Simplified Chinese, and Japanese, following the system language by default or chosen explicitly in Settings.
+
 ### 🔄 Built-in update channel
 
-Stable and release-candidate update channels with a manual download flow today, signed automatic installs as platform trust requirements land.
+Stable and release-candidate update channels. Stable builds install updates automatically on macOS, Windows, and Linux tarball installations, verified through an Ed25519-signed manifest and per-artifact SHA-256. Package-manager installations update through their own manager instead. The app re-checks every 15 minutes while its window is visible.
 
 ### 📱 Mobile companion foundation
 
@@ -158,7 +178,7 @@ Alera is shipping fast. A non-exhaustive list of what's on the roadmap:
 
 - **SSH worktrees**: run agents on remote machines as if they were local
 - **Mobile live transport expansion**: add file review and non-terminal tab surfaces to the mobile app
-- **Code editing with LSP support**: full editing with language-server autocomplete and diagnostics
+- **Richer language intelligence**: completion, hover, rename, and diagnostics on top of today's navigation features
 - **Git conflict resolution**: resolve merge conflicts visually with AI-assisted three-way merge
 - **More forge & tracker integrations**: Additional git forges, Linear, and issue-tracker linking per worktree
 - **Automations, MCP management, skills, and more**
@@ -211,7 +231,7 @@ Requires 64-bit Windows. Or download `alera-<version>-windows.zip` from [GitHub 
 
 ### Updating
 
-Alera updates itself only when no package manager owns the installation. Under Homebrew or Scoop, **Settings → Updates** runs that manager's own upgrade and reopens Alera; under Chocolatey and on Linux it shows the command to run, because those upgrades need elevation or a dependency resolution Alera must not do itself.
+Alera updates itself only when no package manager owns the installation. Under Homebrew or Scoop, **Settings → Updates** runs that manager's own upgrade and reopens Alera. For apt, dnf, and Chocolatey installations it shows the upgrade command and offers **Run Update**, which runs it in a built-in terminal where you can answer a `sudo` password prompt, because those upgrades need elevation or a dependency resolution Alera must not do itself.
 
 ### Code signing policy
 
@@ -318,6 +338,8 @@ Want to contribute or hack on Alera locally? Start with:
 - `lib/src/features/projects`: project registry and project sidebar UI
 - `lib/src/features/workbench`: workspaces, tabs, split layouts, terminal runtime
 - `lib/src/features/agent_status`: agent lifecycle hooks and activity tracking
+- `lib/src/features/language_intelligence`: language servers, semantic navigation, and per-language extensions
+- `lib/src/features/external_editor`: Zed and VS Code launchers
 - `lib/src/features/updater`: update archive parsing and desktop updater integration
 - `lib/src/features/shell`: top-level application shell
 - `lib/src/design_system`: shared Alera UI components
