@@ -19,7 +19,7 @@ The `ghostty_vte` package names remain owned and published by the upstream proje
 | Package | Submodule | Fork branch | Notes |
 | --- | --- | --- | --- |
 | `ghostty_vte` | `third_party/dart_terminal` | `leynier/dart_terminal:next` | Existing SDK, bindings and native artifacts retained; upstream upgrade deferred |
-| `xterm2` | `third_party/xterm` | `leynier/xterm2:next` | Desktop and mobile renderer; see `third_party/xterm/ALERA_PATCHES.md` |
+| `xterm2` | `third_party/xterm` | `shelizi/xterm2:alera` | Desktop and mobile renderer; see `third_party/xterm/ALERA_PATCHES.md`. Carries three input and selection fixes on top of `leynier/xterm2:next` |
 
 `leynier/xterm.dart:next` retains the complete legacy fork history. It remains available and is not archived, but Alera no longer depends on it. The old upstream proposals [xterm.dart #227](https://github.com/TerminalStudio/xterm.dart/pull/227) and [dart_terminal #15](https://github.com/kingwill101/dart_terminal/pull/15) were closed without merging; their fork fixes are retained locally.
 
