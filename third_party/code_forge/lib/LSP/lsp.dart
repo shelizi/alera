@@ -7,6 +7,8 @@ import 'package:flutter/services.dart';
 
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import 'lsp_message_framer.dart';
+
 part 'lsp_socket.dart';
 part 'lsp_stdio.dart';
 

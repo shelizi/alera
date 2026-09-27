@@ -72,8 +72,14 @@ class LspStdioConfig extends LspConfig {
   final Map<String, String>? environment;
 
   late Process _process;
-  final _buffer = <int>[];
+  final _framer = LspMessageFramer();
+  StreamSubscription<List<int>>? _stdoutSubscription;
+  StreamSubscription<List<int>>? _stderrSubscription;
   Future<void> _sendTail = Future<void>.value();
+  // Large bodies decode in another isolate and can finish out of order, so
+  // delivery is chained to keep responses and notifications in wire order.
+  Future<void> _receiveTail = Future<void>.value();
+  bool _disposed = false;
 
   LspStdioConfig._({
     required this.executable,
@@ -178,10 +184,10 @@ class LspStdioConfig extends LspConfig {
       workingDirectory: workspacePath,
       runInShell: _requiresWindowsCommandShell(executable),
     );
-    _process.stdout.listen(_handleStdoutData);
+    _stdoutSubscription = _process.stdout.listen(_handleStdoutData);
     // Chunks can split a multi-byte character, and Windows servers may write
     // the console code page instead of UTF-8.
-    _process.stderr.listen(
+    _stderrSubscription = _process.stderr.listen(
       (data) => debugPrint(utf8.decode(data, allowMalformed: true)),
     );
   }
@@ -199,41 +205,25 @@ class LspStdioConfig extends LspConfig {
   Process get process => _process;
 
   void _handleStdoutData(List<int> data) {
-    _buffer.addAll(data);
-    while (_buffer.isNotEmpty) {
-      final headerEnd = _findHeaderEnd();
-      if (headerEnd == -1) return;
-      final header = utf8.decode(_buffer.sublist(0, headerEnd));
-      final contentLength = int.parse(
-        RegExp(r'Content-Length: (\d+)').firstMatch(header)?.group(1) ?? '0',
-      );
-      if (_buffer.length < headerEnd + 4 + contentLength) return;
-      final messageStart = headerEnd + 4;
-      final messageEnd = messageStart + contentLength;
-      final messageBytes = _buffer.sublist(messageStart, messageEnd);
-      _buffer.removeRange(0, messageEnd);
-      try {
-        final json = jsonDecode(utf8.decode(messageBytes));
-        _responseController.add(json);
-      } catch (e) {
-        throw FormatException(
-          'Invalid JSON message $e',
-          utf8.decode(messageBytes),
-        );
-      }
+    if (_disposed) return;
+    for (final body in _framer.add(data)) {
+      _receiveTail = _receiveTail.then((_) => _deliver(body));
     }
   }
 
-  int _findHeaderEnd() {
-    for (var i = 0; i <= _buffer.length - 4; i++) {
-      if (_buffer[i] == 13 &&
-          _buffer[i + 1] == 10 &&
-          _buffer[i + 2] == 13 &&
-          _buffer[i + 3] == 10) {
-        return i;
-      }
+  Future<void> _deliver(Uint8List body) async {
+    final Object? message;
+    try {
+      message = await decodeLspMessageBody(body);
+    } catch (e) {
+      debugPrint('Ignoring malformed language server message: $e');
+      return;
     }
-    return -1;
+    // A server that was just stopped still flushes its last output.
+    if (_disposed || _responseController.isClosed) return;
+    if (message is Map<String, dynamic>) {
+      _responseController.add(message);
+    }
   }
 
   @override
@@ -322,6 +312,9 @@ class LspStdioConfig extends LspConfig {
 
   @override
   void dispose() {
+    _disposed = true;
+    unawaited(_stdoutSubscription?.cancel());
+    unawaited(_stderrSubscription?.cancel());
     _process.kill();
     _responseController.close();
   }
