@@ -42,6 +42,22 @@ fn encode_binary_frame(kind: u8, payload: &[u8]) -> Vec<u8> {
     frame
 }
 
+// serde_json key order depends on whether `preserve_order` is unified in by
+// another workspace crate, so the JSON body is compared as a value while the
+// kind byte and length prefix are still checked byte for byte.
+fn assert_json_frame_matches_fixture(kind: u8, payload: &[u8], fixture_name: &str) {
+    let fixture = wire_fixture(fixture_name);
+    let expected = STANDARD
+        .decode(fixture["frameBase64"].as_str().unwrap())
+        .unwrap();
+    let actual = encode_binary_frame(kind, payload);
+    assert_eq!(actual[..5], expected[..5]);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&actual[5..]).unwrap(),
+        serde_json::from_slice::<Value>(&expected[5..]).unwrap()
+    );
+}
+
 #[tokio::test]
 async fn observe_binary_resync_and_terminal_control_order() {
     let dir = tempfile::tempdir().unwrap();
@@ -114,12 +130,10 @@ async fn observe_binary_resync_and_terminal_control_order() {
         &serde_json::from_slice::<Value>(&resync_payload).unwrap(),
         &wire_fixture("event.output_resync_required.json"),
     );
-    let resync_frame_fixture = wire_fixture("frame.output_resync_required.binary.json");
-    assert_eq!(
-        encode_binary_frame(resync_kind, &resync_payload),
-        STANDARD
-            .decode(resync_frame_fixture["frameBase64"].as_str().unwrap())
-            .unwrap()
+    assert_json_frame_matches_fixture(
+        resync_kind,
+        &resync_payload,
+        "frame.output_resync_required.binary.json",
     );
 
     let mut resume_request = wire_fixture("request.set_output_paused.resume.json");
@@ -132,12 +146,10 @@ async fn observe_binary_resync_and_terminal_control_order() {
         &resume,
         &wire_fixture("response.ok.output_resumed_snapshot.binary.json"),
     );
-    let resume_frame_fixture = wire_fixture("frame.output_resumed_snapshot.binary.json");
-    assert_eq!(
-        encode_binary_frame(resume_kind, &resume_payload),
-        STANDARD
-            .decode(resume_frame_fixture["frameBase64"].as_str().unwrap())
-            .unwrap()
+    assert_json_frame_matches_fixture(
+        resume_kind,
+        &resume_payload,
+        "frame.output_resumed_snapshot.binary.json",
     );
 
     let output_fixture = wire_fixture("terminal.output.binary.resync.json");
@@ -172,12 +184,10 @@ async fn observe_binary_resync_and_terminal_control_order() {
         &control,
         &wire_fixture("response.ok.empty.binary_interleaved.json"),
     );
-    let control_frame_fixture = wire_fixture("frame.empty.binary_interleaved.json");
-    assert_eq!(
-        encode_binary_frame(control_kind, &control_payload),
-        STANDARD
-            .decode(control_frame_fixture["frameBase64"].as_str().unwrap())
-            .unwrap()
+    assert_json_frame_matches_fixture(
+        control_kind,
+        &control_payload,
+        "frame.empty.binary_interleaved.json",
     );
     let output_frame = encode_binary_frame(output_kind, &output_payload);
     assert_eq!(

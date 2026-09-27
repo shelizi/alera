@@ -126,7 +126,10 @@ pub fn windowless_async_shell_command(
     #[cfg(windows)]
     let resolved = resolve_windows_executable(executable, working_directory, environment_path);
     #[cfg(not(windows))]
-    let resolved = executable.to_string();
+    let resolved = {
+        let _ = (working_directory, environment_path);
+        executable.to_string()
+    };
 
     match shell_invocation(&resolved, arguments) {
         ShellInvocation::Posix { program, arguments } => {
@@ -163,7 +166,10 @@ pub fn windowless_shell_command(
     #[cfg(windows)]
     let resolved = resolve_windows_executable(executable, working_directory, environment_path);
     #[cfg(not(windows))]
-    let resolved = executable.to_string();
+    let resolved = {
+        let _ = (working_directory, environment_path);
+        executable.to_string()
+    };
 
     match shell_invocation(&resolved, arguments) {
         ShellInvocation::Posix { program, arguments } => {

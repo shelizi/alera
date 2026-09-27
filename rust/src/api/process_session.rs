@@ -11,6 +11,7 @@ use std::process::Stdio;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
+#[cfg(windows)]
 use alera_core::child_process::windowless_async_command;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, Command};
