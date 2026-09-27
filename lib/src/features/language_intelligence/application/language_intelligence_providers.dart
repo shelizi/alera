@@ -1,6 +1,8 @@
 import 'package:alera/src/features/language_intelligence/infra/builtin_language_extensions.dart';
 import 'package:alera/src/features/language_intelligence/infra/code_forge_language_server_runtime.dart';
 import 'package:alera/src/features/language_intelligence/infra/code_forge_semantic_adapter_factory.dart';
+import 'package:alera/src/features/language_intelligence/infra/git_nested_worktree_locator.dart';
+import 'package:alera/src/shared/infra/git/git_providers.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart' show Provider;
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
@@ -29,6 +31,9 @@ final languageIntelligenceActivityProvider =
 LanguageServerRuntimePort languageServerRuntime(Ref ref) =>
     CodeForgeLanguageServerRuntime(
       activityReporter: ref.watch(languageIntelligenceActivityProvider),
+      nestedCheckouts: GitNestedWorktreeLocator(
+        ref.watch(gitBackendProvider).listWorktrees,
+      ),
     );
 
 @Riverpod(keepAlive: true)

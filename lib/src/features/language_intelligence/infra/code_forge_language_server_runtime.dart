@@ -10,10 +10,12 @@ import '../../../shared/infra/process/command_path_probe.dart';
 import '../application/language_intelligence_activity.dart';
 import '../application/language_server_runtime.dart';
 import '../application/managed_language_server_installer.dart';
+import '../application/workspace_nested_checkouts.dart';
 import '../domain/language_capability.dart';
 import '../domain/language_intelligence_settings.dart';
 import '../domain/language_provider_descriptor.dart';
 import 'managed_language_server_installer.dart';
+import 'nested_checkout_exclusion_settings.dart';
 
 typedef CodeForgeEnvironmentReader = Map<String, String> Function();
 typedef CodeForgeExecutableExists = bool Function(String path);
@@ -107,6 +109,7 @@ final class CodeForgeLanguageServerRuntime
     CodeForgeSupportDirectory? supportDirectory,
     ManagedLanguageServerInstallerPort? managedInstaller,
     LanguageIntelligenceActivityReporter? activityReporter,
+    WorkspaceNestedCheckoutsPort? nestedCheckouts,
     Duration shutdownTimeout = const Duration(seconds: 5),
   }) => CodeForgeLanguageServerRuntime._(
     environmentReader: environmentReader ?? _platformEnvironment,
@@ -122,6 +125,7 @@ final class CodeForgeLanguageServerRuntime
           executableExists: executableExists,
           activityReporter: activityReporter,
         ),
+    nestedCheckouts: nestedCheckouts,
     shutdownTimeout: shutdownTimeout,
   );
 
@@ -132,6 +136,7 @@ final class CodeForgeLanguageServerRuntime
     required this._transportFactory,
     required this._supportDirectory,
     required this._managedInstaller,
+    required this._nestedCheckouts,
     required this._shutdownTimeout,
   });
 
@@ -141,6 +146,7 @@ final class CodeForgeLanguageServerRuntime
   final CodeForgeLanguageServerTransportFactory _transportFactory;
   final CodeForgeSupportDirectory _supportDirectory;
   final ManagedLanguageServerInstallerPort _managedInstaller;
+  final WorkspaceNestedCheckoutsPort? _nestedCheckouts;
 
   /// A server busy indexing may never answer `shutdown`; the process is
   /// disposed regardless once this elapses.
@@ -239,6 +245,7 @@ final class CodeForgeLanguageServerRuntime
       throw StateError('Provider ${request.provider.id} has no languages.');
     }
     final initializationOptions = await _initializationOptionsFor(request);
+    final configurationSections = await _configurationSectionsFor(request);
 
     final transport = await _transportFactory(
       CodeForgeLanguageServerLaunchSpec(
@@ -258,6 +265,7 @@ final class CodeForgeLanguageServerRuntime
       transport,
       workspaceRoot: request.workspaceRoot,
       isWindows: _isWindows,
+      configurationSections: configurationSections,
       progressSink: progressController.sink,
     );
     try {
@@ -310,6 +318,25 @@ final class CodeForgeLanguageServerRuntime
       'storagePath': workspaceStorage.path,
       'globalStoragePath': globalStorage.path,
     };
+  }
+
+  Future<Map<String, Object?>> _configurationSectionsFor(
+    LanguageServerRuntimeStartRequest request,
+  ) async {
+    final locator = _nestedCheckouts;
+    if (locator == null) return const <String, Object?>{};
+    final List<String> nested;
+    try {
+      nested = await locator.nestedCheckouts(request.workspaceRoot);
+    } catch (_) {
+      // Not a git checkout, or git is unavailable: nothing to exclude.
+      return const <String, Object?>{};
+    }
+    return nestedCheckoutExclusionSections(
+      providerId: request.provider.id,
+      workspaceRoot: request.workspaceRoot,
+      nestedCheckouts: nested,
+    );
   }
 
   Future<Directory> _workspaceStorageDirectory({
@@ -440,6 +467,7 @@ final class CodeForgeLanguageServerRuntime
     CodeForgeLanguageServerTransport transport, {
     required String workspaceRoot,
     required bool isWindows,
+    required Map<String, Object?> configurationSections,
     required StreamSink<LanguageServerWorkProgress> progressSink,
   }) => transport.responses.listen((message) {
     final id = message['id'];
@@ -462,6 +490,7 @@ final class CodeForgeLanguageServerRuntime
         params: message['params'],
         workspaceRoot: workspaceRoot,
         isWindows: isWindows,
+        configurationSections: configurationSections,
       ),
     );
   });
@@ -496,19 +525,20 @@ final class CodeForgeLanguageServerRuntime
     required Object? params,
     required String workspaceRoot,
     required bool isWindows,
+    required Map<String, Object?> configurationSections,
   }) async {
     try {
       switch (method) {
         case 'workspace/configuration':
           final items = params is Map ? params['items'] : null;
-          final count = items is List ? items.length : 0;
           await transport.sendResponse(
             id: id,
-            result: List<Map<String, dynamic>>.generate(
-              count,
-              (_) => <String, dynamic>{},
-              growable: false,
-            ),
+            result: <Object?>[
+              if (items is List)
+                for (final item in items)
+                  configurationSections[item is Map ? item['section'] : null] ??
+                      <String, dynamic>{},
+            ],
           );
           return;
         case 'client/registerCapability':

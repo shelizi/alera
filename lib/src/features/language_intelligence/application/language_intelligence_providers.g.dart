@@ -103,7 +103,7 @@ final class LanguageServerRuntimeProvider
 }
 
 String _$languageServerRuntimeHash() =>
-    r'ea741be131156ac023ebd11e6332903fae9b4b02';
+    r'e80c517f9752ec8e60c46195934d5656dda0c702';
 
 @ProviderFor(languageSemanticAdapterFactory)
 final languageSemanticAdapterFactoryProvider =

@@ -5,6 +5,7 @@ import 'package:path/path.dart' as p;
 
 import 'package:alera/src/features/language_intelligence/application/language_server_runtime.dart';
 import 'package:alera/src/features/language_intelligence/application/managed_language_server_installer.dart';
+import 'package:alera/src/features/language_intelligence/application/workspace_nested_checkouts.dart';
 import 'package:alera/src/features/language_intelligence/domain/language_capability.dart';
 import 'package:alera/src/features/language_intelligence/domain/language_id.dart';
 import 'package:alera/src/features/language_intelligence/domain/language_intelligence_settings.dart';
@@ -310,6 +311,73 @@ void main() {
       },
     ]);
     await runtime.stop(session);
+  });
+
+  test('configuration requests exclude nested worktrees for servers that scan them', () async {
+    Map<String, dynamic> configurationRequest() => <String, dynamic>{
+      'jsonrpc': '2.0',
+      'id': 'config-1',
+      'method': 'workspace/configuration',
+      'params': <String, dynamic>{
+        'items': <Map<String, dynamic>>[
+          <String, dynamic>{'section': 'dart'},
+          <String, dynamic>{'section': 'dart.other'},
+        ],
+      },
+    };
+    final dart = LanguageProviderDescriptor(
+      id: 'dart.analysis-server',
+      kind: LanguageProviderKind.semanticServer,
+      languages: <LanguageId>{LanguageId('dart')},
+      capabilities: const <LanguageCapability>{LanguageCapability.hover},
+      processScope: LanguageProviderProcessScope.workspace,
+      launchPolicy: LanguageProviderLaunchPolicy.lazyOnDemand,
+      executableResolutionPolicy:
+          LanguageExecutableResolutionPolicy.explicitOverrideThenPath,
+      executableCandidates: const <String>['dart'],
+    );
+    final root = p.join(Directory.systemTemp.path, 'repo');
+    final nested = p.join(root, '.worktrees', 'feature');
+
+    Future<List<Map<String, dynamic>>> answer(
+      WorkspaceNestedCheckoutsPort locator,
+    ) async {
+      final transport = _FakeTransport(
+        initializationRequest: configurationRequest(),
+      );
+      final runtime = CodeForgeLanguageServerRuntime(
+        transportFactory: (_) async => transport,
+        nestedCheckouts: locator,
+      );
+      final session = await runtime.start(
+        LanguageServerRuntimeStartRequest(
+          provider: dart,
+          executable: 'dart',
+          workspaceRoot: root,
+          target: LanguageServerTarget.localWorkspace,
+        ),
+      );
+      await runtime.stop(session);
+      return transport.sentResponses;
+    }
+
+    expect(await answer(_FakeNestedCheckouts(<String>[nested])), [
+      {
+        'id': 'config-1',
+        'result': [
+          {
+            'analysisExcludedFolders': [nested],
+          },
+          <String, dynamic>{},
+        ],
+      },
+    ]);
+    expect(await answer(_FakeNestedCheckouts.failing()), [
+      {
+        'id': 'config-1',
+        'result': [<String, dynamic>{}, <String, dynamic>{}],
+      },
+    ]);
   });
 
   test('unknown server requests receive method-not-found responses', () async {
@@ -621,6 +689,20 @@ void main() {
     expect(transport.exitCalls, 1);
     expect(transport.disposeCalls, 1);
   });
+}
+
+final class _FakeNestedCheckouts implements WorkspaceNestedCheckoutsPort {
+  _FakeNestedCheckouts(this.paths) : fails = false;
+  _FakeNestedCheckouts.failing() : paths = const <String>[], fails = true;
+
+  final List<String> paths;
+  final bool fails;
+
+  @override
+  Future<List<String>> nestedCheckouts(String workspaceRoot) async {
+    if (fails) throw StateError('not a git repository');
+    return paths;
+  }
 }
 
 final class _FakeManagedInstaller
