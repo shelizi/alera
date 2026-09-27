@@ -30,6 +30,7 @@ final class LanguageServerSessionManager {
     required LanguageExtensionRegistry registry,
     required LanguageServerRuntimePort runtime,
     Duration idleShutdownDelay = const Duration(seconds: 30),
+    Duration prewarmReleaseDelay = const Duration(minutes: 5),
     Duration restartBackoff = const Duration(seconds: 1),
     int maxRestartAttempts = 2,
     LanguageServerDelay delay = _defaultDelay,
@@ -46,6 +47,7 @@ final class LanguageServerSessionManager {
       registry: registry,
       runtime: runtime,
       idleShutdownDelay: idleShutdownDelay,
+      prewarmReleaseDelay: prewarmReleaseDelay,
       restartBackoff: restartBackoff,
       maxRestartAttempts: maxRestartAttempts,
       delay: delay,
@@ -57,6 +59,7 @@ final class LanguageServerSessionManager {
     required this._registry,
     required this._runtime,
     required this._idleShutdownDelay,
+    required this._prewarmReleaseDelay,
     required this._restartBackoff,
     required this._maxRestartAttempts,
     required this._delay,
@@ -66,6 +69,11 @@ final class LanguageServerSessionManager {
   final LanguageExtensionRegistry _registry;
   final LanguageServerRuntimePort _runtime;
   final Duration _idleShutdownDelay;
+
+  /// Leaving a workspace releases its prewarm lease. A cold start re-indexes
+  /// the whole workspace, so switching back within this window must reuse the
+  /// running servers instead of paying that cost on every switch.
+  final Duration _prewarmReleaseDelay;
   final Duration _restartBackoff;
   final int _maxRestartAttempts;
   final LanguageServerDelay _delay;
@@ -215,7 +223,7 @@ final class LanguageServerSessionManager {
     }
 
     final idleGeneration = ++record.idleGeneration;
-    unawaited(_stopAfterIdle(record, idleGeneration));
+    unawaited(_stopAfterIdle(record, idleGeneration, _idleShutdownDelay));
   }
 
   Future<void> disableProvider({
@@ -463,8 +471,9 @@ final class LanguageServerSessionManager {
   Future<void> _stopAfterIdle(
     _LanguageServerSessionRecord record,
     int idleGeneration,
+    Duration idleDelay,
   ) async {
-    await _delay(_idleShutdownDelay);
+    await _delay(idleDelay);
     if (idleGeneration != record.idleGeneration || record.hasDemand) {
       return;
     }
@@ -636,7 +645,7 @@ final class LanguageServerSessionManager {
       return;
     }
     final idleGeneration = ++record.idleGeneration;
-    unawaited(_stopAfterIdle(record, idleGeneration));
+    unawaited(_stopAfterIdle(record, idleGeneration, _prewarmReleaseDelay));
   }
 
   void _report(_LanguageServerSessionRecord record) =>

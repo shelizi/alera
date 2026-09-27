@@ -175,6 +175,40 @@ void main() {
     },
   );
 
+  test('returning to a workspace inside the prewarm release window reuses its server', () async {
+    final delay = _ControlledDelay();
+    final manager = LanguageServerSessionManager(
+      registry: registry,
+      runtime: runtime,
+      idleShutdownDelay: const Duration(seconds: 30),
+      prewarmReleaseDelay: const Duration(minutes: 5),
+      delay: delay.call,
+    );
+    final settings = _enabledSettings(rust);
+    Future<void> prewarm() => manager.prewarmLanguage(
+      workspaceId: 'workspace-a',
+      workspaceRoot: r'C:\repo',
+      language: rust,
+      settings: settings,
+      target: LanguageServerTarget.localWorkspace,
+    );
+
+    await prewarm();
+    manager.releaseWorkspacePrewarm('workspace-a');
+    expect(delay.requested.single, const Duration(minutes: 5));
+
+    await prewarm();
+    delay.completeNext();
+    await _flushAsync();
+
+    expect(runtime.startCalls, 1);
+    expect(runtime.stopCalls, 0);
+    expect(
+      manager.snapshotFor('workspace-a', 'rust-semantic').state,
+      LanguageServerSessionState.ready,
+    );
+  });
+
   test(
     'enabled language falls back to its declared default semantic provider',
     () async {
@@ -627,12 +661,14 @@ final class _FakeLanguageServerRuntime
 
 final class _ControlledDelay {
   final List<Completer<void>> _pending = <Completer<void>>[];
+  final List<Duration> requested = <Duration>[];
 
   int get pending => _pending.where((item) => !item.isCompleted).length;
 
-  Future<void> call(Duration _) {
+  Future<void> call(Duration duration) {
     final completer = Completer<void>();
     _pending.add(completer);
+    requested.add(duration);
     return completer.future;
   }
 
