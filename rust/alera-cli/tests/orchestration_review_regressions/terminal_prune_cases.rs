@@ -197,18 +197,31 @@ fn terminal_prune_removes_unloaded_retained_spawn_and_history() {
             .connect_with(options)
             .await
             .unwrap();
-        let checkpoints: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM checkpoints WHERE sessionId = ?")
-                .bind("retained-worker")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-        let chunks: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM outputChunks WHERE sessionId = ?")
-                .bind("retained-worker")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-        assert_eq!((checkpoints, chunks), (0, 0));
+        // History deletion is write-behind, so the prune response does not
+        // prove the rows are gone yet.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let checkpoints: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM checkpoints WHERE sessionId = ?")
+                    .bind("retained-worker")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            let chunks: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM outputChunks WHERE sessionId = ?")
+                    .bind("retained-worker")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            if (checkpoints, chunks) == (0, 0) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "history rows remained after prune: {:?}",
+                (checkpoints, chunks)
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
     });
 }

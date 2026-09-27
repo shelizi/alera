@@ -133,7 +133,11 @@ fn agent_profile_cli_manages_the_complete_catalog() {
         ],
     );
     assert!(!stale.status.success());
-    assert!(String::from_utf8_lossy(&stale.stderr).contains("revision conflict"));
+    let stale_stderr = String::from_utf8_lossy(&stale.stderr);
+    assert!(
+        stale_stderr.contains("revision conflict"),
+        "stale update stderr: {stale_stderr}"
+    );
 
     let reordered = success_json(
         temp.path(),

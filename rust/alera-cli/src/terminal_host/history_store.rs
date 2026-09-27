@@ -326,14 +326,18 @@ impl TerminalHostHistoryStore {
     }
 
     pub async fn delete(&self, session_id: &str) -> Result<()> {
+        // One transaction, so a reader never sees the chunks gone while the
+        // checkpoint that would restore the session still exists.
+        let mut transaction = self.pool.begin().await?;
         sqlx::query("DELETE FROM outputChunks WHERE sessionId = ?")
             .bind(session_id)
-            .execute(&self.pool)
+            .execute(&mut *transaction)
             .await?;
         sqlx::query("DELETE FROM checkpoints WHERE sessionId = ?")
             .bind(session_id)
-            .execute(&self.pool)
+            .execute(&mut *transaction)
             .await?;
+        transaction.commit().await?;
         Ok(())
     }
 
