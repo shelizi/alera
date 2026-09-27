@@ -538,6 +538,16 @@ fn init_repo() -> (TempDir, Repository) {
     let mut options = RepositoryInitOptions::new();
     options.initial_head("main");
     let repo = Repository::init_opts(path, &options).expect("initialize repository");
+    // Reverts commit through the repository's configured identity, which CI
+    // runners and containers do not provide globally.
+    let mut config = repo.config().expect("open repository config");
+    config
+        .set_str("user.name", "Alera Tests")
+        .expect("set user.name");
+    config
+        .set_str("user.email", "tests@alera.build")
+        .expect("set user.email");
+    drop(config);
     fs::write(path.join("README.md"), "initial\n").expect("write README");
     fs::write(path.join("tracked.txt"), "initial\n").expect("write tracked file");
     let mut index = repo.index().expect("open index");

@@ -427,7 +427,7 @@ fn runtime_hook_receiver_detects_every_enabled_agent() {
         ("agy", "PreInvocation", "Stop"),
         ("opencode", "SessionBusy", "SessionIdle"),
         ("opencode2", "SessionBusy", "SessionIdle"),
-        ("pi", "agent_start", "agent_end"),
+        ("pi", "agent_start", "agent_settled"),
         ("amp", "session.start", "agent.end"),
         ("grok", "UserPromptSubmit", "Stop"),
     ]

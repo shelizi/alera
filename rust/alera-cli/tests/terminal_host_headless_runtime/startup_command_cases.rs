@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::json;
 
-use super::{connect, post_hook_for_terminal, read_response, send, spawn_host, workspace_payload};
+use super::{connect, read_response, send, spawn_host, workspace_payload};
 
 #[test]
 #[cfg(unix)]
@@ -456,7 +456,10 @@ fn wait_for_tab_state(
 fn report_fx_idle(runtime_dir: &std::path::Path, session_id: &str) {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
+    use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::UnixStream;
+
+    use serde_json::Value;
 
     let direct = runtime_dir.join("fx-herdr.sock");
     let socket_path = if direct.to_string_lossy().len() <= 90 {
