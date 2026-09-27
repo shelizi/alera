@@ -273,6 +273,7 @@ fn remints_session_from_disk_after_restart_with_prior_scrollback() {
         let detached = read_message(&mut reader);
         assert_eq!(detached["id"], json!(2));
         assert_eq!(detached["ok"], json!(true));
+        wait_for_persisted_exit_output(dir.path(), "s1", "AFTER");
     }
 
     std::fs::remove_file(&control_path).ok();
