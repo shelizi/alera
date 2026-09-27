@@ -79,7 +79,7 @@ fn run_with_environment_mode(
     })
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(super) fn run_without_parent_environment_for_tests(
     executable: String,
     arguments: Vec<String>,

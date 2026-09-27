@@ -1257,6 +1257,9 @@ mod tests {
         let workspace = tempfile::tempdir().expect("tempdir");
         let hidden_path = workspace.path().join("hidden.txt");
         fs::write(&hidden_path, "hidden").expect("write hidden file");
+        // Test fixture: it runs from a console, so the console-window
+        // suppression in `alera_core::child_process` does not apply.
+        #[allow(clippy::disallowed_methods)]
         let status = Command::new("attrib")
             .arg("+H")
             .arg(&hidden_path)
@@ -1290,6 +1293,7 @@ mod tests {
         {
             use std::process::Command;
 
+            #[allow(clippy::disallowed_methods)]
             let status = Command::new("attrib")
                 .arg("+H")
                 .arg(&hidden_path)

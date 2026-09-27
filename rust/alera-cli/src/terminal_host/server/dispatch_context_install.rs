@@ -56,6 +56,9 @@ pub(super) enum DispatchInstallOrigin {
 
 /// What the actor resumes once the context file lands. Every continuation
 /// carries the state it needs because the install happens off the actor.
+// One short-lived value per context install, so boxing the large variant buys
+// nothing; the size difference only crosses the lint threshold on some targets.
+#[allow(clippy::large_enum_variant)]
 pub(super) enum DispatchContextContinuation {
     /// `orchestration.dispatch` (also inject-mode `agentSpawn`): inject the
     /// preamble when asked, then answer the parked request.

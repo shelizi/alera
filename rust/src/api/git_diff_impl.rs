@@ -923,7 +923,7 @@ fn flush_full_file_side_by_side_changes(
 }
 
 fn parse_hunk_raw_line_starts(text: &str) -> Option<(u32, u32)> {
-    let mut parts = text.strip_prefix("@@")?.trim_start().split_whitespace();
+    let mut parts = text.strip_prefix("@@")?.split_whitespace();
     Some((
         parse_hunk_raw_side_start(parts.next()?, '-')?,
         parse_hunk_raw_side_start(parts.next()?, '+')?,
@@ -988,7 +988,7 @@ fn flush_side_by_side_changes(
 }
 
 fn parse_hunk_line_starts(text: &str) -> Option<(Option<u32>, Option<u32>)> {
-    let mut parts = text.strip_prefix("@@")?.trim_start().split_whitespace();
+    let mut parts = text.strip_prefix("@@")?.split_whitespace();
     let old_range = parts.next()?;
     let new_range = parts.next()?;
     Some((

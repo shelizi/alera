@@ -498,8 +498,10 @@ mod tests {
         assert_eq!(i32::from_le_bytes(bytes[16..20].try_into().unwrap()), 1);
 
         let values = bytes[20..]
-            .chunks_exact(2)
-            .map(|bytes| u16::from_le_bytes([bytes[0], bytes[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|bytes| u16::from_le_bytes(*bytes))
             .collect::<Vec<_>>();
         let expected = [r"C:\one.txt", r"D:\two"]
             .into_iter()

@@ -94,8 +94,7 @@ fn decode_utf16(bytes: &[u8], little_endian: bool) -> Result<String, WorkspaceFi
     if !bytes.len().is_multiple_of(2) {
         return Err(unsupported_encoding("invalid UTF-16 byte length"));
     }
-    let units = bytes.chunks_exact(2).map(|chunk| {
-        let pair = [chunk[0], chunk[1]];
+    let units = bytes.as_chunks::<2>().0.iter().map(|&pair| {
         if little_endian {
             u16::from_le_bytes(pair)
         } else {

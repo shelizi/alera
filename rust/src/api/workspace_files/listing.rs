@@ -21,6 +21,7 @@ pub(super) enum HideIgnoredDirectoryKind {
     Unknown,
 }
 
+#[cfg(test)]
 pub(super) fn list_workspace_children(
     workspace_path: String,
     relative_path: String,
