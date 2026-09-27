@@ -385,7 +385,7 @@ fn runtime_hook_receiver_detects_every_enabled_agent() {
         .join("agent-runtime-homes/claude/home/settings.json");
     let grok_hooks = test_home.join(".grok/hooks/alera-status.json");
     for integration in [
-        dir.path().join("agent-runtime-homes/codex/home/hooks.json"),
+        test_home.join(".codex/hooks.json"),
         claude_settings.clone(),
         test_home.join(".copilot/hooks/alera.json"),
         test_home.join(".gemini/config/hooks.json"),

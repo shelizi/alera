@@ -262,14 +262,7 @@ fn orchestration_fx_rearms_its_bootstrap_once_per_restarted_pty() {
         .to_string();
 
     wait_for_file(&ready);
-    post_hook_for_terminal(
-        dir.path(),
-        "fx",
-        "Idle",
-        &session_id,
-        "fx-workspace",
-        &session_id,
-    );
+    report_fx_idle(dir.path(), &session_id);
     wait_for_occurrences(
         &marker,
         "You have an active Alera orchestration dispatch",
@@ -291,14 +284,7 @@ fn orchestration_fx_rearms_its_bootstrap_once_per_restarted_pty() {
         tab.payload["pendingAgentPrompt"] = json!({"agent": "fx", "prompt": prompt});
         store.upsert_workspace_tab(tab).await.unwrap();
     });
-    post_hook_for_terminal(
-        dir.path(),
-        "fx",
-        "Idle",
-        &session_id,
-        "fx-workspace",
-        &session_id,
-    );
+    report_fx_idle(dir.path(), &session_id);
     // Two 500ms deferred-submit windows plus margin: a duplicate accepted by
     // the PTY queue must have reached the recorder before this assertion.
     std::thread::sleep(Duration::from_millis(1_200));
@@ -362,27 +348,13 @@ fn orchestration_fx_rearms_its_bootstrap_once_per_restarted_pty() {
     let (_restarted_guard, restarted_port) = spawn_host(dir.path(), token);
     let (_restarted_writer, _restarted_reader) = connect(restarted_port, token);
     wait_for_file(&ready);
-    post_hook_for_terminal(
-        dir.path(),
-        "fx",
-        "Idle",
-        &session_id,
-        "fx-workspace",
-        &session_id,
-    );
+    report_fx_idle(dir.path(), &session_id);
     wait_for_occurrences(
         &marker,
         "You have an active Alera orchestration dispatch",
         2,
     );
-    post_hook_for_terminal(
-        dir.path(),
-        "fx",
-        "Idle",
-        &session_id,
-        "fx-workspace",
-        &session_id,
-    );
+    report_fx_idle(dir.path(), &session_id);
     std::thread::sleep(Duration::from_millis(1_200));
     assert_eq!(
         occurrence_count(&marker, "You have an active Alera orchestration dispatch"),
@@ -476,4 +448,43 @@ fn wait_for_tab_state(
         request_id += 1;
         std::thread::sleep(Duration::from_millis(25));
     }
+}
+
+/// fx reports its state over the runtime's herdr socket rather than the HTTP
+/// hook route, so the test drives the same path a real fx session uses.
+#[cfg(unix)]
+fn report_fx_idle(runtime_dir: &std::path::Path, session_id: &str) {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    use std::os::unix::net::UnixStream;
+
+    let direct = runtime_dir.join("fx-herdr.sock");
+    let socket_path = if direct.to_string_lossy().len() <= 90 {
+        direct
+    } else {
+        let mut hasher = DefaultHasher::new();
+        runtime_dir.hash(&mut hasher);
+        std::env::temp_dir().join(format!("alera-fx-herdr-{:016x}.sock", hasher.finish()))
+    };
+    let mut stream = UnixStream::connect(&socket_path).unwrap();
+    let request = json!({
+        "id": 1,
+        "method": "pane.report_agent",
+        "params": {
+            "pane_id": session_id,
+            "source": "custom:fx",
+            "agent": "fx",
+            "state": "idle"
+        }
+    });
+    writeln!(stream, "{request}").unwrap();
+    stream.flush().unwrap();
+    let mut response = String::new();
+    BufReader::new(stream).read_line(&mut response).unwrap();
+    let response: Value = serde_json::from_str(&response).unwrap();
+    assert_eq!(
+        response["result"],
+        json!({}),
+        "fx report failed: {response}"
+    );
 }
