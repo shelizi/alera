@@ -211,6 +211,9 @@ fn remints_session_from_disk_after_restart_with_prior_scrollback() {
         let detached = read_message(&mut reader);
         assert_eq!(detached["id"], json!(2));
         assert_eq!(detached["ok"], json!(true));
+        // History is write-behind, so the detach response does not prove the
+        // output reached SQLite. Wait for it before killing host A.
+        wait_for_persisted_exit_output(dir.path(), "s1", "SECOND");
         // Dropping _guard kills host A, leaving the checkpoint on disk.
     }
 
@@ -308,4 +311,59 @@ fn remints_session_from_disk_after_restart_with_prior_scrollback() {
         first < second && second < after,
         "scrollback order: {snapshot}"
     );
+}
+
+/// Polls the runtime's history database until the exit checkpoint and the
+/// expected output are durable, so killing the host cannot lose them.
+fn wait_for_persisted_exit_output(runtime_dir: &std::path::Path, session_id: &str, marker: &str) {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let database = runtime_dir.join("terminal_history.sqlite");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    runtime.block_on(async {
+        loop {
+            assert!(
+                Instant::now() < deadline,
+                "history never persisted {marker:?} for {session_id}"
+            );
+            if database.exists()
+                && persisted_exit_output_contains(&database, session_id, marker).await
+            {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    });
+}
+
+async fn persisted_exit_output_contains(
+    database: &std::path::Path,
+    session_id: &str,
+    marker: &str,
+) -> bool {
+    let options = sqlx::sqlite::SqliteConnectOptions::new().filename(database);
+    let Ok(pool) = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(options)
+        .await
+    else {
+        return false;
+    };
+    let exited: Option<i64> =
+        sqlx::query_scalar("SELECT COUNT(*) FROM checkpoints WHERE sessionId = ? AND running = 0")
+            .bind(session_id)
+            .fetch_one(&pool)
+            .await
+            .ok();
+    let chunks: Vec<Vec<u8>> =
+        sqlx::query_scalar("SELECT data FROM outputChunks WHERE sessionId = ? ORDER BY sequence")
+            .bind(session_id)
+            .fetch_all(&pool)
+            .await
+            .unwrap_or_default();
+    pool.close().await;
+    let output = String::from_utf8_lossy(&chunks.concat()).into_owned();
+    exited == Some(1) && output.contains(marker)
 }
