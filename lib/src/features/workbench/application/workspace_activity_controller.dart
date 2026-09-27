@@ -16,9 +16,10 @@ abstract interface class WorkbenchWorkspaceActivityRecorder {
   void recordActivity(String workspaceId, DateTime at);
 }
 
-/// Tracks the last discrete activity timestamp per workspace (agent state
-/// transitions, terminal lifecycle) and persists it with a debounce. State is
-/// the in-memory map used by the Agent Activity sort as its recency fallback.
+/// Tracks the last discrete activity timestamp per workspace (opening it,
+/// terminal input, agent state transitions, terminal lifecycle) and persists
+/// it with a debounce. State is the in-memory map that orders the Recent sort
+/// and breaks ties in the Agent Activity sort.
 @Riverpod(keepAlive: true)
 class WorkspaceActivityController extends _$WorkspaceActivityController
     implements WorkbenchWorkspaceActivityRecorder {

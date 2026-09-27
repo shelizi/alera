@@ -19,8 +19,8 @@ part 'workbench_listing_sort.dart';
 /// Builds the flat list of rows the sidebar should render for the current
 /// [state]. Pure function - easy to unit test.
 ///
-/// [lastActivityByWorkspaceId] supplies the persisted recency fallback for the
-/// Agent Activity sort. [acknowledgedCompletions] maps a terminal session id
+/// [lastActivityByWorkspaceId] supplies the persisted activity times that order
+/// the Recent sort and break ties in the Agent Activity sort. [acknowledgedCompletions] maps a terminal session id
 /// to the completion epoch the user has viewed, splitting done runs into the
 /// read and unread buckets.
 List<WorkbenchSidebarRow> buildSidebarRows(

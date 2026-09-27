@@ -8,7 +8,10 @@ class XtermTerminalRuntime._(
   final TerminalSessionCleanup? _terminalSessionCleanup,
   final bool _parserWorkerEnabled,
   final bool _snapshotHydrationProfilingEnabled,
-) implements TerminalRuntime, TerminalRuntimeSessionOwnerHost {
+) implements
+    TerminalRuntime,
+    TerminalRuntimeSessionOwnerHost,
+    TerminalRuntimeUserInputSource {
   factory({
     TerminalPtySessionFactory? ptySessionFactory,
     TerminalSettings? initialSettings,
@@ -68,6 +71,9 @@ class XtermTerminalRuntime._(
 
   final StreamController<TerminalRuntimeExitEvent> _exitController =
       StreamController<TerminalRuntimeExitEvent>.broadcast();
+  final StreamController<String> _userInputController =
+      StreamController<String>.broadcast();
+  final Map<String, DateTime> _lastUserInputAt = <String, DateTime>{};
   late final TerminalRuntimeSessionOwner _sessionOwner =
       TerminalRuntimeSessionOwner(this);
 
@@ -76,6 +82,9 @@ class XtermTerminalRuntime._(
 
   @override
   Stream<TerminalRuntimeExitEvent> get exits => _exitController.stream;
+
+  @override
+  Stream<String> get userInputWorkspaceIds => _userInputController.stream;
 
   void updateSettings(TerminalSettings settings) {
     _settings = settings;
@@ -130,7 +139,21 @@ class XtermTerminalRuntime._(
       _snapshotHydrationProfilingEnabled,
       owner._handleSessionExit,
       owner._handleVisibilityChanged,
+      _handleUserInput,
     );
+  }
+
+  void _handleUserInput(String workspaceId) {
+    final now = DateTime.now();
+    final last = _lastUserInputAt[workspaceId];
+    if (last != null &&
+        now.difference(last) < terminalUserInputActivityInterval) {
+      return;
+    }
+    _lastUserInputAt[workspaceId] = now;
+    if (!_userInputController.isClosed) {
+      _userInputController.add(workspaceId);
+    }
   }
 
   void _handleSessionExit(TerminalRuntimeExitEvent event) {
@@ -161,6 +184,7 @@ class XtermTerminalRuntime._(
   void dispose() {
     _sessionOwner.dispose();
     unawaited(_exitController.close());
+    unawaited(_userInputController.close());
   }
 
   @override

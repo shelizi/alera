@@ -5,6 +5,7 @@ List<Workspace> _sortSidebarWorkspaces(
   required WorkbenchSortBy sortBy,
   required bool pinMainOnRecent,
   required AgentActivityRank? Function(Workspace) activityOf,
+  required DateTime Function(Workspace) lastActivityOf,
 }) {
   final sorted = List<Workspace>.from(workspaces);
   switch (sortBy) {
@@ -20,7 +21,7 @@ List<Workspace> _sortSidebarWorkspaces(
         if (pinMainOnRecent && a.isMain != b.isMain) {
           return a.isMain ? -1 : 1;
         }
-        return b.updatedAt.compareTo(a.updatedAt);
+        return lastActivityOf(b).compareTo(lastActivityOf(a));
       });
     case WorkbenchSortBy.activity:
       final subtreeActivity = aggregateAgentActivityBySubtree(
@@ -50,6 +51,7 @@ List<Project> _sortSidebarProjects(
   required Iterable<Workspace> Function(String projectId) workspacesFor,
   required bool Function(Project, Workspace) workspaceVisible,
   required AgentActivityRank? Function(Workspace) activityOf,
+  required DateTime Function(Workspace) lastActivityOf,
 }) {
   final sorted = List<Project>.from(projects);
   switch (sortBy) {
@@ -58,7 +60,19 @@ List<Project> _sortSidebarProjects(
         (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
       );
     case WorkbenchSortBy.recent:
-      sorted.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+      final latest = <String, DateTime>{};
+      for (final project in sorted) {
+        var value = project.updatedAt;
+        for (final workspace in workspacesFor(project.id)) {
+          if (!workspaceVisible(project, workspace)) {
+            continue;
+          }
+          final at = lastActivityOf(workspace);
+          if (at.isAfter(value)) value = at;
+        }
+        latest[project.id] = value;
+      }
+      sorted.sort((a, b) => latest[b.id]!.compareTo(latest[a.id]!));
     case WorkbenchSortBy.activity:
       final rank = <String, AgentActivityRank?>{};
       for (final project in sorted) {

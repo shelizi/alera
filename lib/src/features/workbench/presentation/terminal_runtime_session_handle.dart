@@ -12,6 +12,7 @@ class _XtermTerminalSessionHandle(
   final bool _snapshotHydrationProfilingEnabled,
   final void Function(TerminalRuntimeExitEvent event) _onExit,
   this._onVisibilityChanged,
+  final void Function(String workspaceId) _onUserInput,
 ) extends TerminalSessionHandle
     with _TerminalSearchSessionSupport, _TerminalSessionCapabilitiesSupport
     implements
@@ -369,7 +370,9 @@ class _XtermTerminalSessionHandle(
     if (_disposed || !_running || _ptySession == null) {
       return false;
     }
-    return _launchInputOwner.submitText(this, text);
+    final submitted = _launchInputOwner.submitText(this, text);
+    if (submitted) _onUserInput(_workspace.id);
+    return submitted;
   }
 
   @override

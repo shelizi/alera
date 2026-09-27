@@ -33,6 +33,33 @@ void _registerTerminalSurfaceComposerSubmitTests() {
     }
   });
 
+  testWidgets('submission reports user input once per activity interval', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+    try {
+      final runtime = XtermTerminalRuntime(
+        ptySessionFactory: _FakeDeferredEnterTerminalPtySessionFactory(),
+        shellLaunchesBuilder: _testShellLaunches,
+      );
+      addTearDown(runtime.dispose);
+      final reported = <String>[];
+      final subscription = runtime.userInputWorkspaceIds.listen(reported.add);
+      addTearDown(subscription.cancel);
+      final workspace = _workspace();
+      final session = runtime.sessionFor(workspace: workspace, tab: _tab());
+
+      await session.ensureStarted();
+      await session.submitText('First prompt');
+      await session.submitText('Second prompt');
+      await tester.pump();
+
+      expect(reported, <String>[workspace.id]);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
   testWidgets(
     'fallback submit drops Enter when the session is disposed early',
     (tester) async {

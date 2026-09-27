@@ -8,23 +8,26 @@ part of 'workspace_activity_controller.dart';
 
 // GENERATED CODE - DO NOT MODIFY BY HAND
 // ignore_for_file: type=lint, type=warning
-/// Tracks the last discrete activity timestamp per workspace (agent state
-/// transitions, terminal lifecycle) and persists it with a debounce. State is
-/// the in-memory map used by the Agent Activity sort as its recency fallback.
+/// Tracks the last discrete activity timestamp per workspace (opening it,
+/// terminal input, agent state transitions, terminal lifecycle) and persists
+/// it with a debounce. State is the in-memory map that orders the Recent sort
+/// and breaks ties in the Agent Activity sort.
 
 @ProviderFor(WorkspaceActivityController)
 final workspaceActivityControllerProvider =
     WorkspaceActivityControllerProvider._();
 
-/// Tracks the last discrete activity timestamp per workspace (agent state
-/// transitions, terminal lifecycle) and persists it with a debounce. State is
-/// the in-memory map used by the Agent Activity sort as its recency fallback.
+/// Tracks the last discrete activity timestamp per workspace (opening it,
+/// terminal input, agent state transitions, terminal lifecycle) and persists
+/// it with a debounce. State is the in-memory map that orders the Recent sort
+/// and breaks ties in the Agent Activity sort.
 final class WorkspaceActivityControllerProvider
     extends
         $NotifierProvider<WorkspaceActivityController, Map<String, DateTime>> {
-  /// Tracks the last discrete activity timestamp per workspace (agent state
-  /// transitions, terminal lifecycle) and persists it with a debounce. State is
-  /// the in-memory map used by the Agent Activity sort as its recency fallback.
+  /// Tracks the last discrete activity timestamp per workspace (opening it,
+  /// terminal input, agent state transitions, terminal lifecycle) and persists
+  /// it with a debounce. State is the in-memory map that orders the Recent sort
+  /// and breaks ties in the Agent Activity sort.
   WorkspaceActivityControllerProvider._()
     : super(
         from: null,
@@ -55,9 +58,10 @@ final class WorkspaceActivityControllerProvider
 String _$workspaceActivityControllerHash() =>
     r'eb6e673fad1abb873f95971a162227deac3c95cc';
 
-/// Tracks the last discrete activity timestamp per workspace (agent state
-/// transitions, terminal lifecycle) and persists it with a debounce. State is
-/// the in-memory map used by the Agent Activity sort as its recency fallback.
+/// Tracks the last discrete activity timestamp per workspace (opening it,
+/// terminal input, agent state transitions, terminal lifecycle) and persists
+/// it with a debounce. State is the in-memory map that orders the Recent sort
+/// and breaks ties in the Agent Activity sort.
 
 abstract class _$WorkspaceActivityController
     extends $Notifier<Map<String, DateTime>> {

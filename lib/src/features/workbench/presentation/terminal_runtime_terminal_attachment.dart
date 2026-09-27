@@ -44,6 +44,9 @@ extension _XtermTerminalAttachment on _XtermTerminalSessionHandle {
   void _handleTerminalInput(String data) {
     _pump.markInteractiveInput();
     _ptySession?.writeBytes(utf8.encode(data));
+    // The emulator also answers terminal queries through this callback; an
+    // unfocused terminal cannot be receiving the user's keys or paste.
+    if (_focusNode.hasFocus) _onUserInput(_workspace.id);
   }
 
   void _handleTerminalOutput(String data) => _queueTerminalOutput(data);

@@ -383,6 +383,7 @@ class _WorkbenchSidebarRowBuilder(
       sortBy: prefs.workspaceSort,
       pinMainOnRecent: pinMainOnRecent,
       activityOf: _activityOf,
+      lastActivityOf: _lastActivityOf,
     );
   }
 
@@ -393,7 +394,17 @@ class _WorkbenchSidebarRowBuilder(
       workspacesFor: state.workspacesFor,
       workspaceVisible: _isWorkspaceVisible,
       activityOf: _activityOf,
+      lastActivityOf: _lastActivityOf,
     );
+  }
+
+  /// Opening a workspace, terminal input and agent transitions are recorded
+  /// as activity; creation and renames still count through `updatedAt`.
+  DateTime _lastActivityOf(Workspace workspace) {
+    final recorded = lastActivityByWorkspaceId[workspace.id];
+    return recorded != null && recorded.isAfter(workspace.updatedAt)
+        ? recorded
+        : workspace.updatedAt;
   }
 
   /// Runs are memoized per workspace: a workspace can render twice (pinned

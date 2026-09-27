@@ -220,6 +220,18 @@ void main() {
       expect(headers.last.project.name, 'alera');
     });
 
+    test('recent sort ranks a project by its latest workspace activity', () {
+      final prefs = WorkbenchViewPrefs.defaults.copyWith(projectSort: .recent);
+      final rows = buildSidebarRows(
+        _fixtureState(prefs: prefs),
+        lastActivityByWorkspaceId: <String, DateTime>{
+          'w-alera-main': _t0.add(const Duration(days: 10)),
+        },
+      );
+      final headers = rows.whereType<WorkbenchProjectHeaderRow>().toList();
+      expect(headers.map((row) => row.project.name), <String>['alera', 'orca']);
+    });
+
     test('search can match a workspace source branch', () {
       final rows = buildSidebarRows(_fixtureState(searchQuery: 'main'));
       final workspaces = rows.whereType<WorkbenchWorkspaceRow>().toList();
@@ -338,6 +350,26 @@ void main() {
           .toList();
       // alera-feature (offset 4) > orca-main (3) > alera-main (1)
       expect(ids, <String>['w-alera-feature', 'w-orca-main', 'w-alera-main']);
+    });
+
+    test('recent sort prefers recorded activity over updatedAt', () {
+      final prefs = WorkbenchViewPrefs.defaults.copyWith(
+        groupBy: .none,
+        workspaceSort: .recent,
+      );
+      final rows = buildSidebarRows(
+        _fixtureState(prefs: prefs),
+        lastActivityByWorkspaceId: <String, DateTime>{
+          'w-alera-main': _t0.add(const Duration(days: 10)),
+          // Older than its updatedAt, so creation or rename still wins.
+          'w-orca-main': _t0,
+        },
+      );
+      final ids = rows
+          .whereType<WorkbenchWorkspaceRow>()
+          .map((r) => r.workspace.id)
+          .toList();
+      expect(ids, <String>['w-alera-main', 'w-alera-feature', 'w-orca-main']);
     });
   });
 

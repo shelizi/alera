@@ -4,6 +4,7 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 export 'package:alera/src/features/workbench/application/terminal_runtime_focus.dart';
 export 'package:alera/src/features/workbench/application/terminal_runtime_lifecycle.dart';
+export 'package:alera/src/features/workbench/application/terminal_runtime_user_input.dart';
 
 part 'terminal_runtime_bindings.g.dart';
 

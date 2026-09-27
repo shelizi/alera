@@ -8,6 +8,7 @@ import 'package:alera/src/features/workbench/application/workbench_source_contro
 import 'package:alera/src/features/workbench/application/workbench_state.dart';
 import 'package:alera/src/features/workbench/application/workbench_workspace_selection_coordinator.dart';
 import 'package:alera/src/features/workbench/application/workbench_workspace_selection_hydrator.dart';
+import 'package:alera/src/features/workbench/application/workspace_activity_controller.dart';
 import 'package:alera/src/features/workbench/domain/workbench_layout.dart';
 import 'package:alera/src/features/workbench/domain/workbench_view_prefs.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
@@ -60,6 +61,9 @@ abstract interface class WorkbenchSelectionOwnerHost {
 
   /// Replaces the view preferences and persists them in the background.
   void updateViewPrefs(WorkbenchViewPrefs prefs);
+
+  /// Records that the user opened a workspace, for the Recent sort.
+  WorkbenchWorkspaceActivityRecorder get workspaceActivityRecorder;
 }
 
 /// Owns the selection and navigation slice of the workbench: which project,
@@ -100,6 +104,10 @@ final class WorkbenchSelectionOwner {
               project: project,
               workspace: workspace,
             ),
+          );
+          _host.workspaceActivityRecorder.recordActivity(
+            workspace.id,
+            DateTime.now().toUtc(),
           );
         },
         hydrate: ({required workspaceId, required ensureInitialTerminal}) =>

@@ -327,9 +327,24 @@ void terminalRuntimeExitCoordinator(Ref ref) {
     unawaited(closeExitedTerminalTab(event));
   });
 
+  final inputSource = runtime is TerminalRuntimeUserInputSource
+      ? runtime as TerminalRuntimeUserInputSource
+      : null;
+  final inputSubscription = inputSource?.userInputWorkspaceIds.listen((
+    workspaceId,
+  ) {
+    if (disposed || isCommandTerminalWorkspaceId(workspaceId)) {
+      return;
+    }
+    ref
+        .read(workspaceActivityControllerProvider.notifier)
+        .recordActivity(workspaceId, DateTime.now().toUtc());
+  });
+
   ref.onDispose(() {
     disposed = true;
     unawaited(subscription.cancel());
+    unawaited(inputSubscription?.cancel());
   });
 }
 
