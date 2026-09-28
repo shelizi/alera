@@ -11,8 +11,6 @@ on:
   push:
     branches:
       - main
-  schedule:
-    - cron: '30 5 * * *'
   workflow_dispatch:
 
 # Every commit is a data point, so superseded runs are not cancelled.
