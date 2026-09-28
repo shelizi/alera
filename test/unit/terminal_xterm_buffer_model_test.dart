@@ -23,14 +23,14 @@ void main() {
       expect(model.bufferLength, initial.bufferLength);
       expect(model.scrollBack, initial.scrollBack);
       expect(model.rowTexts, <String>['one', 'two', 'three', 'four']);
-      final firstRow = model.renderRows[0];
-      final secondRow = model.renderRows[1];
+      final firstRow = model.packedRows[0];
+      final secondRow = model.packedRows[1];
 
       final partial = await worker.writeBufferDelta('!');
       model.apply(partial);
       expect(model.rowTexts, <String>['one', 'two', 'three', 'four!']);
-      expect(identical(model.renderRows[0], firstRow), isTrue);
-      expect(identical(model.renderRows[1], secondRow), isTrue);
+      expect(identical(model.packedRows[0], firstRow), isTrue);
+      expect(identical(model.packedRows[1], secondRow), isTrue);
       expect(model.revision, partial.revision);
       expect(() => model.apply(partial), throwsStateError);
     },
@@ -47,12 +47,12 @@ void main() {
 
     model.apply(await worker.writeBufferDelta('one\r\ntwo\r\nthree'));
     final rowTexts = model.rowTexts;
-    final renderRows = model.renderRows;
+    final packedRows = model.packedRows;
 
     model.apply(await worker.writeBufferDelta('!'));
 
     expect(identical(model.rowTexts, rowTexts), isTrue);
-    expect(identical(model.renderRows, renderRows), isTrue);
+    expect(identical(model.packedRows, packedRows), isTrue);
     expect(model.rowTexts.last, 'three!');
   });
 
@@ -70,7 +70,7 @@ void main() {
       (index) => '${index + 1}',
     ).join('\r\n');
     model.apply(await worker.writeBufferDelta(initialText));
-    final oldSecondRow = model.renderRows[1];
+    final oldSecondRow = model.packedRows[1];
 
     final trimmed = await worker.writeBufferDelta('\r\n26');
     expect(trimmed.fullRepaint, isFalse);
@@ -80,7 +80,7 @@ void main() {
     expect(model.bufferLength, 25);
     expect(model.rowTexts.first, '2');
     expect(model.rowTexts.last, '26');
-    expect(identical(model.renderRows.first, oldSecondRow), isTrue);
+    expect(identical(model.packedRows.first, oldSecondRow), isTrue);
   });
 
   test('circular trims advance a logical mirror head', () async {
@@ -97,7 +97,7 @@ void main() {
     ).join('\r\n');
     model.apply(await worker.writeBufferDelta(initialText));
     final rowTexts = model.rowTexts;
-    final renderRows = model.renderRows;
+    final packedRows = model.packedRows;
 
     for (var line = 26; line <= 35; line++) {
       final delta = await worker.writeBufferDelta('\r\n$line');
@@ -110,7 +110,7 @@ void main() {
     expect(model.rowTexts.first, '11');
     expect(model.rowTexts.last, '35');
     expect(identical(model.rowTexts, rowTexts), isTrue);
-    expect(identical(model.renderRows, renderRows), isTrue);
+    expect(identical(model.packedRows, packedRows), isTrue);
   });
 
   test(
@@ -149,7 +149,7 @@ void main() {
     final model = TerminalXtermBufferModel();
 
     model.apply(await worker.writeBufferDelta('ready'));
-    final identities = List<Object>.from(model.renderRows);
+    final identities = List<Object>.from(model.packedRows);
     final escape = String.fromCharCode(27);
     final modes = await worker.writeBufferDelta('$escape[?2004h$escape[?1004h');
     expect(modes.rowDeltas, isEmpty);
@@ -158,7 +158,7 @@ void main() {
     expect(model.bracketedPaste, isTrue);
     expect(model.focusEvents, isTrue);
     for (var row = 0; row < model.bufferLength; row++) {
-      expect(identical(model.renderRows[row], identities[row]), isTrue);
+      expect(identical(model.packedRows[row], identities[row]), isTrue);
     }
   });
 
@@ -196,8 +196,8 @@ void main() {
 
     String? hyperlink;
     for (var row = 0; row < model.bufferLength && hyperlink == null; row++) {
-      for (var column = 0; column < model.renderRows[row].length; column++) {
-        if (model.renderRows[row][column].hyperlinkId == 0) continue;
+      for (var column = 0; column < model.rowLength(row); column++) {
+        if (model.hyperlinkIdAt(row, column) == 0) continue;
         hyperlink = model.hyperlinkAt(row, column);
         break;
       }

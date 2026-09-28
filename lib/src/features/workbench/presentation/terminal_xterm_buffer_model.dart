@@ -1,4 +1,5 @@
 import 'dart:collection';
+import 'dart:typed_data';
 
 import 'package:xterm2/core.dart';
 
@@ -78,6 +79,11 @@ final class _TerminalXtermHeadList<T extends Object> extends ListBase<T> {
   }
 }
 
+const int _packedCellWords = 3;
+const int _packedWidthWord = 0;
+const int _packedContentWord = 1;
+const int _packedHyperlinkWord = 2;
+
 final class _TerminalXtermBufferSearchLineId {
   const _TerminalXtermBufferSearchLineId({
     required this.generation,
@@ -128,16 +134,19 @@ final class TerminalXtermBufferModel implements TerminalSearchSource {
       const <TerminalXtermWorkerEffect>[];
   final _TerminalXtermHeadList<String> _rowTexts =
       _TerminalXtermHeadList<String>();
-  final _TerminalXtermHeadList<List<TerminalXtermWorkerRenderCell>>
-  _renderRows = _TerminalXtermHeadList<List<TerminalXtermWorkerRenderCell>>();
+  // One packed row per buffer line rather than one object per cell: a full
+  // scrollback held ~10k x cols cell objects on the UI isolate, and that heap
+  // is what every collection in the isolate group had to walk.
+  final _TerminalXtermHeadList<Uint32List> _renderRows =
+      _TerminalXtermHeadList<Uint32List>();
   final _TerminalXtermHeadList<bool> _wrappedRows =
       _TerminalXtermHeadList<bool>();
   List<int> _semanticPromptLines = <int>[];
   late final UnmodifiableListView<String> _rowTextsView = UnmodifiableListView(
     _rowTexts,
   );
-  late final UnmodifiableListView<List<TerminalXtermWorkerRenderCell>>
-  _renderRowsView = UnmodifiableListView(_renderRows);
+  late final UnmodifiableListView<Uint32List> _renderRowsView =
+      UnmodifiableListView(_renderRows);
 
   int get revision => _revision;
   int get cols => _cols;
@@ -191,7 +200,12 @@ final class TerminalXtermBufferModel implements TerminalSearchSource {
       globalState.selectionForegroundColorOverride;
   List<TerminalXtermWorkerEffect> get effects => _effects;
   List<String> get rowTexts => _rowTextsView;
-  List<List<TerminalXtermWorkerRenderCell>> get renderRows => _renderRowsView;
+
+  /// Packed rows, [_packedCellWords] words per cell (width, content,
+  /// hyperlink id). Read-only; exposed for tests.
+  List<Uint32List> get packedRows => _renderRowsView;
+
+  int rowLength(int row) => _renderRows[row].length ~/ _packedCellWords;
 
   /// Exposes the logical backing head only to make amortized trim behavior
   /// deterministic in unit tests; UI/runtime code must not depend on it.
@@ -228,10 +242,11 @@ final class TerminalXtermBufferModel implements TerminalSearchSource {
   }
 
   int hyperlinkIdAt(int row, int column) {
-    if (row < 0 || row >= _renderRows.length) return 0;
+    if (row < 0 || row >= _renderRows.length || column < 0) return 0;
     final cells = _renderRows[row];
-    if (column < 0 || column >= cells.length) return 0;
-    return cells[column].hyperlinkId;
+    final offset = column * _packedCellWords;
+    if (offset >= cells.length) return 0;
+    return cells[offset + _packedHyperlinkWord];
   }
 
   String? hyperlinkAt(int row, int column) {
@@ -460,7 +475,7 @@ final class TerminalXtermBufferModel implements TerminalSearchSource {
       null,
       growable: false,
     );
-    final nextRows = List<List<TerminalXtermWorkerRenderCell>?>.filled(
+    final nextRows = List<Uint32List?>.filled(
       delta.bufferLength,
       null,
       growable: false,
@@ -489,7 +504,7 @@ final class TerminalXtermBufferModel implements TerminalSearchSource {
       ..addAll(nextTexts.cast<String>());
     _renderRows
       ..clear()
-      ..addAll(nextRows.cast<List<TerminalXtermWorkerRenderCell>>());
+      ..addAll(nextRows.cast<Uint32List>());
     _wrappedRows
       ..clear()
       ..addAll(nextWrapped.cast<bool>());
@@ -584,16 +599,17 @@ final class TerminalXtermBufferModel implements TerminalSearchSource {
         );
       }
       final existing = _renderRows[delta.trimStart + changed.row];
-      if (existing.length != changed.rowLength) {
+      final existingLength = existing.length ~/ _packedCellWords;
+      if (existingLength != changed.rowLength) {
         _validateFullRowCells(changed);
         continue;
       }
       final start = changed.cellStart;
       final end = start + changed.cells.length;
-      if (start < 0 || end > existing.length) {
+      if (start < 0 || end > existingLength) {
         throw StateError(
           'Terminal xterm cell span [$start, $end) exceeds row width '
-          '${existing.length}.',
+          '$existingLength.',
         );
       }
     }
@@ -605,37 +621,53 @@ final class TerminalXtermBufferModel implements TerminalSearchSource {
     }
   }
 
-  List<TerminalXtermWorkerRenderCell> _freezeCells(
-    List<TerminalXtermWorkerRenderCell> cells,
-  ) {
-    return List<TerminalXtermWorkerRenderCell>.unmodifiable(cells);
+  Uint32List _freezeCells(List<TerminalXtermWorkerRenderCell> cells) {
+    final packed = Uint32List(cells.length * _packedCellWords);
+    for (var column = 0; column < cells.length; column++) {
+      _packCell(packed, column, cells[column]);
+    }
+    return packed;
   }
 
-  List<TerminalXtermWorkerRenderCell> _mergeCellSpan(
-    List<TerminalXtermWorkerRenderCell> existing,
+  void _packCell(
+    Uint32List packed,
+    int column,
+    TerminalXtermWorkerRenderCell cell,
+  ) {
+    final offset = column * _packedCellWords;
+    packed[offset + _packedWidthWord] = cell.width;
+    packed[offset + _packedContentWord] = cell.content;
+    packed[offset + _packedHyperlinkWord] = cell.hyperlinkId;
+  }
+
+  Uint32List _mergeCellSpan(
+    Uint32List existing,
     TerminalXtermWorkerRowDelta changed,
   ) {
-    if (existing.length != changed.rowLength) {
+    final existingLength = existing.length ~/ _packedCellWords;
+    if (existingLength != changed.rowLength) {
       _validateFullRowCells(changed);
       return _freezeCells(changed.cells);
     }
     final start = changed.cellStart;
     final end = start + changed.cells.length;
-    if (start < 0 || end > existing.length) {
+    if (start < 0 || end > existingLength) {
       throw StateError(
         'Terminal xterm cell span [$start, $end) exceeds row width '
-        '${existing.length}.',
+        '$existingLength.',
       );
     }
     if (changed.cells.isEmpty) return existing;
-    if (start == 0 && end == existing.length) {
+    if (start == 0 && end == existingLength) {
       return _freezeCells(changed.cells);
     }
-    final next = List<TerminalXtermWorkerRenderCell>.of(existing);
+    // A new row rather than an in-place write keeps the identity contract:
+    // an untouched row is the same object, a changed one is not.
+    final next = Uint32List.fromList(existing);
     for (var offset = 0; offset < changed.cells.length; offset++) {
-      next[start + offset] = changed.cells[offset];
+      _packCell(next, start + offset, changed.cells[offset]);
     }
-    return List<TerminalXtermWorkerRenderCell>.unmodifiable(next);
+    return next;
   }
 
   void _validateFullRowCells(TerminalXtermWorkerRowDelta row) {
@@ -667,15 +699,17 @@ final class TerminalXtermBufferModel implements TerminalSearchSource {
   int _codePoint(int row, int column) {
     if (row < 0 || row >= _renderRows.length || column < 0) return 0;
     final cells = _renderRows[row];
-    if (column >= cells.length) return 0;
-    return cells[column].content & CellContent.codepointMask;
+    final offset = column * _packedCellWords;
+    if (offset >= cells.length) return 0;
+    return cells[offset + _packedContentWord] & CellContent.codepointMask;
   }
 
   int _cellWidth(int row, int column) {
     if (row < 0 || row >= _renderRows.length || column < 0) return 0;
     final cells = _renderRows[row];
-    if (column >= cells.length) return 0;
-    return cells[column].width;
+    final offset = column * _packedCellWords;
+    if (offset >= cells.length) return 0;
+    return cells[offset + _packedWidthWord];
   }
 
   bool _lineHasOnlyWhitespace(int line) {
