@@ -106,6 +106,7 @@ final class CodeForgeLanguageServerRuntime
     bool? isWindows,
     CodeForgeExecutableExists? executableExists,
     CodeForgeLanguageServerTransportFactory? transportFactory,
+    LspProcessStarter? processStarter,
     CodeForgeSupportDirectory? supportDirectory,
     ManagedLanguageServerInstallerPort? managedInstaller,
     LanguageIntelligenceActivityReporter? activityReporter,
@@ -115,7 +116,9 @@ final class CodeForgeLanguageServerRuntime
     environmentReader: environmentReader ?? _platformEnvironment,
     isWindows: isWindows ?? Platform.isWindows,
     executableExists: executableExists,
-    transportFactory: transportFactory ?? _startCodeForgeTransport,
+    transportFactory:
+        transportFactory ??
+        (spec) => _startCodeForgeTransport(spec, processStarter),
     supportDirectory: supportDirectory ?? getApplicationSupportDirectory,
     managedInstaller:
         managedInstaller ??
@@ -597,6 +600,7 @@ Map<String, String> _platformEnvironment() => Platform.environment;
 
 Future<CodeForgeLanguageServerTransport> _startCodeForgeTransport(
   CodeForgeLanguageServerLaunchSpec spec,
+  LspProcessStarter? processStarter,
 ) async {
   final config = await LspStdioConfig.start(
     executable: spec.executable,
@@ -608,6 +612,7 @@ Future<CodeForgeLanguageServerTransport> _startCodeForgeTransport(
     environment: spec.environment,
     initializationOptions: spec.initializationOptions,
     capabilities: _codeForgeCapabilities(spec.capabilities),
+    processStarter: processStarter,
   );
   return _LspStdioCodeForgeTransport(config);
 }

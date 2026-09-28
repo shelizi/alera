@@ -71,7 +71,8 @@ class LspStdioConfig extends LspConfig {
   /// Optional environement variables for the executable.
   final Map<String, String>? environment;
 
-  late Process _process;
+  final LspProcessStarter _processStarter;
+  late LspProcess _process;
   final _framer = LspMessageFramer();
   StreamSubscription<List<int>>? _stdoutSubscription;
   StreamSubscription<List<int>>? _stderrSubscription;
@@ -87,12 +88,13 @@ class LspStdioConfig extends LspConfig {
     required super.languageId,
     this.args,
     this.environment,
+    LspProcessStarter? processStarter,
     super.capabilities,
     super.initializationOptions,
     super.workspaceConfiguration,
     super.disableWarning,
     super.disableError,
-  });
+  }) : _processStarter = processStarter ?? _startDartIoProcess;
 
   static Future<LspStdioConfig> start({
     required String executable,
@@ -105,6 +107,7 @@ class LspStdioConfig extends LspConfig {
     Map<String, String>? environment,
     bool disableWarning = false,
     bool disableError = false,
+    LspProcessStarter? processStarter,
   }) async {
     final effectiveInitializationOptions = _withCclsInitializationDefaults(
       executable,
@@ -122,6 +125,7 @@ class LspStdioConfig extends LspConfig {
       capabilities: capabilities,
       initializationOptions: effectiveInitializationOptions,
       workspaceConfiguration: workspaceConfiguration,
+      processStarter: processStarter,
     );
     await config._startProcess();
     return config;
@@ -177,12 +181,11 @@ class LspStdioConfig extends LspConfig {
   }
 
   Future<void> _startProcess() async {
-    _process = await Process.start(
+    _process = await _processStarter(
       executable,
-      args ?? [],
-      environment: environment,
+      args ?? const <String>[],
       workingDirectory: workspacePath,
-      runInShell: _requiresWindowsCommandShell(executable),
+      environment: environment,
     );
     _stdoutSubscription = _process.stdout.listen(_handleStdoutData);
     // Chunks can split a multi-byte character, and Windows servers may write
@@ -192,17 +195,8 @@ class LspStdioConfig extends LspConfig {
     );
   }
 
-  static bool _requiresWindowsCommandShell(String executable) {
-    if (!Platform.isWindows) {
-      return false;
-    }
-    final normalized = executable.trim().toLowerCase();
-    return normalized.endsWith('.cmd') || normalized.endsWith('.bat');
-  }
-
   int get pid => _process.pid;
   Future<int> get exitCode => _process.exitCode;
-  Process get process => _process;
 
   void _handleStdoutData(List<int> data) {
     if (_disposed) return;
@@ -295,8 +289,8 @@ class LspStdioConfig extends LspConfig {
         final body = utf8.encode(jsonEncode(message));
         final header = utf8.encode('Content-Length: ${body.length}\r\n\r\n');
         final combined = <int>[...header, ...body];
-        _process.stdin.add(combined);
-        await _process.stdin.flush();
+        _process.writeStdin(combined);
+        await _process.flushStdin();
         if (!completer.isCompleted) {
           completer.complete();
         }
@@ -318,4 +312,81 @@ class LspStdioConfig extends LspConfig {
     _process.kill();
     _responseController.close();
   }
+}
+
+/// Starts the language-server process for [LspStdioConfig]. A host can supply
+/// its own to route the spawn through its process boundary, for example one
+/// that ends the whole process tree when the session is disposed.
+typedef LspProcessStarter = Future<LspProcess> Function(
+  String executable,
+  List<String> arguments, {
+  String? workingDirectory,
+  Map<String, String>? environment,
+});
+
+/// The stdio surface [LspStdioConfig] needs from a running server process.
+abstract interface class LspProcess {
+  int get pid;
+
+  Stream<List<int>> get stdout;
+
+  Stream<List<int>> get stderr;
+
+  Future<int> get exitCode;
+
+  void writeStdin(List<int> data);
+
+  Future<void> flushStdin();
+
+  bool kill();
+}
+
+Future<LspProcess> _startDartIoProcess(
+  String executable,
+  List<String> arguments, {
+  String? workingDirectory,
+  Map<String, String>? environment,
+}) async => _DartIoLspProcess(
+  await Process.start(
+    executable,
+    arguments,
+    environment: environment,
+    workingDirectory: workingDirectory,
+    runInShell: _requiresWindowsCommandShell(executable),
+  ),
+);
+
+bool _requiresWindowsCommandShell(String executable) {
+  if (!Platform.isWindows) {
+    return false;
+  }
+  final normalized = executable.trim().toLowerCase();
+  return normalized.endsWith('.cmd') || normalized.endsWith('.bat');
+}
+
+final class _DartIoLspProcess implements LspProcess {
+  _DartIoLspProcess(this._process);
+
+  final Process _process;
+
+  @override
+  int get pid => _process.pid;
+
+  @override
+  Stream<List<int>> get stdout => _process.stdout;
+
+  @override
+  Stream<List<int>> get stderr => _process.stderr;
+
+  @override
+  Future<int> get exitCode => _process.exitCode;
+
+  @override
+  void writeStdin(List<int> data) => _process.stdin.add(data);
+
+  @override
+  Future<void> flushStdin() => _process.stdin.flush();
+
+  @override
+  bool kill() => _process.kill();
 }
