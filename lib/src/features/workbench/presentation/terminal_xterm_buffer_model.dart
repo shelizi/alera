@@ -80,6 +80,7 @@ final class _TerminalXtermHeadList<T extends Object> extends ListBase<T> {
 }
 
 const int _packedCellWords = 3;
+const int _retainedRowOverheadBytes = 96;
 const int _packedWidthWord = 0;
 const int _packedContentWord = 1;
 const int _packedHyperlinkWord = 2;
@@ -206,6 +207,21 @@ final class TerminalXtermBufferModel implements TerminalSearchSource {
   List<Uint32List> get packedRows => _renderRowsView;
 
   int rowLength(int row) => _renderRows[row].length ~/ _packedCellWords;
+
+  /// Estimated bytes this mirror holds on top of the replica's own cells: the
+  /// packed rows, the row text search reads and a fixed per-row overhead for
+  /// headers and list slots. The eviction budget used to see only the
+  /// replica's cells, which is less than half of what a mirrored tab retains.
+  int get retainedBytes {
+    var bytes = 0;
+    for (var row = 0; row < _renderRows.length; row++) {
+      bytes +=
+          _renderRows[row].lengthInBytes +
+          _rowTexts[row].length * 2 +
+          _retainedRowOverheadBytes;
+    }
+    return bytes;
+  }
 
   /// Exposes the logical backing head only to make amortized trim behavior
   /// deterministic in unit tests; UI/runtime code must not depend on it.

@@ -5,6 +5,29 @@ import 'package:xterm2/core.dart';
 import 'package:xterm2/xterm.dart';
 
 void main() {
+  test('retained bytes grow with mirrored scrollback', () async {
+    final worker = await TerminalXtermWorker.start(
+      cols: 20,
+      rows: 3,
+      maxLines: 200,
+    );
+    addTearDown(worker.close);
+    final model = TerminalXtermBufferModel();
+
+    model.apply(await worker.writeBufferDelta('one'));
+    final small = model.retainedBytes;
+    model.apply(
+      await worker.writeBufferDelta(
+        List<String>.generate(100, (index) => '\r\nline $index').join(),
+      ),
+    );
+
+    expect(small, greaterThan(0));
+    // Scrolled-out rows are compacted, so only the per-row floor is exact.
+    expect(model.retainedBytes, greaterThan(small));
+    expect(model.retainedBytes, greaterThan(model.bufferLength * 96));
+  });
+
   test(
     'mirrors full scrollback and preserves unchanged row identity',
     () async {
