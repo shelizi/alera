@@ -202,7 +202,14 @@ Future<String> _runGit(List<String> args) => _run('git', args);
 Future<String> _runGh(List<String> args) => _run('gh', args);
 
 Future<String> _run(String executable, List<String> args) async {
-  final result = await Process.run(executable, args);
+  // git and gh write UTF-8; the platform default on Windows is the console
+  // code page, which garbles emoji in PR bodies and breaks the JSON decode.
+  final result = await Process.run(
+    executable,
+    args,
+    stdoutEncoding: utf8,
+    stderrEncoding: utf8,
+  );
   if (result.exitCode != 0) {
     throw ProcessException(
       executable,

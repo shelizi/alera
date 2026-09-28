@@ -158,7 +158,14 @@ jobs:
           previous="$(git describe --tags --abbrev=0 --match 'v[0-9]*' "$TARGET_SHA^" 2>/dev/null || true)"
           if [[ -z "$previous" ]]; then
             git fetch --quiet --no-tags https://github.com/leynier/alera.git '+refs/tags/v*:refs/tags/upstream/v*'
-            previous="$(git describe --tags --abbrev=0 --match 'upstream/v[0-9]*.[0-9]*.[0-9]' "$TARGET_SHA" 2>/dev/null || true)"
+            # Not `git describe`: these annotated tags still carry their upstream
+            # name, and describe prints `v0.82.0-1032-g<sha>` once the ref name
+            # differs from it. Pass the commit, since the fork has no such tag.
+            upstream_tag="$(git tag --list 'upstream/v*' --merged "$TARGET_SHA" --sort=-v:refname \
+              | grep -E '^upstream/v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1 || true)"
+            if [[ -n "$upstream_tag" ]]; then
+              previous="$(git rev-parse "$upstream_tag^{commit}")"
+            fi
           fi
           args=(--scope desktop --repo "$GITHUB_REPOSITORY" --tag "$TAG" --target "$TARGET_SHA" --output release-notes.md)
           if [[ -n "$previous" ]]; then
