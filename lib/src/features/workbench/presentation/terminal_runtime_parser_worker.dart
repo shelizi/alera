@@ -321,11 +321,17 @@ extension _XtermTerminalParserWorker on _XtermTerminalSessionHandle {
       return null;
     }
     final generation = _parserWorkerGeneration;
+    final uiBufferEvicted = _uiBufferEvicted;
     _flushPendingParserWorkerResize();
     final command = _queueParserWorkerCommand(terminal, generation, (
       worker,
     ) async {
-      final delta = await worker.snapshotBufferDelta();
+      // An evicted replica starts empty and needs every row. Otherwise it still
+      // mirrors the worker's last buffer delta, so only what the hidden output
+      // changed has to cross the isolate boundary and be rebuilt.
+      final delta = uiBufferEvicted
+          ? await worker.snapshotBufferDelta()
+          : await worker.catchUpBufferDelta();
       if (_disposed ||
           generation != _parserWorkerGeneration ||
           !identical(_terminal, terminal)) {

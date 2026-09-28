@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:isolate';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:xterm2/xterm.dart';
@@ -16,6 +17,7 @@ const String _workerProfileHydrateSnapshotBufferDelta =
     'profileHydrateSnapshotBufferDelta';
 const String _workerParseHidden = 'parseHidden';
 const String _workerSnapshotBufferDelta = 'snapshotBufferDelta';
+const String _workerCatchUpBufferDelta = 'catchUpBufferDelta';
 const String _workerProfileSnapshotBufferDelta = 'profileSnapshotBufferDelta';
 const String _workerProfilePackedSnapshotBufferDelta =
     'profilePackedSnapshotBufferDelta';
@@ -1497,6 +1499,15 @@ final class TerminalXtermWorker {
     );
   }
 
+  /// Brings a replica that already mirrors this worker's last buffer delta up
+  /// to date, sending only rows that changed since then. Falls back to a full
+  /// repaint when the worker has nothing to compare against.
+  Future<TerminalXtermWorkerBufferDelta> catchUpBufferDelta() async {
+    return TerminalXtermWorkerBufferDelta._fromMessage(
+      await _requestRaw(const <Object?>[_workerCatchUpBufferDelta]),
+    );
+  }
+
   Future<TerminalXtermWorkerBufferDelta> snapshotBufferDelta() async {
     return TerminalXtermWorkerBufferDelta._fromMessage(
       await _requestRaw(const <Object?>[_workerSnapshotBufferDelta]),
@@ -2007,182 +2018,6 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
     ];
   }
 
-  List<Object?> bufferDelta() {
-    final lines = terminal.buffer.lines;
-    final previousRefs = bufferLineRefs;
-    final previousCaches = bufferLineCaches;
-    var fullRepaint = previousRefs == null || previousCaches == null;
-    var trimStart = 0;
-    var overlap = 0;
-
-    if (!fullRepaint) {
-      if (lines.length == 0 || previousRefs.isEmpty) {
-        fullRepaint = lines.length != previousRefs.length;
-      } else {
-        var retainedStart = -1;
-        final firstLine = lines[0];
-        for (var index = 0; index < previousRefs.length; index++) {
-          if (identical(previousRefs[index], firstLine)) {
-            retainedStart = index;
-            break;
-          }
-        }
-
-        if (retainedStart < 0) {
-          fullRepaint = true;
-        } else {
-          final availablePrevious = previousRefs.length - retainedStart;
-          overlap = availablePrevious < lines.length
-              ? availablePrevious
-              : lines.length;
-          if (retainedStart + overlap != previousRefs.length) {
-            fullRepaint = true;
-          } else {
-            // xterm only replaces lines inside the scroll margins, which sit
-            // in the viewport; scrollback lines leave only from the head. So
-            // rows that were already scrollback keep their identity and the
-            // check starts at the last of them, which keeps a keystroke echo
-            // from walking the whole scrollback.
-            final firstViewportRow = cachedBufferScrollBack - retainedStart;
-            for (
-              var row = firstViewportRow > 0 ? firstViewportRow - 1 : 0;
-              row < overlap;
-              row++
-            ) {
-              if (!identical(previousRefs[retainedStart + row], lines[row])) {
-                fullRepaint = true;
-                break;
-              }
-            }
-          }
-          if (!fullRepaint) {
-            trimStart = retainedStart;
-          }
-        }
-      }
-    }
-
-    if (fullRepaint) {
-      trimStart = 0;
-      overlap = 0;
-    }
-
-    final changedRows = <Object?>[];
-    final hyperlinkUpdates = <int, String>{};
-    var comparedRowCount = 0;
-    final currentScrollBack = terminal.buffer.scrollBack;
-    // Rows that were scrollback and still are carry no cache and cannot have
-    // changed, so the retained prefix of the previous lists is reused as is
-    // and only the rows after it are revisited.
-    var retainedRows = 0;
-    if (!fullRepaint) {
-      final previousScrollBackRows = cachedBufferScrollBack - trimStart;
-      retainedRows = previousScrollBackRows < currentScrollBack
-          ? previousScrollBackRows
-          : currentScrollBack;
-      if (retainedRows < 0) {
-        retainedRows = 0;
-      }
-    }
-    final nextRefs = <BufferLine>[];
-    final nextCaches = <_TerminalXtermWorkerRowCache?>[];
-    var cachedRowCount = 0;
-    for (var row = retainedRows; row < lines.length; row++) {
-      final line = lines[row];
-      nextRefs.add(line);
-      final previousCache =
-          !fullRepaint && previousCaches != null && row < overlap
-          ? previousCaches[trimStart + row]
-          : null;
-      final previousRow = trimStart + row;
-      final wasAlreadyScrollback =
-          !fullRepaint && previousRow < cachedBufferScrollBack;
-      final remainsScrollback = row < currentScrollBack;
-      if (wasAlreadyScrollback && remainsScrollback) {
-        nextCaches.add(null);
-        continue;
-      }
-      final changedSpan = switch (previousCache) {
-        null => null,
-        final cache => () {
-          comparedRowCount += 1;
-          return cache.changedCellSpan(line);
-        }(),
-      };
-      if (previousCache != null &&
-          previousCache.isWrapped == line.isWrapped &&
-          changedSpan == null) {
-        nextCaches.add(remainsScrollback ? null : previousCache);
-        if (!remainsScrollback) cachedRowCount += 1;
-        continue;
-      }
-      nextCaches.add(
-        remainsScrollback ? null : _TerminalXtermWorkerRowCache.capture(line),
-      );
-      if (!remainsScrollback) cachedRowCount += 1;
-      final cellStart = changedSpan?.start ?? 0;
-      final cellEnd =
-          changedSpan?.end ?? (previousCache == null ? line.length : 0);
-      changedRows.add(
-        rowMessage(
-          row,
-          line,
-          bufferRow: row,
-          hyperlinkUpdates: hyperlinkUpdates,
-          cellStart: cellStart,
-          cellEnd: cellEnd,
-        ),
-      );
-    }
-
-    if (retainedRows > 0) {
-      // Shift the retained prefix into place and append the revisited rows,
-      // instead of rebuilding lists as long as the whole buffer.
-      previousRefs!
-        ..removeRange(0, trimStart)
-        ..length = retainedRows
-        ..addAll(nextRefs);
-      previousCaches!
-        ..removeRange(0, trimStart)
-        ..length = retainedRows
-        ..addAll(nextCaches);
-      bufferLineRefs = previousRefs;
-      bufferLineCaches = previousCaches;
-    } else {
-      bufferLineRefs = nextRefs;
-      bufferLineCaches = nextCaches;
-    }
-    cachedBufferScrollBack = currentScrollBack;
-    return <Object?>[
-      fullRepaint,
-      terminal.viewWidth,
-      terminal.viewHeight,
-      lines.length,
-      terminal.buffer.scrollBack,
-      trimStart,
-      changedRows,
-      terminal.buffer.cursorX,
-      terminal.buffer.cursorY,
-      terminal.cursorVisibleMode,
-      terminal.cursorKeysMode,
-      terminal.appKeypadMode,
-      terminal.bracketedPasteMode,
-      terminal.reportFocusMode,
-      terminal.altBufferMouseScrollMode,
-      terminal.mouseMode.index,
-      terminal.mouseReportMode.index,
-      <Object?>[for (final effect in effects) List<Object?>.from(effect)],
-      revision,
-      globalStateMessage(),
-      <Object?>[
-        for (final entry in hyperlinkUpdates.entries)
-          <Object?>[entry.key, entry.value],
-      ],
-      comparedRowCount,
-      cachedRowCount,
-    ];
-  }
-
   List<Object?> packedFullBufferDelta() {
     final lines = terminal.buffer.lines;
     var totalCells = 0;
@@ -2293,6 +2128,187 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
     ];
   }
 
+  List<Object?> bufferDelta({int? maxRevisitedRows}) {
+    final lines = terminal.buffer.lines;
+    final previousRefs = bufferLineRefs;
+    final previousCaches = bufferLineCaches;
+    var fullRepaint = previousRefs == null || previousCaches == null;
+    var trimStart = 0;
+    var overlap = 0;
+
+    if (!fullRepaint) {
+      if (lines.length == 0 || previousRefs.isEmpty) {
+        fullRepaint = lines.length != previousRefs.length;
+      } else {
+        var retainedStart = -1;
+        final firstLine = lines[0];
+        for (var index = 0; index < previousRefs.length; index++) {
+          if (identical(previousRefs[index], firstLine)) {
+            retainedStart = index;
+            break;
+          }
+        }
+
+        if (retainedStart < 0) {
+          fullRepaint = true;
+        } else {
+          final availablePrevious = previousRefs.length - retainedStart;
+          overlap = availablePrevious < lines.length
+              ? availablePrevious
+              : lines.length;
+          if (retainedStart + overlap != previousRefs.length) {
+            fullRepaint = true;
+          } else {
+            // xterm only replaces lines inside the scroll margins, which sit
+            // in the viewport; scrollback lines leave only from the head. So
+            // rows that were already scrollback keep their identity and the
+            // check starts at the last of them, which keeps a keystroke echo
+            // from walking the whole scrollback.
+            final firstViewportRow = cachedBufferScrollBack - retainedStart;
+            for (
+              var row = firstViewportRow > 0 ? firstViewportRow - 1 : 0;
+              row < overlap;
+              row++
+            ) {
+              if (!identical(previousRefs[retainedStart + row], lines[row])) {
+                fullRepaint = true;
+                break;
+              }
+            }
+          }
+          if (!fullRepaint) {
+            trimStart = retainedStart;
+          }
+        }
+      }
+    }
+
+    if (fullRepaint) {
+      // Every row goes out either way, and the packed form costs one typed
+      // buffer instead of a message list per cell on both isolates.
+      return packedFullBufferDelta();
+    }
+
+    final changedRows = <Object?>[];
+    final hyperlinkUpdates = <int, String>{};
+    var comparedRowCount = 0;
+    final currentScrollBack = terminal.buffer.scrollBack;
+    // Rows that were scrollback and still are carry no cache and cannot have
+    // changed, so the retained prefix of the previous lists is reused as is
+    // and only the rows after it are revisited.
+    var retainedRows = 0;
+    if (!fullRepaint) {
+      final previousScrollBackRows = cachedBufferScrollBack - trimStart;
+      retainedRows = previousScrollBackRows < currentScrollBack
+          ? previousScrollBackRows
+          : currentScrollBack;
+      if (retainedRows < 0) {
+        retainedRows = 0;
+      }
+    }
+    if (maxRevisitedRows != null &&
+        lines.length - retainedRows > maxRevisitedRows) {
+      return packedFullBufferDelta();
+    }
+    final nextRefs = <BufferLine>[];
+    final nextCaches = <_TerminalXtermWorkerRowCache?>[];
+    var cachedRowCount = 0;
+    for (var row = retainedRows; row < lines.length; row++) {
+      final line = lines[row];
+      nextRefs.add(line);
+      final previousCache =
+          !fullRepaint && previousCaches != null && row < overlap
+          ? previousCaches[trimStart + row]
+          : null;
+      final previousRow = trimStart + row;
+      final wasAlreadyScrollback =
+          !fullRepaint && previousRow < cachedBufferScrollBack;
+      final remainsScrollback = row < currentScrollBack;
+      if (wasAlreadyScrollback && remainsScrollback) {
+        nextCaches.add(null);
+        continue;
+      }
+      final changedSpan = switch (previousCache) {
+        null => null,
+        final cache => () {
+          comparedRowCount += 1;
+          return cache.changedCellSpan(line);
+        }(),
+      };
+      if (previousCache != null &&
+          previousCache.isWrapped == line.isWrapped &&
+          changedSpan == null) {
+        nextCaches.add(remainsScrollback ? null : previousCache);
+        if (!remainsScrollback) cachedRowCount += 1;
+        continue;
+      }
+      nextCaches.add(
+        remainsScrollback ? null : _TerminalXtermWorkerRowCache.capture(line),
+      );
+      if (!remainsScrollback) cachedRowCount += 1;
+      final cellStart = changedSpan?.start ?? 0;
+      final cellEnd =
+          changedSpan?.end ?? (previousCache == null ? line.length : 0);
+      changedRows.add(
+        rowMessage(
+          row,
+          line,
+          bufferRow: row,
+          hyperlinkUpdates: hyperlinkUpdates,
+          cellStart: cellStart,
+          cellEnd: cellEnd,
+        ),
+      );
+    }
+
+    if (retainedRows > 0) {
+      // Shift the retained prefix into place and append the revisited rows,
+      // instead of rebuilding lists as long as the whole buffer.
+      previousRefs!
+        ..removeRange(0, trimStart)
+        ..length = retainedRows
+        ..addAll(nextRefs);
+      previousCaches!
+        ..removeRange(0, trimStart)
+        ..length = retainedRows
+        ..addAll(nextCaches);
+      bufferLineRefs = previousRefs;
+      bufferLineCaches = previousCaches;
+    } else {
+      bufferLineRefs = nextRefs;
+      bufferLineCaches = nextCaches;
+    }
+    cachedBufferScrollBack = currentScrollBack;
+    return <Object?>[
+      fullRepaint,
+      terminal.viewWidth,
+      terminal.viewHeight,
+      lines.length,
+      terminal.buffer.scrollBack,
+      trimStart,
+      changedRows,
+      terminal.buffer.cursorX,
+      terminal.buffer.cursorY,
+      terminal.cursorVisibleMode,
+      terminal.cursorKeysMode,
+      terminal.appKeypadMode,
+      terminal.bracketedPasteMode,
+      terminal.reportFocusMode,
+      terminal.altBufferMouseScrollMode,
+      terminal.mouseMode.index,
+      terminal.mouseReportMode.index,
+      <Object?>[for (final effect in effects) List<Object?>.from(effect)],
+      revision,
+      globalStateMessage(),
+      <Object?>[
+        for (final entry in hyperlinkUpdates.entries)
+          <Object?>[entry.key, entry.value],
+      ],
+      comparedRowCount,
+      cachedRowCount,
+    ];
+  }
+
   List<Object?> actionResult(bool? handled) {
     return <Object?>[
       revision,
@@ -2391,6 +2407,22 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
           bufferLineRefs = null;
           bufferLineCaches = null;
           reply.send(packedFullBufferDelta());
+        case _workerCatchUpBufferDelta:
+          effects.clear();
+          revision += 1;
+          // A row sent on its own costs roughly 30 times its share of a packed
+          // full buffer, so a long hidden backlog is cheaper to resend whole.
+          final lineCount = terminal.buffer.lines.length;
+          reply.send(
+            bufferLineRefs == null
+                ? packedFullBufferDelta()
+                : bufferDelta(
+                    maxRevisitedRows: math.max(
+                      lineCount ~/ 32,
+                      terminal.viewHeight * 2,
+                    ),
+                  ),
+          );
         case _workerProfileSnapshotBufferDelta:
           effects.clear();
           revision += 1;

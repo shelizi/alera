@@ -546,6 +546,42 @@ void main() {
     },
   );
 
+  test('catch-up after hidden output sends only what changed', () async {
+    final direct = _createDirectTerminal(cols: 8, rows: 4, maxLines: 40);
+    final worker = await TerminalXtermWorker.start(
+      cols: 8,
+      rows: 4,
+      maxLines: 40,
+    );
+    addTearDown(worker.close);
+    final mirror = <String>[];
+    final visible = List<String>.generate(
+      50,
+      (index) => '${index + 1}',
+    ).join('\r\n');
+    direct.write(visible);
+    _applyBufferDelta(mirror, await worker.writeBufferDelta(visible));
+
+    for (final hidden in <String>['\r\nh1', '\r\nh2\r\nh3', 'x']) {
+      direct.write(hidden);
+      await worker.parseHidden(hidden);
+    }
+    final catchUp = await worker.catchUpBufferDelta();
+    _applyBufferDelta(mirror, catchUp);
+
+    expect(catchUp.fullRepaint, isFalse);
+    expect(catchUp.trimStart, 3);
+    expect(catchUp.rowDeltas.length, lessThanOrEqualTo(8));
+    expect(mirror, _bufferRows(direct));
+
+    // Hidden output that clears the screen still lands as a full repaint.
+    direct.write('\x1b[3J\x1b[2J\x1b[Hclean');
+    await worker.parseHidden('\x1b[3J\x1b[2J\x1b[Hclean');
+    final repaint = await worker.catchUpBufferDelta();
+    _applyBufferDelta(mirror, repaint);
+    expect(mirror, _bufferRows(direct));
+  });
+
   test('worker invalidates cached scrollback when CSI 3 J clears it', () async {
     final direct = _createDirectTerminal(cols: 8, rows: 3, maxLines: 25);
     final worker = await TerminalXtermWorker.start(

@@ -125,6 +125,19 @@ void main() {
         },
       ),
       _Scenario(
+        name: 'reveal full scrollback after brief hidden output',
+        setup: (harness) async {
+          for (var chunk = 0; chunk < 26; chunk++) {
+            await harness.visible(_logLines(chunk * 500, 500));
+          }
+          harness.resetMetrics();
+        },
+        run: (harness) async {
+          await harness.hidden(_logLines(50_000, 20, ansi: true));
+          await harness.reveal();
+        },
+      ),
+      _Scenario(
         name: 'resize storm',
         setup: (harness) async {
           await harness.visible(_logLines(0, 300));
@@ -290,7 +303,8 @@ final class _Harness {
 
   Future<void> reveal() async {
     final workerWatch = Stopwatch()..start();
-    final delta = await worker.snapshotBufferDelta();
+    // Production reveals a replica that was not evicted with a catch-up.
+    final delta = await worker.catchUpBufferDelta();
     workerWatch.stop();
     workerMicros += workerWatch.elapsedMicroseconds;
     workerRequests += 1;
