@@ -11,6 +11,10 @@ use sqlx::{Row, SqlitePool};
 
 pub const HISTORY_DATABASE_FILE_NAME: &str = "terminal_history.sqlite";
 const HISTORY_STORE_MAX_CONNECTIONS: u32 = 2;
+/// Output rows are appended to until they reach this size.
+const OUTPUT_CHUNK_TARGET_BYTES: usize = 16 * 1024;
+/// A session with more rows than this is compacted before it is trimmed.
+const OUTPUT_COMPACTION_ROW_THRESHOLD: i64 = 2048;
 
 const CREATE_CHECKPOINTS_TABLE_SQL: &str = "\
 CREATE TABLE IF NOT EXISTS checkpoints (\n\
@@ -221,28 +225,8 @@ impl TerminalHostHistoryStore {
             .await?;
         }
 
-        for (sequence, data) in outputs {
-            if data.is_empty() {
-                continue;
-            }
-            // A write-behind retry can repeat a batch after an ambiguous SQLite
-            // failure. Sequence is the session-local idempotency key, so retrying
-            // never duplicates terminal bytes.
-            sqlx::query(
-                "INSERT INTO outputChunks (sessionId, sequence, createdAt, data) \
-                 SELECT ?, ?, ?, ? \
-                 WHERE EXISTS (SELECT 1 FROM checkpoints WHERE sessionId = ?) \
-                   AND NOT EXISTS (SELECT 1 FROM outputChunks WHERE sessionId = ? AND sequence = ?)",
-            )
-            .bind(session_id)
-            .bind(*sequence)
-            .bind(format_timestamp(Utc::now()))
-            .bind(data)
-            .bind(session_id)
-            .bind(session_id)
-            .bind(*sequence)
-            .execute(&mut *transaction)
-            .await?;
+        if outputs.iter().any(|(_, data)| !data.is_empty()) {
+            append_output_rows(&mut transaction, session_id, outputs).await?;
         }
         transaction.commit().await?;
         Ok(())
@@ -265,6 +249,16 @@ impl TerminalHostHistoryStore {
         // by bytes, not rows, so a chatty session persisting a batch every
         // 100 ms accumulates six figures of rows, and this runs on the server
         // actor: on every checkpoint tick, every detach, and every configure.
+        let row_count: i64 =
+            sqlx::query("SELECT COUNT(*) AS rowCount FROM outputChunks WHERE sessionId = ?")
+                .bind(session_id)
+                .fetch_one(&self.pool)
+                .await?
+                .try_get("rowCount")?;
+        if row_count > OUTPUT_COMPACTION_ROW_THRESHOLD {
+            // Compaction keeps only the retained tail, so it is the trim too.
+            return compact_output_rows(self, session_id, max_bytes).await;
+        }
         let row = sqlx::query(
             "SELECT id, sequence, byteLen, running FROM ( \
                SELECT id, sequence, length(data) AS byteLen, \
@@ -378,6 +372,152 @@ impl TerminalHostHistoryStore {
         }
         Ok(buffer)
     }
+}
+
+/// Appends a flush's output to the session's newest row until it holds
+/// [`OUTPUT_CHUNK_TARGET_BYTES`], then opens new rows of that size.
+///
+/// One row per PTY read left sessions with six figures of rows averaging under
+/// 100 bytes, and the byte-retention trim has to sum every one of them.
+///
+/// A write-behind retry can repeat a batch after an ambiguous SQLite failure.
+/// A flush commits all of its output or none of it and sequences only grow, so
+/// skipping every sequence at or below the newest persisted one is the
+/// idempotency rule; the newest row always carries the last sequence it holds.
+async fn append_output_rows(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    session_id: &str,
+    outputs: &[(i64, Vec<u8>)],
+) -> Result<()> {
+    let has_checkpoint = sqlx::query("SELECT 1 FROM checkpoints WHERE sessionId = ?")
+        .bind(session_id)
+        .fetch_optional(&mut **transaction)
+        .await?
+        .is_some();
+    if !has_checkpoint {
+        return Ok(());
+    }
+    let newest = sqlx::query(
+        "SELECT id, sequence, data FROM outputChunks WHERE sessionId = ? \
+         ORDER BY sequence DESC, id DESC LIMIT 1",
+    )
+    .bind(session_id)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    let mut rows: Vec<PendingOutputRow> = Vec::new();
+    let mut persisted_sequence = None;
+    if let Some(row) = newest {
+        let sequence: i64 = row.try_get("sequence")?;
+        persisted_sequence = Some(sequence);
+        let data: Vec<u8> = row.try_get("data")?;
+        if data.len() < OUTPUT_CHUNK_TARGET_BYTES {
+            rows.push(PendingOutputRow {
+                existing_id: Some(row.try_get("id")?),
+                sequence,
+                data,
+                dirty: false,
+            });
+        }
+    }
+
+    for (sequence, data) in outputs {
+        if data.is_empty() || persisted_sequence.is_some_and(|newest| *sequence <= newest) {
+            continue;
+        }
+        match rows.last_mut() {
+            Some(row) if row.data.len() + data.len() <= OUTPUT_CHUNK_TARGET_BYTES => {
+                row.data.extend_from_slice(data);
+                row.sequence = *sequence;
+                row.dirty = true;
+            }
+            _ => rows.push(PendingOutputRow {
+                existing_id: None,
+                sequence: *sequence,
+                data: data.clone(),
+                dirty: true,
+            }),
+        }
+    }
+
+    let created_at = format_timestamp(Utc::now());
+    for row in rows.into_iter().filter(|row| row.dirty) {
+        match row.existing_id {
+            Some(id) => {
+                sqlx::query(
+                    "UPDATE outputChunks SET sequence = ?, createdAt = ?, data = ? WHERE id = ?",
+                )
+                .bind(row.sequence)
+                .bind(&created_at)
+                .bind(row.data)
+                .bind(id)
+                .execute(&mut **transaction)
+                .await?;
+            }
+            None => {
+                sqlx::query(
+                    "INSERT INTO outputChunks (sessionId, sequence, createdAt, data)                      VALUES (?, ?, ?, ?)",
+                )
+                .bind(session_id)
+                .bind(row.sequence)
+                .bind(&created_at)
+                .bind(row.data)
+                .execute(&mut **transaction)
+                .await?;
+            }
+        }
+    }
+    Ok(())
+}
+
+struct PendingOutputRow {
+    existing_id: Option<i64>,
+    sequence: i64,
+    data: Vec<u8>,
+    dirty: bool,
+}
+
+/// Rewrites a session's retained tail as [`OUTPUT_CHUNK_TARGET_BYTES`] rows,
+/// ending at the newest sequence so later appends still order after it.
+///
+/// Histories written before rows were coalesced can hold six figures of tiny
+/// rows, and the trim's running sum over them took seconds on every
+/// maintenance pass.
+async fn compact_output_rows(
+    store: &TerminalHostHistoryStore,
+    session_id: &str,
+    max_bytes: usize,
+) -> Result<()> {
+    let tail = store.read_buffer(session_id, max_bytes).await?;
+    let mut transaction = store.pool.begin().await?;
+    let newest: Option<i64> =
+        sqlx::query("SELECT MAX(sequence) AS maxSequence FROM outputChunks WHERE sessionId = ?")
+            .bind(session_id)
+            .fetch_one(&mut *transaction)
+            .await?
+            .try_get("maxSequence")?;
+    let Some(newest) = newest else {
+        return Ok(());
+    };
+    sqlx::query("DELETE FROM outputChunks WHERE sessionId = ?")
+        .bind(session_id)
+        .execute(&mut *transaction)
+        .await?;
+    let chunks: Vec<&[u8]> = tail.chunks(OUTPUT_CHUNK_TARGET_BYTES).collect();
+    let first_sequence = newest.saturating_sub(chunks.len() as i64 - 1);
+    let created_at = format_timestamp(Utc::now());
+    for (index, chunk) in chunks.into_iter().enumerate() {
+        sqlx::query(
+            "INSERT INTO outputChunks (sessionId, sequence, createdAt, data) VALUES (?, ?, ?, ?)",
+        )
+        .bind(session_id)
+        .bind(first_sequence.saturating_add(index as i64))
+        .bind(&created_at)
+        .bind(chunk)
+        .execute(&mut *transaction)
+        .await?;
+    }
+    transaction.commit().await?;
+    Ok(())
 }
 
 async fn destroy_legacy_checkpoint_schema(pool: &SqlitePool) -> Result<()> {
