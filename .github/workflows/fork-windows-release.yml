@@ -1,0 +1,189 @@
+name: Fork Windows Release
+
+run-name: >-
+  ${{ github.event_name == 'workflow_dispatch' &&
+    format('Fork Windows Release from {0}', inputs.ref) ||
+    format('Fork Windows Release {0}', github.ref_name) }}
+
+# The upstream Cut Release pipeline publishes to the upstream update bucket and
+# needs its signing keys, so it cannot run on this fork. This workflow only
+# builds the Windows app and attaches it to a GitHub Release: no updater index,
+# no package managers, no platform signing.
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag, or SHA to release; the tag comes from its pubspec version
+        required: false
+        type: string
+        default: main
+
+permissions:
+  contents: read
+
+# Never cancel mid-publish: a cancelled run could leave a partial release.
+concurrency:
+  group: fork-windows-release
+  cancel-in-progress: false
+
+env:
+  ALERA_FLAVOR: release
+
+jobs:
+  build:
+    if: github.repository == 'shelizi/alera'
+    runs-on: windows-latest
+    timeout-minutes: 120
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      target_sha: ${{ steps.version.outputs.target_sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
+          submodules: false
+
+      - name: Resolve version
+        id: version
+        shell: pwsh
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          $line = Select-String -Path pubspec.yaml -Pattern '^version:\s*(\S+)' | Select-Object -First 1
+          if (-not $line) { throw 'pubspec.yaml has no version.' }
+          $version = $line.Matches[0].Groups[1].Value
+          $release = $version.Split('+')[0]
+          $tag = "v$release"
+          if ($env:EVENT_NAME -eq 'push' -and $env:REF_NAME -ne $tag) {
+            throw "Tag $env:REF_NAME does not match pubspec version $version (expected $tag)."
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "target_sha=$(git rev-parse HEAD)" >> $env:GITHUB_OUTPUT
+          Write-Host "Releasing $version as $tag"
+
+      - name: Setup Flutter workspace
+        uses: ./.github/actions/setup-flutter-workspace
+        with:
+          rust: 'true'
+
+      - name: Tune Windows build environment
+        uses: ./.github/actions/tune-windows-build
+
+      - name: Restore cargokit build
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            build/**/cargokit_build
+            build/**/ck
+          key: cargokit-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust/Cargo.lock') }}-
+          restore-keys: |
+            cargokit-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust/Cargo.lock') }}-
+            cargokit-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Build Windows app
+        shell: pwsh
+        env:
+          # Stamps the bundled runtime sidecar with the app version instead of
+          # the Cargo crate version.
+          ALERA_BUILD_VERSION: ${{ steps.version.outputs.version }}
+        run: >-
+          flutter build windows --release
+          --dart-define=ALERA_FLAVOR=release
+          --dart-define=ALERA_RELEASE_PAGE_URL=https://github.com/${{ github.repository }}/releases
+
+      - name: Package release zip
+        id: package
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $release = 'build/windows/x64/runner/Release'
+          foreach ($required in "$release/Alera.exe", "$release/resources/alera/alera.exe") {
+            if (-not (Test-Path -LiteralPath $required -PathType Leaf)) { throw "Missing $required." }
+          }
+          $name = "alera-$($env:VERSION.Split('+')[0])-windows-x64.zip"
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Compress-Archive -Path "$release/*" -DestinationPath "dist/$name" -CompressionLevel Optimal
+          $hash = (Get-FileHash -Algorithm SHA256 "dist/$name").Hash.ToLowerInvariant()
+          "$hash  $name" | Out-File -Encoding ascii -NoNewline "dist/$name.sha256"
+          Get-ChildItem dist | Format-Table Name, Length
+
+      - name: Upload release zip
+        uses: actions/upload-artifact@v7
+        with:
+          name: fork-windows-release
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.build.outputs.tag }}
+      TARGET_SHA: ${{ needs.build.outputs.target_sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.build.outputs.target_sha }}
+          fetch-depth: 0
+          submodules: false
+
+      - name: Setup Dart
+        uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260
+
+      - name: Download release zip
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: fork-windows-release
+          path: dist
+
+      - name: Generate release notes
+        run: |
+          set -euo pipefail
+          # Notes start at the previous fork release. The first fork release has
+          # none, so it starts at the newest upstream tag in this history.
+          previous="$(git describe --tags --abbrev=0 --match 'v[0-9]*' "$TARGET_SHA^" 2>/dev/null || true)"
+          if [[ -z "$previous" ]]; then
+            git fetch --quiet --no-tags https://github.com/leynier/alera.git '+refs/tags/v*:refs/tags/upstream/v*'
+            previous="$(git describe --tags --abbrev=0 --match 'upstream/v[0-9]*.[0-9]*.[0-9]' "$TARGET_SHA" 2>/dev/null || true)"
+          fi
+          args=(--scope desktop --repo "$GITHUB_REPOSITORY" --tag "$TAG" --target "$TARGET_SHA" --output release-notes.md)
+          if [[ -n "$previous" ]]; then
+            args+=(--previous-tag "$previous")
+          fi
+          echo "Release notes from ${previous:-the start of history} to $TAG"
+          dart tool/release/generate_release_notes.dart "${args[@]}"
+
+      - name: Publish release
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            if [[ "$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" != "true" ]]; then
+              echo "::error::Release $TAG is already public."
+              exit 1
+            fi
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft \
+              --target "$TARGET_SHA" --title "$TAG" --notes-file release-notes.md
+          fi
+          gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+          # Publish only once every asset is attached, so nobody sees a partial release.
+          for asset in dist/*; do
+            name="$(basename "$asset")"
+            gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets \
+              --jq ".assets[].name" | grep -Fxq "$name" || { echo "::error::Missing asset $name"; exit 1; }
+          done
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
