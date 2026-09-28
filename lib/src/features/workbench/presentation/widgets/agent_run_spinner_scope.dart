@@ -21,7 +21,8 @@ const Duration agentRunSpinnerFrameInterval = Duration(milliseconds: 83);
 /// layout work in the list.
 ///
 /// The clock is reference counted by the mounted spinners, so an idle sidebar
-/// schedules no frames at all, and it stops while the window is hidden.
+/// schedules no frames at all, and it stops while the window is hidden or
+/// unfocused.
 class const AgentRunSpinnerScope({super.key, required final Widget child})
     extends StatefulWidget {
   static _AgentRunSpinnerScopeState? _maybeStateOf(BuildContext context) {
@@ -67,9 +68,10 @@ class _AgentRunSpinnerScopeState extends State<AgentRunSpinnerScope>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    _windowVisible =
-        state == AppLifecycleState.resumed ||
-        state == AppLifecycleState.inactive;
+    // Only a focused window animates. An unfocused one can still be on screen
+    // beside the app the user is working in, and each step there is a
+    // full-window frame nobody is watching; the arc holds its angle instead.
+    _windowVisible = state == AppLifecycleState.resumed;
     _syncTimer();
   }
 

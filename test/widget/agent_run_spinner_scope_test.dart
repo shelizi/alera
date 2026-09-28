@@ -67,6 +67,17 @@ void main() {
     expect(_running(tester), isTrue);
   });
 
+  testWidgets('the clock holds while the window is unfocused', (tester) async {
+    await tester.pumpWidget(_host(spinning: true));
+    expect(_running(tester), isTrue);
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    expect(_running(tester), isFalse);
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    expect(_running(tester), isTrue);
+  });
+
   testWidgets('a disabled ticker mode pauses the clock', (tester) async {
     await tester.pumpWidget(
       TickerMode(enabled: false, child: _host(spinning: true)),
