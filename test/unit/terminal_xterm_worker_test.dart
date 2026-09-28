@@ -497,6 +497,55 @@ void main() {
     },
   );
 
+  test(
+    'worker keeps full scrollback in sync without revisiting it per echo',
+    () async {
+      final direct = _createDirectTerminal(cols: 8, rows: 4, maxLines: 40);
+      final worker = await TerminalXtermWorker.start(
+        cols: 8,
+        rows: 4,
+        maxLines: 40,
+      );
+      addTearDown(worker.close);
+      final mirror = <String>[];
+      final initial = List<String>.generate(
+        60,
+        (index) => '${index + 1}',
+      ).join('\r\n');
+      direct.write(initial);
+      _applyBufferDelta(mirror, await worker.writeBufferDelta(initial));
+
+      final steps = <String>[
+        'a',
+        'b',
+        '\r\nnext',
+        // Insert and delete lines inside a scroll region in the viewport.
+        '\x1b[2;3r\x1b[2H\x1b[L\x1b[3H\x1b[M\x1b[r',
+        '\r\nmore\r\nlines',
+        // Clear the screen and then the scrollback.
+        '\x1b[2J\x1b[Hfresh',
+        '\x1b[3J',
+        '\r\nafter',
+        // The alternate buffer and back.
+        '\x1b[?1049halt\x1b[?1049l',
+        'c',
+      ];
+      for (final step in steps) {
+        direct.write(step);
+        final delta = await worker.writeBufferDelta(step);
+        _applyBufferDelta(mirror, delta);
+        expect(
+          mirror,
+          _bufferRows(direct),
+          reason: 'after ${jsonEncode(step)}',
+        );
+        if (step.length == 1 && !delta.fullRepaint) {
+          expect(delta.comparedRowCount, lessThanOrEqualTo(4));
+        }
+      }
+    },
+  );
+
   test('worker invalidates cached scrollback when CSI 3 J clears it', () async {
     final direct = _createDirectTerminal(cols: 8, rows: 3, maxLines: 25);
     final worker = await TerminalXtermWorker.start(

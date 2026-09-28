@@ -2038,7 +2038,17 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
           if (retainedStart + overlap != previousRefs.length) {
             fullRepaint = true;
           } else {
-            for (var row = 0; row < overlap; row++) {
+            // xterm only replaces lines inside the scroll margins, which sit
+            // in the viewport; scrollback lines leave only from the head. So
+            // rows that were already scrollback keep their identity and the
+            // check starts at the last of them, which keeps a keystroke echo
+            // from walking the whole scrollback.
+            final firstViewportRow = cachedBufferScrollBack - retainedStart;
+            for (
+              var row = firstViewportRow > 0 ? firstViewportRow - 1 : 0;
+              row < overlap;
+              row++
+            ) {
               if (!identical(previousRefs[retainedStart + row], lines[row])) {
                 fullRepaint = true;
                 break;
@@ -2057,13 +2067,27 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
       overlap = 0;
     }
 
-    final nextRefs = <BufferLine>[];
-    final nextCaches = <_TerminalXtermWorkerRowCache?>[];
     final changedRows = <Object?>[];
     final hyperlinkUpdates = <int, String>{};
     var comparedRowCount = 0;
     final currentScrollBack = terminal.buffer.scrollBack;
-    for (var row = 0; row < lines.length; row++) {
+    // Rows that were scrollback and still are carry no cache and cannot have
+    // changed, so the retained prefix of the previous lists is reused as is
+    // and only the rows after it are revisited.
+    var retainedRows = 0;
+    if (!fullRepaint) {
+      final previousScrollBackRows = cachedBufferScrollBack - trimStart;
+      retainedRows = previousScrollBackRows < currentScrollBack
+          ? previousScrollBackRows
+          : currentScrollBack;
+      if (retainedRows < 0) {
+        retainedRows = 0;
+      }
+    }
+    final nextRefs = <BufferLine>[];
+    final nextCaches = <_TerminalXtermWorkerRowCache?>[];
+    var cachedRowCount = 0;
+    for (var row = retainedRows; row < lines.length; row++) {
       final line = lines[row];
       nextRefs.add(line);
       final previousCache =
@@ -2089,11 +2113,13 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
           previousCache.isWrapped == line.isWrapped &&
           changedSpan == null) {
         nextCaches.add(remainsScrollback ? null : previousCache);
+        if (!remainsScrollback) cachedRowCount += 1;
         continue;
       }
       nextCaches.add(
         remainsScrollback ? null : _TerminalXtermWorkerRowCache.capture(line),
       );
+      if (!remainsScrollback) cachedRowCount += 1;
       final cellStart = changedSpan?.start ?? 0;
       final cellEnd =
           changedSpan?.end ?? (previousCache == null ? line.length : 0);
@@ -2109,12 +2135,24 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
       );
     }
 
-    bufferLineRefs = nextRefs;
-    bufferLineCaches = nextCaches;
+    if (retainedRows > 0) {
+      // Shift the retained prefix into place and append the revisited rows,
+      // instead of rebuilding lists as long as the whole buffer.
+      previousRefs!
+        ..removeRange(0, trimStart)
+        ..length = retainedRows
+        ..addAll(nextRefs);
+      previousCaches!
+        ..removeRange(0, trimStart)
+        ..length = retainedRows
+        ..addAll(nextCaches);
+      bufferLineRefs = previousRefs;
+      bufferLineCaches = previousCaches;
+    } else {
+      bufferLineRefs = nextRefs;
+      bufferLineCaches = nextCaches;
+    }
     cachedBufferScrollBack = currentScrollBack;
-    final cachedRowCount = nextCaches
-        .whereType<_TerminalXtermWorkerRowCache>()
-        .length;
     return <Object?>[
       fullRepaint,
       terminal.viewWidth,

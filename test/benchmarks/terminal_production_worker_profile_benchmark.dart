@@ -82,6 +82,32 @@ void main() {
         },
       ),
       _Scenario(
+        name: 'keystroke echo with short scrollback',
+        setup: (harness) async {
+          await harness.visible(_logLines(0, 100));
+          harness.resetMetrics();
+        },
+        run: (harness) async {
+          for (var key = 0; key < 200; key++) {
+            await harness.visible(String.fromCharCode(0x61 + key % 26));
+          }
+        },
+      ),
+      _Scenario(
+        name: 'keystroke echo with full scrollback',
+        setup: (harness) async {
+          for (var chunk = 0; chunk < 26; chunk++) {
+            await harness.visible(_logLines(chunk * 500, 500));
+          }
+          harness.resetMetrics();
+        },
+        run: (harness) async {
+          for (var key = 0; key < 200; key++) {
+            await harness.visible(String.fromCharCode(0x61 + key % 26));
+          }
+        },
+      ),
+      _Scenario(
         name: 'hidden terminal output',
         run: (harness) async {
           for (var chunk = 0; chunk < 20; chunk++) {
