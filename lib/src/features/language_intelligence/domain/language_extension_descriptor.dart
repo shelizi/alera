@@ -13,6 +13,7 @@ final class LanguageExtensionDescriptor {
     Iterable<String> semanticProviderIds = const <String>[],
     String? defaultSemanticProviderId,
     Iterable<LanguageCapability> capabilities = const <LanguageCapability>{},
+    Iterable<String> workspaceMarkers = const <String>[],
   }) : displayName = _requireNonEmpty(displayName, 'displayName'),
        fileExtensions = Set<String>.unmodifiable(
          fileExtensions.map(_normalizeExtension),
@@ -35,7 +36,10 @@ final class LanguageExtensionDescriptor {
        defaultSemanticProviderId = _normalizeOptionalId(
          defaultSemanticProviderId,
        ),
-       capabilities = Set<LanguageCapability>.unmodifiable(capabilities) {
+       capabilities = Set<LanguageCapability>.unmodifiable(capabilities),
+       workspaceMarkers = Set<String>.unmodifiable(
+         workspaceMarkers.map(_normalizeWorkspaceMarker),
+       ) {
     final unknownSyntaxExtensions = this.syntaxLanguageIdsByExtension.keys
         .where((extension) => !this.fileExtensions.contains(extension))
         .toList(growable: false);
@@ -69,12 +73,50 @@ final class LanguageExtensionDescriptor {
   final String? defaultSemanticProviderId;
   final Set<LanguageCapability> capabilities;
 
+  /// File names (`Cargo.toml`) or extension patterns (`*.csproj`) whose
+  /// presence near a workspace root shows the workspace uses this language.
+  /// Workspace prewarm starts semantic servers only for detected languages; an
+  /// empty set means the language cannot be detected and is always prewarmed.
+  final Set<String> workspaceMarkers;
+
+  /// Whether [fileName] is one of this language's [workspaceMarkers].
+  bool isWorkspaceMarker(String fileName) {
+    final name = fileName.toLowerCase();
+    for (final marker in workspaceMarkers) {
+      if (marker.startsWith('*.')
+          ? name.endsWith(marker.substring(1))
+          : name == marker) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   static String _normalizeExtension(String value) {
     final normalized = value.trim().toLowerCase();
     if (normalized.isEmpty || normalized == '.') {
       throw ArgumentError.value(value, 'fileExtensions', 'Extension is empty.');
     }
     return normalized.startsWith('.') ? normalized : '.$normalized';
+  }
+
+  static String _normalizeWorkspaceMarker(String value) {
+    final normalized = _requireNonEmpty(
+      value,
+      'workspaceMarkers',
+    ).toLowerCase();
+    if (normalized.contains('/') ||
+        normalized.contains(r'\') ||
+        (normalized.contains('*') &&
+            (!normalized.startsWith('*.') ||
+                normalized.lastIndexOf('*') != 0))) {
+      throw ArgumentError.value(
+        value,
+        'workspaceMarkers',
+        'A marker is a file name or a `*.extension` pattern.',
+      );
+    }
+    return normalized;
   }
 
   static String _normalizeAlias(String value) =>

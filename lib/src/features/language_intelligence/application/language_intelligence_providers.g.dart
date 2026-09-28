@@ -252,7 +252,7 @@ final class LanguageIntelligenceManagerProvider
 }
 
 String _$languageIntelligenceManagerHash() =>
-    r'1ae207a1d7ab54781be5a52e6d5a580c313db1b9';
+    r'017a8857a89e28f5df7bcd4ce8cba54f20f94354';
 
 @ProviderFor(languageIntelligenceStatusPort)
 final languageIntelligenceStatusPortProvider =

@@ -16,6 +16,7 @@ final LanguageExtensionContribution csharpLanguageExtension =
           semanticProviderIds: const <String>['csharp.csharp-ls'],
           defaultSemanticProviderId: 'csharp.csharp-ls',
           capabilities: builtinImplementationLanguageCapabilities,
+          workspaceMarkers: const <String>['*.sln', '*.slnx', '*.csproj'],
         ),
       ],
       providers: <LanguageProviderDescriptor>[

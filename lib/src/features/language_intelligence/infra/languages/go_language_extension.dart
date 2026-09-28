@@ -16,6 +16,7 @@ final LanguageExtensionContribution goLanguageExtension =
           semanticProviderIds: const <String>['go.gopls'],
           defaultSemanticProviderId: 'go.gopls',
           capabilities: builtinImplementationLanguageCapabilities,
+          workspaceMarkers: const <String>['go.mod', 'go.work'],
         ),
       ],
       providers: <LanguageProviderDescriptor>[

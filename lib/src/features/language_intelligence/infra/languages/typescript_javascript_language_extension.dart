@@ -21,6 +21,7 @@ final LanguageExtensionContribution typescriptJavascriptLanguageExtension =
           defaultSemanticProviderId:
               'typescript-javascript.typescript-language-server',
           capabilities: builtinImplementationLanguageCapabilities,
+          workspaceMarkers: const <String>['package.json', 'tsconfig.json'],
         ),
         LanguageExtensionDescriptor(
           id: LanguageId('javascript'),
@@ -36,6 +37,7 @@ final LanguageExtensionContribution typescriptJavascriptLanguageExtension =
           defaultSemanticProviderId:
               'typescript-javascript.typescript-language-server',
           capabilities: builtinImplementationLanguageCapabilities,
+          workspaceMarkers: const <String>['package.json', 'jsconfig.json'],
         ),
       ],
       providers: <LanguageProviderDescriptor>[

@@ -1,4 +1,5 @@
 import '../domain/language_capability.dart';
+import '../domain/language_extension_descriptor.dart';
 import '../domain/language_id.dart';
 import '../domain/language_intelligence_settings.dart';
 import '../domain/language_server_session_state.dart';
@@ -8,6 +9,7 @@ import 'language_provider_registry.dart';
 import 'language_semantic_adapter_factory.dart';
 import 'language_server_runtime.dart';
 import 'language_server_session_manager.dart';
+import 'workspace_marker_files.dart';
 
 final class LanguageIntelligenceDocumentState {
   const LanguageIntelligenceDocumentState({
@@ -33,21 +35,28 @@ final class LanguageIntelligenceManager {
     required LanguageExtensionRegistry registry,
     required LanguageServerSessionManager sessions,
     required LanguageSemanticAdapterFactory semanticAdapterFactory,
+    WorkspaceMarkerFilesPort? markerFiles,
   }) => LanguageIntelligenceManager._(
     registry: registry,
     sessions: sessions,
     semanticAdapterFactory: semanticAdapterFactory,
+    markerFiles: markerFiles,
   );
 
   LanguageIntelligenceManager._({
     required this._registry,
     required this._sessions,
     required this._semanticAdapterFactory,
+    required this._markerFiles,
   });
 
   final LanguageExtensionRegistry _registry;
   final LanguageServerSessionManager _sessions;
   final LanguageSemanticAdapterFactory _semanticAdapterFactory;
+
+  /// Limits workspace prewarm to the languages the workspace uses. Opening a
+  /// document still starts its server on demand.
+  final WorkspaceMarkerFilesPort? _markerFiles;
   final Map<_DocumentKey, _TrackedDocument> _documents =
       <_DocumentKey, _TrackedDocument>{};
   final Map<_BindingKey, _SemanticBindingCache> _bindings =
@@ -72,10 +81,18 @@ final class LanguageIntelligenceManager {
       );
     }
 
+    // Claimed before detection so a release or a newer prewarm that lands
+    // while the workspace is being scanned wins.
+    final generation = (_prewarmGenerations[workspaceId] ?? 0) + 1;
+    _prewarmGenerations[workspaceId] = generation;
+    final usesLanguage = await _workspaceLanguageFilter(workspaceRoot, target);
+    if (_prewarmGenerations[workspaceId] != generation) return;
+
     final languagesByProvider = <String, LanguageId>{};
     for (final language in _registry.languages) {
       final activation = settings.forLanguage(language.id);
       if (!activation.enabled) continue;
+      if (usesLanguage != null && !usesLanguage(language)) continue;
       final provider = _registry.semanticProviderFor(
         language.id,
         preferredProviderId: activation.semanticProviderId,
@@ -84,8 +101,6 @@ final class LanguageIntelligenceManager {
       languagesByProvider.putIfAbsent(provider.id, () => language.id);
     }
 
-    final generation = (_prewarmGenerations[workspaceId] ?? 0) + 1;
-    _prewarmGenerations[workspaceId] = generation;
     final desiredProviders = Set<String>.unmodifiable(languagesByProvider.keys);
     _desiredPrewarmProviders[workspaceId] = desiredProviders;
     _sessions.retainWorkspacePrewarms(
@@ -133,6 +148,26 @@ final class LanguageIntelligenceManager {
     await Future.wait<void>(
       List<Future<void>>.generate(workerCount, (_) => worker()),
     );
+  }
+
+  Future<bool Function(LanguageExtensionDescriptor)?> _workspaceLanguageFilter(
+    String workspaceRoot,
+    LanguageServerTarget target,
+  ) async {
+    final markerFiles = _markerFiles;
+    if (markerFiles == null || target != LanguageServerTarget.localWorkspace) {
+      return null;
+    }
+    final Set<String> names;
+    try {
+      names = await markerFiles.markerCandidates(workspaceRoot);
+    } on Object {
+      // Detection is an optimization; an unreadable root prewarms as before.
+      return null;
+    }
+    return (language) =>
+        language.workspaceMarkers.isEmpty ||
+        names.any(language.isWorkspaceMarker);
   }
 
   void releaseWorkspacePrewarm(String workspaceId) {

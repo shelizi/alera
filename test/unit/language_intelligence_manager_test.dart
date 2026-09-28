@@ -7,6 +7,7 @@ import 'package:alera/src/features/language_intelligence/application/language_pr
 import 'package:alera/src/features/language_intelligence/application/language_semantic_adapter_factory.dart';
 import 'package:alera/src/features/language_intelligence/application/language_server_runtime.dart';
 import 'package:alera/src/features/language_intelligence/application/language_server_session_manager.dart';
+import 'package:alera/src/features/language_intelligence/application/workspace_marker_files.dart';
 import 'package:alera/src/features/language_intelligence/domain/language_capability.dart';
 import 'package:alera/src/features/language_intelligence/domain/language_extension_descriptor.dart';
 import 'package:alera/src/features/language_intelligence/domain/language_id.dart';
@@ -204,6 +205,94 @@ void main() {
       expect(snapshot.state, LanguageServerSessionState.ready);
       expect(snapshot.activeDocumentCount, 0);
     }
+  });
+
+  group('workspace prewarm language detection', () {
+    final go = LanguageId('go');
+    final python = LanguageId('python');
+    late _FakeRuntime detectRuntime;
+
+    LanguageIntelligenceManager detectingManager(
+      WorkspaceMarkerFilesPort markerFiles,
+    ) {
+      final languages = <LanguageId>[rust, go, python];
+      final detectRegistry = _multiProviderRegistry(
+        languages,
+        markers: <LanguageId, List<String>>{
+          rust: <String>['Cargo.toml'],
+          go: <String>['go.mod'],
+          // python declares no markers, so it is always prewarmed.
+        },
+      );
+      detectRuntime = _FakeRuntime();
+      return LanguageIntelligenceManager(
+        registry: detectRegistry,
+        sessions: LanguageServerSessionManager(
+          registry: detectRegistry,
+          runtime: detectRuntime,
+        ),
+        semanticAdapterFactory: _FakeSemanticFactory(),
+        markerFiles: markerFiles,
+      );
+    }
+
+    LanguageIntelligenceSettings allEnabled() {
+      var settings = LanguageIntelligenceSettings.defaults;
+      for (final language in <LanguageId>[rust, go, python]) {
+        settings = settings.withLanguage(
+          language,
+          LanguageActivationSettings(
+            enabled: true,
+            semanticProviderId: '${language.value}-semantic',
+          ),
+        );
+      }
+      return settings;
+    }
+
+    Future<void> prewarm(LanguageIntelligenceManager target) =>
+        target.prewarmWorkspace(
+          workspaceId: 'workspace-a',
+          workspaceRoot: r'C:\repo',
+          settings: allEnabled(),
+          target: LanguageServerTarget.localWorkspace,
+        );
+
+    test('starts only languages whose markers are present', () async {
+      await prewarm(
+        detectingManager(_FakeMarkerFiles(<String>{'cargo.toml', 'README.md'})),
+      );
+
+      expect(detectRuntime.startedProviderIds, <String>{
+        'rust-semantic',
+        'python-semantic',
+      });
+    });
+
+    test('a failed scan prewarms every enabled language', () async {
+      await prewarm(detectingManager(_FakeMarkerFiles.failing()));
+
+      expect(detectRuntime.startedProviderIds, <String>{
+        'rust-semantic',
+        'go-semantic',
+        'python-semantic',
+      });
+    });
+
+    test(
+      'releasing the workspace during the scan cancels the prewarm',
+      () async {
+        final markerFiles = _FakeMarkerFiles.gated(<String>{'Cargo.toml'});
+        final target = detectingManager(markerFiles);
+
+        final pending = prewarm(target);
+        target.releaseWorkspacePrewarm('workspace-a');
+        markerFiles.gate.complete();
+        await pending;
+
+        expect(detectRuntime.startCalls, 0);
+      },
+    );
   });
 
   test(
@@ -416,8 +505,9 @@ LanguageExtensionRegistry _registry(LanguageId rust) {
 }
 
 LanguageExtensionRegistry _multiProviderRegistry(
-  Iterable<LanguageId> languages,
-) {
+  Iterable<LanguageId> languages, {
+  Map<LanguageId, List<String>> markers = const <LanguageId, List<String>>{},
+}) {
   final registry = LanguageExtensionRegistry();
   for (final language in languages) {
     final providerId = '${language.value}-semantic';
@@ -432,6 +522,7 @@ LanguageExtensionRegistry _multiProviderRegistry(
           LanguageCapability.definition,
           LanguageCapability.references,
         },
+        workspaceMarkers: markers[language] ?? const <String>[],
       ),
     );
     registry.registerProvider(
@@ -468,6 +559,28 @@ Future<void> _flushAsync() async {
   await Future<void>.delayed(Duration.zero);
 }
 
+final class _FakeMarkerFiles implements WorkspaceMarkerFilesPort {
+  _FakeMarkerFiles(this.names) : fails = false, _gate = null;
+  _FakeMarkerFiles.failing()
+    : names = const <String>{},
+      fails = true,
+      _gate = null;
+  _FakeMarkerFiles.gated(this.names) : fails = false, _gate = Completer<void>();
+
+  final Set<String> names;
+  final bool fails;
+  final Completer<void>? _gate;
+
+  Completer<void> get gate => _gate!;
+
+  @override
+  Future<Set<String>> markerCandidates(String workspaceRoot) async {
+    await _gate?.future;
+    if (fails) throw StateError('unreadable workspace');
+    return names;
+  }
+}
+
 final class _FakeRuntimeSession implements LanguageServerRuntimeSession {
   const _FakeRuntimeSession(this.id);
 
@@ -480,6 +593,7 @@ final class _FakeRuntime implements LanguageServerRuntimePort {
   int stopCalls = 0;
   int concurrentStarts = 0;
   int maxConcurrentStarts = 0;
+  final Set<String> startedProviderIds = <String>{};
   final List<_FakeRuntimeSession> sessions = <_FakeRuntimeSession>[];
   final Map<LanguageServerRuntimeSession, StreamController<LanguageServerExit>>
   exits =
@@ -497,6 +611,7 @@ final class _FakeRuntime implements LanguageServerRuntimePort {
     LanguageServerRuntimeStartRequest request,
   ) async {
     startCalls += 1;
+    startedProviderIds.add(request.provider.id);
     concurrentStarts += 1;
     if (concurrentStarts > maxConcurrentStarts) {
       maxConcurrentStarts = concurrentStarts;

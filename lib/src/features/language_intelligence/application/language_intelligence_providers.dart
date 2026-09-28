@@ -2,6 +2,7 @@ import 'package:alera/src/features/language_intelligence/infra/builtin_language_
 import 'package:alera/src/features/language_intelligence/infra/code_forge_language_server_runtime.dart';
 import 'package:alera/src/features/language_intelligence/infra/code_forge_semantic_adapter_factory.dart';
 import 'package:alera/src/features/language_intelligence/infra/git_nested_worktree_locator.dart';
+import 'package:alera/src/features/language_intelligence/infra/local_workspace_marker_files.dart';
 import 'package:alera/src/shared/infra/git/git_providers.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart' show Provider;
 import 'package:riverpod_annotation/riverpod_annotation.dart';
@@ -54,6 +55,7 @@ LanguageIntelligenceManager languageIntelligenceManager(Ref ref) =>
       registry: ref.watch(languageExtensionRegistryProvider),
       sessions: ref.watch(languageServerSessionManagerProvider),
       semanticAdapterFactory: ref.watch(languageSemanticAdapterFactoryProvider),
+      markerFiles: const LocalWorkspaceMarkerFiles(),
     );
 
 @Riverpod(keepAlive: true)

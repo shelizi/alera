@@ -456,6 +456,8 @@ Rules:
 8. Provider crash moves to `failed`; bounded restart/backoff is owned by the manager.
 9. Disabling a language closes documents and stops the owned server.
 10. A stale request is discarded by document/workspace generation before it reaches presentation state.
+11. Selecting a local workspace prewarms semantic servers only for enabled languages whose `workspaceMarkers` (for example `pubspec.yaml`, `Cargo.toml`, `*.csproj`) appear in the workspace root or its immediate subdirectories. A language without markers is always prewarmed, and opening a document still starts its server on demand.
+12. Leaving a workspace releases its prewarm after five minutes rather than the 30 second document idle delay, so switching back reuses running servers instead of re-indexing.
 
 No process lifecycle timer or open-document map should live in `WorkspaceEditorSurface`.
 

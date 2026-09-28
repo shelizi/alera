@@ -25,6 +25,13 @@ final LanguageExtensionContribution pythonLanguageExtension =
           ],
           defaultSemanticProviderId: 'python.pyrefly',
           capabilities: builtinImplementationLanguageCapabilities,
+          workspaceMarkers: const <String>[
+            'pyproject.toml',
+            'setup.py',
+            'setup.cfg',
+            'requirements.txt',
+            '*.py',
+          ],
         ),
       ],
       providers: <LanguageProviderDescriptor>[

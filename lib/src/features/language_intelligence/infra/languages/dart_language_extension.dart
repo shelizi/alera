@@ -17,6 +17,7 @@ final LanguageExtensionContribution dartLanguageExtension =
           semanticProviderIds: const <String>['dart.analysis-server'],
           defaultSemanticProviderId: 'dart.analysis-server',
           capabilities: builtinImplementationLanguageCapabilities,
+          workspaceMarkers: const <String>['pubspec.yaml'],
         ),
       ],
       providers: <LanguageProviderDescriptor>[

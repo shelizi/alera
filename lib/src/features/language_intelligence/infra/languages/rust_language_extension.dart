@@ -17,6 +17,7 @@ final LanguageExtensionContribution rustLanguageExtension =
           semanticProviderIds: const <String>['rust.rust-analyzer'],
           defaultSemanticProviderId: 'rust.rust-analyzer',
           capabilities: builtinImplementationLanguageCapabilities,
+          workspaceMarkers: const <String>['Cargo.toml'],
         ),
       ],
       providers: <LanguageProviderDescriptor>[

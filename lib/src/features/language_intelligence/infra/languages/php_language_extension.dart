@@ -18,6 +18,7 @@ final LanguageExtensionContribution phpLanguageExtension =
           ],
           defaultSemanticProviderId: 'php.intelephense',
           capabilities: builtinLanguageCapabilities,
+          workspaceMarkers: const <String>['composer.json', '*.php'],
         ),
       ],
       providers: <LanguageProviderDescriptor>[
