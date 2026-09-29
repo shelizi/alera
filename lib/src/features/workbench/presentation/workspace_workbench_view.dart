@@ -18,7 +18,6 @@ import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 import 'package:alera/src/features/agent_status/presentation/agent_identity_icon.dart';
 import 'package:alera/src/design_system/feedback/alera_status_dot.dart';
 import 'package:alera/src/features/projects/domain/project.dart';
-import 'package:alera/src/features/projects/application/project_providers.dart';
 import 'package:alera/src/features/workbench/application/workbench_tab_acknowledgements.dart';
 import 'package:alera/src/features/workbench/domain/workbench_layout.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';

@@ -97,6 +97,7 @@ void _registerWorkspaceGitDiffPanelContextMenuTests() {
     await tester.pumpAndSettle();
 
     expect(find.text('Open File'), findsNothing);
+    expect(find.text('Open with Default Application'), findsNothing);
     expect(find.text('Open in Zed'), findsNothing);
     expect(find.text('Reveal in Explorer'), findsOneWidget);
   });
@@ -121,6 +122,7 @@ void _registerWorkspaceGitDiffPanelContextMenuTests() {
     await tester.tap(find.text('src'), buttons: kSecondaryMouseButton);
     await tester.pumpAndSettle();
     expect(find.text('Open File'), findsNothing);
+    expect(find.text('Open with Default Application'), findsNothing);
     expect(find.text('Open in Zed'), findsNothing);
     expect(find.text('Reveal in Explorer'), findsOneWidget);
 
