@@ -179,6 +179,15 @@ void main() {
     );
   });
 
+  test('markdown preview search matches case-insensitively', () {
+    expect(
+      markdownViewerSearchMatchOffsets('Alpha beta alpha ALPHA', 'alpha'),
+      const <int>[0, 11, 17],
+    );
+    expect(markdownViewerSearchMatchOffsets('Alpha', '   '), isEmpty);
+    expect(markdownViewerSearchMatchOffsets('', 'alpha'), isEmpty);
+  });
+
   test('canonical local image resolver allows workspace files', () async {
     final tempRoot = await Directory.systemTemp.createTemp('alera-md-image-');
     addTearDown(() async {
@@ -313,6 +322,36 @@ void main() {
     expect(service.reads, const <String>['docs/readme.md']);
   });
 
+  testWidgets('searches within markdown preview and navigates matches', (
+    tester,
+  ) async {
+    final registry = EditorSessionRegistry();
+    final service = _FakeWorkspaceFileService(
+      '# Alpha\n\nBeta alpha\n\nALPHA final',
+    );
+
+    await tester.pumpWidget(
+      _surface(registry: registry, workspaceFiles: service),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Search preview'));
+    await tester.pumpAndSettle();
+    expect(find.text('Find in Preview'), findsOneWidget);
+
+    await tester.enterText(find.byType(EditableText).last, 'alpha');
+    await tester.pumpAndSettle();
+    expect(find.text('1/3'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Next Match'));
+    await tester.pumpAndSettle();
+    expect(find.text('2/3'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Close Search'));
+    await tester.pumpAndSettle();
+    expect(find.text('Find in Preview'), findsNothing);
+  });
+
   testWidgets('restores scroll position after switching away and back', (
     tester,
   ) async {
@@ -355,12 +394,11 @@ void main() {
     expect(_markdownScrollOffset(tester), closeTo(offsetBeforeSwitch, 0.5));
   });
 
-  testWidgets('keeps horizontal overflow controls visible in markdown preview', (
-    tester,
-  ) async {
-    final registry = EditorSessionRegistry();
-    final service = _FakeWorkspaceFileService(
-      '''
+  testWidgets(
+    'keeps horizontal overflow controls visible in markdown preview',
+    (tester) async {
+      final registry = EditorSessionRegistry();
+      final service = _FakeWorkspaceFileService('''
 ```text
 ${List<String>.filled(220, 'wide').join('_')}
 ```
@@ -368,33 +406,39 @@ ${List<String>.filled(220, 'wide').join('_')}
 \\[
 ${List<String>.filled(80, r'\frac{a}{b}').join(' + ')}
 \\]
-''',
-    );
+''');
 
-    await tester.pumpWidget(
-      _surface(registry: registry, workspaceFiles: service),
-    );
-    await tester.pumpAndSettle();
+      await tester.pumpWidget(
+        _surface(registry: registry, workspaceFiles: service),
+      );
+      await tester.pumpAndSettle();
 
-    final scrollbarTheme = tester.widget<ScrollbarTheme>(
-      find.byType(ScrollbarTheme),
-    );
-    expect(
-      scrollbarTheme.data.thumbVisibility?.resolve(const <WidgetState>{}),
-      isTrue,
-    );
+      final scrollbarTheme = tester.widget<ScrollbarTheme>(
+        find.byType(ScrollbarTheme),
+      );
+      expect(
+        scrollbarTheme.data.thumbVisibility?.resolve(const <WidgetState>{}),
+        isTrue,
+      );
 
-    final horizontalPositions = tester
-        .stateList<ScrollableState>(find.byType(Scrollable))
-        .map((state) => state.position)
-        .where((position) => position.axis == Axis.horizontal)
-        .toList(growable: false);
-    expect(horizontalPositions, isNotEmpty);
-    expect(
-      horizontalPositions.any((position) => position.maxScrollExtent > 0),
-      isTrue,
-    );
-  });
+      final codeScrollbar = tester.widget<Scrollbar>(
+        find.byKey(const ValueKey<String>('markdown-code-x-scrollbar')),
+      );
+      expect(codeScrollbar.thumbVisibility, isTrue);
+      expect(codeScrollbar.scrollbarOrientation, ScrollbarOrientation.bottom);
+
+      final horizontalPositions = tester
+          .stateList<ScrollableState>(find.byType(Scrollable))
+          .map((state) => state.position)
+          .where((position) => position.axis == Axis.horizontal)
+          .toList(growable: false);
+      expect(horizontalPositions, isNotEmpty);
+      expect(
+        horizontalPositions.any((position) => position.maxScrollExtent > 0),
+        isTrue,
+      );
+    },
+  );
 
   testWidgets('refresh reloads disk content while the editor buffer is clean', (
     tester,
