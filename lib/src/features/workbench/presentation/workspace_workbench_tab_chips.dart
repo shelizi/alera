@@ -52,6 +52,7 @@ class const _DraggableWorkspaceTabChip({
         childWhenDragging: Opacity(
           opacity: 0.45,
           child: _WorkspaceTabChip(
+            workspace: workspace,
             tab: tab,
             terminalSession: session,
             status: status,
@@ -67,6 +68,7 @@ class const _DraggableWorkspaceTabChip({
           ),
         ),
         child: _WorkspaceTabChip(
+          workspace: workspace,
           tab: tab,
           terminalSession: session,
           status: status,
@@ -86,6 +88,7 @@ class const _DraggableWorkspaceTabChip({
 }
 
 class const _WorkspaceTabChip({
+  required final Workspace workspace,
   required final WorkspaceTabRecord tab,
   required final TerminalSessionHandle? terminalSession,
   required final AgentStatusEntry? status,
@@ -232,6 +235,8 @@ enum _TabMenuAction {
   splitRight,
   keepOpen,
   reloadDocument,
+  openWithDefaultApplication,
+  revealInFileManager,
   close,
   closeOthers,
   closeRight,

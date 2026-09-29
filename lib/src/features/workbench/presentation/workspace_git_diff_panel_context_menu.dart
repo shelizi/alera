@@ -2,6 +2,7 @@ part of 'workspace_git_diff_panel.dart';
 
 enum _GitChangeContextAction {
   openFile,
+  openWithDefaultApplication,
   openExternally,
   revealInExplorer,
   addToGitIgnore,
@@ -19,6 +20,7 @@ Future<void> _showGitChangeContextMenu(
   required bool canDiscard,
   required bool busy,
   required VoidCallback? onOpenFile,
+  required VoidCallback? onOpenWithDefaultApplication,
   required ExternalEditorSpec? externalEditor,
   required List<ExternalEditorSpec> installedExternalEditors,
   required ValueChanged<ExternalEditorKind>? onOpenExternally,
@@ -38,6 +40,12 @@ Future<void> _showGitChangeContextMenu(
           value: .openFile,
           label: 'Open File',
           leading: Icon(AleraIcons.file, size: 16),
+        ),
+      if (onOpenWithDefaultApplication != null)
+        const AleraDropdownEntry<_GitChangeContextAction>(
+          value: .openWithDefaultApplication,
+          label: 'Open with Default Application',
+          leading: Icon(AleraIcons.external, size: 16),
         ),
       if (externalEditor case final editor?)
         AleraDropdownSubmenuEntry<_GitChangeContextAction, ExternalEditorKind>(
@@ -93,6 +101,8 @@ Future<void> _showGitChangeContextMenu(
   switch (selected) {
     case _GitChangeContextAction.openFile:
       onOpenFile?.call();
+    case _GitChangeContextAction.openWithDefaultApplication:
+      onOpenWithDefaultApplication?.call();
     case _GitChangeContextAction.openExternally:
       final kind = pickedKind ?? externalEditor?.kind;
       if (kind != null) {

@@ -91,6 +91,7 @@ void _registerWorkspaceWorkbenchViewTabTests() {
       kind: WorkspaceTabKind.editor,
       filePath: 'README.md',
     );
+    final opener = _RecordingWorkspaceFolderOpener();
 
     await _pumpWorkbenchView(
       tester,
@@ -99,7 +100,7 @@ void _registerWorkspaceWorkbenchViewTabTests() {
       layout: .single(
         workspaceId: _workspaceId,
         groupId: 'group-a',
-        tabIds: <String>[terminalTab.id, editorTab.id],
+        tabIds: <String>[editorTab.id, terminalTab.id],
       ),
       createdTabs: createdTabs,
       selectedTabs: selectedTabs,
@@ -110,10 +111,26 @@ void _registerWorkspaceWorkbenchViewTabTests() {
       splitGroups: splitGroups,
       mergedGroups: mergedGroups,
       updatedRatios: updatedRatios,
+      workspaceFolderOpener: opener,
     );
 
     await _openTabContextMenu(tester, 'README.md');
     expect(find.text('Reload Document'), findsOneWidget);
+    expect(find.text('Open with Default Application'), findsOneWidget);
+    expect(find.text('Reveal in Explorer'), findsOneWidget);
+
+    await tester.tap(find.text('Open with Default Application'));
+    await tester.pumpAndSettle();
+    expect(opener.defaultOpenedPaths, <String>[
+      terminalAbsolutePath(rootPath: '/tmp/alera', relativePath: 'README.md'),
+    ]);
+
+    await _openTabContextMenu(tester, 'README.md');
+    await tester.tap(find.text('Reveal in Explorer'));
+    await tester.pumpAndSettle();
+    expect(opener.revealedPaths, <String>[
+      terminalAbsolutePath(rootPath: '/tmp/alera', relativePath: 'README.md'),
+    ]);
   });
 
   testWidgets('tab context menu closes sibling tabs', (tester) async {

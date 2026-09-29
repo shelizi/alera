@@ -13,6 +13,7 @@ class const _GitDiffGroups({
   required final ValueChanged<GitChangeEntry> onToggleSubmodule,
   required final OpenGitDiffTabCallback onOpenGitDiff,
   final ValueChanged<String>? onOpenFile,
+  final ValueChanged<String>? onOpenWithDefaultApplication,
   final void Function(String path, ExternalEditorKind kind)? onOpenExternally,
   required final ExternalEditorSpec? externalEditor,
   required final List<ExternalEditorSpec> installedExternalEditors,
@@ -108,6 +109,8 @@ class const _GitDiffGroups({
                       onToggleSubmodule: onToggleSubmodule,
                       onOpenGitDiff: onOpenGitDiff,
                       onOpenFile: onOpenFile,
+                      onOpenWithDefaultApplication:
+                          onOpenWithDefaultApplication,
                       onOpenExternally: onOpenExternally,
                       externalEditor: externalEditor,
                       installedExternalEditors: installedExternalEditors,
@@ -142,6 +145,9 @@ class const _GitDiffGroups({
         showAreaMarker: group.unified,
         busy: busy,
         onOpenFile: onOpenFile == null ? null : () => onOpenFile!(entry.path),
+        onOpenWithDefaultApplication: onOpenWithDefaultApplication == null
+            ? null
+            : () => onOpenWithDefaultApplication!(entry.path),
         onOpenExternally: onOpenExternally == null
             ? null
             : (kind) => onOpenExternally!(entry.path, kind),
@@ -174,6 +180,7 @@ class const _GitDiffGroups({
           busy: busy,
           onOpenGitDiff: onOpenGitDiff,
           onOpenFile: onOpenFile,
+          onOpenWithDefaultApplication: onOpenWithDefaultApplication,
           onOpenExternally: onOpenExternally,
           externalEditor: externalEditor,
           installedExternalEditors: installedExternalEditors,

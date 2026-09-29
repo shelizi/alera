@@ -16,6 +16,7 @@ void _registerWorkspaceGitDiffPanelContextMenuTests() {
       );
     final opened = <String>[];
     final launcher = _RecordingExternalEditorLauncher();
+    final opener = _RecordingWorkspaceFolderOpener();
 
     await _pumpPanel(
       tester,
@@ -23,12 +24,14 @@ void _registerWorkspaceGitDiffPanelContextMenuTests() {
       viewMode: .tree,
       onOpenFile: opened.add,
       externalEditorLauncher: launcher,
+      workspaceFolderOpener: opener,
     );
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('dirty.dart'), buttons: kSecondaryMouseButton);
     await tester.pumpAndSettle();
     expect(find.text('Open File'), findsOneWidget);
+    expect(find.text('Open with Default Application'), findsOneWidget);
     expect(find.text('Open in Zed'), findsOneWidget);
     expect(find.text('Reveal in Explorer'), findsOneWidget);
     expect(find.text('Add to .gitignore'), findsOneWidget);
@@ -54,6 +57,18 @@ void _registerWorkspaceGitDiffPanelContextMenuTests() {
         relativePath: 'lib/src/dirty.dart',
       ),
     );
+
+    await tester.tap(find.text('dirty.dart'), buttons: kSecondaryMouseButton);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Open with Default Application'));
+    await tester.pumpAndSettle();
+
+    expect(opener.defaultOpenedPaths, <String>[
+      terminalAbsolutePath(
+        rootPath: '/tmp/project',
+        relativePath: 'lib/src/dirty.dart',
+      ),
+    ]);
   });
 
   testWidgets('deleted file context menu does not offer Open in Zed', (

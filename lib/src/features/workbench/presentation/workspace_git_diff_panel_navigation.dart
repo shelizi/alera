@@ -10,6 +10,33 @@ extension _WorkspaceGitDiffPanelNavigation on _WorkspaceGitDiffPanelState {
     widget.onOpenFile?.call(workspaceRelativePath);
   }
 
+  Future<void> _openWorkspaceFileWithDefaultApplication(
+    String sourceRelativePath,
+  ) async {
+    final workspaceRelativePath = widget.sourceControlScope
+        .toWorkspaceRelativePath(sourceRelativePath);
+    if (workspaceRelativePath == null) {
+      return;
+    }
+    final result = await ref
+        .read(workspaceFolderOpenerProvider)
+        .openWithDefaultApplication(
+          terminalAbsolutePath(
+            rootPath: widget.workspace.path,
+            relativePath: workspaceRelativePath,
+          ),
+        );
+    if (!mounted || result.ok) {
+      return;
+    }
+    AleraToast.show(
+      context,
+      message:
+          result.message ?? 'Could not open item with the default application.',
+      tone: .error,
+    );
+  }
+
   Future<void> _openWorkspaceFileExternally(
     String sourceRelativePath,
     ExternalEditorKind kind,

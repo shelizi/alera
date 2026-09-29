@@ -7,6 +7,7 @@ class const _SubmoduleChanges({
   required final bool busy,
   required final OpenGitDiffTabCallback onOpenGitDiff,
   final ValueChanged<String>? onOpenFile,
+  final ValueChanged<String>? onOpenWithDefaultApplication,
   final void Function(String path, ExternalEditorKind kind)? onOpenExternally,
   required final ExternalEditorSpec? externalEditor,
   required final List<ExternalEditorSpec> installedExternalEditors,
@@ -54,6 +55,10 @@ class const _SubmoduleChanges({
                 onOpenFile: onOpenFile == null
                     ? null
                     : () => onOpenFile!(child.path),
+                onOpenWithDefaultApplication:
+                    onOpenWithDefaultApplication == null
+                    ? null
+                    : () => onOpenWithDefaultApplication!(child.path),
                 onOpenExternally: onOpenExternally == null
                     ? null
                     : (kind) => onOpenExternally!(child.path, kind),

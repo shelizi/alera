@@ -20,6 +20,10 @@ extension _WorkspaceTabMenu on _WorkspaceTabChip {
         : <String>[
             for (final candidate in groupTabs.skip(tabIndex + 1)) candidate.id,
           ];
+    final filePath = tab.filePath;
+    final workspaceFolderOpener = filePath == null
+        ? null
+        : ref.read(workspaceFolderOpenerProvider);
     final selected = await showMenu<_TabMenuAction>(
       context: context,
       position: .fromRect(
@@ -66,6 +70,18 @@ extension _WorkspaceTabMenu on _WorkspaceTabChip {
             value: .reloadDocument,
             label: 'Reload Document',
             leading: Icon(AleraIcons.refresh, size: 16),
+          ),
+        if (filePath != null)
+          const AleraDropdownEntry<_TabMenuAction>(
+            value: .openWithDefaultApplication,
+            label: 'Open with Default Application',
+            leading: Icon(AleraIcons.external, size: 16),
+          ),
+        if (filePath != null && workspaceFolderOpener != null)
+          AleraDropdownEntry<_TabMenuAction>(
+            value: .revealInFileManager,
+            label: 'Reveal in ${workspaceFolderOpener.fileManagerLabel}',
+            leading: const Icon(AleraIcons.copyFiles, size: 16),
           ),
         const AleraDropdownEntry<_TabMenuAction>(
           value: .close,
@@ -130,6 +146,10 @@ extension _WorkspaceTabMenu on _WorkspaceTabChip {
         _KeepPreviewTabScope.maybeOf(context)?.call(tab.id);
       case _TabMenuAction.reloadDocument:
         await reloadWorkspaceEditorDocument(context, ref, tab);
+      case _TabMenuAction.openWithDefaultApplication:
+        await _openWorkspaceTabFileWithDefaultApplication(context, ref);
+      case _TabMenuAction.revealInFileManager:
+        await _revealWorkspaceTabFile(context, ref);
       case _TabMenuAction.close:
         onClose();
       case _TabMenuAction.closeOthers:
@@ -160,5 +180,58 @@ extension _WorkspaceTabMenu on _WorkspaceTabChip {
       case _TabMenuAction.openExternalTerminal:
         await onOpenExternalTerminal?.call(tab);
     }
+  }
+
+  Future<void> _openWorkspaceTabFileWithDefaultApplication(
+    BuildContext context,
+    WidgetRef ref,
+  ) async {
+    final filePath = tab.filePath;
+    if (filePath == null) {
+      return;
+    }
+    final result = await ref
+        .read(workspaceFolderOpenerProvider)
+        .openWithDefaultApplication(
+          terminalAbsolutePath(
+            rootPath: workspace.path,
+            relativePath: filePath,
+          ),
+        );
+    if (!context.mounted || result.ok) {
+      return;
+    }
+    AleraToast.show(
+      context,
+      message:
+          result.message ?? 'Could not open item with the default application.',
+      tone: .error,
+    );
+  }
+
+  Future<void> _revealWorkspaceTabFile(
+    BuildContext context,
+    WidgetRef ref,
+  ) async {
+    final filePath = tab.filePath;
+    if (filePath == null) {
+      return;
+    }
+    final result = await ref
+        .read(workspaceFolderOpenerProvider)
+        .reveal(
+          terminalAbsolutePath(
+            rootPath: workspace.path,
+            relativePath: filePath,
+          ),
+        );
+    if (!context.mounted || result.ok) {
+      return;
+    }
+    AleraToast.show(
+      context,
+      message: result.message ?? 'Could not reveal item in file manager.',
+      tone: .error,
+    );
   }
 }

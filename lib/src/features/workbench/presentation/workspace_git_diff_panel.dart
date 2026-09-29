@@ -284,6 +284,8 @@ class _WorkspaceGitDiffPanelState extends ConsumerState<WorkspaceGitDiffPanel> {
                       onOpenFile: widget.onOpenFile == null
                           ? null
                           : _openWorkspaceFile,
+                      onOpenWithDefaultApplication:
+                          _openWorkspaceFileWithDefaultApplication,
                       onOpenExternally: _openWorkspaceFileExternally,
                       externalEditor: resolvedEditor,
                       installedExternalEditors: installedEditors,

@@ -26,6 +26,7 @@ Future<void> _pumpWorkbenchView(
   List<AgentType> installedAgents = const <AgentType>[],
   List<({AgentType agentType, String? targetGroupId})>? createdAgentTabs,
   FakeGitBackend? gitBackend,
+  WorkspaceFolderOpener? workspaceFolderOpener,
 }) async {
   final openExternalTerminal = externalTerminalTabs == null
       ? null
@@ -41,6 +42,10 @@ Future<void> _pumpWorkbenchView(
         installedAgentClisProvider.overrideWith((ref) async => installedAgents),
         if (gitBackend != null)
           gitBackendProvider.overrideWithValue(gitBackend),
+        if (workspaceFolderOpener != null)
+          workspaceFolderOpenerProvider.overrideWithValue(
+            workspaceFolderOpener,
+          ),
       ],
       child: MaterialApp(
         home: Scaffold(
@@ -449,4 +454,49 @@ class const _UpdatedSplitRatioAction(
 
   @override
   int get hashCode => Object.hash(Object.hashAll(nodePath), ratio);
+}
+
+final class _RecordingWorkspaceFolderOpener extends WorkspaceFolderOpener {
+  _RecordingWorkspaceFolderOpener()
+    : super(
+        processRunner: _UnusedProcessRunner(),
+        platform: .windows,
+        directoryExists: (_) async => true,
+      );
+
+  final List<String> revealedPaths = <String>[];
+  final List<String> defaultOpenedPaths = <String>[];
+
+  @override
+  Future<WorkspaceFolderOpenResult> reveal(String path) async {
+    revealedPaths.add(path);
+    return const WorkspaceFolderOpenResult.success();
+  }
+
+  @override
+  Future<WorkspaceFolderOpenResult> openWithDefaultApplication(
+    String path,
+  ) async {
+    defaultOpenedPaths.add(path);
+    return const WorkspaceFolderOpenResult.success();
+  }
+}
+
+final class _UnusedProcessRunner implements ProcessRunner {
+  @override
+  Future<ProcessRunOutput> run(
+    String executable,
+    List<String> arguments, {
+    String? workingDirectory,
+    Map<String, String>? environment,
+  }) async => throw UnimplementedError();
+
+  @override
+  Future<StartedProcess> start(
+    String executable,
+    List<String> arguments, {
+    String? workingDirectory,
+    Map<String, String>? environment,
+    bool includeParentEnvironment = true,
+  }) async => throw UnimplementedError();
 }

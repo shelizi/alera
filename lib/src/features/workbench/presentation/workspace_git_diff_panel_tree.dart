@@ -11,6 +11,7 @@ class const _GitDiffTree({
   required final ValueChanged<GitChangeEntry> onToggleSubmodule,
   required final OpenGitDiffTabCallback onOpenGitDiff,
   final ValueChanged<String>? onOpenFile,
+  final ValueChanged<String>? onOpenWithDefaultApplication,
   final void Function(String path, ExternalEditorKind kind)? onOpenExternally,
   required final ExternalEditorSpec? externalEditor,
   required final List<ExternalEditorSpec> installedExternalEditors,
@@ -121,6 +122,10 @@ class _GitDiffTreeState extends State<_GitDiffTree> {
           onOpenFile: widget.onOpenFile == null
               ? null
               : () => widget.onOpenFile!(entry.path),
+          onOpenWithDefaultApplication:
+              widget.onOpenWithDefaultApplication == null
+              ? null
+              : () => widget.onOpenWithDefaultApplication!(entry.path),
           onOpenExternally: widget.onOpenExternally == null
               ? null
               : (kind) => widget.onOpenExternally!(entry.path, kind),
@@ -154,6 +159,7 @@ class _GitDiffTreeState extends State<_GitDiffTree> {
             busy: widget.busy,
             onOpenGitDiff: widget.onOpenGitDiff,
             onOpenFile: widget.onOpenFile,
+            onOpenWithDefaultApplication: widget.onOpenWithDefaultApplication,
             onOpenExternally: widget.onOpenExternally,
             externalEditor: widget.externalEditor,
             installedExternalEditors: widget.installedExternalEditors,
@@ -316,6 +322,7 @@ class const _GitDiffDirectoryRow({
       canDiscard: canDiscard,
       busy: busy,
       onOpenFile: onOpenFile,
+      onOpenWithDefaultApplication: null,
       externalEditor: null,
       installedExternalEditors: const <ExternalEditorSpec>[],
       onOpenExternally: null,
@@ -335,6 +342,7 @@ class const _GitDiffFileRow({
   required final VoidCallback onTap,
   required final bool busy,
   final VoidCallback? onOpenFile,
+  final VoidCallback? onOpenWithDefaultApplication,
   final VoidCallback? onAddToGitIgnore,
   final ValueChanged<ExternalEditorKind>? onOpenExternally,
   required final ExternalEditorSpec? externalEditor,
@@ -442,6 +450,9 @@ class const _GitDiffFileRow({
       canDiscard: entry.canDiscardFromParent,
       busy: busy,
       onOpenFile: onOpenFile,
+      onOpenWithDefaultApplication: entry.status != GitChangeStatus.deleted
+          ? onOpenWithDefaultApplication
+          : null,
       externalEditor:
           onOpenExternally != null && entry.status != GitChangeStatus.deleted
           ? externalEditor

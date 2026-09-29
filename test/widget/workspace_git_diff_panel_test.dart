@@ -1656,10 +1656,19 @@ final class _RecordingWorkspaceFolderOpener extends WorkspaceFolderOpener {
       );
 
   final List<String> revealedPaths = <String>[];
+  final List<String> defaultOpenedPaths = <String>[];
 
   @override
   Future<WorkspaceFolderOpenResult> reveal(String path) async {
     revealedPaths.add(path);
+    return const WorkspaceFolderOpenResult.success();
+  }
+
+  @override
+  Future<WorkspaceFolderOpenResult> openWithDefaultApplication(
+    String path,
+  ) async {
+    defaultOpenedPaths.add(path);
     return const WorkspaceFolderOpenResult.success();
   }
 }
