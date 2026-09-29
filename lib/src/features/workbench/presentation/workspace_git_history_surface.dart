@@ -31,6 +31,8 @@ part 'workspace_git_history_surface_perspective.dart';
 part 'workspace_git_history_surface_ref_actions.dart';
 
 const String _allBranchesPerspective = '__all_branches__';
+const String _headPerspective = '__head__';
+const String _headRef = 'HEAD';
 
 /// Main-area commit graph tab. Walks every branch tip by default and pages
 /// history in with offset pagination, keeping swimlanes continuous across

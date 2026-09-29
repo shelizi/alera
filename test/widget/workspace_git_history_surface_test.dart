@@ -119,6 +119,59 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Page Two Root'), findsOneWidget);
   });
+  testWidgets('HEAD perspective is first and roots the graph at HEAD', (
+    tester,
+  ) async {
+    final backend =
+        gitHistoryBackend(<GitHistoryItem>[
+            gitHistoryCommit('c1', parents: <String>[], subject: 'Only Commit'),
+          ])
+          ..sourceBranches = <String>['feature', 'main', 'origin/main']
+          ..headBranch = 'HEAD';
+    final repository = GitHistoryFakeWorkbenchRepository()
+      ..tabs.add(gitHistoryTab());
+
+    await pumpGitHistorySurface(
+      tester,
+      backend: backend,
+      repository: repository,
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('All Branches'));
+    await tester.pumpAndSettle();
+
+    final headItem = find.byKey(
+      const ValueKey<String>('git-history-head-perspective'),
+    );
+    final allBranchesItem = find.widgetWithText(MenuItemButton, 'All Branches');
+    expect(headItem, findsOneWidget);
+    expect(find.text('HEAD'), findsOneWidget);
+    expect(allBranchesItem, findsOneWidget);
+    expect(
+      tester.getRect(headItem).top,
+      lessThan(tester.getRect(allBranchesItem).top),
+    );
+
+    await tester.tap(headItem);
+    await tester.pumpAndSettle();
+
+    final historyCalls = backend.calls
+        .where((call) => call.method == 'history')
+        .toList();
+    expect(historyCalls, hasLength(2));
+    expect(historyCalls.last.args['includeAllRefs'], isFalse);
+    expect(historyCalls.last.args['baseRef'], 'HEAD');
+    expect(historyCalls.last.args['offset'], isNull);
+    expect(repository.tabs.single.gitHistoryAllBranches, isFalse);
+    expect(repository.tabs.single.gitHistorySelectedRef, 'HEAD');
+    expect(find.text('HEAD'), findsOneWidget);
+    expect(
+      backend.calls.where((call) => call.method == 'switchBranch'),
+      isEmpty,
+    );
+  });
+
   testWidgets('branch perspective dropdown reloads history without checkout', (
     tester,
   ) async {

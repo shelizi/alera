@@ -9,10 +9,12 @@ extension _WorkspaceGitHistoryPerspective on _WorkspaceGitHistorySurfaceState {
       );
       final branches = await backend.listBranches(_sourceControlScope.path);
       if (!mounted) return;
+      final selectedBranchRef = _selectedRef == _headRef ? null : _selectedRef;
+      final currentBranchRef = currentBranch == _headRef ? null : currentBranch;
       final values = <String>{
         ...branches,
-        currentBranch,
-        ?_selectedRef,
+        ?currentBranchRef,
+        ?selectedBranchRef,
       }.toList()..sort();
       _setSurfaceState(() {
         _currentBranch = currentBranch;
@@ -25,12 +27,19 @@ extension _WorkspaceGitHistoryPerspective on _WorkspaceGitHistorySurfaceState {
 
   String get _perspectiveLabel {
     if (_allBranches) return 'All Branches';
+    if (_selectedRef == _headRef) return _headRef;
     return _selectedRef ?? _currentBranch ?? 'Current Branch';
   }
 
   Future<void> _setPerspective(String value) async {
     final allBranches = value == _allBranchesPerspective;
-    final selectedRef = allBranches || value == _currentBranch ? null : value;
+    final selectedRef = allBranches
+        ? null
+        : value == _headPerspective
+        ? _headRef
+        : value == _currentBranch
+        ? null
+        : value;
     if (allBranches == _allBranches && selectedRef == _selectedRef) return;
 
     _setSurfaceState(() {
@@ -119,6 +128,9 @@ class _GitHistoryBranchPerspectiveMenuState
     final theme = Theme.of(context);
     final normalizedQuery = _query.trim().toLowerCase();
     final localizedAllBranches = context.tr('All Branches').toLowerCase();
+    final showHead =
+        normalizedQuery.isEmpty ||
+        _headRef.toLowerCase().contains(normalizedQuery);
     final filteredBranches = widget.branches
         .where(
           (branch) =>
@@ -163,6 +175,19 @@ class _GitHistoryBranchPerspectiveMenuState
                     primary: false,
                     padding: EdgeInsets.zero,
                     children: <Widget>[
+                      if (showHead)
+                        MenuItemButton(
+                          key: const ValueKey<String>(
+                            'git-history-head-perspective',
+                          ),
+                          onPressed: () => _select(_headPerspective),
+                          leadingIcon:
+                              (!widget.allBranches &&
+                                  widget.selectedRef == _headRef)
+                              ? const Icon(Icons.check, size: 16)
+                              : const SizedBox(width: 16),
+                          child: const Text(_headRef),
+                        ),
                       if (showAllBranches)
                         MenuItemButton(
                           onPressed: () => _select(_allBranchesPerspective),
@@ -195,7 +220,9 @@ class _GitHistoryBranchPerspectiveMenuState
                             ),
                           ),
                         ),
-                      if (!showAllBranches && filteredBranches.isEmpty)
+                      if (!showHead &&
+                          !showAllBranches &&
+                          filteredBranches.isEmpty)
                         Padding(
                           padding: const EdgeInsets.all(AleraTokens.space12),
                           child: Text(
