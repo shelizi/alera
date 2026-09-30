@@ -303,6 +303,173 @@ void _registerWorkspaceWorkbenchViewTabTests() {
     expect(closedTabs, <String>['tab-2']);
   });
 
+  testWidgets('overflowing tabs expose horizontal scroll controls', (
+    tester,
+  ) async {
+    final tabs = _overflowingWorkbenchTabs();
+    await _pumpWorkbenchView(
+      tester,
+      tabs: tabs,
+      terminalRuntime: terminalRuntime,
+      layout: _singleTabStripLayout(tabs, activeTabId: tabs.first.id),
+      createdTabs: createdTabs,
+      selectedTabs: selectedTabs,
+      closedTabs: closedTabs,
+      closedTabGroups: closedTabGroups,
+      renamedTabs: renamedTabs,
+      movedTabs: movedTabs,
+      splitGroups: splitGroups,
+      mergedGroups: mergedGroups,
+      updatedRatios: updatedRatios,
+      size: const Size(360, 280),
+    );
+    await tester.pumpAndSettle();
+
+    final left = find.byKey(
+      const ValueKey<String>('workspace-tab-scroll-left:group-a'),
+    );
+    final right = find.byKey(
+      const ValueKey<String>('workspace-tab-scroll-right:group-a'),
+    );
+    expect(left, findsOneWidget);
+    expect(right, findsOneWidget);
+
+    final controller = _tabStripScrollController(tester);
+    expect(controller.position.maxScrollExtent, greaterThan(0));
+    expect(controller.position.pixels, closeTo(0, 0.1));
+    expect(
+      tester
+          .widget<IconButton>(
+            find.descendant(of: left, matching: find.byType(IconButton)),
+          )
+          .onPressed,
+      isNull,
+    );
+
+    await tester.tap(right);
+    await tester.pumpAndSettle();
+
+    final afterRight = controller.position.pixels;
+    expect(afterRight, greaterThan(0));
+    expect(
+      tester
+          .widget<IconButton>(
+            find.descendant(of: left, matching: find.byType(IconButton)),
+          )
+          .onPressed,
+      isNotNull,
+    );
+
+    await tester.tap(left);
+    await tester.pumpAndSettle();
+    expect(controller.position.pixels, lessThan(afterRight));
+  });
+
+  testWidgets('mouse wheel scrolls overflowing tabs horizontally', (
+    tester,
+  ) async {
+    final tabs = _overflowingWorkbenchTabs();
+    await _pumpWorkbenchView(
+      tester,
+      tabs: tabs,
+      terminalRuntime: terminalRuntime,
+      layout: _singleTabStripLayout(tabs, activeTabId: tabs.first.id),
+      createdTabs: createdTabs,
+      selectedTabs: selectedTabs,
+      closedTabs: closedTabs,
+      closedTabGroups: closedTabGroups,
+      renamedTabs: renamedTabs,
+      movedTabs: movedTabs,
+      splitGroups: splitGroups,
+      mergedGroups: mergedGroups,
+      updatedRatios: updatedRatios,
+      size: const Size(360, 280),
+    );
+    await tester.pumpAndSettle();
+
+    final scrollView = find.byKey(
+      const ValueKey<String>('workspace-tab-scroll:group-a'),
+    );
+    final controller = _tabStripScrollController(tester);
+    expect(controller.position.pixels, closeTo(0, 0.1));
+
+    await tester.sendEventToBinding(
+      PointerScrollEvent(
+        position: tester.getCenter(scrollView),
+        scrollDelta: const Offset(0, 120),
+        kind: PointerDeviceKind.mouse,
+      ),
+    );
+    await tester.pump();
+
+    expect(controller.position.pixels, greaterThan(0));
+    final afterForwardWheel = controller.position.pixels;
+
+    await tester.sendEventToBinding(
+      PointerScrollEvent(
+        position: tester.getCenter(scrollView),
+        scrollDelta: const Offset(0, -120),
+        kind: PointerDeviceKind.mouse,
+      ),
+    );
+    await tester.pump();
+
+    expect(controller.position.pixels, lessThan(afterForwardWheel));
+  });
+
+  testWidgets('active overflow tab is revealed with trailing breathing room', (
+    tester,
+  ) async {
+    final tabs = _overflowingWorkbenchTabs();
+    await _pumpWorkbenchView(
+      tester,
+      tabs: tabs,
+      terminalRuntime: terminalRuntime,
+      layout: _singleTabStripLayout(tabs, activeTabId: tabs.first.id),
+      createdTabs: createdTabs,
+      selectedTabs: selectedTabs,
+      closedTabs: closedTabs,
+      closedTabGroups: closedTabGroups,
+      renamedTabs: renamedTabs,
+      movedTabs: movedTabs,
+      splitGroups: splitGroups,
+      mergedGroups: mergedGroups,
+      updatedRatios: updatedRatios,
+      size: const Size(360, 280),
+    );
+    await tester.pumpAndSettle();
+    expect(_tabStripScrollController(tester).position.pixels, closeTo(0, 0.1));
+
+    await _pumpWorkbenchView(
+      tester,
+      tabs: tabs,
+      terminalRuntime: terminalRuntime,
+      layout: _singleTabStripLayout(tabs, activeTabId: tabs.last.id),
+      createdTabs: createdTabs,
+      selectedTabs: selectedTabs,
+      closedTabs: closedTabs,
+      closedTabGroups: closedTabGroups,
+      renamedTabs: renamedTabs,
+      movedTabs: movedTabs,
+      splitGroups: splitGroups,
+      mergedGroups: mergedGroups,
+      updatedRatios: updatedRatios,
+      size: const Size(360, 280),
+    );
+    await tester.pumpAndSettle();
+
+    final controller = _tabStripScrollController(tester);
+    expect(controller.position.pixels, greaterThan(0));
+
+    final scrollRect = tester.getRect(
+      find.byKey(const ValueKey<String>('workspace-tab-scroll:group-a')),
+    );
+    final activeTabRect = tester.getRect(
+      find.byKey(ValueKey<String>('workspace-tab-chip:${tabs.last.id}')),
+    );
+    expect(activeTabRect.left, greaterThanOrEqualTo(scrollRect.left));
+    expect(activeTabRect.right, lessThan(scrollRect.right - 4));
+  });
   testWidgets('active-tab fallback picks the first available tab', (
     tester,
   ) async {
@@ -344,4 +511,37 @@ void _registerWorkspaceWorkbenchViewTabTests() {
     );
     expect(terminalRuntime.requestedTabIds, contains('tab-1'));
   });
+}
+
+List<WorkspaceTabRecord> _overflowingWorkbenchTabs() {
+  return <WorkspaceTabRecord>[
+    for (var index = 0; index < 8; index += 1)
+      _tab('overflow-tab-$index', title: 'Long terminal tab $index'),
+  ];
+}
+
+WorkbenchLayout _singleTabStripLayout(
+  List<WorkspaceTabRecord> tabs, {
+  required String activeTabId,
+}) {
+  return WorkbenchLayout(
+    workspaceId: _workspaceId,
+    root: .leaf('group-a'),
+    groups: <String, WorkbenchPaneGroup>{
+      'group-a': WorkbenchPaneGroup(
+        id: 'group-a',
+        tabIds: <String>[for (final tab in tabs) tab.id],
+        activeTabId: activeTabId,
+      ),
+    },
+    activeGroupId: 'group-a',
+  );
+}
+
+ScrollController _tabStripScrollController(WidgetTester tester) {
+  return tester
+      .widget<SingleChildScrollView>(
+        find.byKey(const ValueKey<String>('workspace-tab-scroll:group-a')),
+      )
+      .controller!;
 }
