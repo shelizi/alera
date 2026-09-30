@@ -46,6 +46,18 @@ part 'workspace_explorer_widgets.dart';
 bool _isDirectoryEntry(native.WorkspaceFileEntry? entry) =>
     entry?.kind.name == 'directory';
 
+class _WorkspaceExplorerUiState {
+  const _WorkspaceExplorerUiState({
+    required this.loadedDirectories,
+    required this.expandedDirectories,
+    required this.selectedRelativePath,
+  });
+
+  final Set<String> loadedDirectories;
+  final Set<String> expandedDirectories;
+  final String? selectedRelativePath;
+}
+
 class const WorkspaceExplorer({
   super.key,
   required final Workspace workspace,
@@ -103,6 +115,9 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
     debugLabel: 'workspace-explorer',
   );
   bool _filterVisible = false;
+  PageStorageBucket? _pageStorageBucket;
+  final Set<String> _expandedDirectoryPaths = <String>{};
+  String? _selectedRelativePath;
 
   @override
   void initState() {
@@ -119,14 +134,23 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _pageStorageBucket = PageStorage.maybeOf(context);
+  }
+
+  @override
   void didUpdateWidget(covariant WorkspaceExplorer oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.workspace.id != widget.workspace.id ||
         oldWidget.workspace.path != widget.workspace.path) {
+      _saveWorkspaceUiState(oldWidget.workspace);
       _loading = true;
       _clipboard = null;
       _filterController.clear();
       _filterVisible = false;
+      _expandedDirectoryPaths.clear();
+      _selectedRelativePath = null;
       _resetExplorerProjection();
       _controller.dispose();
       _controller = tree.DirectoryTreeController(
@@ -142,6 +166,7 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
 
   @override
   void dispose() {
+    _saveWorkspaceUiState(widget.workspace);
     unawaited(_stopNativeWatcher());
     _filterController.dispose();
     _filterFocusNode.dispose();
@@ -169,7 +194,7 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
           filterVisible: _isFilterVisible,
           onToggleFilter: _toggleFilterVisibility,
           onRefresh: () => unawaited(_reloadRoot()),
-          onCollapseAll: _controller.expansions.collapseAll,
+          onCollapseAll: _collapseAll,
           onToggleMode: _toggleMode,
           onToggleHiddenFiles: _toggleHiddenFiles,
           onSaveAll: () => unawaited(_saveAllEditors()),
@@ -219,6 +244,9 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
                             roundedCorners: false,
                           ),
                           child: tree.DirectoryTreeView(
+                            key: PageStorageKey<String>(
+                              'workspace-explorer:${widget.workspace.id}',
+                            ),
                             controller: _controller,
                             padding: const .symmetric(
                               vertical: AleraTokens.space4,
@@ -507,10 +535,49 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
       _rebuildTree();
     }
     _controller.toggle(node.id);
+    final relativePath = directory.relativePath;
+    if (!_expandedDirectoryPaths.add(relativePath)) {
+      _expandedDirectoryPaths.remove(relativePath);
+    }
   }
 
   void _select(tree.VisibleNode node) {
     _controller.selection.selectOnly(node.id);
+    _selectedRelativePath = _entryByNodeId[node.id]?.relativePath;
+  }
+
+  void _collapseAll() {
+    _controller.expansions.collapseAll();
+    _expandedDirectoryPaths.clear();
+  }
+
+  Object _workspaceUiStateIdentifier(Workspace workspace) =>
+      'workspace-explorer-ui:${workspace.id}:${workspace.path}';
+
+  void _saveWorkspaceUiState(Workspace workspace) {
+    final bucket = _pageStorageBucket;
+    if (bucket == null) {
+      return;
+    }
+    bucket.writeState(
+      context,
+      _WorkspaceExplorerUiState(
+        loadedDirectories: _childrenByDirectory.keys
+            .where((path) => path.isNotEmpty)
+            .toSet(),
+        expandedDirectories: Set<String>.from(_expandedDirectoryPaths),
+        selectedRelativePath: _selectedRelativePath,
+      ),
+      identifier: _workspaceUiStateIdentifier(workspace),
+    );
+  }
+
+  _WorkspaceExplorerUiState? _readWorkspaceUiState() {
+    final bucket = _pageStorageBucket;
+    return bucket?.readState(
+      context,
+      identifier: _workspaceUiStateIdentifier(widget.workspace),
+    ) as _WorkspaceExplorerUiState?;
   }
 
   void _handlePasteShortcut() {

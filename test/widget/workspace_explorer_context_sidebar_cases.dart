@@ -427,6 +427,101 @@ void _registerWorkspaceExplorerContextSidebarTests() {
   );
 
   testWidgets(
+    'context sidebar restores explorer state after switching workspaces',
+    (tester) async {
+      final service = _FakeWorkspaceFileService()
+        ..childrenByWorkspacePath['/repo/alera'] =
+            <String, List<native.WorkspaceFileEntry>>{
+              '': <native.WorkspaceFileEntry>[
+                for (var index = 0; index < 24; index += 1)
+                  _file('file_' + index.toString().padLeft(2, '0') + '.dart'),
+                _directory('src', hasChildrenHint: true),
+              ],
+              'src': <native.WorkspaceFileEntry>[_file('src/main.dart')],
+            }
+        ..childrenByWorkspacePath['/repo/alera-feature'] =
+            <String, List<native.WorkspaceFileEntry>>{
+              '': <native.WorkspaceFileEntry>[_file('feature.dart')],
+            };
+
+      Widget sidebar(Workspace workspace) => _withWorkspaceFiles(
+        service,
+        child: MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 360,
+              height: 520,
+              child: _workspaceContextSidebar(workspace),
+            ),
+          ),
+        ),
+      );
+
+      final mainWorkspace = _workspace();
+      final featureWorkspace = _workspace(
+        id: 'workspace-2',
+        name: 'Feature',
+        path: '/repo/alera-feature',
+      );
+
+      await tester.pumpWidget(sidebar(mainWorkspace));
+      await tester.pumpAndSettle();
+
+      var explorer = find.byType(WorkspaceExplorer);
+      var scrollable = find
+          .descendant(of: explorer, matching: find.byType(Scrollable))
+          .last;
+      await tester.scrollUntilVisible(
+        find.text('src'),
+        240,
+        scrollable: scrollable,
+      );
+      await tester.tap(find.text('src'));
+      await tester.pumpAndSettle();
+      await tester.drag(scrollable, const Offset(0, -120));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('main.dart'));
+      await tester.pump();
+
+      final beforePixels = tester
+          .state<ScrollableState>(scrollable)
+          .position
+          .pixels;
+      expect(beforePixels, greaterThan(0));
+
+      await tester.pumpWidget(sidebar(featureWorkspace));
+      await tester.pumpAndSettle();
+      expect(find.text('feature.dart'), findsOneWidget);
+      expect(find.text('main.dart'), findsNothing);
+
+      await tester.pumpWidget(sidebar(mainWorkspace));
+      await tester.pumpAndSettle();
+
+      expect(find.text('main.dart'), findsOneWidget);
+      explorer = find.byType(WorkspaceExplorer);
+      scrollable = find
+          .descendant(of: explorer, matching: find.byType(Scrollable))
+          .last;
+      expect(
+        tester.state<ScrollableState>(scrollable).position.pixels,
+        closeTo(beforePixels, 0.1),
+      );
+      expect(
+        find.ancestor(
+          of: find.text('main.dart'),
+          matching: find.byWidgetPredicate(
+            (widget) =>
+                widget is DecoratedBox &&
+                widget.decoration is BoxDecoration &&
+                (widget.decoration as BoxDecoration).color ==
+                    AleraTokens.surfaceElevated,
+          ),
+        ),
+        findsOneWidget,
+      );
+    },
+  );
+  testWidgets(
     'context sidebar preserves explorer expansion selection and scroll position across tabs',
     (tester) async {
       final service = _FakeWorkspaceFileService()

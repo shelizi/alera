@@ -67,6 +67,20 @@ part 'workspace_git_diff_panel_context_menu.dart';
 part 'workspace_git_diff_panel_inline_actions.dart';
 part 'workspace_git_diff_panel_navigation.dart';
 
+class _GitDiffPanelUiState {
+  const _GitDiffPanelUiState({
+    required this.collapsedSections,
+    required this.collapsedTreeNodes,
+    required this.expandedSubmodules,
+    required this.historyCollapsed,
+  });
+
+  final Set<String> collapsedSections;
+  final Set<String> collapsedTreeNodes;
+  final Set<String> expandedSubmodules;
+  final bool historyCollapsed;
+}
+
 class const WorkspaceGitDiffPanel({
   super.key,
   required final Workspace workspace,
@@ -119,6 +133,8 @@ class _WorkspaceGitDiffPanelState extends ConsumerState<WorkspaceGitDiffPanel> {
   List<GitChangeGroup>? _cachedCollapsibleGroups;
   Set<String> _cachedCollapsibleKeys = const <String>{};
   ExternalEditorKind? _pickedExternalEditorKind;
+  PageStorageBucket? _pageStorageBucket;
+  bool _restoredInitialPanelUiState = false;
 
   void _applyUnifiedGroups(
     GitStatusResult status,
@@ -149,9 +165,21 @@ class _WorkspaceGitDiffPanelState extends ConsumerState<WorkspaceGitDiffPanel> {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _pageStorageBucket = PageStorage.maybeOf(context);
+    if (_restoredInitialPanelUiState) {
+      return;
+    }
+    _restorePanelUiState(widget.sourceControlScope.path);
+    _restoredInitialPanelUiState = true;
+  }
+
+  @override
   void didUpdateWidget(covariant WorkspaceGitDiffPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.sourceControlScope.path != widget.sourceControlScope.path) {
+      _savePanelUiState(oldWidget.sourceControlScope.path);
       _aiAssistService.cancel(
         oldWidget.sourceControlScope.path,
         .commitMessage,
@@ -165,6 +193,7 @@ class _WorkspaceGitDiffPanelState extends ConsumerState<WorkspaceGitDiffPanel> {
       _filterVisible = false;
       _generatingCommitMessage = false;
       _historyCollapsed = true;
+      _restorePanelUiState(widget.sourceControlScope.path);
       _historyLoader.rebind(widget.sourceControlScope.path);
       _commitCompareCache.rebind(widget.sourceControlScope.path);
     }
@@ -172,6 +201,7 @@ class _WorkspaceGitDiffPanelState extends ConsumerState<WorkspaceGitDiffPanel> {
 
   @override
   void dispose() {
+    _savePanelUiState(widget.sourceControlScope.path);
     _aiAssistService.cancel(widget.sourceControlScope.path, .commitMessage);
     _commitMessageGenerationId += 1;
     _historyLoader.detach();
@@ -183,6 +213,46 @@ class _WorkspaceGitDiffPanelState extends ConsumerState<WorkspaceGitDiffPanel> {
   }
 
   void _setPanelState(VoidCallback fn) => setState(fn);
+
+  Object _panelUiStateIdentifier(String scopePath) =>
+      'workspace-git-diff-ui:$scopePath';
+
+  void _savePanelUiState(String scopePath) {
+    final bucket = _pageStorageBucket;
+    if (bucket == null) {
+      return;
+    }
+    bucket.writeState(
+      context,
+      _GitDiffPanelUiState(
+        collapsedSections: Set<String>.from(_collapsedSections),
+        collapsedTreeNodes: Set<String>.from(_collapsedTreeNodes),
+        expandedSubmodules: Set<String>.from(_expandedSubmodules),
+        historyCollapsed: _historyCollapsed,
+      ),
+      identifier: _panelUiStateIdentifier(scopePath),
+    );
+  }
+
+  void _restorePanelUiState(String scopePath) {
+    final snapshot = _pageStorageBucket?.readState(
+      context,
+      identifier: _panelUiStateIdentifier(scopePath),
+    ) as _GitDiffPanelUiState?;
+    if (snapshot == null) {
+      return;
+    }
+    _collapsedSections
+      ..clear()
+      ..addAll(snapshot.collapsedSections);
+    _collapsedTreeNodes
+      ..clear()
+      ..addAll(snapshot.collapsedTreeNodes);
+    _expandedSubmodules
+      ..clear()
+      ..addAll(snapshot.expandedSubmodules);
+    _historyCollapsed = snapshot.historyCollapsed;
+  }
 
   @override
   Widget build(BuildContext context) {

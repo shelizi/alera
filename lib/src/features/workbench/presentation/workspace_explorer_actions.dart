@@ -26,6 +26,10 @@ extension _WorkspaceExplorerActions on _WorkspaceExplorerState {
     switch (action) {
       case _ExplorerAction.collapse:
         _controller.expansions.setExpanded(node.id, false);
+        final relativePath = entry?.relativePath;
+        if (relativePath != null) {
+          _expandedDirectoryPaths.remove(relativePath);
+        }
       case _ExplorerAction.newFile:
         await _createEntry(parentPath: targetDir, directory: false);
       case _ExplorerAction.newFolder:

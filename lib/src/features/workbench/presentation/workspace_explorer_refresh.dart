@@ -22,6 +22,10 @@ extension _WorkspaceExplorerRefresh on _WorkspaceExplorerState {
     if (!mounted) {
       return;
     }
+    await _restoreWorkspaceUiState();
+    if (!mounted) {
+      return;
+    }
     await _revealPendingPath();
   }
 
@@ -31,6 +35,43 @@ extension _WorkspaceExplorerRefresh on _WorkspaceExplorerState {
       return;
     }
     await _bootstrapExplorer();
+  }
+
+  Future<void> _restoreWorkspaceUiState() async {
+    final snapshot = _readWorkspaceUiState();
+    if (snapshot == null) {
+      _expandedDirectoryPaths.clear();
+      _selectedRelativePath = null;
+      return;
+    }
+
+    final loadedDirectories = snapshot.loadedDirectories.toList(growable: false)
+      ..sort(_compareDirectoryDepth);
+    for (final relativePath in loadedDirectories) {
+      if (!mounted || !_isDirectoryEntry(_entryByPath[relativePath])) {
+        continue;
+      }
+      await _loadDirectory(relativePath);
+    }
+    if (!mounted) {
+      return;
+    }
+
+    _expandedDirectoryPaths
+      ..clear()
+      ..addAll(snapshot.expandedDirectories);
+    _selectedRelativePath = snapshot.selectedRelativePath;
+    _rebuildTree();
+
+    for (final entry in _entryByNodeId.entries) {
+      final relativePath = entry.value.relativePath;
+      if (_expandedDirectoryPaths.contains(relativePath)) {
+        _controller.expansions.setExpanded(entry.key, true);
+      }
+      if (relativePath == _selectedRelativePath) {
+        _controller.selection.selectOnly(entry.key);
+      }
+    }
   }
 
   Future<void> _replaceDirectoryChildren(

@@ -1348,6 +1348,39 @@ void main() {
     expect(find.text('test/hidden.dart'), findsOneWidget);
   });
 
+  testWidgets('restores collapsed change state after switching workspaces', (
+    tester,
+  ) async {
+    final backend = FakeGitBackend()
+      ..gitStatusResult = const GitStatusResult(
+        entries: <GitChangeEntry>[
+          GitChangeEntry(
+            path: 'lib/dirty.dart',
+            area: .unstaged,
+            status: .modified,
+          ),
+        ],
+      );
+    final workspaceA = _workspace(id: 'workspace-a', path: '/tmp/project-a');
+    final workspaceB = _workspace(id: 'workspace-b', path: '/tmp/project-b');
+
+    await _pumpPanel(tester, backend: backend, workspace: workspaceA);
+    await tester.pumpAndSettle();
+    expect(find.text('lib/dirty.dart'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Collapse All'));
+    await tester.pumpAndSettle();
+    expect(find.text('lib/dirty.dart'), findsNothing);
+
+    await _pumpPanel(tester, backend: backend, workspace: workspaceB);
+    await tester.pumpAndSettle();
+    expect(find.text('lib/dirty.dart'), findsOneWidget);
+
+    await _pumpPanel(tester, backend: backend, workspace: workspaceA);
+    await tester.pumpAndSettle();
+    expect(find.text('lib/dirty.dart'), findsNothing);
+    expect(find.byTooltip('Expand All'), findsOneWidget);
+  });
   testWidgets('sections and visible rows can be collapsed together', (
     tester,
   ) async {
