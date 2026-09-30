@@ -113,8 +113,15 @@ class _WorkspaceMarkdownViewerSurfaceState
       content = _MarkdownViewerMessage(message: _messageFor(loadError));
     } else {
       content = ScrollbarTheme(
-        data: Theme.of(context).scrollbarTheme
-            .copyWith(thumbVisibility: WidgetStateProperty.all(true)),
+        data: Theme.of(context).scrollbarTheme.copyWith(
+          thumbVisibility: WidgetStateProperty.all(true),
+          trackVisibility: WidgetStateProperty.all(true),
+          thickness: WidgetStateProperty.all(8),
+          thumbColor: WidgetStateProperty.all(AleraTokens.foregroundMuted),
+          trackColor: WidgetStateProperty.all(AleraTokens.surfaceElevated),
+          trackBorderColor: WidgetStateProperty.all(AleraTokens.borderSubtle),
+          radius: const Radius.circular(4),
+        ),
         child: SelectionArea(
           contextMenuBuilder: AleraTextSelectionToolbar.selectableRegion,
           child: Scrollbar(
@@ -708,6 +715,10 @@ class _MarkdownViewerCodeBlockState extends State<_MarkdownViewerCodeBlock> {
             key: const ValueKey<String>('markdown-code-x-scrollbar'),
             controller: _horizontalController,
             thumbVisibility: true,
+            trackVisibility: true,
+            thickness: 8,
+            radius: const Radius.circular(4),
+            interactive: true,
             scrollbarOrientation: ScrollbarOrientation.bottom,
             notificationPredicate: (notification) =>
                 notification.metrics.axis == Axis.horizontal,
@@ -718,7 +729,7 @@ class _MarkdownViewerCodeBlockState extends State<_MarkdownViewerCodeBlock> {
                 AleraTokens.space16,
                 AleraTokens.space12,
                 AleraTokens.space16,
-                AleraTokens.space16,
+                AleraTokens.space24,
               ),
               child: AleraSearchHighlightedText(
                 text: widget.code,

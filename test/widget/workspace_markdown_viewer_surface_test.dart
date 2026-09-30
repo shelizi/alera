@@ -456,11 +456,23 @@ ${List<String>.filled(80, r'\frac{a}{b}').join(' + ')}
         scrollbarTheme.data.thumbVisibility?.resolve(const <WidgetState>{}),
         isTrue,
       );
+      expect(
+        scrollbarTheme.data.trackVisibility?.resolve(const <WidgetState>{}),
+        isTrue,
+      );
+      expect(scrollbarTheme.data.thickness?.resolve(const <WidgetState>{}), 8);
+      expect(
+        scrollbarTheme.data.thumbColor?.resolve(const <WidgetState>{}),
+        AleraTokens.foregroundMuted,
+      );
 
       final codeScrollbar = tester.widget<Scrollbar>(
         find.byKey(const ValueKey<String>('markdown-code-x-scrollbar')),
       );
       expect(codeScrollbar.thumbVisibility, isTrue);
+      expect(codeScrollbar.trackVisibility, isTrue);
+      expect(codeScrollbar.thickness, 8);
+      expect(codeScrollbar.interactive, isTrue);
       expect(codeScrollbar.scrollbarOrientation, ScrollbarOrientation.bottom);
 
       final horizontalPositions = tester
