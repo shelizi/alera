@@ -2,6 +2,7 @@ part of 'workspace_git_diff_panel.dart';
 
 class const _SubmoduleChanges({
   required final String workspacePath,
+  required final String filterQuery,
   required final GitChangeEntry entry,
   required final int depth,
   required final bool busy,
@@ -45,6 +46,7 @@ class const _SubmoduleChanges({
             for (final child in result.entries)
               _GitDiffFileRow(
                 entry: child,
+                filterQuery: filterQuery,
                 absolutePath: _terminalPathForGitEntry(
                   workspacePath,
                   child.path,

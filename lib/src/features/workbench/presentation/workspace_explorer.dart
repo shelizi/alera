@@ -13,6 +13,7 @@ import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:alera/src/design_system/layout/alera_confirm_dialog.dart';
 import 'package:alera/src/design_system/menus/alera_dropdown_entry.dart';
 import 'package:alera/src/design_system/menus/alera_dropdown_submenu_entry.dart';
+import 'package:alera/src/design_system/typography/alera_search_highlighted_text.dart';
 import 'package:alera/src/features/external_editor/application/external_editor_providers.dart';
 import 'package:alera/src/features/external_editor/domain/external_editor_launcher.dart';
 import 'package:alera/src/features/external_editor/domain/external_editor_spec.dart';
@@ -281,6 +282,7 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
     final selected = _controller.selection.isSelected(node.id);
     final child = _ExplorerRow(
       name: node.name,
+      filterQuery: _filterController.text,
       entry: entry,
       expanded: state.isExpanded,
       selected: selected,

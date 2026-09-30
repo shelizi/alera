@@ -139,6 +139,7 @@ class const _SidebarBody({
         ),
         child: _ProjectHeaderTile(
           project: row.project,
+          searchQuery: state.searchQuery,
           expanded: !row.collapsed,
           workspaceCount: row.workspaceCount,
           agentCounts: row.agentCounts,
@@ -166,6 +167,7 @@ class const _SidebarBody({
         padding: EdgeInsets.only(left: leftPadding, right: AleraTokens.space8),
         child: _WorkspaceRow(
           project: row.project,
+          searchQuery: state.searchQuery,
           workspace: row.workspace,
           agentRuns: row.agentRuns,
           agentRunGroups: row.agentRunGroups,

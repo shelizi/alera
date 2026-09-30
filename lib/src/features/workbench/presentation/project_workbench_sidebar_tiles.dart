@@ -101,6 +101,7 @@ class _SidebarSectionTileState extends State<_SidebarSectionTile> {
 
 class const _ProjectHeaderTile({
   required final Project project,
+  required final String searchQuery,
   required final bool expanded,
   required final int workspaceCount,
   final Map<WorkspaceAgentGroupKind, int> agentCounts =
@@ -221,8 +222,9 @@ class _ProjectHeaderTileState extends State<_ProjectHeaderTile> {
                 ),
                 const SizedBox(width: AleraTokens.space6),
                 Expanded(
-                  child: Text(
-                    widget.project.name,
+                  child: AleraSearchHighlightedText(
+                    text: widget.project.name,
+                    query: widget.searchQuery,
                     maxLines: 1,
                     overflow: .ellipsis,
                     style: theme.textTheme.labelLarge?.copyWith(

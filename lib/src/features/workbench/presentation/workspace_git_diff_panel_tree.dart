@@ -2,6 +2,7 @@ part of 'workspace_git_diff_panel.dart';
 
 class const _GitDiffTree({
   required final String workspacePath,
+  required final String filterQuery,
   required final GitChangeArea area,
   required final List<GitChangeTreeRow> rows,
   required final bool busy,
@@ -113,6 +114,7 @@ class _GitDiffTreeState extends State<_GitDiffTree> {
       return <Widget>[
         _GitDiffFileRow(
           entry: entry,
+          filterQuery: widget.filterQuery,
           absolutePath: _terminalPathForGitEntry(
             widget.workspacePath,
             entry.path,
@@ -154,6 +156,7 @@ class _GitDiffTreeState extends State<_GitDiffTree> {
         if (entry.isExpandableSubmodule && expanded)
           _SubmoduleChanges(
             workspacePath: widget.workspacePath,
+            filterQuery: widget.filterQuery,
             entry: entry,
             depth: row.depth + 1,
             busy: widget.busy,
@@ -174,6 +177,7 @@ class _GitDiffTreeState extends State<_GitDiffTree> {
     return <Widget>[
       _GitDiffDirectoryRow(
         row: row,
+        filterQuery: widget.filterQuery,
         absolutePath: _terminalPathForGitEntry(widget.workspacePath, row.path),
         busy: widget.busy,
         collapsed: collapsed,
@@ -234,6 +238,7 @@ class _GitDirectoryCapabilities {
 
 class const _GitDiffDirectoryRow({
   required final GitChangeTreeRow row,
+  required final String filterQuery,
   required final String absolutePath,
   required final bool busy,
   required final bool collapsed,
@@ -280,8 +285,9 @@ class const _GitDiffDirectoryRow({
                   ),
                   const SizedBox(width: AleraTokens.space6),
                   Expanded(
-                    child: Text(
-                      row.name,
+                    child: AleraSearchHighlightedText(
+                      text: row.name,
+                      query: filterQuery,
                       maxLines: 1,
                       overflow: .ellipsis,
                       style: Theme.of(context).textTheme.bodySmall
@@ -337,6 +343,7 @@ class const _GitDiffDirectoryRow({
 
 class const _GitDiffFileRow({
   required final GitChangeEntry entry,
+  required final String filterQuery,
   required final String absolutePath,
   required final int depth,
   required final VoidCallback onTap,
@@ -394,10 +401,11 @@ class const _GitDiffFileRow({
                   AleraFileIcon(pathOrName: entry.path, kind: .file, size: 15),
                   const SizedBox(width: AleraTokens.space6),
                   Expanded(
-                    child: Text(
-                      showRelativePath
+                    child: AleraSearchHighlightedText(
+                      text: showRelativePath
                           ? entry.path
                           : entry.path.split('/').last,
+                      query: filterQuery,
                       maxLines: 1,
                       overflow: .ellipsis,
                       style: Theme.of(context).textTheme.bodySmall

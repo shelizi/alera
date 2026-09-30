@@ -192,6 +192,7 @@ class const _ThemeSearchList({
                         return AleraMenuItem(
                           label: entry.name,
                           localizeLabel: false,
+                          highlightQuery: controller.text,
                           active: index == highlightedIndex,
                           selected: entry.name == selectedName,
                           leading: _ThemeColorDots(entry: entry),

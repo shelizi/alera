@@ -246,6 +246,7 @@ class const _AvailableProjectsList({
             for (final project in projects)
               _AvailableProjectRow(
                 project: project,
+                query: query,
                 onPick: () => onPick(project),
               ),
           ],
@@ -257,6 +258,7 @@ class const _AvailableProjectsList({
 
 class const _AvailableProjectRow({
   required final Project project,
+  required final String query,
   required final VoidCallback onPick,
 }) extends StatefulWidget {
   @override
@@ -291,8 +293,9 @@ class _AvailableProjectRowState extends State<_AvailableProjectRow> {
               const AleraStatusDot(active: false, size: 6),
               const SizedBox(width: AleraTokens.space8),
               Expanded(
-                child: Text(
-                  widget.project.name,
+                child: AleraSearchHighlightedText(
+                  text: widget.project.name,
+                  query: widget.query,
                   maxLines: 1,
                   overflow: .ellipsis,
                   style: Theme.of(context).textTheme.bodySmall

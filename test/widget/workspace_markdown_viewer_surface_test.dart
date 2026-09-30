@@ -1,6 +1,7 @@
 import 'dart:io' show Directory, File, FileSystemException, Link;
 
 import 'package:alera/src/app/providers.dart';
+import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_service.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
@@ -186,6 +187,41 @@ void main() {
     );
     expect(markdownViewerSearchMatchOffsets('Alpha', '   '), isEmpty);
     expect(markdownViewerSearchMatchOffsets('', 'alpha'), isEmpty);
+  });
+
+  testWidgets('markdown preview visibly highlights search matches', (
+    tester,
+  ) async {
+    final registry = EditorSessionRegistry();
+    final service = _FakeWorkspaceFileService(
+      '# Alpha heading\n\nBeta alpha body',
+    );
+
+    await tester.pumpWidget(
+      _surface(registry: registry, workspaceFiles: service),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Search preview'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(EditableText).last, 'alpha');
+    await tester.pumpAndSettle();
+
+    expect(find.text('1/2'), findsOneWidget);
+    final firstPass = _searchHighlightColors(tester, 'alpha');
+    expect(
+      firstPass.where((color) => color == AleraTokens.accentSubtle),
+      hasLength(2),
+    );
+
+    await tester.tap(find.byTooltip('Next Match'));
+    await tester.pumpAndSettle();
+    expect(find.text('2/2'), findsOneWidget);
+    final secondPass = _searchHighlightColors(tester, 'alpha');
+    expect(
+      secondPass.where((color) => color == AleraTokens.accentSubtle),
+      hasLength(2),
+    );
   });
 
   test('canonical local image resolver allows workspace files', () async {
@@ -598,6 +634,27 @@ ${List<String>.filled(80, r'\frac{a}{b}').join(' + ')}
     expect(find.byType(Image), findsNothing);
     expect(find.byIcon(AleraIcons.imageError), findsOneWidget);
   });
+}
+
+List<Color?> _searchHighlightColors(WidgetTester tester, String query) {
+  return <Color?>[
+    for (final richText in tester.widgetList<RichText>(find.byType(RichText)))
+      for (final span in _textSpanLeaves(richText.text))
+        if (span.text?.toLowerCase() == query.toLowerCase())
+          span.style?.backgroundColor,
+  ];
+}
+
+Iterable<TextSpan> _textSpanLeaves(InlineSpan span) sync* {
+  if (span is! TextSpan) {
+    return;
+  }
+  if (span.text != null && span.text!.isNotEmpty) {
+    yield span;
+  }
+  for (final child in span.children ?? const <InlineSpan>[]) {
+    yield* _textSpanLeaves(child);
+  }
 }
 
 Future<void> _pumpLoadedMarkdown(WidgetTester tester) async {

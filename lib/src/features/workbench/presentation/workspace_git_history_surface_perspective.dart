@@ -186,7 +186,10 @@ class _GitHistoryBranchPerspectiveMenuState
                                   widget.selectedRef == _headRef)
                               ? const Icon(Icons.check, size: 16)
                               : const SizedBox(width: 16),
-                          child: const Text(_headRef),
+                          child: AleraSearchHighlightedText(
+                            text: _headRef,
+                            query: _query,
+                          ),
                         ),
                       if (showAllBranches)
                         MenuItemButton(
@@ -194,7 +197,10 @@ class _GitHistoryBranchPerspectiveMenuState
                           leadingIcon: widget.allBranches
                               ? const Icon(Icons.check, size: 16)
                               : const SizedBox(width: 16),
-                          child: Text(context.tr('All Branches')),
+                          child: AleraSearchHighlightedText(
+                            text: context.tr('All Branches'),
+                            query: _query,
+                          ),
                         ),
                       for (final branch in filteredBranches)
                         MenuItemButton(
@@ -210,10 +216,11 @@ class _GitHistoryBranchPerspectiveMenuState
                             message: branch,
                             child: Align(
                               alignment: .centerLeft,
-                              child: Text(
-                                branch == widget.currentBranch
+                              child: AleraSearchHighlightedText(
+                                text: branch == widget.currentBranch
                                     ? '$branch (${context.tr('Current')})'
                                     : branch,
+                                query: _query,
                                 maxLines: 1,
                                 overflow: .ellipsis,
                               ),

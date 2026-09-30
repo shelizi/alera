@@ -117,7 +117,11 @@ class const _AvailableTagsList({
           crossAxisAlignment: .stretch,
           children: <Widget>[
             for (final tag in tags)
-              _AvailableTagRow(tag: tag, onPick: () => onPick(tag.id)),
+              _AvailableTagRow(
+                tag: tag,
+                query: query,
+                onPick: () => onPick(tag.id),
+              ),
           ],
         ),
       ),
@@ -127,6 +131,7 @@ class const _AvailableTagsList({
 
 class const _AvailableTagRow({
   required final _TagOption tag,
+  required final String query,
   required final VoidCallback onPick,
 }) extends StatefulWidget {
   @override
@@ -165,8 +170,9 @@ class _AvailableTagRowState extends State<_AvailableTagRow> {
               ),
               const SizedBox(width: AleraTokens.space8),
               Expanded(
-                child: Text(
-                  widget.tag.name,
+                child: AleraSearchHighlightedText(
+                  text: widget.tag.name,
+                  query: widget.query,
                   maxLines: 1,
                   overflow: .ellipsis,
                   style: Theme.of(context).textTheme.bodySmall

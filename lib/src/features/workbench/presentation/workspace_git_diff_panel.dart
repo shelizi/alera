@@ -12,6 +12,7 @@ import 'package:alera/src/design_system/layout/alera_confirm_dialog.dart';
 import 'package:alera/src/design_system/layout/alera_dialog.dart';
 import 'package:alera/src/design_system/menus/alera_dropdown_entry.dart';
 import 'package:alera/src/design_system/menus/alera_dropdown_submenu_entry.dart';
+import 'package:alera/src/design_system/typography/alera_search_highlighted_text.dart';
 import 'package:alera/src/design_system/surfaces/hover_container.dart';
 import 'package:alera/src/features/external_editor/application/external_editor_providers.dart';
 import 'package:alera/src/features/external_editor/domain/external_editor_launcher.dart';
@@ -271,6 +272,7 @@ class _WorkspaceGitDiffPanelState extends ConsumerState<WorkspaceGitDiffPanel> {
                     }
                     return _GitDiffGroups(
                       groups: _groupsFor(status),
+                      filterQuery: _filterController.text,
                       workspacePath: widget.sourceControlScope.path,
                       viewMode: widget.viewMode,
                       busy: data.isBusy,

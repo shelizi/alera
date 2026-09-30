@@ -213,6 +213,7 @@ class _AleraDropdownFilterPopoverState<T>
                               enabled: entry.enabled,
                               selected: entry.value == widget.selectedValue,
                               active: index == _highlightedIndex,
+                              highlightQuery: _query,
                               onHover: entry.enabled
                                   ? () => setState(
                                       () => _highlightedIndex = index,

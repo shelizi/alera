@@ -7,6 +7,7 @@ import 'package:alera/src/design_system/forms/alera_text_field.dart';
 import 'package:alera/src/design_system/feedback/alera_toast.dart';
 import 'package:alera/src/design_system/icons/alera_file_icon.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
+import 'package:alera/src/design_system/typography/alera_search_highlighted_text.dart';
 import 'package:alera/src/design_system/menus/alera_text_selection_toolbar.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_service.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
@@ -150,8 +151,15 @@ class _WorkspaceMarkdownViewerSurfaceState
                       styleSheet: const GptMarkdownStyleSheet(
                         latex: LatexStyle(scrollBlockHorizontally: true),
                       ),
+                      inlinePatterns: _markdownSearchPatterns(),
                       codeBuilder: (context, name, code, closed) =>
-                          _MarkdownViewerCodeBlock(language: name, code: code),
+                          _MarkdownViewerCodeBlock(
+                            language: name,
+                            code: code,
+                            searchQuery: _searchOpen
+                                ? _searchController.text
+                                : '',
+                          ),
                       imageBuilder: _buildImage,
                       onLinkTap: (url, _) => unawaited(_openLink(url)),
                     ),
@@ -211,6 +219,28 @@ class _WorkspaceMarkdownViewerSurfaceState
         ),
       ),
     );
+  }
+
+  List<InlinePattern>? _markdownSearchPatterns() {
+    if (!_searchOpen) {
+      return null;
+    }
+    final query = _searchController.text.trim();
+    if (query.isEmpty) {
+      return null;
+    }
+    return <InlinePattern>[
+      InlinePattern(
+        pattern: RegExp(
+          RegExp.escape(query),
+          caseSensitive: false,
+          multiLine: true,
+        ),
+        scopes: MarkdownComponent.allScopes,
+        builder: (context, match, style) =>
+            TextSpan(text: match.group(0), style: aleraSearchMatchStyle(style)),
+      ),
+    ];
   }
 
   void _openSearch() {
@@ -608,6 +638,7 @@ class const _MarkdownViewerSearchBar({
 class const _MarkdownViewerCodeBlock({
   required final String language,
   required final String code,
+  required final String searchQuery,
 }) extends StatefulWidget {
   @override
   State<_MarkdownViewerCodeBlock> createState() =>
@@ -689,9 +720,9 @@ class _MarkdownViewerCodeBlockState extends State<_MarkdownViewerCodeBlock> {
                 AleraTokens.space16,
                 AleraTokens.space16,
               ),
-              child: Text(
-                widget.code,
-                softWrap: false,
+              child: AleraSearchHighlightedText(
+                text: widget.code,
+                query: widget.searchQuery,
                 style:
                     Theme.of(context).textTheme.bodySmall?.copyWith(
                       color: AleraTokens.foreground,

@@ -52,6 +52,8 @@ class const _ProjectPicker({
             return AleraMenuItem(
               label: project.name,
               subtitle: subtitle,
+              highlightQuery: query,
+              subtitleHighlightQuery: query,
               selected: selected,
               leading: Icon(
                 selected ? AleraIcons.radioOn : AleraIcons.radioOff,
@@ -124,6 +126,7 @@ class const _SourceBranchPicker({
             final label = branch + (isDefault ? ' (default)' : '');
             return AleraMenuItem(
               label: label,
+              highlightQuery: query,
               selected: selected,
               leading: Icon(
                 selected ? AleraIcons.success : AleraIcons.circle,

@@ -4,6 +4,7 @@ import 'package:alera/src/design_system/badges/alera_badge.dart';
 import 'package:alera/src/design_system/feedback/alera_empty_state.dart';
 import 'package:alera/src/design_system/forms/alera_search_field.dart';
 import 'package:alera/src/design_system/layout/alera_section_header.dart';
+import 'package:alera/src/design_system/typography/alera_search_highlighted_text.dart';
 import 'package:alera/src/features/settings/presentation/settings_sections.dart';
 import 'package:flutter/material.dart';
 
@@ -102,6 +103,7 @@ class const SettingsSidebar({
               section: section,
               active: section.id == activeSectionId,
               matchCount: section.matchCount(query),
+              query: query,
               onTap: () => onSelect(section.id),
             ),
           ),
@@ -118,9 +120,11 @@ class const SettingsNavItem({
   required final bool active,
   required final VoidCallback onTap,
   this.matchCount = 0,
+  this.query = '',
 }) extends StatelessWidget {
   /// Number of matching search entries; shown as a badge while searching.
   final int matchCount;
+  final String query;
 
   @override
   Widget build(BuildContext context) {
@@ -165,8 +169,9 @@ class const SettingsNavItem({
               ),
               const SizedBox(width: AleraTokens.space8),
               Expanded(
-                child: Text(
-                  context.tr(section.title),
+                child: AleraSearchHighlightedText(
+                  text: context.tr(section.title),
+                  query: query,
                   style: theme.textTheme.bodyMedium?.copyWith(
                     color: AleraTokens.foreground,
                     fontWeight: .w500,

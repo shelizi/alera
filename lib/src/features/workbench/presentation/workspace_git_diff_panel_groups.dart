@@ -2,6 +2,7 @@ part of 'workspace_git_diff_panel.dart';
 
 class const _GitDiffGroups({
   required final List<GitChangeGroup> groups,
+  required final String filterQuery,
   required final String workspacePath,
   required final GitDiffViewMode viewMode,
   required final bool busy,
@@ -100,6 +101,7 @@ class const _GitDiffGroups({
                     )
                   : _GitDiffTree(
                       workspacePath: workspacePath,
+                      filterQuery: filterQuery,
                       area: group.area,
                       rows: group.treeRows,
                       busy: busy,
@@ -139,6 +141,7 @@ class const _GitDiffGroups({
     final children = <Widget>[
       _GitDiffFileRow(
         entry: entry,
+        filterQuery: filterQuery,
         absolutePath: _terminalPathForGitEntry(workspacePath, entry.path),
         depth: 0,
         showRelativePath: true,
@@ -175,6 +178,7 @@ class const _GitDiffGroups({
       if (entry.isExpandableSubmodule && submoduleExpanded)
         _SubmoduleChanges(
           workspacePath: workspacePath,
+          filterQuery: filterQuery,
           entry: entry,
           depth: 1,
           busy: busy,

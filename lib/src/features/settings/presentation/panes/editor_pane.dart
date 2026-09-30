@@ -435,6 +435,7 @@ class const _EditorThemeSearchList({
                         return AleraMenuItem(
                           label: entry.name,
                           localizeLabel: false,
+                          highlightQuery: controller.text,
                           active: index == highlightedIndex,
                           selected: entry.name == selectedName,
                           leading: _EditorThemeColorDots(entry: entry),

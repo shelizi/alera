@@ -2,6 +2,7 @@ part of 'project_workbench_sidebar.dart';
 
 class const _WorkspaceRow({
   required final Project project,
+  required final String searchQuery,
   required final Workspace workspace,
   required final List<WorkspaceAgentRun> agentRuns,
   required final List<WorkspaceAgentRunGroup> agentRunGroups,
@@ -157,10 +158,10 @@ class _WorkspaceRowState extends State<_WorkspaceRow> {
                               mainAxisSize: .min,
                               children: <Widget>[
                                 Flexible(
-                                  child: Text(
-                                    widget.workspace.name,
+                                  child: AleraSearchHighlightedText(
+                                    text: widget.workspace.name,
+                                    query: widget.searchQuery,
                                     maxLines: 1,
-                                    softWrap: false,
                                     overflow: .ellipsis,
                                     style: theme.textTheme.bodyMedium?.copyWith(
                                       color: widget.workspace.isArchived

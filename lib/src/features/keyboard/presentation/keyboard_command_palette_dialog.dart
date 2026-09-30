@@ -3,6 +3,7 @@ import 'package:alera/src/app/providers.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/forms/alera_text_field.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
+import 'package:alera/src/design_system/typography/alera_search_highlighted_text.dart';
 import 'package:alera/src/design_system/layout/alera_dialog.dart';
 import 'package:alera/src/features/keyboard/application/keybinding_resolver.dart';
 import 'package:alera/src/features/keyboard/domain/keyboard_action.dart';
@@ -223,13 +224,15 @@ class _KeyboardCommandPaletteDialogState
                     child: Column(
                       crossAxisAlignment: .start,
                       children: <Widget>[
-                        Text(
-                          context.tr(definition.label),
+                        AleraSearchHighlightedText(
+                          text: context.tr(definition.label),
+                          query: _queryController.text,
                           style: theme.textTheme.bodyMedium,
                         ),
                         const SizedBox(height: AleraTokens.space2),
-                        Text(
-                          context.tr(definition.description),
+                        AleraSearchHighlightedText(
+                          text: context.tr(definition.description),
+                          query: _queryController.text,
                           maxLines: 1,
                           overflow: .ellipsis,
                           style: theme.textTheme.bodySmall?.copyWith(

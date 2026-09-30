@@ -6,6 +6,7 @@ import 'package:alera/src/design_system/forms/alera_checkbox.dart';
 import 'package:alera/src/design_system/forms/alera_text_field.dart';
 import 'package:alera/src/design_system/icons/alera_file_icon.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
+import 'package:alera/src/design_system/typography/alera_search_highlighted_text.dart';
 import 'package:alera/src/design_system/layout/alera_dialog.dart';
 import 'package:alera/src/features/settings/application/settings_controller.dart';
 import 'package:alera/src/features/workbench/application/workbench_controller.dart';
@@ -504,8 +505,9 @@ class _QuickOpenDialogState extends ConsumerState<QuickOpenDialog> {
                   ),
                   const SizedBox(width: AleraTokens.space12),
                   Expanded(
-                    child: Text(
-                      match.relativePath,
+                    child: AleraSearchHighlightedText(
+                      text: match.relativePath,
+                      query: _queryController.text,
                       maxLines: 1,
                       overflow: .ellipsis,
                       style: theme.textTheme.bodyMedium,

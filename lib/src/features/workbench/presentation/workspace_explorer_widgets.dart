@@ -96,6 +96,7 @@ class const _ExplorerToolbar({
 
 class const _ExplorerRow({
   required final String name,
+  required final String filterQuery,
   required final native.WorkspaceFileEntry? entry,
   required final bool expanded,
   required final bool selected,
@@ -129,8 +130,9 @@ class const _ExplorerRow({
                 ),
                 const SizedBox(width: AleraTokens.space6),
                 Expanded(
-                  child: Text(
-                    name,
+                  child: AleraSearchHighlightedText(
+                    text: name,
+                    query: filterQuery,
                     maxLines: 1,
                     overflow: .ellipsis,
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(

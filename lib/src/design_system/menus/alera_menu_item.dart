@@ -1,6 +1,7 @@
 import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
+import 'package:alera/src/design_system/typography/alera_search_highlighted_text.dart';
 import 'package:flutter/material.dart';
 
 /// Row used inside picker/autocomplete popovers. Renders three states:
@@ -20,6 +21,8 @@ class const AleraMenuItem({
   final bool localizeLabel = true,
   final bool localizeSubtitle = true,
   final bool enabled = true,
+  final String highlightQuery = '',
+  final String subtitleHighlightQuery = '',
 }) extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
@@ -70,17 +73,19 @@ class const AleraMenuItem({
                       ? Column(
                           crossAxisAlignment: .start,
                           children: <Widget>[
-                            Text(
-                              localizeLabel ? context.tr(label) : label,
+                            AleraSearchHighlightedText(
+                              text: localizeLabel ? context.tr(label) : label,
+                              query: highlightQuery,
                               overflow: .ellipsis,
                               maxLines: 1,
                               style: labelStyle,
                             ),
                             const SizedBox(height: AleraTokens.space2),
-                            Text(
-                              localizeSubtitle
+                            AleraSearchHighlightedText(
+                              text: localizeSubtitle
                                   ? context.tr(subtitle!)
                                   : subtitle!,
+                              query: subtitleHighlightQuery,
                               overflow: .ellipsis,
                               maxLines: 1,
                               style: theme.textTheme.labelSmall?.copyWith(
@@ -89,8 +94,9 @@ class const AleraMenuItem({
                             ),
                           ],
                         )
-                      : Text(
-                          localizeLabel ? context.tr(label) : label,
+                      : AleraSearchHighlightedText(
+                          text: localizeLabel ? context.tr(label) : label,
+                          query: highlightQuery,
                           overflow: .ellipsis,
                           maxLines: 1,
                           style: labelStyle,
