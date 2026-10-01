@@ -467,7 +467,7 @@ extension _CodexRuntimeHomeServiceHookPlanning on CodexRuntimeHomeService {
     final escapedPrefix = RegExp.escape(prefix);
     final escaped = RegExp.escape(_escapeTomlString(key));
     return RegExp(
-      '(^|\\r?\\n)[ \\t]*\\[$escapedPrefix\\."$escaped"\\][ \\t]*(?:#[^\\r\\n]*)?(?=\\r?\\n|\\\$)',
+      '(^|\\r?\\n)[ \\t]*\\[$escapedPrefix\\."$escaped"\\][ \\t]*(?:#[^\\r\\n]*)?(?=\\r?\\n|\$)',
     );
   }
 }

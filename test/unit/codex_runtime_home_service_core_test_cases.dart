@@ -501,4 +501,29 @@ void _registerCodexRuntimeHomeServiceCoreTests() {
     expect(runtimeToml, contains('hooks = true'));
     expect(runtimeToml, contains('[hooks.state."runtime-hooks:stop:0:0"]'));
   });
+
+  test(
+    'does not duplicate hook trust tables when config has no trailing newline',
+    () async {
+      final preparation = await service.prepareForTerminalLaunch();
+      final runtimeTomlFile = File(
+        p.join(preparation.runtimeHomePath, 'config.toml'),
+      );
+      final initialToml = runtimeTomlFile.readAsStringSync();
+      expect(initialToml, endsWith('\n'));
+      runtimeTomlFile.writeAsStringSync(
+        initialToml.substring(0, initialToml.length - 1),
+      );
+
+      await service.prepareForTerminalLaunch();
+
+      final updatedToml = runtimeTomlFile.readAsStringSync();
+      final trustHeaders = RegExp(
+        r'^\[hooks\.state\.".*"\]$',
+        multiLine: true,
+      ).allMatches(updatedToml).map((match) => match.group(0)!).toList();
+      expect(trustHeaders, hasLength(8));
+      expect(trustHeaders.toSet(), hasLength(trustHeaders.length));
+    },
+  );
 }
