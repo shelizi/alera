@@ -105,6 +105,21 @@ void main() {
     await tester.tap(find.text('COMMITS'));
     await tester.pumpAndSettle();
 
+    expect(
+      find.byKey(
+        const ValueKey<String>('git-history-head-row-abc123456789'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(
+        const ValueKey<String>(
+          'git-history-current-ref-refs/heads/feat/settings-fullscreen-modal',
+        ),
+      ),
+      findsOneWidget,
+    );
+
     await tester.tap(
       find.text('feat/settings-fullscreen-modal'),
       buttons: kSecondaryMouseButton,

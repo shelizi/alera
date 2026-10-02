@@ -78,6 +78,7 @@ class const _GitHistoryCommitRow({
     final boundary =
         viewModel.kind == GitHistoryItemViewModelKind.incomingChanges ||
         viewModel.kind == GitHistoryItemViewModelKind.outgoingChanges;
+    final isHead = viewModel.kind == GitHistoryItemViewModelKind.head;
     return MouseRegion(
       cursor: onTap != null
           ? SystemMouseCursors.click
@@ -90,102 +91,129 @@ class const _GitHistoryCommitRow({
         mouseCursor: onTap != null
             ? SystemMouseCursors.click
             : SystemMouseCursors.basic,
-        child: SizedBox(
-          height: 28,
-          child: Padding(
-            padding: const EdgeInsets.only(
-              left: AleraTokens.space8,
-              right: AleraTokens.space6,
-            ),
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final budget = _refBadgeBudget(
-                  rowWidth: constraints.maxWidth,
-                  refCount: item.references.length,
-                );
-                final hiddenRefCount =
-                    item.references.length - budget.visibleRefCount;
-                return Row(
-                  children: <Widget>[
-                    GitHistoryGraph(viewModel: viewModel),
-                    const SizedBox(width: AleraTokens.space4),
-                    if (!boundary)
-                      Icon(
-                        expanded
-                            ? AleraIcons.chevronDown
-                            : AleraIcons.chevronRight,
-                        size: _chevronSlotWidth,
-                        color: AleraTokens.foregroundFaint,
-                      )
-                    else
-                      const SizedBox(width: _chevronSlotWidth),
-                    const SizedBox(width: AleraTokens.space4),
-                    Expanded(
-                      child: Row(
-                        children: <Widget>[
-                          for (final itemRef in item.references.take(
-                            budget.visibleRefCount,
-                          )) ...<Widget>[
-                            ConstrainedBox(
-                              constraints: BoxConstraints(
-                                maxWidth: budget.refBadgeMaxWidth,
-                              ),
-                              child: GitRefBadge(
-                                itemRef: itemRef,
-                                onOpenActions: onOpenRefActions == null
-                                    ? null
-                                    : (position) =>
-                                          onOpenRefActions!(itemRef, position),
-                              ),
-                            ),
-                            const SizedBox(width: AleraTokens.space4),
-                          ],
-                          if (hiddenRefCount > 0) ...<Widget>[
-                            Text(
-                              '+$hiddenRefCount',
-                              style: Theme.of(context).textTheme.labelSmall
-                                  ?.copyWith(
-                                    color: AleraTokens.foregroundFaint,
-                                  ),
-                            ),
-                            const SizedBox(width: AleraTokens.space4),
-                          ],
-                          Expanded(
-                            child: Text(
-                              item.subject,
-                              maxLines: 1,
-                              overflow: .ellipsis,
-                              style: Theme.of(context).textTheme.bodySmall
-                                  ?.copyWith(
-                                    color: boundary
-                                        ? AleraTokens.foregroundMuted
-                                        : AleraTokens.foreground,
-                                  ),
-                            ),
-                          ),
-                        ],
-                      ),
+        child: DecoratedBox(
+          key: isHead
+              ? ValueKey<String>('git-history-head-row-${item.id}')
+              : null,
+          decoration: BoxDecoration(
+            color: isHead ? AleraTokens.accent.withValues(alpha: 0.08) : null,
+            border: isHead
+                ? Border(
+                    left: const BorderSide(color: AleraTokens.accent, width: 3),
+                    top: BorderSide(
+                      color: AleraTokens.accent.withValues(alpha: 0.28),
                     ),
-                    if (onOpenActions != null)
-                      Builder(
-                        builder: (context) => AleraIconButton(
-                          tooltip: 'Commit Actions',
-                          icon: AleraIcons.more,
-                          onPressed: () {
-                            final box =
-                                context.findRenderObject() as RenderBox?;
-                            if (box == null) {
-                              return;
-                            }
-                            onOpenActions!(
-                              box.localToGlobal(box.size.bottomLeft(.zero)),
-                            );
-                          },
+                    right: BorderSide(
+                      color: AleraTokens.accent.withValues(alpha: 0.28),
+                    ),
+                    bottom: BorderSide(
+                      color: AleraTokens.accent.withValues(alpha: 0.28),
+                    ),
+                  )
+                : null,
+          ),
+          child: SizedBox(
+            height: 28,
+            child: Padding(
+              padding: const EdgeInsets.only(
+                left: AleraTokens.space8,
+                right: AleraTokens.space6,
+              ),
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final budget = _refBadgeBudget(
+                    rowWidth: constraints.maxWidth,
+                    refCount: item.references.length,
+                  );
+                  final hiddenRefCount =
+                      item.references.length - budget.visibleRefCount;
+                  return Row(
+                    children: <Widget>[
+                      GitHistoryGraph(viewModel: viewModel),
+                      const SizedBox(width: AleraTokens.space4),
+                      if (!boundary)
+                        Icon(
+                          expanded
+                              ? AleraIcons.chevronDown
+                              : AleraIcons.chevronRight,
+                          size: _chevronSlotWidth,
+                          color: AleraTokens.foregroundFaint,
+                        )
+                      else
+                        const SizedBox(width: _chevronSlotWidth),
+                      const SizedBox(width: AleraTokens.space4),
+                      Expanded(
+                        child: Row(
+                          children: <Widget>[
+                            for (final itemRef in item.references.take(
+                              budget.visibleRefCount,
+                            )) ...<Widget>[
+                              ConstrainedBox(
+                                constraints: BoxConstraints(
+                                  maxWidth: budget.refBadgeMaxWidth,
+                                ),
+                                child: GitRefBadge(
+                                  itemRef: itemRef,
+                                  isCurrent:
+                                      isHead &&
+                                      itemRef.color == gitHistoryRefColor,
+                                  onOpenActions: onOpenRefActions == null
+                                      ? null
+                                      : (position) => onOpenRefActions!(
+                                          itemRef,
+                                          position,
+                                        ),
+                                ),
+                              ),
+                              const SizedBox(width: AleraTokens.space4),
+                            ],
+                            if (hiddenRefCount > 0) ...<Widget>[
+                              Text(
+                                '+$hiddenRefCount',
+                                style: Theme.of(context).textTheme.labelSmall
+                                    ?.copyWith(
+                                      color: AleraTokens.foregroundFaint,
+                                    ),
+                              ),
+                              const SizedBox(width: AleraTokens.space4),
+                            ],
+                            Expanded(
+                              child: Text(
+                                item.subject,
+                                maxLines: 1,
+                                overflow: .ellipsis,
+                                style: Theme.of(context).textTheme.bodySmall
+                                    ?.copyWith(
+                                      color: boundary
+                                          ? AleraTokens.foregroundMuted
+                                          : AleraTokens.foreground,
+                                    ),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
-                  ],
-                );
-              },
+                      if (onOpenActions != null)
+                        Builder(
+                          builder: (context) => AleraIconButton(
+                            tooltip: 'Commit Actions',
+                            icon: AleraIcons.more,
+                            onPressed: () {
+                              final box =
+                                  context.findRenderObject() as RenderBox?;
+                              if (box == null) {
+                                return;
+                              }
+                              onOpenActions!(
+                                box.localToGlobal(box.size.bottomLeft(.zero)),
+                              );
+                            },
+                          ),
+                        ),
+                    ],
+                  );
+                },
+              ),
             ),
           ),
         ),

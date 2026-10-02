@@ -159,19 +159,35 @@ class const GitHistoryGraphPainter(final GitHistoryItemViewModel viewModel)
     final boundary =
         viewModel.kind == GitHistoryItemViewModelKind.incomingChanges ||
         viewModel.kind == GitHistoryItemViewModelKind.outgoingChanges;
-    if (viewModel.kind == GitHistoryItemViewModelKind.head || boundary) {
+    if (viewModel.kind == GitHistoryItemViewModelKind.head) {
+      canvas.drawCircle(
+        center,
+        circleRadius + 6,
+        Paint()..color = AleraTokens.accent.withValues(alpha: 0.16),
+      );
+      canvas.drawCircle(
+        center,
+        circleRadius + 4,
+        Paint()
+          ..color = AleraTokens.accent.withValues(alpha: 0.9)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.5,
+      );
       canvas.drawCircle(center, circleRadius + 3, paint);
       canvas.drawCircle(center, circleRadius, Paint()..color = AleraTokens.bg);
-      if (boundary) {
-        canvas.drawCircle(
-          center,
-          circleRadius + 1,
-          Paint()
-            ..color = paint.color
-            ..style = PaintingStyle.stroke
-            ..strokeWidth = 1,
-        );
-      }
+      return;
+    }
+    if (boundary) {
+      canvas.drawCircle(center, circleRadius + 3, paint);
+      canvas.drawCircle(center, circleRadius, Paint()..color = AleraTokens.bg);
+      canvas.drawCircle(
+        center,
+        circleRadius + 1,
+        Paint()
+          ..color = paint.color
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1,
+      );
       return;
     }
     if (viewModel.historyItem.parentIds.length > 1) {
@@ -211,6 +227,7 @@ Color? gitHistoryGraphColor(GitHistoryGraphColorId? color) {
 class const GitRefBadge({
   super.key,
   required final GitHistoryItemRef itemRef,
+  final bool isCurrent = false,
   final ValueChanged<Offset>? onOpenActions,
 }) extends StatelessWidget {
   @override
@@ -225,10 +242,25 @@ class const GitRefBadge({
           null => AleraTokens.accent,
         };
     final badge = DecoratedBox(
+      key: isCurrent
+          ? ValueKey<String>('git-history-current-ref-${itemRef.id}')
+          : null,
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.14),
+        color: color.withValues(alpha: isCurrent ? 0.28 : 0.14),
         borderRadius: BorderRadius.circular(AleraTokens.radiusPill),
-        border: Border.all(color: color.withValues(alpha: 0.72)),
+        border: Border.all(
+          color: isCurrent ? AleraTokens.accent : color.withValues(alpha: 0.72),
+          width: isCurrent ? 2 : 1,
+        ),
+        boxShadow: isCurrent
+            ? <BoxShadow>[
+                BoxShadow(
+                  color: AleraTokens.accent.withValues(alpha: 0.18),
+                  blurRadius: 6,
+                  spreadRadius: 1,
+                ),
+              ]
+            : null,
       ),
       child: Padding(
         padding: const EdgeInsets.symmetric(
@@ -239,8 +271,11 @@ class const GitRefBadge({
           itemRef.name,
           maxLines: 1,
           overflow: .ellipsis,
-          style: Theme.of(context).textTheme.labelSmall
-              ?.copyWith(color: color, fontSize: 10, fontWeight: .w700),
+          style: Theme.of(context).textTheme.labelSmall?.copyWith(
+            color: color,
+            fontSize: 10,
+            fontWeight: isCurrent ? .w800 : .w700,
+          ),
         ),
       ),
     );

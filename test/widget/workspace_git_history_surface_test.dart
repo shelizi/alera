@@ -11,6 +11,51 @@ import '../unit/fake_git_backend.dart';
 import 'workspace_git_history_surface_test_harness.dart';
 
 void main() {
+  testWidgets('highlights the current HEAD row and branch ref', (tester) async {
+    const currentRef = GitHistoryItemRef(
+      id: 'refs/heads/main',
+      name: 'main',
+      revision: 'c1',
+      category: GitHistoryRefCategory.branches,
+    );
+    final backend = FakeGitBackend()
+      ..gitHistoryResult = GitHistoryResult(
+        currentRef: currentRef,
+        items: <GitHistoryItem>[
+          gitHistoryCommit(
+            'c1',
+            parents: <String>[],
+            subject: 'Current Commit',
+            references: const <GitHistoryItemRef>[currentRef],
+          ),
+        ],
+        hasIncomingChanges: false,
+        hasOutgoingChanges: false,
+        hasMore: false,
+        limit: 200,
+      );
+    final repository = GitHistoryFakeWorkbenchRepository()
+      ..tabs.add(gitHistoryTab());
+
+    await pumpGitHistorySurface(
+      tester,
+      backend: backend,
+      repository: repository,
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey<String>('git-history-head-row-c1')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(
+        const ValueKey<String>('git-history-current-ref-refs/heads/main'),
+      ),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('commit graph tab loads all-branch history into the list', (
     tester,
   ) async {

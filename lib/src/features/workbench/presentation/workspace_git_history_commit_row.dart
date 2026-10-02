@@ -16,6 +16,7 @@ class const _CommitGraphRow({
   Widget build(BuildContext context) {
     final item = viewModel.historyItem;
     final theme = Theme.of(context);
+    final isHead = viewModel.kind == GitHistoryItemViewModelKind.head;
     return MouseRegion(
       cursor: SystemMouseCursors.click,
       child: InkWell(
@@ -25,8 +26,29 @@ class const _CommitGraphRow({
             : (details) => onOpenActions!(details.globalPosition),
         mouseCursor: SystemMouseCursors.click,
         child: DecoratedBox(
+          key: isHead
+              ? ValueKey<String>('git-history-head-row-${item.id}')
+              : null,
           decoration: BoxDecoration(
-            color: isCompareAnchor ? AleraTokens.surfaceVariant : null,
+            color: isCompareAnchor
+                ? AleraTokens.surfaceVariant
+                : isHead
+                ? AleraTokens.accent.withValues(alpha: 0.08)
+                : null,
+            border: isHead
+                ? Border(
+                    left: const BorderSide(color: AleraTokens.accent, width: 3),
+                    top: BorderSide(
+                      color: AleraTokens.accent.withValues(alpha: 0.28),
+                    ),
+                    right: BorderSide(
+                      color: AleraTokens.accent.withValues(alpha: 0.28),
+                    ),
+                    bottom: BorderSide(
+                      color: AleraTokens.accent.withValues(alpha: 0.28),
+                    ),
+                  )
+                : null,
           ),
           child: SizedBox(
             height: 28,
@@ -55,6 +77,8 @@ class const _CommitGraphRow({
                             ),
                             child: GitRefBadge(
                               itemRef: itemRef,
+                              isCurrent:
+                                  isHead && itemRef.color == gitHistoryRefColor,
                               onOpenActions: onOpenRefActions == null
                                   ? null
                                   : (position) =>
