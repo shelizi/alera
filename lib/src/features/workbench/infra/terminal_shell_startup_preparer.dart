@@ -255,6 +255,8 @@ GhosttyTerminalShellLaunch _launchWithPrependedSetupCommand(
 
 bool _hasManagedAgentRuntimeEnvironment(Map<String, String> environment) {
   return environment.containsKey('ALERA_CODEX_HOME') ||
+      environment.containsKey('ALERA_ACCOUNT_CODEX_HOME') ||
+      environment.containsKey('ALERA_ACCOUNT_CLAUDE_PROFILE') ||
       environment.containsKey('ALERA_CLAUDE_CONFIG_DIR') ||
       environment.containsKey('ALERA_COPILOT_HOME') ||
       environment.containsKey('ALERA_OPENCODE_CONFIG_DIR') ||

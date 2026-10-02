@@ -169,12 +169,14 @@ class const AgentQuotaStatusBarContent({
         continue;
       }
       if (provider == AgentQuotaProviderId.claude ||
+          provider == AgentQuotaProviderId.codex ||
           provider == AgentQuotaProviderId.opencode) {
         final byAccount = <String, AgentQuotaSnapshot>{
           for (final snapshot in candidates) snapshot.accountId: snapshot,
         };
         final addedAccounts = <String>{};
-        if (provider == AgentQuotaProviderId.opencode ||
+        if (provider == AgentQuotaProviderId.codex ||
+            provider == AgentQuotaProviderId.opencode ||
             settings.claudeDefaultEnabled) {
           final defaultSnapshot = byAccount['default'];
           if (defaultSnapshot != null) {
@@ -184,7 +186,16 @@ class const AgentQuotaStatusBarContent({
         } else {
           addedAccounts.add('default');
         }
-        for (final profile in settings.claudeProfiles) {
+        final profiles = provider == AgentQuotaProviderId.codex
+            ? [
+                for (final profile in settings.codexProfiles)
+                  (profile: profile.profile, alias: profile.alias),
+              ]
+            : [
+                for (final profile in settings.claudeProfiles)
+                  (profile: profile.profile, alias: profile.alias),
+              ];
+        for (final profile in profiles) {
           final snapshot = byAccount[profile.profile];
           if (snapshot != null) {
             visible.add(snapshot);
@@ -211,6 +222,15 @@ class const AgentQuotaStatusBarContent({
   }) {
     if (snapshot.provider == AgentQuotaProviderId.opencode) {
       return snapshot.accountId == 'go' ? 'Go' : 'Zen';
+    }
+    if (snapshot.provider == AgentQuotaProviderId.codex) {
+      if (snapshot.accountId == 'default') {
+        return settings.codexProfiles.isEmpty ? null : 'Default';
+      }
+      for (final profile in settings.codexProfiles) {
+        if (profile.profile == snapshot.accountId) return profile.alias;
+      }
+      return snapshot.displayName;
     }
     if (snapshot.provider != AgentQuotaProviderId.claude) {
       return null;

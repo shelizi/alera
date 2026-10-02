@@ -12,14 +12,18 @@ struct CodexBackendAuth {
 }
 
 async fn fetch_codex() -> QuotaSnapshot {
+    fetch_codex_in_home(None).await
+}
+
+async fn fetch_codex_in_home(home: Option<&std::path::Path>) -> QuotaSnapshot {
     if let Ok(Ok(Some(snapshot))) =
-        tokio::time::timeout(FETCH_TIMEOUT, fetch_codex_via_backend()).await
+        tokio::time::timeout(FETCH_TIMEOUT, fetch_codex_backend_in_home(home)).await
     {
         return snapshot;
     }
-    let mut snapshot = fetch_codex_via_rpc().await;
+    let mut snapshot = fetch_codex_via_rpc(home).await;
     if snapshot.status == "ok" && snapshot.rate_limit_reset_credits.is_none() {
-        if let Ok(Some(auth)) = read_codex_backend_auth().await {
+        if let Ok(Some(auth)) = read_codex_auth_in_home(home).await {
             if let Ok(Some(credits)) = fetch_codex_reset_credits(&auth).await {
                 snapshot.rate_limit_reset_credits = Some(Box::new(credits));
             }
@@ -29,7 +33,13 @@ async fn fetch_codex() -> QuotaSnapshot {
 }
 
 async fn fetch_codex_via_backend() -> Result<Option<QuotaSnapshot>> {
-    let Some(auth) = read_codex_backend_auth().await? else {
+    fetch_codex_backend_in_home(None).await
+}
+
+async fn fetch_codex_backend_in_home(
+    home: Option<&std::path::Path>,
+) -> Result<Option<QuotaSnapshot>> {
+    let Some(auth) = read_codex_auth_in_home(home).await? else {
         return Ok(None);
     };
     let response = codex_request(&auth, reqwest::Method::GET, CODEX_USAGE_URL)
@@ -87,7 +97,7 @@ async fn fetch_codex_via_backend() -> Result<Option<QuotaSnapshot>> {
     Ok(Some(snapshot))
 }
 
-async fn fetch_codex_via_rpc() -> QuotaSnapshot {
+async fn fetch_codex_via_rpc(home: Option<&std::path::Path>) -> QuotaSnapshot {
     let result = tokio::time::timeout(FETCH_TIMEOUT, async {
         let mut command = windowless_async_shell_command(
             "codex",
@@ -106,9 +116,12 @@ async fn fetch_codex_via_rpc() -> QuotaSnapshot {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .kill_on_drop(true);
+        let environment = home.map(|home| BTreeMap::from([
+            ("CODEX_HOME".to_string(), home.to_string_lossy().into_owned()),
+        ])).unwrap_or_default();
         crate::login_shell_environment::apply_login_shell_environment(
             &mut command,
-            &BTreeMap::new(),
+            &environment,
         )
         .await;
         let mut child = command
@@ -189,40 +202,6 @@ async fn fetch_codex_via_rpc() -> QuotaSnapshot {
     snapshot
 }
 
-async fn read_codex_backend_auth() -> Result<Option<CodexBackendAuth>> {
-    let home = shell_environment_value("CODEX_HOME")
-        .await
-        .map(PathBuf::from)
-        .or_else(|| home_dir().map(|home| home.join(".codex")));
-    let Some(home) = home else {
-        return Ok(None);
-    };
-    let contents = match tokio::fs::read_to_string(home.join("auth.json")).await {
-        Ok(contents) => contents,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error).context("Could not read Codex auth.json"),
-    };
-    let raw: Value = serde_json::from_str(&contents).context("Codex auth.json is not valid JSON")?;
-    let Some(access_token) = raw
-        .pointer("/tokens/access_token")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        return Ok(None);
-    };
-    let account_id = raw
-        .pointer("/tokens/account_id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string);
-    Ok(Some(CodexBackendAuth {
-        access_token: access_token.to_string(),
-        account_id,
-    }))
-}
-
 fn codex_request(
     auth: &CodexBackendAuth,
     method: reqwest::Method,
@@ -244,9 +223,7 @@ fn codex_request(
     request
 }
 
-async fn fetch_codex_reset_credits(
-    auth: &CodexBackendAuth,
-) -> Result<Option<CodexResetCredits>> {
+async fn fetch_codex_reset_credits(auth: &CodexBackendAuth) -> Result<Option<CodexResetCredits>> {
     let response = codex_request(auth, reqwest::Method::GET, CODEX_RESET_CREDITS_URL)
         .send()
         .await
@@ -334,10 +311,7 @@ fn parse_codex_timestamp(value: &Value) -> Option<i64> {
     parse_timestamp_millis(raw)
 }
 
-fn map_backend_codex_window(
-    value: Option<&Value>,
-    fallback_minutes: i64,
-) -> Option<QuotaWindow> {
+fn map_backend_codex_window(value: Option<&Value>, fallback_minutes: i64) -> Option<QuotaWindow> {
     let value = value?;
     let used_percent = value
         .get("used_percent")
@@ -412,9 +386,7 @@ fn map_codex_window(value: Option<&Value>, fallback_minutes: i64) -> Option<Quot
         .get("windowDurationMins")
         .and_then(Value::as_i64)
         .unwrap_or(fallback_minutes);
-    let resets_at = value
-        .get("resetsAt")
-        .and_then(parse_codex_timestamp);
+    let resets_at = value.get("resetsAt").and_then(parse_codex_timestamp);
     Some(QuotaWindow {
         label: window_label(window_minutes),
         used_percent,

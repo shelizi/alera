@@ -2,7 +2,7 @@ part of 'alera_settings.dart';
 
 // Ownership: the per-host quota fields the runtime host needs are pushed as
 // `agentQuotas` in `runtimeSettings.update` (runtime operational), while
-// `selectedClaudeProfile` and `unpinnedQuotaKeys` stay local-only UI prefs and
+// Selected account ids and `unpinnedQuotaKeys` stay local-only preferences and
 // are merged back from the local repository on every load.
 
 /// Canonicalizes quota provider ids until the agent descriptor registry is
@@ -88,6 +88,17 @@ class const ClaudeQuotaProfileSettings({
 }
 
 @MappableClass()
+class const CodexQuotaProfileSettings({
+  required this.alias,
+  required this.profile,
+}) with CodexQuotaProfileSettingsMappable {
+  final String alias;
+
+  /// Absolute CODEX_HOME on the host, containing the CLI's own credentials.
+  final String profile;
+}
+
+@MappableClass()
 class const AgentQuotaEnvironmentSettings({
   this.kimiApiKey = 'KIMI_API_KEY',
   this.zaiApiKey = 'ZAI_API_KEY',
@@ -118,6 +129,8 @@ class const AgentQuotaHostSettings({
   this.claudeDefaultShowInUsage = true,
   this.claudeProfiles = const <ClaudeQuotaProfileSettings>[],
   this.selectedClaudeProfile = 'default',
+  this.codexProfiles = const <CodexQuotaProfileSettings>[],
+  this.selectedCodexProfile = 'default',
   this.environment = AgentQuotaEnvironmentSettings.defaults,
   this.unpinnedQuotaKeys = const <String>[],
 }) with AgentQuotaHostSettingsMappable {
@@ -128,6 +141,8 @@ class const AgentQuotaHostSettings({
   final bool claudeDefaultShowInUsage;
   final List<ClaudeQuotaProfileSettings> claudeProfiles;
   final String selectedClaudeProfile;
+  final List<CodexQuotaProfileSettings> codexProfiles;
+  final String selectedCodexProfile;
   final AgentQuotaEnvironmentSettings environment;
 
   /// Quotas hidden from the status bar (still visible in the overview panel).
@@ -144,6 +159,9 @@ class const AgentQuotaHostSettings({
     String claudeAccountId = 'default',
   }) {
     final providerId = canonicalAgentQuotaProviderId(provider.name)!;
+    if (provider == AgentQuotaProviderId.codex) {
+      return claudeAccountId == 'default' ? 'codex' : 'codex:$claudeAccountId';
+    }
     if (provider == AgentQuotaProviderId.claude ||
         provider == AgentQuotaProviderId.opencode) {
       return '$providerId:$claudeAccountId';

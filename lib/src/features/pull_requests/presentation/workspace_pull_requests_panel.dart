@@ -218,7 +218,6 @@ class _VisiblePullRequestsPanelState
         .open<WorkspaceTabRecord>(
           workspace: widget.workspace,
           relativePath: relativePath,
-          preview: true,
           line: line,
           openInAlera:
               ({required workspace, required relativePath, required preview}) =>

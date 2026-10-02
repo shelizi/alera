@@ -125,6 +125,7 @@ void main() {
             'local',
             const AgentQuotaHostSettings(
               selectedClaudeProfile: 'leynierdev',
+              selectedCodexProfile: '/codex-work',
               unpinnedQuotaKeys: <String>['codex', 'claude:leynierdev'],
             ),
           ),
@@ -155,6 +156,7 @@ void main() {
       expect(local.claudeDefaultEnabled, isFalse);
       expect(local.claudeDefaultShowInUsage, isTrue);
       expect(local.selectedClaudeProfile, 'leynierdev');
+      expect(local.selectedCodexProfile, '/codex-work');
       expect(local.unpinnedQuotaKeys, <String>['codex', 'claude:leynierdev']);
     },
   );

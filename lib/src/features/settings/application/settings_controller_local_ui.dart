@@ -181,9 +181,56 @@ mixin _SettingsControllerLocalUiSettings on _$SettingsController {
     required String profile,
   }) => _controller._serialize(() async {
     final current = state.agents.quotas.forHost(hostId);
+    if (profile != 'default' &&
+        !current.claudeProfiles.any((entry) => entry.profile == profile)) {
+      throw ArgumentError.value(profile, 'profile', 'Unknown Claude account');
+    }
     await _controller._saveQuotaHost(
       hostId,
       current.copyWith(selectedClaudeProfile: profile),
+    );
+  });
+
+  Future<void> setCodexQuotaProfiles({
+    required String hostId,
+    required List<CodexQuotaProfileSettings> profiles,
+  }) => _controller._serialize(() async {
+    final current = state.agents.quotas.forHost(hostId);
+    final selected =
+        profiles.any(
+          (profile) => profile.profile == current.selectedCodexProfile,
+        )
+        ? current.selectedCodexProfile
+        : 'default';
+    final validKeys = <String>{
+      for (final profile in profiles) 'codex:${profile.profile}',
+    };
+    await _controller._saveQuotaHost(
+      hostId,
+      current.copyWith(
+        codexProfiles: profiles,
+        selectedCodexProfile: selected,
+        unpinnedQuotaKeys: current.unpinnedQuotaKeys
+            .where(
+              (key) => !key.startsWith('codex:') || validKeys.contains(key),
+            )
+            .toList(),
+      ),
+    );
+  });
+
+  Future<void> setSelectedCodexQuotaProfile({
+    required String hostId,
+    required String profile,
+  }) => _controller._serialize(() async {
+    final current = state.agents.quotas.forHost(hostId);
+    if (profile != 'default' &&
+        !current.codexProfiles.any((entry) => entry.profile == profile)) {
+      throw ArgumentError.value(profile, 'profile', 'Unknown Codex account');
+    }
+    await _controller._saveQuotaHost(
+      hostId,
+      current.copyWith(selectedCodexProfile: profile),
     );
   });
 

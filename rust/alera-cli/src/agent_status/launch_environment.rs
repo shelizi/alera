@@ -51,6 +51,20 @@ pub fn prepare_launch_environment(
     strip_managed_primary(environment, "CLAUDE_CONFIG_DIR", "ALERA_CLAUDE_CONFIG_DIR");
     strip_managed_wrapper_path(environment);
     environment.retain(|key, _| !is_managed_hook_key(key));
+    // Explicit account selection survives inherited-hook cleanup and shell rc files.
+    for (selection, primary, startup) in [
+        ("ALERA_ACCOUNT_CODEX_HOME", "CODEX_HOME", "ALERA_CODEX_HOME"),
+        (
+            "ALERA_ACCOUNT_CLAUDE_CONFIG_DIR",
+            "CLAUDE_CONFIG_DIR",
+            "ALERA_CLAUDE_CONFIG_DIR",
+        ),
+    ] {
+        if let Some(directory) = environment.remove(selection) {
+            environment.insert(primary.to_string(), directory.clone());
+            environment.insert(startup.to_string(), directory);
+        }
+    }
     environment.insert(
         "ALERA_TERMINAL_SESSION_ID".to_string(),
         session_id.to_string(),
@@ -249,6 +263,45 @@ fn is_managed_hook_key(key: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn account_selection_survives_inherited_overlay_cleanup() {
+        let runtime = tempfile::tempdir().unwrap();
+        let mut environment = std::collections::BTreeMap::from([
+            ("CODEX_HOME".into(), "old-codex".into()),
+            ("ALERA_CODEX_HOME".into(), "old-codex".into()),
+            ("CLAUDE_CONFIG_DIR".into(), "old-claude".into()),
+            ("ALERA_CLAUDE_CONFIG_DIR".into(), "old-claude".into()),
+            ("ALERA_ACCOUNT_CODEX_HOME".into(), "selected-codex".into()),
+            (
+                "ALERA_ACCOUNT_CLAUDE_CONFIG_DIR".into(),
+                "selected-claude".into(),
+            ),
+        ]);
+        let settings = alera_core::runtime::RuntimeAgentStatusHookSettings::default();
+        super::prepare_launch_environment(
+            runtime.path(),
+            "session",
+            "workspace",
+            "tab",
+            &settings,
+            &mut environment,
+        )
+        .unwrap();
+        assert_eq!(
+            environment.get("CODEX_HOME").map(String::as_str),
+            Some("selected-codex")
+        );
+        assert_eq!(
+            environment.get("CLAUDE_CONFIG_DIR").map(String::as_str),
+            Some("selected-claude")
+        );
+        assert_eq!(
+            environment.get("ALERA_CODEX_HOME").map(String::as_str),
+            Some("selected-codex")
+        );
+        assert!(!environment.contains_key("ALERA_ACCOUNT_CODEX_HOME"));
+    }
     use super::*;
 
     #[test]

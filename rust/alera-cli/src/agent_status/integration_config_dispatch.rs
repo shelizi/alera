@@ -32,6 +32,13 @@ pub fn prepare_enabled_integrations(
             AgentHookStrategy::RuntimeHome => {
                 if !settings.is_enabled(descriptor.id) {
                     if descriptor.id == "claude" {
+                        if let Some(directory) = environment.get("CLAUDE_CONFIG_DIR") {
+                            if let Err(error) = user_hooks::cleanup_managed_hooks_file(
+                                &Path::new(directory).join("settings.json"),
+                            ) {
+                                warnings.push(format!("Claude: {error}"));
+                            }
+                        }
                         if let Err(error) = super::home_dir().and_then(|home| {
                             user_hooks::cleanup_claude_user_hooks(&home)?;
                             ccs::remove_ccs_claude_hooks(&home, environment)

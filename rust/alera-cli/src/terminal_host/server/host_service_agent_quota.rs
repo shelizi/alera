@@ -119,6 +119,7 @@ impl ServerActor {
                     let quota_payload = json!({
                         "providers": providers,
                         "claudeDefaultEnabled": settings.claude_default_enabled,
+                        "codexProfiles": settings.codex_profiles,
                         "claudeProfiles": settings.claude_profiles,
                         "environmentNames": settings.environment,
                         "environmentValues": environment_values,

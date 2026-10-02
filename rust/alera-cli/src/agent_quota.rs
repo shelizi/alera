@@ -62,6 +62,8 @@ struct AgentQuotaFetchRequest {
     #[serde(default)]
     claude_profiles: Vec<ClaudeProfileRequest>,
     #[serde(default)]
+    codex_profiles: Vec<CodexProfileRequest>,
+    #[serde(default)]
     environment_names: EnvironmentNames,
     #[serde(default)]
     environment_values: BTreeMap<String, String>,
@@ -110,6 +112,13 @@ fn default_true() -> bool {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ClaudeProfileRequest {
+    alias: String,
+    profile: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexProfileRequest {
     alias: String,
     profile: String,
 }
@@ -296,6 +305,14 @@ pub(crate) async fn fetch_agent_quotas(payload: Value) -> Result<Value> {
                     let _permit = permits.acquire_owned().await.ok();
                     fetch_codex().await
                 });
+                for profile in &request.codex_profiles {
+                    let profile = profile.clone();
+                    let permits = Arc::clone(&cli_permits);
+                    tasks.spawn(async move {
+                        let _permit = permits.acquire_owned().await.ok();
+                        fetch_codex_profile(&profile).await
+                    });
+                }
             }
             "kimi" => {
                 let names = request.environment_names.clone();
@@ -365,6 +382,7 @@ pub(crate) async fn fetch_agent_quotas(payload: Value) -> Result<Value> {
 include!("agent_quota/claude.rs");
 include!("agent_quota/tui.rs");
 include!("agent_quota/codex.rs");
+include!("agent_quota/codex_accounts.rs");
 include!("agent_quota/codex_reset_store.rs");
 include!("agent_quota/grok.rs");
 include!("agent_quota/cursor.rs");

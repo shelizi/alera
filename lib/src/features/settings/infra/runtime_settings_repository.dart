@@ -84,6 +84,7 @@ class RuntimeSettingsRepository({
               _asMap(runtime['agentQuotas']),
             ).copyWith(
               selectedClaudeProfile: legacyLocalQuotas.selectedClaudeProfile,
+              selectedCodexProfile: legacyLocalQuotas.selectedCodexProfile,
               unpinnedQuotaKeys: legacyLocalQuotas.unpinnedQuotaKeys,
             ),
           ),

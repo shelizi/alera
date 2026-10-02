@@ -18,7 +18,11 @@ use super::{
 /// Grok scans this file for Claude Code compatibility, so the managed command
 /// carries its own `CLAUDECODE` guard (see `integration_hook_scripts`).
 pub(super) fn install_claude_user_hooks(home: &Path, script: &Path) -> anyhow::Result<()> {
-    let path = home.join(".claude/settings.json");
+    install_claude_config_hooks(&home.join(".claude"), script)
+}
+
+pub(super) fn install_claude_config_hooks(directory: &Path, script: &Path) -> anyhow::Result<()> {
+    let path = directory.join("settings.json");
     let settings = read_jsonc_object(&path)?.unwrap_or_default();
     let mut updated = settings.clone();
     install_claude_hooks_into(&mut updated, script);

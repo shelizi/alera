@@ -386,6 +386,9 @@ impl ServerActor {
         let launch_workspace_id = workspace_id.clone();
         let launch_tab_id = tab_id.clone();
         let mut environment = std::mem::take(&mut launch.environment);
+        crate::agent_account_environment::resolve_account_launch_environment(&mut environment)
+            .await
+            .map_err(|error| HostError::state(error.to_string()))?;
         if let Some(path) = crate::login_shell_environment::login_shell_merged_path(
             environment.get("PATH").map(String::as_str),
         )

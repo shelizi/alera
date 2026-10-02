@@ -16,6 +16,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'agent_quota_status_bar_content.dart';
 import 'agent_quota_inline_actions.dart';
+import 'agent_quota_account_switch.dart';
 
 export 'agent_quota_status_bar_content.dart' show AgentQuotaPinToggle;
 
@@ -62,6 +63,11 @@ class const AgentQuotaStatusBar({super.key, final Widget? trailing})
         settings: settings,
         error: state.error,
         loading: quota.isLoading,
+        actions: const AgentQuotaInlineActions(
+          codexReset: _buildCodexReset,
+          claudeTui: _buildClaudeTui,
+          accountSwitch: _buildAccountSwitch,
+        ),
         onRefresh: refresh,
         onTogglePinned: togglePinned,
         onOpenUsage: () => unawaited(openAgentUsageDialog(context)),
@@ -74,6 +80,11 @@ class const AgentQuotaStatusBar({super.key, final Widget? trailing})
         snapshots: const <AgentQuotaSnapshot>[],
         settings: settings,
         loading: true,
+        actions: const AgentQuotaInlineActions(
+          codexReset: _buildCodexReset,
+          claudeTui: _buildClaudeTui,
+          accountSwitch: _buildAccountSwitch,
+        ),
         onRefresh: refresh,
         onTogglePinned: togglePinned,
         onOpenUsage: () => unawaited(openAgentUsageDialog(context)),
@@ -84,6 +95,11 @@ class const AgentQuotaStatusBar({super.key, final Widget? trailing})
         snapshots: const <AgentQuotaSnapshot>[],
         settings: settings,
         error: error.toString(),
+        actions: const AgentQuotaInlineActions(
+          codexReset: _buildCodexReset,
+          claudeTui: _buildClaudeTui,
+          accountSwitch: _buildAccountSwitch,
+        ),
         onRefresh: refresh,
         onTogglePinned: togglePinned,
         onOpenUsage: () => unawaited(openAgentUsageDialog(context)),
@@ -94,6 +110,11 @@ class const AgentQuotaStatusBar({super.key, final Widget? trailing})
         snapshots: const <AgentQuotaSnapshot>[],
         settings: settings,
         loading: true,
+        actions: const AgentQuotaInlineActions(
+          codexReset: _buildCodexReset,
+          claudeTui: _buildClaudeTui,
+          accountSwitch: _buildAccountSwitch,
+        ),
         onRefresh: refresh,
         onTogglePinned: togglePinned,
         onOpenUsage: () => unawaited(openAgentUsageDialog(context)),
@@ -115,15 +136,11 @@ class const AgentQuotaStatusBarView({
   super.error,
   super.trailing,
   super.onOpenUsage,
-}) extends AgentQuotaStatusBarContent {
-  this
-    : super(
-        actions: const AgentQuotaInlineActions(
-          codexReset: _buildCodexReset,
-          claudeTui: _buildClaudeTui,
-        ),
-      );
-}
+  super.actions = const AgentQuotaInlineActions(
+    codexReset: _buildCodexReset,
+    claudeTui: _buildClaudeTui,
+  ),
+}) extends AgentQuotaStatusBarContent;
 
 Widget _buildCodexReset({
   required String hostId,
@@ -140,3 +157,9 @@ Widget _buildClaudeTui({
   required AgentQuotaSnapshot snapshot,
   required bool compact,
 }) => _ClaudeTryWithTuiButton(hostId: hostId, snapshot: snapshot);
+
+Widget _buildAccountSwitch({
+  required String hostId,
+  required AgentQuotaSnapshot snapshot,
+  required bool compact,
+}) => AgentQuotaAccountSwitch(hostId: hostId, provider: snapshot.provider);

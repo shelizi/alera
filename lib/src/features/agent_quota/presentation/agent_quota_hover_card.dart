@@ -114,6 +114,7 @@ class const _AgentQuotaHoverSection({
             ],
           ),
           const SizedBox(height: AleraTokens.space12),
+          actions.buildAccountSwitch(hostId: hostId, snapshot: snapshot),
           if (entries.isEmpty)
             _QuotaHoverEmptyState(snapshot: snapshot)
           else

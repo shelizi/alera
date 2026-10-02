@@ -1,5 +1,8 @@
 import 'dart:async';
 
+import 'package:alera/src/features/agent_quota/application/agent_account_launch_environment.dart';
+import 'package:alera/src/features/workbench/application/workbench_controller.dart';
+
 import 'package:alera/src/design_system/feedback/alera_toast.dart';
 import 'package:alera/src/features/agent_status/application/agent_status_controller.dart';
 import 'package:alera/src/features/agent_status/application/agent_status_providers.dart';
@@ -59,7 +62,18 @@ TerminalRuntime terminalRuntime(Ref ref) {
     },
     agentHookEnvironmentBuilder:
         ({required terminalSessionId, required workspaceId, required tabId}) {
-          final environment = <String, String>{};
+          final workbench = ref.read(workbenchControllerProvider);
+          final workspace = workbench.workspacesByProject.values
+              .expand((entries) => entries)
+              .where((entry) => entry.id == workspaceId)
+              .firstOrNull;
+          final environment = agentAccountLaunchEnvironment(
+            ref
+                .read(settingsControllerProvider)
+                .agents
+                .quotas
+                .forHost(workspace?.hostId ?? 'local'),
+          );
           Future<void> addAleraCliShim() async {
             try {
               mergeTerminalLaunchEnvironment(

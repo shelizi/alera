@@ -17,6 +17,8 @@ import 'package:alera/src/features/settings/presentation/rows/settings_rows.dart
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'codex_quota_profiles_control.dart';
+
 part 'agent_quota_settings_controls.dart';
 
 class const AgentQuotaSettingsPane({
@@ -114,7 +116,7 @@ class const AgentQuotaSettingsPane({
           key: groupKeys['claude'],
           child: AleraSettingsGroup(
             title: 'Claude',
-            description: 'Configure the default Claude account and every CCS profile together.',
+            description: 'Configure the default Claude account, CCS profiles, and independent account directories.',
             children: <Widget>[
               SettingsSwitchRow(
                 title: 'Claude Code Quotas',
@@ -176,9 +178,8 @@ class const AgentQuotaSettingsPane({
                 },
               ),
               AleraSettingRow(
-                title: 'Claude CCS Profiles',
-                description:
-                    'Add CCS profiles and choose which ones appear in Usage.',
+                title: 'Claude Accounts',
+                description: 'Add a CCS instance name or an absolute CLAUDE_CONFIG_DIR. Switch accounts from the quota card.',
                 controlWidth: 420,
                 child: _ClaudeProfilesControl(
                   profiles: hostSettings.claudeProfiles,
@@ -210,6 +211,27 @@ class const AgentQuotaSettingsPane({
               ),
             ],
           ),
+        ),
+        const SizedBox(height: AleraTokens.space16),
+        AleraSettingsGroup(
+          title: 'Codex Accounts',
+          description: 'Add signed-in CODEX_HOME directories. Choose the active account from its quota card.',
+          children: <Widget>[
+            AleraSettingRow(
+              title: 'Codex Accounts',
+              description: 'Each directory keeps its own CLI login, configuration, and history. The default account is retained.',
+              controlWidth: 420,
+              child: CodexQuotaProfilesControl(
+                profiles: hostSettings.codexProfiles,
+                onChanged: (profiles) => unawaited(
+                  controller.setCodexQuotaProfiles(
+                    hostId: hostId,
+                    profiles: profiles,
+                  ),
+                ),
+              ),
+            ),
+          ],
         ),
         const SizedBox(height: AleraTokens.space16),
         KeyedSubtree(

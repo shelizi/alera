@@ -7,7 +7,7 @@ The left-to-right provider order is configurable in **Settings → Quotas → Pr
 ## Supported Providers
 
 - Claude Code, including the default account and manually configured CCS profiles.
-- Codex.
+- Codex, including the default account and independently configured CODEX_HOME directories.
 - Kimi Code.
 - Grok Build.
 - Cursor.
@@ -49,9 +49,28 @@ Configure the Claude provider, Default account, and CCS profiles together in **S
 - **Alias**: the familiar command name, such as `ccdev`.
 - **Profile**: the CCS instance directory name under `$CCS_DIR/instances` or `~/.ccs/instances`.
 
-Alera sets `CLAUDE_CONFIG_DIR` only for the quota query. On macOS it reads each profile's scoped Claude Code Keychain item and queries the OAuth usage endpoint directly; older credential files remain a cross-platform fallback. A CCS profile never falls back to Default's legacy Keychain item. Snapshot and force-refresh stay on that OAuth path; if OAuth fails, the profile is reported as unavailable or error without launching Claude. When a profile is not `ok`, desktop hover cards and the mobile Quotas screen offer **Try With TUI**, which scrapes `/usage` for that account only through `agentQuota.fetchClaudeTui` (requires runtime capability `agentQuotaClaudeTuiV1`). Accounts without OAuth or API credentials are reported as signed out without launching Claude.
+Alera sets `CLAUDE_CONFIG_DIR` for each quota query and for new terminals using the selected account. On macOS it reads each profile's scoped Claude Code Keychain item and queries the OAuth usage endpoint directly; older credential files remain a cross-platform fallback. A CCS profile never falls back to Default's legacy Keychain item. Snapshot and force-refresh stay on that OAuth path; if OAuth fails, the profile is reported as unavailable or error without launching Claude. When a profile is not `ok`, desktop hover cards and the mobile Quotas screen offer **Try With TUI**, which scrapes `/usage` for that account only through `agentQuota.fetchClaudeTui` (requires runtime capability `agentQuotaClaudeTuiV1`). Accounts without OAuth or API credentials are reported as signed out without launching Claude.
 
-The default Claude account can be enabled or disabled independently from the Claude provider, so configured CCS profiles remain available without querying Default. When enabled, the status bar shows Default first, followed by every configured CCS profile in settings order using its configured alias. Quota queries do not change how terminals launch Claude.
+The default Claude account can be enabled or disabled independently from the Claude provider, so configured CCS profiles remain available without querying Default. When enabled, the status bar shows Default first, followed by every configured CCS profile in settings order using its configured alias. Quota queries do not change the selected account. Use **Active Account** in the quota card to select the account for new terminals.
+
+## Multiple Accounts And Quick Switching
+
+Add Codex accounts in **Settings > Quotas > Codex Accounts** with a name and an absolute `CODEX_HOME` directory on that host. Add Claude accounts under **Claude Accounts** with either a CCS instance name or an absolute `CLAUDE_CONFIG_DIR` directory. Sign in with the corresponding CLI in each directory first; Alera stores only the names and paths. Credential storage and refresh stay with the CLI. The default account remains available.
+
+Click a Codex or Claude quota to pin its card, then choose **Active Account**. The same selector appears in the quota overview. Selection is saved per host on this desktop and applies to newly created terminals. Existing PTYs and running CLI sessions retain their original account: the terminal integration has no safe live account replacement API, so Alera sends no login commands and never restarts sessions to force a switch. Account directories also isolate configuration and conversation history; resuming a conversation requires the history in that account directory.
+
+For example, sign in to separate accounts from PowerShell:
+
+```powershell
+$env:CODEX_HOME = 'C:\Users\me\codex-work'
+codex login
+$env:CLAUDE_CONFIG_DIR = 'C:\Users\me\claude-work'
+claude auth login
+```
+
+On Linux or macOS, use `CODEX_HOME=/absolute/codex-work codex login` and `CLAUDE_CONFIG_DIR=/absolute/claude-work claude auth login`. Configure those directories on the corresponding quota host. See [Codex authentication](https://developers.openai.com/codex/auth/) and [Claude credential management](https://code.claude.com/docs/en/authentication) for native credential storage behavior.
+
+Quota cards query every configured account independently and preserve default-account pin settings. Named Codex accounts display reset-credit metadata but cannot spend credits through the default-only reset mutation; the default account keeps its existing reset action.
 
 ## Environment-Based Plans
 

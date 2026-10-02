@@ -17,6 +17,8 @@ pub struct RuntimeAgentQuotaSettings {
     #[serde(default)]
     pub claude_profiles: Vec<RuntimeClaudeQuotaProfile>,
     #[serde(default)]
+    pub codex_profiles: Vec<RuntimeCodexQuotaProfile>,
+    #[serde(default)]
     pub environment: RuntimeAgentQuotaEnvironment,
 }
 
@@ -28,6 +30,7 @@ impl Default for RuntimeAgentQuotaSettings {
             claude_default_enabled: true,
             claude_default_show_in_usage: true,
             claude_profiles: Vec::new(),
+            codex_profiles: Vec::new(),
             environment: RuntimeAgentQuotaEnvironment::default(),
         }
     }
@@ -77,6 +80,16 @@ impl RuntimeAgentQuotaSettings {
         self.claude_profiles
             .retain(|profile| !profile.alias.is_empty() && !profile.profile.is_empty());
         self.environment.normalize();
+        let mut seen_profiles = std::collections::HashSet::new();
+        for profile in &mut self.codex_profiles {
+            profile.alias = profile.alias.trim().to_string();
+            profile.profile = profile.profile.trim().to_string();
+        }
+        self.codex_profiles.retain(|entry| {
+            !entry.alias.is_empty()
+                && std::path::Path::new(&entry.profile).is_absolute()
+                && seen_profiles.insert(entry.profile.clone())
+        });
         self
     }
 
@@ -91,6 +104,13 @@ impl RuntimeAgentQuotaSettings {
             })
             .collect()
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeCodexQuotaProfile {
+    pub alias: String,
+    pub profile: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

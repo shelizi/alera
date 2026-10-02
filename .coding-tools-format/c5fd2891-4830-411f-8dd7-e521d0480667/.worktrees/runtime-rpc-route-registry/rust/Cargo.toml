@@ -1,0 +1,69 @@
+[package]
+name = "alera_native"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+
+# `rust/` is both the flutter_rust_bridge library package (`alera_native`, built
+# by cargokit via `cargo build --manifest-path rust/Cargo.toml`, no `-p`) and the
+# workspace root that hosts the `alera-cli` terminal-host sidecar (built by the
+# native hooks via `cargo build --locked -p alera-cli`). One lock file, one
+# target dir; the FRB build only compiles the root package.
+[workspace]
+members = ["alera-cli", "alera-core", "alera-mobile-native"]
+resolver = "2"
+
+[features]
+default = []
+local-whisper = ["dep:whisper-rs"]
+
+[dependencies]
+alera-core = { path = "alera-core", default-features = false, features = ["async-process"] }
+flutter_rust_bridge = "=2.13.0"
+keepawake = "0.6.1"
+tokio = { version = "1.53.1", features = ["io-util", "net", "process", "rt-multi-thread", "sync", "time"] }
+axum = { version = "0.8.9", features = ["http1", "tokio"] }
+bytes = "1.12.1"
+chardetng = "0.1.17"
+encoding_rs = "0.8.35"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+serde_urlencoded = "0.7.1"
+sha2 = "0.10.9"
+# Local git operations via libgit2. Network features (https/ssh/openssl) are
+# disabled on purpose: git2-backed operations here are local; operations that
+# need network credentials (clone/fetch/pull/push) are delegated to the git CLI
+# via `alera_core::git::git_in_dir`, which uses the system credential helper.
+git2 = { version = "0.21.0", default-features = false }
+ignore = "0.4.33"
+notify = "8.2.0"
+trash = "5.2.6"
+globset = "0.4.20"
+grep-matcher = "0.1.9"
+grep-regex = "0.1.14"
+regex = "1.13.1"
+merman = { version = "0.7.0", default-features = false, features = ["render"] }
+png = "0.18.1"
+tempfile = "3.27.0"
+hound = "3.5.1"
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+whisper-rs = { version = "0.16.0", features = ["coreml", "metal"], optional = true }
+
+[target.'cfg(all(target_arch = "x86_64", any(target_os = "linux", target_os = "windows")))'.dependencies]
+whisper-rs = { version = "0.16.0", features = ["vulkan"], optional = true }
+
+[target.'cfg(not(any(target_os = "macos", all(target_arch = "x86_64", any(target_os = "linux", target_os = "windows")))))'.dependencies]
+whisper-rs = { version = "0.16.0", optional = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.189"
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+arboard = "3.6.1"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }

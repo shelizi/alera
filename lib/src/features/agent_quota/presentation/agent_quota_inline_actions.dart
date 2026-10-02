@@ -11,7 +11,15 @@ typedef AgentQuotaActionBuilder = Widget Function({
 class const AgentQuotaInlineActions({
   final AgentQuotaActionBuilder? codexReset,
   final AgentQuotaActionBuilder? claudeTui,
+  final AgentQuotaActionBuilder? accountSwitch,
 }) {
+  Widget buildAccountSwitch({
+    required String hostId,
+    required AgentQuotaSnapshot snapshot,
+  }) =>
+      accountSwitch?.call(hostId: hostId, snapshot: snapshot, compact: false) ??
+      const SizedBox.shrink();
+
   Widget buildCodexReset({
     required String hostId,
     required AgentQuotaSnapshot snapshot,

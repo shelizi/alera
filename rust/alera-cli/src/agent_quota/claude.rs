@@ -124,25 +124,26 @@ async fn resolve_claude_account(
             ))
         }
         Some(profile) => {
-            let Some(home) = home_dir() else {
-                return Err(QuotaSnapshot::unavailable(
-                    "claude",
-                    &profile.profile,
-                    &profile.alias,
-                    "Home directory is unavailable",
-                ));
-            };
-            let ccs_root = shell_environment_value("CCS_DIR")
-                .await
-                .map(PathBuf::from)
-                .unwrap_or_else(|| home.join(".ccs"));
-            let config_dir = ccs_root.join("instances").join(&profile.profile);
+            let config_dir =
+                match crate::agent_account_environment::claude_profile_directory(&profile.profile)
+                    .await
+                {
+                    Ok(directory) => directory,
+                    Err(error) => {
+                        return Err(QuotaSnapshot::error(
+                            "claude",
+                            &profile.profile,
+                            &profile.alias,
+                            error.to_string(),
+                        ))
+                    }
+                };
             if !config_dir.exists() {
                 return Err(QuotaSnapshot::unavailable(
                     "claude",
                     &profile.profile,
                     &profile.alias,
-                    format!("CCS profile not found: {}", profile.profile),
+                    format!("Claude account directory not found: {}", profile.profile),
                 ));
             }
             Ok((
@@ -211,9 +212,7 @@ async fn fetch_claude_oauth(
 ) -> Result<ClaudeOAuthFetch> {
     let credentials = match read_claude_oauth_credentials(config_dir).await? {
         ClaudeCredentialRead::Credentials(credentials) => credentials,
-        ClaudeCredentialRead::Missing(gap) => {
-            return Ok(ClaudeOAuthFetch::CredentialsMissing(gap))
-        }
+        ClaudeCredentialRead::Missing(gap) => return Ok(ClaudeOAuthFetch::CredentialsMissing(gap)),
     };
     let Some(oauth) = credentials.get("claudeAiOauth") else {
         return Ok(ClaudeOAuthFetch::CredentialsMissing(
@@ -248,11 +247,9 @@ async fn fetch_claude_oauth(
     }
     let data: Value = response.json().await?;
     let mut windows = Vec::new();
-    if let Some(window) = map_claude_oauth_window(
-        data.get("five_hour"),
-        "5 Hour",
-        SESSION_WINDOW_MINUTES,
-    ) {
+    if let Some(window) =
+        map_claude_oauth_window(data.get("five_hour"), "5 Hour", SESSION_WINDOW_MINUTES)
+    {
         windows.push(window);
     }
     if let Some(window) =
@@ -355,14 +352,7 @@ async fn read_macos_keychain_password(service: &str) -> KeychainRead {
     };
     let mut command = alera_core::child_process::windowless_async_command("security");
     command
-        .args([
-            "find-generic-password",
-            "-s",
-            service,
-            "-a",
-            &account,
-            "-w",
-        ])
+        .args(["find-generic-password", "-s", service, "-a", &account, "-w"])
         .stdin(Stdio::null())
         .stderr(Stdio::null())
         .kill_on_drop(true);

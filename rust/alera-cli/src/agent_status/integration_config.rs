@@ -95,6 +95,12 @@ fn prepare_claude(
     if let Err(error) = ccs::remove_ccs_claude_hooks(&home, environment) {
         warnings.push(error.to_string());
     }
+    // Install after CCS cleanup so an independent instance keeps its active hooks.
+    if let Some(directory) = environment.get("CLAUDE_CONFIG_DIR") {
+        if let Err(error) = user_hooks::install_claude_config_hooks(Path::new(directory), script) {
+            warnings.push(error.to_string());
+        }
+    }
     Ok((runtime_home, warnings))
 }
 

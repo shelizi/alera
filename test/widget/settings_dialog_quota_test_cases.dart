@@ -25,7 +25,7 @@ void _registerSettingsDialogQuotaTests() {
     expect(find.text('Claude Code Quotas'), findsOneWidget);
     expect(find.text('Claude Default Quotas'), findsOneWidget);
     expect(find.text('Claude Default in Usage'), findsOneWidget);
-    expect(find.text('Claude CCS Profiles'), findsOneWidget);
+    expect(find.text('Claude Accounts'), findsOneWidget);
     expect(find.text('Kimi API Key Variable'), findsOneWidget);
 
     final kimiField = find.descendant(

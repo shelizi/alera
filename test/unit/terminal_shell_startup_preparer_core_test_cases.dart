@@ -1,6 +1,23 @@
 part of 'terminal_shell_startup_preparer_test.dart';
 
 void _registerTerminalShellStartupPreparerCoreTests() {
+  test('account selection alone prepares shell restoration', () async {
+    for (final key in [
+      'ALERA_ACCOUNT_CODEX_HOME',
+      'ALERA_ACCOUNT_CLAUDE_PROFILE',
+    ]) {
+      final launch = await preparer.prepare(
+        _launch(
+          shell: 'pwsh',
+          arguments: const ['-NoLogo'],
+          environment: {key: '/account'},
+        ),
+      );
+      expect(launch.arguments, contains('-EncodedCommand'));
+      expect(launch.environment, containsPair(key, '/account'));
+    }
+  });
+
   test(
     'zsh uses a managed ZDOTDIR and restores managed agent env in wrappers',
     () async {

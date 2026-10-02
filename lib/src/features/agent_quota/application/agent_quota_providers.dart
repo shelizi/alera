@@ -95,6 +95,9 @@ String agentQuotaRequestKey(AgentQuotaHostSettings settings) {
     'providers': providers,
     'claudeDefaultEnabled': settings.claudeDefaultEnabled,
     'claudeProfiles': profiles,
+    'codexProfiles': [
+      for (final profile in settings.codexProfiles) profile.toMap(),
+    ],
     'environment': settings.environment.toJson(),
   });
 }
@@ -162,6 +165,9 @@ class AgentQuotaService(
                       'alias': profile.alias,
                       'profile': profile.profile,
                     },
+                ],
+                'codexProfiles': [
+                  for (final profile in settings.codexProfiles) profile.toMap(),
                 ],
                 'allowCliFallback': false,
                 'environmentNames': <String, String>{

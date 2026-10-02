@@ -48,6 +48,7 @@ void main() {
     await tester.sendKeyEvent(.enter);
     await tester.pumpAndSettle();
     expect(controller.openedFiles, <String>['lib/main_test.dart']);
+    expect(controller.openedPreviews, <bool>[false]);
   });
 
   testWidgets(
@@ -430,6 +431,7 @@ class _QuickOpenFileService({
 class _QuickOpenTestController(final WorkbenchState _seed)
     extends WorkbenchController {
   final List<String> openedFiles = <String>[];
+  final List<bool> openedPreviews = <bool>[];
 
   @override
   WorkbenchState build() => _seed;
@@ -445,6 +447,7 @@ class _QuickOpenTestController(final WorkbenchState _seed)
     bool preview = false,
   }) async {
     openedFiles.add(relativePath);
+    openedPreviews.add(preview);
     final now = DateTime.utc(2026);
     return WorkspaceTabRecord(
       id: 'tab-${openedFiles.length}',

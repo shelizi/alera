@@ -217,6 +217,7 @@ class const _QuotaOverviewRow({
               snapshot: snapshot,
               compact: true,
             ),
+          actions.buildAccountSwitch(hostId: hostId, snapshot: snapshot),
         ],
       ),
     );

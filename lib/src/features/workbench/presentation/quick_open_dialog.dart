@@ -292,7 +292,6 @@ class _QuickOpenDialogState extends ConsumerState<QuickOpenDialog> {
           .open<WorkspaceTabRecord>(
             workspace: workspace,
             relativePath: relativePath,
-            preview: true,
             openInAlera:
                 ({
                   required workspace,

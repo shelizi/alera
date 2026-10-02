@@ -104,7 +104,7 @@ class const _ClaudeProfilesControl({
       children: <Widget>[
         if (profiles.isEmpty)
           Text(
-            context.tr('No CCS profiles configured'),
+            context.tr('No additional Claude accounts configured'),
             textAlign: .right,
             style: Theme.of(context).textTheme.bodySmall
                 ?.copyWith(color: AleraTokens.foregroundFaint),
@@ -165,7 +165,7 @@ class const _ClaudeProfilesControl({
               ),
               const SizedBox(width: AleraTokens.space4),
               AleraIconButton(
-                tooltip: 'Edit CCS Profile',
+                tooltip: 'Edit Claude Account',
                 icon: AleraIcons.edit,
                 onPressed: () async {
                   final updated = await _showClaudeProfileDialog(
@@ -185,7 +185,7 @@ class const _ClaudeProfilesControl({
               ),
               const SizedBox(width: AleraTokens.space4),
               AleraIconButton(
-                tooltip: 'Remove CCS Profile',
+                tooltip: 'Remove Claude Account',
                 icon: AleraIcons.delete,
                 onPressed: () => onChanged(<ClaudeQuotaProfileSettings>[
                   ...profiles.take(index),
@@ -209,7 +209,7 @@ class const _ClaudeProfilesControl({
               }
             },
             icon: const Icon(AleraIcons.add, size: 14),
-            label: Text(context.tr('Add CCS Profile')),
+            label: Text(context.tr('Add Claude Account')),
           ),
         ),
       ],
@@ -284,7 +284,7 @@ class _ClaudeProfileDialogState extends State<_ClaudeProfileDialog> {
           candidate != widget.initial &&
           (candidate.alias == alias || candidate.profile == profile),
     );
-    if (alias.isEmpty || profile.isEmpty) {
+    if (alias.isEmpty || profile.isEmpty || profile == 'default') {
       setState(() => _error = 'Alias and profile are required.');
       return;
     }
@@ -314,7 +314,9 @@ class _ClaudeProfileDialogState extends State<_ClaudeProfileDialog> {
           children: <Widget>[
             Text(
               context.tr(
-                widget.initial == null ? 'Add CCS Profile' : 'Edit CCS Profile',
+                widget.initial == null
+                    ? 'Add Claude Account'
+                    : 'Edit Claude Account',
               ),
               style: Theme.of(context).textTheme.titleLarge,
             ),
@@ -328,8 +330,8 @@ class _ClaudeProfileDialogState extends State<_ClaudeProfileDialog> {
             const SizedBox(height: AleraTokens.space12),
             AleraTextField(
               controller: _profileController,
-              labelText: 'CCS Profile',
-              hintText: 'work',
+              labelText: 'CCS Instance Or Config Directory',
+              hintText: 'work or an absolute directory',
             ),
             const SizedBox(height: AleraTokens.space12),
             AleraCheckbox(

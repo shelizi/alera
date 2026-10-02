@@ -1230,6 +1230,7 @@ class AgentQuotaHostSettingsMapper
       MapperContainer.globals.use(_instance = AgentQuotaHostSettingsMapper._());
       AgentQuotaProviderIdMapper.ensureInitialized();
       ClaudeQuotaProfileSettingsMapper.ensureInitialized();
+      CodexQuotaProfileSettingsMapper.ensureInitialized();
       AgentQuotaEnvironmentSettingsMapper.ensureInitialized();
     }
     return _instance!;
@@ -1295,6 +1296,25 @@ class AgentQuotaHostSettingsMapper
         opt: true,
         def: 'default',
       );
+  static List<CodexQuotaProfileSettings> _$codexProfiles(
+    AgentQuotaHostSettings v,
+  ) => v.codexProfiles;
+  static const Field<AgentQuotaHostSettings, List<CodexQuotaProfileSettings>>
+  _f$codexProfiles = Field(
+    'codexProfiles',
+    _$codexProfiles,
+    opt: true,
+    def: const <CodexQuotaProfileSettings>[],
+  );
+  static String _$selectedCodexProfile(AgentQuotaHostSettings v) =>
+      v.selectedCodexProfile;
+  static const Field<AgentQuotaHostSettings, String> _f$selectedCodexProfile =
+      Field(
+        'selectedCodexProfile',
+        _$selectedCodexProfile,
+        opt: true,
+        def: 'default',
+      );
   static AgentQuotaEnvironmentSettings _$environment(
     AgentQuotaHostSettings v,
   ) => v.environment;
@@ -1324,6 +1344,8 @@ class AgentQuotaHostSettingsMapper
     #claudeDefaultShowInUsage: _f$claudeDefaultShowInUsage,
     #claudeProfiles: _f$claudeProfiles,
     #selectedClaudeProfile: _f$selectedClaudeProfile,
+    #codexProfiles: _f$codexProfiles,
+    #selectedCodexProfile: _f$selectedCodexProfile,
     #environment: _f$environment,
     #unpinnedQuotaKeys: _f$unpinnedQuotaKeys,
   };
@@ -1336,6 +1358,8 @@ class AgentQuotaHostSettingsMapper
       claudeDefaultShowInUsage: data.dec(_f$claudeDefaultShowInUsage),
       claudeProfiles: data.dec(_f$claudeProfiles),
       selectedClaudeProfile: data.dec(_f$selectedClaudeProfile),
+      codexProfiles: data.dec(_f$codexProfiles),
+      selectedCodexProfile: data.dec(_f$selectedCodexProfile),
       environment: data.dec(_f$environment),
       unpinnedQuotaKeys: data.dec(_f$unpinnedQuotaKeys),
     );
@@ -1427,6 +1451,16 @@ abstract class AgentQuotaHostSettingsCopyWith<
     >
   >
   get claudeProfiles;
+  ListCopyWith<
+    $R,
+    CodexQuotaProfileSettings,
+    CodexQuotaProfileSettingsCopyWith<
+      $R,
+      CodexQuotaProfileSettings,
+      CodexQuotaProfileSettings
+    >
+  >
+  get codexProfiles;
   AgentQuotaEnvironmentSettingsCopyWith<
     $R,
     AgentQuotaEnvironmentSettings,
@@ -1442,6 +1476,8 @@ abstract class AgentQuotaHostSettingsCopyWith<
     bool? claudeDefaultShowInUsage,
     List<ClaudeQuotaProfileSettings>? claudeProfiles,
     String? selectedClaudeProfile,
+    List<CodexQuotaProfileSettings>? codexProfiles,
+    String? selectedCodexProfile,
     AgentQuotaEnvironmentSettings? environment,
     List<String>? unpinnedQuotaKeys,
   });
@@ -1486,6 +1522,21 @@ class _AgentQuotaHostSettingsCopyWithImpl<$R, $Out>
     (v) => call(claudeProfiles: v),
   );
   @override
+  ListCopyWith<
+    $R,
+    CodexQuotaProfileSettings,
+    CodexQuotaProfileSettingsCopyWith<
+      $R,
+      CodexQuotaProfileSettings,
+      CodexQuotaProfileSettings
+    >
+  >
+  get codexProfiles => ListCopyWith(
+    $value.codexProfiles,
+    (v, t) => v.copyWith.$chain(t),
+    (v) => call(codexProfiles: v),
+  );
+  @override
   AgentQuotaEnvironmentSettingsCopyWith<
     $R,
     AgentQuotaEnvironmentSettings,
@@ -1508,6 +1559,8 @@ class _AgentQuotaHostSettingsCopyWithImpl<$R, $Out>
     bool? claudeDefaultShowInUsage,
     List<ClaudeQuotaProfileSettings>? claudeProfiles,
     String? selectedClaudeProfile,
+    List<CodexQuotaProfileSettings>? codexProfiles,
+    String? selectedCodexProfile,
     AgentQuotaEnvironmentSettings? environment,
     List<String>? unpinnedQuotaKeys,
   }) => $apply(
@@ -1522,6 +1575,9 @@ class _AgentQuotaHostSettingsCopyWithImpl<$R, $Out>
       if (claudeProfiles != null) #claudeProfiles: claudeProfiles,
       if (selectedClaudeProfile != null)
         #selectedClaudeProfile: selectedClaudeProfile,
+      if (codexProfiles != null) #codexProfiles: codexProfiles,
+      if (selectedCodexProfile != null)
+        #selectedCodexProfile: selectedCodexProfile,
       if (environment != null) #environment: environment,
       if (unpinnedQuotaKeys != null) #unpinnedQuotaKeys: unpinnedQuotaKeys,
     }),
@@ -1545,6 +1601,11 @@ class _AgentQuotaHostSettingsCopyWithImpl<$R, $Out>
     selectedClaudeProfile: data.get(
       #selectedClaudeProfile,
       or: $value.selectedClaudeProfile,
+    ),
+    codexProfiles: data.get(#codexProfiles, or: $value.codexProfiles),
+    selectedCodexProfile: data.get(
+      #selectedCodexProfile,
+      or: $value.selectedCodexProfile,
     ),
     environment: data.get(#environment, or: $value.environment),
     unpinnedQuotaKeys: data.get(
@@ -1743,6 +1804,156 @@ class _ClaudeQuotaProfileSettingsCopyWithImpl<$R, $Out>
   ClaudeQuotaProfileSettingsCopyWith<$R2, ClaudeQuotaProfileSettings, $Out2>
   $chain<$R2, $Out2>(Then<$Out2, $R2> t) =>
       _ClaudeQuotaProfileSettingsCopyWithImpl<$R2, $Out2>($value, $cast, t);
+}
+
+class CodexQuotaProfileSettingsMapper
+    extends ClassMapperBase<CodexQuotaProfileSettings> {
+  CodexQuotaProfileSettingsMapper._();
+
+  static CodexQuotaProfileSettingsMapper? _instance;
+  static CodexQuotaProfileSettingsMapper ensureInitialized() {
+    if (_instance == null) {
+      MapperContainer.globals.use(
+        _instance = CodexQuotaProfileSettingsMapper._(),
+      );
+    }
+    return _instance!;
+  }
+
+  @override
+  final String id = 'CodexQuotaProfileSettings';
+
+  static String _$alias(CodexQuotaProfileSettings v) => v.alias;
+  static const Field<CodexQuotaProfileSettings, String> _f$alias = Field(
+    'alias',
+    _$alias,
+  );
+  static String _$profile(CodexQuotaProfileSettings v) => v.profile;
+  static const Field<CodexQuotaProfileSettings, String> _f$profile = Field(
+    'profile',
+    _$profile,
+  );
+
+  @override
+  final MappableFields<CodexQuotaProfileSettings> fields = const {
+    #alias: _f$alias,
+    #profile: _f$profile,
+  };
+
+  static CodexQuotaProfileSettings _instantiate(DecodingData data) {
+    return CodexQuotaProfileSettings(
+      alias: data.dec(_f$alias),
+      profile: data.dec(_f$profile),
+    );
+  }
+
+  @override
+  final Function instantiate = _instantiate;
+
+  static CodexQuotaProfileSettings fromMap(Map<String, dynamic> map) {
+    return ensureInitialized().decodeMap<CodexQuotaProfileSettings>(map);
+  }
+
+  static CodexQuotaProfileSettings fromJson(String json) {
+    return ensureInitialized().decodeJson<CodexQuotaProfileSettings>(json);
+  }
+}
+
+mixin CodexQuotaProfileSettingsMappable {
+  String toJson() {
+    return CodexQuotaProfileSettingsMapper.ensureInitialized()
+        .encodeJson<CodexQuotaProfileSettings>(
+          this as CodexQuotaProfileSettings,
+        );
+  }
+
+  Map<String, dynamic> toMap() {
+    return CodexQuotaProfileSettingsMapper.ensureInitialized()
+        .encodeMap<CodexQuotaProfileSettings>(
+          this as CodexQuotaProfileSettings,
+        );
+  }
+
+  CodexQuotaProfileSettingsCopyWith<
+    CodexQuotaProfileSettings,
+    CodexQuotaProfileSettings,
+    CodexQuotaProfileSettings
+  >
+  get copyWith =>
+      _CodexQuotaProfileSettingsCopyWithImpl<
+        CodexQuotaProfileSettings,
+        CodexQuotaProfileSettings
+      >(this as CodexQuotaProfileSettings, $identity, $identity);
+  @override
+  String toString() {
+    return CodexQuotaProfileSettingsMapper.ensureInitialized().stringifyValue(
+      this as CodexQuotaProfileSettings,
+    );
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return CodexQuotaProfileSettingsMapper.ensureInitialized().equalsValue(
+      this as CodexQuotaProfileSettings,
+      other,
+    );
+  }
+
+  @override
+  int get hashCode {
+    return CodexQuotaProfileSettingsMapper.ensureInitialized().hashValue(
+      this as CodexQuotaProfileSettings,
+    );
+  }
+}
+
+extension CodexQuotaProfileSettingsValueCopy<$R, $Out>
+    on ObjectCopyWith<$R, CodexQuotaProfileSettings, $Out> {
+  CodexQuotaProfileSettingsCopyWith<$R, CodexQuotaProfileSettings, $Out>
+  get $asCodexQuotaProfileSettings => $base.as(
+    (v, t, t2) => _CodexQuotaProfileSettingsCopyWithImpl<$R, $Out>(v, t, t2),
+  );
+}
+
+abstract class CodexQuotaProfileSettingsCopyWith<
+  $R,
+  $In extends CodexQuotaProfileSettings,
+  $Out
+>
+    implements ClassCopyWith<$R, $In, $Out> {
+  $R call({String? alias, String? profile});
+  CodexQuotaProfileSettingsCopyWith<$R2, $In, $Out2> $chain<$R2, $Out2>(
+    Then<$Out2, $R2> t,
+  );
+}
+
+class _CodexQuotaProfileSettingsCopyWithImpl<$R, $Out>
+    extends ClassCopyWithBase<$R, CodexQuotaProfileSettings, $Out>
+    implements
+        CodexQuotaProfileSettingsCopyWith<$R, CodexQuotaProfileSettings, $Out> {
+  _CodexQuotaProfileSettingsCopyWithImpl(super.value, super.then, super.then2);
+
+  @override
+  late final ClassMapperBase<CodexQuotaProfileSettings> $mapper =
+      CodexQuotaProfileSettingsMapper.ensureInitialized();
+  @override
+  $R call({String? alias, String? profile}) => $apply(
+    FieldCopyWithData({
+      if (alias != null) #alias: alias,
+      if (profile != null) #profile: profile,
+    }),
+  );
+  @override
+  CodexQuotaProfileSettings $make(CopyWithData data) =>
+      CodexQuotaProfileSettings(
+        alias: data.get(#alias, or: $value.alias),
+        profile: data.get(#profile, or: $value.profile),
+      );
+
+  @override
+  CodexQuotaProfileSettingsCopyWith<$R2, CodexQuotaProfileSettings, $Out2>
+  $chain<$R2, $Out2>(Then<$Out2, $R2> t) =>
+      _CodexQuotaProfileSettingsCopyWithImpl<$R2, $Out2>($value, $cast, t);
 }
 
 class AgentQuotaEnvironmentSettingsMapper

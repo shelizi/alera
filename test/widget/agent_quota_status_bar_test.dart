@@ -12,6 +12,32 @@ import 'package:flutter_test/flutter_test.dart';
 part 'agent_quota_status_bar_test_support.dart';
 
 void main() {
+  testWidgets('shows each Codex account with its own quota and pin identity', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _wrap(
+        settings: const AgentQuotaHostSettings(
+          enabledProviders: [AgentQuotaProviderId.codex],
+          codexProfiles: [
+            CodexQuotaProfileSettings(alias: 'Work', profile: '/codex-work'),
+          ],
+        ),
+        snapshots: [
+          _snapshot(provider: .codex, windows: [_window('5 Hour', 20)]),
+          _snapshot(
+            provider: .codex,
+            accountId: '/codex-work',
+            displayName: 'Work',
+            windows: [_window('5 Hour', 60)],
+          ),
+        ],
+      ),
+    );
+    expect(find.text('Default'), findsOneWidget);
+    expect(find.text('Work'), findsOneWidget);
+  });
+
   testWidgets('shows all Claude profiles and Antigravity quotas at a glance', (
     tester,
   ) async {

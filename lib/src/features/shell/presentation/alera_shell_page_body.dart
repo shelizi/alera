@@ -170,7 +170,6 @@ class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody> {
                                 _openWorkspaceFile(
                                   workspace: workspace,
                                   relativePath: relativePath,
-                                  preview: true,
                                 ),
                               );
                             },
@@ -245,7 +244,6 @@ class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody> {
                                     .open<WorkspaceTabRecord>(
                                       workspace: workspace,
                                       relativePath: target.relativePath,
-                                      preview: true,
                                       line: target.line,
                                       column: target.column,
                                       openInAlera:
