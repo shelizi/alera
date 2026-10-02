@@ -52,6 +52,42 @@ void main() {
       );
     });
 
+    test('resubscribes after native event stream closes', () async {
+      await receiver.dispose();
+      sink = _FakeStatusSink();
+      final recoveringServer = _RestartableFakeAgentHookServer();
+      receiver = AgentHookReceiver(
+        statusSink: sink,
+        applicationSupportDirectory: () async => tempDir,
+        token: 'token-1',
+        hookServer: recoveringServer,
+      );
+      await receiver.start();
+
+      expect(recoveringServer.watchCount, 1);
+      await recoveringServer.closeCurrentStream();
+      await _waitUntil(() => recoveringServer.watchCount >= 2);
+
+      recoveringServer.emit(
+        const AgentHookEventBatch(
+          events: <AgentHookEvent>[
+            AgentHookEvent(
+              terminalSessionId: 'session-1',
+              workspaceId: 'workspace-1',
+              tabId: 'tab-1',
+              agentType: AgentType.claude,
+              payload: <String, Object?>{},
+              hookEventName: 'Stop',
+            ),
+          ],
+        ),
+      );
+      await _waitUntil(() => sink.events.isNotEmpty);
+
+      expect(sink.events.single.hookEventName, 'Stop');
+      expect(sink.events.single.agentType, AgentType.claude);
+    });
+
     test('rejects bad tokens with 403', () async {
       final response = await _post(
         receiver.endpoint!.port,
@@ -345,6 +381,52 @@ class _ThrowingStatusSink implements AgentStatusSink {
   @override
   void applyHookEvent(AgentHookEvent event) {
     throw StateError('sink failed');
+  }
+}
+
+Future<void> _waitUntil(bool Function() predicate) async {
+  for (var attempt = 0; attempt < 100; attempt += 1) {
+    if (predicate()) {
+      return;
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+  }
+  fail('Condition was not met before timeout.');
+}
+
+class _RestartableFakeAgentHookServer implements AgentHookServer {
+  StreamController<AgentHookEventBatch>? _controller;
+  int watchCount = 0;
+
+  @override
+  Stream<AgentHookEventBatch> watchEventBatches() {
+    watchCount += 1;
+    final controller = StreamController<AgentHookEventBatch>.broadcast();
+    _controller = controller;
+    return controller.stream;
+  }
+
+  void emit(AgentHookEventBatch batch) {
+    _controller?.add(batch);
+  }
+
+  Future<void> closeCurrentStream() async {
+    await _controller?.close();
+  }
+
+  @override
+  Future<int> start({
+    required String token,
+    required List<String> enabledAgents,
+  }) async => 43123;
+
+  @override
+  Future<void> setEnabledAgents(List<String> enabledAgents) async {}
+
+  @override
+  Future<void> stop() async {
+    await _controller?.close();
+    _controller = null;
   }
 }
 

@@ -42,7 +42,7 @@ fn rejects_missing_metadata() {
 }
 
 #[test]
-fn coalesces_intermediate_non_close_events() {
+fn coalesces_intermediate_events_but_preserves_completion_boundaries() {
     let mut events = vec![
         event("s1", "cursor", "beforeSubmitPrompt"),
         event("s1", "cursor", "afterAgentResponse"),
@@ -51,18 +51,35 @@ fn coalesces_intermediate_non_close_events() {
         event("s3", "grok", "Stop"),
         event("s3", "grok", "StopFailure"),
         event("s3", "grok", "SessionEnd"),
+        event("s4", "claude", "PostToolUse"),
+        event("s4", "claude", "Stop"),
+        event("s4", "claude", "PostToolUseFailure"),
+        event("s4", "claude", "StopFailure"),
     ];
 
     let coalesced = coalesce_pending(&mut events);
 
-    assert_eq!(coalesced, 1);
-    assert_eq!(events.len(), 6);
+    assert_eq!(coalesced, 2);
+    assert_eq!(events.len(), 9);
     assert_eq!(
         events
             .iter()
             .filter(|event| event.inferred_event_name.as_deref() == Some("sessionEnd"))
             .count(),
         1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| {
+                event.agent_type == "claude"
+                    && matches!(
+                        event.inferred_event_name.as_deref(),
+                        Some("Stop") | Some("StopFailure")
+                    )
+            })
+            .count(),
+        2
     );
 }
 

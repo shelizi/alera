@@ -49,6 +49,8 @@ class AgentHookReceiver._(
   Future<void>? _starting;
   AgentHookEndpoint? _endpoint;
   StreamSubscription<AgentHookEventBatch>? _eventSubscription;
+  Timer? _eventSubscriptionRetryTimer;
+  bool _eventStreamEnabled = false;
   bool _disposed = false;
 
   bool get isRunning => _endpoint != null;
@@ -73,6 +75,9 @@ class AgentHookReceiver._(
   }
 
   Future<void> stop() async {
+    _eventStreamEnabled = false;
+    _eventSubscriptionRetryTimer?.cancel();
+    _eventSubscriptionRetryTimer = null;
     final starting = _starting;
     if (starting != null) {
       await starting.catchError((_) {});
@@ -115,6 +120,7 @@ class AgentHookReceiver._(
   Future<void> _start() async {
     int? startedPort;
     try {
+      _eventStreamEnabled = true;
       _ensureEventSubscription();
       startedPort = await _hookServer.start(
         token: _token,
@@ -141,6 +147,11 @@ class AgentHookReceiver._(
         version: aleraAgentHookProtocolVersion,
       );
     } catch (_) {
+      _eventStreamEnabled = false;
+      _eventSubscriptionRetryTimer?.cancel();
+      _eventSubscriptionRetryTimer = null;
+      await _eventSubscription?.cancel();
+      _eventSubscription = null;
       if (startedPort != null) {
         await _hookServer.stop();
       }
@@ -151,10 +162,26 @@ class AgentHookReceiver._(
   }
 
   void _ensureEventSubscription() {
-    _eventSubscription ??= _hookServer.watchEventBatches().listen(
+    if (_disposed || !_eventStreamEnabled || _eventSubscription != null) {
+      return;
+    }
+    _eventSubscription = _hookServer.watchEventBatches().listen(
       _handleEventBatch,
       onError: (_) {},
+      onDone: _handleEventStreamDone,
     );
+  }
+
+  void _handleEventStreamDone() {
+    _eventSubscription = null;
+    if (_disposed || !_eventStreamEnabled) {
+      return;
+    }
+    _eventSubscriptionRetryTimer?.cancel();
+    _eventSubscriptionRetryTimer = Timer(const Duration(milliseconds: 50), () {
+      _eventSubscriptionRetryTimer = null;
+      _ensureEventSubscription();
+    });
   }
 
   void _handleEventBatch(AgentHookEventBatch batch) {

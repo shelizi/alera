@@ -3,7 +3,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-use alera_core::agent_descriptor::{AgentHookStrategy, AGENT_DESCRIPTORS};
+use alera_core::agent_descriptor::{AgentHookStrategy, AgentStatusState, AGENT_DESCRIPTORS};
 use axum::body::{to_bytes, Body};
 use axum::extract::{Path as AxumPath, State};
 use axum::http::{HeaderMap, Request, StatusCode};
@@ -26,6 +26,7 @@ pub struct AgentHookEndpointDto {
     pub port: u16,
 }
 
+#[derive(Clone)]
 pub struct AgentHookEventDto {
     pub terminal_session_id: String,
     pub workspace_id: String,
@@ -318,11 +319,12 @@ fn flush_events(pending: &mut Vec<AgentHookEventDto>, coalesced_intermediate_cou
     };
     let events = std::mem::take(pending);
     let batch = AgentHookEventBatchDto {
-        events,
+        events: events.clone(),
         coalesced_intermediate_count,
     };
     if sink.add(batch).is_err() {
         globals.sink = None;
+        pending.extend(events);
     }
 }
 
@@ -330,7 +332,7 @@ fn coalesce_pending(pending: &mut Vec<AgentHookEventDto>) -> u32 {
     let original_len = pending.len();
     let mut latest_by_key = HashMap::<(String, String), usize>::new();
     for (index, event) in pending.iter().enumerate() {
-        if !is_session_close_event(event) {
+        if !is_status_completion_event(event) {
             latest_by_key.insert(
                 (event.terminal_session_id.clone(), event.agent_type.clone()),
                 index,
@@ -339,7 +341,7 @@ fn coalesce_pending(pending: &mut Vec<AgentHookEventDto>) -> u32 {
     }
     let mut index = 0usize;
     pending.retain(|event| {
-        let keep = if is_session_close_event(event) {
+        let keep = if is_status_completion_event(event) {
             true
         } else {
             latest_by_key
@@ -353,20 +355,20 @@ fn coalesce_pending(pending: &mut Vec<AgentHookEventDto>) -> u32 {
     original_len.saturating_sub(pending.len()) as u32
 }
 
-fn is_session_close_event(event: &AgentHookEventDto) -> bool {
+fn is_status_completion_event(event: &AgentHookEventDto) -> bool {
     let Some(name) = event.inferred_event_name.as_deref() else {
         return false;
     };
-    matches!(
-        (event.agent_type.as_str(), name),
-        ("copilot", "SessionEnd")
-            | ("cursor", "sessionEnd")
-            | ("pi", "session_shutdown")
-            | ("grok", "Stop")
-            | ("grok", "StopFailure")
-            | ("grok", "SessionEnd")
-            | ("devin", "SessionEnd")
-    )
+    AGENT_DESCRIPTORS
+        .iter()
+        .find(|descriptor| descriptor.id == event.agent_type.as_str())
+        .is_some_and(|descriptor| {
+            descriptor
+                .status_normalization
+                .rules
+                .iter()
+                .any(|rule| rule.event == name && rule.state == AgentStatusState::Done)
+        })
 }
 
 fn normalized_enabled_agents(enabled_agents: Vec<String>) -> HashSet<String> {
