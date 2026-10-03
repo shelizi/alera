@@ -101,8 +101,19 @@ void _registerDevinHookInstallerTests(
       p.join(home().path, '.alera', 'agent-hooks', 'alera-devin-hook.cmd'),
     );
     expect(script.existsSync(), isTrue);
-    expect(script.readAsStringSync(), contains('/hook/devin'));
-    expect(script.readAsStringSync(), isNot(contains('endpoint.env')));
+    final scriptSource = script.readAsStringSync();
+    expect(scriptSource, contains('/hook/devin'));
+    expect(scriptSource, isNot(contains('endpoint.env')));
+    expect(
+      scriptSource,
+      contains(
+        r'if ([string]::IsNullOrWhiteSpace($inputData)) { if ($completion) { $payload=@{} } else { exit 0 } }',
+      ),
+    );
+    expect(
+      scriptSource,
+      contains(r'Start-Sleep -Milliseconds (50 * $attempt)'),
+    );
 
     final config = _readJson(p.join(appData, 'devin', 'config.json'));
     final hooks = Map<String, Object?>.from(config['hooks'] as Map);

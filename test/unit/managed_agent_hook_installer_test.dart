@@ -331,6 +331,27 @@ void main() {
       expect(command, contains(r'$env:ALERA_COPILOT_HOOK_EVENT'));
       expect(command, contains("quoted''home"));
       expect(command, contains('alera-copilot-hook.ps1'));
+      final script = File(
+        p.join(
+          quotedHome.path,
+          '.alera',
+          'agent-hooks',
+          'alera-copilot-hook.ps1',
+        ),
+      ).readAsStringSync();
+      expect(
+        script,
+        contains(
+          r'$completion = $completionEvents -contains $env:ALERA_COPILOT_HOOK_EVENT',
+        ),
+      );
+      expect(
+        script,
+        contains(
+          r"if ([string]::IsNullOrWhiteSpace($inputData)) { if ($completion) { $inputData = '{}' } else { exit 0 } }",
+        ),
+      );
+      expect(script, contains(r'Start-Sleep -Milliseconds (50 * $attempt)'));
     });
 
     test('installs and removes the managed OpenCode status plugin', () {
@@ -360,10 +381,28 @@ void main() {
       expect(source, contains('AleraOpenCodeStatusPlugin'));
       expect(source, contains('/hook/opencode'));
       expect(source, contains('ALERA_AGENT_HOOK_ENDPOINT'));
+      expect(source, contains('setTimeout(resolve, 50 * (attempt + 1))'));
 
       final removed = service.remove(.opencode);
       expect(removed.state, ManagedAgentHookInstallState.notInstalled);
       expect(File(pluginPath).existsSync(), isFalse);
+    });
+
+    test('installs OpenCode 2 plugin with completion retry backoff', () {
+      final pluginPath = p.join(
+        home.path,
+        '.config',
+        'opencode',
+        'plugins',
+        'alera-agent-status-v2.js',
+      );
+
+      final status = service.install(.opencode2);
+
+      expect(status.state, ManagedAgentHookInstallState.installed);
+      final source = File(pluginPath).readAsStringSync();
+      expect(source, contains('/hook/opencode2'));
+      expect(source, contains('setTimeout(resolve, 50 * (attempt + 1))'));
     });
 
     test('resolves OpenCode artifact paths from env and Windows defaults', () {
@@ -442,6 +481,7 @@ void main() {
       expect(source, contains("pi.on('before_agent_start'"));
       expect(source, contains('/hook/pi'));
       expect(source, contains('ALERA_AGENT_HOOK_ENDPOINT'));
+      expect(source, contains('setTimeout(resolve, 50 * (attempt + 1))'));
     });
 
     test('resolves Amp artifact paths from env and Windows defaults', () {

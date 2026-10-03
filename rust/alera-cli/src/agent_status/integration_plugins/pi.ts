@@ -32,6 +32,9 @@ async function post(eventName, payload = {}) {
       })
       if (response.ok) return
     } catch {}
+    if (attempt + 1 < attempts) {
+      await new Promise((resolve) => setTimeout(resolve, 50 * (attempt + 1)))
+    }
   }
 }
 

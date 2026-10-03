@@ -29,11 +29,13 @@ void _registerCodexRuntimeHomeServiceCoreTests() {
         contains('echo user-hook'),
       );
       expect(_managedCommandCount(systemHooks, 'alera-codex-hook.sh'), 8);
-      expect(
-        File(p.join(home.path, '.alera', 'agent-hooks', 'alera-codex-hook.sh'))
-            .existsSync(),
-        isTrue,
+      final hookScriptFile = File(
+        p.join(home.path, '.alera', 'agent-hooks', 'alera-codex-hook.sh'),
       );
+      expect(hookScriptFile.existsSync(), isTrue);
+      final hookScript = hookScriptFile.readAsStringSync();
+      expect(hookScript, contains('sleep 0.05'));
+      expect(hookScript, contains('sleep 0.10'));
 
       final systemToml = File(p.join(home.path, '.codex', 'config.toml'))
           .readAsStringSync();

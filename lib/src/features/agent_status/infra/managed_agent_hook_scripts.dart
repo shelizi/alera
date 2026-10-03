@@ -1,5 +1,23 @@
 part of 'managed_agent_hook_installer.dart';
 
+const List<String> _managedHookCompletionEvents = <String>[
+  'Stop',
+  'StopFailure',
+  'SessionEnd',
+  'Interrupt',
+  'stop',
+  'sessionEnd',
+  'SessionIdle',
+  'agent_settled',
+  'session_shutdown',
+  'agent.end',
+  'ErrorOccurred',
+];
+
+String _managedHookPowerShellCompletionEvents() => _managedHookCompletionEvents
+    .map((event) => "'${_powerShellSingleQuote(event)}'")
+    .join(',');
+
 extension _ManagedAgentHookScripts on ManagedAgentHookInstallService {
   String _managedCommand({
     required _AgentHookDescriptor descriptor,
@@ -79,7 +97,7 @@ extension _ManagedAgentHookScripts on ManagedAgentHookInstallService {
       'payload=\$(cat)',
       'alera_completion_event=0',
       'case "\${$eventEnvVar}" in',
-      '  Stop|StopFailure|SessionEnd|stop|sessionEnd|SessionIdle|agent_settled|session_shutdown|agent.end|ErrorOccurred) alera_completion_event=1 ;;',
+      '  ${_managedHookCompletionEvents.join('|')}) alera_completion_event=1 ;;',
       'esac',
       'if [ -z "\$payload" ]; then',
       '  if [ "\$alera_completion_event" -eq 1 ]; then payload=\'{}\'; else exit 0; fi',
@@ -100,6 +118,9 @@ extension _ManagedAgentHookScripts on ManagedAgentHookInstallService {
       '    --data-urlencode "payload=\${payload}" >/dev/null 2>&1; then',
       '    break',
       '  fi',
+      '  if [ "\$alera_attempt" -lt "\$alera_attempts" ]; then',
+      '    case "\$alera_attempt" in 1) sleep 0.05 ;; *) sleep 0.10 ;; esac',
+      '  fi',
       '  alera_attempt=\$((alera_attempt + 1))',
       'done',
       'exit 0',
@@ -114,12 +135,14 @@ extension _ManagedAgentHookScripts on ManagedAgentHookInstallService {
     String? emptyPayloadFallbackEvent,
     bool allowEmptyPayload = false,
   }) {
+    final completionScript =
+        '\$completionEvents=@(${_managedHookPowerShellCompletionEvents()}); \$completion=\$completionEvents -contains \$env:$eventEnvVar;';
     final inputScript = allowEmptyPayload
         ? 'if ([string]::IsNullOrWhiteSpace(\$inputData)) { \$payload=@{} } else { \$payload=(\$inputData | ConvertFrom-Json) };'
         : emptyPayloadFallbackEvent == null
-        ? 'if ([string]::IsNullOrWhiteSpace(\$inputData)) { exit 0 }; \$payload=(\$inputData | ConvertFrom-Json);'
-        : 'if ([string]::IsNullOrWhiteSpace(\$inputData)) { if (\$env:$eventEnvVar -ieq \'${_powerShellSingleQuote(emptyPayloadFallbackEvent)}\') { \$payload=@{} } else { exit 0 } } else { \$payload=(\$inputData | ConvertFrom-Json) };';
-    return 'powershell -NoProfile -ExecutionPolicy Bypass -Command "\$utf8=[System.Text.UTF8Encoding]::new(\$false); [Console]::InputEncoding=\$utf8; [Console]::OutputEncoding=\$utf8; \$inputData=[Console]::In.ReadToEnd(); $inputScript try { \$body=@{ terminalSessionId=\$env:ALERA_TERMINAL_SESSION_ID; workspaceId=\$env:ALERA_WORKSPACE_ID; tabId=\$env:ALERA_TAB_ID; hookEventName=\$env:$eventEnvVar; version=\$env:ALERA_AGENT_HOOK_VERSION; payload=\$payload } | ConvertTo-Json -Depth 100 -Compress; \$bodyBytes=\$utf8.GetBytes(\$body) } catch { exit 0 }; \$completionEvents=@(\'Stop\',\'StopFailure\',\'SessionEnd\',\'stop\',\'sessionEnd\',\'SessionIdle\',\'agent_settled\',\'session_shutdown\',\'agent.end\',\'ErrorOccurred\'); \$attempts=1; if (\$completionEvents -contains \$env:$eventEnvVar) { \$attempts=3 }; for (\$attempt=1; \$attempt -le \$attempts; \$attempt++) { try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 1 -Method Post -Uri (\'http://127.0.0.1:\' + \$env:ALERA_AGENT_HOOK_PORT + \'/hook/$source\') -ContentType \'application/json; charset=utf-8\' -Headers @{ \'$aleraAgentHookTokenHeader\'=\$env:ALERA_AGENT_HOOK_TOKEN } -Body \$bodyBytes | Out-Null; break } catch {} }"';
+        ? 'if ([string]::IsNullOrWhiteSpace(\$inputData)) { if (\$completion) { \$payload=@{} } else { exit 0 } } else { \$payload=(\$inputData | ConvertFrom-Json) };'
+        : 'if ([string]::IsNullOrWhiteSpace(\$inputData)) { if (\$completion -or \$env:$eventEnvVar -ieq \'${_powerShellSingleQuote(emptyPayloadFallbackEvent)}\') { \$payload=@{} } else { exit 0 } } else { \$payload=(\$inputData | ConvertFrom-Json) };';
+    return 'powershell -NoProfile -ExecutionPolicy Bypass -Command "\$utf8=[System.Text.UTF8Encoding]::new(\$false); [Console]::InputEncoding=\$utf8; [Console]::OutputEncoding=\$utf8; \$inputData=[Console]::In.ReadToEnd(); $completionScript $inputScript try { \$body=@{ terminalSessionId=\$env:ALERA_TERMINAL_SESSION_ID; workspaceId=\$env:ALERA_WORKSPACE_ID; tabId=\$env:ALERA_TAB_ID; hookEventName=\$env:$eventEnvVar; version=\$env:ALERA_AGENT_HOOK_VERSION; payload=\$payload } | ConvertTo-Json -Depth 100 -Compress; \$bodyBytes=\$utf8.GetBytes(\$body) } catch { exit 0 }; \$attempts=if (\$completion) { 3 } else { 1 }; for (\$attempt=1; \$attempt -le \$attempts; \$attempt++) { try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 1 -Method Post -Uri (\'http://127.0.0.1:\' + \$env:ALERA_AGENT_HOOK_PORT + \'/hook/$source\') -ContentType \'application/json; charset=utf-8\' -Headers @{ \'$aleraAgentHookTokenHeader\'=\$env:ALERA_AGENT_HOOK_TOKEN } -Body \$bodyBytes | Out-Null; break } catch {} if (\$attempt -lt \$attempts) { Start-Sleep -Milliseconds (50 * \$attempt) } }"';
   }
 
   Map<String, Object?> _managedHookDefinition(

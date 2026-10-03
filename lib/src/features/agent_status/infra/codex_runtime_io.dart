@@ -110,6 +110,9 @@ extension _CodexRuntimeHomeServiceIo on CodexRuntimeHomeService {
       '  --data-urlencode "hookEventName=\${ALERA_AGENT_HOOK_EVENT}" \\',
       '  --data-urlencode "version=\${ALERA_AGENT_HOOK_VERSION}" \\',
       '  --data-urlencode "payload=\${payload}" >/dev/null 2>&1; then break; fi',
+      '  if [ "\$alera_attempt" -lt "\$alera_attempts" ]; then',
+      '    case "\$alera_attempt" in 1) sleep 0.05 ;; *) sleep 0.10 ;; esac',
+      '  fi',
       '  alera_attempt=\$((alera_attempt + 1))',
       'done',
       'exit 0',
@@ -118,6 +121,6 @@ extension _CodexRuntimeHomeServiceIo on CodexRuntimeHomeService {
   }
 
   String _windowsPostCommand() {
-    return 'powershell -NoProfile -ExecutionPolicy Bypass -Command "\$utf8=[System.Text.UTF8Encoding]::new(\$false); [Console]::InputEncoding=\$utf8; [Console]::OutputEncoding=\$utf8; \$inputData=[Console]::In.ReadToEnd(); \$terminal=@(\'Stop\',\'Interrupt\',\'SessionEnd\') -contains \$env:ALERA_AGENT_HOOK_EVENT; if ([string]::IsNullOrWhiteSpace(\$inputData)) { if (\$terminal) { \$inputData=\'{}\' } else { exit 0 } }; try { \$body=@{ terminalSessionId=\$env:ALERA_TERMINAL_SESSION_ID; workspaceId=\$env:ALERA_WORKSPACE_ID; tabId=\$env:ALERA_TAB_ID; hookEventName=\$env:ALERA_AGENT_HOOK_EVENT; version=\$env:ALERA_AGENT_HOOK_VERSION; payload=(\$inputData | ConvertFrom-Json) } | ConvertTo-Json -Depth 100 -Compress; \$bodyBytes=\$utf8.GetBytes(\$body) } catch { exit 0 }; \$attempts=if (\$terminal) { 3 } else { 1 }; for (\$attempt=1; \$attempt -le \$attempts; \$attempt++) { try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 1 -Method Post -Uri (\'http://127.0.0.1:\' + \$env:ALERA_AGENT_HOOK_PORT + \'/hook/codex\') -ContentType \'application/json; charset=utf-8\' -Headers @{ \'$aleraAgentHookTokenHeader\'=\$env:ALERA_AGENT_HOOK_TOKEN } -Body \$bodyBytes | Out-Null; break } catch {} }"';
+    return 'powershell -NoProfile -ExecutionPolicy Bypass -Command "\$utf8=[System.Text.UTF8Encoding]::new(\$false); [Console]::InputEncoding=\$utf8; [Console]::OutputEncoding=\$utf8; \$inputData=[Console]::In.ReadToEnd(); \$terminal=@(\'Stop\',\'Interrupt\',\'SessionEnd\') -contains \$env:ALERA_AGENT_HOOK_EVENT; if ([string]::IsNullOrWhiteSpace(\$inputData)) { if (\$terminal) { \$inputData=\'{}\' } else { exit 0 } }; try { \$body=@{ terminalSessionId=\$env:ALERA_TERMINAL_SESSION_ID; workspaceId=\$env:ALERA_WORKSPACE_ID; tabId=\$env:ALERA_TAB_ID; hookEventName=\$env:ALERA_AGENT_HOOK_EVENT; version=\$env:ALERA_AGENT_HOOK_VERSION; payload=(\$inputData | ConvertFrom-Json) } | ConvertTo-Json -Depth 100 -Compress; \$bodyBytes=\$utf8.GetBytes(\$body) } catch { exit 0 }; \$attempts=if (\$terminal) { 3 } else { 1 }; for (\$attempt=1; \$attempt -le \$attempts; \$attempt++) { try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 1 -Method Post -Uri (\'http://127.0.0.1:\' + \$env:ALERA_AGENT_HOOK_PORT + \'/hook/codex\') -ContentType \'application/json; charset=utf-8\' -Headers @{ \'$aleraAgentHookTokenHeader\'=\$env:ALERA_AGENT_HOOK_TOKEN } -Body \$bodyBytes | Out-Null; break } catch {} if (\$attempt -lt \$attempts) { Start-Sleep -Milliseconds (50 * \$attempt) } }"';
   }
 }

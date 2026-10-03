@@ -98,11 +98,13 @@ void main() {
         contains('echo user-hook'),
       );
       expect(_managedCommandCount(runtimeHooks, 'alera-claude-hook.sh'), 7);
-      expect(
-        File(p.join(home.path, '.alera', 'agent-hooks', 'alera-claude-hook.sh'))
-            .existsSync(),
-        isTrue,
+      final hookScriptFile = File(
+        p.join(home.path, '.alera', 'agent-hooks', 'alera-claude-hook.sh'),
       );
+      expect(hookScriptFile.existsSync(), isTrue);
+      final hookScript = hookScriptFile.readAsStringSync();
+      expect(hookScript, contains('sleep 0.05'));
+      expect(hookScript, contains('sleep 0.10'));
 
       final runtimePluginFile = File(
         p.join(preparation.runtimeHomePath, 'plugins', 'demo.md'),
@@ -237,11 +239,13 @@ void main() {
       expect(promptCommand, contains('cmd.exe /d /s /c call '));
       expect(promptCommand, isNot(contains('/c \'if exist "')));
       expect(promptCommand, isNot(startsWith('cmd /d /s /c')));
+      final hookScript = File(
+        p.join(home.path, '.alera', 'agent-hooks', 'alera-claude-hook.cmd'),
+      ).readAsStringSync();
+      expect(hookScript, contains('/hook/claude'));
       expect(
-        File(
-          p.join(home.path, '.alera', 'agent-hooks', 'alera-claude-hook.cmd'),
-        ).readAsStringSync(),
-        contains('/hook/claude'),
+        hookScript,
+        contains(r'Start-Sleep -Milliseconds (50 * $attempt)'),
       );
     });
 

@@ -33,6 +33,7 @@ void _registerAmpHookInstallerTests(
     expect(source, isNot(contains("await post('agent.start'")));
     expect(source, contains('/hook/amp'));
     expect(source, contains('ALERA_AGENT_HOOK_ENDPOINT'));
+    expect(source, contains('setTimeout(resolve, 50 * (attempt + 1))'));
 
     File(pluginPath).writeAsStringSync(
       '// ALERA_AGENT_STATUS_MANAGED_FILE\n'

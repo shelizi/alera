@@ -62,7 +62,7 @@ if [ -z "$payload" ]; then payload='{}'; fi
 # small bounded retry window.
 alera_completion_event=0
 case "$ALERA_AGENT_HOOK_EVENT" in
-  Stop|StopFailure|SessionEnd|stop|sessionEnd|SessionIdle|agent_settled|session_shutdown|agent.end|ErrorOccurred)
+  Stop|StopFailure|SessionEnd|Interrupt|stop|sessionEnd|SessionIdle|agent_settled|session_shutdown|agent.end|ErrorOccurred)
     alera_completion_event=1
     ;;
 esac
@@ -88,6 +88,9 @@ while [ "$alera_attempt" -le "$alera_attempts" ]; do
     --data-urlencode "version=${ALERA_AGENT_HOOK_VERSION}" \
     --data-urlencode "payload@-" >/dev/null 2>&1; then
     break
+  fi
+  if [ "$alera_attempt" -lt "$alera_attempts" ]; then
+    case "$alera_attempt" in 1) sleep 0.05 ;; *) sleep 0.10 ;; esac
   fi
   alera_attempt=$((alera_attempt + 1))
 done
@@ -119,7 +122,7 @@ if "%ALERA_AGENT_HOOK_TOKEN%"=="" exit /b 0
 if "%ALERA_TERMINAL_SESSION_ID%"=="" exit /b 0
 if "%ALERA_WORKSPACE_ID%"=="" exit /b 0
 if "%ALERA_TAB_ID%"=="" exit /b 0
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$inputData=[Console]::In.ReadToEnd(); if ([string]::IsNullOrWhiteSpace($inputData)) { $inputData='{}' }; try { $body=@{ terminalSessionId=$env:ALERA_TERMINAL_SESSION_ID; workspaceId=$env:ALERA_WORKSPACE_ID; tabId=$env:ALERA_TAB_ID; hookEventName=$env:ALERA_AGENT_HOOK_EVENT; version=$env:ALERA_AGENT_HOOK_VERSION; payload=($inputData | ConvertFrom-Json) } | ConvertTo-Json -Depth 100 -Compress } catch { exit 0 }; $completionEvents=@('Stop','StopFailure','SessionEnd','stop','sessionEnd','SessionIdle','agent_settled','session_shutdown','agent.end','ErrorOccurred'); $attempts=1; if ($completionEvents -contains $env:ALERA_AGENT_HOOK_EVENT) { $attempts=3 }; for ($attempt=1; $attempt -le $attempts; $attempt++) { try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 1 -Method Post -Uri ('http://127.0.0.1:' + $env:ALERA_AGENT_HOOK_PORT + '/hook/' + $env:ALERA_AGENT_TYPE) -ContentType 'application/json' -Headers @{ 'X-Alera-Agent-Hook-Token'=$env:ALERA_AGENT_HOOK_TOKEN } -Body $body | Out-Null; break } catch {} }"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$inputData=[Console]::In.ReadToEnd(); if ([string]::IsNullOrWhiteSpace($inputData)) { $inputData='{}' }; try { $body=@{ terminalSessionId=$env:ALERA_TERMINAL_SESSION_ID; workspaceId=$env:ALERA_WORKSPACE_ID; tabId=$env:ALERA_TAB_ID; hookEventName=$env:ALERA_AGENT_HOOK_EVENT; version=$env:ALERA_AGENT_HOOK_VERSION; payload=($inputData | ConvertFrom-Json) } | ConvertTo-Json -Depth 100 -Compress } catch { exit 0 }; $completionEvents=@('Stop','StopFailure','SessionEnd','Interrupt','stop','sessionEnd','SessionIdle','agent_settled','session_shutdown','agent.end','ErrorOccurred'); $attempts=1; if ($completionEvents -contains $env:ALERA_AGENT_HOOK_EVENT) { $attempts=3 }; for ($attempt=1; $attempt -le $attempts; $attempt++) { try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 1 -Method Post -Uri ('http://127.0.0.1:' + $env:ALERA_AGENT_HOOK_PORT + '/hook/' + $env:ALERA_AGENT_TYPE) -ContentType 'application/json' -Headers @{ 'X-Alera-Agent-Hook-Token'=$env:ALERA_AGENT_HOOK_TOKEN } -Body $body | Out-Null; break } catch {} if ($attempt -lt $attempts) { Start-Sleep -Milliseconds (50 * $attempt) } }"
 exit /b 0
 "#;
 
@@ -175,8 +178,11 @@ mod tests {
     fn managed_script_retries_completion_delivery_only() {
         assert!(POSIX_HOOK_SCRIPT.contains("alera_completion_event"));
         assert!(POSIX_HOOK_SCRIPT.contains("StopFailure"));
+        assert!(POSIX_HOOK_SCRIPT.contains("Interrupt"));
         assert!(POSIX_HOOK_SCRIPT.contains("agent_settled"));
         assert!(POSIX_HOOK_SCRIPT.contains("alera_attempts=3"));
+        assert!(POSIX_HOOK_SCRIPT.contains("sleep 0.05"));
+        assert!(POSIX_HOOK_SCRIPT.contains("sleep 0.10"));
     }
 
     #[cfg(windows)]
@@ -199,6 +205,8 @@ mod tests {
         assert!(WINDOWS_HOOK_SCRIPT.contains("$completionEvents"));
         assert!(WINDOWS_HOOK_SCRIPT.contains("$attempts=3"));
         assert!(WINDOWS_HOOK_SCRIPT.contains("StopFailure"));
+        assert!(WINDOWS_HOOK_SCRIPT.contains("Interrupt"));
         assert!(WINDOWS_HOOK_SCRIPT.contains("agent_settled"));
+        assert!(WINDOWS_HOOK_SCRIPT.contains("Start-Sleep -Milliseconds (50 * $attempt)"));
     }
 }

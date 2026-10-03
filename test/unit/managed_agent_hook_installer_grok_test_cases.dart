@@ -55,8 +55,9 @@ void _registerGrokHookInstallerTests(
 
   test('uses a Windows-safe command for Grok Build hooks', () {
     final home = readHome();
+    final windowsHome = p.join(home.path, 'Home With Spaces');
     final windowsService = ManagedAgentHookInstallService(
-      homeDirectory: p.join(home.path, 'Home With Spaces'),
+      homeDirectory: windowsHome,
       platform: .windows,
       environment: <String, String>{'USERPROFILE': home.path},
     );
@@ -69,6 +70,16 @@ void _registerGrokHookInstallerTests(
     expect(command, startsWith('cmd /d /s /c'));
     expect(command, contains('ALERA_GROK_EVENT'));
     expect(command, isNot(contains("MSYS2_ARG_CONV_EXCL='*'")));
+    final script = File(
+      p.join(windowsHome, '.alera', 'agent-hooks', 'alera-grok-hook.cmd'),
+    ).readAsStringSync();
+    expect(
+      script,
+      contains(
+        r'if ([string]::IsNullOrWhiteSpace($inputData)) { if ($completion) { $payload=@{} } else { exit 0 } }',
+      ),
+    );
+    expect(script, contains(r'Start-Sleep -Milliseconds (50 * $attempt)'));
   });
 
   test('installs Grok Build hooks under GROK_HOME', () {

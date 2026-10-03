@@ -56,3 +56,15 @@ const OPENCODE_PLUGIN: &str = include_str!("integration_plugins/opencode.js");
 const OPENCODE2_PLUGIN: &str = include_str!("integration_plugins/opencode2.js");
 const PI_PLUGIN: &str = include_str!("integration_plugins/pi.ts");
 const AMP_PLUGIN: &str = include_str!("integration_plugins/amp.ts");
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn completion_plugins_use_bounded_retry_backoff() {
+        for plugin in [OPENCODE_PLUGIN, OPENCODE2_PLUGIN, PI_PLUGIN, AMP_PLUGIN] {
+            assert!(plugin.contains("setTimeout(resolve, 50 * (attempt + 1))"));
+        }
+    }
+}
