@@ -72,4 +72,14 @@ mixin _WorkbenchControllerTabOpening
     allBranches: allBranches,
     selectedRef: selectedRef,
   );
+
+  Future<void> setGitHistoryMergedBranchFilter({
+    required String tabId,
+    required WorkspaceGitHistoryMergedBranchVisibility visibility,
+    String? mergedIntoRef,
+  }) => _tabLayoutOwner.setGitHistoryMergedBranchFilter(
+    tabId: tabId,
+    visibility: visibility,
+    mergedIntoRef: mergedIntoRef,
+  );
 }

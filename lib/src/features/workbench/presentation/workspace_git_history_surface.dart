@@ -29,6 +29,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 part 'workspace_git_history_commit_row.dart';
 part 'workspace_git_history_surface_actions.dart';
 part 'workspace_git_history_surface_perspective.dart';
+part 'workspace_git_history_surface_filters.dart';
 part 'workspace_git_history_surface_ref_actions.dart';
 
 const String _allBranchesPerspective = '__all_branches__';
@@ -74,6 +75,11 @@ class _WorkspaceGitHistorySurfaceState
   late String? _selectedRef = widget.tab.gitHistorySelectedRef;
   List<String> _branches = const <String>[];
   String? _currentBranch;
+  late WorkspaceGitHistoryMergedBranchVisibility _mergedBranchVisibility =
+      widget.tab.gitHistoryMergedBranchVisibility;
+  late String? _mergedIntoRef = widget.tab.gitHistoryMergedIntoRef;
+  Set<String> _mergedBranches = const <String>{};
+  String? _mergedIntoRevision;
   bool _loading = false;
   bool _loadingMore = false;
   bool _hasMore = false;
@@ -87,8 +93,7 @@ class _WorkspaceGitHistorySurfaceState
   void initState() {
     super.initState();
     _verticalController.addListener(_onScroll);
-    unawaited(_loadBranchPerspectives());
-    _reload();
+    unawaited(_initializeHistory());
   }
 
   @override
@@ -175,7 +180,9 @@ class _WorkspaceGitHistorySurfaceState
           remoteRef: result.remoteRef,
           baseRef: _selectedRef == null ? result.baseRef : null,
         );
-        final projection = _buildProjection(result.items);
+        final projection = _buildProjection(
+          _filteredHistoryItems(result.items),
+        );
         _viewModels = projection.viewModels;
         _projectionContinuation = projection.continuation;
       });
@@ -219,16 +226,10 @@ class _WorkspaceGitHistorySurfaceState
       if (!mounted || generation != _generation) {
         return;
       }
-      final projection = _buildProjection(
-        result.items,
-        continuation: _projectionContinuation,
-      );
       setState(() {
         _items = <GitHistoryItem>[..._items, ...result.items];
-        _viewModels = <GitHistoryItemViewModel>[
-          ..._viewModels,
-          ...projection.viewModels,
-        ];
+        final projection = _buildProjection(_filteredHistoryItems(_items));
+        _viewModels = projection.viewModels;
         _projectionContinuation = projection.continuation;
         _hasMore = result.hasMore;
         _loadingMore = false;
@@ -312,8 +313,22 @@ class _WorkspaceGitHistorySurfaceState
               ),
             ],
             const SizedBox(width: AleraTokens.space16),
-            _buildBranchPerspectiveMenu(theme),
-            const Spacer(),
+            Expanded(
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    _buildBranchPerspectiveMenu(theme),
+                    const SizedBox(width: AleraTokens.space8),
+                    _buildMergedVisibilityMenu(theme),
+                    const SizedBox(width: AleraTokens.space8),
+                    _buildMergedTargetMenu(theme),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(width: AleraTokens.space8),
             if (_loading || _loadingMore)
               const Padding(
                 padding: EdgeInsets.only(right: AleraTokens.space8),

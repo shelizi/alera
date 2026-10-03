@@ -11,10 +11,14 @@ extension _WorkspaceGitHistoryPerspective on _WorkspaceGitHistorySurfaceState {
       if (!mounted) return;
       final selectedBranchRef = _selectedRef == _headRef ? null : _selectedRef;
       final currentBranchRef = currentBranch == _headRef ? null : currentBranch;
+      final mergedTargetRef = _mergedIntoRef == _headRef
+          ? null
+          : _mergedIntoRef;
       final values = <String>{
         ...branches,
         ?currentBranchRef,
         ?selectedBranchRef,
+        ?mergedTargetRef,
       }.toList()..sort();
       _setSurfaceState(() {
         _currentBranch = currentBranch;
@@ -46,6 +50,7 @@ extension _WorkspaceGitHistoryPerspective on _WorkspaceGitHistorySurfaceState {
       _allBranches = allBranches;
       _selectedRef = selectedRef;
     });
+    await _refreshMergedBranchState();
     unawaited(_reload());
     try {
       await ref

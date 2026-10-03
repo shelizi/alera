@@ -74,6 +74,10 @@ const String workspaceTabGitHistoryAllBranchesPayloadKey =
     'gitHistoryAllBranches';
 const String workspaceTabGitHistorySelectedRefPayloadKey =
     'gitHistorySelectedRef';
+const String workspaceTabGitHistoryMergedBranchVisibilityPayloadKey =
+    'gitHistoryMergedBranchVisibility';
+const String workspaceTabGitHistoryMergedIntoRefPayloadKey =
+    'gitHistoryMergedIntoRef';
 
 enum WorkspaceGitDiffSource(this.key) {
   workingTree('workingTree'),
@@ -112,6 +116,23 @@ enum WorkspaceGitDiffScope(this.key) {
       }
     }
     return null;
+  }
+}
+
+enum WorkspaceGitHistoryMergedBranchVisibility(this.key) {
+  showAll('showAll'),
+  hideMergedNames('hideMergedNames'),
+  hideMergedGraph('hideMergedGraph');
+
+  final String key;
+
+  static WorkspaceGitHistoryMergedBranchVisibility fromJson(Object? value) {
+    if (value is String) {
+      for (final visibility in values) {
+        if (visibility.key == value) return visibility;
+      }
+    }
+    return WorkspaceGitHistoryMergedBranchVisibility.showAll;
   }
 }
 
@@ -260,6 +281,15 @@ class WorkspaceTabRecord({
   /// checking that branch out. Null means use the repository's current branch.
   String? get gitHistorySelectedRef =>
       _nonEmptyPayloadString(workspaceTabGitHistorySelectedRefPayloadKey);
+
+  WorkspaceGitHistoryMergedBranchVisibility
+  get gitHistoryMergedBranchVisibility =>
+      WorkspaceGitHistoryMergedBranchVisibility.fromJson(
+        payload[workspaceTabGitHistoryMergedBranchVisibilityPayloadKey],
+      );
+
+  String? get gitHistoryMergedIntoRef =>
+      _nonEmptyPayloadString(workspaceTabGitHistoryMergedIntoRefPayloadKey);
 
   String? _nonEmptyPayloadString(String key) {
     final value = payload[key];

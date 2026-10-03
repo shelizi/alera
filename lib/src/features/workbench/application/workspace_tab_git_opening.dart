@@ -234,6 +234,26 @@ extension WorkspaceTabGitOpening on WorkspaceTabService {
     return _repository.upsertWorkspaceTab(next);
   }
 
+  Future<WorkspaceTabRecord?> setGitHistoryMergedBranchFilter({
+    required String tabId,
+    required WorkspaceGitHistoryMergedBranchVisibility visibility,
+    String? mergedIntoRef,
+  }) async {
+    final tab = await _repository.findWorkspaceTabById(tabId);
+    if (tab == null || tab.kind != WorkspaceTabKind.gitHistory) {
+      return null;
+    }
+    final next = tab.copyWith(
+      updatedAt: _now(),
+      payload: <String, Object?>{
+        ...tab.payload,
+        workspaceTabGitHistoryMergedBranchVisibilityPayloadKey: visibility.key,
+        workspaceTabGitHistoryMergedIntoRefPayloadKey: mergedIntoRef,
+      },
+    );
+    return _repository.upsertWorkspaceTab(next);
+  }
+
   Future<WorkspaceTabRecord> _upsertGitDiffTab({
     required String workspaceId,
     required List<WorkspaceTabRecord> existing,

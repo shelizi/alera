@@ -269,6 +269,286 @@ void main() {
       isEmpty,
     );
   });
+  testWidgets('hide merged names keeps commits and graph history visible', (
+    tester,
+  ) async {
+    const mainRef = GitHistoryItemRef(
+      id: 'refs/heads/main',
+      name: 'main',
+      revision: 'm3',
+      category: GitHistoryRefCategory.branches,
+    );
+    const mergedRef = GitHistoryItemRef(
+      id: 'refs/heads/feature-merged',
+      name: 'feature-merged',
+      revision: 'f2',
+      category: GitHistoryRefCategory.branches,
+    );
+    const openRef = GitHistoryItemRef(
+      id: 'refs/heads/feature-open',
+      name: 'feature-open',
+      revision: 'o2',
+      category: GitHistoryRefCategory.branches,
+    );
+    final backend = FakeGitBackend()
+      ..sourceBranches = <String>['feature-merged', 'feature-open', 'main']
+      ..headBranch = 'main'
+      ..ancestorResults[('feature-merged', 'main')] = true
+      ..ancestorResults[('feature-open', 'main')] = false
+      ..gitHistoryResult = GitHistoryResult(
+        currentRef: mainRef,
+        items: <GitHistoryItem>[
+          gitHistoryCommit(
+            'm3',
+            parents: <String>['m2', 'f2'],
+            subject: 'Main Merge',
+            references: const <GitHistoryItemRef>[mainRef],
+          ),
+          gitHistoryCommit(
+            'o2',
+            parents: <String>['o1'],
+            subject: 'Open Commit 2',
+            references: const <GitHistoryItemRef>[openRef],
+          ),
+          gitHistoryCommit(
+            'o1',
+            parents: <String>['m2'],
+            subject: 'Open Commit 1',
+          ),
+          gitHistoryCommit(
+            'f2',
+            parents: <String>['f1'],
+            subject: 'Merged Commit 2',
+            references: const <GitHistoryItemRef>[mergedRef],
+          ),
+          gitHistoryCommit(
+            'f1',
+            parents: <String>['m1'],
+            subject: 'Merged Commit 1',
+          ),
+          gitHistoryCommit('m2', parents: <String>['m1'], subject: 'Main 2'),
+          gitHistoryCommit('m1', parents: <String>[], subject: 'Main 1'),
+        ],
+        hasIncomingChanges: false,
+        hasOutgoingChanges: false,
+        hasMore: false,
+        limit: 200,
+      );
+    final repository = GitHistoryFakeWorkbenchRepository()
+      ..tabs.add(gitHistoryTab());
+
+    await pumpGitHistorySurface(
+      tester,
+      backend: backend,
+      repository: repository,
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('feature-merged'), findsOneWidget);
+    expect(find.text('Merged Commit 2'), findsOneWidget);
+    await tester.tap(
+      find.byKey(const ValueKey<String>('git-history-merged-visibility-menu')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Hide Merged Names'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('feature-merged'), findsNothing);
+    expect(find.text('feature-open'), findsOneWidget);
+    expect(find.text('Merged Commit 2'), findsOneWidget);
+    expect(find.text('Merged Commit 1'), findsOneWidget);
+    expect(
+      backend.calls.where(
+        (call) =>
+            call.method == 'isAncestor' &&
+            call.args['ancestorRef'] == 'feature-merged' &&
+            call.args['descendantRef'] == 'main',
+      ),
+      hasLength(1),
+    );
+  });
+
+  testWidgets('hide merged graph removes merged side history', (tester) async {
+    const mainRef = GitHistoryItemRef(
+      id: 'refs/heads/main',
+      name: 'main',
+      revision: 'm3',
+      category: GitHistoryRefCategory.branches,
+    );
+    const mergedRef = GitHistoryItemRef(
+      id: 'refs/heads/feature-merged',
+      name: 'feature-merged',
+      revision: 'f2',
+      category: GitHistoryRefCategory.branches,
+    );
+    const openRef = GitHistoryItemRef(
+      id: 'refs/heads/feature-open',
+      name: 'feature-open',
+      revision: 'o2',
+      category: GitHistoryRefCategory.branches,
+    );
+    final backend = FakeGitBackend()
+      ..sourceBranches = <String>['feature-merged', 'feature-open', 'main']
+      ..headBranch = 'main'
+      ..ancestorResults[('feature-merged', 'main')] = true
+      ..ancestorResults[('feature-open', 'main')] = false
+      ..gitHistoryResult = GitHistoryResult(
+        currentRef: mainRef,
+        items: <GitHistoryItem>[
+          gitHistoryCommit(
+            'm3',
+            parents: <String>['m2', 'f2'],
+            subject: 'Main Merge',
+            references: const <GitHistoryItemRef>[mainRef],
+          ),
+          gitHistoryCommit(
+            'o2',
+            parents: <String>['o1'],
+            subject: 'Open Commit 2',
+            references: const <GitHistoryItemRef>[openRef],
+          ),
+          gitHistoryCommit(
+            'o1',
+            parents: <String>['m2'],
+            subject: 'Open Commit 1',
+          ),
+          gitHistoryCommit(
+            'f2',
+            parents: <String>['f1'],
+            subject: 'Merged Commit 2',
+            references: const <GitHistoryItemRef>[mergedRef],
+          ),
+          gitHistoryCommit(
+            'f1',
+            parents: <String>['m1'],
+            subject: 'Merged Commit 1',
+          ),
+          gitHistoryCommit('m2', parents: <String>['m1'], subject: 'Main 2'),
+          gitHistoryCommit('m1', parents: <String>[], subject: 'Main 1'),
+        ],
+        hasIncomingChanges: false,
+        hasOutgoingChanges: false,
+        hasMore: false,
+        limit: 200,
+      );
+    final repository = GitHistoryFakeWorkbenchRepository()
+      ..tabs.add(gitHistoryTab());
+
+    await pumpGitHistorySurface(
+      tester,
+      backend: backend,
+      repository: repository,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey<String>('git-history-merged-visibility-menu')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Hide Merged Graph'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Merged Commit 2'), findsNothing);
+    expect(find.text('Merged Commit 1'), findsNothing);
+    expect(find.text('feature-merged'), findsNothing);
+    expect(find.text('Open Commit 2'), findsOneWidget);
+    expect(find.text('Open Commit 1'), findsOneWidget);
+    expect(find.text('feature-open'), findsOneWidget);
+    expect(find.text('Main Merge'), findsOneWidget);
+    expect(find.text('Main 2'), findsOneWidget);
+    expect(find.text('Main 1'), findsOneWidget);
+  });
+
+  testWidgets('merged target changes comparison without checkout', (
+    tester,
+  ) async {
+    const mainRef = GitHistoryItemRef(
+      id: 'refs/heads/main',
+      name: 'main',
+      revision: 'm1',
+      category: GitHistoryRefCategory.branches,
+    );
+    const releaseRef = GitHistoryItemRef(
+      id: 'refs/heads/release',
+      name: 'release',
+      revision: 'r1',
+      category: GitHistoryRefCategory.branches,
+    );
+    final backend = FakeGitBackend()
+      ..sourceBranches = <String>['feature', 'main', 'release']
+      ..headBranch = 'main'
+      ..ancestorResults[('feature', 'release')] = true
+      ..ancestorResults[('main', 'release')] = false
+      ..gitHistoryResult = GitHistoryResult(
+        currentRef: mainRef,
+        baseRef: releaseRef,
+        items: <GitHistoryItem>[
+          gitHistoryCommit(
+            'm1',
+            parents: <String>[],
+            subject: 'Main Commit',
+            references: const <GitHistoryItemRef>[mainRef],
+          ),
+          gitHistoryCommit(
+            'r1',
+            parents: <String>[],
+            subject: 'Release Commit',
+            references: const <GitHistoryItemRef>[releaseRef],
+          ),
+        ],
+        hasIncomingChanges: false,
+        hasOutgoingChanges: false,
+        hasMore: false,
+        limit: 200,
+      );
+    final repository = GitHistoryFakeWorkbenchRepository()
+      ..tabs.add(gitHistoryTab());
+
+    await pumpGitHistorySurface(
+      tester,
+      backend: backend,
+      repository: repository,
+    );
+    await tester.pumpAndSettle();
+
+    final targetMenu = find.byKey(
+      const ValueKey<String>('git-history-merged-target-menu'),
+    );
+    await tester.ensureVisible(targetMenu);
+    await tester.tap(targetMenu);
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey<String>('git-history-merged-target-release')),
+    );
+    await tester.pumpAndSettle();
+
+    final visibilityMenu = find.byKey(
+      const ValueKey<String>('git-history-merged-visibility-menu'),
+    );
+    await tester.ensureVisible(visibilityMenu);
+    await tester.tap(visibilityMenu);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Hide Merged Names'));
+    await tester.pumpAndSettle();
+
+    expect(
+      backend.calls.where(
+        (call) =>
+            call.method == 'isAncestor' &&
+            call.args['ancestorRef'] == 'feature' &&
+            call.args['descendantRef'] == 'release',
+      ),
+      hasLength(1),
+    );
+    expect(
+      backend.calls.where((call) => call.method == 'switchBranch'),
+      isEmpty,
+    );
+    expect(repository.tabs.single.gitHistoryMergedIntoRef, 'release');
+    expect(
+      repository.tabs.single.gitHistoryMergedBranchVisibility,
+      WorkspaceGitHistoryMergedBranchVisibility.hideMergedNames,
+    );
+  });
   testWidgets('tapping a commit opens its diff tab', (tester) async {
     final backend = gitHistoryBackend(<GitHistoryItem>[
       gitHistoryCommit('abc123', parents: <String>[], subject: 'Only Commit'),

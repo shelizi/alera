@@ -194,6 +194,34 @@ extension WorkbenchTabLayoutOwnerOpening on WorkbenchTabLayoutOwner {
     }
   }
 
+  Future<void> setGitHistoryMergedBranchFilter({
+    required String tabId,
+    required WorkspaceGitHistoryMergedBranchVisibility visibility,
+    String? mergedIntoRef,
+  }) async {
+    try {
+      final tab = await _host.workspaceTabService
+          .setGitHistoryMergedBranchFilter(
+            tabId: tabId,
+            visibility: visibility,
+            mergedIntoRef: mergedIntoRef,
+          );
+      if (tab != null && !_host.isDisposed) {
+        _host.emitState(
+          applyWorkbenchTabUpdateState(
+            state: _host.readState(),
+            tab: tab,
+          ).copyWith(error: null),
+        );
+      }
+    } catch (error) {
+      if (!_host.isDisposed) {
+        _host.emitState(_host.readState().copyWith(error: error.toString()));
+      }
+      rethrow;
+    }
+  }
+
   Future<WorkspaceTabRecord> openGitPullRequestDiffTab({
     required Workspace workspace,
     String? gitDiffRoot,
