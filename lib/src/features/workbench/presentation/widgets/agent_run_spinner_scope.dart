@@ -12,6 +12,14 @@ import 'package:flutter/material.dart';
 @visibleForTesting
 const Duration agentRunSpinnerFrameInterval = Duration(milliseconds: 83);
 
+/// Lower repaint cadence for a visible but unfocused desktop window.
+/// Four steps per second keeps the liveness cue moving without restoring the
+/// high full-window raster cost that the shared clock was added to avoid.
+@visibleForTesting
+const Duration agentRunSpinnerUnfocusedFrameInterval = Duration(
+  milliseconds: 250,
+);
+
 /// One animation clock for every agent spinner under this scope.
 ///
 /// A `CircularProgressIndicator` owns a private `AnimationController` and
@@ -21,8 +29,8 @@ const Duration agentRunSpinnerFrameInterval = Duration(milliseconds: 83);
 /// layout work in the list.
 ///
 /// The clock is reference counted by the mounted spinners, so an idle sidebar
-/// schedules no frames at all, and it stops while the window is hidden or
-/// unfocused.
+/// schedules no frames at all. It stops while hidden and drops to a low
+/// repaint rate while the window is visible but unfocused.
 class const AgentRunSpinnerScope({super.key, required final Widget child})
     extends StatefulWidget {
   static _AgentRunSpinnerScopeState? _maybeStateOf(BuildContext context) {
@@ -42,8 +50,10 @@ class _AgentRunSpinnerScopeState extends State<AgentRunSpinnerScope>
   final ValueNotifier<double> _progress = ValueNotifier<double>(0);
   final Stopwatch _clock = Stopwatch();
   Timer? _timer;
+  Duration? _timerInterval;
   int _spinners = 0;
   bool _windowVisible = true;
+  bool _windowFocused = true;
   bool _tickersEnabled = true;
 
   ValueListenable<double> get progress => _progress;
@@ -68,10 +78,12 @@ class _AgentRunSpinnerScopeState extends State<AgentRunSpinnerScope>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    // Only a focused window animates. An unfocused one can still be on screen
-    // beside the app the user is working in, and each step there is a
-    // full-window frame nobody is watching; the arc holds its angle instead.
-    _windowVisible = state == AppLifecycleState.resumed;
+    // On desktop, inactive commonly means visible but not focused. Keep the
+    // liveness cue in that state; hidden/paused/detached still stop the clock.
+    _windowVisible =
+        state == AppLifecycleState.resumed ||
+        state == AppLifecycleState.inactive;
+    _windowFocused = state == AppLifecycleState.resumed;
     _syncTimer();
   }
 
@@ -86,18 +98,34 @@ class _AgentRunSpinnerScopeState extends State<AgentRunSpinnerScope>
   }
 
   void _syncTimer() {
-    final shouldRun = _spinners > 0 && _windowVisible && _tickersEnabled;
-    if (shouldRun && _timer == null) {
-      _clock.start();
-      _timer = Timer.periodic(agentRunSpinnerFrameInterval, (_) {
-        final phase = _clock.elapsedMilliseconds % _periodMilliseconds;
-        _progress.value = phase / _periodMilliseconds;
-      });
-    } else if (!shouldRun && _timer != null) {
+    final interval = _spinners > 0 && _windowVisible && _tickersEnabled
+        ? (_windowFocused
+              ? agentRunSpinnerFrameInterval
+              : agentRunSpinnerUnfocusedFrameInterval)
+        : null;
+
+    if (interval == null) {
+      if (_timer == null) {
+        return;
+      }
       _timer!.cancel();
       _timer = null;
+      _timerInterval = null;
       _clock.stop();
+      return;
     }
+
+    if (_timer != null && _timerInterval == interval) {
+      return;
+    }
+
+    _timer?.cancel();
+    _timerInterval = interval;
+    _clock.start();
+    _timer = Timer.periodic(interval, (_) {
+      final phase = _clock.elapsedMilliseconds % _periodMilliseconds;
+      _progress.value = phase / _periodMilliseconds;
+    });
   }
 
   @override
@@ -105,6 +133,7 @@ class _AgentRunSpinnerScopeState extends State<AgentRunSpinnerScope>
     WidgetsBinding.instance.removeObserver(this);
     _timer?.cancel();
     _timer = null;
+    _timerInterval = null;
     _progress.dispose();
     super.dispose();
   }
