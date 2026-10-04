@@ -2,7 +2,9 @@ import 'package:alera/src/design_system/feedback/alera_toast.dart';
 import 'package:alera/src/features/projects/domain/project.dart';
 import 'package:alera/src/features/workbench/application/workbench_state.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
+import 'package:alera/src/features/workbench/presentation/workspace_git_history_surface.dart';
 import 'package:alera/src/shared/infra/git/git_diff_models.dart';
+import 'package:alera/src/shared/infra/git/git_history_graph.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -11,6 +13,58 @@ import '../unit/fake_git_backend.dart';
 import 'workspace_git_history_surface_test_harness.dart';
 
 void main() {
+  test('collapses older merged history onto one target lane', () {
+    final source = <GitHistoryItem>[
+      gitHistoryCommit(
+        'm5',
+        parents: <String>['m4', 'f2'],
+        subject: 'Newest Merge',
+      ),
+      gitHistoryCommit('f2', parents: <String>['f1'], subject: 'Feature 2'),
+      gitHistoryCommit('f1', parents: <String>['m3'], subject: 'Feature 1'),
+      gitHistoryCommit(
+        'm4',
+        parents: <String>['m3', 'g2'],
+        subject: 'Older Merge',
+      ),
+      gitHistoryCommit('g2', parents: <String>['g1'], subject: 'Old Feature 2'),
+      gitHistoryCommit('g1', parents: <String>['m2'], subject: 'Old Feature 1'),
+      gitHistoryCommit('m3', parents: <String>['m2'], subject: 'Main 3'),
+      gitHistoryCommit('m2', parents: <String>['m1'], subject: 'Main 2'),
+      gitHistoryCommit('m1', parents: <String>[], subject: 'Main 1'),
+    ];
+
+    final collapsed = collapseGitHistoryOntoTargetLane(
+      source,
+      targetRevision: 'm5',
+    );
+
+    expect(collapsed.map((item) => item.parentIds).toList(), <List<String>>[
+      <String>['f2'],
+      <String>['f1'],
+      <String>['m4'],
+      <String>['g2'],
+      <String>['g1'],
+      <String>['m3'],
+      <String>['m2'],
+      <String>['m1'],
+      <String>[],
+    ]);
+
+    final viewModels = buildGitHistoryViewModelsFromItems(collapsed);
+    for (final viewModel in viewModels) {
+      expect(
+        viewModel.inputSwimlanes.map((node) => node.id).toSet().length,
+        viewModel.inputSwimlanes.length,
+      );
+      expect(
+        viewModel.outputSwimlanes.map((node) => node.id).toSet().length,
+        viewModel.outputSwimlanes.length,
+      );
+      expect(viewModel.inputSwimlanes.length, lessThanOrEqualTo(1));
+      expect(viewModel.outputSwimlanes.length, lessThanOrEqualTo(1));
+    }
+  });
   testWidgets('highlights the current HEAD row and branch ref', (tester) async {
     const currentRef = GitHistoryItemRef(
       id: 'refs/heads/main',
@@ -368,7 +422,9 @@ void main() {
     );
   });
 
-  testWidgets('hide merged graph removes merged side history', (tester) async {
+  testWidgets('hide merged graph collapses merged side history', (
+    tester,
+  ) async {
     const mainRef = GitHistoryItemRef(
       id: 'refs/heads/main',
       name: 'main',
@@ -447,8 +503,8 @@ void main() {
     await tester.tap(find.text('Hide Merged Graph'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Merged Commit 2'), findsNothing);
-    expect(find.text('Merged Commit 1'), findsNothing);
+    expect(find.text('Merged Commit 2'), findsOneWidget);
+    expect(find.text('Merged Commit 1'), findsOneWidget);
     expect(find.text('feature-merged'), findsNothing);
     expect(find.text('Open Commit 2'), findsOneWidget);
     expect(find.text('Open Commit 1'), findsOneWidget);

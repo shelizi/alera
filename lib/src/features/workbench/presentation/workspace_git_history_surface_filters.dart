@@ -1,5 +1,64 @@
 part of 'workspace_git_history_surface.dart';
 
+/// Flattens every loaded commit reachable from [targetRevision] onto one
+/// presentation lane while preserving the commits themselves.
+///
+/// This intentionally changes only the display topology. Merged side-branch
+/// commits remain in history, but they are chained in the same order as the
+/// loaded history so hiding their branch graph cannot create replacement
+/// lanes, duplicate dots, or multi-parent fan-out deeper in the graph.
+List<GitHistoryItem> collapseGitHistoryOntoTargetLane(
+  List<GitHistoryItem> source, {
+  required String targetRevision,
+}) {
+  if (source.isEmpty || targetRevision.isEmpty) return source;
+
+  final byId = <String, GitHistoryItem>{
+    for (final item in source) item.id: item,
+  };
+  final targetReachable = <String>{};
+  final stack = <String>[targetRevision];
+  while (stack.isNotEmpty) {
+    final id = stack.removeLast();
+    if (!targetReachable.add(id)) continue;
+    final item = byId[id];
+    if (item != null) stack.addAll(item.parentIds);
+  }
+
+  final targetItems = source
+      .where((item) => targetReachable.contains(item.id))
+      .toList(growable: false);
+  if (targetItems.isEmpty) return source;
+
+  final nextTargetById = <String, String>{};
+  for (var index = 0; index + 1 < targetItems.length; index += 1) {
+    nextTargetById[targetItems[index].id] = targetItems[index + 1].id;
+  }
+
+  return source
+      .map((item) {
+        if (!targetReachable.contains(item.id)) return item;
+        final nextTarget = nextTargetById[item.id];
+        final parentIds = nextTarget != null
+            ? <String>[nextTarget]
+            : item.parentIds.isEmpty
+            ? const <String>[]
+            : <String>[item.parentIds.first];
+        return GitHistoryItem(
+          id: item.id,
+          parentIds: parentIds,
+          subject: item.subject,
+          message: item.message,
+          displayId: item.displayId,
+          author: item.author,
+          authorEmail: item.authorEmail,
+          timestamp: item.timestamp,
+          references: item.references,
+        );
+      })
+      .toList(growable: false);
+}
+
 extension _WorkspaceGitHistoryMergedFilters
     on _WorkspaceGitHistorySurfaceState {
   Future<void> _initializeHistory() async {
@@ -176,108 +235,10 @@ extension _WorkspaceGitHistoryMergedFilters
       return source.map(withoutMergedRefs).toList(growable: false);
     }
 
-    final byId = <String, GitHistoryItem>{
-      for (final item in source) item.id: item,
-    };
-    final targetReachable = <String>{};
-    final reachableStack = <String>[targetRevision];
-    while (reachableStack.isNotEmpty) {
-      final id = reachableStack.removeLast();
-      if (!targetReachable.add(id)) continue;
-      final item = byId[id];
-      if (item != null) reachableStack.addAll(item.parentIds);
-    }
-
-    final targetMainline = <String>{};
-    String? cursor = targetRevision;
-    while (cursor != null && targetMainline.add(cursor)) {
-      final item = byId[cursor];
-      cursor = item == null || item.parentIds.isEmpty
-          ? null
-          : item.parentIds.first;
-    }
-
-    final visible = <String>{...targetMainline};
-    final unmergedTips = <String>{};
-    for (final item in source) {
-      for (final itemRef in item.references) {
-        if (!_isBranchRef(itemRef) ||
-            _mergedBranches.contains(itemRef.name) ||
-            itemRef.name == (_mergedIntoRef ?? _currentBranch)) {
-          continue;
-        }
-        unmergedTips.add(item.id);
-      }
-    }
-
-    final stack = <String>[...unmergedTips];
-    while (stack.isNotEmpty) {
-      final id = stack.removeLast();
-      if (targetReachable.contains(id)) {
-        if (targetMainline.contains(id)) visible.add(id);
-        continue;
-      }
-      if (!visible.add(id)) continue;
-      final item = byId[id];
-      if (item != null) stack.addAll(item.parentIds);
-    }
-
-    List<String> nearestVisibleParents(String start) {
-      if (visible.contains(start)) return <String>[start];
-      if (!byId.containsKey(start)) return <String>[start];
-      final output = <String>[];
-      final seen = <String>{start};
-      final queue = <String>[start];
-      var index = 0;
-      while (index < queue.length) {
-        final id = queue[index++];
-        final item = byId[id];
-        if (item == null) continue;
-        for (final parent in item.parentIds) {
-          if (!seen.add(parent)) continue;
-          if (visible.contains(parent)) {
-            output.add(parent);
-          } else if (byId.containsKey(parent)) {
-            queue.add(parent);
-          } else {
-            output.add(parent);
-          }
-        }
-      }
-      return output;
-    }
-
-    final output = <GitHistoryItem>[];
-    for (final item in source) {
-      if (!visible.contains(item.id)) continue;
-      final parentIds = <String>[];
-      final seenParents = <String>{};
-      final parents =
-          targetMainline.contains(item.id) && item.parentIds.isNotEmpty
-          ? <String>[item.parentIds.first]
-          : item.parentIds;
-      for (final parent in parents) {
-        for (final visibleParent in nearestVisibleParents(parent)) {
-          if (seenParents.add(visibleParent)) parentIds.add(visibleParent);
-        }
-      }
-      output.add(
-        withoutMergedRefs(
-          GitHistoryItem(
-            id: item.id,
-            parentIds: parentIds,
-            subject: item.subject,
-            message: item.message,
-            displayId: item.displayId,
-            author: item.author,
-            authorEmail: item.authorEmail,
-            timestamp: item.timestamp,
-            references: item.references,
-          ),
-        ),
-      );
-    }
-    return output;
+    return collapseGitHistoryOntoTargetLane(
+      source.map(withoutMergedRefs).toList(growable: false),
+      targetRevision: targetRevision,
+    );
   }
 
   static bool _isBranchRef(GitHistoryItemRef itemRef) =>
