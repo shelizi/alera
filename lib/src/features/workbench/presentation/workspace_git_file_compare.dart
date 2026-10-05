@@ -155,7 +155,8 @@ WorkspaceSourceControlScope? _scopeForRepositoryRoot({
 }) {
   final workspacePath = p.normalize(p.absolute(workspace.path));
   final rootPath = p.normalize(p.absolute(repositoryRoot));
-  if (p.equals(rootPath, workspacePath)) {
+  if (p.equals(rootPath, workspacePath) ||
+      p.isWithin(rootPath, workspacePath)) {
     return WorkspaceSourceControlScope(
       workspaceId: workspace.id,
       workspacePath: workspace.path,
@@ -175,9 +176,8 @@ WorkspaceSourceControlScope? _scopeForRepositoryRoot({
       );
     }
   }
-  // Diff tabs persist Git roots as workspace-relative paths. A repository
-  // outside the workspace cannot be reopened safely without an absolute-root
-  // field, so reject it instead of silently computing the wrong tree path.
+  // A repository unrelated to this workspace cannot be reopened safely from
+  // the persisted workspace-relative Git root metadata.
   return null;
 }
 
