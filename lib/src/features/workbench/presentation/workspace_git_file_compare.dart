@@ -25,7 +25,6 @@ Future<void> compareWorkspaceFileWithLatestGitRevision({
     ref: ref,
     workspace: workspace,
     relativePath: relativePath,
-    sourceControlScope: sourceControlScope,
   );
   if (target == null || !context.mounted) return;
   try {
@@ -57,7 +56,6 @@ Future<void> compareWorkspaceFileWithBranch({
     ref: ref,
     workspace: workspace,
     relativePath: relativePath,
-    sourceControlScope: sourceControlScope,
   );
   if (target == null || !context.mounted) return;
   try {
@@ -103,7 +101,6 @@ Future<_GitFileCompareTarget?> _prepareGitFileCompare({
   required WidgetRef ref,
   required Workspace workspace,
   required String relativePath,
-  required WorkspaceSourceControlScope? sourceControlScope,
 }) async {
   final backend = ref.read(gitBackendProvider);
   final normalizedRelativePath = normalizeWorkspaceRelativePath(relativePath);
@@ -120,35 +117,20 @@ Future<_GitFileCompareTarget?> _prepareGitFileCompare({
     final repositoryRoot = await backend.repositoryRoot(
       p.dirname(absoluteFilePath),
     );
-    final discoveredScope = repositoryRoot == null
-        ? null
-        : _scopeForRepositoryRoot(
-            workspace: workspace,
-            repositoryRoot: repositoryRoot,
-          );
-    final candidateScopes = <WorkspaceSourceControlScope>[
-      if (discoveredScope != null) discoveredScope,
-      if (sourceControlScope != null &&
-          !_sameSourceControlScope(sourceControlScope, discoveredScope))
-        sourceControlScope,
-      if (discoveredScope == null || !discoveredScope.isWorkspaceRoot)
-        WorkspaceSourceControlScope(
-          workspaceId: workspace.id,
-          workspacePath: workspace.path,
-          path: workspace.path,
-        ),
-    ];
-    for (final scope in candidateScopes) {
-      final sourceFilePath = scope.toSourceRelativePath(relativePath);
-      if (sourceFilePath == null || sourceFilePath.isEmpty) continue;
-      if (!await backend.isGitRepository(scope.path)) continue;
-      return _GitFileCompareTarget(
-        backend: backend,
-        scope: scope,
-        workspaceRelativePath: relativePath,
-        sourceFilePath: sourceFilePath,
-      );
-    }
+    if (repositoryRoot == null) return null;
+    final scope = _scopeForRepositoryRoot(
+      workspace: workspace,
+      repositoryRoot: repositoryRoot,
+    );
+    if (scope == null) return null;
+    final sourceFilePath = scope.toSourceRelativePath(relativePath);
+    if (sourceFilePath == null || sourceFilePath.isEmpty) return null;
+    return _GitFileCompareTarget(
+      backend: backend,
+      scope: scope,
+      workspaceRelativePath: relativePath,
+      sourceFilePath: sourceFilePath,
+    );
   } on Object catch (error) {
     lastError = error;
   }
@@ -167,14 +149,13 @@ Future<_GitFileCompareTarget?> _prepareGitFileCompare({
   return null;
 }
 
-WorkspaceSourceControlScope _scopeForRepositoryRoot({
+WorkspaceSourceControlScope? _scopeForRepositoryRoot({
   required Workspace workspace,
   required String repositoryRoot,
 }) {
   final workspacePath = p.normalize(p.absolute(workspace.path));
   final rootPath = p.normalize(p.absolute(repositoryRoot));
-  if (p.equals(rootPath, workspacePath) ||
-      p.isWithin(rootPath, workspacePath)) {
+  if (p.equals(rootPath, workspacePath)) {
     return WorkspaceSourceControlScope(
       workspaceId: workspace.id,
       workspacePath: workspace.path,
@@ -194,20 +175,10 @@ WorkspaceSourceControlScope _scopeForRepositoryRoot({
       );
     }
   }
-  return WorkspaceSourceControlScope(
-    workspaceId: workspace.id,
-    workspacePath: workspace.path,
-    path: workspace.path,
-  );
-}
-
-bool _sameSourceControlScope(
-  WorkspaceSourceControlScope left,
-  WorkspaceSourceControlScope? right,
-) {
-  if (right == null) return false;
-  return p.equals(p.normalize(left.path), p.normalize(right.path)) &&
-      left.relativeRoot == right.relativeRoot;
+  // Diff tabs persist Git roots as workspace-relative paths. A repository
+  // outside the workspace cannot be reopened safely without an absolute-root
+  // field, so reject it instead of silently computing the wrong tree path.
+  return null;
 }
 
 Future<void> _openGitFileRevisionComparison({

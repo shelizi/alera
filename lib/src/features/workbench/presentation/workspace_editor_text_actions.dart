@@ -88,36 +88,6 @@ extension _WorkspaceEditorTextActions on _WorkspaceEditorSurfaceState {
         ),
       ]);
     }
-    if (widget.tab.filePath case final filePath?) {
-      items.addAll(<code_forge.CustomContextMenu>[
-        code_forge.CustomContextMenu(
-          label: context.tr('Compare With Latest Git Revision'),
-          description: '',
-          onPress: () => unawaited(
-            compareWorkspaceFileWithLatestGitRevision(
-              context: context,
-              ref: ref,
-              workspace: widget.workspace,
-              relativePath: filePath,
-              sourceControlScope: widget.sourceControlScope,
-            ),
-          ),
-        ),
-        code_forge.CustomContextMenu(
-          label: context.tr('Compare With Branch...'),
-          description: '',
-          onPress: () => unawaited(
-            compareWorkspaceFileWithBranch(
-              context: context,
-              ref: ref,
-              workspace: widget.workspace,
-              relativePath: filePath,
-              sourceControlScope: widget.sourceControlScope,
-            ),
-          ),
-        ),
-      ]);
-    }
     final textActions = _editorTextActionMenuItems(context);
     if (textActions != null) {
       items.addAll(textActions);
