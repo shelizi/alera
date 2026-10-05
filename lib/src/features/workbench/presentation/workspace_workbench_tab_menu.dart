@@ -21,6 +21,16 @@ extension _WorkspaceTabMenu on _WorkspaceTabChip {
             for (final candidate in groupTabs.skip(tabIndex + 1)) candidate.id,
           ];
     final filePath = tab.filePath;
+    final canCompareWithGit =
+        filePath != null &&
+        switch (tab.kind) {
+          WorkspaceTabKind.editor ||
+          WorkspaceTabKind.markdownViewer ||
+          WorkspaceTabKind.pdf => true,
+          WorkspaceTabKind.gitDiff ||
+          WorkspaceTabKind.gitHistory ||
+          WorkspaceTabKind.terminal => false,
+        };
     final workspaceFolderOpener = filePath == null
         ? null
         : ref.read(workspaceFolderOpenerProvider);
@@ -83,6 +93,19 @@ extension _WorkspaceTabMenu on _WorkspaceTabChip {
             label: 'Reveal in ${workspaceFolderOpener.fileManagerLabel}',
             leading: const Icon(AleraIcons.copyFiles, size: 16),
           ),
+        if (canCompareWithGit) ...<PopupMenuEntry<_TabMenuAction>>[
+          const PopupMenuDivider(height: AleraTokens.space8),
+          const AleraDropdownEntry<_TabMenuAction>(
+            value: .compareLatestGitRevision,
+            label: 'Compare With Latest Git Revision',
+            leading: Icon(AleraIcons.diff, size: 16),
+          ),
+          const AleraDropdownEntry<_TabMenuAction>(
+            value: .compareGitBranch,
+            label: 'Compare With Branch...',
+            leading: Icon(AleraIcons.gitBranch, size: 16),
+          ),
+        ],
         const AleraDropdownEntry<_TabMenuAction>(
           value: .close,
           label: 'Close',
@@ -150,6 +173,26 @@ extension _WorkspaceTabMenu on _WorkspaceTabChip {
         await _openWorkspaceTabFileWithDefaultApplication(context, ref);
       case _TabMenuAction.revealInFileManager:
         await _revealWorkspaceTabFile(context, ref);
+      case _TabMenuAction.compareLatestGitRevision:
+        if (filePath != null) {
+          await compareWorkspaceFileWithLatestGitRevision(
+            context: context,
+            ref: ref,
+            workspace: workspace,
+            relativePath: filePath,
+            sourceControlScope: sourceControlScope,
+          );
+        }
+      case _TabMenuAction.compareGitBranch:
+        if (filePath != null) {
+          await compareWorkspaceFileWithBranch(
+            context: context,
+            ref: ref,
+            workspace: workspace,
+            relativePath: filePath,
+            sourceControlScope: sourceControlScope,
+          );
+        }
       case _TabMenuAction.close:
         onClose();
       case _TabMenuAction.closeOthers:

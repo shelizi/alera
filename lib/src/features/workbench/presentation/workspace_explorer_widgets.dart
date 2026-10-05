@@ -351,6 +351,34 @@ class const _ExplorerMenuDelegate({
               label: 'Open in Alera',
               leading: Icon(AleraIcons.edit, size: 16),
             ),
+          if (node.type ==
+              tree.NodeType.file) ...<PopupMenuEntry<_ExplorerAction>>[
+            const PopupMenuDivider(height: AleraTokens.space8),
+            const AleraDropdownEntry<_ExplorerAction>(
+              value: .compareLatestGitRevision,
+              label: 'Compare With Latest Git Revision',
+              leading: Icon(AleraIcons.diff, size: 16),
+            ),
+            const AleraDropdownEntry<_ExplorerAction>(
+              value: .compareGitBranch,
+              label: 'Compare With Branch...',
+              leading: Icon(AleraIcons.gitBranch, size: 16),
+            ),
+          ],
+          if (node.type ==
+              tree.NodeType.file) ...<PopupMenuEntry<_ExplorerAction>>[
+            const PopupMenuDivider(height: AleraTokens.space8),
+            const AleraDropdownEntry<_ExplorerAction>(
+              value: .compareLatestGitRevision,
+              label: 'Compare With Latest Git Revision',
+              leading: Icon(AleraIcons.diff, size: 16),
+            ),
+            const AleraDropdownEntry<_ExplorerAction>(
+              value: .compareGitBranch,
+              label: 'Compare With Branch...',
+              leading: Icon(AleraIcons.gitBranch, size: 16),
+            ),
+          ],
           const PopupMenuDivider(height: AleraTokens.space8),
           const AleraDropdownEntry<_ExplorerAction>(
             value: .rename,
@@ -496,6 +524,8 @@ enum _ExplorerAction {
   openWithDefaultApplication,
   openExternally,
   openInAlera,
+  compareLatestGitRevision,
+  compareGitBranch,
   delete,
   refresh,
   focusSourceControlRoot,

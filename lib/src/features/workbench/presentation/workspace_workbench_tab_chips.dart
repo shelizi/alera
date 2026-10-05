@@ -2,6 +2,7 @@ part of 'workspace_workbench_view.dart';
 
 class const _DraggableWorkspaceTabChip({
   required final Workspace workspace,
+  required final WorkspaceSourceControlScope? sourceControlScope,
   required final String groupId,
   required final WorkspaceTabRecord tab,
   required final bool active,
@@ -53,6 +54,7 @@ class const _DraggableWorkspaceTabChip({
           opacity: 0.45,
           child: _WorkspaceTabChip(
             workspace: workspace,
+            sourceControlScope: sourceControlScope,
             tab: tab,
             terminalSession: session,
             status: status,
@@ -69,6 +71,7 @@ class const _DraggableWorkspaceTabChip({
         ),
         child: _WorkspaceTabChip(
           workspace: workspace,
+          sourceControlScope: sourceControlScope,
           tab: tab,
           terminalSession: session,
           status: status,
@@ -89,6 +92,7 @@ class const _DraggableWorkspaceTabChip({
 
 class const _WorkspaceTabChip({
   required final Workspace workspace,
+  required final WorkspaceSourceControlScope? sourceControlScope,
   required final WorkspaceTabRecord tab,
   required final TerminalSessionHandle? terminalSession,
   required final AgentStatusEntry? status,
@@ -237,6 +241,8 @@ enum _TabMenuAction {
   reloadDocument,
   openWithDefaultApplication,
   revealInFileManager,
+  compareLatestGitRevision,
+  compareGitBranch,
   close,
   closeOthers,
   closeRight,

@@ -48,6 +48,11 @@ mixin _FakeGitBackendDiffs {
   }
 
   GitDiffPage gitDiffAllPageResult = const GitDiffPage(files: []);
+  GitFileRevision? latestFileRevisionResult;
+  GitDiffResult fileRevisionDiffResult = const GitDiffResult(files: []);
+  final Map<({String filePath, bool oldSide}), Uint8List>
+  fileRevisionBlobBytesBySide =
+      <({String filePath, bool oldSide}), Uint8List>{};
 
   Future<GitDiffPage> diffAllPage({
     required String path,
@@ -63,6 +68,56 @@ mixin _FakeGitBackendDiffs {
       }),
     );
     return gitDiffAllPageResult;
+  }
+
+  Future<GitFileRevision?> latestFileRevision({
+    required String path,
+    required String filePath,
+    required String gitRef,
+  }) async {
+    calls.add(
+      GitBackendCall('latestFileRevision', <String, Object?>{
+        'path': path,
+        'filePath': filePath,
+        'gitRef': gitRef,
+      }),
+    );
+    return latestFileRevisionResult;
+  }
+
+  Future<GitDiffResult> fileRevisionDiff({
+    required String path,
+    required String filePath,
+    required String revisionOid,
+    GitDiffWhitespaceMode whitespaceMode = GitDiffWhitespaceMode.normal,
+  }) async {
+    lastDiffWhitespaceMode = whitespaceMode;
+    calls.add(
+      GitBackendCall('fileRevisionDiff', <String, Object?>{
+        'path': path,
+        'filePath': filePath,
+        'revisionOid': revisionOid,
+        'whitespaceMode': whitespaceMode,
+      }),
+    );
+    return fileRevisionDiffResult;
+  }
+
+  Future<Uint8List?> fileRevisionBlobBytes({
+    required String path,
+    required String filePath,
+    required String revisionOid,
+    required bool oldSide,
+  }) async {
+    calls.add(
+      GitBackendCall('fileRevisionBlobBytes', <String, Object?>{
+        'path': path,
+        'filePath': filePath,
+        'revisionOid': revisionOid,
+        'oldSide': oldSide,
+      }),
+    );
+    return fileRevisionBlobBytesBySide[(filePath: filePath, oldSide: oldSide)];
   }
 
   Future<Uint8List> readingDiffPatch({

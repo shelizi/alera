@@ -32,6 +32,8 @@ class FakeGitBackend
 
   bool isRepository = true;
 
+  String? repositoryRootResult;
+
   GitException? isRepositoryError;
 
   Future<void> Function(String path)? beforeIsGitRepository;
@@ -157,6 +159,17 @@ class FakeGitBackend
       throw error;
     }
     return isRepository;
+  }
+
+  @override
+  Future<String?> repositoryRoot(String path) async {
+    calls.add(
+      GitBackendCall('repositoryRoot', <String, Object?>{'path': path}),
+    );
+    final error = isRepositoryError;
+    if (error != null) throw error;
+    if (!isRepository) return null;
+    return repositoryRootResult ?? path;
   }
 
   @override

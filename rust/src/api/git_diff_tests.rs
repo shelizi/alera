@@ -512,6 +512,71 @@ fn git_diff_preserves_staged_rename_pairs() {
 }
 
 #[test]
+fn git_file_revision_compare_uses_requested_branch_without_switching_head() {
+    let repo = init_repo();
+    commit_file(
+        repo.path(),
+        "tracked.txt",
+        "main revision\n",
+        "add tracked file",
+    );
+    let main_file_revision = branch_oid(repo.path(), "main");
+    run_git(repo.path(), &["branch", "feature"]);
+    commit_file(
+        repo.path(),
+        "unrelated.txt",
+        "main only\n",
+        "main unrelated change",
+    );
+
+    run_git(repo.path(), &["switch", "feature"]);
+    commit_file(
+        repo.path(),
+        "tracked.txt",
+        "feature revision\n",
+        "update tracked on feature",
+    );
+    let feature_file_revision = branch_oid(repo.path(), "feature");
+    run_git(repo.path(), &["switch", "main"]);
+    std::fs::write(repo.path().join("tracked.txt"), "working tree\n").expect("modify working tree");
+
+    let main_revision = git_latest_file_revision(
+        path_str(repo.path()),
+        "tracked.txt".to_string(),
+        "main".to_string(),
+    )
+    .expect("main file revision")
+    .expect("main revision exists");
+    assert_eq!(main_revision.oid, main_file_revision.to_string());
+    assert_eq!(main_revision.subject, "add tracked file");
+    assert_eq!(current_branch(path_str(repo.path())).unwrap(), "main");
+
+    let feature_revision = git_latest_file_revision(
+        path_str(repo.path()),
+        "tracked.txt".to_string(),
+        "feature".to_string(),
+    )
+    .expect("feature file revision")
+    .expect("feature revision exists");
+    assert_eq!(feature_revision.oid, feature_file_revision.to_string());
+    assert_eq!(feature_revision.subject, "update tracked on feature");
+    assert_eq!(current_branch(path_str(repo.path())).unwrap(), "main");
+
+    let diff = git_file_revision_diff_with_whitespace(
+        path_str(repo.path()),
+        "tracked.txt".to_string(),
+        feature_revision.oid,
+        GitDiffWhitespaceMode::Normal,
+    )
+    .expect("revision diff");
+    assert_eq!(diff.files.len(), 1);
+    let text = diff_text(&diff.files[0]);
+    assert!(text.contains("-feature revision"), "{text}");
+    assert!(text.contains("+working tree"), "{text}");
+    assert_eq!(current_branch(path_str(repo.path())).unwrap(), "main");
+}
+
+#[test]
 fn git_diff_truncates_large_unicode_without_panicking() {
     let repo = init_repo();
     let total_added_lines = 120_000u32;

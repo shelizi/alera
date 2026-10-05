@@ -78,6 +78,26 @@ pub fn git_diff_blob_bytes(
     }
 }
 
+pub fn git_file_revision_blob_bytes(
+    path: String,
+    file_path: String,
+    revision_oid: String,
+    old_side: bool,
+) -> Result<Option<Vec<u8>>, GitError> {
+    let repo = open_repo(&path)?;
+    let paths = GitPathContext::new(&repo, &path)?;
+    let repo_path = paths.to_repo_path(&file_path);
+    if old_side {
+        let oid = Oid::from_str(&revision_oid).map_err(GitError::from_git2)?;
+        let tree = repo
+            .find_commit(oid)
+            .and_then(|commit| commit.tree())
+            .map_err(GitError::from_git2)?;
+        return Ok(tree_blob_bytes(&repo, &tree, &repo_path));
+    }
+    Ok(workdir_file_bytes(&repo, &repo_path))
+}
+
 fn tree_blob_bytes(repo: &Repository, tree: &git2::Tree<'_>, repo_path: &str) -> Option<Vec<u8>> {
     let entry = tree.get_path(Path::new(repo_path)).ok()?;
     blob_bytes(repo, entry.id())

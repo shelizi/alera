@@ -31,3 +31,15 @@ Future<Uint8List?> gitDiffBlobBytes({
   parentOid: parentOid,
   oldSide: oldSide,
 );
+
+Future<Uint8List?> gitFileRevisionBlobBytes({
+  required String path,
+  required String filePath,
+  required String revisionOid,
+  required bool oldSide,
+}) => RustLib.instance.api.crateApiGitDiffBlobGitFileRevisionBlobBytes(
+  path: path,
+  filePath: filePath,
+  revisionOid: revisionOid,
+  oldSide: oldSide,
+);

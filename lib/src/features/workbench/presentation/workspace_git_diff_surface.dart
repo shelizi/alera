@@ -299,18 +299,24 @@ class _WorkspaceGitDiffSurfaceState
             onWhitespaceModeSelected: _changeWhitespaceMode,
             onRefresh: _load,
             onOpenFile: _canOpenFile ? () => unawaited(_openFile()) : null,
-            aiAssistEnabled: aiAssistEnabled,
-            readingDiffReady: _readingDiffResult != null,
-            showingReadingDiff: _showReadingDiff,
-            readingDiffBusy: _readingDiffBusy,
-            onGenerateReadingDiff: _loadedResult?.files.isNotEmpty == true
+            aiAssistEnabled: aiAssistEnabled && !_isFileRevisionDiff,
+            readingDiffReady:
+                !_isFileRevisionDiff && _readingDiffResult != null,
+            showingReadingDiff: !_isFileRevisionDiff && _showReadingDiff,
+            readingDiffBusy: !_isFileRevisionDiff && _readingDiffBusy,
+            onGenerateReadingDiff:
+                !_isFileRevisionDiff && _loadedResult?.files.isNotEmpty == true
                 ? () => unawaited(_generateReadingDiff())
                 : null,
-            onRegenerateReadingDiff: _loadedResult?.files.isNotEmpty == true
+            onRegenerateReadingDiff:
+                !_isFileRevisionDiff && _loadedResult?.files.isNotEmpty == true
                 ? () => unawaited(_generateReadingDiff(ignoreCache: true))
                 : null,
-            onCancelReadingDiff: _cancelReadingDiff,
-            onToggleReadingDiff: _readingDiffResult == null
+            onCancelReadingDiff: _isFileRevisionDiff
+                ? null
+                : _cancelReadingDiff,
+            onToggleReadingDiff:
+                _isFileRevisionDiff || _readingDiffResult == null
                 ? null
                 : () => setState(() {
                     _showReadingDiff = !_showReadingDiff;
@@ -371,11 +377,7 @@ class _WorkspaceGitDiffSurfaceState
                         onEditableSave: (file) =>
                             unawaited(_saveWorkingTreeDocument(file)),
                         sourcePath: _sourceControlScope.path,
-                        sourceLabel:
-                            widget.tab.gitDiffSource ==
-                                WorkspaceGitDiffSource.pullRequest
-                            ? 'Pull Request'
-                            : null,
+                        sourceLabel: _diffSourceLabel,
                         commitOid: isCommitDiff
                             ? widget.tab.gitDiffCommitOid
                             : null,
@@ -600,6 +602,23 @@ class _WorkspaceGitDiffSurfaceState
         .then((_) {});
   }
 
+  Future<GitDiffResult> _loadFileRevisionDiff({
+    required GitBackend backend,
+    required WorkspaceSourceControlScope sourceControlScope,
+    required String? sourceFilePath,
+  }) {
+    final revisionOid = widget.tab.gitDiffCommitOid;
+    if (revisionOid == null || sourceFilePath == null) {
+      return Future<GitDiffResult>.value(const GitDiffResult(files: []));
+    }
+    return backend.fileRevisionDiff(
+      path: sourceControlScope.path,
+      filePath: sourceFilePath,
+      revisionOid: revisionOid,
+      whitespaceMode: _whitespaceMode,
+    );
+  }
+
   Future<GitDiffResult> _loadCommitDiff({
     required GitBackend backend,
     required WorkspaceSourceControlScope sourceControlScope,
@@ -620,10 +639,26 @@ class _WorkspaceGitDiffSurfaceState
     );
   }
 
+  bool get _isFileRevisionDiff =>
+      widget.tab.gitDiffSource == WorkspaceGitDiffSource.fileRevision;
+
   bool get _isCommitBackedDiff => switch (widget.tab.gitDiffSource) {
     WorkspaceGitDiffSource.commit || WorkspaceGitDiffSource.pullRequest => true,
-    WorkspaceGitDiffSource.workingTree => false,
+    WorkspaceGitDiffSource.workingTree ||
+    WorkspaceGitDiffSource.fileRevision => false,
   };
+
+  String? get _diffSourceLabel => switch (widget.tab.gitDiffSource) {
+    WorkspaceGitDiffSource.pullRequest => 'Pull Request',
+    WorkspaceGitDiffSource.fileRevision =>
+      '${widget.tab.gitDiffCompareRef ?? 'Revision'} @ ${_shortRevision(widget.tab.gitDiffCommitOid)}',
+    WorkspaceGitDiffSource.workingTree || WorkspaceGitDiffSource.commit => null,
+  };
+
+  String _shortRevision(String? oid) {
+    if (oid == null || oid.isEmpty) return 'unknown';
+    return oid.length <= 7 ? oid : oid.substring(0, 7);
+  }
 
   WorkspaceSourceControlScope get _sourceControlScope {
     final root = normalizeSourceControlRootRelativePath(widget.tab.gitDiffRoot);

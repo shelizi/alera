@@ -18,6 +18,10 @@ abstract interface class GitBackend {
   /// Whether [path] resolves to a git repository work tree.
   Future<bool> isGitRepository(String path);
 
+  /// The absolute work-tree root containing [path], or null when [path] is not
+  /// inside a Git work tree.
+  Future<String?> repositoryRoot(String path);
+
   /// Local and remote-tracking branch short names, sorted and de-duplicated.
   Future<List<String>> listBranches(String path);
 
@@ -135,6 +139,33 @@ abstract interface class GitBackend {
     required String path,
     required List<String> filePaths,
     GitDiffWhitespaceMode whitespaceMode = GitDiffWhitespaceMode.normal,
+  });
+
+  /// Resolves the most recent commit on [gitRef] that established the current
+  /// blob version of [filePath]. Returns null when the file does not exist on
+  /// that ref.
+  Future<GitFileRevision?> latestFileRevision({
+    required String path,
+    required String filePath,
+    required String gitRef,
+  });
+
+  /// Compares the worktree copy of [filePath] against the file stored in
+  /// [revisionOid]. The checkout and selected branch are never changed.
+  Future<GitDiffResult> fileRevisionDiff({
+    required String path,
+    required String filePath,
+    required String revisionOid,
+    GitDiffWhitespaceMode whitespaceMode = GitDiffWhitespaceMode.normal,
+  });
+
+  /// Raw bytes for a file-revision comparison. [oldSide] reads the file from
+  /// [revisionOid]; the new side reads the current working-tree file.
+  Future<Uint8List?> fileRevisionBlobBytes({
+    required String path,
+    required String filePath,
+    required String revisionOid,
+    required bool oldSide,
   });
 
   /// Immutable unified patch used as the source for a reading diff. Passing a

@@ -72,7 +72,9 @@ extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
     );
     final area = widget.tab.gitDiffArea;
     final progressiveAllPathsFuture =
-        !_isCommitBackedDiff && scope == WorkspaceGitDiffScope.all
+        !_isCommitBackedDiff &&
+            !_isFileRevisionDiff &&
+            scope == WorkspaceGitDiffScope.all
         ? _loadProgressiveAllPaths(
             backend: backend,
             sourceControlPath: sourceControlScope.path,
@@ -85,7 +87,13 @@ extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
             sourceControlPath: sourceControlScope.path,
             pathsFuture: progressiveAllPathsFuture,
           );
-    final nextFuture = _isCommitBackedDiff
+    final nextFuture = _isFileRevisionDiff
+        ? _loadFileRevisionDiff(
+            backend: backend,
+            sourceControlScope: sourceControlScope,
+            sourceFilePath: sourceFilePath,
+          )
+        : _isCommitBackedDiff
         ? _loadCommitDiff(
             backend: backend,
             sourceControlScope: sourceControlScope,
@@ -366,6 +374,16 @@ extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
     }
     Future<Uint8List?> loadSide(GitDiffFile file, bool oldSide) async {
       try {
+        if (_isFileRevisionDiff) {
+          final revisionOid = widget.tab.gitDiffCommitOid;
+          if (revisionOid == null) return null;
+          return await backend.fileRevisionBlobBytes(
+            path: sourceControlScope.path,
+            filePath: file.path,
+            revisionOid: revisionOid,
+            oldSide: oldSide,
+          );
+        }
         return await backend.diffBlobBytes(
           path: sourceControlScope.path,
           filePath: file.path,

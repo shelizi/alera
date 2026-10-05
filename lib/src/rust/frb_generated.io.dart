@@ -146,6 +146,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   GitChangeArea dco_decode_box_autoadd_git_change_area(dynamic raw);
 
   @protected
+  GitFileRevision dco_decode_box_autoadd_git_file_revision(dynamic raw);
+
+  @protected
   GitHistoryItemRef dco_decode_box_autoadd_git_history_item_ref(dynamic raw);
 
   @protected
@@ -309,6 +312,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   GitExplorerStatusSnapshot dco_decode_git_explorer_status_snapshot(
     dynamic raw,
   );
+
+  @protected
+  GitFileRevision dco_decode_git_file_revision(dynamic raw);
 
   @protected
   GitHistoryItem dco_decode_git_history_item(dynamic raw);
@@ -533,6 +539,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   GitChangeArea? dco_decode_opt_box_autoadd_git_change_area(dynamic raw);
+
+  @protected
+  GitFileRevision? dco_decode_opt_box_autoadd_git_file_revision(dynamic raw);
 
   @protected
   GitHistoryItemRef? dco_decode_opt_box_autoadd_git_history_item_ref(
@@ -865,6 +874,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  GitFileRevision sse_decode_box_autoadd_git_file_revision(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   GitHistoryItemRef sse_decode_box_autoadd_git_history_item_ref(
     SseDeserializer deserializer,
   );
@@ -1068,6 +1082,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   GitExplorerStatusSnapshot sse_decode_git_explorer_status_snapshot(
     SseDeserializer deserializer,
   );
+
+  @protected
+  GitFileRevision sse_decode_git_file_revision(SseDeserializer deserializer);
 
   @protected
   GitHistoryItem sse_decode_git_history_item(SseDeserializer deserializer);
@@ -1360,6 +1377,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   GitChangeArea? sse_decode_opt_box_autoadd_git_change_area(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  GitFileRevision? sse_decode_opt_box_autoadd_git_file_revision(
     SseDeserializer deserializer,
   );
 
@@ -1777,6 +1799,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_box_autoadd_git_file_revision(
+    GitFileRevision self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_box_autoadd_git_history_item_ref(
     GitHistoryItemRef self,
     SseSerializer serializer,
@@ -2028,6 +2056,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_git_explorer_status_snapshot(
     GitExplorerStatusSnapshot self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_git_file_revision(
+    GitFileRevision self,
     SseSerializer serializer,
   );
 
@@ -2394,6 +2428,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_opt_box_autoadd_git_change_area(
     GitChangeArea? self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_opt_box_autoadd_git_file_revision(
+    GitFileRevision? self,
     SseSerializer serializer,
   );
 

@@ -12,6 +12,7 @@ pub(super) const MAX_DIFF_PREVIEW_LINES: usize = 5000;
 
 const MAX_DIFF_ENCODING_SOURCE_BYTES: u64 = 20 * 1024 * 1024;
 
+#[flutter_rust_bridge::frb(ignore)]
 #[derive(Default)]
 struct SideEncodingCache {
     attempted: bool,

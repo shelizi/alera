@@ -35,6 +35,10 @@ class const RustGitBackend()
       _guard(() => rust.isGitRepository(path: path));
 
   @override
+  Future<String?> repositoryRoot(String path) =>
+      _guard(() => rust.gitRepositoryRoot(path: path));
+
+  @override
   Future<List<String>> listBranches(String path) =>
       _guard(() => rust_branch.listBranches(path: path));
 
@@ -228,6 +232,56 @@ class const RustGitBackend()
     );
     return _toDiffPage(result);
   });
+
+  @override
+  Future<GitFileRevision?> latestFileRevision({
+    required String path,
+    required String filePath,
+    required String gitRef,
+  }) => _guard(() async {
+    final result = await rust.gitLatestFileRevision(
+      path: path,
+      filePath: filePath,
+      gitRef: gitRef,
+    );
+    if (result == null) return null;
+    return GitFileRevision(
+      oid: result.oid,
+      shortOid: result.shortOid,
+      subject: result.subject,
+    );
+  });
+
+  @override
+  Future<GitDiffResult> fileRevisionDiff({
+    required String path,
+    required String filePath,
+    required String revisionOid,
+    GitDiffWhitespaceMode whitespaceMode = GitDiffWhitespaceMode.normal,
+  }) => _guard(() async {
+    final result = await rust.gitFileRevisionDiffWithWhitespace(
+      path: path,
+      filePath: filePath,
+      revisionOid: revisionOid,
+      whitespaceMode: _toRustWhitespaceMode(whitespaceMode),
+    );
+    return _toDiffResult(result, sourceLabel: 'Revision');
+  });
+
+  @override
+  Future<Uint8List?> fileRevisionBlobBytes({
+    required String path,
+    required String filePath,
+    required String revisionOid,
+    required bool oldSide,
+  }) => _guard(
+    () => rust_blob.gitFileRevisionBlobBytes(
+      path: path,
+      filePath: filePath,
+      revisionOid: revisionOid,
+      oldSide: oldSide,
+    ),
+  );
 
   @override
   Future<Uint8List> readingDiffPatch({

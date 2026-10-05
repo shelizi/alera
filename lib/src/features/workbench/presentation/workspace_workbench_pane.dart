@@ -65,6 +65,7 @@ class const _WorkbenchPane({
             children: <Widget>[
               _WorkspaceTabStrip(
                 workspace: workspace,
+                sourceControlScope: sourceControlScope,
                 groupId: groupId,
                 tabs: groupTabs,
                 activeTabId: activeTab?.id,

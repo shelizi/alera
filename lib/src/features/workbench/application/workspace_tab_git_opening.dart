@@ -59,6 +59,58 @@ extension WorkspaceTabGitOpening on WorkspaceTabService {
     );
   }
 
+  Future<WorkspaceTabRecord> openOrCreateGitFileRevisionDiffTab({
+    required String workspaceId,
+    required String relativePath,
+    String? gitDiffRoot,
+    required String revisionOid,
+    required String compareRef,
+    String? subject,
+    bool preview = false,
+    String? replacePreviewTabId,
+  }) async {
+    final normalizedPath = _normalizeRelativePath(relativePath);
+    final normalizedRoot = normalizeSourceControlRootRelativePath(gitDiffRoot);
+    final existing = await _repository.listWorkspaceTabs(workspaceId);
+    for (final tab in existing) {
+      if (tab.kind != WorkspaceTabKind.gitDiff ||
+          tab.gitDiffSource != WorkspaceGitDiffSource.fileRevision) {
+        continue;
+      }
+      if (tab.filePath == normalizedPath &&
+          tab.gitDiffRoot == normalizedRoot &&
+          tab.gitDiffCommitOid == revisionOid &&
+          tab.gitDiffCompareRef == compareRef) {
+        if (!preview && tab.isPreview) {
+          return keepPreviewTab(tab.id);
+        }
+        return tab;
+      }
+    }
+    final payload = <String, Object?>{
+      workspaceTabGitDiffSourcePayloadKey:
+          WorkspaceGitDiffSource.fileRevision.key,
+      workspaceTabGitDiffScopePayloadKey: WorkspaceGitDiffScope.file.key,
+      workspaceTabGitDiffCommitOidPayloadKey: revisionOid,
+      workspaceTabGitDiffCompareRefPayloadKey: compareRef,
+      workspaceTabGitDiffCommitSubjectPayloadKey: ?subject,
+      workspaceTabGitDiffRootPayloadKey: ?normalizedRoot,
+      workspaceTabFilePathPayloadKey: normalizedPath,
+      if (preview) workspaceTabPreviewPayloadKey: true,
+    };
+    return _upsertGitDiffTab(
+      workspaceId: workspaceId,
+      existing: existing,
+      preview: preview,
+      replacePreviewTabId: replacePreviewTabId,
+      title: _titleForGitFileRevisionDiff(
+        path: normalizedPath,
+        compareRef: compareRef,
+      ),
+      payload: payload,
+    );
+  }
+
   Future<WorkspaceTabRecord> openOrCreateGitCommitDiffTab({
     required String workspaceId,
     String? relativePath,
@@ -302,6 +354,11 @@ extension WorkspaceTabGitOpening on WorkspaceTabService {
         '${_titleForPath(path!)} ${area!.label.toLowerCase()}',
     };
   }
+
+  String _titleForGitFileRevisionDiff({
+    required String path,
+    required String compareRef,
+  }) => '${_titleForPath(path)} vs $compareRef';
 
   String _titleForGitCommitDiff({
     required WorkspaceGitDiffScope scope,

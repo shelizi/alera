@@ -69,6 +69,26 @@ mixin _WorkbenchControllerFileTabs
     preview: preview,
   );
 
+  Future<WorkspaceTabRecord> openGitFileRevisionDiffTab({
+    required Workspace workspace,
+    required String relativePath,
+    String? gitDiffRoot,
+    required String revisionOid,
+    required String compareRef,
+    String? subject,
+    String? targetGroupId,
+    bool preview = false,
+  }) => _tabLayoutOwner.openGitFileRevisionDiffTab(
+    workspace: workspace,
+    relativePath: relativePath,
+    gitDiffRoot: gitDiffRoot,
+    revisionOid: revisionOid,
+    compareRef: compareRef,
+    subject: subject,
+    targetGroupId: targetGroupId,
+    preview: preview,
+  );
+
   Future<WorkspaceTabRecord> openGitCommitDiffTab({
     required Workspace workspace,
     String? relativePath,

@@ -81,6 +81,7 @@ const String workspaceTabGitHistoryMergedIntoRefPayloadKey =
 
 enum WorkspaceGitDiffSource(this.key) {
   workingTree('workingTree'),
+  fileRevision('fileRevision'),
   commit('commit'),
   pullRequest('pullRequest');
 

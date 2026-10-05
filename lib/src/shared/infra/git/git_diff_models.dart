@@ -137,6 +137,12 @@ class const GitDiffPage({
   final bool truncated = false,
 });
 
+class const GitFileRevision({
+  required final String oid,
+  required final String shortOid,
+  required final String subject,
+});
+
 class const GitDiffFile({
   required final String path,
   required final GitChangeArea area,

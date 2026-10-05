@@ -12,7 +12,8 @@ use super::{
     GitCommitCompareSummary, GitDiffFile, GitDiffFullFileRow, GitDiffFullFileRowKind,
     GitDiffFullFileSideBySideRow, GitDiffFullFileSideBySideRowKind, GitDiffLine, GitDiffLineKind,
     GitDiffPage, GitDiffResult, GitDiffSideBySideRow, GitDiffSideBySideRowKind,
-    GitDiffWhitespaceMode, GitError, GitErrorKind, GitStatusResult, GitSubmoduleStatus,
+    GitDiffWhitespaceMode, GitError, GitErrorKind, GitFileRevision, GitStatusResult,
+    GitSubmoduleStatus,
 };
 
 #[path = "git_diff_combined.rs"]
@@ -252,6 +253,97 @@ pub(super) fn git_diff_all_page_with_whitespace(
     }
 
     Ok(GitDiffPage { files, truncated })
+}
+
+pub(super) fn git_latest_file_revision(
+    path: String,
+    file_path: String,
+    git_ref: String,
+) -> Result<Option<GitFileRevision>, GitError> {
+    let repo = open_repo(&path)?;
+    let paths = GitPathContext::new(&repo, &path)?;
+    let ref_name = git_ref.trim();
+    if ref_name.is_empty() {
+        return Err(GitError::new(
+            GitErrorKind::InvalidBranchName,
+            "git ref cannot be empty",
+        ));
+    }
+    let repo_path = paths.to_repo_path(&file_path);
+    let mut commit = repo
+        .find_commit(resolve_compare_ref_oid(&repo, ref_name, "comparison")?)
+        .map_err(GitError::from_git2)?;
+    let target_blob = match commit
+        .tree()
+        .and_then(|tree| tree.get_path(Path::new(&repo_path)).map(|entry| entry.id()))
+    {
+        Ok(oid) => oid,
+        Err(error) if error.code() == ErrorCode::NotFound => return Ok(None),
+        Err(error) => return Err(GitError::from_git2(error)),
+    };
+
+    loop {
+        let mut matching_parent = None;
+        for index in 0..commit.parent_count() {
+            let parent = commit.parent(index).map_err(GitError::from_git2)?;
+            let parent_blob = parent
+                .tree()
+                .ok()
+                .and_then(|tree| tree.get_path(Path::new(&repo_path)).ok())
+                .map(|entry| entry.id());
+            if parent_blob == Some(target_blob) {
+                matching_parent = Some(parent);
+                break;
+            }
+        }
+        match matching_parent {
+            Some(parent) => commit = parent,
+            None => {
+                let oid = commit.id();
+                return Ok(Some(GitFileRevision {
+                    oid: oid.to_string(),
+                    short_oid: short_oid(oid),
+                    subject: commit
+                        .summary()
+                        .ok()
+                        .flatten()
+                        .unwrap_or_default()
+                        .to_string(),
+                }));
+            }
+        }
+    }
+}
+
+pub(super) fn git_file_revision_diff_with_whitespace(
+    path: String,
+    file_path: String,
+    revision_oid: String,
+    whitespace_mode: GitDiffWhitespaceMode,
+) -> Result<GitDiffResult, GitError> {
+    let repo = open_repo(&path)?;
+    let paths = GitPathContext::new(&repo, &path)?;
+    let revision_oid = Oid::from_str(&revision_oid).map_err(GitError::from_git2)?;
+    let revision = repo
+        .find_commit(revision_oid)
+        .map_err(GitError::from_git2)?;
+    let revision_tree = revision.tree().map_err(GitError::from_git2)?;
+    let repo_path = paths.to_repo_path(&file_path);
+    let mut options = DiffOptions::new();
+    apply_whitespace_mode(&mut options, whitespace_mode);
+    options.disable_pathspec_match(true).pathspec(&repo_path);
+    let mut diff = repo
+        .diff_tree_to_workdir_with_index(Some(&revision_tree), Some(&mut options))
+        .map_err(GitError::from_git2)?;
+    let mut find_options = DiffFindOptions::new();
+    find_options.renames(true).copies(true);
+    diff.find_similar(Some(&mut find_options))
+        .map_err(GitError::from_git2)?;
+    let file = commit_diff_file_for_path(&repo, &paths, &mut diff, &repo_path, None)?;
+    Ok(GitDiffResult {
+        truncated: file.as_ref().is_some_and(|file| file.truncated),
+        files: file.into_iter().collect(),
+    })
 }
 
 pub(super) fn git_commit_compare(

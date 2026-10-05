@@ -19,7 +19,7 @@ pub mod git_commit_ops;
 #[path = "git_commit_state_impl.rs"]
 mod git_commit_state_impl;
 #[path = "git_diff_impl.rs"]
-pub(in crate::api) mod git_diff_impl;
+mod git_diff_impl;
 #[path = "git_diff_paths.rs"]
 pub(in crate::api) mod git_diff_paths;
 #[path = "git_head_helpers.rs"]
@@ -254,6 +254,13 @@ pub struct GitDiffPage {
     pub truncated: bool,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GitFileRevision {
+    pub oid: String,
+    pub short_oid: String,
+    pub subject: String,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GitHistoryRefCategory {
     Branches,
@@ -464,12 +471,50 @@ pub fn is_git_repository(path: String) -> Result<bool, GitError> {
     }
 }
 
+pub fn git_repository_root(path: String) -> Result<Option<String>, GitError> {
+    match Repository::discover(&path) {
+        Ok(repo) => Ok(repo.workdir().map(|workdir| {
+            workdir
+                .to_string_lossy()
+                .trim_end_matches(|ch| ch == '/' || ch == '\\')
+                .to_string()
+        })),
+        Err(error) => match error.code() {
+            ErrorCode::NotFound => Ok(None),
+            _ => {
+                let lowered = error.message().to_lowercase();
+                if lowered.contains("permission denied")
+                    || lowered.contains("operation not permitted")
+                {
+                    Err(GitError::new(GitErrorKind::AccessDenied, path))
+                } else {
+                    Ok(None)
+                }
+            }
+        },
+    }
+}
+
 pub fn is_ancestor(
     path: String,
     ancestor_ref: String,
     descendant_ref: String,
 ) -> Result<bool, GitError> {
     git_ancestry_impl::is_ancestor(path, ancestor_ref, descendant_ref)
+}
+
+pub(in crate::api) fn git_reading_diff_patch_internal(
+    path: String,
+    file_path: Option<String>,
+    old_path: Option<String>,
+    area: Option<GitChangeArea>,
+    commit_oid: Option<String>,
+    parent_oid: Option<String>,
+    base_ref: Option<String>,
+) -> Result<Vec<u8>, GitError> {
+    git_diff_impl::git_reading_diff_patch::git_reading_diff_patch(
+        path, file_path, old_path, area, commit_oid, parent_oid, base_ref,
+    )
 }
 
 pub fn git_status(path: String) -> Result<GitStatusResult, GitError> {
@@ -527,6 +572,28 @@ pub fn git_diff_all_page_with_whitespace(
     whitespace_mode: GitDiffWhitespaceMode,
 ) -> Result<GitDiffPage, GitError> {
     git_diff_impl::git_diff_all_page_with_whitespace(path, file_paths, whitespace_mode)
+}
+
+pub fn git_latest_file_revision(
+    path: String,
+    file_path: String,
+    git_ref: String,
+) -> Result<Option<GitFileRevision>, GitError> {
+    git_diff_impl::git_latest_file_revision(path, file_path, git_ref)
+}
+
+pub fn git_file_revision_diff_with_whitespace(
+    path: String,
+    file_path: String,
+    revision_oid: String,
+    whitespace_mode: GitDiffWhitespaceMode,
+) -> Result<GitDiffResult, GitError> {
+    git_diff_impl::git_file_revision_diff_with_whitespace(
+        path,
+        file_path,
+        revision_oid,
+        whitespace_mode,
+    )
 }
 
 pub fn git_history(

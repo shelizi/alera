@@ -86,6 +86,26 @@ extension _WorkspaceExplorerActions on _WorkspaceExplorerState {
         if (entry != null && !_isDirectoryEntry(entry)) {
           widget.onOpenFileInAlera?.call(entry.relativePath);
         }
+      case _ExplorerAction.compareLatestGitRevision:
+        if (entry != null && !_isDirectoryEntry(entry)) {
+          await compareWorkspaceFileWithLatestGitRevision(
+            context: context,
+            ref: ref,
+            workspace: widget.workspace,
+            relativePath: entry.relativePath,
+            sourceControlScope: _gitCompareSourceControlScope,
+          );
+        }
+      case _ExplorerAction.compareGitBranch:
+        if (entry != null && !_isDirectoryEntry(entry)) {
+          await compareWorkspaceFileWithBranch(
+            context: context,
+            ref: ref,
+            workspace: widget.workspace,
+            relativePath: entry.relativePath,
+            sourceControlScope: _gitCompareSourceControlScope,
+          );
+        }
       case _ExplorerAction.delete:
         if (entry != null) {
           await _delete(entry);
@@ -99,6 +119,28 @@ extension _WorkspaceExplorerActions on _WorkspaceExplorerState {
       case _ExplorerAction.clearSourceControlRoot:
         widget.onClearSourceControlRoot?.call();
     }
+  }
+
+  WorkspaceSourceControlScope get _gitCompareSourceControlScope {
+    final relativeRoot = normalizeSourceControlRootRelativePath(
+      widget.focusedSourceControlRoot,
+    );
+    if (relativeRoot == null) {
+      return WorkspaceSourceControlScope(
+        workspaceId: widget.workspace.id,
+        workspacePath: widget.workspace.path,
+        path: widget.workspace.path,
+      );
+    }
+    return WorkspaceSourceControlScope(
+      workspaceId: widget.workspace.id,
+      workspacePath: widget.workspace.path,
+      path: sourceControlRootAbsolutePath(
+        workspacePath: widget.workspace.path,
+        relativeRoot: relativeRoot,
+      ),
+      relativeRoot: relativeRoot,
+    );
   }
 
   Future<void> _handleBackgroundAction(

@@ -125,6 +125,36 @@ extension WorkbenchTabLayoutOwnerFileTabs on WorkbenchTabLayoutOwner {
     );
   }
 
+  Future<WorkspaceTabRecord> openGitFileRevisionDiffTab({
+    required Workspace workspace,
+    required String relativePath,
+    String? gitDiffRoot,
+    required String revisionOid,
+    required String compareRef,
+    String? subject,
+    String? targetGroupId,
+    bool preview = false,
+  }) {
+    return _openReplaceableTab(
+      workspace: workspace,
+      targetGroupId: targetGroupId,
+      preview: preview,
+      createTab:
+          ({required workspaceId, required preview, replacePreviewTabId}) {
+            return _host.workspaceTabService.openOrCreateGitFileRevisionDiffTab(
+              workspaceId: workspaceId,
+              relativePath: relativePath,
+              gitDiffRoot: gitDiffRoot,
+              revisionOid: revisionOid,
+              compareRef: compareRef,
+              subject: subject,
+              preview: preview,
+              replacePreviewTabId: replacePreviewTabId,
+            );
+          },
+    );
+  }
+
   Future<WorkspaceTabRecord> openGitCommitDiffTab({
     required Workspace workspace,
     String? relativePath,

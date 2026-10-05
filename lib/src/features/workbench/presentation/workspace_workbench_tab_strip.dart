@@ -2,6 +2,7 @@ part of 'workspace_workbench_view.dart';
 
 class const _WorkspaceTabStrip({
   required final Workspace workspace,
+  required final WorkspaceSourceControlScope? sourceControlScope,
   required final String groupId,
   required final List<WorkspaceTabRecord> tabs,
   required final String? activeTabId,
@@ -372,6 +373,7 @@ class _WorkspaceTabStripState extends ConsumerState<_WorkspaceTabStrip> {
                               onDropGap: _handleGapDrop,
                               child: _DraggableWorkspaceTabChip(
                                 workspace: widget.workspace,
+                                sourceControlScope: widget.sourceControlScope,
                                 groupId: widget.groupId,
                                 tab: tab,
                                 active: tab.id == widget.activeTabId,

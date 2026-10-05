@@ -141,12 +141,17 @@ extension WorkspaceTabPathMoves on WorkspaceTabService {
         title: tab.isMermanPreview
             ? _previewTitleForPath(nextPath)
             : tab.kind == WorkspaceTabKind.gitDiff
-            ? _titleForGitDiff(
-                scope: tab.gitDiffScope ?? WorkspaceGitDiffScope.file,
-                path: nextPath,
-                area: tab.gitDiffArea,
-                root: tab.gitDiffRoot,
-              )
+            ? tab.gitDiffSource == WorkspaceGitDiffSource.fileRevision
+                  ? _titleForGitFileRevisionDiff(
+                      path: nextPath,
+                      compareRef: tab.gitDiffCompareRef ?? 'revision',
+                    )
+                  : _titleForGitDiff(
+                      scope: tab.gitDiffScope ?? WorkspaceGitDiffScope.file,
+                      path: nextPath,
+                      area: tab.gitDiffArea,
+                      root: tab.gitDiffRoot,
+                    )
             : _titleForPath(nextPath),
         updatedAt: _now(),
         payload: <String, Object?>{
@@ -190,8 +195,15 @@ extension WorkspaceTabPathMoves on WorkspaceTabService {
   }
 
   bool _isCommitBackedGitDiff(WorkspaceTabRecord tab) {
-    return tab.kind == WorkspaceTabKind.gitDiff &&
-        tab.gitDiffSource != WorkspaceGitDiffSource.workingTree;
+    if (tab.kind != WorkspaceTabKind.gitDiff) {
+      return false;
+    }
+    return switch (tab.gitDiffSource) {
+      WorkspaceGitDiffSource.commit ||
+      WorkspaceGitDiffSource.pullRequest => true,
+      WorkspaceGitDiffSource.workingTree ||
+      WorkspaceGitDiffSource.fileRevision => false,
+    };
   }
 
   WorkspaceTabKind? _fileTabKindAfterPathMove({
