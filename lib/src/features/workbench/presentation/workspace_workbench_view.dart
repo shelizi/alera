@@ -252,7 +252,11 @@ class _WorkspaceWorkbenchViewState
     return _editorFileWatcher.update(
       workspacePath: widget.workspace.path,
       openRelativePaths: widget.tabs
-          .where((tab) => tab.kind == WorkspaceTabKind.editor)
+          .where(
+            (tab) =>
+                tab.kind == WorkspaceTabKind.editor ||
+                tab.kind == WorkspaceTabKind.markdownViewer,
+          )
           .map((tab) => tab.filePath)
           .whereType<String>(),
     );

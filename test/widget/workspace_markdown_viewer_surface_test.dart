@@ -367,6 +367,62 @@ void main() {
     expect(service.reads, const <String>['docs/readme.md']);
   });
 
+  testWidgets('reloads clean preview after an external disk change', (
+    tester,
+  ) async {
+    final registry = EditorSessionRegistry();
+    final service = _FakeWorkspaceFileService('# Disk v1');
+
+    await tester.pumpWidget(
+      _surface(registry: registry, workspaceFiles: service),
+    );
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Disk v1'), findsOneWidget);
+
+    service.content = '# Disk v2';
+    registry.notifyExternalFileChanges(
+      workspacePath: '/repo/alera',
+      relativePaths: const <String>['docs/readme.md'],
+    );
+    await tester.pump(workspaceMarkdownViewerEditorUpdateDebounce);
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Disk v2'), findsOneWidget);
+    expect(find.textContaining('Disk v1'), findsNothing);
+    expect(service.reads, const <String>['docs/readme.md', 'docs/readme.md']);
+  });
+
+  testWidgets('external disk changes do not replace a dirty editor preview', (
+    tester,
+  ) async {
+    final registry = EditorSessionRegistry();
+    final service = _FakeWorkspaceFileService('# Disk v1');
+    registry.documentFor('editor-tab')
+      ..attachFile(workspacePath: '/repo/alera', relativePath: 'docs/readme.md')
+      ..acceptLoaded(
+        _editorFile(rawContent: '# Disk v1', displayContent: '# Disk v1'),
+      )
+      ..updateCurrentText('# Dirty');
+
+    await tester.pumpWidget(
+      _surface(registry: registry, workspaceFiles: service),
+    );
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Dirty'), findsOneWidget);
+
+    service.content = '# Disk v2';
+    registry.notifyExternalFileChanges(
+      workspacePath: '/repo/alera',
+      relativePaths: const <String>['docs/readme.md'],
+    );
+    await tester.pump(workspaceMarkdownViewerEditorUpdateDebounce);
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Dirty'), findsOneWidget);
+    expect(find.textContaining('Disk v2'), findsNothing);
+    expect(service.reads, isEmpty);
+  });
+
   testWidgets('searches within markdown preview and navigates matches', (
     tester,
   ) async {
@@ -574,6 +630,8 @@ flowchart TD
     await tester.pumpAndSettle();
 
     expect(service.mermanSources.single.trimRight(), 'flowchart TD\n  A --> B');
+    expect(service.mermanDiagramIds.single, isNot(':'));
+    expect(service.mermanDiagramIds.single, startsWith('docs/readme.md:'));
     expect(
       find.byKey(
         const ValueKey<String>('markdown-mermaid-svg:docs/readme.md:0'),
@@ -927,6 +985,7 @@ class _FakeWorkspaceFileService(var String content)
   final List<String> reads = <String>[];
   int mermaidRenders = 0;
   final List<String> mermanSources = <String>[];
+  final List<String> mermanDiagramIds = <String>[];
 
   @override
   Future<native.WorkspaceTextFile> readTextFile({
@@ -949,6 +1008,7 @@ class _FakeWorkspaceFileService(var String content)
   }) async {
     mermaidRenders += 1;
     mermanSources.add(source);
+    mermanDiagramIds.add(diagramId);
     return '<svg viewBox="0 0 10 10">'
         '<rect x="1" y="1" width="8" height="8" />'
         '</svg>';

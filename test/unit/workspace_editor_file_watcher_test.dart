@@ -97,6 +97,35 @@ void main() {
     },
   );
 
+  test('changed events notify path listeners without an editor tab', () async {
+    final service = _WatcherFileService();
+    final registry = EditorSessionRegistry();
+    addTearDown(registry.dispose);
+    final changes = registry.documentChangesForPath(
+      workspacePath: '/repo/alera',
+      relativePath: 'docs/readme.md',
+    );
+    var notifications = 0;
+    void handleChange() => notifications += 1;
+    changes.addListener(handleChange);
+    addTearDown(() => changes.removeListener(handleChange));
+
+    final watcher = WorkspaceEditorFileWatcher(
+      workspaceFiles: service,
+      editorSessions: registry,
+    );
+    addTearDown(watcher.dispose);
+    await watcher.update(
+      workspacePath: '/repo/alera',
+      openRelativePaths: const <String>['docs/readme.md'],
+    );
+
+    service.emitChanged('docs/readme.md');
+    await _flush();
+
+    expect(notifications, 1);
+  });
+
   test(
     'switching workspace stops the old watcher before starting the new one',
     () async {

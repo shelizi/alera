@@ -173,7 +173,8 @@ class _WorkspaceMarkdownViewerSurfaceState
                           ? _MarkdownViewerMermaidBlock(
                               workspaceFiles: _workspaceFiles,
                               source: code,
-                              diagramId: ':',
+                              diagramId:
+                                  '${widget.tab.filePath ?? 'markdown-preview'}:${code.hashCode.toUnsigned(32)}',
                             )
                           : _MarkdownViewerCodeBlock(
                               language: name,
@@ -452,9 +453,7 @@ class _WorkspaceMarkdownViewerSurfaceState
       _refreshSearchForContentChange();
       return;
     }
-    if (_usingDirtyEditorContent) {
-      unawaited(_load());
-    }
+    unawaited(_load());
   }
 
   void _subscribeToEditorDocument() {

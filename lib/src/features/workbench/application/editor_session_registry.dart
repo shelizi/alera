@@ -27,6 +27,16 @@ class EditorSessionRegistry extends ChangeNotifier
     return _pathNotifiers.putIfAbsent(path, _EditorPathChangeNotifier.new);
   }
 
+  void notifyExternalFileChanges({
+    required String workspacePath,
+    required Iterable<String> relativePaths,
+  }) {
+    for (final relativePath in relativePaths.toSet()) {
+      _pathNotifiers[_EditorDocumentPath(workspacePath, relativePath)]
+          ?.notifyListeners();
+    }
+  }
+
   void register(String tabId, EditorSessionHandle handle) {
     _sessions[tabId] = handle;
   }

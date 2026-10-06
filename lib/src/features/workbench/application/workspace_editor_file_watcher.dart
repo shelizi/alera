@@ -108,6 +108,11 @@ class WorkspaceEditorFileWatcher {
         } catch (_) {
           // Best-effort live reload. Save-time content-token validation remains
           // the final guard against overwriting a file changed on disk.
+        } finally {
+          _editorSessions.notifyExternalFileChanges(
+            workspacePath: workspacePath,
+            relativePaths: changed,
+          );
         }
       }
     } finally {
