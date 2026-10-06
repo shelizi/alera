@@ -11,7 +11,7 @@ class const _GitDiffBar({
   required final bool readingDiffBusy,
   required final VoidCallback? onGenerateReadingDiff,
   required final VoidCallback? onRegenerateReadingDiff,
-  required final VoidCallback onCancelReadingDiff,
+  required final VoidCallback? onCancelReadingDiff,
   required final VoidCallback? onToggleReadingDiff,
   required final GitDiffContentMode contentMode,
   required final VoidCallback onToggleContentMode,
