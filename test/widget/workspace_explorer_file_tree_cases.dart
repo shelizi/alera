@@ -1,6 +1,24 @@
 part of 'workspace_explorer_test.dart';
 
 void _registerWorkspaceExplorerFileTreeTests() {
+  testWidgets('branch change replaces files from the previous checkout', (
+    tester,
+  ) async {
+    final service = _FakeWorkspaceFileService()
+      ..childrenByDirectory[''] = [_file('old-branch.txt')];
+    final workspace = _workspace().copyWith(branch: 'main');
+    await _pumpExplorer(tester, service, workspace: workspace);
+    expect(find.text('old-branch.txt'), findsOneWidget);
+    service.childrenByDirectory[''] = [_file('new-branch.txt')];
+    await _pumpExplorer(
+      tester,
+      service,
+      workspace: workspace.copyWith(branch: 'feature'),
+    );
+    expect(find.text('old-branch.txt'), findsNothing);
+    expect(find.text('new-branch.txt'), findsOneWidget);
+  });
+
   testWidgets('single click toggles folders and rows expose click cursors', (
     tester,
   ) async {

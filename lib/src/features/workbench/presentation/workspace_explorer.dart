@@ -26,7 +26,6 @@ import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_relative_path.dart';
 import 'package:alera/src/features/workbench/domain/workspace_source_control_scope.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_git_file_compare.dart';
-import 'package:alera/src/features/workbench/presentation/workspace_git_file_compare.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_path_drop.dart';
 import 'package:alera/src/rust/api/workspace_files.dart' as native;
 import 'package:alera/src/shared/infra/files/path_identity.dart';
@@ -160,6 +159,8 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
         flattenStrategy: const _AleraFlattenStrategy(),
       );
       unawaited(_restartExplorer());
+    } else if (oldWidget.workspace.branch != widget.workspace.branch) {
+      unawaited(_reloadForModeChange());
     } else if (oldWidget.mode != widget.mode ||
         oldWidget.showHiddenFiles != widget.showHiddenFiles) {
       unawaited(_reloadForModeChange());

@@ -129,30 +129,14 @@ pub fn checkout_branch(path: &str, branch: &str) -> Result<(), GitError> {
     repo.checkout_tree(target_commit.as_object(), Some(&mut preflight))
         .map_err(checkout_error)?;
 
-    let head = repo.find_reference("HEAD").map_err(GitError::from_git2)?;
-    let previous_symbolic = head
-        .symbolic_target()
-        .map_err(GitError::from_git2)?
-        .map(str::to_string);
-    let previous_detached = if previous_symbolic.is_none() {
-        head.target()
-    } else {
-        None
-    };
-    drop(head);
-
-    repo.set_head(&target_reference)
-        .map_err(GitError::from_git2)?;
+    // Checkout while HEAD still supplies the old tree as libgit2's baseline.
+    // Moving HEAD first leaves files unique to the previous branch behind.
     let mut checkout = CheckoutBuilder::new();
     checkout.safe();
-    if let Err(error) = repo.checkout_head(Some(&mut checkout)) {
-        if let Some(reference) = previous_symbolic.as_deref() {
-            let _ = repo.set_head(reference);
-        } else if let Some(oid) = previous_detached {
-            let _ = repo.set_head_detached(oid);
-        }
-        return Err(checkout_error(error));
-    }
+    repo.checkout_tree(target_commit.as_object(), Some(&mut checkout))
+        .map_err(checkout_error)?;
+    repo.set_head(&target_reference)
+        .map_err(GitError::from_git2)?;
     Ok(())
 }
 

@@ -160,6 +160,41 @@ fn rejects_conflicting_dirty_checkout_without_switching_head() {
     );
 }
 
+#[test]
+fn switching_branch_removes_previous_branch_files_and_preserves_untracked_files() {
+    let (_directory, repo) = init_repo();
+    let parent = repo.head().unwrap().peel_to_commit().unwrap();
+    let parent_tree = parent.tree().unwrap();
+    let mut builder = repo.treebuilder(Some(&parent_tree)).unwrap();
+    builder
+        .insert("feature-only.txt", repo.blob(b"feature").unwrap(), 0o100644)
+        .unwrap();
+    builder.remove("tracked.txt").unwrap();
+    let tree = repo.find_tree(builder.write().unwrap()).unwrap();
+    let signature = Signature::now("Tests", "tests@example.com").unwrap();
+    repo.commit(
+        Some("refs/heads/feature"),
+        &signature,
+        &signature,
+        "feature files",
+        &tree,
+        &[&parent],
+    )
+    .unwrap();
+    fs::write(workdir(&repo).join("untracked.txt"), "keep me").unwrap();
+    checkout_branch(path_str(workdir(&repo)), "feature").unwrap();
+    assert!(workdir(&repo).join("feature-only.txt").exists());
+    assert!(!workdir(&repo).join("tracked.txt").exists());
+    assert_eq!(
+        fs::read_to_string(workdir(&repo).join("untracked.txt")).unwrap(),
+        "keep me"
+    );
+    checkout_branch(path_str(workdir(&repo)), "main").unwrap();
+    assert!(!workdir(&repo).join("feature-only.txt").exists());
+    assert!(workdir(&repo).join("tracked.txt").exists());
+    assert_eq!(status_snapshot(&repo).len(), 1);
+}
+
 fn create_branch_commit(repo: &Repository, branch: &str, readme: &str) {
     let parent = repo
         .head()

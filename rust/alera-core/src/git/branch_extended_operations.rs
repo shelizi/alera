@@ -47,33 +47,17 @@ pub fn create_branch_at_commit(
         return Err(checkout_error(error));
     }
 
-    let head = repo.find_reference("HEAD").map_err(GitError::from_git2)?;
-    let previous_symbolic = head
-        .symbolic_target()
-        .map_err(GitError::from_git2)?
-        .map(str::to_string);
-    let previous_detached = if previous_symbolic.is_none() {
-        head.target()
-    } else {
-        None
-    };
-    drop(head);
-
+    // Keep the old HEAD as the baseline until tracked files have been replaced.
+    let mut checkout_options = CheckoutBuilder::new();
+    checkout_options.safe();
+    if let Err(error) = repo.checkout_tree(commit.as_object(), Some(&mut checkout_options)) {
+        let _ = created.delete();
+        return Err(checkout_error(error));
+    }
     let reference_name = format!("refs/heads/{branch_name}");
     if let Err(error) = repo.set_head(&reference_name) {
         let _ = created.delete();
         return Err(GitError::from_git2(error));
-    }
-    let mut checkout_options = CheckoutBuilder::new();
-    checkout_options.safe();
-    if let Err(error) = repo.checkout_head(Some(&mut checkout_options)) {
-        if let Some(reference) = previous_symbolic.as_deref() {
-            let _ = repo.set_head(reference);
-        } else if let Some(oid) = previous_detached {
-            let _ = repo.set_head_detached(oid);
-        }
-        let _ = created.delete();
-        return Err(checkout_error(error));
     }
     Ok(())
 }
