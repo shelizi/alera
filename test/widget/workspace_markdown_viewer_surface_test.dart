@@ -13,6 +13,7 @@ import 'package:alera/src/rust/api/workspace_files.dart' as native;
 import 'package:alera/src/shared/infra/uri/external_uri_launcher.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -187,6 +188,14 @@ void main() {
     );
     expect(markdownViewerSearchMatchOffsets('Alpha', '   '), isEmpty);
     expect(markdownViewerSearchMatchOffsets('', 'alpha'), isEmpty);
+  });
+
+  test('markdown preview recognizes Mermaid fence aliases', () {
+    expect(isMarkdownMermaidFence('mermaid'), isTrue);
+    expect(isMarkdownMermaidFence('Mermaid'), isTrue);
+    expect(isMarkdownMermaidFence('mmd'), isTrue);
+    expect(isMarkdownMermaidFence('merman'), isTrue);
+    expect(isMarkdownMermaidFence('dart'), isFalse);
   });
 
   testWidgets('markdown preview visibly highlights search matches', (
@@ -487,6 +496,126 @@ ${List<String>.filled(80, r'\frac{a}{b}').join(' + ')}
       );
     },
   );
+
+  testWidgets(
+    'table scrollbar leaves a gutter and resets horizontal position',
+    (tester) async {
+      final registry = EditorSessionRegistry();
+      final longCell = List<String>.filled(80, 'wide').join('_');
+      final service = _FakeWorkspaceFileService('''
+| First | Second |
+| --- | --- |
+| row one | $longCell |
+| final row | $longCell |
+''');
+      final showMarkdown = ValueNotifier<bool>(true);
+      addTearDown(showMarkdown.dispose);
+
+      await tester.pumpWidget(
+        _switchableSurface(
+          registry: registry,
+          workspaceFiles: service,
+          showMarkdown: showMarkdown,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const ValueKey<String>('markdown-table-x-scrollbar')),
+        findsOneWidget,
+      );
+      final horizontalView = tester.widget<SingleChildScrollView>(
+        find.byKey(const ValueKey<String>('markdown-table-x-scrollview')),
+      );
+      expect(
+        horizontalView.padding,
+        const EdgeInsets.only(bottom: AleraTokens.space16),
+      );
+
+      ScrollPosition position() {
+        final scrollable = find.descendant(
+          of: find.byKey(const ValueKey<String>('markdown-table-x-scrollview')),
+          matching: find.byType(Scrollable),
+        );
+        return tester.state<ScrollableState>(scrollable).position;
+      }
+
+      expect(position().maxScrollExtent, greaterThan(0));
+      expect(position().pixels, position().minScrollExtent);
+      await tester.drag(
+        find.byKey(const ValueKey<String>('markdown-table-x-scrollview')),
+        const Offset(-300, 0),
+      );
+      await tester.pumpAndSettle();
+      expect(position().pixels, greaterThan(0));
+
+      showMarkdown.value = false;
+      await tester.pump();
+      showMarkdown.value = true;
+      await tester.pumpAndSettle();
+      expect(position().pixels, position().minScrollExtent);
+    },
+  );
+
+  testWidgets('renders Mermaid fences as SVG in markdown preview', (
+    tester,
+  ) async {
+    final registry = EditorSessionRegistry();
+    final service = _FakeWorkspaceFileService('''
+```mermaid
+flowchart TD
+  A --> B
+```
+''');
+
+    await tester.pumpWidget(
+      _surface(registry: registry, workspaceFiles: service),
+    );
+    await tester.pumpAndSettle();
+
+    expect(service.mermanSources.single.trimRight(), 'flowchart TD\n  A --> B');
+    expect(
+      find.byKey(
+        const ValueKey<String>('markdown-mermaid-svg:docs/readme.md:0'),
+      ),
+      findsNothing,
+    );
+    expect(
+      find.byWidgetPredicate(
+        (widget) =>
+            widget is SvgPicture &&
+            widget.key is ValueKey<String> &&
+            ((widget.key as ValueKey<String>).value).startsWith(
+              'markdown-mermaid-svg:',
+            ),
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('Mermaid diagram cannot be rendered'), findsNothing);
+  });
+  testWidgets('wide preview blocks use isolated selectable regions', (
+    tester,
+  ) async {
+    final registry = EditorSessionRegistry();
+    final service = _FakeWorkspaceFileService('''
+Paragraph text remains selectable.
+
+| A | B |
+| --- | --- |
+| one | two |
+
+```text
+${List<String>.filled(120, 'selectable').join('_')}
+```
+''');
+
+    await tester.pumpWidget(
+      _surface(registry: registry, workspaceFiles: service),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byType(SelectionArea), findsNWidgets(3));
+  });
 
   testWidgets('refresh reloads disk content while the editor buffer is clean', (
     tester,
@@ -796,6 +925,8 @@ native.WorkspaceEditorTextFile _editorFile({
 class _FakeWorkspaceFileService(var String content)
     extends WorkspaceFileService {
   final List<String> reads = <String>[];
+  int mermaidRenders = 0;
+  final List<String> mermanSources = <String>[];
 
   @override
   Future<native.WorkspaceTextFile> readTextFile({
@@ -809,6 +940,18 @@ class _FakeWorkspaceFileService(var String content)
       modifiedMillis: 0,
       size: .from(content.length),
     );
+  }
+
+  @override
+  Future<String> renderMermanSource({
+    required String source,
+    required String diagramId,
+  }) async {
+    mermaidRenders += 1;
+    mermanSources.add(source);
+    return '<svg viewBox="0 0 10 10">'
+        '<rect x="1" y="1" width="8" height="8" />'
+        '</svg>';
   }
 }
 

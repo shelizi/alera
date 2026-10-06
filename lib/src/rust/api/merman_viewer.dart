@@ -18,6 +18,14 @@ Future<MermanWorkspaceRender> renderMermanWorkspaceFile({
   relativePath: relativePath,
 );
 
+Future<String> renderMermanSource({
+  required String source,
+  required String diagramId,
+}) => RustLib.instance.api.crateApiMermanViewerRenderMermanSource(
+  source: source,
+  diagramId: diagramId,
+);
+
 class MermanViewerError implements FrbException {
   final MermanViewerErrorKind kind;
   final String context;

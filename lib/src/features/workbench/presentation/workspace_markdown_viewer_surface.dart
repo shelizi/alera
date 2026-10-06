@@ -15,10 +15,12 @@ import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_editor_surface.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_markdown_uri_policy.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_markdown_viewer_images.dart';
+import 'package:alera/src/features/workbench/presentation/workspace_merman_viewer_surface.dart';
 import 'package:alera/src/rust/api/workspace_files.dart' as native;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:gpt_markdown/gpt_markdown.dart';
 
 @visibleForTesting
@@ -159,14 +161,27 @@ class _WorkspaceMarkdownViewerSurfaceState
                         latex: LatexStyle(scrollBlockHorizontally: true),
                       ),
                       inlinePatterns: _markdownSearchPatterns(),
-                      codeBuilder: (context, name, code, closed) =>
-                          _MarkdownViewerCodeBlock(
-                            language: name,
-                            code: code,
-                            searchQuery: _searchOpen
-                                ? _searchController.text
-                                : '',
+                      tableBuilder: (context, rows, textStyle, config) =>
+                          _MarkdownViewerTable(
+                            rows: rows,
+                            textStyle: textStyle,
+                            config: config,
+                            searchPatterns: _markdownSearchPatterns(),
                           ),
+                      codeBuilder: (context, name, code, closed) =>
+                          isMarkdownMermaidFence(name)
+                          ? _MarkdownViewerMermaidBlock(
+                              workspaceFiles: _workspaceFiles,
+                              source: code,
+                              diagramId: ':',
+                            )
+                          : _MarkdownViewerCodeBlock(
+                              language: name,
+                              code: code,
+                              searchQuery: _searchOpen
+                                  ? _searchController.text
+                                  : '',
+                            ),
                       imageBuilder: _buildImage,
                       onLinkTap: (url, _) => unawaited(_openLink(url)),
                     ),
@@ -642,6 +657,306 @@ class const _MarkdownViewerSearchBar({
   }
 }
 
+@visibleForTesting
+bool isMarkdownMermaidFence(String language) {
+  final normalized = language.trim().toLowerCase();
+  if (normalized.isEmpty) {
+    return false;
+  }
+  final name = normalized.split(RegExp(r'\s+')).first;
+  return name == 'mermaid' || name == 'mmd' || name == 'merman';
+}
+
+class const _MarkdownViewerTable({
+  required final List<CustomTableRow> rows,
+  required final TextStyle textStyle,
+  required final GptMarkdownConfig config,
+  required final List<InlinePattern>? searchPatterns,
+}) extends StatefulWidget {
+  @override
+  State<_MarkdownViewerTable> createState() => _MarkdownViewerTableState();
+}
+
+class _MarkdownViewerTableState extends State<_MarkdownViewerTable> {
+  late final ScrollController _horizontalController;
+
+  @override
+  void initState() {
+    super.initState();
+    _horizontalController = ScrollController(keepScrollOffset: false);
+    _resetHorizontalPositionNextFrame();
+  }
+
+  @override
+  void dispose() {
+    _horizontalController.dispose();
+    super.dispose();
+  }
+
+  void _resetHorizontalPositionNextFrame() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_horizontalController.hasClients) {
+        return;
+      }
+      final position = _horizontalController.position;
+      if (position.pixels != position.minScrollExtent) {
+        _horizontalController.jumpTo(position.minScrollExtent);
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.rows.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    final columnCount = widget.rows
+        .map((row) => row.fields.length)
+        .fold<int>(0, (current, count) => count > current ? count : current);
+    if (columnCount == 0) {
+      return const SizedBox.shrink();
+    }
+
+    return SelectionContainer.disabled(
+      child: SelectionArea(
+        contextMenuBuilder: AleraTextSelectionToolbar.selectableRegion,
+        child: Container(
+          margin: const EdgeInsets.symmetric(vertical: AleraTokens.space8),
+          decoration: BoxDecoration(
+            border: Border.all(color: AleraTokens.borderSubtle),
+            borderRadius: BorderRadius.circular(AleraTokens.radiusSm),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final minWidth = constraints.hasBoundedWidth
+                  ? constraints.maxWidth
+                  : 0.0;
+              return Scrollbar(
+                key: const ValueKey<String>('markdown-table-x-scrollbar'),
+                controller: _horizontalController,
+                thumbVisibility: true,
+                trackVisibility: true,
+                thickness: 8,
+                radius: const Radius.circular(4),
+                interactive: true,
+                scrollbarOrientation: ScrollbarOrientation.bottom,
+                notificationPredicate: (notification) =>
+                    notification.metrics.axis == Axis.horizontal,
+                child: SingleChildScrollView(
+                  key: const ValueKey<String>('markdown-table-x-scrollview'),
+                  controller: _horizontalController,
+                  scrollDirection: Axis.horizontal,
+                  padding: const EdgeInsets.only(bottom: AleraTokens.space16),
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(minWidth: minWidth),
+                    child: Table(
+                      defaultColumnWidth: const IntrinsicColumnWidth(),
+                      border: const TableBorder(
+                        horizontalInside: BorderSide(
+                          color: AleraTokens.borderSubtle,
+                        ),
+                        verticalInside: BorderSide(
+                          color: AleraTokens.borderSubtle,
+                        ),
+                      ),
+                      children: <TableRow>[
+                        for (final row in widget.rows)
+                          TableRow(
+                            decoration: row.isHeader
+                                ? const BoxDecoration(
+                                    color: AleraTokens.surfaceElevated,
+                                  )
+                                : null,
+                            children: <Widget>[
+                              for (
+                                var column = 0;
+                                column < columnCount;
+                                column += 1
+                              )
+                                _buildCell(context, row, column),
+                            ],
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCell(BuildContext context, CustomTableRow row, int column) {
+    if (column >= row.fields.length) {
+      return const SizedBox.shrink();
+    }
+    final field = row.fields[column];
+    final style = row.isHeader
+        ? widget.textStyle.copyWith(fontWeight: FontWeight.w600)
+        : widget.textStyle;
+    return Padding(
+      padding: const EdgeInsets.symmetric(
+        horizontal: AleraTokens.space12,
+        vertical: AleraTokens.space8,
+      ),
+      child: GptMarkdown(
+        field.data,
+        style: style,
+        textAlign: field.alignment,
+        textDirection: widget.config.textDirection,
+        textScaler: widget.config.textScaler,
+        followLinkColor: widget.config.followLinkColor,
+        onLinkTap: widget.config.onLinkTap,
+        latexWorkaround: widget.config.latexWorkaround,
+        latexBuilder: widget.config.latexBuilder,
+        codeBuilder: widget.config.codeBuilder,
+        sourceTagBuilder: widget.config.sourceTagBuilder,
+        inlineCodeBuilder: widget.config.inlineCodeBuilder,
+        linkBuilder: widget.config.linkBuilder,
+        imageBuilder: widget.config.imageBuilder,
+        orderedListBuilder: widget.config.orderedListBuilder,
+        unOrderedListBuilder: widget.config.unOrderedListBuilder,
+        maxLines: widget.config.maxLines,
+        overflow: widget.config.overflow,
+        components: widget.config.components,
+        inlineComponents: widget.config.inlineComponents,
+        tableBuilder: widget.config.tableBuilder,
+        inlinePatterns: widget.searchPatterns,
+        isStreaming: false,
+      ),
+    );
+  }
+}
+
+class const _MarkdownViewerMermaidBlock({
+  required final WorkspaceFileService workspaceFiles,
+  required final String source,
+  required final String diagramId,
+}) extends StatefulWidget {
+  @override
+  State<_MarkdownViewerMermaidBlock> createState() =>
+      _MarkdownViewerMermaidBlockState();
+}
+
+class _MarkdownViewerMermaidBlockState
+    extends State<_MarkdownViewerMermaidBlock> {
+  String? _svg;
+  Object? _error;
+  bool _loading = true;
+  int _generation = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_load());
+  }
+
+  @override
+  void didUpdateWidget(covariant _MarkdownViewerMermaidBlock oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.source != widget.source ||
+        oldWidget.diagramId != widget.diagramId) {
+      unawaited(_load());
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    Widget child;
+    if (_loading) {
+      child = const Padding(
+        padding: EdgeInsets.all(AleraTokens.space24),
+        child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+      );
+    } else if (_svg case final svg?) {
+      child = Padding(
+        key: const ValueKey<String>('markdown-mermaid-diagram'),
+        padding: const EdgeInsets.all(AleraTokens.space16),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxHeight: 640),
+          child: Center(
+            child: SvgPicture.string(
+              prepareMermanSvgForFlutterSvg(svg),
+              key: ValueKey<String>('markdown-mermaid-svg:' + widget.diagramId),
+              fit: BoxFit.contain,
+            ),
+          ),
+        ),
+      );
+    } else {
+      child = Padding(
+        padding: const EdgeInsets.all(AleraTokens.space12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            Text(
+              'Mermaid diagram cannot be rendered',
+              style: Theme.of(context).textTheme.bodySmall
+                  ?.copyWith(color: AleraTokens.error),
+            ),
+            const SizedBox(height: AleraTokens.space4),
+            _MarkdownViewerCodeBlock(
+              language: 'mermaid',
+              code: widget.source,
+              searchQuery: '',
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: AleraTokens.space8),
+      decoration: BoxDecoration(
+        color: AleraTokens.surfaceVariant,
+        border: Border.all(
+          color: _error == null ? AleraTokens.borderSubtle : AleraTokens.error,
+        ),
+        borderRadius: BorderRadius.circular(AleraTokens.radiusMd),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: child,
+    );
+  }
+
+  Future<void> _load() async {
+    final generation = ++_generation;
+    if (mounted) {
+      setState(() {
+        _svg = null;
+        _error = null;
+        _loading = true;
+      });
+    }
+    try {
+      final svg = await widget.workspaceFiles.renderMermanSource(
+        source: widget.source,
+        diagramId: widget.diagramId,
+      );
+      if (!mounted || generation != _generation) {
+        return;
+      }
+      setState(() {
+        _svg = svg;
+        _error = null;
+        _loading = false;
+      });
+    } catch (error) {
+      if (!mounted || generation != _generation) {
+        return;
+      }
+      setState(() {
+        _svg = null;
+        _error = error;
+        _loading = false;
+      });
+    }
+  }
+}
+
 class const _MarkdownViewerCodeBlock({
   required final String language,
   required final String code,
@@ -658,7 +973,16 @@ class _MarkdownViewerCodeBlockState extends State<_MarkdownViewerCodeBlock> {
   @override
   void initState() {
     super.initState();
-    _horizontalController = ScrollController();
+    _horizontalController = ScrollController(keepScrollOffset: false);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_horizontalController.hasClients) {
+        return;
+      }
+      final position = _horizontalController.position;
+      if (position.pixels != position.minScrollExtent) {
+        _horizontalController.jumpTo(position.minScrollExtent);
+      }
+    });
   }
 
   @override
@@ -670,83 +994,89 @@ class _MarkdownViewerCodeBlockState extends State<_MarkdownViewerCodeBlock> {
   @override
   Widget build(BuildContext context) {
     final language = widget.language.trim();
-    return Container(
-      margin: const EdgeInsets.symmetric(vertical: AleraTokens.space8),
-      decoration: BoxDecoration(
-        color: AleraTokens.surfaceVariant,
-        border: Border.all(color: AleraTokens.borderSubtle),
-        borderRadius: BorderRadius.circular(AleraTokens.radiusMd),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: Column(
-        crossAxisAlignment: .stretch,
-        children: <Widget>[
-          if (language.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(
-                left: AleraTokens.space12,
-                top: AleraTokens.space6,
-                right: AleraTokens.space4,
-                bottom: AleraTokens.space4,
-              ),
-              child: Row(
-                children: <Widget>[
-                  Expanded(
-                    child: Text(
-                      language,
-                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                        color: AleraTokens.foregroundMuted,
-                        fontFamily: 'JetBrains Mono',
-                      ),
-                    ),
-                  ),
-                  AleraIconButton(
-                    tooltip: 'Copy code',
-                    icon: AleraIcons.copy,
-                    minSize: AleraTokens.space32,
-                    onPressed: () => unawaited(
-                      Clipboard.setData(ClipboardData(text: widget.code)),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          Scrollbar(
-            key: const ValueKey<String>('markdown-code-x-scrollbar'),
-            controller: _horizontalController,
-            thumbVisibility: true,
-            trackVisibility: true,
-            thickness: 8,
-            radius: const Radius.circular(4),
-            interactive: true,
-            scrollbarOrientation: ScrollbarOrientation.bottom,
-            notificationPredicate: (notification) =>
-                notification.metrics.axis == Axis.horizontal,
-            child: SingleChildScrollView(
-              controller: _horizontalController,
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.fromLTRB(
-                AleraTokens.space16,
-                AleraTokens.space12,
-                AleraTokens.space16,
-                AleraTokens.space24,
-              ),
-              child: AleraSearchHighlightedText(
-                text: widget.code,
-                query: widget.searchQuery,
-                style:
-                    Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: AleraTokens.foreground,
-                      fontFamily: 'JetBrains Mono',
-                    ) ??
-                    const TextStyle(
-                      color: AleraTokens.foreground,
-                      fontFamily: 'JetBrains Mono',
-                    ),
-              ),
-            ),
+    return SelectionContainer.disabled(
+      child: SelectionArea(
+        contextMenuBuilder: AleraTextSelectionToolbar.selectableRegion,
+        child: Container(
+          margin: const EdgeInsets.symmetric(vertical: AleraTokens.space8),
+          decoration: BoxDecoration(
+            color: AleraTokens.surfaceVariant,
+            border: Border.all(color: AleraTokens.borderSubtle),
+            borderRadius: BorderRadius.circular(AleraTokens.radiusMd),
           ),
-        ],
+          clipBehavior: Clip.antiAlias,
+          child: Column(
+            crossAxisAlignment: .stretch,
+            children: <Widget>[
+              if (language.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(
+                    left: AleraTokens.space12,
+                    top: AleraTokens.space6,
+                    right: AleraTokens.space4,
+                    bottom: AleraTokens.space4,
+                  ),
+                  child: Row(
+                    children: <Widget>[
+                      Expanded(
+                        child: Text(
+                          language,
+                          style: Theme.of(context).textTheme.labelSmall
+                              ?.copyWith(
+                                color: AleraTokens.foregroundMuted,
+                                fontFamily: 'JetBrains Mono',
+                              ),
+                        ),
+                      ),
+                      AleraIconButton(
+                        tooltip: 'Copy code',
+                        icon: AleraIcons.copy,
+                        minSize: AleraTokens.space32,
+                        onPressed: () => unawaited(
+                          Clipboard.setData(ClipboardData(text: widget.code)),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              Scrollbar(
+                key: const ValueKey<String>('markdown-code-x-scrollbar'),
+                controller: _horizontalController,
+                thumbVisibility: true,
+                trackVisibility: true,
+                thickness: 8,
+                radius: const Radius.circular(4),
+                interactive: true,
+                scrollbarOrientation: ScrollbarOrientation.bottom,
+                notificationPredicate: (notification) =>
+                    notification.metrics.axis == Axis.horizontal,
+                child: SingleChildScrollView(
+                  controller: _horizontalController,
+                  scrollDirection: Axis.horizontal,
+                  padding: const EdgeInsets.fromLTRB(
+                    AleraTokens.space16,
+                    AleraTokens.space12,
+                    AleraTokens.space16,
+                    AleraTokens.space24,
+                  ),
+                  child: AleraSearchHighlightedText(
+                    text: widget.code,
+                    query: widget.searchQuery,
+                    style:
+                        Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: AleraTokens.foreground,
+                          fontFamily: 'JetBrains Mono',
+                        ) ??
+                        const TextStyle(
+                          color: AleraTokens.foreground,
+                          fontFamily: 'JetBrains Mono',
+                        ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
