@@ -186,6 +186,16 @@ class const WorkspaceFileService() {
     );
   }
 
+  Future<String> renderMermanSource({
+    required String source,
+    required String diagramId,
+  }) {
+    return merman_native.renderMermanSource(
+      source: source,
+      diagramId: diagramId,
+    );
+  }
+
   Future<native.WorkspaceDecodedText> decodeTextBytes({
     required List<int> bytes,
     native.WorkspaceTextEncoding? encoding,

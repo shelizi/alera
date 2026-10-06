@@ -85,19 +85,7 @@ pub fn render_merman_workspace_file(
     let source = String::from_utf8(bytes).map_err(|_| {
         MermanViewerError::new(MermanViewerErrorKind::Unsupported, relative_path.clone())
     })?;
-    let svg = HeadlessRenderer::new()
-        .with_site_config(MermaidConfig::from_value(json!({
-            "theme": "neutral",
-        })))
-        .with_diagram_id(&relative_path)
-        .render_svg_resvg_safe_sync(&source)
-        .map_err(|error| MermanViewerError::new(MermanViewerErrorKind::Render, error.to_string()))?
-        .ok_or_else(|| {
-            MermanViewerError::new(
-                MermanViewerErrorKind::Unsupported,
-                "No Mermaid diagram found",
-            )
-        })?;
+    let svg = render_merman_source(source, relative_path.clone())?;
 
     Ok(MermanWorkspaceRender {
         svg,
@@ -105,6 +93,42 @@ pub fn render_merman_workspace_file(
         modified_millis: modified_millis(&metadata),
         size: metadata.len(),
     })
+}
+
+pub fn render_merman_source(
+    source: String,
+    diagram_id: String,
+) -> Result<String, MermanViewerError> {
+    if source.len() as u64 > MAX_MERMAN_SOURCE_BYTES {
+        return Err(MermanViewerError::new(
+            MermanViewerErrorKind::Unsupported,
+            format!("diagram exceeds {} bytes", MAX_MERMAN_SOURCE_BYTES),
+        ));
+    }
+    if source.as_bytes().contains(&0) {
+        return Err(MermanViewerError::new(
+            MermanViewerErrorKind::Unsupported,
+            "diagram contains binary data",
+        ));
+    }
+    let diagram_id = if diagram_id.trim().is_empty() {
+        "markdown-diagram"
+    } else {
+        diagram_id.as_str()
+    };
+    HeadlessRenderer::new()
+        .with_site_config(MermaidConfig::from_value(json!({
+            "theme": "neutral",
+        })))
+        .with_diagram_id(diagram_id)
+        .render_svg_resvg_safe_sync(&source)
+        .map_err(|error| MermanViewerError::new(MermanViewerErrorKind::Render, error.to_string()))?
+        .ok_or_else(|| {
+            MermanViewerError::new(
+                MermanViewerErrorKind::Unsupported,
+                "No Mermaid diagram found",
+            )
+        })
 }
 
 fn workspace_root(path: &str) -> Result<PathBuf, MermanViewerError> {
@@ -204,6 +228,27 @@ mod tests {
             .starts_with(&rendered.size.to_string()));
     }
 
+    #[test]
+    fn renders_merman_source_for_markdown_fences() {
+        let svg = render_merman_source(
+            "flowchart TD\n  A[Start] --> B[Done]\n".to_string(),
+            "markdown-flowchart".to_string(),
+        )
+        .unwrap();
+
+        assert!(svg.contains("<svg"));
+    }
+
+    #[test]
+    fn rejects_binary_merman_source() {
+        let error = render_merman_source(
+            "flowchart TD\0A-->B".to_string(),
+            "markdown-binary".to_string(),
+        )
+        .unwrap_err();
+
+        assert_eq!(error.kind, MermanViewerErrorKind::Unsupported);
+    }
     #[test]
     fn rejects_outside_workspace_paths() {
         let dir = tempfile::tempdir().unwrap();
