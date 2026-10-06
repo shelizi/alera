@@ -1,16 +1,19 @@
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
 
 use git2::{Oid, Repository, Sort};
 
 use super::git_diff_paths::GitPathContext;
 use super::{
-    current_head_commit, head_branch_name, open_repo, GitError, GitHistoryItem, GitHistoryItemRef,
-    GitHistoryRefCategory, GitHistoryResult,
+    current_head_commit, head_branch_name, open_repo, GitError, GitErrorKind, GitHistoryItem,
+    GitHistoryItemRef, GitHistoryRefCategory, GitHistoryResult,
 };
 
+#[path = "git_file_history_impl.rs"]
+mod git_file_history_impl;
 #[path = "git_history_refs.rs"]
 mod git_history_refs;
+use git_file_history_impl::{commit_touches_file, nearest_file_ancestors};
 
 const DEFAULT_HISTORY_LIMIT: u32 = 50;
 const MAX_HISTORY_LIMIT: u32 = 200;
@@ -21,9 +24,28 @@ pub(super) fn git_history(
     base_ref: Option<String>,
     include_all_refs: Option<bool>,
     offset: Option<u32>,
+    file_path: Option<String>,
 ) -> Result<GitHistoryResult, GitError> {
     let repo = open_repo(&path)?;
     let paths = GitPathContext::new(&repo, &path)?;
+    if let Some(path) = file_path.as_deref() {
+        if path.is_empty()
+            || Path::new(path).is_absolute()
+            || Path::new(path).components().any(|component| {
+                matches!(
+                    component,
+                    std::path::Component::ParentDir | std::path::Component::Prefix(_)
+                )
+            })
+        {
+            return Err(GitError::new(
+                GitErrorKind::WorkspaceScope,
+                "file history requires a workspace-relative file path",
+            ));
+        }
+    }
+    let file_path = file_path.map(|path| paths.to_repo_path(&path));
+    let scoped = !paths.is_workspace_root() || file_path.is_some();
     let limit = limit
         .unwrap_or(DEFAULT_HISTORY_LIMIT)
         .clamp(1, MAX_HISTORY_LIMIT);
@@ -94,8 +116,13 @@ pub(super) fn git_history(
     for oid in revwalk {
         let oid = oid.map_err(GitError::from_git2)?;
         let commit = repo.find_commit(oid).map_err(GitError::from_git2)?;
-        if !commit_touches_workspace(&repo, &paths, &commit)? {
+        if file_path.is_none() && !commit_touches_workspace(&repo, &paths, &commit)? {
             continue;
+        }
+        if let Some(path) = file_path.as_deref() {
+            if !commit_touches_file(&repo, &commit, path)? {
+                continue;
+            }
         }
         parsed.push(history_item_from_commit(&commit, refs_by_oid.get(&oid)));
         if parsed.len() > take {
@@ -112,11 +139,29 @@ pub(super) fn git_history(
         .iter()
         .filter_map(|item| Oid::from_str(&item.id).ok())
         .collect::<HashSet<_>>();
+    let mut file_ancestor_cache = HashMap::new();
+    if let Some(path) = file_path.as_deref() {
+        // A branch tip may not touch the file. Keep its badge on its nearest visible ancestors.
+        for (oid, references) in &refs_by_oid {
+            if visible_ids.contains(oid) {
+                continue;
+            }
+            let ancestors = nearest_file_ancestors(&repo, path, *oid, &mut file_ancestor_cache)?;
+            for item in &mut parsed {
+                if ancestors
+                    .iter()
+                    .any(|ancestor| ancestor.to_string() == item.id)
+                {
+                    item.references.extend(references.iter().cloned());
+                }
+            }
+        }
+    }
     if offset > 0 {
         let skip = (offset as usize).min(parsed.len());
         parsed.drain(..skip);
     }
-    let scoped_merge_base_oid = if paths.is_workspace_root() {
+    let scoped_merge_base_oid = if !scoped {
         merge_base_oid
     } else {
         merge_base_oid
@@ -125,24 +170,44 @@ pub(super) fn git_history(
             .and_then(|ancestors| ancestors.into_iter().next())
     };
     let merge_base = scoped_merge_base_oid.map(|oid| oid.to_string());
-    if !paths.is_workspace_root() {
+    if let Some(path) = file_path.as_deref() {
+        for item in &mut parsed {
+            let mut parents = Vec::new();
+            for parent in &item.parent_ids {
+                for oid in nearest_file_ancestors(
+                    &repo,
+                    path,
+                    Oid::from_str(parent).map_err(GitError::from_git2)?,
+                    &mut file_ancestor_cache,
+                )? {
+                    let id = oid.to_string();
+                    if !parents.contains(&id) {
+                        parents.push(id);
+                    }
+                }
+            }
+            item.parent_ids = parents;
+        }
+    } else if scoped {
         rewrite_history_parents_to_visible_ancestors(&repo, &visible_ids, &mut parsed)?;
     }
-    let has_incoming_changes =
-        if let (Some(remote_oid), Some(merge_base_oid)) = (remote_oid, merge_base_oid) {
-            remote_oid != merge_base_oid
-                && range_has_workspace_changes(&repo, &paths, merge_base_oid, remote_oid)?
-        } else {
-            false
-        };
-    let has_outgoing_changes =
-        if let (Some(remote_oid), Some(merge_base_oid)) = (remote_oid, merge_base_oid) {
-            remote_oid != head_oid
-                && head_oid != merge_base_oid
-                && range_has_workspace_changes(&repo, &paths, merge_base_oid, head_oid)?
-        } else {
-            false
-        };
+    let has_incoming_changes = if file_path.is_some() {
+        false
+    } else if let (Some(remote_oid), Some(merge_base_oid)) = (remote_oid, merge_base_oid) {
+        remote_oid != merge_base_oid
+            && range_has_workspace_changes(&repo, &paths, merge_base_oid, remote_oid)?
+    } else {
+        false
+    };
+    let has_outgoing_changes = if file_path.is_some() {
+        false
+    } else if let (Some(remote_oid), Some(merge_base_oid)) = (remote_oid, merge_base_oid) {
+        remote_oid != head_oid
+            && head_oid != merge_base_oid
+            && range_has_workspace_changes(&repo, &paths, merge_base_oid, head_oid)?
+    } else {
+        false
+    };
 
     Ok(GitHistoryResult {
         items: parsed,

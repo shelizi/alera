@@ -61,8 +61,6 @@ class _WorkspaceGitHistorySurfaceState
 
   List<GitHistoryItem> _items = const <GitHistoryItem>[];
   List<GitHistoryItemViewModel> _viewModels = const <GitHistoryItemViewModel>[];
-  GitHistoryProjectionContinuation _projectionContinuation =
-      const GitHistoryProjectionContinuation();
   Map<String, GitHistoryGraphColorId?> _colorMap =
       const <String, GitHistoryGraphColorId?>{};
   GitHistoryItemRef? _currentRef;
@@ -143,7 +141,6 @@ class _WorkspaceGitHistorySurfaceState
     setState(() {
       _items = const <GitHistoryItem>[];
       _viewModels = const <GitHistoryItemViewModel>[];
-      _projectionContinuation = const GitHistoryProjectionContinuation();
       _compareAnchorId = null;
       _hasMore = false;
       _pageFailed = false;
@@ -161,6 +158,7 @@ class _WorkspaceGitHistorySurfaceState
             limit: WorkspaceGitHistorySurface.pageSize,
             baseRef: _allBranches ? null : _selectedRef,
             includeAllRefs: _allBranches,
+            filePath: widget.tab.gitHistoryFilePath,
           );
       if (!mounted || generation != _generation) {
         return;
@@ -184,7 +182,6 @@ class _WorkspaceGitHistorySurfaceState
           _filteredHistoryItems(result.items),
         );
         _viewModels = projection.viewModels;
-        _projectionContinuation = projection.continuation;
       });
       // A short first page may not fill the viewport, which means the scroll
       // listener never fires, so pull the next page eagerly instead.
@@ -221,6 +218,7 @@ class _WorkspaceGitHistorySurfaceState
             limit: WorkspaceGitHistorySurface.pageSize,
             baseRef: _allBranches ? null : _selectedRef,
             includeAllRefs: _allBranches,
+            filePath: widget.tab.gitHistoryFilePath,
             offset: _items.length,
           );
       if (!mounted || generation != _generation) {
@@ -230,7 +228,6 @@ class _WorkspaceGitHistorySurfaceState
         _items = <GitHistoryItem>[..._items, ...result.items];
         final projection = _buildProjection(_filteredHistoryItems(_items));
         _viewModels = projection.viewModels;
-        _projectionContinuation = projection.continuation;
         _hasMore = result.hasMore;
         _loadingMore = false;
       });
@@ -296,11 +293,15 @@ class _WorkspaceGitHistorySurfaceState
               color: AleraTokens.foregroundMuted,
             ),
             const SizedBox(width: AleraTokens.space8),
-            Text(
-              'Commits',
-              style: theme.textTheme.titleSmall?.copyWith(
-                fontWeight: .w600,
-                color: AleraTokens.foreground,
+            Flexible(
+              child: Text(
+                widget.tab.gitHistoryFilePath ?? 'Commits',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.titleSmall?.copyWith(
+                  fontWeight: .w600,
+                  color: AleraTokens.foreground,
+                ),
               ),
             ),
             if (_items.isNotEmpty) ...<Widget>[
@@ -319,7 +320,10 @@ class _WorkspaceGitHistorySurfaceState
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: <Widget>[
-                    _buildBranchPerspectiveMenu(theme),
+                    if (widget.tab.gitHistoryFilePath == null)
+                      _buildBranchPerspectiveMenu(theme)
+                    else
+                      Text('All Branches', style: theme.textTheme.labelSmall),
                     const SizedBox(width: AleraTokens.space8),
                     _buildMergedVisibilityMenu(theme),
                     const SizedBox(width: AleraTokens.space8),

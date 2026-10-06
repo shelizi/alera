@@ -241,6 +241,7 @@ enum _TabMenuAction {
   reloadDocument,
   openWithDefaultApplication,
   revealInFileManager,
+  viewFileHistory,
   compareLatestGitRevision,
   compareGitBranch,
   close,

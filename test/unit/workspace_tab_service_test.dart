@@ -566,6 +566,38 @@ void main() {
       },
     );
 
+    test('file history tabs reuse only the same root and file and persist their scope', () async {
+      final repository = _FakeWorkbenchRepository();
+      final service = WorkspaceTabService(
+        repository: repository,
+        now: () => DateTime.utc(2026, 10, 5),
+      );
+      final graph = await service.openOrCreateGitHistoryTab(
+        workspaceId: 'workspace-1',
+      );
+      final file = await service.openOrCreateGitHistoryTab(
+        workspaceId: 'workspace-1',
+        filePath: 'lib/main.dart',
+      );
+      final reopened = await service.openOrCreateGitHistoryTab(
+        workspaceId: 'workspace-1',
+        filePath: 'lib/main.dart',
+      );
+      final other = await service.openOrCreateGitHistoryTab(
+        workspaceId: 'workspace-1',
+        filePath: 'lib/other.dart',
+      );
+      expect(file.id, isNot(graph.id));
+      expect(file.id, reopened.id);
+      expect(other.id, isNot(file.id));
+      expect(file.gitHistoryAllBranches, isTrue);
+      final restored = WorkspaceTabRecord.fromJson(
+        Map<String, Object?>.from(file.toMap()),
+      );
+      expect(restored.gitHistoryFilePath, 'lib/main.dart');
+      expect(repository.tabs, hasLength(3));
+    });
+
     test('setGitHistoryAllBranches persists the toggle', () async {
       final repository = _FakeWorkbenchRepository();
       final service = WorkspaceTabService(

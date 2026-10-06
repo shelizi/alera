@@ -476,7 +476,7 @@ pub fn git_repository_root(path: String) -> Result<Option<String>, GitError> {
         Ok(repo) => Ok(repo.workdir().map(|workdir| {
             workdir
                 .to_string_lossy()
-                .trim_end_matches(|ch| ch == '/' || ch == '\\')
+                .trim_end_matches(['/', '\\'])
                 .to_string()
         })),
         Err(error) => match error.code() {
@@ -603,7 +603,16 @@ pub fn git_history(
     include_all_refs: Option<bool>,
     offset: Option<u32>,
 ) -> Result<GitHistoryResult, GitError> {
-    git_history_impl::git_history(path, limit, base_ref, include_all_refs, offset)
+    git_history_impl::git_history(path, limit, base_ref, include_all_refs, offset, None)
+}
+
+pub fn git_file_history(
+    path: String,
+    file_path: String,
+    limit: Option<u32>,
+    offset: Option<u32>,
+) -> Result<GitHistoryResult, GitError> {
+    git_history_impl::git_history(path, limit, None, Some(true), offset, Some(file_path))
 }
 
 pub fn git_commit_compare(

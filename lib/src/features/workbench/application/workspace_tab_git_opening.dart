@@ -237,12 +237,17 @@ extension WorkspaceTabGitOpening on WorkspaceTabService {
   Future<WorkspaceTabRecord> openOrCreateGitHistoryTab({
     required String workspaceId,
     String? gitDiffRoot,
+    String? filePath,
   }) async {
+    final normalizedFile = filePath == null
+        ? null
+        : _normalizeRelativePath(filePath);
     final normalizedRoot = normalizeSourceControlRootRelativePath(gitDiffRoot);
     final existing = await _repository.listWorkspaceTabs(workspaceId);
     for (final tab in existing) {
       if (tab.kind == WorkspaceTabKind.gitHistory &&
-          tab.gitDiffRoot == normalizedRoot) {
+          tab.gitDiffRoot == normalizedRoot &&
+          tab.gitHistoryFilePath == normalizedFile) {
         return tab;
       }
     }
@@ -250,12 +255,15 @@ extension WorkspaceTabGitOpening on WorkspaceTabService {
       id: _uuid.v4(),
       workspaceId: workspaceId,
       kind: .gitHistory,
-      title: 'Commit Graph',
+      title: normalizedFile == null
+          ? 'Commit Graph'
+          : 'History: $normalizedFile',
       createdAt: _now(),
       updatedAt: _now(),
       payload: <String, Object?>{
         workspaceTabGitDiffRootPayloadKey: ?normalizedRoot,
         workspaceTabGitHistoryAllBranchesPayloadKey: true,
+        workspaceTabGitHistoryFilePathPayloadKey: ?normalizedFile,
       },
     );
     await _repository.upsertWorkspaceTab(tab);

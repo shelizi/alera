@@ -140,6 +140,7 @@ extension WorkbenchTabLayoutOwnerOpening on WorkbenchTabLayoutOwner {
   Future<WorkspaceTabRecord> openGitHistoryTab({
     required Workspace workspace,
     String? gitDiffRoot,
+    String? filePath,
     String? targetGroupId,
   }) async {
     try {
@@ -149,6 +150,7 @@ extension WorkbenchTabLayoutOwnerOpening on WorkbenchTabLayoutOwner {
         openTab: () => _host.workspaceTabService.openOrCreateGitHistoryTab(
           workspaceId: workspace.id,
           gitDiffRoot: gitDiffRoot,
+          filePath: filePath,
         ),
         planPlacement: (tab) => planWorkbenchReusableTabToGroup(
           previousTabs: previousTabs,

@@ -96,6 +96,11 @@ extension _WorkspaceTabMenu on _WorkspaceTabChip {
         if (canCompareWithGit) ...<PopupMenuEntry<_TabMenuAction>>[
           const PopupMenuDivider(height: AleraTokens.space8),
           const AleraDropdownEntry<_TabMenuAction>(
+            value: .viewFileHistory,
+            label: 'View File History',
+            leading: Icon(AleraIcons.gitGraph, size: 16),
+          ),
+          const AleraDropdownEntry<_TabMenuAction>(
             value: .compareLatestGitRevision,
             label: 'Compare With Latest Git Revision',
             leading: Icon(AleraIcons.diff, size: 16),
@@ -173,6 +178,15 @@ extension _WorkspaceTabMenu on _WorkspaceTabChip {
         await _openWorkspaceTabFileWithDefaultApplication(context, ref);
       case _TabMenuAction.revealInFileManager:
         await _revealWorkspaceTabFile(context, ref);
+      case _TabMenuAction.viewFileHistory:
+        if (filePath != null) {
+          await openWorkspaceFileHistory(
+            context: context,
+            ref: ref,
+            workspace: workspace,
+            relativePath: filePath,
+          );
+        }
       case _TabMenuAction.compareLatestGitRevision:
         if (filePath != null) {
           await compareWorkspaceFileWithLatestGitRevision(

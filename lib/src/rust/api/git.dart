@@ -136,6 +136,18 @@ Future<GitHistoryResult> gitHistory({
   offset: offset,
 );
 
+Future<GitHistoryResult> gitFileHistory({
+  required String path,
+  required String filePath,
+  int? limit,
+  int? offset,
+}) => RustLib.instance.api.crateApiGitGitFileHistory(
+  path: path,
+  filePath: filePath,
+  limit: limit,
+  offset: offset,
+);
+
 Future<GitCommitCompareResult> gitCommitCompare({
   required String path,
   required String commitId,

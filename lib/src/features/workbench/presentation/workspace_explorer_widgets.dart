@@ -355,6 +355,11 @@ class const _ExplorerMenuDelegate({
               tree.NodeType.file) ...<PopupMenuEntry<_ExplorerAction>>[
             const PopupMenuDivider(height: AleraTokens.space8),
             const AleraDropdownEntry<_ExplorerAction>(
+              value: .viewFileHistory,
+              label: 'View File History',
+              leading: Icon(AleraIcons.gitGraph, size: 16),
+            ),
+            const AleraDropdownEntry<_ExplorerAction>(
               value: .compareLatestGitRevision,
               label: 'Compare With Latest Git Revision',
               leading: Icon(AleraIcons.diff, size: 16),
@@ -510,6 +515,7 @@ enum _ExplorerAction {
   openWithDefaultApplication,
   openExternally,
   openInAlera,
+  viewFileHistory,
   compareLatestGitRevision,
   compareGitBranch,
   delete,

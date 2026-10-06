@@ -279,3 +279,46 @@ fn git_history_offset_pages_visible_items() {
     assert!(past_end.items.is_empty());
     assert!(!past_end.has_more);
 }
+
+#[test]
+fn file_history_preserves_cross_branch_ancestry_and_pages_only_matching_commits() {
+    let repo = init_repo();
+    commit_file(repo.path(), "target.txt", "root", "file root");
+    run_git(repo.path(), &["checkout", "-b", "feature"]);
+    commit_file(repo.path(), "other.txt", "skip", "unrelated feature");
+    commit_file(repo.path(), "target.txt", "feature", "file feature");
+    run_git(repo.path(), &["checkout", "main"]);
+    commit_file(repo.path(), "other.txt", "skip main", "unrelated main");
+    commit_file(repo.path(), "target.txt", "main", "file main");
+    let full =
+        git_file_history(path_str(repo.path()), "target.txt".into(), Some(50), None).unwrap();
+    assert_eq!(full.items.len(), 3);
+    let root = full
+        .items
+        .iter()
+        .find(|item| item.subject == "file root")
+        .unwrap();
+    for item in full.items.iter().filter(|item| item.id != root.id) {
+        assert_eq!(item.parent_ids, vec![root.id.clone()]);
+    }
+    let first =
+        git_file_history(path_str(repo.path()), "target.txt".into(), Some(2), None).unwrap();
+    let last =
+        git_file_history(path_str(repo.path()), "target.txt".into(), Some(2), Some(2)).unwrap();
+    assert!(first.has_more);
+    for item in &first.items {
+        assert_eq!(item.parent_ids, vec![root.id.clone()]);
+    }
+    assert!(!last.has_more);
+    assert_eq!(last.items[0].id, root.id);
+    assert_eq!(
+        head_branch_name(&git2::Repository::open(repo.path()).unwrap()),
+        "main"
+    );
+    run_git(repo.path(), &["rm", "target.txt"]);
+    run_git(repo.path(), &["commit", "-m", "file deleted"]);
+    let deleted =
+        git_file_history(path_str(repo.path()), "target.txt".into(), Some(50), None).unwrap();
+    assert_eq!(deleted.items[0].subject, "file deleted");
+    assert_eq!(deleted.items.len(), 4);
+}

@@ -93,6 +93,7 @@ Future<void> pumpGitHistorySurface(
   required FakeGitBackend backend,
   required GitHistoryFakeWorkbenchRepository repository,
   WorkbenchController? controller,
+  WorkspaceTabRecord? tab,
 }) {
   final workspace = Workspace(
     id: 'workspace-1',
@@ -122,7 +123,7 @@ Future<void> pumpGitHistorySurface(
             height: 400,
             child: WorkspaceGitHistorySurface(
               workspace: workspace,
-              tab: gitHistoryTab(),
+              tab: tab ?? gitHistoryTab(),
             ),
           ),
         ),

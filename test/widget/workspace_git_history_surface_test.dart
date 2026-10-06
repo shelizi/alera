@@ -13,6 +13,48 @@ import '../unit/fake_git_backend.dart';
 import 'workspace_git_history_surface_test_harness.dart';
 
 void main() {
+  testWidgets(
+    'file graph queries the file across all branches and renders branch lanes',
+    (tester) async {
+      final backend = gitHistoryBackend([
+        gitHistoryCommit(
+          'feature',
+          parents: ['root'],
+          subject: 'Feature File Change',
+        ),
+        gitHistoryCommit(
+          'main',
+          parents: ['root'],
+          subject: 'Main File Change',
+        ),
+        gitHistoryCommit('root', parents: [], subject: 'File Created'),
+      ]);
+      final tab = gitHistoryTab().copyWith(
+        payload: {workspaceTabGitHistoryFilePathPayloadKey: 'lib/main.dart'},
+      );
+      await pumpGitHistorySurface(
+        tester,
+        backend: backend,
+        repository: GitHistoryFakeWorkbenchRepository(),
+        tab: tab,
+      );
+      await tester.pumpAndSettle();
+      final call = backend.calls.singleWhere(
+        (call) => call.method == 'history',
+      );
+      expect(call.args['filePath'], 'lib/main.dart');
+      expect(call.args['includeAllRefs'], isTrue);
+      expect(find.text('lib/main.dart'), findsOneWidget);
+      expect(find.text('Feature File Change'), findsOneWidget);
+      expect(find.text('Main File Change'), findsOneWidget);
+      expect(find.text('All Branches'), findsOneWidget);
+      final graph = buildGitHistoryViewModelsFromItems(
+        backend.gitHistoryResult.items,
+      );
+      expect(graph.any((item) => item.outputSwimlanes.length > 1), isTrue);
+    },
+  );
+
   test('collapses older merged history onto one target lane', () {
     final source = <GitHistoryItem>[
       gitHistoryCommit(

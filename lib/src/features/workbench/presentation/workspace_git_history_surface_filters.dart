@@ -201,7 +201,6 @@ extension _WorkspaceGitHistoryMergedFilters
     _setSurfaceState(() {
       final projection = _buildProjection(_filteredHistoryItems(_items));
       _viewModels = projection.viewModels;
-      _projectionContinuation = projection.continuation;
     });
   }
 

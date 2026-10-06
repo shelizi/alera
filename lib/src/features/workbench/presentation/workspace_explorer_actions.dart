@@ -86,6 +86,15 @@ extension _WorkspaceExplorerActions on _WorkspaceExplorerState {
         if (entry != null && !_isDirectoryEntry(entry)) {
           widget.onOpenFileInAlera?.call(entry.relativePath);
         }
+      case _ExplorerAction.viewFileHistory:
+        if (entry != null && !_isDirectoryEntry(entry)) {
+          await openWorkspaceFileHistory(
+            context: context,
+            ref: ref,
+            workspace: widget.workspace,
+            relativePath: entry.relativePath,
+          );
+        }
       case _ExplorerAction.compareLatestGitRevision:
         if (entry != null && !_isDirectoryEntry(entry)) {
           await compareWorkspaceFileWithLatestGitRevision(

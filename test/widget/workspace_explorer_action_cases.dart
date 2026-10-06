@@ -1,6 +1,25 @@
 part of 'workspace_explorer_test.dart';
 
 void _registerWorkspaceExplorerActionTests() {
+  testWidgets('file context menu offers file history and folders do not', (
+    tester,
+  ) async {
+    final service = _FakeWorkspaceFileService()
+      ..childrenByDirectory[''] = [
+        _file('readme.md'),
+        _directory('src', hasChildrenHint: false),
+      ];
+    await _pumpExplorer(tester, service);
+    await tester.tap(find.text('readme.md'), buttons: kSecondaryMouseButton);
+    await tester.pumpAndSettle();
+    expect(find.text('View File History'), findsOneWidget);
+    await tester.tapAt(const Offset(310, 470));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('src'), buttons: kSecondaryMouseButton);
+    await tester.pumpAndSettle();
+    expect(find.text('View File History'), findsNothing);
+  });
+
   testWidgets('save all writes dirty editor documents that are not mounted', (
     tester,
   ) async {

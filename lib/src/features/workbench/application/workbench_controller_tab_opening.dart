@@ -55,10 +55,12 @@ mixin _WorkbenchControllerTabOpening
   Future<WorkspaceTabRecord> openGitHistoryTab({
     required Workspace workspace,
     String? gitDiffRoot,
+    String? filePath,
     String? targetGroupId,
   }) => _tabLayoutOwner.openGitHistoryTab(
     workspace: workspace,
     gitDiffRoot: gitDiffRoot,
+    filePath: filePath,
     targetGroupId: targetGroupId,
   );
 

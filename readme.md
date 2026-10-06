@@ -142,7 +142,7 @@ Browse workspace folders in a tree-based explorer with a file filter, a git-igno
 
 Review structured diffs side-by-side or unified, with per-file and aggregated views, syntax highlighting, a full-file view, whitespace modes, and an overview ruler. The working-tree side of a side-by-side diff is editable and saves straight to disk. Stage, commit, amend, stash, and discard visually, with AI-powered commit message suggestions. Submodules get lazy read-only status and diff inspection.
 
-The commit graph opens as a main-area tab that walks all branches or a single branch perspective. Context menus on commits and refs cover checkout, cherry-pick, revert, reset (soft, mixed, hard), merge, rebase, tags, branch management, pull and push, and creating a new linked worktree from any commit or branch.
+The commit graph opens as a main-area tab that walks all branches or a single branch perspective. Choose **View File History** from an Explorer file or file tab context menu to open a separate graph of that file's commits across all branches. The file graph keeps branch connections through skipped commits. Context menus on commits and refs cover checkout, cherry-pick, revert, reset (soft, mixed, hard), merge, rebase, tags, branch management, pull and push, and creating a new linked worktree from any commit or branch.
 
 ### ✅ Pull requests & checks
 

@@ -383,6 +383,7 @@ class FakeGitBackend
     String? baseRef,
     bool includeAllRefs = false,
     int? offset,
+    String? filePath,
   }) async {
     calls.add(
       GitBackendCall('history', <String, Object?>{
@@ -391,6 +392,7 @@ class FakeGitBackend
         'baseRef': baseRef,
         'includeAllRefs': includeAllRefs,
         'offset': offset,
+        'filePath': filePath,
       }),
     );
     final error = historyError;

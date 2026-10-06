@@ -13,6 +13,38 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
 
+Future<void> openWorkspaceFileHistory({
+  required BuildContext context,
+  required WidgetRef ref,
+  required Workspace workspace,
+  required String relativePath,
+}) async {
+  final target = await _prepareGitFileCompare(
+    context: context,
+    ref: ref,
+    workspace: workspace,
+    relativePath: relativePath,
+  );
+  if (target == null || !context.mounted) return;
+  try {
+    await ref
+        .read(workbenchControllerProvider.notifier)
+        .openGitHistoryTab(
+          workspace: workspace,
+          gitDiffRoot: target.scope.relativeRoot,
+          filePath: target.sourceFilePath,
+        );
+  } catch (error) {
+    if (context.mounted) {
+      AleraToast.show(
+        context,
+        message: 'Could not open file history: $error',
+        tone: .error,
+      );
+    }
+  }
+}
+
 Future<void> compareWorkspaceFileWithLatestGitRevision({
   required BuildContext context,
   required WidgetRef ref,
@@ -106,7 +138,6 @@ Future<_GitFileCompareTarget?> _prepareGitFileCompare({
   final normalizedRelativePath = normalizeWorkspaceRelativePath(relativePath);
   if (normalizedRelativePath == null) return null;
 
-  Object? lastError;
   try {
     final absoluteFilePath = p.normalize(
       p.joinAll(<String>[
@@ -132,20 +163,11 @@ Future<_GitFileCompareTarget?> _prepareGitFileCompare({
       sourceFilePath: sourceFilePath,
     );
   } on Object catch (error) {
-    lastError = error;
-  }
-
-  if (context.mounted) {
-    if (lastError != null) {
-      _showGitCompareError(context, lastError);
-    } else {
-      AleraToast.show(
-        context,
-        message: context.tr('Git comparison is unavailable for this file.'),
-        tone: .error,
-      );
+    if (context.mounted) {
+      _showGitCompareError(context, error);
     }
   }
+
   return null;
 }
 

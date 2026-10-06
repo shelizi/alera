@@ -116,6 +116,7 @@ void _registerWorkspaceWorkbenchViewTabTests() {
 
     await _openTabContextMenu(tester, 'README.md');
     expect(find.text('Reload Document'), findsOneWidget);
+    expect(find.text('View File History'), findsOneWidget);
     expect(find.text('Open with Default Application'), findsOneWidget);
     expect(find.text('Reveal in Explorer'), findsOneWidget);
 

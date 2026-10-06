@@ -70,6 +70,7 @@ const String workspaceTabGitDiffPullRequestNumberPayloadKey =
 const String workspaceTabGitDiffHostedReviewRetentionIdPayloadKey =
     'gitDiffHostedReviewRetentionId';
 const String workspaceTabGitDiffOldPathPayloadKey = 'gitDiffOldPath';
+const String workspaceTabGitHistoryFilePathPayloadKey = 'gitHistoryFilePath';
 const String workspaceTabGitHistoryAllBranchesPayloadKey =
     'gitHistoryAllBranches';
 const String workspaceTabGitHistorySelectedRefPayloadKey =
@@ -275,6 +276,9 @@ class WorkspaceTabRecord({
 
   /// Whether a commit-graph tab walks every branch tip. Defaults on so tabs
   /// persisted before the toggle existed keep the all-branches view.
+  String? get gitHistoryFilePath =>
+      _nonEmptyPayloadString(workspaceTabGitHistoryFilePathPayloadKey);
+
   bool get gitHistoryAllBranches =>
       payload[workspaceTabGitHistoryAllBranchesPayloadKey] != false;
 

@@ -1,6 +1,25 @@
 part of 'workbench_controller_test.dart';
 
 void _registerWorkbenchControllerGitHistoryTabTests() {
+  test(
+    'openGitHistoryTab forwards the file scope and selects a separate tab',
+    () async {
+      await _controller.bootstrap();
+      final workspace = await _selectMainWorkspace(_controller, _harness);
+      final graph = await _controller.openGitHistoryTab(workspace: workspace);
+      final file = await _controller.openGitHistoryTab(
+        workspace: workspace,
+        gitDiffRoot: 'packages/app',
+        filePath: 'lib/main.dart',
+      );
+      await _flush();
+      expect(file.id, isNot(graph.id));
+      expect(file.gitDiffRoot, 'packages/app');
+      expect(file.gitHistoryFilePath, 'lib/main.dart');
+      expect(_controller.state.activeWorkspaceTab?.id, file.id);
+    },
+  );
+
   test('openGitHistoryTab creates and selects the commit graph tab', () async {
     await _controller.bootstrap();
     final workspace = await _selectMainWorkspace(_controller, _harness);
