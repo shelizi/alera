@@ -18,15 +18,6 @@ if (-not [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
 $requiredRustToolchain = '1.98.0'
 
-if ([string]::IsNullOrWhiteSpace($CargoScratchDirectory)) {
-    $systemDrive = $env:SystemDrive
-    if ([string]::IsNullOrWhiteSpace($systemDrive)) {
-        $systemDrive = [System.IO.Path]::GetPathRoot($repoRoot)
-    }
-    $CargoScratchDirectory = Join-Path $systemDrive 'c'
-}
-$CargoScratchDirectory = [System.IO.Path]::GetFullPath($CargoScratchDirectory)
-
 function Write-Step([string]$Message) {
     Write-Host "`n==> $Message" -ForegroundColor Cyan
 }
@@ -182,6 +173,32 @@ function Assert-FileAvailable([string]$Path) {
     }
 }
 
+if ($env:CI -ne 'true') {
+    $prepareStorage = Join-Path $repoRoot 'tool\development\prepare_windows_build_storage.ps1'
+    if ([string]::IsNullOrWhiteSpace($CargoScratchDirectory)) {
+        & $prepareStorage -RepoRoot $repoRoot -CheckOnly:$CheckOnly
+        $CargoScratchDirectory = $env:ALERA_CARGOKIT_TEMP_DIR
+    }
+    else {
+        & $prepareStorage -RepoRoot $repoRoot -CargoScratchDirectory $CargoScratchDirectory -CheckOnly:$CheckOnly
+    }
+}
+elseif ([string]::IsNullOrWhiteSpace($CargoScratchDirectory)) {
+    $CargoScratchDirectory = if ($env:ALERA_CARGOKIT_TEMP_DIR) {
+        $env:ALERA_CARGOKIT_TEMP_DIR
+    }
+    else {
+        $ciDriveRoot = $env:SystemDrive
+        if ([string]::IsNullOrWhiteSpace($ciDriveRoot)) {
+            $ciDriveRoot = [IO.Path]::GetPathRoot($repoRoot)
+        }
+        Join-Path $ciDriveRoot 'c'
+    }
+}
+if ([string]::IsNullOrWhiteSpace($CargoScratchDirectory)) {
+    throw 'Cargo scratch directory was not resolved.'
+}
+$CargoScratchDirectory = [System.IO.Path]::GetFullPath($CargoScratchDirectory)
 $flutter = Resolve-FlutterExecutable
 $rustup = Get-Command rustup.exe -ErrorAction SilentlyContinue
 if ($null -eq $rustup) {
@@ -253,7 +270,7 @@ try {
         Write-Host "Rust compiler cache: $($sccache.Source)"
     }
     else {
-        Write-Host 'Rust compiler cache: sccache not found; using Cargo incremental artifacts'
+        Write-Host 'Rust compiler cache: sccache not found; reusing Cargo build artifacts'
     }
 
     if ($CheckOnly) {

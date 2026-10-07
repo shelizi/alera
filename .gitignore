@@ -6,6 +6,9 @@ build/
 .flutter-plugins-dependencies
 .pub-cache/
 .pub/
+.tools/
+/.cargo/config.toml
+/.cargo/alera-build-storage.json
 coverage/
 flutter_*.log
 

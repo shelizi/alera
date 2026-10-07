@@ -1,16 +1,93 @@
 part of 'alera_debug.dart';
 
 final class _DebugContext(final _Options _options) {
+  Map<String, String>? _preparedBuildEnvironment;
+
+  Future<int> prepareBuildStorage() async {
+    if (!Platform.isWindows || Platform.environment['CI'] == 'true') {
+      return 0;
+    }
+    final result = await _run('powershell.exe', <String>[
+      '-NoProfile',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-File',
+      _join(
+        _repoRoot,
+        'tool',
+        'development',
+        'prepare_windows_build_storage.ps1',
+      ),
+      '-RepoRoot',
+      _repoRoot,
+    ]);
+    if (result != 0) {
+      return result;
+    }
+    try {
+      _preparedBuildEnvironment = _readBuildStorageEnvironment();
+    } on Object catch (error) {
+      stderr.writeln('Failed to read prepared build storage metadata: $error');
+      return 1;
+    }
+    if (_preparedBuildEnvironment == null) {
+      stderr.writeln('Build storage preparation did not write its metadata.');
+      return 1;
+    }
+    return 0;
+  }
+
+  Map<String, String> _buildEnvironment() {
+    if (!Platform.isWindows || Platform.environment['CI'] == 'true') {
+      return Map<String, String>.of(Platform.environment);
+    }
+    final prepared =
+        _preparedBuildEnvironment ?? _readBuildStorageEnvironment();
+    if (prepared == null) {
+      throw StateError(
+        'Windows build storage has not been prepared. '
+        'Run tool/development/prepare_windows_build_storage.ps1 first.',
+      );
+    }
+    return <String, String>{...Platform.environment, ...prepared};
+  }
+
+  Map<String, String>? _readBuildStorageEnvironment() {
+    final metadata = File(
+      _join(_repoRoot, '.cargo', 'alera-build-storage.json'),
+    );
+    if (!metadata.existsSync()) {
+      return null;
+    }
+    final decoded = jsonDecode(metadata.readAsStringSync());
+    if (decoded is! Map || decoded['environment'] is! Map) {
+      throw const FormatException(
+        'Invalid .cargo/alera-build-storage.json environment payload.',
+      );
+    }
+    final values = decoded['environment'] as Map;
+    return <String, String>{
+      for (final entry in values.entries)
+        if (entry.key is String && entry.value is String)
+          entry.key as String: entry.value as String,
+    };
+  }
+
   // Builds the Rust sidecar (rust/alera-cli) and stages its runtime bundle so
   // ALERA_CLI_BUNDLE_DIR resolution finds every required asset.
   Future<int> buildCli({String? outputDir, bool release = true}) async {
-    final cargoExit = await _run(_options.cargoExecutable, <String>[
-      'build',
-      '--locked',
-      '-p',
-      'alera-cli',
-      if (release) '--release',
-    ], workingDirectory: _rustDir);
+    final cargoExit = await _run(
+      _options.cargoExecutable,
+      <String>[
+        'build',
+        '--locked',
+        '-p',
+        'alera-cli',
+        if (release) '--release',
+      ],
+      workingDirectory: _rustDir,
+      environment: _buildEnvironment(),
+    );
     if (cargoExit != 0) {
       return cargoExit;
     }
@@ -22,11 +99,37 @@ final class _DebugContext(final _Options _options) {
 
   Future<int> buildRuntimeDev() => buildCli(release: false);
 
+  Future<int> testRust() async {
+    for (final arguments in const <List<String>>[
+      <String>['fmt', '--check'],
+      <String>[
+        'clippy',
+        '--workspace',
+        '--all-targets',
+        '--',
+        '-D',
+        'warnings',
+      ],
+      <String>['test', '--workspace'],
+    ]) {
+      final result = await _run(
+        _options.cargoExecutable,
+        arguments,
+        workingDirectory: _rustDir,
+        environment: _buildEnvironment(),
+      );
+      if (result != 0) return result;
+    }
+    return 0;
+  }
+
   Future<int> _stageCliBinary(
     String outputDir, {
     required String profile,
   }) async {
-    final source = File(_join(_rustDir, 'target', profile, _cliExecutableName));
+    final targetDir =
+        _buildEnvironment()['CARGO_TARGET_DIR'] ?? _join(_rustDir, 'target');
+    final source = File(_join(targetDir, profile, _cliExecutableName));
     if (!await source.exists()) {
       stderr.writeln('Built Alera CLI binary not found at ${source.path}.');
       return 1;
@@ -191,7 +294,7 @@ final class _DebugContext(final _Options _options) {
   }
 
   Map<String, String> _flutterEnvironment() {
-    final environment = Map<String, String>.of(Platform.environment);
+    final environment = _buildEnvironment();
     environment['ALERA_FLAVOR'] = _options.flavor;
     return environment;
   }

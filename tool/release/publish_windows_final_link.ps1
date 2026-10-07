@@ -322,6 +322,9 @@ if (-not [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $script:RepoRoot = (Resolve-Path -LiteralPath (Join-Path $scriptDir '..\..')).Path
+if ($env:CI -ne 'true') {
+    & (Join-Path $script:RepoRoot 'tool\development\prepare_windows_build_storage.ps1') -RepoRoot $script:RepoRoot
+}
 $script:Ssh = (Get-Command ssh.exe -ErrorAction Stop).Source
 $script:Scp = (Get-Command scp.exe -ErrorAction Stop).Source
 $script:Rsync = Resolve-RsyncExecutable -ExplicitPath $RsyncPath
@@ -375,13 +378,26 @@ try {
             throw '-SkipBuild requires -UseCurrentWorktree because a fresh pinned worktree has no existing build artifacts.'
         }
         $shortCommit = $commit.Substring(0, 8)
-        $releaseWorktree = Join-Path $script:RepoRoot ".worktrees\release-auto-$shortCommit-$PID"
+        $releaseWorktreeRoot = if ($env:CI -eq 'true') {
+            Join-Path $script:RepoRoot '.worktrees'
+        }
+        else {
+            if ([string]::IsNullOrWhiteSpace($env:ALERA_BUILD_STORAGE_ROOT)) {
+                throw 'ALERA_BUILD_STORAGE_ROOT was not set by build storage preparation.'
+            }
+            Join-Path $env:ALERA_BUILD_STORAGE_ROOT 'worktrees'
+        }
+        New-Item -ItemType Directory -Path $releaseWorktreeRoot -Force | Out-Null
+        $releaseWorktree = Join-Path $releaseWorktreeRoot "release-auto-$shortCommit-$PID"
         Write-Step 'Create isolated pinned release worktree'
         Invoke-Checked -FilePath 'git' -Arguments @('-C', $script:RepoRoot, 'worktree', 'add', '--detach', $releaseWorktree, $commit)
         $createdReleaseWorktree = $true
         $script:BuildRoot = (Resolve-Path -LiteralPath $releaseWorktree).Path
         Restore-PinnedSubmodule -RelativePath 'third_party/xterm' -Commit $commit
         Restore-PinnedSubmodule -RelativePath 'third_party/dart_terminal' -Commit $commit
+        if ($env:CI -ne 'true') {
+            & (Join-Path $script:RepoRoot 'tool\development\prepare_windows_build_storage.ps1') -RepoRoot $script:BuildRoot
+        }
         Write-Host "Build root: $($script:BuildRoot)"
     }
 

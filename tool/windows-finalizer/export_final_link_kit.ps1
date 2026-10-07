@@ -130,6 +130,9 @@ function Get-ProjectNodeText {
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $scriptDir '..\..')).Path
+if ($env:CI -ne 'true') {
+    & (Join-Path $repoRoot 'tool\development\prepare_windows_build_storage.ps1') -RepoRoot $repoRoot
+}
 $defaultRoot = Join-Path $repoRoot 'build\final-link-kit'
 if (-not $OutputDirectory) {
     $OutputDirectory = Join-Path $defaultRoot 'Alera-Final-Link-Kit'

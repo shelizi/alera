@@ -118,6 +118,16 @@ When planning is needed, use a spec-driven development flow. Do not jump straigh
 - Keep progress updates short but useful during longer work.
 - When implementation is complete, summarize what changed, how it was verified, and any remaining risk or follow-up.
 
+## Local Windows Build Storage
+
+- Local Windows compilation artifacts and caches MUST live at the root of a ready local fixed drive outside Dropbox. The preparer automatically selects the fixed drive with the most free space that has at least 20 GB available; override it with `ALERA_BUILD_STORAGE_ROOT` / `ALERA_CARGOKIT_TEMP_DIR` or `-StorageRoot` / `-CargoScratchDirectory` when needed. Before running raw Flutter, Dart code generation, native-asset preflight, Cargo, or tests in a checkout, run `& .\tool\development\prepare_windows_build_storage.ps1` in the same PowerShell session. The standard Windows setup, debug, `make rust-test`, Release, and Final-Link entry points run this preparation automatically.
+- On the selected drive, use `<drive>:\c\n` for native Cargokit, `<drive>:\c\cli` for the bundled sidecar, and `<drive>:\c\t` for direct Cargo/debug/test builds. Keep these paths short for nested Vulkan/CMake builds. Local direct Cargo builds disable incremental compilation to avoid large persistent incremental caches.
+- Flutter/Dart checkout-relative generated directories and local `.tools` use Windows junctions to per-checkout directories under `<drive>:\alera-build`; their physical contents MUST NOT be stored below Dropbox. Different checkouts MUST NOT share Flutter/CMake state. Local temporary files, pub cache, and sccache also use the selected `<drive>:\alera-build`.
+- Flutter-required generated paths beneath Dropbox MUST have the Windows `com.dropbox.ignored` stream set to `1`, including junction paths. The preparation script repairs this attribute and `-CheckOnly` verifies it. Git `.gitignore` does not prevent Dropbox uploads. If Flutter requires a physical generated directory in the checkout, apply the Dropbox ignore attribute before generating its contents.
+- Create local release build worktrees under the selected `<drive>:\alera-build\worktrees`. Preserve worktree source changes and active builds when cleaning or migrating existing caches. Do not remove source worktrees merely to recover their generated artifacts.
+- After `flutter clean` removes a junction, run the preparation again before the next tool command. Verify with `pwsh -File tool/development/prepare_windows_build_storage.ps1 -CheckOnly`. Do not silently fall back to Dropbox, a network/removable drive, or a fixed drive below the free-space threshold.
+- This local policy does not change Linux/macOS paths or GitHub Actions Windows storage; CI keeps its explicit `R:\c` scratch configuration.
+
 ## Worktree Safety
 
 - Always read and edit files from the active working directory.

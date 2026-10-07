@@ -28,11 +28,29 @@ Future<void> main(List<String> arguments) async {
     return;
   }
   final context = _DebugContext(options);
+  if (const <String>{
+    'cli-build',
+    'cli-help',
+    'runtime-dev-build',
+    'rust-test',
+    'host-debug',
+    'app-debug',
+    'app-profile',
+    'app-debug-bundled-cli',
+    'app-debug-runtime-dev',
+  }.contains(command)) {
+    final storageExit = await context.prepareBuildStorage();
+    if (storageExit != 0) {
+      exitCode = storageExit;
+      return;
+    }
+  }
 
   final result = switch (command) {
     'cli-build' => await context.buildCli(),
     'cli-help' => await context.cliHelp(),
     'runtime-dev-build' => await context.buildRuntimeDev(),
+    'rust-test' => await context.testRust(),
     'host-debug' => await context.hostDebugForeground(),
     'app-debug' => await context.appDebug(),
     'app-profile' => await context.appProfile(),

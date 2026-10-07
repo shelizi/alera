@@ -61,7 +61,7 @@ frb-generate:
 # `--workspace` flags are required because `rust/` has a root package, so a bare
 # clippy/test would only cover `alera_native` and skip the `alera-cli` member.
 rust-test:
-	cd rust && "$(CARGO)" fmt --check && "$(CARGO)" clippy --workspace --all-targets -- -D warnings && "$(CARGO)" test --workspace
+	$(DART) $(ALERA_DEBUG_TOOL) rust-test --cargo "$(CARGO)"
 
 # Build the Rust alera CLI sidecar (cargo) used by desktop app launches.
 cli-build:

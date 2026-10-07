@@ -9,6 +9,9 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+if ($env:CI -ne 'true') {
+    & (Join-Path $PSScriptRoot 'prepare_windows_build_storage.ps1') -RepoRoot $repoRoot -CheckOnly:$CheckOnly
+}
 $requiredFlutterVersion = [version]'3.47.2'
 $minimumDartVersion = [version]'3.13.2'
 $requiredZigVersion = [version]'0.16.0'
