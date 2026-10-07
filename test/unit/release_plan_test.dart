@@ -26,6 +26,33 @@ void main() {
   });
 
   group('product changes', () {
+    test(
+      'falls back to merge commit body when pull request metadata is absent',
+      () {
+        final fallback = mergeCommitMetadataFallback(
+          'Merge pull request #620 from leynier/feature',
+          'feat: let ship choose staged-only or all working-tree changes\n\n'
+              'Additional release context.',
+        );
+
+        expect(
+          fallback.subject,
+          'feat: let ship choose staged-only or all working-tree changes',
+        );
+        expect(fallback.body, 'Additional release context.');
+      },
+    );
+
+    test('keeps merge subject when the commit body has no fallback title', () {
+      final fallback = mergeCommitMetadataFallback(
+        'Merge pull request #620 from leynier/feature',
+        '',
+      );
+
+      expect(fallback.subject, 'Merge pull request #620 from leynier/feature');
+      expect(fallback.body, isEmpty);
+    });
+
     test('separates path scopes and bookkeeping', () {
       expect(pathsMatchProduct(mobile, ['mobile/lib/main.dart']), isTrue);
       expect(pathsMatchProduct(desktop, ['mobile/lib/main.dart']), isFalse);

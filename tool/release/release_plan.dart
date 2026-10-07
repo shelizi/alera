@@ -342,11 +342,27 @@ Future<List<ReleaseChange>> _readChanges(
     var body = fields.sublist(2).join('\x1f').trim();
     final merge = RegExp(r'^Merge pull request #(\d+)\b').firstMatch(subject);
     if (merge != null) {
-      final pull = jsonDecode(
-        await _run('gh', ['api', 'repos/$repository/pulls/${merge.group(1)}']),
-      ) as Map<String, dynamic>;
-      subject = pull['title'] as String;
-      body = pull['body'] as String? ?? '';
+      final fallback = mergeCommitMetadataFallback(subject, body);
+      if (body.isNotEmpty) {
+        subject = fallback.subject;
+        body = fallback.body;
+      } else {
+        try {
+          final pull = jsonDecode(
+            await _run('gh', [
+              'api',
+              'repos/$repository/pulls/${merge.group(1)}',
+            ]),
+          ) as Map<String, dynamic>;
+          subject = pull['title'] as String;
+          body = pull['body'] as String? ?? '';
+        } on ProcessException catch (error) {
+          stderr.writeln(
+            'warning: could not read PR #${merge.group(1)} from $repository; '
+            'using merge commit metadata instead (${error.errorCode})',
+          );
+        }
+      }
     }
     List<String> paths;
     try {
@@ -361,6 +377,21 @@ Future<List<ReleaseChange>> _readChanges(
     changes.add(ReleaseChange(subject: subject, body: body, paths: paths));
   }
   return changes;
+}
+
+({String subject, String body}) mergeCommitMetadataFallback(
+  String subject,
+  String body,
+) {
+  final lines = const LineSplitter().convert(body);
+  final titleIndex = lines.indexWhere((line) => line.trim().isNotEmpty);
+  if (titleIndex < 0) {
+    return (subject: subject, body: body);
+  }
+  return (
+    subject: lines[titleIndex].trim(),
+    body: lines.skip(titleIndex + 1).join('\n').trim(),
+  );
 }
 
 int _pubspecBuildNumber(String path) {
