@@ -143,6 +143,7 @@ class const E2eGitBackend() implements GitBackend {
     String? baseRef,
     bool includeAllRefs = false,
     int? offset,
+    String? filePath,
   }) async => GitHistoryResult(
     items: const <GitHistoryItem>[],
     hasIncomingChanges: false,
@@ -286,4 +287,11 @@ class const E2eGitBackend() implements GitBackend {
     required String path,
     required int stashIndex,
   }) async {}
+
+  // This smoke backend intentionally implements only the Git calls exercised
+  // by the end-to-end add-project flow. Keep newly added GitBackend APIs from
+  // breaking the integration harness while still failing loudly if the smoke
+  // test unexpectedly starts depending on one of them.
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }

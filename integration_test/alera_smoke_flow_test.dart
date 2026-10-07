@@ -9,6 +9,7 @@ import 'package:alera/src/features/projects/infra/drift_project_config_repositor
 import 'package:alera/src/features/projects/infra/drift_project_repository.dart';
 import 'package:alera/src/features/projects/presentation/add_project_dialog.dart';
 import 'package:alera/src/features/settings/infra/drift_settings_repository.dart';
+import 'package:alera/src/features/workbench/application/terminal_runtime_lifecycle.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/infra/drift_workbench_repository.dart';
