@@ -34,7 +34,7 @@ mod termination;
 mod tests;
 mod title_tracker;
 #[cfg(windows)]
-mod windows_process_job;
+pub(crate) mod windows_process_job;
 pub(crate) mod workspace_shutdown;
 
 #[cfg(test)]

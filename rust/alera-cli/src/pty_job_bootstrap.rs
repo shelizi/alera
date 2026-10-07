@@ -1,7 +1,9 @@
+use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use std::process::Command;
 
+use portable_pty::CommandBuilder;
 use serde::Deserialize;
 use windows::core::{BOOL, PCWSTR};
 use windows::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
@@ -16,12 +18,43 @@ pub(crate) const BOOTSTRAP_EVENT_ENV: &str = "ALERA_PTY_JOB_BOOTSTRAP_EVENT";
 pub(crate) const BOOTSTRAP_PARENT_PID_ENV: &str = "ALERA_PTY_JOB_BOOTSTRAP_PARENT_PID";
 pub(crate) const BOOTSTRAP_REQUEST_ENV: &str = "ALERA_PTY_JOB_BOOTSTRAP_REQUEST";
 
-#[derive(Deserialize)]
+#[derive(Deserialize, serde::Serialize)]
 struct BootstrapRequest {
     shell: String,
     arguments: Vec<String>,
     #[serde(rename = "workingDirectory")]
     working_directory: String,
+}
+
+/// Builds the small Alera-owned process that portable-pty attaches to ConPTY.
+///
+/// portable-pty itself calls CreateProcessW without CREATE_NO_WINDOW. Starting
+/// a batch shim such as agy.cmd directly through that boundary can therefore
+/// flash a visible cmd.exe window. The Alera executable is a stable bootstrap
+/// target; once it is attached to ConPTY it launches the real command as a
+/// child so .cmd/.bat wrappers inherit the already-created pseudoconsole.
+pub(crate) fn command_builder(
+    shell: &str,
+    arguments: &[String],
+    working_directory: &str,
+    environment: &BTreeMap<String, String>,
+) -> Result<CommandBuilder, String> {
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("failed to locate PTY bootstrap executable: {error}"))?;
+    let request = serde_json::to_string(&BootstrapRequest {
+        shell: shell.to_string(),
+        arguments: arguments.to_vec(),
+        working_directory: working_directory.to_string(),
+    })
+    .map_err(|error| format!("failed to encode PTY launch: {error}"))?;
+    let mut command = CommandBuilder::new(executable);
+    command.arg(BOOTSTRAP_ARGUMENT);
+    command.env_clear();
+    for (key, value) in environment {
+        command.env(key, value);
+    }
+    command.env(BOOTSTRAP_REQUEST_ENV, request);
+    Ok(command)
 }
 
 pub(crate) fn is_invocation() -> bool {

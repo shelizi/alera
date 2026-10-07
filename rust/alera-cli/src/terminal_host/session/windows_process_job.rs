@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::ffi::{c_void, OsStr};
 use std::mem::size_of;
 use std::os::windows::ffi::OsStrExt;
@@ -16,15 +17,14 @@ use windows::Win32::System::Threading::{
 };
 
 use crate::pty_job_bootstrap::{
-    BOOTSTRAP_ARGUMENT, BOOTSTRAP_EVENT_ENV, BOOTSTRAP_PARENT_PID_ENV, BOOTSTRAP_REQUEST_ENV,
+    command_builder as pty_bootstrap_command, BOOTSTRAP_EVENT_ENV, BOOTSTRAP_PARENT_PID_ENV,
 };
 use crate::terminal_host::host_error::{HostError, HostResult};
-use crate::terminal_host::protocol::TerminalHostLaunch;
 
 /// Owns the Windows Job Object that contains one PTY shell and all processes it
 /// subsequently creates. Dropping the last handle terminates every process
 /// still in the job.
-pub(super) struct WindowsProcessJob {
+pub(crate) struct WindowsProcessJob {
     handle: OwnedHandle,
     release_event: OwnedHandle,
     release_event_name: String,
@@ -39,7 +39,7 @@ impl WindowsProcessJob {
         })
     }
 
-    pub(super) fn create() -> HostResult<Self> {
+    pub(crate) fn create() -> HostResult<Self> {
         // Safe: both arguments are null, so Windows creates an unnamed job with
         // default security attributes and returns an owned handle.
         let raw = unsafe { CreateJobObjectW(None, PCWSTR::null()) }.map_err(|error| {
@@ -78,33 +78,21 @@ impl WindowsProcessJob {
         })
     }
 
-    pub(super) fn bootstrap_command(
+    pub(crate) fn bootstrap_command(
         &self,
-        launch: &TerminalHostLaunch,
+        shell: &str,
+        arguments: &[String],
         working_directory: &str,
+        environment: &BTreeMap<String, String>,
     ) -> HostResult<CommandBuilder> {
-        let executable = std::env::current_exe().map_err(|error| {
-            HostError::state(format!("failed to locate PTY Job bootstrap: {error}"))
-        })?;
-        let request = serde_json::to_string(&serde_json::json!({
-            "shell": launch.shell,
-            "arguments": launch.arguments,
-            "workingDirectory": working_directory,
-        }))
-        .map_err(|error| HostError::state(format!("failed to encode PTY launch: {error}")))?;
-        let mut command = CommandBuilder::new(executable);
-        command.arg(BOOTSTRAP_ARGUMENT);
-        command.env_clear();
-        for (key, value) in &launch.environment {
-            command.env(key, value);
-        }
+        let mut command = pty_bootstrap_command(shell, arguments, working_directory, environment)
+            .map_err(|error| HostError::state(error))?;
         command.env(BOOTSTRAP_EVENT_ENV, &self.release_event_name);
         command.env(BOOTSTRAP_PARENT_PID_ENV, std::process::id().to_string());
-        command.env(BOOTSTRAP_REQUEST_ENV, request);
         Ok(command)
     }
 
-    pub(super) fn assign_and_release(&self, child: &dyn Child) -> HostResult<()> {
+    pub(crate) fn assign_and_release(&self, child: &dyn Child) -> HostResult<()> {
         let process = child.as_raw_handle().ok_or_else(|| {
             HostError::state("PTY Job bootstrap did not expose its process handle")
         })?;

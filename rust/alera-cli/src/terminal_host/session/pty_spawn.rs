@@ -39,7 +39,12 @@ pub(super) fn spawn_pty(
         })
         .map_err(|error| HostError::state(error.to_string()))?;
     #[cfg(windows)]
-    let mut command = process_job.bootstrap_command(&launch, working_directory)?;
+    let mut command = process_job.bootstrap_command(
+        &launch.shell,
+        &launch.arguments,
+        working_directory,
+        &launch.environment,
+    )?;
     #[cfg(not(windows))]
     let _ = working_directory;
     #[cfg(not(windows))]

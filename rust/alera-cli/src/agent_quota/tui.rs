@@ -100,6 +100,10 @@ async fn run_tui_command(
         environment.clone(),
     );
     tokio::task::spawn_blocking(move || -> Result<String> {
+        #[cfg(windows)]
+        let process_job =
+            crate::terminal_host::session::windows_process_job::WindowsProcessJob::create()
+                .map_err(|error| anyhow!(error.to_string()))?;
         let pty_system = native_pty_system();
         let pair = pty_system.openpty(PtySize {
             rows: 46,
@@ -108,28 +112,20 @@ async fn run_tui_command(
             pixel_height: 0,
         })?;
         #[cfg(windows)]
-        let (command_binary, command_arguments) = {
-            let path = resolved
-                .as_ref()
-                .and_then(|r| r.get("PATH").map(String::as_str));
-            let resolved_path =
-                alera_core::process_shell::resolve_windows_executable(&command, None, path);
-            let lower = resolved_path.to_lowercase();
-            if lower.ends_with(".cmd") || lower.ends_with(".bat") {
-                let mut cmd_args = vec!["/c".to_string(), resolved_path];
-                cmd_args.extend(arguments);
-                ("cmd.exe".to_string(), cmd_args)
-            } else {
-                (resolved_path, arguments)
-            }
-        };
+        let builder = windows_tui_command_builder(
+            &process_job,
+            &command,
+            &arguments,
+            resolved,
+            environment,
+        )?;
         #[cfg(not(windows))]
-        let (command_binary, command_arguments) = (command.clone(), arguments);
-
-        let mut builder = CommandBuilder::new(&command_binary);
-        for argument in &command_arguments {
+        let mut builder = CommandBuilder::new(&command);
+        #[cfg(not(windows))]
+        for argument in &arguments {
             builder.arg(argument);
         }
+        #[cfg(not(windows))]
         match resolved {
             // `CommandBuilder` seeds itself from this process, so clearing is
             // what makes the resolved environment authoritative.
@@ -151,6 +147,10 @@ async fn run_tui_command(
             .spawn_command(builder)
             .with_context(|| format!("{command} CLI not found or could not start"))?;
         drop(pair.slave);
+        #[cfg(windows)]
+        process_job
+            .assign_and_release(child.as_ref())
+            .map_err(|error| anyhow!(error.to_string()))?;
         let mut killer = child.clone_killer();
         let mut reader = pair.master.try_clone_reader()?;
         let mut writer = pair.master.take_writer()?;
@@ -246,11 +246,65 @@ async fn run_tui_command(
             }
         }
         let _ = killer.kill();
+        #[cfg(windows)]
+        drop(process_job);
         let _ = child.wait();
         Ok(String::from_utf8_lossy(&output).to_string())
     })
     .await
     .context("Quota PTY task failed")?
+}
+
+#[cfg(windows)]
+fn windows_tui_command_builder(
+    process_job: &crate::terminal_host::session::windows_process_job::WindowsProcessJob,
+    command: &str,
+    arguments: &[String],
+    resolved: Option<BTreeMap<String, String>>,
+    overrides: BTreeMap<String, String>,
+) -> Result<CommandBuilder> {
+    let environment = match resolved {
+        Some(environment) => environment,
+        None => {
+            let mut environment = std::env::vars().collect::<BTreeMap<_, _>>();
+            environment.extend(overrides);
+            environment.insert("TERM".to_string(), "xterm-256color".to_string());
+            environment
+        }
+    };
+    let working_directory = std::env::current_dir()
+        .context("Could not determine quota TUI working directory")?
+        .to_string_lossy()
+        .into_owned();
+    process_job
+        .bootstrap_command(
+            command,
+            arguments,
+            &working_directory,
+            &environment,
+        )
+        .map_err(|error| anyhow!(error.to_string()))
+}
+
+#[cfg(all(test, windows))]
+#[test]
+fn windows_tui_launches_through_alera_bootstrap_instead_of_cmd() {
+    let process_job =
+        crate::terminal_host::session::windows_process_job::WindowsProcessJob::create()
+            .expect("quota PTY process job");
+    let builder = windows_tui_command_builder(&process_job, "agy", &[], None, BTreeMap::new())
+        .expect("quota TUI command builder");
+    let argv = builder.get_argv();
+
+    assert_eq!(
+        std::path::Path::new(&argv[0]),
+        std::env::current_exe().expect("current executable")
+    );
+    assert_eq!(
+        argv[1],
+        std::ffi::OsString::from(crate::pty_job_bootstrap::BOOTSTRAP_ARGUMENT)
+    );
+    assert_ne!(argv[0].to_string_lossy().to_lowercase(), "cmd.exe");
 }
 
 fn agy_usage_complete(output: &str) -> bool {
