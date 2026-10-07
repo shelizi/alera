@@ -59,6 +59,27 @@ Set<Color> _textSpanColors(InlineSpan span) {
   return colors;
 }
 
+List<String> _textSpanBackgroundTexts(InlineSpan span) {
+  final texts = <String>[];
+
+  void collect(InlineSpan current) {
+    if (current case final TextSpan textSpan) {
+      final text = textSpan.text;
+      if (text != null &&
+          text.isNotEmpty &&
+          textSpan.style?.backgroundColor != null) {
+        texts.add(text);
+      }
+      for (final child in textSpan.children ?? const <InlineSpan>[]) {
+        collect(child);
+      }
+    }
+  }
+
+  collect(span);
+  return texts;
+}
+
 void main() {
   _registerWorkspaceGitDiffSurfacePullRequestTests();
   _registerWorkspaceGitDiffSurfaceReadingDiffTests();
@@ -277,6 +298,50 @@ void main() {
           .single
           .args,
       containsPair('oldSide', false),
+    );
+  });
+
+  testWidgets('full-file diff highlights only changed character segments', (
+    tester,
+  ) async {
+    final backend = FakeGitBackend()
+      ..gitDiffResult = const GitDiffResult(
+        files: <GitDiffFile>[
+          GitDiffFile(
+            path: 'lib/main.dart',
+            area: .unstaged,
+            status: .modified,
+            lines: <GitDiffLine>[
+              GitDiffLine.hunk('@@ -1,1 +1,1 @@'),
+              GitDiffLine.deletion('-const value = 12345;'),
+              GitDiffLine.addition('+const value = 12945;'),
+            ],
+          ),
+        ],
+      )
+      ..diffBlobBytesBySide[(filePath: 'lib/main.dart', oldSide: false)] =
+          Uint8List.fromList('const value = 12945;\n'.codeUnits);
+
+    await _pumpDiffSurface(
+      tester,
+      backend: backend,
+      tab: _diffTab(filePath: 'lib/main.dart', title: 'main.dart unstaged'),
+    );
+    await tester.pumpAndSettle();
+
+    Text changedText(String text) => tester.widget<Text>(
+      find.byWidgetPredicate(
+        (widget) => widget is Text && widget.textSpan?.toPlainText() == text,
+      ),
+    );
+
+    expect(
+      _textSpanBackgroundTexts(changedText('const value = 12345;').textSpan!),
+      <String>['3'],
+    );
+    expect(
+      _textSpanBackgroundTexts(changedText('const value = 12945;').textSpan!),
+      <String>['9'],
     );
   });
 

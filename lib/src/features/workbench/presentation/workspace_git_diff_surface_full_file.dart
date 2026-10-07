@@ -22,11 +22,13 @@ final class _FullFileLine {
     required this.lineNumber,
     required this.text,
     required this.kind,
+    this.intralineRanges = const <_IntralineRange>[],
   });
 
   final int? lineNumber;
   final String text;
   final GitDiffLineKind kind;
+  final List<_IntralineRange> intralineRanges;
 }
 
 class const _FullFileDiffRow(final _FullFileLine line) extends _DiffRow {
@@ -58,6 +60,25 @@ class const _FullFileDiffLine({required final _FullFileLine line})
           fontSize: 12,
           color: AleraTokens.foreground,
         );
+    final baseSpan =
+        syntax?.lineSpan(
+          line.text,
+          lineIndex: math.max((line.lineNumber ?? 1) - 1, 0),
+        ) ??
+        TextSpan(text: line.text, style: codeStyle);
+    final intralineBackground = line.kind == GitDiffLineKind.addition
+        ? AleraTokens.success.withValues(alpha: 0.22)
+        : AleraTokens.error.withValues(alpha: 0.22);
+    final renderedSpan =
+        line.kind == GitDiffLineKind.addition ||
+            line.kind == GitDiffLineKind.deletion
+        ? _intralineHighlightedSpan(
+            text: line.text,
+            baseSpan: baseSpan,
+            ranges: line.intralineRanges,
+            background: intralineBackground,
+          )
+        : baseSpan;
     return DecoratedBox(
       decoration: BoxDecoration(color: background),
       child: Padding(
@@ -97,11 +118,7 @@ class const _FullFileDiffLine({required final _FullFileLine line})
             const SizedBox(width: AleraTokens.space6),
             Expanded(
               child: Text.rich(
-                syntax?.lineSpan(
-                      line.text,
-                      lineIndex: math.max((line.lineNumber ?? 1) - 1, 0),
-                    ) ??
-                    TextSpan(text: line.text, style: codeStyle),
+                renderedSpan,
                 maxLines: 1,
                 overflow: TextOverflow.visible,
                 softWrap: false,
@@ -125,7 +142,12 @@ class _FullFileForcedDiffRowSpan implements _DiffRowSpan {
 
   @override
   _DiffRow rowAt(int index) => _FullFileDiffRow(
-    _FullFileLine(lineNumber: index + 1, text: lines[index], kind: kind),
+    _FullFileLine(
+      lineNumber: index + 1,
+      text: lines[index],
+      kind: kind,
+      intralineRanges: _fullIntralineRange(lines[index]),
+    ),
   );
 }
 
@@ -175,6 +197,7 @@ List<_DiffRowSpan>? _buildProjectedFullFileRowSpans(
     ];
   }
   if (file.fullFileRows.isEmpty) return null;
+  final intralineRanges = _buildIntralineRangesForDiffLines(file.lines);
   final spans = <_DiffRowSpan>[];
   final materialized = <_DiffRow>[];
 
@@ -221,6 +244,7 @@ List<_DiffRowSpan>? _buildProjectedFullFileRowSpans(
               lineNumber: projection.lineNumber,
               text: text,
               kind: diffLine.kind,
+              intralineRanges: intralineRanges[diffLineIndex],
             ),
           ),
         );
@@ -246,12 +270,18 @@ List<_DiffRow>? _buildFullFileRows(
     return <_DiffRow>[
       for (var i = 0; i < lines.length; i++)
         _FullFileDiffRow(
-          _FullFileLine(lineNumber: i + 1, text: lines[i], kind: forceKind),
+          _FullFileLine(
+            lineNumber: i + 1,
+            text: lines[i],
+            kind: forceKind,
+            intralineRanges: _fullIntralineRange(lines[i]),
+          ),
         ),
     ];
   }
 
   final rows = <_DiffRow>[];
+  final intralineRanges = _buildIntralineRangesForDiffLines(file.lines);
   var nextFullIndex = 0;
   int? oldLine;
   int? newLine;
@@ -275,7 +305,12 @@ List<_DiffRow>? _buildFullFileRows(
     }
   }
 
-  for (final diffLine in file.lines) {
+  for (
+    var diffLineIndex = 0;
+    diffLineIndex < file.lines.length;
+    diffLineIndex += 1
+  ) {
+    final diffLine = file.lines[diffLineIndex];
     if (diffLine.kind == GitDiffLineKind.hunk) {
       final match = _hunkHeaderRegExp.firstMatch(diffLine.text);
       if (match == null) continue;
@@ -292,6 +327,7 @@ List<_DiffRow>? _buildFullFileRows(
             lineNumber: oldLine,
             text: _extractContent(diffLine.text),
             kind: GitDiffLineKind.deletion,
+            intralineRanges: intralineRanges[diffLineIndex],
           ),
         ),
       );
@@ -306,6 +342,7 @@ List<_DiffRow>? _buildFullFileRows(
             lineNumber: lineNumber,
             text: _extractContent(diffLine.text),
             kind: GitDiffLineKind.addition,
+            intralineRanges: intralineRanges[diffLineIndex],
           ),
         ),
       );

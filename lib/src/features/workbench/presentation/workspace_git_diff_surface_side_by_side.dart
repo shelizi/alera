@@ -104,23 +104,43 @@ class const _SideBySideDiffRow({
 }) extends _DiffRow {
   @override
   Widget build(BuildContext context) {
+    final intraline = _intralinePairForSides(left, right);
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
-        Expanded(child: _SideBySideCell(line: left, isLeft: true)),
-        Expanded(child: _SideBySideCell(line: right, isLeft: false)),
+        Expanded(
+          child: _SideBySideCell(
+            line: left,
+            isLeft: true,
+            intralineRanges: intraline.left,
+          ),
+        ),
+        Expanded(
+          child: _SideBySideCell(
+            line: right,
+            isLeft: false,
+            intralineRanges: intraline.right,
+          ),
+        ),
       ],
     );
   }
 
   @override
-  Widget buildSideBySidePane(BuildContext context, {required bool isLeft}) =>
-      _SideBySideCell(line: isLeft ? left : right, isLeft: false);
+  Widget buildSideBySidePane(BuildContext context, {required bool isLeft}) {
+    final intraline = _intralinePairForSides(left, right);
+    return _SideBySideCell(
+      line: isLeft ? left : right,
+      isLeft: false,
+      intralineRanges: isLeft ? intraline.left : intraline.right,
+    );
+  }
 }
 
 class const _SideBySideCell({
   required final _DiffSideLine? line,
   required final bool isLeft,
+  final List<_IntralineRange> intralineRanges = const <_IntralineRange>[],
 }) extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
@@ -150,6 +170,24 @@ class const _SideBySideCell({
           fontSize: 12,
           color: AleraTokens.foreground,
         );
+    final text = line?.text ?? '';
+    final baseSpan =
+        syntax?.lineSpan(
+          text,
+          lineIndex: math.max((line?.lineNumber ?? 1) - 1, 0),
+        ) ??
+        TextSpan(text: text, style: codeStyle);
+    final intralineBackground = switch (kind) {
+      GitDiffLineKind.addition => AleraTokens.success.withValues(alpha: 0.22),
+      GitDiffLineKind.deletion => AleraTokens.error.withValues(alpha: 0.22),
+      _ => Colors.transparent,
+    };
+    final renderedSpan = _intralineHighlightedSpan(
+      text: text,
+      baseSpan: baseSpan,
+      ranges: intralineRanges,
+      background: intralineBackground,
+    );
     final cell = ClipRect(
       child: DecoratedBox(
         decoration: BoxDecoration(
@@ -195,11 +233,7 @@ class const _SideBySideCell({
               const SizedBox(width: AleraTokens.space6),
               Expanded(
                 child: Text.rich(
-                  syntax?.lineSpan(
-                        line?.text ?? '',
-                        lineIndex: math.max((line?.lineNumber ?? 1) - 1, 0),
-                      ) ??
-                      TextSpan(text: line?.text ?? '', style: codeStyle),
+                  renderedSpan,
                   maxLines: 1,
                   overflow: TextOverflow.visible,
                   softWrap: false,

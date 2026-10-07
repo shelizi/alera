@@ -682,15 +682,18 @@ class _MaterializedDiffRowSpan implements _DiffRowSpan {
 }
 
 class _DiffLineRowSpan implements _DiffRowSpan {
-  const _DiffLineRowSpan(this.lines);
+  _DiffLineRowSpan(this.lines)
+    : intralineRanges = _buildIntralineRangesForDiffLines(lines);
 
   final List<GitDiffLine> lines;
+  final List<List<_IntralineRange>> intralineRanges;
 
   @override
   int get length => lines.length;
 
   @override
-  _DiffRow rowAt(int index) => _DiffLineRow(lines[index]);
+  _DiffRow rowAt(int index) =>
+      _DiffLineRow(lines[index], intralineRanges: intralineRanges[index]);
 }
 
 class _DiffRowsBuilder {
@@ -996,9 +999,13 @@ class const _ImageDiffRow({
   );
 }
 
-class const _DiffLineRow(final GitDiffLine text) extends _DiffRow {
+class const _DiffLineRow(
+  final GitDiffLine text, {
+  final List<_IntralineRange> intralineRanges = const <_IntralineRange>[],
+}) extends _DiffRow {
   @override
-  Widget build(BuildContext context) => _DiffLine(line: text);
+  Widget build(BuildContext context) =>
+      _DiffLine(line: text, intralineRanges: intralineRanges);
 }
 
 class const _DiffStats({required final GitDiffFile file})
@@ -1026,8 +1033,10 @@ class const _DiffStats({required final GitDiffFile file})
   }
 }
 
-class const _DiffLine({required final GitDiffLine line})
-    extends StatelessWidget {
+class const _DiffLine({
+  required final GitDiffLine line,
+  final List<_IntralineRange> intralineRanges = const <_IntralineRange>[],
+}) extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final (color, background) = switch (line.kind) {
@@ -1059,6 +1068,47 @@ class const _DiffLine({required final GitDiffLine line})
       fontSize: 12,
       color: syntax?.textStyle.color ?? color,
     );
+    final isChangedLine =
+        line.kind == GitDiffLineKind.addition ||
+        line.kind == GitDiffLineKind.deletion;
+    final changedContent = isChangedLine ? _extractContent(line.text) : content;
+    final contentBaseSpan = syntaxHighlighted
+        ? syntax.lineSpan(changedContent)
+        : TextSpan(text: changedContent, style: baseStyle);
+    final intralineBackground = line.kind == GitDiffLineKind.addition
+        ? AleraTokens.success.withValues(alpha: 0.22)
+        : AleraTokens.error.withValues(alpha: 0.22);
+    final highlightedContent = isChangedLine
+        ? _intralineHighlightedSpan(
+            text: changedContent,
+            baseSpan: contentBaseSpan,
+            ranges: intralineRanges,
+            background: intralineBackground,
+          )
+        : contentBaseSpan;
+    final renderedSpan = isChangedLine
+        ? TextSpan(
+            style: baseStyle,
+            children: <InlineSpan>[
+              TextSpan(
+                text: line.text.isEmpty ? '' : line.text.substring(0, 1),
+                style: TextStyle(color: color),
+              ),
+              highlightedContent,
+            ],
+          )
+        : syntaxHighlighted
+        ? TextSpan(
+            style: baseStyle,
+            children: <InlineSpan>[
+              TextSpan(
+                text: marker,
+                style: TextStyle(color: color),
+              ),
+              syntax.lineSpan(content),
+            ],
+          )
+        : TextSpan(text: line.text, style: baseStyle);
     return DecoratedBox(
       decoration: BoxDecoration(color: background),
       child: Padding(
@@ -1067,18 +1117,7 @@ class const _DiffLine({required final GitDiffLine line})
           vertical: AleraTokens.space2,
         ),
         child: Text.rich(
-          syntaxHighlighted
-              ? TextSpan(
-                  style: baseStyle,
-                  children: <InlineSpan>[
-                    TextSpan(
-                      text: marker,
-                      style: TextStyle(color: color),
-                    ),
-                    syntax.lineSpan(content),
-                  ],
-                )
-              : TextSpan(text: line.text, style: baseStyle),
+          renderedSpan,
           maxLines: 1,
           overflow: .visible,
           softWrap: false,

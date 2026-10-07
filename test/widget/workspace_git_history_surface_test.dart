@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:alera/src/design_system/feedback/alera_toast.dart';
 import 'package:alera/src/features/projects/domain/project.dart';
 import 'package:alera/src/features/workbench/application/workbench_state.dart';
@@ -7,6 +9,7 @@ import 'package:alera/src/shared/infra/git/git_diff_models.dart';
 import 'package:alera/src/shared/infra/git/git_history_graph.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../unit/fake_git_backend.dart';
@@ -728,6 +731,83 @@ void main() {
     expect(diffTabs.single.gitDiffScope, WorkspaceGitDiffScope.file);
     expect(diffTabs.single.filePath, 'lib/main.dart');
     expect(diffTabs.single.gitDiffOldPath, 'lib/old_main.dart');
+  });
+  testWidgets('modifier-clicking two file history commits compares the range', (
+    tester,
+  ) async {
+    final backend =
+        gitHistoryBackend(<GitHistoryItem>[
+            gitHistoryCommit(
+              'new123',
+              parents: <String>['old123'],
+              subject: 'New Version',
+            ),
+            gitHistoryCommit(
+              'old123',
+              parents: <String>['root123'],
+              subject: 'Old Version',
+            ),
+          ])
+          ..compareRangeResult = const GitCommitCompareResult(
+            summary: GitCommitCompareSummary(
+              commitOid: 'new123',
+              parentOid: 'old123',
+              compareRef: 'new123',
+              baseRef: 'old123',
+              changedFiles: 1,
+              status: .ready,
+            ),
+            entries: <GitCommitChangeEntry>[
+              GitCommitChangeEntry(path: 'lib/main.dart', status: .modified),
+            ],
+          );
+    final tab = gitHistoryTab().copyWith(
+      payload: <String, Object?>{
+        workspaceTabGitHistoryFilePathPayloadKey: 'lib/main.dart',
+      },
+    );
+    final repository = GitHistoryFakeWorkbenchRepository()..tabs.add(tab);
+
+    await pumpGitHistorySurface(
+      tester,
+      backend: backend,
+      repository: repository,
+      tab: tab,
+    );
+    await tester.pumpAndSettle();
+
+    final modifier = Platform.isMacOS
+        ? LogicalKeyboardKey.metaLeft
+        : LogicalKeyboardKey.controlLeft;
+    await tester.sendKeyDownEvent(modifier);
+    await tester.tap(find.text('Old Version'));
+    await tester.pump();
+    expect(
+      backend.calls.where((call) => call.method == 'compareRange'),
+      isEmpty,
+    );
+
+    await tester.tap(find.text('New Version'));
+    await tester.pumpAndSettle();
+    await tester.sendKeyUpEvent(modifier);
+
+    final compareCall = backend.calls.singleWhere(
+      (call) => call.method == 'compareRange',
+    );
+    expect(compareCall.args['baseRef'], 'old123');
+    expect(compareCall.args['headRef'], 'new123');
+    expect(
+      backend.calls.where((call) => call.method == 'commitCompare'),
+      isEmpty,
+    );
+    final diffTabs = repository.tabs
+        .where((tab) => tab.kind == WorkspaceTabKind.gitDiff)
+        .toList();
+    expect(diffTabs, hasLength(1));
+    expect(diffTabs.single.gitDiffScope, WorkspaceGitDiffScope.file);
+    expect(diffTabs.single.filePath, 'lib/main.dart');
+    expect(diffTabs.single.gitDiffCommitOid, 'new123');
+    expect(diffTabs.single.gitDiffParentOid, 'old123');
   });
   testWidgets('secondary tapping a commit row copies its hash', (tester) async {
     String? copiedText;

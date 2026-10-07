@@ -46,6 +46,7 @@ part 'workspace_git_diff_surface_loading.dart';
 part 'workspace_git_diff_surface_syntax.dart';
 part 'workspace_git_diff_surface_full_file.dart';
 part 'workspace_git_diff_surface_side_by_side.dart';
+part 'workspace_git_diff_surface_intraline.dart';
 part 'workspace_git_diff_surface_editable.dart';
 
 class const WorkspaceGitDiffSurface({
