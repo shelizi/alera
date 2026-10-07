@@ -9,6 +9,44 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   group('AgentStatusNotificationActivationService', () {
     test(
+      'activation queue defers selection until workbench is ready',
+      () async {
+        var ready = false;
+        final activated = <String>[];
+        final queue = AgentStatusNotificationActivationQueue(
+          isReady: () => ready,
+          activate: (payload) async => activated.add(payload),
+        );
+
+        await queue.handle('first');
+        expect(activated, isEmpty);
+
+        ready = true;
+        await queue.flushIfReady();
+        expect(activated, <String>['first']);
+      },
+    );
+
+    test(
+      'activation queue keeps only the latest cold-start selection',
+      () async {
+        var ready = false;
+        final activated = <String>[];
+        final queue = AgentStatusNotificationActivationQueue(
+          isReady: () => ready,
+          activate: (payload) async => activated.add(payload),
+        );
+
+        await queue.handle('first');
+        await queue.handle('second');
+        ready = true;
+        await queue.flushIfReady();
+
+        expect(activated, <String>['second']);
+      },
+    );
+
+    test(
       'focuses the app, selects workspace, activates tab, and focuses terminal',
       () async {
         final target = _fixture();

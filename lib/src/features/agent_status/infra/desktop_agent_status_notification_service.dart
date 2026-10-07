@@ -55,19 +55,25 @@ class DesktopAgentStatusNotificationService({
         ),
       ),
       onDidReceiveNotificationResponse: (response) {
-        final payload = response.payload;
-        if (payload == null || payload.isEmpty) {
-          return;
-        }
-        for (final handler
-            in List<AgentStatusNotificationSelectionHandler>.from(
-              _selectionHandlers,
-            )) {
-          handler(payload);
-        }
+        _dispatchSelection(response.payload);
       },
     );
     _initialized = true;
+    final launchDetails = await _plugin.getNotificationAppLaunchDetails();
+    if (launchDetails?.didNotificationLaunchApp ?? false) {
+      _dispatchSelection(launchDetails?.notificationResponse?.payload);
+    }
+  }
+
+  void _dispatchSelection(String? payload) {
+    if (payload == null || payload.isEmpty) {
+      return;
+    }
+    for (final handler in List<AgentStatusNotificationSelectionHandler>.from(
+      _selectionHandlers,
+    )) {
+      handler(payload);
+    }
   }
 
   @override

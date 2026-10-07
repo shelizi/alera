@@ -65,6 +65,10 @@ void agentStatusNotificationCoordinator(Ref ref) {
   );
   var initialized = false;
   Future<void>? initializing;
+  final activationQueue = AgentStatusNotificationActivationQueue(
+    isReady: () => ref.read(workbenchControllerProvider).bootstrapped,
+    activate: activationService.activatePayload,
+  );
 
   Future<void> ensureInitialized() async {
     if (initialized) {
@@ -74,8 +78,8 @@ void agentStatusNotificationCoordinator(Ref ref) {
         .initialize(
           onSelected: (payload) {
             unawaited(
-              activationService
-                  .activatePayload(payload)
+              activationQueue
+                  .handle(payload)
                   .catchError(_ignoreProviderAsyncError),
             );
           },
@@ -85,6 +89,17 @@ void agentStatusNotificationCoordinator(Ref ref) {
         });
     await initializing;
   }
+
+  ref.listen<bool>(
+    workbenchControllerProvider.select((state) => state.bootstrapped),
+    (previous, next) {
+      if (next) {
+        unawaited(
+          activationQueue.flushIfReady().catchError(_ignoreProviderAsyncError),
+        );
+      }
+    },
+  );
 
   final coalescing = ref.watch(agentStatusNotificationCoalescingProvider);
   final scheduler = AgentStatusNotificationScheduler(

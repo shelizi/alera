@@ -26,6 +26,33 @@ abstract interface class AgentNotificationTerminalFocusRequester {
   });
 }
 
+class AgentStatusNotificationActivationQueue({
+  required bool Function() isReady,
+  required Future<void> Function(String payload) activate,
+}) {
+  final bool Function() _isReady = isReady;
+  final Future<void> Function(String payload) _activate = activate;
+  String? _pendingPayload;
+
+  Future<void> handle(String payload) async {
+    if (!_isReady()) {
+      _pendingPayload = payload;
+      return;
+    }
+    _pendingPayload = null;
+    await _activate(payload);
+  }
+
+  Future<void> flushIfReady() async {
+    final payload = _pendingPayload;
+    if (payload == null || !_isReady()) {
+      return;
+    }
+    _pendingPayload = null;
+    await _activate(payload);
+  }
+}
+
 class AgentStatusNotificationActivationService({
   required AgentNotificationWindowActivator windowActivator,
   required AgentNotificationWorkbenchNavigator navigator,
