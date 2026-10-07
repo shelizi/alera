@@ -258,6 +258,57 @@ void main() {
         ),
       );
     });
+
+    test('root commit preserves unrelated active lanes', () {
+      const items = <GitHistoryItem>[
+        GitHistoryItem(
+          id: 'main-change',
+          parentIds: <String>['main-file-root'],
+          subject: 'Main Change',
+          message: 'Main Change',
+        ),
+        GitHistoryItem(
+          id: 'side-change',
+          parentIds: <String>['side-file-root'],
+          subject: 'Side Change',
+          message: 'Side Change',
+        ),
+        GitHistoryItem(
+          id: 'main-file-root',
+          parentIds: <String>[],
+          subject: 'Main File Root',
+          message: 'Main File Root',
+        ),
+        GitHistoryItem(
+          id: 'side-file-root',
+          parentIds: <String>[],
+          subject: 'Side File Root',
+          message: 'Side File Root',
+        ),
+      ];
+
+      final viewModels = buildGitHistoryViewModelsFromItems(items);
+      final mainRoot = viewModels.singleWhere(
+        (viewModel) => viewModel.historyItem.id == 'main-file-root',
+      );
+      final sideRoot = viewModels.singleWhere(
+        (viewModel) => viewModel.historyItem.id == 'side-file-root',
+      );
+
+      expect(
+        mainRoot.inputSwimlanes.map((node) => node.id),
+        containsAll(<String>['main-file-root', 'side-file-root']),
+      );
+      expect(
+        mainRoot.outputSwimlanes.map((node) => node.id),
+        <String>['side-file-root'],
+        reason: 'finishing one root must not drop another file-history lane that continues below it',
+      );
+      expect(sideRoot.inputSwimlanes.map((node) => node.id), <String>[
+        'side-file-root',
+      ]);
+    });
+
     test('projection continuation preserves lane colors across pages', () {
       const firstPage = <GitHistoryItem>[
         GitHistoryItem(

@@ -149,22 +149,23 @@ GitHistoryProjectionPage buildGitHistoryProjectionPage(
     final outputSwimlanes = <GitHistoryGraphNode>[];
     var firstParentAdded = false;
 
-    if (historyItem.parentIds.isNotEmpty) {
-      for (final node in inputSwimlanes) {
-        if (node.id == historyItem.id) {
-          if (!firstParentAdded) {
-            outputSwimlanes.add(
-              GitHistoryGraphNode(
-                id: historyItem.parentIds.first,
-                color: _labelColor(historyItem, colorMap) ?? node.color,
-              ),
-            );
-            firstParentAdded = true;
-          }
-          continue;
+    for (final node in inputSwimlanes) {
+      if (node.id == historyItem.id) {
+        if (!firstParentAdded && historyItem.parentIds.isNotEmpty) {
+          outputSwimlanes.add(
+            GitHistoryGraphNode(
+              id: historyItem.parentIds.first,
+              color: _labelColor(historyItem, colorMap) ?? node.color,
+            ),
+          );
+          firstParentAdded = true;
         }
-        outputSwimlanes.add(_cloneNode(node));
+        // This lane ends here when the current item has no visible parent.
+        // Other active lanes must keep flowing through this row; file-history
+        // filtering can legitimately produce several independent roots.
+        continue;
       }
+      outputSwimlanes.add(_cloneNode(node));
     }
 
     for (
