@@ -132,6 +132,56 @@ extension _WorkspaceGitDiffPanelNavigation on _WorkspaceGitDiffPanelState {
     unawaited(_revealWorkspaceItemInFileManager(workspaceRelativePath));
   }
 
+  void _openSourceFileHistory(String sourceRelativePath) {
+    final workspaceRelativePath = widget.sourceControlScope
+        .toWorkspaceRelativePath(sourceRelativePath);
+    if (workspaceRelativePath == null) {
+      return;
+    }
+    unawaited(
+      openWorkspaceFileHistory(
+        context: context,
+        ref: ref,
+        workspace: widget.workspace,
+        relativePath: workspaceRelativePath,
+      ),
+    );
+  }
+
+  void _compareSourceFileWithLatestGitRevision(String sourceRelativePath) {
+    final workspaceRelativePath = widget.sourceControlScope
+        .toWorkspaceRelativePath(sourceRelativePath);
+    if (workspaceRelativePath == null) {
+      return;
+    }
+    unawaited(
+      compareWorkspaceFileWithLatestGitRevision(
+        context: context,
+        ref: ref,
+        workspace: widget.workspace,
+        relativePath: workspaceRelativePath,
+        sourceControlScope: widget.sourceControlScope,
+      ),
+    );
+  }
+
+  void _compareSourceFileWithBranch(String sourceRelativePath) {
+    final workspaceRelativePath = widget.sourceControlScope
+        .toWorkspaceRelativePath(sourceRelativePath);
+    if (workspaceRelativePath == null) {
+      return;
+    }
+    unawaited(
+      compareWorkspaceFileWithBranch(
+        context: context,
+        ref: ref,
+        workspace: widget.workspace,
+        relativePath: workspaceRelativePath,
+        sourceControlScope: widget.sourceControlScope,
+      ),
+    );
+  }
+
   Future<void> _revealWorkspaceItemInFileManager(String relativePath) async {
     final result = await ref
         .read(workspaceFolderOpenerProvider)

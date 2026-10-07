@@ -35,6 +35,7 @@ import 'package:alera/src/features/workbench/domain/workspace_source_control_sco
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/application/workbench_controller.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_path_drop.dart';
+import 'package:alera/src/features/workbench/presentation/workspace_git_file_compare.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_git_ignore.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_git_history_actions.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_git_history_graph.dart';
@@ -362,6 +363,10 @@ class _WorkspaceGitDiffPanelState extends ConsumerState<WorkspaceGitDiffPanel> {
                       externalEditor: resolvedEditor,
                       installedExternalEditors: installedEditors,
                       onRevealInExplorer: _revealInExplorer,
+                      onViewFileHistory: _openSourceFileHistory,
+                      onCompareLatestGitRevision:
+                          _compareSourceFileWithLatestGitRevision,
+                      onCompareGitBranch: _compareSourceFileWithBranch,
                       onAddToGitIgnore: _addToGitIgnore,
                       onStage: _stageEntry,
                       onUnstage: _unstageEntry,

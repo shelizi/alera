@@ -122,11 +122,26 @@ extension _WorkspaceGitHistorySurfaceActions
         );
       }
       _compareCache[cacheKey] = compare;
+      final fileHistoryPath = widget.tab.gitHistoryFilePath;
+      final fileEntry = fileHistoryPath == null
+          ? null
+          : _fileHistoryCompareEntry(compare.entries, fileHistoryPath);
+      final sourcePath = fileHistoryPath == null
+          ? null
+          : fileEntry?.path ?? fileHistoryPath;
+      final relativePath = _sourceControlScope.toWorkspaceRelativePath(
+        sourcePath,
+      );
+      final oldPath = _sourceControlScope.toWorkspaceRelativePath(
+        fileEntry?.oldPath,
+      );
       await ref
           .read(workbenchControllerProvider.notifier)
           .openGitCommitDiffTab(
             workspace: widget.workspace,
-            scope: .all,
+            relativePath: relativePath,
+            oldPath: oldPath,
+            scope: fileHistoryPath == null ? .all : .file,
             gitDiffRoot: _sourceControlScope.relativeRoot,
             commitOid: compare.summary.commitOid,
             parentOid: compare.summary.parentOid,
@@ -143,6 +158,18 @@ extension _WorkspaceGitHistorySurfaceActions
         );
       }
     }
+  }
+
+  GitCommitChangeEntry? _fileHistoryCompareEntry(
+    List<GitCommitChangeEntry> entries,
+    String filePath,
+  ) {
+    for (final entry in entries) {
+      if (entry.path == filePath || entry.oldPath == filePath) {
+        return entry;
+      }
+    }
+    return null;
   }
 
   String _rangeCompareCacheKey(String anchorId, String headId) =>

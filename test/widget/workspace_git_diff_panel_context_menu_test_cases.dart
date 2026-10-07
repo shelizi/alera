@@ -35,6 +35,9 @@ void _registerWorkspaceGitDiffPanelContextMenuTests() {
     expect(find.text('Open in Zed'), findsOneWidget);
     expect(find.text('Reveal in Explorer'), findsOneWidget);
     expect(find.text('Add to .gitignore'), findsOneWidget);
+    expect(find.text('View File History'), findsOneWidget);
+    expect(find.text('Compare With Latest Git Revision'), findsOneWidget);
+    expect(find.text('Compare With Branch...'), findsOneWidget);
     expect(find.text('Stage'), findsWidgets);
     expect(find.text('Discard'), findsWidgets);
 
@@ -125,6 +128,9 @@ void _registerWorkspaceGitDiffPanelContextMenuTests() {
     expect(find.text('Open with Default Application'), findsNothing);
     expect(find.text('Open in Zed'), findsNothing);
     expect(find.text('Reveal in Explorer'), findsOneWidget);
+    expect(find.text('View File History'), findsNothing);
+    expect(find.text('Compare With Latest Git Revision'), findsNothing);
+    expect(find.text('Compare With Branch...'), findsNothing);
 
     await tester.tap(find.text('Stage').last);
     await tester.pumpAndSettle();

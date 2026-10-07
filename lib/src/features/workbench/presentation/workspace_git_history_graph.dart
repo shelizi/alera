@@ -38,6 +38,10 @@ class const GitHistoryGraphPainter(final GitHistoryItemViewModel viewModel)
   static const double laneWidth = 16;
   static const double nodeY = laneHeight / 2;
   static const double circleRadius = 4;
+  // Extend row-spanning segments past the CustomPaint boundary so adjacent
+  // anti-aliased strokes overlap instead of looking dashed while scrolling.
+  static const double _laneTop = -1;
+  static const double _laneBottom = laneHeight + 1;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -61,7 +65,7 @@ class const GitHistoryGraphPainter(final GitHistoryItemViewModel viewModel)
             canvas,
             color,
             Path()
-              ..moveTo(laneWidth * (index + 1), 0)
+              ..moveTo(laneWidth * (index + 1), _laneTop)
               ..quadraticBezierTo(
                 laneWidth * index,
                 nodeY,
@@ -76,9 +80,9 @@ class const GitHistoryGraphPainter(final GitHistoryItemViewModel viewModel)
       }
       if (outputIndex < output.length &&
           input[index].id == output[outputIndex].id) {
-        final path = Path()..moveTo(laneWidth * (index + 1), 0);
+        final path = Path()..moveTo(laneWidth * (index + 1), _laneTop);
         if (index == outputIndex) {
-          path.lineTo(laneWidth * (index + 1), laneHeight);
+          path.lineTo(laneWidth * (index + 1), _laneBottom);
         } else {
           path
             ..lineTo(laneWidth * (index + 1), 6)
@@ -88,7 +92,7 @@ class const GitHistoryGraphPainter(final GitHistoryItemViewModel viewModel)
               laneWidth * (outputIndex + 1),
               nodeY,
             )
-            ..lineTo(laneWidth * (outputIndex + 1), laneHeight);
+            ..lineTo(laneWidth * (outputIndex + 1), _laneBottom);
         }
         _drawPath(canvas, color, path);
         outputIndex += 1;
@@ -112,9 +116,9 @@ class const GitHistoryGraphPainter(final GitHistoryItemViewModel viewModel)
           ..moveTo(laneWidth * (parentIndex + 1), nodeY)
           ..quadraticBezierTo(
             laneWidth * (parentIndex + 1),
-            laneHeight,
+            _laneBottom,
             laneWidth * (parentIndex + 1),
-            laneHeight,
+            _laneBottom,
           ),
       );
     }
@@ -124,7 +128,7 @@ class const GitHistoryGraphPainter(final GitHistoryItemViewModel viewModel)
         canvas,
         input[inputIndex].color,
         Path()
-          ..moveTo(laneWidth * (circleIndex + 1), 0)
+          ..moveTo(laneWidth * (circleIndex + 1), _laneTop)
           ..lineTo(laneWidth * (circleIndex + 1), nodeY),
       );
     }
@@ -134,7 +138,7 @@ class const GitHistoryGraphPainter(final GitHistoryItemViewModel viewModel)
         circleColor,
         Path()
           ..moveTo(laneWidth * (circleIndex + 1), nodeY)
-          ..lineTo(laneWidth * (circleIndex + 1), laneHeight),
+          ..lineTo(laneWidth * (circleIndex + 1), _laneBottom),
       );
     }
 

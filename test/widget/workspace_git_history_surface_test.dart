@@ -672,8 +672,62 @@ void main() {
         .where((tab) => tab.kind == WorkspaceTabKind.gitDiff)
         .toList();
     expect(diffTabs, hasLength(1));
+    expect(diffTabs.single.gitDiffScope, WorkspaceGitDiffScope.all);
     expect(diffTabs.single.gitDiffCommitOid, 'abc123');
     expect(diffTabs.single.gitDiffCommitSubject, 'Only Commit');
+  });
+  testWidgets('file history commit opens only that file diff', (tester) async {
+    final backend =
+        gitHistoryBackend(<GitHistoryItem>[
+            gitHistoryCommit(
+              'abc123',
+              parents: <String>[],
+              subject: 'File Change',
+            ),
+          ])
+          ..gitCommitCompareResult = const GitCommitCompareResult(
+            summary: GitCommitCompareSummary(
+              commitOid: 'abc123',
+              parentOid: 'def456',
+              compareRef: 'abc123',
+              baseRef: 'def456',
+              changedFiles: 2,
+              status: .ready,
+            ),
+            entries: <GitCommitChangeEntry>[
+              GitCommitChangeEntry(
+                path: 'lib/main.dart',
+                oldPath: 'lib/old_main.dart',
+                status: .renamed,
+              ),
+              GitCommitChangeEntry(path: 'lib/other.dart', status: .modified),
+            ],
+          );
+    final tab = gitHistoryTab().copyWith(
+      payload: <String, Object?>{
+        workspaceTabGitHistoryFilePathPayloadKey: 'lib/main.dart',
+      },
+    );
+    final repository = GitHistoryFakeWorkbenchRepository()..tabs.add(tab);
+
+    await pumpGitHistorySurface(
+      tester,
+      backend: backend,
+      repository: repository,
+      tab: tab,
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('File Change'));
+    await tester.pumpAndSettle();
+
+    final diffTabs = repository.tabs
+        .where((tab) => tab.kind == WorkspaceTabKind.gitDiff)
+        .toList();
+    expect(diffTabs, hasLength(1));
+    expect(diffTabs.single.gitDiffScope, WorkspaceGitDiffScope.file);
+    expect(diffTabs.single.filePath, 'lib/main.dart');
+    expect(diffTabs.single.gitDiffOldPath, 'lib/old_main.dart');
   });
   testWidgets('secondary tapping a commit row copies its hash', (tester) async {
     String? copiedText;

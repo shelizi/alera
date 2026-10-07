@@ -5,6 +5,9 @@ enum _GitChangeContextAction {
   openWithDefaultApplication,
   openExternally,
   revealInExplorer,
+  viewFileHistory,
+  compareLatestGitRevision,
+  compareGitBranch,
   addToGitIgnore,
   stage,
   unstage,
@@ -25,6 +28,9 @@ Future<void> _showGitChangeContextMenu(
   required List<ExternalEditorSpec> installedExternalEditors,
   required ValueChanged<ExternalEditorKind>? onOpenExternally,
   required VoidCallback onRevealInExplorer,
+  required VoidCallback? onViewFileHistory,
+  required VoidCallback? onCompareLatestGitRevision,
+  required VoidCallback? onCompareGitBranch,
   required VoidCallback? onAddToGitIgnore,
   required VoidCallback onStage,
   required VoidCallback onUnstage,
@@ -70,6 +76,28 @@ Future<void> _showGitChangeContextMenu(
           label: 'Add to .gitignore',
           leading: Icon(AleraIcons.file, size: 16),
         ),
+      if (onViewFileHistory != null ||
+          onCompareLatestGitRevision != null ||
+          onCompareGitBranch != null)
+        const PopupMenuDivider(height: AleraTokens.space8),
+      if (onViewFileHistory != null)
+        const AleraDropdownEntry<_GitChangeContextAction>(
+          value: .viewFileHistory,
+          label: 'View File History',
+          leading: Icon(AleraIcons.gitGraph, size: 16),
+        ),
+      if (onCompareLatestGitRevision != null)
+        const AleraDropdownEntry<_GitChangeContextAction>(
+          value: .compareLatestGitRevision,
+          label: 'Compare With Latest Git Revision',
+          leading: Icon(AleraIcons.diff, size: 16),
+        ),
+      if (onCompareGitBranch != null)
+        const AleraDropdownEntry<_GitChangeContextAction>(
+          value: .compareGitBranch,
+          label: 'Compare With Branch...',
+          leading: Icon(AleraIcons.gitBranch, size: 16),
+        ),
       if (canStage || canUnstage || canDiscard)
         const PopupMenuDivider(height: AleraTokens.space8),
       if (canUnstage)
@@ -110,6 +138,12 @@ Future<void> _showGitChangeContextMenu(
       }
     case _GitChangeContextAction.revealInExplorer:
       onRevealInExplorer();
+    case _GitChangeContextAction.viewFileHistory:
+      onViewFileHistory?.call();
+    case _GitChangeContextAction.compareLatestGitRevision:
+      onCompareLatestGitRevision?.call();
+    case _GitChangeContextAction.compareGitBranch:
+      onCompareGitBranch?.call();
     case _GitChangeContextAction.addToGitIgnore:
       onAddToGitIgnore?.call();
     case _GitChangeContextAction.stage:

@@ -19,6 +19,9 @@ class const _GitDiffGroups({
   required final ExternalEditorSpec? externalEditor,
   required final List<ExternalEditorSpec> installedExternalEditors,
   required final ValueChanged<String> onRevealInExplorer,
+  required final ValueChanged<String> onViewFileHistory,
+  required final ValueChanged<String> onCompareLatestGitRevision,
+  required final ValueChanged<String> onCompareGitBranch,
   required final void Function(String path, {required bool isDirectory})
   onAddToGitIgnore,
   required final ValueChanged<GitChangeEntry> onStage,
@@ -117,6 +120,9 @@ class const _GitDiffGroups({
                       externalEditor: externalEditor,
                       installedExternalEditors: installedExternalEditors,
                       onRevealInExplorer: onRevealInExplorer,
+                      onViewFileHistory: onViewFileHistory,
+                      onCompareLatestGitRevision: onCompareLatestGitRevision,
+                      onCompareGitBranch: onCompareGitBranch,
                       onAddToGitIgnore: onAddToGitIgnore,
                       onStage: onStage,
                       onUnstage: onUnstage,
@@ -157,6 +163,10 @@ class const _GitDiffGroups({
         externalEditor: externalEditor,
         installedExternalEditors: installedExternalEditors,
         onRevealInExplorer: () => onRevealInExplorer(entry.path),
+        onViewFileHistory: () => onViewFileHistory(entry.path),
+        onCompareLatestGitRevision: () =>
+            onCompareLatestGitRevision(entry.path),
+        onCompareGitBranch: () => onCompareGitBranch(entry.path),
         onAddToGitIgnore: () =>
             onAddToGitIgnore(entry.path, isDirectory: false),
         onStage: onStage,
