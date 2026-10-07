@@ -1,5 +1,6 @@
 import 'package:alera/src/features/agent_status/application/agent_status_notification_activation_service.dart';
 import 'package:alera/src/features/agent_status/application/agent_status_notifications.dart';
+import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 import 'package:alera/src/features/projects/domain/project.dart';
 import 'package:alera/src/features/workbench/application/workbench_state.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
@@ -69,6 +70,38 @@ void main() {
       },
     );
 
+    for (final agentType in AgentType.values) {
+      test(
+        'activates ${agentType.key} notification to its related terminal tab',
+        () async {
+          final target = _fixture();
+          final activator = _FakeWindowActivator();
+          final navigator = _FakeNavigator(target.state);
+          final focusRequester = _FakeTerminalFocusRequester();
+          final service = AgentStatusNotificationActivationService(
+            windowActivator: activator,
+            navigator: navigator,
+            terminalFocusRequester: focusRequester,
+          );
+          final encoded = _payload(agentType).encode();
+
+          expect(
+            decodeAgentStatusNotificationPayload(encoded)?.agentType,
+            agentType,
+          );
+          await service.activatePayload(encoded);
+
+          expect(activator.showAndFocusCalls, 1);
+          expect(navigator.selectedProjectIds, <String>['project-1']);
+          expect(navigator.selectedWorkspaceIds, <String>['workspace-1']);
+          expect(navigator.activeTabs, <String, String>{
+            'workspace-1': 'tab-1',
+          });
+          expect(focusRequester.focusedTabIds, <String>['tab-1']);
+        },
+      );
+    }
+
     test(
       'brings the app forward but stops when workspace or tab is missing',
       () async {
@@ -110,12 +143,14 @@ void main() {
   });
 }
 
-AgentStatusNotificationPayload _payload() {
-  return const AgentStatusNotificationPayload(
+AgentStatusNotificationPayload _payload([
+  AgentType agentType = AgentType.codex,
+]) {
+  return AgentStatusNotificationPayload(
     terminalSessionId: 'session-1',
     workspaceId: 'workspace-1',
     tabId: 'tab-1',
-    agentType: .codex,
+    agentType: agentType,
     state: .done,
   );
 }
