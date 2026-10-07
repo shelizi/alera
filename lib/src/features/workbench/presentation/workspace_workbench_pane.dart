@@ -12,7 +12,7 @@ class const _WorkbenchPane({
   required final CreateTerminalTabCallback onCreateTab,
   required final CreateAgentTabCallback onCreateAgentTab,
   required final OpenFileTabCallback onOpenEditorTab,
-  required final OpenFileTabCallback onOpenMarkdownViewerTab,
+  required final OpenMarkdownFileTabCallback onOpenMarkdownViewerTab,
   required final SelectWorkspaceTabCallback onSelectTab,
   required final ValueChanged<String> onCloseTab,
   required final ValueChanged<List<String>> onCloseTabs,
@@ -108,12 +108,14 @@ class const _WorkbenchPane({
                             targetGroupId: groupId,
                           ),
                         ),
-                        onOpenMarkdownViewerTab: (relativePath) => unawaited(
-                          onOpenMarkdownViewerTab(
-                            relativePath: relativePath,
-                            targetGroupId: groupId,
-                          ),
-                        ),
+                        onOpenMarkdownViewerTab: (relativePath, fragment) =>
+                            unawaited(
+                              onOpenMarkdownViewerTab(
+                                relativePath: relativePath,
+                                targetGroupId: groupId,
+                                fragment: fragment,
+                              ),
+                            ),
                         onOpenMermanPreview: (relativePath) =>
                             unawaited(onOpenMermanPreview(relativePath)),
                       ),

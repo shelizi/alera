@@ -13,12 +13,13 @@ extension _WorkspaceTabMenu on _WorkspaceTabChip {
     );
     final closeOthers = <String>[
       for (final candidate in groupTabs)
-        if (candidate.id != tab.id) candidate.id,
+        if (candidate.id != tab.id && !candidate.isPinned) candidate.id,
     ];
     final closeRight = tabIndex < 0
         ? const <String>[]
         : <String>[
-            for (final candidate in groupTabs.skip(tabIndex + 1)) candidate.id,
+            for (final candidate in groupTabs.skip(tabIndex + 1))
+              if (!candidate.isPinned) candidate.id,
           ];
     final filePath = tab.filePath;
     final canCompareWithGit =
@@ -75,6 +76,11 @@ extension _WorkspaceTabMenu on _WorkspaceTabChip {
             label: 'Keep Open',
             leading: Icon(AleraIcons.pin, size: 16),
           ),
+        AleraDropdownEntry<_TabMenuAction>(
+          value: .togglePin,
+          label: tab.isPinned ? 'Unpin Tab' : 'Pin Tab',
+          leading: const Icon(AleraIcons.pin, size: 16),
+        ),
         if (tab.kind == WorkspaceTabKind.editor)
           const AleraDropdownEntry<_TabMenuAction>(
             value: .reloadDocument,
@@ -172,6 +178,10 @@ extension _WorkspaceTabMenu on _WorkspaceTabChip {
         onSplit(.right);
       case _TabMenuAction.keepOpen:
         _KeepPreviewTabScope.maybeOf(context)?.call(tab.id);
+      case _TabMenuAction.togglePin:
+        await ref
+            .read(workbenchControllerProvider.notifier)
+            .setWorkspaceTabPinned(tabId: tab.id, pinned: !tab.isPinned);
       case _TabMenuAction.reloadDocument:
         await reloadWorkspaceEditorDocument(context, ref, tab);
       case _TabMenuAction.openWithDefaultApplication:

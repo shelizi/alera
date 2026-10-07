@@ -8,7 +8,8 @@ class const _WorkspaceTabContent({
   required final TerminalRuntime terminalRuntime,
   required final WorkbenchMobileDriverPresence? mobileDriverPresence,
   required final ValueChanged<String> onOpenEditorTab,
-  required final ValueChanged<String> onOpenMarkdownViewerTab,
+  required final void Function(String relativePath, String? fragment)
+  onOpenMarkdownViewerTab,
   required final ValueChanged<String> onOpenMermanPreview,
 }) extends StatelessWidget {
   Widget _buildTerminal() {
@@ -48,12 +49,14 @@ class const _WorkspaceTabContent({
         autofocus: autofocus,
         onOpenEditor: onOpenEditorTab,
         onOpenMermanPreview: onOpenMermanPreview,
-        onOpenMarkdownViewerTab: onOpenMarkdownViewerTab,
+        onOpenMarkdownViewerTab: (relativePath) =>
+            onOpenMarkdownViewerTab(relativePath, null),
       ),
       WorkspaceTabKind.markdownViewer => WorkspaceMarkdownViewerSurface(
         workspace: workspace,
         tab: tab,
         onOpenEditorTab: onOpenEditorTab,
+        onOpenMarkdownReference: onOpenMarkdownViewerTab,
       ),
       WorkspaceTabKind.pdf => WorkspacePdfViewerSurface(
         workspace: workspace,

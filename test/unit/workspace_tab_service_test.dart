@@ -27,6 +27,41 @@ void main() {
     });
 
     test(
+      'pinning a tab persists pin state and promotes preview tabs',
+      () async {
+        final repository = _FakeWorkbenchRepository()
+          ..tabs.add(
+            WorkspaceTabRecord(
+              id: 'tab-1',
+              workspaceId: 'workspace-1',
+              title: 'README.md',
+              kind: WorkspaceTabKind.markdownViewer,
+              payload: const <String, Object?>{
+                workspaceTabPreviewPayloadKey: true,
+                workspaceTabFilePathPayloadKey: 'README.md',
+              },
+              createdAt: .utc(2026, 5, 21),
+              updatedAt: .utc(2026, 5, 21),
+            ),
+          );
+        final service = WorkspaceTabService(
+          repository: repository,
+          now: () => DateTime.utc(2026, 5, 21, 1),
+        );
+
+        final pinned = await service.setTabPinned(tabId: 'tab-1', pinned: true);
+        expect(pinned.isPinned, isTrue);
+        expect(pinned.isPreview, isFalse);
+
+        final unpinned = await service.setTabPinned(
+          tabId: 'tab-1',
+          pinned: false,
+        );
+        expect(unpinned.isPinned, isFalse);
+      },
+    );
+
+    test(
       'createTerminalTab picks the next available terminal ordinal',
       () async {
         final repository = _FakeWorkbenchRepository()

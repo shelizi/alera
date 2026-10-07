@@ -199,6 +199,17 @@ class const _WorkspaceTabChip({
                   ),
                 ),
                 const SizedBox(width: AleraTokens.space4),
+                if (tab.isPinned) ...<Widget>[
+                  const Tooltip(
+                    message: 'Pinned tab',
+                    child: Icon(
+                      AleraIcons.pin,
+                      size: 12,
+                      color: AleraTokens.foregroundMuted,
+                    ),
+                  ),
+                  const SizedBox(width: AleraTokens.space4),
+                ],
                 if (tab.payload['agentTitleStatus'] == 'generating') ...[
                   const Tooltip(
                     message: 'Generating title...',
@@ -238,6 +249,7 @@ enum _TabMenuAction {
   splitLeft,
   splitRight,
   keepOpen,
+  togglePin,
   reloadDocument,
   openWithDefaultApplication,
   revealInFileManager,

@@ -18,11 +18,13 @@ mixin _WorkbenchControllerFileTabs
   Future<WorkspaceTabRecord> openMarkdownViewerTab({
     required Workspace workspace,
     required String relativePath,
+    String? fragment,
     String? targetGroupId,
     bool preview = false,
   }) => _tabLayoutOwner.openMarkdownViewerTab(
     workspace: workspace,
     relativePath: relativePath,
+    fragment: fragment,
     targetGroupId: targetGroupId,
     preview: preview,
   );

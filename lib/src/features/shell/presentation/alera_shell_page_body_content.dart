@@ -106,10 +106,11 @@ extension _AleraShellPageBodyContent on _AleraShellPageBodyState {
             );
           },
           onOpenMarkdownViewerTab:
-              ({required relativePath, targetGroupId}) async {
+              ({required relativePath, targetGroupId, fragment}) async {
                 await controller.openMarkdownViewerTab(
                   workspace: workspace,
                   relativePath: relativePath,
+                  fragment: fragment,
                   targetGroupId: targetGroupId,
                 );
               },

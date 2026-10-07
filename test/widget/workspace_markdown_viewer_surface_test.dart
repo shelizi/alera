@@ -190,6 +190,46 @@ void main() {
     expect(markdownViewerSearchMatchOffsets('', 'alpha'), isEmpty);
   });
 
+  test('resolves local markdown refs relative to the current document', () {
+    final target = resolveMarkdownViewerReference(
+      currentMarkdownPath: 'docs/setup/guide.md',
+      rawUrl: '../api.md#client-setup',
+    );
+    expect(target?.path, 'docs/api.md');
+    expect(target?.fragment, 'client-setup');
+    expect(
+      resolveMarkdownViewerReference(
+        currentMarkdownPath: 'README.md',
+        rawUrl: 'https://example.com/docs.md#heading',
+      ),
+      isNull,
+    );
+  });
+
+  test('extracts only the referenced markdown heading section', () {
+    const content = '''# Root
+
+Intro
+
+## Target Section
+
+Wanted
+
+### Child
+
+Still wanted
+
+## Next Section
+
+Not wanted
+''';
+    final section = markdownViewerReferenceSection(content, 'target-section');
+    expect(section, contains('## Target Section'));
+    expect(section, contains('### Child'));
+    expect(section, isNot(contains('## Next Section')));
+    expect(markdownViewerReferenceOffset(content, 'target-section'), isNotNull);
+  });
+
   test('markdown preview recognizes Mermaid fence aliases', () {
     expect(isMarkdownMermaidFence('mermaid'), isTrue);
     expect(isMarkdownMermaidFence('Mermaid'), isTrue);

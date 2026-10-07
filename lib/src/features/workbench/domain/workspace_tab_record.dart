@@ -54,6 +54,8 @@ const String workspaceTabFilePathPayloadKey = 'filePath';
 const String workspaceTabFileRolePayloadKey = 'fileRole';
 const String workspaceTabFileRoleMermanPreview = 'mermanPreview';
 const String workspaceTabPreviewPayloadKey = 'preview';
+const String workspaceTabPinnedPayloadKey = 'pinned';
+const String workspaceTabMarkdownFragmentPayloadKey = 'markdownFragment';
 const String workspaceTabGitDiffScopePayloadKey = 'gitDiffScope';
 const String workspaceTabGitDiffAreaPayloadKey = 'gitDiffArea';
 const String workspaceTabGitDiffRootPayloadKey = 'gitDiffRoot';
@@ -207,6 +209,11 @@ class WorkspaceTabRecord({
 
   /// Preview tabs stay replaceable until they are kept open.
   bool get isPreview => payload[workspaceTabPreviewPayloadKey] == true;
+
+  bool get isPinned => payload[workspaceTabPinnedPayloadKey] == true;
+
+  String? get markdownFragment =>
+      _nonEmptyPayloadString(workspaceTabMarkdownFragmentPayloadKey);
 
   bool get isFilePreviewSlot {
     if (!isPreview || isMermanPreview) {

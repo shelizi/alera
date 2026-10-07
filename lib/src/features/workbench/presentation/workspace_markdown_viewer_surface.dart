@@ -7,6 +7,7 @@ import 'package:alera/src/design_system/forms/alera_text_field.dart';
 import 'package:alera/src/design_system/feedback/alera_toast.dart';
 import 'package:alera/src/design_system/icons/alera_file_icon.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
+import 'package:alera/src/design_system/layout/alera_dialog.dart';
 import 'package:alera/src/design_system/typography/alera_search_highlighted_text.dart';
 import 'package:alera/src/design_system/menus/alera_text_selection_toolbar.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_service.dart';
@@ -22,6 +23,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:gpt_markdown/gpt_markdown.dart';
+import 'package:path/path.dart' as p;
 
 @visibleForTesting
 const Duration workspaceMarkdownViewerEditorUpdateDebounce = Duration(
@@ -33,6 +35,8 @@ class const WorkspaceMarkdownViewerSurface({
   required final Workspace workspace,
   required final WorkspaceTabRecord tab,
   required final ValueChanged<String> onOpenEditorTab,
+  final void Function(String relativePath, String? fragment)?
+  onOpenMarkdownReference,
 }) extends ConsumerStatefulWidget {
   @override
   ConsumerState<WorkspaceMarkdownViewerSurface> createState() =>
@@ -85,6 +89,8 @@ class _WorkspaceMarkdownViewerSurfaceState
       _searchMatchIndex = -1;
       _subscribeToEditorDocument();
       unawaited(_load());
+    } else if (oldWidget.tab.markdownFragment != widget.tab.markdownFragment) {
+      _scheduleFragmentReveal();
     }
   }
 
@@ -323,6 +329,7 @@ class _WorkspaceMarkdownViewerSurfaceState
   }
 
   void _refreshSearchForContentChange() {
+    _scheduleFragmentReveal();
     if (!_searchOpen || _searchController.text.isEmpty) {
       return;
     }
@@ -498,6 +505,27 @@ class _WorkspaceMarkdownViewerSurfaceState
   }
 
   Future<void> _openLink(String rawUrl) async {
+    final currentPath = widget.tab.filePath;
+    final reference = currentPath == null
+        ? null
+        : resolveMarkdownViewerReference(
+            currentMarkdownPath: currentPath,
+            rawUrl: rawUrl,
+          );
+    if (reference != null) {
+      final keyboard = HardwareKeyboard.instance;
+      if (keyboard.isControlPressed || keyboard.isMetaPressed) {
+        final navigate = widget.onOpenMarkdownReference;
+        if (navigate == null) {
+          await _showMarkdownReference(reference);
+        } else {
+          navigate(reference.path, reference.fragment);
+        }
+      } else {
+        await _showMarkdownReference(reference);
+      }
+      return;
+    }
     final uri = Uri.tryParse(rawUrl);
     if (!isSupportedMarkdownViewerLinkUri(uri)) {
       _showToast('Link cannot be opened', tone: .error);
@@ -508,6 +536,106 @@ class _WorkspaceMarkdownViewerSurfaceState
     } catch (_) {
       _showToast('Link cannot be opened', tone: .error);
     }
+  }
+
+  Future<void> _showMarkdownReference(MarkdownViewerReference reference) async {
+    try {
+      final currentPath = widget.tab.filePath;
+      final content = reference.path == currentPath && _content != null
+          ? _content!
+          : (await _workspaceFiles.readTextFile(
+              workspacePath: widget.workspace.path,
+              relativePath: reference.path,
+            )).content;
+      final section = markdownViewerReferenceSection(
+        content,
+        reference.fragment,
+      );
+      if (section == null) {
+        _showToast('Referenced section was not found', tone: .error);
+        return;
+      }
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AleraDialog(
+          maxWidth: 820,
+          maxHeight: 720,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              Padding(
+                padding: const EdgeInsets.fromLTRB(
+                  AleraTokens.space20,
+                  AleraTokens.space16,
+                  AleraTokens.space8,
+                  AleraTokens.space8,
+                ),
+                child: Row(
+                  children: <Widget>[
+                    Expanded(
+                      child: Text(
+                        reference.fragment == null
+                            ? reference.path
+                            : '${reference.path}#${reference.fragment}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    AleraIconButton(
+                      tooltip: 'Close',
+                      icon: AleraIcons.close,
+                      onPressed: () => Navigator.of(dialogContext).pop(),
+                    ),
+                  ],
+                ),
+              ),
+              const Divider(height: 1, color: AleraTokens.borderSubtle),
+              Flexible(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(AleraTokens.space20),
+                  child: SelectionArea(
+                    contextMenuBuilder:
+                        AleraTextSelectionToolbar.selectableRegion,
+                    child: GptMarkdownTheme(
+                      gptThemeData: GptMarkdownThemeData(
+                        brightness: .dark,
+                        linkColor: AleraTokens.info,
+                        highlightColor: AleraTokens.accentSubtle,
+                      ),
+                      child: GptMarkdown(section),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    } catch (_) {
+      _showToast('Referenced content cannot be opened', tone: .error);
+    }
+  }
+
+  void _scheduleFragmentReveal() {
+    final fragment = widget.tab.markdownFragment;
+    final content = _content;
+    if (fragment == null || content == null || content.isEmpty) return;
+    final offset = markdownViewerReferenceOffset(content, fragment);
+    if (offset == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_verticalScrollController.hasClients) return;
+      final ratio = (offset / content.length).clamp(0.0, 1.0);
+      final target = _verticalScrollController.position.maxScrollExtent * ratio;
+      unawaited(
+        _verticalScrollController.animateTo(
+          target,
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOut,
+        ),
+      );
+    });
   }
 
   void _showToast(String message, {AleraToastTone tone = AleraToastTone.info}) {
@@ -530,6 +658,84 @@ class _WorkspaceMarkdownViewerSurfaceState
     }
     return 'File operation failed';
   }
+}
+
+class MarkdownViewerReference {
+  const MarkdownViewerReference({required this.path, this.fragment});
+
+  final String path;
+  final String? fragment;
+}
+
+@visibleForTesting
+MarkdownViewerReference? resolveMarkdownViewerReference({
+  required String currentMarkdownPath,
+  required String rawUrl,
+}) {
+  final uri = Uri.tryParse(rawUrl.trim());
+  if (uri == null || uri.hasScheme || uri.hasAuthority) return null;
+  try {
+    final rawPath = Uri.decodeComponent(uri.path).replaceAll('\\', '/');
+    if (p.posix.isAbsolute(rawPath)) return null;
+    final current = p.posix.normalize(
+      currentMarkdownPath.replaceAll('\\', '/'),
+    );
+    final targetPath = rawPath.isEmpty
+        ? current
+        : p.posix.normalize(p.posix.join(p.posix.dirname(current), rawPath));
+    if (targetPath == '..' || targetPath.startsWith('../')) return null;
+    if (!isWorkspaceMarkdownFilePath(targetPath)) return null;
+    final fragment = uri.fragment.trim();
+    return MarkdownViewerReference(
+      path: targetPath,
+      fragment: fragment.isEmpty ? null : Uri.decodeComponent(fragment),
+    );
+  } on FormatException {
+    return null;
+  }
+}
+
+String _markdownHeadingSlug(String heading) {
+  return heading
+      .trim()
+      .toLowerCase()
+      .replaceAll(RegExp(r'[`*_~]'), '')
+      .replaceAll(RegExp(r'[^\p{L}\p{N}\s-]', unicode: true), '')
+      .replaceAll(RegExp(r'\s+'), '-')
+      .replaceAll(RegExp(r'-+'), '-');
+}
+
+@visibleForTesting
+int? markdownViewerReferenceOffset(String content, String fragment) {
+  final target = fragment.trim().toLowerCase();
+  final headingPattern = RegExp(r'^(#{1,6})\s+(.+?)\s*#*\s*$', multiLine: true);
+  for (final match in headingPattern.allMatches(content)) {
+    final heading = match.group(2) ?? '';
+    if (_markdownHeadingSlug(heading) == target) return match.start;
+  }
+  return null;
+}
+
+@visibleForTesting
+String? markdownViewerReferenceSection(String content, String? fragment) {
+  if (fragment == null || fragment.trim().isEmpty) return content;
+  final target = fragment.trim().toLowerCase();
+  final headingPattern = RegExp(r'^(#{1,6})\s+(.+?)\s*#*\s*$', multiLine: true);
+  final headings = headingPattern.allMatches(content).toList(growable: false);
+  for (var index = 0; index < headings.length; index += 1) {
+    final heading = headings[index];
+    if (_markdownHeadingSlug(heading.group(2) ?? '') != target) continue;
+    final level = heading.group(1)!.length;
+    var end = content.length;
+    for (var next = index + 1; next < headings.length; next += 1) {
+      if (headings[next].group(1)!.length <= level) {
+        end = headings[next].start;
+        break;
+      }
+    }
+    return content.substring(heading.start, end).trimRight();
+  }
+  return null;
 }
 
 @visibleForTesting

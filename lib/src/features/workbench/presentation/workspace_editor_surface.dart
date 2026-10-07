@@ -77,6 +77,8 @@ class _WorkspaceEditorSurfaceState
   late final code_forge.CodeForgeController _controller;
   late final code_forge.UndoRedoController _undoController;
   late final code_forge.FindController _findController;
+  late final TextEditingController _goToLineController;
+  late final FocusNode _goToLineFocusNode;
   late final ScrollController _verticalScrollController;
   late final ScrollController _horizontalScrollController;
   late WorkspaceEditorFocusNode _focusNode;
@@ -105,11 +107,17 @@ class _WorkspaceEditorSurfaceState
   bool _hasPendingDocumentSnapshot = false;
   bool _suppressControllerChangeHandling = false;
   bool _outlineOpen = false;
+  bool _goToLineOpen = false;
   bool _outlineLoading = false;
   bool _outlineTruncated = false;
   int _outlineRequestId = 0;
   code_forge.CodeForgeDocumentSymbolSource? _outlineSource;
   List<code_forge.CodeForgeDocumentSymbol> _outlineSymbols = const [];
+
+  void _setGoToLineOpen(bool value) {
+    if (_goToLineOpen == value) return;
+    setState(() => _goToLineOpen = value);
+  }
 
   @override
   void initState() {
@@ -124,6 +132,8 @@ class _WorkspaceEditorSurfaceState
     );
     _undoController = code_forge.UndoRedoController();
     _findController = code_forge.FindController(_controller);
+    _goToLineController = TextEditingController();
+    _goToLineFocusNode = FocusNode(debugLabel: 'WorkspaceEditorGoToLine');
     _verticalScrollController = ScrollController();
     _horizontalScrollController = ScrollController();
     _focusNode = WorkspaceEditorFocusNode();
@@ -227,6 +237,8 @@ class _WorkspaceEditorSurfaceState
     _removeNativeSyntaxActivityForPath(widget.tab.filePath);
     _controller.nativeSyntaxStatus.removeListener(_handleNativeSyntaxStatus);
     _findController.dispose();
+    _goToLineController.dispose();
+    _goToLineFocusNode.dispose();
     _undoController.dispose();
     _controller.dispose();
     _verticalScrollController.dispose();
@@ -348,6 +360,10 @@ class _WorkspaceEditorSurfaceState
                   filePath: filePath,
                   languageId: syntaxLanguageId,
                 ),
+                const SingleActivator(LogicalKeyboardKey.keyG, control: true):
+                    _openGoToLine,
+                const SingleActivator(LogicalKeyboardKey.keyG, meta: true):
+                    _openGoToLine,
               },
               child: Focus(
                 canRequestFocus: false,
@@ -453,6 +469,14 @@ class _WorkspaceEditorSurfaceState
                 ? null
                 : _toggleOutline,
           ),
+          if (_goToLineOpen)
+            _WorkspaceEditorGoToLineBar(
+              controller: _goToLineController,
+              focusNode: _goToLineFocusNode,
+              lineCount: _controller.lineCount,
+              onSubmit: _goToLine,
+              onClose: _closeGoToLine,
+            ),
           const Divider(height: 1, color: AleraTokens.borderSubtle),
           Expanded(
             child: Row(

@@ -119,6 +119,14 @@ void main() {
     expect(macosActivator.meta, isTrue);
   });
 
+  test('go-to-line parser converts valid one-based lines', () {
+    expect(workspaceEditorGoToLineIndex('1', lineCount: 20), 0);
+    expect(workspaceEditorGoToLineIndex(' 12 ', lineCount: 20), 11);
+    expect(workspaceEditorGoToLineIndex('0', lineCount: 20), isNull);
+    expect(workspaceEditorGoToLineIndex('21', lineCount: 20), isNull);
+    expect(workspaceEditorGoToLineIndex('abc', lineCount: 20), isNull);
+  });
+
   testWidgets('suppresses stale focus callbacks during editor teardown', (
     tester,
   ) async {

@@ -150,6 +150,26 @@ class WorkspaceTabService._(
     return _repository.upsertWorkspaceTab(next, manualRename: true);
   }
 
+  Future<WorkspaceTabRecord> setTabPinned({
+    required String tabId,
+    required bool pinned,
+  }) async {
+    final tab = await _repository.findWorkspaceTabById(tabId);
+    if (tab == null) {
+      throw StateError('Workspace tab not found: $tabId');
+    }
+    final payload = Map<String, Object?>.of(tab.payload);
+    if (pinned) {
+      payload[workspaceTabPinnedPayloadKey] = true;
+      payload.remove(workspaceTabPreviewPayloadKey);
+    } else {
+      payload.remove(workspaceTabPinnedPayloadKey);
+    }
+    final next = tab.copyWith(updatedAt: _now(), payload: payload);
+    await _repository.upsertWorkspaceTab(next);
+    return next;
+  }
+
   int _nextOrdinal(List<WorkspaceTabRecord> tabs) {
     final used = <int>{};
     for (final tab in tabs) {

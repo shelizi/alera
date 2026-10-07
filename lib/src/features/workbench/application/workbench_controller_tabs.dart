@@ -18,6 +18,11 @@ mixin _WorkbenchControllerTabs
     required String title,
   }) => _tabLayoutOwner.renameWorkspaceTab(tabId: tabId, title: title);
 
+  Future<void> setWorkspaceTabPinned({
+    required String tabId,
+    required bool pinned,
+  }) => _tabLayoutOwner.setWorkspaceTabPinned(tabId: tabId, pinned: pinned);
+
   Future<void> syncFileTabsAfterPathMove({
     required Workspace workspace,
     required String oldRelativePath,

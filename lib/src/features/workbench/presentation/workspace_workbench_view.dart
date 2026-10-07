@@ -64,6 +64,11 @@ typedef OpenFileTabCallback = Future<void> Function({
   required String relativePath,
   String? targetGroupId,
 });
+typedef OpenMarkdownFileTabCallback = Future<void> Function({
+  required String relativePath,
+  String? targetGroupId,
+  String? fragment,
+});
 typedef SelectWorkspaceTabCallback = void Function({
   required String groupId,
   required String tabId,
@@ -200,7 +205,7 @@ class const WorkspaceWorkbenchView({
   required final CreateTerminalTabCallback onCreateTab,
   required final CreateAgentTabCallback onCreateAgentTab,
   required final OpenFileTabCallback onOpenEditorTab,
-  required final OpenFileTabCallback onOpenMarkdownViewerTab,
+  required final OpenMarkdownFileTabCallback onOpenMarkdownViewerTab,
   required final SelectWorkspaceTabCallback onSelectTab,
   required final ValueChanged<String> onCloseTab,
   required final ValueChanged<List<String>> onCloseTabs,

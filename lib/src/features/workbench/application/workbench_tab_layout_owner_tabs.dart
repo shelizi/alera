@@ -82,6 +82,31 @@ extension WorkbenchTabLayoutOwnerTabs on WorkbenchTabLayoutOwner {
     }
   }
 
+  Future<void> setWorkspaceTabPinned({
+    required String tabId,
+    required bool pinned,
+  }) async {
+    try {
+      final tab = await _host.workspaceTabService.setTabPinned(
+        tabId: tabId,
+        pinned: pinned,
+      );
+      if (!_host.isDisposed) {
+        _host.emitState(
+          applyWorkbenchTabUpdateState(
+            state: _host.readState(),
+            tab: tab,
+          ).copyWith(error: null),
+        );
+      }
+    } catch (error) {
+      if (!_host.isDisposed) {
+        _host.emitState(_host.readState().copyWith(error: error.toString()));
+      }
+      rethrow;
+    }
+  }
+
   Future<void> syncFileTabsAfterPathMove({
     required Workspace workspace,
     required String oldRelativePath,

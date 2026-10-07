@@ -27,6 +27,7 @@ extension WorkbenchTabLayoutOwnerFileTabs on WorkbenchTabLayoutOwner {
   Future<WorkspaceTabRecord> openMarkdownViewerTab({
     required Workspace workspace,
     required String relativePath,
+    String? fragment,
     String? targetGroupId,
     bool preview = false,
   }) {
@@ -39,6 +40,7 @@ extension WorkbenchTabLayoutOwnerFileTabs on WorkbenchTabLayoutOwner {
             return _host.workspaceTabService.openOrCreateMarkdownViewerTab(
               workspaceId: workspaceId,
               relativePath: relativePath,
+              fragment: fragment,
               preview: preview,
               replacePreviewTabId: replacePreviewTabId,
             );

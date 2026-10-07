@@ -50,6 +50,7 @@ extension WorkspaceTabFileOpening on WorkspaceTabService {
   Future<WorkspaceTabRecord> openOrCreateMarkdownViewerTab({
     required String workspaceId,
     required String relativePath,
+    String? fragment,
     bool preview = false,
     String? replacePreviewTabId,
   }) async {
@@ -57,13 +58,28 @@ extension WorkspaceTabFileOpening on WorkspaceTabService {
     if (!isWorkspaceMarkdownFilePath(normalizedPath)) {
       throw StateError('Markdown viewer tabs require a .md file');
     }
-    return _openOrCreateFileTab(
+    final tab = await _openOrCreateFileTab(
       workspaceId: workspaceId,
       relativePath: normalizedPath,
       kind: .markdownViewer,
       preview: preview,
       replacePreviewTabId: replacePreviewTabId,
     );
+    final normalizedFragment = fragment?.trim();
+    final nextFragment =
+        normalizedFragment == null || normalizedFragment.isEmpty
+        ? null
+        : normalizedFragment;
+    if (tab.markdownFragment == nextFragment) return tab;
+    final payload = Map<String, Object?>.of(tab.payload);
+    if (nextFragment == null) {
+      payload.remove(workspaceTabMarkdownFragmentPayloadKey);
+    } else {
+      payload[workspaceTabMarkdownFragmentPayloadKey] = nextFragment;
+    }
+    final next = tab.copyWith(updatedAt: _now(), payload: payload);
+    await _repository.upsertWorkspaceTab(next);
+    return next;
   }
 
   Future<WorkspaceTabRecord> keepPreviewTab(String tabId) async {
