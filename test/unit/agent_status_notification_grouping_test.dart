@@ -104,7 +104,7 @@ void main() {
         includeFinished: false,
       );
 
-      expect(notification!.body, 'Terminal 1, Claude');
+      expect(notification!.body, 'Terminal 1, Claude Code');
     });
 
     test('drops finished entries from a group when they are off', () {

@@ -27,10 +27,13 @@ import 'package:alera/src/features/projects/domain/project.dart';
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
 import 'package:alera/src/features/workbench/application/workbench_repository.dart';
 import 'package:alera/src/features/workbench/application/workbench_state.dart';
+import 'package:alera/src/features/workbench/application/workspace_service.dart';
 import 'package:alera/src/features/workbench/domain/workbench_layout.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_client.dart';
+import 'package:alera/src/rust/api/agent_runtime_overlay.dart'
+    as runtime_overlay;
 import 'package:alera/src/platform/runtime_host/protocol/terminal_host_protocol.dart';
 import 'package:alera/src/features/workbench/application/terminal_runtime_lifecycle.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_runtime.dart';
@@ -719,6 +722,7 @@ void main() {
           'pi': true,
           'amp': true,
           'grok': true,
+          'devin': true,
           'fx': true,
         },
       );
@@ -782,6 +786,20 @@ void main() {
               'SHELL': '/bin/zsh',
             },
             applicationSupportDirectory: () async => support,
+            nativePreparer: ({required request}) async =>
+                runtime_overlay.AgentRuntimeOverlayResult(
+                  sourceExists: false,
+                  linkedCount: BigInt.zero,
+                  copiedCount: BigInt.zero,
+                  writtenCount: BigInt.zero,
+                  removedCount: BigInt.zero,
+                  warnings: const <String>[],
+                ),
+            nativeCleaner: ({required targets}) async =>
+                runtime_overlay.AgentRuntimeOverlayCleanupResult(
+                  removedCount: BigInt.zero,
+                  warnings: const <String>[],
+                ),
           ),
           hooks: const AgentStatusHookSettings(
             values: {
