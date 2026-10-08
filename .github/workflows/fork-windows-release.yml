@@ -1,13 +1,13 @@
-name: Fork Windows Release
+name: Fork Portable Release
 
 run-name: >-
   ${{ github.event_name == 'workflow_dispatch' &&
-    format('Fork Windows Release from {0}', inputs.ref) ||
-    format('Fork Windows Release {0}', github.ref_name) }}
+    format('Fork Portable Release from {0}', inputs.ref) ||
+    format('Fork Portable Release {0}', github.ref_name) }}
 
 # The upstream Cut Release pipeline publishes to the upstream update bucket and
 # needs its signing keys, so it cannot run on this fork. This workflow only
-# builds the Windows app and attaches it to a GitHub Release: no updater index,
+# builds the Windows and macOS apps and attaches them to one GitHub Release: no updater index,
 # no package managers, no platform signing.
 on:
   push:
@@ -26,14 +26,14 @@ permissions:
 
 # Never cancel mid-publish: a cancelled run could leave a partial release.
 concurrency:
-  group: fork-windows-release
+  group: fork-portable-release
   cancel-in-progress: false
 
 env:
   ALERA_FLAVOR: release
 
 jobs:
-  build:
+  build-windows:
     if: github.repository == 'shelizi/alera'
     runs-on: windows-latest
     timeout-minutes: 120
@@ -123,21 +123,123 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  build-macos:
+    if: github.repository == 'shelizi/alera'
+    runs-on: macos-latest
+    timeout-minutes: 120
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      target_sha: ${{ steps.version.outputs.target_sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
+          submodules: false
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="$(sed -nE 's/^version:[[:space:]]*([^[:space:]]+).*/\1/p' pubspec.yaml | head -n 1)"
+          [[ -n "$version" ]] || { echo "::error::pubspec.yaml has no version."; exit 1; }
+          release="${version%%+*}"
+          tag="v$release"
+          if [[ "$EVENT_NAME" == "push" && "$REF_NAME" != "$tag" ]]; then
+            echo "::error::Tag $REF_NAME does not match pubspec version $version (expected $tag)."
+            exit 1
+          fi
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+          echo "tag=$tag" >>"$GITHUB_OUTPUT"
+          echo "target_sha=$(git rev-parse HEAD)" >>"$GITHUB_OUTPUT"
+          echo "Releasing $version as $tag"
+
+      - name: Setup Flutter workspace
+        uses: ./.github/actions/setup-flutter-workspace
+        with:
+          rust: 'true'
+
+      - name: Restore cargokit build
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            build/**/cargokit_build
+            build/**/ck
+          key: cargokit-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust/Cargo.lock') }}-
+          restore-keys: |
+            cargokit-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust/Cargo.lock') }}-
+            cargokit-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Build macOS app
+        shell: bash
+        env:
+          ALERA_BUILD_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          flutter build macos --release \
+            --dart-define=ALERA_FLAVOR=release \
+            --dart-define=ALERA_RELEASE_PAGE_URL=https://github.com/${{ github.repository }}/releases
+
+      - name: Verify macOS ARM64 bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle="$(find build/macos/Build/Products/Release -maxdepth 1 -type d -name '*.app' -print -quit)"
+          [[ -d "$bundle" ]] || { echo "::error::Missing macOS app bundle."; exit 1; }
+          bash tool/release/verify_macos_arm64_only.sh "$bundle"
+
+      - name: Package release archive
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          bundle="$(find build/macos/Build/Products/Release -maxdepth 1 -type d -name '*.app' -print -quit)"
+          [[ -d "$bundle" ]] || { echo "::error::Missing macOS app bundle."; exit 1; }
+          release="${VERSION%%+*}"
+          name="alera-$release-macos-arm64.tar.gz"
+          mkdir -p dist
+          COPYFILE_DISABLE=1 tar -czf "dist/$name" \
+            -C "$(dirname "$bundle")" "$(basename "$bundle")"
+          shasum -a 256 "dist/$name" | sed 's#  dist/#  #' >"dist/$name.sha256"
+          ls -lh dist
+
+      - name: Upload release archive
+        uses: actions/upload-artifact@v7
+        with:
+          name: fork-macos-release
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
   publish:
-    needs: build
+    needs: [build-windows, build-macos]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: write
     env:
       GH_TOKEN: ${{ github.token }}
-      TAG: ${{ needs.build.outputs.tag }}
-      TARGET_SHA: ${{ needs.build.outputs.target_sha }}
+      TAG: ${{ needs.build-windows.outputs.tag }}
+      TARGET_SHA: ${{ needs.build-windows.outputs.target_sha }}
+      MACOS_TAG: ${{ needs.build-macos.outputs.tag }}
+      MACOS_TARGET_SHA: ${{ needs.build-macos.outputs.target_sha }}
     steps:
+      - name: Verify build metadata
+        run: |
+          set -euo pipefail
+          [[ "$TAG" == "$MACOS_TAG" ]] || { echo "::error::Windows and macOS tags differ."; exit 1; }
+          [[ "$TARGET_SHA" == "$MACOS_TARGET_SHA" ]] || { echo "::error::Windows and macOS commits differ."; exit 1; }
+
       - name: Checkout
         uses: actions/checkout@v7
         with:
-          ref: ${{ needs.build.outputs.target_sha }}
+          ref: ${{ needs.build-windows.outputs.target_sha }}
           fetch-depth: 0
           submodules: false
 
@@ -148,6 +250,12 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: fork-windows-release
+          path: dist
+
+      - name: Download macOS archive
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: fork-macos-release
           path: dist
 
       - name: Generate release notes
