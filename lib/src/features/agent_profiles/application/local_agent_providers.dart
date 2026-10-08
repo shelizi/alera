@@ -16,6 +16,7 @@ LocalAgentDetection localAgentDetection(Ref ref) {
   );
   return LocalAgentDetection(
     commandEnvironmentResolver: ref.watch(commandEnvironmentResolverProvider),
+    processRunner: ref.watch(processRunnerProvider),
     executablePaths: executablePaths,
   );
 }

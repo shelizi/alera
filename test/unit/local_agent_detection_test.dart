@@ -2,7 +2,10 @@ import 'package:alera/src/features/agent_profiles/application/local_agent_detect
 import 'package:alera/src/features/agent_profiles/domain/agent_profile_adapters.dart';
 import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 import 'package:alera/src/shared/infra/process/command_environment_resolver.dart';
+import 'package:alera/src/shared/infra/process/process_runner.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import 'fake_recording_process_runner.dart';
 
 class _FakeEnvironmentResolver implements CommandEnvironmentResolver {
   _FakeEnvironmentResolver(this._environment);
@@ -22,9 +25,11 @@ LocalAgentDetection _detection({
   required bool isWindows,
   required Set<String> existing,
   Map<String, String> executablePaths = const <String, String>{},
+  ProcessRunner? processRunner,
 }) {
   return LocalAgentDetection(
     commandEnvironmentResolver: _FakeEnvironmentResolver(environment),
+    processRunner: processRunner ?? FakeRecordingProcessRunner(<Object>[]),
     executablePaths: executablePaths,
     isWindows: isWindows,
     executableExists: existing.contains,
@@ -107,6 +112,76 @@ void main() {
         expect(
           await detection.detectInstalled(),
           isNot(contains(AgentType.devin)),
+        );
+      },
+    );
+
+    test(
+      'probes AGY with --version in the background before exposing it',
+      () async {
+        final runner = FakeRecordingProcessRunner(<Object>[
+          const ProcessRunOutput(exitCode: 0, stdout: '1.2.16\n', stderr: ''),
+        ]);
+        final environment = <String, String>{
+          'Path': r'C:\tools',
+          'PATHEXT': '.COM;.EXE;.BAT;.CMD',
+        };
+        final detection = _detection(
+          environment: environment,
+          isWindows: true,
+          existing: <String>{r'C:\tools\agy.cmd'},
+          processRunner: runner,
+        );
+
+        expect(await detection.detectInstalled(), contains(AgentType.agy));
+        expect(runner.calls, hasLength(1));
+        expect(runner.calls.single.executable, r'C:\tools\agy.cmd');
+        expect(runner.calls.single.arguments, const <String>['--version']);
+        expect(runner.calls.single.environment, environment);
+      },
+    );
+
+    test('does not expose AGY when its silent version probe fails', () async {
+      final runner = FakeRecordingProcessRunner(<Object>[
+        const ProcessRunOutput(
+          exitCode: 2,
+          stdout: '',
+          stderr: 'unexpected argument "version"',
+        ),
+      ]);
+      final detection = _detection(
+        environment: <String, String>{
+          'Path': r'C:\tools',
+          'PATHEXT': '.COM;.EXE;.BAT;.CMD',
+        },
+        isWindows: true,
+        existing: <String>{r'C:\tools\agy.cmd'},
+        processRunner: runner,
+      );
+
+      expect(await detection.detectInstalled(), isNot(contains(AgentType.agy)));
+      expect(runner.calls.single.arguments, const <String>['--version']);
+    });
+
+    test(
+      'does not expose AGY when its silent version probe cannot start',
+      () async {
+        final runner = FakeRecordingProcessRunner(<Object>[
+          StateError('broken shim'),
+        ]);
+        final detection = _detection(
+          environment: <String, String>{
+            'Path': r'C:\tools',
+            'PATHEXT': '.COM;.EXE;.BAT;.CMD',
+          },
+          isWindows: true,
+          existing: <String>{r'C:\tools\agy.cmd'},
+          processRunner: runner,
+        );
+
+        expect(
+          await detection.detectInstalled(),
+          isNot(contains(AgentType.agy)),
         );
       },
     );
