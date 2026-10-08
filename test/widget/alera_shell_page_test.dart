@@ -11,7 +11,6 @@ import 'package:alera/src/features/agent_profiles/application/agent_profile_prov
 import 'package:alera/src/features/agent_profiles/application/local_agent_providers.dart';
 import 'package:alera/src/features/agent_profiles/domain/agent_profile.dart';
 import 'package:alera/src/features/agent_profiles/domain/agent_profile_adapters.dart';
-import 'package:alera/src/features/agent_status/application/agent_status_providers.dart';
 import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 import 'package:alera/src/features/external_editor/application/external_editor_providers.dart';
 import 'package:alera/src/features/external_editor/domain/external_editor_spec.dart';
@@ -28,6 +27,7 @@ import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/domain/workbench_layout.dart';
 import 'package:alera/src/features/workbench/domain/workbench_view_prefs.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
+import 'package:alera/src/features/workbench/domain/workspace_source_control_scope.dart';
 import 'package:alera/src/features/workbench/domain/workspace_creation_result.dart';
 import 'package:alera/src/features/workbench/domain/workspace_storage_impact.dart';
 import 'package:alera/src/features/workbench/application/terminal_runtime_lifecycle.dart';
@@ -38,6 +38,7 @@ import 'package:alera/src/features/workbench/presentation/widgets/agent_run_spin
 import 'package:alera/src/features/workbench/presentation/project_workbench_sidebar.dart';
 import 'package:alera/src/features/workbench/presentation/widgets/workspace_agent_compact_summary.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_workbench_view.dart';
+import 'package:alera/src/shared/infra/git/git_providers.dart';
 import 'package:alera/src/shared/infra/process/process_runner.dart';
 import 'package:alera/src/shared/infra/storage/drift_database.dart';
 import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_client_models.dart';
@@ -50,6 +51,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../unit/terminal_host_test_fakes.dart';
+import '../unit/fake_git_backend.dart';
 
 part 'alera_shell_page_test_harness.dart';
 part 'alera_shell_page_runtime_test_harness.dart';
@@ -163,6 +165,95 @@ class _ShellAgentProfiles extends AgentProfiles {
 }
 
 void main() {
+  testWidgets(
+    'status branch menu is searchable, hierarchical, and switches branches',
+    (tester) async {
+      final backend = FakeGitBackend()
+        ..sourceBranches = <String>[
+          'feature/auth/login',
+          'feature/auth/logout',
+          'main',
+          'origin/main',
+          'release/2026/q4',
+        ]
+        ..remotesByName = <String, String?>{
+          'origin': 'https://example.com/repo.git',
+        };
+      final switched = <String>[];
+      final now = DateTime.utc(2026, 10, 8);
+      final workspace = Workspace(
+        id: 'branch-workspace',
+        projectId: 'project-1',
+        name: 'Main',
+        branch: 'main',
+        path: '/tmp/project',
+        createdAt: now,
+        updatedAt: now,
+        kind: .main,
+        status: .active,
+      );
+      final scope = WorkspaceSourceControlScope(
+        workspaceId: workspace.id,
+        workspacePath: workspace.path,
+        path: workspace.path,
+      );
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [gitBackendProvider.overrideWithValue(backend)],
+          child: MaterialApp(
+            home: Scaffold(
+              body: Align(
+                alignment: Alignment.bottomRight,
+                child: WorkspaceBranchStatusBarControl(
+                  workspace: workspace,
+                  sourceControlScope: scope,
+                  onSwitchBranch: (branch) async => switched.add(branch),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('main'), findsOneWidget);
+      await tester.tap(
+        find.byKey(const ValueKey<String>('workspace-branch-status')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('feature'), findsOneWidget);
+      expect(find.text('auth'), findsOneWidget);
+      expect(find.text('login'), findsOneWidget);
+      expect(find.text('logout'), findsOneWidget);
+      expect(find.text('origin'), findsNothing);
+      expect(
+        tester.getTopLeft(find.text('auth')).dx,
+        greaterThan(tester.getTopLeft(find.text('feature')).dx),
+      );
+      expect(
+        tester.getTopLeft(find.text('login')).dx,
+        greaterThan(tester.getTopLeft(find.text('auth')).dx),
+      );
+
+      await tester.enterText(
+        find.byKey(const ValueKey<String>('workspace-branch-search')),
+        'logout',
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('feature'), findsOneWidget);
+      expect(find.text('auth'), findsOneWidget);
+      expect(find.text('login'), findsNothing);
+      expect(find.text('logout'), findsOneWidget);
+
+      await tester.tap(find.text('logout'));
+      await tester.pumpAndSettle();
+      expect(switched, <String>['feature/auth/logout']);
+    },
+  );
+
   testWidgets('shell starts the agent hook installer coordinator', (
     WidgetTester tester,
   ) async {

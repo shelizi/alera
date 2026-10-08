@@ -197,6 +197,9 @@ class _WorkspaceGitDiffPanelState extends ConsumerState<WorkspaceGitDiffPanel> {
       _restorePanelUiState(widget.sourceControlScope.path);
       _historyLoader.rebind(widget.sourceControlScope.path);
       _commitCompareCache.rebind(widget.sourceControlScope.path);
+      if (!_historyCollapsed) {
+        unawaited(_loadGitHistory());
+      }
     }
   }
 

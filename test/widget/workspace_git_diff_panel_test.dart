@@ -1381,6 +1381,60 @@ void main() {
     expect(find.text('lib/dirty.dart'), findsNothing);
     expect(find.byTooltip('Expand All'), findsOneWidget);
   });
+
+  testWidgets(
+    'restored expanded commits reload after switching away and back',
+    (tester) async {
+      GitHistoryResult history(String id, String subject) => GitHistoryResult(
+        currentRef: GitHistoryItemRef(
+          id: 'refs/heads/main',
+          name: 'main',
+          revision: id,
+        ),
+        hasIncomingChanges: false,
+        hasOutgoingChanges: false,
+        hasMore: false,
+        limit: 50,
+        items: <GitHistoryItem>[
+          GitHistoryItem(
+            id: id,
+            parentIds: const <String>[],
+            subject: subject,
+            message: subject,
+          ),
+        ],
+      );
+
+      final backend = FakeGitBackend()
+        ..gitHistoryResultQueue.addAll(<Future<GitHistoryResult>>[
+          Future<GitHistoryResult>.value(history('a-old', 'Project A First')),
+          Future<GitHistoryResult>.value(history('a-new', 'Project A Return')),
+        ]);
+      final workspaceA = _workspace(id: 'workspace-a', path: '/tmp/project-a');
+      final workspaceB = _workspace(id: 'workspace-b', path: '/tmp/project-b');
+
+      await _pumpPanel(tester, backend: backend, workspace: workspaceA);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('COMMITS'));
+      await tester.pumpAndSettle();
+      expect(find.text('Project A First'), findsOneWidget);
+
+      await _pumpPanel(tester, backend: backend, workspace: workspaceB);
+      await tester.pumpAndSettle();
+      expect(find.text('Project A First'), findsNothing);
+
+      await _pumpPanel(tester, backend: backend, workspace: workspaceA);
+      await tester.pumpAndSettle();
+
+      expect(find.text('Project A Return'), findsOneWidget);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+      final historyCalls = backend.calls
+          .where((call) => call.method == 'history')
+          .toList(growable: false);
+      expect(historyCalls, hasLength(2));
+      expect(historyCalls.last.args['path'], '/tmp/project-a');
+    },
+  );
   testWidgets('sections and visible rows can be collapsed together', (
     tester,
   ) async {
