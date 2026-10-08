@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:alera/src/features/workbench/application/workbench_replaceable_tab_editor_sessions.dart';
@@ -18,7 +19,10 @@ class const WorkspaceFileClipboardPayload({
   required final int sequenceNumber,
 });
 
-class const WorkspaceFileService() {
+class WorkspaceFileService {
+  final Map<String, _WorkspaceQuickOpenCacheEntry> _quickOpenCache =
+      <String, _WorkspaceQuickOpenCacheEntry>{};
+  final Map<String, Timer> _quickOpenRefreshTimers = <String, Timer>{};
   Future<List<native.WorkspaceFileEntry>> listChildren({
     required String workspacePath,
     required String relativePath,
@@ -62,6 +66,201 @@ class const WorkspaceFileService() {
   }) {
     return native.stopWorkspaceQuickOpenSession(session: session);
   }
+
+  List<native.WorkspaceQuickOpenMatch>? peekQuickOpenMatches({
+    required String workspacePath,
+    required List<String> excludedDirectories,
+    required String query,
+    required bool includeGitignored,
+    int limit = 50,
+  }) {
+    final entry =
+        _quickOpenCache[_quickOpenCacheKey(workspacePath, excludedDirectories)];
+    return entry?.matches[_quickOpenSearchKey(query, includeGitignored, limit)];
+  }
+
+  Future<List<native.WorkspaceQuickOpenMatch>> searchQuickOpenCached({
+    required String workspacePath,
+    required List<String> excludedDirectories,
+    required String query,
+    required bool includeGitignored,
+    int limit = 50,
+  }) async {
+    final entry = _quickOpenEntry(workspacePath, excludedDirectories);
+    final searchKey = _quickOpenSearchKey(query, includeGitignored, limit);
+    entry.searchRequests[searchKey] = _WorkspaceQuickOpenSearchRequest(
+      key: searchKey,
+      query: query,
+      includeGitignored: includeGitignored,
+      limit: limit,
+    );
+    final session = await _ensureQuickOpenSession(entry);
+    final matches = await searchQuickOpenSession(
+      session: session,
+      query: query,
+      includeGitignored: includeGitignored,
+      limit: limit,
+    );
+    if (entry.session?.id == session.id) {
+      entry.matches[searchKey] =
+          List<native.WorkspaceQuickOpenMatch>.unmodifiable(matches);
+    }
+    return matches;
+  }
+
+  Future<void> warmQuickOpenSession({
+    required String workspacePath,
+    required List<String> excludedDirectories,
+  }) async {
+    await searchQuickOpenCached(
+      workspacePath: workspacePath,
+      excludedDirectories: excludedDirectories,
+      query: '',
+      includeGitignored: false,
+    );
+  }
+
+  void scheduleQuickOpenRefresh({
+    required String workspacePath,
+    Duration debounce = const Duration(milliseconds: 500),
+  }) {
+    _quickOpenRefreshTimers.remove(workspacePath)?.cancel();
+    _quickOpenRefreshTimers[workspacePath] = Timer(debounce, () {
+      _quickOpenRefreshTimers.remove(workspacePath);
+      unawaited(_refreshQuickOpenEntries(workspacePath));
+    });
+  }
+
+  Future<void> dispose() async {
+    for (final timer in _quickOpenRefreshTimers.values) {
+      timer.cancel();
+    }
+    _quickOpenRefreshTimers.clear();
+    final sessions = <native.WorkspaceQuickOpenSession>[
+      for (final entry in _quickOpenCache.values)
+        if (entry.session != null) entry.session!,
+    ];
+    _quickOpenCache.clear();
+    await Future.wait(
+      sessions.map((session) async {
+        try {
+          await stopQuickOpenSession(session: session);
+        } catch (_) {
+          // Service disposal is best effort.
+        }
+      }),
+    );
+  }
+
+  _WorkspaceQuickOpenCacheEntry _quickOpenEntry(
+    String workspacePath,
+    List<String> excludedDirectories,
+  ) {
+    final key = _quickOpenCacheKey(workspacePath, excludedDirectories);
+    return _quickOpenCache.putIfAbsent(
+      key,
+      () => _WorkspaceQuickOpenCacheEntry(
+        workspacePath: workspacePath,
+        excludedDirectories: List<String>.unmodifiable(excludedDirectories),
+      ),
+    );
+  }
+
+  Future<native.WorkspaceQuickOpenSession> _ensureQuickOpenSession(
+    _WorkspaceQuickOpenCacheEntry entry,
+  ) {
+    final current = entry.session;
+    if (current != null) {
+      return Future<native.WorkspaceQuickOpenSession>.value(current);
+    }
+    final pending = entry.pendingSession;
+    if (pending != null) {
+      return pending;
+    }
+    final next = startQuickOpenSession(
+      workspacePath: entry.workspacePath,
+      excludedDirectories: entry.excludedDirectories,
+    );
+    entry.pendingSession = next;
+    return next.then(
+      (session) {
+        if (identical(entry.pendingSession, next)) {
+          entry
+            ..session = session
+            ..pendingSession = null;
+        }
+        return session;
+      },
+      onError: (Object error, StackTrace stackTrace) {
+        if (identical(entry.pendingSession, next)) {
+          entry.pendingSession = null;
+        }
+        Error.throwWithStackTrace(error, stackTrace);
+      },
+    );
+  }
+
+  Future<void> _refreshQuickOpenEntries(String workspacePath) async {
+    final entries = _quickOpenCache.values
+        .where((entry) => entry.workspacePath == workspacePath)
+        .toList(growable: false);
+    for (final entry in entries) {
+      if (entry.refreshing || entry.pendingSession != null) {
+        continue;
+      }
+      entry.refreshing = true;
+      try {
+        final session = await startQuickOpenSession(
+          workspacePath: entry.workspacePath,
+          excludedDirectories: entry.excludedDirectories,
+        );
+        final refreshedMatches =
+            <String, List<native.WorkspaceQuickOpenMatch>>{};
+        for (final request in entry.searchRequests.values) {
+          final matches = await searchQuickOpenSession(
+            session: session,
+            query: request.query,
+            includeGitignored: request.includeGitignored,
+            limit: request.limit,
+          );
+          refreshedMatches[request.key] =
+              List<native.WorkspaceQuickOpenMatch>.unmodifiable(matches);
+        }
+        final previousSession = entry.session;
+        entry
+          ..session = session
+          ..pendingSession = null;
+        entry.matches
+          ..clear()
+          ..addAll(refreshedMatches);
+        if (previousSession != null && previousSession.id != session.id) {
+          unawaited(_stopQuickOpenSessionBestEffort(previousSession));
+        }
+      } catch (_) {
+        // Keep serving the previous index if a background refresh fails.
+      } finally {
+        entry.refreshing = false;
+      }
+    }
+  }
+
+  Future<void> _stopQuickOpenSessionBestEffort(
+    native.WorkspaceQuickOpenSession session,
+  ) async {
+    try {
+      await stopQuickOpenSession(session: session);
+    } catch (_) {
+      // Superseded cache sessions are cleanup-only work.
+    }
+  }
+
+  String _quickOpenCacheKey(
+    String workspacePath,
+    List<String> excludedDirectories,
+  ) => '$workspacePath\u0000${excludedDirectories.join('\u0000')}';
+
+  String _quickOpenSearchKey(String query, bool includeGitignored, int limit) =>
+      '${includeGitignored ? 1 : 0}:$limit:${query.trim()}';
 
   List<native.WorkspaceFileEntry> applyGitStatusSnapshot(
     List<native.WorkspaceFileEntry> entries,
@@ -463,6 +662,30 @@ class const WorkspaceFileService() {
     return normalized;
   }
 }
+
+class _WorkspaceQuickOpenCacheEntry {
+  _WorkspaceQuickOpenCacheEntry({
+    required this.workspacePath,
+    required this.excludedDirectories,
+  });
+
+  final String workspacePath;
+  final List<String> excludedDirectories;
+  native.WorkspaceQuickOpenSession? session;
+  Future<native.WorkspaceQuickOpenSession>? pendingSession;
+  bool refreshing = false;
+  final Map<String, List<native.WorkspaceQuickOpenMatch>> matches =
+      <String, List<native.WorkspaceQuickOpenMatch>>{};
+  final Map<String, _WorkspaceQuickOpenSearchRequest> searchRequests =
+      <String, _WorkspaceQuickOpenSearchRequest>{};
+}
+
+class const _WorkspaceQuickOpenSearchRequest({
+  required final String key,
+  required final String query,
+  required final bool includeGitignored,
+  required final int limit,
+});
 
 class const ResolvedWorkspaceFile({
   required final String path,

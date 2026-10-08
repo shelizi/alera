@@ -31,6 +31,7 @@ class _FakeWorkspaceFileService({
   final List<bool> hideHiddenCalls = <bool>[];
   final List<List<String>> watchedPathUpdates = <List<String>>[];
   final Map<String, String> writtenFiles = <String, String>{};
+  List<String> quickOpenEntries = <String>[];
 
   void emitWatchBatch(List<String> directoryRelativePaths) {
     _watchController.add(
@@ -40,6 +41,29 @@ class _FakeWorkspaceFileService({
         coalescedEventCount: 0,
       ),
     );
+  }
+
+  @override
+  Future<List<native.WorkspaceQuickOpenMatch>> searchQuickOpenCached({
+    required String workspacePath,
+    required List<String> excludedDirectories,
+    required String query,
+    required bool includeGitignored,
+    int limit = 50,
+  }) async {
+    final normalizedQuery = query.trim().toLowerCase();
+    return quickOpenEntries
+        .where(
+          (path) =>
+              normalizedQuery.isEmpty ||
+              path.toLowerCase().contains(normalizedQuery),
+        )
+        .take(limit)
+        .map(
+          (path) =>
+              native.WorkspaceQuickOpenMatch(relativePath: path, score: 0),
+        )
+        .toList(growable: false);
   }
 
   @override

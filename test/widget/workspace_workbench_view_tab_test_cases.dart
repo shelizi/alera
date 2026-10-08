@@ -418,6 +418,60 @@ void _registerWorkspaceWorkbenchViewTabTests() {
     expect(controller.position.pixels, lessThan(afterForwardWheel));
   });
 
+  testWidgets('pinned tabs stay left and fixed while other tabs scroll', (
+    tester,
+  ) async {
+    final tabs = <WorkspaceTabRecord>[
+      _tab('regular-first', title: 'Regular first'),
+      _tab('pinned-tab', title: 'Pinned tab', pinned: true),
+      ..._overflowingWorkbenchTabs(),
+    ];
+    await _pumpWorkbenchView(
+      tester,
+      tabs: tabs,
+      terminalRuntime: terminalRuntime,
+      layout: _singleTabStripLayout(tabs, activeTabId: 'regular-first'),
+      createdTabs: createdTabs,
+      selectedTabs: selectedTabs,
+      closedTabs: closedTabs,
+      closedTabGroups: closedTabGroups,
+      renamedTabs: renamedTabs,
+      movedTabs: movedTabs,
+      splitGroups: splitGroups,
+      mergedGroups: mergedGroups,
+      updatedRatios: updatedRatios,
+      size: const Size(420, 280),
+    );
+    await tester.pumpAndSettle();
+
+    final pinned = find.byKey(
+      const ValueKey<String>('workspace-tab-chip:pinned-tab'),
+    );
+    final regular = find.byKey(
+      const ValueKey<String>('workspace-tab-chip:regular-first'),
+    );
+    final scrollView = find.byKey(
+      const ValueKey<String>('workspace-tab-scroll:group-a'),
+    );
+    expect(
+      tester.getTopLeft(pinned).dx,
+      lessThan(tester.getTopLeft(regular).dx),
+    );
+    final pinnedLeft = tester.getTopLeft(pinned).dx;
+
+    await tester.sendEventToBinding(
+      PointerScrollEvent(
+        position: tester.getCenter(scrollView),
+        scrollDelta: const Offset(0, 160),
+        kind: PointerDeviceKind.mouse,
+      ),
+    );
+    await tester.pump();
+
+    expect(tester.getTopLeft(pinned).dx, closeTo(pinnedLeft, 0.1));
+    expect(_tabStripScrollController(tester).position.pixels, greaterThan(0));
+  });
+
   testWidgets('active overflow tab is revealed with trailing breathing room', (
     tester,
   ) async {

@@ -32,7 +32,6 @@ class _QuickOpenDialogState extends ConsumerState<QuickOpenDialog> {
   late final WorkspaceFileService _workspaceFiles;
 
   String? _workspaceId;
-  native.WorkspaceQuickOpenSession? _session;
   List<native.WorkspaceQuickOpenMatch> _matches =
       const <native.WorkspaceQuickOpenMatch>[];
   bool _loading = true;
@@ -62,13 +61,8 @@ class _QuickOpenDialogState extends ConsumerState<QuickOpenDialog> {
 
   @override
   void dispose() {
-    final session = _session;
-    _session = null;
     _workspaceGeneration++;
     _searchGeneration++;
-    if (session != null) {
-      unawaited(_stopSession(session));
-    }
     _queryController.dispose();
     _queryFocusNode.dispose();
     _resultsScrollController.dispose();
@@ -80,11 +74,6 @@ class _QuickOpenDialogState extends ConsumerState<QuickOpenDialog> {
     final workspaceId = workspace?.id;
     final generation = ++_workspaceGeneration;
     ++_searchGeneration;
-    final previousSession = _session;
-    _session = null;
-    if (previousSession != null) {
-      unawaited(_stopSession(previousSession));
-    }
     final workspaceChanged = _workspaceId != workspaceId;
     _workspaceId = workspaceId;
     if (workspaceChanged) {
@@ -93,68 +82,59 @@ class _QuickOpenDialogState extends ConsumerState<QuickOpenDialog> {
     if (!mounted) {
       return;
     }
+    final includeGitignored = ref
+        .read(workbenchControllerProvider)
+        .viewPrefs
+        .quickOpenIncludeGitignored;
+    final excludedDirectories = _excludedDirectories();
+    final cached = workspace == null
+        ? null
+        : _workspaceFiles.peekQuickOpenMatches(
+            workspacePath: workspace.path,
+            excludedDirectories: excludedDirectories,
+            query: _queryController.text,
+            includeGitignored: includeGitignored,
+            limit: _quickOpenResultLimit,
+          );
     _resetResultsScroll();
     setState(() {
-      _matches = const <native.WorkspaceQuickOpenMatch>[];
+      _matches = cached ?? const <native.WorkspaceQuickOpenMatch>[];
       _selectedIndex = 0;
       _loadError = null;
-      _loading = workspace != null;
+      _loading = workspace != null && cached == null;
       _rowKeys.clear();
     });
     if (workspace == null) {
-      if (mounted && generation == _workspaceGeneration) {
-        setState(() => _loading = false);
-      }
       return;
     }
-    try {
-      final session = await _workspaceFiles.startQuickOpenSession(
-        workspacePath: workspace.path,
-        excludedDirectories: ref
-            .read(settingsControllerProvider)
-            .editor
-            .quickOpenExcludedDirectories,
-      );
-      if (!mounted || generation != _workspaceGeneration) {
-        unawaited(_stopSession(session));
-        return;
-      }
-      _session = session;
-      final searchGeneration = ++_searchGeneration;
-      await _searchSession(
-        session: session,
-        workspaceGeneration: generation,
-        searchGeneration: searchGeneration,
-        query: _queryController.text,
-      );
-    } catch (error) {
-      if (!mounted || generation != _workspaceGeneration) {
-        return;
-      }
-      setState(() {
-        _loadError = error;
-        _loading = false;
-      });
-    }
+    final searchGeneration = ++_searchGeneration;
+    await _searchWorkspace(
+      workspacePath: workspace.path,
+      excludedDirectories: excludedDirectories,
+      workspaceGeneration: generation,
+      searchGeneration: searchGeneration,
+      query: _queryController.text,
+      includeGitignored: includeGitignored,
+    );
   }
 
-  Future<void> _searchSession({
-    required native.WorkspaceQuickOpenSession session,
+  Future<void> _searchWorkspace({
+    required String workspacePath,
+    required List<String> excludedDirectories,
     required int workspaceGeneration,
     required int searchGeneration,
     required String query,
+    required bool includeGitignored,
   }) async {
     try {
-      final matches = await _workspaceFiles.searchQuickOpenSession(
-        session: session,
+      final matches = await _workspaceFiles.searchQuickOpenCached(
+        workspacePath: workspacePath,
+        excludedDirectories: excludedDirectories,
         query: query,
-        includeGitignored: ref
-            .read(workbenchControllerProvider)
-            .viewPrefs
-            .quickOpenIncludeGitignored,
+        includeGitignored: includeGitignored,
         limit: _quickOpenResultLimit,
       );
-      if (!_isCurrentSearch(session, workspaceGeneration, searchGeneration)) {
+      if (!_isCurrentSearch(workspaceGeneration, searchGeneration)) {
         return;
       }
       setState(() {
@@ -164,7 +144,7 @@ class _QuickOpenDialogState extends ConsumerState<QuickOpenDialog> {
         _loadError = null;
       });
     } catch (error) {
-      if (!_isCurrentSearch(session, workspaceGeneration, searchGeneration)) {
+      if (!_isCurrentSearch(workspaceGeneration, searchGeneration)) {
         return;
       }
       setState(() {
@@ -174,36 +154,49 @@ class _QuickOpenDialogState extends ConsumerState<QuickOpenDialog> {
     }
   }
 
-  bool _isCurrentSearch(
-    native.WorkspaceQuickOpenSession session,
-    int workspaceGeneration,
-    int searchGeneration,
-  ) {
+  bool _isCurrentSearch(int workspaceGeneration, int searchGeneration) {
     return mounted &&
         workspaceGeneration == _workspaceGeneration &&
-        searchGeneration == _searchGeneration &&
-        identical(_session, session);
+        searchGeneration == _searchGeneration;
   }
 
+  List<String> _excludedDirectories() =>
+      ref.read(settingsControllerProvider).editor.quickOpenExcludedDirectories;
+
   void _updateQuery(String query) {
-    final session = _session;
+    final workspace = ref.read(workbenchControllerProvider).activeWorkspace;
     final workspaceGeneration = _workspaceGeneration;
     final searchGeneration = ++_searchGeneration;
+    final includeGitignored = ref
+        .read(workbenchControllerProvider)
+        .viewPrefs
+        .quickOpenIncludeGitignored;
+    final excludedDirectories = _excludedDirectories();
+    final cached = workspace == null
+        ? null
+        : _workspaceFiles.peekQuickOpenMatches(
+            workspacePath: workspace.path,
+            excludedDirectories: excludedDirectories,
+            query: query,
+            includeGitignored: includeGitignored,
+            limit: _quickOpenResultLimit,
+          );
     _resetResultsScroll();
     setState(() {
-      _matches = const <native.WorkspaceQuickOpenMatch>[];
+      _matches = cached ?? const <native.WorkspaceQuickOpenMatch>[];
       _selectedIndex = 0;
-      if (session != null) {
-        _loading = true;
-      }
+      _loadError = null;
+      _loading = workspace != null && cached == null;
     });
-    if (session != null) {
+    if (workspace != null) {
       unawaited(
-        _searchSession(
-          session: session,
+        _searchWorkspace(
+          workspacePath: workspace.path,
+          excludedDirectories: excludedDirectories,
           workspaceGeneration: workspaceGeneration,
           searchGeneration: searchGeneration,
           query: query,
+          includeGitignored: includeGitignored,
         ),
       );
     }
@@ -223,14 +216,6 @@ class _QuickOpenDialogState extends ConsumerState<QuickOpenDialog> {
   void _resetResultsScroll() {
     if (_resultsScrollController.hasClients) {
       _resultsScrollController.jumpTo(0);
-    }
-  }
-
-  Future<void> _stopSession(native.WorkspaceQuickOpenSession session) async {
-    try {
-      await _workspaceFiles.stopQuickOpenSession(session: session);
-    } catch (_) {
-      // Session cleanup is best effort during stale requests and disposal.
     }
   }
 

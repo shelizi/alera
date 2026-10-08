@@ -18,6 +18,7 @@ import 'package:alera/src/features/external_editor/application/external_editor_p
 import 'package:alera/src/features/external_editor/domain/external_editor_launcher.dart';
 import 'package:alera/src/features/external_editor/domain/external_editor_spec.dart';
 import 'package:alera/src/features/external_editor/presentation/external_editor_menu_entries.dart';
+import 'package:alera/src/features/settings/application/settings_controller.dart';
 import 'package:alera/src/features/workbench/application/workspace_explorer_reveal.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_service.dart';
 import 'package:alera/src/features/workbench/application/workspace_folder_opener.dart';
@@ -85,6 +86,7 @@ class const WorkspaceExplorer({
 class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
   static const String _rootId = 'workspace-root';
   static const String _placeholderPrefix = '__alera_placeholder__:';
+  static const int _filterResultLimit = 200;
 
   late tree.DirectoryTreeController _controller;
   final Map<String, List<native.WorkspaceFileEntry>> _childrenByDirectory =
@@ -115,7 +117,11 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
   final FocusNode _explorerFocusNode = FocusNode(
     debugLabel: 'workspace-explorer',
   );
-  bool _filterVisible = false;
+  List<native.WorkspaceQuickOpenMatch> _filterMatches =
+      const <native.WorkspaceQuickOpenMatch>[];
+  bool _filterLoading = false;
+  Object? _filterError;
+  int _filterGeneration = 0;
   PageStorageBucket? _pageStorageBucket;
   final Set<String> _expandedDirectoryPaths = <String>{};
   String? _selectedRelativePath;
@@ -149,7 +155,10 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
       _loading = true;
       _clipboard = null;
       _filterController.clear();
-      _filterVisible = false;
+      _filterMatches = const <native.WorkspaceQuickOpenMatch>[];
+      _filterLoading = false;
+      _filterError = null;
+      _filterGeneration++;
       _expandedDirectoryPaths.clear();
       _selectedRelativePath = null;
       _resetExplorerProjection();
@@ -194,9 +203,13 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
           showHiddenFiles: widget.showHiddenFiles,
           showHiddenToggle: defaultTargetPlatform == TargetPlatform.windows,
           loading: _loading,
-          filterVisible: _isFilterVisible,
-          onToggleFilter: _toggleFilterVisibility,
-          onRefresh: () => unawaited(_reloadRoot()),
+          onRefresh: () {
+            _workspaceFiles.scheduleQuickOpenRefresh(
+              workspacePath: widget.workspace.path,
+              debounce: Duration.zero,
+            );
+            unawaited(_reloadRoot());
+          },
           onCollapseAll: _collapseAll,
           onToggleMode: _toggleMode,
           onToggleHiddenFiles: _toggleHiddenFiles,
@@ -204,22 +217,21 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
           onNewFile: () => unawaited(_createEntry(directory: false)),
           onNewFolder: () => unawaited(_createEntry(directory: true)),
         ),
-        if (_isFilterVisible)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(
-              AleraTokens.space8,
-              0,
-              AleraTokens.space8,
-              AleraTokens.space8,
-            ),
-            child: AleraSearchField(
-              controller: _filterController,
-              focusNode: _filterFocusNode,
-              hintText: 'Filter files...',
-              dense: true,
-              onChanged: _onFilterChanged,
-            ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(
+            AleraTokens.space8,
+            0,
+            AleraTokens.space8,
+            AleraTokens.space8,
           ),
+          child: AleraSearchField(
+            controller: _filterController,
+            focusNode: _filterFocusNode,
+            hintText: 'Filter files...',
+            dense: true,
+            onChanged: _onFilterChanged,
+          ),
+        ),
         const Divider(height: 1, color: AleraTokens.borderSubtle),
         Expanded(
           child: CallbackShortcuts(
@@ -235,7 +247,9 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
                 child: _ExplorerBackgroundMenu(
                   shouldSuppress: _consumeBackgroundMenuSuppression,
                   onAction: _handleBackgroundAction,
-                  child: _loading && _controller.visibleNodes.isEmpty
+                  child: _filterController.text.trim().isNotEmpty
+                      ? _buildFilterResults()
+                      : _loading && _controller.visibleNodes.isEmpty
                       ? const Center(child: CircularProgressIndicator())
                       : tree.DirectoryTreeTheme(
                           data: const tree.DirectoryTreeThemeData(
@@ -392,6 +406,9 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
         return;
       }
       _rebuildTree();
+      if (_filterController.text.trim().isNotEmpty) {
+        _onFilterChanged(_filterController.text);
+      }
     } catch (error) {
       if (mounted) {
         _rebuildTree(tryPreserveState: false);
@@ -587,24 +604,135 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
     unawaited(_paste(_pasteTargetDirectory()));
   }
 
-  bool get _isFilterVisible =>
-      _filterVisible || _filterController.text.trim().isNotEmpty;
-
-  void _toggleFilterVisibility() {
+  void _onFilterChanged(String value) {
+    _controller.filterQuery = '';
+    final query = value.trim();
+    final generation = ++_filterGeneration;
+    if (query.isEmpty) {
+      setState(() {
+        _filterMatches = const <native.WorkspaceQuickOpenMatch>[];
+        _filterLoading = false;
+        _filterError = null;
+      });
+      return;
+    }
+    final excludedDirectories = ref
+        .read(settingsControllerProvider)
+        .editor
+        .quickOpenExcludedDirectories;
+    final includeGitignored = widget.mode == WorkspaceExplorerMode.showAll;
+    final cached = _workspaceFiles.peekQuickOpenMatches(
+      workspacePath: widget.workspace.path,
+      excludedDirectories: excludedDirectories,
+      query: query,
+      includeGitignored: includeGitignored,
+      limit: _filterResultLimit,
+    );
     setState(() {
-      _filterVisible = !_isFilterVisible;
+      _filterMatches = cached ?? const <native.WorkspaceQuickOpenMatch>[];
+      _filterLoading = cached == null;
+      _filterError = null;
     });
-    if (_isFilterVisible) {
-      // autofocus is skipped while the terminal or editor holds focus, so the
-      // field asks for it once it has been mounted.
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && _isFilterVisible) _filterFocusNode.requestFocus();
+    unawaited(
+      _searchFilter(
+        generation: generation,
+        query: query,
+        excludedDirectories: excludedDirectories,
+        includeGitignored: includeGitignored,
+      ),
+    );
+  }
+
+  Future<void> _searchFilter({
+    required int generation,
+    required String query,
+    required List<String> excludedDirectories,
+    required bool includeGitignored,
+  }) async {
+    try {
+      final matches = await _workspaceFiles.searchQuickOpenCached(
+        workspacePath: widget.workspace.path,
+        excludedDirectories: excludedDirectories,
+        query: query,
+        includeGitignored: includeGitignored,
+        limit: _filterResultLimit,
+      );
+      if (!mounted || generation != _filterGeneration) {
+        return;
+      }
+      setState(() {
+        _filterMatches = matches;
+        _filterLoading = false;
+        _filterError = null;
+      });
+    } catch (error) {
+      if (!mounted || generation != _filterGeneration) {
+        return;
+      }
+      setState(() {
+        _filterLoading = false;
+        _filterError = error;
       });
     }
   }
 
-  void _onFilterChanged(String value) {
-    _controller.filterQuery = value;
+  Widget _buildFilterResults() {
+    final query = _filterController.text.trim();
+    if (_filterLoading && _filterMatches.isEmpty) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_filterError != null && _filterMatches.isEmpty) {
+      return Center(
+        child: Text(
+          context.tr('Could not filter workspace files.'),
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+      );
+    }
+    final matches = _filterMatches;
+    if (matches.isEmpty) {
+      return Center(
+        child: Text(
+          context.tr('No matching files.'),
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+      );
+    }
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(vertical: AleraTokens.space4),
+      itemExtent: AleraTokens.space32,
+      itemCount: matches.length,
+      itemBuilder: (context, index) {
+        final path = matches[index].relativePath;
+        return InkWell(
+          onTap: () => widget.onOpenFile(path),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: AleraTokens.space8),
+            child: Row(
+              children: <Widget>[
+                AleraFileIcon(
+                  pathOrName: path,
+                  kind: AleraFileIconKind.file,
+                  size: 15,
+                  fallbackColor: AleraTokens.foregroundMuted,
+                ),
+                const SizedBox(width: AleraTokens.space6),
+                Expanded(
+                  child: AleraSearchHighlightedText(
+                    text: path,
+                    query: query,
+                    maxLines: 1,
+                    overflow: .ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall
+                        ?.copyWith(color: AleraTokens.foregroundMuted),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 
   void _setClipboard(_ExplorerClipboard? clipboard) {

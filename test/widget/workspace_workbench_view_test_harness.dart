@@ -182,12 +182,14 @@ WorkspaceTabRecord _tab(
   String? filePath,
   bool mermanPreview = false,
   bool preview = false,
+  bool pinned = false,
 }) {
   final payload = <String, Object?>{
     workspaceTabFilePathPayloadKey: ?filePath,
     if (mermanPreview)
       workspaceTabFileRolePayloadKey: workspaceTabFileRoleMermanPreview,
     if (preview) workspaceTabPreviewPayloadKey: true,
+    if (pinned) workspaceTabPinnedPayloadKey: true,
   };
   return WorkspaceTabRecord(
     id: id,

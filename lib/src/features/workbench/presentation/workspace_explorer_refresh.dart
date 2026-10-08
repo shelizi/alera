@@ -196,6 +196,9 @@ extension _WorkspaceExplorerRefresh on _WorkspaceExplorerState {
   }
 
   void _scheduleWatchedRefresh(native.WorkspaceExplorerWatchBatch batch) {
+    _workspaceFiles.scheduleQuickOpenRefresh(
+      workspacePath: widget.workspace.path,
+    );
     _pendingWatchedDirectories.addAll(batch.directoryRelativePaths);
     if (_watchRefreshInFlight) {
       return;

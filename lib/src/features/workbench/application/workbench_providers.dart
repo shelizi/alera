@@ -158,7 +158,42 @@ WorkspaceTabService workspaceTabService(Ref ref) {
 
 @Riverpod(keepAlive: true)
 WorkspaceFileService workspaceFileService(Ref ref) {
-  return const WorkspaceFileService();
+  final service = WorkspaceFileService();
+
+  void warmActiveWorkspace() {
+    final workspace = ref.read(workbenchControllerProvider).activeWorkspace;
+    if (workspace == null) {
+      return;
+    }
+    final excludedDirectories = ref
+        .read(settingsControllerProvider)
+        .editor
+        .quickOpenExcludedDirectories;
+    unawaited(
+      service
+          .warmQuickOpenSession(
+            workspacePath: workspace.path,
+            excludedDirectories: excludedDirectories,
+          )
+          .catchError(_ignoreProviderAsyncError),
+    );
+  }
+
+  ref.listen<(String?, String?)>(
+    workbenchControllerProvider.select(
+      (state) => (state.activeWorkspaceId, state.activeWorkspace?.path),
+    ),
+    (_, _) => warmActiveWorkspace(),
+    fireImmediately: true,
+  );
+  ref.listen<String>(
+    settingsControllerProvider.select(
+      (settings) => settings.editor.quickOpenExcludedDirectories.join('\u0000'),
+    ),
+    (_, _) => warmActiveWorkspace(),
+  );
+  ref.onDispose(() => unawaited(service.dispose()));
+  return service;
 }
 
 @Riverpod(keepAlive: true)

@@ -95,12 +95,19 @@ class _WorkspaceTabStripState extends ConsumerState<_WorkspaceTabStrip> {
       return true;
     }
     for (var index = 0; index < previous.length; index += 1) {
-      if (previous[index].id != current[index].id) {
+      if (previous[index].id != current[index].id ||
+          previous[index].isPinned != current[index].isPinned) {
         return true;
       }
     }
     return false;
   }
+
+  List<WorkspaceTabRecord> _visualTabs(List<WorkspaceTabRecord> tabs) =>
+      <WorkspaceTabRecord>[
+        ...tabs.where((tab) => tab.isPinned),
+        ...tabs.where((tab) => !tab.isPinned),
+      ];
 
   GlobalKey _tabKey(String tabId) {
     return _tabKeys.putIfAbsent(tabId, GlobalKey.new);
@@ -128,6 +135,9 @@ class _WorkspaceTabStripState extends ConsumerState<_WorkspaceTabStrip> {
   }
 
   void _ensureTabVisible(String tabId, {required bool animate}) {
+    if (widget.tabs.any((tab) => tab.id == tabId && tab.isPinned)) {
+      return;
+    }
     if (!_scrollController.hasClients) {
       return;
     }
@@ -260,7 +270,7 @@ class _WorkspaceTabStripState extends ConsumerState<_WorkspaceTabStrip> {
 
   int? _resolvedDropIndex(_WorkspaceTabDragData data, int gapIndex) {
     return resolveWorkbenchTabStripDropIndex(
-      tabIds: <String>[for (final tab in widget.tabs) tab.id],
+      tabIds: <String>[for (final tab in _visualTabs(widget.tabs)) tab.id],
       sourceGroupId: data.sourceGroupId,
       targetGroupId: widget.groupId,
       draggedTabId: data.tabId,
@@ -328,6 +338,63 @@ class _WorkspaceTabStripState extends ConsumerState<_WorkspaceTabStrip> {
       onCreateTab: widget.onCreateTab,
       onCreateAgentTab: widget.onCreateAgentTab,
     );
+    final visualTabs = _visualTabs(widget.tabs);
+    final pinnedTabs = visualTabs
+        .where((tab) => tab.isPinned)
+        .toList(growable: false);
+    final scrollingTabs = visualTabs
+        .where((tab) => !tab.isPinned)
+        .toList(growable: false);
+
+    Widget buildTabEntry(WorkspaceTabRecord tab) {
+      final index = visualTabs.indexWhere(
+        (candidate) => candidate.id == tab.id,
+      );
+      return SizedBox(
+        key: _tabKey(tab.id),
+        child: _TabStripChipDropTarget(
+          chipIndex: index,
+          workspaceId: widget.workspace.id,
+          showLeadingIndicator: index == 0 && _insertionGapIndex == 0,
+          showTrailingIndicator: _insertionGapIndex == index + 1,
+          onHoverGap: _handleGapHover,
+          onLeave: _handleGapLeave,
+          onDropGap: _handleGapDrop,
+          child: _DraggableWorkspaceTabChip(
+            workspace: widget.workspace,
+            sourceControlScope: widget.sourceControlScope,
+            groupId: widget.groupId,
+            tab: tab,
+            active: tab.id == widget.activeTabId,
+            terminalRuntime: widget.terminalRuntime,
+            status: widget.agentStatuses[tab.terminalSessionId],
+            completionAcknowledged: isCompletionAcknowledged(
+              acknowledgedCompletions,
+              widget.agentStatuses[tab.terminalSessionId],
+            ),
+            groupTabs: visualTabs,
+            onSelect: () {
+              ref
+                  .read(
+                    workbenchTabCompletionAcknowledgementsControllerProvider
+                        .notifier,
+                  )
+                  .acknowledge(widget.agentStatuses[tab.terminalSessionId]);
+              widget.onSelectTab(tab.id);
+              _scheduleTabReveal(tab.id);
+              _maybeKeepPreviewTab(tab);
+            },
+            onClose: () => widget.onCloseTab(tab.id),
+            onCloseTabs: widget.onCloseTabs,
+            onRename: (title) =>
+                widget.onRenameTab(tabId: tab.id, title: title),
+            onOpenExternalTerminal: widget.onOpenExternalTerminal,
+            onSplit: widget.onSplitGroup,
+          ),
+        ),
+      );
+    }
+
     return ColoredBox(
       color: AleraTokens.surface,
       child: _TabStripAppendDropTarget(
@@ -340,6 +407,20 @@ class _WorkspaceTabStripState extends ConsumerState<_WorkspaceTabStrip> {
           height: AleraTokens.sidebarHeaderHeight,
           child: Row(
             children: <Widget>[
+              if (pinnedTabs.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(
+                    left: AleraTokens.space8,
+                    top: AleraTokens.space6,
+                    bottom: AleraTokens.space6,
+                  ),
+                  child: Row(
+                    mainAxisSize: .min,
+                    children: <Widget>[
+                      for (final tab in pinnedTabs) buildTabEntry(tab),
+                    ],
+                  ),
+                ),
               Expanded(
                 child: Listener(
                   key: _scrollViewportKey,
@@ -351,68 +432,18 @@ class _WorkspaceTabStripState extends ConsumerState<_WorkspaceTabStrip> {
                     ),
                     controller: _scrollController,
                     scrollDirection: .horizontal,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: AleraTokens.space8,
-                      vertical: AleraTokens.space6,
+                    padding: EdgeInsets.only(
+                      left: pinnedTabs.isEmpty
+                          ? AleraTokens.space8
+                          : AleraTokens.space4,
+                      right: AleraTokens.space8,
+                      top: AleraTokens.space6,
+                      bottom: AleraTokens.space6,
                     ),
                     child: Row(
                       mainAxisSize: .min,
                       children: <Widget>[
-                        for (final (index, tab) in widget.tabs.indexed)
-                          SizedBox(
-                            key: _tabKey(tab.id),
-                            child: _TabStripChipDropTarget(
-                              chipIndex: index,
-                              workspaceId: widget.workspace.id,
-                              showLeadingIndicator:
-                                  index == 0 && _insertionGapIndex == 0,
-                              showTrailingIndicator:
-                                  _insertionGapIndex == index + 1,
-                              onHoverGap: _handleGapHover,
-                              onLeave: _handleGapLeave,
-                              onDropGap: _handleGapDrop,
-                              child: _DraggableWorkspaceTabChip(
-                                workspace: widget.workspace,
-                                sourceControlScope: widget.sourceControlScope,
-                                groupId: widget.groupId,
-                                tab: tab,
-                                active: tab.id == widget.activeTabId,
-                                terminalRuntime: widget.terminalRuntime,
-                                status:
-                                    widget.agentStatuses[tab.terminalSessionId],
-                                completionAcknowledged:
-                                    isCompletionAcknowledged(
-                                      acknowledgedCompletions,
-                                      widget.agentStatuses[tab
-                                          .terminalSessionId],
-                                    ),
-                                groupTabs: widget.tabs,
-                                onSelect: () {
-                                  ref
-                                      .read(
-                                        workbenchTabCompletionAcknowledgementsControllerProvider
-                                            .notifier,
-                                      )
-                                      .acknowledge(
-                                        widget.agentStatuses[tab
-                                            .terminalSessionId],
-                                      );
-                                  widget.onSelectTab(tab.id);
-                                  _scheduleTabReveal(tab.id);
-                                  _maybeKeepPreviewTab(tab);
-                                },
-                                onClose: () => widget.onCloseTab(tab.id),
-                                onCloseTabs: widget.onCloseTabs,
-                                onRename: (title) => widget.onRenameTab(
-                                  tabId: tab.id,
-                                  title: title,
-                                ),
-                                onOpenExternalTerminal:
-                                    widget.onOpenExternalTerminal,
-                                onSplit: widget.onSplitGroup,
-                              ),
-                            ),
-                          ),
+                        for (final tab in scrollingTabs) buildTabEntry(tab),
                         if (!_hasOverflow) addButton,
                       ],
                     ),

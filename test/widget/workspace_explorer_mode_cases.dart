@@ -47,29 +47,25 @@ void _registerWorkspaceExplorerModeTests() {
     },
   );
 
-  testWidgets('file filter toggles and filters visible explorer entries', (
+  testWidgets('file filter is always visible and searches unloaded folders', (
     tester,
   ) async {
     final service = _FakeWorkspaceFileService()
       ..childrenByDirectory[''] = <native.WorkspaceFileEntry>[
         _file('main.dart'),
-        _file('README.md'),
-      ];
+        _directory('lib', hasChildrenHint: true),
+      ]
+      ..quickOpenEntries = <String>['main.dart', 'lib/deep/hidden_match.dart'];
 
     await tester.pumpWidget(
       _withWorkspaceFiles(
         service,
         child: MaterialApp(
           home: Scaffold(
-            body: Column(
-              children: <Widget>[
-                const TextField(key: Key('focused-elsewhere')),
-                SizedBox(
-                  width: 320,
-                  height: 480,
-                  child: const _WorkspaceExplorerModeHarness(),
-                ),
-              ],
+            body: SizedBox(
+              width: 320,
+              height: 480,
+              child: const _WorkspaceExplorerModeHarness(),
             ),
           ),
         ),
@@ -77,48 +73,27 @@ void _registerWorkspaceExplorerModeTests() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('main.dart'), findsOneWidget);
-    expect(find.text('README.md'), findsOneWidget);
-    expect(find.text('Filter files...'), findsNothing);
-    // autofocus alone yields to an already focused node, as the terminal or
-    // editor usually is in the app.
-    await tester.tap(find.byKey(const Key('focused-elsewhere')));
-    await tester.pump();
-
-    await tester.tap(find.byTooltip('Search Files'));
-    await tester.pump();
-
     expect(find.text('Filter files...'), findsOneWidget);
-    expect(find.byTooltip('Hide File Filter'), findsOneWidget);
-    await tester.pump();
+    expect(find.byTooltip('Search Files'), findsNothing);
+    expect(find.text('main.dart'), findsOneWidget);
     expect(
-      tester
-          .widget<EditableText>(
-            find.descendant(
-              of: find.byType(TextField).last,
-              matching: find.byType(EditableText),
-            ),
-          )
-          .focusNode
-          .hasFocus,
-      isTrue,
+      service.listChildrenCalls.where((call) => call.relativePath == 'lib'),
+      isEmpty,
     );
 
-    await tester.enterText(find.byType(TextField).last, 'main');
-    await tester.pump();
+    await tester.enterText(find.byType(TextField), 'hidden_match');
+    await tester.pumpAndSettle();
 
+    expect(find.text('lib/deep/hidden_match.dart'), findsOneWidget);
+    expect(find.text('main.dart'), findsNothing);
+    expect(
+      service.listChildrenCalls.where((call) => call.relativePath == 'lib'),
+      isEmpty,
+    );
+
+    await tester.enterText(find.byType(TextField), '');
+    await tester.pumpAndSettle();
     expect(find.text('main.dart'), findsOneWidget);
-    expect(find.text('README.md'), findsNothing);
-
-    await tester.enterText(find.byType(TextField).last, '');
-    await tester.pump();
-
-    expect(find.text('main.dart'), findsOneWidget);
-    expect(find.text('README.md'), findsOneWidget);
-
-    await tester.tap(find.byTooltip('Hide File Filter'));
-    await tester.pump();
-    expect(find.text('Filter files...'), findsNothing);
   });
 
   testWidgets(

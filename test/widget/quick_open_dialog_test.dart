@@ -51,6 +51,34 @@ void main() {
     expect(controller.openedPreviews, <bool>[false]);
   });
 
+  testWidgets('shows cached results while the background index refreshes', (
+    tester,
+  ) async {
+    final workspace = _workspace('workspace-1', 'Main', '/repo/main');
+    final controller = _QuickOpenTestController(_state(workspace));
+    final refresh = Completer<List<native.WorkspaceQuickOpenMatch>>();
+    final service = _QuickOpenFileService(
+      entries: <String>['fresh.dart'],
+      cachedEntries: <String>['cached.dart'],
+      searchGates: <String, Completer<List<native.WorkspaceQuickOpenMatch>>>{
+        '': refresh,
+      },
+    );
+    await _pumpQuickOpen(tester, controller: controller, service: service);
+
+    await tester.tap(find.text('Open Quick Open'));
+    await tester.pump();
+
+    expect(find.text('cached.dart'), findsOneWidget);
+    expect(find.text('Loading workspace files...'), findsNothing);
+
+    refresh.complete(<native.WorkspaceQuickOpenMatch>[_match('fresh.dart')]);
+    await tester.pumpAndSettle();
+
+    expect(find.text('cached.dart'), findsNothing);
+    expect(find.text('fresh.dart'), findsOneWidget);
+  });
+
   testWidgets(
     'routes editable files externally when it is the default target',
     (tester) async {
@@ -112,7 +140,7 @@ void main() {
     expect(find.text('new.dart'), findsOneWidget);
   });
 
-  testWidgets('stops a session whose start completes after disposal', (
+  testWidgets('ignores a cached session whose start completes after disposal', (
     tester,
   ) async {
     final workspace = _workspace('workspace-1', 'Main', '/repo/main');
@@ -128,7 +156,7 @@ void main() {
 
     session.complete(_session('late-session', 0));
     await tester.pump();
-    expect(service.stoppedSessionIds, <String>['late-session']);
+    expect(service.stoppedSessionIds, isEmpty);
   });
 
   testWidgets('arrow navigation, Escape, and focus restoration work', (
@@ -263,10 +291,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Open Quick Open'));
     await tester.pumpAndSettle();
-    expect(service.startedWorkspacePaths, <String>[
-      workspace.path,
-      workspace.path,
-    ]);
+    expect(service.startedWorkspacePaths, <String>[workspace.path]);
     expect(service.includeGitignoredRequests, <bool>[false, true, true]);
   });
 }
@@ -351,6 +376,7 @@ native.WorkspaceQuickOpenSession _session(String id, int indexedFileCount) {
 
 class _QuickOpenFileService({
   final List<String> entries = const <String>[],
+  final List<String> cachedEntries = const <String>[],
   final Object? error,
   final Completer<native.WorkspaceQuickOpenSession>? session,
   final Map<String, List<String>> entriesByWorkspacePath =
@@ -365,6 +391,55 @@ class _QuickOpenFileService({
   final List<bool> includeGitignoredRequests = <bool>[];
   final Map<String, List<String>> _entriesBySessionId =
       <String, List<String>>{};
+  final Map<String, native.WorkspaceQuickOpenSession>
+  _cachedSessionByWorkspacePath = <String, native.WorkspaceQuickOpenSession>{};
+
+  @override
+  List<native.WorkspaceQuickOpenMatch>? peekQuickOpenMatches({
+    required String workspacePath,
+    required List<String> excludedDirectories,
+    required String query,
+    required bool includeGitignored,
+    int limit = 50,
+  }) {
+    if (cachedEntries.isEmpty) {
+      return null;
+    }
+    final normalizedQuery = query.trim().toLowerCase();
+    return cachedEntries
+        .where(
+          (path) =>
+              normalizedQuery.isEmpty ||
+              path.toLowerCase().contains(normalizedQuery),
+        )
+        .take(limit)
+        .map(_match)
+        .toList(growable: false);
+  }
+
+  @override
+  Future<List<native.WorkspaceQuickOpenMatch>> searchQuickOpenCached({
+    required String workspacePath,
+    required List<String> excludedDirectories,
+    required String query,
+    required bool includeGitignored,
+    int limit = 50,
+  }) async {
+    var session = _cachedSessionByWorkspacePath[workspacePath];
+    if (session == null) {
+      session = await startQuickOpenSession(
+        workspacePath: workspacePath,
+        excludedDirectories: excludedDirectories,
+      );
+      _cachedSessionByWorkspacePath[workspacePath] = session;
+    }
+    return searchQuickOpenSession(
+      session: session,
+      query: query,
+      includeGitignored: includeGitignored,
+      limit: limit,
+    );
+  }
 
   @override
   Future<native.WorkspaceQuickOpenSession> startQuickOpenSession({
