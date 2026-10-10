@@ -1,6 +1,6 @@
 use std::path::{Component, Path, PathBuf};
 
-use git2::{DiffFormat, DiffOptions, Repository};
+use git2::{DiffFormat, DiffOptions, Repository, Status, StatusOptions};
 
 use alera_core::runtime::{RuntimeStore, Workspace};
 use alera_core::workspace_files::{
@@ -123,6 +123,9 @@ async fn handle_mobile_workspace_file_request(
         }
         MobileWorkspaceFileOperation::WorkspaceFileDiff => {
             read_mobile_workspace_diff(&runtime_store, payload).await
+        }
+        MobileWorkspaceFileOperation::WorkspaceGitStatus => {
+            read_mobile_workspace_git_status(&runtime_store, payload).await
         }
         MobileWorkspaceFileOperation::PromptAttachmentRead => {
             read_mobile_prompt_attachment(runtime_dir, payload).await
@@ -276,6 +279,16 @@ fn workspace_git_patch(root: &Path, relative_path: &str) -> HostResult<Value> {
     let mut patch = Vec::new();
     let mut truncated = false;
     diff.print(DiffFormat::Patch, |_delta, _hunk, line| {
+        // libgit2 provides the line bytes without the patch prefix. Preserve
+        // it explicitly for additions, removals and unchanged context lines.
+        let prefix = line.origin();
+        if matches!(prefix, '+' | '-' | ' ') {
+            if patch.len() < MAX_MOBILE_GIT_DIFF_BYTES {
+                patch.push(prefix as u8);
+            } else {
+                truncated = true;
+            }
+        }
         let available = MAX_MOBILE_GIT_DIFF_BYTES.saturating_sub(patch.len());
         let content = line.content();
         patch.extend_from_slice(&content[..content.len().min(available)]);
@@ -290,6 +303,70 @@ fn workspace_git_patch(root: &Path, relative_path: &str) -> HostResult<Value> {
         "patch": String::from_utf8_lossy(&patch),
         "truncated": truncated,
     }))
+}
+
+const MAX_MOBILE_GIT_STATUS_ITEMS: usize = 200;
+
+async fn read_mobile_workspace_git_status(
+    runtime_store: &RuntimeStore,
+    payload: &Value,
+) -> HostResult<Value> {
+    let workspace = workspace_for_mobile_file_request(runtime_store, payload).await?;
+    let known_roots = known_workspace_paths(runtime_store).await?;
+    spawn_blocking_workspace("Workspace Git status", move || {
+        let root = open_validated_mobile_workspace_root(&workspace.path, known_roots)?;
+        workspace_git_status(root.canonical_path())
+    })
+    .await
+}
+
+fn workspace_git_status(root: &Path) -> HostResult<Value> {
+    let repo = Repository::open(root)
+        .map_err(|_| HostError::state("Workspace is not a Git repository."))?;
+    let workdir = repo
+        .workdir()
+        .and_then(|directory| dunce::canonicalize(directory).ok())
+        .ok_or_else(|| HostError::state("Workspace Git worktree is unavailable."))?;
+    if workdir != root {
+        return Err(HostError::state(
+            "Workspace Git root is not the selected workspace.",
+        ));
+    }
+    let mut options = StatusOptions::new();
+    options
+        .include_untracked(true)
+        .recurse_untracked_dirs(true)
+        .include_ignored(false)
+        .include_unmodified(false);
+    let statuses = repo
+        .statuses(Some(&mut options))
+        .map_err(|error| HostError::state(format!("Git status failed: {error}")))?;
+    let mut items = Vec::new();
+    for entry in statuses.iter() {
+        let Ok(path) = entry.path() else { continue };
+        if is_protected_workspace_path(Path::new(path)) {
+            continue;
+        }
+        let status = entry.status();
+        let label = if status.contains(Status::CONFLICTED) {
+            "conflict"
+        } else if status.intersects(Status::INDEX_DELETED | Status::WT_DELETED) {
+            "deleted"
+        } else if status.intersects(Status::INDEX_NEW | Status::WT_NEW) {
+            "added"
+        } else if status.intersects(Status::INDEX_RENAMED | Status::WT_RENAMED) {
+            "renamed"
+        } else {
+            "modified"
+        };
+        items.push(json!({"relativePath": path, "status": label}));
+        if items.len() > MAX_MOBILE_GIT_STATUS_ITEMS {
+            break;
+        }
+    }
+    let truncated = items.len() > MAX_MOBILE_GIT_STATUS_ITEMS;
+    items.truncate(MAX_MOBILE_GIT_STATUS_ITEMS);
+    Ok(json!({"items": items, "truncated": truncated}))
 }
 
 async fn read_mobile_prompt_attachment(runtime_dir: PathBuf, payload: &Value) -> HostResult<Value> {
@@ -471,11 +548,38 @@ mod tests {
     use super::super::request_route_policy::MobileWorkspaceFileOperation;
     use super::{
         absolute_workspace_file_target, prompt_attachment_root, validated_mobile_workspace_root,
-        workspace_git_patch,
+        workspace_git_patch, workspace_git_status,
     };
     use serde_json::json;
     use std::collections::HashMap;
     use std::path::Path;
+
+    #[test]
+    fn workspace_git_status_reports_tracked_and_untracked_changes() {
+        let directory = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(directory.path()).unwrap();
+        let path = Path::new("tracked.txt");
+        std::fs::write(directory.path().join(path), "old\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(path).unwrap();
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let signature = git2::Signature::now("Test", "test@example.com").unwrap();
+        repo.commit(Some("HEAD"), &signature, &signature, "init", &tree, &[])
+            .unwrap();
+        std::fs::write(directory.path().join(path), "new\n").unwrap();
+        std::fs::write(directory.path().join("added.txt"), "new file\n").unwrap();
+        let root = dunce::canonicalize(directory.path()).unwrap();
+        let result = workspace_git_status(&root).unwrap();
+        let items = result["items"].as_array().unwrap();
+        assert!(items
+            .iter()
+            .any(|item| { item["relativePath"] == "tracked.txt" && item["status"] == "modified" }));
+        assert!(items
+            .iter()
+            .any(|item| { item["relativePath"] == "added.txt" && item["status"] == "added" }));
+        assert_eq!(result["truncated"], false);
+    }
 
     #[test]
     fn workspace_git_patch_is_scoped_to_one_tracked_file() {

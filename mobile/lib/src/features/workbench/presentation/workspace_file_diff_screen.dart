@@ -4,6 +4,7 @@ import 'package:alera_mobile/src/features/runtime/domain/mobile_codex_workspace.
 import 'package:alera_mobile/src/features/workbench/presentation/workspace_file_picker_sheet.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:logging/logging.dart';
 
 /// Read-only HEAD-to-worktree diff. Git stays on the paired runtime; only a
 /// bounded patch for the requested path is sent over the authenticated socket.
@@ -20,6 +21,7 @@ class const WorkspaceFileDiffScreen({
 
 class _WorkspaceFileDiffScreenState
     extends ConsumerState<WorkspaceFileDiffScreen> {
+  static final Logger _logger = Logger('WorkspaceFileDiffScreen');
   late final Future<MobileWorkspaceFileDiff> _diff;
 
   @override
@@ -29,13 +31,18 @@ class _WorkspaceFileDiffScreenState
   }
 
   Future<MobileWorkspaceFileDiff> _loadDiff() async {
-    final client = await ref.read(
-      hostConnectionControllerProvider(widget.hostId).future,
-    );
-    return client.diffWorkspaceFile(
-      workspaceId: widget.workspaceId,
-      relativePath: widget.relativePath,
-    );
+    try {
+      final client = await ref.read(
+        hostConnectionControllerProvider(widget.hostId).future,
+      );
+      return await client.diffWorkspaceFile(
+        workspaceId: widget.workspaceId,
+        relativePath: widget.relativePath,
+      );
+    } on Object catch (error, stackTrace) {
+      _logger.warning('Could not load mobile Git diff', error, stackTrace);
+      rethrow;
+    }
   }
 
   @override

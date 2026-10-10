@@ -5,6 +5,7 @@ import 'package:alera_mobile/src/features/workbench/presentation/workspace_file_
 import 'package:alera_mobile/src/features/workbench/presentation/workspace_file_diff_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:logging/logging.dart';
 
 class const WorkspaceFileViewerScreen({
   super.key,
@@ -19,6 +20,7 @@ class const WorkspaceFileViewerScreen({
 
 class _WorkspaceFileViewerScreenState
     extends ConsumerState<WorkspaceFileViewerScreen> {
+  static final Logger _logger = Logger('WorkspaceFileViewerScreen');
   late final Future<MobileWorkspaceTextPreview> _preview;
 
   @override
@@ -28,17 +30,26 @@ class _WorkspaceFileViewerScreenState
   }
 
   Future<MobileWorkspaceTextPreview> _readPreview() async {
-    final client = await ref.read(
-      hostConnectionControllerProvider(widget.hostId).future,
-    );
-    return loadWorkspaceTextPreview(
-      (offset, length) => client.readWorkspaceFile(
-        workspaceId: widget.workspaceId,
-        relativePath: widget.relativePath,
-        offset: offset,
-        length: length,
-      ),
-    );
+    try {
+      final client = await ref.read(
+        hostConnectionControllerProvider(widget.hostId).future,
+      );
+      return await loadWorkspaceTextPreview(
+        (offset, length) => client.readWorkspaceFile(
+          workspaceId: widget.workspaceId,
+          relativePath: widget.relativePath,
+          offset: offset,
+          length: length,
+        ),
+      );
+    } on Object catch (error, stackTrace) {
+      _logger.warning(
+        'Could not preview mobile workspace file',
+        error,
+        stackTrace,
+      );
+      rethrow;
+    }
   }
 
   @override

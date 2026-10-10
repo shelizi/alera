@@ -12,6 +12,7 @@ import 'package:alera_mobile/src/features/workbench/presentation/workspace_tags_
 import 'package:alera_mobile/src/features/workbench/presentation/workspace_branch_picker.dart';
 import 'package:alera_mobile/src/features/workbench/presentation/workspace_file_picker_sheet.dart';
 import 'package:alera_mobile/src/features/workbench/presentation/workspace_file_viewer_screen.dart';
+import 'package:alera_mobile/src/features/workbench/presentation/workspace_git_status_screen.dart';
 import 'package:alera_mobile/src/features/runtime/application/host_connection_controller.dart';
 import 'package:alera_mobile/src/features/workbench/application/workbench_providers.dart';
 import 'package:alera_mobile/src/features/terminal/presentation/workspace_tabs_screen.dart';
@@ -35,6 +36,7 @@ enum _WorkspaceAction {
   copyPath,
   openBranch,
   browseFiles,
+  sourceControl,
   sleep,
   delete,
 }
@@ -167,6 +169,14 @@ Future<void> showWorkspaceActionsSheet(
                       onTap: () =>
                           Navigator.of(context)
                               .pop(_WorkspaceAction.browseFiles),
+                    ),
+                  if (data.supportsWorkspaceGitStatus)
+                    ListTile(
+                      leading: const Icon(AleraIcons.gitBranch, size: 20),
+                      title: const Text('Source Control'),
+                      onTap: () =>
+                          Navigator.of(context)
+                              .pop(_WorkspaceAction.sourceControl),
                     ),
                   ListTile(
                     leading: const Icon(AleraIcons.theme, size: 20),
@@ -308,6 +318,16 @@ Future<void> showWorkspaceActionsSheet(
               hostId: hostId,
               workspaceId: workspace.id,
               relativePath: relativePath,
+            ),
+          ),
+        );
+      case _WorkspaceAction.sourceControl:
+        Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => WorkspaceGitStatusScreen(
+              hostId: hostId,
+              workspaceId: workspace.id,
+              workspaceName: workspace.name,
             ),
           ),
         );

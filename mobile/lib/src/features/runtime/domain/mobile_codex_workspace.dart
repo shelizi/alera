@@ -69,6 +69,30 @@ class const MobileWorkspaceFileDiff({
   );
 }
 
+class const MobileWorkspaceGitStatusEntry({
+  required final String relativePath,
+  required final String status,
+}) {
+  factory fromJson(Map<String, Object?> json) => MobileWorkspaceGitStatusEntry(
+    relativePath: json.requiredString('relativePath'),
+    status: json['status'] as String? ?? 'modified',
+  );
+}
+
+class const MobileWorkspaceGitStatus({
+  required final List<MobileWorkspaceGitStatusEntry> items,
+  required final bool truncated,
+}) {
+  factory fromJson(Map<String, Object?> json) => MobileWorkspaceGitStatus(
+    items: <MobileWorkspaceGitStatusEntry>[
+      for (final item in json['items'] as List<Object?>? ?? const <Object?>[])
+        if (item is Map)
+          MobileWorkspaceGitStatusEntry.fromJson(asJsonMap(item)),
+    ],
+    truncated: json['truncated'] == true,
+  );
+}
+
 bool mobileWorkspaceFileCanShare(int totalBytes) =>
     totalBytes >= 0 && totalBytes <= maxMobileWorkspaceShareBytes;
 

@@ -54,6 +54,15 @@ mixin FakeWorkspaceFilesClient implements MobileCodexWorkspaceClient {
   bool get supportsCodexWorkspaceFiles => workspaceFiles.isNotEmpty;
 
   @override
+  bool get supportsWorkspaceGitStatus => false;
+
+  @override
+  Future<MobileWorkspaceGitStatus> loadWorkspaceGitStatus(
+    String workspaceId,
+  ) async =>
+      throw UnsupportedError('Fake runtime does not advertise Git status.');
+
+  @override
   bool get supportsPromptFileUpload => promptFileUploadSupported;
 
   @override

@@ -23,6 +23,9 @@ mixin MobileRuntimeCodexWorkspaceRequests {
   bool get supportsWorkspaceFileDiff =>
       runtimeCapabilities.contains(mobileWorkspaceFileDiffCapability);
 
+  bool get supportsWorkspaceGitStatus =>
+      runtimeCapabilities.contains(mobileWorkspaceGitStatusCapability);
+
   bool get supportsPromptFileUpload =>
       runtimeCapabilities.contains(mobilePromptFileUploadCapability);
 
@@ -124,6 +127,19 @@ mixin MobileRuntimeCodexWorkspaceRequests {
       },
     );
     return MobileWorkspaceFileDiff.fromJson(payload);
+  }
+
+  Future<MobileWorkspaceGitStatus> loadWorkspaceGitStatus(
+    String workspaceId,
+  ) async {
+    if (!supportsWorkspaceGitStatus) {
+      throw UnsupportedError('Update the runtime to view Git status.');
+    }
+    return MobileWorkspaceGitStatus.fromJson(
+      await requestMap('mobile.workspaceGit.status', <String, Object?>{
+        'workspaceId': workspaceId,
+      }),
+    );
   }
 
   Future<MobileWorkspaceFileRange> readPromptAttachment({

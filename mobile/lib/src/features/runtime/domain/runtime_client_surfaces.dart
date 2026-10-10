@@ -60,6 +60,7 @@ const String agentProfileLaunchIdempotencyCapability =
 const String mobileCodexWorkspaceFilesCapability =
     'mobileCodexWorkspaceFilesV1';
 const String mobileWorkspaceFileDiffCapability = 'mobileWorkspaceFileDiffV1';
+const String mobileWorkspaceGitStatusCapability = 'mobileWorkspaceGitStatusV1';
 const String mobilePromptFileUploadCapability = 'mobilePromptFileUploadV1';
 const String mobilePromptAttachmentReadCapability =
     'mobilePromptAttachmentReadV1';
@@ -148,6 +149,8 @@ abstract interface class MobileTerminalClient {
 
 abstract interface class MobileCodexWorkspaceClient {
   bool get supportsCodexWorkspaceFiles;
+  bool get supportsWorkspaceGitStatus;
+  Future<MobileWorkspaceGitStatus> loadWorkspaceGitStatus(String workspaceId);
   bool get supportsPromptFileUpload;
   bool get supportsPromptAttachmentRead;
   Future<MobileWorkspaceQuickOpenSession> startWorkspaceQuickOpen(
