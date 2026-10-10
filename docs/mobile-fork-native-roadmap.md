@@ -29,6 +29,7 @@ merge commit `9dec1b90` without modifying the main worktree's pending changes.
 
 - `dart test test/mobile_workspace_git_status_test.dart test/mobile_workspace_text_preview_test.dart`: **6 passed**.
 - `cargo test --manifest-path rust/Cargo.toml -p alera-cli --locked workspace_git_`: **3 passed** (two Git RPC regressions and one existing cleanup regression).
+- After integrating the latest `main`, `cargo test --manifest-path rust/Cargo.toml -p alera-cli --locked mobile_codex_file_surface_tests`: **3 passed** (mobile.hello capability advertisement and mobile request allowlist). An extra post-merge repeat of `workspace_git_` exceeded a 120-second Windows Rust recompilation limit before tests began; the three `workspace_git_` assertions had already passed before the merge and did not report a new assertion failure.
 - `dart analyze` targeted mobile Git/status/diff/preview/controller files: **no issues**.
 - `flutter test --no-pub test/workspace_branch_picker_test.dart`: **2 passed**.
 - `flutter test --no-pub test/agent_quota_controller_test.dart test/mobile_runtime_client_test.dart test/workspace_branch_picker_test.dart test/mobile_workspace_text_preview_test.dart test/mobile_workspace_git_status_test.dart`: **21 passed** (including real loopback WebSocket RPC negotiation). Two pre-existing capability checks were made deterministic by draining their post-auth background `status.get` probe before test socket teardown.
