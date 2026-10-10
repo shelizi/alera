@@ -104,18 +104,12 @@ final class AgentQuotaServiceProvider
 
 String _$agentQuotaServiceHash() => r'c6aad5fd83eaa05569133c91176a90ec87215dbe';
 
-@ProviderFor(agentQuotaState)
-final agentQuotaStateProvider = AgentQuotaStateProvider._();
+@ProviderFor(AgentQuotaSnapshotList)
+final agentQuotaStateProvider = AgentQuotaSnapshotListProvider._();
 
-final class AgentQuotaStateProvider
-    extends
-        $FunctionalProvider<
-          AsyncValue<AgentQuotaState>,
-          AgentQuotaState,
-          FutureOr<AgentQuotaState>
-        >
-    with $FutureModifier<AgentQuotaState>, $FutureProvider<AgentQuotaState> {
-  AgentQuotaStateProvider._()
+final class AgentQuotaSnapshotListProvider
+    extends $AsyncNotifierProvider<AgentQuotaSnapshotList, AgentQuotaState> {
+  AgentQuotaSnapshotListProvider._()
     : super(
         from: null,
         argument: null,
@@ -127,18 +121,31 @@ final class AgentQuotaStateProvider
       );
 
   @override
-  String debugGetCreateSourceHash() => _$agentQuotaStateHash();
+  String debugGetCreateSourceHash() => _$agentQuotaSnapshotListHash();
 
   @$internal
   @override
-  $FutureProviderElement<AgentQuotaState> $createElement(
-    $ProviderPointer pointer,
-  ) => $FutureProviderElement(pointer);
-
-  @override
-  FutureOr<AgentQuotaState> create(Ref ref) {
-    return agentQuotaState(ref);
-  }
+  AgentQuotaSnapshotList create() => AgentQuotaSnapshotList();
 }
 
-String _$agentQuotaStateHash() => r'aff66547d5431d847288af38a120171ef8257d14';
+String _$agentQuotaSnapshotListHash() =>
+    r'9becaf70c22b5385966a0c6665c302f1f666168c';
+
+abstract class _$AgentQuotaSnapshotList
+    extends $AsyncNotifier<AgentQuotaState> {
+  FutureOr<AgentQuotaState> build();
+  @$mustCallSuper
+  @override
+  WhenComplete runBuild() {
+    final ref = this.ref as $Ref<AsyncValue<AgentQuotaState>, AgentQuotaState>;
+    final element =
+        ref.element
+            as $ClassProviderElement<
+              AnyNotifier<AsyncValue<AgentQuotaState>, AgentQuotaState>,
+              AsyncValue<AgentQuotaState>,
+              Object?,
+              Object?
+            >;
+    return element.handleCreate(ref, build);
+  }
+}

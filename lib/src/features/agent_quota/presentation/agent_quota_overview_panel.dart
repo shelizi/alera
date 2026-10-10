@@ -9,6 +9,8 @@ class const _QuotaOverviewButton({
   required final String hostId,
   final AgentQuotaInlineActions actions = const AgentQuotaInlineActions(),
   required final String? error,
+  final AgentQuotaSnapshotRefresh? onRefreshSnapshot,
+  final bool snapshotRefreshEnabled = true,
   required final AgentQuotaPinToggle onTogglePinned,
   required final String? Function(AgentQuotaSnapshot snapshot) profileLabelFor,
   final VoidCallback? onOpenUsage,
@@ -25,6 +27,8 @@ class const _QuotaOverviewButton({
           hostId: hostId,
           actions: actions,
           emptyMessage: error ?? 'No quota data',
+          onRefreshSnapshot: onRefreshSnapshot,
+          snapshotRefreshEnabled: snapshotRefreshEnabled,
           onTogglePinned: onTogglePinned,
           onOpenUsage: onOpenUsage,
           profileLabels: <String, String>{
@@ -52,6 +56,8 @@ class const _AgentQuotaOverviewPanel({
   required final String hostId,
   final AgentQuotaInlineActions actions = const AgentQuotaInlineActions(),
   required final AgentQuotaPinToggle onTogglePinned,
+  final AgentQuotaSnapshotRefresh? onRefreshSnapshot,
+  final bool snapshotRefreshEnabled = true,
   final Map<String, String> profileLabels = const <String, String>{},
   final String emptyMessage = 'No quota data',
   final VoidCallback? onOpenUsage,
@@ -103,6 +109,8 @@ class const _AgentQuotaOverviewPanel({
                       snapshot.provider,
                       claudeAccountId: snapshot.accountId,
                     ),
+                    enabled: snapshotRefreshEnabled,
+                    onRefreshSnapshot: onRefreshSnapshot,
                     onTogglePinned: onTogglePinned,
                   ),
                 if (onOpenUsage != null) ...<Widget>[
@@ -132,6 +140,8 @@ class const _QuotaOverviewRow({
   required final String? profileLabel,
   required final bool pinned,
   required final AgentQuotaPinToggle onTogglePinned,
+  final bool enabled = true,
+  final AgentQuotaSnapshotRefresh? onRefreshSnapshot,
 }) extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
@@ -198,6 +208,14 @@ class const _QuotaOverviewRow({
                   ),
                 ],
               const SizedBox(width: AleraTokens.space6),
+              if (onRefreshSnapshot != null)
+                _QuotaSnapshotRefreshButton(
+                  key: ValueKey<String>(
+                    'quota-overview-refresh:${snapshot.key}',
+                  ),
+                  enabled: enabled,
+                  onRefresh: () => onRefreshSnapshot!(snapshot),
+                ),
               AleraIconButton(
                 tooltip: pinned ? 'Unpin From Status Bar' : 'Pin To Status Bar',
                 icon: pinned ? AleraIcons.pin : AleraIcons.pinOff,

@@ -124,6 +124,7 @@ mod dispatch_context_install_tests_startup_recovery;
 mod host_service_agent_integrations;
 mod host_service_agent_quota;
 mod host_service_agent_quota_codex_reset;
+mod host_service_agent_quota_partial;
 #[cfg(test)]
 mod host_service_autostart_tests;
 mod host_service_requests;
@@ -530,11 +531,13 @@ impl ServerActor {
                 client_id,
                 request_id,
                 environment_signature,
+                partial,
                 result,
             } => self.handle_agent_quota_finished(
                 client_id,
                 request_id,
                 environment_signature,
+                partial,
                 result,
             ),
             ServerCommand::AgentQuotaClaudeTuiFinished {

@@ -23,10 +23,9 @@ void main() {
         sshTargetsProvider.overrideWith(
           (ref) => Stream.value(const <SshTarget>[]),
         ),
-        agentQuotaStateProvider.overrideWith((ref) async {
-          quotaBuilds += 1;
-          return AgentQuotaState.empty('local');
-        }),
+        agentQuotaStateProvider.overrideWith(
+          () => _CountingAgentQuotaSnapshotList(() => quotaBuilds += 1),
+        ),
       ],
     );
     addTearDown(container.dispose);
@@ -88,6 +87,18 @@ void main() {
     expect(tester.takeException(), isNull);
     expect(quotaBuilds, 2);
   });
+}
+
+class _CountingAgentQuotaSnapshotList extends AgentQuotaSnapshotList {
+  _CountingAgentQuotaSnapshotList(this.onBuild);
+
+  final void Function() onBuild;
+
+  @override
+  Future<AgentQuotaState> build() async {
+    onBuild();
+    return AgentQuotaState.empty('local');
+  }
 }
 
 class _PendingClaudeTuiService extends Fake implements AgentQuotaService {

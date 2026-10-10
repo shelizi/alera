@@ -6,6 +6,8 @@ class const _QuotaProviderSummary({
   required final bool compact,
   required final String hostId,
   final AgentQuotaInlineActions actions = const AgentQuotaInlineActions(),
+  final bool enabled = true,
+  final AgentQuotaSnapshotRefresh? onRefreshSnapshot,
 }) extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
@@ -70,6 +72,16 @@ class const _QuotaProviderSummary({
                     compact: compact,
                   ),
                 ],
+              if (onRefreshSnapshot != null) ...<Widget>[
+                SizedBox(
+                  width: compact ? AleraTokens.space4 : AleraTokens.space6,
+                ),
+                _QuotaSnapshotRefreshButton(
+                  key: ValueKey<String>('quota-refresh:${snapshot.key}'),
+                  enabled: enabled,
+                  onRefresh: () => onRefreshSnapshot!(snapshot),
+                ),
+              ],
             ],
           ),
         ),
@@ -86,6 +98,7 @@ class const _CollapsedQuotaBar({
   required final bool loading,
   required final String? error,
   required final VoidCallback onRefresh,
+  final AgentQuotaSnapshotRefresh? onRefreshSnapshot,
   required final AgentQuotaPinToggle onTogglePinned,
   final VoidCallback? onOpenUsage,
   required final String? Function(AgentQuotaSnapshot snapshot) profileLabelFor,
@@ -116,6 +129,8 @@ class const _CollapsedQuotaBar({
                 emptyMessage: error ?? 'No quota data',
                 hostId: hostId,
                 actions: actions,
+                onRefreshSnapshot: onRefreshSnapshot,
+                snapshotRefreshEnabled: !loading,
                 onTogglePinned: onTogglePinned,
                 onOpenUsage: onOpenUsage,
                 profileLabels: <String, String>{
@@ -154,6 +169,79 @@ class const _CollapsedQuotaBar({
         _QuotaRefreshButton(loading: loading, onRefresh: onRefresh),
         trailing ?? const SizedBox.shrink(),
       ],
+    );
+  }
+}
+
+class const _QuotaSnapshotRefreshButton({
+  super.key,
+  required final Future<void> Function() onRefresh,
+  final bool enabled = true,
+}) extends StatefulWidget {
+  @override
+  State<_QuotaSnapshotRefreshButton> createState() =>
+      _QuotaSnapshotRefreshButtonState();
+}
+
+class _QuotaSnapshotRefreshButtonState
+    extends State<_QuotaSnapshotRefreshButton>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+  var _loading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: AleraTokens.durationSpin,
+    );
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _run() async {
+    if (_loading || !widget.enabled) {
+      return;
+    }
+    setState(() => _loading = true);
+    _controller.repeat();
+    try {
+      await widget.onRefresh();
+    } finally {
+      if (mounted) {
+        _controller.stop();
+        setState(() => _loading = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final busy = _loading || !widget.enabled;
+    return IconButton(
+      tooltip: _loading ? 'Refreshing Agent' : 'Refresh Agent',
+      onPressed: busy ? null : () => unawaited(_run()),
+      iconSize: 13,
+      visualDensity: .compact,
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints(minWidth: 22, minHeight: 22),
+      style: IconButton.styleFrom(
+        minimumSize: const Size(22, 22),
+        maximumSize: const Size(22, 22),
+        tapTargetSize: .shrinkWrap,
+        padding: EdgeInsets.zero,
+      ),
+      color: AleraTokens.foregroundMuted,
+      disabledColor: AleraTokens.foregroundFaint,
+      icon: RotationTransition(
+        turns: _controller,
+        child: const Icon(AleraIcons.refresh),
+      ),
     );
   }
 }

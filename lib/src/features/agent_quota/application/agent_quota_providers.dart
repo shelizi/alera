@@ -15,6 +15,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:uuid/uuid.dart';
 
+part 'agent_quota_service.dart';
 part 'agent_quota_providers.g.dart';
 
 const agentQuotaRefreshInterval = Duration(minutes: 15);
@@ -35,41 +36,84 @@ AgentQuotaService agentQuotaService(Ref ref) {
   );
 }
 
-@Riverpod(keepAlive: true)
-Future<AgentQuotaState> agentQuotaState(Ref ref) async {
-  final hostId = ref.watch(
-    workbenchControllerProvider.select(
-      (state) => state.activeWorkspace?.hostId ?? 'local',
-    ),
-  );
-  ref.watch(
-    settingsControllerProvider.select(
-      (settings) =>
-          agentQuotaRequestKey(settings.agents.quotas.forHost(hostId)),
-    ),
-  );
-  final settings = ref
-      .read(settingsControllerProvider)
-      .agents
-      .quotas
-      .forHost(hostId);
-  final targets = ref.watch(sshTargetsProvider).value ?? const <SshTarget>[];
-  final target = hostId == 'local'
-      ? null
-      : targets.where((candidate) => candidate.id == hostId).firstOrNull;
-  final timer = Timer(agentQuotaRefreshInterval, () {
-    if (ref.mounted) {
-      ref.invalidateSelf();
+@Riverpod(keepAlive: true, name: 'agentQuotaStateProvider')
+class AgentQuotaSnapshotList extends _$AgentQuotaSnapshotList {
+  var _epoch = 0;
+
+  @override
+  Future<AgentQuotaState> build() {
+    ++_epoch;
+    final hostId = ref.watch(
+      workbenchControllerProvider.select(
+        (state) => state.activeWorkspace?.hostId ?? 'local',
+      ),
+    );
+    ref.watch(
+      settingsControllerProvider.select(
+        (settings) =>
+            agentQuotaRequestKey(settings.agents.quotas.forHost(hostId)),
+      ),
+    );
+    final settings = ref
+        .read(settingsControllerProvider)
+        .agents
+        .quotas
+        .forHost(hostId);
+    final targets = ref.watch(sshTargetsProvider).value ?? const <SshTarget>[];
+    final target = hostId == 'local'
+        ? null
+        : targets.where((candidate) => candidate.id == hostId).firstOrNull;
+    final timer = Timer(agentQuotaRefreshInterval, () {
+      if (ref.mounted) {
+        ref.invalidateSelf();
+      }
+    });
+    ref.onDispose(timer.cancel);
+    final service = ref.watch(agentQuotaServiceProvider);
+    return service.fetch(
+      hostId: hostId,
+      target: target,
+      settings: settings,
+      forceRefresh: service.consumeForceRefresh(hostId),
+    );
+  }
+
+  /// Refetches one account and publishes it without reloading the other rows.
+  Future<void> refreshSnapshot({
+    required String hostId,
+    required AgentQuotaProviderId provider,
+    required String accountId,
+  }) async {
+    final epoch = _epoch;
+    final settings = ref
+        .read(settingsControllerProvider)
+        .agents
+        .quotas
+        .forHost(hostId);
+    final targets = ref.read(sshTargetsProvider).value ?? const <SshTarget>[];
+    final target = hostId == 'local'
+        ? null
+        : targets.where((candidate) => candidate.id == hostId).firstOrNull;
+    final next = await ref
+        .read(agentQuotaServiceProvider)
+        .refreshSnapshot(
+          hostId: hostId,
+          target: target,
+          settings: settings,
+          provider: provider,
+          accountId: accountId,
+        );
+    if (!ref.mounted || epoch != _epoch) {
+      return;
     }
-  });
-  ref.onDispose(timer.cancel);
-  final service = ref.watch(agentQuotaServiceProvider);
-  return service.fetch(
-    hostId: hostId,
-    target: target,
-    settings: settings,
-    forceRefresh: service.consumeForceRefresh(hostId),
-  );
+    final activeHost =
+        ref.read(workbenchControllerProvider).activeWorkspace?.hostId ??
+        'local';
+    if (activeHost != hostId) {
+      return;
+    }
+    state = AsyncData(next);
+  }
 }
 
 String agentQuotaRequestKey(AgentQuotaHostSettings settings) {
@@ -100,274 +144,6 @@ String agentQuotaRequestKey(AgentQuotaHostSettings settings) {
     ],
     'environment': settings.environment.toJson(),
   });
-}
-
-class AgentQuotaService(
-  final RuntimeProxyClient _client, [
-  final RuntimeHostClient? _runtimeClient,
-]) {
-  final Map<String, AgentQuotaState> _cache = <String, AgentQuotaState>{};
-  final Set<String> _forceRefreshHosts = <String>{};
-  final Map<String, String> _pendingCodexResetCreditMutationIds =
-      <String, String>{};
-
-  void requestForceRefresh(String hostId) {
-    _forceRefreshHosts.add(hostId);
-  }
-
-  bool consumeForceRefresh(String hostId) {
-    return _forceRefreshHosts.remove(hostId);
-  }
-
-  Future<AgentQuotaState> fetch({
-    required String hostId,
-    required SshTarget? target,
-    required AgentQuotaHostSettings settings,
-    bool forceRefresh = false,
-  }) async {
-    try {
-      final environmentNames = <String>[
-        settings.environment.kimiApiKey,
-        settings.environment.zaiApiKey,
-        settings.environment.zaiBaseUrl,
-        settings.environment.minimaxApiKey,
-        settings.environment.minimaxApiHost,
-      ];
-      final environmentValues = hostId == 'local' && _runtimeClient != null
-          ? await _client.resolveMissingLocalEnvironment(environmentNames)
-          : const <String, String>{};
-      final payload = hostId == 'local' && _runtimeClient != null
-          ? _mapValue(
-              await _runtimeClient.runtimeRequest(
-                'agentQuota.snapshot',
-                <String, Object?>{
-                  'forceRefresh': forceRefresh,
-                  if (environmentValues.isNotEmpty)
-                    'environmentValues': environmentValues,
-                },
-                const Duration(seconds: 45),
-              ),
-            )
-          : await _client.request(
-              hostId: hostId,
-              target: target,
-              type: 'agentQuota.fetch',
-              localEnvironmentNames: environmentNames,
-              payload: <String, Object?>{
-                'providers': <String>[
-                  for (final provider in settings.enabledProviders)
-                    provider.name,
-                ],
-                'claudeDefaultEnabled': settings.claudeDefaultEnabled,
-                'claudeProfiles': <Map<String, String>>[
-                  for (final profile in settings.claudeProfiles)
-                    <String, String>{
-                      'alias': profile.alias,
-                      'profile': profile.profile,
-                    },
-                ],
-                'codexProfiles': [
-                  for (final profile in settings.codexProfiles) profile.toMap(),
-                ],
-                'allowCliFallback': false,
-                'environmentNames': <String, String>{
-                  'kimiApiKey': settings.environment.kimiApiKey,
-                  'zaiApiKey': settings.environment.zaiApiKey,
-                  'zaiBaseUrl': settings.environment.zaiBaseUrl,
-                  'minimaxApiKey': settings.environment.minimaxApiKey,
-                  'minimaxApiHost': settings.environment.minimaxApiHost,
-                },
-              },
-            );
-      final fresh = <AgentQuotaSnapshot>[];
-      for (final item in (payload['snapshots'] as List? ?? const <Object?>[])) {
-        if (item is! Map) continue;
-        final snapshot = AgentQuotaSnapshot.tryFromJson(
-          Map<String, Object?>.from(item),
-        );
-        if (snapshot != null) fresh.add(snapshot);
-      }
-      final previous = <String, AgentQuotaSnapshot>{
-        for (final snapshot
-            in _cache[hostId]?.snapshots ?? const <AgentQuotaSnapshot>[])
-          snapshot.key: snapshot,
-      };
-      final merged = <AgentQuotaSnapshot>[
-        for (final snapshot in fresh)
-          if (snapshot.status == AgentQuotaStatus.ok ||
-              !previous.containsKey(snapshot.key))
-            _markOldSnapshotStale(snapshot)
-          else
-            previous[snapshot.key]!.asStale(snapshot.error),
-      ];
-      final state = AgentQuotaState(
-        hostId: hostId,
-        snapshots: merged,
-        environment: _boolMap(payload['environment']),
-        fetchedAt: DateTime.now().toUtc(),
-      );
-      _cache[hostId] = state;
-      return state;
-    } catch (error) {
-      final previous = _cache[hostId];
-      if (previous != null) {
-        return AgentQuotaState(
-          hostId: hostId,
-          snapshots: <AgentQuotaSnapshot>[
-            for (final snapshot in previous.snapshots)
-              snapshot.asStale(error.toString()),
-          ],
-          environment: previous.environment,
-          fetchedAt: previous.fetchedAt,
-          error: error.toString(),
-        );
-      }
-      return AgentQuotaState(
-        hostId: hostId,
-        snapshots: const <AgentQuotaSnapshot>[],
-        environment: const <String, bool>{},
-        fetchedAt: DateTime.now().toUtc(),
-        error: error.toString(),
-      );
-    }
-  }
-
-  Future<AgentQuotaSnapshot> fetchClaudeTui({
-    required String hostId,
-    required SshTarget? target,
-    required String accountId,
-    String? displayName,
-  }) async {
-    final payload = hostId == 'local' && _runtimeClient != null
-        ? _mapValue(
-            await _runtimeClient.runtimeRequest(
-              'agentQuota.fetchClaudeTui',
-              <String, Object?>{
-                'accountId': accountId,
-                if (displayName != null && displayName.trim().isNotEmpty)
-                  'displayName': displayName.trim(),
-              },
-              const Duration(seconds: 60),
-            ),
-          )
-        : await _client.request(
-            hostId: hostId,
-            target: target,
-            type: 'agentQuota.fetchClaudeTui',
-            payload: <String, Object?>{
-              'accountId': accountId,
-              if (displayName != null && displayName.trim().isNotEmpty)
-                'displayName': displayName.trim(),
-            },
-            timeout: const Duration(seconds: 60),
-          );
-    final raw = payload['snapshot'];
-    if (raw is! Map) {
-      throw const FormatException('Claude TUI response missing snapshot.');
-    }
-    final snapshot = AgentQuotaSnapshot.tryFromJson(
-      Map<String, Object?>.from(raw),
-    );
-    if (snapshot == null) {
-      throw const FormatException(
-        'Claude TUI response had an unknown provider.',
-      );
-    }
-    final previous = _cache[hostId];
-    if (previous != null) {
-      final snapshots = <AgentQuotaSnapshot>[
-        for (final item in previous.snapshots)
-          if (item.key == snapshot.key) snapshot else item,
-      ];
-      if (!snapshots.any((item) => item.key == snapshot.key)) {
-        snapshots.add(snapshot);
-      }
-      _cache[hostId] = AgentQuotaState(
-        hostId: hostId,
-        snapshots: snapshots,
-        environment: previous.environment,
-        fetchedAt: DateTime.now().toUtc(),
-      );
-    }
-    return snapshot;
-  }
-
-  Future<CodexResetConsumeResult> consumeCodexResetCredit({
-    required String hostId,
-    required SshTarget? target,
-    required String offerRevision,
-  }) async {
-    final clientMutationId = _pendingCodexResetCreditMutationIds.putIfAbsent(
-      offerRevision,
-      () => const Uuid().v4(),
-    );
-    final requestPayload = <String, Object?>{
-      'offerRevision': offerRevision,
-      'clientMutationId': clientMutationId,
-    };
-    final payload = hostId == 'local' && _runtimeClient != null
-        ? _mapValue(
-            await _runtimeClient.runtimeRequest(
-              'agentQuota.consumeCodexResetCredit',
-              requestPayload,
-              const Duration(seconds: 45),
-            ),
-          )
-        : await _client.request(
-            hostId: hostId,
-            target: target,
-            type: 'agentQuota.consumeCodexResetCredit',
-            payload: requestPayload,
-            timeout: const Duration(seconds: 45),
-          );
-    final result = CodexResetConsumeResult.fromJson(payload);
-    final previous = _cache[hostId];
-    final snapshots = <AgentQuotaSnapshot>[
-      for (final snapshot
-          in previous?.snapshots ?? const <AgentQuotaSnapshot>[])
-        if (snapshot.key == result.snapshot.key) result.snapshot else snapshot,
-    ];
-    if (!snapshots.any((snapshot) => snapshot.key == result.snapshot.key)) {
-      snapshots.add(result.snapshot);
-    }
-    _cache[hostId] = AgentQuotaState(
-      hostId: hostId,
-      snapshots: snapshots,
-      environment: previous?.environment ?? const <String, bool>{},
-      fetchedAt: DateTime.now().toUtc(),
-    );
-    _pendingCodexResetCreditMutationIds.remove(offerRevision);
-    return result;
-  }
-}
-
-Map<String, Object?> _mapValue(Object? value) {
-  if (value is Map<String, Object?>) {
-    return value;
-  }
-  if (value is Map) {
-    return Map<String, Object?>.from(value);
-  }
-  throw const FormatException('Agent quota response must be an object.');
-}
-
-AgentQuotaSnapshot _markOldSnapshotStale(AgentQuotaSnapshot snapshot) {
-  if (DateTime.now().toUtc().difference(snapshot.updatedAt) >
-      const Duration(minutes: 30)) {
-    return snapshot.asStale(snapshot.error);
-  }
-  return snapshot;
-}
-
-Map<String, bool> _boolMap(Object? value) {
-  if (value is! Map) {
-    return const <String, bool>{};
-  }
-  return <String, bool>{
-    for (final entry in value.entries)
-      if (entry.key is String && entry.value is bool)
-        entry.key as String: entry.value as bool,
-  };
 }
 
 extension<T> on Iterable<T> {

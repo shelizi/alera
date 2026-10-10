@@ -10,6 +10,9 @@ use crate::terminal_host::host_error::{HostError, HostResult};
 use crate::terminal_host::protocol::{error_response, event, ok_response};
 
 use super::deferred_admission::DeferredRequestClass;
+use super::host_service_agent_quota_partial::{
+    apply_partial_quota_update, optional_quota_text, quota_fetch_payload,
+};
 use super::host_service_requests::required_non_blank;
 use super::{ServerActor, ServerCommand};
 
@@ -87,12 +90,18 @@ impl ServerActor {
             .get("forceRefresh")
             .and_then(Value::as_bool)
             .unwrap_or(false);
+        let provider = optional_quota_text(payload, "provider");
+        let account_id = optional_quota_text(payload, "accountId");
+        // A provider filter is one agent (and, with accountId, one account).
+        // It must not be served from the full-cache TTL: the caller asked to
+        // update that row now.
+        let partial = provider.is_some();
         let environment_values = payload
             .get("environmentValues")
             .cloned()
             .unwrap_or_else(|| json!({}));
         let environment_signature = quota_environment_signature(&environment_values);
-        if !force_refresh {
+        if !force_refresh && !partial {
             if let Some((fetched_at, cached_signature, cached)) = &self.agent_quota_cache {
                 if *cached_signature == environment_signature
                     && fetched_at.elapsed() < AGENT_QUOTA_CACHE_TTL
@@ -111,20 +120,12 @@ impl ServerActor {
             async move {
                 let result = async {
                     let settings = settings_query.load().await?;
-                    let providers = if settings.enabled_providers.is_empty() {
-                        vec!["__none__".to_string()]
-                    } else {
-                        settings.enabled_providers
-                    };
-                    let quota_payload = json!({
-                        "providers": providers,
-                        "claudeDefaultEnabled": settings.claude_default_enabled,
-                        "codexProfiles": settings.codex_profiles,
-                        "claudeProfiles": settings.claude_profiles,
-                        "environmentNames": settings.environment,
-                        "environmentValues": environment_values,
-                        "allowCliFallback": false,
-                    });
+                    let quota_payload = quota_fetch_payload(
+                        &settings,
+                        &environment_values,
+                        provider.as_deref(),
+                        account_id.as_deref(),
+                    );
                     fetch_agent_quotas(quota_payload)
                         .await
                         .map_err(|error| HostError::state(error.to_string()))
@@ -134,6 +135,7 @@ impl ServerActor {
                     client_id,
                     request_id,
                     environment_signature,
+                    partial,
                     result,
                 });
             },
@@ -245,8 +247,13 @@ impl ServerActor {
         client_id: u64,
         request_id: i64,
         environment_signature: u64,
+        partial: bool,
         result: HostResult<Value>,
     ) {
+        if partial {
+            self.finish_partial_agent_quota(client_id, request_id, environment_signature, result);
+            return;
+        }
         match result {
             Ok(fresh) => {
                 let merged = self
@@ -276,6 +283,40 @@ impl ServerActor {
                 } else {
                     self.client_write(client_id, error_response(request_id, &error));
                 }
+            }
+        }
+    }
+
+    /// Keeps the full-cache timestamp. Moving it would treat every other agent
+    /// as freshly fetched. Creating a cache from this reply would make the next
+    /// unfiltered snapshot return only the refreshed agent until the TTL ends.
+    fn finish_partial_agent_quota(
+        &mut self,
+        client_id: u64,
+        request_id: i64,
+        environment_signature: u64,
+        result: HostResult<Value>,
+    ) {
+        match result {
+            Ok(fresh) => {
+                let cached = self
+                    .agent_quota_cache
+                    .as_ref()
+                    .filter(|(_, signature, _)| *signature == environment_signature)
+                    .map(|(_, _, cached)| cached.clone());
+                let (updated, reply) = apply_partial_quota_update(cached.as_ref(), fresh);
+                if let Some(updated) = updated {
+                    if let Some((fetched_at, signature, _)) = self.agent_quota_cache {
+                        if signature == environment_signature {
+                            self.agent_quota_cache = Some((fetched_at, signature, updated));
+                        }
+                    }
+                }
+                self.client_write(client_id, ok_response(request_id, reply));
+                self.broadcast_authenticated(event("agentQuotasChanged", json!({})));
+            }
+            Err(error) => {
+                self.client_write(client_id, error_response(request_id, &error));
             }
         }
     }
@@ -336,7 +377,7 @@ fn quota_environment_signature(value: &Value) -> u64 {
     hasher.finish()
 }
 
-fn merge_quota_snapshots(cached: &Value, mut fresh: Value) -> Value {
+pub(super) fn merge_quota_snapshots(cached: &Value, mut fresh: Value) -> Value {
     let previous = cached
         .get("snapshots")
         .and_then(Value::as_array)
@@ -366,7 +407,7 @@ fn merge_quota_snapshots(cached: &Value, mut fresh: Value) -> Value {
     fresh
 }
 
-fn upsert_quota_snapshot(cached: Option<&Value>, snapshot: Value) -> Value {
+pub(super) fn upsert_quota_snapshot(cached: Option<&Value>, snapshot: Value) -> Value {
     let mut base = cached.cloned().unwrap_or_else(|| {
         json!({
             "snapshots": [],
@@ -422,35 +463,5 @@ mod tests {
 
         assert_eq!(settings.enabled_providers, vec!["codex"]);
         assert!(!settings.claude_default_enabled);
-    }
-
-    #[test]
-    fn failed_provider_keeps_previous_snapshot_as_stale() {
-        let cached = json!({"snapshots": [{"provider":"codex","accountId":"default","status":"ok","windows":[1]}]});
-        let fresh = json!({"snapshots": [{"provider":"codex","accountId":"default","status":"error","error":"offline","windows":[]}]});
-        let merged = merge_quota_snapshots(&cached, fresh);
-        assert_eq!(merged["snapshots"][0]["status"], "stale");
-        assert_eq!(merged["snapshots"][0]["windows"], json!([1]));
-        assert_eq!(merged["snapshots"][0]["error"], "offline");
-    }
-
-    #[test]
-    fn upsert_replaces_matching_claude_account() {
-        let cached = json!({
-            "snapshots": [
-                {"provider":"claude","accountId":"default","status":"unavailable"},
-                {"provider":"codex","accountId":"default","status":"ok"}
-            ],
-            "environment": {"KIMI": true}
-        });
-        let merged = upsert_quota_snapshot(
-            Some(&cached),
-            json!({"provider":"claude","accountId":"default","status":"ok","windows":[1]}),
-        );
-        assert_eq!(merged["snapshots"].as_array().unwrap().len(), 2);
-        assert_eq!(merged["snapshots"][0]["status"], "ok");
-        assert_eq!(merged["snapshots"][0]["windows"], json!([1]));
-        assert_eq!(merged["snapshots"][1]["provider"], "codex");
-        assert_eq!(merged["environment"]["KIMI"], true);
     }
 }

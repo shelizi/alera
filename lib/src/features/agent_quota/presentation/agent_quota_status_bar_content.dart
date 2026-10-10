@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/badges/alera_badge.dart';
@@ -18,6 +20,10 @@ part 'agent_quota_overview_panel.dart';
 
 typedef AgentQuotaPinToggle = void Function(String pinKey, bool pinned);
 
+typedef AgentQuotaSnapshotRefresh = Future<void> Function(
+  AgentQuotaSnapshot snapshot,
+);
+
 class const AgentQuotaStatusBarContent({
   super.key,
   required final String hostId,
@@ -26,6 +32,7 @@ class const AgentQuotaStatusBarContent({
   required final AgentQuotaHostSettings settings,
   required final VoidCallback onRefresh,
   required final AgentQuotaPinToggle onTogglePinned,
+  final AgentQuotaSnapshotRefresh? onRefreshSnapshot,
   final bool loading = false,
   final String? error,
   final Widget? trailing,
@@ -61,6 +68,7 @@ class const AgentQuotaStatusBarContent({
               loading: loading,
               error: error,
               onRefresh: onRefresh,
+              onRefreshSnapshot: onRefreshSnapshot,
               onTogglePinned: onTogglePinned,
               onOpenUsage: onOpenUsage,
               profileLabelFor: profileLabelFor,
@@ -98,6 +106,8 @@ class const AgentQuotaStatusBarContent({
                 hostId: hostId,
                 actions: actions,
                 error: error,
+                onRefreshSnapshot: onRefreshSnapshot,
+                snapshotRefreshEnabled: !loading,
                 onTogglePinned: onTogglePinned,
                 onOpenUsage: onOpenUsage,
                 profileLabelFor: profileLabelFor,
@@ -115,6 +125,8 @@ class const AgentQuotaStatusBarContent({
                           compact: compact,
                           hostId: hostId,
                           actions: actions,
+                          enabled: !loading,
+                          onRefreshSnapshot: onRefreshSnapshot,
                         ),
                       if (enabled.isEmpty)
                         Padding(

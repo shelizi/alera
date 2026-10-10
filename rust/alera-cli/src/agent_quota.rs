@@ -63,6 +63,10 @@ struct AgentQuotaFetchRequest {
     claude_profiles: Vec<ClaudeProfileRequest>,
     #[serde(default)]
     codex_profiles: Vec<CodexProfileRequest>,
+    /// Limits Claude, Codex, and OpenCode to one account. Absent means every
+    /// account of the selected providers, which is what a full snapshot sends.
+    #[serde(default)]
+    account_id: Option<String>,
     #[serde(default)]
     environment_names: EnvironmentNames,
     #[serde(default)]
@@ -107,6 +111,10 @@ impl QuotaEnvironment {
 
 fn default_true() -> bool {
     true
+}
+
+fn quota_account_requested(selected: &Option<String>, account: &str) -> bool {
+    selected.as_ref().is_none_or(|selected| selected == account)
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -286,26 +294,42 @@ pub(crate) async fn fetch_agent_quotas(payload: Value) -> Result<Value> {
         canonicalize_quota_provider_ids(request.providers)
     };
 
+    let selected_account = request
+        .account_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
     let cli_permits = Arc::new(Semaphore::new(AGENT_QUOTA_CLI_CONCURRENCY));
     let mut tasks = tokio::task::JoinSet::new();
     for provider in providers {
         match provider.as_str() {
             "claude" => {
-                if request.claude_default_enabled {
+                if request.claude_default_enabled
+                    && quota_account_requested(&selected_account, "default")
+                {
                     tasks.spawn(async move { fetch_claude(None).await });
                 }
                 for profile in &request.claude_profiles {
+                    if !quota_account_requested(&selected_account, &profile.profile) {
+                        continue;
+                    }
                     let profile = profile.clone();
                     tasks.spawn(async move { fetch_claude(Some(&profile)).await });
                 }
             }
             "codex" => {
-                let permits = Arc::clone(&cli_permits);
-                tasks.spawn(async move {
-                    let _permit = permits.acquire_owned().await.ok();
-                    fetch_codex().await
-                });
+                if quota_account_requested(&selected_account, "default") {
+                    let permits = Arc::clone(&cli_permits);
+                    tasks.spawn(async move {
+                        let _permit = permits.acquire_owned().await.ok();
+                        fetch_codex().await
+                    });
+                }
                 for profile in &request.codex_profiles {
+                    if !quota_account_requested(&selected_account, &profile.profile) {
+                        continue;
+                    }
                     let profile = profile.clone();
                     let permits = Arc::clone(&cli_permits);
                     tasks.spawn(async move {
@@ -346,8 +370,13 @@ pub(crate) async fn fetch_agent_quotas(payload: Value) -> Result<Value> {
                 tasks.spawn(fetch_devin());
             }
             "opencode" => {
-                tasks.spawn(async { fetch_opencode_snapshot("go").await });
-                tasks.spawn(async { fetch_opencode_snapshot("zen").await });
+                for account in ["go", "zen"] {
+                    if !quota_account_requested(&selected_account, account) {
+                        continue;
+                    }
+                    let account = account.to_string();
+                    tasks.spawn(async move { fetch_opencode_snapshot(&account).await });
+                }
             }
             _ => {}
         }

@@ -326,6 +326,39 @@ void main() {
     expect(find.byTooltip('Unpin From Status Bar'), findsOneWidget);
     expect(find.byTooltip('Pin To Status Bar'), findsOneWidget);
   });
+
+  testWidgets('refreshes one pinned agent from the status bar', (tester) async {
+    final refreshed = <AgentQuotaProviderId>[];
+    await tester.pumpWidget(
+      _wrap(
+        settings: const AgentQuotaHostSettings(
+          enabledProviders: <AgentQuotaProviderId>[
+            AgentQuotaProviderId.claude,
+            AgentQuotaProviderId.agy,
+          ],
+        ),
+        snapshots: <AgentQuotaSnapshot>[
+          _snapshot(
+            provider: .claude,
+            windows: <AgentQuotaWindow>[_window('Weekly', 40)],
+          ),
+          _snapshot(
+            provider: .agy,
+            buckets: <AgentQuotaBucket>[_bucket('Gemini Models - Weekly', 15)],
+          ),
+        ],
+        onRefreshSnapshot: (snapshot) async {
+          refreshed.add(snapshot.provider);
+        },
+      ),
+    );
+
+    expect(find.byTooltip('Refresh Agent'), findsNWidgets(2));
+    await tester.tap(find.byTooltip('Refresh Agent').first);
+    await tester.pump();
+
+    expect(refreshed, <AgentQuotaProviderId>[AgentQuotaProviderId.claude]);
+  });
 }
 
 Widget _wrap({
@@ -333,6 +366,7 @@ Widget _wrap({
   required AgentQuotaHostSettings settings,
   AgentQuotaPinToggle? onTogglePinned,
   VoidCallback? onOpenUsage,
+  AgentQuotaSnapshotRefresh? onRefreshSnapshot,
   double width = 1100,
 }) {
   return ProviderScope(
@@ -348,6 +382,7 @@ Widget _wrap({
               snapshots: snapshots,
               settings: settings,
               onRefresh: () {},
+              onRefreshSnapshot: onRefreshSnapshot,
               onTogglePinned: onTogglePinned ?? (_, _) {},
               onOpenUsage: onOpenUsage,
             ),

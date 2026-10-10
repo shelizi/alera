@@ -109,8 +109,9 @@ Future<_ShellPumpHarness> _pumpShell(
         agentProfilesProvider.overrideWith(() => _ShellAgentProfiles()),
         agentStatusControllerProvider.overrideWith(() => agentStatusController),
         agentQuotaStateProvider.overrideWith(
-          (ref) async =>
-              AgentQuotaState.empty(state.activeWorkspace?.hostId ?? 'local'),
+          () => _ShellAgentQuotaSnapshotList(
+            state.activeWorkspace?.hostId ?? 'local',
+          ),
         ),
         managedWorkspaceRuntimeProvider.overrideWithValue(
           const _FakeManagedWorkspaceRuntime(),
@@ -162,6 +163,15 @@ Future<_ShellPumpHarness> _pumpShell(
 class _ShellAgentProfiles extends AgentProfiles {
   @override
   Future<List<AgentProfile>> build() async => const <AgentProfile>[];
+}
+
+class _ShellAgentQuotaSnapshotList extends AgentQuotaSnapshotList {
+  _ShellAgentQuotaSnapshotList(this.hostId);
+
+  final String hostId;
+
+  @override
+  Future<AgentQuotaState> build() async => AgentQuotaState.empty(hostId);
 }
 
 void main() {

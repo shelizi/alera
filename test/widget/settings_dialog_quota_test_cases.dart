@@ -7,9 +7,7 @@ void _registerSettingsDialogQuotaTests() {
     final container = await _pumpSettingsDialog(
       tester,
       extraOverrides: <dynamic>[
-        agentQuotaStateProvider.overrideWith(
-          (ref) async => AgentQuotaState.empty('local'),
-        ),
+        agentQuotaStateProvider.overrideWith(_EmptyAgentQuotaSnapshotList.new),
       ],
     );
 
@@ -56,9 +54,7 @@ void _registerSettingsDialogQuotaTests() {
     final container = await _pumpSettingsDialog(
       tester,
       extraOverrides: <dynamic>[
-        agentQuotaStateProvider.overrideWith(
-          (ref) async => AgentQuotaState.empty('local'),
-        ),
+        agentQuotaStateProvider.overrideWith(_EmptyAgentQuotaSnapshotList.new),
       ],
     );
 
@@ -87,9 +83,7 @@ void _registerSettingsDialogQuotaTests() {
     final container = await _pumpSettingsDialog(
       tester,
       extraOverrides: <dynamic>[
-        agentQuotaStateProvider.overrideWith(
-          (ref) async => AgentQuotaState.empty('local'),
-        ),
+        agentQuotaStateProvider.overrideWith(_EmptyAgentQuotaSnapshotList.new),
       ],
     );
 
@@ -138,9 +132,7 @@ void _registerSettingsDialogQuotaTests() {
         agents: AleraSettings.defaults.agents.copyWith(quotas: quotaSettings),
       ),
       extraOverrides: <dynamic>[
-        agentQuotaStateProvider.overrideWith(
-          (ref) async => AgentQuotaState.empty('local'),
-        ),
+        agentQuotaStateProvider.overrideWith(_EmptyAgentQuotaSnapshotList.new),
       ],
     );
 
@@ -176,4 +168,9 @@ void _registerSettingsDialogQuotaTests() {
     expect(profile.showInUsage, isFalse);
     expect(find.text('Not shown in Usage'), findsOneWidget);
   });
+}
+
+class _EmptyAgentQuotaSnapshotList extends AgentQuotaSnapshotList {
+  @override
+  Future<AgentQuotaState> build() async => AgentQuotaState.empty('local');
 }

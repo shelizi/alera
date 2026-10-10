@@ -18,7 +18,8 @@ import 'agent_quota_status_bar_content.dart';
 import 'agent_quota_inline_actions.dart';
 import 'agent_quota_account_switch.dart';
 
-export 'agent_quota_status_bar_content.dart' show AgentQuotaPinToggle;
+export 'agent_quota_status_bar_content.dart'
+    show AgentQuotaPinToggle, AgentQuotaSnapshotRefresh;
 
 part 'agent_quota_codex_reset.dart';
 part 'agent_quota_claude_tui.dart';
@@ -42,6 +43,16 @@ class const AgentQuotaStatusBar({super.key, final Widget? trailing})
     void refresh() {
       ref.read(agentQuotaServiceProvider).requestForceRefresh(hostId);
       ref.invalidate(agentQuotaStateProvider);
+    }
+
+    Future<void> refreshSnapshot(AgentQuotaSnapshot snapshot) {
+      return ref
+          .read(agentQuotaStateProvider.notifier)
+          .refreshSnapshot(
+            hostId: hostId,
+            provider: snapshot.provider,
+            accountId: snapshot.accountId,
+          );
     }
 
     void togglePinned(String pinKey, bool pinned) {
@@ -69,6 +80,7 @@ class const AgentQuotaStatusBar({super.key, final Widget? trailing})
           accountSwitch: _buildAccountSwitch,
         ),
         onRefresh: refresh,
+        onRefreshSnapshot: refreshSnapshot,
         onTogglePinned: togglePinned,
         onOpenUsage: () => unawaited(openAgentUsageDialog(context)),
         trailing: trailing,
@@ -86,6 +98,7 @@ class const AgentQuotaStatusBar({super.key, final Widget? trailing})
           accountSwitch: _buildAccountSwitch,
         ),
         onRefresh: refresh,
+        onRefreshSnapshot: refreshSnapshot,
         onTogglePinned: togglePinned,
         onOpenUsage: () => unawaited(openAgentUsageDialog(context)),
         trailing: trailing,
@@ -101,6 +114,7 @@ class const AgentQuotaStatusBar({super.key, final Widget? trailing})
           accountSwitch: _buildAccountSwitch,
         ),
         onRefresh: refresh,
+        onRefreshSnapshot: refreshSnapshot,
         onTogglePinned: togglePinned,
         onOpenUsage: () => unawaited(openAgentUsageDialog(context)),
         trailing: trailing,
@@ -116,6 +130,7 @@ class const AgentQuotaStatusBar({super.key, final Widget? trailing})
           accountSwitch: _buildAccountSwitch,
         ),
         onRefresh: refresh,
+        onRefreshSnapshot: refreshSnapshot,
         onTogglePinned: togglePinned,
         onOpenUsage: () => unawaited(openAgentUsageDialog(context)),
         trailing: trailing,
@@ -131,6 +146,7 @@ class const AgentQuotaStatusBarView({
   required super.snapshots,
   required super.settings,
   required super.onRefresh,
+  super.onRefreshSnapshot,
   required super.onTogglePinned,
   super.loading,
   super.error,

@@ -164,6 +164,7 @@ pub enum ServerCommand {
         client_id: u64,
         request_id: i64,
         environment_signature: u64,
+        partial: bool,
         result: HostResult<Value>,
     },
     AgentQuotaClaudeTuiFinished {
