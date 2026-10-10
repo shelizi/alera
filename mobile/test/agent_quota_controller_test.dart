@@ -9,6 +9,38 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 void main() {
+  test('refresh one quota account keeps every other card unchanged', () {
+    QuotaSnapshot quota(String provider, String accountId, String title) =>
+        QuotaSnapshot(
+          provider: provider,
+          accountId: accountId,
+          displayName: title,
+          status: 'ok',
+          updatedAt: DateTime.utc(2026, 10, 10),
+          error: null,
+          windows: const [],
+          buckets: const [],
+        );
+    final oldCodex = quota('codex', 'a', 'old');
+    final oldClaude = quota('claude', 'b', 'untouched');
+    final newCodex = quota('codex', 'a', 'new');
+    final previous = QuotaSnapshotState(
+      snapshots: [oldCodex, oldClaude],
+      environment: const {'codex': true},
+      fetchedAt: DateTime.utc(2026, 10, 9),
+    );
+    final refreshed = QuotaSnapshotState(
+      snapshots: [newCodex, quota('claude', 'b', 'changed')],
+      environment: const {'codex': false},
+      fetchedAt: DateTime.utc(2026, 10, 10),
+    );
+    final result = mergeRefreshedQuotaAccount(previous, refreshed, oldCodex);
+    expect(result.snapshots[0], same(newCodex));
+    expect(result.snapshots[1], same(oldClaude));
+    expect(result.environment, {'codex': true});
+    expect(result.fetchedAt, previous.fetchedAt);
+  });
+
   testWidgets(
     'does not register a refresh timer after the controller is disposed',
     (tester) async {
