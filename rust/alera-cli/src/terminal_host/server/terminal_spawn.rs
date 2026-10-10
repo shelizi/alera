@@ -8,6 +8,9 @@ use crate::terminal_host::orchestration::agent_profile_launch_snapshot::AgentIni
 use crate::terminal_host::orchestration::agent_startup_command::{
     append_initial_prompt_argument_for, command_with_initial_prompt_for,
 };
+use crate::terminal_host::orchestration::codex_terminal_launch::{
+    isolate_codex_command, isolate_managed_codex_launch,
+};
 use crate::terminal_host::protocol::TerminalHostLaunch;
 use crate::terminal_host::session::Session;
 
@@ -228,6 +231,7 @@ impl ServerActor {
             mechanism(tab)?.or_else(|| descriptor.map(|item| item.startup_prompt.into()));
         let prompt_arguments = delivery.as_ref().zip(prompt.as_deref());
         let command = if let Some(mut launch) = managed_launch {
+            isolate_managed_codex_launch(descriptor.map(|item| item.id), &mut launch);
             if let Some((mechanism, prompt)) = prompt_arguments {
                 append_initial_prompt_argument_for(mechanism, &mut launch.arguments, prompt);
             }
@@ -239,6 +243,7 @@ impl ServerActor {
             )
         } else {
             initial_command(tab)?.map(|command| {
+                let command = isolate_codex_command(command);
                 let command = prompt_arguments
                     .map(|(mechanism, prompt)| {
                         command_with_initial_prompt_for(
