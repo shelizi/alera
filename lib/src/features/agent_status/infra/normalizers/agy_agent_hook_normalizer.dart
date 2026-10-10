@@ -14,6 +14,11 @@ final class _AgyAgentHookAdapter extends _AgentHookAdapter {
   ) => _normalizeAgyState(eventName, toolName, event.payload);
 
   @override
+  bool isInterrupted(AgentHookEvent event, String eventName) =>
+      (eventName == 'Stop' && _agyStopUserCanceled(event.payload)) ||
+      super.isInterrupted(event, eventName);
+
+  @override
   bool isNewTurn(String eventName) => _isAgyNewTurn(eventName);
 
   @override
@@ -115,6 +120,16 @@ AgentStatusState? _normalizeAgyState(
 
 bool _agyStopStillBusy(Map<String, Object?> payload) {
   return payload['fullyIdle'] == false || payload['fully_idle'] == false;
+}
+
+// Antigravity reports a cancelled turn as a Stop whose `terminationReason` is
+// `TERMINATION_REASON_USER_CANCELED`; there is no separate interrupt event.
+bool _agyStopUserCanceled(Map<String, Object?> payload) {
+  final reason = _readFirstString(payload, const <String>[
+    'terminationReason',
+    'termination_reason',
+  ]);
+  return reason?.toUpperCase().endsWith('USER_CANCELED') ?? false;
 }
 
 bool _isAgyNewTurn(String eventName) {

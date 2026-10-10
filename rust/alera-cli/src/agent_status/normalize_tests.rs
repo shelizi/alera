@@ -213,6 +213,49 @@ fn codex_interrupt_is_marked_interrupted() {
 }
 
 #[test]
+fn grok_stop_cancelled_is_marked_interrupted() {
+    let status = normalize_hook_event(
+        &event(
+            "grok",
+            "stop_cancelled",
+            json!({ "reason": "user_interrupt" }),
+        ),
+        None,
+    )
+    .expect("Grok StopCancelled status");
+
+    assert_eq!(status.state, AgentPresenceState::Done);
+    assert_eq!(status.interrupted, Some(true));
+}
+
+#[test]
+fn agy_stop_is_interrupted_only_when_the_user_cancelled() {
+    let cancelled = normalize_hook_event(
+        &event(
+            "agy",
+            "Stop",
+            json!({ "terminationReason": "TERMINATION_REASON_USER_CANCELED" }),
+        ),
+        None,
+    )
+    .expect("AGY cancelled Stop status");
+    assert_eq!(cancelled.state, AgentPresenceState::Done);
+    assert_eq!(cancelled.interrupted, Some(true));
+
+    let completed = normalize_hook_event(
+        &event(
+            "agy",
+            "Stop",
+            json!({ "terminationReason": "TERMINATION_REASON_NO_TOOL_CALL" }),
+        ),
+        None,
+    )
+    .expect("AGY completed Stop status");
+    assert_eq!(completed.state, AgentPresenceState::Done);
+    assert_eq!(completed.interrupted, None);
+}
+
+#[test]
 fn payload_sensitive_custom_handlers_keep_their_irregular_behavior() {
     let copilot = normalize_hook_event(
         &event(

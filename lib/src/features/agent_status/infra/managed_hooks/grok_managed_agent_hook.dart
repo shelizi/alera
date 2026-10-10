@@ -32,6 +32,7 @@ extension _GrokManagedAgentHook on ManagedAgentHookInstallService {
         _ManagedHookEvent('Notification'),
         _ManagedHookEvent('Stop'),
         _ManagedHookEvent('StopFailure'),
+        _ManagedHookEvent('StopCancelled'),
         _ManagedHookEvent('SessionEnd'),
       ],
     );

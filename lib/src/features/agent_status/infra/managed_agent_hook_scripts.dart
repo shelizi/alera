@@ -3,6 +3,7 @@ part of 'managed_agent_hook_installer.dart';
 const List<String> _managedHookCompletionEvents = <String>[
   'Stop',
   'StopFailure',
+  'StopCancelled',
   'SessionEnd',
   'Interrupt',
   'stop',

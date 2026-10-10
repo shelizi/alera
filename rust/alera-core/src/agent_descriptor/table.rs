@@ -271,6 +271,7 @@ const GROK_STATUS: &[AgentStatusNormalizationRule] = &[
     AgentStatusNormalizationRule::new("PostToolUseFailure", AgentStatusState::Working),
     AgentStatusNormalizationRule::new("Stop", AgentStatusState::Done),
     AgentStatusNormalizationRule::new("StopFailure", AgentStatusState::Done),
+    AgentStatusNormalizationRule::new("StopCancelled", AgentStatusState::Done),
     AgentStatusNormalizationRule::new("SessionEnd", AgentStatusState::Done),
 ];
 const DEVIN_STATUS: &[AgentStatusNormalizationRule] = &[

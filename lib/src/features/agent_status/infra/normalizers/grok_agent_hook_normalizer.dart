@@ -18,6 +18,12 @@ final class _GrokAgentHookAdapter extends _AgentHookAdapter {
     AgentStatusEntry? previous,
   ) => _normalizeGrokState(eventName, event.payload);
 
+  // Grok fires StopCancelled instead of Stop when a turn is interrupted or a
+  // permission prompt is declined.
+  @override
+  bool isInterrupted(AgentHookEvent event, String eventName) =>
+      eventName == 'StopCancelled' || super.isInterrupted(event, eventName);
+
   @override
   bool isNewTurn(String eventName) => _isGrokNewTurn(eventName);
 
@@ -69,7 +75,10 @@ AgentStatusState? _normalizeGrokState(
     'PreToolUse' ||
     'PostToolUse' ||
     'PostToolUseFailure' => AgentStatusState.working,
-    'Stop' || 'StopFailure' || 'SessionEnd' => AgentStatusState.done,
+    'Stop' ||
+    'StopFailure' ||
+    'StopCancelled' ||
+    'SessionEnd' => AgentStatusState.done,
     'SessionStart' => null,
     _ => null,
   };
@@ -93,6 +102,7 @@ String? _normalizeGrokEventName(String? eventName) {
     'notification' => 'Notification',
     'stop' => 'Stop',
     'stopfailure' => 'StopFailure',
+    'stopcancelled' => 'StopCancelled',
     'sessionend' => 'SessionEnd',
     _ => eventName,
   };

@@ -154,7 +154,7 @@ fn normalize_grok(event: &AgentHookEvent, name: &str) -> Option<AgentPresenceSta
         "UserPromptSubmit" | "PreToolUse" | "PostToolUse" | "PostToolUseFailure" => {
             Some(AgentPresenceState::Working)
         }
-        "Stop" | "StopFailure" | "SessionEnd" => Some(AgentPresenceState::Done),
+        "Stop" | "StopFailure" | "StopCancelled" | "SessionEnd" => Some(AgentPresenceState::Done),
         _ => None,
     }
 }
@@ -205,6 +205,7 @@ fn normalized_event_name(event: &AgentHookEvent) -> Option<String> {
                 "notification" => "Notification",
                 "stop" => "Stop",
                 "stopfailure" => "StopFailure",
+                "stopcancelled" => "StopCancelled",
                 "sessionend" => "SessionEnd",
                 _ => return Some(raw),
             }
@@ -343,8 +344,19 @@ fn interrupted(event: &AgentHookEvent, name: &str, state: AgentPresenceState) ->
         || bool_field(&event.payload, "is_interrupt") == Some(true)
         || first_string(&event.payload, &["status"]).as_deref() == Some("cancelled")
         || name == "Interrupt"
+        || name == "StopCancelled"
+        || agy_stop_user_canceled(event, name)
         || name.contains("Failure");
     interrupted.then_some(true)
+}
+
+// Antigravity reports a cancelled turn as a Stop whose `terminationReason` is
+// `TERMINATION_REASON_USER_CANCELED`; there is no separate interrupt event.
+fn agy_stop_user_canceled(event: &AgentHookEvent, name: &str) -> bool {
+    event.agent_type == "agy"
+        && name == "Stop"
+        && first_string(&event.payload, &["terminationReason", "termination_reason"])
+            .is_some_and(|reason| reason.to_ascii_uppercase().ends_with("USER_CANCELED"))
 }
 
 fn first_string(value: &Value, keys: &[&str]) -> Option<String> {

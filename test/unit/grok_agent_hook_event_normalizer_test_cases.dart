@@ -87,4 +87,26 @@ void _registerGrokAgentHookEventNormalizerTests() {
       );
     }
   });
+
+  test('marks a Grok StopCancelled turn as interrupted', () {
+    final cancelled = normalizeAgentHookEvent(
+      _event(
+        agentType: .grok,
+        hookEventName: 'stop_cancelled',
+        payload: const <String, Object?>{'reason': 'user_interrupt'},
+      ),
+    );
+    expect(cancelled?.state, AgentStatusState.done);
+    expect(cancelled?.interrupted, isTrue);
+
+    final completed = normalizeAgentHookEvent(
+      _event(
+        agentType: .grok,
+        hookEventName: 'Stop',
+        payload: const <String, Object?>{},
+      ),
+    );
+    expect(completed?.state, AgentStatusState.done);
+    expect(completed?.interrupted, isNot(true));
+  });
 }

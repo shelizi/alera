@@ -172,6 +172,7 @@ fn install_grok(script: &Path) -> anyhow::Result<()> {
         ("Notification", None),
         ("Stop", None),
         ("StopFailure", None),
+        ("StopCancelled", None),
         ("SessionEnd", None),
     ]
     .into_iter()

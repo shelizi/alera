@@ -62,7 +62,7 @@ if [ -z "$payload" ]; then payload='{}'; fi
 # small bounded retry window.
 alera_completion_event=0
 case "$ALERA_AGENT_HOOK_EVENT" in
-  Stop|StopFailure|SessionEnd|Interrupt|stop|sessionEnd|SessionIdle|agent_settled|session_shutdown|agent.end|ErrorOccurred)
+  Stop|StopFailure|StopCancelled|SessionEnd|Interrupt|stop|sessionEnd|SessionIdle|agent_settled|session_shutdown|agent.end|ErrorOccurred)
     alera_completion_event=1
     ;;
 esac
@@ -122,7 +122,7 @@ if "%ALERA_AGENT_HOOK_TOKEN%"=="" exit /b 0
 if "%ALERA_TERMINAL_SESSION_ID%"=="" exit /b 0
 if "%ALERA_WORKSPACE_ID%"=="" exit /b 0
 if "%ALERA_TAB_ID%"=="" exit /b 0
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$utf8=[System.Text.UTF8Encoding]::new($false); [Console]::InputEncoding=$utf8; $inputData=[Console]::In.ReadToEnd(); if ([string]::IsNullOrWhiteSpace($inputData)) { $inputData='{}' }; try { $body=@{ terminalSessionId=$env:ALERA_TERMINAL_SESSION_ID; workspaceId=$env:ALERA_WORKSPACE_ID; tabId=$env:ALERA_TAB_ID; hookEventName=$env:ALERA_AGENT_HOOK_EVENT; version=$env:ALERA_AGENT_HOOK_VERSION; payload=($inputData | ConvertFrom-Json) } | ConvertTo-Json -Depth 100 -Compress; $bodyBytes=$utf8.GetBytes($body) } catch { exit 0 }; $completionEvents=@('Stop','StopFailure','SessionEnd','Interrupt','stop','sessionEnd','SessionIdle','agent_settled','session_shutdown','agent.end','ErrorOccurred'); $attempts=1; if ($completionEvents -contains $env:ALERA_AGENT_HOOK_EVENT) { $attempts=3 }; for ($attempt=1; $attempt -le $attempts; $attempt++) { try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 1 -Method Post -Uri ('http://127.0.0.1:' + $env:ALERA_AGENT_HOOK_PORT + '/hook/' + $env:ALERA_AGENT_TYPE) -ContentType 'application/json; charset=utf-8' -Headers @{ 'X-Alera-Agent-Hook-Token'=$env:ALERA_AGENT_HOOK_TOKEN } -Body $bodyBytes | Out-Null; break } catch {} if ($attempt -lt $attempts) { Start-Sleep -Milliseconds (50 * $attempt) } }"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$utf8=[System.Text.UTF8Encoding]::new($false); [Console]::InputEncoding=$utf8; $inputData=[Console]::In.ReadToEnd(); if ([string]::IsNullOrWhiteSpace($inputData)) { $inputData='{}' }; try { $body=@{ terminalSessionId=$env:ALERA_TERMINAL_SESSION_ID; workspaceId=$env:ALERA_WORKSPACE_ID; tabId=$env:ALERA_TAB_ID; hookEventName=$env:ALERA_AGENT_HOOK_EVENT; version=$env:ALERA_AGENT_HOOK_VERSION; payload=($inputData | ConvertFrom-Json) } | ConvertTo-Json -Depth 100 -Compress; $bodyBytes=$utf8.GetBytes($body) } catch { exit 0 }; $completionEvents=@('Stop','StopFailure','StopCancelled','SessionEnd','Interrupt','stop','sessionEnd','SessionIdle','agent_settled','session_shutdown','agent.end','ErrorOccurred'); $attempts=1; if ($completionEvents -contains $env:ALERA_AGENT_HOOK_EVENT) { $attempts=3 }; for ($attempt=1; $attempt -le $attempts; $attempt++) { try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 1 -Method Post -Uri ('http://127.0.0.1:' + $env:ALERA_AGENT_HOOK_PORT + '/hook/' + $env:ALERA_AGENT_TYPE) -ContentType 'application/json; charset=utf-8' -Headers @{ 'X-Alera-Agent-Hook-Token'=$env:ALERA_AGENT_HOOK_TOKEN } -Body $bodyBytes | Out-Null; break } catch {} if ($attempt -lt $attempts) { Start-Sleep -Milliseconds (50 * $attempt) } }"
 exit /b 0
 "#;
 
