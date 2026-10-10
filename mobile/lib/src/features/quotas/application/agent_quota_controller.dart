@@ -44,13 +44,18 @@ class AgentQuotaController extends _$AgentQuotaController {
     }
   }
 
-  /// Older runtimes fetch all providers. Keep the other cards stable while
-  /// applying only the selected account from that response.
+  /// New hosts refresh only the selected account; older hosts fall back to a
+  /// full fetch while preserving the other cards' last known values.
   Future<void> refreshAccount(QuotaSnapshot account) async {
     final client = await ref.read(
       hostConnectionControllerProvider(hostId).future,
     );
-    final refreshed = await client.fetchAgentQuotas(forceRefresh: true);
+    final refreshed = client.supportsAgentQuotaPartialRefresh
+        ? await client.fetchAgentQuotaAccount(
+            provider: account.provider,
+            accountId: account.accountId,
+          )
+        : await client.fetchAgentQuotas(forceRefresh: true);
     if (!ref.mounted) return;
     final previous = state.value;
     if (previous == null) {

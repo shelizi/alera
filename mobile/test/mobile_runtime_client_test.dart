@@ -14,6 +14,77 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 void main() {
   tearDown(CrashReporting.resetForTesting);
 
+  test(
+    'quota account refresh uses a capability-gated filtered request',
+    () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final sockets = <WebSocket>[];
+      final requests = <Map<String, Object?>>[];
+      addTearDown(() async {
+        for (final socket in sockets) {
+          await socket.close();
+        }
+        await server.close(force: true);
+      });
+      final subscription = server.listen((request) async {
+        final socket = await WebSocketTransformer.upgrade(request);
+        sockets.add(socket);
+        socket.listen((raw) {
+          final message = jsonDecode(raw as String) as Map<String, Object?>;
+          requests.add(message);
+          socket.add(
+            jsonEncode(<String, Object?>{
+              'id': message['id'],
+              'ok': true,
+              'payload': message['type'] == 'mobile.hello'
+                  ? <String, Object?>{
+                      'runtimeCapabilities': <String>[
+                        mobileAgentQuotaCapability,
+                        mobileAgentQuotaPartialRefreshCapability,
+                      ],
+                    }
+                  : <String, Object?>{
+                      'snapshots': <Object?>[
+                        <String, Object?>{
+                          'provider': 'claude',
+                          'accountId': 'work',
+                          'displayName': 'Work',
+                          'status': 'ok',
+                          'updatedAt': 0,
+                          'windows': <Object?>[],
+                          'buckets': <Object?>[],
+                        },
+                      ],
+                      'environment': <String, Object?>{},
+                    },
+            }),
+          );
+        });
+      });
+      addTearDown(subscription.cancel);
+      final client = await MobileRuntimeClient.connect(
+        'ws://${server.address.address}:${server.port}',
+      );
+      addTearDown(client.dispose);
+      expect(client.supportsAgentQuotaPartialRefresh, isFalse);
+      await client.authenticate(deviceId: 'device', deviceToken: 'token');
+      expect(client.supportsAgentQuotaPartialRefresh, isTrue);
+      final refreshed = await client.fetchAgentQuotaAccount(
+        provider: 'claude',
+        accountId: 'work',
+      );
+      expect(refreshed.snapshots.single.accountId, 'work');
+      final request = requests.singleWhere(
+        (entry) => entry['type'] == 'agentQuota.snapshot',
+      );
+      expect(request['payload'], <String, Object?>{
+        'forceRefresh': true,
+        'provider': 'claude',
+        'accountId': 'work',
+      });
+    },
+  );
+
   test('Creates Account Enrollment Through A Capable Paired Host', () async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     final sockets = <WebSocket>[];
