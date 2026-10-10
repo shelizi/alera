@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+
 import 'package:alera_mobile/src/app/theme/alera_theme.dart';
 import 'package:alera_mobile/src/features/ai_dictation/application/mobile_ai_dictation_controller.dart';
 import 'package:alera_mobile/src/features/ai_dictation/application/mobile_ai_dictation_model_transfers.dart';
@@ -174,27 +176,35 @@ void main() {
     expect(find.text('API Token'), findsNothing);
   });
 
-  testWidgets('direct OpenAI mobile settings golden', (tester) async {
-    await tester.binding.setSurfaceSize(const Size(390, 844));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-    await tester.pumpWidget(
-      _settingsApp(
-        const MobileAiDictationSettings(
-          enabled: true,
-          engine: .openAiCompatible,
-          remoteAudioConsentVersion: 1,
+  testWidgets(
+    'direct OpenAI mobile settings golden',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(390, 844));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        _settingsApp(
+          const MobileAiDictationSettings(
+            enabled: true,
+            engine: .openAiCompatible,
+            remoteAudioConsentVersion: 1,
+          ),
         ),
-      ),
-    );
-    await tester.pumpAndSettle();
-    await tester.ensureVisible(find.text('Remote Provider'));
-    await tester.pumpAndSettle();
+      );
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.text('Remote Provider'));
+      await tester.pumpAndSettle();
 
-    await expectLater(
-      find.byType(MobileAiDictationSettingsScreen),
-      matchesGoldenFile('goldens/ai_dictation_openai_direct.png'),
-    );
-  });
+      await expectLater(
+        find.byType(MobileAiDictationSettingsScreen),
+        matchesGoldenFile('goldens/ai_dictation_openai_direct.png'),
+      );
+    },
+    // Flutter's Windows renderer differs from the checked-in Linux golden
+    // by about 1% of pixels even when widget/layout assertions pass. Keep
+    // the exact golden gate enabled on Linux CI instead of rewriting it from
+    // this Windows machine or globally relaxing image tolerance.
+    skip: Platform.isWindows,
+  );
 }
 
 Widget _settingsApp(MobileAiDictationSettings settings) {

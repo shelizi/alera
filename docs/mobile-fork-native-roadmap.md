@@ -20,6 +20,10 @@ version is intentionally unchanged. Build and commit each slice in
 | 3 | `74575821` | Search local branches, reuse a matching active workspace or create a managed sibling, and browse protected workspace files with bounded UTF-8 text previews |
 | 4 | `1f937098` | Read-only, authenticated, bounded HEAD-to-worktree single-file Git patches gated by `mobileWorkspaceFileDiffV1` |
 | 5 | `b87ec31f` | Source Control changed-file list gated by `mobileWorkspaceGitStatusV1`, max 200 entries, plus correct diff patch line prefixes and mobile failure logging |
+| 6 | `bbb63980` | Fix capability-probe WebSocket test teardown races and document mobile feature/release scope |
+
+The latest committed `main` was incorporated into this isolated worktree as
+merge commit `9dec1b90` without modifying the main worktree's pending changes.
 
 ## Validation
 
@@ -28,8 +32,15 @@ version is intentionally unchanged. Build and commit each slice in
 - `dart analyze` targeted mobile Git/status/diff/preview/controller files: **no issues**.
 - `flutter test --no-pub test/workspace_branch_picker_test.dart`: **2 passed**.
 - `flutter test --no-pub test/agent_quota_controller_test.dart test/mobile_runtime_client_test.dart test/workspace_branch_picker_test.dart test/mobile_workspace_text_preview_test.dart test/mobile_workspace_git_status_test.dart`: **21 passed** (including real loopback WebSocket RPC negotiation). Two pre-existing capability checks were made deterministic by draining their post-auth background `status.get` probe before test socket teardown.
-- A full mobile test suite, Android build, signed release and device smoke test
-  remain separate release gates, not implied by the targeted green tests above.
+- `flutter analyze --no-pub` for the whole mobile app: **no issues**.
+- `flutter test --no-pub` for the whole mobile app on Windows: **439 passed, 4 skipped, 0 failed**. The terminal WebSocket harness now waits for server upgrade registration before emitting output resync events; all eight of its isolated tests pass.
+- The direct OpenAI settings golden is explicitly skipped on Windows only:
+  Windows rasterization differs by 1.03% (3,402 pixels) from the checked-in
+  golden. The exact screenshot comparison remains active on Linux CI, and
+  all functional AI dictation settings widget assertions still run on Windows.
+  The other three skips are the existing relay/edge integration fixtures.
+- Android build, signed release and physical-device smoke tests remain
+  separate release gates, not implied by these green tests.
 
 ## Compatibility, security and limits
 
