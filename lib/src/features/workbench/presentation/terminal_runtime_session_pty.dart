@@ -36,8 +36,8 @@ extension _XtermTerminalSessionPty on _XtermTerminalSessionHandle {
         await session.start(
           launch: prepared.workspaceLaunch,
           workingDirectory: withoutWindowsPathPrefix(_workspace.path),
-          cols: _terminal.viewWidth,
-          rows: _terminal.viewHeight,
+          cols: _requestedCols,
+          rows: _requestedRows,
           onProcessCreated: () => _launchInputOwner.onProcessCreated(
             terminalSessionId: _tab.terminalSessionId,
             session: session,

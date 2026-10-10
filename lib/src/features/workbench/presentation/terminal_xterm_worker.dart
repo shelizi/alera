@@ -7,6 +7,7 @@ import 'package:xterm2/xterm.dart';
 
 import '../domain/terminal_mode_reset.dart';
 import '../domain/terminal_osc52_clipboard.dart';
+import 'terminal_xterm_worker_packed_cells.dart';
 
 const String _workerReady = 'ready';
 const String _workerWrite = 'write';
@@ -23,7 +24,9 @@ const String _workerProfilePackedSnapshotBufferDelta =
     'profilePackedSnapshotBufferDelta';
 const String _workerResize = 'resize';
 const String _packedBufferRowsTag = 'packedBufferRowsV1';
-const int _packedCellStride = 8;
+const String _packedSpanRowsTag = 'packedSpanRowsV1';
+const int _packedSpanHeaderWords = 5;
+const int _packedCellStride = terminalXtermPackedCellStride;
 const String _workerResizeDelta = 'resizeDelta';
 const String _workerResizeBufferDelta = 'resizeBufferDelta';
 const String _workerKeyInput = 'keyInput';
@@ -370,6 +373,87 @@ final class TerminalXtermWorkerRowDelta {
   final bool isSemanticPromptLine;
 }
 
+typedef _TerminalXtermWorkerChangedSpan = ({
+  int row,
+  BufferLine line,
+  int start,
+  int end,
+});
+
+int _packCellWords(Uint32List words, int offset, BufferLine line, int column) {
+  words[offset] = line.getWidth(column).toUnsigned(32);
+  words[offset + 1] = line.getForeground(column).toUnsigned(32);
+  words[offset + 2] = line.getBackground(column).toUnsigned(32);
+  words[offset + 3] = line.getAttributes(column).toUnsigned(32);
+  words[offset + 4] = line.getUnderlineColor(column).toUnsigned(32);
+  words[offset + 5] = line.getContent(column).toUnsigned(32);
+  words[offset + 6] = line.getHyperlinkId(column).toUnsigned(32);
+  words[offset + 7] = line.getSemanticContent(column).toUnsigned(32);
+  return offset + _packedCellStride;
+}
+
+List<TerminalXtermWorkerRowDelta> _decodePackedSpanRows(List<Object?> raw) {
+  if (raw.length != 4) {
+    throw StateError('Unexpected packed terminal row span payload.');
+  }
+  final rowTexts = List<String>.from(raw[1]! as List);
+  final packed = raw[2];
+  if (packed is! TransferableTypedData) {
+    throw StateError('Packed terminal row spans are missing cell data.');
+  }
+  final words = packed.materialize().asUint32List();
+  final combining = raw[3]! as List;
+  final rows = <TerminalXtermWorkerRowDelta>[];
+  var wordOffset = 0;
+  var combiningOffset = 0;
+  var payloadCell = 0;
+  for (var index = 0; index < rowTexts.length; index++) {
+    if (wordOffset + _packedSpanHeaderWords > words.length) {
+      throw StateError('Packed terminal span header is truncated.');
+    }
+    final row = words[wordOffset];
+    final rowLength = words[wordOffset + 1];
+    final cellStart = words[wordOffset + 2];
+    final cellCount = words[wordOffset + 3];
+    final flags = words[wordOffset + 4];
+    wordOffset += _packedSpanHeaderWords;
+    if (wordOffset + cellCount * _packedCellStride > words.length) {
+      throw StateError('Packed terminal span cells are truncated at row $row.');
+    }
+    final spanEnd = payloadCell + cellCount;
+    Map<int, String>? spanCombining;
+    while (combiningOffset < combining.length &&
+        (combining[combiningOffset]! as int) < spanEnd) {
+      final cell = combining[combiningOffset]! as int;
+      (spanCombining ??= <int, String>{})[cell - payloadCell] =
+          combining[combiningOffset + 1]! as String;
+      combiningOffset += 2;
+    }
+    rows.add(
+      TerminalXtermWorkerRowDelta(
+        row: row,
+        rowLength: rowLength,
+        cellStart: cellStart,
+        text: rowTexts[index],
+        cells: TerminalXtermWorkerPackedCells(
+          words,
+          wordOffset,
+          cellCount,
+          spanCombining,
+        ),
+        isWrapped: flags & 1 != 0,
+        isSemanticPromptLine: flags & 2 != 0,
+      ),
+    );
+    wordOffset += cellCount * _packedCellStride;
+    payloadCell = spanEnd;
+  }
+  if (wordOffset != words.length || combiningOffset != combining.length) {
+    throw StateError('Packed terminal row span payload has trailing data.');
+  }
+  return rows;
+}
+
 List<TerminalXtermWorkerRowDelta> _decodePackedWorkerRows(Object? raw) {
   final message = List<Object?>.from(raw! as List);
   if (message.length != 4 || message[0] != _packedBufferRowsTag) {
@@ -395,34 +479,26 @@ List<TerminalXtermWorkerRowDelta> _decodePackedWorkerRows(Object? raw) {
     }
     final rowLength = words[wordOffset++];
     final flags = words[wordOffset++];
-    final cells = List<TerminalXtermWorkerRenderCell>.generate(rowLength, (
-      column,
-    ) {
-      if (wordOffset + _packedCellStride > words.length) {
-        throw StateError(
-          'Packed terminal cell data is truncated at row $row column $column.',
-        );
-      }
-      String? combiningCharacters;
-      if (combiningOffset < combining.length &&
-          combining[combiningOffset] == absoluteCell) {
-        combiningCharacters = combining[combiningOffset + 1]! as String;
-        combiningOffset += 2;
-      }
-      final cell = TerminalXtermWorkerRenderCell(
-        width: words[wordOffset++],
-        foreground: words[wordOffset++],
-        background: words[wordOffset++],
-        attributes: words[wordOffset++],
-        underlineColor: words[wordOffset++],
-        content: words[wordOffset++],
-        hyperlinkId: words[wordOffset++],
-        semanticAttributes: words[wordOffset++],
-        combiningCharacters: combiningCharacters,
-      );
-      absoluteCell += 1;
-      return cell;
-    }, growable: false);
+    if (wordOffset + rowLength * _packedCellStride > words.length) {
+      throw StateError('Packed terminal cell data is truncated at row $row.');
+    }
+    final rowEnd = absoluteCell + rowLength;
+    Map<int, String>? rowCombining;
+    while (combiningOffset < combining.length &&
+        (combining[combiningOffset]! as int) < rowEnd) {
+      final cell = combining[combiningOffset]! as int;
+      (rowCombining ??= <int, String>{})[cell - absoluteCell] =
+          combining[combiningOffset + 1]! as String;
+      combiningOffset += 2;
+    }
+    final cells = TerminalXtermWorkerPackedCells(
+      words,
+      wordOffset,
+      rowLength,
+      rowCombining,
+    );
+    wordOffset += rowLength * _packedCellStride;
+    absoluteCell = rowEnd;
     rows.add(
       TerminalXtermWorkerRowDelta(
         row: row,
@@ -1275,15 +1351,16 @@ final class TerminalXtermWorkerBufferDelta {
 
   factory TerminalXtermWorkerBufferDelta._fromMessage(List<Object?> message) {
     final rawRows = message[6]! as List;
-    final rowDeltas =
-        rawRows.isNotEmpty && rawRows.first == _packedBufferRowsTag
-        ? _decodePackedWorkerRows(rawRows)
-        : <TerminalXtermWorkerRowDelta>[
-            for (final raw in rawRows)
-              TerminalXtermWorkerRowDelta._fromMessage(
-                List<Object?>.from(raw as List),
-              ),
-          ];
+    final rowDeltas = switch (rawRows.isEmpty ? null : rawRows.first) {
+      _packedBufferRowsTag => _decodePackedWorkerRows(rawRows),
+      _packedSpanRowsTag => _decodePackedSpanRows(List<Object?>.from(rawRows)),
+      _ => <TerminalXtermWorkerRowDelta>[
+        for (final raw in rawRows)
+          TerminalXtermWorkerRowDelta._fromMessage(
+            List<Object?>.from(raw as List),
+          ),
+      ],
+    };
     return TerminalXtermWorkerBufferDelta(
       fullRepaint: message[0]! as bool,
       cols: message[1]! as int,
@@ -2064,18 +2141,7 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
             hyperlinkUpdates[hyperlinkId] = uri;
           }
         }
-        packedWords[wordOffset++] = line.getWidth(column).toUnsigned(32);
-        packedWords[wordOffset++] = line.getForeground(column).toUnsigned(32);
-        packedWords[wordOffset++] = line.getBackground(column).toUnsigned(32);
-        packedWords[wordOffset++] = line.getAttributes(column).toUnsigned(32);
-        packedWords[wordOffset++] = line
-            .getUnderlineColor(column)
-            .toUnsigned(32);
-        packedWords[wordOffset++] = line.getContent(column).toUnsigned(32);
-        packedWords[wordOffset++] = hyperlinkId.toUnsigned(32);
-        packedWords[wordOffset++] = line
-            .getSemanticContent(column)
-            .toUnsigned(32);
+        wordOffset = _packCellWords(packedWords, wordOffset, line, column);
         absoluteCell += 1;
       }
     }
@@ -2125,6 +2191,63 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
       ],
       0,
       cachedRowCount,
+    ];
+  }
+
+  /// Packs changed row spans into one typed buffer.
+  ///
+  /// A per-cell message list costs an allocation per field on both isolates,
+  /// which made a large flush (a fast `cat`, an agent reprinting its
+  /// transcript) spend most of its time copying and decoding messages.
+  List<Object?> packedSpanRows(
+    List<_TerminalXtermWorkerChangedSpan> spans,
+    Map<int, String> hyperlinkUpdates,
+  ) {
+    if (spans.isEmpty) return const <Object?>[];
+    var totalCells = 0;
+    for (final span in spans) {
+      totalCells += span.end - span.start;
+    }
+    final words = Uint32List(
+      spans.length * _packedSpanHeaderWords + totalCells * _packedCellStride,
+    );
+    final rowTexts = List<String>.filled(spans.length, '', growable: false);
+    final combiningEntries = <Object?>[];
+    var wordOffset = 0;
+    var payloadCell = 0;
+    for (var index = 0; index < spans.length; index++) {
+      final (:row, :line, :start, :end) = spans[index];
+      rowTexts[index] = line.toString();
+      words[wordOffset++] = row;
+      words[wordOffset++] = line.length;
+      words[wordOffset++] = start;
+      words[wordOffset++] = end - start;
+      words[wordOffset++] =
+          (line.isWrapped ? 1 : 0) |
+          (terminal.isSemanticPromptLine(row) ? 2 : 0);
+      for (var column = start; column < end; column++) {
+        final combining = line.getCombiningCharacters(column);
+        if (combining != null) {
+          combiningEntries
+            ..add(payloadCell)
+            ..add(combining);
+        }
+        final hyperlinkId = line.getHyperlinkId(column);
+        if (hyperlinkId != 0 && !hyperlinkUpdates.containsKey(hyperlinkId)) {
+          final uri = terminal.hyperlinkAt(CellOffset(column, row));
+          if (uri != null) {
+            hyperlinkUpdates[hyperlinkId] = uri;
+          }
+        }
+        wordOffset = _packCellWords(words, wordOffset, line, column);
+        payloadCell += 1;
+      }
+    }
+    return <Object?>[
+      _packedSpanRowsTag,
+      rowTexts,
+      TransferableTypedData.fromList(<TypedData>[words]),
+      combiningEntries,
     ];
   }
 
@@ -2189,7 +2312,7 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
       return packedFullBufferDelta();
     }
 
-    final changedRows = <Object?>[];
+    final changedSpans = <_TerminalXtermWorkerChangedSpan>[];
     final hyperlinkUpdates = <int, String>{};
     var comparedRowCount = 0;
     final currentScrollBack = terminal.buffer.scrollBack;
@@ -2249,17 +2372,9 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
       final cellStart = changedSpan?.start ?? 0;
       final cellEnd =
           changedSpan?.end ?? (previousCache == null ? line.length : 0);
-      changedRows.add(
-        rowMessage(
-          row,
-          line,
-          bufferRow: row,
-          hyperlinkUpdates: hyperlinkUpdates,
-          cellStart: cellStart,
-          cellEnd: cellEnd,
-        ),
-      );
+      changedSpans.add((row: row, line: line, start: cellStart, end: cellEnd));
     }
+    final changedRows = packedSpanRows(changedSpans, hyperlinkUpdates);
 
     if (retainedRows > 0) {
       // Shift the retained prefix into place and append the revisited rows,

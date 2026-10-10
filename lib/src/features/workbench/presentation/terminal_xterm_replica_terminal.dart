@@ -1,10 +1,12 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:xterm2/xterm.dart';
 
 import '../domain/terminal_osc52_clipboard.dart';
 import 'terminal_xterm_buffer_model.dart';
 import 'terminal_xterm_worker.dart';
+import 'terminal_xterm_replica_row_writer.dart';
 
 /// UI-isolate xterm state replica fed by [TerminalXtermWorker] deltas.
 ///
@@ -49,12 +51,80 @@ final class TerminalXtermReplicaTerminal extends Terminal {
   bool _notificationsEnabled;
   bool _notificationPending = false;
   bool _applyingReplicaDelta = false;
+  int? _requestedViewWidth;
+  int? _requestedViewHeight;
   bool _synchronizedUpdateSuppressed = false;
   bool _synchronizedUpdateNotificationPending = false;
   int _synchronizedUpdateGeneration = -1;
   Timer? _synchronizedUpdateReleaseTimer;
 
+  final TerminalXtermReplicaRowWriter _rowWriter =
+      TerminalXtermReplicaRowWriter();
+
   TerminalXtermBufferModel get replicaModel => _model;
+
+  /// The size the view last asked for. It equals [viewWidth] and [viewHeight]
+  /// once the worker has applied it and its repaint has arrived.
+  int get requestedViewWidth => _requestedViewWidth ?? viewWidth;
+  int get requestedViewHeight => _requestedViewHeight ?? viewHeight;
+
+  /// Forwards a view resize to the session instead of reflowing locally.
+  ///
+  /// The worker owns the buffer and answers a resize with a full repaint, so a
+  /// local reflow of the whole scrollback on the UI isolate was pure waste, and
+  /// output deltas still in flight at the old size would then resize the
+  /// replica straight back. Before a session attaches [onResize] there is no
+  /// worker to forward to, so the size applies locally.
+  @override
+  void resize(
+    int newWidth,
+    int newHeight, [
+    int? pixelWidth,
+    int? pixelHeight,
+  ]) {
+    final forward = onResize;
+    if (forward == null || _disposed) {
+      super.resize(newWidth, newHeight, pixelWidth, pixelHeight);
+      return;
+    }
+    newWidth = math.max(newWidth, 1);
+    newHeight = math.max(newHeight, 1);
+    if (newWidth == viewWidth && newHeight == viewHeight) {
+      final abandonedRequest = _requestedViewWidth != null;
+      _requestedViewWidth = null;
+      _requestedViewHeight = null;
+      super.resize(newWidth, newHeight, pixelWidth, pixelHeight);
+      if (abandonedRequest) {
+        // The view went back to the size the worker already has; replace the
+        // pending request so the session does not apply the abandoned one.
+        forward(newWidth, newHeight, pixelWidth ?? 0, pixelHeight ?? 0);
+      }
+      return;
+    }
+    _requestedViewWidth = newWidth;
+    _requestedViewHeight = newHeight;
+    forward(newWidth, newHeight, pixelWidth ?? 0, pixelHeight ?? 0);
+  }
+
+  void _resizeToWorker(int cols, int rows, {required bool reflow}) {
+    // Echoing the worker's size through onResize would overwrite a newer
+    // pending view size with this one, leaving the PTY at a stale size.
+    final forward = onResize;
+    final reflowWas = reflowEnabled;
+    onResize = null;
+    // A full repaint replaces every row, so reflowing them first is wasted.
+    reflowEnabled = reflowWas && reflow;
+    try {
+      super.resize(cols, rows);
+    } finally {
+      onResize = forward;
+      reflowEnabled = reflowWas;
+    }
+    if (_requestedViewWidth == cols && _requestedViewHeight == rows) {
+      _requestedViewWidth = null;
+      _requestedViewHeight = null;
+    }
+  }
 
   void setNotificationsEnabled(bool enabled, {bool flushPending = true}) {
     _notificationsEnabled = enabled;
@@ -94,7 +164,7 @@ final class TerminalXtermReplicaTerminal extends Terminal {
     _applyingReplicaDelta = true;
     try {
       if (super.viewWidth != delta.cols || super.viewHeight != delta.rows) {
-        super.resize(delta.cols, delta.rows);
+        _resizeToWorker(delta.cols, delta.rows, reflow: !delta.fullRepaint);
       }
 
       final target = super.mainBuffer.lines;
@@ -105,7 +175,7 @@ final class TerminalXtermReplicaTerminal extends Terminal {
           growable: false,
         );
         for (final changed in delta.rowDeltas) {
-          rows[changed.row] = _buildLine(changed);
+          rows[changed.row] = _rowWriter.buildLine(changed);
         }
         if (rows.any((line) => line == null)) {
           throw StateError(
@@ -119,10 +189,10 @@ final class TerminalXtermReplicaTerminal extends Terminal {
         }
         for (final changed in delta.rowDeltas) {
           if (changed.row == target.length) {
-            target.push(_buildLine(changed));
+            target.push(_rowWriter.buildLine(changed));
           } else if (changed.row >= 0 && changed.row < target.length) {
             final line = target[changed.row];
-            _applyRowDelta(line, changed);
+            _rowWriter.applyRowDelta(line, changed);
           } else {
             throw StateError(
               'Terminal xterm replica received invalid row ${changed.row}.',
@@ -218,60 +288,6 @@ final class TerminalXtermReplicaTerminal extends Terminal {
     if (!_synchronizedUpdateNotificationPending) return;
     _synchronizedUpdateNotificationPending = false;
     notifyListeners();
-  }
-
-  BufferLine _buildLine(TerminalXtermWorkerRowDelta row) {
-    if (row.cellStart != 0 || row.cells.length != row.rowLength) {
-      throw StateError(
-        'Terminal xterm replica full row ${row.row} returned cell span '
-        '${row.cellStart}+${row.cells.length}; expected 0+${row.rowLength}.',
-      );
-    }
-    final line = BufferLine(row.rowLength, isWrapped: row.isWrapped);
-    _applyRowDelta(line, row);
-    return line;
-  }
-
-  void _applyRowDelta(BufferLine line, TerminalXtermWorkerRowDelta row) {
-    if (line.length != row.rowLength) {
-      if (row.cellStart != 0 || row.cells.length != row.rowLength) {
-        throw StateError(
-          'Terminal xterm replica cannot resize row ${row.row} from '
-          '${line.length} to ${row.rowLength} with partial span '
-          '${row.cellStart}+${row.cells.length}.',
-        );
-      }
-      line.resize(row.rowLength, clearNewCells: true);
-    }
-    final start = row.cellStart;
-    final end = start + row.cells.length;
-    if (start < 0 || end > line.length) {
-      throw StateError(
-        'Terminal xterm replica cell span [$start, $end) exceeds row width '
-        '${line.length}.',
-      );
-    }
-    line.isWrapped = row.isWrapped;
-    for (var offset = 0; offset < row.cells.length; offset++) {
-      final column = start + offset;
-      final cell = row.cells[offset];
-      line.setCellData(
-        column,
-        CellData(
-          foreground: cell.foreground,
-          background: cell.background,
-          underlineColor: cell.underlineColor,
-          flags: cell.attributes,
-          content: cell.content,
-        ),
-      );
-      final combining = cell.combiningCharacters;
-      if (combining != null) {
-        for (final codePoint in combining.runes) {
-          line.addCombiningCharacter(column, codePoint);
-        }
-      }
-    }
   }
 
   @override

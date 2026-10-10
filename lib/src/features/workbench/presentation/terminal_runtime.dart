@@ -59,6 +59,7 @@ part 'terminal_runtime_output_batching.dart';
 part 'terminal_runtime_output_pump.dart';
 part 'terminal_runtime_output_pipeline.dart';
 part 'terminal_runtime_parser_worker.dart';
+part 'terminal_runtime_parser_worker_resync.dart';
 part 'terminal_runtime_pointer_synchronization.dart';
 part 'terminal_runtime_startup_delivery.dart';
 part 'terminal_runtime_interactive_view.dart';

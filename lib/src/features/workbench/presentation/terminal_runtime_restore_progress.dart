@@ -96,8 +96,10 @@ extension _TerminalRestoreProgressTracking on _XtermTerminalSessionHandle {
     _resetParserWorkerBackend();
     _terminalController.clearSelection();
     final previousTerminal = _terminal;
-    final viewWidth = previousTerminal.viewWidth;
-    final viewHeight = previousTerminal.viewHeight;
+    // The worker is replaced too, so the new one can start at the size the
+    // view last asked for rather than the replica's committed one.
+    final viewWidth = _requestedCols;
+    final viewHeight = _requestedRows;
     _detachTerminal(previousTerminal);
 
     final nextTerminal = _createTerminal(notificationsEnabled: _outputVisible)

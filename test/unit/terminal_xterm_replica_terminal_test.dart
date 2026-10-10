@@ -163,6 +163,99 @@ void main() {
   });
 
   test(
+    'attached replica forwards a view resize and waits for the worker',
+    () async {
+      final direct = _createDirect(cols: 10, rows: 4, maxLines: 64);
+      final worker = await TerminalXtermWorker.start(
+        cols: 10,
+        rows: 4,
+        maxLines: 64,
+      );
+      addTearDown(worker.close);
+      final replica = TerminalXtermReplicaTerminal(
+        cols: 10,
+        rows: 4,
+        maxLines: 64,
+      );
+      final requested = <(int, int)>[];
+      replica.onResize = (cols, rows, _, _) => requested.add((cols, rows));
+
+      const initial = 'abcdefghijABCDEFGHIJ\r\nend';
+      direct.write(initial);
+      replica.applyBufferDelta(await worker.writeBufferDelta(initial));
+
+      replica.resize(6, 6);
+      expect(requested, [(6, 6)]);
+      expect((replica.viewWidth, replica.viewHeight), (10, 4));
+      expect((replica.requestedViewWidth, replica.requestedViewHeight), (6, 6));
+
+      // A delta parsed before the worker resized keeps the old size and must
+      // not echo it back over the pending request.
+      direct.write('!');
+      replica.applyBufferDelta(await worker.writeBufferDelta('!'));
+      expect(requested, [(6, 6)]);
+      expect((replica.requestedViewWidth, replica.requestedViewHeight), (6, 6));
+      _expectReplicaParity(replica, direct);
+
+      direct.resize(6, 6);
+      replica.applyBufferDelta(
+        await worker.resizeBufferDelta(cols: 6, rows: 6),
+      );
+      expect(requested, [(6, 6)]);
+      expect((replica.viewWidth, replica.viewHeight), (6, 6));
+      expect((replica.requestedViewWidth, replica.requestedViewHeight), (6, 6));
+      _expectReplicaParity(replica, direct);
+    },
+  );
+
+  test('attached replica withdraws an abandoned resize request', () {
+    final replica = TerminalXtermReplicaTerminal(cols: 10, rows: 4);
+    final requested = <(int, int)>[];
+    replica.onResize = (cols, rows, _, _) => requested.add((cols, rows));
+
+    replica
+      ..resize(6, 6)
+      ..resize(10, 4);
+
+    expect(requested, [(6, 6), (10, 4)]);
+    expect((replica.requestedViewWidth, replica.requestedViewHeight), (10, 4));
+  });
+
+  test(
+    'replica matches direct xterm after a large packed span delta',
+    () async {
+      final direct = _createDirect(cols: 12, rows: 4, maxLines: 400);
+      final worker = await TerminalXtermWorker.start(
+        cols: 12,
+        rows: 4,
+        maxLines: 400,
+      );
+      addTearDown(worker.close);
+      final replica = TerminalXtermReplicaTerminal(
+        cols: 12,
+        rows: 4,
+        maxLines: 400,
+      );
+      final escape = String.fromCharCode(27);
+
+      direct.write('seed');
+      replica.applyBufferDelta(await worker.writeBufferDelta('seed'));
+
+      final burst = List<String>.generate(
+        300,
+        (index) => '$escape[3${index % 8}m界é $index$escape[0m',
+      ).join('\r\n');
+      direct.write(burst);
+      final delta = await worker.writeBufferDelta(burst);
+      expect(delta.fullRepaint, isFalse);
+      expect(delta.rowDeltas.length, greaterThan(100));
+      replica.applyBufferDelta(delta);
+
+      _expectReplicaParity(replica, direct);
+    },
+  );
+
+  test(
     'replica exposes alternate-buffer contents through normal buffer getter',
     () async {
       final direct = _createDirect(cols: 12, rows: 4, maxLines: 64);

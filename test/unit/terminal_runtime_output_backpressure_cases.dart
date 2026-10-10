@@ -125,30 +125,68 @@ void _registerTerminalRuntimeOutputBackpressureTests() {
     );
   });
 
-  test('parser worker resizes before parsing following output', () async {
-    final runtime = XtermTerminalRuntime(
-      parserWorkerEnabled: true,
-      ptySessionFactory: _FakeTerminalPtySessionFactory(),
-      shellLaunchesBuilder: () => <GhosttyTerminalShellLaunch>[
-        _launch('shell', shell: '/bin/sh'),
-      ],
-    );
-    addTearDown(runtime.dispose);
-    final session = runtime.sessionFor(workspace: _workspace(), tab: _tab());
-    final visibility = acquireTerminalVisibilityForTesting(session);
-    addTearDown(visibility.dispose);
+  test(
+    'parser worker applies the throttled resize before following output',
+    () async {
+      final runtime = XtermTerminalRuntime(
+        parserWorkerEnabled: true,
+        ptySessionFactory: _FakeTerminalPtySessionFactory(),
+        shellLaunchesBuilder: () => <GhosttyTerminalShellLaunch>[
+          _launch('shell', shell: '/bin/sh'),
+        ],
+      );
+      addTearDown(runtime.dispose);
+      final session = runtime.sessionFor(workspace: _workspace(), tab: _tab());
+      final visibility = acquireTerminalVisibilityForTesting(session);
+      addTearDown(visibility.dispose);
 
-    queueTerminalOutputForTesting(session, 'warmup\r\n');
-    flushTerminalOutputForTesting(session);
-    await waitForTerminalParserApplyForTesting(session);
+      queueTerminalOutputForTesting(session, 'warmup\r\n');
+      flushTerminalOutputForTesting(session);
+      await waitForTerminalParserApplyForTesting(session);
 
-    resizeTerminalForTesting(session, 6, 4);
-    queueTerminalOutputForTesting(session, '1234567890');
-    flushTerminalOutputForTesting(session);
-    await waitForTerminalParserApplyForTesting(session);
+      resizeTerminalForTesting(session, 6, 4);
+      flushPendingPtyResizeForTesting(session);
+      queueTerminalOutputForTesting(session, '1234567890');
+      flushTerminalOutputForTesting(session);
+      await waitForTerminalParserApplyForTesting(session);
 
-    expect(terminalBufferTextForTesting(session), contains('123456\n7890'));
-  });
+      expect(terminalBufferTextForTesting(session), contains('123456\n7890'));
+    },
+  );
+
+  test(
+    'parser worker output before the resize throttle keeps the newer size',
+    () async {
+      final runtime = XtermTerminalRuntime(
+        parserWorkerEnabled: true,
+        ptySessionFactory: _FakeTerminalPtySessionFactory(),
+        shellLaunchesBuilder: () => <GhosttyTerminalShellLaunch>[
+          _launch('shell', shell: '/bin/sh'),
+        ],
+      );
+      addTearDown(runtime.dispose);
+      final session = runtime.sessionFor(workspace: _workspace(), tab: _tab());
+      final visibility = acquireTerminalVisibilityForTesting(session);
+      addTearDown(visibility.dispose);
+
+      queueTerminalOutputForTesting(session, 'warmup\r\n');
+      flushTerminalOutputForTesting(session);
+      await waitForTerminalParserApplyForTesting(session);
+
+      // A delta parsed at the old size lands after the view resized; applying
+      // it must not echo the old size back over the pending request.
+      queueTerminalOutputForTesting(session, 'old size\r\n');
+      flushTerminalOutputForTesting(session);
+      resizeTerminalForTesting(session, 6, 4);
+      await waitForTerminalParserApplyForTesting(session);
+      flushPendingPtyResizeForTesting(session);
+      queueTerminalOutputForTesting(session, '1234567890');
+      flushTerminalOutputForTesting(session);
+      await waitForTerminalParserApplyForTesting(session);
+
+      expect(terminalBufferTextForTesting(session), contains('123456\n7890'));
+    },
+  );
 
   test('parser worker coalesces a resize burst to the final size', () async {
     final runtime = XtermTerminalRuntime(

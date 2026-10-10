@@ -131,9 +131,15 @@ extension _XtermTerminalParserWorker on _XtermTerminalSessionHandle {
       return existing;
     }
     final retainedState = _parserWorkerRetainedState;
+    // Retained buffers were laid out at the replica's committed size; a fresh
+    // worker can start straight at the size the view asked for.
     final workerFuture = TerminalXtermWorker.start(
-      cols: terminal.viewWidth,
-      rows: terminal.viewHeight,
+      cols: retainedState == null
+          ? terminal.requestedViewWidth
+          : terminal.viewWidth,
+      rows: retainedState == null
+          ? terminal.requestedViewHeight
+          : terminal.viewHeight,
       maxLines: _settings.scrollbackLines,
       platform: _xtermTargetPlatform,
       wordSeparators: _rendererAdapterOwner.resolveWordSeparators(
@@ -165,7 +171,12 @@ extension _XtermTerminalParserWorker on _XtermTerminalSessionHandle {
       throw StateError('Parser worker backend requires an xterm replica.');
     }
     final generation = _parserWorkerGeneration;
-    _flushPendingParserWorkerResize();
+    // A running worker takes view sizes from the PTY resize throttle, which
+    // coalesces a drag into a few full repaints. Flushing here instead made
+    // every output chunk during a drag pay a whole-scrollback repaint.
+    if (_parserWorkerFuture == null) {
+      _flushPendingParserWorkerResize(startWorker: true);
+    }
     final applyBuffer = _visibility.isOutputVisible;
     if (!applyBuffer) {
       // Mark dirty when the hidden command is queued, not when it completes.
@@ -189,7 +200,7 @@ extension _XtermTerminalParserWorker on _XtermTerminalSessionHandle {
         }
         final applyClock = Stopwatch()..start();
         _applyParserWorkerEffects(delta.effects);
-        terminal.applyBufferDelta(delta);
+        _applyParserWorkerBufferDelta(terminal, generation, delta);
         applyClock.stop();
         uiApplyTime = applyClock.elapsed;
         return;
@@ -322,7 +333,7 @@ extension _XtermTerminalParserWorker on _XtermTerminalSessionHandle {
     }
     final generation = _parserWorkerGeneration;
     final uiBufferEvicted = _uiBufferEvicted;
-    _flushPendingParserWorkerResize();
+    _flushPendingParserWorkerResize(startWorker: true);
     final command = _queueParserWorkerCommand(terminal, generation, (
       worker,
     ) async {
@@ -367,7 +378,7 @@ extension _XtermTerminalParserWorker on _XtermTerminalSessionHandle {
     required int pixelWidth,
     required int pixelHeight,
   }) {
-    if (!_parserWorkerEnabled || _disposed || _parserWorkerFuture == null) {
+    if (!_parserWorkerEnabled || _disposed) {
       return;
     }
     final terminal = _terminal;
@@ -390,7 +401,7 @@ extension _XtermTerminalParserWorker on _XtermTerminalSessionHandle {
         return;
       }
       _applyParserWorkerEffects(delta.effects);
-      terminal.applyBufferDelta(delta);
+      _applyParserWorkerBufferDelta(terminal, generation, delta);
     });
     _parserWorkerLastApply = command;
     unawaited(

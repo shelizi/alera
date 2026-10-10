@@ -200,9 +200,18 @@ final class TerminalRuntimeRendererAdapterOwner {
       return;
     }
     final cellSize = renderTerminal.cellSize;
+    // A worker-backed replica can still be at its previous size while the
+    // view's newer one is on its way to the worker; pulse the view's size.
+    final (cols, rows) = switch (terminal) {
+      final TerminalXtermReplicaTerminal replica => (
+        replica.requestedViewWidth,
+        replica.requestedViewHeight,
+      ),
+      _ => (terminal.viewWidth, terminal.viewHeight),
+    };
     await session.refreshViewport(
-      terminal.viewWidth,
-      terminal.viewHeight,
+      cols,
+      rows,
       cellSize.width.round(),
       cellSize.height.round(),
     );

@@ -5,6 +5,7 @@ import 'package:xterm2/core.dart';
 
 import 'terminal_search_source.dart';
 import 'terminal_xterm_worker.dart';
+import 'terminal_xterm_worker_packed_cells.dart';
 
 final class _TerminalXtermHeadList<T extends Object> extends ListBase<T> {
   static const int _minCompactionHead = 1024;
@@ -639,6 +640,15 @@ final class TerminalXtermBufferModel implements TerminalSearchSource {
 
   Uint32List _freezeCells(List<TerminalXtermWorkerRenderCell> cells) {
     final packed = Uint32List(cells.length * _packedCellWords);
+    if (cells is TerminalXtermWorkerPackedCells) {
+      for (var column = 0; column < cells.length; column++) {
+        final offset = column * _packedCellWords;
+        packed[offset + _packedWidthWord] = cells.widthAt(column);
+        packed[offset + _packedContentWord] = cells.contentAt(column);
+        packed[offset + _packedHyperlinkWord] = cells.hyperlinkIdAt(column);
+      }
+      return packed;
+    }
     for (var column = 0; column < cells.length; column++) {
       _packCell(packed, column, cells[column]);
     }
