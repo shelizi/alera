@@ -1,10 +1,12 @@
 use std::fs;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
 
 use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptions, OpenOptionsFollowExt};
 use cap_std::{ambient_authority, fs::Dir};
 use same_file::Handle;
+use sha2::{Digest, Sha256};
+use uuid::Uuid;
 
 mod mime;
 mod prompts;
@@ -20,6 +22,23 @@ pub use quick_open::{
 };
 
 pub const MAX_REMOTE_READ_BYTES: u64 = 256 * 1024;
+pub const MAX_REMOTE_EDIT_BYTES: usize = 256 * 1024;
+pub const MAX_REMOTE_DIRECTORY_PAGE_ENTRIES: usize = 200;
+const MAX_REMOTE_DIRECTORY_SCAN_ENTRIES: usize = 10_000;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceDirectoryEntry {
+    pub name: String,
+    pub relative_path: String,
+    pub is_directory: bool,
+    pub size_bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceDirectoryPage {
+    pub entries: Vec<WorkspaceDirectoryEntry>,
+    pub has_more: bool,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkspaceFileErrorKind {
@@ -27,7 +46,14 @@ pub enum WorkspaceFileErrorKind {
     OutsideWorkspace,
     NotFound,
     Unsupported,
+    Conflict,
     Io,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceTextWriteResult {
+    pub sha256: String,
+    pub size_bytes: u64,
 }
 
 #[derive(Debug)]
@@ -174,6 +200,244 @@ pub fn read_workspace_file_range_from_root(
     })
 }
 
+/// List one bounded page from a workspace directory without following any
+/// symlink on the way to the target. Protected VCS metadata is never exposed.
+pub fn list_workspace_directory_from_root(
+    root: &WorkspaceFileRoot,
+    relative_directory: &str,
+    offset: usize,
+    limit: usize,
+    include_hidden: bool,
+) -> Result<WorkspaceDirectoryPage, WorkspaceFileError> {
+    if limit == 0 || limit > MAX_REMOTE_DIRECTORY_PAGE_ENTRIES {
+        return Err(WorkspaceFileError::new(
+            WorkspaceFileErrorKind::InvalidPath,
+            "Invalid directory page size",
+        ));
+    }
+    let relative = Path::new(relative_directory);
+    if relative.is_absolute()
+        || relative
+            .components()
+            .any(|c| !matches!(c, Component::Normal(_)))
+        || is_protected_workspace_path(relative)
+    {
+        return Err(WorkspaceFileError::new(
+            WorkspaceFileErrorKind::InvalidPath,
+            "Invalid workspace directory path",
+        ));
+    }
+    let mut directory = root
+        .directory
+        .try_clone()
+        .map_err(|err| WorkspaceFileError::from_io(err, relative_directory))?;
+    for component in relative.components() {
+        if let Component::Normal(part) = component {
+            reject_workspace_symlink(&directory, part, relative_directory)?;
+            directory = directory
+                .open_dir_nofollow(part)
+                .map_err(|err| WorkspaceFileError::from_io(err, relative_directory))?;
+        }
+    }
+    let mut entries = Vec::new();
+    for result in directory
+        .read_dir(".")
+        .map_err(|err| WorkspaceFileError::from_io(err, relative_directory))?
+    {
+        let entry = result.map_err(|err| WorkspaceFileError::from_io(err, relative_directory))?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name == "." || name == ".." || (!include_hidden && name.starts_with('.')) {
+            continue;
+        }
+        let child = relative.join(&name);
+        if is_protected_workspace_path(&child) {
+            continue;
+        }
+        let file_type = entry
+            .file_type()
+            .map_err(|err| WorkspaceFileError::from_io(err, &name))?;
+        if file_type.is_symlink() || (!file_type.is_dir() && !file_type.is_file()) {
+            continue;
+        }
+        let size_bytes = if file_type.is_file() {
+            entry
+                .metadata()
+                .map_err(|err| WorkspaceFileError::from_io(err, &name))?
+                .len()
+        } else {
+            0
+        };
+        entries.push(WorkspaceDirectoryEntry {
+            name,
+            relative_path: child.to_string_lossy().replace('\\', "/"),
+            is_directory: file_type.is_dir(),
+            size_bytes,
+        });
+        if entries.len() > MAX_REMOTE_DIRECTORY_SCAN_ENTRIES {
+            return Err(WorkspaceFileError::new(
+                WorkspaceFileErrorKind::Unsupported,
+                "Directory has too many entries to browse on mobile",
+            ));
+        }
+    }
+    entries.sort_by(|a, b| {
+        b.is_directory
+            .cmp(&a.is_directory)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    if offset > entries.len() {
+        return Err(WorkspaceFileError::new(
+            WorkspaceFileErrorKind::InvalidPath,
+            "Directory page offset exceeds entry count",
+        ));
+    }
+    let has_more = entries.len().saturating_sub(offset) > limit;
+    Ok(WorkspaceDirectoryPage {
+        entries: entries.into_iter().skip(offset).take(limit).collect(),
+        has_more,
+    })
+}
+
+/// Replace an existing small UTF-8 file only when its content still matches
+/// the exact bytes fetched by the phone. Write a sibling temporary file then
+/// rename it through the already opened, no-follow parent directory handle.
+/// This never creates an arbitrary new target path or follows a symlink.
+pub fn write_workspace_text_from_root(
+    root: &WorkspaceFileRoot,
+    relative_path: &str,
+    expected_sha256: &str,
+    new_text: &str,
+) -> Result<WorkspaceTextWriteResult, WorkspaceFileError> {
+    if new_text.len() > MAX_REMOTE_EDIT_BYTES {
+        return Err(WorkspaceFileError::new(
+            WorkspaceFileErrorKind::Unsupported,
+            "Mobile edits are limited to 256 KiB",
+        ));
+    }
+    if expected_sha256.len() != 64 || !expected_sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(WorkspaceFileError::new(
+            WorkspaceFileErrorKind::InvalidPath,
+            "Expected file checksum must be a SHA-256 hex digest",
+        ));
+    }
+    let path = Path::new(relative_path);
+    if path.as_os_str().is_empty()
+        || path
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+        || is_protected_workspace_path(path)
+    {
+        return Err(WorkspaceFileError::new(
+            WorkspaceFileErrorKind::InvalidPath,
+            "Invalid workspace edit path",
+        ));
+    }
+    let (mut source, normalized) = open_workspace_file_without_symlinks(root, relative_path)?;
+    let metadata = source
+        .metadata()
+        .map_err(|error| WorkspaceFileError::from_io(error, relative_path))?;
+    if !metadata.is_file() || metadata.len() > MAX_REMOTE_EDIT_BYTES as u64 {
+        return Err(WorkspaceFileError::new(
+            WorkspaceFileErrorKind::Unsupported,
+            "Only existing UTF-8 text files up to 256 KiB can be edited",
+        ));
+    }
+    if metadata.permissions().readonly() {
+        return Err(WorkspaceFileError::new(
+            WorkspaceFileErrorKind::Unsupported,
+            "Workspace file is read-only",
+        ));
+    }
+    if !file_is_probably_utf8(&mut source, &normalized, metadata.len(), relative_path)? {
+        return Err(WorkspaceFileError::new(
+            WorkspaceFileErrorKind::Unsupported,
+            "Binary files cannot be edited on mobile",
+        ));
+    }
+    source
+        .seek(SeekFrom::Start(0))
+        .map_err(|error| WorkspaceFileError::from_io(error, relative_path))?;
+    let mut old_bytes = Vec::new();
+    source
+        .read_to_end(&mut old_bytes)
+        .map_err(|error| WorkspaceFileError::from_io(error, relative_path))?;
+    if old_bytes.contains(&0) || std::str::from_utf8(&old_bytes).is_err() {
+        return Err(WorkspaceFileError::new(
+            WorkspaceFileErrorKind::Unsupported,
+            "Binary or invalid UTF-8 content cannot be edited",
+        ));
+    }
+    let old_hash = hex::encode(Sha256::digest(&old_bytes));
+    if !old_hash.eq_ignore_ascii_case(expected_sha256) {
+        return Err(WorkspaceFileError::new(
+            WorkspaceFileErrorKind::Conflict,
+            "Workspace file changed since it was opened; reload before saving",
+        ));
+    }
+    drop(source);
+
+    let mut parent = root.directory.try_clone().map_err(|error| {
+        WorkspaceFileError::from_io(error, root.canonical_path.display().to_string())
+    })?;
+    let components = path.components().collect::<Vec<_>>();
+    for component in &components[..components.len() - 1] {
+        if let Component::Normal(name) = component {
+            reject_workspace_symlink(&parent, name, relative_path)?;
+            parent = parent
+                .open_dir_nofollow(name)
+                .map_err(|error| WorkspaceFileError::from_io(error, relative_path))?;
+        }
+    }
+    let Component::Normal(file_name) = components[components.len() - 1] else {
+        unreachable!("workspace edit path validated above")
+    };
+    let temp_name = format!(".alera-mobile-edit-{}.tmp", Uuid::new_v4());
+    let result = (|| {
+        let mut options = OpenOptions::new();
+        options
+            .write(true)
+            .create_new(true)
+            .follow(FollowSymlinks::No);
+        let mut temporary = parent
+            .open_with(&temp_name, &options)
+            .map_err(|error| WorkspaceFileError::from_io(error, relative_path))?
+            .into_std();
+        temporary
+            .set_permissions(metadata.permissions())
+            .map_err(|error| WorkspaceFileError::from_io(error, relative_path))?;
+        temporary
+            .write_all(new_text.as_bytes())
+            .and_then(|_| temporary.sync_all())
+            .map_err(|error| WorkspaceFileError::from_io(error, relative_path))?;
+        drop(temporary);
+        // Detect a second editor or agent modifying the file while we were
+        // preparing the replacement. Never merge blindly or overwrite it.
+        let (mut latest, _) = open_workspace_file_without_symlinks(root, relative_path)?;
+        let mut latest_bytes = Vec::new();
+        latest
+            .read_to_end(&mut latest_bytes)
+            .map_err(|error| WorkspaceFileError::from_io(error, relative_path))?;
+        if hex::encode(Sha256::digest(&latest_bytes)) != old_hash {
+            return Err(WorkspaceFileError::new(
+                WorkspaceFileErrorKind::Conflict,
+                "Workspace file changed during save; reload before retrying",
+            ));
+        }
+        drop(latest);
+        parent
+            .rename(&temp_name, &parent, file_name)
+            .map_err(|error| WorkspaceFileError::from_io(error, relative_path))?;
+        Ok(WorkspaceTextWriteResult {
+            sha256: hex::encode(Sha256::digest(new_text.as_bytes())),
+            size_bytes: new_text.len() as u64,
+        })
+    })();
+    let _ = parent.remove_file(&temp_name);
+    result
+}
+
 fn open_workspace_file_without_symlinks(
     root: &WorkspaceFileRoot,
     relative_path: &str,
@@ -318,6 +582,66 @@ pub fn is_protected_workspace_path(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mobile_edit_requires_unchanged_existing_utf8_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let file = temp.path().join("example.txt");
+        fs::write(&file, "original\n").unwrap();
+        fs::create_dir(temp.path().join(".git")).unwrap();
+        fs::write(temp.path().join(".git/config"), "secret").unwrap();
+        let root = open_workspace_file_root(&temp.path().to_string_lossy()).unwrap();
+        let expected = hex::encode(Sha256::digest(b"original\n"));
+        let result =
+            write_workspace_text_from_root(&root, "example.txt", &expected, "edited\n").unwrap();
+        assert_eq!(result.sha256, hex::encode(Sha256::digest(b"edited\n")));
+        assert_eq!(fs::read_to_string(&file).unwrap(), "edited\n");
+        let conflict =
+            write_workspace_text_from_root(&root, "example.txt", &expected, "lost\n").unwrap_err();
+        assert_eq!(conflict.kind, WorkspaceFileErrorKind::Conflict);
+        assert_eq!(fs::read_to_string(&file).unwrap(), "edited\n");
+        assert!(write_workspace_text_from_root(&root, "../escape.txt", &expected, "x").is_err());
+        assert!(write_workspace_text_from_root(&root, ".git/config", &expected, "x").is_err());
+        assert!(write_workspace_text_from_root(&root, "missing.txt", &expected, "x").is_err());
+        let large = "x".repeat(MAX_REMOTE_EDIT_BYTES + 1);
+        assert!(
+            write_workspace_text_from_root(&root, "example.txt", &result.sha256, &large).is_err()
+        );
+        fs::write(temp.path().join("binary.png"), [0, 1, 2, 3]).unwrap();
+        let binary_hash = hex::encode(Sha256::digest([0, 1, 2, 3]));
+        assert!(write_workspace_text_from_root(&root, "binary.png", &binary_hash, "text").is_err());
+    }
+
+    #[test]
+    fn workspace_directory_pages_are_sorted_bounded_and_hide_metadata() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::create_dir(temp.path().join("src")).unwrap();
+        fs::create_dir(temp.path().join(".git")).unwrap();
+        fs::write(temp.path().join("z.txt"), "z").unwrap();
+        fs::write(temp.path().join("a.txt"), "a").unwrap();
+        fs::write(temp.path().join(".secret"), "hidden").unwrap();
+        fs::write(temp.path().join(".git/config"), "protected").unwrap();
+        let root = open_workspace_file_root(&temp.path().to_string_lossy()).unwrap();
+
+        let first = list_workspace_directory_from_root(&root, "", 0, 2, false).unwrap();
+        assert_eq!(first.entries.len(), 2);
+        assert_eq!(first.entries[0].relative_path, "src");
+        assert_eq!(first.entries[1].relative_path, "a.txt");
+        assert!(first.has_more);
+        let second = list_workspace_directory_from_root(&root, "", 2, 2, false).unwrap();
+        assert_eq!(second.entries[0].relative_path, "z.txt");
+        assert!(!second.has_more);
+
+        let with_hidden = list_workspace_directory_from_root(&root, "", 0, 100, true).unwrap();
+        assert!(with_hidden
+            .entries
+            .iter()
+            .any(|entry| entry.name == ".secret"));
+        assert!(!with_hidden.entries.iter().any(|entry| entry.name == ".git"));
+        assert!(list_workspace_directory_from_root(&root, "../", 0, 2, true).is_err());
+        assert!(list_workspace_directory_from_root(&root, ".git", 0, 2, true).is_err());
+        assert!(list_workspace_directory_from_root(&root, "", 0, 201, false).is_err());
+    }
 
     #[test]
     fn bounded_read_rejects_traversal_and_symlink_escape() {

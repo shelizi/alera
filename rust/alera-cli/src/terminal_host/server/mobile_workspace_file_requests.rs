@@ -4,10 +4,11 @@ use git2::{DiffFormat, DiffOptions, Repository, Status, StatusOptions};
 
 use alera_core::runtime::{RuntimeStore, Workspace};
 use alera_core::workspace_files::{
-    is_protected_workspace_path, open_workspace_file_root, read_workspace_file_range_from_root,
-    search_workspace_quick_open_session, start_workspace_quick_open_session_without_symlinks,
-    stop_workspace_quick_open_session, WorkspaceFileRoot, WorkspaceQuickOpenSession,
-    DEFAULT_QUICK_OPEN_EXCLUDED_DIRECTORIES,
+    is_protected_workspace_path, list_workspace_directory_from_root, open_workspace_file_root,
+    read_workspace_file_range_from_root, search_workspace_quick_open_session,
+    start_workspace_quick_open_session_without_symlinks, stop_workspace_quick_open_session,
+    write_workspace_text_from_root, WorkspaceFileErrorKind, WorkspaceFileRoot,
+    WorkspaceQuickOpenSession, DEFAULT_QUICK_OPEN_EXCLUDED_DIRECTORIES, MAX_REMOTE_EDIT_BYTES,
 };
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
@@ -118,8 +119,14 @@ async fn handle_mobile_workspace_file_request(
         MobileWorkspaceFileOperation::QuickOpenSearch => {
             search_mobile_workspace_quick_open(payload).await
         }
+        MobileWorkspaceFileOperation::WorkspaceDirectoryList => {
+            list_mobile_workspace_directory(&runtime_store, payload).await
+        }
         MobileWorkspaceFileOperation::WorkspaceFileRead => {
             read_mobile_workspace_file(&runtime_store, payload).await
+        }
+        MobileWorkspaceFileOperation::WorkspaceFileWrite => {
+            write_mobile_workspace_text(&runtime_store, payload).await
         }
         MobileWorkspaceFileOperation::WorkspaceFileDiff => {
             read_mobile_workspace_diff(&runtime_store, payload).await
@@ -186,6 +193,83 @@ async fn search_mobile_workspace_quick_open(payload: &Value) -> HostResult<Value
                 })).collect::<Vec<_>>(),
             })
         })
+    })
+    .await
+}
+
+async fn list_mobile_workspace_directory(
+    runtime_store: &RuntimeStore,
+    payload: &Value,
+) -> HostResult<Value> {
+    let workspace = workspace_for_mobile_file_request(runtime_store, payload).await?;
+    let directory = optional_string_key(payload, "relativePath").unwrap_or_default();
+    let offset = payload
+        .get("offset")
+        .and_then(Value::as_u64)
+        .and_then(|v| usize::try_from(v).ok())
+        .unwrap_or(0);
+    let limit = payload
+        .get("limit")
+        .and_then(Value::as_u64)
+        .and_then(|v| usize::try_from(v).ok())
+        .unwrap_or(100);
+    let show_hidden = payload.get("showHidden") == Some(&Value::Bool(true));
+    let roots = known_workspace_paths(runtime_store).await?;
+    spawn_blocking_workspace("Workspace directory listing", move || {
+        let root = open_validated_mobile_workspace_root(&workspace.path, roots)?;
+        let page =
+            list_workspace_directory_from_root(&root, &directory, offset, limit, show_hidden)
+                .map_err(workspace_file_error)?;
+        Ok(json!({
+            "items": page.entries.iter().map(|entry| json!({
+                "name": entry.name,
+                "relativePath": entry.relative_path,
+                "isDirectory": entry.is_directory,
+                "sizeBytes": entry.size_bytes,
+            })).collect::<Vec<_>>(),
+            "hasMore": page.has_more,
+            "nextOffset": offset + page.entries.len(),
+        }))
+    })
+    .await
+}
+
+async fn write_mobile_workspace_text(
+    runtime_store: &RuntimeStore,
+    payload: &Value,
+) -> HostResult<Value> {
+    let workspace = workspace_for_mobile_file_request(runtime_store, payload).await?;
+    let path = require_string_key(payload, "relativePath")?;
+    let expected_sha256 = require_string_key(payload, "expectedSha256")?;
+    // Empty content is valid when clearing an existing text file.
+    let new_text = payload
+        .get("text")
+        .and_then(Value::as_str)
+        .ok_or_else(|| HostError::format("Text content must be a string"))?
+        .to_string();
+    if new_text.len() > MAX_REMOTE_EDIT_BYTES {
+        return Err(HostError::state("Mobile edits are limited to 256 KiB"));
+    }
+    let roots = known_workspace_paths(runtime_store).await?;
+    spawn_blocking_workspace("Workspace text save", move || {
+        let root = open_validated_mobile_workspace_root(&workspace.path, roots)?;
+        let written = write_workspace_text_from_root(&root, &path, &expected_sha256, &new_text)
+            .map_err(|error| {
+                if error.kind == WorkspaceFileErrorKind::Conflict {
+                    HostError::conflict(
+                        "mobile_workspace_file_changed",
+                        error.to_string(),
+                        json!({ "relativePath": path }),
+                    )
+                } else {
+                    workspace_file_error(error)
+                }
+            })?;
+        Ok(json!({
+            "relativePath": path,
+            "sha256": written.sha256,
+            "sizeBytes": written.size_bytes,
+        }))
     })
     .await
 }

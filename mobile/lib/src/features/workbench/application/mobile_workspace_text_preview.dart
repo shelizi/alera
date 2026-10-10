@@ -2,9 +2,12 @@ import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart' as crypto;
+
 import 'package:alera_mobile/src/features/runtime/domain/mobile_codex_workspace.dart';
 
 const int maxMobileWorkspaceTextPreviewBytes = 512 * 1024;
+const int maxMobileWorkspaceTextEditBytes = 256 * 1024;
 
 class const MobileWorkspaceTextPreview({
   required final String relativePath,
@@ -13,6 +16,7 @@ class const MobileWorkspaceTextPreview({
   required final int totalBytes,
   required final bool truncated,
   required final String mimeType,
+  final String? originalSha256,
 });
 
 /// Assemble remote byte ranges before decoding. UTF-8 characters can cross
@@ -62,12 +66,28 @@ Future<MobileWorkspaceTextPreview> loadWorkspaceTextPreview(
       throw const FormatException('Workspace file preview made no progress.');
     }
   }
+  final content = bytes.takeBytes();
+  String decoded;
+  var validUtf8 = true;
+  try {
+    decoded = utf8.decode(content);
+  } on FormatException {
+    decoded = utf8.decode(content, allowMalformed: true);
+    validUtf8 = false;
+  }
+  final truncated = offset < (expectedTotalBytes ?? 0);
   return MobileWorkspaceTextPreview(
     relativePath: expectedPath ?? '',
-    text: utf8.decode(bytes.takeBytes(), allowMalformed: true),
+    text: decoded,
     isText: true,
     totalBytes: expectedTotalBytes ?? 0,
-    truncated: offset < (expectedTotalBytes ?? 0),
+    truncated: truncated,
     mimeType: mimeType,
+    originalSha256:
+        !truncated &&
+            validUtf8 &&
+            content.length <= maxMobileWorkspaceTextEditBytes
+        ? crypto.sha256.convert(content).toString()
+        : null,
   );
 }

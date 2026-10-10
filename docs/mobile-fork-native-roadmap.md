@@ -22,6 +22,12 @@ version is intentionally unchanged. Build and commit each slice in
 | 5 | `b87ec31f` | Source Control changed-file list gated by `mobileWorkspaceGitStatusV1`, max 200 entries, plus correct diff patch line prefixes and mobile failure logging |
 | 6 | `bbb63980` | Fix capability-probe WebSocket test teardown races and document mobile feature/release scope |
 
+### October 11 follow-up implementation
+
+- Protected `mobile.workspaceDirectory.list` RPC (`mobileWorkspaceDirectoryBrowseV1`): paged folder navigation, directories sorted first, optional hidden files, no VCS metadata or symlinks, 10,000-entry scan ceiling. Legacy phones/hosts continue using the Quick Open picker.
+- `mobile.workspaceFile.write` RPC (`mobileWorkspaceTextEditV1`): only existing UTF-8 files up to 256 KiB, explicit mobile confirmation, SHA-256 optimistic concurrency, typed `mobile_workspace_file_changed` conflict, atomic no-follow sibling replacement and permission preservation. The source file is never overwritten if the checksum differs.
+- Regression tests cover paginated directory security, existing-file save and stale-digest refusal, WebSocket capabilities/payloads, strict UTF-8 mobile baseline and editor size limitations. Runtime and release verification remain separate gates.
+
 The latest committed `main` was incorporated into this isolated worktree as
 merge commit `9dec1b90` without modifying the main worktree's pending changes.
 
@@ -70,8 +76,9 @@ merge commit `9dec1b90` without modifying the main worktree's pending changes.
    mobile-build workflow. Do not publish a release based on these unit tests.
 3. **iOS**: needs macOS runner, Apple signing and provisioning. Background
    notifications still need real Firebase/APNs configuration and device checks.
-4. **Richer file review**: folder tree, large-file pagination, syntax-highlit
-   read-only content, binary/image preview, side-by-side/intraline diff,
+4. **Richer file review**: tree is available with folder-by-folder pagination;
+   further work includes large-file **editing**, syntax-highlighted content,
+   binary/image preview, side-by-side/intraline diff,
    commit history and arbitrary two-revision comparisons are not in this slice.
 5. **Mutating Git actions**: staging, commits, branch checkout in-place and
    network operations need independent runtime authorization, clean-worktree

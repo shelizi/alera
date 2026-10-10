@@ -154,7 +154,9 @@ pub(crate) enum MobilePromptFileOperation {
 pub(crate) enum MobileWorkspaceFileOperation {
     QuickOpenStart,
     QuickOpenSearch,
+    WorkspaceDirectoryList,
     WorkspaceFileRead,
+    WorkspaceFileWrite,
     WorkspaceFileDiff,
     WorkspaceGitStatus,
     PromptAttachmentRead,
@@ -322,6 +324,14 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         ),
         "mobile.workspaceFile.read" => mobile_deferred_operation(
             MobileDeferredRoute::WorkspaceFile(MobileWorkspaceFileOperation::WorkspaceFileRead),
+        ),
+        "mobile.workspaceDirectory.list" => {
+            mobile_deferred_operation(MobileDeferredRoute::WorkspaceFile(
+                MobileWorkspaceFileOperation::WorkspaceDirectoryList,
+            ))
+        }
+        "mobile.workspaceFile.write" => mobile_conflicting_deferred_operation(
+            MobileDeferredRoute::WorkspaceFile(MobileWorkspaceFileOperation::WorkspaceFileWrite),
         ),
         "mobile.workspaceFile.diff" => mobile_deferred_operation(
             MobileDeferredRoute::WorkspaceFile(MobileWorkspaceFileOperation::WorkspaceFileDiff),
@@ -631,6 +641,13 @@ const fn mobile_deferred_operation(route: MobileDeferredRoute) -> RequestRoutePo
         mobile_allowed: true,
         mobile_deferred: Some(route),
         ..LOCAL
+    }
+}
+
+const fn mobile_conflicting_deferred_operation(route: MobileDeferredRoute) -> RequestRoutePolicy {
+    RequestRoutePolicy {
+        runtime_mutation: RuntimeMutationPolicy::Conflicts,
+        ..mobile_deferred_operation(route)
     }
 }
 

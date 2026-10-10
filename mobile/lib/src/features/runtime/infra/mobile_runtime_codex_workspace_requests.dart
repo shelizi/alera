@@ -20,6 +20,58 @@ mixin MobileRuntimeCodexWorkspaceRequests {
   bool get supportsCodexWorkspaceFiles =>
       runtimeCapabilities.contains(mobileCodexWorkspaceFilesCapability);
 
+  bool get supportsWorkspaceDirectoryBrowse =>
+      runtimeCapabilities.contains(mobileWorkspaceDirectoryBrowseCapability);
+
+  bool get supportsWorkspaceTextEdit =>
+      runtimeCapabilities.contains(mobileWorkspaceTextEditCapability);
+
+  Future<MobileWorkspaceTextSaveResult> saveWorkspaceText({
+    required String workspaceId,
+    required String relativePath,
+    required String expectedSha256,
+    required String text,
+  }) async {
+    if (!supportsWorkspaceTextEdit) {
+      throw UnsupportedError('Update the paired runtime to edit text files.');
+    }
+    if (utf8.encode(text).length > 256 * 1024) {
+      throw ArgumentError.value(text.length, 'text', 'Edit exceeds 256 KiB');
+    }
+    return MobileWorkspaceTextSaveResult.fromJson(
+      await requestMap('mobile.workspaceFile.write', <String, Object?>{
+        'workspaceId': workspaceId,
+        'relativePath': relativePath,
+        'expectedSha256': expectedSha256,
+        'text': text,
+      }, const Duration(seconds: 30)),
+    );
+  }
+
+  Future<MobileWorkspaceDirectoryPage> listWorkspaceDirectory({
+    required String workspaceId,
+    String relativePath = '',
+    int offset = 0,
+    int limit = 100,
+    bool showHidden = false,
+  }) async {
+    if (!supportsWorkspaceDirectoryBrowse) {
+      throw UnsupportedError('Update the paired runtime to browse folders.');
+    }
+    if (limit <= 0 || limit > maxMobileWorkspaceDirectoryPageEntries) {
+      throw ArgumentError.value(limit, 'limit');
+    }
+    return MobileWorkspaceDirectoryPage.fromJson(
+      await requestMap('mobile.workspaceDirectory.list', <String, Object?>{
+        'workspaceId': workspaceId,
+        'relativePath': relativePath,
+        'offset': offset,
+        'limit': limit,
+        'showHidden': showHidden,
+      }),
+    );
+  }
+
   bool get supportsWorkspaceFileDiff =>
       runtimeCapabilities.contains(mobileWorkspaceFileDiffCapability);
 

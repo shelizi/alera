@@ -50,6 +50,9 @@ pub const RUNTIME_HOST_MOBILE_CODEX_WORKSPACE_FILES_CAPABILITY: &str =
 /// arbitrary commands or sending workspace contents through a cloud server.
 pub const RUNTIME_HOST_MOBILE_WORKSPACE_FILE_DIFF_CAPABILITY: &str = "mobileWorkspaceFileDiffV1";
 pub const RUNTIME_HOST_MOBILE_WORKSPACE_GIT_STATUS_CAPABILITY: &str = "mobileWorkspaceGitStatusV1";
+pub const RUNTIME_HOST_MOBILE_DIRECTORY_BROWSE_CAPABILITY: &str =
+    "mobileWorkspaceDirectoryBrowseV1";
+pub const RUNTIME_HOST_MOBILE_TEXT_EDIT_CAPABILITY: &str = "mobileWorkspaceTextEditV1";
 /// Retained name. Codex chat sessions are gone; older phones still feature-detect this string.
 #[allow(dead_code)]
 pub const RUNTIME_HOST_MOBILE_CODEX_SESSIONS_CAPABILITY: &str = "mobileCodexSessionsV1";

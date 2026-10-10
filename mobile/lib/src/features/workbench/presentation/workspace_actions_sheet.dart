@@ -12,6 +12,7 @@ import 'package:alera_mobile/src/features/workbench/presentation/workspace_tags_
 import 'package:alera_mobile/src/features/workbench/presentation/workspace_branch_picker.dart';
 import 'package:alera_mobile/src/features/workbench/presentation/workspace_file_picker_sheet.dart';
 import 'package:alera_mobile/src/features/workbench/presentation/workspace_file_viewer_screen.dart';
+import 'package:alera_mobile/src/features/workbench/presentation/workspace_directory_browser_screen.dart';
 import 'package:alera_mobile/src/features/workbench/presentation/workspace_git_status_screen.dart';
 import 'package:alera_mobile/src/features/runtime/application/host_connection_controller.dart';
 import 'package:alera_mobile/src/features/workbench/application/workbench_providers.dart';
@@ -304,6 +305,18 @@ Future<void> showWorkspaceActionsSheet(
           hostConnectionControllerProvider(hostId).future,
         );
         if (!client.supportsCodexWorkspaceFiles || !context.mounted) return;
+        if (client.supportsWorkspaceDirectoryBrowse) {
+          Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) => WorkspaceDirectoryBrowserScreen(
+                hostId: hostId,
+                workspaceId: workspace.id,
+                workspaceName: workspace.name,
+              ),
+            ),
+          );
+          return;
+        }
         final relativePath = await showWorkspaceFilePickerSheet(
           context,
           start: () => client.startWorkspaceQuickOpen(workspace.id),

@@ -3,6 +3,7 @@ import 'package:alera_mobile/src/features/runtime/application/host_connection_co
 import 'package:alera_mobile/src/features/workbench/application/mobile_workspace_text_preview.dart';
 import 'package:alera_mobile/src/features/workbench/presentation/workspace_file_picker_sheet.dart';
 import 'package:alera_mobile/src/features/workbench/presentation/workspace_file_diff_screen.dart';
+import 'package:alera_mobile/src/features/workbench/presentation/workspace_text_editor_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:logging/logging.dart';
@@ -21,7 +22,7 @@ class const WorkspaceFileViewerScreen({
 class _WorkspaceFileViewerScreenState
     extends ConsumerState<WorkspaceFileViewerScreen> {
   static final Logger _logger = Logger('WorkspaceFileViewerScreen');
-  late final Future<MobileWorkspaceTextPreview> _preview;
+  late Future<MobileWorkspaceTextPreview> _preview;
 
   @override
   void initState() {
@@ -59,6 +60,12 @@ class _WorkspaceFileViewerScreenState
             .watch(hostConnectionControllerProvider(widget.hostId))
             .value
             ?.supportsWorkspaceFileDiff ==
+        true;
+    final canEdit =
+        ref
+            .watch(hostConnectionControllerProvider(widget.hostId))
+            .value
+            ?.supportsWorkspaceTextEdit ==
         true;
     return Scaffold(
       appBar: AppBar(
@@ -110,6 +117,30 @@ class _WorkspaceFileViewerScreenState
                         ?.copyWith(color: AleraTokens.foregroundMuted),
                   ),
                 ),
+                if (canEdit && preview.originalSha256 != null)
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton.icon(
+                      icon: const Icon(Icons.edit_outlined),
+                      label: const Text('Edit text'),
+                      onPressed: () async {
+                        final saved = await Navigator.of(context).push<bool>(
+                          MaterialPageRoute<bool>(
+                            builder: (_) => WorkspaceTextEditorScreen(
+                              hostId: widget.hostId,
+                              workspaceId: widget.workspaceId,
+                              relativePath: widget.relativePath,
+                              originalText: preview.text,
+                              originalSha256: preview.originalSha256!,
+                            ),
+                          ),
+                        );
+                        if (saved == true && mounted) {
+                          setState(() => _preview = _readPreview());
+                        }
+                      },
+                    ),
+                  ),
                 const Divider(height: 1),
                 if (!preview.isText)
                   const Expanded(

@@ -61,6 +61,9 @@ const String mobileCodexWorkspaceFilesCapability =
     'mobileCodexWorkspaceFilesV1';
 const String mobileWorkspaceFileDiffCapability = 'mobileWorkspaceFileDiffV1';
 const String mobileWorkspaceGitStatusCapability = 'mobileWorkspaceGitStatusV1';
+const String mobileWorkspaceDirectoryBrowseCapability =
+    'mobileWorkspaceDirectoryBrowseV1';
+const String mobileWorkspaceTextEditCapability = 'mobileWorkspaceTextEditV1';
 const String mobilePromptFileUploadCapability = 'mobilePromptFileUploadV1';
 const String mobilePromptAttachmentReadCapability =
     'mobilePromptAttachmentReadV1';
@@ -149,6 +152,21 @@ abstract interface class MobileTerminalClient {
 
 abstract interface class MobileCodexWorkspaceClient {
   bool get supportsCodexWorkspaceFiles;
+  bool get supportsWorkspaceTextEdit;
+  Future<MobileWorkspaceTextSaveResult> saveWorkspaceText({
+    required String workspaceId,
+    required String relativePath,
+    required String expectedSha256,
+    required String text,
+  });
+  bool get supportsWorkspaceDirectoryBrowse;
+  Future<MobileWorkspaceDirectoryPage> listWorkspaceDirectory({
+    required String workspaceId,
+    String relativePath = '',
+    int offset = 0,
+    int limit = 100,
+    bool showHidden = false,
+  });
   bool get supportsWorkspaceGitStatus;
   Future<MobileWorkspaceGitStatus> loadWorkspaceGitStatus(String workspaceId);
   bool get supportsPromptFileUpload;

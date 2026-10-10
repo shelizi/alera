@@ -54,6 +54,29 @@ mixin FakeWorkspaceFilesClient implements MobileCodexWorkspaceClient {
   bool get supportsCodexWorkspaceFiles => workspaceFiles.isNotEmpty;
 
   @override
+  bool get supportsWorkspaceDirectoryBrowse => false;
+
+  @override
+  bool get supportsWorkspaceTextEdit => false;
+
+  @override
+  Future<MobileWorkspaceTextSaveResult> saveWorkspaceText({
+    required String workspaceId,
+    required String relativePath,
+    required String expectedSha256,
+    required String text,
+  }) async => throw UnsupportedError('Fake host does not support edits.');
+
+  @override
+  Future<MobileWorkspaceDirectoryPage> listWorkspaceDirectory({
+    required String workspaceId,
+    String relativePath = '',
+    int offset = 0,
+    int limit = 100,
+    bool showHidden = false,
+  }) async => throw UnsupportedError('Fake host has no directory listing.');
+
+  @override
   bool get supportsWorkspaceGitStatus => false;
 
   @override
