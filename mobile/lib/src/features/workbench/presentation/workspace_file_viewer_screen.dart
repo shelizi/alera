@@ -1,6 +1,7 @@
 import 'package:alera_mobile/src/app/theme/alera_tokens.dart';
 import 'package:alera_mobile/src/features/runtime/application/host_connection_controller.dart';
 import 'package:alera_mobile/src/features/workbench/application/mobile_workspace_text_preview.dart';
+import 'package:alera_mobile/src/features/workbench/application/mobile_markdown_preview.dart';
 import 'package:alera_mobile/src/features/workbench/presentation/workspace_file_picker_sheet.dart';
 import 'package:alera_mobile/src/features/workbench/presentation/workspace_file_diff_screen.dart';
 import 'package:alera_mobile/src/features/workbench/presentation/workspace_text_editor_screen.dart';
@@ -23,6 +24,7 @@ class _WorkspaceFileViewerScreenState
     extends ConsumerState<WorkspaceFileViewerScreen> {
   static final Logger _logger = Logger('WorkspaceFileViewerScreen');
   late Future<MobileWorkspaceTextPreview> _preview;
+  bool _markdownPreview = true;
 
   @override
   void initState() {
@@ -141,6 +143,17 @@ class _WorkspaceFileViewerScreenState
                       },
                     ),
                   ),
+                if (preview.isText &&
+                    isMarkdownWorkspaceFile(widget.relativePath))
+                  SwitchListTile.adaptive(
+                    title: const Text('Formatted Markdown preview'),
+                    subtitle: const Text(
+                      'Passive text-only rendering; no remote images or scripts',
+                    ),
+                    value: _markdownPreview,
+                    onChanged: (value) =>
+                        setState(() => _markdownPreview = value),
+                  ),
                 const Divider(height: 1),
                 if (!preview.isText)
                   const Expanded(
@@ -157,11 +170,48 @@ class _WorkspaceFileViewerScreenState
                   Expanded(
                     child: SingleChildScrollView(
                       padding: AleraTokens.contentPadding,
-                      child: SelectableText(
-                        preview.text,
-                        style: Theme.of(context).textTheme.bodySmall
-                            ?.copyWith(fontFamily: AleraTokens.monoFontFamily),
-                      ),
+                      child:
+                          _markdownPreview &&
+                              isMarkdownWorkspaceFile(widget.relativePath)
+                          ? SelectableText.rich(
+                              TextSpan(
+                                children: <TextSpan>[
+                                  for (final line in parsePassiveMarkdown(
+                                    preview.text,
+                                  ))
+                                    TextSpan(
+                                      text: '${line.text}\n',
+                                      style: TextStyle(
+                                        fontWeight: line.kind == .heading
+                                            ? FontWeight.bold
+                                            : FontWeight.normal,
+                                        fontStyle: line.kind == .quote
+                                            ? FontStyle.italic
+                                            : FontStyle.normal,
+                                        fontSize: line.kind == .heading
+                                            ? (line.level <= 2 ? 19 : 15)
+                                            : 13,
+                                        fontFamily: line.kind == .code
+                                            ? AleraTokens.monoFontFamily
+                                            : null,
+                                        color: line.kind == .code
+                                            ? Theme.of(context)
+                                                  .colorScheme
+                                                  .primary
+                                            : null,
+                                      ),
+                                    ),
+                                ],
+                              ),
+                              style: Theme.of(context).textTheme.bodySmall,
+                            )
+                          : SelectableText(
+                              preview.text,
+                              style: Theme.of(context).textTheme.bodySmall
+                                  ?.copyWith(
+                                    fontFamily: AleraTokens.monoFontFamily,
+                                  ),
+                            ),
                     ),
                   ),
                 ],
