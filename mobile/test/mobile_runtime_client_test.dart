@@ -261,6 +261,10 @@ void main() {
       expect(client.supportsAgentQuotaClaudeTui, isFalse);
 
       await client.authenticate(deviceId: 'device-1', deviceToken: 'token-1');
+      // authenticate intentionally starts a background status.get probe.
+      // Drain its reply before teardown closes the loopback WebSocket.
+      await pumpEventQueue();
+      expect(client.debugPendingRequestCount, 0);
 
       expect(client.supportsAgentQuotaClaudeTui, isTrue);
     },
@@ -359,6 +363,8 @@ void main() {
       expect(client.supportsTerminalTitles, isFalse);
 
       await client.authenticate(deviceId: 'device-1', deviceToken: 'token-1');
+      await pumpEventQueue();
+      expect(client.debugPendingRequestCount, 0);
 
       expect(client.supportsTerminalTitles, isTrue);
     },

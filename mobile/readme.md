@@ -13,6 +13,9 @@ Build with Flutter 3.47.2 / Dart 3.13.2 using Dart language 3.13. The minimum iO
 - Rename terminal and non-terminal tabs from the tab action sheet. Terminal chips follow OSC 0/2 title changes for every running session, including tabs not selected on the phone, while manual renames keep priority. This live synchronization uses `mobileTerminalTitlesV1`; older runtimes continue showing the stored tab title. Non-terminal content remains unavailable on mobile, but its runtime-owned title stays synchronized with desktop.
 - Open host Settings to manage the workspace directory, project/workspace removal confirmations, all nine agent-status hooks, CLI registration, and the `alera-cli` and `alera-orchestration` skills through Auto, npx, or bunx. These settings belong to the runtime and update live across desktop and mobile; Terminal Quick Keys stay local to the phone.
 - Inspect quotas in a dedicated screen, refresh manually, and configure provider order, Claude Default and CCS profiles, and credential environment variable names. Quotas refresh on entry and every five minutes while visible, and secret values never leave the host.
+- Refresh an individual quota account without clearing the other cards. Runtimes advertising `agentQuotaPartialRefreshV1` fetch only that provider/account; older runtimes fall back to the existing full snapshot query. The mobile protocol version remains unchanged.
+- From a workspace's action sheet, search local branches and open the matching active workspace, or create a separate managed workspace reusing that branch (never checkout over an active workspace). Browse workspace files via the runtime's protected Quick Open index and read them through bounded, read-only ranges; text previews are limited to 512 KiB and binary files are not decoded as text.
+- The read-only Source Control screen shows up to 200 modified, added, removed, renamed or conflicted file paths when the host advertises `mobileWorkspaceGitStatusV1`. Changed tracked files can open a bounded HEAD-to-worktree patch using `mobileWorkspaceFileDiffV1`; newly added files open the existing text preview instead. Neither surface grants arbitrary Git commands or write access to the phone. Older runtimes hide unsupported entry points.
 - Workspace rows show an aggregate agent count and highest urgency. Tapping a workspace opens its tabs screen, where each tab also shows its agent status for Codex, Claude, Copilot, Cursor, Antigravity, OpenCode, Pi, Amp, and Grok. Tabs remain horizontally scrollable with one tab visible at a time and no splits on the phone. The `+` button creates numbered terminal tabs, and chip delete closes a tab and terminates its session. The full-screen terminal uses the vendored Flutter `xterm` with JetBrains Mono, attaches with the measured viewport, and forwards resizes as the keyboard opens and closes.
 - Terminal input has two modes per tab: compose (default), where you type a full command in a field and send it as one write (long-press Send offers sending without a newline), and direct, an opt-in toggle that streams every keystroke straight to the PTY. A configurable quick-key bar sits above the keyboard in both modes with Esc, Tab, Shift+Tab, arrows, and Ctrl combos; keys can be reordered, hidden, or extended with custom key combos (Ctrl/Alt/Shift plus any key) from the Terminal Quick Keys screen, persisted across launches.
 - Opening a terminal claims its viewport (the mobile presence lock): the PTY resizes to the phone screen, the desktop pane shows a banner naming the driving device with Take Back actions, and desktop resizes are held for later instead of fighting the phone. When the desktop takes the terminal back the phone returns to the workspace list; detaching or losing the connection releases the claim and restores the desktop dims automatically. Feature-detected through the `terminalDriverPresence` runtime capability.
@@ -46,6 +49,12 @@ iOS background notification mode and the APNs entitlement are present, but real 
 flutter pub get
 flutter analyze
 flutter test
+
+# Lightweight protocol/model tests that bypass Flutter's native-asset runner:
+dart test test/mobile_workspace_text_preview_test.dart test/mobile_workspace_git_status_test.dart
+
+# Rust runtime Git review regression tests:
+cargo test --manifest-path ../rust/Cargo.toml -p alera-cli workspace_git_
 ```
 
 Regenerate the native launcher icons and splash screens after changing files under `assets/branding/`:
@@ -99,4 +108,4 @@ The gateway has four endpoint modes, selectable from Settings > Mobile Devices i
 
 ## Remaining Work
 
-The live transport includes host status, projects, branches, desktop-parity workspace organization and actions, agent status, tab rename, runtime-portable settings, quotas, host tools, and terminal streaming. File review, non-terminal tab content surfaces, and end-to-end encrypted payloads are intentionally left for later mobile iterations.
+The live transport includes host status, projects, branches, desktop-parity workspace organization and actions, agent status, tab rename, runtime-portable settings, quotas, host tools, terminal streaming, and bounded read-only file/Git review. The mobile file viewer does not yet implement editing, image/binary previews, rich syntax highlighting or side-by-side / multi-revision diffs. Git review does not stage, commit, reset, or push. Non-terminal tab content remains unavailable on mobile. Direct VPN/TLS and cloud relay transports retain their separate security and deployment models; an arbitrary direct WebSocket is not independently end-to-end encrypted. Production notification delivery still requires Firebase/APNs provisioning and physical-device testing.
