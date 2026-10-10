@@ -256,9 +256,12 @@ void main() {
       expect(find.text('feature'), findsOneWidget);
       expect(find.text('auth'), findsOneWidget);
       expect(find.text('login'), findsNothing);
-      expect(find.text('logout'), findsOneWidget);
+      final logoutOption = find.byKey(
+        const ValueKey('workspace-branch-option:feature/auth/logout'),
+      );
+      expect(logoutOption, findsOneWidget);
 
-      await tester.tap(find.text('logout'));
+      await tester.tap(logoutOption);
       await tester.pumpAndSettle();
       expect(switched, <String>['feature/auth/logout']);
     },

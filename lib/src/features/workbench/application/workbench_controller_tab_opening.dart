@@ -68,10 +68,12 @@ mixin _WorkbenchControllerTabOpening
   Future<void> setGitHistoryAllBranches({
     required String tabId,
     required bool allBranches,
+    bool favoritesOnly = false,
     String? selectedRef,
   }) => _tabLayoutOwner.setGitHistoryAllBranches(
     tabId: tabId,
     allBranches: allBranches,
+    favoritesOnly: favoritesOnly,
     selectedRef: selectedRef,
   );
 

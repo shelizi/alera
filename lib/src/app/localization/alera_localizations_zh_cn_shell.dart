@@ -1,6 +1,11 @@
 part of 'alera_localizations.dart';
 
 const Map<String, String> _simplifiedChineseShell = <String, String>{
+  'Favorite Branches': '收藏分支',
+  'Add To Favorites': '加入收藏',
+  'Remove From Favorites': '从收藏移除',
+  'No favorite branch commits': '没有收藏分支提交',
+
   // Workspace and editor shell.
   'Add Project': '添加项目',
   'New Workspace': '新建工作区',

@@ -15,6 +15,9 @@ mod git_file_history_impl;
 mod git_history_refs;
 use git_file_history_impl::{commit_touches_file, nearest_file_ancestors};
 
+#[path = "git_history_selection.rs"]
+mod git_history_selection;
+
 const DEFAULT_HISTORY_LIMIT: u32 = 50;
 const MAX_HISTORY_LIMIT: u32 = 200;
 
@@ -25,6 +28,26 @@ pub(super) fn git_history(
     include_all_refs: Option<bool>,
     offset: Option<u32>,
     file_path: Option<String>,
+) -> Result<GitHistoryResult, GitError> {
+    git_history_with_refs(
+        path,
+        limit,
+        base_ref,
+        include_all_refs,
+        offset,
+        file_path,
+        None,
+    )
+}
+
+pub(super) fn git_history_with_refs(
+    path: String,
+    limit: Option<u32>,
+    base_ref: Option<String>,
+    include_all_refs: Option<bool>,
+    offset: Option<u32>,
+    file_path: Option<String>,
+    included_refs: Option<Vec<String>>,
 ) -> Result<GitHistoryResult, GitError> {
     let repo = open_repo(&path)?;
     let paths = GitPathContext::new(&repo, &path)?;
@@ -97,7 +120,9 @@ pub(super) fn git_history(
     };
     let refs_by_oid = git_history_refs::refs_by_oid(&repo)?;
     let mut revwalk = repo.revwalk().map_err(GitError::from_git2)?;
-    if let Some(selected_oid) = selected_oid {
+    if let Some(refs) = included_refs.as_deref() {
+        git_history_selection::push_selected_refs(&repo, &mut revwalk, refs)?;
+    } else if let Some(selected_oid) = selected_oid {
         revwalk.push(selected_oid).map_err(GitError::from_git2)?;
     } else {
         revwalk.push(head_oid).map_err(GitError::from_git2)?;
@@ -191,7 +216,12 @@ pub(super) fn git_history(
     } else if scoped {
         rewrite_history_parents_to_visible_ancestors(&repo, &visible_ids, &mut parsed)?;
     }
-    let has_incoming_changes = if file_path.is_some() {
+    if let Some(refs) = included_refs.as_deref() {
+        for item in &mut parsed {
+            git_history_selection::keep_selected_branch_badges(refs, &mut item.references);
+        }
+    }
+    let has_incoming_changes = if file_path.is_some() || included_refs.is_some() {
         false
     } else if let (Some(remote_oid), Some(merge_base_oid)) = (remote_oid, merge_base_oid) {
         remote_oid != merge_base_oid
@@ -199,7 +229,7 @@ pub(super) fn git_history(
     } else {
         false
     };
-    let has_outgoing_changes = if file_path.is_some() {
+    let has_outgoing_changes = if file_path.is_some() || included_refs.is_some() {
         false
     } else if let (Some(remote_oid), Some(merge_base_oid)) = (remote_oid, merge_base_oid) {
         remote_oid != head_oid
@@ -211,10 +241,22 @@ pub(super) fn git_history(
 
     Ok(GitHistoryResult {
         items: parsed,
-        current_ref: Some(current_ref),
-        remote_ref,
+        current_ref: Some(current_ref).filter(|item_ref| {
+            included_refs
+                .as_deref()
+                .is_none_or(|refs| git_history_selection::includes_ref(refs, item_ref))
+        }),
+        remote_ref: remote_ref.filter(|item_ref| {
+            included_refs
+                .as_deref()
+                .is_none_or(|refs| git_history_selection::includes_ref(refs, item_ref))
+        }),
         base_ref,
-        merge_base,
+        merge_base: if included_refs.is_some() {
+            None
+        } else {
+            merge_base
+        },
         has_incoming_changes,
         has_outgoing_changes,
         has_more,

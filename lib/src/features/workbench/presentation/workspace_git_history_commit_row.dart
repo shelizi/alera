@@ -2,6 +2,8 @@ part of 'workspace_git_history_surface.dart';
 
 class const _CommitGraphRow({
   required final GitHistoryItemViewModel viewModel,
+  required final Set<String> favoriteBranches,
+  required final ValueChanged<String> onToggleFavorite,
   required final double graphWidth,
   required final bool isCompareAnchor,
   required final VoidCallback onTap,
@@ -77,6 +79,15 @@ class const _CommitGraphRow({
                             ),
                             child: GitRefBadge(
                               itemRef: itemRef,
+                              isFavorite: favoriteBranches.contains(
+                                itemRef.name,
+                              ),
+                              onToggleFavorite:
+                                  _WorkspaceGitHistoryMergedFilters._isBranchRef(
+                                    itemRef,
+                                  )
+                                  ? () => onToggleFavorite(itemRef.name)
+                                  : null,
                               isCurrent:
                                   isHead && itemRef.color == gitHistoryRefColor,
                               onOpenActions: onOpenRefActions == null

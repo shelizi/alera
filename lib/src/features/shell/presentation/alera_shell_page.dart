@@ -1,5 +1,8 @@
 import 'dart:async';
 
+import 'package:alera/src/design_system/buttons/alera_icon_button.dart';
+import 'package:alera/src/features/workbench/application/workbench_branch_favorites.dart';
+
 import 'package:alera/src/app/providers.dart';
 import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
@@ -47,6 +50,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 part 'alera_shell_page_body.dart';
+part 'workspace_branch_status_bar_control.dart';
 part 'alera_shell_page_body_content.dart';
 
 class const AleraShellPage({super.key}) extends ConsumerWidget {

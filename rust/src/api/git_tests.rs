@@ -21,6 +21,8 @@ mod git_diff_tests;
 mod git_discard_tests;
 #[path = "git_explorer_status_tests.rs"]
 mod git_explorer_status_tests;
+#[path = "git_history_favorites_tests.rs"]
+mod git_history_favorites_tests;
 #[path = "git_history_tests.rs"]
 mod git_history_tests;
 #[path = "git_range_tests.rs"]

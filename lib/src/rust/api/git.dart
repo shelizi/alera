@@ -136,6 +136,22 @@ Future<GitHistoryResult> gitHistory({
   offset: offset,
 );
 
+/// Walks precisely the requested ref tips, including their shared ancestry.
+/// An empty ref list produces no commits, including when HEAD has commits.
+Future<GitHistoryResult> gitHistoryForRefs({
+  required String path,
+  required List<String> refs,
+  int? limit,
+  int? offset,
+  String? filePath,
+}) => RustLib.instance.api.crateApiGitGitHistoryForRefs(
+  path: path,
+  refs: refs,
+  limit: limit,
+  offset: offset,
+  filePath: filePath,
+);
+
 Future<GitHistoryResult> gitFileHistory({
   required String path,
   required String filePath,

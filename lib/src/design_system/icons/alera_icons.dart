@@ -38,6 +38,8 @@ abstract final class const AleraIcons._() {
   static const IconData send = LucideIcons.send;
   static const IconData mic = LucideIcons.mic;
   static const IconData pin = LucideIcons.pin;
+  static const IconData favorite = LucideIcons.star;
+  static const IconData favoriteOff = LucideIcons.starOff;
   static const IconData pinOff = LucideIcons.pinOff;
   static const IconData maximize = LucideIcons.maximize2;
   static const IconData minimize = LucideIcons.minimize2;

@@ -90,6 +90,7 @@ class const WorkbenchViewPrefs({
   this.allSectionCollapsed = false,
   this.showPinnedWorkspacesBelow = true,
   this.sourceControlRootByWorkspaceId = const <String, String>{},
+  this.favoriteBranchesByRepository = const <String, Set<String>>{},
   this.rightSidebarVisible = true,
   this.rightSidebarWidth = 280,
   this.sidebarWidth = AleraTokens.sidebarDefaultWidth,
@@ -148,6 +149,7 @@ class const WorkbenchViewPrefs({
   /// Folder-workspace ids mapped to the workspace-relative Git folder that
   /// should back the Source Control tab.
   final Map<String, String> sourceControlRootByWorkspaceId;
+  final Map<String, Set<String>> favoriteBranchesByRepository;
   final bool rightSidebarVisible;
   final double rightSidebarWidth;
 

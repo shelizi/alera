@@ -10,6 +10,7 @@ import 'package:alera/src/design_system/feedback/alera_toast.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:alera/src/design_system/typography/alera_search_highlighted_text.dart';
 import 'package:alera/src/features/workbench/application/workbench_controller.dart';
+import 'package:alera/src/features/workbench/application/workbench_branch_favorites.dart';
 import 'package:alera/src/features/workbench/application/workspace_source_control_controller.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_source_control_scope.dart';
@@ -22,17 +23,21 @@ import 'package:alera/src/shared/infra/git/git_diff_models.dart';
 import 'package:alera/src/shared/infra/git/git_exception.dart';
 import 'package:alera/src/shared/infra/git/git_history_graph.dart';
 import 'package:alera/src/shared/infra/git/git_providers.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 part 'workspace_git_history_commit_row.dart';
+part 'workspace_git_history_surface_favorites.dart';
+part 'workspace_git_history_surface_toolbar.dart';
 part 'workspace_git_history_surface_actions.dart';
 part 'workspace_git_history_surface_perspective.dart';
 part 'workspace_git_history_surface_filters.dart';
 part 'workspace_git_history_surface_ref_actions.dart';
 
 const String _allBranchesPerspective = '__all_branches__';
+const String _favoritesPerspective = '__favorite_branches__';
 const String _headPerspective = '__head__';
 const String _headRef = 'HEAD';
 
@@ -70,6 +75,7 @@ class _WorkspaceGitHistorySurfaceState
   bool _hasOutgoingChanges = false;
   String? _mergeBase;
   late bool _allBranches = widget.tab.gitHistoryAllBranches;
+  late bool _favoritesOnly = widget.tab.gitHistoryFavoritesOnly;
   late String? _selectedRef = widget.tab.gitHistorySelectedRef;
   List<String> _branches = const <String>[];
   String? _currentBranch;
@@ -146,6 +152,7 @@ class _WorkspaceGitHistorySurfaceState
       _pageFailed = false;
       _error = null;
       _loading = true;
+      _loadingMore = false;
       _hasIncomingChanges = false;
       _hasOutgoingChanges = false;
       _mergeBase = null;
@@ -158,6 +165,7 @@ class _WorkspaceGitHistorySurfaceState
             limit: WorkspaceGitHistorySurface.pageSize,
             baseRef: _allBranches ? null : _selectedRef,
             includeAllRefs: _allBranches,
+            includedRefs: _includedRefs,
             filePath: widget.tab.gitHistoryFilePath,
           );
       if (!mounted || generation != _generation) {
@@ -218,6 +226,7 @@ class _WorkspaceGitHistorySurfaceState
             limit: WorkspaceGitHistorySurface.pageSize,
             baseRef: _allBranches ? null : _selectedRef,
             includeAllRefs: _allBranches,
+            includedRefs: _includedRefs,
             filePath: widget.tab.gitHistoryFilePath,
             offset: _items.length,
           );
@@ -267,6 +276,15 @@ class _WorkspaceGitHistorySurfaceState
 
   @override
   Widget build(BuildContext context) {
+    final favoritesProvider = workbenchControllerProvider.select(
+      (state) =>
+          state.viewPrefs.favoriteBranchesByRepository[_favoriteScopeKey] ??
+          const <String>{},
+    );
+    ref.watch(favoritesProvider);
+    ref.listen(favoritesProvider, (previous, next) {
+      if (_favoritesOnly && !setEquals(previous, next)) unawaited(_reload());
+    });
     return DecoratedBox(
       decoration: const BoxDecoration(color: AleraTokens.surface),
       child: Column(
@@ -275,80 +293,6 @@ class _WorkspaceGitHistorySurfaceState
           const Divider(height: 1, color: AleraTokens.borderSubtle),
           Expanded(child: _buildBody(context)),
         ],
-      ),
-    );
-  }
-
-  Widget _buildToolbar(BuildContext context) {
-    final theme = Theme.of(context);
-    return SizedBox(
-      height: AleraTokens.sidebarHeaderHeight,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: AleraTokens.space12),
-        child: Row(
-          children: <Widget>[
-            const Icon(
-              AleraIcons.gitGraph,
-              size: 16,
-              color: AleraTokens.foregroundMuted,
-            ),
-            const SizedBox(width: AleraTokens.space8),
-            Flexible(
-              child: Text(
-                widget.tab.gitHistoryFilePath ?? 'Commits',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: theme.textTheme.titleSmall?.copyWith(
-                  fontWeight: .w600,
-                  color: AleraTokens.foreground,
-                ),
-              ),
-            ),
-            if (_items.isNotEmpty) ...<Widget>[
-              const SizedBox(width: AleraTokens.space8),
-              Text(
-                _hasMore ? '${_items.length}+' : '${_items.length}',
-                style: theme.textTheme.labelSmall?.copyWith(
-                  color: AleraTokens.foregroundFaint,
-                ),
-              ),
-            ],
-            const SizedBox(width: AleraTokens.space16),
-            Expanded(
-              child: SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: <Widget>[
-                    if (widget.tab.gitHistoryFilePath == null)
-                      _buildBranchPerspectiveMenu(theme)
-                    else
-                      Text('All Branches', style: theme.textTheme.labelSmall),
-                    const SizedBox(width: AleraTokens.space8),
-                    _buildMergedVisibilityMenu(theme),
-                    const SizedBox(width: AleraTokens.space8),
-                    _buildMergedTargetMenu(theme),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(width: AleraTokens.space8),
-            if (_loading || _loadingMore)
-              const Padding(
-                padding: EdgeInsets.only(right: AleraTokens.space8),
-                child: SizedBox(
-                  width: 12,
-                  height: 12,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                ),
-              ),
-            AleraIconButton(
-              tooltip: 'Refresh Commits',
-              icon: AleraIcons.refresh,
-              onPressed: _loading ? null : () => unawaited(_reload()),
-            ),
-          ],
-        ),
       ),
     );
   }
@@ -367,7 +311,11 @@ class _WorkspaceGitHistorySurfaceState
           ),
         );
       }
-      return const AleraEmptyState(message: 'No commits yet');
+      return AleraEmptyState(
+        message: _favoritesOnly
+            ? 'No favorite branch commits'
+            : 'No commits yet',
+      );
     }
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -403,6 +351,8 @@ class _WorkspaceGitHistorySurfaceState
                     final boundary = _isBoundary(viewModel);
                     return _CommitGraphRow(
                       viewModel: viewModel,
+                      favoriteBranches: _favoriteBranches,
+                      onToggleFavorite: _toggleFavorite,
                       graphWidth: graphWidth,
                       isCompareAnchor:
                           _compareAnchorId == viewModel.historyItem.id,

@@ -626,6 +626,16 @@ class WorkbenchViewPrefsMapper extends ClassMapperBase<WorkbenchViewPrefs> {
     opt: true,
     def: const <String, String>{},
   );
+  static Map<String, Set<String>> _$favoriteBranchesByRepository(
+    WorkbenchViewPrefs v,
+  ) => v.favoriteBranchesByRepository;
+  static const Field<WorkbenchViewPrefs, Map<String, Set<String>>>
+  _f$favoriteBranchesByRepository = Field(
+    'favoriteBranchesByRepository',
+    _$favoriteBranchesByRepository,
+    opt: true,
+    def: const <String, Set<String>>{},
+  );
   static bool _$rightSidebarVisible(WorkbenchViewPrefs v) =>
       v.rightSidebarVisible;
   static const Field<WorkbenchViewPrefs, bool> _f$rightSidebarVisible = Field(
@@ -776,6 +786,7 @@ class WorkbenchViewPrefsMapper extends ClassMapperBase<WorkbenchViewPrefs> {
     #allSectionCollapsed: _f$allSectionCollapsed,
     #showPinnedWorkspacesBelow: _f$showPinnedWorkspacesBelow,
     #sourceControlRootByWorkspaceId: _f$sourceControlRootByWorkspaceId,
+    #favoriteBranchesByRepository: _f$favoriteBranchesByRepository,
     #rightSidebarVisible: _f$rightSidebarVisible,
     #rightSidebarWidth: _f$rightSidebarWidth,
     #sidebarWidth: _f$sidebarWidth,
@@ -814,6 +825,7 @@ class WorkbenchViewPrefsMapper extends ClassMapperBase<WorkbenchViewPrefs> {
       sourceControlRootByWorkspaceId: data.dec(
         _f$sourceControlRootByWorkspaceId,
       ),
+      favoriteBranchesByRepository: data.dec(_f$favoriteBranchesByRepository),
       rightSidebarVisible: data.dec(_f$rightSidebarVisible),
       rightSidebarWidth: data.dec(_f$rightSidebarWidth),
       sidebarWidth: data.dec(_f$sidebarWidth),
@@ -905,6 +917,13 @@ abstract class WorkbenchViewPrefsCopyWith<
     implements ClassCopyWith<$R, $In, $Out> {
   MapCopyWith<$R, String, String, ObjectCopyWith<$R, String, String>>
   get sourceControlRootByWorkspaceId;
+  MapCopyWith<
+    $R,
+    String,
+    Set<String>,
+    ObjectCopyWith<$R, Set<String>, Set<String>>
+  >
+  get favoriteBranchesByRepository;
   $R call({
     WorkbenchSortBy? sectionSort,
     Set<String>? collapsedSectionIds,
@@ -921,6 +940,7 @@ abstract class WorkbenchViewPrefsCopyWith<
     bool? allSectionCollapsed,
     bool? showPinnedWorkspacesBelow,
     Map<String, String>? sourceControlRootByWorkspaceId,
+    Map<String, Set<String>>? favoriteBranchesByRepository,
     bool? rightSidebarVisible,
     double? rightSidebarWidth,
     double? sidebarWidth,
@@ -958,6 +978,18 @@ class _WorkbenchViewPrefsCopyWithImpl<$R, $Out>
     (v) => call(sourceControlRootByWorkspaceId: v),
   );
   @override
+  MapCopyWith<
+    $R,
+    String,
+    Set<String>,
+    ObjectCopyWith<$R, Set<String>, Set<String>>
+  >
+  get favoriteBranchesByRepository => MapCopyWith(
+    $value.favoriteBranchesByRepository,
+    (v, t) => ObjectCopyWith(v, $identity, t),
+    (v) => call(favoriteBranchesByRepository: v),
+  );
+  @override
   $R call({
     WorkbenchSortBy? sectionSort,
     Set<String>? collapsedSectionIds,
@@ -974,6 +1006,7 @@ class _WorkbenchViewPrefsCopyWithImpl<$R, $Out>
     bool? allSectionCollapsed,
     bool? showPinnedWorkspacesBelow,
     Map<String, String>? sourceControlRootByWorkspaceId,
+    Map<String, Set<String>>? favoriteBranchesByRepository,
     bool? rightSidebarVisible,
     double? rightSidebarWidth,
     double? sidebarWidth,
@@ -1015,6 +1048,8 @@ class _WorkbenchViewPrefsCopyWithImpl<$R, $Out>
         #showPinnedWorkspacesBelow: showPinnedWorkspacesBelow,
       if (sourceControlRootByWorkspaceId != null)
         #sourceControlRootByWorkspaceId: sourceControlRootByWorkspaceId,
+      if (favoriteBranchesByRepository != null)
+        #favoriteBranchesByRepository: favoriteBranchesByRepository,
       if (rightSidebarVisible != null)
         #rightSidebarVisible: rightSidebarVisible,
       if (rightSidebarWidth != null) #rightSidebarWidth: rightSidebarWidth,
@@ -1086,6 +1121,10 @@ class _WorkbenchViewPrefsCopyWithImpl<$R, $Out>
     sourceControlRootByWorkspaceId: data.get(
       #sourceControlRootByWorkspaceId,
       or: $value.sourceControlRootByWorkspaceId,
+    ),
+    favoriteBranchesByRepository: data.get(
+      #favoriteBranchesByRepository,
+      or: $value.favoriteBranchesByRepository,
     ),
     rightSidebarVisible: data.get(
       #rightSidebarVisible,

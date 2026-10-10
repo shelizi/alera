@@ -30,13 +30,15 @@ extension _WorkspaceGitHistoryPerspective on _WorkspaceGitHistorySurfaceState {
   }
 
   String get _perspectiveLabel {
+    if (_favoritesOnly) return 'Favorite Branches';
     if (_allBranches) return 'All Branches';
     if (_selectedRef == _headRef) return _headRef;
     return _selectedRef ?? _currentBranch ?? 'Current Branch';
   }
 
   Future<void> _setPerspective(String value) async {
-    final allBranches = value == _allBranchesPerspective;
+    final favoritesOnly = value == _favoritesPerspective;
+    final allBranches = favoritesOnly || value == _allBranchesPerspective;
     final selectedRef = allBranches
         ? null
         : value == _headPerspective
@@ -44,10 +46,15 @@ extension _WorkspaceGitHistoryPerspective on _WorkspaceGitHistorySurfaceState {
         : value == _currentBranch
         ? null
         : value;
-    if (allBranches == _allBranches && selectedRef == _selectedRef) return;
+    if (allBranches == _allBranches &&
+        selectedRef == _selectedRef &&
+        favoritesOnly == _favoritesOnly) {
+      return;
+    }
 
     _setSurfaceState(() {
       _allBranches = allBranches;
+      _favoritesOnly = favoritesOnly;
       _selectedRef = selectedRef;
     });
     await _refreshMergedBranchState();
@@ -58,6 +65,7 @@ extension _WorkspaceGitHistoryPerspective on _WorkspaceGitHistorySurfaceState {
           .setGitHistoryAllBranches(
             tabId: widget.tab.id,
             allBranches: allBranches,
+            favoritesOnly: favoritesOnly,
             selectedRef: selectedRef,
           );
     } catch (_) {
@@ -69,7 +77,10 @@ extension _WorkspaceGitHistoryPerspective on _WorkspaceGitHistorySurfaceState {
   Widget _buildBranchPerspectiveMenu(ThemeData theme) {
     return _GitHistoryBranchPerspectiveMenu(
       label: _perspectiveLabel,
-      branches: _branches,
+      branches: favoriteBranchesFirst(_branches, _favoriteBranches),
+      favoriteBranches: _favoriteBranches,
+      favoritesOnly: _favoritesOnly,
+      onToggleFavorite: _toggleFavorite,
       currentBranch: _currentBranch,
       allBranches: _allBranches,
       selectedRef: _selectedRef,
@@ -82,6 +93,9 @@ class _GitHistoryBranchPerspectiveMenu extends StatefulWidget {
   const _GitHistoryBranchPerspectiveMenu({
     required this.label,
     required this.branches,
+    required this.favoriteBranches,
+    required this.favoritesOnly,
+    required this.onToggleFavorite,
     required this.currentBranch,
     required this.allBranches,
     required this.selectedRef,
@@ -90,6 +104,9 @@ class _GitHistoryBranchPerspectiveMenu extends StatefulWidget {
 
   final String label;
   final List<String> branches;
+  final Set<String> favoriteBranches;
+  final bool favoritesOnly;
+  final ValueChanged<String> onToggleFavorite;
   final String? currentBranch;
   final bool allBranches;
   final String? selectedRef;
@@ -133,6 +150,10 @@ class _GitHistoryBranchPerspectiveMenuState
     final theme = Theme.of(context);
     final normalizedQuery = _query.trim().toLowerCase();
     final localizedAllBranches = context.tr('All Branches').toLowerCase();
+    final showFavorites =
+        normalizedQuery.isEmpty ||
+        'favorite branches'.contains(normalizedQuery) ||
+        context.tr('Favorite Branches').toLowerCase().contains(normalizedQuery);
     final showHead =
         normalizedQuery.isEmpty ||
         _headRef.toLowerCase().contains(normalizedQuery);
@@ -180,6 +201,18 @@ class _GitHistoryBranchPerspectiveMenuState
                     primary: false,
                     padding: EdgeInsets.zero,
                     children: <Widget>[
+                      if (showFavorites)
+                        MenuItemButton(
+                          key: const ValueKey('git-history-favorites-only'),
+                          onPressed: () => _select(_favoritesPerspective),
+                          leadingIcon: Icon(
+                            widget.favoritesOnly
+                                ? AleraIcons.check
+                                : AleraIcons.favorite,
+                            size: AleraIconButton.defaultIconSize,
+                          ),
+                          child: Text(context.tr('Favorite Branches')),
+                        ),
                       if (showHead)
                         MenuItemButton(
                           key: const ValueKey<String>(
@@ -199,7 +232,8 @@ class _GitHistoryBranchPerspectiveMenuState
                       if (showAllBranches)
                         MenuItemButton(
                           onPressed: () => _select(_allBranchesPerspective),
-                          leadingIcon: widget.allBranches
+                          leadingIcon:
+                              widget.allBranches && !widget.favoritesOnly
                               ? const Icon(Icons.check, size: 16)
                               : const SizedBox(width: 16),
                           child: AleraSearchHighlightedText(
@@ -209,6 +243,22 @@ class _GitHistoryBranchPerspectiveMenuState
                         ),
                       for (final branch in filteredBranches)
                         MenuItemButton(
+                          key: ValueKey('git-history-branch-option:$branch'),
+                          trailingIcon: AleraIconButton(
+                            key: ValueKey(
+                              'git-history-branch-favorite:$branch',
+                            ),
+                            tooltip: widget.favoriteBranches.contains(branch)
+                                ? 'Remove From Favorites'
+                                : 'Add To Favorites',
+                            icon: widget.favoriteBranches.contains(branch)
+                                ? AleraIcons.favorite
+                                : AleraIcons.favoriteOff,
+                            iconColor: widget.favoriteBranches.contains(branch)
+                                ? AleraTokens.accent
+                                : AleraTokens.foregroundFaint,
+                            onPressed: () => widget.onToggleFavorite(branch),
+                          ),
                           onPressed: () => _select(branch),
                           leadingIcon:
                               (!widget.allBranches &&
@@ -233,6 +283,7 @@ class _GitHistoryBranchPerspectiveMenuState
                           ),
                         ),
                       if (!showHead &&
+                          !showFavorites &&
                           !showAllBranches &&
                           filteredBranches.isEmpty)
                         Padding(

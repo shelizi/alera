@@ -77,6 +77,8 @@ const String workspaceTabGitHistoryAllBranchesPayloadKey =
     'gitHistoryAllBranches';
 const String workspaceTabGitHistorySelectedRefPayloadKey =
     'gitHistorySelectedRef';
+const String workspaceTabGitHistoryFavoritesOnlyPayloadKey =
+    'gitHistoryFavoritesOnly';
 const String workspaceTabGitHistoryMergedBranchVisibilityPayloadKey =
     'gitHistoryMergedBranchVisibility';
 const String workspaceTabGitHistoryMergedIntoRefPayloadKey =
@@ -288,6 +290,9 @@ class WorkspaceTabRecord({
 
   bool get gitHistoryAllBranches =>
       payload[workspaceTabGitHistoryAllBranchesPayloadKey] != false;
+
+  bool get gitHistoryFavoritesOnly =>
+      payload[workspaceTabGitHistoryFavoritesOnlyPayloadKey] == true;
 
   /// Optional branch/ref used as the commit-graph history root without
   /// checking that branch out. Null means use the repository's current branch.

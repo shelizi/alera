@@ -606,6 +606,26 @@ pub fn git_history(
     git_history_impl::git_history(path, limit, base_ref, include_all_refs, offset, None)
 }
 
+/// Walks precisely the requested ref tips, including their shared ancestry.
+/// An empty ref list produces no commits, including when HEAD has commits.
+pub fn git_history_for_refs(
+    path: String,
+    refs: Vec<String>,
+    limit: Option<u32>,
+    offset: Option<u32>,
+    file_path: Option<String>,
+) -> Result<GitHistoryResult, GitError> {
+    git_history_impl::git_history_with_refs(
+        path,
+        limit,
+        None,
+        Some(true),
+        offset,
+        file_path,
+        Some(refs),
+    )
+}
+
 pub fn git_file_history(
     path: String,
     file_path: String,

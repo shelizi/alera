@@ -1,6 +1,11 @@
 part of 'alera_localizations.dart';
 
 const Map<String, String> _japaneseShell = <String, String>{
+  'Favorite Branches': 'お気に入りブランチ',
+  'Add To Favorites': 'お気に入りに追加',
+  'Remove From Favorites': 'お気に入りから削除',
+  'No favorite branch commits': 'お気に入りブランチのコミットがありません',
+
   // Workspace and editor shell.
   'Add Project': 'プロジェクトを追加',
   'New Workspace': '新規ワークスペース',

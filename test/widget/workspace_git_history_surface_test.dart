@@ -611,6 +611,16 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    expect(
+      find.byKey(const ValueKey('git-history-merged-target-menu')),
+      findsNothing,
+    );
+    await tester.tap(
+      find.byKey(const ValueKey('git-history-merged-visibility-menu')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Hide Merged Names'));
+    await tester.pumpAndSettle();
     final targetMenu = find.byKey(
       const ValueKey<String>('git-history-merged-target-menu'),
     );
@@ -620,15 +630,6 @@ void main() {
     await tester.tap(
       find.byKey(const ValueKey<String>('git-history-merged-target-release')),
     );
-    await tester.pumpAndSettle();
-
-    final visibilityMenu = find.byKey(
-      const ValueKey<String>('git-history-merged-visibility-menu'),
-    );
-    await tester.ensureVisible(visibilityMenu);
-    await tester.tap(visibilityMenu);
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Hide Merged Names'));
     await tester.pumpAndSettle();
 
     expect(

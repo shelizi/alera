@@ -2,6 +2,19 @@ part of 'workbench_controller.dart';
 
 mixin _WorkbenchControllerViewPrefs
     on _$WorkbenchController, _WorkbenchControllerInternals {
+  void toggleBranchFavorite({
+    required String scopeKey,
+    required String branch,
+  }) {
+    _updateViewPrefs(
+      toggleWorkbenchBranchFavorite(
+        prefs: state.viewPrefs,
+        scopeKey: scopeKey,
+        branch: branch,
+      ),
+    );
+  }
+
   void toggleExpanded(String projectId) {
     toggleProjectCollapsed(projectId);
   }

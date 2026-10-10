@@ -201,6 +201,9 @@ abstract interface class GitBackend {
   /// of only HEAD and its upstream. [offset] skips that many visible commits
   /// before taking [limit], which drives paged loading; `hasMore` reports
   /// whether further pages remain.
+  /// [includedRefs] walks only these branch/ref tips and their ancestors.
+  /// An empty list returns empty history. It takes precedence over perspective
+  /// arguments and composes with [filePath].
   /// [filePath] selects an exact workspace-relative file across all branches,
   /// preserving connections through omitted commits. It overrides branch
   /// perspective arguments and pages matching commits only.
@@ -209,6 +212,7 @@ abstract interface class GitBackend {
     int? limit,
     String? baseRef,
     bool includeAllRefs = false,
+    List<String>? includedRefs,
     int? offset,
     String? filePath,
   });

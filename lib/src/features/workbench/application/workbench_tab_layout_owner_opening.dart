@@ -172,12 +172,14 @@ extension WorkbenchTabLayoutOwnerOpening on WorkbenchTabLayoutOwner {
   Future<void> setGitHistoryAllBranches({
     required String tabId,
     required bool allBranches,
+    bool favoritesOnly = false,
     String? selectedRef,
   }) async {
     try {
       final tab = await _host.workspaceTabService.setGitHistoryAllBranches(
         tabId: tabId,
         allBranches: allBranches,
+        favoritesOnly: favoritesOnly,
         selectedRef: selectedRef,
       );
       if (tab != null && !_host.isDisposed) {

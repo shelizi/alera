@@ -1,6 +1,8 @@
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/shared/infra/git/git_diff_models.dart';
 import 'package:alera/src/shared/infra/git/git_history_graph.dart';
+import 'package:alera/src/design_system/buttons/alera_icon_button.dart';
+import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:flutter/material.dart';
 
 /// Swimlane rendering for one commit row, shared between the source-control
@@ -232,6 +234,8 @@ class const GitRefBadge({
   super.key,
   required final GitHistoryItemRef itemRef,
   final bool isCurrent = false,
+  final bool isFavorite = false,
+  final VoidCallback? onToggleFavorite,
   final ValueChanged<Offset>? onOpenActions,
 }) extends StatelessWidget {
   @override
@@ -271,15 +275,34 @@ class const GitRefBadge({
           horizontal: AleraTokens.space6,
           vertical: AleraTokens.space2,
         ),
-        child: Text(
-          itemRef.name,
-          maxLines: 1,
-          overflow: .ellipsis,
-          style: Theme.of(context).textTheme.labelSmall?.copyWith(
-            color: color,
-            fontSize: 10,
-            fontWeight: isCurrent ? .w800 : .w700,
-          ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (onToggleFavorite != null)
+              AleraIconButton(
+                key: ValueKey('git-history-ref-favorite:${itemRef.id}'),
+                tooltip: isFavorite
+                    ? 'Remove From Favorites'
+                    : 'Add To Favorites',
+                icon: isFavorite ? AleraIcons.favorite : AleraIcons.favoriteOff,
+                iconSize: AleraTokens.space12,
+                minSize: AleraTokens.space16,
+                iconColor: isFavorite ? AleraTokens.accent : color,
+                onPressed: onToggleFavorite,
+              ),
+            Flexible(
+              child: Text(
+                itemRef.name,
+                maxLines: 1,
+                overflow: .ellipsis,
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  color: color,
+                  fontSize: 10,
+                  fontWeight: isCurrent ? .w800 : .w700,
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );

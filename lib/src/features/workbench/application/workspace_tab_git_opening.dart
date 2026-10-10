@@ -275,6 +275,7 @@ extension WorkspaceTabGitOpening on WorkspaceTabService {
   Future<WorkspaceTabRecord?> setGitHistoryAllBranches({
     required String tabId,
     required bool allBranches,
+    bool favoritesOnly = false,
     String? selectedRef,
   }) async {
     final tab = await _repository.findWorkspaceTabById(tabId);
@@ -286,6 +287,7 @@ extension WorkspaceTabGitOpening on WorkspaceTabService {
       payload: <String, Object?>{
         ...tab.payload,
         workspaceTabGitHistoryAllBranchesPayloadKey: allBranches,
+        workspaceTabGitHistoryFavoritesOnlyPayloadKey: favoritesOnly,
         workspaceTabGitHistorySelectedRefPayloadKey: allBranches
             ? null
             : selectedRef,

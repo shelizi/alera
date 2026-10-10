@@ -382,6 +382,7 @@ class FakeGitBackend
     int? limit,
     String? baseRef,
     bool includeAllRefs = false,
+    List<String>? includedRefs,
     int? offset,
     String? filePath,
   }) async {
@@ -391,6 +392,7 @@ class FakeGitBackend
         'limit': limit,
         'baseRef': baseRef,
         'includeAllRefs': includeAllRefs,
+        'includedRefs': includedRefs,
         'offset': offset,
         'filePath': filePath,
       }),

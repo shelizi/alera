@@ -30,7 +30,7 @@ extension _WorkspaceGitHistorySurfaceRefActions
       return;
     }
     _compareCache.clear();
-    await _reload();
+    await _initializeHistory();
     if (!mounted) {
       return;
     }
