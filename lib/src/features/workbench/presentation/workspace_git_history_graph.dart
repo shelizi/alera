@@ -278,16 +278,14 @@ class const GitRefBadge({
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (onToggleFavorite != null)
+            if (isFavorite && onToggleFavorite != null)
               AleraIconButton(
                 key: ValueKey('git-history-ref-favorite:${itemRef.id}'),
-                tooltip: isFavorite
-                    ? 'Remove From Favorites'
-                    : 'Add To Favorites',
-                icon: isFavorite ? AleraIcons.favorite : AleraIcons.favoriteOff,
+                tooltip: 'Remove From Favorites',
+                icon: AleraIcons.favorite,
                 iconSize: AleraTokens.space12,
                 minSize: AleraTokens.space16,
-                iconColor: isFavorite ? AleraTokens.accent : color,
+                iconColor: AleraTokens.accent,
                 onPressed: onToggleFavorite,
               ),
             Flexible(

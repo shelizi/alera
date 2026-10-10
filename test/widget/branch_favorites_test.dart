@@ -75,8 +75,20 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('git-history-ref-favorite:refs/heads/feature')),
+      findsNothing,
+    );
     await tester.tap(find.byKey(const ValueKey('workspace-branch-status')));
     await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<AleraIconButton>(
+            find.byKey(const ValueKey('workspace-branch-favorite:feature')),
+          )
+          .icon,
+      AleraIcons.add,
+    );
     await tester.tap(
       find.byKey(const ValueKey('workspace-branch-favorite:feature')),
     );
@@ -122,6 +134,10 @@ void main() {
       isEmpty,
     );
     expect(switches, isEmpty);
+    expect(
+      find.byKey(const ValueKey('git-history-ref-favorite:refs/heads/feature')),
+      findsNothing,
+    );
   });
 
   testWidgets(
@@ -143,6 +159,14 @@ void main() {
         find.byKey(const ValueKey('git-history-branch-perspective-menu')),
       );
       await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<AleraIconButton>(
+              find.byKey(const ValueKey('git-history-branch-favorite:feature')),
+            )
+            .icon,
+        AleraIcons.add,
+      );
       await tester.tap(
         find.byKey(const ValueKey('git-history-branch-favorite:feature')),
       );

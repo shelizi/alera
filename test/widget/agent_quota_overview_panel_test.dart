@@ -327,7 +327,9 @@ void main() {
     expect(find.byTooltip('Pin To Status Bar'), findsOneWidget);
   });
 
-  testWidgets('refreshes one pinned agent from the status bar', (tester) async {
+  testWidgets('refreshes one pinned agent from its detail popup', (
+    tester,
+  ) async {
     final refreshed = <AgentQuotaProviderId>[];
     await tester.pumpWidget(
       _wrap(
@@ -353,8 +355,12 @@ void main() {
       ),
     );
 
-    expect(find.byTooltip('Refresh Agent'), findsNWidgets(2));
-    await tester.tap(find.byTooltip('Refresh Agent').first);
+    expect(find.byTooltip('Refresh Agent'), findsNothing);
+    await tester.tap(find.text('W').first, kind: .mouse);
+    await tester.pumpAndSettle();
+
+    expect(find.byTooltip('Refresh Agent'), findsOneWidget);
+    await tester.tap(find.byTooltip('Refresh Agent'));
     await tester.pump();
 
     expect(refreshed, <AgentQuotaProviderId>[AgentQuotaProviderId.claude]);

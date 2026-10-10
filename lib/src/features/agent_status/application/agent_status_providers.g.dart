@@ -970,4 +970,4 @@ final class AgentStatusNotificationCoordinatorProvider
 }
 
 String _$agentStatusNotificationCoordinatorHash() =>
-    r'd471f67adab487c653e23c918c2f46921a9c90cc';
+    r'1eefa0ead13485f9a2db70c0af92646bd0c00e7d';

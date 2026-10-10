@@ -23,6 +23,8 @@ class const _QuotaProviderSummary({
               : <String, String>{snapshot.key: profileLabel!},
           hostId: hostId,
           actions: actions,
+          onRefreshSnapshot: onRefreshSnapshot,
+          snapshotRefreshEnabled: enabled,
         ),
         child: Container(
           height: AleraTokens.statusBarHeight,
@@ -72,16 +74,6 @@ class const _QuotaProviderSummary({
                     compact: compact,
                   ),
                 ],
-              if (onRefreshSnapshot != null) ...<Widget>[
-                SizedBox(
-                  width: compact ? AleraTokens.space4 : AleraTokens.space6,
-                ),
-                _QuotaSnapshotRefreshButton(
-                  key: ValueKey<String>('quota-refresh:${snapshot.key}'),
-                  enabled: enabled,
-                  onRefresh: () => onRefreshSnapshot!(snapshot),
-                ),
-              ],
             ],
           ),
         ),

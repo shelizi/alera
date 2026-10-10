@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "latest_number": 69,
+  "latest_number": 77,
   "sessions": {
     "alera-editor-scrollbar-check": {
       "number": 13,
@@ -10,6 +10,15 @@
       "summary": "用户核心目标: - 確認 Alera 內建編輯器是否不顯示 Y 軸 scrollbar。 - Use an isolated Alera worktree to make the editor Y-axis scrollbar visible and improve long-file scrolling performance, while checking whether missing GPU acceleration is the cause. - Merge the verified editor scrollbar and long-file performance worktree branch into main.；已确认事实: - WorkspaceEditorSurface 使用 code_forge.CodeForge，並傳入自訂 scrollbarDecoration。 - _scrollbarDecoration() 明確設定 thickness: 0、thumbColor: Colors.transparent、trackVisibility: false、track/trackBorder 皆透明，因此目前 scrollbar 是刻意隱藏，而非單純未觸發顯示。 - 編輯器同時設定 lineWrap: true，因此一般不依賴 X 軸水平捲動。 - Alera intentionally hid the CodeForge vertical scrollbar with thickness 0 and transparent thumb. - Alera uses code_forge 10.13.0. The installed package already computes first/last visible lines, prunes viewport caches, and pre-highlights only viewport-adjacent lines, so document-level chunk/lazy loading would duplicate existing virtualization and risk breaking whole-document editing/search/save semantics. - Long-file hot paths include forced lineWrap and indentation guide work. CodeForge has extra wrapped-height/paragraph layout work when wrapping is enabled; guide calculation scans around the visible range. - Windows has no Alera setting forcing software rendering. docs/performance.md says Windows retains Flutter SDK renderer defaults; the lag is therefore more consistent with CPU text layout/highlighting/FFI/paint costs than an intentionally disabled GPU renderer. - main had unrelated pre-existing Rust/generated file modifications and untracked worktree/history/release files; these were preserved. - feat/editor-scroll-performance contained commit c3b43b62 perf(editor): improve long-file scrolling. - Merge completed cleanly with ort and no conflicts.；已完成修改: - lib/src/features/workbench/presentation/workspace_editor_surface.dart - test/widget/workspace_editor_surface_test.dart；关键设计决定: - Keep CodeForge native viewport virtualization/lazy highlighting rather than introducing outer document chunk loading. - Add automatic large-file performance mode at 5000 lines or 512 KiB of text, disabling line wrapping and indentation guides while preserving normal behavior for smaller files. - Show a subtle interactive 6px vertical scrollbar with a visible thumb and no persistent track. - Keep the work isolated on feat/editor-scroll-performance; do not merge to main in this task.；测试结果: - 唯讀程式碼檢查，未修改檔案，無需執行測試。 - TDD red phase: workspace editor widget test failed on the newly referenced scrollbar/performance helpers before implementation, as expected. - flutter test test/widget/workspace_editor_surface_test.dart test/unit/workspace_editor_surface_test.dart: 18 tests passed. - flutter analyze lib/src/features/workbench/presentation/workspace_editor_surface.dart test/widget/workspace_editor_surface_test.dart test/unit/workspace_editor_surface_test.dart: No issues found. - dart format applied to the changed production/test files. - flutter test test/widget/workspace_editor_surface…（摘要已截断）",
       "content_sha256": "ef59c2f617725886d35b32ca8d3b265c4c0d1143fab544594db8b9aafedbcac3",
       "content_bytes": 28941
+    },
+    "alera-file-history-diff-20261007": {
+      "number": 72,
+      "path": "docs/history-session/72.md",
+      "created_at": "unix:1791354155",
+      "updated_at": "unix:1791354155",
+      "summary": "未记录结构化摘要",
+      "content_sha256": "30dcc87c21432c8e34e3f21212b8321f7a9aee6bda75fc99e26adf40dd666107",
+      "content_bytes": 14876
     },
     "alera-file-manager-open-location": {
       "number": 6,
@@ -100,6 +109,15 @@
       "summary": "用户核心目标: - 修正 Alera Diff View 可編輯區沒有填滿可用高度的問題。 - 確認並修正 Alera Diff View 的 X 軸捲軸顯示，以及左右 pane 的同步 Y 軸捲動；同時支援 X 軸同步。；已确认事实: - side-by-side working-tree editable diff 原本依內容行數計算高度並 clamp 在 260–620px，沒有使用 Diff View 實際 viewport 高度；新增回歸斷言後，修正前 TextField 實測只有 225px 高。 - 上一版 0ebf59cf 僅修可編輯 Diff 高度滿版，沒有加入 X 軸 Scrollbar，也沒有左右 Y 軸同步。 - 可編輯模式原先左側為 SingleChildScrollView、右側 TextField 使用自己的捲動，因此兩側垂直捲動彼此獨立。 - 新增回歸測試後，修正前找不到任何 X 軸 Scrollbar，成功重現問題；測試同時暴露 Workspace Editable 標題列在較窄寬度可能 overflow 的既有問題。；已完成修改: - lib/src/features/workbench/presentation/workspace_git_diff_surface_rows.dart - lib/src/features/workbench/presentation/workspace_git_diff_surface_editable.dart - test/widget/workspace_git_diff_surface_test.dart；关键设计决定: - 由 _DiffFileList 的 side-by-side LayoutBuilder 將 bounded viewport height 傳入 _EditableWorkingTreeDiff；可編輯區優先使用 viewport 高度，僅在沒有 bounded height 時回退原本的內容高度算法。 - 保留原有水平捲動與 ListView lazy rendering，不改 staged/read-only diff 行為。 - 可編輯 side-by-side diff 左右 pane 各自使用水平與垂直 ScrollController。 - X/Y 捲動皆做雙向同步，使用 feedback guard 避免 controller listener 互相遞迴；target offset 依自身 extent clamp。 - 左右 pane 共用依最長行計算的內容寬度，確保兩側有一致的水平捲動範圍與可見 X 軸 scrollbar。 - Scrollbar 設為 thumbVisibility=true，水平 scrollbar 固定顯示於 bottom。 - Workspace Editable 標題改為 Expanded + ellipsis，避免窄視窗 overflow。；测试结果: - TDD pre-fix focused test reproduced the bug: editor height 225px, expected >400. - Focused widget test passed after fix: working-tree side-by-side right pane edits and saves file. - Targeted flutter analyze for the 3 touched files passed with no issues. - Full test/widget/workspace_git_diff_surface_test.dart passed 31/31; only pre-existing Drift multiple-database debug warnings were emitted. - 新增 focused regression: editable side-by-side shows x scrollbars and syncs x/y scroll；修正前失敗，修正後通過。 - 完整 test/widget/workspace_git_diff_surface_test.dart：32/32 passed。 - flutter analyze 兩個 touched files：No issues found。 - 完整 suite 仍出現既有 Drift multiple database debug warnings，與此次變更無關。；当前运行状态: - branch main - commit 0ebf59cfa0f5332dc40a1be215db5cb53dbd084c (fix(workbench): fill editable diff viewport) - Unrelated Rust/FRB worktree changes and pre-existing untracked files remain untouched. - HEAD 8b7d7bca3f2303ee0bc7b2144e888e5e105ae053 - commit: 8b7d7bca fix(workbench): sync editable diff scrolling - 其他既有 Rust/FRB 與 untracked 修改未納入此次 commit。；剩余问题: - 目前同步採像素 offset 對齊；若未來需要不同高度/折行策略下嚴格對齊 logical line，可再改成 line-based synchronized scrolling。",
       "content_sha256": "514909fc48b39a50a9c21126be1323fc1070a387d8305b562afa06a4f0f64dbc",
       "content_bytes": 25785
+    },
+    "v1/2LBhTAZX73zBYGR46hu6Y8gynCiGu5oQQBvbxYKmEkLOqmNxkyHc6KaWi4Bh2ihfnLWHFNSqgado": {
+      "number": 73,
+      "path": "docs/history-session/73.md",
+      "created_at": "unix:1791357958",
+      "updated_at": "unix:1791363509",
+      "summary": "用户核心目标: - Make Alera completion system notifications clickable so selecting one restores/focuses Alera and opens the corresponding workspace/tab. - Verify whether Alera notification-click activation is tested across all agent types, and add full coverage if not.；已确认事实: - Notification payloads already carried workspaceId, tabId, and terminalSessionId, and running-app activation already selected the target tab. - The missing case was notification cold-start: flutter_local_notifications launch details were not consumed, and activation could occur before Workbench bootstrap. - Before this change, notification activation itself was only covered with Codex. Other notification tests covered some but not all agent types. - Current AgentType values are codex, claude, copilot, cursor, agy, opencode, opencode2, pi, amp, grok, devin, fx.；已完成修改: - lib/src/features/agent_status/application/agent_status_notification_activation_service.dart - lib/src/features/agent_status/application/agent_status_notification_providers.dart - lib/src/features/agent_status/infra/desktop_agent_status_notification_service.dart - test/unit/agent_status_notification_activation_service_test.dart；关键设计决定: - Read notification app-launch details after notification plugin initialization. - Buffer the latest notification activation until Workbench is bootstrapped, then route it through the existing workspace/tab/terminal focus activation service. - Use AgentType.values to parameterize notification activation tests so future enum additions are automatically included. - For each agent type, verify payload decoding preserves the type and activation selects the expected project/workspace/tab and focuses the terminal.；测试结果: - flutter test test/unit/agent_status_notification_activation_service_test.dart => 5/5 passed - dart analyze scoped notification activation files/tests => No issues found - flutter test test/unit/agent_status_notification_activation_service_test.dart => 17/17 passed, including one activation case for each of 12 AgentType values. - dart analyze test/unit/agent_status_notification_activation_service_test.dart => No issues found.；当前运行状态: - HEAD 8e9fca5a54ecc9e4972fdf922cebe38f7134c232 - Commit: fix(notifications): open related tab on activation - Not pushed - Unrelated docs/history-session working tree changes remain. - HEAD 72ff57b97ca4bbdf7895d6f70c06c4d99bf572bb - Commit: test(notifications): cover all agent activation types - Previous feature commit 8e9fca5a5 remains immediately before it. - Not pushed.；剩余问题: - Broader app_providers_test.dart currently has an unrelated pre-existing compile failure because WorkspaceService.createLinkedWorkspace is absent. - An unrelated notification grouping test expects 'Claude' while current display name is 'Claude Code'.；下一步: - Push commit 8e9fca5a5 when requested. - Optionally perform a manual Windows notification-click smoke test in a built desktop app. - Push commits when requested.",
+      "content_sha256": "97d375410cb2c0549b34ce5b7e14cdd030cbc44140f6e3c63150cc2d7c7c90fd",
+      "content_bytes": 18548
     },
     "v1/2PHyVIYiyWNIyuWkxmqdlHEW7iYmJfbfj8pMCNfCyzMugsSHbeGbMvJFAeaFM5EdRPCP3UbKeCF0": {
       "number": 63,
@@ -344,6 +362,15 @@
       "content_sha256": "01600ed5f2a0b217f26ca816b60066faea4e75e403dbd6aa28ad844c30b3dbde",
       "content_bytes": 10223
     },
+    "v1/3vb9JpWaVS1vFd5qlr3sTxqfXZDXlDiIGMZzKlC8RWFLt068eRpm0LG7uiaNwAZbwwJVyhDPgKXx": {
+      "number": 70,
+      "path": "docs/history-session/70.md",
+      "created_at": "unix:1791192768",
+      "updated_at": "unix:1791387781",
+      "summary": "用户核心目标: - Finish, commit, and continue the Alera Git file revision compare feature without waiting for confirmation. - Continue improving Alera Git UX: keep Git graph lanes visually continuous, make file-history commit diffs show only the selected file, and add the same file-history/revision/branch comparison actions to Source Control file context menus; commit the finished work. - Clarify whether Git file-history graph line breaks are caused by commits in between that do not modify the selected file. - Investigate the real cause of Git file-history graph line breaks caused by filtered/skipped commits and fix it. - Push the current Alera main branch after the Git history lane continuity fix. - Confirm whether the GitHub CI triggered for the latest pushed Alera main commit. - Inspect the current uncommitted Alera changes and determine whether they contain functional changes. - Change Alera's uncommitted Windows build-storage workflow so it is not tied to D:, but instead uses a suitable local fixed drive root with enough free space, then validate and commit it. - Investigate and fix the Windows CMD window that flashes briefly when Alera queries agent quotas. - Push the completed Alera Windows quota TUI windowless fix. - Push the latest quota fix and confirm its compile/CI status. - Confirm whether Alera supports building a macOS version. - Confirm whether the currently published Alera release already includes a macOS build. - Explain whether Alera macOS builds must run on macOS or whether there are other practical build options. - Explain why the existing Windows portable release can publish even though the full release-cut path lacks signing secrets. - Add a fork macOS release workflow analogous to the existing Windows portable release and backfill the current public v0.87.12 release with a macOS ARM64 portable archive. - Add a fork macOS portable release flow mirroring the existing Windows portable release and backfill the current public release. - Add a fork macOS release path analogous to the existing Windows portable release and backfill the current public v0.87.12 release with a macOS ARM64 asset. - Add a fork-specific macOS portable release workflow analogous to the existing Windows portable release, push it, and backfill the current public release with a macOS ARM64 artifact. - Add a fork macOS release path analogous to the existing Windows portable release and publish a macOS ARM64 asset.；已确认事实: - Initial feature commit already existed at 53715914c with Git file revision compare tabs. - Follow-up review found duplicate Compare menu entries in editor and Explorer and tightened repository-root handling. - Rust GitPathContext supports workspace subdirectories inside a parent repository by prefixing repo-relative paths. - Flutter widget regression runner stalled during compiler startup and eventually reported the Dart compiler exited unexpectedly after termination; this was not a test assertion failure. - Git graph lane strokes ended exactly a…（摘要已截断）",
+      "content_sha256": "eab4882bca424be1ca928d2ef52c1759749b0a0d91dcb537ad936c1e8691c3cf",
+      "content_bytes": 95092
+    },
     "v1/3wi5YmhyJGGiQTqn57LQYsfB9lTXpFCBkrdjceXU1ShLOUICqrBdMbUdGrCvGGOrvN8neM7lZOEK": {
       "number": 21,
       "path": "docs/history-session/21.md",
@@ -443,6 +470,15 @@
       "content_sha256": "55ac0eddfd49a825e7eff16f5fd284aec2ee5b41d0307a0724d8a8039a659d62",
       "content_bytes": 31370
     },
+    "v1/4PtJDBio91VRhIOZfPg9zTksxt2Z4qDezuXZkxZ5LMJQf6olU6FOBxXOvYbxTJWEP2NgtuomMdwW": {
+      "number": 77,
+      "path": "docs/history-session/77.md",
+      "created_at": "unix:1791607983",
+      "updated_at": "unix:1791608073",
+      "summary": "用户核心目标: - 釐清 Alera 手機版如何連線、是否需要雲端伺服器，並對照 Orca Mobile。；已确认事实: - Alera 獨立 Flutter mobile/ 應用透過 runtime-host mobile WebSocket gateway 連線，QR pairing 並安全儲存 device token。 - desktop GUI 可以關閉，但 alera runtime start 啟動的獨立 Rust runtime 必須保持運作。 - Gateway 支援 This Device (loopback)、Tailscale、NetBird、Manual TLS proxy；不需自行架雲端伺服器即可透過 Tailscale/NetBird 跨網路操作。 - docs/remote-access-relay.md 描述 Cloudflare Durable Objects relay 作為 direct LAN/VPN transport 失敗後的選用備援，120 秒 grant 與端對端加密；需 Alera cloud/edge 部署以及登入，功能預設 opt-in off。 - cloud/readme.md 說明 API 驗證、mobile enrollment、push 訂閱/FCM、relay grants；推播與雲端功能需 production OAuth/Cloud/Firebase 設定並真機驗證。 - Orca 官方 docs 的 mobile 為 React Native/Expo，桌面 Electron 提供 port 6768 WebSocket RPC，支援 LAN 或自家 relay；relay 模式下雙方 outbound WebSocket，另有 push gateway。；关键设计决定: - 只查詢並說明現有架構，不修改程式碼、不部署、不新增執行程序。；测试结果: - 閱讀 Alera mobile/README.md、cloud/readme.md、docs/remote-access-relay.md、docs/remote-host-bootstrap.md 與根 readme.md；對照 Orca GitHub/docs。；当前运行状态: - 未執行 build、test、deploy 或修改產品程式碼。；剩余问题: - Alera README 指出 production OAuth/Cloud/Firebase 與 iOS APNs 真機推播端到端驗證尚待完成。；下一步: - 若使用者想實測，使用實體手機與 Tailscale 對現有 Alera runtime 做配對；驗證 Android/iOS 與 push 實際狀態。",
+      "content_sha256": "12e4fe24aab7259b0baf19134d99f188b9d7ae2ce5b0c471b77eae907543aada",
+      "content_bytes": 12191
+    },
     "v1/4PvWK7d5a9Xx4WYJ1o0TUw4p16qK8FIJ6DGIQGLISCQmHPNqLi2WyrNWupR0UhEHJ8b7eJ9CU0nR": {
       "number": 49,
       "path": "docs/history-session/49.md",
@@ -533,6 +569,24 @@
       "content_sha256": "1ca019d443851e6a81542f6e39fd20535f0ec4990758808cf4b7b7298e954f2e",
       "content_bytes": 42281
     },
+    "v1/4nHV6CHcCkvgurzL4hTMIgu016qaJess7dvafKeFKPEhtSQl5TzkvK9LLRSTJGmz2xRbQjvOcmPH": {
+      "number": 74,
+      "path": "docs/history-session/74.md",
+      "created_at": "unix:1791415819",
+      "updated_at": "unix:1791417081",
+      "summary": "用户核心目标: - Inspect the current Alera project status, including repository cleanliness, branch/worktree state, recent commits, CI/release status, and current release assets. - Clear the known Alera test debts: app_providers_test createLinkedWorkspace compile failure and stale Claude notification grouping expectation.；已确认事实: - Alera main HEAD is d81b387c28e83c4183bda715741a840203b522c6 (ci(release): publish fork macOS portable). - main tracks fork/main and is ahead 0 / behind 0. - There are no uncommitted product-code changes; working tree changes are only docs/history-session bookkeeping (index.json plus sessions 70-74). - Only the primary main worktree is currently present; no linked feature worktrees remain. - Recent commits include macOS portable release, all-agent notification activation tests, clickable notification activation, workbench/tab/file navigation improvements, intraline diff highlighting, and quota TUI windowless fix. - Fork GitHub Actions run 37598828713 (Fork macOS Release) succeeded for current HEAD d81b387c2; Startup Performance run 37598790366 also succeeded for the same HEAD. - Release v0.87.12 on shelizi/alera is published and contains Windows x64 zip plus macOS ARM64 tar.gz and SHA256 assets. - The createLinkedWorkspace compile failure was caused by app_providers_test.dart not importing workspace_service.dart, so the WorkspaceServiceLinkedOps extension was not in scope. - The notification grouping test still expected 'Claude' while the current descriptor display name is 'Claude Code'. - After those two fixes, a fresh full run of app_providers_test.dart exposed two more stale assertions in the same test file: the all-enabled hook map omitted Devin, and the runtime-overlay test depended on an initialized Rust native overlay backend. - The runtime overlay service already exposes nativePreparer/nativeCleaner test seams, so the provider test now injects deterministic fake native results instead of depending on Rust initialization.；已完成修改: - test/unit/app_providers_test.dart - test/unit/agent_status_notification_grouping_test.dart；关键设计决定: - Fix only tests; do not change production behavior. - Add the missing workspace_service.dart import so the extension method is in scope. - Update the notification expectation to Claude Code. - Include Devin in the all-enabled hook test. - Use AgentRuntimeOverlayService nativePreparer/nativeCleaner test seams for deterministic overlay preparation. - Commit only the two test files; leave docs/history-session bookkeeping uncommitted.；测试结果: - No new local test suite was run during this status inspection. - Verified GitHub Actions success for current HEAD via gh run list. - Verified v0.87.12 assets via gh release view. - flutter test test/unit/app_providers_test.dart test/unit/agent_status_notification_grouping_test.dart => 31/31 passed after final formatting. - dart format --output=none --set-exit-if-changed on both files => passed after canonical formatting. - git diff --check on both files => passe…（摘要已截断）",
+      "content_sha256": "8e0d1a3d0b42b5c9ef436014cdaa313e0826f75e16b1d33a939b10e317f971e4",
+      "content_bytes": 21888
+    },
+    "v1/4w5Zu3o1IztC2O0SmDr2GlWRsTLpzsCAsjKt6LrVAfYSJ9AK4NeKJnx80ivJZIs84F4NAL9wyTmO": {
+      "number": 76,
+      "path": "docs/history-session/76.md",
+      "created_at": "unix:1791525358",
+      "updated_at": "unix:1791525684",
+      "summary": "用户核心目标: - 啟動 Alera Windows 桌面程式；已确认事实: - home-rust Windows 機器沒有 alera.exe 執行中的程序，Start 搜尋 Alera 無本機應用結果。 - flutter run -d windows 已執行，但建置在 Visual Studio 18 MSBuild ZERO_CHECK.vcxproj 報 MSB4018：FileTracker.InitializeCommonApplicationDataPaths() System.ArgumentException 不合法的路徑格式。；当前运行状态: - flutter run 指令 session d53dd100-7f88-4467-9651-d1e2a03ee688，應視為建置失敗而非正常啟動。；剩余问题: - 修復 MSBuild FileTracker 路徑環境問題後重試 Alera 桌面啟動。",
+      "content_sha256": "1f1c6c98a305465de1da95f21caae8c3c7184c1ff508e5258c8a1cbb2d78c819",
+      "content_bytes": 13222
+    },
     "v1/4ycuqgyaTzkty5wAckznVHcCp9rmfoW6Sbr6hH83qunYrWkQPUe2tSCWn5jTuSxEIHVDmcsit0sc": {
       "number": 53,
       "path": "docs/history-session/53.md",
@@ -541,6 +595,15 @@
       "summary": "未记录结构化摘要",
       "content_sha256": "fd02860b83f17156325495ae175746c53ab467148619a3e74b96aebe3231315f",
       "content_bytes": 12150
+    },
+    "v1/52CvHaHgvR8rx8sfTIS6dY4ZCySjrP7P9lBBBAPKauLvxmlPuqzzBFS2QhroTMYONwdQt1YYnAne": {
+      "number": 71,
+      "path": "docs/history-session/71.md",
+      "created_at": "unix:1791248388",
+      "updated_at": "unix:1791254463",
+      "summary": "用户核心目标: - 盤點 Alera main 工作區目前尚未提交的內容。 - 提交 Alera 尚未提交的主要功能修改。 - 確認未提交的 workspace_git_diff_surface_bar.dart 修改內容。 - 依建議保留並提交 workspace_git_diff_surface_bar.dart 的 nullable onCancelReadingDiff 修正。；已确认事实: - 目前 main 相對 fork/main ahead 4；沒有 staged 變更。 - 產品程式 tracked 修改共 34 檔，git diff --stat 為 730 insertions / 272 deletions。 - 主要未提交功能是 View File History：Explorer 與檔案 tab 右鍵可開檔案歷史，Git history tab 儲存 filePath，Rust backend 新增 git_file_history，跨所有 branch 顯示該檔案 commits 並重寫省略 commit 後的 ancestry/refs。 - 另一組未提交修正是 branch checkout/create branch：先 checkout target tree 再移動 HEAD，避免切分支後前一分支獨有 tracked 檔殘留；並新增回歸測試。 - Workspace Explorer 另有 branch 變更時重新載入檔案樹的修正。 - 其餘包含 FRB generated bindings、對應 unit/widget/Rust tests、README，以及 untracked rust/src/api/git_file_history_impl.rs。 - untracked 另有 .worktrees/、docs/history-session/70.md；docs/history-session/71.md 是本次檢查建立的會話記錄。 - 建立 commit 04f8cd7f51e573cdfad500bdc2951508a8686908: feat(git): add file history view。 - 建立 commit 4b6d4ca539d8be0ac61fecc4c95a9ebbaa5917fe: fix(git): clean branch checkout state。 - File History 驗證：git diff --check 通過；Flutter workspace_tab_service + workspace_git_history_surface 共 73 tests passed；Rust file history targeted test 1 passed。 - Branch checkout 驗證：git diff --check 通過；Rust switching_branch_removes_previous_branch_files_and_preserves_untracked_files 1 passed；Flutter Explorer branch reload targeted test 1 passed。 - 提交前遇到零 bytes 的 .git/index.lock；確認無 running MCP command sessions 後移除 stale lock。 - 目前 main HEAD 為 4b6d4ca539d8be0ac61fecc4c95a9ebbaa5917fe，對 fork/main ahead 6。 - 仍保留未提交的非目標變更：workspace_git_diff_surface_bar.dart、pubspec.yaml、tool/release/prepared_release.json、history bookkeeping、.worktrees/。 - workspace_git_diff_surface_bar.dart 目前只有一處實質修改：_GitDiffBar constructor 的 onCancelReadingDiff 型別由 VoidCallback 改成 VoidCallback?。 - 原因是 workspace_git_diff_surface.dart 在 file revision diff 模式會傳 onCancelReadingDiff: null；非 file revision diff 才傳 _cancelReadingDiff。 - 按鈕在 readingDiffBusy 時直接使用 onCancelReadingDiff，nullable 會讓 file revision diff 模式下該按鈕不可點，符合該模式停用 Reading Diff 操作的邏輯。 - 此修改不是 branch checkout / Explorer reload 那組，因此先前沒有提交。 - 確認 workspace_git_diff_surface_bar.dart 的唯一實質修改是 onCancelReadingDiff 由 VoidCallback 改為 VoidCallback?，配合 file revision diff 模式傳 null。 - 原先考慮 fixup+autosquash 回 File History commit，但發現 fix/markdown-preview-fixes worktree 正指向同一個 HEAD 4b6d4ca53；重寫 main 會讓該活躍 worktree 分支留在舊歷史，因此改採安全的獨立 follow-up commit。 - 建立 commit e20d4f467a3ed5385a15070f835c80de9c4e961b: fix(git): allow disabled reading diff cancel。 - fix/markdown-preview-fixes worktree 保持在 4b6d4ca53 未被改動。 - 目前 main 對 fork/main ahead 7；剩餘未提交 tracked 只有 history index、pubspec.yaml、tool/release/prepared_release.json，加上 .worktrees 與 history session untracked 檔。；已完成修改: - lib/src/features/workbench/application/workbench_controller_tab_opening.dart - lib/src/features/workbench/application/workbench_tab_layout_owner_opening.dart - lib/src/features/workbench/application/workspace_tab_git_opening.dart - lib/src/features/workbench/domai…（摘要已截断）",
+      "content_sha256": "1638a3e9b783e7e4cb573154db971bfa70acee64e1c4927c535f3a689e3574ef",
+      "content_bytes": 26014
     },
     "v1/579HUTdryiw9mm4s9J3op34fildT8F9LpBOi6labPvb3yOFIAF664URPr9ah91YW8dmpwD6X8oe2": {
       "number": 8,
@@ -586,6 +649,15 @@
       "summary": "未记录结构化摘要",
       "content_sha256": "e6a1709f4c8d705e138ba2adaddd1d072ebc99b6760ccdc448560b49eb3c52b8",
       "content_bytes": 13077
+    },
+    "v1/5dbl2lD1NypK3o0sA3LysMhVQqKvMuFBoiv7sx42sVZiGZe2GDO2bZN07t5U3vipxRGap8pwmAqs": {
+      "number": 75,
+      "path": "docs/history-session/75.md",
+      "created_at": "unix:1791435876",
+      "updated_at": "unix:1791436424",
+      "summary": "用户核心目标: - Check Alera latest push and CI status. - Determine whether the currently compiled Alera release includes the recent Git file history/version feature.；已确认事实: - Local main is ahead of fork/main by 2 commits. - Local HEAD is release: v0.87.16. - Fork main is still at d81b387c2. - No fork CI exists for the two local commits because they are not pushed. - Latest published release on shelizi/alera is v0.87.12 built from target commit 76a648563423249634b70a6f86b176539e76fe46. - The Git file history view commit is 04f8cd7f5. - 04f8cd7f5 is not an ancestor of the v0.87.12 build commit, so the published v0.87.12 binaries do not include that feature. - Current main at 658df7e34 contains the newer Git file-history/version work but has not yet been packaged into a new release asset.；下一步: - Push main to fork if the user wants the release build triggered. - If requested, trigger/build and publish a new Windows/macOS release from current main.",
+      "content_sha256": "141912c14dcf1bb8c48ac7b986d4fa092b7bd639e4145e4b8651078ba21d8aa2",
+      "content_bytes": 16386
     },
     "v1/5ems2P7VLTxjnnQXXPbKtRQTzxEP1oZa7G3GmXRz0No6tLseiqyTijUSkLi9FP4CdOOKWafc8Eu8": {
       "number": 31,

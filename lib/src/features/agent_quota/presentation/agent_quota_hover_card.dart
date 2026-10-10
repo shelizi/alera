@@ -8,6 +8,8 @@ class const _AgentQuotaHoverCard({
   final Map<String, String> profileLabels = const <String, String>{},
   final String hostId = 'local',
   final AgentQuotaInlineActions actions = const AgentQuotaInlineActions(),
+  final AgentQuotaSnapshotRefresh? onRefreshSnapshot,
+  final bool snapshotRefreshEnabled = true,
 }) extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
@@ -50,6 +52,8 @@ class const _AgentQuotaHoverCard({
                   profileLabel: profileLabels[snapshot.key],
                   hostId: hostId,
                   actions: actions,
+                  onRefreshSnapshot: onRefreshSnapshot,
+                  refreshEnabled: snapshotRefreshEnabled,
                 ),
               ],
             ],
@@ -65,6 +69,8 @@ class const _AgentQuotaHoverSection({
   required final String? profileLabel,
   required final String hostId,
   final AgentQuotaInlineActions actions = const AgentQuotaInlineActions(),
+  final AgentQuotaSnapshotRefresh? onRefreshSnapshot,
+  final bool refreshEnabled = true,
 }) extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
@@ -111,6 +117,14 @@ class const _AgentQuotaHoverSection({
                 color: statusColor.withAlpha(28),
                 foregroundColor: statusColor,
               ),
+              if (onRefreshSnapshot != null) ...<Widget>[
+                const SizedBox(width: AleraTokens.space6),
+                _QuotaSnapshotRefreshButton(
+                  key: ValueKey<String>('quota-refresh:${snapshot.key}'),
+                  enabled: refreshEnabled,
+                  onRefresh: () => onRefreshSnapshot!(snapshot),
+                ),
+              ],
             ],
           ),
           const SizedBox(height: AleraTokens.space12),

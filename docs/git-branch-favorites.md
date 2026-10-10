@@ -1,6 +1,6 @@
 # Git Branch Favorites
 
-Use the star beside a branch in the bottom-right branch switcher or Git Graph to add or remove it from Favorites. Favorites appear first in both branch menus. Toggling a star keeps the menu open and does not check out the branch. Git Graph branch badges show the same favorite state and let you change it directly.
+Use the plus beside an unfavorited branch in the bottom-right branch switcher or Git Graph's branch menu to add it to Favorites. Favorite branches show a star; click it to remove the favorite. Favorites appear first in both branch menus. Toggling a favorite keeps the menu open and does not check out the branch. Git Graph branch badges display a star only for favorites; click that star to remove the favorite.
 
 Favorites are saved in local workbench preferences per project and source-control root. Linked worktrees of the same project share favorites; nested repositories and other projects keep separate lists.
 

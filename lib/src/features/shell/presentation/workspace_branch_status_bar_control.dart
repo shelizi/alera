@@ -257,7 +257,7 @@ class _WorkspaceBranchStatusBarControlState
                                             : 'Add To Favorites',
                                         icon: favorites.contains(row.branch)
                                             ? AleraIcons.favorite
-                                            : AleraIcons.favoriteOff,
+                                            : AleraIcons.add,
                                         iconColor:
                                             favorites.contains(row.branch)
                                             ? AleraTokens.accent

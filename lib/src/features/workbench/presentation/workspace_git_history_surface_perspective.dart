@@ -253,7 +253,7 @@ class _GitHistoryBranchPerspectiveMenuState
                                 : 'Add To Favorites',
                             icon: widget.favoriteBranches.contains(branch)
                                 ? AleraIcons.favorite
-                                : AleraIcons.favoriteOff,
+                                : AleraIcons.add,
                             iconColor: widget.favoriteBranches.contains(branch)
                                 ? AleraTokens.accent
                                 : AleraTokens.foregroundFaint,
