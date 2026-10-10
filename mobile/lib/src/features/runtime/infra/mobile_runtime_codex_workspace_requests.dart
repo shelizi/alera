@@ -20,6 +20,9 @@ mixin MobileRuntimeCodexWorkspaceRequests {
   bool get supportsCodexWorkspaceFiles =>
       runtimeCapabilities.contains(mobileCodexWorkspaceFilesCapability);
 
+  bool get supportsWorkspaceFileDiff =>
+      runtimeCapabilities.contains(mobileWorkspaceFileDiffCapability);
+
   bool get supportsPromptFileUpload =>
       runtimeCapabilities.contains(mobilePromptFileUploadCapability);
 
@@ -104,6 +107,23 @@ mixin MobileRuntimeCodexWorkspaceRequests {
       isText: payload['isText'] == true,
       bytes: base64Decode(payload.requiredString('dataBase64')),
     );
+  }
+
+  Future<MobileWorkspaceFileDiff> diffWorkspaceFile({
+    required String workspaceId,
+    required String relativePath,
+  }) async {
+    if (!supportsWorkspaceFileDiff) {
+      throw UnsupportedError('Update the paired runtime to view Git diffs.');
+    }
+    final payload = await requestMap(
+      'mobile.workspaceFile.diff',
+      <String, Object?>{
+        'workspaceId': workspaceId,
+        'relativePath': relativePath,
+      },
+    );
+    return MobileWorkspaceFileDiff.fromJson(payload);
   }
 
   Future<MobileWorkspaceFileRange> readPromptAttachment({

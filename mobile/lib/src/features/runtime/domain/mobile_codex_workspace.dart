@@ -57,6 +57,18 @@ class const MobileWorkspaceFileRange({
   required final List<int> bytes,
 });
 
+class const MobileWorkspaceFileDiff({
+  required final String relativePath,
+  required final String patch,
+  required final bool truncated,
+}) {
+  factory fromJson(Map<String, Object?> json) => MobileWorkspaceFileDiff(
+    relativePath: json.requiredString('relativePath'),
+    patch: json['patch'] as String? ?? '',
+    truncated: json['truncated'] == true,
+  );
+}
+
 bool mobileWorkspaceFileCanShare(int totalBytes) =>
     totalBytes >= 0 && totalBytes <= maxMobileWorkspaceShareBytes;
 

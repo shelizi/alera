@@ -2,7 +2,7 @@ import 'dart:convert';
 
 import 'package:alera_mobile/src/features/runtime/domain/mobile_codex_workspace.dart';
 import 'package:alera_mobile/src/features/workbench/application/mobile_workspace_text_preview.dart';
-import 'package:flutter_test/flutter_test.dart';
+import 'package:test/test.dart';
 
 void main() {
   test('reassembles split UTF-8 characters before decoding', () async {

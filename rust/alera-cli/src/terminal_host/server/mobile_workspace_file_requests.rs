@@ -1,4 +1,6 @@
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
+
+use git2::{DiffFormat, DiffOptions, Repository};
 
 use alera_core::runtime::{RuntimeStore, Workspace};
 use alera_core::workspace_files::{
@@ -119,6 +121,9 @@ async fn handle_mobile_workspace_file_request(
         MobileWorkspaceFileOperation::WorkspaceFileRead => {
             read_mobile_workspace_file(&runtime_store, payload).await
         }
+        MobileWorkspaceFileOperation::WorkspaceFileDiff => {
+            read_mobile_workspace_diff(&runtime_store, payload).await
+        }
         MobileWorkspaceFileOperation::PromptAttachmentRead => {
             read_mobile_prompt_attachment(runtime_dir, payload).await
         }
@@ -210,6 +215,81 @@ async fn read_mobile_workspace_file(
         Ok(workspace_range_response(relative_path, range))
     })
     .await
+}
+
+const MAX_MOBILE_GIT_DIFF_BYTES: usize = 512 * 1024;
+
+async fn read_mobile_workspace_diff(
+    runtime_store: &RuntimeStore,
+    payload: &Value,
+) -> HostResult<Value> {
+    let workspace = workspace_for_mobile_file_request(runtime_store, payload).await?;
+    let requested_path = require_string_key(payload, "relativePath")?;
+    let known_roots = known_workspace_paths(runtime_store).await?;
+    spawn_blocking_workspace("Workspace Git diff", move || {
+        let root = open_validated_mobile_workspace_root(&workspace.path, known_roots)?;
+        workspace_git_patch(root.canonical_path(), &requested_path)
+    })
+    .await
+}
+
+fn workspace_git_patch(root: &Path, relative_path: &str) -> HostResult<Value> {
+    let path = Path::new(relative_path);
+    if path.as_os_str().is_empty()
+        || path
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+        || is_protected_workspace_path(path)
+    {
+        return Err(HostError::state("Workspace Git diff path is invalid."));
+    }
+    let requested = root.join(path);
+    if requested.exists() {
+        let canonical = dunce::canonicalize(&requested)
+            .map_err(|_| HostError::state("Workspace Git diff path is unavailable."))?;
+        if !canonical.starts_with(root) {
+            return Err(HostError::state(
+                "Workspace Git diff cannot leave the workspace.",
+            ));
+        }
+    }
+    let repo = Repository::open(root)
+        .map_err(|_| HostError::state("Workspace is not a Git repository."))?;
+    let actual_root = repo
+        .workdir()
+        .and_then(|directory| dunce::canonicalize(directory).ok())
+        .ok_or_else(|| HostError::state("Workspace Git worktree is unavailable."))?;
+    if actual_root != root {
+        return Err(HostError::state(
+            "Workspace Git root is not the selected workspace.",
+        ));
+    }
+    let tree = repo
+        .head()
+        .and_then(|head| head.peel_to_tree())
+        .map_err(|_| HostError::state("Workspace has no Git HEAD to compare."))?;
+    let mut options = DiffOptions::new();
+    options.pathspec(relative_path).disable_pathspec_match(true);
+    let diff = repo
+        .diff_tree_to_workdir_with_index(Some(&tree), Some(&mut options))
+        .map_err(|error| HostError::state(format!("Git diff failed: {error}")))?;
+    let mut patch = Vec::new();
+    let mut truncated = false;
+    diff.print(DiffFormat::Patch, |_delta, _hunk, line| {
+        let available = MAX_MOBILE_GIT_DIFF_BYTES.saturating_sub(patch.len());
+        let content = line.content();
+        patch.extend_from_slice(&content[..content.len().min(available)]);
+        if content.len() > available {
+            truncated = true;
+        }
+        true
+    })
+    .map_err(|error| HostError::state(format!("Git diff failed: {error}")))?;
+    Ok(json!({
+        "relativePath": relative_path,
+        "patch": String::from_utf8_lossy(&patch),
+        "truncated": truncated,
+    }))
 }
 
 async fn read_mobile_prompt_attachment(runtime_dir: PathBuf, payload: &Value) -> HostResult<Value> {
@@ -391,10 +471,35 @@ mod tests {
     use super::super::request_route_policy::MobileWorkspaceFileOperation;
     use super::{
         absolute_workspace_file_target, prompt_attachment_root, validated_mobile_workspace_root,
+        workspace_git_patch,
     };
     use serde_json::json;
     use std::collections::HashMap;
     use std::path::Path;
+
+    #[test]
+    fn workspace_git_patch_is_scoped_to_one_tracked_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(directory.path()).unwrap();
+        let relative = Path::new("change.txt");
+        std::fs::write(directory.path().join(relative), "before\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(relative).unwrap();
+        index.write().unwrap();
+        let tree_id = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        let signature = git2::Signature::now("Test", "test@example.com").unwrap();
+        repo.commit(Some("HEAD"), &signature, &signature, "initial", &tree, &[])
+            .unwrap();
+        std::fs::write(directory.path().join(relative), "after\n").unwrap();
+        let root = dunce::canonicalize(directory.path()).unwrap();
+        let result = workspace_git_patch(&root, "change.txt").unwrap();
+        assert!(result["patch"].as_str().unwrap().contains("+after"));
+        assert!(!result["truncated"].as_bool().unwrap());
+        assert_eq!(result["relativePath"], "change.txt");
+        assert!(workspace_git_patch(&root, "../outside.txt").is_err());
+        assert!(workspace_git_patch(&root, ".git/config").is_err());
+    }
 
     #[test]
     fn prompt_attachment_reads_are_limited_to_runtime_upload_stores() {

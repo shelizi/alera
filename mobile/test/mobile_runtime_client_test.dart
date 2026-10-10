@@ -14,6 +14,63 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 void main() {
   tearDown(CrashReporting.resetForTesting);
 
+  test('mobile Git diff sends one workspace-scoped file request', () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    final sockets = <WebSocket>[];
+    final requests = <Map<String, Object?>>[];
+    addTearDown(() async {
+      for (final socket in sockets) {
+        await socket.close();
+      }
+      await server.close(force: true);
+    });
+    final subscription = server.listen((request) async {
+      final socket = await WebSocketTransformer.upgrade(request);
+      sockets.add(socket);
+      socket.listen((raw) {
+        final message = jsonDecode(raw as String) as Map<String, Object?>;
+        requests.add(message);
+        socket.add(
+          jsonEncode(<String, Object?>{
+            'id': message['id'],
+            'ok': true,
+            'payload': message['type'] == 'mobile.hello'
+                ? <String, Object?>{
+                    'runtimeCapabilities': <String>[
+                      mobileWorkspaceFileDiffCapability,
+                    ],
+                  }
+                : <String, Object?>{
+                    'relativePath': 'src/main.dart',
+                    'patch': '@@ -1 +1 @@\n-old\n+new\n',
+                    'truncated': false,
+                  },
+          }),
+        );
+      });
+    });
+    addTearDown(subscription.cancel);
+    final client = await MobileRuntimeClient.connect(
+      'ws://${server.address.address}:${server.port}',
+    );
+    addTearDown(client.dispose);
+    expect(client.supportsWorkspaceFileDiff, isFalse);
+    await client.authenticate(deviceId: 'device', deviceToken: 'token');
+    expect(client.supportsWorkspaceFileDiff, isTrue);
+    final diff = await client.diffWorkspaceFile(
+      workspaceId: 'workspace-a',
+      relativePath: 'src/main.dart',
+    );
+    expect(diff.patch, contains('+new'));
+    final request = requests.singleWhere(
+      (message) => message['type'] == 'mobile.workspaceFile.diff',
+    );
+    expect(request['payload'], <String, Object?>{
+      'workspaceId': 'workspace-a',
+      'relativePath': 'src/main.dart',
+    });
+  });
+
   test(
     'quota account refresh uses a capability-gated filtered request',
     () async {

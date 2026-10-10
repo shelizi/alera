@@ -46,6 +46,9 @@ pub const RUNTIME_HOST_MOBILE_PROMPT_IMAGE_UPLOAD_CAPABILITY: &str = "mobileProm
 /// Codex prompts without receiving unrestricted host filesystem access.
 pub const RUNTIME_HOST_MOBILE_CODEX_WORKSPACE_FILES_CAPABILITY: &str =
     "mobileCodexWorkspaceFilesV1";
+/// Paired phones may read a bounded exact-path Git diff, without executing
+/// arbitrary commands or sending workspace contents through a cloud server.
+pub const RUNTIME_HOST_MOBILE_WORKSPACE_FILE_DIFF_CAPABILITY: &str = "mobileWorkspaceFileDiffV1";
 /// Retained name. Codex chat sessions are gone; older phones still feature-detect this string.
 #[allow(dead_code)]
 pub const RUNTIME_HOST_MOBILE_CODEX_SESSIONS_CAPABILITY: &str = "mobileCodexSessionsV1";

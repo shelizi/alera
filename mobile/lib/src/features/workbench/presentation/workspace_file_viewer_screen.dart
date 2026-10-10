@@ -2,6 +2,7 @@ import 'package:alera_mobile/src/app/theme/alera_tokens.dart';
 import 'package:alera_mobile/src/features/runtime/application/host_connection_controller.dart';
 import 'package:alera_mobile/src/features/workbench/application/mobile_workspace_text_preview.dart';
 import 'package:alera_mobile/src/features/workbench/presentation/workspace_file_picker_sheet.dart';
+import 'package:alera_mobile/src/features/workbench/presentation/workspace_file_diff_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -42,12 +43,34 @@ class _WorkspaceFileViewerScreenState
 
   @override
   Widget build(BuildContext context) {
+    final canDiff =
+        ref
+            .watch(hostConnectionControllerProvider(widget.hostId))
+            .value
+            ?.supportsWorkspaceFileDiff ==
+        true;
     return Scaffold(
       appBar: AppBar(
         title: Text(
           workspaceFileBaseName(widget.relativePath),
           overflow: TextOverflow.ellipsis,
         ),
+        actions: <Widget>[
+          if (canDiff)
+            IconButton(
+              tooltip: 'View Git Changes',
+              icon: const Icon(Icons.difference_outlined),
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => WorkspaceFileDiffScreen(
+                    hostId: widget.hostId,
+                    workspaceId: widget.workspaceId,
+                    relativePath: widget.relativePath,
+                  ),
+                ),
+              ),
+            ),
+        ],
       ),
       body: SafeArea(
         child: FutureBuilder<MobileWorkspaceTextPreview>(

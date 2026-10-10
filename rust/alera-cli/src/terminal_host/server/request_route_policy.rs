@@ -155,6 +155,7 @@ pub(crate) enum MobileWorkspaceFileOperation {
     QuickOpenStart,
     QuickOpenSearch,
     WorkspaceFileRead,
+    WorkspaceFileDiff,
     PromptAttachmentRead,
 }
 
@@ -320,6 +321,9 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         ),
         "mobile.workspaceFile.read" => mobile_deferred_operation(
             MobileDeferredRoute::WorkspaceFile(MobileWorkspaceFileOperation::WorkspaceFileRead),
+        ),
+        "mobile.workspaceFile.diff" => mobile_deferred_operation(
+            MobileDeferredRoute::WorkspaceFile(MobileWorkspaceFileOperation::WorkspaceFileDiff),
         ),
         "mobile.promptAttachment.read" => mobile_deferred_operation(
             MobileDeferredRoute::WorkspaceFile(MobileWorkspaceFileOperation::PromptAttachmentRead),

@@ -59,6 +59,7 @@ const String agentProfileLaunchIdempotencyCapability =
     'agentProfileLaunchIdempotencyV1';
 const String mobileCodexWorkspaceFilesCapability =
     'mobileCodexWorkspaceFilesV1';
+const String mobileWorkspaceFileDiffCapability = 'mobileWorkspaceFileDiffV1';
 const String mobilePromptFileUploadCapability = 'mobilePromptFileUploadV1';
 const String mobilePromptAttachmentReadCapability =
     'mobilePromptAttachmentReadV1';
