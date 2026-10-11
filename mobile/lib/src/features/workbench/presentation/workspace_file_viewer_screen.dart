@@ -1,8 +1,10 @@
 import 'package:alera_mobile/src/app/theme/alera_tokens.dart';
 import 'package:alera_mobile/src/features/runtime/application/host_connection_controller.dart';
+import 'package:alera_mobile/src/features/runtime/infra/mobile_runtime_client.dart';
 import 'package:alera_mobile/src/features/workbench/application/mobile_workspace_text_preview.dart';
 import 'package:alera_mobile/src/features/workbench/application/mobile_workspace_image_preview.dart';
 import 'package:alera_mobile/src/features/workbench/application/mobile_markdown_preview.dart';
+import 'package:alera_mobile/src/features/workbench/application/mobile_workspace_filename.dart';
 import 'package:alera_mobile/src/features/workbench/presentation/workspace_file_picker_sheet.dart';
 import 'package:alera_mobile/src/features/workbench/presentation/workspace_file_diff_screen.dart';
 import 'package:alera_mobile/src/features/workbench/presentation/workspace_text_editor_screen.dart';
@@ -27,6 +29,7 @@ class _WorkspaceFileViewerScreenState
   late Future<MobileWorkspaceTextPreview> _preview;
   Future<MobileWorkspaceImagePreview>? _imagePreview;
   bool _markdownPreview = true;
+  bool _renaming = false;
 
   @override
   void initState() {
@@ -71,6 +74,85 @@ class _WorkspaceFileViewerScreenState
     );
   }
 
+  Future<void> _renameText(String expectedSha256) async {
+    if (_renaming) return;
+    final currentName = workspaceFileBaseName(widget.relativePath);
+    var enteredName = currentName;
+    final newName = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Rename text file on host?'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            const Text(
+              'Only the filename changes. Existing destinations are never overwritten.',
+            ),
+            const SizedBox(height: 12),
+            TextFormField(
+              initialValue: currentName,
+              autofocus: true,
+              onChanged: (text) => enteredName = text,
+              decoration: const InputDecoration(
+                labelText: 'New filename',
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(enteredName),
+            child: const Text('Rename'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || newName == null) return;
+    if (newName == currentName || !isSafeMobileWorkspaceFileName(newName)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Choose a different single filename.')),
+      );
+      return;
+    }
+    setState(() => _renaming = true);
+    try {
+      final client = await ref.read(
+        hostConnectionControllerProvider(widget.hostId).future,
+      );
+      await client.renameWorkspaceText(
+        workspaceId: widget.workspaceId,
+        relativePath: widget.relativePath,
+        newName: newName,
+        expectedSha256: expectedSha256,
+      );
+      if (mounted) Navigator.of(context).pop();
+    } on MobileRuntimeConflictException catch (error, trace) {
+      _logger.warning('Mobile text rename conflicted', error, trace);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'The file changed or the destination exists. Reopen and retry.',
+            ),
+          ),
+        );
+      }
+    } on Object catch (error, trace) {
+      _logger.warning('Mobile text rename failed', error, trace);
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Rename failed: $error')));
+      }
+    } finally {
+      if (mounted) setState(() => _renaming = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final canDiff =
@@ -84,6 +166,12 @@ class _WorkspaceFileViewerScreenState
             .watch(hostConnectionControllerProvider(widget.hostId))
             .value
             ?.supportsWorkspaceTextEdit ==
+        true;
+    final canRename =
+        ref
+            .watch(hostConnectionControllerProvider(widget.hostId))
+            .value
+            ?.supportsWorkspaceTextRename ==
         true;
     return Scaffold(
       appBar: AppBar(
@@ -157,6 +245,17 @@ class _WorkspaceFileViewerScreenState
                           setState(() => _preview = _readPreview());
                         }
                       },
+                    ),
+                  ),
+                if (canRename && preview.originalSha256 != null)
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton.icon(
+                      icon: const Icon(Icons.drive_file_rename_outline),
+                      label: const Text('Rename file'),
+                      onPressed: _renaming
+                          ? null
+                          : () => _renameText(preview.originalSha256!),
                     ),
                   ),
                 if (preview.isText &&

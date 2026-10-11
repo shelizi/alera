@@ -29,6 +29,31 @@ mixin MobileRuntimeCodexWorkspaceRequests {
   bool get supportsWorkspaceTextCreate =>
       runtimeCapabilities.contains(mobileWorkspaceTextCreateCapability);
 
+  bool get supportsWorkspaceTextRename =>
+      runtimeCapabilities.contains(mobileWorkspaceTextRenameCapability);
+
+  Future<String> renameWorkspaceText({
+    required String workspaceId,
+    required String relativePath,
+    required String newName,
+    required String expectedSha256,
+  }) async {
+    if (!supportsWorkspaceTextRename) {
+      throw UnsupportedError('Update the paired runtime to rename text files.');
+    }
+    final response = await requestMap(
+      'mobile.workspaceFile.rename',
+      <String, Object?>{
+        'workspaceId': workspaceId,
+        'relativePath': relativePath,
+        'newName': newName,
+        'expectedSha256': expectedSha256,
+      },
+      const Duration(seconds: 30),
+    );
+    return response.requiredString('relativePath');
+  }
+
   Future<MobileWorkspaceTextSaveResult> createWorkspaceText({
     required String workspaceId,
     required String relativePath,

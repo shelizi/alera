@@ -58,6 +58,19 @@ class _WorkspaceDirectoryBrowserScreenState
     _load(reset: true);
   }
 
+  Future<void> _openFile(String relativePath) async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => WorkspaceFileViewerScreen(
+          hostId: widget.hostId,
+          workspaceId: widget.workspaceId,
+          relativePath: relativePath,
+        ),
+      ),
+    );
+    if (mounted) await _load(reset: true);
+  }
+
   Future<void> _quickOpen() async {
     try {
       final client = await ref.read(
@@ -72,15 +85,7 @@ class _WorkspaceDirectoryBrowserScreenState
         stop: client.stopWorkspaceQuickOpen,
       );
       if (!mounted || path == null) return;
-      Navigator.of(context).push(
-        MaterialPageRoute<void>(
-          builder: (_) => WorkspaceFileViewerScreen(
-            hostId: widget.hostId,
-            workspaceId: widget.workspaceId,
-            relativePath: path,
-          ),
-        ),
-      );
+      await _openFile(path);
     } on Object catch (error, trace) {
       _logger.warning('Quick Open failed', error, trace);
       if (mounted) setState(() => _error = error.toString());
@@ -100,15 +105,7 @@ class _WorkspaceDirectoryBrowserScreenState
     if (!mounted || path == null) return;
     await _load(reset: true);
     if (!mounted) return;
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => WorkspaceFileViewerScreen(
-          hostId: widget.hostId,
-          workspaceId: widget.workspaceId,
-          relativePath: path,
-        ),
-      ),
-    );
+    await _openFile(path);
   }
 
   Future<void> _load({required bool reset}) async {
@@ -244,15 +241,7 @@ class _WorkspaceDirectoryBrowserScreenState
                     if (entry.isDirectory) {
                       _navigate(entry.relativePath);
                     } else {
-                      Navigator.of(context).push(
-                        MaterialPageRoute<void>(
-                          builder: (_) => WorkspaceFileViewerScreen(
-                            hostId: widget.hostId,
-                            workspaceId: widget.workspaceId,
-                            relativePath: entry.relativePath,
-                          ),
-                        ),
-                      );
+                      _openFile(entry.relativePath);
                     }
                   },
                 ),

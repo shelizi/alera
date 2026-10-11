@@ -158,6 +158,7 @@ pub(crate) enum MobileWorkspaceFileOperation {
     WorkspaceFileRead,
     WorkspaceFileWrite,
     WorkspaceFileCreate,
+    WorkspaceFileRename,
     WorkspaceFileDiff,
     WorkspaceGitStatus,
     WorkspaceGitStage,
@@ -340,6 +341,9 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         ),
         "mobile.workspaceFile.create" => mobile_conflicting_deferred_operation(
             MobileDeferredRoute::WorkspaceFile(MobileWorkspaceFileOperation::WorkspaceFileCreate),
+        ),
+        "mobile.workspaceFile.rename" => mobile_conflicting_deferred_operation(
+            MobileDeferredRoute::WorkspaceFile(MobileWorkspaceFileOperation::WorkspaceFileRename),
         ),
         "mobile.workspaceFile.diff" => mobile_deferred_operation(
             MobileDeferredRoute::WorkspaceFile(MobileWorkspaceFileOperation::WorkspaceFileDiff),
@@ -699,6 +703,7 @@ mod tests {
         for request in [
             "mobile.workspaceFile.write",
             "mobile.workspaceFile.create",
+            "mobile.workspaceFile.rename",
             "mobile.workspaceGit.stage",
         ] {
             let policy = request_route_policy(request);

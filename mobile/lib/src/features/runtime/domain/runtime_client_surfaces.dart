@@ -71,6 +71,8 @@ const String mobileWorkspaceDirectoryBrowseCapability =
 const String mobileWorkspaceTextEditCapability = 'mobileWorkspaceTextEditV1';
 const String mobileWorkspaceTextCreateCapability =
     'mobileWorkspaceTextCreateV1';
+const String mobileWorkspaceTextRenameCapability =
+    'mobileWorkspaceTextRenameV1';
 const String mobilePromptFileUploadCapability = 'mobilePromptFileUploadV1';
 const String mobilePromptAttachmentReadCapability =
     'mobilePromptAttachmentReadV1';
@@ -184,6 +186,13 @@ abstract interface class MobileCodexWorkspaceClient {
   });
   bool get supportsWorkspaceTextEdit;
   bool get supportsWorkspaceTextCreate;
+  bool get supportsWorkspaceTextRename;
+  Future<String> renameWorkspaceText({
+    required String workspaceId,
+    required String relativePath,
+    required String newName,
+    required String expectedSha256,
+  });
   Future<MobileWorkspaceTextSaveResult> createWorkspaceText({
     required String workspaceId,
     required String relativePath,

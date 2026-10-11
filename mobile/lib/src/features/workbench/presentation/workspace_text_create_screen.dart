@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:alera_mobile/src/app/theme/alera_tokens.dart';
 import 'package:alera_mobile/src/features/runtime/application/host_connection_controller.dart';
 import 'package:alera_mobile/src/features/runtime/infra/mobile_runtime_client.dart';
+import 'package:alera_mobile/src/features/workbench/application/mobile_workspace_filename.dart';
 import 'package:alera_mobile/src/features/workbench/application/mobile_workspace_text_preview.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -47,13 +48,7 @@ class _WorkspaceTextCreateScreenState
   Future<void> _create() async {
     if (_saving) return;
     final name = _name.text;
-    if (name.isEmpty ||
-        name != name.trim() ||
-        name == '.' ||
-        name == '..' ||
-        name.contains('/') ||
-        name.contains('\\') ||
-        <String>{'.git', '.hg', '.svn'}.contains(name.toLowerCase())) {
+    if (!isSafeMobileWorkspaceFileName(name)) {
       _showError('Use one valid file name, without path separators.');
       return;
     }

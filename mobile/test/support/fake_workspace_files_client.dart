@@ -63,6 +63,18 @@ mixin FakeWorkspaceFilesClient implements MobileCodexWorkspaceClient {
   bool get supportsWorkspaceTextCreate => false;
 
   @override
+  bool get supportsWorkspaceTextRename => false;
+
+  @override
+  Future<String> renameWorkspaceText({
+    required String workspaceId,
+    required String relativePath,
+    required String newName,
+    required String expectedSha256,
+  }) async =>
+      throw UnsupportedError('Fake runtime does not rename text files.');
+
+  @override
   Future<MobileWorkspaceTextSaveResult> createWorkspaceText({
     required String workspaceId,
     required String relativePath,

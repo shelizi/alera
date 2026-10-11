@@ -26,6 +26,7 @@ version is intentionally unchanged. Build and commit each slice in
 
 - Protected `mobile.workspaceDirectory.list` RPC (`mobileWorkspaceDirectoryBrowseV1`): paged folder navigation, directories sorted first, optional hidden files, no VCS metadata or symlinks, 10,000-entry scan ceiling. Legacy phones/hosts continue using the Quick Open picker.
 - `mobile.workspaceFile.write` RPC (`mobileWorkspaceTextEditV1`): only existing UTF-8 files up to 256 KiB, explicit mobile confirmation, SHA-256 optimistic concurrency, typed `mobile_workspace_file_changed` conflict, atomic no-follow sibling replacement and permission preservation. The source file is never overwritten if the checksum differs.
+- `mobile.workspaceFile.rename` (`mobileWorkspaceTextRenameV1`): confirmed same-folder rename of already-read, writable UTF-8 files up to 256 KiB; SHA-256 optimistic precondition, pinned no-follow directories, hard-link no-clobber destination reservation and source/destination file-ID verification. Existing names or stale file content cause a conflict. Directory moves, large/binary renames and deletion/recovery need separate review.
 - `mobile.workspaceFile.create` (`mobileWorkspaceTextCreateV1`): creates only new UTF-8 files up to 256 KiB under already-existing, no-follow workspace directories. Atomic `create_new` refuses conflicts and never overwrites existing text or symlink targets; phone confirms destination and preserves drafts on failure. Rename/delete/move remain out of scope pending no-clobber and deletion safety review.
 - Regression tests cover paginated directory security, existing-file save and stale-digest refusal, WebSocket capabilities/payloads, strict UTF-8 mobile baseline and editor size limitations. Runtime and release verification remain separate gates.
 - Passive selectable Markdown formatting with raw-view toggle, without loading untrusted remote images or executing workspace HTML/JS. Git unified diff highlights additions/deletions/hunks while retaining literal patch text.
@@ -38,6 +39,13 @@ The latest committed `main` was incorporated into this isolated worktree as
 merge commit `9dec1b90` without modifying the main worktree's pending changes.
 
 ## Validation
+
+### 2026-10-11 guarded mobile text rename
+
+- `mobile.workspaceFile.rename` (`mobileWorkspaceTextRenameV1`) is a separate, authenticated and conflicting runtime mutation. The phone offers it only for fully read, valid UTF-8 text files up to 256 KiB with a SHA-256 baseline; the new name stays in the same directory. The Rust core reserves the name using a capability-directory hard link, checks original/target file IDs and content, and removes the old name only when validation passes. A destination collision never overwrites a file; renamed directories, binary files, moves and permanent deletion are not supported.
+- `cargo test --manifest-path rust/Cargo.toml -p alera-core --locked mobile_`: **4 passed**, including real filesystem rename no-clobber/stale-hash protection, safe existing edits/create, DOS device/Windows alternate-stream names and Unicode support. The mobile filename validator mirrors the server restrictions.
+- Mobile filename/rename/create focused tests: **4 passed**; `flutter test --no-pub` complete suite after filename hardening: **463 passed, 4 skipped, 0 failed**; `flutter analyze --no-pub`: **No issues**. Runtime Gateway mobile capability/allowlist `mobile_codex_file_surface_tests`: **3 passed** with isolated Cargo target. Signed app/device integration remains a separate gate.
+- Deletion must be a separate *recoverable trash/restore* workflow: persist verified contents/metadata outside the repository before any source unlink, require the current content hash and pinned no-follow parent, restore with a no-clobber create, and provide explicit mobile confirmation and retention limits. No irreversible delete RPC is exposed.
 
 ### 2026-10-11 image preview
 

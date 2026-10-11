@@ -479,6 +479,12 @@ pub fn create_workspace_text_from_root(
     let Component::Normal(name) = components[components.len() - 1] else {
         unreachable!("workspace creation path validated above")
     };
+    if !mobile_workspace_leaf_name_is_safe(name) {
+        return Err(WorkspaceFileError::new(
+            WorkspaceFileErrorKind::InvalidPath,
+            "Filename contains a reserved or unsafe filesystem name",
+        ));
+    }
     let mut options = OpenOptions::new();
     options
         .write(true)
@@ -498,15 +504,242 @@ pub fn create_workspace_text_from_root(
         .write_all(text.as_bytes())
         .and_then(|_| file.sync_all())
         .map_err(|error| WorkspaceFileError::from_io(error, relative_path));
-    drop(file);
+    let created_handle = Handle::from_file(file.into_std()).ok();
     if let Err(error) = result {
-        let _ = parent.remove_file(name);
+        // Another process might replace this name after the write failed.
+        // Only unlink it if it still refers to the precise file we created.
+        let mut options = OpenOptions::new();
+        options.read(true).follow(FollowSymlinks::No);
+        let current_handle = parent
+            .open_with(name, &options)
+            .ok()
+            .and_then(|current| Handle::from_file(current.into_std()).ok());
+        if created_handle.is_some() && created_handle == current_handle {
+            let _ = parent.remove_file(name);
+        }
         return Err(error);
     }
     Ok(WorkspaceTextWriteResult {
         sha256: hex::encode(Sha256::digest(text.as_bytes())),
         size_bytes: text.len() as u64,
     })
+}
+
+/// Rename an existing small UTF-8 text file within its current directory.
+/// A hard link first reserves the new name *without replacing any target*;
+/// only after verifying both links still point to the originally opened file
+/// is the old name removed. This intentionally never moves directories.
+pub fn rename_workspace_text_from_root(
+    root: &WorkspaceFileRoot,
+    relative_path: &str,
+    new_name: &str,
+    expected_sha256: &str,
+) -> Result<String, WorkspaceFileError> {
+    let old_path = Path::new(relative_path);
+    let new_file_name = Path::new(new_name);
+    if old_path.as_os_str().is_empty()
+        || old_path
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+        || is_protected_workspace_path(old_path)
+        || new_file_name
+            .components()
+            .collect::<Vec<_>>()
+            .as_slice()
+            .len()
+            != 1
+        || !matches!(
+            new_file_name.components().next(),
+            Some(Component::Normal(_))
+        )
+        || is_protected_workspace_path(new_file_name)
+        || expected_sha256.len() != 64
+        || !expected_sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(WorkspaceFileError::new(
+            WorkspaceFileErrorKind::InvalidPath,
+            "Invalid mobile file rename path or checksum",
+        ));
+    }
+    let old_name = old_path.file_name().expect("validated nonempty file path");
+    let new_name_os = new_file_name.file_name().expect("validated new name");
+    if !mobile_workspace_leaf_name_is_safe(new_name_os) {
+        return Err(WorkspaceFileError::new(
+            WorkspaceFileErrorKind::InvalidPath,
+            "New filename contains a reserved or unsafe filesystem name",
+        ));
+    }
+    if old_name == new_name_os {
+        return Err(WorkspaceFileError::new(
+            WorkspaceFileErrorKind::Conflict,
+            "New filename must differ from the original",
+        ));
+    }
+    let mut target_relative = old_path.parent().unwrap_or(Path::new("")).to_path_buf();
+    target_relative.push(new_name_os);
+    if is_protected_workspace_path(&target_relative) {
+        return Err(WorkspaceFileError::new(
+            WorkspaceFileErrorKind::InvalidPath,
+            "Rename target is protected",
+        ));
+    }
+    let target_str = target_relative.to_string_lossy().to_string();
+    let (mut source, source_path) = open_workspace_file_without_symlinks(root, relative_path)?;
+    let metadata = source
+        .metadata()
+        .map_err(|error| WorkspaceFileError::from_io(error, relative_path))?;
+    if !metadata.is_file()
+        || metadata.len() > MAX_REMOTE_EDIT_BYTES as u64
+        || metadata.permissions().readonly()
+        || !file_is_probably_utf8(&mut source, &source_path, metadata.len(), relative_path)?
+    {
+        return Err(WorkspaceFileError::new(
+            WorkspaceFileErrorKind::Unsupported,
+            "Only writable UTF-8 text files up to 256 KiB can be renamed",
+        ));
+    }
+    source
+        .seek(SeekFrom::Start(0))
+        .map_err(|error| WorkspaceFileError::from_io(error, relative_path))?;
+    let mut bytes = Vec::new();
+    source
+        .read_to_end(&mut bytes)
+        .map_err(|error| WorkspaceFileError::from_io(error, relative_path))?;
+    if bytes.contains(&0)
+        || std::str::from_utf8(&bytes).is_err()
+        || !hex::encode(Sha256::digest(&bytes)).eq_ignore_ascii_case(expected_sha256)
+    {
+        return Err(WorkspaceFileError::new(
+            WorkspaceFileErrorKind::Conflict,
+            "File changed on host or is not valid UTF-8; reopen before renaming",
+        ));
+    }
+    let source_identity = Handle::from_file(
+        source
+            .try_clone()
+            .map_err(|error| WorkspaceFileError::from_io(error, relative_path))?,
+    )
+    .map_err(|error| WorkspaceFileError::from_io(error, relative_path))?;
+    let mut parent = root
+        .directory
+        .try_clone()
+        .map_err(|error| WorkspaceFileError::from_io(error, relative_path))?;
+    for component in old_path
+        .components()
+        .take(old_path.components().count() - 1)
+    {
+        if let Component::Normal(name) = component {
+            reject_workspace_symlink(&parent, name, relative_path)?;
+            parent = parent
+                .open_dir_nofollow(name)
+                .map_err(|error| WorkspaceFileError::from_io(error, relative_path))?;
+        }
+    }
+    parent
+        .hard_link(old_name, &parent, new_name_os)
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::AlreadyExists {
+                WorkspaceFileError::new(
+                    WorkspaceFileErrorKind::Conflict,
+                    "Rename destination already exists; no file was replaced",
+                )
+            } else {
+                WorkspaceFileError::from_io(error, relative_path)
+            }
+        })?;
+    let validation = (|| {
+        let (mut newest, _) = open_workspace_file_without_symlinks(root, relative_path)?;
+        let (mut linked, _) = open_workspace_file_without_symlinks(root, &target_str)?;
+        for handle in [&newest, &linked] {
+            let identity = Handle::from_file(
+                handle
+                    .try_clone()
+                    .map_err(|error| WorkspaceFileError::from_io(error, relative_path))?,
+            )
+            .map_err(|error| WorkspaceFileError::from_io(error, relative_path))?;
+            if identity != source_identity {
+                return Err(WorkspaceFileError::new(
+                    WorkspaceFileErrorKind::Conflict,
+                    "Workspace file was replaced during rename",
+                ));
+            }
+        }
+        let mut current_bytes = Vec::new();
+        linked
+            .read_to_end(&mut current_bytes)
+            .map_err(|error| WorkspaceFileError::from_io(error, relative_path))?;
+        if !hex::encode(Sha256::digest(&current_bytes)).eq_ignore_ascii_case(expected_sha256) {
+            return Err(WorkspaceFileError::new(
+                WorkspaceFileErrorKind::Conflict,
+                "Workspace file changed during rename; reopen before retrying",
+            ));
+        }
+        newest
+            .seek(SeekFrom::Start(0))
+            .map_err(|error| WorkspaceFileError::from_io(error, relative_path))?;
+        current_bytes.clear();
+        newest
+            .read_to_end(&mut current_bytes)
+            .map_err(|error| WorkspaceFileError::from_io(error, relative_path))?;
+        if !hex::encode(Sha256::digest(&current_bytes)).eq_ignore_ascii_case(expected_sha256) {
+            return Err(WorkspaceFileError::new(
+                WorkspaceFileErrorKind::Conflict,
+                "Workspace file changed during rename",
+            ));
+        }
+        drop(linked);
+        drop(newest);
+        drop(source);
+        parent
+            .remove_file(old_name)
+            .map_err(|error| WorkspaceFileError::from_io(error, relative_path))?;
+        Ok(target_str.clone())
+    })();
+    if validation.is_err() {
+        // Never remove an unexpected destination or the only remaining copy.
+        let old_identity = open_workspace_file_without_symlinks(root, relative_path)
+            .ok()
+            .and_then(|(old, _)| Handle::from_file(old).ok());
+        let new_identity = open_workspace_file_without_symlinks(root, &target_str)
+            .ok()
+            .and_then(|(new_file, _)| Handle::from_file(new_file).ok());
+        if old_identity.as_ref() == Some(&source_identity)
+            && new_identity.as_ref() == Some(&source_identity)
+        {
+            let _ = parent.remove_file(new_name_os);
+        }
+    }
+    validation
+}
+
+/// Apply portable filename restrictions even on Unix so paired Windows hosts
+/// cannot later interpret a name as an NT device or alternate data stream.
+fn mobile_workspace_leaf_name_is_safe(name: &std::ffi::OsStr) -> bool {
+    let Some(name) = name.to_str() else {
+        return false;
+    };
+    if name.is_empty()
+        || name.trim() != name
+        || name.ends_with('.')
+        || name.to_ascii_lowercase().starts_with(".alera-mobile-")
+        || name.chars().any(|ch| {
+            ch.is_control() || matches!(ch, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|')
+        })
+    {
+        return false;
+    }
+    let stem = name.split('.').next().unwrap_or("").to_ascii_uppercase();
+    if matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CLOCK$") {
+        return false;
+    }
+    let stem_bytes = stem.as_bytes();
+    if stem_bytes.len() == 4
+        && (&stem_bytes[..3] == b"COM" || &stem_bytes[..3] == b"LPT")
+        && (b'1'..=b'9').contains(&stem_bytes[3])
+    {
+        return false;
+    }
+    true
 }
 
 fn open_workspace_file_without_symlinks(
@@ -653,6 +886,107 @@ pub fn is_protected_workspace_path(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mobile_file_names_reject_windows_devices_and_alternate_streams() {
+        for bad in [
+            "CON",
+            "con.txt",
+            "PRN.md",
+            "AUX",
+            "NUL",
+            "COM1.log",
+            "LPT9",
+            "notes:stream",
+            "bad?.txt",
+            "trailing.",
+            "bad\\name",
+            "end ",
+            ".alera-mobile-edit-fake.tmp",
+            "newline\n.txt",
+        ] {
+            assert!(
+                !mobile_workspace_leaf_name_is_safe(std::ffi::OsStr::new(bad)),
+                "{bad}"
+            );
+        }
+        for valid in ["notes.md", "config.toml", ".env", "台灣.md", "a-b_c.txt"] {
+            assert!(
+                mobile_workspace_leaf_name_is_safe(std::ffi::OsStr::new(valid)),
+                "{valid}"
+            );
+        }
+    }
+
+    #[test]
+    fn mobile_text_rename_keeps_data_and_refuses_existing_destinations() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::create_dir(temp.path().join("src")).unwrap();
+        fs::create_dir(temp.path().join(".git")).unwrap();
+        fs::write(temp.path().join("src/one.md"), "alpha\n").unwrap();
+        fs::write(temp.path().join("src/keep.md"), "keep\n").unwrap();
+        let root = open_workspace_file_root(&temp.path().to_string_lossy()).unwrap();
+        let checksum = hex::encode(Sha256::digest(b"alpha\n"));
+        let conflict =
+            rename_workspace_text_from_root(&root, "src/one.md", "keep.md", &checksum).unwrap_err();
+        assert_eq!(conflict.kind, WorkspaceFileErrorKind::Conflict);
+        assert_eq!(
+            fs::read_to_string(temp.path().join("src/keep.md")).unwrap(),
+            "keep\n"
+        );
+        assert!(temp.path().join("src/one.md").exists());
+        assert!(rename_workspace_text_from_root(
+            &root,
+            "src/one.md",
+            "bad.md",
+            &hex::encode(Sha256::digest(b"stale"))
+        )
+        .is_err());
+        assert!(!temp.path().join("src/bad.md").exists());
+        let path =
+            rename_workspace_text_from_root(&root, "src/one.md", "new.md", &checksum).unwrap();
+        assert_eq!(path.replace('\\', "/"), "src/new.md");
+        assert!(!temp.path().join("src/one.md").exists());
+        assert_eq!(
+            fs::read_to_string(temp.path().join("src/new.md")).unwrap(),
+            "alpha\n"
+        );
+        assert_eq!(
+            fs::read_to_string(temp.path().join("src/keep.md")).unwrap(),
+            "keep\n"
+        );
+        for new_name in ["", "..", "../escape.md", "new/escape.md", ".git", ".svn"] {
+            assert!(
+                rename_workspace_text_from_root(&root, "src/new.md", new_name, &checksum).is_err(),
+                "bad: {new_name}"
+            );
+        }
+        assert!(
+            rename_workspace_text_from_root(&root, ".git/config", "safe.md", &checksum).is_err()
+        );
+        fs::write(temp.path().join("src/binary.png"), [0, 1, 2]).unwrap();
+        let binary_hash = hex::encode(Sha256::digest([0, 1, 2]));
+        assert!(rename_workspace_text_from_root(
+            &root,
+            "src/binary.png",
+            "image.png",
+            &binary_hash
+        )
+        .is_err());
+        assert!(temp.path().join("src/binary.png").exists());
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(
+                temp.path().join("src/new.md"),
+                temp.path().join("src/link.md"),
+            )
+            .unwrap();
+            assert!(
+                rename_workspace_text_from_root(&root, "src/link.md", "unlink.md", &checksum)
+                    .is_err()
+            );
+        }
+    }
 
     #[test]
     fn mobile_create_new_text_file_never_overwrites_or_leaves_workspace() {

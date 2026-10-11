@@ -6,10 +6,11 @@ use alera_core::runtime::{RuntimeStore, Workspace};
 use alera_core::workspace_files::{
     create_workspace_text_from_root, is_protected_workspace_path,
     list_workspace_directory_from_root, open_workspace_file_root,
-    read_workspace_file_range_from_root, search_workspace_quick_open_session,
-    start_workspace_quick_open_session_without_symlinks, stop_workspace_quick_open_session,
-    write_workspace_text_from_root, WorkspaceFileErrorKind, WorkspaceFileRoot,
-    WorkspaceQuickOpenSession, DEFAULT_QUICK_OPEN_EXCLUDED_DIRECTORIES, MAX_REMOTE_EDIT_BYTES,
+    read_workspace_file_range_from_root, rename_workspace_text_from_root,
+    search_workspace_quick_open_session, start_workspace_quick_open_session_without_symlinks,
+    stop_workspace_quick_open_session, write_workspace_text_from_root, WorkspaceFileErrorKind,
+    WorkspaceFileRoot, WorkspaceQuickOpenSession, DEFAULT_QUICK_OPEN_EXCLUDED_DIRECTORIES,
+    MAX_REMOTE_EDIT_BYTES,
 };
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
@@ -131,6 +132,9 @@ async fn handle_mobile_workspace_file_request(
         }
         MobileWorkspaceFileOperation::WorkspaceFileCreate => {
             create_mobile_workspace_text(&runtime_store, payload).await
+        }
+        MobileWorkspaceFileOperation::WorkspaceFileRename => {
+            rename_mobile_workspace_text(&runtime_store, payload).await
         }
         MobileWorkspaceFileOperation::WorkspaceFileDiff => {
             read_mobile_workspace_diff(&runtime_store, payload).await
@@ -285,6 +289,35 @@ async fn create_mobile_workspace_text(
             "sha256": result.sha256,
             "sizeBytes": result.size_bytes,
         }))
+    })
+    .await
+}
+
+async fn rename_mobile_workspace_text(
+    runtime_store: &RuntimeStore,
+    payload: &Value,
+) -> HostResult<Value> {
+    let workspace = workspace_for_mobile_file_request(runtime_store, payload).await?;
+    let old_path = require_string_key(payload, "relativePath")?;
+    let new_name = require_string_key(payload, "newName")?;
+    let expected_sha256 = require_string_key(payload, "expectedSha256")?;
+    let roots = known_workspace_paths(runtime_store).await?;
+    spawn_blocking_workspace("Workspace text rename", move || {
+        let root = open_validated_mobile_workspace_root(&workspace.path, roots)?;
+        let updated_path =
+            rename_workspace_text_from_root(&root, &old_path, &new_name, &expected_sha256)
+                .map_err(|error| {
+                    if error.kind == WorkspaceFileErrorKind::Conflict {
+                        HostError::conflict(
+                            "mobile_workspace_file_rename_conflict",
+                            error.to_string(),
+                            json!({ "relativePath": old_path, "newName": new_name }),
+                        )
+                    } else {
+                        workspace_file_error(error)
+                    }
+                })?;
+        Ok(json!({"relativePath": updated_path}))
     })
     .await
 }
