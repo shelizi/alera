@@ -91,6 +91,8 @@ pub fn prepare_launch_environment(
     if settings.enabled_agents().is_empty() {
         return Ok(());
     }
+    #[cfg(windows)]
+    pin_hook_relay(environment);
     let endpoint = runtime_dir.join("agent-hooks").join(if cfg!(windows) {
         "endpoint.cmd"
     } else {
@@ -225,6 +227,16 @@ fn prepend_sidecar_directory(environment: &mut BTreeMap<String, String>) {
     }
 }
 
+#[cfg(windows)]
+fn pin_hook_relay(environment: &mut BTreeMap<String, String>) {
+    if let Ok(executable) = std::env::current_exe() {
+        environment.insert(
+            "ALERA_AGENT_HOOK_RELAY".to_string(),
+            executable.to_string_lossy().into_owned(),
+        );
+    }
+}
+
 fn same_path(left: &Path, right: &Path) -> bool {
     if cfg!(windows) {
         left.to_string_lossy()
@@ -235,7 +247,8 @@ fn same_path(left: &Path, right: &Path) -> bool {
 }
 
 fn is_managed_hook_key(key: &str) -> bool {
-    key == "ALERA_AGENT_HOOK_ENDPOINT"
+    key == "ALERA_AGENT_HOOK_RELAY"
+        || key == "ALERA_AGENT_HOOK_ENDPOINT"
         || key == "ALERA_AGENT_HOOK_PORT"
         || key == "ALERA_AGENT_HOOK_TOKEN"
         || key == "ALERA_AGENT_HOOK_VERSION"
@@ -342,8 +355,31 @@ mod tests {
             Some(executable_dir)
         );
         assert!(!environment.contains_key("ALERA_AGENT_HOOK_ENDPOINT"));
+        assert!(!environment.contains_key("ALERA_AGENT_HOOK_RELAY"));
         assert_eq!(environment["GROK_CLAUDE_HOOKS_ENABLED"], "false");
         assert_eq!(environment["GROK_CURSOR_HOOKS_ENABLED"], "false");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn enabled_hooks_pin_relay_to_the_current_sidecar_and_replace_inherited_paths() {
+        let runtime = tempfile::tempdir().unwrap();
+        let mut environment = BTreeMap::from([("ALERA_AGENT_HOOK_RELAY".into(), "old.exe".into())]);
+        pin_hook_relay(&mut environment);
+        assert_eq!(
+            environment["ALERA_AGENT_HOOK_RELAY"],
+            std::env::current_exe().unwrap().to_string_lossy()
+        );
+        prepare_launch_environment(
+            runtime.path(),
+            "session",
+            "workspace",
+            "tab",
+            &RuntimeAgentStatusHookSettings::default(),
+            &mut environment,
+        )
+        .unwrap();
+        assert!(!environment.contains_key("ALERA_AGENT_HOOK_RELAY"));
     }
 
     #[test]

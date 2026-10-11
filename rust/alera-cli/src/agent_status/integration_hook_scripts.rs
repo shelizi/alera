@@ -122,6 +122,10 @@ if "%ALERA_AGENT_HOOK_TOKEN%"=="" exit /b 0
 if "%ALERA_TERMINAL_SESSION_ID%"=="" exit /b 0
 if "%ALERA_WORKSPACE_ID%"=="" exit /b 0
 if "%ALERA_TAB_ID%"=="" exit /b 0
+if defined ALERA_AGENT_HOOK_RELAY if exist "%ALERA_AGENT_HOOK_RELAY%" (
+  "%ALERA_AGENT_HOOK_RELAY%" agent-hook-relay 2>nul
+  exit /b 0
+)
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$utf8=[System.Text.UTF8Encoding]::new($false); [Console]::InputEncoding=$utf8; $inputData=[Console]::In.ReadToEnd(); if ([string]::IsNullOrWhiteSpace($inputData)) { $inputData='{}' }; try { $body=@{ terminalSessionId=$env:ALERA_TERMINAL_SESSION_ID; workspaceId=$env:ALERA_WORKSPACE_ID; tabId=$env:ALERA_TAB_ID; hookEventName=$env:ALERA_AGENT_HOOK_EVENT; version=$env:ALERA_AGENT_HOOK_VERSION; payload=($inputData | ConvertFrom-Json) } | ConvertTo-Json -Depth 100 -Compress; $bodyBytes=$utf8.GetBytes($body) } catch { exit 0 }; $completionEvents=@('Stop','StopFailure','StopCancelled','SessionEnd','Interrupt','stop','sessionEnd','SessionIdle','agent_settled','session_shutdown','agent.end','ErrorOccurred'); $attempts=1; if ($completionEvents -contains $env:ALERA_AGENT_HOOK_EVENT) { $attempts=3 }; for ($attempt=1; $attempt -le $attempts; $attempt++) { try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 1 -Method Post -Uri ('http://127.0.0.1:' + $env:ALERA_AGENT_HOOK_PORT + '/hook/' + $env:ALERA_AGENT_TYPE) -ContentType 'application/json; charset=utf-8' -Headers @{ 'X-Alera-Agent-Hook-Token'=$env:ALERA_AGENT_HOOK_TOKEN } -Body $bodyBytes | Out-Null; break } catch {} if ($attempt -lt $attempts) { Start-Sleep -Milliseconds (50 * $attempt) } }"
 exit /b 0
 "#;
@@ -191,6 +195,19 @@ mod tests {
         assert!(WINDOWS_HOOK_SCRIPT.contains(r#"if /I "%ALERA_AGENT_TYPE%"=="agy" ("#));
         assert!(WINDOWS_HOOK_SCRIPT.contains(r#"else if /I "%ALERA_AGENT_TYPE%"=="copilot" ("#));
         assert!(WINDOWS_HOOK_SCRIPT.contains(r#"echo {"decision":""}"#));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_managed_script_uses_terminal_owned_relay_with_legacy_fallback() {
+        let relay = WINDOWS_HOOK_SCRIPT.find("agent-hook-relay").unwrap();
+        let fallback = WINDOWS_HOOK_SCRIPT.find("powershell -NoProfile").unwrap();
+        let guard = WINDOWS_HOOK_SCRIPT
+            .find(r#"if "%ALERA_TAB_ID%"=="""#)
+            .unwrap();
+        assert!(guard < relay && relay < fallback);
+        assert!(WINDOWS_HOOK_SCRIPT
+            .contains(r#"if defined ALERA_AGENT_HOOK_RELAY if exist "%ALERA_AGENT_HOOK_RELAY%""#));
     }
 
     #[cfg(windows)]

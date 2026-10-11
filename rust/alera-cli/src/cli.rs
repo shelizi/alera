@@ -41,6 +41,9 @@ pub enum Command {
     /// Export the Rust agent descriptor table for Dart consumers.
     #[command(name = "export-agent-descriptors", hide = true)]
     ExportAgentDescriptors,
+    /// Forward a lifecycle hook without starting an async runtime.
+    #[command(name = "agent-hook-relay", hide = true)]
+    AgentHookRelay,
     RuntimeProxy,
     /// Run the persistent terminal host sidecar.
     #[command(name = TERMINAL_HOST_COMMAND)]

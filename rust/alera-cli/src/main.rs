@@ -116,6 +116,10 @@ fn main() {
     if matches!(&cli.command, Command::ExportAgentDescriptors) {
         agent_descriptor_export::run();
     }
+    if matches!(&cli.command, Command::AgentHookRelay) {
+        agent_status::run_hook_relay();
+        return;
+    }
     let runtime = match cli_async_runtime::build(&cli.command) {
         Ok(runtime) => runtime,
         Err(error) => {
@@ -131,6 +135,7 @@ async fn run(cli: Cli) -> i32 {
         Command::RuntimeHost(args) => runtime_host_command::run(args).await,
         Command::AutomationHost(args) => runtime_host_command::run_automation_host(args).await,
         Command::ExportAgentDescriptors => unreachable!("handled before runtime init"),
+        Command::AgentHookRelay => unreachable!("handled before runtime init"),
         Command::RuntimeProxy => agent_quota::run_runtime_proxy().await,
         Command::Version(command) => run_version_command(command).await,
         Command::TerminalHost(args) => runtime_host_command::run(args).await,
