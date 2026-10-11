@@ -30,11 +30,21 @@ version is intentionally unchanged. Build and commit each slice in
 - Passive selectable Markdown formatting with raw-view toggle, without loading untrusted remote images or executing workspace HTML/JS. Git unified diff highlights additions/deletions/hunks while retaining literal patch text.
 - Git per-file `mobile.workspaceGit.stage` (`mobileWorkspaceGitStageV1`): user-confirmed Stage/Unstage via registered workspace and exact path, no shell commands, no resetting workspace content; rename/conflict paths require desktop review. Network Git operations, Commit and Push remain unavailable on phone.
 - `mobile.workspaceGit.history` (`mobileWorkspaceGitHistoryV1`) offers read-only HEAD history from the registered workspace, bounded to 100 commits; the phone displays summary, author, date, full message and parent SHA, and can copy a commit hash. Arbitrary ref lookup, reset, commit, push and history rewrites are not exposed.
+- `mobile.workspaceGit.compare` and `mobile.workspaceGit.revisionPatch` (`mobileWorkspaceGitCompareV1`) let the phone view a commit's changes versus its first parent (or an empty initial tree), select any two listed commits as base/target, browse up to 200 changed files, and open a colored, selectable exact-file historical patch truncated at 512 KiB. All requested commit hashes must be full SHA-1 IDs reachable from the selected worktree HEAD; pathspec matching is disabled and protected paths are rejected.
+- Git history file comparisons and reusable patch view were committed as `31e77cef` in the isolated `feat/mobile-fork-native` branch. The shared Cargo target cache issue was eliminated by running the repeat authorization and Git integration regressions with an isolated target directory on drive D.
 
 The latest committed `main` was incorporated into this isolated worktree as
 merge commit `9dec1b90` without modifying the main worktree's pending changes.
 
 ## Validation
+
+### 2026-10-11 historical Git comparisons
+
+- Isolated `CARGO_TARGET_DIR=D:/alera-build/mobile-fork-native-cargo-isolated` resolves the previous shared Cargo artifact mismatch; `cargo test --manifest-path rust/Cargo.toml -p alera-cli --locked mobile_codex_file_surface_tests`: **3 passed**, including new comparison/patch allowlist and capability checks.
+- `cargo test --manifest-path rust/Cargo.toml -p alera-cli --locked mobile_git_`: **3 passed** (history, single-file Stage/Unstage, and exact-commit file listing / historical patch, including root/reverse changes, traversal, protected metadata, wildcard paths and unreachable commit rejection).
+- `flutter test --no-pub` full suite: **453 passed, 4 skipped, 0 failed**. New selectable Git patch view widget tests run separately: **2 passed**. Focused comparison/history/parser tests: **5 passed**.
+- `flutter analyze --no-pub`: **no issues**; `rustfmt --check`, `dart format --output=none --set-exit-if-changed`, and `git diff --check`: **passed**.
+- Signed APK, real Android/iOS and Firebase/APNs smoke testing remain unverified release gates.
 
 ### 2026-10-11 follow-up
 
@@ -69,7 +79,8 @@ merge commit `9dec1b90` without modifying the main worktree's pending changes.
   advertisement and the phone hides unsupported UI or falls back for quotas.
 - The Git review RPCs accept a registered workspace id, validate the canonical
   Git root and reject path traversal. The patch returns at most 512 KiB of
-  text, Git status at most 200 changed paths, and history at most 100 commits.
+  text, Git status and commit comparisons at most 200 changed paths, historical
+  patches at most 512 KiB, and history at most 100 commits.
   They do not execute arbitrary Git commands. Scoped stage/unstage affects only
   the index; reset, commit, delete and push are not exposed.
 - New/untracked files in Source Control open text previews; they are not in
@@ -93,7 +104,8 @@ merge commit `9dec1b90` without modifying the main worktree's pending changes.
 4. **Richer file review**: tree is available with folder-by-folder pagination;
    further work includes large-file **editing**, syntax-highlighted content,
    binary/image preview, side-by-side/intraline diff,
-   history beyond the latest 100 commits, and arbitrary two-revision comparisons.
+   history beyond the latest 100 commits, and comparisons against unrelated
+   branches or arbitrary refs not reachable from the selected worktree HEAD.
 5. **Mutating Git actions**: explicit-confirmation per-file Stage/Unstage is now
    available, while commits, branch checkout in-place and network operations
    need independent runtime authorization, clean-worktree
