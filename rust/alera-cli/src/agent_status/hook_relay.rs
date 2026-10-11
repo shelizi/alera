@@ -2,7 +2,10 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::time::{Duration, Instant};
 
-use serde_json::{json, Value};
+use serde_json::Value;
+
+#[cfg(test)]
+use serde_json::json;
 
 const COMPLETION_EVENTS: &[&str] = &[
     "Stop",
@@ -66,18 +69,30 @@ impl HookRequest {
             .ok()?
             .trim_start_matches('\u{feff}');
         let payload: Value = if input.trim().is_empty() {
-            json!({})
+            Value::Object(Default::default())
         } else {
             serde_json::from_str(input).ok()?
         };
-        serde_json::to_vec(&json!({
-            "terminalSessionId": self.terminal,
-            "workspaceId": self.workspace,
-            "tabId": self.tab,
-            "hookEventName": self.event,
-            "version": self.version,
-            "payload": payload,
-        }))
+        // Borrow the parsed payload to avoid cloning its entire JSON tree.
+        // Field order preserves the existing serde_json map's wire representation.
+        #[derive(serde::Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Envelope<'a> {
+            hook_event_name: &'a Option<String>,
+            payload: &'a Value,
+            tab_id: &'a str,
+            terminal_session_id: &'a str,
+            version: &'a Option<String>,
+            workspace_id: &'a str,
+        }
+        serde_json::to_vec(&Envelope {
+            hook_event_name: &self.event,
+            payload: &payload,
+            tab_id: &self.tab,
+            terminal_session_id: &self.terminal,
+            version: &self.version,
+            workspace_id: &self.workspace,
+        })
         .ok()
     }
 
@@ -167,6 +182,7 @@ pub fn run_hook_relay() {
     let Some(body) = request.body(&input) else {
         return;
     };
+    drop(input);
     request.deliver(&body);
 }
 

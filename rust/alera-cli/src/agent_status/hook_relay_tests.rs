@@ -63,6 +63,41 @@ fn hook_relay_handles_empty_bom_and_invalid_input_without_inventing_events() {
 }
 
 #[test]
+fn hook_relay_borrowed_envelope_matches_previous_wire_bytes() {
+    let mut env = environment();
+    env.insert("ALERA_AGENT_HOOK_EVENT".into(), "Tool\"\\\n測試".into());
+    env.insert("ALERA_AGENT_HOOK_VERSION".into(), "2".into());
+    let request = request(&env).unwrap();
+    for input in [
+        "null",
+        "true",
+        "123",
+        "-0.0",
+        "1.25e30",
+        "18446744073709551615",
+        "\"測試 🦀\\n\\u0000\"",
+        "[1, null, {\"b\": false, \"a\": [\"x\"]}]",
+        "{\"duplicate\": 1, \"duplicate\": 2}",
+        "  {\"nested\": [{\"text\": \"x\"}]} \r\n",
+    ] {
+        let payload: Value = serde_json::from_str(input).unwrap();
+        let previous = serde_json::to_vec(&json!({
+            "terminalSessionId": request.terminal,
+            "workspaceId": request.workspace,
+            "tabId": request.tab,
+            "hookEventName": request.event,
+            "version": request.version,
+            "payload": payload,
+        }))
+        .unwrap();
+        assert_eq!(request.body(input.as_bytes()).unwrap(), previous, "{input}");
+    }
+    for input in [b"{} trailing".as_slice(), b"{} {}", b"[1,]", b"\"\\uD800\""] {
+        assert!(request.body(input).is_none());
+    }
+}
+
+#[test]
 fn hook_relay_requires_routing_and_rejects_invalid_port_or_headers() {
     for key in environment().keys() {
         let mut env = environment();
