@@ -4,6 +4,7 @@ import 'package:alera_mobile/src/features/runtime/domain/mobile_codex_workspace.
 import 'package:alera_mobile/src/features/workbench/presentation/workspace_file_picker_sheet.dart';
 import 'package:alera_mobile/src/features/workbench/presentation/workspace_file_viewer_screen.dart';
 import 'package:alera_mobile/src/features/workbench/presentation/workspace_text_create_screen.dart';
+import 'package:alera_mobile/src/features/workbench/presentation/workspace_trash_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:logging/logging.dart';
@@ -159,6 +160,12 @@ class _WorkspaceDirectoryBrowserScreenState
             .value
             ?.supportsWorkspaceTextCreate ==
         true;
+    final canTrash =
+        ref
+            .watch(hostConnectionControllerProvider(widget.hostId))
+            .value
+            ?.supportsWorkspaceTextTrash ==
+        true;
     return Scaffold(
       appBar: AppBar(
         title: Text(
@@ -173,6 +180,22 @@ class _WorkspaceDirectoryBrowserScreenState
               )
             : null,
         actions: <Widget>[
+          if (canTrash)
+            IconButton(
+              tooltip: 'Recoverable files',
+              icon: const Icon(Icons.restore_from_trash_outlined),
+              onPressed: () async {
+                await Navigator.of(context).push<void>(
+                  MaterialPageRoute<void>(
+                    builder: (_) => WorkspaceTrashScreen(
+                      hostId: widget.hostId,
+                      workspaceId: widget.workspaceId,
+                    ),
+                  ),
+                );
+                if (mounted) await _load(reset: true);
+              },
+            ),
           if (canCreate)
             IconButton(
               tooltip: 'New text file',

@@ -5,8 +5,9 @@ use git2::{Delta, DiffFormat, DiffOptions, Index, Oid, Repository, Status, Statu
 use alera_core::runtime::{RuntimeStore, Workspace};
 use alera_core::workspace_files::{
     create_workspace_text_from_root, is_protected_workspace_path,
-    list_workspace_directory_from_root, open_workspace_file_root,
-    read_workspace_file_range_from_root, rename_workspace_text_from_root,
+    list_workspace_directory_from_root, list_workspace_text_trash, move_workspace_text_to_trash,
+    open_workspace_file_root, open_workspace_text_trash, read_workspace_file_range_from_root,
+    rename_workspace_text_from_root, restore_workspace_text_from_trash,
     search_workspace_quick_open_session, start_workspace_quick_open_session_without_symlinks,
     stop_workspace_quick_open_session, write_workspace_text_from_root, WorkspaceFileErrorKind,
     WorkspaceFileRoot, WorkspaceQuickOpenSession, DEFAULT_QUICK_OPEN_EXCLUDED_DIRECTORIES,
@@ -135,6 +136,15 @@ async fn handle_mobile_workspace_file_request(
         }
         MobileWorkspaceFileOperation::WorkspaceFileRename => {
             rename_mobile_workspace_text(&runtime_store, payload).await
+        }
+        MobileWorkspaceFileOperation::WorkspaceFileTrash => {
+            trash_mobile_workspace_text(&runtime_store, &runtime_dir, payload).await
+        }
+        MobileWorkspaceFileOperation::WorkspaceTrashList => {
+            list_mobile_workspace_trash(&runtime_store, &runtime_dir, payload).await
+        }
+        MobileWorkspaceFileOperation::WorkspaceTrashRestore => {
+            restore_mobile_workspace_trash(&runtime_store, &runtime_dir, payload).await
         }
         MobileWorkspaceFileOperation::WorkspaceFileDiff => {
             read_mobile_workspace_diff(&runtime_store, payload).await
@@ -318,6 +328,86 @@ async fn rename_mobile_workspace_text(
                     }
                 })?;
         Ok(json!({"relativePath": updated_path}))
+    })
+    .await
+}
+
+async fn trash_mobile_workspace_text(
+    runtime_store: &RuntimeStore,
+    runtime_dir: &Path,
+    payload: &Value,
+) -> HostResult<Value> {
+    let workspace = workspace_for_mobile_file_request(runtime_store, payload).await?;
+    let path = require_string_key(payload, "relativePath")?;
+    let sha256 = require_string_key(payload, "expectedSha256")?;
+    let roots = known_workspace_paths(runtime_store).await?;
+    let runtime_dir = runtime_dir.to_path_buf();
+    spawn_blocking_workspace("Move mobile file to trash", move || {
+        let root = open_validated_mobile_workspace_root(&workspace.path, roots)?;
+        let trash = open_workspace_text_trash(&runtime_dir, &workspace.id, &root)
+            .map_err(workspace_file_error)?;
+        let item =
+            move_workspace_text_to_trash(&root, &trash, &path, &sha256).map_err(|error| {
+                if error.kind == WorkspaceFileErrorKind::Conflict {
+                    HostError::conflict(
+                        "mobile_workspace_trash_conflict",
+                        error.to_string(),
+                        json!({ "relativePath": path }),
+                    )
+                } else {
+                    workspace_file_error(error)
+                }
+            })?;
+        serde_json::to_value(item)
+            .map_err(|error| HostError::state(format!("Cannot serialize trash entry: {error}")))
+    })
+    .await
+}
+
+async fn list_mobile_workspace_trash(
+    runtime_store: &RuntimeStore,
+    runtime_dir: &Path,
+    payload: &Value,
+) -> HostResult<Value> {
+    let workspace = workspace_for_mobile_file_request(runtime_store, payload).await?;
+    let roots = known_workspace_paths(runtime_store).await?;
+    let runtime_dir = runtime_dir.to_path_buf();
+    spawn_blocking_workspace("List mobile workspace trash", move || {
+        let root = open_validated_mobile_workspace_root(&workspace.path, roots)?;
+        let trash = open_workspace_text_trash(&runtime_dir, &workspace.id, &root)
+            .map_err(workspace_file_error)?;
+        let items = list_workspace_text_trash(&trash).map_err(workspace_file_error)?;
+        Ok(json!({ "items": items, "limit": 64, "capacityBytes": 16 * 1024 * 1024 }))
+    })
+    .await
+}
+
+async fn restore_mobile_workspace_trash(
+    runtime_store: &RuntimeStore,
+    runtime_dir: &Path,
+    payload: &Value,
+) -> HostResult<Value> {
+    let workspace = workspace_for_mobile_file_request(runtime_store, payload).await?;
+    let trash_id = require_string_key(payload, "trashId")?;
+    let roots = known_workspace_paths(runtime_store).await?;
+    let runtime_dir = runtime_dir.to_path_buf();
+    spawn_blocking_workspace("Restore mobile workspace text", move || {
+        let root = open_validated_mobile_workspace_root(&workspace.path, roots)?;
+        let trash = open_workspace_text_trash(&runtime_dir, &workspace.id, &root)
+            .map_err(workspace_file_error)?;
+        let path =
+            restore_workspace_text_from_trash(&root, &trash, &trash_id).map_err(|error| {
+                if error.kind == WorkspaceFileErrorKind::Conflict {
+                    HostError::conflict(
+                        "mobile_workspace_trash_restore_conflict",
+                        error.to_string(),
+                        json!({ "trashId": trash_id }),
+                    )
+                } else {
+                    workspace_file_error(error)
+                }
+            })?;
+        Ok(json!({ "relativePath": path }))
     })
     .await
 }

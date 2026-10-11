@@ -66,6 +66,27 @@ mixin FakeWorkspaceFilesClient implements MobileCodexWorkspaceClient {
   bool get supportsWorkspaceTextRename => false;
 
   @override
+  bool get supportsWorkspaceTextTrash => false;
+
+  @override
+  Future<MobileWorkspaceTrashEntry> moveWorkspaceTextToTrash({
+    required String workspaceId,
+    required String relativePath,
+    required String expectedSha256,
+  }) async => throw UnsupportedError('Fake host does not support trash.');
+
+  @override
+  Future<MobileWorkspaceTrashList> listWorkspaceTextTrash(
+    String workspaceId,
+  ) async => throw UnsupportedError('Fake host has no trash records.');
+
+  @override
+  Future<String> restoreWorkspaceTextFromTrash({
+    required String workspaceId,
+    required String trashId,
+  }) async => throw UnsupportedError('Fake host does not restore trash.');
+
+  @override
   Future<String> renameWorkspaceText({
     required String workspaceId,
     required String relativePath,

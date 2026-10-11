@@ -32,6 +32,56 @@ mixin MobileRuntimeCodexWorkspaceRequests {
   bool get supportsWorkspaceTextRename =>
       runtimeCapabilities.contains(mobileWorkspaceTextRenameCapability);
 
+  bool get supportsWorkspaceTextTrash =>
+      runtimeCapabilities.contains(mobileWorkspaceTextTrashCapability);
+
+  Future<MobileWorkspaceTrashEntry> moveWorkspaceTextToTrash({
+    required String workspaceId,
+    required String relativePath,
+    required String expectedSha256,
+  }) async {
+    if (!supportsWorkspaceTextTrash) {
+      throw UnsupportedError(
+        'Update the paired runtime to move text to trash.',
+      );
+    }
+    return MobileWorkspaceTrashEntry.fromJson(
+      await requestMap('mobile.workspaceFile.trash', <String, Object?>{
+        'workspaceId': workspaceId,
+        'relativePath': relativePath,
+        'expectedSha256': expectedSha256,
+      }, const Duration(seconds: 30)),
+    );
+  }
+
+  Future<MobileWorkspaceTrashList> listWorkspaceTextTrash(
+    String workspaceId,
+  ) async {
+    if (!supportsWorkspaceTextTrash) {
+      throw UnsupportedError('Update the paired runtime to view trash.');
+    }
+    return MobileWorkspaceTrashList.fromJson(
+      await requestMap('mobile.workspaceTrash.list', <String, Object?>{
+        'workspaceId': workspaceId,
+      }),
+    );
+  }
+
+  Future<String> restoreWorkspaceTextFromTrash({
+    required String workspaceId,
+    required String trashId,
+  }) async {
+    if (!supportsWorkspaceTextTrash) {
+      throw UnsupportedError('Update the paired runtime to restore trash.');
+    }
+    final result = await requestMap(
+      'mobile.workspaceTrash.restore',
+      <String, Object?>{'workspaceId': workspaceId, 'trashId': trashId},
+      const Duration(seconds: 30),
+    );
+    return result.requiredString('relativePath');
+  }
+
   Future<String> renameWorkspaceText({
     required String workspaceId,
     required String relativePath,

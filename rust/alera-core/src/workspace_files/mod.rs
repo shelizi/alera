@@ -11,6 +11,7 @@ use uuid::Uuid;
 mod mime;
 mod prompts;
 mod quick_open;
+mod trash;
 
 use mime::{mime_type_for_path, path_has_binary_preview_mime};
 
@@ -19,6 +20,10 @@ pub use quick_open::{
     search_workspace_quick_open_session, start_workspace_quick_open_session,
     start_workspace_quick_open_session_without_symlinks, stop_workspace_quick_open_session,
     WorkspaceQuickOpenMatch, WorkspaceQuickOpenSession, DEFAULT_QUICK_OPEN_EXCLUDED_DIRECTORIES,
+};
+pub use trash::{
+    list_workspace_text_trash, move_workspace_text_to_trash, open_workspace_text_trash,
+    restore_workspace_text_from_trash, WorkspaceTextTrashEntry, WorkspaceTextTrashRoot,
 };
 
 pub const MAX_REMOTE_READ_BYTES: u64 = 256 * 1024;

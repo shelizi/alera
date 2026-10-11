@@ -15,6 +15,39 @@ class const MobileWorkspaceTextSaveResult({
   );
 }
 
+class const MobileWorkspaceTrashEntry({
+  required final String id,
+  required final String relativePath,
+  required final String sha256,
+  required final int sizeBytes,
+  required final int deletedAtMs,
+}) {
+  factory fromJson(Map<String, Object?> json) => MobileWorkspaceTrashEntry(
+    id: json.requiredString('id'),
+    relativePath: json.requiredString('relativePath'),
+    sha256: json.requiredString('sha256'),
+    sizeBytes: json['sizeBytes'] is int ? json['sizeBytes']! as int : 0,
+    deletedAtMs: json['deletedAtMs'] is int ? json['deletedAtMs']! as int : 0,
+  );
+}
+
+class const MobileWorkspaceTrashList({
+  required final List<MobileWorkspaceTrashEntry> items,
+  required final int limit,
+  required final int capacityBytes,
+}) {
+  factory fromJson(Map<String, Object?> json) => MobileWorkspaceTrashList(
+    items: <MobileWorkspaceTrashEntry>[
+      for (final item in json['items'] as List<Object?>? ?? const <Object?>[])
+        if (item is Map) MobileWorkspaceTrashEntry.fromJson(asJsonMap(item)),
+    ],
+    limit: json['limit'] is int ? json['limit']! as int : 64,
+    capacityBytes: json['capacityBytes'] is int
+        ? json['capacityBytes']! as int
+        : 16 * 1024 * 1024,
+  );
+}
+
 class const MobileWorkspaceDirectoryEntry({
   required final String name,
   required final String relativePath,
