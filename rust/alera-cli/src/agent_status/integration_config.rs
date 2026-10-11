@@ -12,6 +12,9 @@ mod codex;
 mod codex_hook_trust;
 #[path = "integration_config_cursor.rs"]
 mod cursor;
+#[cfg(any(windows, test))]
+#[path = "integration_config_devin_paths.rs"]
+mod devin_paths;
 #[path = "integration_config_dispatch.rs"]
 mod dispatch;
 #[path = "integration_config_user_hooks.rs"]
@@ -409,6 +412,17 @@ pub(super) fn home_dir() -> anyhow::Result<PathBuf> {
 fn devin_user_config_path() -> anyhow::Result<PathBuf> {
     #[cfg(windows)]
     {
+        let environment = ["DEVIN_PORTABLE_ROOT", "PATH", "PATHEXT"]
+            .into_iter()
+            .filter_map(|key| {
+                std::env::var(key)
+                    .ok()
+                    .map(|value| (key.to_string(), value))
+            })
+            .collect();
+        if let Some(path) = devin_paths::portable_config_path(&environment) {
+            return Ok(path);
+        }
         let root = env_path("APPDATA").unwrap_or(home_dir()?.join("AppData").join("Roaming"));
         Ok(root.join("devin").join("config.json"))
     }
