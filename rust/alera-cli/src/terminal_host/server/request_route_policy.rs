@@ -159,6 +159,8 @@ pub(crate) enum MobileWorkspaceFileOperation {
     WorkspaceFileWrite,
     WorkspaceFileDiff,
     WorkspaceGitStatus,
+    WorkspaceGitStage,
+    WorkspaceGitHistory,
     PromptAttachmentRead,
 }
 
@@ -338,6 +340,12 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         ),
         "mobile.workspaceGit.status" => mobile_deferred_operation(
             MobileDeferredRoute::WorkspaceFile(MobileWorkspaceFileOperation::WorkspaceGitStatus),
+        ),
+        "mobile.workspaceGit.stage" => mobile_conflicting_deferred_operation(
+            MobileDeferredRoute::WorkspaceFile(MobileWorkspaceFileOperation::WorkspaceGitStage),
+        ),
+        "mobile.workspaceGit.history" => mobile_deferred_operation(
+            MobileDeferredRoute::WorkspaceFile(MobileWorkspaceFileOperation::WorkspaceGitHistory),
         ),
         "mobile.promptAttachment.read" => mobile_deferred_operation(
             MobileDeferredRoute::WorkspaceFile(MobileWorkspaceFileOperation::PromptAttachmentRead),
@@ -674,6 +682,16 @@ mod tests {
         );
         assert_eq!(request_route_policy("workspace.list"), MOBILE);
         assert_eq!(request_route_policy("unknown.request"), LOCAL);
+        for request in ["mobile.workspaceFile.write", "mobile.workspaceGit.stage"] {
+            let policy = request_route_policy(request);
+            assert!(policy.mobile_allowed, "{request}");
+            assert_eq!(
+                policy.runtime_mutation,
+                RuntimeMutationPolicy::Conflicts,
+                "{request}"
+            );
+            assert!(policy.mobile_deferred.is_some(), "{request}");
+        }
     }
 
     #[test]

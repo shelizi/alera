@@ -1,6 +1,6 @@
 use std::path::{Component, Path, PathBuf};
 
-use git2::{DiffFormat, DiffOptions, Repository, Status, StatusOptions};
+use git2::{DiffFormat, DiffOptions, Index, Repository, Status, StatusOptions};
 
 use alera_core::runtime::{RuntimeStore, Workspace};
 use alera_core::workspace_files::{
@@ -133,6 +133,12 @@ async fn handle_mobile_workspace_file_request(
         }
         MobileWorkspaceFileOperation::WorkspaceGitStatus => {
             read_mobile_workspace_git_status(&runtime_store, payload).await
+        }
+        MobileWorkspaceFileOperation::WorkspaceGitStage => {
+            update_mobile_workspace_git_stage(&runtime_store, payload).await
+        }
+        MobileWorkspaceFileOperation::WorkspaceGitHistory => {
+            read_mobile_workspace_git_history(&runtime_store, payload).await
         }
         MobileWorkspaceFileOperation::PromptAttachmentRead => {
             read_mobile_prompt_attachment(runtime_dir, payload).await
@@ -443,7 +449,27 @@ fn workspace_git_status(root: &Path) -> HostResult<Value> {
         } else {
             "modified"
         };
-        items.push(json!({"relativePath": path, "status": label}));
+        let staged = status.intersects(
+            Status::INDEX_NEW
+                | Status::INDEX_MODIFIED
+                | Status::INDEX_DELETED
+                | Status::INDEX_RENAMED
+                | Status::INDEX_TYPECHANGE,
+        );
+        let unstaged = status.intersects(
+            Status::WT_NEW
+                | Status::WT_MODIFIED
+                | Status::WT_DELETED
+                | Status::WT_RENAMED
+                | Status::WT_TYPECHANGE
+                | Status::CONFLICTED,
+        );
+        items.push(json!({
+            "relativePath": path,
+            "status": label,
+            "staged": staged,
+            "unstaged": unstaged,
+        }));
         if items.len() > MAX_MOBILE_GIT_STATUS_ITEMS {
             break;
         }
@@ -451,6 +477,182 @@ fn workspace_git_status(root: &Path) -> HostResult<Value> {
     let truncated = items.len() > MAX_MOBILE_GIT_STATUS_ITEMS;
     items.truncate(MAX_MOBILE_GIT_STATUS_ITEMS);
     Ok(json!({"items": items, "truncated": truncated}))
+}
+
+async fn update_mobile_workspace_git_stage(
+    runtime_store: &RuntimeStore,
+    payload: &Value,
+) -> HostResult<Value> {
+    let workspace = workspace_for_mobile_file_request(runtime_store, payload).await?;
+    let path = require_string_key(payload, "relativePath")?;
+    let stage = payload
+        .get("stage")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| HostError::format("Git staging action must be a boolean"))?;
+    let roots = known_workspace_paths(runtime_store).await?;
+    spawn_blocking_workspace("Workspace Git staging", move || {
+        let root = open_validated_mobile_workspace_root(&workspace.path, roots)?;
+        mutate_mobile_git_stage(root.canonical_path(), &path, stage)
+    })
+    .await
+}
+
+fn mutate_mobile_git_stage(root: &Path, relative_path: &str, stage: bool) -> HostResult<Value> {
+    let path = Path::new(relative_path);
+    if path.as_os_str().is_empty()
+        || path
+            .components()
+            .any(|part| !matches!(part, Component::Normal(_)))
+        || is_protected_workspace_path(path)
+    {
+        return Err(HostError::state(
+            "Git stage path must be one workspace-relative file.",
+        ));
+    }
+    let repo = Repository::open(root)
+        .map_err(|_| HostError::state("Workspace is not a Git repository."))?;
+    let workdir = repo
+        .workdir()
+        .and_then(|directory| dunce::canonicalize(directory).ok())
+        .ok_or_else(|| HostError::state("Git worktree is unavailable."))?;
+    if workdir != root {
+        return Err(HostError::state(
+            "Git root does not match the selected workspace.",
+        ));
+    }
+    let status = repo
+        .status_file(path)
+        .map_err(|_| HostError::state("Git stage path is not a changed file."))?;
+    if status.contains(Status::CONFLICTED)
+        || status.intersects(Status::INDEX_RENAMED | Status::WT_RENAMED)
+    {
+        return Err(HostError::state(
+            "Conflicted or renamed paths need desktop Git review first.",
+        ));
+    }
+    let mut index = repo
+        .index()
+        .map_err(|error| HostError::state(format!("Git index failed: {error}")))?;
+    if stage {
+        let has_worktree_changes = status.intersects(
+            Status::WT_NEW | Status::WT_MODIFIED | Status::WT_DELETED | Status::WT_TYPECHANGE,
+        );
+        if !has_worktree_changes {
+            return Err(HostError::state("There are no new file changes to stage."));
+        }
+        if status.contains(Status::WT_DELETED) {
+            if index.get_path(path, 0).is_none() {
+                return Err(HostError::state("Cannot stage a deleted untracked file."));
+            }
+            index
+                .remove_path(path)
+                .map_err(|error| HostError::state(format!("Git stage failed: {error}")))?;
+        } else {
+            // Use the same no-follow file verification as the file browser.
+            // Do not let an untrusted mobile path add a symlink or directory.
+            let handle =
+                open_workspace_file_root(&root.to_string_lossy()).map_err(workspace_file_error)?;
+            read_workspace_file_range_from_root(&handle, relative_path, 0, 1)
+                .map_err(workspace_file_error)?;
+            index
+                .add_path(path)
+                .map_err(|error| HostError::state(format!("Git stage failed: {error}")))?;
+        }
+    } else {
+        if !status.intersects(
+            Status::INDEX_NEW
+                | Status::INDEX_MODIFIED
+                | Status::INDEX_DELETED
+                | Status::INDEX_TYPECHANGE,
+        ) {
+            return Err(HostError::state("There are no staged changes to unstage."));
+        }
+        let head = repo.head().ok().and_then(|head| head.peel_to_tree().ok());
+        let mut head_index = Index::new()
+            .map_err(|error| HostError::state(format!("Git HEAD index failed: {error}")))?;
+        if let Some(tree) = head.as_ref() {
+            head_index
+                .read_tree(tree)
+                .map_err(|error| HostError::state(format!("Git HEAD index failed: {error}")))?;
+        }
+        if let Some(entry) = head_index.get_path(path, 0) {
+            index
+                .add(&entry)
+                .map_err(|error| HostError::state(format!("Git unstage failed: {error}")))?;
+        } else if index.get_path(path, 0).is_some() {
+            index
+                .remove_path(path)
+                .map_err(|error| HostError::state(format!("Git unstage failed: {error}")))?;
+        }
+    }
+    index
+        .write()
+        .map_err(|error| HostError::state(format!("Git index write failed: {error}")))?;
+    Ok(json!({"relativePath": relative_path, "staged": stage}))
+}
+
+const MAX_MOBILE_GIT_HISTORY_COMMITS: usize = 100;
+
+async fn read_mobile_workspace_git_history(
+    runtime_store: &RuntimeStore,
+    payload: &Value,
+) -> HostResult<Value> {
+    let workspace = workspace_for_mobile_file_request(runtime_store, payload).await?;
+    let limit = payload
+        .get("limit")
+        .and_then(Value::as_u64)
+        .and_then(|n| usize::try_from(n).ok())
+        .unwrap_or(40);
+    if limit == 0 || limit > MAX_MOBILE_GIT_HISTORY_COMMITS {
+        return Err(HostError::format(
+            "Git history limit must be between 1 and 100",
+        ));
+    }
+    let roots = known_workspace_paths(runtime_store).await?;
+    spawn_blocking_workspace("Workspace Git history", move || {
+        let root = open_validated_mobile_workspace_root(&workspace.path, roots)?;
+        workspace_git_history(root.canonical_path(), limit)
+    })
+    .await
+}
+
+fn workspace_git_history(root: &Path, limit: usize) -> HostResult<Value> {
+    let repo = Repository::open(root)
+        .map_err(|_| HostError::state("Workspace is not a Git repository."))?;
+    let workdir = repo
+        .workdir()
+        .and_then(|directory| dunce::canonicalize(directory).ok())
+        .ok_or_else(|| HostError::state("Git worktree is unavailable."))?;
+    if workdir != root {
+        return Err(HostError::state("Git root is not the selected workspace."));
+    }
+    let reference = repo
+        .head()
+        .map_err(|_| HostError::state("Workspace has no Git commits."))?;
+    let branch = reference.shorthand().unwrap_or("HEAD").to_string();
+    let mut walk = repo
+        .revwalk()
+        .map_err(|error| HostError::state(format!("Git history failed: {error}")))?;
+    walk.push_head()
+        .map_err(|error| HostError::state(format!("Git history failed: {error}")))?;
+    walk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::TIME)
+        .map_err(|error| HostError::state(format!("Git history failed: {error}")))?;
+    let mut commits = Vec::new();
+    for id in walk.take(limit) {
+        let id = id.map_err(|error| HostError::state(format!("Git history failed: {error}")))?;
+        let commit = repo
+            .find_commit(id)
+            .map_err(|error| HostError::state(format!("Git history failed: {error}")))?;
+        commits.push(json!({
+            "id": id.to_string(),
+            "summary": commit.summary().ok().flatten().unwrap_or("").chars().take(240).collect::<String>(),
+            "message": commit.message().unwrap_or("").chars().take(8192).collect::<String>(),
+            "author": commit.author().name().unwrap_or("").chars().take(180).collect::<String>(),
+            "timestamp": commit.time().seconds(),
+            "parents": commit.parent_ids().map(|parent| parent.to_string()).take(8).collect::<Vec<_>>(),
+        }));
+    }
+    Ok(json!({"branch": branch, "commits": commits}))
 }
 
 async fn read_mobile_prompt_attachment(runtime_dir: PathBuf, payload: &Value) -> HostResult<Value> {
@@ -631,12 +833,103 @@ mod tests {
     use super::super::actor_test_harness::test_actor;
     use super::super::request_route_policy::MobileWorkspaceFileOperation;
     use super::{
-        absolute_workspace_file_target, prompt_attachment_root, validated_mobile_workspace_root,
-        workspace_git_patch, workspace_git_status,
+        absolute_workspace_file_target, mutate_mobile_git_stage, prompt_attachment_root,
+        validated_mobile_workspace_root, workspace_git_history, workspace_git_patch,
+        workspace_git_status,
     };
     use serde_json::json;
     use std::collections::HashMap;
     use std::path::Path;
+
+    #[test]
+    fn mobile_git_history_lists_only_selected_worktree_head_and_parents() {
+        let directory = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(directory.path()).unwrap();
+        let tracked = Path::new("history.txt");
+        let author = git2::Signature::now("Test User", "test@example.com").unwrap();
+        std::fs::write(directory.path().join(tracked), "first\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(tracked).unwrap();
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let first = repo
+            .commit(Some("HEAD"), &author, &author, "first commit", &tree, &[])
+            .unwrap();
+        drop(tree);
+        std::fs::write(directory.path().join(tracked), "second\n").unwrap();
+        index.add_path(tracked).unwrap();
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let parent = repo.find_commit(first).unwrap();
+        let second = repo
+            .commit(
+                Some("HEAD"),
+                &author,
+                &author,
+                "second commit",
+                &tree,
+                &[&parent],
+            )
+            .unwrap();
+        let root = dunce::canonicalize(directory.path()).unwrap();
+        let recent = workspace_git_history(&root, 1).unwrap();
+        let list = recent["commits"].as_array().unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0]["id"], second.to_string());
+        assert_eq!(list[0]["summary"], "second commit");
+        assert_eq!(list[0]["parents"][0], first.to_string());
+        let complete = workspace_git_history(&root, 2).unwrap();
+        assert_eq!(complete["commits"].as_array().unwrap().len(), 2);
+        assert_eq!(complete["commits"][1]["id"], first.to_string());
+    }
+
+    #[test]
+    fn mobile_git_stage_is_exact_file_and_unstage_preserves_working_copy() {
+        let directory = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(directory.path()).unwrap();
+        let path = Path::new("tracked.txt");
+        std::fs::write(directory.path().join(path), b"old\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(path).unwrap();
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let author = git2::Signature::now("Mobile Test", "mobile@test.invalid").unwrap();
+        repo.commit(Some("HEAD"), &author, &author, "init", &tree, &[])
+            .unwrap();
+        std::fs::write(directory.path().join(path), b"edited\n").unwrap();
+        let root = dunce::canonicalize(directory.path()).unwrap();
+
+        mutate_mobile_git_stage(&root, "tracked.txt", true).unwrap();
+        let staged = git2::Repository::open(&root).unwrap();
+        assert!(staged
+            .status_file(path)
+            .unwrap()
+            .contains(git2::Status::INDEX_MODIFIED));
+        mutate_mobile_git_stage(&root, "tracked.txt", false).unwrap();
+        let unstaged = git2::Repository::open(&root).unwrap();
+        let status = unstaged.status_file(path).unwrap();
+        assert!(status.contains(git2::Status::WT_MODIFIED));
+        assert!(!status.contains(git2::Status::INDEX_MODIFIED));
+        assert_eq!(
+            std::fs::read(directory.path().join(path)).unwrap(),
+            b"edited\n"
+        );
+
+        std::fs::write(directory.path().join("new.txt"), b"new\n").unwrap();
+        mutate_mobile_git_stage(&root, "new.txt", true).unwrap();
+        mutate_mobile_git_stage(&root, "new.txt", false).unwrap();
+        assert!(directory.path().join("new.txt").exists());
+        assert!(git2::Repository::open(&root)
+            .unwrap()
+            .index()
+            .unwrap()
+            .get_path(Path::new("new.txt"), 0)
+            .is_none());
+
+        assert!(mutate_mobile_git_stage(&root, "../outside.txt", true).is_err());
+        assert!(mutate_mobile_git_stage(&root, ".git/config", true).is_err());
+        assert!(mutate_mobile_git_stage(&root, "untracked-directory", true).is_err());
+    }
 
     #[test]
     fn workspace_git_status_reports_tracked_and_untracked_changes() {

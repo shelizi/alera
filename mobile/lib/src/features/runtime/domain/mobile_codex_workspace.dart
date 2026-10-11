@@ -116,10 +116,49 @@ class const MobileWorkspaceFileDiff({
 class const MobileWorkspaceGitStatusEntry({
   required final String relativePath,
   required final String status,
+  final bool staged = false,
+  final bool unstaged = false,
 }) {
   factory fromJson(Map<String, Object?> json) => MobileWorkspaceGitStatusEntry(
     relativePath: json.requiredString('relativePath'),
     status: json['status'] as String? ?? 'modified',
+    staged: json['staged'] == true,
+    unstaged: json['unstaged'] == true,
+  );
+}
+
+class const MobileWorkspaceGitCommit({
+  required final String id,
+  required final String summary,
+  required final String message,
+  required final String author,
+  required final int timestamp,
+  required final List<String> parents,
+}) {
+  factory fromJson(Map<String, Object?> json) => MobileWorkspaceGitCommit(
+    id: json.requiredString('id'),
+    summary: json['summary'] as String? ?? '',
+    message: json['message'] as String? ?? '',
+    author: json['author'] as String? ?? '',
+    timestamp: json['timestamp'] is int ? json['timestamp']! as int : 0,
+    parents: <String>[
+      for (final parent
+          in json['parents'] as List<Object?>? ?? const <Object?>[])
+        if (parent is String) parent,
+    ],
+  );
+}
+
+class const MobileWorkspaceGitHistory({
+  required final String branch,
+  required final List<MobileWorkspaceGitCommit> commits,
+}) {
+  factory fromJson(Map<String, Object?> json) => MobileWorkspaceGitHistory(
+    branch: json['branch'] as String? ?? 'HEAD',
+    commits: <MobileWorkspaceGitCommit>[
+      for (final item in json['commits'] as List<Object?>? ?? const <Object?>[])
+        if (item is Map) MobileWorkspaceGitCommit.fromJson(asJsonMap(item)),
+    ],
   );
 }
 

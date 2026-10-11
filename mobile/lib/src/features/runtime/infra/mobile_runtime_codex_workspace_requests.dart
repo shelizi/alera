@@ -78,6 +78,45 @@ mixin MobileRuntimeCodexWorkspaceRequests {
   bool get supportsWorkspaceGitStatus =>
       runtimeCapabilities.contains(mobileWorkspaceGitStatusCapability);
 
+  bool get supportsWorkspaceGitStage =>
+      runtimeCapabilities.contains(mobileWorkspaceGitStageCapability);
+
+  bool get supportsWorkspaceGitHistory =>
+      runtimeCapabilities.contains(mobileWorkspaceGitHistoryCapability);
+
+  Future<MobileWorkspaceGitHistory> loadWorkspaceGitHistory(
+    String workspaceId, {
+    int limit = 60,
+  }) async {
+    if (!supportsWorkspaceGitHistory) {
+      throw UnsupportedError('Update the paired runtime for commit history.');
+    }
+    if (limit < 1 || limit > 100) {
+      throw ArgumentError.value(limit, 'limit');
+    }
+    return MobileWorkspaceGitHistory.fromJson(
+      await requestMap('mobile.workspaceGit.history', <String, Object?>{
+        'workspaceId': workspaceId,
+        'limit': limit,
+      }),
+    );
+  }
+
+  Future<void> stageWorkspaceFile({
+    required String workspaceId,
+    required String relativePath,
+    required bool stage,
+  }) async {
+    if (!supportsWorkspaceGitStage) {
+      throw UnsupportedError('Update the paired runtime for Git staging.');
+    }
+    await requestMap('mobile.workspaceGit.stage', <String, Object?>{
+      'workspaceId': workspaceId,
+      'relativePath': relativePath,
+      'stage': stage,
+    });
+  }
+
   bool get supportsPromptFileUpload =>
       runtimeCapabilities.contains(mobilePromptFileUploadCapability);
 

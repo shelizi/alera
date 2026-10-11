@@ -80,6 +80,27 @@ mixin FakeWorkspaceFilesClient implements MobileCodexWorkspaceClient {
   bool get supportsWorkspaceGitStatus => false;
 
   @override
+  bool get supportsWorkspaceGitStage => false;
+
+  @override
+  bool get supportsWorkspaceGitHistory => false;
+
+  @override
+  Future<MobileWorkspaceGitHistory> loadWorkspaceGitHistory(
+    String workspaceId, {
+    int limit = 60,
+  }) async =>
+      throw UnsupportedError('Fake runtime does not support Git history.');
+
+  @override
+  Future<void> stageWorkspaceFile({
+    required String workspaceId,
+    required String relativePath,
+    required bool stage,
+  }) async =>
+      throw UnsupportedError('Fake runtime does not support Git staging.');
+
+  @override
   Future<MobileWorkspaceGitStatus> loadWorkspaceGitStatus(
     String workspaceId,
   ) async =>
