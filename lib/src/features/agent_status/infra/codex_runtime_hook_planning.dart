@@ -373,7 +373,7 @@ extension _CodexRuntimeHomeServiceHookPlanning on CodexRuntimeHomeService {
     }
     final content = _readTextFile(configPath);
     final headerRegex = RegExp(
-      r'^[ \t]*\[hooks\.state\."((?:[^"\\]|\\.)*)"\][ \t]*(?:#[^\r\n]*)?$',
+      r"""^[ \t]*\[hooks\.state\.(?:"((?:[^"\\]|\\.)*)"|'([^']*)')\][ \t]*(?:#[^\r\n]*)?$""",
     );
     var cursor = 0;
     var multilineState = const _TomlMultilineState();
@@ -405,7 +405,10 @@ extension _CodexRuntimeHomeServiceHookPlanning on CodexRuntimeHomeService {
           r'^[ \t]*enabled[ \t]*=[ \t]*(true|false)[ \t\r]*(?:#.*)?$',
           multiLine: true,
         ).firstMatch(blockText);
-        result[_unescapeTomlString(match.group(1)!)] = _CodexHookTrustState(
+        final key = match.group(1) != null
+            ? _unescapeTomlString(match.group(1)!)
+            : match.group(2)!;
+        result[key] = _CodexHookTrustState(
           trustedHash: hashMatch == null
               ? null
               : _unescapeTomlString(hashMatch.group(1)!),
@@ -466,8 +469,11 @@ extension _CodexRuntimeHomeServiceHookPlanning on CodexRuntimeHomeService {
   RegExp _tomlHeaderPattern(String prefix, String key) {
     final escapedPrefix = RegExp.escape(prefix);
     final escaped = RegExp.escape(_escapeTomlString(key));
+    final quotedKey = key.contains("'")
+        ? '"$escaped"'
+        : '(?:"$escaped"|\'${RegExp.escape(key)}\')';
     return RegExp(
-      '(^|\\r?\\n)[ \\t]*\\[$escapedPrefix\\."$escaped"\\][ \\t]*(?:#[^\\r\\n]*)?(?=\\r?\\n|\$)',
+      '(^|\\r?\\n)[ \\t]*\\[$escapedPrefix\\.$quotedKey\\][ \\t]*(?:#[^\\r\\n]*)?(?=\\r?\\n|\$)',
     );
   }
 }

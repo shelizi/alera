@@ -504,6 +504,84 @@ void _registerCodexRuntimeHomeServiceCoreTests() {
     expect(runtimeToml, contains('[hooks.state."runtime-hooks:stop:0:0"]'));
   });
 
+  for (final platform in ManagedAgentHookPlatform.values) {
+    test(
+      'refreshes literal trust keys without duplicates on $platform',
+      () async {
+        final localService = CodexRuntimeHomeService(
+          homeDirectory: home.path,
+          applicationSupportDirectory: () async => support,
+          platform: platform,
+          environment: <String, String>{'HOME': home.path},
+        );
+        final preparation = await localService.prepareForTerminalLaunch();
+        final configFile = File(
+          p.join(preparation.runtimeHomePath, 'config.toml'),
+        );
+        const userBlock =
+            "[hooks.state.'C:\\Users\\user\\hooks.json:stop:99:0']\n"
+            'enabled = false\n'
+            'trusted_hash = "sha256:user"';
+        var config = _literalTrustHeaders(configFile.readAsStringSync())
+            .replaceAll(
+              RegExp(r'trusted_hash = "sha256:[a-f0-9]+"'),
+              'trusted_hash = "sha256:old-managed"',
+            );
+        config = '$config\n$userBlock';
+        if (platform == ManagedAgentHookPlatform.windows) {
+          config = config.replaceAll('\n', '\r\n');
+        }
+        configFile.writeAsStringSync(config);
+
+        await localService.prepareForTerminalLaunch();
+        await localService.prepareForTerminalLaunch();
+
+        final updated = configFile.readAsStringSync();
+        final parsed = TomlDocument.parse(updated).toMap();
+        final states = (parsed['hooks'] as Map)['state'] as Map;
+        expect(states, hasLength(9));
+        expect(updated, isNot(contains('sha256:old-managed')));
+        expect(
+          updated,
+          contains(
+            platform == ManagedAgentHookPlatform.windows
+                ? userBlock.replaceAll('\n', '\r\n')
+                : userBlock,
+          ),
+        );
+        expect(preparation.runtimeHomePath, p.join(home.path, '.codex'));
+      },
+    );
+
+    test('reads and removes literal trust keys on $platform', () async {
+      final localService = CodexRuntimeHomeService(
+        homeDirectory: home.path,
+        applicationSupportDirectory: () async => support,
+        platform: platform,
+        environment: <String, String>{'HOME': home.path},
+      );
+      final preparation = await localService.prepareForTerminalLaunch();
+      final configFile = File(
+        p.join(preparation.runtimeHomePath, 'config.toml'),
+      );
+      configFile.writeAsStringSync(
+        _literalTrustHeaders(configFile.readAsStringSync()),
+      );
+
+      expect(
+        (await localService.status()).state,
+        ManagedAgentHookInstallState.installed,
+      );
+      await localService.remove();
+
+      final parsed = TomlDocument.parse(configFile.readAsStringSync()).toMap();
+      expect(
+        (parsed['hooks'] as Map?)?['state'] ?? <String, Object?>{},
+        isEmpty,
+      );
+    });
+  }
+
   test(
     'does not duplicate hook trust tables when config has no trailing newline',
     () async {

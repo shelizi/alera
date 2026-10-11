@@ -5,6 +5,7 @@ import 'package:alera/src/features/agent_status/infra/codex_runtime_home_service
 import 'package:alera/src/features/agent_status/infra/managed_agent_hook_installer.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
+import 'package:toml/toml.dart';
 
 part 'codex_runtime_home_service_test_harness.dart';
 

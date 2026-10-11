@@ -78,6 +78,13 @@ int _managedCommandCount(Map<String, Object?> hooks, String fileName) {
   return count;
 }
 
+String _literalTrustHeaders(String content) {
+  return content.replaceAllMapped(
+    RegExp(r'^\[hooks\.state\.("(?:[^"\\]|\\.)*")\]$', multiLine: true),
+    (match) => "[hooks.state.'${jsonDecode(match.group(1)!)}']",
+  );
+}
+
 String _escapeTomlString(String value) {
   return value.replaceAll(r'\', r'\\').replaceAll('"', r'\"');
 }
