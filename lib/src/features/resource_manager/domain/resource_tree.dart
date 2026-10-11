@@ -15,6 +15,7 @@ enum ResourceSortColumn { name, cpu, memory }
 class const ResourceSessionRow({
   required final String sessionId,
   required final String label,
+  final String? agentName,
   required final String tabId,
   required final bool running,
   required this.orphan,

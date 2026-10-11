@@ -1,3 +1,5 @@
+import 'package:alera/src/features/agent_status/domain/agent_status.dart';
+import 'package:alera/src/features/workbench/application/workspace_agent_status_projection.dart';
 import 'package:alera/src/features/projects/domain/project.dart';
 import 'package:alera/src/features/resource_manager/domain/machine_cpu_share.dart';
 import 'package:alera/src/features/resource_manager/domain/resource_snapshot.dart';
@@ -17,6 +19,9 @@ ResourceTree buildResourceTree({
   required List<Project> projects,
   required List<Workspace> workspaces,
   required List<WorkspaceTabRecord> tabs,
+  Map<String, String> terminalTitles = const <String, String>{},
+  Map<String, AgentStatusEntry> agentStatuses =
+      const <String, AgentStatusEntry>{},
   ResourceSortColumn sortColumn = ResourceSortColumn.memory,
 }) {
   final workspacesById = <String, Workspace>{
@@ -36,11 +41,29 @@ ResourceTree buildResourceTree({
     final tab = tabsBySessionId[session.sessionId];
     final workspace = workspacesById[session.workspaceId];
     final remote = workspace != null && workspace.hostId != 'local';
+    final status =
+        tab == null ||
+            tab.id != session.tabId ||
+            tab.workspaceId != session.workspaceId
+        ? null
+        : matchingAgentStatusForTab(tab: tab, agentStatuses: agentStatuses);
+    final liveTitle = terminalTitles[session.sessionId]?.trim() ?? '';
+    final storedTitle = tab?.title.trim() ?? '';
+    final label = tab == null
+        ? session.sessionId
+        : tab.hasManualTitle && storedTitle.isNotEmpty
+        ? storedTitle
+        : liveTitle.isNotEmpty
+        ? liveTitle
+        : storedTitle.isNotEmpty
+        ? storedTitle
+        : session.sessionId;
     final row = ResourceSessionRow(
       sessionId: session.sessionId,
-      label: tab?.title.trim().isNotEmpty ?? false
-          ? tab!.title.trim()
-          : session.sessionId,
+      label: label,
+      agentName: session.running && status != null
+          ? agentDisplayName(status.agentType)
+          : null,
       tabId: session.tabId,
       running: session.running,
       // A session is orphaned when no terminal tab claims it. The workspace

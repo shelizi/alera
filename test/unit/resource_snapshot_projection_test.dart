@@ -1,3 +1,4 @@
+import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 import 'package:alera/src/features/projects/domain/project.dart';
 import 'package:alera/src/features/resource_manager/application/resource_snapshot_projection.dart';
 import 'package:alera/src/features/resource_manager/domain/resource_snapshot.dart';
@@ -5,6 +6,8 @@ import 'package:alera/src/features/resource_manager/domain/resource_tree.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+part 'resource_snapshot_projection_titles_test_cases.dart';
 
 final _now = DateTime.utc(2026, 7, 25);
 
@@ -97,6 +100,7 @@ ResourceSnapshot _snapshot(
 );
 
 void main() {
+  _registerResourceTitleTests();
   group('buildResourceTree', () {
     test('groups sessions under their workspace and project', () {
       final tree = buildResourceTree(

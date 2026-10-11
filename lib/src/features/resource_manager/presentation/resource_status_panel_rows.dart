@@ -108,6 +108,7 @@ class const _SessionRow({
     return _MetricRow(
       indent: 2,
       label: session.label,
+      suffix: session.agentName,
       cpuMachinePercent: session.cpuMachinePercent,
       memoryBytes: session.memoryBytes,
       onTap: onOpen,

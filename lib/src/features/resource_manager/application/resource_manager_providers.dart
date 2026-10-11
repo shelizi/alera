@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:io' show pid;
 
+import 'package:alera/src/features/agent_status/application/agent_status_controller.dart';
+import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 import 'package:alera/src/features/app_window/application/app_window_providers.dart';
 import 'package:alera/src/features/app_window/domain/foreground_parked_refresh.dart';
 import 'package:alera/src/features/resource_manager/application/resource_snapshot_projection.dart';
@@ -9,9 +11,10 @@ import 'package:alera/src/features/resource_manager/domain/resource_tree.dart';
 import 'package:alera/src/features/workbench/application/workbench_controller.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
+import 'package:alera/src/features/workbench/presentation/terminal_runtime_providers.dart';
 import 'package:alera/src/platform/runtime_host/protocol/terminal_host_protocol.dart';
 import 'package:alera/src/shared/infra/runtime/runtime_host_providers.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart' show Provider;
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 part 'resource_manager_providers.g.dart';
@@ -121,6 +124,40 @@ ResourceTree resourceTree(Ref ref, ResourceSortColumn sortColumn) {
     return ResourceTree.empty;
   }
   final workbench = ref.watch(workbenchControllerProvider);
+  final open = ref.watch(resourcePanelOpenProvider);
+  final runtime = ref.watch(terminalRuntimeProvider);
+  final terminalTitles = <String, String>{};
+  final agentStatuses = <String, AgentStatusEntry>{};
+  for (final session in snapshot.sessions) {
+    if (open && session.running) {
+      // Tool and status updates cannot change the agent label. Watch identity only.
+      ref.watch(
+        agentStatusControllerProvider.select((entries) {
+          final entry = entries[session.sessionId];
+          return entry == null
+              ? null
+              : (entry.workspaceId, entry.tabId, entry.agentType);
+        }),
+      );
+    }
+    final status = ref.read(agentStatusControllerProvider)[session.sessionId];
+    if (status != null) {
+      agentStatuses[session.sessionId] = status;
+    }
+    final handle = runtime.peekSession(session.tabId);
+    if (handle == null ||
+        handle.workspaceId != session.workspaceId ||
+        (handle.terminalSessionId != null &&
+            handle.terminalSessionId != session.sessionId)) {
+      continue;
+    }
+    terminalTitles[session.sessionId] = handle.displayTitle;
+    if (open) {
+      final titles = handle.titleListenable;
+      titles.addListener(ref.invalidateSelf);
+      ref.onDispose(() => titles.removeListener(ref.invalidateSelf));
+    }
+  }
   return buildResourceTree(
     snapshot: snapshot,
     projects: workbench.projects,
@@ -131,6 +168,8 @@ ResourceTree resourceTree(Ref ref, ResourceSortColumn sortColumn) {
     tabs: <WorkspaceTabRecord>[
       for (final tabs in workbench.tabsByWorkspace.values) ...tabs,
     ],
+    terminalTitles: terminalTitles,
+    agentStatuses: agentStatuses,
     sortColumn: sortColumn,
   );
 }

@@ -45,11 +45,13 @@ ResourceSnapshot _snapshot({bool warming = false, String? error}) =>
 ResourceSessionRow _session(
   String label, {
   bool orphan = false,
+  String? agentName,
   double? cpuMachinePercent = 12.5,
   int? memoryBytes = 500 * 1024 * 1024,
 }) => ResourceSessionRow(
   sessionId: 'session-$label',
   label: label,
+  agentName: agentName,
   tabId: 'tab-$label',
   running: true,
   orphan: orphan,
@@ -122,6 +124,26 @@ Future<void> _pump(
 }
 
 void main() {
+  testWidgets('shows current agent beside the title and updates its identity', (
+    tester,
+  ) async {
+    for (final agent in <String>['Codex', 'Claude Code']) {
+      await _pump(
+        tester,
+        snapshot: _snapshot(),
+        tree: _tree(
+          sessions: <ResourceSessionRow>[
+            _session('Fix Login', agentName: agent),
+          ],
+        ),
+      );
+      expect(find.text('Fix Login'), findsOneWidget);
+      expect(find.text(agent), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    }
+    expect(find.text('Codex'), findsNothing);
+  });
+
   testWidgets('renders the project, workspace and session tree', (
     tester,
   ) async {

@@ -167,7 +167,7 @@ final class ResourceTreeProvider
   }
 }
 
-String _$resourceTreeHash() => r'171b800b95589ee4f6b8a0db0c031b9639231da9';
+String _$resourceTreeHash() => r'eba64b49f19324f9f50688c597d022f662255229';
 
 /// The snapshot projected onto the workbench tree, ready to render.
 
