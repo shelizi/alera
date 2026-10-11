@@ -42,9 +42,12 @@ merge commit `9dec1b90` without modifying the main worktree's pending changes.
 
 ### 2026-10-11 read-only Git diff intraline highlighting
 
+- Detailed current handoff for the two follow-up feature commits and Android environment: [`mobile-native-move-diff-handoff.md`](mobile-native-move-diff-handoff.md). Cross-directory commit `a8c2a953`; intraline commit `daa5daa5`.
+
 - The existing `MobileGitPatchView` now highlights changed Unicode characters within **unambiguous equal-count removed/added runs**, up to 8 lines per run and at most 4096 UTF-16 units per line. Pairing and start/end indices respect Unicode runes. Unequal groups, long lines, unchanged paired content and file headers keep the previous whole-line styling.
 - The underlying patch bytes/text, `+`/`-` markers, selectable copy and 512 KiB patch-size cap remain unchanged. This is presentation-only; no additional host RPC or arbitrary Git access.
 - `flutter test --no-pub test/mobile_git_patch_lines_test.dart test/mobile_git_patch_view_test.dart`: **8 passed**. `flutter test --no-pub` complete suite: **471 passed, 4 skipped, 0 failed**. `flutter analyze --no-pub`: **no issues**.
+- Android build smoke: `flutter build apk --debug --no-pub` timed out at Gradle `assembleDebug` after ~311 seconds with no detailed Gradle error and **no `app-debug.apk` output**. Windows SDK platforms remain 33/34/35 and build tools 30.0.3/34.0.0/35.0.0; app `compileSdk=37`, so the Android environment is not yet release-ready. Do not report a successful APK or attribute the timeout to an unverified single cause. License acceptance remains an operator step.
 
 ### 2026-10-11 safe cross-directory mobile text move
 
