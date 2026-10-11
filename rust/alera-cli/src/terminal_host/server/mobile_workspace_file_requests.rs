@@ -1,6 +1,6 @@
 use std::path::{Component, Path, PathBuf};
 
-use git2::{DiffFormat, DiffOptions, Index, Repository, Status, StatusOptions};
+use git2::{Delta, DiffFormat, DiffOptions, Index, Oid, Repository, Status, StatusOptions};
 
 use alera_core::runtime::{RuntimeStore, Workspace};
 use alera_core::workspace_files::{
@@ -139,6 +139,12 @@ async fn handle_mobile_workspace_file_request(
         }
         MobileWorkspaceFileOperation::WorkspaceGitHistory => {
             read_mobile_workspace_git_history(&runtime_store, payload).await
+        }
+        MobileWorkspaceFileOperation::WorkspaceGitCompare => {
+            read_mobile_workspace_git_comparison(&runtime_store, payload).await
+        }
+        MobileWorkspaceFileOperation::WorkspaceGitRevisionPatch => {
+            read_mobile_workspace_git_revision_patch(&runtime_store, payload).await
         }
         MobileWorkspaceFileOperation::PromptAttachmentRead => {
             read_mobile_prompt_attachment(runtime_dir, payload).await
@@ -655,6 +661,218 @@ fn workspace_git_history(root: &Path, limit: usize) -> HostResult<Value> {
     Ok(json!({"branch": branch, "commits": commits}))
 }
 
+const MAX_MOBILE_GIT_COMPARE_ITEMS: usize = 200;
+
+async fn read_mobile_workspace_git_comparison(
+    runtime_store: &RuntimeStore,
+    payload: &Value,
+) -> HostResult<Value> {
+    let workspace = workspace_for_mobile_file_request(runtime_store, payload).await?;
+    let target_commit = require_string_key(payload, "targetCommit")?;
+    let base_commit = optional_string_key(payload, "baseCommit");
+    let roots = known_workspace_paths(runtime_store).await?;
+    spawn_blocking_workspace("Workspace Git commit comparison", move || {
+        let root = open_validated_mobile_workspace_root(&workspace.path, roots)?;
+        workspace_git_compare(
+            root.canonical_path(),
+            base_commit.as_deref(),
+            &target_commit,
+        )
+    })
+    .await
+}
+
+async fn read_mobile_workspace_git_revision_patch(
+    runtime_store: &RuntimeStore,
+    payload: &Value,
+) -> HostResult<Value> {
+    let workspace = workspace_for_mobile_file_request(runtime_store, payload).await?;
+    let target_commit = require_string_key(payload, "targetCommit")?;
+    let base_commit = optional_string_key(payload, "baseCommit");
+    let relative_path = require_string_key(payload, "relativePath")?;
+    let roots = known_workspace_paths(runtime_store).await?;
+    spawn_blocking_workspace("Workspace Git revision patch", move || {
+        let root = open_validated_mobile_workspace_root(&workspace.path, roots)?;
+        workspace_git_revision_patch(
+            root.canonical_path(),
+            base_commit.as_deref(),
+            &target_commit,
+            &relative_path,
+        )
+    })
+    .await
+}
+
+fn open_mobile_git_repository(root: &Path) -> HostResult<Repository> {
+    let repo = Repository::open(root)
+        .map_err(|_| HostError::state("Workspace is not a Git repository."))?;
+    let actual_root = repo
+        .workdir()
+        .and_then(|directory| dunce::canonicalize(directory).ok())
+        .ok_or_else(|| HostError::state("Workspace Git worktree is unavailable."))?;
+    if actual_root != root {
+        return Err(HostError::state(
+            "Git root does not match the selected workspace.",
+        ));
+    }
+    Ok(repo)
+}
+
+/// Never resolve a mobile-supplied branch name, tag or arbitrary Git object.
+/// A valid SHA must identify a commit reachable from this workspace's HEAD.
+fn checked_mobile_git_commit<'repo>(
+    repo: &'repo Repository,
+    raw_sha: &str,
+) -> HostResult<git2::Commit<'repo>> {
+    if raw_sha.len() != 40 || !raw_sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(HostError::format(
+            "A full 40-character Git commit SHA is required.",
+        ));
+    }
+    let oid =
+        Oid::from_str(raw_sha).map_err(|_| HostError::format("Git commit SHA is invalid."))?;
+    let head = repo
+        .head()
+        .and_then(|reference| reference.peel_to_commit())
+        .map_err(|_| HostError::state("Workspace has no Git HEAD commit."))?;
+    if oid != head.id() && !repo.graph_descendant_of(head.id(), oid).unwrap_or(false) {
+        return Err(HostError::state(
+            "Commit is not reachable from the selected workspace HEAD.",
+        ));
+    }
+    repo.find_commit(oid)
+        .map_err(|_| HostError::state("Commit is unavailable in the selected workspace."))
+}
+
+fn workspace_git_revision_patch(
+    root: &Path,
+    base_commit: Option<&str>,
+    target_commit: &str,
+    relative_path: &str,
+) -> HostResult<Value> {
+    let path = Path::new(relative_path);
+    if path.as_os_str().is_empty()
+        || path
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+        || is_protected_workspace_path(path)
+    {
+        return Err(HostError::state("Git revision patch path is invalid."));
+    }
+    let repo = open_mobile_git_repository(root)?;
+    let target = checked_mobile_git_commit(&repo, target_commit)?;
+    let base = base_commit
+        .map(|sha| checked_mobile_git_commit(&repo, sha))
+        .transpose()?;
+    let base_tree = base
+        .as_ref()
+        .map(|commit| commit.tree())
+        .transpose()
+        .map_err(|error| HostError::state(format!("Git revision patch failed: {error}")))?;
+    let target_tree = target
+        .tree()
+        .map_err(|error| HostError::state(format!("Git revision patch failed: {error}")))?;
+    let mut options = DiffOptions::new();
+    options.pathspec(relative_path).disable_pathspec_match(true);
+    let diff = repo
+        .diff_tree_to_tree(base_tree.as_ref(), Some(&target_tree), Some(&mut options))
+        .map_err(|error| HostError::state(format!("Git revision patch failed: {error}")))?;
+    if !diff
+        .deltas()
+        .any(|delta| delta.old_file().path() == Some(path) || delta.new_file().path() == Some(path))
+    {
+        return Err(HostError::state(
+            "File has no changes between selected commits.",
+        ));
+    }
+    let mut patch = Vec::new();
+    let mut truncated = false;
+    diff.print(DiffFormat::Patch, |_delta, _hunk, line| {
+        if patch.len() >= MAX_MOBILE_GIT_DIFF_BYTES {
+            truncated = true;
+            return true;
+        }
+        if matches!(line.origin(), '+' | '-' | ' ') {
+            patch.push(line.origin() as u8);
+        }
+        let available = MAX_MOBILE_GIT_DIFF_BYTES.saturating_sub(patch.len());
+        let content = line.content();
+        patch.extend_from_slice(&content[..content.len().min(available)]);
+        if content.len() > available {
+            truncated = true;
+            return true;
+        }
+        true
+    })
+    .map_err(|error| HostError::state(format!("Git revision patch failed: {error}")))?;
+    Ok(json!({
+        "baseCommit": base_commit,
+        "targetCommit": target.id().to_string(),
+        "relativePath": relative_path,
+        "patch": String::from_utf8_lossy(&patch),
+        "truncated": truncated,
+    }))
+}
+
+fn workspace_git_compare(
+    root: &Path,
+    base_commit: Option<&str>,
+    target_commit: &str,
+) -> HostResult<Value> {
+    let repo = open_mobile_git_repository(root)?;
+    let target = checked_mobile_git_commit(&repo, target_commit)?;
+    let base = base_commit
+        .map(|sha| checked_mobile_git_commit(&repo, sha))
+        .transpose()?;
+    let base_tree = base
+        .as_ref()
+        .map(|commit| commit.tree())
+        .transpose()
+        .map_err(|error| HostError::state(format!("Git comparison failed: {error}")))?;
+    let target_tree = target
+        .tree()
+        .map_err(|error| HostError::state(format!("Git comparison failed: {error}")))?;
+    let diff = repo
+        .diff_tree_to_tree(base_tree.as_ref(), Some(&target_tree), None)
+        .map_err(|error| HostError::state(format!("Git comparison failed: {error}")))?;
+    let mut items = Vec::new();
+    for delta in diff.deltas() {
+        let old_path = delta.old_file().path().and_then(Path::to_str);
+        let new_path = delta.new_file().path().and_then(Path::to_str);
+        let Some(relative_path) = new_path.or(old_path) else {
+            continue;
+        };
+        if is_protected_workspace_path(Path::new(relative_path)) {
+            continue;
+        }
+        let status = match delta.status() {
+            Delta::Added => "added",
+            Delta::Deleted => "deleted",
+            Delta::Renamed => "renamed",
+            Delta::Copied => "copied",
+            Delta::Typechange => "typechange",
+            _ => "modified",
+        };
+        items.push(json!({
+            "relativePath": relative_path,
+            "oldPath": old_path,
+            "newPath": new_path,
+            "status": status,
+        }));
+        if items.len() > MAX_MOBILE_GIT_COMPARE_ITEMS {
+            break;
+        }
+    }
+    let truncated = items.len() > MAX_MOBILE_GIT_COMPARE_ITEMS;
+    items.truncate(MAX_MOBILE_GIT_COMPARE_ITEMS);
+    Ok(json!({
+        "baseCommit": base_commit,
+        "targetCommit": target.id().to_string(),
+        "items": items,
+        "truncated": truncated,
+    }))
+}
+
 async fn read_mobile_prompt_attachment(runtime_dir: PathBuf, payload: &Value) -> HostResult<Value> {
     let requested_path = require_string_key(payload, "path")?;
     let offset = payload.get("offset").and_then(Value::as_u64).unwrap_or(0);
@@ -834,12 +1052,121 @@ mod tests {
     use super::super::request_route_policy::MobileWorkspaceFileOperation;
     use super::{
         absolute_workspace_file_target, mutate_mobile_git_stage, prompt_attachment_root,
-        validated_mobile_workspace_root, workspace_git_history, workspace_git_patch,
-        workspace_git_status,
+        validated_mobile_workspace_root, workspace_git_compare, workspace_git_history,
+        workspace_git_patch, workspace_git_revision_patch, workspace_git_status,
     };
     use serde_json::json;
     use std::collections::HashMap;
     use std::path::Path;
+
+    #[test]
+    fn mobile_git_compare_returns_changed_files_and_rejects_unreachable_commits() {
+        let directory = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(directory.path()).unwrap();
+        let signature = git2::Signature::now("Mobile Test", "mobile@test.invalid").unwrap();
+        let file = Path::new("notes.txt");
+        std::fs::write(directory.path().join(file), "before\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(file).unwrap();
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let first = repo
+            .commit(Some("HEAD"), &signature, &signature, "first", &tree, &[])
+            .unwrap();
+        drop(tree);
+        std::fs::write(directory.path().join(file), "after\n").unwrap();
+        std::fs::write(directory.path().join("extra.txt"), "new\n").unwrap();
+        index.add_path(file).unwrap();
+        index.add_path(Path::new("extra.txt")).unwrap();
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let previous = repo.find_commit(first).unwrap();
+        let second = repo
+            .commit(
+                Some("HEAD"),
+                &signature,
+                &signature,
+                "second",
+                &tree,
+                &[&previous],
+            )
+            .unwrap();
+        let root = dunce::canonicalize(directory.path()).unwrap();
+        let changed =
+            workspace_git_compare(&root, Some(&first.to_string()), &second.to_string()).unwrap();
+        let files = changed["items"].as_array().unwrap();
+        assert_eq!(files.len(), 2);
+        assert!(files
+            .iter()
+            .any(|file| file["relativePath"] == "notes.txt" && file["status"] == "modified"));
+        assert!(files
+            .iter()
+            .any(|file| file["relativePath"] == "extra.txt" && file["status"] == "added"));
+        assert_eq!(changed["truncated"], false);
+        let first_changes = workspace_git_compare(&root, None, &first.to_string()).unwrap();
+        assert_eq!(first_changes["items"][0]["status"], "added");
+        let reversed =
+            workspace_git_compare(&root, Some(&second.to_string()), &first.to_string()).unwrap();
+        assert!(reversed["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|file| file["status"] == "deleted"));
+
+        let patch = workspace_git_revision_patch(
+            &root,
+            Some(&first.to_string()),
+            &second.to_string(),
+            "notes.txt",
+        )
+        .unwrap();
+        assert!(patch["patch"].as_str().unwrap().contains("-before"));
+        assert!(patch["patch"].as_str().unwrap().contains("+after"));
+        assert_eq!(patch["truncated"], false);
+        let root_patch =
+            workspace_git_revision_patch(&root, None, &first.to_string(), "notes.txt").unwrap();
+        assert!(root_patch["patch"].as_str().unwrap().contains("+before"));
+        assert!(workspace_git_revision_patch(
+            &root,
+            Some(&first.to_string()),
+            &second.to_string(),
+            "../notes.txt"
+        )
+        .is_err());
+        assert!(workspace_git_revision_patch(
+            &root,
+            Some(&first.to_string()),
+            &second.to_string(),
+            ".git/config"
+        )
+        .is_err());
+        assert!(workspace_git_revision_patch(
+            &root,
+            Some(&first.to_string()),
+            &second.to_string(),
+            "notes*.txt"
+        )
+        .is_err());
+
+        let unattached = repo
+            .commit(None, &signature, &signature, "unreachable", &tree, &[])
+            .unwrap();
+        assert!(
+            workspace_git_compare(&root, Some(&unattached.to_string()), &second.to_string())
+                .is_err()
+        );
+        assert!(
+            workspace_git_compare(&root, Some("refs/heads/main"), &second.to_string()).is_err()
+        );
+        assert!(workspace_git_compare(&root, Some(&first.to_string()), "deadbeef").is_err());
+        assert!(workspace_git_revision_patch(
+            &root,
+            Some(&unattached.to_string()),
+            &second.to_string(),
+            "notes.txt"
+        )
+        .is_err());
+    }
 
     #[test]
     fn mobile_git_history_lists_only_selected_worktree_head_and_parents() {

@@ -162,6 +162,55 @@ class const MobileWorkspaceGitHistory({
   );
 }
 
+class const MobileWorkspaceGitChangedFile({
+  required final String relativePath,
+  required final String status,
+  final String? oldPath,
+  final String? newPath,
+}) {
+  factory fromJson(Map<String, Object?> json) => MobileWorkspaceGitChangedFile(
+    relativePath: json.requiredString('relativePath'),
+    status: json['status'] as String? ?? 'modified',
+    oldPath: json.optionalString('oldPath'),
+    newPath: json.optionalString('newPath'),
+  );
+}
+
+class const MobileWorkspaceGitComparison({
+  required final String? baseCommit,
+  required final String targetCommit,
+  required final List<MobileWorkspaceGitChangedFile> items,
+  required final bool truncated,
+}) {
+  factory fromJson(Map<String, Object?> json) => MobileWorkspaceGitComparison(
+    baseCommit: json.optionalString('baseCommit'),
+    targetCommit: json.requiredString('targetCommit'),
+    items: <MobileWorkspaceGitChangedFile>[
+      for (final item in json['items'] as List<Object?>? ?? const <Object?>[])
+        if (item is Map)
+          MobileWorkspaceGitChangedFile.fromJson(asJsonMap(item)),
+    ],
+    truncated: json['truncated'] == true,
+  );
+}
+
+class const MobileWorkspaceGitRevisionPatch({
+  required final String? baseCommit,
+  required final String targetCommit,
+  required final String relativePath,
+  required final String patch,
+  required final bool truncated,
+}) {
+  factory fromJson(Map<String, Object?> json) =>
+      MobileWorkspaceGitRevisionPatch(
+        baseCommit: json.optionalString('baseCommit'),
+        targetCommit: json.requiredString('targetCommit'),
+        relativePath: json.requiredString('relativePath'),
+        patch: json['patch'] as String? ?? '',
+        truncated: json['truncated'] == true,
+      );
+}
+
 class const MobileWorkspaceGitStatus({
   required final List<MobileWorkspaceGitStatusEntry> items,
   required final bool truncated,

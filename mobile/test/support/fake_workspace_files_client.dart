@@ -86,6 +86,26 @@ mixin FakeWorkspaceFilesClient implements MobileCodexWorkspaceClient {
   bool get supportsWorkspaceGitHistory => false;
 
   @override
+  bool get supportsWorkspaceGitCompare => false;
+
+  @override
+  Future<MobileWorkspaceGitComparison> compareWorkspaceGitCommits({
+    required String workspaceId,
+    String? baseCommit,
+    required String targetCommit,
+  }) async =>
+      throw UnsupportedError('Fake runtime does not compare Git commits.');
+
+  @override
+  Future<MobileWorkspaceGitRevisionPatch> loadWorkspaceGitRevisionPatch({
+    required String workspaceId,
+    String? baseCommit,
+    required String targetCommit,
+    required String relativePath,
+  }) async =>
+      throw UnsupportedError('Fake runtime has no historical Git patches.');
+
+  @override
   Future<MobileWorkspaceGitHistory> loadWorkspaceGitHistory(
     String workspaceId, {
     int limit = 60,

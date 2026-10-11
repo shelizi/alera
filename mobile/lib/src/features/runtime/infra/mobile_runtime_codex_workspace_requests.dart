@@ -84,6 +84,49 @@ mixin MobileRuntimeCodexWorkspaceRequests {
   bool get supportsWorkspaceGitHistory =>
       runtimeCapabilities.contains(mobileWorkspaceGitHistoryCapability);
 
+  bool get supportsWorkspaceGitCompare =>
+      runtimeCapabilities.contains(mobileWorkspaceGitCompareCapability);
+
+  Future<MobileWorkspaceGitComparison> compareWorkspaceGitCommits({
+    required String workspaceId,
+    String? baseCommit,
+    required String targetCommit,
+  }) async {
+    if (!supportsWorkspaceGitCompare) {
+      throw UnsupportedError(
+        'Update the paired runtime to compare Git commits.',
+      );
+    }
+    return MobileWorkspaceGitComparison.fromJson(
+      await requestMap('mobile.workspaceGit.compare', <String, Object?>{
+        'workspaceId': workspaceId,
+        'baseCommit': ?baseCommit,
+        'targetCommit': targetCommit,
+      }),
+    );
+  }
+
+  Future<MobileWorkspaceGitRevisionPatch> loadWorkspaceGitRevisionPatch({
+    required String workspaceId,
+    String? baseCommit,
+    required String targetCommit,
+    required String relativePath,
+  }) async {
+    if (!supportsWorkspaceGitCompare) {
+      throw UnsupportedError(
+        'Update the paired runtime to view historical patches.',
+      );
+    }
+    return MobileWorkspaceGitRevisionPatch.fromJson(
+      await requestMap('mobile.workspaceGit.revisionPatch', <String, Object?>{
+        'workspaceId': workspaceId,
+        'baseCommit': ?baseCommit,
+        'targetCommit': targetCommit,
+        'relativePath': relativePath,
+      }),
+    );
+  }
+
   Future<MobileWorkspaceGitHistory> loadWorkspaceGitHistory(
     String workspaceId, {
     int limit = 60,

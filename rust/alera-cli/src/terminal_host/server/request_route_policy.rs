@@ -161,6 +161,8 @@ pub(crate) enum MobileWorkspaceFileOperation {
     WorkspaceGitStatus,
     WorkspaceGitStage,
     WorkspaceGitHistory,
+    WorkspaceGitCompare,
+    WorkspaceGitRevisionPatch,
     PromptAttachmentRead,
 }
 
@@ -347,6 +349,14 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         "mobile.workspaceGit.history" => mobile_deferred_operation(
             MobileDeferredRoute::WorkspaceFile(MobileWorkspaceFileOperation::WorkspaceGitHistory),
         ),
+        "mobile.workspaceGit.compare" => mobile_deferred_operation(
+            MobileDeferredRoute::WorkspaceFile(MobileWorkspaceFileOperation::WorkspaceGitCompare),
+        ),
+        "mobile.workspaceGit.revisionPatch" => {
+            mobile_deferred_operation(MobileDeferredRoute::WorkspaceFile(
+                MobileWorkspaceFileOperation::WorkspaceGitRevisionPatch,
+            ))
+        }
         "mobile.promptAttachment.read" => mobile_deferred_operation(
             MobileDeferredRoute::WorkspaceFile(MobileWorkspaceFileOperation::PromptAttachmentRead),
         ),

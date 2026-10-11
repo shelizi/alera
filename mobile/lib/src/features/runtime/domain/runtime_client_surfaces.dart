@@ -62,7 +62,10 @@ const String mobileCodexWorkspaceFilesCapability =
 const String mobileWorkspaceFileDiffCapability = 'mobileWorkspaceFileDiffV1';
 const String mobileWorkspaceGitStatusCapability = 'mobileWorkspaceGitStatusV1';
 const String mobileWorkspaceGitStageCapability = 'mobileWorkspaceGitStageV1';
-const String mobileWorkspaceGitHistoryCapability = 'mobileWorkspaceGitHistoryV1';
+const String mobileWorkspaceGitHistoryCapability =
+    'mobileWorkspaceGitHistoryV1';
+const String mobileWorkspaceGitCompareCapability =
+    'mobileWorkspaceGitCompareV1';
 const String mobileWorkspaceDirectoryBrowseCapability =
     'mobileWorkspaceDirectoryBrowseV1';
 const String mobileWorkspaceTextEditCapability = 'mobileWorkspaceTextEditV1';
@@ -155,6 +158,18 @@ abstract interface class MobileTerminalClient {
 abstract interface class MobileCodexWorkspaceClient {
   bool get supportsCodexWorkspaceFiles;
   bool get supportsWorkspaceGitHistory;
+  bool get supportsWorkspaceGitCompare;
+  Future<MobileWorkspaceGitComparison> compareWorkspaceGitCommits({
+    required String workspaceId,
+    String? baseCommit,
+    required String targetCommit,
+  });
+  Future<MobileWorkspaceGitRevisionPatch> loadWorkspaceGitRevisionPatch({
+    required String workspaceId,
+    String? baseCommit,
+    required String targetCommit,
+    required String relativePath,
+  });
   Future<MobileWorkspaceGitHistory> loadWorkspaceGitHistory(
     String workspaceId, {
     int limit = 60,
