@@ -1,6 +1,7 @@
 import 'package:alera_mobile/src/app/theme/alera_tokens.dart';
 import 'package:alera_mobile/src/features/runtime/application/host_connection_controller.dart';
 import 'package:alera_mobile/src/features/workbench/application/mobile_workspace_text_preview.dart';
+import 'package:alera_mobile/src/features/workbench/application/mobile_workspace_image_preview.dart';
 import 'package:alera_mobile/src/features/workbench/application/mobile_markdown_preview.dart';
 import 'package:alera_mobile/src/features/workbench/presentation/workspace_file_picker_sheet.dart';
 import 'package:alera_mobile/src/features/workbench/presentation/workspace_file_diff_screen.dart';
@@ -24,6 +25,7 @@ class _WorkspaceFileViewerScreenState
     extends ConsumerState<WorkspaceFileViewerScreen> {
   static final Logger _logger = Logger('WorkspaceFileViewerScreen');
   late Future<MobileWorkspaceTextPreview> _preview;
+  Future<MobileWorkspaceImagePreview>? _imagePreview;
   bool _markdownPreview = true;
 
   @override
@@ -53,6 +55,20 @@ class _WorkspaceFileViewerScreenState
       );
       rethrow;
     }
+  }
+
+  Future<MobileWorkspaceImagePreview> _readImage() async {
+    final client = await ref.read(
+      hostConnectionControllerProvider(widget.hostId).future,
+    );
+    return loadWorkspaceImagePreview(
+      (offset, length) => client.readWorkspaceFile(
+        workspaceId: widget.workspaceId,
+        relativePath: widget.relativePath,
+        offset: offset,
+        length: length,
+      ),
+    );
   }
 
   @override
@@ -156,10 +172,53 @@ class _WorkspaceFileViewerScreenState
                   ),
                 const Divider(height: 1),
                 if (!preview.isText)
-                  const Expanded(
-                    child: Center(
-                      child: Text('Binary files cannot be previewed.'),
-                    ),
+                  Expanded(
+                    child:
+                        isSupportedMobileWorkspaceImageMime(preview.mimeType) &&
+                            preview.totalBytes <=
+                                maxMobileWorkspaceImagePreviewBytes
+                        ? FutureBuilder<MobileWorkspaceImagePreview>(
+                            future: _imagePreview ??= _readImage(),
+                            builder: (context, imageSnapshot) {
+                              if (imageSnapshot.hasError) {
+                                return Center(
+                                  child: Text(
+                                    'Unable to preview image: ${imageSnapshot.error}',
+                                  ),
+                                );
+                              }
+                              final image = imageSnapshot.data;
+                              if (image == null) {
+                                return const Center(
+                                  child: CircularProgressIndicator(),
+                                );
+                              }
+                              return InteractiveViewer(
+                                minScale: 0.5,
+                                maxScale: 5,
+                                child: Center(
+                                  child: Image.memory(
+                                    image.bytes,
+                                    fit: BoxFit.contain,
+                                    cacheWidth: 2048,
+                                    cacheHeight: 2048,
+                                    errorBuilder: (_, _, _) => const Text(
+                                      'This image cannot be decoded.',
+                                    ),
+                                  ),
+                                ),
+                              );
+                            },
+                          )
+                        : Center(
+                            child: Text(
+                              isSupportedMobileWorkspaceImageMime(
+                                    preview.mimeType,
+                                  )
+                                  ? 'Image preview is limited to 4 MiB.'
+                                  : 'This binary file type cannot be previewed.',
+                            ),
+                          ),
                   )
                 else ...<Widget>[
                   if (preview.truncated)

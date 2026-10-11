@@ -39,6 +39,12 @@ merge commit `9dec1b90` without modifying the main worktree's pending changes.
 
 ## Validation
 
+### 2026-10-11 image preview
+
+- PNG, JPEG, GIF and WebP workspace images can be previewed up to **4 MiB** using Flutter in-memory decoding with pan/zoom. SVG/HTML/PDF/other binary types remain unsupported, and no remote images or WebViews execute.
+- Ranged image loader verifies every chunk's path, MIME type, total size, requested length and offsets, and validates minimal format signature before decoding. `flutter test --no-pub test/mobile_workspace_image_preview_test.dart`: **4 passed**. Full Flutter regression with the image loader tests: **460 passed, 4 skipped, 0 failed**. Targeted `dart analyze` on the image loader and viewer: **No issues found**.
+- Physical-device image decoding, APK/iOS signing and real network latency verification are pending separate release checks.
+
 ### 2026-10-11 create-only mobile text files
 
 - `cargo test --manifest-path rust/Cargo.toml -p alera-core --locked mobile_create_new_text_file_never_overwrites_or_leaves_workspace`: **1 passed**. Verifies no clobber, VCS metadata and traversal protection, existing-parent requirement, NUL/256 KiB limits and no-follow traversal on Unix.
