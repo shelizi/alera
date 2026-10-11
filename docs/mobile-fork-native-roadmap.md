@@ -42,6 +42,8 @@ merge commit `9dec1b90` without modifying the main worktree's pending changes.
 
 ### 2026-10-11 recoverable mobile workspace text deletion
 
+- Detailed implementation/release handoff: [`mobile-workspace-recovery-handoff.md`](mobile-workspace-recovery-handoff.md). Feature commit: `176c3ef5`.
+
 - `mobile.workspaceFile.trash`, `mobile.workspaceTrash.list`, `mobile.workspaceTrash.restore` (`mobileWorkspaceTextTrashV1`) operate only on an authorized workspace ID. The phone confirms before removal and restore, and never exposes a permanent-delete button. Old runtimes do not display unsupported actions.
 - The host requires a complete SHA-256-matched writable UTF-8 file at most 256 KiB, a real registered workspace root and no-follow path traversal. A verified copy with its SHA, original path, ID and timestamp is fsynced under `<runtime-dir>/mobile-workspace-trash/<sha256(workspace-id)>/` **before** removing the source name. Other workspaces cannot list or restore it. Backup contents do not travel to the phone in the listing endpoint.
 - Recovery only uses atomic create-new at the original path; if another agent has recreated that name, restore returns a conflict and retains its backup. Capacity is bounded to 64 entries / 16 MiB per workspace; when full, deletion is rejected before any unlink. No background expiration/purge is enabled because this would silently destroy the recovery path.
