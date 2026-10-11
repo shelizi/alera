@@ -29,6 +29,14 @@ on:
           - android
           - ios
           - all
+      android_target:
+        description: Android architecture for a manual smoke build
+        type: choice
+        required: true
+        default: all
+        options:
+          - all
+          - emulator-x64
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -101,7 +109,16 @@ jobs:
       - name: Build Android release APK
         if: matrix.platform == 'android'
         working-directory: mobile
-        run: flutter build apk --release
+        shell: bash
+        env:
+          ALERA_ANDROID_TARGET: ${{ inputs.android_target || 'all' }}
+        run: |
+          set -euo pipefail
+          if [[ "$ALERA_ANDROID_TARGET" == 'emulator-x64' ]]; then
+            flutter build apk --release --target-platform android-x64
+          else
+            flutter build apk --release
+          fi
 
       - name: Verify Android native dependencies
         if: matrix.platform == 'android'

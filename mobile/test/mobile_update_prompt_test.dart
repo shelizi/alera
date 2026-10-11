@@ -14,7 +14,7 @@ final MobileRelease _release = MobileRelease(
   version: const MobileVersion(0, 10, 0),
   tag: 'v0.10.0-mobile',
   apkUrl: Uri.parse(
-    'https://github.com/leynier/alera/releases/download/'
+    'https://github.com/shelizi/alera/releases/download/'
     'v0.10.0-mobile/alera-0.10.0-android.apk',
   ),
 );

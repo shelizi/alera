@@ -66,6 +66,14 @@ dart run flutter_native_splash:create --path=flutter_native_splash.yaml
 
 ## Android Releases
 
+The in-app Android updater checks published `vX.Y.Z-mobile` releases in
+`shelizi/alera` by default for this fork, not `leynier/alera`. This avoids
+offering upstream APKs with unrelated code and signing keys. A downstream build
+can override the owner/repository with
+`--dart-define=ALERA_MOBILE_RELEASE_REPOSITORY=owner/repo`. Until this fork
+publishes a mobile release with a universal Android APK, the updater offers
+nothing.
+
 Run the unified **Cut Release** GitHub Actions workflow to create releases. It detects changes under `mobile/` independently from desktop changes and derives the next patch, minor, or major version from Conventional Commit metadata. Mobile tags use `vX.Y.Z-mobile` for stable releases and `vX.Y.Z-rc.N-mobile` for release candidates, independently from desktop tags. Mobile release notes only include changes that touch `mobile/`, and mobile releases never take the repository's Latest badge (it stays on the desktop release). When mobile changed, the workflow analyzes and tests the app, builds universal and architecture-specific APKs, verifies SHA-256 checksums, creates a draft GitHub Release, uploads and attests every artifact, and publishes only after the complete asset set passes verification. Use its `dry_run` input to preview the release plan without creating builds, commits, tags, or releases.
 
 iOS publishing remains disabled until Apple signing and provisioning are configured; the generated iOS icon and splash resources continue to be maintained in the project.
