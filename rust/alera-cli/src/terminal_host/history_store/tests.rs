@@ -316,3 +316,39 @@ async fn trim_compacts_a_history_of_tiny_rows() {
     let tail = store.read("s1", usize::MAX).await.unwrap().unwrap().buffer;
     assert!(tail.ends_with(b"next"));
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn concurrent_session_writers_wait_for_the_lock_instead_of_failing() {
+    // Each output-only persist reads before it writes. In WAL a deferred
+    // transaction that upgrades while the other pooled connection holds the
+    // write lock fails at once with SQLITE_BUSY (or SQLITE_BUSY_SNAPSHOT)
+    // without consulting the busy timeout, which left live sessions retrying
+    // every five seconds.
+    let dir = tempfile::tempdir().unwrap();
+    let store = TerminalHostHistoryStore::open(dir.path()).await.unwrap();
+    for session in ["s1", "s2"] {
+        store
+            .persist_session(session, Some(&sample(session)), &[(0, b"x".to_vec())])
+            .await
+            .unwrap();
+    }
+
+    let writer = |session: &'static str| {
+        let store = store.clone();
+        tokio::spawn(async move {
+            for sequence in 1..200_i64 {
+                store
+                    .persist_session(session, None, &[(sequence, vec![b'y'; 64])])
+                    .await?;
+            }
+            anyhow::Ok(())
+        })
+    };
+    let (first, second) = tokio::join!(writer("s1"), writer("s2"));
+    first.unwrap().unwrap();
+    second.unwrap().unwrap();
+
+    for session in ["s1", "s2"] {
+        assert_eq!(store.next_output_sequence(session).await.unwrap(), 200);
+    }
+}

@@ -181,6 +181,16 @@ impl TerminalHostHistoryStore {
         Ok(())
     }
 
+    /// Opens a transaction that takes the write lock up front.
+    ///
+    /// These transactions read before they write. In WAL mode a deferred
+    /// transaction that upgrades while the other pooled connection holds the
+    /// write lock fails at once with SQLITE_BUSY, or SQLITE_BUSY_SNAPSHOT,
+    /// without consulting the busy timeout. `BEGIN IMMEDIATE` waits instead.
+    async fn begin_write(&self) -> Result<sqlx::Transaction<'static, sqlx::Sqlite>> {
+        Ok(self.pool.begin_with("BEGIN IMMEDIATE").await?)
+    }
+
     pub async fn persist_session(
         &self,
         session_id: &str,
@@ -191,7 +201,7 @@ impl TerminalHostHistoryStore {
             return Ok(());
         }
 
-        let mut transaction = self.pool.begin().await?;
+        let mut transaction = self.begin_write().await?;
         if let Some(checkpoint) = checkpoint {
             sqlx::query(
                 "INSERT INTO checkpoints \
@@ -280,10 +290,13 @@ impl TerminalHostHistoryStore {
             // Everything newer than this row, which is what stays whole.
             let kept = running.saturating_sub(byte_len).max(0) as usize;
             let remaining = max_bytes.saturating_sub(kept);
+            // The cut was found outside the write lock: the running sum is the
+            // slow part, and only this session's own worker removes its rows.
+            let mut transaction = self.begin_write().await?;
             if remaining > 0 {
                 let data: Vec<u8> = sqlx::query("SELECT data FROM outputChunks WHERE id = ?")
                     .bind(id)
-                    .fetch_one(&self.pool)
+                    .fetch_one(&mut *transaction)
                     .await?
                     .try_get("data")?;
                 let tail_start = data.len().saturating_sub(remaining);
@@ -291,7 +304,7 @@ impl TerminalHostHistoryStore {
                 sqlx::query("UPDATE outputChunks SET data = ? WHERE id = ?")
                     .bind(tail)
                     .bind(id)
-                    .execute(&self.pool)
+                    .execute(&mut *transaction)
                     .await?;
                 sqlx::query(
                     "DELETE FROM outputChunks \
@@ -301,7 +314,7 @@ impl TerminalHostHistoryStore {
                 .bind(sequence)
                 .bind(sequence)
                 .bind(id)
-                .execute(&self.pool)
+                .execute(&mut *transaction)
                 .await?;
             } else {
                 sqlx::query(
@@ -312,9 +325,10 @@ impl TerminalHostHistoryStore {
                 .bind(sequence)
                 .bind(sequence)
                 .bind(id)
-                .execute(&self.pool)
+                .execute(&mut *transaction)
                 .await?;
             }
+            transaction.commit().await?;
         }
         Ok(())
     }
@@ -322,7 +336,7 @@ impl TerminalHostHistoryStore {
     pub async fn delete(&self, session_id: &str) -> Result<()> {
         // One transaction, so a reader never sees the chunks gone while the
         // checkpoint that would restore the session still exists.
-        let mut transaction = self.pool.begin().await?;
+        let mut transaction = self.begin_write().await?;
         sqlx::query("DELETE FROM outputChunks WHERE sessionId = ?")
             .bind(session_id)
             .execute(&mut *transaction)
@@ -488,7 +502,7 @@ async fn compact_output_rows(
     max_bytes: usize,
 ) -> Result<()> {
     let tail = store.read_buffer(session_id, max_bytes).await?;
-    let mut transaction = store.pool.begin().await?;
+    let mut transaction = store.begin_write().await?;
     let newest: Option<i64> =
         sqlx::query("SELECT MAX(sequence) AS maxSequence FROM outputChunks WHERE sessionId = ?")
             .bind(session_id)
