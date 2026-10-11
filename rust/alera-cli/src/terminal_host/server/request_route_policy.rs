@@ -154,7 +154,21 @@ pub(crate) enum MobilePromptFileOperation {
 pub(crate) enum MobileWorkspaceFileOperation {
     QuickOpenStart,
     QuickOpenSearch,
+    WorkspaceDirectoryList,
     WorkspaceFileRead,
+    WorkspaceFileWrite,
+    WorkspaceFileCreate,
+    WorkspaceFileRename,
+    WorkspaceFileMove,
+    WorkspaceFileTrash,
+    WorkspaceTrashList,
+    WorkspaceTrashRestore,
+    WorkspaceFileDiff,
+    WorkspaceGitStatus,
+    WorkspaceGitStage,
+    WorkspaceGitHistory,
+    WorkspaceGitCompare,
+    WorkspaceGitRevisionPatch,
     PromptAttachmentRead,
 }
 
@@ -321,6 +335,52 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         "mobile.workspaceFile.read" => mobile_deferred_operation(
             MobileDeferredRoute::WorkspaceFile(MobileWorkspaceFileOperation::WorkspaceFileRead),
         ),
+        "mobile.workspaceDirectory.list" => {
+            mobile_deferred_operation(MobileDeferredRoute::WorkspaceFile(
+                MobileWorkspaceFileOperation::WorkspaceDirectoryList,
+            ))
+        }
+        "mobile.workspaceFile.write" => mobile_conflicting_deferred_operation(
+            MobileDeferredRoute::WorkspaceFile(MobileWorkspaceFileOperation::WorkspaceFileWrite),
+        ),
+        "mobile.workspaceFile.create" => mobile_conflicting_deferred_operation(
+            MobileDeferredRoute::WorkspaceFile(MobileWorkspaceFileOperation::WorkspaceFileCreate),
+        ),
+        "mobile.workspaceFile.rename" => mobile_conflicting_deferred_operation(
+            MobileDeferredRoute::WorkspaceFile(MobileWorkspaceFileOperation::WorkspaceFileRename),
+        ),
+        "mobile.workspaceFile.move" => mobile_conflicting_deferred_operation(
+            MobileDeferredRoute::WorkspaceFile(MobileWorkspaceFileOperation::WorkspaceFileMove),
+        ),
+        "mobile.workspaceFile.trash" => mobile_conflicting_deferred_operation(
+            MobileDeferredRoute::WorkspaceFile(MobileWorkspaceFileOperation::WorkspaceFileTrash),
+        ),
+        "mobile.workspaceTrash.list" => mobile_deferred_operation(
+            MobileDeferredRoute::WorkspaceFile(MobileWorkspaceFileOperation::WorkspaceTrashList),
+        ),
+        "mobile.workspaceTrash.restore" => mobile_conflicting_deferred_operation(
+            MobileDeferredRoute::WorkspaceFile(MobileWorkspaceFileOperation::WorkspaceTrashRestore),
+        ),
+        "mobile.workspaceFile.diff" => mobile_deferred_operation(
+            MobileDeferredRoute::WorkspaceFile(MobileWorkspaceFileOperation::WorkspaceFileDiff),
+        ),
+        "mobile.workspaceGit.status" => mobile_deferred_operation(
+            MobileDeferredRoute::WorkspaceFile(MobileWorkspaceFileOperation::WorkspaceGitStatus),
+        ),
+        "mobile.workspaceGit.stage" => mobile_conflicting_deferred_operation(
+            MobileDeferredRoute::WorkspaceFile(MobileWorkspaceFileOperation::WorkspaceGitStage),
+        ),
+        "mobile.workspaceGit.history" => mobile_deferred_operation(
+            MobileDeferredRoute::WorkspaceFile(MobileWorkspaceFileOperation::WorkspaceGitHistory),
+        ),
+        "mobile.workspaceGit.compare" => mobile_deferred_operation(
+            MobileDeferredRoute::WorkspaceFile(MobileWorkspaceFileOperation::WorkspaceGitCompare),
+        ),
+        "mobile.workspaceGit.revisionPatch" => {
+            mobile_deferred_operation(MobileDeferredRoute::WorkspaceFile(
+                MobileWorkspaceFileOperation::WorkspaceGitRevisionPatch,
+            ))
+        }
         "mobile.promptAttachment.read" => mobile_deferred_operation(
             MobileDeferredRoute::WorkspaceFile(MobileWorkspaceFileOperation::PromptAttachmentRead),
         ),
@@ -626,6 +686,13 @@ const fn mobile_deferred_operation(route: MobileDeferredRoute) -> RequestRoutePo
     }
 }
 
+const fn mobile_conflicting_deferred_operation(route: MobileDeferredRoute) -> RequestRoutePolicy {
+    RequestRoutePolicy {
+        runtime_mutation: RuntimeMutationPolicy::Conflicts,
+        ..mobile_deferred_operation(route)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -649,6 +716,24 @@ mod tests {
         );
         assert_eq!(request_route_policy("workspace.list"), MOBILE);
         assert_eq!(request_route_policy("unknown.request"), LOCAL);
+        for request in [
+            "mobile.workspaceFile.write",
+            "mobile.workspaceFile.create",
+            "mobile.workspaceFile.rename",
+            "mobile.workspaceFile.move",
+            "mobile.workspaceFile.trash",
+            "mobile.workspaceTrash.restore",
+            "mobile.workspaceGit.stage",
+        ] {
+            let policy = request_route_policy(request);
+            assert!(policy.mobile_allowed, "{request}");
+            assert_eq!(
+                policy.runtime_mutation,
+                RuntimeMutationPolicy::Conflicts,
+                "{request}"
+            );
+            assert!(policy.mobile_deferred.is_some(), "{request}");
+        }
     }
 
     #[test]

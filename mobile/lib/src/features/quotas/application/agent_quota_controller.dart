@@ -44,6 +44,27 @@ class AgentQuotaController extends _$AgentQuotaController {
     }
   }
 
+  /// New hosts refresh only the selected account; older hosts fall back to a
+  /// full fetch while preserving the other cards' last known values.
+  Future<void> refreshAccount(QuotaSnapshot account) async {
+    final client = await ref.read(
+      hostConnectionControllerProvider(hostId).future,
+    );
+    final refreshed = client.supportsAgentQuotaPartialRefresh
+        ? await client.fetchAgentQuotaAccount(
+            provider: account.provider,
+            accountId: account.accountId,
+          )
+        : await client.fetchAgentQuotas(forceRefresh: true);
+    if (!ref.mounted) return;
+    final previous = state.value;
+    if (previous == null) {
+      state = AsyncData(refreshed);
+      return;
+    }
+    state = AsyncData(mergeRefreshedQuotaAccount(previous, refreshed, account));
+  }
+
   Future<void> tryClaudeWithTui(QuotaSnapshot snapshot) async {
     final client = await ref.read(
       hostConnectionControllerProvider(hostId).future,
@@ -126,4 +147,30 @@ class AgentQuotaController extends _$AgentQuotaController {
     );
     return result;
   }
+}
+
+QuotaSnapshotState mergeRefreshedQuotaAccount(
+  QuotaSnapshotState previous,
+  QuotaSnapshotState refreshed,
+  QuotaSnapshot account,
+) {
+  final matches = <QuotaSnapshot>[
+    for (final snapshot in refreshed.snapshots)
+      if (snapshot.provider == account.provider &&
+          snapshot.accountId == account.accountId)
+        snapshot,
+  ];
+  if (matches.isEmpty) return previous;
+  return QuotaSnapshotState(
+    snapshots: <QuotaSnapshot>[
+      for (final snapshot in previous.snapshots)
+        if (snapshot.provider == account.provider &&
+            snapshot.accountId == account.accountId)
+          matches.first
+        else
+          snapshot,
+    ],
+    environment: previous.environment,
+    fetchedAt: previous.fetchedAt,
+  );
 }

@@ -32,6 +32,10 @@ pub const RUNTIME_HOST_MOBILE_TAB_RENAME_CAPABILITY: &str = "mobileTabRenameV1";
 pub const RUNTIME_HOST_MOBILE_TERMINAL_TITLES_CAPABILITY: &str = "mobileTerminalTitlesV1";
 pub const RUNTIME_HOST_MOBILE_PORTABLE_SETTINGS_CAPABILITY: &str = "mobilePortableSettingsV1";
 pub const RUNTIME_HOST_MOBILE_AGENT_QUOTA_CAPABILITY: &str = "mobileAgentQuotaV1";
+/// The existing agentQuota.snapshot RPC accepts provider/accountId filters,
+/// fetching one account without refreshing every configured provider.
+pub const RUNTIME_HOST_MOBILE_AGENT_QUOTA_PARTIAL_REFRESH_CAPABILITY: &str =
+    "agentQuotaPartialRefreshV1";
 pub const RUNTIME_HOST_AGENT_QUOTA_CLAUDE_TUI_CAPABILITY: &str = "agentQuotaClaudeTuiV1";
 pub const RUNTIME_HOST_CODEX_RESET_CREDITS_CAPABILITY: &str = "codexResetCreditsV1";
 pub const RUNTIME_HOST_MOBILE_HOST_TOOLS_CAPABILITY: &str = "mobileHostToolsV1";
@@ -42,6 +46,20 @@ pub const RUNTIME_HOST_MOBILE_PROMPT_IMAGE_UPLOAD_CAPABILITY: &str = "mobileProm
 /// Codex prompts without receiving unrestricted host filesystem access.
 pub const RUNTIME_HOST_MOBILE_CODEX_WORKSPACE_FILES_CAPABILITY: &str =
     "mobileCodexWorkspaceFilesV1";
+/// Paired phones may read a bounded exact-path Git diff, without executing
+/// arbitrary commands or sending workspace contents through a cloud server.
+pub const RUNTIME_HOST_MOBILE_WORKSPACE_FILE_DIFF_CAPABILITY: &str = "mobileWorkspaceFileDiffV1";
+pub const RUNTIME_HOST_MOBILE_WORKSPACE_GIT_STATUS_CAPABILITY: &str = "mobileWorkspaceGitStatusV1";
+pub const RUNTIME_HOST_MOBILE_DIRECTORY_BROWSE_CAPABILITY: &str =
+    "mobileWorkspaceDirectoryBrowseV1";
+pub const RUNTIME_HOST_MOBILE_TEXT_EDIT_CAPABILITY: &str = "mobileWorkspaceTextEditV1";
+pub const RUNTIME_HOST_MOBILE_TEXT_CREATE_CAPABILITY: &str = "mobileWorkspaceTextCreateV1";
+pub const RUNTIME_HOST_MOBILE_TEXT_RENAME_CAPABILITY: &str = "mobileWorkspaceTextRenameV1";
+pub const RUNTIME_HOST_MOBILE_TEXT_TRASH_CAPABILITY: &str = "mobileWorkspaceTextTrashV1";
+pub const RUNTIME_HOST_MOBILE_TEXT_MOVE_CAPABILITY: &str = "mobileWorkspaceTextMoveV1";
+pub const RUNTIME_HOST_MOBILE_GIT_STAGE_CAPABILITY: &str = "mobileWorkspaceGitStageV1";
+pub const RUNTIME_HOST_MOBILE_GIT_HISTORY_CAPABILITY: &str = "mobileWorkspaceGitHistoryV1";
+pub const RUNTIME_HOST_MOBILE_GIT_COMPARE_CAPABILITY: &str = "mobileWorkspaceGitCompareV1";
 /// Retained name. Codex chat sessions are gone; older phones still feature-detect this string.
 #[allow(dead_code)]
 pub const RUNTIME_HOST_MOBILE_CODEX_SESSIONS_CAPABILITY: &str = "mobileCodexSessionsV1";

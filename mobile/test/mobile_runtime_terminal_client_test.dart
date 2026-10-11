@@ -20,6 +20,9 @@ class _FakeGateway._(
     gateway._subscription = server.listen((request) async {
       final socket = await WebSocketTransformer.upgrade(request);
       gateway._sockets.add(socket);
+      if (!gateway._firstConnection.isCompleted) {
+        gateway._firstConnection.complete();
+      }
       socket.listen((raw) {
         if (gateway._closing || socket.readyState != WebSocket.open) return;
         final message = jsonDecode(raw as String) as Map<String, Object?>;
@@ -37,6 +40,10 @@ class _FakeGateway._(
   }
 
   bool _closing = false;
+  final Completer<void> _firstConnection = Completer<void>();
+
+  Future<void> get whenConnected =>
+      _firstConnection.future.timeout(const Duration(seconds: 5));
 
   final List<WebSocket> _sockets = <WebSocket>[];
   StreamSubscription<HttpRequest>? _subscription;
@@ -44,14 +51,25 @@ class _FakeGateway._(
   String get endpoint => 'ws://${_server.address.address}:${_server.port}';
 
   void emit(String event, Map<String, Object?> payload) {
-    for (final socket in _sockets) {
-      socket.add(
-        jsonEncode(<String, Object?>{'event': event, 'payload': payload}),
-      );
-    }
+    // WebSocketChannel.ready on the phone can complete just before the
+    // server's awaited upgrade adds the socket. Do not silently drop a test
+    // event sent at that boundary.
+    unawaited(
+      whenConnected.then((_) {
+        if (_closing) return;
+        final encoded = jsonEncode(<String, Object?>{
+          'event': event,
+          'payload': payload,
+        });
+        for (final socket in _sockets) {
+          if (socket.readyState == WebSocket.open) socket.add(encoded);
+        }
+      }),
+    );
   }
 
   Future<void> closeSockets() async {
+    if (!_closing) await whenConnected;
     for (final socket in _sockets) {
       await socket.close();
     }
@@ -331,7 +349,7 @@ void main() {
     addTearDown(outputSub.cancel);
 
     await gateway.closeSockets();
-    await pumpEventQueue();
+    await _waitUntil(() => eventsDone && outputDone);
 
     // Otherwise a dead socket is indistinguishable from an idle terminal.
     expect(eventsDone, isTrue);

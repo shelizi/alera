@@ -328,7 +328,12 @@ class _TerminalSurfaceState extends State<_TerminalSurface> {
       // Unset callbacks let TerminalView grant remote system clipboard access.
       onClipboardStore: (_, _) {},
       onClipboardQuery: (_) => null,
-      onOutput: (data) => widget.onInput(data),
+      // A restored scrollback is a recording, not a live PTY request. Never
+      // answer terminal queries replayed from history into the running shell.
+      onOutput: (data) {
+        if (_batcher?.debugRestoring == true) return;
+        widget.onInput(data);
+      },
       onResize: (width, height, _, _) => _handleViewportResize(width, height),
       // This emulator is filled from restored history, and the program that
       // wrote it keeps the cursor hidden for as long as it runs. Without this

@@ -59,6 +59,8 @@ crash.*.log
 
 # Alchemist golden failure diffs (transient)
 test/golden/failures/
+# Flutter test goldens produce temporary diagnostic screenshots here.
+/mobile/test/failures/
 # Keep only the fork overrides; Flutter generates the preview scaffolds.
 **/.widget_preview/*
 !**/.widget_preview/pubspec_overrides.yaml
@@ -68,3 +70,6 @@ test/golden/failures/
 # Agent worktree pool local state
 .agent-worktree-pool.md
 .agent-task.md
+
+# Linked worktrees are local development checkouts, never tracked sources.
+/.worktrees/

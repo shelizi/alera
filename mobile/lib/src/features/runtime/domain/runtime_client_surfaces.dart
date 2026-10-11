@@ -38,6 +38,8 @@ const String runtimeHostRestartCapability = 'runtimeHostRestartV1';
 const String mobileTerminalTitlesCapability = 'mobileTerminalTitlesV1';
 const String mobilePortableSettingsCapability = 'mobilePortableSettingsV1';
 const String mobileAgentQuotaCapability = 'mobileAgentQuotaV1';
+const String mobileAgentQuotaPartialRefreshCapability =
+    'agentQuotaPartialRefreshV1';
 const String mobileAgentQuotaClaudeTuiCapability = 'agentQuotaClaudeTuiV1';
 const String codexResetCreditsCapability = 'codexResetCreditsV1';
 const String mobileHostToolsCapability = 'mobileHostToolsV1';
@@ -57,6 +59,22 @@ const String agentProfileLaunchIdempotencyCapability =
     'agentProfileLaunchIdempotencyV1';
 const String mobileCodexWorkspaceFilesCapability =
     'mobileCodexWorkspaceFilesV1';
+const String mobileWorkspaceFileDiffCapability = 'mobileWorkspaceFileDiffV1';
+const String mobileWorkspaceGitStatusCapability = 'mobileWorkspaceGitStatusV1';
+const String mobileWorkspaceGitStageCapability = 'mobileWorkspaceGitStageV1';
+const String mobileWorkspaceGitHistoryCapability =
+    'mobileWorkspaceGitHistoryV1';
+const String mobileWorkspaceGitCompareCapability =
+    'mobileWorkspaceGitCompareV1';
+const String mobileWorkspaceDirectoryBrowseCapability =
+    'mobileWorkspaceDirectoryBrowseV1';
+const String mobileWorkspaceTextEditCapability = 'mobileWorkspaceTextEditV1';
+const String mobileWorkspaceTextCreateCapability =
+    'mobileWorkspaceTextCreateV1';
+const String mobileWorkspaceTextRenameCapability =
+    'mobileWorkspaceTextRenameV1';
+const String mobileWorkspaceTextTrashCapability = 'mobileWorkspaceTextTrashV1';
+const String mobileWorkspaceTextMoveCapability = 'mobileWorkspaceTextMoveV1';
 const String mobilePromptFileUploadCapability = 'mobilePromptFileUploadV1';
 const String mobilePromptAttachmentReadCapability =
     'mobilePromptAttachmentReadV1';
@@ -145,6 +163,77 @@ abstract interface class MobileTerminalClient {
 
 abstract interface class MobileCodexWorkspaceClient {
   bool get supportsCodexWorkspaceFiles;
+  bool get supportsWorkspaceGitHistory;
+  bool get supportsWorkspaceGitCompare;
+  Future<MobileWorkspaceGitComparison> compareWorkspaceGitCommits({
+    required String workspaceId,
+    String? baseCommit,
+    required String targetCommit,
+  });
+  Future<MobileWorkspaceGitRevisionPatch> loadWorkspaceGitRevisionPatch({
+    required String workspaceId,
+    String? baseCommit,
+    required String targetCommit,
+    required String relativePath,
+  });
+  Future<MobileWorkspaceGitHistory> loadWorkspaceGitHistory(
+    String workspaceId, {
+    int limit = 60,
+  });
+  bool get supportsWorkspaceGitStage;
+  Future<void> stageWorkspaceFile({
+    required String workspaceId,
+    required String relativePath,
+    required bool stage,
+  });
+  bool get supportsWorkspaceTextEdit;
+  bool get supportsWorkspaceTextCreate;
+  bool get supportsWorkspaceTextRename;
+  bool get supportsWorkspaceTextMove;
+  Future<String> moveWorkspaceText({
+    required String workspaceId,
+    required String relativePath,
+    required String destinationDirectory,
+    required String expectedSha256,
+  });
+  bool get supportsWorkspaceTextTrash;
+  Future<MobileWorkspaceTrashEntry> moveWorkspaceTextToTrash({
+    required String workspaceId,
+    required String relativePath,
+    required String expectedSha256,
+  });
+  Future<MobileWorkspaceTrashList> listWorkspaceTextTrash(String workspaceId);
+  Future<String> restoreWorkspaceTextFromTrash({
+    required String workspaceId,
+    required String trashId,
+  });
+  Future<String> renameWorkspaceText({
+    required String workspaceId,
+    required String relativePath,
+    required String newName,
+    required String expectedSha256,
+  });
+  Future<MobileWorkspaceTextSaveResult> createWorkspaceText({
+    required String workspaceId,
+    required String relativePath,
+    required String text,
+  });
+  Future<MobileWorkspaceTextSaveResult> saveWorkspaceText({
+    required String workspaceId,
+    required String relativePath,
+    required String expectedSha256,
+    required String text,
+  });
+  bool get supportsWorkspaceDirectoryBrowse;
+  Future<MobileWorkspaceDirectoryPage> listWorkspaceDirectory({
+    required String workspaceId,
+    String relativePath = '',
+    int offset = 0,
+    int limit = 100,
+    bool showHidden = false,
+  });
+  bool get supportsWorkspaceGitStatus;
+  Future<MobileWorkspaceGitStatus> loadWorkspaceGitStatus(String workspaceId);
   bool get supportsPromptFileUpload;
   bool get supportsPromptAttachmentRead;
   Future<MobileWorkspaceQuickOpenSession> startWorkspaceQuickOpen(

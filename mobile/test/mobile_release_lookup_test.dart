@@ -22,13 +22,20 @@ Map<String, dynamic> _release(
         <String, dynamic>{
           'name': name,
           'browser_download_url':
-              'https://github.com/leynier/alera/releases/download/$tag/$name',
+              'https://github.com/shelizi/alera/releases/download/$tag/$name',
         },
     ],
   };
 }
 
 void main() {
+  test('checks this fork for published mobile APK updates by default', () {
+    expect(
+      defaultMobileReleasesUrl.toString(),
+      'https://api.github.com/repos/shelizi/alera/releases?per_page=30',
+    );
+  });
+
   group('MobileVersion', () {
     test('parses a pubspec version with a build suffix', () {
       expect(MobileVersion.tryParse('0.9.0+63'), const MobileVersion(0, 9, 0));

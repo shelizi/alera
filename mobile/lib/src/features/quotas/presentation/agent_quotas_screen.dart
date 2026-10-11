@@ -113,6 +113,7 @@ class const _QuotaCard({
 class _QuotaCardState extends ConsumerState<_QuotaCard> {
   var _tryingTui = false;
   var _usingReset = false;
+  var _refreshing = false;
   Timer? _expiryTimer;
 
   @override
@@ -150,6 +151,23 @@ class _QuotaCardState extends ConsumerState<_QuotaCard> {
       setState(() {});
       _scheduleExpiryRefresh();
     });
+  }
+
+  Future<void> _refreshAccount() async {
+    if (_refreshing) return;
+    setState(() => _refreshing = true);
+    try {
+      await ref
+          .read(agentQuotaControllerProvider(widget.hostId).notifier)
+          .refreshAccount(widget.snapshot);
+    } on Object catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Quota refresh failed: $error')));
+    } finally {
+      if (mounted) setState(() => _refreshing = false);
+    }
   }
 
   Future<void> _useCodexReset() async {
@@ -234,6 +252,17 @@ class _QuotaCardState extends ConsumerState<_QuotaCard> {
                   ),
                 ),
                 QuotaStatusPill(status: snapshot.status),
+                IconButton(
+                  tooltip: 'Refresh ${snapshot.displayName} quota',
+                  onPressed: _refreshing ? null : _refreshAccount,
+                  icon: _refreshing
+                      ? const SizedBox(
+                          width: AleraTokens.spaceLg,
+                          height: AleraTokens.spaceLg,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.refresh),
+                ),
               ],
             ),
             if (meters.isNotEmpty) ...<Widget>[
