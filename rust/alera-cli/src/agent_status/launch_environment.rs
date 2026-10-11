@@ -3,6 +3,7 @@ use std::path::Path;
 
 use alera_core::runtime::RuntimeAgentStatusHookSettings;
 
+use super::codex_terminal_wrapper::prepare_codex_terminal_wrapper;
 #[cfg(unix)]
 use super::fx_herdr_receiver::fx_herdr_socket_path;
 use super::integration_config::prepare_enabled_integrations;
@@ -104,6 +105,9 @@ pub fn prepare_launch_environment(
     );
     environment.insert("ALERA_AGENT_HOOK_VERSION".to_string(), "1".to_string());
     let _ = prepare_enabled_integrations(runtime_dir, Some(session_id), settings, environment);
+    if settings.is_enabled("codex") {
+        prepare_codex_terminal_wrapper(runtime_dir, environment)?;
+    }
     // Runs after the integrations because they are what mints the wrapper
     // directory; the strip above only removes values inherited from a parent
     // Alera terminal.
@@ -247,7 +251,9 @@ fn same_path(left: &Path, right: &Path) -> bool {
 }
 
 fn is_managed_hook_key(key: &str) -> bool {
-    key == "ALERA_AGENT_HOOK_RELAY"
+    key == "ALERA_CODEX_LAUNCHER"
+        || key == "ALERA_CODEX_WRAPPER_PATH"
+        || key == "ALERA_AGENT_HOOK_RELAY"
         || key == "ALERA_AGENT_HOOK_ENDPOINT"
         || key == "ALERA_AGENT_HOOK_PORT"
         || key == "ALERA_AGENT_HOOK_TOKEN"
@@ -364,7 +370,11 @@ mod tests {
     #[test]
     fn enabled_hooks_pin_relay_to_the_current_sidecar_and_replace_inherited_paths() {
         let runtime = tempfile::tempdir().unwrap();
-        let mut environment = BTreeMap::from([("ALERA_AGENT_HOOK_RELAY".into(), "old.exe".into())]);
+        let mut environment = BTreeMap::from([
+            ("ALERA_AGENT_HOOK_RELAY".into(), "old.exe".into()),
+            ("ALERA_CODEX_LAUNCHER".into(), "old-launcher.exe".into()),
+            ("ALERA_CODEX_WRAPPER_PATH".into(), "old-wrapper".into()),
+        ]);
         pin_hook_relay(&mut environment);
         assert_eq!(
             environment["ALERA_AGENT_HOOK_RELAY"],
@@ -380,6 +390,8 @@ mod tests {
         )
         .unwrap();
         assert!(!environment.contains_key("ALERA_AGENT_HOOK_RELAY"));
+        assert!(!environment.contains_key("ALERA_CODEX_LAUNCHER"));
+        assert!(!environment.contains_key("ALERA_CODEX_WRAPPER_PATH"));
     }
 
     #[test]

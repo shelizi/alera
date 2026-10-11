@@ -1,3 +1,5 @@
+mod codex_terminal_launcher;
+mod codex_terminal_wrapper;
 mod fx_herdr_receiver;
 mod hook_receiver;
 mod hook_relay;
@@ -8,6 +10,7 @@ mod integration_plugins;
 mod launch_environment;
 mod normalize;
 
+pub use codex_terminal_launcher::{codex_terminal_wrapper_arguments, run_codex_terminal_launcher};
 pub use fx_herdr_receiver::start_fx_herdr_receiver;
 pub use hook_receiver::{start_hook_receiver, AgentHookEvent};
 pub use hook_relay::run_hook_relay;

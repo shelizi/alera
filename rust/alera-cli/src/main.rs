@@ -98,6 +98,9 @@ use crate::tab_record_factory::tab_from_args;
 const USAGE_EXIT_CODE: i32 = 64;
 
 fn main() {
+    if let Some(arguments) = agent_status::codex_terminal_wrapper_arguments() {
+        std::process::exit(agent_status::run_codex_terminal_launcher(&arguments));
+    }
     #[cfg(windows)]
     if pty_job_bootstrap::is_invocation() {
         std::process::exit(pty_job_bootstrap::run());
@@ -120,6 +123,9 @@ fn main() {
         agent_status::run_hook_relay();
         return;
     }
+    if let Command::AgentCodexLaunch { arguments } = &cli.command {
+        std::process::exit(agent_status::run_codex_terminal_launcher(arguments));
+    }
     let runtime = match cli_async_runtime::build(&cli.command) {
         Ok(runtime) => runtime,
         Err(error) => {
@@ -136,6 +142,7 @@ async fn run(cli: Cli) -> i32 {
         Command::AutomationHost(args) => runtime_host_command::run_automation_host(args).await,
         Command::ExportAgentDescriptors => unreachable!("handled before runtime init"),
         Command::AgentHookRelay => unreachable!("handled before runtime init"),
+        Command::AgentCodexLaunch { .. } => unreachable!("handled before runtime init"),
         Command::RuntimeProxy => agent_quota::run_runtime_proxy().await,
         Command::Version(command) => run_version_command(command).await,
         Command::TerminalHost(args) => runtime_host_command::run(args).await,

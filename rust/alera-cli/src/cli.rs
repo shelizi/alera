@@ -44,6 +44,12 @@ pub enum Command {
     /// Forward a lifecycle hook without starting an async runtime.
     #[command(name = "agent-hook-relay", hide = true)]
     AgentHookRelay,
+    /// Launch terminal-owned Codex without the shared daemon.
+    #[command(name = "agent-codex-launch", hide = true)]
+    AgentCodexLaunch {
+        #[arg(last = true, allow_hyphen_values = true)]
+        arguments: Vec<String>,
+    },
     RuntimeProxy,
     /// Run the persistent terminal host sidecar.
     #[command(name = TERMINAL_HOST_COMMAND)]
