@@ -80,22 +80,8 @@ extension _AleraShellPageBodyContent on _AleraShellPageBodyState {
               workspace: workspace,
               tab: tab,
             );
-            if (agentType == AgentType.devin &&
-                defaultTargetPlatform == TargetPlatform.windows) {
-              // The runtime remains the single owner of the Devin PTY. Native
-              // terminals only attach to that session, so a failed external
-              // launch naturally falls back to the original embedded terminal.
-              await session.ensureStarted();
-              await ref
-                  .read(externalTerminalLauncherProvider)
-                  .open(
-                    ExternalTerminalOpenRequest(
-                      workspacePath: workspace.path,
-                      terminalSessionId: tab.terminalSessionId,
-                      title: tab.title,
-                    ),
-                  );
-            }
+            // Opening an agent tab always stays inside Alera. Users can opt
+            // into a native terminal via the tab's context menu.
             session.requestFocus();
           },
           onOpenEditorTab: ({required relativePath, targetGroupId}) async {

@@ -388,7 +388,7 @@ void _registerAleraShellWorkbenchTests() {
   });
 
   testWidgets(
-    'Windows Devin activation starts the Alera session before external attach',
+    'Windows Devin opens in the embedded terminal without external launch',
     (tester) async {
       debugDefaultTargetPlatformOverride = TargetPlatform.windows;
       try {
@@ -407,10 +407,13 @@ void _registerAleraShellWorkbenchTests() {
         await tester.pump();
         await tester.pump();
 
-        expect(externalTerminal.requests, hasLength(1));
-        expect(externalTerminal.requests.single.terminalSessionId, 'tab-2');
+        expect(externalTerminal.requests, isEmpty);
         expect(harness.runtime.peekSession('tab-2')?.isRunning, isTrue);
         expect(harness.runtime.totalFocusRequests, 1);
+        expect(
+          find.byKey(const ValueKey<String>('fake-terminal-tab-2')),
+          findsOneWidget,
+        );
       } finally {
         debugDefaultTargetPlatformOverride = null;
       }
@@ -418,7 +421,7 @@ void _registerAleraShellWorkbenchTests() {
   );
 
   testWidgets(
-    'Windows Devin keeps the embedded terminal when external launch fails',
+    'Windows Devin opens externally only through the tab context menu',
     (tester) async {
       debugDefaultTargetPlatformOverride = TargetPlatform.windows;
       try {
@@ -442,7 +445,19 @@ void _registerAleraShellWorkbenchTests() {
         await tester.pump();
         await tester.pump();
 
+        expect(externalTerminal.requests, isEmpty);
+        await tester.tapAt(
+          tester.getCenter(
+            find.byKey(const ValueKey<String>('workspace-tab-chip:tab-2')),
+          ),
+          buttons: kSecondaryMouseButton,
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Open In External Terminal'));
+        await tester.pump();
+
         expect(externalTerminal.requests, hasLength(1));
+        expect(externalTerminal.requests.single.terminalSessionId, 'tab-2');
         expect(harness.runtime.peekSession('tab-2')?.isRunning, isTrue);
         expect(harness.runtime.totalFocusRequests, 1);
         expect(harness.controller.state.tabsFor('workspace-1'), hasLength(2));
@@ -451,6 +466,50 @@ void _registerAleraShellWorkbenchTests() {
       }
     },
   );
+
+  // Every agent in the + menu must remain inside Alera on Windows. Devin has
+  // its own focused regression tests above; guard the other adapters too.
+  for (final agentType in AgentType.values.where(
+    (type) => type != AgentType.devin,
+  )) {
+    testWidgets(
+      'Windows ${agentDisplayName(agentType)} does not auto-open an external terminal',
+      (tester) async {
+        debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+        try {
+          final externalTerminal = _RecordingExternalTerminalLauncher();
+          final harness = await _pumpShell(
+            tester,
+            state: _populatedWorkbenchState(),
+            installedAgents: <AgentType>[agentType],
+            externalTerminalLauncher: externalTerminal,
+          );
+
+          await tester.pump();
+          await tester.tap(find.byTooltip('New Tab'));
+          await tester.pumpAndSettle();
+          await tester.tap(find.text(agentDisplayName(agentType)));
+          await tester.pump();
+          await tester.pump();
+
+          expect(externalTerminal.requests, isEmpty);
+          expect(harness.controller.state.tabsFor('workspace-1'), hasLength(2));
+          expect(
+            harness.controller.state.tabsFor('workspace-1').last.kind,
+            WorkspaceTabKind.terminal,
+          );
+          expect(harness.runtime.peekSession('tab-2')?.isRunning, isTrue);
+          expect(harness.runtime.totalFocusRequests, 1);
+          expect(
+            find.byKey(const ValueKey<String>('fake-terminal-tab-2')),
+            findsOneWidget,
+          );
+        } finally {
+          debugDefaultTargetPlatformOverride = null;
+        }
+      },
+    );
+  }
 
   testWidgets('new-terminal shortcut focuses the new session', (tester) async {
     final harness = await _pumpShell(tester, state: _populatedWorkbenchState());
