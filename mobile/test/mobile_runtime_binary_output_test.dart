@@ -25,6 +25,9 @@ Future<({HttpServer server, List<Map<String, Object?>> requests})> _runtime({
     final socket = await WebSocketTransformer.upgrade(request);
     sockets.add(socket);
     socket.listen((raw) {
+      // A post-auth background metadata request may finish after the test
+      // disposes its client socket. The fake must not send on a closed sink.
+      if (socket.readyState != WebSocket.open) return;
       final message = jsonDecode(raw as String) as Map<String, Object?>;
       requests.add(message);
       final response = jsonEncode(<String, Object?>{
@@ -43,11 +46,16 @@ Future<({HttpServer server, List<Map<String, Object?>> requests})> _runtime({
             ).join(),
         },
       });
-      socket.add(
-        binaryJsonResponses && message['type'] != 'mobile.hello'
-            ? Uint8List.fromList(utf8.encode(response))
-            : response,
-      );
+      try {
+        socket.add(
+          binaryJsonResponses && message['type'] != 'mobile.hello'
+              ? Uint8List.fromList(utf8.encode(response))
+              : response,
+        );
+      } on StateError {
+        // A concurrent test tearDown closed the loopback socket.
+        return;
+      }
       if (message['type'] == 'mobile.hello') {
         onAuthenticated(socket);
       }
