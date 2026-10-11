@@ -9,11 +9,13 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 mod mime;
+mod move_file;
 mod prompts;
 mod quick_open;
 mod trash;
 
 use mime::{mime_type_for_path, path_has_binary_preview_mime};
+pub use move_file::move_workspace_text_from_root;
 
 pub use prompts::{list_codex_saved_prompts, CodexSavedPrompt, CodexSavedPromptScope};
 pub use quick_open::{

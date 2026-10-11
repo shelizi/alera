@@ -56,6 +56,7 @@ pub const RUNTIME_HOST_MOBILE_TEXT_EDIT_CAPABILITY: &str = "mobileWorkspaceTextE
 pub const RUNTIME_HOST_MOBILE_TEXT_CREATE_CAPABILITY: &str = "mobileWorkspaceTextCreateV1";
 pub const RUNTIME_HOST_MOBILE_TEXT_RENAME_CAPABILITY: &str = "mobileWorkspaceTextRenameV1";
 pub const RUNTIME_HOST_MOBILE_TEXT_TRASH_CAPABILITY: &str = "mobileWorkspaceTextTrashV1";
+pub const RUNTIME_HOST_MOBILE_TEXT_MOVE_CAPABILITY: &str = "mobileWorkspaceTextMoveV1";
 pub const RUNTIME_HOST_MOBILE_GIT_STAGE_CAPABILITY: &str = "mobileWorkspaceGitStageV1";
 pub const RUNTIME_HOST_MOBILE_GIT_HISTORY_CAPABILITY: &str = "mobileWorkspaceGitHistoryV1";
 pub const RUNTIME_HOST_MOBILE_GIT_COMPARE_CAPABILITY: &str = "mobileWorkspaceGitCompareV1";

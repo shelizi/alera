@@ -32,6 +32,31 @@ mixin MobileRuntimeCodexWorkspaceRequests {
   bool get supportsWorkspaceTextRename =>
       runtimeCapabilities.contains(mobileWorkspaceTextRenameCapability);
 
+  bool get supportsWorkspaceTextMove =>
+      runtimeCapabilities.contains(mobileWorkspaceTextMoveCapability);
+
+  Future<String> moveWorkspaceText({
+    required String workspaceId,
+    required String relativePath,
+    required String destinationDirectory,
+    required String expectedSha256,
+  }) async {
+    if (!supportsWorkspaceTextMove) {
+      throw UnsupportedError('Update the paired runtime to move text files.');
+    }
+    final response = await requestMap(
+      'mobile.workspaceFile.move',
+      <String, Object?>{
+        'workspaceId': workspaceId,
+        'relativePath': relativePath,
+        'destinationDirectory': destinationDirectory,
+        'expectedSha256': expectedSha256,
+      },
+      const Duration(seconds: 30),
+    );
+    return response.requiredString('relativePath');
+  }
+
   bool get supportsWorkspaceTextTrash =>
       runtimeCapabilities.contains(mobileWorkspaceTextTrashCapability);
 

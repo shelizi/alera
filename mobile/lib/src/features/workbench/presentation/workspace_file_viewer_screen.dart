@@ -6,6 +6,7 @@ import 'package:alera_mobile/src/features/workbench/application/mobile_workspace
 import 'package:alera_mobile/src/features/workbench/application/mobile_markdown_preview.dart';
 import 'package:alera_mobile/src/features/workbench/application/mobile_workspace_filename.dart';
 import 'package:alera_mobile/src/features/workbench/presentation/workspace_file_picker_sheet.dart';
+import 'package:alera_mobile/src/features/workbench/presentation/workspace_directory_picker_screen.dart';
 import 'package:alera_mobile/src/features/workbench/presentation/workspace_file_diff_screen.dart';
 import 'package:alera_mobile/src/features/workbench/presentation/workspace_text_editor_screen.dart';
 import 'package:flutter/material.dart';
@@ -31,6 +32,7 @@ class _WorkspaceFileViewerScreenState
   bool _markdownPreview = true;
   bool _renaming = false;
   bool _trashing = false;
+  bool _moving = false;
 
   @override
   void initState() {
@@ -76,7 +78,7 @@ class _WorkspaceFileViewerScreenState
   }
 
   Future<void> _renameText(String expectedSha256) async {
-    if (_renaming) return;
+    if (_renaming || _trashing || _moving) return;
     final currentName = workspaceFileBaseName(widget.relativePath);
     var enteredName = currentName;
     final newName = await showDialog<String>(
@@ -155,7 +157,7 @@ class _WorkspaceFileViewerScreenState
   }
 
   Future<void> _moveToTrash(String expectedSha256) async {
-    if (_trashing || _renaming) return;
+    if (_trashing || _renaming || _moving) return;
     final accepted = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -208,6 +210,81 @@ class _WorkspaceFileViewerScreenState
     }
   }
 
+  Future<void> _moveText(String expectedSha256) async {
+    if (_moving || _trashing || _renaming) return;
+    final original = widget.relativePath.replaceAll('\\', '/');
+    final currentDir = original.contains('/')
+        ? original.substring(0, original.lastIndexOf('/'))
+        : '';
+    final fileName = workspaceFileBaseName(widget.relativePath);
+    final destinationDir = await Navigator.of(context).push<String>(
+      MaterialPageRoute<String>(
+        builder: (_) => WorkspaceDirectoryPickerScreen(
+          hostId: widget.hostId,
+          workspaceId: widget.workspaceId,
+          sourceDirectory: currentDir,
+          fileName: fileName,
+        ),
+      ),
+    );
+    if (!mounted || destinationDir == null) return;
+    final target = destinationDir.isEmpty
+        ? fileName
+        : '$destinationDir/$fileName';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Move this text file on host?'),
+        content: Text(
+          'From: ${widget.relativePath}\nTo: $target\n\nThe original file will only be removed after its SHA-256 is rechecked and the destination is reserved without overwriting. Both folders must be on the same filesystem.',
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Move'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => _moving = true);
+    try {
+      final client = await ref.read(
+        hostConnectionControllerProvider(widget.hostId).future,
+      );
+      await client.moveWorkspaceText(
+        workspaceId: widget.workspaceId,
+        relativePath: widget.relativePath,
+        destinationDirectory: destinationDir,
+        expectedSha256: expectedSha256,
+      );
+      if (mounted) Navigator.of(context).pop();
+    } on MobileRuntimeConflictException catch (error, trace) {
+      _logger.warning('Mobile workspace file move conflicted', error, trace);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'File changed or destination already exists. Reopen and retry.',
+            ),
+          ),
+        );
+      }
+    } on Object catch (error, trace) {
+      _logger.warning('Mobile workspace file move failed', error, trace);
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Move failed: $error')));
+      }
+    } finally {
+      if (mounted) setState(() => _moving = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final canDiff =
@@ -227,6 +304,12 @@ class _WorkspaceFileViewerScreenState
             .watch(hostConnectionControllerProvider(widget.hostId))
             .value
             ?.supportsWorkspaceTextRename ==
+        true;
+    final canMove =
+        ref
+            .watch(hostConnectionControllerProvider(widget.hostId))
+            .value
+            ?.supportsWorkspaceTextMove ==
         true;
     final canTrash =
         ref
@@ -314,9 +397,20 @@ class _WorkspaceFileViewerScreenState
                     child: TextButton.icon(
                       icon: const Icon(Icons.drive_file_rename_outline),
                       label: const Text('Rename file'),
-                      onPressed: _renaming
+                      onPressed: (_renaming || _moving || _trashing)
                           ? null
                           : () => _renameText(preview.originalSha256!),
+                    ),
+                  ),
+                if (canMove && preview.originalSha256 != null)
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton.icon(
+                      icon: const Icon(Icons.drive_file_move_outline),
+                      label: const Text('Move to folder'),
+                      onPressed: (_moving || _renaming || _trashing)
+                          ? null
+                          : () => _moveText(preview.originalSha256!),
                     ),
                   ),
                 if (canTrash && preview.originalSha256 != null)
@@ -325,7 +419,7 @@ class _WorkspaceFileViewerScreenState
                     child: TextButton.icon(
                       icon: const Icon(Icons.delete_outline),
                       label: const Text('Move to recovery'),
-                      onPressed: (_trashing || _renaming)
+                      onPressed: (_trashing || _renaming || _moving)
                           ? null
                           : () => _moveToTrash(preview.originalSha256!),
                     ),

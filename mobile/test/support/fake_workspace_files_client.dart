@@ -66,6 +66,18 @@ mixin FakeWorkspaceFilesClient implements MobileCodexWorkspaceClient {
   bool get supportsWorkspaceTextRename => false;
 
   @override
+  bool get supportsWorkspaceTextMove => false;
+
+  @override
+  Future<String> moveWorkspaceText({
+    required String workspaceId,
+    required String relativePath,
+    required String destinationDirectory,
+    required String expectedSha256,
+  }) async =>
+      throw UnsupportedError('Fake host does not support moving files.');
+
+  @override
   bool get supportsWorkspaceTextTrash => false;
 
   @override
