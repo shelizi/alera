@@ -15,6 +15,45 @@ class MobileGitPatchView extends StatelessWidget {
   final bool truncated;
   final String emptyMessage;
 
+  TextSpan _renderLine(BuildContext context, MobileGitPatchLine line) {
+    final colors = Theme.of(context).colorScheme;
+    final lineStyle = TextStyle(
+      backgroundColor: switch (line.kind) {
+        MobileGitPatchLineKind.added => colors.tertiary.withValues(alpha: 0.16),
+        MobileGitPatchLineKind.removed => colors.error.withValues(alpha: 0.15),
+        MobileGitPatchLineKind.hunk => colors.primary.withValues(alpha: 0.12),
+        _ => null,
+      },
+      fontWeight: switch (line.kind) {
+        MobileGitPatchLineKind.header ||
+        MobileGitPatchLineKind.hunk => FontWeight.w600,
+        _ => FontWeight.normal,
+      },
+    );
+    final start = line.changedStart;
+    final end = line.changedEnd;
+    if (start == null || end == null || start >= end) {
+      return TextSpan(text: '${line.text}\n', style: lineStyle);
+    }
+    final emphasisColor = line.kind == MobileGitPatchLineKind.added
+        ? colors.tertiary
+        : colors.error;
+    return TextSpan(
+      style: lineStyle,
+      children: <TextSpan>[
+        TextSpan(text: line.text.substring(0, start)),
+        TextSpan(
+          text: line.text.substring(start, end),
+          style: TextStyle(
+            backgroundColor: emphasisColor.withValues(alpha: 0.34),
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        TextSpan(text: '${line.text.substring(end)}\n'),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (patch.isEmpty) {
@@ -34,28 +73,7 @@ class MobileGitPatchView extends StatelessWidget {
               TextSpan(
                 children: <TextSpan>[
                   for (final line in classifyMobileGitPatchLines(patch))
-                    TextSpan(
-                      text: '${line.text}\n',
-                      style: TextStyle(
-                        backgroundColor: switch (line.kind) {
-                          MobileGitPatchLineKind.added => Theme.of(
-                            context,
-                          ).colorScheme.tertiary.withValues(alpha: 0.16),
-                          MobileGitPatchLineKind.removed => Theme.of(
-                            context,
-                          ).colorScheme.error.withValues(alpha: 0.15),
-                          MobileGitPatchLineKind.hunk => Theme.of(
-                            context,
-                          ).colorScheme.primary.withValues(alpha: 0.12),
-                          _ => null,
-                        },
-                        fontWeight: switch (line.kind) {
-                          MobileGitPatchLineKind.header ||
-                          MobileGitPatchLineKind.hunk => FontWeight.w600,
-                          _ => FontWeight.normal,
-                        },
-                      ),
-                    ),
+                    _renderLine(context, line),
                 ],
               ),
               style: Theme.of(context).textTheme.bodySmall

@@ -35,4 +35,35 @@ void main() {
     );
     expect(find.text('No printable patch for this file.'), findsOneWidget);
   });
+
+  testWidgets(
+    'intraline Git changes are emphasized but copied text stays exact',
+    (tester) async {
+      const patch = '@@ -1 +1 @@\n-const n = 123;\n+const n = 456;\n';
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: Scaffold(
+            body: MobileGitPatchView(patch: patch, truncated: false),
+          ),
+        ),
+      );
+      final selectable = tester.widget<SelectableText>(
+        find.byType(SelectableText),
+      );
+      expect(selectable.textSpan?.toPlainText(), patch);
+      final rows = selectable.textSpan!.children!.cast<TextSpan>();
+      final removed = rows.elementAt(1);
+      final added = rows.elementAt(2);
+      expect((removed.children![1] as TextSpan).text, '123');
+      expect((added.children![1] as TextSpan).text, '456');
+      expect(
+        (removed.children![1] as TextSpan).style?.backgroundColor,
+        isNotNull,
+      );
+      expect(
+        (added.children![1] as TextSpan).style?.backgroundColor,
+        isNotNull,
+      );
+    },
+  );
 }

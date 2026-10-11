@@ -29,7 +29,7 @@ version is intentionally unchanged. Build and commit each slice in
 - `mobile.workspaceFile.rename` (`mobileWorkspaceTextRenameV1`): confirmed same-folder rename of already-read, writable UTF-8 files up to 256 KiB; SHA-256 optimistic precondition, pinned no-follow directories, hard-link no-clobber destination reservation and source/destination file-ID verification. Existing names or stale file content cause a conflict. Small text file moves to another existing directory are supported by `mobileWorkspaceTextMoveV1`; directory moves and large/binary renames still require separate review. Small text file recovery is implemented through `mobileWorkspaceTextTrashV1`.
 - `mobile.workspaceFile.create` (`mobileWorkspaceTextCreateV1`): creates only new UTF-8 files up to 256 KiB under already-existing, no-follow workspace directories. Atomic `create_new` refuses conflicts and never overwrites existing text or symlink targets; phone confirms destination and preserves drafts on failure. Same-directory small text rename and recoverable text removal are implemented separately; arbitrary moves and irreversible deletion remain unavailable.
 - Regression tests cover paginated directory security, existing-file save and stale-digest refusal, WebSocket capabilities/payloads, strict UTF-8 mobile baseline and editor size limitations. Runtime and release verification remain separate gates.
-- Passive selectable Markdown formatting with raw-view toggle, without loading untrusted remote images or executing workspace HTML/JS. Git unified diff highlights additions/deletions/hunks while retaining literal patch text.
+- Passive selectable Markdown formatting with raw-view toggle, without loading untrusted remote images or executing workspace HTML/JS. Git unified diff highlights additions/deletions/hunks plus bounded Unicode-safe intraline changed character spans for unambiguous equal-sized +/- groups, while retaining literal copyable patch text.
 - Git per-file `mobile.workspaceGit.stage` (`mobileWorkspaceGitStageV1`): user-confirmed Stage/Unstage via registered workspace and exact path, no shell commands, no resetting workspace content; rename/conflict paths require desktop review. Network Git operations, Commit and Push remain unavailable on phone.
 - `mobile.workspaceGit.history` (`mobileWorkspaceGitHistoryV1`) offers read-only HEAD history from the registered workspace, bounded to 100 commits; the phone displays summary, author, date, full message and parent SHA, and can copy a commit hash. Arbitrary ref lookup, reset, commit, push and history rewrites are not exposed.
 - `mobile.workspaceGit.compare` and `mobile.workspaceGit.revisionPatch` (`mobileWorkspaceGitCompareV1`) let the phone view a commit's changes versus its first parent (or an empty initial tree), select any two listed commits as base/target, browse up to 200 changed files, and open a colored, selectable exact-file historical patch truncated at 512 KiB. All requested commit hashes must be full SHA-1 IDs reachable from the selected worktree HEAD; pathspec matching is disabled and protected paths are rejected.
@@ -39,6 +39,12 @@ The latest committed `main` was incorporated into this isolated worktree as
 merge commit `9dec1b90` without modifying the main worktree's pending changes.
 
 ## Validation
+
+### 2026-10-11 read-only Git diff intraline highlighting
+
+- The existing `MobileGitPatchView` now highlights changed Unicode characters within **unambiguous equal-count removed/added runs**, up to 8 lines per run and at most 4096 UTF-16 units per line. Pairing and start/end indices respect Unicode runes. Unequal groups, long lines, unchanged paired content and file headers keep the previous whole-line styling.
+- The underlying patch bytes/text, `+`/`-` markers, selectable copy and 512 KiB patch-size cap remain unchanged. This is presentation-only; no additional host RPC or arbitrary Git access.
+- `flutter test --no-pub test/mobile_git_patch_lines_test.dart test/mobile_git_patch_view_test.dart`: **8 passed**. `flutter test --no-pub` complete suite: **471 passed, 4 skipped, 0 failed**. `flutter analyze --no-pub`: **no issues**.
 
 ### 2026-10-11 safe cross-directory mobile text move
 
