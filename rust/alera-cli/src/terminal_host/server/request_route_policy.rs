@@ -157,6 +157,7 @@ pub(crate) enum MobileWorkspaceFileOperation {
     WorkspaceDirectoryList,
     WorkspaceFileRead,
     WorkspaceFileWrite,
+    WorkspaceFileCreate,
     WorkspaceFileDiff,
     WorkspaceGitStatus,
     WorkspaceGitStage,
@@ -336,6 +337,9 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         }
         "mobile.workspaceFile.write" => mobile_conflicting_deferred_operation(
             MobileDeferredRoute::WorkspaceFile(MobileWorkspaceFileOperation::WorkspaceFileWrite),
+        ),
+        "mobile.workspaceFile.create" => mobile_conflicting_deferred_operation(
+            MobileDeferredRoute::WorkspaceFile(MobileWorkspaceFileOperation::WorkspaceFileCreate),
         ),
         "mobile.workspaceFile.diff" => mobile_deferred_operation(
             MobileDeferredRoute::WorkspaceFile(MobileWorkspaceFileOperation::WorkspaceFileDiff),
@@ -692,7 +696,11 @@ mod tests {
         );
         assert_eq!(request_route_policy("workspace.list"), MOBILE);
         assert_eq!(request_route_policy("unknown.request"), LOCAL);
-        for request in ["mobile.workspaceFile.write", "mobile.workspaceGit.stage"] {
+        for request in [
+            "mobile.workspaceFile.write",
+            "mobile.workspaceFile.create",
+            "mobile.workspaceGit.stage",
+        ] {
             let policy = request_route_policy(request);
             assert!(policy.mobile_allowed, "{request}");
             assert_eq!(

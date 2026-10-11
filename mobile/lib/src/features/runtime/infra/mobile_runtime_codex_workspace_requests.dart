@@ -26,6 +26,33 @@ mixin MobileRuntimeCodexWorkspaceRequests {
   bool get supportsWorkspaceTextEdit =>
       runtimeCapabilities.contains(mobileWorkspaceTextEditCapability);
 
+  bool get supportsWorkspaceTextCreate =>
+      runtimeCapabilities.contains(mobileWorkspaceTextCreateCapability);
+
+  Future<MobileWorkspaceTextSaveResult> createWorkspaceText({
+    required String workspaceId,
+    required String relativePath,
+    required String text,
+  }) async {
+    if (!supportsWorkspaceTextCreate) {
+      throw UnsupportedError('Update the paired runtime to create text files.');
+    }
+    if (utf8.encode(text).length > 256 * 1024 || text.contains('\u0000')) {
+      throw ArgumentError.value(
+        text.length,
+        'text',
+        'Invalid text or exceeds 256 KiB',
+      );
+    }
+    return MobileWorkspaceTextSaveResult.fromJson(
+      await requestMap('mobile.workspaceFile.create', <String, Object?>{
+        'workspaceId': workspaceId,
+        'relativePath': relativePath,
+        'text': text,
+      }, const Duration(seconds: 30)),
+    );
+  }
+
   Future<MobileWorkspaceTextSaveResult> saveWorkspaceText({
     required String workspaceId,
     required String relativePath,

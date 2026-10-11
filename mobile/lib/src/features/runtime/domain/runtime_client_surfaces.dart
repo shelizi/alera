@@ -69,6 +69,8 @@ const String mobileWorkspaceGitCompareCapability =
 const String mobileWorkspaceDirectoryBrowseCapability =
     'mobileWorkspaceDirectoryBrowseV1';
 const String mobileWorkspaceTextEditCapability = 'mobileWorkspaceTextEditV1';
+const String mobileWorkspaceTextCreateCapability =
+    'mobileWorkspaceTextCreateV1';
 const String mobilePromptFileUploadCapability = 'mobilePromptFileUploadV1';
 const String mobilePromptAttachmentReadCapability =
     'mobilePromptAttachmentReadV1';
@@ -181,6 +183,12 @@ abstract interface class MobileCodexWorkspaceClient {
     required bool stage,
   });
   bool get supportsWorkspaceTextEdit;
+  bool get supportsWorkspaceTextCreate;
+  Future<MobileWorkspaceTextSaveResult> createWorkspaceText({
+    required String workspaceId,
+    required String relativePath,
+    required String text,
+  });
   Future<MobileWorkspaceTextSaveResult> saveWorkspaceText({
     required String workspaceId,
     required String relativePath,

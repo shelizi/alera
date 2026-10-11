@@ -4,7 +4,8 @@ use git2::{Delta, DiffFormat, DiffOptions, Index, Oid, Repository, Status, Statu
 
 use alera_core::runtime::{RuntimeStore, Workspace};
 use alera_core::workspace_files::{
-    is_protected_workspace_path, list_workspace_directory_from_root, open_workspace_file_root,
+    create_workspace_text_from_root, is_protected_workspace_path,
+    list_workspace_directory_from_root, open_workspace_file_root,
     read_workspace_file_range_from_root, search_workspace_quick_open_session,
     start_workspace_quick_open_session_without_symlinks, stop_workspace_quick_open_session,
     write_workspace_text_from_root, WorkspaceFileErrorKind, WorkspaceFileRoot,
@@ -128,6 +129,9 @@ async fn handle_mobile_workspace_file_request(
         MobileWorkspaceFileOperation::WorkspaceFileWrite => {
             write_mobile_workspace_text(&runtime_store, payload).await
         }
+        MobileWorkspaceFileOperation::WorkspaceFileCreate => {
+            create_mobile_workspace_text(&runtime_store, payload).await
+        }
         MobileWorkspaceFileOperation::WorkspaceFileDiff => {
             read_mobile_workspace_diff(&runtime_store, payload).await
         }
@@ -241,6 +245,45 @@ async fn list_mobile_workspace_directory(
             })).collect::<Vec<_>>(),
             "hasMore": page.has_more,
             "nextOffset": offset + page.entries.len(),
+        }))
+    })
+    .await
+}
+
+async fn create_mobile_workspace_text(
+    runtime_store: &RuntimeStore,
+    payload: &Value,
+) -> HostResult<Value> {
+    let workspace = workspace_for_mobile_file_request(runtime_store, payload).await?;
+    let path = require_string_key(payload, "relativePath")?;
+    let text = payload
+        .get("text")
+        .and_then(Value::as_str)
+        .ok_or_else(|| HostError::format("New file text must be a string"))?
+        .to_string();
+    if text.len() > MAX_REMOTE_EDIT_BYTES {
+        return Err(HostError::state(
+            "New mobile text files are limited to 256 KiB",
+        ));
+    }
+    let roots = known_workspace_paths(runtime_store).await?;
+    spawn_blocking_workspace("Create workspace text file", move || {
+        let root = open_validated_mobile_workspace_root(&workspace.path, roots)?;
+        let result = create_workspace_text_from_root(&root, &path, &text).map_err(|error| {
+            if error.kind == WorkspaceFileErrorKind::Conflict {
+                HostError::conflict(
+                    "mobile_workspace_file_exists",
+                    error.to_string(),
+                    json!({ "relativePath": path }),
+                )
+            } else {
+                workspace_file_error(error)
+            }
+        })?;
+        Ok(json!({
+            "relativePath": path,
+            "sha256": result.sha256,
+            "sizeBytes": result.size_bytes,
         }))
     })
     .await

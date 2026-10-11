@@ -53,6 +53,7 @@ pub const RUNTIME_HOST_MOBILE_WORKSPACE_GIT_STATUS_CAPABILITY: &str = "mobileWor
 pub const RUNTIME_HOST_MOBILE_DIRECTORY_BROWSE_CAPABILITY: &str =
     "mobileWorkspaceDirectoryBrowseV1";
 pub const RUNTIME_HOST_MOBILE_TEXT_EDIT_CAPABILITY: &str = "mobileWorkspaceTextEditV1";
+pub const RUNTIME_HOST_MOBILE_TEXT_CREATE_CAPABILITY: &str = "mobileWorkspaceTextCreateV1";
 pub const RUNTIME_HOST_MOBILE_GIT_STAGE_CAPABILITY: &str = "mobileWorkspaceGitStageV1";
 pub const RUNTIME_HOST_MOBILE_GIT_HISTORY_CAPABILITY: &str = "mobileWorkspaceGitHistoryV1";
 pub const RUNTIME_HOST_MOBILE_GIT_COMPARE_CAPABILITY: &str = "mobileWorkspaceGitCompareV1";

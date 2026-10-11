@@ -438,6 +438,77 @@ pub fn write_workspace_text_from_root(
     result
 }
 
+/// Create a new UTF-8 file inside an already-existing, no-follow workspace
+/// directory. `create_new` atomically refuses an existing file or symlink;
+/// mobile clients never get a replace/overwrite variant of this operation.
+pub fn create_workspace_text_from_root(
+    root: &WorkspaceFileRoot,
+    relative_path: &str,
+    text: &str,
+) -> Result<WorkspaceTextWriteResult, WorkspaceFileError> {
+    if text.len() > MAX_REMOTE_EDIT_BYTES || text.contains('\0') {
+        return Err(WorkspaceFileError::new(
+            WorkspaceFileErrorKind::Unsupported,
+            "Mobile file creation requires UTF-8 text up to 256 KiB, without NUL bytes",
+        ));
+    }
+    let path = Path::new(relative_path);
+    if path.as_os_str().is_empty()
+        || path
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+        || is_protected_workspace_path(path)
+    {
+        return Err(WorkspaceFileError::new(
+            WorkspaceFileErrorKind::InvalidPath,
+            "Invalid workspace file creation path",
+        ));
+    }
+    let components = path.components().collect::<Vec<_>>();
+    let mut parent = root.directory.try_clone().map_err(|error| {
+        WorkspaceFileError::from_io(error, root.canonical_path.display().to_string())
+    })?;
+    for component in &components[..components.len() - 1] {
+        if let Component::Normal(name) = component {
+            reject_workspace_symlink(&parent, name, relative_path)?;
+            parent = parent
+                .open_dir_nofollow(name)
+                .map_err(|error| WorkspaceFileError::from_io(error, relative_path))?;
+        }
+    }
+    let Component::Normal(name) = components[components.len() - 1] else {
+        unreachable!("workspace creation path validated above")
+    };
+    let mut options = OpenOptions::new();
+    options
+        .write(true)
+        .create_new(true)
+        .follow(FollowSymlinks::No);
+    let mut file = parent.open_with(name, &options).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::AlreadyExists {
+            WorkspaceFileError::new(
+                WorkspaceFileErrorKind::Conflict,
+                "A file with this name already exists; choose another name",
+            )
+        } else {
+            WorkspaceFileError::from_io(error, relative_path)
+        }
+    })?;
+    let result = file
+        .write_all(text.as_bytes())
+        .and_then(|_| file.sync_all())
+        .map_err(|error| WorkspaceFileError::from_io(error, relative_path));
+    drop(file);
+    if let Err(error) = result {
+        let _ = parent.remove_file(name);
+        return Err(error);
+    }
+    Ok(WorkspaceTextWriteResult {
+        sha256: hex::encode(Sha256::digest(text.as_bytes())),
+        size_bytes: text.len() as u64,
+    })
+}
+
 fn open_workspace_file_without_symlinks(
     root: &WorkspaceFileRoot,
     relative_path: &str,
@@ -582,6 +653,66 @@ pub fn is_protected_workspace_path(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mobile_create_new_text_file_never_overwrites_or_leaves_workspace() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::create_dir(temp.path().join("src")).unwrap();
+        fs::create_dir(temp.path().join(".git")).unwrap();
+        fs::write(temp.path().join("src/old.txt"), "leave alone").unwrap();
+        let root = open_workspace_file_root(&temp.path().to_string_lossy()).unwrap();
+        let created = create_workspace_text_from_root(&root, "src/new.txt", "hello\n").unwrap();
+        assert_eq!(created.sha256, hex::encode(Sha256::digest(b"hello\n")));
+        assert_eq!(created.size_bytes, 6);
+        assert_eq!(
+            fs::read_to_string(temp.path().join("src/new.txt")).unwrap(),
+            "hello\n"
+        );
+        let conflict =
+            create_workspace_text_from_root(&root, "src/new.txt", "overwrite").unwrap_err();
+        assert_eq!(conflict.kind, WorkspaceFileErrorKind::Conflict);
+        assert_eq!(
+            fs::read_to_string(temp.path().join("src/new.txt")).unwrap(),
+            "hello\n"
+        );
+        assert_eq!(
+            fs::read_to_string(temp.path().join("src/old.txt")).unwrap(),
+            "leave alone"
+        );
+        for bad in [
+            "",
+            "../escape.txt",
+            "src/../escape.txt",
+            ".git/config",
+            "src/missing/file.txt",
+        ] {
+            assert!(
+                create_workspace_text_from_root(&root, bad, "x").is_err(),
+                "{bad}"
+            );
+        }
+        assert!(create_workspace_text_from_root(&root, "src/nul.txt", "bad\0text").is_err());
+        assert!(create_workspace_text_from_root(
+            &root,
+            "src/large.txt",
+            &"x".repeat(MAX_REMOTE_EDIT_BYTES + 1)
+        )
+        .is_err());
+        assert!(!temp.path().join("src/large.txt").exists());
+        assert!(!temp.path().join("src/nul.txt").exists());
+        #[cfg(unix)]
+        {
+            let outside = tempfile::tempdir().unwrap();
+            std::os::unix::fs::symlink(outside.path(), temp.path().join("link")).unwrap();
+            assert!(create_workspace_text_from_root(&root, "link/outside.txt", "x").is_err());
+            std::os::unix::fs::symlink(
+                temp.path().join("src/old.txt"),
+                temp.path().join("src/alias.txt"),
+            )
+            .unwrap();
+            assert!(create_workspace_text_from_root(&root, "src/alias.txt", "x").is_err());
+        }
+    }
 
     #[test]
     fn mobile_edit_requires_unchanged_existing_utf8_file() {

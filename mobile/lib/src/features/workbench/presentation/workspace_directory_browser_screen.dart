@@ -3,6 +3,7 @@ import 'package:alera_mobile/src/features/runtime/application/host_connection_co
 import 'package:alera_mobile/src/features/runtime/domain/mobile_codex_workspace.dart';
 import 'package:alera_mobile/src/features/workbench/presentation/workspace_file_picker_sheet.dart';
 import 'package:alera_mobile/src/features/workbench/presentation/workspace_file_viewer_screen.dart';
+import 'package:alera_mobile/src/features/workbench/presentation/workspace_text_create_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:logging/logging.dart';
@@ -86,6 +87,30 @@ class _WorkspaceDirectoryBrowserScreenState
     }
   }
 
+  Future<void> _createTextFile() async {
+    final path = await Navigator.of(context).push<String>(
+      MaterialPageRoute<String>(
+        builder: (_) => WorkspaceTextCreateScreen(
+          hostId: widget.hostId,
+          workspaceId: widget.workspaceId,
+          directory: _directory,
+        ),
+      ),
+    );
+    if (!mounted || path == null) return;
+    await _load(reset: true);
+    if (!mounted) return;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => WorkspaceFileViewerScreen(
+          hostId: widget.hostId,
+          workspaceId: widget.workspaceId,
+          relativePath: path,
+        ),
+      ),
+    );
+  }
+
   Future<void> _load({required bool reset}) async {
     if (_loading && !reset) return;
     final generation = reset ? ++_generation : _generation;
@@ -131,6 +156,12 @@ class _WorkspaceDirectoryBrowserScreenState
 
   @override
   Widget build(BuildContext context) {
+    final canCreate =
+        ref
+            .watch(hostConnectionControllerProvider(widget.hostId))
+            .value
+            ?.supportsWorkspaceTextCreate ==
+        true;
     return Scaffold(
       appBar: AppBar(
         title: Text(
@@ -145,6 +176,12 @@ class _WorkspaceDirectoryBrowserScreenState
               )
             : null,
         actions: <Widget>[
+          if (canCreate)
+            IconButton(
+              tooltip: 'New text file',
+              icon: const Icon(Icons.note_add_outlined),
+              onPressed: _createTextFile,
+            ),
           IconButton(
             tooltip: 'Quick Open File',
             icon: const Icon(Icons.search),

@@ -26,6 +26,7 @@ version is intentionally unchanged. Build and commit each slice in
 
 - Protected `mobile.workspaceDirectory.list` RPC (`mobileWorkspaceDirectoryBrowseV1`): paged folder navigation, directories sorted first, optional hidden files, no VCS metadata or symlinks, 10,000-entry scan ceiling. Legacy phones/hosts continue using the Quick Open picker.
 - `mobile.workspaceFile.write` RPC (`mobileWorkspaceTextEditV1`): only existing UTF-8 files up to 256 KiB, explicit mobile confirmation, SHA-256 optimistic concurrency, typed `mobile_workspace_file_changed` conflict, atomic no-follow sibling replacement and permission preservation. The source file is never overwritten if the checksum differs.
+- `mobile.workspaceFile.create` (`mobileWorkspaceTextCreateV1`): creates only new UTF-8 files up to 256 KiB under already-existing, no-follow workspace directories. Atomic `create_new` refuses conflicts and never overwrites existing text or symlink targets; phone confirms destination and preserves drafts on failure. Rename/delete/move remain out of scope pending no-clobber and deletion safety review.
 - Regression tests cover paginated directory security, existing-file save and stale-digest refusal, WebSocket capabilities/payloads, strict UTF-8 mobile baseline and editor size limitations. Runtime and release verification remain separate gates.
 - Passive selectable Markdown formatting with raw-view toggle, without loading untrusted remote images or executing workspace HTML/JS. Git unified diff highlights additions/deletions/hunks while retaining literal patch text.
 - Git per-file `mobile.workspaceGit.stage` (`mobileWorkspaceGitStageV1`): user-confirmed Stage/Unstage via registered workspace and exact path, no shell commands, no resetting workspace content; rename/conflict paths require desktop review. Network Git operations, Commit and Push remain unavailable on phone.
@@ -37,6 +38,13 @@ The latest committed `main` was incorporated into this isolated worktree as
 merge commit `9dec1b90` without modifying the main worktree's pending changes.
 
 ## Validation
+
+### 2026-10-11 create-only mobile text files
+
+- `cargo test --manifest-path rust/Cargo.toml -p alera-core --locked mobile_create_new_text_file_never_overwrites_or_leaves_workspace`: **1 passed**. Verifies no clobber, VCS metadata and traversal protection, existing-parent requirement, NUL/256 KiB limits and no-follow traversal on Unix.
+- `cargo test --manifest-path rust/Cargo.toml -p alera-cli --locked mobile_codex_file_surface_tests` with isolated `CARGO_TARGET_DIR`: **3 passed**. Includes authenticated `mobile.workspaceFile.create` allowlist and capability advertisement. All mutating requests are marked as conflicting with Runtime state changes.
+- `flutter test --no-pub` full mobile suite: **456 passed, 4 skipped, 0 failed**. Create RPC and existing-write focused tests: **2 passed**.
+- `flutter analyze --no-pub`: **no issues**. Physical Android/iOS device and signed build remain separate release gates.
 
 ### 2026-10-11 historical Git comparisons
 
@@ -81,7 +89,10 @@ merge commit `9dec1b90` without modifying the main worktree's pending changes.
   Git root and reject path traversal. The patch returns at most 512 KiB of
   text, Git status and commit comparisons at most 200 changed paths, historical
   patches at most 512 KiB, and history at most 100 commits.
-  They do not execute arbitrary Git commands. Scoped stage/unstage affects only
+  Workspace text create/save require explicit mobile confirmation, guard the
+  working directory against protected metadata and symlink traversal, and never
+  overwrite an existing path on create. They do not execute arbitrary Git commands.
+  Scoped stage/unstage affects only
   the index; reset, commit, delete and push are not exposed.
 - New/untracked files in Source Control open text previews; they are not in
   the HEAD-to-worktree tracked diff. File preview itself allows only bounded

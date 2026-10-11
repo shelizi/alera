@@ -60,6 +60,17 @@ mixin FakeWorkspaceFilesClient implements MobileCodexWorkspaceClient {
   bool get supportsWorkspaceTextEdit => false;
 
   @override
+  bool get supportsWorkspaceTextCreate => false;
+
+  @override
+  Future<MobileWorkspaceTextSaveResult> createWorkspaceText({
+    required String workspaceId,
+    required String relativePath,
+    required String text,
+  }) async =>
+      throw UnsupportedError('Fake runtime does not create text files.');
+
+  @override
   Future<MobileWorkspaceTextSaveResult> saveWorkspaceText({
     required String workspaceId,
     required String relativePath,
