@@ -62,6 +62,21 @@ jobs:
           preflight: 'false'
           rust: 'true'
 
+      # Linux runner builds the same Rust Whisper FFI library used by Android.
+      # libclang must be discoverable by bindgen before Gradle invokes Cargo.
+      - name: Provision Android native build tools
+        if: matrix.platform == 'android'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev cmake ninja-build
+          libclang="$(find /usr/lib -name libclang.so -print -quit)"
+          test -n "$libclang"
+          echo "LIBCLANG_PATH=$(dirname "$libclang")" >> "$GITHUB_ENV"
+          cmake --version
+          ninja --version
+
       - name: Select Java 17
         if: matrix.platform == 'android'
         shell: bash
