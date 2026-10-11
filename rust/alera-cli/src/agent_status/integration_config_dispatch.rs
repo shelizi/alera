@@ -9,13 +9,13 @@ use super::super::integration_plugins::{
     install_amp_plugin, install_opencode2_plugin, install_opencode_plugin, install_pi_plugin,
 };
 use super::{
-    ccs, codex, cursor_overlay, install_agy, install_copilot, install_devin, install_grok,
-    prepare_claude, user_hooks,
+    ccs, codex, cursor, install_agy, install_copilot, install_devin, install_grok, prepare_claude,
+    user_hooks,
 };
 
 pub fn prepare_enabled_integrations(
     runtime_dir: &Path,
-    session_id: Option<&str>,
+    _session_id: Option<&str>,
     settings: &RuntimeAgentStatusHookSettings,
     environment: &mut BTreeMap<String, String>,
 ) -> Vec<String> {
@@ -74,26 +74,16 @@ pub fn prepare_enabled_integrations(
                     _ => {}
                 }
             }
-            AgentHookStrategy::SessionOverlay => {
-                // The Cursor plugin is per terminal session, so it can only be
-                // built when a session is being launched. `reconcile_agent_integrations` has none.
-                if settings.is_enabled(descriptor.id) {
-                    if let Some(session_id) = session_id {
-                        if let Err(error) = cursor_overlay::prepare_cursor(
-                            runtime_dir,
-                            session_id,
-                            &script,
-                            environment,
-                        ) {
-                            warnings.push(format!("Cursor: {error}"));
-                        }
-                    }
-                }
-            }
-            AgentHookStrategy::ConfigJson
+            AgentHookStrategy::SessionOverlay
+            | AgentHookStrategy::ConfigJson
             | AgentHookStrategy::PluginScript
             | AgentHookStrategy::HerdrSocket
             | AgentHookStrategy::None => {}
+        }
+    }
+    if !settings.is_enabled("cursor") {
+        if let Err(error) = super::home_dir().and_then(|home| cursor::cleanup_user_hooks(&home)) {
+            warnings.push(format!("Cursor: {error}"));
         }
     }
     for descriptor in AGENT_DESCRIPTORS {
@@ -125,6 +115,7 @@ pub fn prepare_enabled_integrations(
 
 fn config_json_installer(agent_type: &str) -> Option<fn(&Path) -> anyhow::Result<()>> {
     match agent_type {
+        "cursor" => Some(cursor::install_cursor),
         "copilot" => Some(install_copilot),
         "agy" => Some(install_agy),
         "grok" => Some(install_grok),

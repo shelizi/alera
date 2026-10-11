@@ -169,6 +169,7 @@ extension _ManagedAgentHookScripts on ManagedAgentHookInstallService {
       },
       _ManagedHookDefinitionShape.topLevelCommand => <String, Object?>{
         'command': command,
+        'timeout': 5,
       },
       _ManagedHookDefinitionShape.agyLifecycleCommand => <String, Object?>{
         'type': 'command',

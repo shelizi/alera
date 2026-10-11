@@ -10,8 +10,8 @@ mod ccs;
 mod codex;
 #[path = "integration_config_codex_trust.rs"]
 mod codex_hook_trust;
-#[path = "integration_config_cursor_overlay.rs"]
-mod cursor_overlay;
+#[path = "integration_config_cursor.rs"]
+mod cursor;
 #[path = "integration_config_dispatch.rs"]
 mod dispatch;
 #[path = "integration_config_user_hooks.rs"]
@@ -45,11 +45,10 @@ pub fn start_agent_integrations(
     runtime_dir: &Path,
     settings: &RuntimeAgentStatusHookSettings,
 ) -> Vec<String> {
-    let mut warnings =
-        match home_dir().and_then(|home| cursor_overlay::clear_stale_state(runtime_dir, &home)) {
-            Ok(()) => Vec::new(),
-            Err(error) => vec![format!("Cursor: {error}")],
-        };
+    let mut warnings = match cursor::clear_stale_state(runtime_dir) {
+        Ok(()) => Vec::new(),
+        Err(error) => vec![format!("Cursor: {error}")],
+    };
     warnings.extend(reconcile_agent_integrations(runtime_dir, settings));
     warnings
 }
@@ -428,6 +427,7 @@ fn env_path(key: &str) -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+#[cfg(not(windows))]
 fn path_string(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }

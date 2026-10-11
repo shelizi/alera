@@ -365,7 +365,7 @@ pub const AGENT_DESCRIPTORS: &[AgentDescriptor] = &[
         force_submit: true,
         interrupt_bytes: CTRL_C,
         startup_prompt: AgentStartupPrompt::PositionalAfterTerminator,
-        hook_strategy: AgentHookStrategy::SessionOverlay,
+        hook_strategy: AgentHookStrategy::ConfigJson,
         status_strategy: AgentStatusStrategy::HookEvents,
         status_normalization: AgentStatusNormalizationSpec::new(CURSOR_STATUS),
         quota_provider_id: Some("cursor"),

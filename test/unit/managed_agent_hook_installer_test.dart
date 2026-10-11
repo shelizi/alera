@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 
 part 'managed_agent_hook_installer_test_harness.dart';
+part 'managed_agent_hook_installer_cursor_test_cases.dart';
 part 'managed_agent_hook_installer_grok_test_cases.dart';
 part 'managed_agent_hook_installer_devin_test_cases.dart';
 part 'managed_agent_hook_installer_amp_test_cases.dart';
@@ -174,25 +175,7 @@ void main() {
       );
     });
 
-    test('never writes Cursor hooks into the user config', () {
-      final configPath = p.join(home.path, '.cursor', 'hooks.json');
-
-      final status = service.status(.cursor);
-      final install = service.install(.cursor);
-      final remove = service.remove(.cursor);
-
-      for (final result in <ManagedAgentHookInstallStatus>[
-        status,
-        install,
-        remove,
-      ]) {
-        expect(result.state, ManagedAgentHookInstallState.notInstalled);
-        expect(result.managedHooksPresent, isFalse);
-        expect(result.configPath, configPath);
-        expect(result.detail, contains('per-session plugin'));
-      }
-      expect(File(configPath).existsSync(), isFalse);
-    });
+    _registerCursorHookInstallerTests(() => home, () => service);
 
     test('reports partial Copilot configs when disabled or missing events', () {
       service.install(.copilot);

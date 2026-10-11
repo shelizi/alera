@@ -49,8 +49,8 @@ pub enum AgentHookStrategy {
     /// An isolated `agent-runtime-homes/<agent>/home` with merged config
     /// (codex, claude).
     RuntimeHome,
-    /// A per-session overlay directory passed via launch flags (cursor's
-    /// `--plugin-dir`).
+    /// A per-session overlay directory passed via launch flags. Retained for
+    /// compatibility with older descriptor snapshots.
     SessionOverlay,
     /// Status flows over `fx-herdr.sock`; no files are installed (fx).
     HerdrSocket,
