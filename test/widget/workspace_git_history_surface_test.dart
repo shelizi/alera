@@ -16,6 +16,28 @@ import '../unit/fake_git_backend.dart';
 import 'workspace_git_history_surface_test_harness.dart';
 
 void main() {
+  testWidgets('commit graph refresh stays aligned to the right edge', (
+    tester,
+  ) async {
+    final backend = gitHistoryBackend(<GitHistoryItem>[
+      gitHistoryCommit('c1', parents: <String>[], subject: 'Only Commit'),
+    ]);
+    final repository = GitHistoryFakeWorkbenchRepository()
+      ..tabs.add(gitHistoryTab());
+
+    await pumpGitHistorySurface(
+      tester,
+      backend: backend,
+      repository: repository,
+    );
+    await tester.pumpAndSettle();
+
+    final surface = tester.getRect(find.byType(WorkspaceGitHistorySurface));
+    final refresh = tester.getRect(find.byTooltip('Refresh Commits'));
+    expect(refresh.center.dy, closeTo(surface.top + 22, 1));
+    expect(refresh.right, closeTo(surface.right - 12, 1));
+  });
+
   testWidgets(
     'file graph queries the file across all branches and renders branch lanes',
     (tester) async {

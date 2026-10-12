@@ -288,6 +288,7 @@ class _WorkspaceGitHistorySurfaceState
     return DecoratedBox(
       decoration: const BoxDecoration(color: AleraTokens.surface),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
           _buildToolbar(context),
           const Divider(height: 1, color: AleraTokens.borderSubtle),
