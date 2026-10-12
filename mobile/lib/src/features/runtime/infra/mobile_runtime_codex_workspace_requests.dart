@@ -20,6 +20,273 @@ mixin MobileRuntimeCodexWorkspaceRequests {
   bool get supportsCodexWorkspaceFiles =>
       runtimeCapabilities.contains(mobileCodexWorkspaceFilesCapability);
 
+  bool get supportsWorkspaceDirectoryBrowse =>
+      runtimeCapabilities.contains(mobileWorkspaceDirectoryBrowseCapability);
+
+  bool get supportsWorkspaceTextEdit =>
+      runtimeCapabilities.contains(mobileWorkspaceTextEditCapability);
+
+  bool get supportsWorkspaceTextCreate =>
+      runtimeCapabilities.contains(mobileWorkspaceTextCreateCapability);
+
+  bool get supportsWorkspaceTextRename =>
+      runtimeCapabilities.contains(mobileWorkspaceTextRenameCapability);
+
+  bool get supportsWorkspaceTextMove =>
+      runtimeCapabilities.contains(mobileWorkspaceTextMoveCapability);
+
+  Future<String> moveWorkspaceText({
+    required String workspaceId,
+    required String relativePath,
+    required String destinationDirectory,
+    required String expectedSha256,
+  }) async {
+    if (!supportsWorkspaceTextMove) {
+      throw UnsupportedError('Update the paired runtime to move text files.');
+    }
+    final response = await requestMap(
+      'mobile.workspaceFile.move',
+      <String, Object?>{
+        'workspaceId': workspaceId,
+        'relativePath': relativePath,
+        'destinationDirectory': destinationDirectory,
+        'expectedSha256': expectedSha256,
+      },
+      const Duration(seconds: 30),
+    );
+    return response.requiredString('relativePath');
+  }
+
+  bool get supportsWorkspaceTextTrash =>
+      runtimeCapabilities.contains(mobileWorkspaceTextTrashCapability);
+
+  Future<MobileWorkspaceTrashEntry> moveWorkspaceTextToTrash({
+    required String workspaceId,
+    required String relativePath,
+    required String expectedSha256,
+  }) async {
+    if (!supportsWorkspaceTextTrash) {
+      throw UnsupportedError(
+        'Update the paired runtime to move text to trash.',
+      );
+    }
+    return MobileWorkspaceTrashEntry.fromJson(
+      await requestMap('mobile.workspaceFile.trash', <String, Object?>{
+        'workspaceId': workspaceId,
+        'relativePath': relativePath,
+        'expectedSha256': expectedSha256,
+      }, const Duration(seconds: 30)),
+    );
+  }
+
+  Future<MobileWorkspaceTrashList> listWorkspaceTextTrash(
+    String workspaceId,
+  ) async {
+    if (!supportsWorkspaceTextTrash) {
+      throw UnsupportedError('Update the paired runtime to view trash.');
+    }
+    return MobileWorkspaceTrashList.fromJson(
+      await requestMap('mobile.workspaceTrash.list', <String, Object?>{
+        'workspaceId': workspaceId,
+      }),
+    );
+  }
+
+  Future<String> restoreWorkspaceTextFromTrash({
+    required String workspaceId,
+    required String trashId,
+  }) async {
+    if (!supportsWorkspaceTextTrash) {
+      throw UnsupportedError('Update the paired runtime to restore trash.');
+    }
+    final result = await requestMap(
+      'mobile.workspaceTrash.restore',
+      <String, Object?>{'workspaceId': workspaceId, 'trashId': trashId},
+      const Duration(seconds: 30),
+    );
+    return result.requiredString('relativePath');
+  }
+
+  Future<String> renameWorkspaceText({
+    required String workspaceId,
+    required String relativePath,
+    required String newName,
+    required String expectedSha256,
+  }) async {
+    if (!supportsWorkspaceTextRename) {
+      throw UnsupportedError('Update the paired runtime to rename text files.');
+    }
+    final response = await requestMap(
+      'mobile.workspaceFile.rename',
+      <String, Object?>{
+        'workspaceId': workspaceId,
+        'relativePath': relativePath,
+        'newName': newName,
+        'expectedSha256': expectedSha256,
+      },
+      const Duration(seconds: 30),
+    );
+    return response.requiredString('relativePath');
+  }
+
+  Future<MobileWorkspaceTextSaveResult> createWorkspaceText({
+    required String workspaceId,
+    required String relativePath,
+    required String text,
+  }) async {
+    if (!supportsWorkspaceTextCreate) {
+      throw UnsupportedError('Update the paired runtime to create text files.');
+    }
+    if (utf8.encode(text).length > 256 * 1024 || text.contains('\u0000')) {
+      throw ArgumentError.value(
+        text.length,
+        'text',
+        'Invalid text or exceeds 256 KiB',
+      );
+    }
+    return MobileWorkspaceTextSaveResult.fromJson(
+      await requestMap('mobile.workspaceFile.create', <String, Object?>{
+        'workspaceId': workspaceId,
+        'relativePath': relativePath,
+        'text': text,
+      }, const Duration(seconds: 30)),
+    );
+  }
+
+  Future<MobileWorkspaceTextSaveResult> saveWorkspaceText({
+    required String workspaceId,
+    required String relativePath,
+    required String expectedSha256,
+    required String text,
+  }) async {
+    if (!supportsWorkspaceTextEdit) {
+      throw UnsupportedError('Update the paired runtime to edit text files.');
+    }
+    if (utf8.encode(text).length > 256 * 1024) {
+      throw ArgumentError.value(text.length, 'text', 'Edit exceeds 256 KiB');
+    }
+    return MobileWorkspaceTextSaveResult.fromJson(
+      await requestMap('mobile.workspaceFile.write', <String, Object?>{
+        'workspaceId': workspaceId,
+        'relativePath': relativePath,
+        'expectedSha256': expectedSha256,
+        'text': text,
+      }, const Duration(seconds: 30)),
+    );
+  }
+
+  Future<MobileWorkspaceDirectoryPage> listWorkspaceDirectory({
+    required String workspaceId,
+    String relativePath = '',
+    int offset = 0,
+    int limit = 100,
+    bool showHidden = false,
+  }) async {
+    if (!supportsWorkspaceDirectoryBrowse) {
+      throw UnsupportedError('Update the paired runtime to browse folders.');
+    }
+    if (limit <= 0 || limit > maxMobileWorkspaceDirectoryPageEntries) {
+      throw ArgumentError.value(limit, 'limit');
+    }
+    return MobileWorkspaceDirectoryPage.fromJson(
+      await requestMap('mobile.workspaceDirectory.list', <String, Object?>{
+        'workspaceId': workspaceId,
+        'relativePath': relativePath,
+        'offset': offset,
+        'limit': limit,
+        'showHidden': showHidden,
+      }),
+    );
+  }
+
+  bool get supportsWorkspaceFileDiff =>
+      runtimeCapabilities.contains(mobileWorkspaceFileDiffCapability);
+
+  bool get supportsWorkspaceGitStatus =>
+      runtimeCapabilities.contains(mobileWorkspaceGitStatusCapability);
+
+  bool get supportsWorkspaceGitStage =>
+      runtimeCapabilities.contains(mobileWorkspaceGitStageCapability);
+
+  bool get supportsWorkspaceGitHistory =>
+      runtimeCapabilities.contains(mobileWorkspaceGitHistoryCapability);
+
+  bool get supportsWorkspaceGitCompare =>
+      runtimeCapabilities.contains(mobileWorkspaceGitCompareCapability);
+
+  Future<MobileWorkspaceGitComparison> compareWorkspaceGitCommits({
+    required String workspaceId,
+    String? baseCommit,
+    required String targetCommit,
+  }) async {
+    if (!supportsWorkspaceGitCompare) {
+      throw UnsupportedError(
+        'Update the paired runtime to compare Git commits.',
+      );
+    }
+    return MobileWorkspaceGitComparison.fromJson(
+      await requestMap('mobile.workspaceGit.compare', <String, Object?>{
+        'workspaceId': workspaceId,
+        'baseCommit': ?baseCommit,
+        'targetCommit': targetCommit,
+      }),
+    );
+  }
+
+  Future<MobileWorkspaceGitRevisionPatch> loadWorkspaceGitRevisionPatch({
+    required String workspaceId,
+    String? baseCommit,
+    required String targetCommit,
+    required String relativePath,
+  }) async {
+    if (!supportsWorkspaceGitCompare) {
+      throw UnsupportedError(
+        'Update the paired runtime to view historical patches.',
+      );
+    }
+    return MobileWorkspaceGitRevisionPatch.fromJson(
+      await requestMap('mobile.workspaceGit.revisionPatch', <String, Object?>{
+        'workspaceId': workspaceId,
+        'baseCommit': ?baseCommit,
+        'targetCommit': targetCommit,
+        'relativePath': relativePath,
+      }),
+    );
+  }
+
+  Future<MobileWorkspaceGitHistory> loadWorkspaceGitHistory(
+    String workspaceId, {
+    int limit = 60,
+  }) async {
+    if (!supportsWorkspaceGitHistory) {
+      throw UnsupportedError('Update the paired runtime for commit history.');
+    }
+    if (limit < 1 || limit > 100) {
+      throw ArgumentError.value(limit, 'limit');
+    }
+    return MobileWorkspaceGitHistory.fromJson(
+      await requestMap('mobile.workspaceGit.history', <String, Object?>{
+        'workspaceId': workspaceId,
+        'limit': limit,
+      }),
+    );
+  }
+
+  Future<void> stageWorkspaceFile({
+    required String workspaceId,
+    required String relativePath,
+    required bool stage,
+  }) async {
+    if (!supportsWorkspaceGitStage) {
+      throw UnsupportedError('Update the paired runtime for Git staging.');
+    }
+    await requestMap('mobile.workspaceGit.stage', <String, Object?>{
+      'workspaceId': workspaceId,
+      'relativePath': relativePath,
+      'stage': stage,
+    });
+  }
+
   bool get supportsPromptFileUpload =>
       runtimeCapabilities.contains(mobilePromptFileUploadCapability);
 
@@ -103,6 +370,36 @@ mixin MobileRuntimeCodexWorkspaceRequests {
       mimeType: payload.requiredString('mimeType'),
       isText: payload['isText'] == true,
       bytes: base64Decode(payload.requiredString('dataBase64')),
+    );
+  }
+
+  Future<MobileWorkspaceFileDiff> diffWorkspaceFile({
+    required String workspaceId,
+    required String relativePath,
+  }) async {
+    if (!supportsWorkspaceFileDiff) {
+      throw UnsupportedError('Update the paired runtime to view Git diffs.');
+    }
+    final payload = await requestMap(
+      'mobile.workspaceFile.diff',
+      <String, Object?>{
+        'workspaceId': workspaceId,
+        'relativePath': relativePath,
+      },
+    );
+    return MobileWorkspaceFileDiff.fromJson(payload);
+  }
+
+  Future<MobileWorkspaceGitStatus> loadWorkspaceGitStatus(
+    String workspaceId,
+  ) async {
+    if (!supportsWorkspaceGitStatus) {
+      throw UnsupportedError('Update the runtime to view Git status.');
+    }
+    return MobileWorkspaceGitStatus.fromJson(
+      await requestMap('mobile.workspaceGit.status', <String, Object?>{
+        'workspaceId': workspaceId,
+      }),
     );
   }
 

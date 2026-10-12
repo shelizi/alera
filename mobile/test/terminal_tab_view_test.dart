@@ -127,6 +127,26 @@ void main() {
     expect(session.retainedSnapshotBytes, 0);
   });
 
+  testWidgets('Recorded terminal queries do not send stale PTY input', (
+    tester,
+  ) async {
+    final client = FakeTerminalClient()
+      ..tabs = <WorkspaceTabSummary>[fakeTab(id: 'tab-1', title: 'Terminal 1')]
+      // An attachment replays old cursor-position queries from PTY history.
+      ..attachmentSnapshot = utf8.encode('previous output\x1b[6n');
+    await _pumpTab(tester, client);
+    expect(
+      client.writes,
+      isEmpty,
+      reason: 'history replay must not answer a stale PTY query',
+    );
+
+    // A live cursor-position query still needs its emulator reply.
+    client.emitOutput('session-tab-1', .fromList(utf8.encode('\x1b[6n')));
+    await tester.pumpAndSettle();
+    expect(client.writes, isNotEmpty);
+  });
+
   testWidgets('Restoring a tab holds the view back until its history is in', (
     tester,
   ) async {

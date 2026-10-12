@@ -5,6 +5,7 @@ const String _runtimeSettingsRevisionConflictCode =
 
 mixin MobileRuntimeClientHostTools {
   bool get isConnectionUsable;
+  bool get supportsAgentQuotaPartialRefresh;
   int _nextHostToolOperationId = 1;
   int? _runtimeSettingsRevision;
   final Map<String, String> _pendingCodexResetCreditMutationIds =
@@ -77,6 +78,21 @@ mixin MobileRuntimeClientHostTools {
   }) async {
     final payload = await requestMap('agentQuota.snapshot', <String, Object?>{
       'forceRefresh': forceRefresh,
+    }, const Duration(seconds: 45));
+    return QuotaSnapshotState.fromJson(payload);
+  }
+
+  Future<QuotaSnapshotState> fetchAgentQuotaAccount({
+    required String provider,
+    required String accountId,
+  }) async {
+    if (!supportsAgentQuotaPartialRefresh) {
+      throw UnsupportedError('This runtime cannot refresh one quota account.');
+    }
+    final payload = await requestMap('agentQuota.snapshot', <String, Object?>{
+      'forceRefresh': true,
+      'provider': provider,
+      'accountId': accountId,
     }, const Duration(seconds: 45));
     return QuotaSnapshotState.fromJson(payload);
   }

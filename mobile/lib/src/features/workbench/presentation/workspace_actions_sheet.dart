@@ -9,6 +9,14 @@ import 'package:alera_mobile/src/features/workbench/presentation/delete_workspac
 import 'package:alera_mobile/src/features/workbench/presentation/parent_picker_sheet.dart';
 import 'package:alera_mobile/src/features/workbench/presentation/sleep_workspace_dialog.dart';
 import 'package:alera_mobile/src/features/workbench/presentation/workspace_tags_sheet.dart';
+import 'package:alera_mobile/src/features/workbench/presentation/workspace_branch_picker.dart';
+import 'package:alera_mobile/src/features/workbench/presentation/workspace_file_picker_sheet.dart';
+import 'package:alera_mobile/src/features/workbench/presentation/workspace_file_viewer_screen.dart';
+import 'package:alera_mobile/src/features/workbench/presentation/workspace_directory_browser_screen.dart';
+import 'package:alera_mobile/src/features/workbench/presentation/workspace_git_status_screen.dart';
+import 'package:alera_mobile/src/features/runtime/application/host_connection_controller.dart';
+import 'package:alera_mobile/src/features/workbench/application/workbench_providers.dart';
+import 'package:alera_mobile/src/features/terminal/presentation/workspace_tabs_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
@@ -27,6 +35,9 @@ enum _WorkspaceAction {
   clearSection,
   openRepository,
   copyPath,
+  openBranch,
+  browseFiles,
+  sourceControl,
   sleep,
   delete,
 }
@@ -147,6 +158,28 @@ Future<void> showWorkspaceActionsSheet(
                         Navigator.of(context).pop(_WorkspaceAction.copyPath),
                   ),
                   ListTile(
+                    leading: const Icon(AleraIcons.gitBranch, size: 20),
+                    title: const Text('Open Another Branch'),
+                    onTap: () =>
+                        Navigator.of(context).pop(_WorkspaceAction.openBranch),
+                  ),
+                  if (data.supportsWorkspaceFiles)
+                    ListTile(
+                      leading: const Icon(AleraIcons.folderOpen, size: 20),
+                      title: const Text('Browse Files'),
+                      onTap: () =>
+                          Navigator.of(context)
+                              .pop(_WorkspaceAction.browseFiles),
+                    ),
+                  if (data.supportsWorkspaceGitStatus)
+                    ListTile(
+                      leading: const Icon(AleraIcons.gitBranch, size: 20),
+                      title: const Text('Source Control'),
+                      onTap: () =>
+                          Navigator.of(context)
+                              .pop(_WorkspaceAction.sourceControl),
+                    ),
+                  ListTile(
                     leading: const Icon(AleraIcons.theme, size: 20),
                     title: const Text('Sleep'),
                     onTap: () =>
@@ -237,6 +270,80 @@ Future<void> showWorkspaceActionsSheet(
             const SnackBar(content: Text('Workspace path copied')),
           );
         }
+      case _WorkspaceAction.openBranch:
+        final client = await ref.read(workspaceClientProvider(hostId).future);
+        final branches = await client.listBranches(workspace.projectId);
+        if (!context.mounted) return;
+        final selectedBranch = await chooseWorkspaceBranch(
+          context,
+          projectId: workspace.projectId,
+          localBranches: branches.localBranches,
+          workspaces: data.workspaces,
+        );
+        if (selectedBranch == null || !context.mounted) return;
+        final existing = findExistingBranchWorkspace(
+          data.workspaces,
+          workspace.projectId,
+          selectedBranch,
+        );
+        final destination =
+            existing ??
+            (await controller.createWorkspace(
+              projectId: workspace.projectId,
+              branch: selectedBranch,
+              reuseExistingBranch: true,
+            )).workspace;
+        if (!context.mounted) return;
+        Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) =>
+                WorkspaceTabsScreen(hostId: hostId, workspace: destination),
+          ),
+        );
+      case _WorkspaceAction.browseFiles:
+        final client = await ref.read(
+          hostConnectionControllerProvider(hostId).future,
+        );
+        if (!client.supportsCodexWorkspaceFiles || !context.mounted) return;
+        if (client.supportsWorkspaceDirectoryBrowse) {
+          Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) => WorkspaceDirectoryBrowserScreen(
+                hostId: hostId,
+                workspaceId: workspace.id,
+                workspaceName: workspace.name,
+              ),
+            ),
+          );
+          return;
+        }
+        final relativePath = await showWorkspaceFilePickerSheet(
+          context,
+          start: () => client.startWorkspaceQuickOpen(workspace.id),
+          search: (session, query) =>
+              client.searchWorkspaceQuickOpen(session, query, limit: 150),
+          stop: client.stopWorkspaceQuickOpen,
+        );
+        if (relativePath == null || !context.mounted) return;
+        Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => WorkspaceFileViewerScreen(
+              hostId: hostId,
+              workspaceId: workspace.id,
+              relativePath: relativePath,
+            ),
+          ),
+        );
+      case _WorkspaceAction.sourceControl:
+        Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => WorkspaceGitStatusScreen(
+              hostId: hostId,
+              workspaceId: workspace.id,
+              workspaceName: workspace.name,
+            ),
+          ),
+        );
       case _WorkspaceAction.sleep:
         final confirmed = await showSleepWorkspaceDialog(
           context,

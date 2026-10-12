@@ -54,6 +54,135 @@ mixin FakeWorkspaceFilesClient implements MobileCodexWorkspaceClient {
   bool get supportsCodexWorkspaceFiles => workspaceFiles.isNotEmpty;
 
   @override
+  bool get supportsWorkspaceDirectoryBrowse => false;
+
+  @override
+  bool get supportsWorkspaceTextEdit => false;
+
+  @override
+  bool get supportsWorkspaceTextCreate => false;
+
+  @override
+  bool get supportsWorkspaceTextRename => false;
+
+  @override
+  bool get supportsWorkspaceTextMove => false;
+
+  @override
+  Future<String> moveWorkspaceText({
+    required String workspaceId,
+    required String relativePath,
+    required String destinationDirectory,
+    required String expectedSha256,
+  }) async =>
+      throw UnsupportedError('Fake host does not support moving files.');
+
+  @override
+  bool get supportsWorkspaceTextTrash => false;
+
+  @override
+  Future<MobileWorkspaceTrashEntry> moveWorkspaceTextToTrash({
+    required String workspaceId,
+    required String relativePath,
+    required String expectedSha256,
+  }) async => throw UnsupportedError('Fake host does not support trash.');
+
+  @override
+  Future<MobileWorkspaceTrashList> listWorkspaceTextTrash(
+    String workspaceId,
+  ) async => throw UnsupportedError('Fake host has no trash records.');
+
+  @override
+  Future<String> restoreWorkspaceTextFromTrash({
+    required String workspaceId,
+    required String trashId,
+  }) async => throw UnsupportedError('Fake host does not restore trash.');
+
+  @override
+  Future<String> renameWorkspaceText({
+    required String workspaceId,
+    required String relativePath,
+    required String newName,
+    required String expectedSha256,
+  }) async =>
+      throw UnsupportedError('Fake runtime does not rename text files.');
+
+  @override
+  Future<MobileWorkspaceTextSaveResult> createWorkspaceText({
+    required String workspaceId,
+    required String relativePath,
+    required String text,
+  }) async =>
+      throw UnsupportedError('Fake runtime does not create text files.');
+
+  @override
+  Future<MobileWorkspaceTextSaveResult> saveWorkspaceText({
+    required String workspaceId,
+    required String relativePath,
+    required String expectedSha256,
+    required String text,
+  }) async => throw UnsupportedError('Fake host does not support edits.');
+
+  @override
+  Future<MobileWorkspaceDirectoryPage> listWorkspaceDirectory({
+    required String workspaceId,
+    String relativePath = '',
+    int offset = 0,
+    int limit = 100,
+    bool showHidden = false,
+  }) async => throw UnsupportedError('Fake host has no directory listing.');
+
+  @override
+  bool get supportsWorkspaceGitStatus => false;
+
+  @override
+  bool get supportsWorkspaceGitStage => false;
+
+  @override
+  bool get supportsWorkspaceGitHistory => false;
+
+  @override
+  bool get supportsWorkspaceGitCompare => false;
+
+  @override
+  Future<MobileWorkspaceGitComparison> compareWorkspaceGitCommits({
+    required String workspaceId,
+    String? baseCommit,
+    required String targetCommit,
+  }) async =>
+      throw UnsupportedError('Fake runtime does not compare Git commits.');
+
+  @override
+  Future<MobileWorkspaceGitRevisionPatch> loadWorkspaceGitRevisionPatch({
+    required String workspaceId,
+    String? baseCommit,
+    required String targetCommit,
+    required String relativePath,
+  }) async =>
+      throw UnsupportedError('Fake runtime has no historical Git patches.');
+
+  @override
+  Future<MobileWorkspaceGitHistory> loadWorkspaceGitHistory(
+    String workspaceId, {
+    int limit = 60,
+  }) async =>
+      throw UnsupportedError('Fake runtime does not support Git history.');
+
+  @override
+  Future<void> stageWorkspaceFile({
+    required String workspaceId,
+    required String relativePath,
+    required bool stage,
+  }) async =>
+      throw UnsupportedError('Fake runtime does not support Git staging.');
+
+  @override
+  Future<MobileWorkspaceGitStatus> loadWorkspaceGitStatus(
+    String workspaceId,
+  ) async =>
+      throw UnsupportedError('Fake runtime does not advertise Git status.');
+
+  @override
   bool get supportsPromptFileUpload => promptFileUploadSupported;
 
   @override

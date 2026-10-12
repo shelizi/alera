@@ -316,6 +316,9 @@ fn shared_workspace_file_error(
         alera_core::workspace_files::WorkspaceFileErrorKind::NotFound => {
             WorkspaceFileErrorKind::NotFound
         }
+        alera_core::workspace_files::WorkspaceFileErrorKind::Conflict => {
+            WorkspaceFileErrorKind::Conflict
+        }
         alera_core::workspace_files::WorkspaceFileErrorKind::Unsupported => {
             WorkspaceFileErrorKind::Unsupported
         }
@@ -1141,6 +1144,17 @@ fn copy_recursively(source: &Path, destination: &Path) -> Result<(), WorkspaceFi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_core_conflict_is_preserved_for_desktop_file_errors() {
+        let conflict = alera_core::workspace_files::WorkspaceFileError {
+            kind: alera_core::workspace_files::WorkspaceFileErrorKind::Conflict,
+            context: "the file changed on disk".into(),
+        };
+        let mapped = shared_workspace_file_error(conflict);
+        assert_eq!(mapped.kind, WorkspaceFileErrorKind::Conflict);
+        assert_eq!(mapped.context, "the file changed on disk");
+    }
 
     fn workspace_path(dir: &tempfile::TempDir) -> String {
         dir.path().to_string_lossy().to_string()

@@ -5,8 +5,14 @@ import 'package:http/http.dart' as http;
 
 /// The releases listing, not `/releases/latest`: that endpoint resolves to the
 /// newest desktop release, and mobile ships on its own tag sequence.
+/// The fork must not direct testers to upstream APKs with unrelated signing.
+const String mobileReleaseRepository = String.fromEnvironment(
+  'ALERA_MOBILE_RELEASE_REPOSITORY',
+  defaultValue: 'shelizi/alera',
+);
+
 final Uri defaultMobileReleasesUrl = Uri.parse(
-  'https://api.github.com/repos/leynier/alera/releases?per_page=30',
+  'https://api.github.com/repos/$mobileReleaseRepository/releases?per_page=30',
 );
 
 /// Finds the newest published Android build on GitHub Releases.

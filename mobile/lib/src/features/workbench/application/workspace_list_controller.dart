@@ -37,6 +37,7 @@ class const WorkspaceListData({
   final bool supportsPromptImageUpload = false,
   final bool supportsPromptFileUpload = false,
   final bool supportsWorkspaceFiles = false,
+  final bool supportsWorkspaceGitStatus = false,
   required final List<WorkspaceTagSummary> tags,
   required final Map<String, DateTime> activity,
   required final bool confirmWorkspaceRemoval,
@@ -95,6 +96,9 @@ class WorkspaceListController extends _$WorkspaceListController {
       supportsWorkspaceFiles:
           client is MobileCodexWorkspaceClient &&
           (client as MobileCodexWorkspaceClient).supportsCodexWorkspaceFiles,
+      supportsWorkspaceGitStatus:
+          client is MobileCodexWorkspaceClient &&
+          (client as MobileCodexWorkspaceClient).supportsWorkspaceGitStatus,
       tags: snapshot.tags,
       activity: snapshot.activity,
       confirmWorkspaceRemoval: snapshot.confirmWorkspaceRemoval,

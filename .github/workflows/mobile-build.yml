@@ -19,6 +19,24 @@ on:
       - .github/workflows/mobile-build.yml
       - tool/release/verify_android_native_dependencies.sh
   workflow_dispatch:
+    inputs:
+      platform:
+        description: Platform for manual build
+        type: choice
+        required: true
+        default: android
+        options:
+          - android
+          - ios
+          - all
+      android_target:
+        description: Android architecture for a manual smoke build
+        type: choice
+        required: true
+        default: all
+        options:
+          - all
+          - emulator-x64
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -34,12 +52,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - platform: android
-            os: ubuntu-latest
-          - platform: ios
-            os: macos-latest
-    runs-on: ${{ matrix.os }}
+        platform: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.platform == 'android' && '["android"]' || github.event_name == 'workflow_dispatch' && inputs.platform == 'ios' && '["ios"]' || '["android","ios"]') }}
+    runs-on: ${{ matrix.platform == 'android' && 'ubuntu-latest' || 'macos-latest' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -56,6 +70,21 @@ jobs:
           preflight: 'false'
           rust: 'true'
 
+      # Linux runner builds the same Rust Whisper FFI library used by Android.
+      # libclang must be discoverable by bindgen before Gradle invokes Cargo.
+      - name: Provision Android native build tools
+        if: matrix.platform == 'android'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev cmake ninja-build
+          libclang="$(find /usr/lib -name libclang.so -print -quit)"
+          test -n "$libclang"
+          echo "LIBCLANG_PATH=$(dirname "$libclang")" >> "$GITHUB_ENV"
+          cmake --version
+          ninja --version
+
       - name: Select Java 17
         if: matrix.platform == 'android'
         shell: bash
@@ -67,15 +96,54 @@ jobs:
 
       # No distribution credentials are available here. Android uses its
       # existing debug-key fallback; Apple builds explicitly disable signing.
+      - name: Analyze Android mobile app
+        if: matrix.platform == 'android'
+        working-directory: mobile
+        run: flutter analyze --no-pub
+
+      - name: Test Android mobile app
+        if: matrix.platform == 'android'
+        working-directory: mobile
+        run: flutter test --no-pub
+
       - name: Build Android release APK
         if: matrix.platform == 'android'
         working-directory: mobile
-        run: flutter build apk --release
+        shell: bash
+        env:
+          ALERA_ANDROID_TARGET: ${{ inputs.android_target || 'all' }}
+        run: |
+          set -euo pipefail
+          if [[ "$ALERA_ANDROID_TARGET" == 'emulator-x64' ]]; then
+            flutter build apk --release --target-platform android-x64
+          else
+            flutter build apk --release
+          fi
 
       - name: Verify Android native dependencies
         if: matrix.platform == 'android'
         shell: bash
         run: bash tool/release/verify_android_native_dependencies.sh mobile/build/app/outputs/flutter-apk
+
+      # Debug-key fallback: a test artifact, not a signed production release.
+      - name: Record Android smoke APK checksum
+        if: matrix.platform == 'android'
+        working-directory: mobile/build/app/outputs/flutter-apk
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum *-release.apk | tee SHA256SUMS
+
+      - name: Upload Android smoke APK (debug-key signed)
+        if: matrix.platform == 'android'
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-smoke-debug-key-${{ github.run_id }}
+          path: |
+            mobile/build/app/outputs/flutter-apk/*-release.apk
+            mobile/build/app/outputs/flutter-apk/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Build iOS device release
         if: matrix.platform == 'ios'

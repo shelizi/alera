@@ -183,6 +183,9 @@ class MobileRuntimeClient._(
       _runtimeCapabilities.contains(mobilePortableSettingsCapability);
   bool get supportsAgentQuotas =>
       _runtimeCapabilities.contains(mobileAgentQuotaCapability);
+  @override
+  bool get supportsAgentQuotaPartialRefresh =>
+      _runtimeCapabilities.contains(mobileAgentQuotaPartialRefreshCapability);
   bool get supportsAgentQuotaClaudeTui =>
       _runtimeCapabilities.contains(mobileAgentQuotaClaudeTuiCapability);
   bool get supportsCodexResetCredits =>
