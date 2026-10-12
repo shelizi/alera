@@ -79,6 +79,27 @@ void main() {
     expect(find.text('fresh.dart'), findsOneWidget);
   });
 
+  testWidgets('keeps cached results usable when the background index fails', (
+    tester,
+  ) async {
+    final workspace = _workspace('workspace-1', 'Main', '/repo/main');
+    final controller = _QuickOpenTestController(_state(workspace));
+    final service = _QuickOpenFileService(
+      cachedEntries: const <String>['cached.dart'],
+      error: const native.WorkspaceFileError(
+        kind: native.WorkspaceFileErrorKind.io,
+        context: 'Temporary indexing failure',
+      ),
+    );
+    await _pumpQuickOpen(tester, controller: controller, service: service);
+
+    await tester.tap(find.text('Open Quick Open'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('cached.dart'), findsOneWidget);
+    expect(find.text('Could not load workspace files.'), findsNothing);
+  });
+
   testWidgets(
     'routes editable files externally when it is the default target',
     (tester) async {
@@ -237,6 +258,33 @@ void main() {
     expect(find.text('Could not load workspace files.'), findsOneWidget);
   });
 
+  testWidgets('displays the native error context and retries failed indexing', (
+    tester,
+  ) async {
+    final workspace = _workspace('workspace-1', 'Main', '/repo/main');
+    final controller = _QuickOpenTestController(_state(workspace));
+    final service = _QuickOpenFileService(
+      error: const native.WorkspaceFileError(
+        kind: native.WorkspaceFileErrorKind.io,
+        context: 'Cannot read the workspace directory',
+      ),
+      failOnce: true,
+      entries: const <String>['lib/main.dart'],
+    );
+    await _pumpQuickOpen(tester, controller: controller, service: service);
+
+    await tester.tap(find.text('Open Quick Open'));
+    await tester.pumpAndSettle();
+    expect(find.text('Could not load workspace files.'), findsOneWidget);
+    expect(find.text('Cannot read the workspace directory'), findsOneWidget);
+    expect(find.text("Instance of 'WorkspaceFileError'"), findsNothing);
+
+    await tester.tap(find.text('Retry'));
+    await tester.pumpAndSettle();
+    expect(find.text('lib/main.dart'), findsOneWidget);
+    expect(find.text('Could not load workspace files.'), findsNothing);
+  });
+
   testWidgets('restarts the search when the active workspace changes', (
     tester,
   ) async {
@@ -378,6 +426,7 @@ class _QuickOpenFileService({
   final List<String> entries = const <String>[],
   final List<String> cachedEntries = const <String>[],
   final Object? error,
+  final bool failOnce = false,
   final Completer<native.WorkspaceQuickOpenSession>? session,
   final Map<String, List<String>> entriesByWorkspacePath =
       const <String, List<String>>{},
@@ -393,6 +442,7 @@ class _QuickOpenFileService({
       <String, List<String>>{};
   final Map<String, native.WorkspaceQuickOpenSession>
   _cachedSessionByWorkspacePath = <String, native.WorkspaceQuickOpenSession>{};
+  int _failedStarts = 0;
 
   @override
   List<native.WorkspaceQuickOpenMatch>? peekQuickOpenMatches({
@@ -448,7 +498,7 @@ class _QuickOpenFileService({
   }) {
     startedWorkspacePaths.add(workspacePath);
     excludedDirectoryRequests.add(List<String>.of(excludedDirectories));
-    if (error != null) {
+    if (error != null && (!failOnce || _failedStarts++ == 0)) {
       return Future<native.WorkspaceQuickOpenSession>.error(error!);
     }
     if (session != null) {

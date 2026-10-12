@@ -94,13 +94,34 @@ class WorkspaceFileService {
       includeGitignored: includeGitignored,
       limit: limit,
     );
-    final session = await _ensureQuickOpenSession(entry);
-    final matches = await searchQuickOpenSession(
-      session: session,
-      query: query,
-      includeGitignored: includeGitignored,
-      limit: limit,
-    );
+    var session = await _ensureQuickOpenSession(entry);
+    List<native.WorkspaceQuickOpenMatch> matches;
+    try {
+      matches = await searchQuickOpenSession(
+        session: session,
+        query: query,
+        includeGitignored: includeGitignored,
+        limit: limit,
+      );
+    } on native.WorkspaceFileError catch (error) {
+      // Rust evicts idle sessions and caps the session registry. A Dart cache
+      // entry may still reference an evicted session (or one replaced by a
+      // concurrent refresh). Rebuild once rather than breaking Ctrl+P.
+      if (error.kind != native.WorkspaceFileErrorKind.notFound ||
+          error.context != 'quick open session not found') {
+        rethrow;
+      }
+      if (entry.session?.id == session.id) {
+        entry.session = null;
+      }
+      session = await _ensureQuickOpenSession(entry);
+      matches = await searchQuickOpenSession(
+        session: session,
+        query: query,
+        includeGitignored: includeGitignored,
+        limit: limit,
+      );
+    }
     if (entry.session?.id == session.id) {
       entry.matches[searchKey] =
           List<native.WorkspaceQuickOpenMatch>.unmodifiable(matches);
@@ -216,7 +237,8 @@ class WorkspaceFileService {
         );
         final refreshedMatches =
             <String, List<native.WorkspaceQuickOpenMatch>>{};
-        for (final request in entry.searchRequests.values) {
+        // Search requests can arrive while this asynchronous rebuild runs.
+        for (final request in entry.searchRequests.values.toList()) {
           final matches = await searchQuickOpenSession(
             session: session,
             query: request.query,

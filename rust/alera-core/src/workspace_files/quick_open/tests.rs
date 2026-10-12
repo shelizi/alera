@@ -55,6 +55,17 @@ fn indexes_and_ranks_workspace_files() {
 }
 
 #[test]
+fn skips_files_removed_while_building_a_quick_open_index() {
+    let workspace = tempfile::tempdir().unwrap();
+    let missing = workspace.path().join("removed.txt");
+    let root = dunce::canonicalize(workspace.path()).unwrap();
+
+    let result = quick_open_relative_path(&root, &missing, true, &QuickOpenExclusions::new(vec![]));
+
+    assert!(result.unwrap().is_none());
+}
+
+#[test]
 fn indexes_gitignored_files_once_and_filters_them_at_query_time() {
     let workspace = tempfile::tempdir().unwrap();
     fs::write(workspace.path().join(".gitignore"), "ignored.txt\n").unwrap();

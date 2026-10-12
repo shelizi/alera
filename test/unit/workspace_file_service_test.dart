@@ -4,8 +4,71 @@ import 'package:alera/src/rust/api/workspace_files.dart' as native;
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  group('WorkspaceFileService quick open session recovery', () {
+    test(
+      'reindexes and retries when a cached native session was evicted',
+      () async {
+        final service = _ExpiringQuickOpenFileService();
+        addTearDown(service.dispose);
+
+        final matches = await service.searchQuickOpenCached(
+          workspacePath: '/repo/alera',
+          excludedDirectories: const <String>['node_modules'],
+          query: 'main',
+          includeGitignored: true,
+        );
+
+        expect(matches.map((match) => match.relativePath), <String>[
+          'lib/main.dart',
+        ]);
+        expect(service.startedSessionIds, <String>['session-1', 'session-2']);
+        expect(service.searchedSessionIds, <String>['session-1', 'session-2']);
+        expect(service.includeGitignoredRequests, <bool>[true, true]);
+        expect(
+          service
+              .peekQuickOpenMatches(
+                workspacePath: '/repo/alera',
+                excludedDirectories: const <String>['node_modules'],
+                query: 'main',
+                includeGitignored: true,
+              )
+              ?.single
+              .relativePath,
+          'lib/main.dart',
+        );
+      },
+    );
+
+    test('does not hide unrelated workspace file errors', () async {
+      final service = _ExpiringQuickOpenFileService(
+        firstSearchError: const native.WorkspaceFileError(
+          kind: native.WorkspaceFileErrorKind.io,
+          context: 'index read failed',
+        ),
+      );
+      addTearDown(service.dispose);
+
+      await expectLater(
+        service.searchQuickOpenCached(
+          workspacePath: '/repo/alera',
+          excludedDirectories: const <String>[],
+          query: '',
+          includeGitignored: false,
+        ),
+        throwsA(
+          isA<native.WorkspaceFileError>().having(
+            (error) => error.context,
+            'context',
+            'index read failed',
+          ),
+        ),
+      );
+      expect(service.startedSessionIds, <String>['session-1']);
+    });
+  });
+
   group('WorkspaceFileService.applyGitStatusSnapshot', () {
-    const service = WorkspaceFileService();
+    final service = WorkspaceFileService();
 
     test('returns the original empty entry list', () {
       final entries = <native.WorkspaceFileEntry>[];
@@ -625,6 +688,51 @@ class _FakeWorkspaceFileService extends WorkspaceFileService {
       encoding: encoding,
     );
   }
+}
+
+class _ExpiringQuickOpenFileService extends WorkspaceFileService {
+  _ExpiringQuickOpenFileService({this.firstSearchError});
+
+  final native.WorkspaceFileError? firstSearchError;
+  final List<String> startedSessionIds = <String>[];
+  final List<String> searchedSessionIds = <String>[];
+  final List<bool> includeGitignoredRequests = <bool>[];
+
+  @override
+  Future<native.WorkspaceQuickOpenSession> startQuickOpenSession({
+    required String workspacePath,
+    required List<String> excludedDirectories,
+  }) async {
+    final id = 'session-${startedSessionIds.length + 1}';
+    startedSessionIds.add(id);
+    return native.WorkspaceQuickOpenSession(id: id, indexedFileCount: 1);
+  }
+
+  @override
+  Future<List<native.WorkspaceQuickOpenMatch>> searchQuickOpenSession({
+    required native.WorkspaceQuickOpenSession session,
+    required String query,
+    required bool includeGitignored,
+    int limit = 50,
+  }) async {
+    searchedSessionIds.add(session.id);
+    includeGitignoredRequests.add(includeGitignored);
+    if (session.id == 'session-1') {
+      throw firstSearchError ??
+          const native.WorkspaceFileError(
+            kind: native.WorkspaceFileErrorKind.notFound,
+            context: 'quick open session not found',
+          );
+    }
+    return const <native.WorkspaceQuickOpenMatch>[
+      native.WorkspaceQuickOpenMatch(relativePath: 'lib/main.dart', score: 1),
+    ];
+  }
+
+  @override
+  Future<void> stopQuickOpenSession({
+    required native.WorkspaceQuickOpenSession session,
+  }) async {}
 }
 
 native.WorkspaceFileEntry _workspaceEntry(

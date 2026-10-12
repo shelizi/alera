@@ -148,10 +148,19 @@ class _QuickOpenDialogState extends ConsumerState<QuickOpenDialog> {
         return;
       }
       setState(() {
-        _loadError = error;
+        // A failed background refresh should not hide an already available
+        // index. Keep the cached results usable until the next search.
+        _loadError = _matches.isEmpty ? error : null;
         _loading = false;
       });
     }
+  }
+
+  String _errorDescription(Object error) {
+    if (error is native.WorkspaceFileError) {
+      return error.context.trim().isNotEmpty ? error.context : error.kind.name;
+    }
+    return error.toString();
   }
 
   bool _isCurrentSearch(int workspaceGeneration, int searchGeneration) {
@@ -427,13 +436,18 @@ class _QuickOpenDialogState extends ConsumerState<QuickOpenDialog> {
               ),
               const SizedBox(height: AleraTokens.space4),
               Text(
-                _loadError.toString(),
+                _errorDescription(_loadError!),
                 maxLines: 3,
                 overflow: .ellipsis,
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: AleraTokens.foregroundMuted,
                 ),
                 textAlign: .center,
+              ),
+              const SizedBox(height: AleraTokens.space12),
+              TextButton(
+                onPressed: () => unawaited(_reloadWorkspace()),
+                child: Text(context.tr('Retry')),
               ),
             ],
           ),

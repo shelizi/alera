@@ -7,7 +7,7 @@ import 'package:path/path.dart' as p;
 
 void main() {
   group('WorkspaceFileService.resolveWorkspaceFilePath', () {
-    const service = WorkspaceFileService();
+    final service = WorkspaceFileService();
 
     test('resolves a relative file inside the workspace', () async {
       final workspace = await Directory.systemTemp.createTemp(

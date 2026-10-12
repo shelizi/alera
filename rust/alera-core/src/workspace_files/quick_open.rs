@@ -316,8 +316,26 @@ fn quick_open_relative_path(
     if relative_path.is_empty() || exclusions.excludes_path(std::path::Path::new(&relative_path)) {
         return Ok(None);
     }
-    let link_metadata = fs::symlink_metadata(path)
-        .map_err(|error| WorkspaceFileError::from_io(error, path.display().to_string()))?;
+    // Files can disappear between directory enumeration and metadata lookup.
+    // Skip these transient entries instead of failing the entire workspace
+    // index. Inaccessible descendants are likewise not searchable files.
+    let link_metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied
+            ) =>
+        {
+            return Ok(None);
+        }
+        Err(error) => {
+            return Err(WorkspaceFileError::from_io(
+                error,
+                path.display().to_string(),
+            ));
+        }
+    };
     let is_symlink = link_metadata.file_type().is_symlink();
     if is_symlink {
         if !include_internal_symlinks {
