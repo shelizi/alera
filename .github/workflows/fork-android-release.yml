@@ -1,0 +1,137 @@
+name: Fork Android Release Build
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        required: true
+        type: string
+    outputs:
+      tag:
+        value: ${{ jobs.build.outputs.tag }}
+      target_sha:
+        value: ${{ jobs.build.outputs.target_sha }}
+      mobile_version:
+        value: ${{ jobs.build.outputs.mobile_version }}
+      mobile_tag:
+        value: ${{ jobs.build.outputs.mobile_tag }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    if: github.repository == 'shelizi/alera'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      target_sha: ${{ steps.version.outputs.target_sha }}
+      mobile_version: ${{ steps.version.outputs.mobile_version }}
+      mobile_tag: ${{ steps.version.outputs.mobile_tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.ref }}
+          submodules: false
+
+      - name: Resolve product versions
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          desktop="$(sed -nE 's/^version:[[:space:]]*([^[:space:]]+).*/\1/p' pubspec.yaml | head -n 1)"
+          mobile="$(sed -nE 's/^version:[[:space:]]*([^[:space:]]+).*/\1/p' mobile/pubspec.yaml | head -n 1)"
+          [[ -n "$desktop" && -n "$mobile" ]]
+          echo "tag=v${desktop%%+*}" >> "$GITHUB_OUTPUT"
+          echo "target_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "mobile_version=${mobile%%+*}" >> "$GITHUB_OUTPUT"
+          echo "mobile_tag=v${mobile%%+*}-mobile" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Flutter workspace
+        uses: ./.github/actions/setup-flutter-workspace
+        with:
+          working-directory: mobile
+          submodules: third_party/xterm
+          linux-toolchain: 'false'
+          native-assets: 'false'
+          preflight: 'false'
+          rust: 'true'
+
+      - name: Provision Android native build tools and Java 17
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev cmake ninja-build
+          libclang="$(find /usr/lib -name libclang.so -print -quit)"
+          test -n "$libclang"
+          echo "LIBCLANG_PATH=$(dirname "$libclang")" >> "$GITHUB_ENV"
+          test -x "$JAVA_HOME_17_X64/bin/java"
+          echo "JAVA_HOME=$JAVA_HOME_17_X64" >> "$GITHUB_ENV"
+          echo "$JAVA_HOME_17_X64/bin" >> "$GITHUB_PATH"
+
+      - name: Analyze and test mobile app
+        working-directory: mobile
+        run: |
+          flutter analyze --no-pub
+          flutter test --no-pub
+
+      - name: Configure persistent Android signing
+        env:
+          ALERA_ANDROID_KEYSTORE_BASE64: ${{ secrets.ALERA_ANDROID_KEYSTORE_BASE64 }}
+          ALERA_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ALERA_ANDROID_KEYSTORE_PASSWORD }}
+          ALERA_ANDROID_KEY_ALIAS: ${{ secrets.ALERA_ANDROID_KEY_ALIAS }}
+          ALERA_ANDROID_KEY_PASSWORD: ${{ secrets.ALERA_ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for var in ALERA_ANDROID_KEYSTORE_BASE64 ALERA_ANDROID_KEYSTORE_PASSWORD ALERA_ANDROID_KEY_ALIAS ALERA_ANDROID_KEY_PASSWORD; do
+            [[ -n "${!var:-}" ]] || { echo "::error::$var is not configured."; exit 1; }
+          done
+          keystore="$RUNNER_TEMP/alera-fork.p12"
+          printf '%s' "$ALERA_ANDROID_KEYSTORE_BASE64" | base64 -d > "$keystore"
+          chmod 600 "$keystore"
+          fingerprint="$(keytool -exportcert -keystore "$keystore" -storepass:env ALERA_ANDROID_KEYSTORE_PASSWORD -alias "$ALERA_ANDROID_KEY_ALIAS" | sha256sum | cut -d ' ' -f 1)"
+          echo "ALERA_ANDROID_SIGNER_SHA256=$fingerprint" >> "$GITHUB_ENV"
+          cat > mobile/android/key.properties <<EOF
+          storePassword=$ALERA_ANDROID_KEYSTORE_PASSWORD
+          keyPassword=$ALERA_ANDROID_KEY_PASSWORD
+          keyAlias=$ALERA_ANDROID_KEY_ALIAS
+          storeFile=$keystore
+          EOF
+          echo "ALERA_ANDROID_KEYSTORE=$keystore" >> "$GITHUB_ENV"
+
+      - name: Build universal Android release APK
+        working-directory: mobile
+        run: flutter build apk --release --dart-define=ALERA_MOBILE_RELEASE_REPOSITORY=${{ github.repository }}
+
+      - name: Verify Android native dependencies
+        run: bash tool/release/verify_android_native_dependencies.sh mobile/build/app/outputs/flutter-apk
+
+      - name: Verify signature and stage APK
+        env:
+          MOBILE_VERSION: ${{ steps.version.outputs.mobile_version }}
+        run: |
+          set -euo pipefail
+          apk=mobile/build/app/outputs/flutter-apk/app-release.apk
+          test -s "$apk"
+          apksigner="$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -1)"
+          "$apksigner" verify --print-certs "$apk" | tee "$RUNNER_TEMP/apk-signature.txt"
+          grep -Fq "certificate SHA-256 digest: $ALERA_ANDROID_SIGNER_SHA256" "$RUNNER_TEMP/apk-signature.txt"
+          mkdir -p dist
+          name="alera-$MOBILE_VERSION-android.apk"
+          cp "$apk" "dist/$name"
+          (cd dist && sha256sum "$name" > "$name.sha256" && sha256sum -c "$name.sha256")
+
+      - name: Upload Android release assets
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: fork-android-release
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Remove signing material
+        if: always()
+        run: rm -f mobile/android/key.properties "$RUNNER_TEMP/alera-fork.p12"

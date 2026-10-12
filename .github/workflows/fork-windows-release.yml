@@ -7,8 +7,8 @@ run-name: >-
 
 # The upstream Cut Release pipeline publishes to the upstream update bucket and
 # needs its signing keys, so it cannot run on this fork. This workflow only
-# builds the Windows and macOS apps and attaches them to one GitHub Release: no updater index,
-# no package managers, no platform signing.
+# builds Windows, macOS and Android and attaches them to one GitHub Release: no updater index,
+# no package managers. Android uses the fork's persistent APK signing key.
 on:
   push:
     tags:
@@ -217,8 +217,15 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  build-android:
+    if: github.repository == 'shelizi/alera'
+    uses: ./.github/workflows/fork-android-release.yml
+    with:
+      ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
+    secrets: inherit
+
   publish:
-    needs: [build-windows, build-macos]
+    needs: [build-windows, build-macos, build-android]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -229,12 +236,18 @@ jobs:
       TARGET_SHA: ${{ needs.build-windows.outputs.target_sha }}
       MACOS_TAG: ${{ needs.build-macos.outputs.tag }}
       MACOS_TARGET_SHA: ${{ needs.build-macos.outputs.target_sha }}
+      ANDROID_TAG: ${{ needs.build-android.outputs.tag }}
+      ANDROID_TARGET_SHA: ${{ needs.build-android.outputs.target_sha }}
+      MOBILE_VERSION: ${{ needs.build-android.outputs.mobile_version }}
+      MOBILE_TAG: ${{ needs.build-android.outputs.mobile_tag }}
     steps:
       - name: Verify build metadata
         run: |
           set -euo pipefail
           [[ "$TAG" == "$MACOS_TAG" ]] || { echo "::error::Windows and macOS tags differ."; exit 1; }
           [[ "$TARGET_SHA" == "$MACOS_TARGET_SHA" ]] || { echo "::error::Windows and macOS commits differ."; exit 1; }
+          [[ "$TAG" == "$ANDROID_TAG" ]] || { echo "::error::Desktop and Android release tags differ."; exit 1; }
+          [[ "$TARGET_SHA" == "$ANDROID_TARGET_SHA" ]] || { echo "::error::Desktop and Android commits differ."; exit 1; }
 
       - name: Checkout
         uses: actions/checkout@v7
@@ -281,24 +294,56 @@ jobs:
           fi
           echo "Release notes from ${previous:-the start of history} to $TAG"
           dart tool/release/generate_release_notes.dart "${args[@]}"
+          mobile_previous="$(git describe --tags --abbrev=0 --match '*-mobile' "$TARGET_SHA^" 2>/dev/null || true)"
+          mobile_args=(--scope mobile --repo "$GITHUB_REPOSITORY" --tag "$MOBILE_TAG" --target "$TARGET_SHA" --output mobile-release-notes.md)
+          if [[ -n "$mobile_previous" ]]; then
+            mobile_args+=(--previous-tag "$mobile_previous")
+          fi
+          dart tool/release/generate_release_notes.dart "${mobile_args[@]}"
+          printf '\nAndroid companion: [%s](https://github.com/%s/releases/tag/%s).\n' "$MOBILE_TAG" "$GITHUB_REPOSITORY" "$MOBILE_TAG" >> release-notes.md
+
+      - name: Download Android APK
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: fork-android-release
+          path: dist
+
+      - name: Verify complete release assets
+        run: bash tool/release/verify_fork_release_assets.sh dist "${TAG#v}" "$MOBILE_VERSION"
 
       - name: Publish release
         run: |
           set -euo pipefail
-          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            if [[ "$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" != "true" ]]; then
-              echo "::error::Release $TAG is already public."
+          for release_tag in "$TAG" "$MOBILE_TAG"; do
+            existing_sha="$(git ls-remote origin "refs/tags/$release_tag" "refs/tags/$release_tag^{}" | tail -n 1 | cut -f 1)"
+            if [[ -n "$existing_sha" && "$existing_sha" != "$TARGET_SHA" ]]; then
+              echo "::error::Tag $release_tag points at another commit; bump its product version."
               exit 1
             fi
-          else
-            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft \
-              --target "$TARGET_SHA" --title "$TAG" --notes-file release-notes.md
-          fi
-          gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+            if gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              if [[ "$(gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" != "true" ]]; then
+                echo "::error::Release $release_tag is already public; bump its product version."
+                exit 1
+              fi
+            else
+              notes=release-notes.md
+              [[ "$release_tag" != "$MOBILE_TAG" ]] || notes=mobile-release-notes.md
+              gh release create "$release_tag" --repo "$GITHUB_REPOSITORY" --draft \
+                --target "$TARGET_SHA" --title "$release_tag" --notes-file "$notes"
+            fi
+          done
+          bash tool/release/upload_release_assets.sh "$TAG" "$GITHUB_REPOSITORY" dist/*
+          bash tool/release/upload_release_assets.sh "$MOBILE_TAG" "$GITHUB_REPOSITORY" dist/*-android.apk dist/*-android.apk.sha256
           # Publish only once every asset is attached, so nobody sees a partial release.
           for asset in dist/*; do
             name="$(basename "$asset")"
             gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets \
               --jq ".assets[].name" | grep -Fxq "$name" || { echo "::error::Missing asset $name"; exit 1; }
           done
+          for asset in dist/*-android.apk dist/*-android.apk.sha256; do
+            name="$(basename "$asset")"
+            gh release view "$MOBILE_TAG" --repo "$GITHUB_REPOSITORY" --json assets \
+              --jq ".assets[].name" | grep -Fxq "$name" || { echo "::error::Missing mobile asset $name"; exit 1; }
+          done
+          gh release edit "$MOBILE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest=false
           gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
