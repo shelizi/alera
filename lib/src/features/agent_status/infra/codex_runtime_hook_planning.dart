@@ -429,14 +429,13 @@ extension _CodexRuntimeHomeServiceHookPlanning on CodexRuntimeHomeService {
     String hash,
     bool enabled,
   ) {
-    final headerPattern = _tomlHeaderPattern('hooks.state', key);
-    final match = headerPattern.firstMatch(content);
+    final matches = _trustBlockRanges(content, key);
     final block = <String>[
       '[hooks.state."${_escapeTomlString(key)}"]',
       'enabled = $enabled',
       'trusted_hash = "${_escapeTomlString(hash)}"',
     ].join('\n');
-    if (match == null) {
+    if (matches.isEmpty) {
       final separator = content.isEmpty
           ? ''
           : content.endsWith('\n\n')
@@ -446,34 +445,22 @@ extension _CodexRuntimeHomeServiceHookPlanning on CodexRuntimeHomeService {
           : '\n\n';
       return '$content$separator$block\n';
     }
-    final cutStart = match.start + ((match.group(1) ?? '').length);
-    final afterHeader = content.substring(match.end);
-    final nextHeader = _findNextTableHeader(afterHeader);
-    final cutEnd = nextHeader < 0 ? content.length : match.end + nextHeader;
-    return '${content.substring(0, cutStart)}$block\n${content.substring(cutEnd)}';
+    var updated = content;
+    for (final range in matches.reversed) {
+      updated = updated.replaceRange(
+        range.start,
+        range.end,
+        range == matches.first ? '$block\n' : '',
+      );
+    }
+    return updated;
   }
 
   String _removeTrustBlock(String content, String key) {
-    final headerPattern = _tomlHeaderPattern('hooks.state', key);
-    final match = headerPattern.firstMatch(content);
-    if (match == null) {
-      return content;
+    var updated = content;
+    for (final range in _trustBlockRanges(content, key).reversed) {
+      updated = updated.replaceRange(range.start, range.end, '');
     }
-    final cutStart = match.start + ((match.group(1) ?? '').length);
-    final afterHeader = content.substring(match.end);
-    final nextHeader = _findNextTableHeader(afterHeader);
-    final cutEnd = nextHeader < 0 ? content.length : match.end + nextHeader;
-    return content.substring(0, cutStart) + content.substring(cutEnd);
-  }
-
-  RegExp _tomlHeaderPattern(String prefix, String key) {
-    final escapedPrefix = RegExp.escape(prefix);
-    final escaped = RegExp.escape(_escapeTomlString(key));
-    final quotedKey = key.contains("'")
-        ? '"$escaped"'
-        : '(?:"$escaped"|\'${RegExp.escape(key)}\')';
-    return RegExp(
-      '(^|\\r?\\n)[ \\t]*\\[$escapedPrefix\\.$quotedKey\\][ \\t]*(?:#[^\\r\\n]*)?(?=\\r?\\n|\$)',
-    );
+    return updated;
   }
 }

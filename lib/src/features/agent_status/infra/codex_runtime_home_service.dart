@@ -267,7 +267,13 @@ final class CodexRuntimeHomeService({
       }
       _removeMatchingTrustEntries(
         descriptor.tomlPath,
-        previousManagedTrustEntries,
+        previousManagedTrustEntries
+            .where(
+              (previous) => !trustEntries.any(
+                (next) => _computeTrustKey(previous) == _computeTrustKey(next),
+              ),
+            )
+            .toList(growable: false),
       );
     } else {
       _syncSystemConfig(runtime);

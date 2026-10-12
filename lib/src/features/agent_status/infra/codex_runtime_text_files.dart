@@ -18,6 +18,23 @@ String _unescapeTomlString(String escaped) {
     final char = escaped[index];
     if (char == r'\' && index + 1 < escaped.length) {
       final next = escaped[index + 1];
+      if (next == 'u' || next == 'U') {
+        final end = index + 2 + (next == 'u' ? 4 : 8);
+        if (end <= escaped.length) {
+          final value = int.tryParse(
+            escaped.substring(index + 2, end),
+            radix: 16,
+          );
+          if (value != null &&
+              value >= 0 &&
+              value <= 0x10ffff &&
+              (value < 0xd800 || value > 0xdfff)) {
+            buffer.writeCharCode(value);
+            index = end;
+            continue;
+          }
+        }
+      }
       buffer.write(switch (next) {
         'n' => '\n',
         'r' => '\r',

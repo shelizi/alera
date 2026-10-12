@@ -1,5 +1,40 @@
 part of 'codex_runtime_home_service.dart';
 
+List<({int start, int end})> _trustBlockRanges(String content, String key) {
+  final headerPattern = RegExp(
+    r"""^[ \t]*\[hooks\.state\.(?:"((?:[^"\\]|\\.)*)"|'([^']*)')\][ \t]*(?:#[^\r\n]*)?$""",
+  );
+  final ranges = <({int start, int end})>[];
+  var cursor = 0;
+  var multilineState = const _TomlMultilineState();
+  while (cursor < content.length) {
+    final newline = content.indexOf('\n', cursor);
+    final lineEnd = newline < 0 ? content.length : newline;
+    final next = newline < 0 ? content.length : newline + 1;
+    final line = content
+        .substring(cursor, lineEnd)
+        .replaceFirst(RegExp(r'\r$'), '');
+    if (!_isInsideTomlMultilineString(multilineState)) {
+      final match = headerPattern.firstMatch(line);
+      if (match != null) {
+        final decoded = match.group(1) == null
+            ? match.group(2)!
+            : _unescapeTomlString(match.group(1)!);
+        if (decoded == key) {
+          final nextHeader = _findNextTableHeader(content.substring(next));
+          ranges.add((
+            start: cursor,
+            end: nextHeader < 0 ? content.length : next + nextHeader,
+          ));
+        }
+      }
+    }
+    multilineState = _updateTomlMultilineState(multilineState, line);
+    cursor = next;
+  }
+  return ranges;
+}
+
 List<_TomlSection> _tomlSections(String config) {
   final lines = config.split('\n');
   final sections = <_TomlSection>[];
