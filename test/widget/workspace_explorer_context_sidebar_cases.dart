@@ -590,7 +590,12 @@ void _registerWorkspaceExplorerContextSidebarTests() {
       await tester.pumpWidget(buildSidebar(.explorer));
       await tester.pumpAndSettle();
 
-      final explorerScrollable = find.byType(Scrollable).first;
+      final explorerScrollable = find
+          .descendant(
+            of: find.byType(WorkspaceExplorer),
+            matching: find.byType(Scrollable),
+          )
+          .last;
       await tester.scrollUntilVisible(
         find.text('src'),
         240,
@@ -631,7 +636,12 @@ void _registerWorkspaceExplorerContextSidebarTests() {
       await tester.pumpAndSettle();
 
       expect(find.text('main.dart'), findsOneWidget);
-      final restoredScrollable = find.byType(Scrollable).first;
+      final restoredScrollable = find
+          .descendant(
+            of: find.byType(WorkspaceExplorer),
+            matching: find.byType(Scrollable),
+          )
+          .last;
       final afterPixels = tester
           .state<ScrollableState>(restoredScrollable)
           .position
@@ -660,7 +670,12 @@ void _registerWorkspaceExplorerContextSidebarTests() {
       await tester.pumpAndSettle();
 
       expect(find.text('main.dart'), findsOneWidget);
-      final afterCollapseScrollable = find.byType(Scrollable).first;
+      final afterCollapseScrollable = find
+          .descendant(
+            of: find.byType(WorkspaceExplorer),
+            matching: find.byType(Scrollable),
+          )
+          .last;
       expect(
         tester.state<ScrollableState>(afterCollapseScrollable).position.pixels,
         closeTo(beforePixels, 0.01),

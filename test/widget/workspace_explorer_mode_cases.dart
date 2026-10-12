@@ -96,6 +96,52 @@ void _registerWorkspaceExplorerModeTests() {
     expect(find.text('main.dart'), findsOneWidget);
   });
 
+  testWidgets('active filter updates automatically after index rebuild', (
+    tester,
+  ) async {
+    final service = _FakeWorkspaceFileService()
+      ..quickOpenEntries = <String>['lib/old.dart'];
+    await _pumpExplorer(tester, service);
+
+    await tester.enterText(find.byType(TextField), 'new_file');
+    await tester.pumpAndSettle();
+    expect(find.text('No matching files.'), findsOneWidget);
+    expect(service.quickOpenFilterRefreshRequests, isNotEmpty);
+
+    service.quickOpenEntries = <String>['lib/old.dart', 'lib/new_file.dart'];
+    service.emitQuickOpenRefresh('/repo/alera');
+    await tester.pumpAndSettle();
+
+    expect(find.text('lib/new_file.dart'), findsOneWidget);
+    expect(
+      service.quickOpenFilterRefreshRequests,
+      hasLength(1),
+      reason: 'A completed index rebuild must not schedule another rebuild',
+    );
+  });
+
+  testWidgets('failed filter shows native reason and can retry', (
+    tester,
+  ) async {
+    final service = _FakeWorkspaceFileService()
+      ..quickOpenSearchError = const native.WorkspaceFileError(
+        kind: native.WorkspaceFileErrorKind.io,
+        context: 'Cannot read workspace directory',
+      );
+    await _pumpExplorer(tester, service);
+
+    await tester.enterText(find.byType(TextField), 'target');
+    await tester.pumpAndSettle();
+    expect(find.text('Cannot read workspace directory'), findsOneWidget);
+
+    service
+      ..quickOpenSearchError = null
+      ..quickOpenEntries = <String>['deep/target.dart'];
+    await tester.tap(find.text('Retry'));
+    await tester.pumpAndSettle();
+    expect(find.text('deep/target.dart'), findsOneWidget);
+  });
+
   testWidgets(
     'ignored files toggle refreshes the listing without manual refresh',
     (tester) async {

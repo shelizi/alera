@@ -57,7 +57,13 @@ void _registerWorkspaceExplorerActionTests() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('New file'));
     await tester.pumpAndSettle();
-    await tester.enterText(find.byType(TextField), 'root.txt');
+    await tester.enterText(
+      find.descendant(
+        of: find.byType(Dialog),
+        matching: find.byType(TextField),
+      ),
+      'root.txt',
+    );
     await tester.tap(find.text('Create'));
     await tester.pumpAndSettle();
 
@@ -463,7 +469,13 @@ void _registerWorkspaceExplorerActionTests() {
     await _pumpExplorer(tester, service);
     await tester.tap(find.byTooltip('New file'));
     await tester.pumpAndSettle();
-    await tester.enterText(find.byType(TextField), 'created.dart');
+    await tester.enterText(
+      find.descendant(
+        of: find.byType(Dialog),
+        matching: find.byType(TextField),
+      ),
+      'created.dart',
+    );
     await tester.tap(find.text('Create'));
     await tester.pump();
 

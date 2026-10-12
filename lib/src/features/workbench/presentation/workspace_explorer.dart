@@ -18,7 +18,6 @@ import 'package:alera/src/features/external_editor/application/external_editor_p
 import 'package:alera/src/features/external_editor/domain/external_editor_launcher.dart';
 import 'package:alera/src/features/external_editor/domain/external_editor_spec.dart';
 import 'package:alera/src/features/external_editor/presentation/external_editor_menu_entries.dart';
-import 'package:alera/src/features/settings/application/settings_controller.dart';
 import 'package:alera/src/features/workbench/application/workspace_explorer_reveal.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_service.dart';
 import 'package:alera/src/features/workbench/application/workspace_folder_opener.dart';
@@ -114,6 +113,7 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
   ExternalEditorKind? _pickedExternalEditorKind;
   final TextEditingController _filterController = TextEditingController();
   final FocusNode _filterFocusNode = FocusNode(debugLabel: 'explorer-filter');
+  StreamSubscription<String>? _quickOpenRefreshSubscription;
   final FocusNode _explorerFocusNode = FocusNode(
     debugLabel: 'workspace-explorer',
   );
@@ -130,6 +130,9 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
   void initState() {
     super.initState();
     _workspaceFiles = ref.read(workspaceFileServiceProvider);
+    _quickOpenRefreshSubscription = _workspaceFiles.quickOpenRefreshes.listen(
+      _onQuickOpenIndexRefreshed,
+    );
     _editorSessions = ref.read(editorSessionRegistryProvider);
     _folderOpener = ref.read(workspaceFolderOpenerProvider);
     _gitBackend = ref.read(gitBackendProvider);
@@ -180,6 +183,7 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
   void dispose() {
     _saveWorkspaceUiState(widget.workspace);
     unawaited(_stopNativeWatcher());
+    unawaited(_quickOpenRefreshSubscription?.cancel());
     _filterController.dispose();
     _filterFocusNode.dispose();
     _explorerFocusNode.dispose();
@@ -604,7 +608,7 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
     unawaited(_paste(_pasteTargetDirectory()));
   }
 
-  void _onFilterChanged(String value) {
+  void _onFilterChanged(String value, {bool refreshIndex = true}) {
     _controller.filterQuery = '';
     final query = value.trim();
     final generation = ++_filterGeneration;
@@ -615,6 +619,11 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
         _filterError = null;
       });
       return;
+    }
+    if (refreshIndex) {
+      _workspaceFiles.scheduleQuickOpenFilterRefresh(
+        workspacePath: widget.workspace.path,
+      );
     }
     final excludedDirectories = ref
         .read(settingsControllerProvider)
@@ -641,6 +650,15 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
         includeGitignored: includeGitignored,
       ),
     );
+  }
+
+  void _onQuickOpenIndexRefreshed(String workspacePath) {
+    if (!mounted ||
+        workspacePath != widget.workspace.path ||
+        _filterController.text.trim().isEmpty) {
+      return;
+    }
+    _onFilterChanged(_filterController.text, refreshIndex: false);
   }
 
   Future<void> _searchFilter({
@@ -683,9 +701,31 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
     }
     if (_filterError != null && _filterMatches.isEmpty) {
       return Center(
-        child: Text(
-          context.tr('Could not filter workspace files.'),
-          style: Theme.of(context).textTheme.bodySmall,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            Text(
+              context.tr('Could not filter workspace files.'),
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            if (_filterError case final native.WorkspaceFileError error)
+              Padding(
+                padding: const EdgeInsets.symmetric(
+                  vertical: AleraTokens.space8,
+                ),
+                child: Text(
+                  error.context,
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
+            TextButton(
+              onPressed: () => _onFilterChanged(_filterController.text),
+              child: Text(context.tr('Retry')),
+            ),
+          ],
         ),
       );
     }

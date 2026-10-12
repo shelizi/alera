@@ -85,6 +85,7 @@ Widget _withWorkspaceFiles(
 }) {
   return ProviderScope(
     overrides: [
+      settingsControllerProvider.overrideWithValue(AleraSettings.defaults),
       workspaceFileServiceProvider.overrideWithValue(service),
       gitBackendProvider.overrideWithValue(gitBackend ?? FakeGitBackend()),
       if (folderOpener != null)

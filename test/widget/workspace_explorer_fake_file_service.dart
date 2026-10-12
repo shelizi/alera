@@ -4,6 +4,34 @@ class _FakeWorkspaceFileService({
   final Completer<void>? createGate,
   final Completer<void>? stopGate,
 }) extends WorkspaceFileService {
+  final StreamController<String> _quickOpenRefreshController =
+      StreamController<String>.broadcast(sync: true);
+  final List<String> quickOpenFilterRefreshRequests = <String>[];
+  final List<String> quickOpenRefreshRequests = <String>[];
+  Object? quickOpenSearchError;
+
+  @override
+  Stream<String> get quickOpenRefreshes => _quickOpenRefreshController.stream;
+
+  void emitQuickOpenRefresh(String workspacePath) {
+    _quickOpenRefreshController.add(workspacePath);
+  }
+
+  @override
+  void scheduleQuickOpenFilterRefresh({required String workspacePath}) {
+    quickOpenFilterRefreshRequests.add(workspacePath);
+  }
+
+  // Explorer widget tests must not start real background reindex timers or
+  // native sessions. The fake exposes scheduling separately from completion.
+  @override
+  void scheduleQuickOpenRefresh({
+    required String workspacePath,
+    Duration debounce = const Duration(milliseconds: 500),
+  }) {
+    quickOpenRefreshRequests.add(workspacePath);
+  }
+
   final StreamController<native.WorkspaceExplorerWatchBatch> _watchController =
       StreamController<native.WorkspaceExplorerWatchBatch>.broadcast();
   final Map<String, List<native.WorkspaceFileEntry>> childrenByDirectory =
@@ -51,6 +79,9 @@ class _FakeWorkspaceFileService({
     required bool includeGitignored,
     int limit = 50,
   }) async {
+    if (quickOpenSearchError case final error?) {
+      throw error;
+    }
     final normalizedQuery = query.trim().toLowerCase();
     return quickOpenEntries
         .where(

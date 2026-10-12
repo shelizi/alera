@@ -23,6 +23,15 @@ class WorkspaceFileService {
   final Map<String, _WorkspaceQuickOpenCacheEntry> _quickOpenCache =
       <String, _WorkspaceQuickOpenCacheEntry>{};
   final Map<String, Timer> _quickOpenRefreshTimers = <String, Timer>{};
+  final StreamController<String> _quickOpenRefreshEvents =
+      StreamController<String>.broadcast();
+  final Map<String, DateTime> _lastOnDemandQuickOpenRefresh =
+      <String, DateTime>{};
+
+  /// Emits the workspace path after a background index rebuild completes.
+  /// Consumers can update already-visible search results without requiring
+  /// the user to type again.
+  Stream<String> get quickOpenRefreshes => _quickOpenRefreshEvents.stream;
   Future<List<native.WorkspaceFileEntry>> listChildren({
     required String workspacePath,
     required String relativePath,
@@ -152,16 +161,34 @@ class WorkspaceFileService {
     });
   }
 
+  /// An explorer filter can search files in collapsed, unwatched directories.
+  /// Refresh its index in the background on demand, but do not reindex the
+  /// entire workspace for every keystroke.
+  void scheduleQuickOpenFilterRefresh({required String workspacePath}) {
+    final now = DateTime.now();
+    final last = _lastOnDemandQuickOpenRefresh[workspacePath];
+    if (last != null && now.difference(last) < const Duration(seconds: 15)) {
+      return;
+    }
+    _lastOnDemandQuickOpenRefresh[workspacePath] = now;
+    scheduleQuickOpenRefresh(
+      workspacePath: workspacePath,
+      debounce: const Duration(milliseconds: 350),
+    );
+  }
+
   Future<void> dispose() async {
     for (final timer in _quickOpenRefreshTimers.values) {
       timer.cancel();
     }
     _quickOpenRefreshTimers.clear();
+    _lastOnDemandQuickOpenRefresh.clear();
     final sessions = <native.WorkspaceQuickOpenSession>[
       for (final entry in _quickOpenCache.values)
         if (entry.session != null) entry.session!,
     ];
     _quickOpenCache.clear();
+    await _quickOpenRefreshEvents.close();
     await Future.wait(
       sessions.map((session) async {
         try {
@@ -225,6 +252,7 @@ class WorkspaceFileService {
     final entries = _quickOpenCache.values
         .where((entry) => entry.workspacePath == workspacePath)
         .toList(growable: false);
+    var refreshed = false;
     for (final entry in entries) {
       if (entry.refreshing || entry.pendingSession != null) {
         continue;
@@ -255,6 +283,7 @@ class WorkspaceFileService {
         entry.matches
           ..clear()
           ..addAll(refreshedMatches);
+        refreshed = true;
         if (previousSession != null && previousSession.id != session.id) {
           unawaited(_stopQuickOpenSessionBestEffort(previousSession));
         }
@@ -263,6 +292,9 @@ class WorkspaceFileService {
       } finally {
         entry.refreshing = false;
       }
+    }
+    if (refreshed && !_quickOpenRefreshEvents.isClosed) {
+      _quickOpenRefreshEvents.add(workspacePath);
     }
   }
 
