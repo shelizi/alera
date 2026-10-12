@@ -49,12 +49,19 @@ void main() {
     final publish = jobs['publish'] as YamlMap;
     expect(
       publish['needs'],
-      containsAll(<String>['build-windows', 'build-macos', 'build-android']),
+      containsAll(<String>[
+        'check-unix-runtime',
+        'build-windows',
+        'build-macos',
+        'build-android',
+      ]),
     );
     expect(
       jobs['build-android']['uses'],
       './.github/workflows/fork-android-release.yml',
     );
+    expect(jobs['build-windows']['needs'], 'check-unix-runtime');
+    expect(jobs['build-macos']['needs'], 'check-unix-runtime');
     expect(
       publish['env']['ANDROID_TARGET_SHA'],
       contains('needs.build-android.outputs.target_sha'),

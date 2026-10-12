@@ -12,6 +12,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
+#[cfg(all(test, unix))]
+#[path = "trash_permissions_tests.rs"]
+mod permissions_tests;
+
 use super::{
     create_workspace_text_from_root, file_is_probably_utf8, is_protected_workspace_path,
     mobile_workspace_leaf_name_is_safe, open_workspace_file_without_symlinks,
@@ -66,8 +70,8 @@ fn open_or_create_private_directory(parent: &Dir, name: &str) -> Result<Dir, Wor
     let dir = parent.open_dir_nofollow(name).map_err(io_error)?;
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt as _;
-        dir.set_permissions(".", fs::Permissions::from_mode(0o700))
+        use cap_std::fs::PermissionsExt as _;
+        dir.set_permissions(".", cap_std::fs::Permissions::from_mode(0o700))
             .map_err(io_error)?;
     }
     Ok(dir)
