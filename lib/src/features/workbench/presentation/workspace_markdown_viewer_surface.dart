@@ -115,7 +115,10 @@ class _WorkspaceMarkdownViewerSurfaceState
     }
 
     Widget content;
-    if (_loading) {
+    // Keep the already-rendered document mounted during background reloads.
+    // Replacing it with a spinner discards its active text selection, so a
+    // filesystem watcher event can make a single-line copy unexpectedly fail.
+    if (_loading && _content == null) {
       content = const Center(child: CircularProgressIndicator());
     } else if (_loadError case final loadError?) {
       content = _MarkdownViewerMessage(message: _messageFor(loadError));

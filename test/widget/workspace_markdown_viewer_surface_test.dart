@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:io' show Directory, File, FileSystemException, Link;
+import 'dart:ui' show PointerDeviceKind;
 
 import 'package:alera/src/app/providers.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
@@ -13,7 +15,9 @@ import 'package:alera/src/features/workbench/presentation/workspace_markdown_vie
 import 'package:alera/src/rust/api/workspace_files.dart' as native;
 import 'package:alera/src/shared/infra/uri/external_uri_launcher.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -796,6 +800,138 @@ ${List<String>.filled(120, 'selectable').join('_')}
     expect(find.byType(SelectionArea), findsNWidgets(3));
   });
 
+  testWidgets('mouse drag copies just one Markdown paragraph line', (
+    tester,
+  ) async {
+    String? copiedText;
+    _captureCopiedText((value) => copiedText = value);
+    final registry = EditorSessionRegistry();
+    final service = _FakeWorkspaceFileService('''
+Select only this single line from the Markdown preview.
+
+Another paragraph must not be included.
+''');
+
+    await tester.pumpWidget(
+      _surface(registry: registry, workspaceFiles: service),
+    );
+    await tester.pumpAndSettle();
+
+    await _dragSelectPreviewText(
+      tester,
+      containing: 'Select only this single line',
+      startAt: 'Select',
+      endAfter: 'Markdown preview',
+    );
+
+    await _copySelectedPreviewText(tester);
+    expect(copiedText, contains('only this single line'));
+    expect(copiedText, isNot(contains('Another paragraph')));
+  });
+
+  testWidgets('mouse drag from the paragraph margin selects its single line', (
+    tester,
+  ) async {
+    String? copiedText;
+    _captureCopiedText((value) => copiedText = value);
+    final registry = EditorSessionRegistry();
+    final service = _FakeWorkspaceFileService('''
+Start selecting this line from the left margin.
+
+The next paragraph is not part of the selection.
+''');
+
+    await tester.pumpWidget(
+      _surface(registry: registry, workspaceFiles: service),
+    );
+    await tester.pumpAndSettle();
+
+    await _dragSelectPreviewText(
+      tester,
+      containing: 'Start selecting this line',
+      startAt: 'Start',
+      endAfter: 'left margin',
+      startInLeftMargin: true,
+    );
+
+    await _copySelectedPreviewText(tester);
+    expect(copiedText, contains('selecting this line'));
+    expect(copiedText, isNot(contains('next paragraph')));
+  });
+
+  testWidgets('unchanged external refresh preserves a selected preview line', (
+    tester,
+  ) async {
+    String? copiedText;
+    _captureCopiedText((value) => copiedText = value);
+    const line = 'Keep this exact Markdown preview line selected.';
+    final registry = EditorSessionRegistry();
+    final service = _FakeWorkspaceFileService('''$line
+
+Another line that must not be copied.
+''');
+
+    await tester.pumpWidget(
+      _surface(registry: registry, workspaceFiles: service),
+    );
+    await tester.pumpAndSettle();
+
+    await _dragSelectPreviewText(
+      tester,
+      containing: line,
+      startAt: 'Keep',
+      endAfter: 'line selected',
+    );
+
+    // Filesystem watcher notifications may occur even when the text hasn't
+    // changed. They must not erase an in-progress selection.
+    final pendingRead = Completer<void>();
+    service.blockNextRead = pendingRead;
+    registry.notifyExternalFileChanges(
+      workspacePath: '/repo/alera',
+      relativePaths: const ['docs/readme.md'],
+    );
+    await tester.pump(workspaceMarkdownViewerEditorUpdateDebounce);
+    await tester.pump();
+    pendingRead.complete();
+    await tester.pumpAndSettle();
+
+    await _copySelectedPreviewText(tester);
+    expect(copiedText, contains('exact Markdown preview line'));
+    expect(copiedText, isNot(contains('Another line')));
+    expect(service.reads, const ['docs/readme.md', 'docs/readme.md']);
+  });
+
+  testWidgets('mouse drag copies a single code line instead of scrolling', (
+    tester,
+  ) async {
+    String? copiedText;
+    _captureCopiedText((value) => copiedText = value);
+    final registry = EditorSessionRegistry();
+    final service = _FakeWorkspaceFileService('''
+```text
+Copy this one code line without selecting another line.
+Do not copy this second code line.
+```
+''');
+
+    await tester.pumpWidget(
+      _surface(registry: registry, workspaceFiles: service),
+    );
+    await tester.pumpAndSettle();
+
+    await _dragSelectPreviewText(
+      tester,
+      containing: 'Copy this one code line',
+      startAt: 'Copy',
+      endAfter: 'another line',
+    );
+
+    await _copySelectedPreviewText(tester);
+    expect(copiedText, contains('this one code line'));
+    expect(copiedText, isNot(contains('second code line')));
+  });
+
   testWidgets('refresh reloads disk content while the editor buffer is clean', (
     tester,
   ) async {
@@ -982,6 +1118,73 @@ Future<void> _pumpLoadedMarkdown(WidgetTester tester) async {
   await tester.pump(const Duration(milliseconds: 1));
 }
 
+Future<void> _dragSelectPreviewText(
+  WidgetTester tester, {
+  required String containing,
+  required String startAt,
+  required String endAfter,
+  bool startInLeftMargin = false,
+}) async {
+  final text = find.byWidgetPredicate(
+    (widget) =>
+        widget is RichText && widget.text.toPlainText().contains(containing),
+  );
+  expect(text, findsWidgets);
+  final paragraph = tester.renderObject<RenderParagraph>(text.first);
+  final source = paragraph.text.toPlainText();
+  final startIndex = source.indexOf(startAt);
+  final endIndex = source.indexOf(endAfter, startIndex) + endAfter.length - 1;
+  expect(startIndex, greaterThanOrEqualTo(0));
+  expect(endIndex, greaterThan(startIndex));
+
+  Offset characterCenter(int offset) {
+    final box = paragraph
+        .getBoxesForSelection(
+          TextSelection(baseOffset: offset, extentOffset: offset + 1),
+        )
+        .first;
+    return paragraph.localToGlobal(
+      Offset((box.left + box.right) / 2, (box.top + box.bottom) / 2),
+    );
+  }
+
+  final firstCharacter = characterCenter(startIndex);
+  final start = startInLeftMargin
+      ? Offset(paragraph.localToGlobal(Offset.zero).dx - 12, firstCharacter.dy)
+      : firstCharacter;
+  final end = characterCenter(endIndex);
+  final gesture = await tester.startGesture(
+    start,
+    kind: PointerDeviceKind.mouse,
+  );
+  await gesture.moveTo(Offset.lerp(start, end, 0.5)!);
+  await tester.pump(const Duration(milliseconds: 40));
+  await gesture.moveTo(end);
+  await gesture.up();
+  await tester.pump();
+}
+
+void _captureCopiedText(ValueChanged<String?> onCopy) {
+  final messenger =
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+  messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+    if (call.method == 'Clipboard.setData') {
+      onCopy((call.arguments as Map<Object?, Object?>)['text'] as String?);
+    }
+    return null;
+  });
+  addTearDown(
+    () => messenger.setMockMethodCallHandler(SystemChannels.platform, null),
+  );
+}
+
+Future<void> _copySelectedPreviewText(WidgetTester tester) async {
+  await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+  await tester.sendKeyEvent(LogicalKeyboardKey.keyC);
+  await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+  await tester.pump();
+}
+
 Future<bool> _createSymlinkOrSkip({
   required String linkPath,
   required String targetPath,
@@ -1104,6 +1307,7 @@ native.WorkspaceEditorTextFile _editorFile({
 class _FakeWorkspaceFileService(var String content)
     extends WorkspaceFileService {
   final List<String> reads = <String>[];
+  Completer<void>? blockNextRead;
   int mermaidRenders = 0;
   final List<String> mermanSources = <String>[];
   final List<String> mermanDiagramIds = <String>[];
@@ -1114,6 +1318,11 @@ class _FakeWorkspaceFileService(var String content)
     required String relativePath,
   }) async {
     reads.add(relativePath);
+    final pendingRead = blockNextRead;
+    if (pendingRead != null) {
+      blockNextRead = null;
+      await pendingRead.future;
+    }
     return native.WorkspaceTextFile(
       content: content,
       contentToken: 'disk-token',
