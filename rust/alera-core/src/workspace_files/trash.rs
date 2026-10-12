@@ -362,13 +362,15 @@ pub fn move_workspace_text_to_trash(
     }
     drop(backup);
     #[cfg(unix)]
-    trash
-        .dir
-        .try_clone()
-        .map_err(io_error)?
-        .into_std_file()
-        .sync_all()
-        .map_err(io_error)?;
+    {
+        // Linux capability directory handles may use O_PATH, which cannot be synced.
+        trash
+            .dir
+            .open(".")
+            .map_err(io_error)?
+            .sync_all()
+            .map_err(io_error)?;
+    }
 
     // Reopen after recording the durable backup. Refuse unlink if a concurrent
     // actor replaced the source path, or modified its contents since preview.
