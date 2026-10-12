@@ -3,6 +3,7 @@ import 'dart:io' show Directory, File, FileSystemException, Link;
 import 'package:alera/src/app/providers.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
+import 'package:alera/src/design_system/layout/alera_dialog.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_service.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
@@ -236,6 +237,86 @@ Not wanted
     expect(isMarkdownMermaidFence('mmd'), isTrue);
     expect(isMarkdownMermaidFence('merman'), isTrue);
     expect(isMarkdownMermaidFence('dart'), isFalse);
+  });
+
+  testWidgets('reference modal scrolls wide code and tables horizontally', (
+    tester,
+  ) async {
+    final registry = EditorSessionRegistry();
+    final wideLine = List<String>.filled(100, 'wide').join('_');
+    final service = _FakeWorkspaceFileService('''
+[Open details](#details)
+
+## Details
+
+| Label | Content |
+| --- | --- |
+| entry | $wideLine |
+
+```text
+$wideLine
+```
+''');
+
+    await tester.pumpWidget(
+      _surface(registry: registry, workspaceFiles: service),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Open details'));
+    await tester.pumpAndSettle();
+
+    final modal = find.byType(AleraDialog);
+    expect(modal, findsOneWidget);
+    final tableScrollbar = find.descendant(
+      of: modal,
+      matching: find.byKey(
+        const ValueKey<String>('markdown-table-x-scrollbar'),
+      ),
+    );
+    final codeScrollbar = find.descendant(
+      of: modal,
+      matching: find.byKey(const ValueKey<String>('markdown-code-x-scrollbar')),
+    );
+    expect(tableScrollbar, findsOneWidget);
+    expect(codeScrollbar, findsOneWidget);
+
+    final tableView = find.descendant(
+      of: modal,
+      matching: find.byKey(
+        const ValueKey<String>('markdown-table-x-scrollview'),
+      ),
+    );
+    final tableScrollable = find.descendant(
+      of: tableView,
+      matching: find.byType(Scrollable),
+    );
+    final tablePosition = tester
+        .state<ScrollableState>(tableScrollable)
+        .position;
+    expect(tablePosition.axis, Axis.horizontal);
+    expect(tablePosition.maxScrollExtent, greaterThan(0));
+    await tester.drag(tableView, const Offset(-240, 0));
+    await tester.pumpAndSettle();
+    expect(tablePosition.pixels, greaterThan(0));
+
+    final codeScrollables = find.descendant(
+      of: codeScrollbar,
+      matching: find.byType(Scrollable),
+    );
+    final codePosition = tester
+        .state<ScrollableState>(codeScrollables)
+        .position;
+    expect(codePosition.axis, Axis.horizontal);
+    expect(codePosition.maxScrollExtent, greaterThan(0));
+    await tester.ensureVisible(codeScrollbar);
+    await tester.pumpAndSettle();
+    final codeView = find.descendant(
+      of: codeScrollbar,
+      matching: find.byType(SingleChildScrollView),
+    );
+    await tester.drag(codeView, const Offset(-240, 0));
+    await tester.pumpAndSettle();
+    expect(codePosition.pixels, greaterThan(0));
   });
 
   testWidgets('markdown preview visibly highlights search matches', (

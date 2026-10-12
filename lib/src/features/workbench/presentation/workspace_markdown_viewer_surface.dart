@@ -604,7 +604,40 @@ class _WorkspaceMarkdownViewerSurfaceState
                         linkColor: AleraTokens.info,
                         highlightColor: AleraTokens.accentSubtle,
                       ),
-                      child: GptMarkdown(section),
+                      child: GptMarkdown(
+                        section,
+                        styleSheet: const GptMarkdownStyleSheet(
+                          latex: LatexStyle(scrollBlockHorizontally: true),
+                        ),
+                        tableBuilder: (context, rows, textStyle, config) =>
+                            _MarkdownViewerTable(
+                              rows: rows,
+                              textStyle: textStyle,
+                              config: config,
+                              searchPatterns: null,
+                            ),
+                        codeBuilder: (context, name, code, closed) =>
+                            isMarkdownMermaidFence(name)
+                            ? _MarkdownViewerMermaidBlock(
+                                workspaceFiles: _workspaceFiles,
+                                source: code,
+                                diagramId:
+                                    '${reference.path}:${code.hashCode.toUnsigned(32)}',
+                              )
+                            : _MarkdownViewerCodeBlock(
+                                language: name,
+                                code: code,
+                                searchQuery: '',
+                              ),
+                        imageBuilder: (context, imageUrl, width, height) =>
+                            buildMarkdownViewerImage(
+                              workspacePath: widget.workspace.path,
+                              markdownPath: reference.path,
+                              imageUrl: imageUrl,
+                              width: width,
+                              height: height,
+                            ),
+                      ),
                     ),
                   ),
                 ),
