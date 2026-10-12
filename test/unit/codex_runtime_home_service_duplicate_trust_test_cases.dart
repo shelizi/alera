@@ -1,6 +1,86 @@
 part of 'codex_runtime_home_service_test.dart';
 
 void _registerCodexRuntimeHomeServiceDuplicateTrustTests() {
+  test('reconciles shared runtime and legacy Codex hooks together', () async {
+    final windowsService = CodexRuntimeHomeService(
+      homeDirectory: home.path,
+      applicationSupportDirectory: () async => support,
+      platform: .windows,
+      environment: <String, String>{'USERPROFILE': home.path},
+    );
+    final hooksPath = p.join(home.path, '.codex', 'hooks.json');
+    _writeJson(hooksPath, <String, Object?>{
+      'hooks': <String, Object?>{
+        'PreToolUse': <Object?>[
+          _userHook('echo user-hook'),
+          _userHook('call "C:\\old\\alera-runtime-agent-hook.cmd"'),
+          _userHook('if [ -f alera-codex-hook.cmd ]; then echo old; fi'),
+        ],
+      },
+    });
+    File(p.join(home.path, '.codex', 'config.toml')).writeAsStringSync(
+      _trustBlock(
+        key: '$hooksPath:pre_tool_use:1:0',
+        enabled: false,
+        trustedHash: 'sha256:wrong-installer',
+      ),
+    );
+    await windowsService.prepareForTerminalLaunch();
+    await windowsService.prepareForTerminalLaunch();
+    final commands = _commandsFor(_hooks(hooksPath), 'PreToolUse');
+    expect(commands, hasLength(2));
+    expect(commands.first, 'echo user-hook');
+    expect(commands.last, startsWith('cmd /d /s /c '));
+    expect(commands.join(), isNot(contains('alera-runtime-agent-hook.cmd')));
+    expect(commands.join(), isNot(contains('if [')));
+    final toml = File(p.join(home.path, '.codex', 'config.toml'));
+    final parsed = TomlDocument.parse(toml.readAsStringSync()).toMap();
+    expect((parsed['hooks'] as Map)['state'], hasLength(8));
+    expect(
+      (await windowsService.status()).state,
+      ManagedAgentHookInstallState.installed,
+    );
+    await windowsService.remove();
+    expect(_commandsFor(_hooks(hooksPath), 'PreToolUse'), <String>[
+      'echo user-hook',
+    ]);
+  });
+
+  test('Windows Codex commands execute with spaced batch paths', () async {
+    if (!Platform.isWindows) {
+      return;
+    }
+    final spacedHome = Directory(p.join(root.path, "user space (dev)'s"))
+      ..createSync();
+    final windowsService = CodexRuntimeHomeService(
+      homeDirectory: spacedHome.path,
+      applicationSupportDirectory: () async => support,
+      platform: .windows,
+      environment: <String, String>{'USERPROFILE': spacedHome.path},
+    );
+    final preparation = await windowsService.prepareForTerminalLaunch();
+    final script = File(
+      p.join(spacedHome.path, '.alera', 'agent-hooks', 'alera-codex-hook.cmd'),
+    );
+    script.writeAsStringSync(
+      '@echo off\r\necho %ALERA_AGENT_HOOK_EVENT%\r\nexit /b 0\r\n',
+    );
+    final hooks = _hooks(p.join(preparation.runtimeHomePath, 'hooks.json'));
+    for (final event in <String>['UserPromptSubmit', 'PreToolUse', 'Stop']) {
+      final probe = File(p.join(root.path, 'probe.cmd'));
+      probe.writeAsStringSync(
+        '@echo off\r\n${_commandsFor(hooks, event).single}\r\n',
+      );
+      final result = await Process.run('cmd.exe', <String>[
+        '/d',
+        '/c',
+        probe.path,
+      ]);
+      expect(result.exitCode, 0, reason: '${result.stderr}');
+      expect((result.stdout as String).trim(), event);
+    }
+  });
+
   for (final platform in ManagedAgentHookPlatform.values) {
     test('repairs duplicate semantic trust keys on $platform', () async {
       final localService = CodexRuntimeHomeService(

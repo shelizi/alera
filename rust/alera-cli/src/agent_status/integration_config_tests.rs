@@ -1,5 +1,9 @@
 use super::*;
 
+#[cfg(windows)]
+#[path = "integration_config_native_windows_tests.rs"]
+mod native_windows;
+
 #[test]
 fn removes_current_and_legacy_alera_definitions_only() {
     let definitions = vec![

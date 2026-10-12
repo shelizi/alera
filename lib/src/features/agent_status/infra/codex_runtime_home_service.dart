@@ -375,7 +375,12 @@ final class CodexRuntimeHomeService({
         'agent-hooks',
         scriptFileName,
       ),
-      managedScriptFileNames: <String>{scriptFileName},
+      managedScriptFileNames: <String>{
+        'alera-codex-hook.cmd',
+        'alera-codex-hook.sh',
+        'alera-runtime-agent-hook.cmd',
+        'alera-runtime-agent-hook.sh',
+      },
     );
   }
 }

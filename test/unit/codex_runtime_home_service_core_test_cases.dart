@@ -467,17 +467,17 @@ void _registerCodexRuntimeHomeServiceCoreTests() {
       runtimeHooks,
       'SessionStart',
     ).single;
-    expect(sessionStartCommand, contains("MSYS2_ARG_CONV_EXCL='*'"));
-    expect(sessionStartCommand, contains('cmd.exe /d /s /c call '));
+    expect(sessionStartCommand, startsWith('cmd /d /s /c '));
+    expect(sessionStartCommand, contains('set ALERA_AGENT_TYPE=codex&& '));
     expect(
       sessionStartCommand,
-      contains("ALERA_AGENT_HOOK_EVENT='SessionStart'"),
+      contains('set ALERA_AGENT_HOOK_EVENT=SessionStart&& call "'),
     );
-    expect(sessionStartCommand, isNot(contains('/c \'if exist "')));
-    expect(sessionStartCommand, isNot(startsWith('cmd /d /s /c')));
+    expect(sessionStartCommand, isNot(contains('if [')));
+    expect(sessionStartCommand, isNot(contains('MSYS2_ARG_CONV_EXCL')));
     final stopCommand = _commandsFor(runtimeHooks, 'Stop').single;
-    expect(stopCommand, contains("ALERA_AGENT_HOOK_EVENT='Stop'"));
-    expect(stopCommand, contains('cmd.exe /d /s /c call '));
+    expect(stopCommand, contains('set ALERA_AGENT_HOOK_EVENT=Stop&& call "'));
+    expect(stopCommand, startsWith('cmd /d /s /c '));
     expect(
       File(p.join(home.path, '.alera', 'agent-hooks', 'alera-codex-hook.cmd'))
           .readAsStringSync(),

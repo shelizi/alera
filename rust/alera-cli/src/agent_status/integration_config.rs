@@ -311,7 +311,7 @@ fn git_bash_windows_managed_command(script: &Path, agent: &str, event: &str) -> 
 #[cfg(windows)]
 fn native_windows_managed_command(script: &Path, agent: &str, event: &str) -> String {
     format!(
-        "cmd /d /s /c \"set ALERA_AGENT_TYPE={agent}&& set ALERA_AGENT_HOOK_EVENT={event}&& call \"\"{}\"\"\"",
+        "cmd /d /s /c \"set ALERA_AGENT_TYPE={agent}&& set ALERA_AGENT_HOOK_EVENT={event}&& call \"{}\"\"",
         script.display()
     )
 }
