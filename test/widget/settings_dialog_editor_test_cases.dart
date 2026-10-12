@@ -1,6 +1,25 @@
 part of 'settings_dialog_test.dart';
 
 void _registerSettingsDialogEditorTests() {
+  testWidgets('two-row tabs setting toggles and persists', (tester) async {
+    final container = await _pumpSettingsDialog(
+      tester,
+      initialSectionId: 'editor',
+    );
+    final row = find.byKey(const ValueKey<String>('editor-two-row-tabs-row'));
+    expect(row, findsOneWidget);
+    expect(
+      container.read(settingsControllerProvider).editor.twoRowTabs,
+      isFalse,
+    );
+    await tester.tap(find.descendant(of: row, matching: find.byType(Switch)));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(
+      container.read(settingsControllerProvider).editor.twoRowTabs,
+      isTrue,
+    );
+  });
+
   testWidgets('edits and resets editor settings', (tester) async {
     final container = await _pumpSettingsDialog(tester);
     await tester.tap(find.text('Editor').first);
@@ -25,6 +44,10 @@ void _registerSettingsDialogEditorTests() {
       EditorSettings.defaultAutosaveDelaySeconds,
     );
 
+    await tester.ensureVisible(
+      find.byKey(const ValueKey<String>('editor-autosave-row')),
+    );
+    await tester.pumpAndSettle();
     await tester.tap(
       find.descendant(
         of: find.byKey(const ValueKey<String>('editor-autosave-row')),
@@ -37,11 +60,17 @@ void _registerSettingsDialogEditorTests() {
       isTrue,
     );
 
+    await tester.ensureVisible(
+      find.byKey(const ValueKey<String>('editor-theme-search-field')),
+    );
+    await tester.pumpAndSettle();
     await tester.enterText(
       find.byKey(const ValueKey<String>('editor-theme-search-field')),
       'monokai',
     );
     await tester.pump();
+    await tester.ensureVisible(find.text(EditorSyntaxThemeNames.monokai));
+    await tester.pumpAndSettle();
     await tester.tap(find.text(EditorSyntaxThemeNames.monokai));
     await tester.pump(const Duration(milliseconds: 50));
 
@@ -65,6 +94,8 @@ void _registerSettingsDialogEditorTests() {
 
     expect(container.read(settingsControllerProvider).editor.tabSize, 2);
 
+    await tester.ensureVisible(find.text('Reset Editor'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Reset Editor'));
     await tester.pump(const Duration(milliseconds: 50));
 

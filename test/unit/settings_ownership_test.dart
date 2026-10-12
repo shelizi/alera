@@ -212,6 +212,7 @@ const _classifiedFieldPaths = <String>{
   'editor.autosaveEnabled',
   'editor.autosaveDelaySeconds',
   'editor.quickOpenExcludedDirectories',
+  'editor.twoRowTabs',
   'editor.externalEditor',
   'editor.codeOpenTarget',
   'editor.externalEditorExecutablePaths',

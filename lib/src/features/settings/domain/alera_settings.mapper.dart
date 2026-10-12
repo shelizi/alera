@@ -2501,6 +2501,13 @@ class EditorSettingsMapper extends ClassMapperBase<EditorSettings> {
     opt: true,
     def: EditorSettings.defaultQuickOpenExcludedDirectories,
   );
+  static bool _$twoRowTabs(EditorSettings v) => v.twoRowTabs;
+  static const Field<EditorSettings, bool> _f$twoRowTabs = Field(
+    'twoRowTabs',
+    _$twoRowTabs,
+    opt: true,
+    def: false,
+  );
   static ExternalEditorKind _$externalEditor(EditorSettings v) =>
       v.externalEditor;
   static const Field<EditorSettings, ExternalEditorKind> _f$externalEditor =
@@ -2564,6 +2571,7 @@ class EditorSettingsMapper extends ClassMapperBase<EditorSettings> {
     #autosaveEnabled: _f$autosaveEnabled,
     #autosaveDelaySeconds: _f$autosaveDelaySeconds,
     #quickOpenExcludedDirectories: _f$quickOpenExcludedDirectories,
+    #twoRowTabs: _f$twoRowTabs,
     #externalEditor: _f$externalEditor,
     #codeOpenTarget: _f$codeOpenTarget,
     #externalEditorExecutablePaths: _f$externalEditorExecutablePaths,
@@ -2581,6 +2589,7 @@ class EditorSettingsMapper extends ClassMapperBase<EditorSettings> {
       autosaveEnabled: data.dec(_f$autosaveEnabled),
       autosaveDelaySeconds: data.dec(_f$autosaveDelaySeconds),
       quickOpenExcludedDirectories: data.dec(_f$quickOpenExcludedDirectories),
+      twoRowTabs: data.dec(_f$twoRowTabs),
       externalEditor: data.dec(_f$externalEditor),
       codeOpenTarget: data.dec(_f$codeOpenTarget),
       externalEditorExecutablePaths: data.dec(_f$externalEditorExecutablePaths),
@@ -2670,6 +2679,7 @@ abstract class EditorSettingsCopyWith<$R, $In extends EditorSettings, $Out>
     bool? autosaveEnabled,
     int? autosaveDelaySeconds,
     List<String>? quickOpenExcludedDirectories,
+    bool? twoRowTabs,
     ExternalEditorKind? externalEditor,
     CodeOpenTarget? codeOpenTarget,
     Map<String, String>? externalEditorExecutablePaths,
@@ -2720,6 +2730,7 @@ class _EditorSettingsCopyWithImpl<$R, $Out>
     bool? autosaveEnabled,
     int? autosaveDelaySeconds,
     List<String>? quickOpenExcludedDirectories,
+    bool? twoRowTabs,
     ExternalEditorKind? externalEditor,
     CodeOpenTarget? codeOpenTarget,
     Map<String, String>? externalEditorExecutablePaths,
@@ -2735,6 +2746,7 @@ class _EditorSettingsCopyWithImpl<$R, $Out>
         #autosaveDelaySeconds: autosaveDelaySeconds,
       if (quickOpenExcludedDirectories != null)
         #quickOpenExcludedDirectories: quickOpenExcludedDirectories,
+      if (twoRowTabs != null) #twoRowTabs: twoRowTabs,
       if (externalEditor != null) #externalEditor: externalEditor,
       if (codeOpenTarget != null) #codeOpenTarget: codeOpenTarget,
       if (externalEditorExecutablePaths != null)
@@ -2760,6 +2772,7 @@ class _EditorSettingsCopyWithImpl<$R, $Out>
       #quickOpenExcludedDirectories,
       or: $value.quickOpenExcludedDirectories,
     ),
+    twoRowTabs: data.get(#twoRowTabs, or: $value.twoRowTabs),
     externalEditor: data.get(#externalEditor, or: $value.externalEditor),
     codeOpenTarget: data.get(#codeOpenTarget, or: $value.codeOpenTarget),
     externalEditorExecutablePaths: data.get(

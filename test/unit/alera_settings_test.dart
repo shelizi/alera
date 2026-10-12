@@ -82,6 +82,7 @@ void main() {
       const editor = EditorSettings.defaults;
 
       expect(editor.tabSize, 4);
+      expect(editor.twoRowTabs, isFalse);
       expect(editor.themeName, EditorSyntaxThemeNames.alera);
       expect(editor.autosaveEnabled, isFalse);
       expect(editor.autosaveDelaySeconds, 1);
@@ -124,6 +125,7 @@ void main() {
       });
 
       expect(editor.tabSize, 2);
+      expect(editor.twoRowTabs, isFalse);
       expect(editor.themeName, EditorSyntaxThemeNames.monokai);
       expect(editor.autosaveEnabled, isFalse);
       expect(editor.autosaveDelaySeconds, 1);
@@ -139,6 +141,12 @@ void main() {
         ExternalEditorWorkspaceMode.newWindow,
       );
       expect(editor.autoOpenNewWorkspacesExternally, isFalse);
+    });
+
+    test('two-row tab preference is persisted', () {
+      final editor = EditorSettings.defaults.copyWith(twoRowTabs: true);
+      final restored = EditorSettings.fromJson(editor.toMap());
+      expect(restored.twoRowTabs, isTrue);
     });
 
     test('legacy Zed-only editor settings migrate to the generic shape', () {

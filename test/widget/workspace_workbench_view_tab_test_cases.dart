@@ -1,6 +1,48 @@
 part of 'workspace_workbench_view_test.dart';
 
 void _registerWorkspaceWorkbenchViewTabTests() {
+  testWidgets('two-row tabs show pinned above regular', (tester) async {
+    final tabs = <WorkspaceTabRecord>[
+      _tab('regular', title: 'Regular'),
+      _tab('pinned', title: 'Pinned', pinned: true),
+    ];
+    await _pumpWorkbenchView(
+      tester,
+      tabs: tabs,
+      layout: _singleTabStripLayout(tabs, activeTabId: 'regular'),
+      terminalRuntime: terminalRuntime,
+      createdTabs: createdTabs,
+      selectedTabs: selectedTabs,
+      closedTabs: closedTabs,
+      closedTabGroups: closedTabGroups,
+      renamedTabs: renamedTabs,
+      movedTabs: movedTabs,
+      splitGroups: splitGroups,
+      mergedGroups: mergedGroups,
+      updatedRatios: updatedRatios,
+      twoRowTabs: true,
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey<String>('workspace-pinned-tab-row:group-a')),
+      findsOneWidget,
+    );
+    expect(
+      tester
+          .getTopLeft(
+            find.byKey(const ValueKey<String>('workspace-tab-chip:pinned')),
+          )
+          .dy,
+      lessThan(
+        tester
+            .getTopLeft(
+              find.byKey(const ValueKey<String>('workspace-tab-chip:regular')),
+            )
+            .dy,
+      ),
+    );
+  });
+
   for (final kind in [WorkspaceTabKind.terminal]) {
     for (final mode in ['unsupported', 'new', 'generated', 'generating']) {
       testWidgets('title action respects $kind capability and $mode state', (

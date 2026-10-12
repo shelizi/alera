@@ -33,6 +33,21 @@ class const EditorSettingsPane({
       crossAxisAlignment: .stretch,
       children: <Widget>[
         AleraSettingsGroup(
+          title: 'Tabs',
+          description: 'Choose how pinned and regular workspace tabs appear.',
+          children: <Widget>[
+            SettingsSwitchRow(
+              key: const ValueKey<String>('editor-two-row-tabs-row'),
+              title: 'Two-row tabs',
+              description: 'Pinned tabs appear on the first row; regular tabs appear below.',
+              value: settings.twoRowTabs,
+              onChanged: (value) =>
+                  onChanged((settings) => settings.copyWith(twoRowTabs: value)),
+            ),
+          ],
+        ),
+        const SizedBox(height: AleraTokens.space16),
+        AleraSettingsGroup(
           title: 'Appearance',
           description: 'Syntax highlighting defaults for editor tabs.',
           children: <Widget>[

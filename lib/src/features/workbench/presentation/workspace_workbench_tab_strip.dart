@@ -330,6 +330,11 @@ class _WorkspaceTabStripState extends ConsumerState<_WorkspaceTabStrip> {
   @override
   Widget build(BuildContext context) {
     WidgetsBinding.instance.addPostFrameCallback((_) => _syncOverflow());
+    final twoRowTabs = ref.watch(
+      settingsControllerProvider.select(
+        (settings) => settings.editor.twoRowTabs,
+      ),
+    );
     final acknowledgedCompletions = ref.watch(
       workbenchTabCompletionAcknowledgementsControllerProvider,
     );
@@ -404,95 +409,135 @@ class _WorkspaceTabStripState extends ConsumerState<_WorkspaceTabStrip> {
         onLeave: _handleGapLeave,
         onDropGap: _handleGapDrop,
         child: SizedBox(
-          height: AleraTokens.sidebarHeaderHeight,
-          child: Row(
+          height:
+              AleraTokens.sidebarHeaderHeight *
+              (twoRowTabs && pinnedTabs.isNotEmpty ? 2 : 1),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
             children: <Widget>[
-              if (pinnedTabs.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(
-                    left: AleraTokens.space8,
-                    top: AleraTokens.space6,
-                    bottom: AleraTokens.space6,
+              if (twoRowTabs && pinnedTabs.isNotEmpty)
+                SizedBox(
+                  key: ValueKey<String>(
+                    'workspace-pinned-tab-row:${widget.groupId}',
                   ),
-                  child: Row(
-                    mainAxisSize: .min,
-                    children: <Widget>[
-                      for (final tab in pinnedTabs) buildTabEntry(tab),
+                  height: AleraTokens.sidebarHeaderHeight,
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: AleraTokens.space8,
+                        vertical: AleraTokens.space6,
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: <Widget>[
+                          for (final tab in pinnedTabs) buildTabEntry(tab),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              SizedBox(
+                height: AleraTokens.sidebarHeaderHeight,
+                child: Row(
+                  children: <Widget>[
+                    if (!twoRowTabs && pinnedTabs.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(
+                          left: AleraTokens.space8,
+                          top: AleraTokens.space6,
+                          bottom: AleraTokens.space6,
+                        ),
+                        child: Row(
+                          mainAxisSize: .min,
+                          children: <Widget>[
+                            for (final tab in pinnedTabs) buildTabEntry(tab),
+                          ],
+                        ),
+                      ),
+                    Expanded(
+                      child: Listener(
+                        key: _scrollViewportKey,
+                        behavior: HitTestBehavior.opaque,
+                        onPointerSignal: _handlePointerSignal,
+                        child: SingleChildScrollView(
+                          key: ValueKey<String>(
+                            'workspace-tab-scroll:${widget.groupId}',
+                          ),
+                          controller: _scrollController,
+                          scrollDirection: .horizontal,
+                          padding: EdgeInsets.only(
+                            left: pinnedTabs.isEmpty
+                                ? AleraTokens.space8
+                                : AleraTokens.space4,
+                            right: AleraTokens.space8,
+                            top: AleraTokens.space6,
+                            bottom: AleraTokens.space6,
+                          ),
+                          child: Row(
+                            mainAxisSize: .min,
+                            children: <Widget>[
+                              for (final tab in scrollingTabs)
+                                buildTabEntry(tab),
+                              if (!_hasOverflow) addButton,
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                    if (_hasOverflow) ...[
+                      AleraIconButton(
+                        key: ValueKey<String>(
+                          'workspace-tab-scroll-left:${widget.groupId}',
+                        ),
+                        tooltip: 'Scroll tabs left',
+                        onPressed: _canScrollLeft
+                            ? () => _scrollTabs(-1)
+                            : null,
+                        icon: AleraIcons.chevronLeft,
+                        iconSize: 14,
+                        minSize: 24,
+                        iconColor: _canScrollLeft
+                            ? AleraTokens.foregroundMuted
+                            : AleraTokens.foregroundFaint,
+                        hoverColor: AleraTokens.surfaceElevated,
+                        borderRadius: AleraTokens.radiusSm,
+                      ),
+                      AleraIconButton(
+                        key: ValueKey<String>(
+                          'workspace-tab-scroll-right:${widget.groupId}',
+                        ),
+                        tooltip: 'Scroll tabs right',
+                        onPressed: _canScrollRight
+                            ? () => _scrollTabs(1)
+                            : null,
+                        icon: AleraIcons.chevronRight,
+                        iconSize: 14,
+                        minSize: 24,
+                        iconColor: _canScrollRight
+                            ? AleraTokens.foregroundMuted
+                            : AleraTokens.foregroundFaint,
+                        hoverColor: AleraTokens.surfaceElevated,
+                        borderRadius: AleraTokens.radiusSm,
+                      ),
                     ],
-                  ),
-                ),
-              Expanded(
-                child: Listener(
-                  key: _scrollViewportKey,
-                  behavior: HitTestBehavior.opaque,
-                  onPointerSignal: _handlePointerSignal,
-                  child: SingleChildScrollView(
-                    key: ValueKey<String>(
-                      'workspace-tab-scroll:${widget.groupId}',
+                    if (_hasOverflow)
+                      Padding(
+                        padding: const EdgeInsets.only(
+                          right: AleraTokens.space8,
+                        ),
+                        child: addButton,
+                      ),
+                    _PaneMenuButton(
+                      canCloseSplit: widget.canCloseSplit,
+                      onSplitGroup: widget.onSplitGroup,
+                      onMergeGroup: widget.onMergeGroup,
                     ),
-                    controller: _scrollController,
-                    scrollDirection: .horizontal,
-                    padding: EdgeInsets.only(
-                      left: pinnedTabs.isEmpty
-                          ? AleraTokens.space8
-                          : AleraTokens.space4,
-                      right: AleraTokens.space8,
-                      top: AleraTokens.space6,
-                      bottom: AleraTokens.space6,
-                    ),
-                    child: Row(
-                      mainAxisSize: .min,
-                      children: <Widget>[
-                        for (final tab in scrollingTabs) buildTabEntry(tab),
-                        if (!_hasOverflow) addButton,
-                      ],
-                    ),
-                  ),
+                    const SizedBox(width: AleraTokens.space4),
+                  ],
                 ),
               ),
-              if (_hasOverflow) ...[
-                AleraIconButton(
-                  key: ValueKey<String>(
-                    'workspace-tab-scroll-left:${widget.groupId}',
-                  ),
-                  tooltip: 'Scroll tabs left',
-                  onPressed: _canScrollLeft ? () => _scrollTabs(-1) : null,
-                  icon: AleraIcons.chevronLeft,
-                  iconSize: 14,
-                  minSize: 24,
-                  iconColor: _canScrollLeft
-                      ? AleraTokens.foregroundMuted
-                      : AleraTokens.foregroundFaint,
-                  hoverColor: AleraTokens.surfaceElevated,
-                  borderRadius: AleraTokens.radiusSm,
-                ),
-                AleraIconButton(
-                  key: ValueKey<String>(
-                    'workspace-tab-scroll-right:${widget.groupId}',
-                  ),
-                  tooltip: 'Scroll tabs right',
-                  onPressed: _canScrollRight ? () => _scrollTabs(1) : null,
-                  icon: AleraIcons.chevronRight,
-                  iconSize: 14,
-                  minSize: 24,
-                  iconColor: _canScrollRight
-                      ? AleraTokens.foregroundMuted
-                      : AleraTokens.foregroundFaint,
-                  hoverColor: AleraTokens.surfaceElevated,
-                  borderRadius: AleraTokens.radiusSm,
-                ),
-              ],
-              if (_hasOverflow)
-                Padding(
-                  padding: const EdgeInsets.only(right: AleraTokens.space8),
-                  child: addButton,
-                ),
-              _PaneMenuButton(
-                canCloseSplit: widget.canCloseSplit,
-                onSplitGroup: widget.onSplitGroup,
-                onMergeGroup: widget.onMergeGroup,
-              ),
-              const SizedBox(width: AleraTokens.space4),
             ],
           ),
         ),

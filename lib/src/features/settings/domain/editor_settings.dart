@@ -37,7 +37,7 @@ class const _LegacyEditorSettingsHook() extends MappingHook {
 /// Mixed ownership: `tabSize`, `themeName`, `autosaveEnabled`,
 /// `autosaveDelaySeconds`, and `quickOpenExcludedDirectories` are
 /// portable-cloud configuration; the external editor and code-open fields are
-/// local-only UI prefs. `languageIntelligence` is also local-only because it
+/// local-only UI prefs, as is `twoRowTabs`. `languageIntelligence` is local-only because it
 /// may contain per-device executable paths.
 @MappableClass(hook: _LegacyEditorSettingsHook())
 class const EditorSettings({
@@ -46,6 +46,7 @@ class const EditorSettings({
   this.autosaveEnabled = false,
   this.autosaveDelaySeconds = defaultAutosaveDelaySeconds,
   this.quickOpenExcludedDirectories = defaultQuickOpenExcludedDirectories,
+  this.twoRowTabs = false,
   this.externalEditor = ExternalEditorKind.zed,
   this.codeOpenTarget = CodeOpenTarget.alera,
   this.externalEditorExecutablePaths = const <String, String>{},
@@ -98,6 +99,9 @@ class const EditorSettings({
   /// Directory names that Quick Open never indexes, even when Git-ignored
   /// files are included. Matching is case-insensitive in the native indexer.
   final List<String> quickOpenExcludedDirectories;
+
+  /// Show pinned workspace tabs on a dedicated upper row.
+  final bool twoRowTabs;
 
   final ExternalEditorKind externalEditor;
   final CodeOpenTarget codeOpenTarget;

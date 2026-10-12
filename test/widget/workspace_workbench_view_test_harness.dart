@@ -27,6 +27,7 @@ Future<void> _pumpWorkbenchView(
   List<({AgentType agentType, String? targetGroupId})>? createdAgentTabs,
   FakeGitBackend? gitBackend,
   WorkspaceFolderOpener? workspaceFolderOpener,
+  bool twoRowTabs = false,
 }) async {
   final openExternalTerminal = externalTerminalTabs == null
       ? null
@@ -36,6 +37,11 @@ Future<void> _pumpWorkbenchView(
   await tester.pumpWidget(
     ProviderScope(
       overrides: [
+        settingsControllerProvider.overrideWithValue(
+          AleraSettings.defaults.copyWith(
+            editor: EditorSettings.defaults.copyWith(twoRowTabs: twoRowTabs),
+          ),
+        ),
         agentTitleAvailableProvider.overrideWith(
           (ref) async => agentTitlesAvailable,
         ),
@@ -80,7 +86,7 @@ Future<void> _pumpWorkbenchView(
                       );
                     },
                 onOpenMarkdownViewerTab:
-                    ({required relativePath, targetGroupId}) async {
+                    ({required relativePath, targetGroupId, fragment}) async {
                       selectedTabs.add(
                         _SelectedTabAction(
                           targetGroupId ?? 'group-a',

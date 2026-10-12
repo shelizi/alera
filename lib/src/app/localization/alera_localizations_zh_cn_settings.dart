@@ -221,6 +221,9 @@ const Map<String, String> _simplifiedChineseSettings = <String, String>{
   'Indentation': '缩进',
   'Autosave': '自动保存',
   'Tab Size': 'Tab 宽度',
+  'Two-row tabs': '双层标签页模式',
+  'Choose how pinned and regular workspace tabs appear.': '设置固定与普通工作区标签页的排列方式。',
+  'Pinned tabs appear on the first row; regular tabs appear below.': '第一层显示固定标签页，第二层显示普通标签页。',
   'Control dependency and build directories that Quick Open never indexes.':
       '管理快速打开永远不创建索引的依赖库与构建目录。',
   'Excluded Directory Names': '排除的目录名称',
