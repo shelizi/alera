@@ -37,16 +37,19 @@ extension _WorkspaceExplorerRefresh on _WorkspaceExplorerState {
     await _bootstrapExplorer();
   }
 
-  Future<void> _restoreWorkspaceUiState() async {
-    final snapshot = _readWorkspaceUiState();
-    if (snapshot == null) {
+  Future<void> _restoreWorkspaceUiState({
+    _WorkspaceExplorerUiState? snapshot,
+  }) async {
+    final savedState = snapshot ?? _readWorkspaceUiState();
+    if (savedState == null) {
       _expandedDirectoryPaths.clear();
       _selectedRelativePath = null;
       return;
     }
 
-    final loadedDirectories = snapshot.loadedDirectories.toList(growable: false)
-      ..sort(_compareDirectoryDepth);
+    final loadedDirectories = savedState.loadedDirectories.toList(
+      growable: false,
+    )..sort(_compareDirectoryDepth);
     for (final relativePath in loadedDirectories) {
       if (!mounted || !_isDirectoryEntry(_entryByPath[relativePath])) {
         continue;
@@ -59,8 +62,15 @@ extension _WorkspaceExplorerRefresh on _WorkspaceExplorerState {
 
     _expandedDirectoryPaths
       ..clear()
-      ..addAll(snapshot.expandedDirectories);
-    _selectedRelativePath = snapshot.selectedRelativePath;
+      ..addAll(
+        savedState.expandedDirectories.where(
+          (path) => _isDirectoryEntry(_entryByPath[path]),
+        ),
+      );
+    _selectedRelativePath =
+        _entryByPath.containsKey(savedState.selectedRelativePath)
+        ? savedState.selectedRelativePath
+        : null;
     _rebuildTree();
 
     for (final entry in _entryByNodeId.entries) {
@@ -196,10 +206,34 @@ extension _WorkspaceExplorerRefresh on _WorkspaceExplorerState {
   }
 
   void _scheduleWatchedRefresh(native.WorkspaceExplorerWatchBatch batch) {
-    _workspaceFiles.scheduleQuickOpenRefresh(
-      workspacePath: widget.workspace.path,
-    );
+    final excludedDirectories = <String>{
+      '.git',
+      '.hg',
+      '.svn',
+      for (final name
+          in ref
+              .read(settingsControllerProvider)
+              .editor
+              .quickOpenExcludedDirectories)
+        name.toLowerCase(),
+    };
+    final searchRelevant =
+        batch.changedRelativePaths.isEmpty ||
+        batch.changedRelativePaths.any(
+          (path) => !path
+              .split('/')
+              .any((part) => excludedDirectories.contains(part.toLowerCase())),
+        );
+    if (searchRelevant) {
+      _workspaceFiles.scheduleQuickOpenRefresh(
+        workspacePath: widget.workspace.path,
+        debounce: const Duration(milliseconds: 120),
+      );
+    }
     _pendingWatchedDirectories.addAll(batch.directoryRelativePaths);
+    if (_pendingWatchedDirectories.isEmpty) {
+      return;
+    }
     if (_watchRefreshInFlight) {
       return;
     }

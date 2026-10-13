@@ -363,6 +363,7 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
   }
 
   Future<void> _reloadRoot() async {
+    final snapshot = _captureWorkspaceUiState();
     setState(() => _loading = true);
     try {
       _resetExplorerProjection();
@@ -372,9 +373,11 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
       if (!mounted) {
         return;
       }
-      _rebuildTree();
+      await _restoreWorkspaceUiState(snapshot: snapshot);
     } catch (error) {
       if (mounted) {
+        _expandedDirectoryPaths.clear();
+        _selectedRelativePath = null;
         _rebuildTree(tryPreserveState: false);
       }
       _showError(error);
@@ -578,6 +581,15 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
   Object _workspaceUiStateIdentifier(Workspace workspace) =>
       'workspace-explorer-ui:${workspace.id}:${workspace.path}';
 
+  _WorkspaceExplorerUiState _captureWorkspaceUiState() =>
+      _WorkspaceExplorerUiState(
+        loadedDirectories: _childrenByDirectory.keys
+            .where((path) => path.isNotEmpty)
+            .toSet(),
+        expandedDirectories: Set<String>.from(_expandedDirectoryPaths),
+        selectedRelativePath: _selectedRelativePath,
+      );
+
   void _saveWorkspaceUiState(Workspace workspace) {
     final bucket = _pageStorageBucket;
     if (bucket == null) {
@@ -585,13 +597,7 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
     }
     bucket.writeState(
       context,
-      _WorkspaceExplorerUiState(
-        loadedDirectories: _childrenByDirectory.keys
-            .where((path) => path.isNotEmpty)
-            .toSet(),
-        expandedDirectories: Set<String>.from(_expandedDirectoryPaths),
-        selectedRelativePath: _selectedRelativePath,
-      ),
+      _captureWorkspaceUiState(),
       identifier: _workspaceUiStateIdentifier(workspace),
     );
   }

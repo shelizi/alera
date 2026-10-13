@@ -60,6 +60,27 @@ void _registerWorkspaceExplorerWatchTests() {
     );
   });
 
+  testWidgets(
+    'collapsed deep file changes reindex search without tree reload',
+    (tester) async {
+      final service = _FakeWorkspaceFileService()
+        ..childrenByDirectory[''] = <native.WorkspaceFileEntry>[
+          _directory('src', hasChildrenHint: true),
+        ];
+      await _pumpExplorer(tester, service);
+      final baseline = service.listChildrenCalls.length;
+
+      service.emitWatchBatch(
+        const <String>[],
+        changedRelativePaths: const <String>['src/deep/new.dart'],
+      );
+      await tester.pumpAndSettle();
+
+      expect(service.quickOpenRefreshRequests, isNotEmpty);
+      expect(service.listChildrenCalls, hasLength(baseline));
+    },
+  );
+
   testWidgets('watched directory updates are skipped when nothing changed', (
     tester,
   ) async {

@@ -152,7 +152,7 @@ class WorkspaceFileService {
 
   void scheduleQuickOpenRefresh({
     required String workspacePath,
-    Duration debounce = const Duration(milliseconds: 500),
+    Duration debounce = const Duration(milliseconds: 120),
   }) {
     _quickOpenRefreshTimers.remove(workspacePath)?.cancel();
     _quickOpenRefreshTimers[workspacePath] = Timer(debounce, () {
@@ -167,13 +167,13 @@ class WorkspaceFileService {
   void scheduleQuickOpenFilterRefresh({required String workspacePath}) {
     final now = DateTime.now();
     final last = _lastOnDemandQuickOpenRefresh[workspacePath];
-    if (last != null && now.difference(last) < const Duration(seconds: 15)) {
+    if (last != null && now.difference(last) < const Duration(seconds: 3)) {
       return;
     }
     _lastOnDemandQuickOpenRefresh[workspacePath] = now;
     scheduleQuickOpenRefresh(
       workspacePath: workspacePath,
-      debounce: const Duration(milliseconds: 350),
+      debounce: const Duration(milliseconds: 200),
     );
   }
 
@@ -236,15 +236,28 @@ class WorkspaceFileService {
           entry
             ..session = session
             ..pendingSession = null;
+          _schedulePendingQuickOpenRefresh(entry);
         }
         return session;
       },
       onError: (Object error, StackTrace stackTrace) {
         if (identical(entry.pendingSession, next)) {
           entry.pendingSession = null;
+          _schedulePendingQuickOpenRefresh(entry);
         }
         Error.throwWithStackTrace(error, stackTrace);
       },
+    );
+  }
+
+  void _schedulePendingQuickOpenRefresh(_WorkspaceQuickOpenCacheEntry entry) {
+    if (!entry.refreshPending || _quickOpenRefreshEvents.isClosed) {
+      return;
+    }
+    entry.refreshPending = false;
+    scheduleQuickOpenRefresh(
+      workspacePath: entry.workspacePath,
+      debounce: const Duration(milliseconds: 120),
     );
   }
 
@@ -255,6 +268,7 @@ class WorkspaceFileService {
     var refreshed = false;
     for (final entry in entries) {
       if (entry.refreshing || entry.pendingSession != null) {
+        entry.refreshPending = true;
         continue;
       }
       entry.refreshing = true;
@@ -291,6 +305,7 @@ class WorkspaceFileService {
         // Keep serving the previous index if a background refresh fails.
       } finally {
         entry.refreshing = false;
+        _schedulePendingQuickOpenRefresh(entry);
       }
     }
     if (refreshed && !_quickOpenRefreshEvents.isClosed) {
@@ -728,6 +743,7 @@ class _WorkspaceQuickOpenCacheEntry {
   native.WorkspaceQuickOpenSession? session;
   Future<native.WorkspaceQuickOpenSession>? pendingSession;
   bool refreshing = false;
+  bool refreshPending = false;
   final Map<String, List<native.WorkspaceQuickOpenMatch>> matches =
       <String, List<native.WorkspaceQuickOpenMatch>>{};
   final Map<String, _WorkspaceQuickOpenSearchRequest> searchRequests =

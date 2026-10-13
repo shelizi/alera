@@ -111,6 +111,33 @@ void _registerWorkspaceExplorerFileTreeTests() {
     },
   );
 
+  testWidgets(
+    'refresh keeps expanded folders open and updates their contents',
+    (tester) async {
+      final service = _FakeWorkspaceFileService()
+        ..childrenByDirectory[''] = <native.WorkspaceFileEntry>[
+          _directory('src', hasChildrenHint: true),
+        ]
+        ..childrenByDirectory['src'] = <native.WorkspaceFileEntry>[
+          _file('src/old.dart'),
+        ];
+
+      await _pumpExplorer(tester, service);
+      await tester.tap(find.text('src'));
+      await tester.pumpAndSettle();
+      expect(find.text('old.dart'), findsOneWidget);
+
+      service.childrenByDirectory['src'] = <native.WorkspaceFileEntry>[
+        _file('src/new.dart'),
+      ];
+      await tester.tap(find.byTooltip('Refresh'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('old.dart'), findsNothing);
+      expect(find.text('new.dart'), findsOneWidget);
+    },
+  );
+
   testWidgets('native watcher refreshes loaded directories after changes', (
     tester,
   ) async {

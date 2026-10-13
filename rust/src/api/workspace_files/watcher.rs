@@ -23,6 +23,7 @@ static WATCHERS: OnceLock<Mutex<HashMap<String, WatcherSession>>> = OnceLock::ne
 struct WatcherSession {
     root: PathBuf,
     watcher: notify::RecommendedWatcher,
+    recursive_root: bool,
     watched_paths: Arc<Mutex<HashMap<String, PathBuf>>>,
     sink: Arc<Mutex<Option<StreamSink<WorkspaceExplorerWatchBatch>>>>,
     shutdown_tx: mpsc::Sender<()>,
@@ -45,12 +46,20 @@ pub(super) fn start_workspace_explorer_watcher(
     let id = NEXT_WATCHER_ID.fetch_add(1, Ordering::Relaxed).to_string();
     let (event_tx, event_rx) = mpsc::channel::<notify::Result<notify::Event>>();
     let (shutdown_tx, shutdown_rx) = mpsc::channel::<()>();
-    let watched_paths = Arc::new(Mutex::new(HashMap::<String, PathBuf>::new()));
+    let watched_paths = Arc::new(Mutex::new(HashMap::from([(String::new(), root.clone())])));
     let sink = Arc::new(Mutex::new(None));
-    let watcher = notify::recommended_watcher(move |result| {
+    let mut watcher = notify::recommended_watcher(move |result| {
         let _ = event_tx.send(result);
     })
     .map_err(notify_error)?;
+    // A recursive root watch keeps searches current even in collapsed folders.
+    // Fall back to the loaded-directory watches when the OS watch limit is hit.
+    let recursive_root = watcher.watch(&root, RecursiveMode::Recursive).is_ok();
+    if !recursive_root {
+        watcher
+            .watch(&root, RecursiveMode::NonRecursive)
+            .map_err(notify_error)?;
+    }
     let thread_root = root.clone();
     let thread_watched_paths = watched_paths.clone();
     let thread_sink = sink.clone();
@@ -70,6 +79,7 @@ pub(super) fn start_workspace_explorer_watcher(
     let session = WatcherSession {
         root,
         watcher,
+        recursive_root,
         watched_paths,
         sink,
         shutdown_tx,
@@ -95,7 +105,7 @@ pub(super) fn update_workspace_explorer_watcher(
             "workspace explorer watcher",
         )
     })?;
-    let mut next_paths = HashMap::<String, PathBuf>::new();
+    let mut next_paths = HashMap::from([(String::new(), session.root.clone())]);
     for relative_path in watched_relative_paths {
         let relative_path = normalize_relative_path(&relative_path);
         match resolve_existing(&session.root, &relative_path) {
@@ -117,17 +127,20 @@ pub(super) fn update_workspace_explorer_watcher(
         .map_err(|_| WorkspaceFileError::new(WorkspaceFileErrorKind::Io, "watcher lock poisoned"))?
         .clone();
 
-    for (relative_path, absolute_path) in &current_paths {
-        if next_paths.get(relative_path) != Some(absolute_path) {
-            let _ = session.watcher.unwatch(absolute_path);
+    if !session.recursive_root {
+        for (relative_path, absolute_path) in &current_paths {
+            if !relative_path.is_empty() && next_paths.get(relative_path) != Some(absolute_path) {
+                let _ = session.watcher.unwatch(absolute_path);
+            }
         }
-    }
-    for (relative_path, absolute_path) in &next_paths {
-        if current_paths.get(relative_path) != Some(absolute_path) {
-            session
-                .watcher
-                .watch(absolute_path, RecursiveMode::NonRecursive)
-                .map_err(notify_error)?;
+        for (relative_path, absolute_path) in &next_paths {
+            if !relative_path.is_empty() && current_paths.get(relative_path) != Some(absolute_path)
+            {
+                session
+                    .watcher
+                    .watch(absolute_path, RecursiveMode::NonRecursive)
+                    .map_err(notify_error)?;
+            }
         }
     }
     *session.watched_paths.lock().map_err(|_| {
@@ -234,7 +247,7 @@ fn build_batch(
             }
         }
     }
-    if directory_relative_paths.is_empty() {
+    if directory_relative_paths.is_empty() && changed_relative_paths.is_empty() {
         return None;
     }
     let mut directory_relative_paths = directory_relative_paths.into_iter().collect::<Vec<_>>();
@@ -255,10 +268,8 @@ fn affected_watched_directory(
     watched_paths
         .iter()
         .filter_map(|(relative_path, absolute_path)| {
-            (event_path == absolute_path
-                || event_path.parent() == Some(absolute_path.as_path())
-                || event_path.starts_with(absolute_path))
-            .then_some((relative_path, absolute_path))
+            (event_path == absolute_path || event_path.parent() == Some(absolute_path.as_path()))
+                .then_some((relative_path, absolute_path))
         })
         .max_by_key(|(_, absolute_path)| absolute_path.components().count())
         .map(|(relative_path, _)| relative_path.clone())
@@ -305,6 +316,23 @@ fn normalize_relative_path(relative_path: &str) -> String {
 mod tests {
     use super::*;
     use notify::{Event, EventKind};
+
+    #[test]
+    fn recursive_event_from_unloaded_subfolder_updates_search_only() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let watched_paths = Arc::new(Mutex::new(HashMap::from([(
+            String::new(),
+            workspace.path().to_path_buf(),
+        )])));
+        let event = Event::new(EventKind::Create(notify::event::CreateKind::File))
+            .add_path(workspace.path().join("src/deep/new.dart"));
+
+        let batch = build_batch(workspace.path(), &watched_paths, vec![event], 0)
+            .expect("search index refresh for collapsed subfolder");
+
+        assert!(batch.directory_relative_paths.is_empty());
+        assert_eq!(batch.changed_relative_paths, vec!["src/deep/new.dart"]);
+    }
 
     #[test]
     fn explicitly_watched_ignored_named_directory_emits_refresh() {
