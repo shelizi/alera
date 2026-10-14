@@ -48,10 +48,12 @@ mixin _WorkbenchControllerProjects
     required Workspace workspace,
     bool deleteBranch = true,
     String? activeWorkspaceId,
+    bool allowExternalWorktreeRemoval = false,
   }) => _catalogOwner.deleteWorkspace(
     project: project,
     workspace: workspace,
     deleteBranch: deleteBranch,
+    allowExternalWorktreeRemoval: allowExternalWorktreeRemoval,
     activeWorkspaceId: activeWorkspaceId,
   );
 

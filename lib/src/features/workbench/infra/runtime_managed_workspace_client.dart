@@ -93,11 +93,13 @@ class RuntimeManagedWorkspaceClient(
     required Workspace workspace,
     bool? deleteBranch,
     String? activeWorkspaceId,
+    bool allowExternalWorktreeRemoval = false,
   }) async {
     await _ensureReady();
     final request = <String, Object?>{
       'id': workspace.id,
       'closeSessions': true,
+      if (allowExternalWorktreeRemoval) 'allowExternalWorktreeRemoval': true,
     };
     if (activeWorkspaceId != null) {
       request['activeWorkspaceId'] = activeWorkspaceId;

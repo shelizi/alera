@@ -131,6 +131,58 @@ void _registerWorkspaceExplorerActionTests() {
     expect(service.clearedClipboardSequences, <int>[cutSequence]);
   });
 
+  testWidgets('Ctrl multi-select and Ctrl+C copies selected files', (
+    tester,
+  ) async {
+    final service = _FakeWorkspaceFileService()
+      ..childrenByDirectory[''] = <native.WorkspaceFileEntry>[
+        _file('one.txt'),
+        _file('two.txt'),
+        _file('three.txt'),
+      ];
+    await _pumpExplorer(tester, service);
+    await tester.tap(find.text('one.txt'));
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.tap(find.text('three.txt'));
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pumpAndSettle();
+    await _pressExplorerFileShortcut(tester, LogicalKeyboardKey.keyC);
+    expect(service.systemClipboardWrites, hasLength(1));
+    expect(
+      service.systemClipboardWrites.single.paths.map(p.basename).toList(),
+      <String>['one.txt', 'three.txt'],
+    );
+    expect(
+      service.systemClipboardWrites.single.operation,
+      WorkspaceFileClipboardOperation.copy,
+    );
+  });
+
+  testWidgets('Shift range and Ctrl+X cuts all files', (tester) async {
+    final service = _FakeWorkspaceFileService()
+      ..childrenByDirectory[''] = <native.WorkspaceFileEntry>[
+        _file('one.txt'),
+        _file('two.txt'),
+        _file('three.txt'),
+      ];
+    await _pumpExplorer(tester, service);
+    await tester.tap(find.text('one.txt'));
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.tap(find.text('three.txt'));
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.pumpAndSettle();
+    await _pressExplorerFileShortcut(tester, LogicalKeyboardKey.keyX);
+    expect(service.systemClipboardWrites, hasLength(1));
+    expect(
+      service.systemClipboardWrites.single.paths.map(p.basename).toList(),
+      <String>['one.txt', 'two.txt', 'three.txt'],
+    );
+    expect(
+      service.systemClipboardWrites.single.operation,
+      WorkspaceFileClipboardOperation.cut,
+    );
+  });
+
   testWidgets('Explorer multi-file cut pastes into the Alera workspace root', (
     tester,
   ) async {
@@ -486,6 +538,16 @@ void _registerWorkspaceExplorerActionTests() {
     expect(service.createdFiles, <String>['created.dart']);
     expect(tester.takeException(), isNull);
   });
+}
+
+Future<void> _pressExplorerFileShortcut(
+  WidgetTester tester,
+  LogicalKeyboardKey key,
+) async {
+  await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+  await tester.sendKeyEvent(key);
+  await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+  await tester.pumpAndSettle();
 }
 
 Future<void> _pressExplorerPasteShortcut(WidgetTester tester) async {

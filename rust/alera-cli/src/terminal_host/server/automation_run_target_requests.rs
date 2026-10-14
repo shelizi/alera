@@ -171,6 +171,7 @@ impl ServerActor {
                         delete_branch: Some(true),
                         active_workspace_id: None,
                         close_sessions: false,
+                        allow_external_worktree_removal: false,
                     },
                 )
                 .await;

@@ -77,6 +77,9 @@ pub struct ManagedWorkspaceRemoveRequest {
     /// Explicit consent to stop this workspace's sessions before removing it.
     #[serde(default)]
     pub close_sessions: bool,
+    /// The user explicitly confirmed deletion of a registered external worktree.
+    #[serde(default)]
+    pub allow_external_worktree_removal: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]

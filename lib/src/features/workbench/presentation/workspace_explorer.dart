@@ -138,6 +138,7 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
     _gitBackend = ref.read(gitBackendProvider);
     _controller = tree.DirectoryTreeController(
       data: _buildTreeData(),
+      selection: tree.SelectionController(mode: tree.SelectionMode.multi),
       flattenStrategy: const _AleraFlattenStrategy(),
     );
     unawaited(_bootstrapExplorer());
@@ -168,6 +169,7 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
       _controller.dispose();
       _controller = tree.DirectoryTreeController(
         data: _buildTreeData(),
+        selection: tree.SelectionController(mode: tree.SelectionMode.multi),
         flattenStrategy: const _AleraFlattenStrategy(),
       );
       unawaited(_restartExplorer());
@@ -242,6 +244,16 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
             bindings: <ShortcutActivator, VoidCallback>{
               const SingleActivator(LogicalKeyboardKey.keyV, control: true):
                   _handlePasteShortcut,
+              const SingleActivator(LogicalKeyboardKey.keyC, control: true):
+                  _handleCopyShortcut,
+              const SingleActivator(LogicalKeyboardKey.keyX, control: true):
+                  _handleCutShortcut,
+              const SingleActivator(LogicalKeyboardKey.keyV, meta: true):
+                  _handlePasteShortcut,
+              const SingleActivator(LogicalKeyboardKey.keyC, meta: true):
+                  _handleCopyShortcut,
+              const SingleActivator(LogicalKeyboardKey.keyX, meta: true):
+                  _handleCutShortcut,
             },
             child: Focus(
               focusNode: _explorerFocusNode,
@@ -346,12 +358,15 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
     return DragTarget<_ExplorerDragData>(
       onWillAcceptWithDetails: (details) =>
           _canDrop(details.data, entry.relativePath),
-      onAcceptWithDetails: (details) =>
-          unawaited(_moveEntry(details.data.relativePath, entry.relativePath)),
+      onAcceptWithDetails: (details) => unawaited(
+        _moveSelectedEntries(details.data.relativePaths, entry.relativePath),
+      ),
       builder: (context, _, _) => TerminalPathDraggable<_ExplorerDragData>(
         data: _ExplorerDragData(
-          relativePath: entry.relativePath,
-          absolutePath: _absolutePath(entry.relativePath),
+          relativePaths: _selectedPathsForEntry(entry),
+          absolutePaths: _selectedPathsForEntry(entry)
+              .map((path) => _absolutePath(path))
+              .toList(growable: false),
         ),
         feedback: Material(
           color: Colors.transparent,
@@ -519,6 +534,9 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
   }
 
   Future<void> _handlePrimaryTap(tree.VisibleNode node) async {
+    if (_handleModifiedSelection(node)) {
+      return;
+    }
     _select(node);
     final entry = _entryByNodeId[node.id];
     if (_isDirectoryEntry(entry)) {
@@ -571,6 +589,69 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
   void _select(tree.VisibleNode node) {
     _controller.selection.selectOnly(node.id);
     _selectedRelativePath = _entryByNodeId[node.id]?.relativePath;
+  }
+
+  bool _handleModifiedSelection(tree.VisibleNode node) {
+    final keyboard = HardwareKeyboard.instance;
+    final toggle = keyboard.isControlPressed || keyboard.isMetaPressed;
+    if (keyboard.isShiftPressed) {
+      final anchor = _entryByNodeId.entries
+          .where((entry) => entry.value.relativePath == _selectedRelativePath)
+          .map((entry) => entry.key)
+          .firstOrNull;
+      if (anchor != null) {
+        _controller.selectRange(anchorId: anchor, toId: node.id);
+      } else {
+        _select(node);
+      }
+      return true;
+    }
+    if (toggle) {
+      _controller.selection.toggle(node.id);
+      _selectedRelativePath = _entryByNodeId[node.id]?.relativePath;
+      return true;
+    }
+    return false;
+  }
+
+  List<String> _selectedPathsForEntry(native.WorkspaceFileEntry entry) {
+    final clickedNodeId = _nodeIdForRelativePath(entry.relativePath);
+    if (clickedNodeId == null ||
+        !_controller.selection.isSelected(clickedNodeId)) {
+      return <String>[entry.relativePath];
+    }
+    final selected = <String>{};
+    for (final node in _controller.visibleNodes) {
+      if (!_controller.selection.isSelected(node.id)) continue;
+      final selectedEntry = _entryByNodeId[node.id];
+      if (selectedEntry != null) selected.add(selectedEntry.relativePath);
+    }
+    // If a folder and its child are both selected, transfer the folder once.
+    return selected
+        .where((path) {
+          var ancestor = _parentPath(path);
+          while (ancestor.isNotEmpty) {
+            if (selected.contains(ancestor)) return false;
+            ancestor = _parentPath(ancestor);
+          }
+          return true;
+        })
+        .toList(growable: false);
+  }
+
+  void _handleCopyShortcut() => unawaited(_copySelection(cut: false));
+
+  void _handleCutShortcut() => unawaited(_copySelection(cut: true));
+
+  Future<void> _copySelection({required bool cut}) async {
+    for (final node in _controller.visibleNodes) {
+      if (!_controller.selection.isSelected(node.id)) continue;
+      final entry = _entryByNodeId[node.id];
+      if (entry != null) {
+        await _copyToClipboard(entry, cut: cut);
+        return;
+      }
+    }
   }
 
   void _collapseAll() {

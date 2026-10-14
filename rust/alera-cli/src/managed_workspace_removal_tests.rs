@@ -58,6 +58,7 @@ async fn rejects_main_workspace_during_removal_validation() {
             delete_branch: None,
             active_workspace_id: None,
             close_sessions: false,
+            allow_external_worktree_removal: false,
         },
     )
     .await
@@ -154,6 +155,33 @@ async fn removal_rechecks_path_containment_at_destructive_boundary() {
     assert!(error.to_string().contains("outside Alera-managed storage"));
     assert!(sentinel.exists());
     assert!(fixture.workspace_record().await.is_some());
+}
+
+#[tokio::test]
+async fn confirmed_external_registered_worktree_can_be_removed() {
+    let fixture = RemovalFixture::new("external-confirmed").await;
+    let alternate_root = fixture._root.path().join("other-managed-root");
+    std::fs::create_dir_all(&alternate_root).unwrap();
+    fixture
+        .store
+        .set_workspace_directory(Some(&alternate_root.to_string_lossy()))
+        .await
+        .unwrap();
+    let removed = remove_managed_workspace(
+        &fixture.store,
+        ManagedWorkspaceRemoveRequest {
+            id: fixture.workspace_id.clone(),
+            delete_branch: Some(false),
+            active_workspace_id: None,
+            close_sessions: true,
+            allow_external_worktree_removal: true,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(removed.id, fixture.workspace_id);
+    assert!(!fixture.worktree_path.exists());
+    assert!(fixture.branch_exists());
 }
 
 #[tokio::test]
@@ -357,6 +385,7 @@ impl RemovalFixture {
                 delete_branch,
                 active_workspace_id: None,
                 close_sessions: false,
+                allow_external_worktree_removal: false,
             },
         )
         .await

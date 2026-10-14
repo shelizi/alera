@@ -102,6 +102,31 @@ class _WorkspaceBranchStatusBarControlState
     });
   }
 
+  Future<void> _copyBranchName(String branch) async {
+    await Clipboard.setData(ClipboardData(text: branch));
+    if (mounted) {
+      AleraToast.show(context, message: 'Copied branch name: $branch');
+    }
+  }
+
+  Future<void> _showCopyBranchMenu(Offset position, String branch) async {
+    final selected = await showMenu<bool>(
+      context: context,
+      position: RelativeRect.fromLTRB(
+        position.dx,
+        position.dy,
+        position.dx,
+        position.dy,
+      ),
+      items: const <PopupMenuEntry<bool>>[
+        PopupMenuItem<bool>(value: true, child: Text('Copy Branch Name')),
+      ],
+    );
+    if (selected == true && mounted) {
+      await _copyBranchName(branch);
+    }
+  }
+
   void _selectBranch(String branch) {
     _menu.close();
     if (_switching || branch == _current) return;
@@ -205,74 +230,86 @@ class _WorkspaceBranchStatusBarControlState
                           itemBuilder: (context, index) {
                             final row = rows[index];
                             final selected = row.branch == _current;
-                            return MenuItemButton(
-                              key: row.branch == null
+                            return GestureDetector(
+                              behavior: HitTestBehavior.translucent,
+                              onSecondaryTapDown: row.branch == null
                                   ? null
-                                  : ValueKey<String>(
-                                      'workspace-branch-option:${row.branch}',
-                                    ),
-                              onPressed: row.branch == null
-                                  ? null
-                                  : () => _selectBranch(row.branch!),
-                              child: Padding(
-                                padding: EdgeInsets.only(
-                                  left: row.depth * AleraTokens.space12,
-                                ),
-                                child: Row(
-                                  children: <Widget>[
-                                    SizedBox(
-                                      width: 16,
-                                      child: selected
-                                          ? const Icon(
-                                              AleraIcons.check,
-                                              size: 14,
-                                            )
-                                          : row.hasChildren
-                                          ? const Icon(
-                                              AleraIcons.chevronRight,
-                                              size: 12,
-                                              color:
-                                                  AleraTokens.foregroundFaint,
-                                            )
-                                          : null,
-                                    ),
-                                    const SizedBox(width: AleraTokens.space6),
-                                    Expanded(
-                                      child: Tooltip(
-                                        message: row.fullPath,
-                                        child: Text(
-                                          row.segment,
-                                          maxLines: 1,
-                                          overflow: .ellipsis,
-                                        ),
+                                  : (details) => unawaited(
+                                      _showCopyBranchMenu(
+                                        details.globalPosition,
+                                        row.branch!,
                                       ),
                                     ),
-                                    if (row.branch != null)
-                                      AleraIconButton(
-                                        key: ValueKey(
-                                          'workspace-branch-favorite:${row.branch}',
-                                        ),
-                                        tooltip: favorites.contains(row.branch)
-                                            ? 'Remove From Favorites'
-                                            : 'Add To Favorites',
-                                        icon: favorites.contains(row.branch)
-                                            ? AleraIcons.favorite
-                                            : AleraIcons.add,
-                                        iconColor:
-                                            favorites.contains(row.branch)
-                                            ? AleraTokens.accent
-                                            : AleraTokens.foregroundFaint,
-                                        onPressed: () => ref
-                                            .read(
-                                              workbenchControllerProvider
-                                                  .notifier,
-                                            )
-                                            .toggleBranchFavorite(
-                                              scopeKey: scopeKey,
-                                              branch: row.branch!,
-                                            ),
+                              child: MenuItemButton(
+                                key: row.branch == null
+                                    ? null
+                                    : ValueKey<String>(
+                                        'workspace-branch-option:${row.branch}',
                                       ),
-                                  ],
+                                onPressed: row.branch == null
+                                    ? null
+                                    : () => _selectBranch(row.branch!),
+                                child: Padding(
+                                  padding: EdgeInsets.only(
+                                    left: row.depth * AleraTokens.space12,
+                                  ),
+                                  child: Row(
+                                    children: <Widget>[
+                                      SizedBox(
+                                        width: 16,
+                                        child: selected
+                                            ? const Icon(
+                                                AleraIcons.check,
+                                                size: 14,
+                                              )
+                                            : row.hasChildren
+                                            ? const Icon(
+                                                AleraIcons.chevronRight,
+                                                size: 12,
+                                                color:
+                                                    AleraTokens.foregroundFaint,
+                                              )
+                                            : null,
+                                      ),
+                                      const SizedBox(width: AleraTokens.space6),
+                                      Expanded(
+                                        child: Tooltip(
+                                          message: row.fullPath,
+                                          child: Text(
+                                            row.segment,
+                                            maxLines: 1,
+                                            overflow: .ellipsis,
+                                          ),
+                                        ),
+                                      ),
+                                      if (row.branch != null)
+                                        AleraIconButton(
+                                          key: ValueKey(
+                                            'workspace-branch-favorite:${row.branch}',
+                                          ),
+                                          tooltip:
+                                              favorites.contains(row.branch)
+                                              ? 'Remove From Favorites'
+                                              : 'Add To Favorites',
+                                          icon: favorites.contains(row.branch)
+                                              ? AleraIcons.favorite
+                                              : AleraIcons.add,
+                                          iconColor:
+                                              favorites.contains(row.branch)
+                                              ? AleraTokens.accent
+                                              : AleraTokens.foregroundFaint,
+                                          onPressed: () => ref
+                                              .read(
+                                                workbenchControllerProvider
+                                                    .notifier,
+                                              )
+                                              .toggleBranchFavorite(
+                                                scopeKey: scopeKey,
+                                                branch: row.branch!,
+                                              ),
+                                        ),
+                                    ],
+                                  ),
                                 ),
                               ),
                             );
@@ -286,58 +323,63 @@ class _WorkspaceBranchStatusBarControlState
       ],
       builder: (context, controller, child) => Material(
         color: Colors.transparent,
-        child: InkWell(
-          key: const ValueKey<String>('workspace-branch-status'),
-          onTap: _switching
-              ? null
-              : controller.isOpen
-              ? controller.close
-              : _openMenu,
-          mouseCursor: WidgetStateMouseCursor.clickable,
-          child: Tooltip(
-            message: '${context.tr('Current Branch')}: $label',
-            child: Container(
-              height: AleraTokens.statusBarHeight,
-              constraints: const BoxConstraints(maxWidth: 220),
-              padding: const EdgeInsets.symmetric(
-                horizontal: AleraTokens.space8,
-              ),
-              decoration: const BoxDecoration(
-                border: Border(
-                  left: BorderSide(color: AleraTokens.borderSubtle),
+        child: GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onSecondaryTapDown: (details) =>
+              unawaited(_showCopyBranchMenu(details.globalPosition, label)),
+          child: InkWell(
+            key: const ValueKey<String>('workspace-branch-status'),
+            onTap: _switching
+                ? null
+                : controller.isOpen
+                ? controller.close
+                : _openMenu,
+            mouseCursor: WidgetStateMouseCursor.clickable,
+            child: Tooltip(
+              message: '${context.tr('Current Branch')}: $label',
+              child: Container(
+                height: AleraTokens.statusBarHeight,
+                constraints: const BoxConstraints(maxWidth: 220),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: AleraTokens.space8,
                 ),
-              ),
-              child: Row(
-                mainAxisSize: .min,
-                children: <Widget>[
-                  const Icon(
-                    AleraIcons.gitBranch,
-                    size: 13,
-                    color: AleraTokens.foregroundMuted,
+                decoration: const BoxDecoration(
+                  border: Border(
+                    left: BorderSide(color: AleraTokens.borderSubtle),
                   ),
-                  const SizedBox(width: AleraTokens.space6),
-                  Flexible(
-                    child: Text(
-                      label,
-                      maxLines: 1,
-                      overflow: .ellipsis,
-                      style: AleraTokens.monoStyle.copyWith(fontSize: 10),
-                    ),
-                  ),
-                  const SizedBox(width: AleraTokens.space4),
-                  if (_switching || _loading)
-                    const SizedBox(
-                      width: 10,
-                      height: 10,
-                      child: CircularProgressIndicator(strokeWidth: 1.5),
-                    )
-                  else
+                ),
+                child: Row(
+                  mainAxisSize: .min,
+                  children: <Widget>[
                     const Icon(
-                      AleraIcons.chevronDown,
-                      size: 12,
+                      AleraIcons.gitBranch,
+                      size: 13,
                       color: AleraTokens.foregroundMuted,
                     ),
-                ],
+                    const SizedBox(width: AleraTokens.space6),
+                    Flexible(
+                      child: Text(
+                        label,
+                        maxLines: 1,
+                        overflow: .ellipsis,
+                        style: AleraTokens.monoStyle.copyWith(fontSize: 10),
+                      ),
+                    ),
+                    const SizedBox(width: AleraTokens.space4),
+                    if (_switching || _loading)
+                      const SizedBox(
+                        width: 10,
+                        height: 10,
+                        child: CircularProgressIndicator(strokeWidth: 1.5),
+                      )
+                    else
+                      const Icon(
+                        AleraIcons.chevronDown,
+                        size: 12,
+                        color: AleraTokens.foregroundMuted,
+                      ),
+                  ],
+                ),
               ),
             ),
           ),

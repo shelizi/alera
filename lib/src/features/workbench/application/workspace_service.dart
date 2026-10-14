@@ -71,6 +71,7 @@ abstract interface class ManagedWorkspaceRuntime {
     required Workspace workspace,
     bool? deleteBranch,
     String? activeWorkspaceId,
+    bool allowExternalWorktreeRemoval = false,
   });
 }
 

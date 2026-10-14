@@ -6,6 +6,7 @@ extension WorkspaceServiceRemoval on WorkspaceService {
     required Workspace workspace,
     required bool deleteBranch,
     String? activeWorkspaceId,
+    bool allowExternalWorktreeRemoval = false,
   }) async {
     if (workspace.isMain) {
       throw WorkspaceException('The main workspace cannot be removed');
@@ -17,6 +18,7 @@ extension WorkspaceServiceRemoval on WorkspaceService {
         workspace: workspace,
         deleteBranch: shouldDeleteBranch,
         activeWorkspaceId: activeWorkspaceId,
+        allowExternalWorktreeRemoval: allowExternalWorktreeRemoval,
       );
       return;
     }

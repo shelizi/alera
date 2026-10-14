@@ -151,7 +151,11 @@ mixin _ProjectWorkbenchSidebarActions
             );
         impact = measuredImpact;
         if (!mounted) return;
-        if (!measuredImpact.safeToClean) {
+        final externalOnly =
+            measuredImpact.blockers.length == 1 &&
+            measuredImpact.blockers.single ==
+                'Workspace path is outside Alera-managed storage';
+        if (!measuredImpact.safeToClean && !externalOnly) {
           await showDialog<bool>(
             context: context,
             builder: (_) => AleraConfirmDialog(
@@ -185,12 +189,16 @@ mixin _ProjectWorkbenchSidebarActions
         : 'Measured size: ${formatResourceMemory(impact.sizeBytes)} '
               'across ${impact.entryCount} entries.\n'
               'Last activity: ${_workspaceStorageTimestamp(lastActivity)}.\n\n';
+    final externalOnly =
+        impact?.blockers.length == 1 &&
+        impact?.blockers.single ==
+            'Workspace path is outside Alera-managed storage';
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (_) => AleraConfirmDialog(
         title: impact == null ? 'Remove Workspace?' : 'Clean Up Workspace?',
         message:
-            '$impactSummary${!deleteBranch || branch == null || branch.isEmpty ? 'This removes the worktree for "${workspace.name}".' : 'This removes the worktree for "${workspace.name}" and deletes branch "$branch".'}'
+            '$impactSummary${externalOnly ? 'External Git worktree: ${workspace.path}\nThis directory is outside Alera-managed storage. Confirm its permanent deletion.\n\n' : ''}${!deleteBranch || branch == null || branch.isEmpty ? 'This removes the worktree for "${workspace.name}".' : 'This removes the worktree for "${workspace.name}" and deletes branch "$branch".'}'
             '\n\nAll tabs will close and running terminals, agents, and their child processes will stop. Unsaved changes will be lost. If removal fails, stopped sessions will not restart automatically.',
         confirmLabel: impact == null ? 'Remove' : 'Clean Up',
         destructive: true,
@@ -208,6 +216,7 @@ mixin _ProjectWorkbenchSidebarActions
               project: project,
               workspace: workspace,
               deleteBranch: deleteBranch,
+              allowExternalWorktreeRemoval: externalOnly,
               activeWorkspaceId: ref
                   .read(workbenchControllerProvider)
                   .activeWorkspaceId,

@@ -176,6 +176,7 @@ class _FakeManagedWorkspaceRuntime implements ManagedWorkspaceRuntime {
     required Workspace workspace,
     bool? deleteBranch,
     String? activeWorkspaceId,
+    bool allowExternalWorktreeRemoval = false,
   }) async {
     removedWorkspace = workspace;
     this.deleteBranch = deleteBranch;

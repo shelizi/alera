@@ -479,17 +479,17 @@ class const _ExplorerBackgroundMenu({
 }
 
 class const _ExplorerClipboard(
-  final String relativePath,
+  final List<String> relativePaths,
   final bool cut, {
   final int? systemSequenceNumber,
 });
 
 class const _ExplorerDragData({
-  required final String relativePath,
-  required final String absolutePath,
+  required final List<String> relativePaths,
+  required final List<String> absolutePaths,
 }) implements TerminalPathDragPayload {
   @override
-  Iterable<String> get paths => <String>[absolutePath];
+  Iterable<String> get paths => absolutePaths;
 }
 
 enum _ExplorerAction {

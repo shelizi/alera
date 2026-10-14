@@ -41,7 +41,9 @@ pub async fn measure_workspace_storage(
         blockers.push("The main workspace is a source repository".to_string());
     }
     let path = PathBuf::from(&workspace.path);
-    if let Err(error) = validate_workspace_storage_ownership(store, &workspace, &project).await {
+    if let Err(error) =
+        validate_workspace_storage_ownership(store, &workspace, &project, false).await
+    {
         blockers.push(error.to_string());
     }
     let updated_at = workspace.updated_at;
@@ -76,7 +78,7 @@ pub async fn validate_workspace_storage_path(
     if workspace.kind == WorkspaceKind::Main {
         bail!("The main workspace cannot be removed");
     }
-    validate_workspace_storage_ownership(store, &workspace, &project).await
+    validate_workspace_storage_ownership(store, &workspace, &project, false).await
 }
 
 fn is_host_owned_workspace_path(root: &Path, target: &Path) -> Result<bool> {
@@ -151,6 +153,7 @@ pub(super) async fn validate_workspace_storage_ownership(
     store: &RuntimeStore,
     workspace: &Workspace,
     project: &Project,
+    allow_external_worktree_removal: bool,
 ) -> Result<()> {
     if workspace.host_id != LOCAL_HOST_ID {
         bail!("Workspace is not owned by the local host");
@@ -160,8 +163,17 @@ pub(super) async fn validate_workspace_storage_ownership(
         .await?
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(default_workspace_root);
-    if path_equals(&workspace.path, &project.repo_path)
-        || !is_host_owned_workspace_path(Path::new(&root), Path::new(&workspace.path))?
+    if path_equals(&workspace.path, &project.repo_path) {
+        bail!("Workspace path is the project source repository");
+    }
+    if std::fs::symlink_metadata(&workspace.path)
+        .map(|metadata| metadata.file_type().is_symlink())
+        .unwrap_or(false)
+    {
+        bail!("Workspace path is a symlink");
+    }
+    if !allow_external_worktree_removal
+        && !is_host_owned_workspace_path(Path::new(&root), Path::new(&workspace.path))?
     {
         bail!("Workspace path is outside Alera-managed storage");
     }

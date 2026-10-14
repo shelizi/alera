@@ -2,6 +2,15 @@ part of 'workspace_explorer.dart';
 
 extension _WorkspaceExplorerActions on _WorkspaceExplorerState {
   String _pasteTargetDirectory() {
+    if (_selectedRelativePath case final path?) {
+      final entry = _entryByPath[path];
+      if (entry != null &&
+          _controller.selection.isSelected(
+            _nodeIdForRelativePath(path) ?? '',
+          )) {
+        return _isDirectoryEntry(entry) ? path : _parentPath(path);
+      }
+    }
     for (final entryByNodeId in _entryByNodeId.entries) {
       if (!_controller.selection.isSelected(entryByNodeId.key)) {
         continue;
@@ -240,13 +249,15 @@ extension _WorkspaceExplorerActions on _WorkspaceExplorerState {
     native.WorkspaceFileEntry entry, {
     required bool cut,
   }) async {
+    final relativePaths = _selectedPathsForEntry(entry);
     int? systemSequenceNumber;
     try {
       systemSequenceNumber = await _workspaceFiles.writeSystemFileClipboard(
         // Windows Explorer does not accept verbatim `\\?\` paths on the
         // system file clipboard.
         paths: <String>[
-          userVisibleWorkspacePath(_absolutePath(entry.relativePath)),
+          for (final path in relativePaths)
+            userVisibleWorkspacePath(_absolutePath(path)),
         ],
         operation: cut
             ? WorkspaceFileClipboardOperation.cut
@@ -262,7 +273,7 @@ extension _WorkspaceExplorerActions on _WorkspaceExplorerState {
     }
     _setClipboard(
       _ExplorerClipboard(
-        entry.relativePath,
+        List<String>.unmodifiable(relativePaths),
         cut,
         systemSequenceNumber: systemSequenceNumber,
       ),
@@ -305,15 +316,20 @@ extension _WorkspaceExplorerActions on _WorkspaceExplorerState {
     final clipboard = _clipboard;
     if (clipboard == null ||
         clipboard.systemSequenceNumber != payload.sequenceNumber ||
-        payload.paths.length != 1 ||
+        payload.paths.length != clipboard.relativePaths.length ||
         clipboard.cut !=
             (payload.operation == WorkspaceFileClipboardOperation.cut)) {
       return false;
     }
-    return p.equals(
-      comparablePath(payload.paths.single),
-      comparablePath(_absolutePath(clipboard.relativePath)),
-    );
+    for (var index = 0; index < payload.paths.length; index++) {
+      if (!p.equals(
+        comparablePath(payload.paths[index]),
+        comparablePath(_absolutePath(clipboard.relativePaths[index])),
+      )) {
+        return false;
+      }
+    }
+    return true;
   }
 
   Future<void> _pasteInternal(String targetDir) async {
@@ -322,7 +338,10 @@ extension _WorkspaceExplorerActions on _WorkspaceExplorerState {
       return;
     }
     if (clipboard.cut) {
-      final moved = await _moveEntry(clipboard.relativePath, targetDir);
+      final moved = await _moveSelectedEntries(
+        clipboard.relativePaths,
+        targetDir,
+      );
       if (!moved || !mounted) {
         return;
       }
@@ -336,13 +355,13 @@ extension _WorkspaceExplorerActions on _WorkspaceExplorerState {
       return;
     }
 
-    await _workspaceFiles.copyEntry(
-      workspacePath: widget.workspace.path,
-      relativePath: clipboard.relativePath,
-      targetParentRelativePath: targetDir,
-    );
-    if (!mounted) {
-      return;
+    for (final path in clipboard.relativePaths) {
+      await _workspaceFiles.copyEntry(
+        workspacePath: widget.workspace.path,
+        relativePath: path,
+        targetParentRelativePath: targetDir,
+      );
+      if (!mounted) return;
     }
     await _refreshDirectory(targetDir);
   }
@@ -387,6 +406,24 @@ extension _WorkspaceExplorerActions on _WorkspaceExplorerState {
       }
     }
     await _refreshDirectory(targetDir);
+  }
+
+  Future<bool> _moveSelectedEntries(
+    List<String> relativePaths,
+    String targetDir,
+  ) async {
+    if (relativePaths.any(
+      (path) => path == targetDir || targetDir.startsWith('$path/'),
+    )) {
+      _showInfo('Cannot move a folder into itself.');
+      return false;
+    }
+    for (final path in relativePaths) {
+      if (!await _moveEntry(path, targetDir) || !mounted) {
+        return false;
+      }
+    }
+    return true;
   }
 
   Future<void> _duplicate(native.WorkspaceFileEntry entry) async {
@@ -636,8 +673,9 @@ extension _WorkspaceExplorerActions on _WorkspaceExplorerState {
     if (!_isDirectoryEntry(target)) {
       return false;
     }
-    return data.relativePath != targetPath &&
-        !targetPath.startsWith('${data.relativePath}/');
+    return data.relativePaths.every(
+      (path) => path != targetPath && !targetPath.startsWith('$path/'),
+    );
   }
 
   void _toggleMode() {

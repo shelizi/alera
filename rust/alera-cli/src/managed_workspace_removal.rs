@@ -124,7 +124,13 @@ async fn managed_workspace_removal(
     } else {
         None
     };
-    validate_workspace_storage_ownership(store, &workspace, &project).await?;
+    validate_workspace_storage_ownership(
+        store,
+        &workspace,
+        &project,
+        request.allow_external_worktree_removal,
+    )
+    .await?;
     if workspace_has_active_automation_owner(store, &workspace.id).await? {
         bail!("Workspace is owned by an active automation");
     }

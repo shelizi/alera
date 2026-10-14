@@ -203,6 +203,7 @@ extension WorkbenchCatalogOwnerProjects on WorkbenchCatalogOwner {
     required Workspace workspace,
     bool deleteBranch = true,
     String? activeWorkspaceId,
+    bool allowExternalWorktreeRemoval = false,
   }) async {
     try {
       final workspaceTabs = _host.readState().tabsFor(workspace.id);
@@ -213,6 +214,7 @@ extension WorkbenchCatalogOwnerProjects on WorkbenchCatalogOwner {
           workspace: workspace,
           deleteBranch: deleteBranch,
           activeWorkspaceId: activeWorkspaceId,
+          allowExternalWorktreeRemoval: allowExternalWorktreeRemoval,
         ),
       );
       // The managed runtime has already stopped the process trees. Preserve the
