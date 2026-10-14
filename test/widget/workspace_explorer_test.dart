@@ -42,6 +42,7 @@ part 'workspace_explorer_reveal_cases.dart';
 part 'workspace_explorer_file_tree_cases.dart';
 part 'workspace_explorer_mode_cases.dart';
 part 'workspace_explorer_action_cases.dart';
+part 'workspace_explorer_native_drag_cases.dart';
 part 'workspace_explorer_watch_cases.dart';
 part 'workspace_explorer_test_harness.dart';
 part 'workspace_explorer_fake_file_service.dart';
@@ -54,5 +55,6 @@ void main() {
   _registerWorkspaceExplorerFileTreeTests();
   _registerWorkspaceExplorerModeTests();
   _registerWorkspaceExplorerActionTests();
+  _registerWorkspaceExplorerNativeDragTests();
   _registerWorkspaceExplorerWatchTests();
 }

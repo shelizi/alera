@@ -151,7 +151,7 @@ class ExplorerFileDataObject final : public IDataObject {
   }
 
  private:
-  ~ExplorerFileDataObject() override = default;
+  ~ExplorerFileDataObject() = default;
   std::atomic<ULONG> refs_{1};
   std::vector<std::wstring> paths_;
 };
