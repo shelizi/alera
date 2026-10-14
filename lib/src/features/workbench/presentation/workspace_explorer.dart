@@ -656,11 +656,13 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
       } else {
         _select(node);
       }
+      setState(() {});
       return true;
     }
     if (toggle) {
       _controller.selection.toggle(node.id);
       _selectedRelativePath = _entryByNodeId[node.id]?.relativePath;
+      setState(() {});
       return true;
     }
     return false;

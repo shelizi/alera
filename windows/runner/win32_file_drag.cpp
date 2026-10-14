@@ -227,12 +227,19 @@ void HandleAleraFileDragMethodCall(
     return;
   }
 
-  // Flutter holds mouse capture while dragging within its own view. Release
-  // that capture when transferring the drag gesture to the Windows Shell.
+  // Flutter hands off an already-started mouse gesture. OLE targets may not
+  // observe modifiers that were pressed before that handoff, so preserve the
+  // user's forced operation in the allowed effect mask at handoff time.
+  DWORD allowed_effects = DROPEFFECT_COPY | DROPEFFECT_MOVE;
+  if ((::GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0) {
+    allowed_effects = DROPEFFECT_COPY;
+  } else if ((::GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0) {
+    allowed_effects = DROPEFFECT_MOVE;
+  }
   ::ReleaseCapture();
   DWORD effect = DROPEFFECT_NONE;
   const HRESULT status = ::SHDoDragDrop(
-      nullptr, data, nullptr, DROPEFFECT_COPY | DROPEFFECT_MOVE, &effect);
+      nullptr, data, nullptr, allowed_effects, &effect);
   data->Release();
   ::OleUninitialize();
 
