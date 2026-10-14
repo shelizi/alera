@@ -246,6 +246,10 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
         Expanded(
           child: CallbackShortcuts(
             bindings: <ShortcutActivator, VoidCallback>{
+              const SingleActivator(LogicalKeyboardKey.keyA, control: true):
+                  _handleSelectAllShortcut,
+              const SingleActivator(LogicalKeyboardKey.keyA, meta: true):
+                  _handleSelectAllShortcut,
               const SingleActivator(LogicalKeyboardKey.keyV, control: true):
                   _handlePasteShortcut,
               const SingleActivator(LogicalKeyboardKey.keyC, control: true):
@@ -691,6 +695,19 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
           return true;
         })
         .toList(growable: false);
+  }
+
+  void _handleSelectAllShortcut() {
+    final nodes = _controller.visibleNodes
+        .where((node) => _entryByNodeId.containsKey(node.id))
+        .toList(growable: false);
+    if (nodes.isEmpty) return;
+    _controller.selection.selectOnly(nodes.first.id);
+    for (final node in nodes.skip(1)) {
+      _controller.selection.toggle(node.id);
+    }
+    _selectedRelativePath = _entryByNodeId[nodes.first.id]?.relativePath;
+    setState(() {});
   }
 
   void _handleCopyShortcut() => unawaited(_copySelection(cut: false));

@@ -158,6 +158,26 @@ void _registerWorkspaceExplorerActionTests() {
     );
   });
 
+  testWidgets('Ctrl+A selects all visible files for multi-file copy', (
+    tester,
+  ) async {
+    final service = _FakeWorkspaceFileService()
+      ..childrenByDirectory[''] = <native.WorkspaceFileEntry>[
+        _file('one.txt'),
+        _file('two.txt'),
+        _file('three.txt'),
+      ];
+    await _pumpExplorer(tester, service);
+    await tester.tap(find.text('one.txt'));
+    await _pressExplorerFileShortcut(tester, LogicalKeyboardKey.keyA);
+    await _pressExplorerFileShortcut(tester, LogicalKeyboardKey.keyC);
+    expect(service.systemClipboardWrites, hasLength(1));
+    expect(
+      service.systemClipboardWrites.single.paths.map(p.basename).toList(),
+      <String>['one.txt', 'two.txt', 'three.txt'],
+    );
+  });
+
   testWidgets('Shift range and Ctrl+X cuts all files', (tester) async {
     final service = _FakeWorkspaceFileService()
       ..childrenByDirectory[''] = <native.WorkspaceFileEntry>[
