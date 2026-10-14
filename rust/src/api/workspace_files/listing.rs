@@ -55,7 +55,10 @@ pub(super) fn list_workspace_children_filtered(
 
     let mut entries = Vec::with_capacity(paths.len());
     for path in paths {
-        if let Some(entry) = entry_for_path_filtered(&root, &path, hide_ignored, hide_hidden)? {
+        // One unreadable child must not blank the whole directory: a Windows
+        // reserved name such as a stray `nul` file cannot be stat'ed through
+        // its plain path, and a child can vanish between listing and stat.
+        if let Ok(Some(entry)) = entry_for_path_filtered(&root, &path, hide_ignored, hide_hidden) {
             entries.push(entry);
         }
     }
@@ -477,6 +480,23 @@ mod tests {
         assert!(hidden_names.contains(&"readme.md"));
         let wide_entry = hidden.iter().find(|entry| entry.name == "wide").unwrap();
         assert!(wide_entry.has_children_hint);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn list_workspace_children_skips_reserved_device_name_entries() {
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let verbatim = format!(r"\\?\{}\nul", workspace.path().display());
+        fs::write(&verbatim, "").expect("write reserved-name file");
+        fs::write(workspace.path().join("readme.md"), "# Alera\n").expect("write readme");
+
+        for hide_ignored in [true, false] {
+            let entries =
+                list_workspace_children(workspace_path(&workspace), String::new(), hide_ignored)
+                    .unwrap();
+            assert_eq!(entry_names(&entries), vec!["readme.md"]);
+        }
+        let _ = fs::remove_file(&verbatim);
     }
 
     #[test]
