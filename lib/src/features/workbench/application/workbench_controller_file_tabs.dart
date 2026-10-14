@@ -91,6 +91,34 @@ mixin _WorkbenchControllerFileTabs
     preview: preview,
   );
 
+  Future<WorkspaceTabRecord> openGitBranchCompareTab({
+    required Workspace workspace,
+    String? gitDiffRoot,
+    required String baseRef,
+    required String headRef,
+    required String headOid,
+    required String mergeBaseOid,
+    String? targetGroupId,
+  }) => _tabLayoutOwner.openGitBranchCompareTab(
+    workspace: workspace,
+    gitDiffRoot: gitDiffRoot,
+    baseRef: baseRef,
+    headRef: headRef,
+    headOid: headOid,
+    mergeBaseOid: mergeBaseOid,
+    targetGroupId: targetGroupId,
+  );
+
+  Future<WorkspaceTabRecord> updateGitBranchCompareSnapshot({
+    required String tabId,
+    required String headOid,
+    required String mergeBaseOid,
+  }) => _tabLayoutOwner.updateGitBranchCompareSnapshot(
+    tabId: tabId,
+    headOid: headOid,
+    mergeBaseOid: mergeBaseOid,
+  );
+
   Future<WorkspaceTabRecord> openGitCommitDiffTab({
     required Workspace workspace,
     String? relativePath,

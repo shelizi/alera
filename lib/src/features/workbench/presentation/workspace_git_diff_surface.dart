@@ -644,7 +644,9 @@ class _WorkspaceGitDiffSurfaceState
       widget.tab.gitDiffSource == WorkspaceGitDiffSource.fileRevision;
 
   bool get _isCommitBackedDiff => switch (widget.tab.gitDiffSource) {
-    WorkspaceGitDiffSource.commit || WorkspaceGitDiffSource.pullRequest => true,
+    WorkspaceGitDiffSource.commit ||
+    WorkspaceGitDiffSource.pullRequest ||
+    WorkspaceGitDiffSource.branchCompare => true,
     WorkspaceGitDiffSource.workingTree ||
     WorkspaceGitDiffSource.fileRevision => false,
   };
@@ -653,7 +655,9 @@ class _WorkspaceGitDiffSurfaceState
     WorkspaceGitDiffSource.pullRequest => 'Pull Request',
     WorkspaceGitDiffSource.fileRevision =>
       '${widget.tab.gitDiffCompareRef ?? 'Revision'} @ ${_shortRevision(widget.tab.gitDiffCommitOid)}',
-    WorkspaceGitDiffSource.workingTree || WorkspaceGitDiffSource.commit => null,
+    WorkspaceGitDiffSource.workingTree ||
+    WorkspaceGitDiffSource.commit ||
+    WorkspaceGitDiffSource.branchCompare => null,
   };
 
   String _shortRevision(String? oid) {

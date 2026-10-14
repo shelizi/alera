@@ -50,6 +50,14 @@ extension _WorkspaceGitHistoryToolbar on _WorkspaceGitHistorySurfaceState {
                         _buildBranchPerspectiveMenu(theme),
                         const SizedBox(width: AleraTokens.space8),
                         _buildMergedVisibilityMenu(theme),
+                        const SizedBox(width: AleraTokens.space8),
+                        OutlinedButton.icon(
+                          onPressed: _loading
+                              ? null
+                              : () => unawaited(_openBranchCompare()),
+                          icon: const Icon(Icons.compare_arrows, size: 16),
+                          label: const Text('Compare Branches'),
+                        ),
                         if (_allBranches &&
                             _mergedBranchVisibility !=
                                 WorkspaceGitHistoryMergedBranchVisibility

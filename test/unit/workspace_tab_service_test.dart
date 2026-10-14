@@ -8,11 +8,13 @@ import 'package:flutter_test/flutter_test.dart';
 
 part 'workspace_tab_path_moves_test_cases.dart';
 part 'workspace_tab_git_preview_test_cases.dart';
+part 'workspace_tab_branch_compare_test_cases.dart';
 
 void main() {
   group('WorkspaceTabService', () {
     _registerWorkspaceTabPathMoveTests();
     _registerWorkspaceTabGitPreviewTests();
+    _registerWorkspaceTabBranchCompareTests();
 
     test('ensureInitialTerminalTab creates the first terminal workspace tab when none exist', () async {
       final repository = _FakeWorkbenchRepository();

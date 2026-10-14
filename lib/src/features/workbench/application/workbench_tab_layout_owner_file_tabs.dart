@@ -157,6 +157,40 @@ extension WorkbenchTabLayoutOwnerFileTabs on WorkbenchTabLayoutOwner {
     );
   }
 
+  Future<WorkspaceTabRecord> openGitBranchCompareTab({
+    required Workspace workspace,
+    String? gitDiffRoot,
+    required String baseRef,
+    required String headRef,
+    required String headOid,
+    required String mergeBaseOid,
+    String? targetGroupId,
+  }) => _openReplaceableTab(
+    workspace: workspace,
+    targetGroupId: targetGroupId,
+    preview: false,
+    createTab:
+        ({required workspaceId, required preview, replacePreviewTabId}) =>
+            _host.workspaceTabService.openOrCreateGitBranchCompareTab(
+              workspaceId: workspaceId,
+              gitDiffRoot: gitDiffRoot,
+              baseRef: baseRef,
+              headRef: headRef,
+              headOid: headOid,
+              mergeBaseOid: mergeBaseOid,
+            ),
+  );
+
+  Future<WorkspaceTabRecord> updateGitBranchCompareSnapshot({
+    required String tabId,
+    required String headOid,
+    required String mergeBaseOid,
+  }) => _host.workspaceTabService.updateGitBranchCompareSnapshot(
+    tabId: tabId,
+    headOid: headOid,
+    mergeBaseOid: mergeBaseOid,
+  );
+
   Future<WorkspaceTabRecord> openGitCommitDiffTab({
     required Workspace workspace,
     String? relativePath,

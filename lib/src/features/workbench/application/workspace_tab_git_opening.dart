@@ -59,6 +59,72 @@ extension WorkspaceTabGitOpening on WorkspaceTabService {
     );
   }
 
+  /// Opens a pinned merge-base-to-head branch comparison without checkout.
+  Future<WorkspaceTabRecord> openOrCreateGitBranchCompareTab({
+    required String workspaceId,
+    String? gitDiffRoot,
+    required String baseRef,
+    required String headRef,
+    required String headOid,
+    required String mergeBaseOid,
+  }) async {
+    if (baseRef == headRef || baseRef.isEmpty || headRef.isEmpty) {
+      throw StateError('Choose two different Git branches to compare.');
+    }
+    final root = normalizeSourceControlRootRelativePath(gitDiffRoot);
+    final existing = await _repository.listWorkspaceTabs(workspaceId);
+    for (final tab in existing) {
+      if (tab.kind == WorkspaceTabKind.gitDiff &&
+          tab.gitDiffSource == WorkspaceGitDiffSource.branchCompare &&
+          tab.gitDiffRoot == root &&
+          tab.gitBranchCompareBaseRef == baseRef &&
+          tab.gitBranchCompareHeadRef == headRef &&
+          tab.gitBranchCompareMode == 'mergeBase') {
+        return tab;
+      }
+    }
+    return _upsertGitDiffTab(
+      workspaceId: workspaceId,
+      existing: existing,
+      preview: false,
+      replacePreviewTabId: null,
+      title: 'Compare $baseRef...$headRef',
+      payload: <String, Object?>{
+        workspaceTabGitDiffSourcePayloadKey:
+            WorkspaceGitDiffSource.branchCompare.key,
+        workspaceTabGitDiffScopePayloadKey: WorkspaceGitDiffScope.all.key,
+        workspaceTabGitDiffRootPayloadKey: ?root,
+        workspaceTabGitDiffCommitOidPayloadKey: headOid,
+        workspaceTabGitDiffParentOidPayloadKey: mergeBaseOid,
+        workspaceTabGitBranchCompareBaseRefPayloadKey: baseRef,
+        workspaceTabGitBranchCompareHeadRefPayloadKey: headRef,
+        workspaceTabGitBranchCompareModePayloadKey: 'mergeBase',
+      },
+    );
+  }
+
+  /// Explicit update is the only operation that changes a pinned comparison.
+  Future<WorkspaceTabRecord> updateGitBranchCompareSnapshot({
+    required String tabId,
+    required String headOid,
+    required String mergeBaseOid,
+  }) async {
+    final tab = await _repository.findWorkspaceTabById(tabId);
+    if (tab == null ||
+        tab.gitDiffSource != WorkspaceGitDiffSource.branchCompare) {
+      throw StateError('Branch comparison tab not found.');
+    }
+    final next = tab.copyWith(
+      updatedAt: _now(),
+      payload: <String, Object?>{
+        ...tab.payload,
+        workspaceTabGitDiffCommitOidPayloadKey: headOid,
+        workspaceTabGitDiffParentOidPayloadKey: mergeBaseOid,
+      },
+    );
+    return _repository.upsertWorkspaceTab(next);
+  }
+
   Future<WorkspaceTabRecord> openOrCreateGitFileRevisionDiffTab({
     required String workspaceId,
     required String relativePath,

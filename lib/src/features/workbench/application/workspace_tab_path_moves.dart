@@ -200,7 +200,8 @@ extension WorkspaceTabPathMoves on WorkspaceTabService {
     }
     return switch (tab.gitDiffSource) {
       WorkspaceGitDiffSource.commit ||
-      WorkspaceGitDiffSource.pullRequest => true,
+      WorkspaceGitDiffSource.pullRequest ||
+      WorkspaceGitDiffSource.branchCompare => true,
       WorkspaceGitDiffSource.workingTree ||
       WorkspaceGitDiffSource.fileRevision => false,
     };

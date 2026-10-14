@@ -47,6 +47,9 @@ Future<void> runGitHistoryRefMenuAction({
   required String Function(Object error) errorMessage,
 }) async {
   switch (action) {
+    case GitHistoryRefMenuAction.compareWithBranch:
+      // Only the commit graph offers this action; it handles the picker.
+      return;
     case GitHistoryRefMenuAction.switchBranch:
       if (onSwitchBranch != null) {
         await onSwitchBranch(itemRef.name);

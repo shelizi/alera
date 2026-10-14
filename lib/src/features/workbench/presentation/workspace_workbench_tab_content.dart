@@ -63,10 +63,10 @@ class const _WorkspaceTabContent({
         tab: tab,
         autofocus: autofocus,
       ),
-      WorkspaceTabKind.gitDiff => WorkspaceGitDiffSurface(
-        workspace: workspace,
-        tab: tab,
-      ),
+      WorkspaceTabKind.gitDiff =>
+        tab.gitDiffSource == WorkspaceGitDiffSource.branchCompare
+            ? WorkspaceGitBranchCompareSurface(workspace: workspace, tab: tab)
+            : WorkspaceGitDiffSurface(workspace: workspace, tab: tab),
       WorkspaceTabKind.gitHistory => WorkspaceGitHistorySurface(
         workspace: workspace,
         tab: tab,

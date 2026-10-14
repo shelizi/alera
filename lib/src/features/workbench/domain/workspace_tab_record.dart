@@ -72,6 +72,12 @@ const String workspaceTabGitDiffPullRequestNumberPayloadKey =
 const String workspaceTabGitDiffHostedReviewRetentionIdPayloadKey =
     'gitDiffHostedReviewRetentionId';
 const String workspaceTabGitDiffOldPathPayloadKey = 'gitDiffOldPath';
+const String workspaceTabGitBranchCompareBaseRefPayloadKey =
+    'gitBranchCompareBaseRef';
+const String workspaceTabGitBranchCompareHeadRefPayloadKey =
+    'gitBranchCompareHeadRef';
+const String workspaceTabGitBranchCompareModePayloadKey =
+    'gitBranchCompareMode';
 const String workspaceTabGitHistoryFilePathPayloadKey = 'gitHistoryFilePath';
 const String workspaceTabGitHistoryAllBranchesPayloadKey =
     'gitHistoryAllBranches';
@@ -88,7 +94,8 @@ enum WorkspaceGitDiffSource(this.key) {
   workingTree('workingTree'),
   fileRevision('fileRevision'),
   commit('commit'),
-  pullRequest('pullRequest');
+  pullRequest('pullRequest'),
+  branchCompare('branchCompare');
 
   final String key;
 
@@ -282,6 +289,14 @@ class WorkspaceTabRecord({
 
   String? get gitDiffOldPath =>
       _nonEmptyPayloadString(workspaceTabGitDiffOldPathPayloadKey);
+  String? get gitBranchCompareBaseRef =>
+      _nonEmptyPayloadString(workspaceTabGitBranchCompareBaseRefPayloadKey);
+
+  String? get gitBranchCompareHeadRef =>
+      _nonEmptyPayloadString(workspaceTabGitBranchCompareHeadRefPayloadKey);
+
+  String? get gitBranchCompareMode =>
+      _nonEmptyPayloadString(workspaceTabGitBranchCompareModePayloadKey);
 
   /// Whether a commit-graph tab walks every branch tip. Defaults on so tabs
   /// persisted before the toggle existed keep the all-branches view.

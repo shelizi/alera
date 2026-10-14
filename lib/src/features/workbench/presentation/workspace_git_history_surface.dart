@@ -17,6 +17,7 @@ import 'package:alera/src/features/workbench/domain/workspace_source_control_sco
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/domain/workbench_view_prefs.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_git_history_actions.dart';
+import 'package:alera/src/features/workbench/presentation/workspace_git_branch_compare_dialog.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_git_history_graph.dart';
 import 'package:alera/src/shared/infra/git/git_commit_ops_models.dart';
 import 'package:alera/src/shared/infra/git/git_diff_models.dart';
@@ -35,6 +36,7 @@ part 'workspace_git_history_surface_actions.dart';
 part 'workspace_git_history_surface_perspective.dart';
 part 'workspace_git_history_surface_filters.dart';
 part 'workspace_git_history_surface_ref_actions.dart';
+part 'workspace_git_history_surface_branch_compare.dart';
 
 const String _allBranchesPerspective = '__all_branches__';
 const String _favoritesPerspective = '__favorite_branches__';
