@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../tool/release/generate_release_notes.dart' as release_notes;
@@ -135,6 +137,124 @@ void main() {
     });
   });
 
+  group('release note history bullets', () {
+    final missingPull = ProcessException(
+      'gh',
+      ['api', 'repos/shelizi/alera/pulls/91'],
+      'gh: Not Found (HTTP 404)',
+      1,
+    );
+    final forbiddenPull = ProcessException(
+      'gh',
+      ['api', 'repos/shelizi/alera/pulls/91'],
+      'gh: Forbidden (HTTP 403)',
+      1,
+    );
+    const mergeEntry = release_notes.HistoryEntry(
+      sha: 'abc123',
+      subject: 'Merge pull request #91 from leynier/some-feature',
+    );
+    const commitMetadata =
+        '{"author":{"login":"shelizi"},"commit":{"author":{"name":"Neo"}}}';
+
+    test(
+      'falls back to commit URL when a fork lacks a historical PR',
+      () async {
+        final requested = <String>[];
+        final seen = <int>{};
+        final bullet = await release_notes.resolveHistoryBullet(
+          'shelizi/alera',
+          mergeEntry,
+          seen,
+          fetchGh: (args) async {
+            final endpoint = args.last;
+            requested.add(endpoint);
+            if (endpoint.endsWith('/pulls/91')) throw missingPull;
+            if (endpoint.endsWith('/commits/abc123')) return commitMetadata;
+            throw StateError('Unexpected API request: $endpoint');
+          },
+        );
+        expect(
+          bullet,
+          contains('https://github.com/shelizi/alera/commit/abc123'),
+        );
+        expect(bullet, contains('by @shelizi'));
+        expect(
+          seen,
+          isEmpty,
+          reason: 'Missing fork PRs must not be marked seen',
+        );
+        expect(requested, [
+          'repos/shelizi/alera/pulls/91',
+          'repos/shelizi/alera/commits/abc123',
+        ]);
+      },
+    );
+
+    test('deduplicates resolved PRs with valid fork links', () async {
+      final seen = <int>{};
+      Future<String> api(List<String> args) async =>
+          '{"title":"Fix drag selection","user":{"login":"contributor"}}';
+      final first = await release_notes.resolveHistoryBullet(
+        'shelizi/alera',
+        mergeEntry,
+        seen,
+        fetchGh: api,
+      );
+      final duplicate = await release_notes.resolveHistoryBullet(
+        'shelizi/alera',
+        mergeEntry,
+        seen,
+        fetchGh: api,
+      );
+      expect(first, contains('Fix drag selection by @contributor'));
+      expect(first, contains('https://github.com/shelizi/alera/pull/91'));
+      expect(duplicate, isNull);
+      expect(seen, {91});
+    });
+
+    test(
+      'does not suppress permission failures when looking up a PR',
+      () async {
+        await expectLater(
+          release_notes.resolveHistoryBullet(
+            'shelizi/alera',
+            mergeEntry,
+            <int>{},
+            fetchGh: (_) async => throw forbiddenPull,
+          ),
+          throwsA(isA<ProcessException>()),
+        );
+      },
+    );
+
+    test('falls back when commit-to-PR association is missing', () async {
+      final requested = <String>[];
+      final bullet = await release_notes.resolveHistoryBullet(
+        'shelizi/alera',
+        const release_notes.HistoryEntry(
+          sha: 'def456',
+          subject: 'fix: minor feature',
+        ),
+        <int>{},
+        fetchGh: (args) async {
+          final endpoint = args.last;
+          requested.add(endpoint);
+          if (endpoint.endsWith('/pulls')) throw missingPull;
+          if (endpoint.endsWith('/commits/def456')) return commitMetadata;
+          throw StateError('Unexpected API request: $endpoint');
+        },
+      );
+      expect(
+        bullet,
+        contains('https://github.com/shelizi/alera/commit/def456'),
+      );
+      expect(requested, [
+        'repos/shelizi/alera/commits/def456/pulls',
+        'repos/shelizi/alera/commits/def456',
+      ]);
+    });
+  });
   group('option parsing', () {
     test('requires a valid scope and mandatory flags', () {
       expect(

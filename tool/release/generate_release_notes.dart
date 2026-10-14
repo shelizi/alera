@@ -26,7 +26,11 @@ Future<void> main(List<String> args) async {
     if (!pathsMatchScope(options.scope, paths)) {
       continue;
     }
-    final bullet = await _resolveBullet(options.repo, entry, seenPullRequests);
+    final bullet = await resolveHistoryBullet(
+      options.repo,
+      entry,
+      seenPullRequests,
+    );
     if (bullet != null) {
       bullets.add(bullet);
     }
@@ -141,37 +145,59 @@ String composeReleaseNotes({
   return buffer.toString();
 }
 
-Future<String?> _resolveBullet(
+/// Builds a release note even when a merge commit references a PR that is
+/// absent from the current fork. Only a genuine 404 is safe to fall back from.
+Future<String?> resolveHistoryBullet(
   String repo,
   HistoryEntry entry,
-  Set<int> seenPullRequests,
-) async {
+  Set<int> seenPullRequests, {
+  Future<String> Function(List<String>)? fetchGh,
+}) async {
+  final gh = fetchGh ?? _runGh;
   var prNumber = entry.pullRequestNumber;
   Map<String, dynamic>? pull;
   if (prNumber == null) {
     // A squash-merged PR lands as a plain commit; attribute it to its PR.
-    final associated = jsonDecode(
-      await _runGh(['api', 'repos/$repo/commits/${entry.sha}/pulls']),
-    ) as List<dynamic>;
-    if (associated.isNotEmpty) {
-      pull = associated.first as Map<String, dynamic>;
-      prNumber = pull['number'] as int;
+    try {
+      final associated = jsonDecode(
+        await gh(['api', 'repos/$repo/commits/${entry.sha}/pulls']),
+      ) as List<dynamic>;
+      if (associated.isNotEmpty) {
+        pull = associated.first as Map<String, dynamic>;
+        prNumber = pull['number'] as int;
+      }
+    } on ProcessException catch (error) {
+      if (!_isGhNotFound(error)) rethrow;
+      stderr.writeln(
+        'warning: no PR association for ${entry.sha} in $repo; '
+        'using commit metadata',
+      );
     }
   }
   if (prNumber != null) {
-    if (!seenPullRequests.add(prNumber)) {
-      return null;
+    if (seenPullRequests.contains(prNumber)) return null;
+    try {
+      pull ??= jsonDecode(
+        await gh(['api', 'repos/$repo/pulls/$prNumber']),
+      ) as Map<String, dynamic>;
+    } on ProcessException catch (error) {
+      if (!_isGhNotFound(error)) rethrow;
+      stderr.writeln(
+        'warning: PR #$prNumber not found in $repo; '
+        'linking commit ${entry.sha} instead',
+      );
     }
-    pull ??= jsonDecode(
-      await _runGh(['api', 'repos/$repo/pulls/$prNumber']),
-    ) as Map<String, dynamic>;
-    final title = pull['title'] as String;
-    final login = (pull['user'] as Map<String, dynamic>?)?['login'] as String?;
-    final author = login == null ? '' : ' by @$login';
-    return '* $title$author in https://github.com/$repo/pull/$prNumber';
+    if (pull != null) {
+      seenPullRequests.add(prNumber);
+      final title = pull['title'] as String;
+      final login =
+          (pull['user'] as Map<String, dynamic>?)?['login'] as String?;
+      final author = login == null ? '' : ' by @$login';
+      return '* $title$author in https://github.com/$repo/pull/$prNumber';
+    }
   }
   final commit = jsonDecode(
-    await _runGh(['api', 'repos/$repo/commits/${entry.sha}']),
+    await gh(['api', 'repos/$repo/commits/${entry.sha}']),
   ) as Map<String, dynamic>;
   final login =
       (commit['author'] as Map<String, dynamic>?)?['login'] as String?;
@@ -186,6 +212,8 @@ Future<String?> _resolveBullet(
       'https://github.com/$repo/commit/${entry.sha}';
 }
 
+bool _isGhNotFound(ProcessException error) =>
+    error.executable == 'gh' && error.message.contains('HTTP 404');
 Future<List<String>> _changedPaths(String sha) async {
   try {
     final diff = await _runGit(['diff', '--name-only', '$sha^1', sha]);
