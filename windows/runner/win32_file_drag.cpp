@@ -30,8 +30,30 @@ std::wstring Utf8ToWide(const std::string& input) {
   return result;
 }
 
-// CF_HDROP lets Explorer decide the default move/copy action based on source
-// and target drives. Ctrl forces copy; Shift forces move, as with shell files.
+CLIPFORMAT PreferredDropEffectFormat() {
+  static const auto format = static_cast<CLIPFORMAT>(
+      ::RegisterClipboardFormatW(CFSTR_PREFERREDDROPEFFECT));
+  return format;
+}
+
+// Default to copy even when dropping on the same volume. Unlike restricting
+// the allowed effects mask, this keeps Shift-to-move available mid-drag.
+constexpr DWORD kPreferredFileDropEffect = DROPEFFECT_COPY;
+
+constexpr DWORD AllowedFileDragEffects(bool control_pressed,
+                                       bool shift_pressed) {
+  if (shift_pressed) return DROPEFFECT_MOVE;
+  if (control_pressed) return DROPEFFECT_COPY;
+  return DROPEFFECT_COPY | DROPEFFECT_MOVE;
+}
+
+static_assert(AllowedFileDragEffects(false, false) ==
+              (DROPEFFECT_COPY | DROPEFFECT_MOVE));
+static_assert(AllowedFileDragEffects(true, false) == DROPEFFECT_COPY);
+static_assert(AllowedFileDragEffects(false, true) == DROPEFFECT_MOVE);
+
+// Expose physical files plus CFSTR_PREFERREDDROPEFFECT so Explorer copies
+// by default, including same-volume drops. Ctrl copies and Shift moves.
 class ExplorerFileDataObject final : public IDataObject {
  public:
   explicit ExplorerFileDataObject(std::vector<std::wstring> paths)
@@ -57,7 +79,8 @@ class ExplorerFileDataObject final : public IDataObject {
 
   HRESULT STDMETHODCALLTYPE QueryGetData(FORMATETC* format) override {
     if (!format) return E_POINTER;
-    if (format->cfFormat != CF_HDROP ||
+    if ((format->cfFormat != CF_HDROP &&
+         format->cfFormat != PreferredDropEffectFormat()) ||
         !(format->tymed & TYMED_HGLOBAL) ||
         format->dwAspect != DVASPECT_CONTENT ||
         format->lindex != -1) {
@@ -72,6 +95,22 @@ class ExplorerFileDataObject final : public IDataObject {
     *medium = {};
     const HRESULT valid = QueryGetData(format);
     if (FAILED(valid)) return valid;
+
+    if (format->cfFormat == PreferredDropEffectFormat()) {
+      HGLOBAL preferred = ::GlobalAlloc(GMEM_MOVEABLE, sizeof(DWORD));
+      if (!preferred) return E_OUTOFMEMORY;
+      auto* value = static_cast<DWORD*>(::GlobalLock(preferred));
+      if (!value) {
+        ::GlobalFree(preferred);
+        return E_OUTOFMEMORY;
+      }
+      *value = kPreferredFileDropEffect;
+      ::GlobalUnlock(preferred);
+      medium->tymed = TYMED_HGLOBAL;
+      medium->hGlobal = preferred;
+      medium->pUnkForRelease = nullptr;
+      return S_OK;
+    }
 
     size_t chars = 1;  // Double-null terminated path list.
     for (const auto& path : paths_) {
@@ -136,8 +175,12 @@ class ExplorerFileDataObject final : public IDataObject {
     if (!enumerator) return E_POINTER;
     *enumerator = nullptr;
     if (direction != DATADIR_GET) return E_NOTIMPL;
-    FORMATETC format{CF_HDROP, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
-    return ::SHCreateStdEnumFmtEtc(1, &format, enumerator);
+    FORMATETC formats[] = {
+        {CF_HDROP, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL},
+        {PreferredDropEffectFormat(), nullptr, DVASPECT_CONTENT, -1,
+         TYMED_HGLOBAL},
+    };
+    return ::SHCreateStdEnumFmtEtc(2, formats, enumerator);
   }
   HRESULT STDMETHODCALLTYPE DAdvise(FORMATETC*, DWORD, IAdviseSink*,
                                      DWORD*) override {
@@ -230,12 +273,9 @@ void HandleAleraFileDragMethodCall(
   // Flutter hands off an already-started mouse gesture. OLE targets may not
   // observe modifiers that were pressed before that handoff, so preserve the
   // user's forced operation in the allowed effect mask at handoff time.
-  DWORD allowed_effects = DROPEFFECT_COPY | DROPEFFECT_MOVE;
-  if ((::GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0) {
-    allowed_effects = DROPEFFECT_COPY;
-  } else if ((::GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0) {
-    allowed_effects = DROPEFFECT_MOVE;
-  }
+  const DWORD allowed_effects = AllowedFileDragEffects(
+      (::GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0,
+      (::GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0);
   ::ReleaseCapture();
   DWORD effect = DROPEFFECT_NONE;
   const HRESULT status = ::SHDoDragDrop(
