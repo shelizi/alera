@@ -45,12 +45,16 @@ class const TerminalPathDraggable<T extends TerminalPathDragPayload>({
   required final T data,
   required final Widget feedback,
   required final Widget child,
+  final DragUpdateCallback? onDragUpdate,
+  final VoidCallback? onDragStarted,
 }) extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return _TerminalPathDragSource<T>(
       data: data,
       feedback: feedback,
+      onDragUpdate: onDragUpdate,
+      onDragStarted: onDragStarted,
       childWhenDragging: Opacity(opacity: 0.45, child: child),
       child: child,
     );
@@ -64,6 +68,8 @@ class const _TerminalPathDragSource<T extends Object>({
   required super.feedback,
   super.data,
   super.childWhenDragging,
+  super.onDragUpdate,
+  super.onDragStarted,
 }) extends Draggable<T> {
   this : super(affinity: .horizontal);
 

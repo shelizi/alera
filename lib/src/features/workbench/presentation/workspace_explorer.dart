@@ -20,6 +20,7 @@ import 'package:alera/src/features/external_editor/domain/external_editor_spec.d
 import 'package:alera/src/features/external_editor/presentation/external_editor_menu_entries.dart';
 import 'package:alera/src/features/workbench/application/workspace_explorer_reveal.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_service.dart';
+import 'package:alera/src/features/workbench/application/windows_file_drag.dart';
 import 'package:alera/src/features/workbench/application/workspace_folder_opener.dart';
 import 'package:alera/src/features/workbench/domain/workbench_view_prefs.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
@@ -106,6 +107,9 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
   late final GitBackend _gitBackend;
   GitExplorerStatusSnapshot _gitStatusSnapshot = const .empty();
   _ExplorerClipboard? _clipboard;
+  final WindowsFileDrag _nativeFileDrag = const WindowsFileDrag();
+  bool _checkingNativeDrag = false;
+  bool _nativeDragHandedOff = false;
   bool _loading = true;
   bool _suppressNextBackgroundMenu = false;
   String? _lastOpenedFilePath;
@@ -357,11 +361,14 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
     }
     return DragTarget<_ExplorerDragData>(
       onWillAcceptWithDetails: (details) =>
-          _canDrop(details.data, entry.relativePath),
+          !_nativeDragHandedOff && _canDrop(details.data, entry.relativePath),
       onAcceptWithDetails: (details) => unawaited(
         _moveSelectedEntries(details.data.relativePaths, entry.relativePath),
       ),
       builder: (context, _, _) => TerminalPathDraggable<_ExplorerDragData>(
+        onDragStarted: () => _nativeDragHandedOff = false,
+        onDragUpdate: (details) =>
+            unawaited(_maybeHandOffNativeDrag(details, entry)),
         data: _ExplorerDragData(
           relativePaths: _selectedPathsForEntry(entry),
           absolutePaths: _selectedPathsForEntry(entry)
@@ -375,6 +382,51 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
         child: child,
       ),
     );
+  }
+
+  Future<void> _maybeHandOffNativeDrag(
+    DragUpdateDetails details,
+    native.WorkspaceFileEntry entry,
+  ) async {
+    if (!Platform.isWindows ||
+        _checkingNativeDrag ||
+        _nativeDragHandedOff ||
+        !mounted)
+      return;
+    _checkingNativeDrag = true;
+    try {
+      final view = View.of(context);
+      final logicalWidth = view.physicalSize.width / view.devicePixelRatio;
+      final logicalHeight = view.physicalSize.height / view.devicePixelRatio;
+      final pointer = details.globalPosition;
+      final outsideView =
+          pointer.dx < 0 ||
+          pointer.dy < 0 ||
+          pointer.dx >= logicalWidth ||
+          pointer.dy >= logicalHeight;
+      if (!outsideView && !await _nativeFileDrag.cursorOutsideWindow()) return;
+      if (!mounted || _nativeDragHandedOff) return;
+      final paths = _selectedPathsForEntry(entry);
+      if (paths.isEmpty) return;
+      _nativeDragHandedOff = true;
+      final effect = await _nativeFileDrag.startDrag(<String>[
+        for (final path in paths) userVisibleWorkspacePath(_absolutePath(path)),
+      ]);
+      if (effect == WindowsFileDragEffect.move && mounted) {
+        // The Windows Shell moves the files. Only refresh our tree; never
+        // delete the source after the native drop finishes.
+        for (final parent in paths.map(_parentPath).toSet()) {
+          await _refreshDirectory(parent);
+          if (!mounted) return;
+        }
+      }
+    } on MissingPluginException {
+      // Embedded test runners or older portable builds can lack this channel.
+    } catch (error) {
+      if (mounted) _showError(error);
+    } finally {
+      _checkingNativeDrag = false;
+    }
   }
 
   Future<void> _reloadRoot() async {

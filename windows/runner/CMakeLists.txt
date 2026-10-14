@@ -13,6 +13,7 @@ add_executable(${BINARY_NAME} WIN32
   "win32_app_menu.cpp"
   "win32_dark_mode.cpp"
   "win32_desktop_presence.cpp"
+  "win32_file_drag.cpp"
   "win32_single_instance.cpp"
   "win32_window.cpp"
   "${FLUTTER_MANAGED_DIR}/generated_plugin_registrant.cc"
