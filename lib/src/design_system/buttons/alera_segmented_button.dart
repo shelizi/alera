@@ -10,6 +10,7 @@ class const AleraSegmentedButton<T>({
   required final T selected,
   required final ValueChanged<T> onSelectionChanged,
   final bool dense = false,
+  final EdgeInsetsGeometry? padding,
   final Color? backgroundColor,
   final Color? foregroundColor,
   final Color? selectedBackgroundColor,
@@ -30,12 +31,14 @@ class const AleraSegmentedButton<T>({
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(AleraTokens.radiusMd),
         ),
-        padding: dense
-            ? const EdgeInsets.symmetric(
-                horizontal: AleraTokens.space12,
-                vertical: AleraTokens.space4,
-              )
-            : null,
+        padding:
+            padding ??
+            (dense
+                ? const EdgeInsets.symmetric(
+                    horizontal: AleraTokens.space12,
+                    vertical: AleraTokens.space4,
+                  )
+                : null),
         minimumSize: dense ? const Size(0, 30) : null,
         tapTargetSize: dense ? MaterialTapTargetSize.shrinkWrap : null,
         textStyle: textStyle,

@@ -3,10 +3,13 @@ import 'dart:math' as math;
 
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/features/workbench/application/workbench_controller.dart';
+import 'package:alera/src/features/workbench/application/workspace_git_branch_compare_cache.dart';
+import 'package:alera/src/features/workbench/application/workspace_git_branch_compare_cache_provider.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_source_control_scope.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_git_diff_surface.dart';
+import 'package:alera/src/features/workbench/presentation/workspace_git_branch_compare_status_filter.dart';
 import 'package:alera/src/shared/infra/git/git_diff_models.dart';
 import 'package:alera/src/shared/infra/git/git_providers.dart';
 import 'package:flutter/material.dart';
@@ -38,6 +41,10 @@ class _WorkspaceGitBranchCompareSurfaceState
   bool _loading = true;
   bool _updating = false;
   String? _error;
+
+  WorkspaceGitBranchCompareCache get _cache => ref.read(
+    workspaceGitBranchCompareCacheProvider(widget.workspace.id, widget.tab.id),
+  );
 
   String get _repositoryPath {
     final root = normalizeSourceControlRootRelativePath(widget.tab.gitDiffRoot);
@@ -73,20 +80,28 @@ class _WorkspaceGitBranchCompareSurfaceState
 
   Future<void> _loadPinnedSnapshot() async {
     final generation = ++_generation;
-    if (mounted)
+    if (mounted) {
       setState(() {
         _loading = true;
         _error = null;
       });
+    }
     try {
       final head = widget.tab.gitDiffCommitOid;
       final base = widget.tab.gitDiffParentOid;
       if (head == null || base == null) {
         throw StateError('This branch comparison has no saved Git snapshot.');
       }
-      final snapshot = await ref
-          .read(gitBackendProvider)
-          .compareRange(path: _repositoryPath, baseRef: base, headRef: head);
+      final cache = _cache;
+      final path = _repositoryPath;
+      final snapshot = await cache.snapshot(
+        path: path,
+        baseOid: base,
+        headOid: head,
+        load: () => ref
+            .read(gitBackendProvider)
+            .compareRange(path: path, baseRef: base, headRef: head),
+      );
       if (snapshot.summary.status != GitCommitCompareStatus.ready) {
         throw StateError(
           snapshot.summary.errorMessage ?? 'Could not compare branches.',
@@ -108,9 +123,11 @@ class _WorkspaceGitBranchCompareSurfaceState
     setState(() {
       _snapshot = snapshot;
       _root = _buildBranchCompareTree(snapshot.entries);
-      _selectedPath = paths.contains(_selectedPath)
-          ? _selectedPath
+      final selectedPath = _selectedPath ?? _cache.selectedPath;
+      _selectedPath = paths.contains(selectedPath)
+          ? selectedPath
           : snapshot.entries.firstOrNull?.path;
+      _cache.selectedPath = _selectedPath;
       _loading = false;
       _updating = false;
       _error = null;
@@ -138,6 +155,7 @@ class _WorkspaceGitBranchCompareSurfaceState
         );
       }
       if (!mounted) return;
+      _cache.acceptSnapshot(_repositoryPath, compare);
       await ref
           .read(workbenchControllerProvider.notifier)
           .updateGitBranchCompareSnapshot(
@@ -149,11 +167,12 @@ class _WorkspaceGitBranchCompareSurfaceState
       ++_generation;
       _acceptSnapshot(compare);
     } catch (error) {
-      if (mounted)
+      if (mounted) {
         setState(() {
           _updating = false;
           _error = error.toString();
         });
+      }
     }
   }
 
@@ -288,6 +307,7 @@ class _WorkspaceGitBranchCompareSurfaceState
                         ),
                         workspace: widget.workspace,
                         tab: _fileTab(selected),
+                        branchCompareCache: _cache,
                       );
                 if (constraints.maxWidth < 620) {
                   return Column(
@@ -339,30 +359,9 @@ class _WorkspaceGitBranchCompareSurfaceState
             onChanged: (value) => setState(() => _query = value),
           ),
         ),
-        SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Row(
-            children: <Widget>[
-              for (final status in <GitChangeStatus?>[
-                null,
-                .added,
-                .modified,
-                .deleted,
-                .renamed,
-                .copied,
-              ])
-                Padding(
-                  padding: const EdgeInsets.only(left: AleraTokens.space4),
-                  child: ChoiceChip(
-                    label: Text(status?.badge ?? 'All'),
-                    selected: status == _statusFilter,
-                    onSelected: (_) => setState(() => _statusFilter = status),
-                    tooltip: status?.name ?? 'All changed files',
-                    visualDensity: VisualDensity.compact,
-                  ),
-                ),
-            ],
-          ),
+        WorkspaceGitBranchCompareStatusFilter(
+          selected: _statusFilter,
+          onChanged: (status) => setState(() => _statusFilter = status),
         ),
         const Divider(height: 1, color: AleraTokens.borderSubtle),
         Expanded(
@@ -375,10 +374,12 @@ class _WorkspaceGitBranchCompareSurfaceState
                 key: ValueKey<String>('branch-compare-row-${node.path}'),
                 onTap: () => setState(() {
                   if (node.isFolder) {
-                    if (!_collapsed.add(node.path))
+                    if (!_collapsed.add(node.path)) {
                       _collapsed.remove(node.path);
+                    }
                   } else {
                     _selectedPath = node.path;
+                    _cache.selectedPath = node.path;
                   }
                 }),
                 child: Container(

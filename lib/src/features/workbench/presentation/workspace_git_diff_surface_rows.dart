@@ -535,6 +535,7 @@ class const _DiffFileList({
   required final Map<GitDiffFile, _FullFileContents> fullFileContents,
   final Set<String> fullFilePreviewLimitedPaths = const <String>{},
   required final String sourcePath,
+  final WorkspaceGitBranchCompareCache? branchCompareCache,
   final String? sourceLabel,
   final String? commitOid,
   final String? parentOid,
@@ -575,6 +576,7 @@ class const _DiffFileList({
         fullFileContents: fullFileContents,
         fullFilePreviewLimitedPaths: fullFilePreviewLimitedPaths,
         sourcePath: sourcePath,
+        branchCompareCache: branchCompareCache,
         sourceLabel: sourceLabel,
         commitOid: commitOid,
         parentOid: parentOid,
@@ -781,6 +783,7 @@ class _DiffRows {
     required Map<GitDiffFile, _FullFileContents> fullFileContents,
     Set<String> fullFilePreviewLimitedPaths = const <String>{},
     required String sourcePath,
+    WorkspaceGitBranchCompareCache? branchCompareCache,
     String? sourceLabel,
     String? commitOid,
     String? parentOid,
@@ -807,6 +810,7 @@ class _DiffRows {
           _ImageDiffRow(
             file: file,
             sourcePath: sourcePath,
+            branchCompareCache: branchCompareCache,
             commitOid: commitOid,
             parentOid: parentOid,
           ),
@@ -987,6 +991,7 @@ class const _BannerRow(final String message) extends _DiffRow {
 class const _ImageDiffRow({
   required final GitDiffFile file,
   required final String sourcePath,
+  final WorkspaceGitBranchCompareCache? branchCompareCache,
   final String? commitOid,
   final String? parentOid,
 }) extends _DiffRow {
@@ -994,6 +999,7 @@ class const _ImageDiffRow({
   Widget build(BuildContext context) => WorkspaceGitDiffImageRow(
     file: file,
     sourcePath: sourcePath,
+    branchCompareCache: branchCompareCache,
     commitOid: commitOid,
     parentOid: parentOid,
   );

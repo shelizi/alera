@@ -384,7 +384,7 @@ extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
             oldSide: oldSide,
           );
         }
-        return await backend.diffBlobBytes(
+        Future<Uint8List?> load() => backend.diffBlobBytes(
           path: sourceControlScope.path,
           filePath: file.path,
           oldPath: file.oldPath,
@@ -392,6 +392,20 @@ extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
           commitOid: _isCommitBackedDiff ? widget.tab.gitDiffCommitOid : null,
           parentOid: _isCommitBackedDiff ? widget.tab.gitDiffParentOid : null,
           oldSide: oldSide,
+        );
+        final cache = widget.branchCompareCache;
+        final commitOid = widget.tab.gitDiffCommitOid;
+        if (cache == null || commitOid == null) return await load();
+        return await cache.blob(
+          key: (
+            sourceControlScope.path,
+            commitOid,
+            widget.tab.gitDiffParentOid,
+            file.path,
+            file.oldPath,
+          ),
+          oldSide: oldSide,
+          load: load,
         );
       } catch (_) {
         return null;

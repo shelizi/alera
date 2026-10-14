@@ -1,4 +1,5 @@
 import 'package:alera/src/app/theme/alera_tokens.dart';
+import 'package:alera/src/features/workbench/application/workspace_git_branch_compare_cache.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_preview_kind.dart';
 import 'package:alera/src/features/workbench/application/workspace_image_decoding.dart';
 import 'package:alera/src/shared/infra/git/git_diff_models.dart';
@@ -20,6 +21,7 @@ class const WorkspaceGitDiffImageRow({
   required this.sourcePath,
   this.commitOid,
   final String? parentOid,
+  final WorkspaceGitBranchCompareCache? branchCompareCache,
 }) extends ConsumerStatefulWidget {
   /// Absolute path of the source-control scope the diff was loaded from.
   final String sourcePath;
@@ -63,7 +65,7 @@ class _WorkspaceGitDiffImageRowState
 
   Future<Uint8List?> _loadSide({required bool oldSide}) async {
     try {
-      final bytes = await ref
+      Future<Uint8List?> load() => ref
           .read(gitBackendProvider)
           .diffBlobBytes(
             path: widget.sourcePath,
@@ -74,6 +76,21 @@ class _WorkspaceGitDiffImageRowState
             parentOid: widget.parentOid,
             oldSide: oldSide,
           );
+      final cache = widget.branchCompareCache;
+      final commitOid = widget.commitOid;
+      final bytes = cache == null || commitOid == null
+          ? await load()
+          : await cache.blob(
+              key: (
+                widget.sourcePath,
+                commitOid,
+                widget.parentOid,
+                widget.file.path,
+                widget.file.oldPath,
+              ),
+              oldSide: oldSide,
+              load: load,
+            );
       if (bytes == null) {
         return null;
       }

@@ -21,6 +21,7 @@ import 'package:alera/src/features/reading_diff/presentation/reading_diff_genera
 import 'package:alera/src/features/reading_diff/presentation/reading_diff_view.dart';
 import 'package:alera/src/features/settings/domain/editor_syntax_theme_catalog.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_open_coordinator_provider.dart';
+import 'package:alera/src/features/workbench/application/workspace_git_branch_compare_cache.dart';
 import 'package:alera/src/features/workbench/application/workspace_text_encoding.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_preview_kind.dart';
 import 'package:alera/src/features/workbench/domain/workbench_view_prefs.dart';
@@ -53,6 +54,7 @@ class const WorkspaceGitDiffSurface({
   super.key,
   required final Workspace workspace,
   required final WorkspaceTabRecord tab,
+  final WorkspaceGitBranchCompareCache? branchCompareCache,
 }) extends ConsumerStatefulWidget {
   @override
   ConsumerState<WorkspaceGitDiffSurface> createState() =>
@@ -378,6 +380,7 @@ class _WorkspaceGitDiffSurfaceState
                         onEditableSave: (file) =>
                             unawaited(_saveWorkingTreeDocument(file)),
                         sourcePath: _sourceControlScope.path,
+                        branchCompareCache: widget.branchCompareCache,
                         sourceLabel: _diffSourceLabel,
                         commitOid: isCommitDiff
                             ? widget.tab.gitDiffCommitOid
@@ -630,13 +633,26 @@ class _WorkspaceGitDiffSurfaceState
     if (commitOid == null) {
       return Future<GitDiffResult>.value(const GitDiffResult(files: []));
     }
-    return backend.commitDiff(
+    Future<GitDiffResult> load() => backend.commitDiff(
       path: sourceControlScope.path,
       commitOid: commitOid,
       parentOid: widget.tab.gitDiffParentOid,
       filePath: sourceFilePath,
       oldPath: sourceOldPath,
       whitespaceMode: _whitespaceMode,
+    );
+    final cache = widget.branchCompareCache;
+    if (cache == null) return load();
+    return cache.diff(
+      key: (
+        sourceControlScope.path,
+        commitOid,
+        widget.tab.gitDiffParentOid,
+        sourceFilePath,
+        sourceOldPath,
+      ),
+      whitespaceMode: _whitespaceMode,
+      load: load,
     );
   }
 
