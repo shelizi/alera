@@ -538,6 +538,101 @@ List<(int, int)> _editableChangedLineRanges(Set<int> lines) {
   return result;
 }
 
+({List<_IntralineRange> left, List<_IntralineRange> right})
+_editableIntralineRanges(
+  String baseline,
+  String current,
+  GitDiffWhitespaceMode whitespaceMode,
+) {
+  final oldLines = _splitFullFileLines(baseline);
+  final newLines = _splitFullFileLines(current);
+  final normalizedOld = [
+    for (final line in oldLines) _normalizeLiveDiffLine(line, whitespaceMode),
+  ];
+  final normalizedNew = [
+    for (final line in newLines) _normalizeLiveDiffLine(line, whitespaceMode),
+  ];
+  final steps =
+      _myersEditableLineDiff(normalizedOld, normalizedNew) ??
+      _coarseEditableLineDiff(normalizedOld, normalizedNew);
+  final oldOffsets = <int>[];
+  final newOffsets = <int>[];
+  var offset = 0;
+  for (final line in oldLines) {
+    oldOffsets.add(offset);
+    offset += line.length + 1;
+  }
+  offset = 0;
+  for (final line in newLines) {
+    newOffsets.add(offset);
+    offset += line.length + 1;
+  }
+  final left = <_IntralineRange>[];
+  final right = <_IntralineRange>[];
+  final deletions = <int>[];
+  final additions = <int>[];
+
+  void flush() {
+    final pairs = math.min(deletions.length, additions.length);
+    for (var i = 0; i < pairs; i++) {
+      final oldIndex = deletions[i];
+      final newIndex = additions[i];
+      final pair = _intralineDiff(oldLines[oldIndex], newLines[newIndex]);
+      for (final range in pair.left) {
+        left.add(
+          _IntralineRange(
+            oldOffsets[oldIndex] + range.start,
+            oldOffsets[oldIndex] + range.end,
+          ),
+        );
+      }
+      for (final range in pair.right) {
+        right.add(
+          _IntralineRange(
+            newOffsets[newIndex] + range.start,
+            newOffsets[newIndex] + range.end,
+          ),
+        );
+      }
+    }
+    for (final oldIndex in deletions.skip(pairs)) {
+      if (oldLines[oldIndex].isNotEmpty) {
+        left.add(
+          _IntralineRange(
+            oldOffsets[oldIndex],
+            oldOffsets[oldIndex] + oldLines[oldIndex].length,
+          ),
+        );
+      }
+    }
+    for (final newIndex in additions.skip(pairs)) {
+      if (newLines[newIndex].isNotEmpty) {
+        right.add(
+          _IntralineRange(
+            newOffsets[newIndex],
+            newOffsets[newIndex] + newLines[newIndex].length,
+          ),
+        );
+      }
+    }
+    deletions.clear();
+    additions.clear();
+  }
+
+  for (final step in steps) {
+    switch (step.kind) {
+      case _EditableLineDiffKind.equal:
+        flush();
+      case _EditableLineDiffKind.deletion:
+        deletions.add(step.oldIndex!);
+      case _EditableLineDiffKind.addition:
+        additions.add(step.newIndex!);
+    }
+  }
+  flush();
+  return (left: left, right: right);
+}
+
 List<({int afterLine, String content})> _editableSpacerRanges(
   List<_EditableDiffSpacer> spacers,
 ) => <({int afterLine, String content})>[
@@ -1025,10 +1120,16 @@ class _EditableWorkingTreeDiffState extends State<_EditableWorkingTreeDiff> {
     _leftFallbackController = _DiffSyntaxTextEditingController(
       text: widget.baseline,
       syntax: widget.syntax,
+      highlightBackground: _diffIntralineHighlightColor(
+        GitDiffLineKind.deletion,
+      ),
     );
     _fallbackController = _DiffSyntaxTextEditingController(
       text: widget.document.currentText,
       syntax: widget.syntax,
+      highlightBackground: _diffIntralineHighlightColor(
+        GitDiffLineKind.addition,
+      ),
     );
     try {
       _leftController = code_forge.CodeForgeController()
@@ -1225,6 +1326,28 @@ class _EditableWorkingTreeDiffState extends State<_EditableWorkingTreeDiff> {
   }
 
   void _applyAlignmentDecorations() {
+    final ranges = _editableIntralineRanges(
+      widget.baseline,
+      _editableDisplayedText,
+      widget.whitespaceMode,
+    );
+    _leftFallbackController.updateHighlightRanges(ranges.left);
+    _fallbackController.updateHighlightRanges(ranges.right);
+    if (_usesCodeForge) {
+      for (final (controller, positions) in [
+        (_leftController!, ranges.left),
+        (_controller!, ranges.right),
+      ]) {
+        controller.searchHighlights = [
+          for (final position in positions)
+            code_forge.SearchHighlight(
+              start: position.start,
+              end: position.end,
+            ),
+        ];
+        controller.searchHighlightsChanged = true;
+      }
+    }
     if (!_usesCodeForge) return;
     const spacerColor = Colors.transparent;
     _leftController!.setGitDiffDecorations(
@@ -1443,6 +1566,18 @@ class _EditableWorkingTreeDiffState extends State<_EditableWorkingTreeDiff> {
             language: widget.syntax.language,
             languageId: widget.syntax.languageId,
             editorTheme: widget.syntax.editorTheme,
+            matchHighlightStyle: code_forge.MatchHighlightStyle(
+              currentMatchStyle: TextStyle(
+                backgroundColor: _diffIntralineHighlightColor(
+                  isLeft ? GitDiffLineKind.deletion : GitDiffLineKind.addition,
+                ),
+              ),
+              otherMatchStyle: TextStyle(
+                backgroundColor: _diffIntralineHighlightColor(
+                  isLeft ? GitDiffLineKind.deletion : GitDiffLineKind.addition,
+                ),
+              ),
+            ),
             textStyle: textStyle,
             innerPadding: const EdgeInsets.all(AleraTokens.space8),
           ),

@@ -28,6 +28,20 @@ final class _IntralineRune {
 
 const int _maxIntralineLcsCells = 65536;
 
+// Keep the whole-line tint subtle while making the characters that actually
+// changed easy to distinguish against Alera's dark surface.
+const double _diffIntralineHighlightAlpha = 0.45;
+
+Color _diffIntralineHighlightColor(GitDiffLineKind kind) => switch (kind) {
+  GitDiffLineKind.addition => AleraTokens.success.withValues(
+    alpha: _diffIntralineHighlightAlpha,
+  ),
+  GitDiffLineKind.deletion => AleraTokens.error.withValues(
+    alpha: _diffIntralineHighlightAlpha,
+  ),
+  _ => Colors.transparent,
+};
+
 List<_IntralineRune> _intralineRunes(String text) {
   final result = <_IntralineRune>[];
   var offset = 0;

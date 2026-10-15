@@ -66,9 +66,7 @@ class const _FullFileDiffLine({required final _FullFileLine line})
           lineIndex: math.max((line.lineNumber ?? 1) - 1, 0),
         ) ??
         TextSpan(text: line.text, style: codeStyle);
-    final intralineBackground = line.kind == GitDiffLineKind.addition
-        ? AleraTokens.success.withValues(alpha: 0.22)
-        : AleraTokens.error.withValues(alpha: 0.22);
+    final intralineBackground = _diffIntralineHighlightColor(line.kind);
     final renderedSpan =
         line.kind == GitDiffLineKind.addition ||
             line.kind == GitDiffLineKind.deletion

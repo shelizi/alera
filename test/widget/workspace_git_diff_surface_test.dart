@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/app/providers.dart'
     show WorkbenchController, workbenchControllerProvider;
 import 'package:alera/src/design_system/icons/alera_icons.dart';
@@ -78,6 +79,23 @@ List<String> _textSpanBackgroundTexts(InlineSpan span) {
 
   collect(span);
   return texts;
+}
+
+Set<Color> _textSpanBackgroundColors(InlineSpan span) {
+  final colors = <Color>{};
+
+  void collect(InlineSpan current) {
+    if (current case final TextSpan textSpan) {
+      final color = textSpan.style?.backgroundColor;
+      if (color != null) colors.add(color);
+      for (final child in textSpan.children ?? const <InlineSpan>[]) {
+        collect(child);
+      }
+    }
+  }
+
+  collect(span);
+  return colors;
 }
 
 void main() {
@@ -342,6 +360,14 @@ void main() {
     expect(
       _textSpanBackgroundTexts(changedText('const value = 12945;').textSpan!),
       <String>['9'],
+    );
+    expect(
+      _textSpanBackgroundColors(changedText('const value = 12345;').textSpan!),
+      contains(AleraTokens.error.withValues(alpha: 0.45)),
+    );
+    expect(
+      _textSpanBackgroundColors(changedText('const value = 12945;').textSpan!),
+      contains(AleraTokens.success.withValues(alpha: 0.45)),
     );
   });
 
@@ -1067,6 +1093,79 @@ void main() {
     expect(_textSpanColors(originalSpan).length, greaterThan(1));
     expect(_textSpanColors(editorSpan).length, greaterThan(1));
   });
+
+  testWidgets(
+    'editable side-by-side highlights changed characters as text changes',
+    (tester) async {
+      const oldCode = 'const value = 12345;\n';
+      const newCode = 'const value = 12945;\n';
+      final backend = FakeGitBackend()
+        ..gitDiffResult = const GitDiffResult(
+          files: <GitDiffFile>[
+            GitDiffFile(
+              path: 'lib/main.dart',
+              area: .unstaged,
+              status: .modified,
+              lines: <GitDiffLine>[
+                GitDiffLine.hunk('@@ -1,1 +1,1 @@'),
+                GitDiffLine.deletion('-const value = 12345;'),
+                GitDiffLine.addition('+const value = 12945;'),
+              ],
+            ),
+          ],
+        )
+        ..diffBlobBytesBySide[(filePath: 'lib/main.dart', oldSide: true)] =
+            Uint8List.fromList(oldCode.codeUnits)
+        ..diffBlobBytesBySide[(filePath: 'lib/main.dart', oldSide: false)] =
+            Uint8List.fromList(newCode.codeUnits);
+
+      await _pumpDiffSurface(
+        tester,
+        backend: backend,
+        workspaceFileService: _EditableDiffFileService(content: newCode),
+        tab: _diffTab(filePath: 'lib/main.dart', title: 'main.dart unstaged'),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Switch to Side-by-Side View'));
+      await tester.pumpAndSettle();
+
+      final original = find.byKey(
+        const ValueKey<String>('git-diff-working-tree-original-lib/main.dart'),
+      );
+      final editor = find.byKey(
+        const ValueKey<String>('git-diff-working-tree-editor-lib/main.dart'),
+      );
+
+      TextSpan displayedSpan(Finder finder) {
+        final field = tester.widget<TextField>(finder);
+        return field.controller!.buildTextSpan(
+          context: tester.element(finder),
+          style: field.style,
+          withComposing: false,
+        );
+      }
+
+      expect(_textSpanBackgroundTexts(displayedSpan(original)), <String>['3']);
+      expect(_textSpanBackgroundTexts(displayedSpan(editor)), <String>['9']);
+      expect(
+        _textSpanBackgroundColors(displayedSpan(original)),
+        contains(AleraTokens.error.withValues(alpha: 0.45)),
+      );
+      expect(
+        _textSpanBackgroundColors(displayedSpan(editor)),
+        contains(AleraTokens.success.withValues(alpha: 0.45)),
+      );
+
+      await tester.enterText(editor, oldCode);
+      await tester.pumpAndSettle();
+      expect(_textSpanBackgroundTexts(displayedSpan(original)), isEmpty);
+      expect(_textSpanBackgroundTexts(displayedSpan(editor)), isEmpty);
+
+      await tester.enterText(editor, newCode);
+      await tester.pumpAndSettle();
+      expect(_textSpanBackgroundTexts(displayedSpan(editor)), <String>['9']);
+    },
+  );
 
   testWidgets('editable side-by-side shows x scrollbars and syncs x/y scroll', (
     tester,

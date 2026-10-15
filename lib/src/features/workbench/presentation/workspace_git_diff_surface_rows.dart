@@ -1081,9 +1081,7 @@ class const _DiffLine({
     final contentBaseSpan = syntaxHighlighted
         ? syntax.lineSpan(changedContent)
         : TextSpan(text: changedContent, style: baseStyle);
-    final intralineBackground = line.kind == GitDiffLineKind.addition
-        ? AleraTokens.success.withValues(alpha: 0.22)
-        : AleraTokens.error.withValues(alpha: 0.22);
+    final intralineBackground = _diffIntralineHighlightColor(line.kind);
     final highlightedContent = isChangedLine
         ? _intralineHighlightedSpan(
             text: changedContent,

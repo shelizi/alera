@@ -84,10 +84,18 @@ class _DiffSyntaxTextEditingController extends TextEditingController {
   _DiffSyntaxTextEditingController({
     required String text,
     required _DiffSyntaxStyle syntax,
+    this.highlightBackground = Colors.transparent,
   }) : _syntax = syntax,
        super(text: text);
 
   _DiffSyntaxStyle _syntax;
+  final Color highlightBackground;
+  List<_IntralineRange> highlightRanges = const [];
+
+  void updateHighlightRanges(List<_IntralineRange> ranges) {
+    highlightRanges = ranges;
+    notifyListeners();
+  }
 
   void updateSyntax(_DiffSyntaxStyle syntax) {
     if (identical(_syntax, syntax)) return;
@@ -110,7 +118,13 @@ class _DiffSyntaxTextEditingController extends TextEditingController {
         withComposing: withComposing,
       );
     }
-    return _syntax.documentSpan(text, style: style);
+    final base = _syntax.documentSpan(text, style: style);
+    return _intralineHighlightedSpan(
+      text: text,
+      baseSpan: base,
+      ranges: highlightRanges,
+      background: highlightBackground,
+    );
   }
 }
 

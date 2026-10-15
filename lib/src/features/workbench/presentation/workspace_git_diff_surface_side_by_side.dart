@@ -177,11 +177,9 @@ class const _SideBySideCell({
           lineIndex: math.max((line?.lineNumber ?? 1) - 1, 0),
         ) ??
         TextSpan(text: text, style: codeStyle);
-    final intralineBackground = switch (kind) {
-      GitDiffLineKind.addition => AleraTokens.success.withValues(alpha: 0.22),
-      GitDiffLineKind.deletion => AleraTokens.error.withValues(alpha: 0.22),
-      _ => Colors.transparent,
-    };
+    final intralineBackground = _diffIntralineHighlightColor(
+      kind ?? GitDiffLineKind.context,
+    );
     final renderedSpan = _intralineHighlightedSpan(
       text: text,
       baseSpan: baseSpan,
