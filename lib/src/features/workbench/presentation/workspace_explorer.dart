@@ -48,6 +48,42 @@ part 'workspace_explorer_widgets.dart';
 bool _isDirectoryEntry(native.WorkspaceFileEntry? entry) =>
     entry?.kind.name == 'directory';
 
+/// Reuses the Explorer's exact file context menu on file-search surfaces such
+/// as Ctrl+P Quick Open. The action names are mapped from the Explorer enum,
+/// so the action list never diverges between search and the file tree.
+class const WorkspaceFileSearchResultContextMenu({
+  super.key,
+  required final Widget child,
+  required final String fileManagerLabel,
+  required final ExternalEditorSpec? externalEditor,
+  required final List<ExternalEditorSpec> installedExternalEditors,
+  required final ValueChanged<ExternalEditorKind> onExternalEditorPicked,
+  required final VoidCallback onMenuOpening,
+  required final Future<void> Function(BuildContext, String) onAction,
+}) extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    final menu = _ExplorerMenuDelegate(
+      fileManagerLabel: fileManagerLabel,
+      canOpenInAlera: true,
+      canFocusSourceControlFolders: false,
+      isFocusedSourceControlRoot: (_) => false,
+      externalEditor: externalEditor,
+      installedExternalEditors: installedExternalEditors,
+      onExternalEditorPicked: onExternalEditorPicked,
+      onMenuOpening: () {},
+      onAction: (_, _, _) async {},
+    );
+    return menu.wrapFilteredFileWithMenu(
+      context,
+      child,
+      onMenuOpeningForFile: onMenuOpening,
+      onEntryAction: (menuContext, action) =>
+          onAction(menuContext, action.name),
+    );
+  }
+}
+
 class _WorkspaceExplorerUiState {
   const _WorkspaceExplorerUiState({
     required this.loadedDirectories,
@@ -399,8 +435,9 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
     if (!Platform.isWindows ||
         _checkingNativeDrag ||
         _nativeDragHandedOff ||
-        !mounted)
+        !mounted) {
       return;
+    }
     _checkingNativeDrag = true;
     try {
       final view = View.of(context);

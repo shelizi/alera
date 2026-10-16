@@ -1,23 +1,35 @@
 import 'dart:async';
+import 'dart:io';
 
+import 'package:alera/src/app/providers.dart';
 import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
+import 'package:alera/src/design_system/feedback/alera_toast.dart';
 import 'package:alera/src/design_system/forms/alera_checkbox.dart';
 import 'package:alera/src/design_system/forms/alera_text_field.dart';
 import 'package:alera/src/design_system/icons/alera_file_icon.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
+import 'package:alera/src/design_system/layout/alera_confirm_dialog.dart';
 import 'package:alera/src/design_system/typography/alera_search_highlighted_text.dart';
 import 'package:alera/src/design_system/layout/alera_dialog.dart';
-import 'package:alera/src/features/settings/application/settings_controller.dart';
-import 'package:alera/src/features/workbench/application/workbench_controller.dart';
-import 'package:alera/src/features/workbench/application/workbench_providers.dart';
+import 'package:alera/src/features/external_editor/application/external_editor_providers.dart';
+import 'package:alera/src/features/external_editor/domain/external_editor_launcher.dart';
+import 'package:alera/src/features/external_editor/domain/external_editor_spec.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_open_coordinator_provider.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_service.dart';
+import 'package:alera/src/features/workbench/domain/workspace.dart';
+import 'package:alera/src/features/workbench/domain/workspace_relative_path.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
+import 'package:alera/src/features/workbench/presentation/terminal_path_drop.dart';
+import 'package:alera/src/features/workbench/presentation/workspace_explorer.dart';
+import 'package:alera/src/features/workbench/presentation/workspace_git_file_compare.dart';
 import 'package:alera/src/rust/api/workspace_files.dart' as native;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path/path.dart' as p;
+
+part 'quick_open_dialog_context_actions.dart';
 
 const _quickOpenResultLimit = 50;
 
@@ -41,6 +53,12 @@ class _QuickOpenDialogState extends ConsumerState<QuickOpenDialog> {
   int _searchGeneration = 0;
   final Map<String, GlobalKey> _rowKeys = <String, GlobalKey>{};
   final ScrollController _resultsScrollController = ScrollController();
+  final Set<String> _contextSelectedPaths = <String>{};
+  String? _contextSelectionAnchor;
+  _QuickOpenContextClipboard? _contextClipboard;
+  ExternalEditorKind? _pickedExternalEditorKind;
+  StreamSubscription<String>? _indexRefreshSubscription;
+  String _previousQuery = '';
 
   @override
   void initState() {
@@ -48,6 +66,9 @@ class _QuickOpenDialogState extends ConsumerState<QuickOpenDialog> {
     _queryController = TextEditingController();
     _queryFocusNode = FocusNode();
     _workspaceFiles = ref.read(workspaceFileServiceProvider);
+    _indexRefreshSubscription = _workspaceFiles.quickOpenRefreshes.listen(
+      _handleQuickOpenIndexRefreshed,
+    );
     ref.listenManual<String?>(
       workbenchControllerProvider.select((state) => state.activeWorkspaceId),
       (previous, next) {
@@ -64,6 +85,7 @@ class _QuickOpenDialogState extends ConsumerState<QuickOpenDialog> {
     _workspaceGeneration++;
     _searchGeneration++;
     _queryController.dispose();
+    unawaited(_indexRefreshSubscription?.cancel());
     _queryFocusNode.dispose();
     _resultsScrollController.dispose();
     super.dispose();
@@ -78,6 +100,10 @@ class _QuickOpenDialogState extends ConsumerState<QuickOpenDialog> {
     _workspaceId = workspaceId;
     if (workspaceChanged) {
       _queryController.clear();
+      _contextSelectedPaths.clear();
+      _contextSelectionAnchor = null;
+      _contextClipboard = null;
+      _previousQuery = '';
     }
     if (!mounted) {
       return;
@@ -140,6 +166,9 @@ class _QuickOpenDialogState extends ConsumerState<QuickOpenDialog> {
       setState(() {
         _matches = matches;
         _selectedIndex = 0;
+        _contextSelectedPaths.removeWhere(
+          (path) => !matches.any((match) => match.relativePath == path),
+        );
         _loading = false;
         _loadError = null;
       });
@@ -173,6 +202,11 @@ class _QuickOpenDialogState extends ConsumerState<QuickOpenDialog> {
       ref.read(settingsControllerProvider).editor.quickOpenExcludedDirectories;
 
   void _updateQuery(String query) {
+    if (_previousQuery != query) {
+      _previousQuery = query;
+      _contextSelectedPaths.clear();
+      _contextSelectionAnchor = null;
+    }
     final workspace = ref.read(workbenchControllerProvider).activeWorkspace;
     final workspaceGeneration = _workspaceGeneration;
     final searchGeneration = ++_searchGeneration;
@@ -278,8 +312,25 @@ class _QuickOpenDialogState extends ConsumerState<QuickOpenDialog> {
     if (workspace == null || _matches.isEmpty) {
       return;
     }
-    final relativePath = _matches[_selectedIndex].relativePath;
+    _openFile(_matches[_selectedIndex].relativePath);
+  }
+
+  void _openFile(String relativePath, {bool forceAlera = false}) {
+    final workspace = ref.read(workbenchControllerProvider).activeWorkspace;
+    if (workspace == null) return;
     Navigator.of(context).pop();
+    if (forceAlera) {
+      unawaited(
+        ref
+            .read(workbenchControllerProvider.notifier)
+            .openFileTab(
+              workspace: workspace,
+              relativePath: relativePath,
+              preview: false,
+            ),
+      );
+      return;
+    }
     unawaited(
       ref
           .read(workspaceFileOpenCoordinatorProvider)
@@ -335,6 +386,10 @@ class _QuickOpenDialogState extends ConsumerState<QuickOpenDialog> {
         (state) => state.viewPrefs.quickOpenIncludeGitignored,
       ),
     );
+    final externalEditor = ref.watch(resolvedExternalEditorProvider).value;
+    final installedExternalEditors =
+        ref.watch(installedExternalEditorsProvider).value ??
+        const <ExternalEditorSpec>[];
     return Focus(
       onKeyEvent: _handleKey,
       child: AleraDialog(
@@ -389,7 +444,13 @@ class _QuickOpenDialogState extends ConsumerState<QuickOpenDialog> {
                   ),
                 ),
                 const SizedBox(height: AleraTokens.space12),
-                Expanded(child: _buildResults(theme)),
+                Expanded(
+                  child: _buildResults(
+                    theme,
+                    externalEditor: externalEditor,
+                    installedExternalEditors: installedExternalEditors,
+                  ),
+                ),
                 const Divider(height: AleraTokens.space20),
                 Text(
                   context.tr(
@@ -407,7 +468,11 @@ class _QuickOpenDialogState extends ConsumerState<QuickOpenDialog> {
     );
   }
 
-  Widget _buildResults(ThemeData theme) {
+  Widget _buildResults(
+    ThemeData theme, {
+    required ExternalEditorSpec? externalEditor,
+    required List<ExternalEditorSpec> installedExternalEditors,
+  }) {
     if (_loading) {
       return Center(
         child: Column(
@@ -481,12 +546,21 @@ class _QuickOpenDialogState extends ConsumerState<QuickOpenDialog> {
           match.relativePath,
           () => GlobalKey(),
         );
-        return Material(
+        final row = Material(
           key: rowKey,
-          color: selected ? AleraTokens.accentSubtle : null,
+          color: selected || _contextSelectedPaths.contains(match.relativePath)
+              ? AleraTokens.accentSubtle
+              : null,
           child: InkWell(
             onTap: () {
-              setState(() => _selectedIndex = index);
+              if (_handleQuickOpenModifiedSelection(index)) return;
+              setState(() {
+                _selectedIndex = index;
+                _contextSelectedPaths
+                  ..clear()
+                  ..add(match.relativePath);
+                _contextSelectionAnchor = match.relativePath;
+              });
               _openSelected();
             },
             child: Padding(
@@ -515,6 +589,21 @@ class _QuickOpenDialogState extends ConsumerState<QuickOpenDialog> {
               ),
             ),
           ),
+        );
+        return WorkspaceFileSearchResultContextMenu(
+          fileManagerLabel: ref
+              .read(workspaceFolderOpenerProvider)
+              .fileManagerLabel,
+          externalEditor: externalEditor,
+          installedExternalEditors: installedExternalEditors,
+          onExternalEditorPicked: (kind) => _pickedExternalEditorKind = kind,
+          onMenuOpening: () => _selectQuickOpenContextTarget(index),
+          onAction: (menuContext, action) => _handleQuickOpenContextAction(
+            menuContext,
+            match.relativePath,
+            action,
+          ),
+          child: row,
         );
       },
     );

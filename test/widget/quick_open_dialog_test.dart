@@ -1,24 +1,300 @@
 import 'dart:async';
 
+import 'package:alera/src/app/providers.dart';
+import 'package:alera/src/features/external_editor/application/external_editor_providers.dart';
 import 'package:alera/src/features/external_editor/domain/external_editor_launch_result.dart';
 import 'package:alera/src/features/external_editor/domain/external_editor_launcher.dart';
-import 'package:alera/src/features/settings/application/settings_controller.dart';
+import 'package:alera/src/features/external_editor/domain/external_editor_spec.dart';
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
-import 'package:alera/src/features/workbench/application/workbench_controller.dart';
-import 'package:alera/src/features/workbench/application/workbench_providers.dart';
 import 'package:alera/src/features/workbench/application/workbench_state.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_open_coordinator.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_open_coordinator_provider.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_service.dart';
+import 'package:alera/src/features/workbench/application/workspace_folder_opener.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/presentation/workbench_dialog_launchers.dart';
 import 'package:alera/src/rust/api/workspace_files.dart' as native;
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:alera/src/shared/infra/process/process_runner.dart';
+import 'package:path/path.dart' as p;
 
 void main() {
+  testWidgets(
+    'Ctrl+P results share Explorer file menu and retain Enter opening',
+    (tester) async {
+      String? copied;
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        (call) async {
+          if (call.method == 'Clipboard.setData') {
+            copied =
+                (call.arguments as Map<Object?, Object?>)['text'] as String?;
+          }
+          return null;
+        },
+      );
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          SystemChannels.platform,
+          null,
+        ),
+      );
+
+      final workspace = _workspace('workspace-1', 'Main', '/repo/main');
+      final controller = _QuickOpenTestController(_state(workspace));
+      await _pumpQuickOpen(
+        tester,
+        controller: controller,
+        service: _QuickOpenFileService(
+          entries: <String>['lib/first.dart', 'lib/second.dart'],
+        ),
+        folderOpener: _QuickOpenFolderOpener(),
+        externalEditorLauncher: _QuickOpenExternalEditorLauncher(),
+      );
+      await tester.tap(find.text('Open Quick Open'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(
+        find.text('lib/second.dart'),
+        buttons: kSecondaryMouseButton,
+      );
+      await tester.pumpAndSettle();
+      for (final label in <String>[
+        'New file',
+        'New folder',
+        'Copy',
+        'Cut',
+        'Paste',
+        'Copy path',
+        'Copy relative path',
+        'Duplicate',
+      ]) {
+        expect(find.text(label), findsOneWidget, reason: label);
+      }
+      await _quickOpenMenuScrollTo(tester, 'Open in Alera');
+      expect(find.text('Open in Zed'), findsOneWidget);
+      expect(find.text('Open in Alera'), findsOneWidget);
+      await _quickOpenMenuScrollTo(tester, 'View File History');
+      expect(find.text('View File History'), findsOneWidget);
+      await _quickOpenMenuScrollTo(tester, 'Compare With Branch...');
+      expect(find.text('Compare With Branch...'), findsOneWidget);
+      await _quickOpenMenuScrollTo(tester, 'Delete');
+      expect(find.text('Delete'), findsOneWidget);
+      // Tapping outside the menu must not close Quick Open.
+      await tester.tapAt(const Offset(760, 120));
+      await tester.pumpAndSettle();
+
+      await tester.tap(
+        find.text('lib/second.dart'),
+        buttons: kSecondaryMouseButton,
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Copy relative path'));
+      await tester.pumpAndSettle();
+      expect(copied, 'lib/second.dart');
+      expect(find.text('Quick Open'), findsOneWidget);
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      expect(controller.openedFiles, <String>['lib/second.dart']);
+    },
+  );
+
+  testWidgets('Ctrl+P can explicitly open file in Alera from right-click', (
+    tester,
+  ) async {
+    final workspace = _workspace('workspace-1', 'Main', '/repo/main');
+    final controller = _QuickOpenTestController(_state(workspace));
+    final launcher = _QuickOpenExternalEditorLauncher();
+    await _pumpQuickOpen(
+      tester,
+      controller: controller,
+      service: _QuickOpenFileService(entries: <String>['deep/main.dart']),
+      externalEditorLauncher: launcher,
+    );
+    await tester.tap(find.text('Open Quick Open'));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.text('deep/main.dart'),
+      buttons: kSecondaryMouseButton,
+    );
+    await tester.pumpAndSettle();
+    await _quickOpenMenuScrollTo(tester, 'Open in Alera');
+    await tester.tap(find.text('Open in Alera'));
+    await tester.pumpAndSettle();
+    expect(controller.openedFiles, <String>['deep/main.dart']);
+    expect(launcher.fileRequests, isEmpty);
+  });
+
+  testWidgets('Ctrl+P context copy/paste supports multi-selected files', (
+    tester,
+  ) async {
+    final workspace = _workspace('workspace-1', 'Main', '/repo/main');
+    final controller = _QuickOpenTestController(_state(workspace));
+    final service = _QuickOpenFileService(
+      entries: <String>['src/a.dart', 'src/b.dart', 'dest/c.dart'],
+    );
+    await _pumpQuickOpen(tester, controller: controller, service: service);
+    await tester.tap(find.text('Open Quick Open'));
+    await tester.pumpAndSettle();
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.tap(find.text('src/a.dart'));
+    await tester.tap(find.text('src/b.dart'));
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pumpAndSettle();
+    expect(controller.openedFiles, isEmpty);
+
+    await tester.tap(find.text('src/a.dart'), buttons: kSecondaryMouseButton);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Copy'));
+    await tester.pumpAndSettle();
+    expect(service.clipboardWrittenPaths.map(p.basename), ['a.dart', 'b.dart']);
+
+    await tester.tap(find.text('dest/c.dart'), buttons: kSecondaryMouseButton);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Paste'));
+    await tester.pumpAndSettle();
+    expect(service.copiedEntries, <String>[
+      'src/a.dart->dest',
+      'src/b.dart->dest',
+    ]);
+    expect(service.refreshedWorkspacePaths, contains('/repo/main'));
+  });
+
+  testWidgets('Ctrl+P rename and delete use original nested file paths', (
+    tester,
+  ) async {
+    final workspace = _workspace('workspace-1', 'Main', '/repo/main');
+    final controller = _QuickOpenTestController(_state(workspace));
+    final service = _QuickOpenFileService(
+      entries: <String>['lib/deep/before.dart', 'lib/deep/remove.dart'],
+    );
+    await _pumpQuickOpen(tester, controller: controller, service: service);
+    await tester.tap(find.text('Open Quick Open'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(
+      find.text('lib/deep/before.dart'),
+      buttons: kSecondaryMouseButton,
+    );
+    await tester.pumpAndSettle();
+    await _quickOpenMenuScrollTo(tester, 'Rename');
+    await tester.tap(find.text('Rename'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.byType(TextField),
+      ),
+      'after.dart',
+    );
+    await tester.tap(find.text('Create'));
+    await tester.pumpAndSettle();
+    expect(service.renamedEntries, <String>[
+      'lib/deep/before.dart->after.dart',
+    ]);
+    expect(controller.movedFileTabs, <String>[
+      'lib/deep/before.dart->lib/deep/after.dart',
+    ]);
+
+    await tester.tap(
+      find.text('lib/deep/remove.dart'),
+      buttons: kSecondaryMouseButton,
+    );
+    await tester.pumpAndSettle();
+    await _quickOpenMenuScrollTo(tester, 'Delete');
+    await tester.tap(find.text('Delete'));
+    await tester.pumpAndSettle();
+    expect(find.text('Delete remove.dart'), findsOneWidget);
+    await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
+    await tester.pumpAndSettle();
+    expect(service.deletedEntries, <String>['lib/deep/remove.dart']);
+    expect(service.refreshedWorkspacePaths, hasLength(2));
+  });
+
+  testWidgets('Ctrl+P menu opens system app and selected external editor', (
+    tester,
+  ) async {
+    final workspace = _workspace('workspace-1', 'Main', '/repo/main');
+    final controller = _QuickOpenTestController(_state(workspace));
+    final service = _QuickOpenFileService(
+      entries: <String>['lib/deep/entry.dart'],
+    );
+    final folderOpener = _QuickOpenFolderOpener();
+    final launcher = _QuickOpenExternalEditorLauncher();
+    await _pumpQuickOpen(
+      tester,
+      controller: controller,
+      service: service,
+      folderOpener: folderOpener,
+      externalEditorLauncher: launcher,
+    );
+    await tester.tap(find.text('Open Quick Open'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(
+      find.text('lib/deep/entry.dart'),
+      buttons: kSecondaryMouseButton,
+    );
+    await tester.pumpAndSettle();
+    await _quickOpenMenuScrollTo(tester, 'Open with Default Application');
+    await tester.tap(find.text('Open with Default Application'));
+    await tester.pumpAndSettle();
+    expect(
+      folderOpener.openedPaths.single,
+      p.join('/repo/main', 'lib', 'deep', 'entry.dart'),
+    );
+
+    await tester.tap(
+      find.text('lib/deep/entry.dart'),
+      buttons: kSecondaryMouseButton,
+    );
+    await tester.pumpAndSettle();
+    await _quickOpenMenuScrollTo(tester, 'Open in Zed');
+    await tester.tap(find.text('Open in Zed'));
+    await tester.pumpAndSettle();
+    expect(launcher.fileRequests, hasLength(1));
+    expect(
+      launcher.fileRequests.single.filePath,
+      p.join('/repo/main', 'lib', 'deep', 'entry.dart'),
+    );
+  });
+
+  testWidgets('Ctrl+P creates a file beside selected search result', (
+    tester,
+  ) async {
+    final workspace = _workspace('workspace-1', 'Main', '/repo/main');
+    final controller = _QuickOpenTestController(_state(workspace));
+    final service = _QuickOpenFileService(
+      entries: <String>['lib/deep/existing.dart'],
+    );
+    await _pumpQuickOpen(tester, controller: controller, service: service);
+    await tester.tap(find.text('Open Quick Open'));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.text('lib/deep/existing.dart'),
+      buttons: kSecondaryMouseButton,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('New file'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.byType(TextField),
+      ),
+      'added.dart',
+    );
+    await tester.tap(find.text('Create'));
+    await tester.pumpAndSettle();
+    expect(service.createdEntries, <String>['lib/deep/added.dart']);
+  });
+
   testWidgets('shows loading, filters files, and opens the selected file', (
     tester,
   ) async {
@@ -344,17 +620,29 @@ void main() {
   });
 }
 
+Future<void> _quickOpenMenuScrollTo(WidgetTester tester, String label) async {
+  await tester.scrollUntilVisible(
+    find.text(label),
+    100,
+    scrollable: find.byType(Scrollable).last,
+  );
+  await tester.pumpAndSettle();
+}
+
 Future<void> _pumpQuickOpen(
   WidgetTester tester, {
   required _QuickOpenTestController controller,
   required _QuickOpenFileService service,
   FocusNode? anchorFocus,
   WorkspaceFileOpenCoordinator? coordinator,
+  WorkspaceFolderOpener? folderOpener,
+  _QuickOpenExternalEditorLauncher? externalEditorLauncher,
 }) async {
+  final launcher = externalEditorLauncher ?? _QuickOpenExternalEditorLauncher();
   final effectiveCoordinator =
       coordinator ??
       WorkspaceFileOpenCoordinator(
-        externalEditorLauncher: _QuickOpenExternalEditorLauncher(),
+        externalEditorLauncher: launcher,
         defaultTargetReader: () => CodeOpenTarget.alera,
       );
   await tester.pumpWidget(
@@ -363,6 +651,20 @@ Future<void> _pumpQuickOpen(
         settingsControllerProvider.overrideWithValue(AleraSettings.defaults),
         workbenchControllerProvider.overrideWith(() => controller),
         workspaceFileServiceProvider.overrideWithValue(service),
+        if (folderOpener != null)
+          workspaceFolderOpenerProvider.overrideWithValue(folderOpener),
+        if (externalEditorLauncher != null) ...[
+          installedExternalEditorsProvider.overrideWith(
+            (ref) async => <ExternalEditorSpec>[
+              externalEditorSpecs[ExternalEditorKind.zed]!,
+            ],
+          ),
+          resolvedExternalEditorProvider.overrideWith(
+            (ref) async => externalEditorSpecs[ExternalEditorKind.zed],
+          ),
+          externalEditorLauncherForProvider(.zed)
+              .overrideWithValue(externalEditorLauncher),
+        ],
         workspaceFileOpenCoordinatorProvider.overrideWithValue(
           effectiveCoordinator,
         ),
@@ -434,6 +736,129 @@ class _QuickOpenFileService({
       searchGates =
       const <String, Completer<List<native.WorkspaceQuickOpenMatch>>>{},
 }) extends WorkspaceFileService {
+  final StreamController<String> _refreshes =
+      StreamController<String>.broadcast(sync: true);
+  final List<String> refreshedWorkspacePaths = <String>[];
+  final List<String> clipboardWrittenPaths = <String>[];
+  final List<String> copiedEntries = <String>[];
+  final List<String> movedEntries = <String>[];
+  final List<String> renamedEntries = <String>[];
+  final List<String> deletedEntries = <String>[];
+  final List<String> createdEntries = <String>[];
+  WorkspaceFileClipboardPayload? systemClipboard;
+  int _clipboardSequence = 0;
+
+  @override
+  Stream<String> get quickOpenRefreshes => _refreshes.stream;
+
+  void emitRefresh(String workspacePath) => _refreshes.add(workspacePath);
+
+  @override
+  void scheduleQuickOpenRefresh({
+    required String workspacePath,
+    Duration debounce = const Duration(milliseconds: 500),
+  }) {
+    refreshedWorkspacePaths.add(workspacePath);
+  }
+
+  @override
+  Future<int?> writeSystemFileClipboard({
+    required List<String> paths,
+    required WorkspaceFileClipboardOperation operation,
+  }) async {
+    clipboardWrittenPaths
+      ..clear()
+      ..addAll(paths);
+    systemClipboard = WorkspaceFileClipboardPayload(
+      paths: List<String>.of(paths),
+      operation: operation,
+      sequenceNumber: ++_clipboardSequence,
+    );
+    return _clipboardSequence;
+  }
+
+  @override
+  Future<WorkspaceFileClipboardPayload?> readSystemFileClipboard() async =>
+      systemClipboard;
+
+  @override
+  Future<bool> clearSystemFileClipboardIfSequence(int sequenceNumber) async {
+    if (_clipboardSequence != sequenceNumber) return false;
+    systemClipboard = null;
+    _clipboardSequence++;
+    return true;
+  }
+
+  @override
+  Future<native.WorkspaceFileEntry> copyEntry({
+    required String workspacePath,
+    required String relativePath,
+    required String targetParentRelativePath,
+  }) async {
+    copiedEntries.add('$relativePath->$targetParentRelativePath');
+    return _quickOpenFileEntry(
+      '$targetParentRelativePath/${p.basename(relativePath)} copy',
+    );
+  }
+
+  @override
+  Future<native.WorkspaceFileEntry> moveEntry({
+    required String workspacePath,
+    required String relativePath,
+    required String targetParentRelativePath,
+  }) async {
+    movedEntries.add('$relativePath->$targetParentRelativePath');
+    return _quickOpenFileEntry(
+      '$targetParentRelativePath/${p.basename(relativePath)}',
+    );
+  }
+
+  @override
+  Future<native.WorkspaceFileEntry> renameEntry({
+    required String workspacePath,
+    required String relativePath,
+    required String newName,
+  }) async {
+    renamedEntries.add('$relativePath->$newName');
+    final parent = p.posix.dirname(relativePath);
+    return _quickOpenFileEntry(parent == '.' ? newName : '$parent/$newName');
+  }
+
+  @override
+  Future<void> deleteEntry({
+    required String workspacePath,
+    required String relativePath,
+    bool useTrash = true,
+  }) async {
+    deletedEntries.add(relativePath);
+  }
+
+  @override
+  Future<native.WorkspaceFileEntry> createFile({
+    required String workspacePath,
+    required String parentRelativePath,
+    required String name,
+  }) async {
+    final path = parentRelativePath.isEmpty
+        ? name
+        : '$parentRelativePath/$name';
+    createdEntries.add(path);
+    return _quickOpenFileEntry(path);
+  }
+
+  @override
+  Future<native.WorkspaceFileEntry> createDirectory({
+    required String workspacePath,
+    required String parentRelativePath,
+    required String name,
+  }) async {
+    final path = parentRelativePath.isEmpty
+        ? name
+        : '$parentRelativePath/$name';
+    createdEntries.add('$path/');
+    return _quickOpenFileEntry(path);
+  }
+
   final List<String> stoppedSessionIds = <String>[];
   final List<String> startedWorkspacePaths = <String>[];
   final List<List<String>> excludedDirectoryRequests = <List<String>>[];
@@ -557,6 +982,16 @@ class _QuickOpenTestController(final WorkbenchState _seed)
     extends WorkbenchController {
   final List<String> openedFiles = <String>[];
   final List<bool> openedPreviews = <bool>[];
+  final List<String> movedFileTabs = <String>[];
+
+  @override
+  Future<void> syncFileTabsAfterPathMove({
+    required Workspace workspace,
+    required String oldRelativePath,
+    required String newRelativePath,
+  }) async {
+    movedFileTabs.add('$oldRelativePath->$newRelativePath');
+  }
 
   @override
   WorkbenchState build() => _seed;
@@ -617,4 +1052,63 @@ class _QuickOpenExternalEditorLauncher implements ExternalEditorLauncher {
   Future<ExternalEditorLaunchResult> openWorkspace(
     String workspacePath,
   ) async => ExternalEditorLaunchResultFactories.opened;
+}
+
+native.WorkspaceFileEntry _quickOpenFileEntry(String relativePath) =>
+    native.WorkspaceFileEntry(
+      relativePath: relativePath,
+      name: p.posix.basename(relativePath),
+      kind: native.WorkspaceFileKind.file,
+      size: BigInt.zero,
+      modifiedMillis: 0,
+      contentToken: '',
+      isIgnored: false,
+      isHidden: false,
+      isSymlink: false,
+      isProtected: false,
+      hasChildrenHint: false,
+    );
+
+class _QuickOpenFolderOpener() extends WorkspaceFolderOpener {
+  this
+    : super(
+        processRunner: _QuickOpenNoopProcessRunner(),
+        platform: WorkspaceFolderPlatform.macos,
+      );
+
+  final List<String> revealedPaths = <String>[];
+  final List<String> openedPaths = <String>[];
+
+  @override
+  Future<WorkspaceFolderOpenResult> reveal(String path) async {
+    revealedPaths.add(path);
+    return const WorkspaceFolderOpenResult.success();
+  }
+
+  @override
+  Future<WorkspaceFolderOpenResult> openWithDefaultApplication(
+    String path,
+  ) async {
+    openedPaths.add(path);
+    return const WorkspaceFolderOpenResult.success();
+  }
+}
+
+class _QuickOpenNoopProcessRunner implements ProcessRunner {
+  @override
+  Future<ProcessRunOutput> run(
+    String executable,
+    List<String> arguments, {
+    String? workingDirectory,
+    Map<String, String>? environment,
+  }) async => const ProcessRunOutput(exitCode: 0, stdout: '', stderr: '');
+
+  @override
+  Future<StartedProcess> start(
+    String executable,
+    List<String> arguments, {
+    String? workingDirectory,
+    Map<String, String>? environment,
+    bool includeParentEnvironment = true,
+  }) => throw UnimplementedError();
 }
