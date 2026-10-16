@@ -267,9 +267,41 @@ class const _ExplorerMenuDelegate({
     BuildContext context,
     Widget child,
     tree.VisibleNode node,
-  ) {
+  ) => _wrapEntryMenu(
+    context,
+    child,
+    nodeType: node.type,
+    isFocusedRoot: () => isFocusedSourceControlRoot(node),
+    onEntryAction: (menuContext, action) => onAction(menuContext, node, action),
+  );
+
+  /// Quick-open filter results are not tree nodes. Reuse the exact same menu
+  /// entries and item handling instead of maintaining a second context menu.
+  Widget wrapFilteredFileWithMenu(
+    BuildContext context,
+    Widget child, {
+    required VoidCallback onMenuOpeningForFile,
+    required Future<void> Function(BuildContext, _ExplorerAction) onEntryAction,
+  }) => _wrapEntryMenu(
+    context,
+    child,
+    nodeType: tree.NodeType.file,
+    isFocusedRoot: () => false,
+    onBeforeOpen: onMenuOpeningForFile,
+    onEntryAction: onEntryAction,
+  );
+
+  Widget _wrapEntryMenu(
+    BuildContext context,
+    Widget child, {
+    required tree.NodeType nodeType,
+    required bool Function() isFocusedRoot,
+    required Future<void> Function(BuildContext, _ExplorerAction) onEntryAction,
+    VoidCallback? onBeforeOpen,
+  }) {
     Future<void> showMenuAt(Offset position) async {
       onMenuOpening();
+      onBeforeOpen?.call();
       final selected = await showMenu<_ExplorerAction>(
         context: context,
         position: .fromLTRB(position.dx, position.dy, position.dx, position.dy),
@@ -319,7 +351,7 @@ class const _ExplorerMenuDelegate({
             label: 'Reveal in $fileManagerLabel',
             leading: const Icon(AleraIcons.external, size: 16),
           ),
-          if (node.type == tree.NodeType.file)
+          if (nodeType == tree.NodeType.file)
             const AleraDropdownEntry<_ExplorerAction>(
               value: .openWithDefaultApplication,
               label: 'Open with Default Application',
@@ -337,13 +369,13 @@ class const _ExplorerMenuDelegate({
                 installed: installedExternalEditors,
               ),
             ),
-          if (canOpenInAlera && node.type == tree.NodeType.file)
+          if (canOpenInAlera && nodeType == tree.NodeType.file)
             const AleraDropdownEntry<_ExplorerAction>(
               value: .openInAlera,
               label: 'Open in Alera',
               leading: Icon(AleraIcons.edit, size: 16),
             ),
-          if (node.type ==
+          if (nodeType ==
               tree.NodeType.file) ...<PopupMenuEntry<_ExplorerAction>>[
             const PopupMenuDivider(height: AleraTokens.space8),
             const AleraDropdownEntry<_ExplorerAction>(
@@ -369,10 +401,10 @@ class const _ExplorerMenuDelegate({
             leading: Icon(AleraIcons.edit, size: 16),
           ),
           if (canFocusSourceControlFolders &&
-              node.type ==
+              nodeType ==
                   tree.NodeType.folder) ...<PopupMenuEntry<_ExplorerAction>>[
             const PopupMenuDivider(height: AleraTokens.space8),
-            if (isFocusedSourceControlRoot(node))
+            if (isFocusedRoot())
               const AleraDropdownEntry<_ExplorerAction>(
                 value: .clearSourceControlRoot,
                 label: 'Clear Source Control Root',
@@ -405,7 +437,7 @@ class const _ExplorerMenuDelegate({
         ],
       );
       if (selected != null && context.mounted) {
-        await onAction(context, node, selected);
+        await onEntryAction(context, selected);
       }
     }
 

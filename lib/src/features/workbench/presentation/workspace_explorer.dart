@@ -123,6 +123,9 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
   );
   List<native.WorkspaceQuickOpenMatch> _filterMatches =
       const <native.WorkspaceQuickOpenMatch>[];
+  final Set<String> _filterSelectedPaths = <String>{};
+  String? _filterSelectionAnchor;
+  String _activeFilterQuery = '';
   bool _filterLoading = false;
   Object? _filterError;
   int _filterGeneration = 0;
@@ -164,6 +167,9 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
       _clipboard = null;
       _filterController.clear();
       _filterMatches = const <native.WorkspaceQuickOpenMatch>[];
+      _filterSelectedPaths.clear();
+      _filterSelectionAnchor = null;
+      _activeFilterQuery = '';
       _filterLoading = false;
       _filterError = null;
       _filterGeneration++;
@@ -204,6 +210,19 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
     final installedEditors =
         ref.watch(installedExternalEditorsProvider).value ??
         const <ExternalEditorSpec>[];
+    final entryMenuDelegate = _ExplorerMenuDelegate(
+      fileManagerLabel: _folderOpener.fileManagerLabel,
+      canOpenInAlera: widget.onOpenFileInAlera != null,
+      canFocusSourceControlFolders: widget.onFocusSourceControlFolder != null,
+      externalEditor: resolvedEditor,
+      installedExternalEditors: installedEditors,
+      onExternalEditorPicked: (kind) => _pickedExternalEditorKind = kind,
+      isFocusedSourceControlRoot: (node) =>
+          _entryByNodeId[node.id]?.relativePath ==
+          widget.focusedSourceControlRoot,
+      onMenuOpening: _suppressBackgroundMenuOnce,
+      onAction: _handleMenuAction,
+    );
     return Column(
       crossAxisAlignment: .stretch,
       children: <Widget>[
@@ -272,7 +291,7 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
                   shouldSuppress: _consumeBackgroundMenuSuppression,
                   onAction: _handleBackgroundAction,
                   child: _filterController.text.trim().isNotEmpty
-                      ? _buildFilterResults()
+                      ? _buildFilterResults(entryMenuDelegate)
                       : _loading && _controller.visibleNodes.isEmpty
                       ? const Center(child: CircularProgressIndicator())
                       : tree.DirectoryTreeTheme(
@@ -295,22 +314,7 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
                             expanderSize: AleraTokens.space24,
                             expanderGap: 0,
                             expanderBuilder: _buildExpander,
-                            contextMenuDelegate: _ExplorerMenuDelegate(
-                              fileManagerLabel: _folderOpener.fileManagerLabel,
-                              canOpenInAlera: widget.onOpenFileInAlera != null,
-                              canFocusSourceControlFolders:
-                                  widget.onFocusSourceControlFolder != null,
-                              externalEditor: resolvedEditor,
-                              installedExternalEditors: installedEditors,
-                              onExternalEditorPicked: (kind) =>
-                                  _pickedExternalEditorKind = kind,
-                              isFocusedSourceControlRoot: (node) {
-                                return _entryByNodeId[node.id]?.relativePath ==
-                                    widget.focusedSourceControlRoot;
-                              },
-                              onMenuOpening: _suppressBackgroundMenuOnce,
-                              onAction: _handleMenuAction,
-                            ),
+                            contextMenuDelegate: entryMenuDelegate,
                             nodeBuilder: _buildNode,
                           ),
                         ),
@@ -673,6 +677,16 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
   }
 
   List<String> _selectedPathsForEntry(native.WorkspaceFileEntry entry) {
+    if (_filterController.text.trim().isNotEmpty) {
+      if (!_filterSelectedPaths.contains(entry.relativePath)) {
+        return <String>[entry.relativePath];
+      }
+      return <String>[
+        for (final match in _filterMatches)
+          if (_filterSelectedPaths.contains(match.relativePath))
+            match.relativePath,
+      ];
+    }
     final clickedNodeId = _nodeIdForRelativePath(entry.relativePath);
     if (clickedNodeId == null ||
         !_controller.selection.isSelected(clickedNodeId)) {
@@ -698,6 +712,15 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
   }
 
   void _handleSelectAllShortcut() {
+    if (_filterController.text.trim().isNotEmpty) {
+      if (_filterMatches.isEmpty) return;
+      _filterSelectedPaths
+        ..clear()
+        ..addAll(_filterMatches.map((match) => match.relativePath));
+      _filterSelectionAnchor = _filterMatches.first.relativePath;
+      setState(() {});
+      return;
+    }
     final nodes = _controller.visibleNodes
         .where((node) => _entryByNodeId.containsKey(node.id))
         .toList(growable: false);
@@ -715,6 +738,18 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
   void _handleCutShortcut() => unawaited(_copySelection(cut: true));
 
   Future<void> _copySelection({required bool cut}) async {
+    if (_filterController.text.trim().isNotEmpty) {
+      for (final match in _filterMatches) {
+        if (_filterSelectedPaths.contains(match.relativePath)) {
+          await _copyToClipboard(
+            _filteredEntryForPath(match.relativePath),
+            cut: cut,
+          );
+          return;
+        }
+      }
+      return;
+    }
     for (final node in _controller.visibleNodes) {
       if (!_controller.selection.isSelected(node.id)) continue;
       final entry = _entryByNodeId[node.id];
@@ -769,6 +804,11 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
   void _onFilterChanged(String value, {bool refreshIndex = true}) {
     _controller.filterQuery = '';
     final query = value.trim();
+    if (_activeFilterQuery != query) {
+      _activeFilterQuery = query;
+      _filterSelectedPaths.clear();
+      _filterSelectionAnchor = null;
+    }
     final generation = ++_filterGeneration;
     if (query.isEmpty) {
       setState(() {
@@ -838,6 +878,12 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
       }
       setState(() {
         _filterMatches = matches;
+        _filterSelectedPaths.removeWhere(
+          (path) => !matches.any((match) => match.relativePath == path),
+        );
+        if (!_filterSelectedPaths.contains(_filterSelectionAnchor)) {
+          _filterSelectionAnchor = null;
+        }
         _filterLoading = false;
         _filterError = null;
       });
@@ -852,7 +898,73 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
     }
   }
 
-  Widget _buildFilterResults() {
+  native.WorkspaceFileEntry _filteredEntryForPath(String path) =>
+      _entryByPath[path] ??
+      native.WorkspaceFileEntry(
+        relativePath: path,
+        name: path.split('/').last,
+        kind: native.WorkspaceFileKind.file,
+        size: BigInt.zero,
+        modifiedMillis: 0,
+        contentToken: '',
+        isIgnored: false,
+        isHidden: false,
+        isSymlink: false,
+        isProtected: false,
+        hasChildrenHint: false,
+      );
+
+  void _handleFilteredContextMenuSelection(String path) {
+    // Match normal file-tree semantics: keep the existing multi-selection only
+    // when right-clicking one of its members; otherwise target just this file.
+    if (!_filterSelectedPaths.contains(path)) {
+      _filterSelectedPaths
+        ..clear()
+        ..add(path);
+    }
+    _filterSelectionAnchor = path;
+    setState(() {});
+  }
+
+  void _handleFilteredPrimaryTap(String path) {
+    final keyboard = HardwareKeyboard.instance;
+    if (keyboard.isShiftPressed && _filterSelectionAnchor != null) {
+      final first = _filterMatches.indexWhere(
+        (match) => match.relativePath == _filterSelectionAnchor,
+      );
+      final last = _filterMatches.indexWhere(
+        (match) => match.relativePath == path,
+      );
+      if (first >= 0 && last >= 0) {
+        _filterSelectedPaths
+          ..clear()
+          ..addAll(
+            _filterMatches
+                .skip(first < last ? first : last)
+                .take((first - last).abs() + 1)
+                .map((match) => match.relativePath),
+          );
+        setState(() {});
+        return;
+      }
+    }
+    if (keyboard.isControlPressed || keyboard.isMetaPressed) {
+      if (!_filterSelectedPaths.add(path)) {
+        _filterSelectedPaths.remove(path);
+      }
+      _filterSelectionAnchor = path;
+      setState(() {});
+      return;
+    }
+    _filterSelectedPaths
+      ..clear()
+      ..add(path);
+    _filterSelectionAnchor = path;
+    setState(() {});
+    widget.onOpenFile(path);
+  }
+
+  Widget _buildFilterResults(_ExplorerMenuDelegate entryMenuDelegate) {
     final query = _filterController.text.trim();
     if (_filterLoading && _filterMatches.isEmpty) {
       return const Center(child: CircularProgressIndicator());
@@ -902,32 +1014,45 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
       itemCount: matches.length,
       itemBuilder: (context, index) {
         final path = matches[index].relativePath;
-        return InkWell(
-          onTap: () => widget.onOpenFile(path),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: AleraTokens.space8),
-            child: Row(
-              children: <Widget>[
-                AleraFileIcon(
-                  pathOrName: path,
-                  kind: AleraFileIconKind.file,
-                  size: 15,
-                  fallbackColor: AleraTokens.foregroundMuted,
-                ),
-                const SizedBox(width: AleraTokens.space6),
-                Expanded(
-                  child: AleraSearchHighlightedText(
-                    text: path,
-                    query: query,
-                    maxLines: 1,
-                    overflow: .ellipsis,
-                    style: Theme.of(context).textTheme.bodySmall
-                        ?.copyWith(color: AleraTokens.foregroundMuted),
+        final selected = _filterSelectedPaths.contains(path);
+        final row = InkWell(
+          onTap: () => _handleFilteredPrimaryTap(path),
+          child: ColoredBox(
+            color: selected ? AleraTokens.surfaceElevated : Colors.transparent,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: AleraTokens.space8,
+              ),
+              child: Row(
+                children: <Widget>[
+                  AleraFileIcon(
+                    pathOrName: path,
+                    kind: AleraFileIconKind.file,
+                    size: 15,
+                    fallbackColor: AleraTokens.foregroundMuted,
                   ),
-                ),
-              ],
+                  const SizedBox(width: AleraTokens.space6),
+                  Expanded(
+                    child: AleraSearchHighlightedText(
+                      text: path,
+                      query: query,
+                      maxLines: 1,
+                      overflow: .ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall
+                          ?.copyWith(color: AleraTokens.foregroundMuted),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
+        );
+        return entryMenuDelegate.wrapFilteredFileWithMenu(
+          context,
+          row,
+          onMenuOpeningForFile: () => _handleFilteredContextMenuSelection(path),
+          onEntryAction: (menuContext, action) =>
+              _handleFilteredMenuAction(menuContext, path, action),
         );
       },
     );

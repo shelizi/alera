@@ -47,6 +47,8 @@ class _FakeWorkspaceFileService({
   final Set<_ListChildrenCall> failingListChildrenCalls = <_ListChildrenCall>{};
   final List<String> createdFiles = <String>[];
   final List<String> copiedFiles = <String>[];
+  final List<String> renamedFiles = <String>[];
+  final List<String> deletedFiles = <String>[];
   final List<String> movedFiles = <String>[];
   final List<_SystemClipboardWrite> systemClipboardWrites =
       <_SystemClipboardWrite>[];
@@ -239,6 +241,28 @@ class _FakeWorkspaceFileService({
       entry,
     ];
     return entry;
+  }
+
+  @override
+  Future<native.WorkspaceFileEntry> renameEntry({
+    required String workspacePath,
+    required String relativePath,
+    required String newName,
+  }) async {
+    renamedFiles.add('$relativePath->$newName');
+    final parent = relativePath.contains('/')
+        ? relativePath.substring(0, relativePath.lastIndexOf('/'))
+        : '';
+    return _file(parent.isEmpty ? newName : '$parent/$newName');
+  }
+
+  @override
+  Future<void> deleteEntry({
+    required String workspacePath,
+    required String relativePath,
+    bool useTrash = true,
+  }) async {
+    deletedFiles.add(relativePath);
   }
 
   @override

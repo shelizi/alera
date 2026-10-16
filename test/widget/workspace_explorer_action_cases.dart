@@ -1,6 +1,304 @@
 part of 'workspace_explorer_test.dart';
 
 void _registerWorkspaceExplorerActionTests() {
+  testWidgets('filtered unloaded file gets the normal complete file menu', (
+    tester,
+  ) async {
+    final service = _FakeWorkspaceFileService()
+      ..childrenByDirectory[''] = <native.WorkspaceFileEntry>[
+        _directory('lib', hasChildrenHint: true),
+      ]
+      ..quickOpenEntries = <String>['lib/deep/hidden_match.dart'];
+    final launcher = _FakeExternalEditorLauncher();
+    final openedInAlera = <String>[];
+    await _pumpExplorer(
+      tester,
+      service,
+      externalEditorLauncher: launcher,
+      onOpenFileInAlera: openedInAlera.add,
+    );
+
+    await tester.enterText(find.byType(TextField), 'hidden_match');
+    await tester.pumpAndSettle();
+    expect(find.text('lib/deep/hidden_match.dart'), findsOneWidget);
+    expect(
+      service.listChildrenCalls.where((call) => call.relativePath == 'lib'),
+      isEmpty,
+    );
+
+    await tester.tap(
+      find.text('lib/deep/hidden_match.dart'),
+      buttons: kSecondaryMouseButton,
+    );
+    await tester.pumpAndSettle();
+    for (final label in <String>[
+      'New file',
+      'New folder',
+      'Copy',
+      'Cut',
+      'Paste',
+      'Copy path',
+      'Copy relative path',
+      'Duplicate',
+    ]) {
+      expect(find.text(label), findsOneWidget, reason: label);
+    }
+    expect(find.text('Use As Source Control Root'), findsNothing);
+    expect(find.text('Clear Source Control Root'), findsNothing);
+
+    // This menu is taller than the 480px test window. Scroll its own overlay
+    // to verify the file-only actions rather than treating unbuilt rows as
+    // missing menu entries.
+    await tester.scrollUntilVisible(
+      find.text('Open in Alera'),
+      96,
+      scrollable: find.byType(Scrollable).last,
+    );
+    expect(find.text('Open in Zed'), findsOneWidget);
+    expect(find.text('Open in Alera'), findsOneWidget);
+    await tester.tap(find.text('Open in Alera'));
+    await tester.pumpAndSettle();
+    expect(openedInAlera, <String>['lib/deep/hidden_match.dart']);
+  });
+
+  testWidgets('filtered unloaded result copies its actual relative path', (
+    tester,
+  ) async {
+    String? copiedText;
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'Clipboard.setData') {
+          copiedText =
+              (call.arguments as Map<Object?, Object?>)['text'] as String?;
+        }
+        return null;
+      },
+    );
+    addTearDown(() {
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      );
+    });
+    final service = _FakeWorkspaceFileService()
+      ..quickOpenEntries = <String>['lib/deep/found.dart'];
+    final opener = _FakeWorkspaceFolderOpener();
+    await _pumpExplorer(tester, service, folderOpener: opener);
+    await tester.enterText(find.byType(TextField), 'found');
+    await tester.pumpAndSettle();
+
+    await tester.tap(
+      find.text('lib/deep/found.dart'),
+      buttons: kSecondaryMouseButton,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Copy relative path'));
+    await tester.pumpAndSettle();
+    expect(copiedText, 'lib/deep/found.dart');
+
+    await tester.tap(
+      find.text('lib/deep/found.dart'),
+      buttons: kSecondaryMouseButton,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Open with Default Application'));
+    await tester.pumpAndSettle();
+    expect(opener.defaultOpenedPaths, <String>[
+      p.join('/repo/alera', 'lib', 'deep', 'found.dart'),
+    ]);
+  });
+
+  testWidgets('filtered Ctrl multi-selection copies only chosen files', (
+    tester,
+  ) async {
+    final service = _FakeWorkspaceFileService()
+      ..quickOpenEntries = <String>[
+        'src/one.dart',
+        'src/two.dart',
+        'src/three.dart',
+      ];
+    await _pumpExplorer(tester, service);
+    await tester.enterText(find.byType(TextField), 'dart');
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('src/one.dart'));
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.tap(find.text('src/three.dart'));
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('src/one.dart'), buttons: kSecondaryMouseButton);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Copy'));
+    await tester.pumpAndSettle();
+
+    expect(service.systemClipboardWrites, hasLength(1));
+    expect(
+      service.systemClipboardWrites.single.paths.map(p.basename).toList(),
+      <String>['one.dart', 'three.dart'],
+    );
+  });
+
+  testWidgets('filtered Ctrl+A and Ctrl+C select visible search results', (
+    tester,
+  ) async {
+    final service = _FakeWorkspaceFileService()
+      ..quickOpenEntries = <String>[
+        'lib/first.dart',
+        'lib/second.dart',
+        'lib/third.dart',
+      ];
+    await _pumpExplorer(tester, service);
+    await tester.enterText(find.byType(TextField), 'dart');
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('lib/first.dart'));
+    await _pressExplorerFileShortcut(tester, LogicalKeyboardKey.keyA);
+    await _pressExplorerFileShortcut(tester, LogicalKeyboardKey.keyC);
+
+    expect(service.systemClipboardWrites, hasLength(1));
+    expect(
+      service.systemClipboardWrites.single.paths.map(p.basename).toList(),
+      <String>['first.dart', 'second.dart', 'third.dart'],
+    );
+  });
+
+  testWidgets('filtered copy and paste operate beside the clicked file', (
+    tester,
+  ) async {
+    final service = _FakeWorkspaceFileService()
+      ..quickOpenEntries = <String>['src/one.dart', 'dest/two.dart'];
+    await _pumpExplorer(tester, service);
+    await tester.enterText(find.byType(TextField), 'dart');
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('src/one.dart'), buttons: kSecondaryMouseButton);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Copy'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(
+      find.text('dest/two.dart'),
+      buttons: kSecondaryMouseButton,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Paste'));
+    await tester.pumpAndSettle();
+
+    expect(service.copiedFiles, <String>['src/one.dart->dest']);
+    expect(service.quickOpenRefreshRequests, contains('/repo/alera'));
+  });
+
+  testWidgets(
+    'filtered duplicate uses nested source folder without expansion',
+    (tester) async {
+      final service = _FakeWorkspaceFileService()
+        ..quickOpenEntries = <String>['src/deep/asset.dart'];
+      await _pumpExplorer(tester, service);
+      await tester.enterText(find.byType(TextField), 'asset');
+      await tester.pumpAndSettle();
+
+      await tester.tap(
+        find.text('src/deep/asset.dart'),
+        buttons: kSecondaryMouseButton,
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Duplicate'));
+      await tester.pumpAndSettle();
+      expect(service.copiedFiles, <String>['src/deep/asset.dart->src/deep']);
+    },
+  );
+
+  testWidgets('filtered rename operates on unloaded full relative path', (
+    tester,
+  ) async {
+    final service = _FakeWorkspaceFileService()
+      ..quickOpenEntries = <String>['lib/deep/before.dart'];
+    await _pumpExplorer(tester, service);
+    await tester.enterText(find.byType(TextField), 'before');
+    await tester.pumpAndSettle();
+
+    await tester.tap(
+      find.text('lib/deep/before.dart'),
+      buttons: kSecondaryMouseButton,
+    );
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.text('Rename'),
+      110,
+      scrollable: find.byType(Scrollable).last,
+    );
+    await tester.tap(find.text('Rename'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.descendant(
+        of: find.byType(Dialog),
+        matching: find.byType(TextField),
+      ),
+      'after.dart',
+    );
+    await tester.tap(find.text('Create'));
+    await tester.pumpAndSettle();
+
+    expect(service.renamedFiles, <String>['lib/deep/before.dart->after.dart']);
+    expect(service.quickOpenRefreshRequests, contains('/repo/alera'));
+  });
+
+  testWidgets('filtered delete confirms and targets its unloaded path', (
+    tester,
+  ) async {
+    final service = _FakeWorkspaceFileService()
+      ..quickOpenEntries = <String>['src/deep/remove_me.dart'];
+    await _pumpExplorer(tester, service);
+    await tester.enterText(find.byType(TextField), 'remove_me');
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.text('src/deep/remove_me.dart'),
+      buttons: kSecondaryMouseButton,
+    );
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.text('Delete'),
+      115,
+      scrollable: find.byType(Scrollable).last,
+    );
+    await tester.tap(find.text('Delete'));
+    await tester.pumpAndSettle();
+    expect(find.text('Delete remove_me.dart'), findsOneWidget);
+    await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
+    await tester.pumpAndSettle();
+
+    expect(service.deletedFiles, <String>['src/deep/remove_me.dart']);
+    expect(service.quickOpenRefreshRequests, contains('/repo/alera'));
+  });
+
+  testWidgets('filtered menu uses selected external editor for nested file', (
+    tester,
+  ) async {
+    final service = _FakeWorkspaceFileService()
+      ..quickOpenEntries = <String>['modules/deep/config.json'];
+    final launcher = _FakeExternalEditorLauncher();
+    await _pumpExplorer(tester, service, externalEditorLauncher: launcher);
+    await tester.enterText(find.byType(TextField), 'config');
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.text('modules/deep/config.json'),
+      buttons: kSecondaryMouseButton,
+    );
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.text('Open in Zed'),
+      95,
+      scrollable: find.byType(Scrollable).last,
+    );
+    await tester.tap(find.text('Open in Zed'));
+    await tester.pumpAndSettle();
+    expect(launcher.fileRequests, hasLength(1));
+    expect(
+      launcher.fileRequests.single.filePath,
+      p.join('/repo/alera', 'modules', 'deep', 'config.json'),
+    );
+  });
+
   testWidgets('file context menu offers file history and folders do not', (
     tester,
   ) async {

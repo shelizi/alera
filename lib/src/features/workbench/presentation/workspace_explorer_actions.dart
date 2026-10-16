@@ -2,6 +2,13 @@ part of 'workspace_explorer.dart';
 
 extension _WorkspaceExplorerActions on _WorkspaceExplorerState {
   String _pasteTargetDirectory() {
+    if (_filterController.text.trim().isNotEmpty) {
+      final selected = _filterSelectedPaths;
+      final path = _filterSelectionAnchor;
+      if (path != null && selected.contains(path)) return _parentPath(path);
+      if (selected.isNotEmpty) return _parentPath(selected.first);
+      return '';
+    }
     if (_selectedRelativePath case final path?) {
       final entry = _entryByPath[path];
       if (entry != null &&
@@ -27,14 +34,51 @@ extension _WorkspaceExplorerActions on _WorkspaceExplorerState {
     BuildContext context,
     tree.VisibleNode node,
     _ExplorerAction action,
+  ) => _handleEntryMenuAction(
+    context,
+    entry: _entryByNodeId[node.id],
+    action: action,
+    nodeId: node.id,
+  );
+
+  Future<void> _handleFilteredMenuAction(
+    BuildContext context,
+    String relativePath,
+    _ExplorerAction action,
   ) async {
-    final entry = _entryByNodeId[node.id];
+    await _handleEntryMenuAction(
+      context,
+      entry: _filteredEntryForPath(relativePath),
+      action: action,
+    );
+    if (mounted &&
+        (action == _ExplorerAction.rename ||
+            action == _ExplorerAction.delete ||
+            action == _ExplorerAction.duplicate ||
+            action == _ExplorerAction.newFile ||
+            action == _ExplorerAction.newFolder ||
+            action == _ExplorerAction.paste)) {
+      _workspaceFiles.scheduleQuickOpenRefresh(
+        workspacePath: widget.workspace.path,
+        debounce: Duration.zero,
+      );
+    }
+  }
+
+  Future<void> _handleEntryMenuAction(
+    BuildContext context, {
+    required native.WorkspaceFileEntry? entry,
+    required _ExplorerAction action,
+    String? nodeId,
+  }) async {
     final targetDir = _isDirectoryEntry(entry)
         ? entry!.relativePath
         : _parentPath(entry?.relativePath ?? '');
     switch (action) {
       case _ExplorerAction.collapse:
-        _controller.expansions.setExpanded(node.id, false);
+        if (nodeId != null) {
+          _controller.expansions.setExpanded(nodeId, false);
+        }
         final relativePath = entry?.relativePath;
         if (relativePath != null) {
           _expandedDirectoryPaths.remove(relativePath);
