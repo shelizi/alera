@@ -4,6 +4,7 @@ extension _WorkspaceEditorLoading on _WorkspaceEditorSurfaceState {
   Future<void> _load({
     _WorkspaceEditorScrollPosition? restoreScrollPosition,
   }) async {
+    _clearSelectedOccurrences();
     _autosave.cancelPending();
     _clearPendingDocumentSnapshot();
     _resetLanguageIntelligenceSource();

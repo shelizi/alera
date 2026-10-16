@@ -176,6 +176,7 @@ class CodeForgeController implements DeltaTextInputClient {
   bool _cclsForcedRefreshAttempted = false;
   bool _lspFoldRangesAdjustedNotFetched = false;
   bool _inlayHintsVisible = false, documentHighlightsChanged = false;
+  bool selectionOccurrenceHighlightsChanged = false;
   int _imeProjectionStartOffset = 0, _completionRequestId = 0;
   int _cachedTextVersion = -1, _currentVersion = 0, _semanticTokensVersion = 0;
   int _bufferLineRopeStart = 0, _bufferLineOriginalLength = 0;
@@ -185,6 +186,7 @@ class CodeForgeController implements DeltaTextInputClient {
   List<InlayHint> _inlayHints = [];
   List<DocumentColor> _documentColors = [];
   List<DocumentHighlight> _documentHighlights = [];
+  List<DocumentHighlight> _selectionOccurrenceHighlights = const [];
   UndoRedoController? _undoController;
   VoidCallback? _foldAllCallback, _unfoldAllCallback;
   StreamSubscription? _lspResponsesSubscription;
@@ -1599,6 +1601,21 @@ class CodeForgeController implements DeltaTextInputClient {
   /// Returns the current document highlights
   List<DocumentHighlight> get documentHighlights =>
       List.unmodifiable(_documentHighlights);
+
+  /// Lexical occurrences of the user's selected text. These are kept
+  /// separate from LSP document highlights and FindController search matches.
+  /// Callers own discovery; CodeForge only renders the bounded visible ranges.
+  List<DocumentHighlight> get selectionOccurrenceHighlights =>
+      _selectionOccurrenceHighlights;
+
+  void setSelectionOccurrenceHighlights(List<DocumentHighlight> highlights) {
+    if (_selectionOccurrenceHighlights.isEmpty && highlights.isEmpty) return;
+    _selectionOccurrenceHighlights = List<DocumentHighlight>.unmodifiable(
+      highlights,
+    );
+    selectionOccurrenceHighlightsChanged = true;
+    notifyListeners();
+  }
 
   /// LSP-provided fold ranges, or null if not available.
   /// If available, these should be used instead of the built-in fold range algorithm.

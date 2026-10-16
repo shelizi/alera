@@ -56,6 +56,7 @@ part 'workspace_editor_outline.dart';
 part 'workspace_editor_save.dart';
 part 'workspace_editor_text_actions.dart';
 part 'workspace_editor_find.dart';
+part 'workspace_editor_occurrences.dart';
 
 class const WorkspaceEditorSurface({
   super.key,
@@ -104,6 +105,10 @@ class _WorkspaceEditorSurfaceState
   String? _languageIntelligenceDocumentPath;
   int _languageIntelligenceSyncGeneration = 0;
   Timer? _outlineRefreshTimer;
+  Timer? _selectionOccurrenceTimer;
+  int _lastOccurrenceSelectionStart = -1;
+  int _lastOccurrenceSelectionEnd = -1;
+  int _lastOccurrenceDocumentVersion = -1;
   bool _hasPendingDocumentSnapshot = false;
   bool _suppressControllerChangeHandling = false;
   bool _outlineOpen = false;
@@ -208,6 +213,7 @@ class _WorkspaceEditorSurfaceState
         _document.clearSnapshot();
       }
       _resetOutlineForDocumentChange();
+      _clearSelectedOccurrences();
       _registerSession(widget.tab.id);
       _restoreDocumentOrLoad();
     }
@@ -224,6 +230,7 @@ class _WorkspaceEditorSurfaceState
 
   @override
   void dispose() {
+    _selectionOccurrenceTimer?.cancel();
     _languageIntelligenceSyncTimer?.cancel();
     unawaited(_closeLanguageIntelligenceDocument());
     _outlineRefreshTimer?.cancel();

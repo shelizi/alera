@@ -239,6 +239,7 @@ extension _WorkspaceEditorSave on _WorkspaceEditorSurfaceState {
     if (_suppressControllerChangeHandling) {
       return;
     }
+    _scheduleSelectedOccurrencesForSelection();
     final documentVersion = _controller.documentVersion;
     if (!workspaceEditorShouldSyncControllerText(
       previousDocumentVersion: _lastObservedDocumentVersion,

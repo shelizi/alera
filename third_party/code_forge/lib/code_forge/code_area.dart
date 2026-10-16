@@ -6322,6 +6322,12 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
       return;
     }
 
+    if (controller.selectionOccurrenceHighlightsChanged) {
+      controller.selectionOccurrenceHighlightsChanged = false;
+      markNeedsPaint();
+      return;
+    }
+
     if (controller.decorationsChanged) {
       controller.decorationsChanged = false;
       _rebuildLineDecorationIndex();
@@ -8667,6 +8673,19 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
       hasActiveFolds,
     );
 
+    if (controller.selectionOccurrenceHighlights.isNotEmpty) {
+      _drawDocumentHighlights(
+        canvas,
+        offset,
+        firstVisibleLine,
+        lastVisibleLine,
+        firstVisibleLineY,
+        hasActiveFolds,
+        highlights: controller.selectionOccurrenceHighlights,
+        color: const Color(0x8064A4E8),
+      );
+    }
+
     if (controller.documentHighlights.isNotEmpty) {
       _drawDocumentHighlights(
         canvas,
@@ -8675,6 +8694,10 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
         lastVisibleLine,
         firstVisibleLineY,
         hasActiveFolds,
+        highlights: controller.documentHighlights,
+        color: (editorTheme['root']?.color ?? Colors.white).withValues(
+          alpha: 0.2,
+        ),
       );
     }
 
@@ -10916,15 +10939,14 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     int firstVisibleLine,
     int lastVisibleLine,
     double firstVisibleLineY,
-    bool hasActiveFolds,
-  ) {
-    final highlights = controller.documentHighlights;
+    bool hasActiveFolds, {
+    required List<DocumentHighlight> highlights,
+    required Color color,
+  }) {
     if (highlights.isEmpty) return;
 
     final highlightPaint = Paint()
-      ..color = (editorTheme['root']?.color ?? Colors.white).withValues(
-        alpha: 0.2,
-      )
+      ..color = color
       ..style = PaintingStyle.fill;
 
     for (final highlight in highlights) {
