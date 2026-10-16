@@ -192,26 +192,39 @@ class _WorkspaceBranchStatusBarControlState
       controller: _menu,
       menuChildren: <Widget>[
         SizedBox(
-          width: 320,
-          height: 360,
+          key: const ValueKey<String>('workspace-branch-menu'),
+          width: 288,
+          height: 300,
           child: Padding(
-            padding: const EdgeInsets.all(AleraTokens.space8),
+            padding: const EdgeInsets.all(AleraTokens.space6),
             child: Column(
               children: <Widget>[
-                TextField(
-                  key: const ValueKey<String>('workspace-branch-search'),
-                  controller: _search,
-                  focusNode: _searchFocus,
-                  textInputAction: .search,
-                  decoration: InputDecoration(
-                    isDense: true,
-                    hintText: context.tr('Search branches'),
-                    prefixIcon: const Icon(Icons.search, size: 16),
-                    border: const OutlineInputBorder(),
+                SizedBox(
+                  height: 34,
+                  child: TextField(
+                    key: const ValueKey<String>('workspace-branch-search'),
+                    controller: _search,
+                    focusNode: _searchFocus,
+                    textInputAction: .search,
+                    style: const TextStyle(fontSize: 12),
+                    decoration: InputDecoration(
+                      isDense: true,
+                      hintText: context.tr('Search branches'),
+                      prefixIcon: const Icon(Icons.search, size: 15),
+                      prefixIconConstraints: const BoxConstraints(
+                        minWidth: 30,
+                        minHeight: 30,
+                      ),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: AleraTokens.space8,
+                        vertical: AleraTokens.space6,
+                      ),
+                      border: const OutlineInputBorder(),
+                    ),
+                    onChanged: (value) => setState(() => _query = value),
                   ),
-                  onChanged: (value) => setState(() => _query = value),
                 ),
-                const SizedBox(height: AleraTokens.space8),
+                const SizedBox(height: AleraTokens.space4),
                 Expanded(
                   child: _loading && rows.isEmpty
                       ? const Center(
@@ -246,6 +259,21 @@ class _WorkspaceBranchStatusBarControlState
                                     : ValueKey<String>(
                                         'workspace-branch-option:${row.branch}',
                                       ),
+                                style: const ButtonStyle(
+                                  minimumSize: WidgetStatePropertyAll(
+                                    Size(0, 32),
+                                  ),
+                                  maximumSize: WidgetStatePropertyAll(
+                                    Size.fromHeight(32),
+                                  ),
+                                  padding: WidgetStatePropertyAll(
+                                    EdgeInsets.symmetric(
+                                      horizontal: AleraTokens.space4,
+                                    ),
+                                  ),
+                                  tapTargetSize:
+                                      MaterialTapTargetSize.shrinkWrap,
+                                ),
                                 onPressed: row.branch == null
                                     ? null
                                     : () => _selectBranch(row.branch!),
@@ -256,7 +284,7 @@ class _WorkspaceBranchStatusBarControlState
                                   child: Row(
                                     children: <Widget>[
                                       SizedBox(
-                                        width: 16,
+                                        width: 14,
                                         child: selected
                                             ? const Icon(
                                                 AleraIcons.check,
@@ -271,7 +299,7 @@ class _WorkspaceBranchStatusBarControlState
                                               )
                                             : null,
                                       ),
-                                      const SizedBox(width: AleraTokens.space6),
+                                      const SizedBox(width: AleraTokens.space4),
                                       Expanded(
                                         child: Tooltip(
                                           message: row.fullPath,
@@ -279,6 +307,9 @@ class _WorkspaceBranchStatusBarControlState
                                             row.segment,
                                             maxLines: 1,
                                             overflow: .ellipsis,
+                                            style: const TextStyle(
+                                              fontSize: 12,
+                                            ),
                                           ),
                                         ),
                                       ),
@@ -294,6 +325,8 @@ class _WorkspaceBranchStatusBarControlState
                                           icon: favorites.contains(row.branch)
                                               ? AleraIcons.favorite
                                               : AleraIcons.add,
+                                          iconSize: 13,
+                                          minSize: 24,
                                           iconColor:
                                               favorites.contains(row.branch)
                                               ? AleraTokens.accent
@@ -339,9 +372,9 @@ class _WorkspaceBranchStatusBarControlState
               message: '${context.tr('Current Branch')}: $label',
               child: Container(
                 height: AleraTokens.statusBarHeight,
-                constraints: const BoxConstraints(maxWidth: 220),
+                constraints: const BoxConstraints(maxWidth: 192),
                 padding: const EdgeInsets.symmetric(
-                  horizontal: AleraTokens.space8,
+                  horizontal: AleraTokens.space6,
                 ),
                 decoration: const BoxDecoration(
                   border: Border(
@@ -356,7 +389,7 @@ class _WorkspaceBranchStatusBarControlState
                       size: 13,
                       color: AleraTokens.foregroundMuted,
                     ),
-                    const SizedBox(width: AleraTokens.space6),
+                    const SizedBox(width: AleraTokens.space4),
                     Flexible(
                       child: Text(
                         label,

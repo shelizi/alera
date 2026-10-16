@@ -82,6 +82,26 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('workspace-branch-status')));
     await tester.pumpAndSettle();
     expect(
+      tester.getSize(find.byKey(const ValueKey('workspace-branch-menu'))),
+      const Size(288, 300),
+    );
+    expect(
+      tester
+          .getSize(
+            find.byKey(const ValueKey('workspace-branch-option:feature')),
+          )
+          .height,
+      lessThanOrEqualTo(32),
+    );
+    expect(
+      tester
+          .widget<AleraIconButton>(
+            find.byKey(const ValueKey('workspace-branch-favorite:feature')),
+          )
+          .minSize,
+      24,
+    );
+    expect(
       tester
           .widget<AleraIconButton>(
             find.byKey(const ValueKey('workspace-branch-favorite:feature')),
@@ -98,6 +118,24 @@ void main() {
       find.byKey(const ValueKey('workspace-branch-search')),
       findsOneWidget,
     );
+    await tester.enterText(
+      find.byKey(const ValueKey('workspace-branch-search')),
+      'fea',
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('workspace-branch-option:feature')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('workspace-branch-option:aaa')),
+      findsNothing,
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('workspace-branch-search')),
+      '',
+    );
+    await tester.pumpAndSettle();
     expect(
       tester
           .getTopLeft(
