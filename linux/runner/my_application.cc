@@ -247,6 +247,36 @@ void rich_clipboard_clear_cb(GtkClipboard*, gpointer user_data) {
 
 void rich_clipboard_channel_method_cb(FlMethodChannel*,
                                      FlMethodCall* method_call, gpointer) {
+  if (g_strcmp0(fl_method_call_get_name(method_call), "setImagePng") == 0) {
+    FlValue* value = fl_method_call_get_args(method_call);
+    if (value == nullptr || fl_value_get_type(value) != FL_VALUE_TYPE_UINT8_LIST ||
+        fl_value_get_length(value) < 8 ||
+        fl_value_get_length(value) > 4 * 1024 * 1024) {
+      fl_method_call_respond_error(method_call, "invalid-arguments",
+                                   "Expected PNG clipboard bytes.", nullptr, nullptr);
+      return;
+    }
+    g_autoptr(GError) error = nullptr;
+    g_autoptr(GdkPixbufLoader) loader = gdk_pixbuf_loader_new_with_type("png", &error);
+    if (loader == nullptr ||
+        !gdk_pixbuf_loader_write(loader, fl_value_get_uint8_list(value),
+                                 fl_value_get_length(value), &error) ||
+        !gdk_pixbuf_loader_close(loader, &error)) {
+      fl_method_call_respond_error(method_call, "clipboard-error",
+                                   "Invalid PNG image data.", nullptr, nullptr);
+      return;
+    }
+    GdkPixbuf* image = gdk_pixbuf_loader_get_pixbuf(loader);
+    if (image == nullptr || gdk_pixbuf_get_width(image) > 4096 ||
+        gdk_pixbuf_get_height(image) > 4096) {
+      fl_method_call_respond_error(method_call, "clipboard-error",
+                                   "Invalid PNG dimensions.", nullptr, nullptr);
+      return;
+    }
+    gtk_clipboard_set_image(gtk_clipboard_get(GDK_SELECTION_CLIPBOARD), image);
+    fl_method_call_respond_success(method_call, nullptr, nullptr);
+    return;
+  }
   if (g_strcmp0(fl_method_call_get_name(method_call), "setHtml") != 0) {
     fl_method_call_respond_not_implemented(method_call, nullptr);
     return;

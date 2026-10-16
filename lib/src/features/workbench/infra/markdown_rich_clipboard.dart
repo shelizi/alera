@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter/services.dart';
 import 'package:markdown/markdown.dart' as md;
 
@@ -33,19 +35,35 @@ class MarkdownRichClipboard {
       return false;
     }
   }
+
+  /// A separate image/diagram copy uses native image clipboard MIME, which
+  /// email composers recognize more consistently than an HTML image alone.
+  Future<void> copyPng(Uint8List png) =>
+      channel.invokeMethod<void>('setImagePng', png);
 }
 
 MarkdownRichClipboardData markdownRichClipboardDocument(String markdown) {
-  final markup = _styleMarkdownHtml(
-    md.markdownToHtml(
-      _escapeRawHtml(markdown),
-      extensionSet: md.ExtensionSet.gitHubFlavored,
-      encodeHtml: true,
-    ),
-  );
+  final markup = _styleMarkdownHtml(markdownClipboardRawHtml(markdown));
   return MarkdownRichClipboardData(
     html: markup,
     plainText: _htmlToPlainText(markup),
+  );
+}
+
+/// Internal Markdown rendering shared with the async image/diagram export.
+String markdownClipboardRawHtml(String markdown) => md.markdownToHtml(
+  _escapeRawHtml(markdown),
+  extensionSet: md.ExtensionSet.gitHubFlavored,
+  encodeHtml: true,
+);
+
+/// Apply the same Office styles, sanitization and plain-text fallback to
+/// markup after its media references have been replaced by embedded images.
+MarkdownRichClipboardData markdownClipboardFromHtml(String rawHtml) {
+  final html = _styleMarkdownHtml(rawHtml);
+  return MarkdownRichClipboardData(
+    html: html,
+    plainText: _htmlToPlainText(html),
   );
 }
 
@@ -54,6 +72,10 @@ MarkdownRichClipboardData markdownRichClipboardDocument(String markdown) {
 MarkdownRichClipboardData markdownRichClipboardTable(
   List<MarkdownRichTableRow> rows,
 ) {
+  return markdownClipboardFromHtml(markdownClipboardRawTableHtml(rows));
+}
+
+String markdownClipboardRawTableHtml(List<MarkdownRichTableRow> rows) {
   final markup = StringBuffer('<table>');
   for (final row in rows) {
     markup.write('<tr>');
@@ -74,11 +96,7 @@ MarkdownRichClipboardData markdownRichClipboardTable(
     markup.write('</tr>');
   }
   markup.write('</table>');
-  final html = _styleMarkdownHtml(markup.toString());
-  return MarkdownRichClipboardData(
-    html: html,
-    plainText: _htmlToPlainText(html),
-  );
+  return markup.toString();
 }
 
 class const MarkdownRichTableRow({
@@ -177,11 +195,17 @@ String _styleMarkdownHtml(String html) {
       final attribute = match.group(1)!.toLowerCase();
       final raw = match.group(2)!;
       final uri = Uri.tryParse(raw.replaceAll('&amp;', '&'));
+      final embeddedImage =
+          attribute == 'src' &&
+          RegExp(r'^data:image/(?:png|jpeg);base64,[a-zA-Z0-9+/=]+$')
+              .hasMatch(raw) &&
+          raw.length <= 24 * 1024 * 1024;
       final permitted =
+          embeddedImage ||
           uri != null &&
-          ((uri.scheme == 'http' || uri.scheme == 'https') &&
-                  uri.hasAuthority ||
-              (attribute == 'href' && uri.scheme == 'mailto'));
+              ((uri.scheme == 'http' || uri.scheme == 'https') &&
+                      uri.hasAuthority ||
+                  (attribute == 'href' && uri.scheme == 'mailto'));
       return permitted ? match.group(0)! : '$attribute=""';
     },
   );
@@ -190,6 +214,10 @@ String _styleMarkdownHtml(String html) {
 
 String _htmlToPlainText(String html) {
   var text = html
+      .replaceAllMapped(
+        RegExp(r'<img\b[^>]*alt="([^"]*)"[^>]*>', caseSensitive: false),
+        (match) => '[Image: ${match.group(1)}]',
+      )
       .replaceAll(RegExp(r'</(?:th|td)>', caseSensitive: false), '\t')
       .replaceAll(
         RegExp(

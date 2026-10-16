@@ -31,6 +31,27 @@ class AppDelegate: FlutterAppDelegate {
       binaryMessenger: controller.engine.binaryMessenger
     )
     richClipboard.setMethodCallHandler { call, result in
+      if call.method == "setImagePng" {
+        guard let payload = call.arguments as? FlutterStandardTypedData,
+              payload.data.count >= 8,
+              payload.data.count <= 4 * 1024 * 1024,
+              let image = NSImage(data: payload.data) else {
+          result(FlutterError(code: "invalid-arguments", message: "Invalid PNG clipboard image", details: nil))
+          return
+        }
+        let clipboard = NSPasteboard.general
+        clipboard.clearContents()
+        let pngWritten = clipboard.setData(payload.data, forType: .png)
+        let tiffWritten = image.tiffRepresentation.map {
+          clipboard.setData($0, forType: .tiff)
+        } ?? false
+        if pngWritten || tiffWritten {
+          result(nil)
+        } else {
+          result(FlutterError(code: "clipboard-error", message: "Unable to copy image", details: nil))
+        }
+        return
+      }
       guard call.method == "setHtml" else {
         result(FlutterMethodNotImplemented)
         return

@@ -11,7 +11,9 @@ import 'package:alera/src/design_system/layout/alera_dialog.dart';
 import 'package:alera/src/design_system/typography/alera_search_highlighted_text.dart';
 import 'package:alera/src/design_system/menus/alera_text_selection_toolbar.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_service.dart';
+import 'package:alera/src/features/workbench/infra/markdown_clipboard_image_loader.dart';
 import 'package:alera/src/features/workbench/infra/markdown_rich_clipboard.dart';
+import 'package:alera/src/features/workbench/infra/markdown_rich_clipboard_media.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_editor_surface.dart';
@@ -187,6 +189,8 @@ class _WorkspaceMarkdownViewerSurfaceState
                             textStyle: textStyle,
                             config: config,
                             searchPatterns: _markdownSearchPatterns(),
+                            workspacePath: widget.workspace.path,
+                            markdownPath: filePath,
                           ),
                       codeBuilder: (context, name, code, closed) =>
                           isMarkdownMermaidFence(name)
@@ -519,7 +523,7 @@ class _WorkspaceMarkdownViewerSurfaceState
     double? width,
     double? height,
   ) {
-    return buildMarkdownViewerImage(
+    return _MarkdownViewerCopyableImage(
       workspacePath: widget.workspace.path,
       markdownPath: widget.tab.filePath,
       imageUrl: imageUrl,
@@ -639,6 +643,8 @@ class _WorkspaceMarkdownViewerSurfaceState
                               textStyle: textStyle,
                               config: config,
                               searchPatterns: null,
+                              workspacePath: widget.workspace.path,
+                              markdownPath: reference.path,
                             ),
                         codeBuilder: (context, name, code, closed) =>
                             isMarkdownMermaidFence(name)
@@ -654,7 +660,7 @@ class _WorkspaceMarkdownViewerSurfaceState
                                 searchQuery: '',
                               ),
                         imageBuilder: (context, imageUrl, width, height) =>
-                            buildMarkdownViewerImage(
+                            _MarkdownViewerCopyableImage(
                               workspacePath: widget.workspace.path,
                               markdownPath: reference.path,
                               imageUrl: imageUrl,
@@ -699,9 +705,25 @@ class _WorkspaceMarkdownViewerSurfaceState
     final content = _content;
     if (content == null) return;
     try {
-      final rich = await const MarkdownRichClipboard().copy(
-        markdownRichClipboardDocument(content),
+      final filePath = widget.tab.filePath;
+      if (filePath == null) return;
+      final resolver = MarkdownClipboardImageLoader(
+        workspacePath: widget.workspace.path,
+        markdownPath: filePath,
       );
+      final data = await markdownRichClipboardDocumentWithMedia(
+        markdown: content,
+        imageResolver: resolver.load,
+        diagramIdPrefix: filePath,
+        diagramRenderer: (source, diagramId) async {
+          final svg = await _workspaceFiles.renderMermanSource(
+            source: source,
+            diagramId: diagramId,
+          );
+          return markdownClipboardRasterizeSvg(svg);
+        },
+      );
+      final rich = await const MarkdownRichClipboard().copy(data);
       _showToast(rich ? 'Copied with formatting' : 'Copied as plain text');
     } catch (_) {
       _showToast('Cannot copy Markdown preview', tone: .error);
@@ -947,6 +969,8 @@ class const _MarkdownViewerTable({
   required final TextStyle textStyle,
   required final GptMarkdownConfig config,
   required final List<InlinePattern>? searchPatterns,
+  required final String workspacePath,
+  required final String markdownPath,
 }) extends StatefulWidget {
   @override
   State<_MarkdownViewerTable> createState() => _MarkdownViewerTableState();
@@ -956,14 +980,21 @@ class _MarkdownViewerTableState extends State<_MarkdownViewerTable> {
   late final ScrollController _horizontalController;
 
   Future<void> _copyFormattedTable() async {
-    final data = markdownRichClipboardTable(<MarkdownRichTableRow>[
-      for (final row in widget.rows)
-        MarkdownRichTableRow(
-          cells: <String>[for (final field in row.fields) field.data],
-          isHeader: row.isHeader,
-        ),
-    ]);
     try {
+      final resolver = MarkdownClipboardImageLoader(
+        workspacePath: widget.workspacePath,
+        markdownPath: widget.markdownPath,
+      );
+      final data = await markdownRichClipboardTableWithMedia(
+        rows: <MarkdownRichTableRow>[
+          for (final row in widget.rows)
+            MarkdownRichTableRow(
+              cells: <String>[for (final field in row.fields) field.data],
+              isHeader: row.isHeader,
+            ),
+        ],
+        imageResolver: resolver.load,
+      );
       final rich = await const MarkdownRichClipboard().copy(data);
       if (mounted) {
         AleraToast.show(
@@ -1162,6 +1193,76 @@ class _MarkdownViewerTableState extends State<_MarkdownViewerTable> {
   }
 }
 
+class const _MarkdownViewerCopyableImage({
+  required final String workspacePath,
+  required final String? markdownPath,
+  required final String imageUrl,
+  final double? width,
+  final double? height,
+}) extends StatefulWidget {
+  @override
+  State<_MarkdownViewerCopyableImage> createState() =>
+      _MarkdownViewerCopyableImageState();
+}
+
+class _MarkdownViewerCopyableImageState
+    extends State<_MarkdownViewerCopyableImage> {
+  bool _copying = false;
+
+  Future<void> _copyImage() async {
+    final markdownPath = widget.markdownPath;
+    if (markdownPath == null || _copying) return;
+    setState(() => _copying = true);
+    try {
+      final image = await MarkdownClipboardImageLoader(
+        workspacePath: widget.workspacePath,
+        markdownPath: markdownPath,
+      ).load(widget.imageUrl);
+      if (image == null) throw StateError('Image is unavailable');
+      final png = await markdownClipboardPngBytes(image);
+      if (png == null) throw StateError('Image cannot be rasterized');
+      await const MarkdownRichClipboard().copyPng(png);
+      if (mounted) AleraToast.show(context, message: 'Copied image');
+    } catch (_) {
+      if (mounted) {
+        AleraToast.show(context, message: 'Cannot copy image', tone: .error);
+      }
+    } finally {
+      if (mounted) setState(() => _copying = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: <Widget>[
+        ConstrainedBox(
+          constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+          child: buildMarkdownViewerImage(
+            workspacePath: widget.workspacePath,
+            markdownPath: widget.markdownPath,
+            imageUrl: widget.imageUrl,
+            width: widget.width,
+            height: widget.height,
+          ),
+        ),
+        Positioned(
+          top: 4,
+          right: 4,
+          child: AleraIconButton(
+            key: const ValueKey<String>('markdown-image-copy'),
+            tooltip: 'Copy image',
+            icon: _copying ? AleraIcons.loading : AleraIcons.copy,
+            backgroundColor: AleraTokens.surfaceElevated,
+            minSize: 28,
+            onPressed: _copying ? null : () => unawaited(_copyImage()),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class const _MarkdownViewerMermaidBlock({
   required final WorkspaceFileService workspaceFiles,
   required final String source,
@@ -1178,6 +1279,23 @@ class _MarkdownViewerMermaidBlockState
   Object? _error;
   bool _loading = true;
   int _generation = 0;
+
+  Future<void> _copyDiagram() async {
+    final svg = _svg;
+    if (svg == null) return;
+    try {
+      final png = await markdownClipboardRasterizeSvg(svg);
+      if (png == null) throw StateError('Cannot rasterize Mermaid');
+      await const MarkdownRichClipboard().copyPng(png.bytes);
+      if (mounted) {
+        AleraToast.show(context, message: 'Copied diagram as image');
+      }
+    } catch (_) {
+      if (mounted) {
+        AleraToast.show(context, message: 'Cannot copy diagram', tone: .error);
+      }
+    }
+  }
 
   @override
   void initState() {
@@ -1249,7 +1367,25 @@ class _MarkdownViewerMermaidBlockState
         borderRadius: BorderRadius.circular(AleraTokens.radiusMd),
       ),
       clipBehavior: Clip.antiAlias,
-      child: child,
+      child: _svg == null
+          ? child
+          : Stack(
+              children: <Widget>[
+                child,
+                Positioned(
+                  top: 4,
+                  right: 4,
+                  child: AleraIconButton(
+                    key: const ValueKey<String>('markdown-diagram-copy-image'),
+                    tooltip: 'Copy diagram as image',
+                    icon: AleraIcons.copy,
+                    backgroundColor: AleraTokens.surfaceElevated,
+                    minSize: 28,
+                    onPressed: () => unawaited(_copyDiagram()),
+                  ),
+                ),
+              ],
+            ),
     );
   }
 

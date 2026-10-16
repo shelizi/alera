@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io' show Directory, File, FileSystemException, Link;
+import 'dart:typed_data';
 import 'dart:ui' show PointerDeviceKind;
 
 import 'package:alera/src/app/providers.dart';
@@ -790,6 +791,59 @@ After the table.
     expect(copied.last['html'], contains('<th style='));
     expect(copied.last['html'], contains('<strong>Tea</strong>'));
     expect(copied.last['html'], isNot(contains('After the table.')));
+  });
+
+  testWidgets('individual Mermaid diagram copies real PNG bytes', (
+    tester,
+  ) async {
+    final copied = <Uint8List>[];
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(MarkdownRichClipboard.channel, (
+      call,
+    ) async {
+      if (call.method == 'setImagePng') {
+        copied.add(call.arguments as Uint8List);
+      }
+      return null;
+    });
+    addTearDown(() {
+      messenger.setMockMethodCallHandler(MarkdownRichClipboard.channel, null);
+    });
+    final service = _FakeWorkspaceFileService('''
+```mermaid
+flowchart TD
+  A --> B
+```
+''');
+    await tester.pumpWidget(
+      _surface(registry: EditorSessionRegistry(), workspaceFiles: service),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('markdown-diagram-copy-image')),
+      findsOneWidget,
+    );
+    await tester.tap(find.byKey(const ValueKey('markdown-diagram-copy-image')));
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 150)),
+    );
+    await tester.pumpAndSettle();
+    expect(copied, hasLength(1));
+    expect(copied.single.take(4).toList(), <int>[137, 80, 78, 71]);
+  });
+
+  testWidgets('Markdown images expose a separate copy-image action', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _surface(
+        registry: EditorSessionRegistry(),
+        workspaceFiles: _FakeWorkspaceFileService('![logo](../blocked.png)'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('markdown-image-copy')), findsOneWidget);
   });
 
   testWidgets('renders Mermaid fences as SVG in markdown preview', (

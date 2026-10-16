@@ -1,10 +1,14 @@
 #include "win32_rich_clipboard.h"
 
 #include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <string>
 #include <thread>
+#include <vector>
+#include <wincodec.h>
+#include <wrl/client.h>
 
 namespace {
 
@@ -104,11 +108,145 @@ bool SetRichClipboard(HWND window, const std::string& html,
   return ok;
 }
 
+// A real CF_DIB is needed for single-image paste into Word/Outlook and for
+// Chromium email composers. Windows Imaging Component decodes the PNG without
+// an external image codec or temporary file.
+bool BuildDibFromPng(const std::vector<uint8_t>& png,
+                     std::vector<uint8_t>& dib) {
+  if (png.size() < 24 || png.size() > 4 * 1024 * 1024 ||
+      std::memcmp(png.data(), "\x89PNG\r\n\x1a\n", 8) != 0) {
+    return false;
+  }
+  const HRESULT initialized = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+  if (FAILED(initialized) && initialized != RPC_E_CHANGED_MODE) return false;
+  const auto cleanup = [&]() {
+    if (SUCCEEDED(initialized)) CoUninitialize();
+  };
+  bool ok = false;
+  do {
+    Microsoft::WRL::ComPtr<IWICImagingFactory> factory;
+    if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr,
+                                CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory)))) {
+      break;
+    }
+    Microsoft::WRL::ComPtr<IWICStream> stream;
+    if (FAILED(factory->CreateStream(&stream)) ||
+        FAILED(stream->InitializeFromMemory(const_cast<BYTE*>(png.data()),
+                                            static_cast<DWORD>(png.size())))) {
+      break;
+    }
+    Microsoft::WRL::ComPtr<IWICBitmapDecoder> decoder;
+    if (FAILED(factory->CreateDecoderFromStream(
+            stream.Get(), nullptr, WICDecodeMetadataCacheOnLoad, &decoder))) {
+      break;
+    }
+    Microsoft::WRL::ComPtr<IWICBitmapFrameDecode> frame;
+    if (FAILED(decoder->GetFrame(0, &frame))) break;
+    Microsoft::WRL::ComPtr<IWICFormatConverter> converter;
+    if (FAILED(factory->CreateFormatConverter(&converter)) ||
+        FAILED(converter->Initialize(frame.Get(), GUID_WICPixelFormat32bppBGRA,
+                                     WICBitmapDitherTypeNone, nullptr, 0.0,
+                                     WICBitmapPaletteTypeCustom))) {
+      break;
+    }
+    UINT width = 0;
+    UINT height = 0;
+    if (FAILED(converter->GetSize(&width, &height)) || width == 0 ||
+        height == 0 || width > 4096 || height > 4096 ||
+        static_cast<uint64_t>(width) * height > 16 * 1024 * 1024) {
+      break;
+    }
+    const auto stride = static_cast<size_t>(width) * 4;
+    const auto pixel_bytes = stride * height;
+    std::vector<uint8_t> pixels(pixel_bytes);
+    if (FAILED(converter->CopyPixels(nullptr, static_cast<UINT>(stride),
+                                     static_cast<UINT>(pixel_bytes), pixels.data()))) {
+      break;
+    }
+    BITMAPINFOHEADER header = {};
+    header.biSize = sizeof(BITMAPINFOHEADER);
+    header.biWidth = static_cast<LONG>(width);
+    header.biHeight = static_cast<LONG>(height);  // bottom-up DIB scanlines
+    header.biPlanes = 1;
+    header.biBitCount = 32;
+    header.biCompression = BI_RGB;
+    header.biSizeImage = static_cast<DWORD>(pixel_bytes);
+    dib.resize(sizeof(header) + pixel_bytes);
+    std::memcpy(dib.data(), &header, sizeof(header));
+    for (UINT y = 0; y < height; ++y) {
+      const auto* src = pixels.data() + y * stride;
+      auto* dst = dib.data() + sizeof(header) + (height - 1 - y) * stride;
+      for (UINT x = 0; x < width; ++x) {
+        const auto alpha = static_cast<unsigned>(src[x * 4 + 3]);
+        for (int component = 0; component < 3; ++component) {
+          dst[x * 4 + component] = static_cast<uint8_t>(
+              (static_cast<unsigned>(src[x * 4 + component]) * alpha +
+               255 * (255 - alpha)) / 255);
+        }
+        dst[x * 4 + 3] = 255;
+      }
+    }
+    ok = true;
+  } while (false);
+  cleanup();
+  return ok;
+}
+
+bool SetPngClipboard(HWND window, const std::vector<uint8_t>& png) {
+  std::vector<uint8_t> dib;
+  if (!BuildDibFromPng(png, dib)) return false;
+  const UINT png_format = RegisterClipboardFormatW(L"PNG");
+  if (!png_format) return false;
+  HGLOBAL dib_memory = AllocateGlobal(dib.data(), dib.size());
+  HGLOBAL png_memory = AllocateGlobal(png.data(), png.size());
+  if (!dib_memory || !png_memory) {
+    if (dib_memory) GlobalFree(dib_memory);
+    if (png_memory) GlobalFree(png_memory);
+    return false;
+  }
+  bool opened = false;
+  for (int attempt = 0; attempt < 10; ++attempt) {
+    if (OpenClipboard(window)) { opened = true; break; }
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  if (!opened) {
+    GlobalFree(dib_memory);
+    GlobalFree(png_memory);
+    return false;
+  }
+  bool ok = false;
+  if (EmptyClipboard()) {
+    if (SetClipboardData(CF_DIB, dib_memory)) {
+      dib_memory = nullptr;
+      if (SetClipboardData(png_format, png_memory)) {
+        png_memory = nullptr;
+        ok = true;
+      }
+    }
+    if (!ok) EmptyClipboard();
+  }
+  CloseClipboard();
+  if (dib_memory) GlobalFree(dib_memory);
+  if (png_memory) GlobalFree(png_memory);
+  return ok;
+}
+
 }  // namespace
 
 void HandleAleraRichClipboardMethodCall(
     HWND window, const flutter::MethodCall<flutter::EncodableValue>& call,
     std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
+  if (call.method_name() == "setImagePng") {
+    const auto* png = std::get_if<std::vector<uint8_t>>(call.arguments());
+    if (!png || png->empty() || png->size() > 4 * 1024 * 1024) {
+      result->Error("invalid-arguments", "Expected PNG clipboard bytes.");
+    } else if (!SetPngClipboard(window, *png)) {
+      result->Error("clipboard-error", "Unable to copy PNG image.");
+    } else {
+      result->Success();
+    }
+    return;
+  }
   if (call.method_name() != "setHtml") {
     result->NotImplemented();
     return;
