@@ -31,7 +31,6 @@ import 'package:alera/src/features/workbench/domain/workspace_relative_path.dart
 import 'package:alera/src/features/workbench/domain/workspace_source_control_scope.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_git_file_compare.dart';
-import 'package:alera/src/features/workbench/presentation/workspace_git_file_compare.dart';
 import 'package:alera/src/rust/api/workspace_files.dart' as native;
 import 'package:alera/src/shared/infra/git/git_diff_models.dart';
 import 'package:alera/src/shared/infra/git/git_providers.dart';
@@ -419,6 +418,7 @@ class _WorkspaceEditorSurfaceState
                         onClose: _closeEditorFind,
                       ),
                   scrollbarDecoration: workspaceEditorScrollbarDecoration(),
+                  innerPadding: workspaceEditorContentPadding,
                   suggestionStyle: _editorOverlayStyle(context),
                   customContextMenuItems: _editorContextMenuItems(context),
                   onNavigationClick: (_) =>
@@ -824,6 +824,26 @@ code_forge.ScrollbarDecoration workspaceEditorScrollbarDecoration() {
     trackBorderColor: Colors.transparent,
   );
 }
+
+/// Preserve scrollable space below the final line, clear of the 30px shell
+/// status bar. CodeForge includes innerPadding in the actual scroll extent.
+@visibleForTesting
+const double workspaceEditorBottomScrollPadding =
+    AleraTokens.statusBarHeight + AleraTokens.space8;
+
+@visibleForTesting
+const EdgeInsets workspaceEditorContentPadding = EdgeInsets.only(
+  bottom: workspaceEditorBottomScrollPadding,
+);
+
+/// Keep the existing top/left/right text inset in editable Git diffs.
+@visibleForTesting
+const EdgeInsets workspaceDiffEditorContentPadding = EdgeInsets.fromLTRB(
+  AleraTokens.space8,
+  AleraTokens.space8,
+  AleraTokens.space8,
+  workspaceEditorBottomScrollPadding,
+);
 
 class const _DiffOpenChoice({
   final GitChangeArea? area,

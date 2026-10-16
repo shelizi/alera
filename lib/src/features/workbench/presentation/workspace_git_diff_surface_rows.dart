@@ -371,7 +371,9 @@ class _ReadOnlySideBySideDiffListState
         final list = ListView.builder(
           key: ValueKey<String>('git-diff-side-by-side-$side-list'),
           controller: verticalController,
-          padding: const EdgeInsets.only(bottom: AleraTokens.space16),
+          padding: const EdgeInsets.only(
+            bottom: workspaceEditorBottomScrollPadding,
+          ),
           itemCount: widget.rows.length,
           itemBuilder: (context, index) => widget.rows
               .rowAt(index)
@@ -492,7 +494,9 @@ class _SingleColumnDiffListState extends State<_SingleColumnDiffList> {
                 child: ListView.builder(
                   key: const ValueKey<String>('git-diff-single-column-list'),
                   controller: _scrollController,
-                  padding: const EdgeInsets.only(bottom: AleraTokens.space16),
+                  padding: const EdgeInsets.only(
+                    bottom: workspaceEditorBottomScrollPadding,
+                  ),
                   itemCount: widget.rows.length,
                   itemBuilder: (context, index) =>
                       widget.rows.rowAt(index).build(context),
@@ -605,7 +609,9 @@ class const _DiffFileList({
             final list = KeyedSubtree(
               key: PageStorageKey<String>('$scrollStorageKey:editable:v'),
               child: ListView.builder(
-                padding: const EdgeInsets.only(bottom: AleraTokens.space16),
+                padding: const EdgeInsets.only(
+                  bottom: workspaceEditorBottomScrollPadding,
+                ),
                 itemCount: rows.length,
                 itemBuilder: (context, index) =>
                     rows.rowAt(index).build(context),

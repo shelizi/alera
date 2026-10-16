@@ -1,5 +1,6 @@
 import 'dart:ui' as ui;
 
+import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_editor_surface.dart';
 import 'package:alera/src/features/settings/domain/editor_syntax_theme_catalog.dart';
@@ -217,6 +218,32 @@ void main() {
     expect(decoration.interactive, isTrue);
     expect(decoration.trackVisibility, isFalse);
   });
+
+  test(
+    'normal and Git diff editors can scroll the last line above status bar',
+    () {
+      expect(
+        workspaceEditorBottomScrollPadding,
+        AleraTokens.statusBarHeight + AleraTokens.space8,
+      );
+      expect(
+        workspaceEditorContentPadding.bottom,
+        workspaceEditorBottomScrollPadding,
+      );
+      expect(workspaceEditorContentPadding.top, 0);
+      expect(
+        workspaceDiffEditorContentPadding.bottom,
+        workspaceEditorBottomScrollPadding,
+      );
+      expect(workspaceDiffEditorContentPadding.top, AleraTokens.space8);
+      expect(workspaceDiffEditorContentPadding.left, AleraTokens.space8);
+      expect(workspaceDiffEditorContentPadding.right, AleraTokens.space8);
+      expect(
+        workspaceEditorBottomScrollPadding,
+        greaterThan(AleraTokens.statusBarHeight),
+      );
+    },
+  );
 
   test('keeps wrapping and guides for ordinary source files', () {
     final profile = workspaceEditorPerformanceProfile(

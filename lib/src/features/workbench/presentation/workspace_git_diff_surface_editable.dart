@@ -1515,7 +1515,7 @@ class _EditableWorkingTreeDiffState extends State<_EditableWorkingTreeDiff> {
                       decoration: const InputDecoration(
                         border: InputBorder.none,
                         filled: false,
-                        contentPadding: EdgeInsets.all(AleraTokens.space8),
+                        contentPadding: workspaceDiffEditorContentPadding,
                       ),
                       onChanged: isLeft ? null : _handleFallbackChanged,
                     ),
@@ -1579,7 +1579,7 @@ class _EditableWorkingTreeDiffState extends State<_EditableWorkingTreeDiff> {
               ),
             ),
             textStyle: textStyle,
-            innerPadding: const EdgeInsets.all(AleraTokens.space8),
+            innerPadding: workspaceDiffEditorContentPadding,
           ),
         ),
       );

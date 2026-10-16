@@ -24,6 +24,7 @@ import 'package:alera/src/features/workbench/domain/workbench_view_prefs.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_service.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
+import 'package:alera/src/features/workbench/presentation/workspace_editor_surface.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_git_diff_surface.dart';
 import 'package:alera/src/shared/infra/git/git_diff_models.dart';
 import 'package:alera/src/shared/infra/git/git_providers.dart';
@@ -101,6 +102,78 @@ Set<Color> _textSpanBackgroundColors(InlineSpan span) {
 void main() {
   _registerWorkspaceGitDiffSurfacePullRequestTests();
   _registerWorkspaceGitDiffSurfaceReadingDiffTests();
+  testWidgets('read-only diff scrolls past the final line in both layouts', (
+    tester,
+  ) async {
+    final backend = FakeGitBackend()
+      ..gitDiffResult = GitDiffResult(
+        files: <GitDiffFile>[
+          GitDiffFile(
+            path: 'lib/tail.dart',
+            area: .staged,
+            status: .modified,
+            lines: <GitDiffLine>[
+              const GitDiffLine.hunk('@@ -1,80 +1,80 @@'),
+              for (var i = 0; i < 80; i++) GitDiffLine.addition('+line $i'),
+            ],
+          ),
+        ],
+      );
+    await _pumpDiffSurface(
+      tester,
+      backend: backend,
+      tab: _diffTab(
+        filePath: 'lib/tail.dart',
+        area: .staged,
+        title: 'tail.dart staged',
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final singleFinder = find.byKey(
+      const ValueKey<String>('git-diff-single-column-list'),
+    );
+    expect(singleFinder, findsOneWidget);
+    final single = tester.widget<ListView>(singleFinder);
+    expect(
+      (single.padding! as EdgeInsets).bottom,
+      workspaceEditorBottomScrollPadding,
+    );
+    final scroll = single.controller!;
+    expect(scroll.position.maxScrollExtent, greaterThan(0));
+    scroll.jumpTo(scroll.position.maxScrollExtent);
+    await tester.pumpAndSettle();
+    expect(
+      scroll.position.pixels,
+      closeTo(scroll.position.maxScrollExtent, 0.5),
+    );
+    final lastLine = find.text('+line 79');
+    expect(lastLine, findsOneWidget);
+    // Prove the last row is not clipped by the viewport's bottom edge: a
+    // separate inset remains available beneath the rendered final line.
+    expect(
+      tester.getBottomLeft(lastLine).dy,
+      lessThanOrEqualTo(
+        tester.getBottomLeft(singleFinder).dy -
+            workspaceEditorBottomScrollPadding +
+            2,
+      ),
+    );
+
+    await tester.tap(find.byTooltip('Switch to Side-by-Side View'));
+    await tester.pumpAndSettle();
+    for (final side in <String>['left', 'right']) {
+      final list = tester.widget<ListView>(
+        find.byKey(ValueKey<String>('git-diff-side-by-side-$side-list')),
+      );
+      expect(
+        (list.padding! as EdgeInsets).bottom,
+        workspaceEditorBottomScrollPadding,
+        reason: '$side diff pane',
+      );
+    }
+  });
+
   testWidgets('diff surface caps rendered line previews', (tester) async {
     final backend = FakeGitBackend()
       ..gitDiffResult = GitDiffResult(
