@@ -7,6 +7,7 @@ import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:alera/src/design_system/layout/alera_dialog.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_service.dart';
+import 'package:alera/src/features/workbench/infra/markdown_rich_clipboard.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_markdown_uri_policy.dart';
@@ -737,6 +738,59 @@ ${List<String>.filled(80, r'\frac{a}{b}').join(' + ')}
       expect(position().pixels, position().minScrollExtent);
     },
   );
+
+  testWidgets('formatted document and table buttons copy semantic HTML', (
+    tester,
+  ) async {
+    final copied = <Map<String, String>>[];
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(MarkdownRichClipboard.channel, (
+      call,
+    ) async {
+      expect(call.method, 'setHtml');
+      copied.add(Map<String, String>.from(call.arguments as Map));
+      return null;
+    });
+    addTearDown(() {
+      messenger.setMockMethodCallHandler(MarkdownRichClipboard.channel, null);
+    });
+
+    final service = _FakeWorkspaceFileService('''
+# Report
+
+Before the table.
+
+| Item | Amount |
+| --- | --- |
+| **Tea** | 12 |
+
+After the table.
+''');
+    await tester.pumpWidget(
+      _surface(registry: EditorSessionRegistry(), workspaceFiles: service),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(
+      find.byKey(const ValueKey<String>('markdown-preview-copy-formatted')),
+    );
+    await tester.pump();
+    expect(copied, hasLength(1));
+    expect(copied.single['html'], contains('<h1 style='));
+    expect(copied.single['html'], contains('<table style='));
+    expect(copied.single['text'], contains('After the table.'));
+
+    await tester.tap(
+      find.byKey(const ValueKey<String>('markdown-table-copy-formatted')),
+    );
+    await tester.pump();
+    expect(copied, hasLength(2));
+    expect(copied.last['html'], startsWith('<table style='));
+    expect(copied.last['html'], contains('<th style='));
+    expect(copied.last['html'], contains('<strong>Tea</strong>'));
+    expect(copied.last['html'], isNot(contains('After the table.')));
+  });
 
   testWidgets('renders Mermaid fences as SVG in markdown preview', (
     tester,

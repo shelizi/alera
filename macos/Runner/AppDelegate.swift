@@ -26,6 +26,31 @@ class AppDelegate: FlutterAppDelegate {
       let locale = localeId.map { Locale(identifier: $0) } ?? Locale.current
       result(SFSpeechRecognizer(locale: locale)?.supportsOnDeviceRecognition == true)
     }
+    let richClipboard = FlutterMethodChannel(
+      name: "dev.leynier.alera/rich_clipboard",
+      binaryMessenger: controller.engine.binaryMessenger
+    )
+    richClipboard.setMethodCallHandler { call, result in
+      guard call.method == "setHtml" else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      guard let arguments = call.arguments as? [String: String],
+            let html = arguments["html"], !html.isEmpty,
+            let text = arguments["text"] else {
+        result(FlutterError(code: "invalid-arguments", message: "Missing rich clipboard content", details: nil))
+        return
+      }
+      let clipboard = NSPasteboard.general
+      clipboard.clearContents()
+      let htmlWritten = clipboard.setString(html, forType: .html)
+      let textWritten = clipboard.setString(text, forType: .string)
+      if htmlWritten && textWritten {
+        result(nil)
+      } else {
+        result(FlutterError(code: "clipboard-error", message: "Unable to copy formatted content", details: nil))
+      }
+    }
     desktopPresence = DesktopPresence(messenger: controller.engine.binaryMessenger)
   }
 

@@ -8,6 +8,7 @@
 #include "win32_app_menu.h"
 #include "win32_dark_mode.h"
 #include "win32_file_drag.h"
+#include "win32_rich_clipboard.h"
 
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
     : project_(project) {}
@@ -63,6 +64,18 @@ bool FlutterWindow::OnCreate() {
         HandleAleraFileDragMethodCall(GetHandle(), call, std::move(result));
       });
 
+  rich_clipboard_channel_ =
+      std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+          flutter_controller_->engine()->messenger(),
+          "dev.leynier.alera/rich_clipboard",
+          &flutter::StandardMethodCodec::GetInstance());
+  rich_clipboard_channel_->SetMethodCallHandler(
+      [this](const flutter::MethodCall<flutter::EncodableValue>& call,
+             std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>>
+                 result) {
+        HandleAleraRichClipboardMethodCall(GetHandle(), call, std::move(result));
+      });
+
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
     this->Show();
   });
@@ -76,6 +89,7 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  rich_clipboard_channel_.reset();
   file_drag_channel_.reset();
   desktop_presence_.Destroy();
   if (flutter_controller_) {

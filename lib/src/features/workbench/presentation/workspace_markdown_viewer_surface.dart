@@ -11,6 +11,7 @@ import 'package:alera/src/design_system/layout/alera_dialog.dart';
 import 'package:alera/src/design_system/typography/alera_search_highlighted_text.dart';
 import 'package:alera/src/design_system/menus/alera_text_selection_toolbar.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_service.dart';
+import 'package:alera/src/features/workbench/infra/markdown_rich_clipboard.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_editor_surface.dart';
@@ -134,7 +135,17 @@ class _WorkspaceMarkdownViewerSurfaceState
           radius: const Radius.circular(4),
         ),
         child: SelectionArea(
-          contextMenuBuilder: AleraTextSelectionToolbar.selectableRegion,
+          contextMenuBuilder: (menuContext, region) =>
+              AleraTextSelectionToolbar(
+                anchors: region.contextMenuAnchors,
+                buttonItems: <ContextMenuButtonItem>[
+                  ...region.contextMenuButtonItems,
+                  ContextMenuButtonItem(
+                    label: 'Copy document with formatting',
+                    onPressed: () => unawaited(_copyFormattedDocument()),
+                  ),
+                ],
+              ),
           child: Scrollbar(
             controller: _verticalScrollController,
             thumbVisibility: true,
@@ -213,6 +224,13 @@ class _WorkspaceMarkdownViewerSurfaceState
           control: !useMeta,
           meta: useMeta,
         ): _openSearch,
+        SingleActivator(
+          LogicalKeyboardKey.keyC,
+          shift: true,
+          control: !useMeta,
+          meta: useMeta,
+        ): () =>
+            unawaited(_copyFormattedDocument()),
       },
       child: Focus(
         focusNode: _surfaceFocusNode,
@@ -231,6 +249,9 @@ class _WorkspaceMarkdownViewerSurfaceState
                 searchOpen: _searchOpen,
                 onSearch: _openSearch,
                 onRefresh: () => unawaited(_load()),
+                onCopyFormatted: _content == null || _loadError != null
+                    ? null
+                    : () => unawaited(_copyFormattedDocument()),
                 onOpenEditor: () => widget.onOpenEditorTab(filePath),
               ),
               if (_searchOpen)
@@ -674,6 +695,19 @@ class _WorkspaceMarkdownViewerSurfaceState
     });
   }
 
+  Future<void> _copyFormattedDocument() async {
+    final content = _content;
+    if (content == null) return;
+    try {
+      final rich = await const MarkdownRichClipboard().copy(
+        markdownRichClipboardDocument(content),
+      );
+      _showToast(rich ? 'Copied with formatting' : 'Copied as plain text');
+    } catch (_) {
+      _showToast('Cannot copy Markdown preview', tone: .error);
+    }
+  }
+
   void _showToast(String message, {AleraToastTone tone = AleraToastTone.info}) {
     if (!mounted) {
       return;
@@ -921,6 +955,31 @@ class const _MarkdownViewerTable({
 class _MarkdownViewerTableState extends State<_MarkdownViewerTable> {
   late final ScrollController _horizontalController;
 
+  Future<void> _copyFormattedTable() async {
+    final data = markdownRichClipboardTable(<MarkdownRichTableRow>[
+      for (final row in widget.rows)
+        MarkdownRichTableRow(
+          cells: <String>[for (final field in row.fields) field.data],
+          isHeader: row.isHeader,
+        ),
+    ]);
+    try {
+      final rich = await const MarkdownRichClipboard().copy(data);
+      if (mounted) {
+        AleraToast.show(
+          context,
+          message: rich
+              ? 'Copied table with formatting'
+              : 'Copied table as text',
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        AleraToast.show(context, message: 'Cannot copy table', tone: .error);
+      }
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -960,7 +1019,16 @@ class _MarkdownViewerTableState extends State<_MarkdownViewerTable> {
 
     return SelectionContainer.disabled(
       child: SelectionArea(
-        contextMenuBuilder: AleraTextSelectionToolbar.selectableRegion,
+        contextMenuBuilder: (menuContext, region) => AleraTextSelectionToolbar(
+          anchors: region.contextMenuAnchors,
+          buttonItems: <ContextMenuButtonItem>[
+            ...region.contextMenuButtonItems,
+            ContextMenuButtonItem(
+              label: 'Copy table with formatting',
+              onPressed: () => unawaited(_copyFormattedTable()),
+            ),
+          ],
+        ),
         child: Container(
           margin: const EdgeInsets.symmetric(vertical: AleraTokens.space8),
           decoration: BoxDecoration(
@@ -973,55 +1041,77 @@ class _MarkdownViewerTableState extends State<_MarkdownViewerTable> {
               final minWidth = constraints.hasBoundedWidth
                   ? constraints.maxWidth
                   : 0.0;
-              return Scrollbar(
-                key: const ValueKey<String>('markdown-table-x-scrollbar'),
-                controller: _horizontalController,
-                thumbVisibility: true,
-                trackVisibility: true,
-                thickness: 8,
-                radius: const Radius.circular(4),
-                interactive: true,
-                scrollbarOrientation: ScrollbarOrientation.bottom,
-                notificationPredicate: (notification) =>
-                    notification.metrics.axis == Axis.horizontal,
-                child: SingleChildScrollView(
-                  key: const ValueKey<String>('markdown-table-x-scrollview'),
-                  controller: _horizontalController,
-                  scrollDirection: Axis.horizontal,
-                  padding: const EdgeInsets.only(bottom: AleraTokens.space16),
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(minWidth: minWidth),
-                    child: Table(
-                      defaultColumnWidth: const IntrinsicColumnWidth(),
-                      border: const TableBorder(
-                        horizontalInside: BorderSide(
-                          color: AleraTokens.borderSubtle,
-                        ),
-                        verticalInside: BorderSide(
-                          color: AleraTokens.borderSubtle,
+              return Stack(
+                children: <Widget>[
+                  Scrollbar(
+                    key: const ValueKey<String>('markdown-table-x-scrollbar'),
+                    controller: _horizontalController,
+                    thumbVisibility: true,
+                    trackVisibility: true,
+                    thickness: 8,
+                    radius: const Radius.circular(4),
+                    interactive: true,
+                    scrollbarOrientation: ScrollbarOrientation.bottom,
+                    notificationPredicate: (notification) =>
+                        notification.metrics.axis == Axis.horizontal,
+                    child: SingleChildScrollView(
+                      key: const ValueKey<String>(
+                        'markdown-table-x-scrollview',
+                      ),
+                      controller: _horizontalController,
+                      scrollDirection: Axis.horizontal,
+                      padding: const EdgeInsets.only(
+                        bottom: AleraTokens.space16,
+                      ),
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(minWidth: minWidth),
+                        child: Table(
+                          defaultColumnWidth: const IntrinsicColumnWidth(),
+                          border: const TableBorder(
+                            horizontalInside: BorderSide(
+                              color: AleraTokens.borderSubtle,
+                            ),
+                            verticalInside: BorderSide(
+                              color: AleraTokens.borderSubtle,
+                            ),
+                          ),
+                          children: <TableRow>[
+                            for (final row in widget.rows)
+                              TableRow(
+                                decoration: row.isHeader
+                                    ? const BoxDecoration(
+                                        color: AleraTokens.surfaceElevated,
+                                      )
+                                    : null,
+                                children: <Widget>[
+                                  for (
+                                    var column = 0;
+                                    column < columnCount;
+                                    column += 1
+                                  )
+                                    _buildCell(context, row, column),
+                                ],
+                              ),
+                          ],
                         ),
                       ),
-                      children: <TableRow>[
-                        for (final row in widget.rows)
-                          TableRow(
-                            decoration: row.isHeader
-                                ? const BoxDecoration(
-                                    color: AleraTokens.surfaceElevated,
-                                  )
-                                : null,
-                            children: <Widget>[
-                              for (
-                                var column = 0;
-                                column < columnCount;
-                                column += 1
-                              )
-                                _buildCell(context, row, column),
-                            ],
-                          ),
-                      ],
                     ),
                   ),
-                ),
+                  Positioned(
+                    top: 2,
+                    right: 2,
+                    child: AleraIconButton(
+                      key: const ValueKey<String>(
+                        'markdown-table-copy-formatted',
+                      ),
+                      tooltip: 'Copy table with formatting',
+                      icon: AleraIcons.copy,
+                      minSize: 28,
+                      backgroundColor: AleraTokens.surfaceElevated,
+                      onPressed: () => unawaited(_copyFormattedTable()),
+                    ),
+                  ),
+                ],
               );
             },
           ),
@@ -1329,6 +1419,7 @@ class const _MarkdownViewerFileBar({
   required final bool searchOpen,
   required final VoidCallback onSearch,
   required final VoidCallback onRefresh,
+  required final VoidCallback? onCopyFormatted,
   required final VoidCallback onOpenEditor,
 }) extends StatelessWidget {
   @override
@@ -1371,6 +1462,13 @@ class const _MarkdownViewerFileBar({
               tooltip: loading ? 'Refreshing preview' : 'Refresh preview',
               icon: loading ? AleraIcons.loading : AleraIcons.refresh,
               onPressed: loading ? null : onRefresh,
+            ),
+            const SizedBox(width: AleraTokens.space2),
+            AleraIconButton(
+              key: const ValueKey<String>('markdown-preview-copy-formatted'),
+              tooltip: 'Copy document with formatting',
+              icon: AleraIcons.copy,
+              onPressed: onCopyFormatted,
             ),
             const SizedBox(width: AleraTokens.space2),
             AleraIconButton(

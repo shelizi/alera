@@ -41,6 +41,8 @@ class FlutterWindow : public Win32Window {
   Win32DesktopPresence desktop_presence_;
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
       file_drag_channel_;
+  std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
+      rich_clipboard_channel_;
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_

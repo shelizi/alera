@@ -3,6 +3,7 @@
 #include "desktop_presence.h"
 
 #include <flutter_linux/flutter_linux.h>
+#include <cstring>
 #include <gio/gio.h>
 #include <glib/gstdio.h>
 #include <time.h>
@@ -16,6 +17,7 @@ struct _MyApplication {
   GtkApplication parent_instance;
   char** dart_entrypoint_arguments;
   FlMethodChannel* clipboard_channel;
+  FlMethodChannel* rich_clipboard_channel;
   FlMethodChannel* app_menu_channel;
   DesktopPresence* desktop_presence;
   GtkWindow* window;
@@ -26,6 +28,7 @@ G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
 namespace {
 
 constexpr char kClipboardChannel[] = "dev.leynier.alera/clipboard";
+constexpr char kRichClipboardChannel[] = "dev.leynier.alera/rich_clipboard";
 constexpr char kSaveClipboardImageMethod[] = "saveImageAsTempFile";
 constexpr char kClipboardImagePrefix[] = "alera-paste-";
 constexpr char kClipboardImageSuffix[] = ".png";
@@ -218,6 +221,74 @@ void clipboard_channel_method_cb(FlMethodChannel* channel,
                               clipboard_image_received_cb, request);
 }
 
+struct RichClipboardPayload {
+  gchar* html;
+  gchar* text;
+};
+
+void rich_clipboard_content_cb(GtkClipboard*, GtkSelectionData* selection,
+                               guint info, gpointer user_data) {
+  const auto* payload = static_cast<RichClipboardPayload*>(user_data);
+  if (info == 0) {
+    gtk_selection_data_set(selection, gdk_atom_intern_static_string("text/html"),
+                           8, reinterpret_cast<const guchar*>(payload->html),
+                           static_cast<gint>(strlen(payload->html)));
+  } else {
+    gtk_selection_data_set_text(selection, payload->text, -1);
+  }
+}
+
+void rich_clipboard_clear_cb(GtkClipboard*, gpointer user_data) {
+  auto* payload = static_cast<RichClipboardPayload*>(user_data);
+  g_free(payload->html);
+  g_free(payload->text);
+  g_free(payload);
+}
+
+void rich_clipboard_channel_method_cb(FlMethodChannel*,
+                                     FlMethodCall* method_call, gpointer) {
+  if (g_strcmp0(fl_method_call_get_name(method_call), "setHtml") != 0) {
+    fl_method_call_respond_not_implemented(method_call, nullptr);
+    return;
+  }
+  FlValue* args = fl_method_call_get_args(method_call);
+  if (args == nullptr || fl_value_get_type(args) != FL_VALUE_TYPE_MAP) {
+    fl_method_call_respond_error(method_call, "invalid-arguments",
+                                 "Expected HTML and text.", nullptr, nullptr);
+    return;
+  }
+  FlValue* html = fl_value_lookup_string(args, "html");
+  FlValue* text = fl_value_lookup_string(args, "text");
+  if (html == nullptr || text == nullptr ||
+      fl_value_get_type(html) != FL_VALUE_TYPE_STRING ||
+      fl_value_get_type(text) != FL_VALUE_TYPE_STRING ||
+      fl_value_get_string(html)[0] == '\0') {
+    fl_method_call_respond_error(method_call, "invalid-arguments",
+                                 "Missing HTML or text.", nullptr, nullptr);
+    return;
+  }
+
+  auto* payload = g_new0(RichClipboardPayload, 1);
+  payload->html = g_strdup(fl_value_get_string(html));
+  payload->text = g_strdup(fl_value_get_string(text));
+  GtkTargetEntry targets[] = {
+      {const_cast<gchar*>("text/html"), 0, 0},
+      {const_cast<gchar*>("UTF8_STRING"), 0, 1},
+      {const_cast<gchar*>("text/plain;charset=utf-8"), 0, 1},
+  };
+  GtkClipboard* clipboard = gtk_clipboard_get(GDK_SELECTION_CLIPBOARD);
+  if (!gtk_clipboard_set_with_data(clipboard, targets, G_N_ELEMENTS(targets),
+                                   rich_clipboard_content_cb,
+                                   rich_clipboard_clear_cb, payload)) {
+    rich_clipboard_clear_cb(nullptr, payload);
+    fl_method_call_respond_error(method_call, "clipboard-error",
+                                 "Unable to copy HTML.", nullptr, nullptr);
+    return;
+  }
+  gtk_clipboard_set_can_store(clipboard, targets, G_N_ELEMENTS(targets));
+  fl_method_call_respond_success(method_call, nullptr, nullptr);
+}
+
 }  // namespace
 
 // Called when first Flutter frame received.
@@ -320,6 +391,15 @@ static void my_application_activate(GApplication* application) {
   fl_method_channel_set_method_call_handler(
       self->clipboard_channel, clipboard_channel_method_cb, self, nullptr);
 
+  g_autoptr(FlStandardMethodCodec) rich_clipboard_codec =
+      fl_standard_method_codec_new();
+  self->rich_clipboard_channel = fl_method_channel_new(
+      fl_engine_get_binary_messenger(engine), kRichClipboardChannel,
+      FL_METHOD_CODEC(rich_clipboard_codec));
+  fl_method_channel_set_method_call_handler(
+      self->rich_clipboard_channel, rich_clipboard_channel_method_cb, self,
+      nullptr);
+
   g_autoptr(FlStandardMethodCodec) app_menu_codec =
       fl_standard_method_codec_new();
   self->app_menu_channel = fl_method_channel_new(
@@ -379,6 +459,7 @@ static void my_application_dispose(GObject* object) {
   MyApplication* self = MY_APPLICATION(object);
   g_clear_pointer(&self->dart_entrypoint_arguments, g_strfreev);
   g_clear_object(&self->clipboard_channel);
+  g_clear_object(&self->rich_clipboard_channel);
   g_clear_object(&self->app_menu_channel);
   desktop_presence_free(self->desktop_presence);
   self->desktop_presence = nullptr;
