@@ -4,3 +4,4 @@ pub(crate) mod editor_languages;
 pub mod rope;
 pub mod workspace_source;
 pub(crate) mod native_save;
+pub mod native_save_io;
