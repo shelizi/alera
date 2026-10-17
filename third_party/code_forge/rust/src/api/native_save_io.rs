@@ -107,7 +107,7 @@ pub(crate) fn guarded_replace_workspace_file(
             if token(&fs::metadata(&dest).map_err(|_| SaveStatus::Conflict)?) != current {
                 return Err(SaveStatus::Conflict);
             }
-            fs::rename(&temp, &dest).map_err(|_| SaveStatus::Io)?;
+            replace_document_file(&temp, &dest)?;
             Ok(())
         })();
         if result.is_err() {
@@ -220,6 +220,65 @@ pub(crate) fn save_rope(
     };
     guarded_replace_workspace_file(root, relative, bytes, expected_token, overwrite)
 }
+
+#[cfg(windows)]
+fn replace_document_file(temp: &Path, dest: &Path) -> Result<(), SaveStatus> {
+    use std::ffi::c_void;
+    use std::os::windows::ffi::OsStrExt;
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn ReplaceFileW(
+            replaced_file: *const u16,
+            replacement_file: *const u16,
+            backup_file: *const u16,
+            replace_flags: u32,
+            exclude: *mut c_void,
+            reserved: *mut c_void,
+        ) -> i32;
+    }
+
+    let to_wide = |path: &Path| -> Vec<u16> {
+        path.as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect()
+    };
+    // A backup prevents failure modes of ReplaceFileW from orphaning the user's
+    // original document. No flags that ignore ACL or attribute-merge failures.
+    let backup = temp.with_extension("bak");
+    let original = to_wide(dest);
+    let replacement = to_wide(temp);
+    let backup_name = to_wide(&backup);
+    let success = unsafe {
+        ReplaceFileW(
+            original.as_ptr(),
+            replacement.as_ptr(),
+            backup_name.as_ptr(),
+            0,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    if success != 0 {
+        // The original document is now the backup and the replacement has
+        // inherited its security metadata. Removing the backup is best effort.
+        let _ = fs::remove_file(&backup);
+        return Ok(());
+    }
+    // In some failure cases Windows leaves the original at the backup path.
+    // Restore it if the destination disappeared, otherwise keep it for recovery.
+    if !dest.exists() && backup.exists() {
+        let _ = fs::rename(&backup, dest);
+    }
+    Err(SaveStatus::Io)
+}
+
+#[cfg(not(windows))]
+fn replace_document_file(temp: &Path, dest: &Path) -> Result<(), SaveStatus> {
+    fs::rename(temp, dest).map_err(|_| SaveStatus::Io)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -331,5 +390,119 @@ mod tests {
         );
         assert_eq!(result.status, SaveStatus::Saved);
         assert_eq!(fs::read(path).unwrap(), original);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn replacement_preserves_original_creation_time() {
+        use std::os::windows::fs::FileTimesExt;
+        use std::time::{Duration, SystemTime};
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("attributes.txt");
+        fs::write(&file, b"original").unwrap();
+        let created = SystemTime::now() - Duration::from_secs(3600 * 24 * 365);
+        fs::File::options()
+            .write(true)
+            .open(&file)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_created(created))
+            .unwrap();
+        let old_creation = fs::metadata(&file).unwrap().created().unwrap();
+        let expected = token(&fs::metadata(&file).unwrap());
+        let result = guarded_replace_workspace_file(
+            dir.path().to_string_lossy().into_owned(),
+            "attributes.txt".into(),
+            b"new content".to_vec(),
+            expected,
+            false,
+        );
+        assert_eq!(result.status, SaveStatus::Saved);
+        assert_eq!(
+            fs::metadata(&file).unwrap().created().unwrap(),
+            old_creation,
+            "replacing a document must retain the original Windows creation time"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn replacement_keeps_explicit_access_control_rules() {
+        use std::process::Command;
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("permissions.txt");
+        fs::write(&file, b"original").unwrap();
+        // Add a distinguishable explicit ACE to this throwaway fixture.
+        let grant = Command::new("icacls")
+            .arg(&file)
+            .arg("/grant")
+            .arg("*S-1-1-0:(R)")
+            .output()
+            .expect("icacls is part of Windows");
+        assert!(
+            grant.status.success(),
+            "{}",
+            String::from_utf8_lossy(&grant.stderr)
+        );
+        let acl = || -> String {
+            let path = file.to_string_lossy().replace("'", "''");
+            let script = format!("(Get-Acl -LiteralPath '{path}').Sddl");
+            let output = Command::new("powershell")
+                .args(["-NoProfile", "-Command", &script])
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8_lossy(&output.stdout).trim().to_string()
+        };
+        let before = acl();
+        assert!(before.contains("WD"), "expected Everyone ACE: {before}");
+        let expected = token(&fs::metadata(&file).unwrap());
+        let result = guarded_replace_workspace_file(
+            dir.path().to_string_lossy().into_owned(),
+            "permissions.txt".into(),
+            b"new content".to_vec(),
+            expected,
+            false,
+        );
+        assert_eq!(result.status, SaveStatus::Saved);
+        assert_eq!(
+            acl(),
+            before,
+            "Windows document save must retain the original DACL"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn replace_failure_keeps_original_and_cleans_temp_file() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("busy.txt");
+        fs::write(&file, b"original").unwrap();
+        let token_before = token(&fs::metadata(&file).unwrap());
+        // Exclude FILE_SHARE_DELETE while this read handle is open.
+        let locked = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(1)
+            .open(&file)
+            .unwrap();
+        let result = guarded_replace_workspace_file(
+            dir.path().to_string_lossy().into_owned(),
+            "busy.txt".into(),
+            b"new content".to_vec(),
+            token_before,
+            false,
+        );
+        assert_eq!(result.status, SaveStatus::Io);
+        assert_eq!(fs::read(&file).unwrap(), b"original");
+        drop(locked);
+        let names: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, vec!["busy.txt"]);
     }
 }
