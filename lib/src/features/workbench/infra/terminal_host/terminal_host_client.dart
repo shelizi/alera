@@ -17,7 +17,7 @@ import 'package:alera/src/shared/infra/logging/log_redaction.dart';
 import 'package:ghostty_vte_flutter/ghostty_vte_flutter.dart';
 import 'package:logging/logging.dart';
 import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
+import 'package:alera/src/shared/infra/storage/alera_support_directory.dart';
 import 'package:uuid/uuid.dart';
 
 export 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_client_models.dart';
@@ -67,7 +67,7 @@ final class SocketTerminalHostClient._(
   }) {
     return SocketTerminalHostClient._(
       launcher ?? DefaultTerminalHostProcessLauncher(),
-      applicationSupportDirectory ?? getApplicationSupportDirectory,
+      applicationSupportDirectory ?? aleraApplicationSupportDirectory,
       startupTimeout,
       initialConfig,
       heartbeatInterval,

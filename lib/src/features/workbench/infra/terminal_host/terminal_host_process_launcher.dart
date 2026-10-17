@@ -5,7 +5,7 @@ import 'package:alera/src/core/build_flavor.dart';
 import 'package:alera/src/shared/infra/runtime/alera_cli_sidecar.dart';
 import 'package:alera/src/platform/runtime_host/protocol/terminal_host_protocol.dart';
 import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
+import 'package:alera/src/shared/infra/storage/alera_support_directory.dart';
 
 const _compiledRuntimeArchivePublicKey = String.fromEnvironment(
   'ALERA_UPDATE_MANIFEST_PUBLIC_KEY',
@@ -75,7 +75,7 @@ Future<Map<String, String>> _terminalHostEnvironment() async {
     environment['ALERA_RUNTIME_ARCHIVE_PUBLIC_KEY'] =
         _compiledRuntimeArchivePublicKey;
   }
-  final support = await getApplicationSupportDirectory();
+  final support = await aleraApplicationSupportDirectory();
   environment['ALERA_WHISPER_MODEL_ROOT'] = p.join(
     support.path,
     'models',

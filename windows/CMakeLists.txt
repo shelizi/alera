@@ -13,6 +13,13 @@ if("$ENV{ALERA_FLAVOR}" STREQUAL "release")
   set(ALERA_APP_ID "dev.leynier.alera")
 endif()
 
+# Explicit Windows UI smoke build: avoid forwarding to the user's Alera Dev.
+# Production App ID remains unchanged unless the test env var is set.
+if("$ENV{ALERA_E2E_DESKTOP}" STREQUAL "1")
+  set(ALERA_APP_NAME "Alera Rope Save E2E")
+  set(ALERA_APP_ID "dev.leynier.alera.rope-save-e2e")
+endif()
+
 # Explicitly opt in to modern CMake behaviors to avoid warnings with recent
 # versions of CMake.
 cmake_policy(VERSION 3.14...3.25)
