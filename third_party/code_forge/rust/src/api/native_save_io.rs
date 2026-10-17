@@ -28,6 +28,55 @@ fn token(m: &fs::Metadata) -> String {
         .unwrap_or_default();
     format!("{}:{t}", m.len())
 }
+fn guarded_target(root: &Path, relative: &str) -> Result<std::path::PathBuf, SaveStatus> {
+    let rel = Path::new(relative);
+    if rel.as_os_str().is_empty() {
+        return Err(SaveStatus::InvalidPath);
+    }
+    for component in rel.components() {
+        match component {
+            Component::Normal(name) => {
+                if [".git", ".hg", ".svn"].iter().any(|value| {
+                    name.to_str()
+                        .is_some_and(|name| name.eq_ignore_ascii_case(value))
+                }) {
+                    return Err(SaveStatus::Protected);
+                }
+            }
+            Component::CurDir => {}
+            _ => return Err(SaveStatus::InvalidPath),
+        }
+    }
+    let canonical_root = fs::canonicalize(root).map_err(|_| SaveStatus::InvalidPath)?;
+    let canonical =
+        fs::canonicalize(canonical_root.join(rel)).map_err(|_| SaveStatus::InvalidPath)?;
+    if !canonical.starts_with(&canonical_root) {
+        return Err(SaveStatus::InvalidPath);
+    }
+    let nested = canonical
+        .strip_prefix(&canonical_root)
+        .map_err(|_| SaveStatus::InvalidPath)?;
+    for component in nested.components() {
+        if let Component::Normal(name) = component {
+            if [".git", ".hg", ".svn"].iter().any(|value| {
+                name.to_str()
+                    .is_some_and(|name| name.eq_ignore_ascii_case(value))
+            }) {
+                return Err(SaveStatus::Protected);
+            }
+        }
+    }
+    Ok(canonical)
+}
+
+fn failed(status: SaveStatus) -> SaveOutcome {
+    SaveOutcome {
+        status,
+        token: String::new(),
+        size: 0,
+    }
+}
+
 pub(crate) fn guarded_replace_workspace_file(
     root: String,
     relative: String,
@@ -36,46 +85,13 @@ pub(crate) fn guarded_replace_workspace_file(
     overwrite: bool,
 ) -> SaveOutcome {
     let run = || -> Result<(String, u64), SaveStatus> {
-        let rel = Path::new(&relative);
-        if rel.as_os_str().is_empty() {
-            return Err(SaveStatus::InvalidPath);
-        }
-        for c in rel.components() {
-            match c {
-                Component::Normal(v)
-                    if [".git", ".hg", ".svn"]
-                        .iter()
-                        .any(|x| v.to_str().is_some_and(|s| s.eq_ignore_ascii_case(x))) =>
-                {
-                    return Err(SaveStatus::Protected)
-                }
-                Component::Normal(_) | Component::CurDir => {}
-                _ => return Err(SaveStatus::InvalidPath),
-            }
-        }
         if bytes.len() > 10 * 1024 * 1024 {
             return Err(SaveStatus::Unsupported);
         }
-        let base = fs::canonicalize(root).map_err(|_| SaveStatus::InvalidPath)?;
-        let dest = fs::canonicalize(base.join(rel)).map_err(|_| SaveStatus::InvalidPath)?;
-        if !dest.starts_with(&base) {
-            return Err(SaveStatus::InvalidPath);
-        }
-        let inner = dest
-            .strip_prefix(&base)
-            .map_err(|_| SaveStatus::InvalidPath)?;
-        for component in inner.components() {
-            if let Component::Normal(name) = component {
-                if [".git", ".hg", ".svn"].iter().any(|x| {
-                    name.to_str()
-                        .is_some_and(|value| value.eq_ignore_ascii_case(x))
-                }) {
-                    return Err(SaveStatus::Protected);
-                }
-            }
-        }
+        let base = fs::canonicalize(&root).map_err(|_| SaveStatus::InvalidPath)?;
+        let dest = guarded_target(&base, &relative)?;
         let before = fs::metadata(&dest).map_err(|_| SaveStatus::Io)?;
-        if !before.is_file() || before.permissions().readonly() {
+        if !before.is_file() || before.permissions().readonly() || before.len() > 10 * 1024 * 1024 {
             return Err(SaveStatus::Unsupported);
         }
         let current = token(&before);
@@ -101,7 +117,7 @@ pub(crate) fn guarded_replace_workspace_file(
             f.sync_all().map_err(|_| SaveStatus::Io)?;
             fs::set_permissions(&temp, before.permissions()).map_err(|_| SaveStatus::Io)?;
             drop(f);
-            if fs::canonicalize(base.join(rel)).map_err(|_| SaveStatus::Conflict)? != dest {
+            if guarded_target(&base, &relative).map_err(|_| SaveStatus::Conflict)? != dest {
                 return Err(SaveStatus::Conflict);
             }
             if token(&fs::metadata(&dest).map_err(|_| SaveStatus::Conflict)?) != current {
@@ -140,59 +156,36 @@ pub(crate) fn save_rope(
     tab_size: i32,
     encoding: super::workspace_source::NativeWorkspaceTextEncoding,
 ) -> SaveOutcome {
-    // Reuse the workspace's existing path and text decoding rules.
-    let source = match super::workspace_source::open_workspace_source(
-        &root,
-        &relative,
-        tab_size,
-        Some(encoding),
-    ) {
-        Ok(source) => source,
-        Err(_) => {
-            return SaveOutcome {
-                status: SaveStatus::InvalidPath,
-                token: String::new(),
-                size: 0,
-            }
-        }
-    };
-    if !overwrite && source.info.content_token != expected_token {
-        return SaveOutcome {
-            status: SaveStatus::Conflict,
-            token: String::new(),
-            size: 0,
-        };
-    }
-    let root_path = match fs::canonicalize(&root) {
+    // Validate once and read the original document exactly once. The same
+    // on-disk version must survive both preparation and the final replacement,
+    // including the explicit user-confirmed overwrite case.
+    let path = match guarded_target(Path::new(&root), &relative) {
         Ok(path) => path,
-        Err(_) => {
-            return SaveOutcome {
-                status: SaveStatus::InvalidPath,
-                token: String::new(),
-                size: 0,
-            }
-        }
+        Err(status) => return failed(status),
     };
-    let path = match fs::canonicalize(root_path.join(&relative)) {
-        Ok(path) if path.starts_with(&root_path) => path,
-        _ => {
-            return SaveOutcome {
-                status: SaveStatus::InvalidPath,
-                token: String::new(),
-                size: 0,
-            }
-        }
+    let original_metadata = match fs::metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(_) => return failed(SaveStatus::Io),
     };
+    if !original_metadata.is_file()
+        || original_metadata.len() > 10 * 1024 * 1024
+        || original_metadata.permissions().readonly()
+    {
+        return failed(SaveStatus::Unsupported);
+    }
+    let disk_token = token(&original_metadata);
+    if !overwrite && expected_token != disk_token {
+        return failed(SaveStatus::Conflict);
+    }
     let original = match fs::read(&path) {
-        Ok(bytes) => bytes,
-        Err(_) => {
-            return SaveOutcome {
-                status: SaveStatus::Io,
-                token: String::new(),
-                size: 0,
-            }
-        }
+        Ok(bytes) if bytes.len() <= 10 * 1024 * 1024 => bytes,
+        Ok(_) => return failed(SaveStatus::Unsupported),
+        Err(_) => return failed(SaveStatus::Io),
     };
+    match fs::metadata(&path) {
+        Ok(metadata) if token(&metadata) == disk_token => {}
+        _ => return failed(SaveStatus::Conflict),
+    }
     let raw = match super::workspace_source::decode_with_encoding(&original, encoding) {
         Ok(raw) => raw,
         Err(_) => {
@@ -218,7 +211,7 @@ pub(crate) fn save_rope(
             }
         }
     };
-    guarded_replace_workspace_file(root, relative, bytes, expected_token, overwrite)
+    guarded_replace_workspace_file(root, relative, bytes, disk_token, false)
 }
 
 #[cfg(windows)]
@@ -504,5 +497,85 @@ mod tests {
             .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
         assert_eq!(names, vec!["busy.txt"]);
+    }
+
+    /// Reconstructs the previous two-read Rust path for a fair Rust-only A/B;
+    /// excludes Flutter/FFI and runs on the same filesystem as the new path.
+    fn baseline_double_read_save(rope: &ropey::Rope, root: &str, expected: String) -> SaveOutcome {
+        let encoding = super::super::workspace_source::NativeWorkspaceTextEncoding::Utf8;
+        let source = super::super::workspace_source::open_workspace_source(
+            root,
+            "profile.txt",
+            4,
+            Some(encoding),
+        )
+        .unwrap();
+        assert_eq!(source.info.content_token, expected);
+        let original = fs::read(std::path::Path::new(root).join("profile.txt")).unwrap();
+        let raw =
+            super::super::workspace_source::decode_with_encoding(&original, encoding).unwrap();
+        let shown = super::super::workspace_source::expand_tabs(&raw, 4);
+        let output =
+            super::super::native_save::snapshot_bytes(rope, &raw, &shown, encoding).unwrap();
+        guarded_replace_workspace_file(root.into(), "profile.txt".into(), output, expected, false)
+    }
+
+    #[test]
+    #[ignore = "manual Rust-only old/new 1/4/10 MiB profile; excludes FFI"]
+    fn profile_native_rope_save_sizes() {
+        use std::time::Instant;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_string_lossy().into_owned();
+        let path = dir.path().join("profile.txt");
+        for mib in [1usize, 4, 10] {
+            let size = mib * 1024 * 1024;
+            let original = "a".repeat(size);
+            let rope = ropey::Rope::from_str(&"b".repeat(size));
+            let mut before_us = Vec::new();
+            let mut after_us = Vec::new();
+            for round in 0..6 {
+                // Alternate execution order to reduce warm filesystem bias;
+                // round zero is a warm-up, five later samples are recorded.
+                for legacy in if round % 2 == 0 {
+                    [true, false]
+                } else {
+                    [false, true]
+                } {
+                    fs::write(&path, original.as_bytes()).unwrap();
+                    let expected = token(&fs::metadata(&path).unwrap());
+                    let start = Instant::now();
+                    let outcome = if legacy {
+                        baseline_double_read_save(&rope, &root, expected)
+                    } else {
+                        save_rope(
+                            &rope,
+                            root.clone(),
+                            "profile.txt".into(),
+                            expected,
+                            false,
+                            4,
+                            super::super::workspace_source::NativeWorkspaceTextEncoding::Utf8,
+                        )
+                    };
+                    let elapsed = start.elapsed().as_micros();
+                    assert_eq!(outcome.status, SaveStatus::Saved);
+                    assert_eq!(outcome.size, size as u64);
+                    if round > 0 {
+                        (if legacy {
+                            &mut before_us
+                        } else {
+                            &mut after_us
+                        })
+                        .push(elapsed);
+                    }
+                }
+            }
+            before_us.sort_unstable();
+            after_us.sort_unstable();
+            eprintln!(
+                "ROPE_SAVE_AB size_mib={mib} samples=5 double_read_median_us={} single_read_median_us={} double_read_max_us={} single_read_max_us={}",
+                before_us[2], after_us[2], before_us[4], after_us[4]
+            );
+        }
     }
 }
