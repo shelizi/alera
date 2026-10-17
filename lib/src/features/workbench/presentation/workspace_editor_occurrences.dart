@@ -56,21 +56,48 @@ extension _WorkspaceEditorSelectionOccurrences on _WorkspaceEditorSurfaceState {
             _controller.selection.end != selection.end) {
           return;
         }
-        final highlights = workspaceEditorSelectedTextOccurrences(
-          selection: selection,
-          lineCount: _controller.lineCount,
-          documentLength: _controller.length,
-          lineForOffset: _controller.getLineAtOffset,
-          lineStartOffset: _controller.getLineStartOffset,
-          lineText: _controller.getLineText,
-          largeFileMode: workspaceEditorShouldDeferDocumentSnapshot(
-            lineCount: _controller.lineCount,
-            contentLength: _controller.length,
-          ),
-        );
-        _controller.setSelectionOccurrenceHighlights(highlights);
+        unawaited(_resolveSelectedOccurrences(selection, version));
       },
     );
+  }
+
+  Future<void> _resolveSelectedOccurrences(
+    TextSelection selection,
+    int version,
+  ) async {
+    final largeFileMode = workspaceEditorShouldDeferDocumentSnapshot(
+      lineCount: _controller.lineCount,
+      contentLength: _controller.length,
+    );
+    List<code_forge.DocumentHighlight> highlights;
+    try {
+      highlights = await _controller.findSelectedOccurrences(
+        selection: selection,
+        largeFileMode: largeFileMode,
+        maxMatches: workspaceEditorMaxOccurrenceHighlights,
+      );
+    } catch (_) {
+      // Preserve the original Dart scanner for older native libraries,
+      // test doubles, and transient native failures.
+      highlights = workspaceEditorSelectedTextOccurrences(
+        selection: selection,
+        lineCount: _controller.lineCount,
+        documentLength: _controller.length,
+        lineForOffset: _controller.getLineAtOffset,
+        lineStartOffset: _controller.getLineStartOffset,
+        lineText: _controller.getLineText,
+        largeFileMode: largeFileMode,
+      );
+    }
+    if (!mounted ||
+        _loading ||
+        _loadError != null ||
+        _controller.documentVersion != version ||
+        _controller.selection.start != selection.start ||
+        _controller.selection.end != selection.end) {
+      return;
+    }
+    _controller.setSelectionOccurrenceHighlights(highlights);
   }
 }
 

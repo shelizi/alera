@@ -3168,6 +3168,31 @@ class CodeForgeController implements DeltaTextInputClient {
   /// background operations can snapshot the latest document contents.
   void flushPendingBuffer() => _flushBuffer();
 
+  /// Uses one asynchronous native request for case-sensitive selected text
+  /// occurrences. Rope positions and returned columns are Unicode scalars.
+  Future<List<DocumentHighlight>> findSelectedOccurrences({
+    required TextSelection selection,
+    required bool largeFileMode,
+    int maxMatches = 400,
+  }) async {
+    _flushBuffer();
+    final matches = await _rope.findSelectedOccurrences(
+      selection.start,
+      selection.end,
+      largeFileMode: largeFileMode,
+      maxMatches: maxMatches,
+    );
+    return [
+      for (final match in matches)
+        DocumentHighlight(
+          startLine: match.line,
+          startColumn: match.startColumn,
+          endLine: match.line,
+          endColumn: match.endColumn,
+        ),
+    ];
+  }
+
   /// Finds the start of the line containing [offset].
   int findLineStart(int offset) => _rope.findLineStart(offset);
 

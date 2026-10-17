@@ -212,6 +212,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<SearchRange> dco_decode_list_search_range(dynamic raw);
 
   @protected
+  List<SelectedOccurrence> dco_decode_list_selected_occurrence(dynamic raw);
+
+  @protected
   NativeDocumentSymbol dco_decode_native_document_symbol(dynamic raw);
 
   @protected
@@ -248,6 +251,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   SearchRange dco_decode_search_range(dynamic raw);
+
+  @protected
+  SelectedOccurrence dco_decode_selected_occurrence(dynamic raw);
 
   @protected
   SelectionState dco_decode_selection_state(dynamic raw);
@@ -478,6 +484,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<SearchRange> sse_decode_list_search_range(SseDeserializer deserializer);
 
   @protected
+  List<SelectedOccurrence> sse_decode_list_selected_occurrence(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   NativeDocumentSymbol sse_decode_native_document_symbol(
     SseDeserializer deserializer,
   );
@@ -524,6 +535,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   SearchRange sse_decode_search_range(SseDeserializer deserializer);
+
+  @protected
+  SelectedOccurrence sse_decode_selected_occurrence(
+    SseDeserializer deserializer,
+  );
 
   @protected
   SelectionState sse_decode_selection_state(SseDeserializer deserializer);
@@ -800,6 +816,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_selected_occurrence(
+    List<SelectedOccurrence> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_native_document_symbol(
     NativeDocumentSymbol self,
     SseSerializer serializer,
@@ -855,6 +877,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_search_range(SearchRange self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_selected_occurrence(
+    SelectedOccurrence self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_selection_state(

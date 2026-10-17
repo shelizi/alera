@@ -243,6 +243,30 @@ class Rope {
         .toList(growable: false);
   }
 
+  /// Search within the native Rope without transferring each document line.
+  Future<List<({int line, int startColumn, int endColumn})>>
+  findSelectedOccurrences(
+    int start,
+    int end, {
+    required bool largeFileMode,
+    int maxMatches = 400,
+  }) async {
+    final matches = await _rope.findSelectedOccurrences(
+      start: BigInt.from(start),
+      end: BigInt.from(end),
+      largeFileMode: largeFileMode,
+      maxMatches: BigInt.from(maxMatches),
+    );
+    return [
+      for (final match in matches)
+        (
+          line: match.line.toInt(),
+          startColumn: match.startColumn.toInt(),
+          endColumn: match.endColumn.toInt(),
+        ),
+    ];
+  }
+
   int findLineStart(int offset) {
     return _rope.findLineStart(offset: BigInt.from(offset)).toInt();
   }
