@@ -154,6 +154,16 @@ extension on RustGitBackend {
       area: _toArea(file.area),
       status: _toStatus(file.status),
       lines: file.lines.map(_toDiffLine).toList(growable: false),
+      intralineRanges: file.intralineRanges
+          .map(
+            (ranges) => ranges
+                .map(
+                  (range) =>
+                      GitIntralineRange(start: range.start, end: range.end),
+                )
+                .toList(growable: false),
+          )
+          .toList(growable: false),
       sideBySideRows: file.sideBySideRows
           .map(
             (row) => GitDiffSideBySideRow(

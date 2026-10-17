@@ -470,6 +470,7 @@ fn pointer_diff(
         old_path: None,
         area,
         status,
+        intraline_ranges: crate::api::git::git_intraline::project(&lines),
         lines,
         side_by_side_rows,
         full_file_rows: Vec::new(),

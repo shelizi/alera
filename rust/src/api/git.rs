@@ -20,6 +20,9 @@ pub mod git_commit_ops;
 mod git_commit_state_impl;
 #[path = "git_diff_impl.rs"]
 mod git_diff_impl;
+#[path = "git_intraline.rs"]
+pub mod git_intraline;
+pub use git_intraline::GitIntralineRange;
 #[path = "git_diff_paths.rs"]
 pub(in crate::api) mod git_diff_paths;
 #[path = "git_head_helpers.rs"]
@@ -223,6 +226,7 @@ pub struct GitDiffFullFileSideBySideRow {
 }
 
 pub struct GitDiffFile {
+    pub intraline_ranges: Vec<Vec<GitIntralineRange>>,
     pub path: String,
     pub old_path: Option<String>,
     pub area: GitChangeArea,

@@ -148,6 +148,7 @@ class const GitDiffFile({
   required final GitChangeArea area,
   required final GitChangeStatus status,
   final List<GitDiffLine> lines = const [],
+  final List<List<GitIntralineRange>>? intralineRanges,
   final List<GitDiffSideBySideRow> sideBySideRows = const [],
   final List<GitDiffFullFileRow> fullFileRows = const [],
   final List<GitDiffFullFileSideBySideRow> fullFileSideBySideRows = const [],
@@ -176,3 +177,8 @@ class const GitDiffLine({
 
   const new context(String text) : this(text: text, kind: .context);
 }
+
+class const GitIntralineRange({
+  required final int start,
+  required final int end,
+});

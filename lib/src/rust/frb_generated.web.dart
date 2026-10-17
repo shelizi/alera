@@ -18,6 +18,7 @@ import 'api/git/git_archive_ops.dart';
 import 'api/git/git_branch.dart';
 import 'api/git/git_commit_ops.dart';
 import 'api/git/git_hosted_review.dart';
+import 'api/git/git_intraline.dart';
 import 'api/git/git_merge_ops.dart';
 import 'api/git/git_remote_ops.dart';
 import 'api/git/git_tag_ops.dart';
@@ -334,6 +335,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   GitHostedReviewRange dco_decode_git_hosted_review_range(dynamic raw);
 
   @protected
+  GitIntralineRange dco_decode_git_intraline_range(dynamic raw);
+
+  @protected
   GitRangeCommit dco_decode_git_range_commit(dynamic raw);
 
   @protected
@@ -439,6 +443,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<GitHistoryItemRef> dco_decode_list_git_history_item_ref(dynamic raw);
 
   @protected
+  List<GitIntralineRange> dco_decode_list_git_intraline_range(dynamic raw);
+
+  @protected
   List<GitRangeCommit> dco_decode_list_git_range_commit(dynamic raw);
 
   @protected
@@ -452,6 +459,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<GitWorktreeEntry> dco_decode_list_git_worktree_entry(dynamic raw);
+
+  @protected
+  List<List<GitIntralineRange>> dco_decode_list_list_git_intraline_range(
+    dynamic raw,
+  );
 
   @protected
   Uint32List dco_decode_list_prim_u_32_strict(dynamic raw);
@@ -1110,6 +1122,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  GitIntralineRange sse_decode_git_intraline_range(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   GitRangeCommit sse_decode_git_range_commit(SseDeserializer deserializer);
 
   @protected
@@ -1247,6 +1264,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  List<GitIntralineRange> sse_decode_list_git_intraline_range(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   List<GitRangeCommit> sse_decode_list_git_range_commit(
     SseDeserializer deserializer,
   );
@@ -1266,6 +1288,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<GitWorktreeEntry> sse_decode_list_git_worktree_entry(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<List<GitIntralineRange>> sse_decode_list_list_git_intraline_range(
     SseDeserializer deserializer,
   );
 
@@ -2098,6 +2125,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_git_intraline_range(
+    GitIntralineRange self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_git_range_commit(
     GitRangeCommit self,
     SseSerializer serializer,
@@ -2269,6 +2302,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_git_intraline_range(
+    List<GitIntralineRange> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_list_git_range_commit(
     List<GitRangeCommit> self,
     SseSerializer serializer,
@@ -2295,6 +2334,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_list_git_worktree_entry(
     List<GitWorktreeEntry> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_list_git_intraline_range(
+    List<List<GitIntralineRange>> self,
     SseSerializer serializer,
   );
 

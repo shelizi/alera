@@ -39,7 +39,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.13.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1715170064;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 855971425;
 
 // Section: executor
 
@@ -3904,6 +3904,40 @@ fn wire__crate__api__process__process_write_stdin_impl(
         },
     )
 }
+fn wire__crate__api__git__git_intraline__project_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "project",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_lines = <Vec<crate::api::git::GitDiffLine>>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let output_ok =
+                        Ok::<_, ()>(crate::api::git::git_intraline::project(&api_lines))?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 fn wire__crate__api__workspace_files__project_workspace_explorer_tree_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -5955,6 +5989,8 @@ impl SseDecode for crate::api::git::GitCommitCompareSummary {
 impl SseDecode for crate::api::git::GitDiffFile {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_intralineRanges =
+            <Vec<Vec<crate::api::git::git_intraline::GitIntralineRange>>>::sse_decode(deserializer);
         let mut var_path = <String>::sse_decode(deserializer);
         let mut var_oldPath = <Option<String>>::sse_decode(deserializer);
         let mut var_area = <crate::api::git::GitChangeArea>::sse_decode(deserializer);
@@ -5974,6 +6010,7 @@ impl SseDecode for crate::api::git::GitDiffFile {
         let mut var_truncated = <bool>::sse_decode(deserializer);
         let mut var_linePreviewTruncated = <bool>::sse_decode(deserializer);
         return crate::api::git::GitDiffFile {
+            intraline_ranges: var_intralineRanges,
             path: var_path,
             old_path: var_oldPath,
             area: var_area,
@@ -6349,6 +6386,18 @@ impl SseDecode for crate::api::git::git_hosted_review::GitHostedReviewRange {
             base_oid: var_baseOid,
             head_oid: var_headOid,
             retention_id: var_retentionId,
+        };
+    }
+}
+
+impl SseDecode for crate::api::git::git_intraline::GitIntralineRange {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_start = <u32>::sse_decode(deserializer);
+        let mut var_end = <u32>::sse_decode(deserializer);
+        return crate::api::git::git_intraline::GitIntralineRange {
+            start: var_start,
+            end: var_end,
         };
     }
 }
@@ -6792,6 +6841,20 @@ impl SseDecode for Vec<crate::api::git::GitHistoryItemRef> {
     }
 }
 
+impl SseDecode for Vec<crate::api::git::git_intraline::GitIntralineRange> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = Vec::with_capacity(len_ as usize);
+        for idx_ in 0..len_ {
+            ans_.push(
+                <crate::api::git::git_intraline::GitIntralineRange>::sse_decode(deserializer),
+            );
+        }
+        return ans_;
+    }
+}
+
 impl SseDecode for Vec<crate::api::git::GitRangeCommit> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -6849,6 +6912,20 @@ impl SseDecode for Vec<crate::api::git::GitWorktreeEntry> {
             ans_.push(<crate::api::git::GitWorktreeEntry>::sse_decode(
                 deserializer,
             ));
+        }
+        return ans_;
+    }
+}
+
+impl SseDecode for Vec<Vec<crate::api::git::git_intraline::GitIntralineRange>> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = Vec::with_capacity(len_ as usize);
+        for idx_ in 0..len_ {
+            ans_.push(
+                <Vec<crate::api::git::git_intraline::GitIntralineRange>>::sse_decode(deserializer),
+            );
         }
         return ans_;
     }
@@ -8093,43 +8170,44 @@ fn pde_ffi_dispatcher_primary_impl(
 102 => wire__crate__api__process__process_run_impl(port, ptr, rust_vec_len, data_len),
 103 => wire__crate__api__process__process_start_impl(port, ptr, rust_vec_len, data_len),
 104 => wire__crate__api__process__process_write_stdin_impl(port, ptr, rust_vec_len, data_len),
-105 => wire__crate__api__workspace_files__project_workspace_explorer_tree_impl(port, ptr, rust_vec_len, data_len),
-106 => wire__crate__api__git__git_remote_ops__push_tag_impl(port, ptr, rust_vec_len, data_len),
-107 => wire__crate__api__clipboard__read_file_clipboard_impl(port, ptr, rust_vec_len, data_len),
-108 => wire__crate__api__workspace_files__read_workspace_editor_text_file_impl(port, ptr, rust_vec_len, data_len),
-109 => wire__crate__api__workspace_files__read_workspace_text_file_impl(port, ptr, rust_vec_len, data_len),
-110 => wire__crate__api__git__git_branch__refresh_source_branch_impl(port, ptr, rust_vec_len, data_len),
-111 => wire__crate__api__git__remove_worktree_impl(port, ptr, rust_vec_len, data_len),
-112 => wire__crate__api__git__git_branch__rename_branch_impl(port, ptr, rust_vec_len, data_len),
-113 => wire__crate__api__workspace_files__rename_workspace_entry_impl(port, ptr, rust_vec_len, data_len),
-114 => wire__crate__api__merman_viewer__render_merman_source_impl(port, ptr, rust_vec_len, data_len),
-115 => wire__crate__api__merman_viewer__render_merman_workspace_file_impl(port, ptr, rust_vec_len, data_len),
-116 => wire__crate__api__agent_runtime_resources__replace_claude_runtime_resource_copy_impl(port, ptr, rust_vec_len, data_len),
-117 => wire__crate__api__agent_runtime_resources__replace_codex_runtime_resource_copy_impl(port, ptr, rust_vec_len, data_len),
-118 => wire__crate__api__workspace_search__replace_workspace_matches_impl(port, ptr, rust_vec_len, data_len),
-119 => wire__crate__api__clipboard__save_clipboard_image_as_temp_file_impl(port, ptr, rust_vec_len, data_len),
-120 => wire__crate__api__workspace_search__search_workspace_impl(port, ptr, rust_vec_len, data_len),
-121 => wire__crate__api__workspace_search__search_workspace_cancelable_impl(port, ptr, rust_vec_len, data_len),
-122 => wire__crate__api__workspace_files__search_workspace_quick_open_session_impl(port, ptr, rust_vec_len, data_len),
-123 => wire__crate__api__agent_hooks__set_agent_hook_enabled_agents_impl(port, ptr, rust_vec_len, data_len),
-124 => wire__crate__api__clipboard__set_file_clipboard_impl(port, ptr, rust_vec_len, data_len),
-125 => wire__crate__api__keep_alive__set_keep_alive_impl(port, ptr, rust_vec_len, data_len),
-126 => wire__crate__api__agent_hooks__start_agent_hook_receiver_impl(port, ptr, rust_vec_len, data_len),
-127 => wire__crate__api__workspace_files__start_source_control_watcher_impl(port, ptr, rust_vec_len, data_len),
-128 => wire__crate__api__workspace_files__start_workspace_explorer_watcher_impl(port, ptr, rust_vec_len, data_len),
-129 => wire__crate__api__workspace_files__start_workspace_quick_open_session_impl(port, ptr, rust_vec_len, data_len),
-130 => wire__crate__api__agent_hooks__stop_agent_hook_receiver_impl(port, ptr, rust_vec_len, data_len),
-131 => wire__crate__api__workspace_files__stop_source_control_watcher_impl(port, ptr, rust_vec_len, data_len),
-132 => wire__crate__api__workspace_files__stop_workspace_explorer_watcher_impl(port, ptr, rust_vec_len, data_len),
-133 => wire__crate__api__workspace_files__stop_workspace_quick_open_session_impl(port, ptr, rust_vec_len, data_len),
-134 => wire__crate__api__ai_dictation__transcribe_whisper_impl(port, ptr, rust_vec_len, data_len),
-135 => wire__crate__api__workspace_files__update_workspace_explorer_watcher_impl(port, ptr, rust_vec_len, data_len),
-136 => wire__crate__api__agent_hooks__watch_agent_hook_event_batches_impl(port, ptr, rust_vec_len, data_len),
-137 => wire__crate__api__workspace_files__watch_source_control_events_impl(port, ptr, rust_vec_len, data_len),
-138 => wire__crate__api__workspace_files__watch_workspace_explorer_events_impl(port, ptr, rust_vec_len, data_len),
-139 => wire__crate__api__diagnostics__write_diagnostics_bundle_impl(port, ptr, rust_vec_len, data_len),
-140 => wire__crate__api__workspace_files__write_workspace_editor_text_file_impl(port, ptr, rust_vec_len, data_len),
-141 => wire__crate__api__workspace_files__write_workspace_text_file_impl(port, ptr, rust_vec_len, data_len),
+105 => wire__crate__api__git__git_intraline__project_impl(port, ptr, rust_vec_len, data_len),
+106 => wire__crate__api__workspace_files__project_workspace_explorer_tree_impl(port, ptr, rust_vec_len, data_len),
+107 => wire__crate__api__git__git_remote_ops__push_tag_impl(port, ptr, rust_vec_len, data_len),
+108 => wire__crate__api__clipboard__read_file_clipboard_impl(port, ptr, rust_vec_len, data_len),
+109 => wire__crate__api__workspace_files__read_workspace_editor_text_file_impl(port, ptr, rust_vec_len, data_len),
+110 => wire__crate__api__workspace_files__read_workspace_text_file_impl(port, ptr, rust_vec_len, data_len),
+111 => wire__crate__api__git__git_branch__refresh_source_branch_impl(port, ptr, rust_vec_len, data_len),
+112 => wire__crate__api__git__remove_worktree_impl(port, ptr, rust_vec_len, data_len),
+113 => wire__crate__api__git__git_branch__rename_branch_impl(port, ptr, rust_vec_len, data_len),
+114 => wire__crate__api__workspace_files__rename_workspace_entry_impl(port, ptr, rust_vec_len, data_len),
+115 => wire__crate__api__merman_viewer__render_merman_source_impl(port, ptr, rust_vec_len, data_len),
+116 => wire__crate__api__merman_viewer__render_merman_workspace_file_impl(port, ptr, rust_vec_len, data_len),
+117 => wire__crate__api__agent_runtime_resources__replace_claude_runtime_resource_copy_impl(port, ptr, rust_vec_len, data_len),
+118 => wire__crate__api__agent_runtime_resources__replace_codex_runtime_resource_copy_impl(port, ptr, rust_vec_len, data_len),
+119 => wire__crate__api__workspace_search__replace_workspace_matches_impl(port, ptr, rust_vec_len, data_len),
+120 => wire__crate__api__clipboard__save_clipboard_image_as_temp_file_impl(port, ptr, rust_vec_len, data_len),
+121 => wire__crate__api__workspace_search__search_workspace_impl(port, ptr, rust_vec_len, data_len),
+122 => wire__crate__api__workspace_search__search_workspace_cancelable_impl(port, ptr, rust_vec_len, data_len),
+123 => wire__crate__api__workspace_files__search_workspace_quick_open_session_impl(port, ptr, rust_vec_len, data_len),
+124 => wire__crate__api__agent_hooks__set_agent_hook_enabled_agents_impl(port, ptr, rust_vec_len, data_len),
+125 => wire__crate__api__clipboard__set_file_clipboard_impl(port, ptr, rust_vec_len, data_len),
+126 => wire__crate__api__keep_alive__set_keep_alive_impl(port, ptr, rust_vec_len, data_len),
+127 => wire__crate__api__agent_hooks__start_agent_hook_receiver_impl(port, ptr, rust_vec_len, data_len),
+128 => wire__crate__api__workspace_files__start_source_control_watcher_impl(port, ptr, rust_vec_len, data_len),
+129 => wire__crate__api__workspace_files__start_workspace_explorer_watcher_impl(port, ptr, rust_vec_len, data_len),
+130 => wire__crate__api__workspace_files__start_workspace_quick_open_session_impl(port, ptr, rust_vec_len, data_len),
+131 => wire__crate__api__agent_hooks__stop_agent_hook_receiver_impl(port, ptr, rust_vec_len, data_len),
+132 => wire__crate__api__workspace_files__stop_source_control_watcher_impl(port, ptr, rust_vec_len, data_len),
+133 => wire__crate__api__workspace_files__stop_workspace_explorer_watcher_impl(port, ptr, rust_vec_len, data_len),
+134 => wire__crate__api__workspace_files__stop_workspace_quick_open_session_impl(port, ptr, rust_vec_len, data_len),
+135 => wire__crate__api__ai_dictation__transcribe_whisper_impl(port, ptr, rust_vec_len, data_len),
+136 => wire__crate__api__workspace_files__update_workspace_explorer_watcher_impl(port, ptr, rust_vec_len, data_len),
+137 => wire__crate__api__agent_hooks__watch_agent_hook_event_batches_impl(port, ptr, rust_vec_len, data_len),
+138 => wire__crate__api__workspace_files__watch_source_control_events_impl(port, ptr, rust_vec_len, data_len),
+139 => wire__crate__api__workspace_files__watch_workspace_explorer_events_impl(port, ptr, rust_vec_len, data_len),
+140 => wire__crate__api__diagnostics__write_diagnostics_bundle_impl(port, ptr, rust_vec_len, data_len),
+141 => wire__crate__api__workspace_files__write_workspace_editor_text_file_impl(port, ptr, rust_vec_len, data_len),
+142 => wire__crate__api__workspace_files__write_workspace_text_file_impl(port, ptr, rust_vec_len, data_len),
                         _ => unreachable!(),
                     }
 }
@@ -8889,6 +8967,7 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::git::GitCommitCompareSummary>
 impl flutter_rust_bridge::IntoDart for crate::api::git::GitDiffFile {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
+            self.intraline_ranges.into_into_dart().into_dart(),
             self.path.into_into_dart().into_dart(),
             self.old_path.into_into_dart().into_dart(),
             self.area.into_into_dart().into_dart(),
@@ -9413,6 +9492,27 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::git::git_hosted_review::GitHo
     for crate::api::git::git_hosted_review::GitHostedReviewRange
 {
     fn into_into_dart(self) -> crate::api::git::git_hosted_review::GitHostedReviewRange {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::git::git_intraline::GitIntralineRange {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.start.into_into_dart().into_dart(),
+            self.end.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::git::git_intraline::GitIntralineRange
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::git::git_intraline::GitIntralineRange>
+    for crate::api::git::git_intraline::GitIntralineRange
+{
+    fn into_into_dart(self) -> crate::api::git::git_intraline::GitIntralineRange {
         self
     }
 }
@@ -11131,6 +11231,10 @@ impl SseEncode for crate::api::git::GitCommitCompareSummary {
 impl SseEncode for crate::api::git::GitDiffFile {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <Vec<Vec<crate::api::git::git_intraline::GitIntralineRange>>>::sse_encode(
+            self.intraline_ranges,
+            serializer,
+        );
         <String>::sse_encode(self.path, serializer);
         <Option<String>>::sse_encode(self.old_path, serializer);
         <crate::api::git::GitChangeArea>::sse_encode(self.area, serializer);
@@ -11448,6 +11552,14 @@ impl SseEncode for crate::api::git::git_hosted_review::GitHostedReviewRange {
         <String>::sse_encode(self.base_oid, serializer);
         <String>::sse_encode(self.head_oid, serializer);
         <String>::sse_encode(self.retention_id, serializer);
+    }
+}
+
+impl SseEncode for crate::api::git::git_intraline::GitIntralineRange {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <u32>::sse_encode(self.start, serializer);
+        <u32>::sse_encode(self.end, serializer);
     }
 }
 
@@ -11774,6 +11886,16 @@ impl SseEncode for Vec<crate::api::git::GitHistoryItemRef> {
     }
 }
 
+impl SseEncode for Vec<crate::api::git::git_intraline::GitIntralineRange> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <crate::api::git::git_intraline::GitIntralineRange>::sse_encode(item, serializer);
+        }
+    }
+}
+
 impl SseEncode for Vec<crate::api::git::GitRangeCommit> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -11820,6 +11942,16 @@ impl SseEncode for Vec<crate::api::git::GitWorktreeEntry> {
         <i32>::sse_encode(self.len() as _, serializer);
         for item in self {
             <crate::api::git::GitWorktreeEntry>::sse_encode(item, serializer);
+        }
+    }
+}
+
+impl SseEncode for Vec<Vec<crate::api::git::git_intraline::GitIntralineRange>> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <Vec<crate::api::git::git_intraline::GitIntralineRange>>::sse_encode(item, serializer);
         }
     }
 }
