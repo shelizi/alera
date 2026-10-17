@@ -211,6 +211,29 @@ impl RopeBridge {
         })
     }
 
+    /// Save an immutable Rope snapshot with metadata-only FFI response.
+    /// Remains opt-in until the editor's save lifecycle parity gate passes.
+    pub fn save_workspace_snapshot(
+        &self,
+        workspace_path: String,
+        relative_path: String,
+        expected_content_token: String,
+        overwrite_if_changed: bool,
+        tab_size: i32,
+        encoding: NativeWorkspaceTextEncoding,
+    ) -> super::native_save_io::SaveOutcome {
+        let snapshot = self.rope.read().unwrap().clone();
+        super::native_save_io::save_rope(
+            &snapshot,
+            workspace_path,
+            relative_path,
+            expected_content_token,
+            overwrite_if_changed,
+            tab_size,
+            encoding,
+        )
+    }
+
     #[flutter_rust_bridge::frb(sync)]
     pub fn source_info(&self) -> Option<WorkspaceSourceInfo> {
         self.source_info.clone()

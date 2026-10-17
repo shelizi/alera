@@ -28,7 +28,7 @@ fn token(m: &fs::Metadata) -> String {
         .unwrap_or_default();
     format!("{}:{t}", m.len())
 }
-pub fn guarded_replace_workspace_file(
+pub(crate) fn guarded_replace_workspace_file(
     root: String,
     relative: String,
     bytes: Vec<u8>,
@@ -130,6 +130,96 @@ pub fn guarded_replace_workspace_file(
         },
     }
 }
+
+pub(crate) fn save_rope(
+    rope: &ropey::Rope,
+    root: String,
+    relative: String,
+    expected_token: String,
+    overwrite: bool,
+    tab_size: i32,
+    encoding: super::workspace_source::NativeWorkspaceTextEncoding,
+) -> SaveOutcome {
+    // Reuse the workspace's existing path and text decoding rules.
+    let source = match super::workspace_source::open_workspace_source(
+        &root,
+        &relative,
+        tab_size,
+        Some(encoding),
+    ) {
+        Ok(source) => source,
+        Err(_) => {
+            return SaveOutcome {
+                status: SaveStatus::InvalidPath,
+                token: String::new(),
+                size: 0,
+            }
+        }
+    };
+    if !overwrite && source.info.content_token != expected_token {
+        return SaveOutcome {
+            status: SaveStatus::Conflict,
+            token: String::new(),
+            size: 0,
+        };
+    }
+    let root_path = match fs::canonicalize(&root) {
+        Ok(path) => path,
+        Err(_) => {
+            return SaveOutcome {
+                status: SaveStatus::InvalidPath,
+                token: String::new(),
+                size: 0,
+            }
+        }
+    };
+    let path = match fs::canonicalize(root_path.join(&relative)) {
+        Ok(path) if path.starts_with(&root_path) => path,
+        _ => {
+            return SaveOutcome {
+                status: SaveStatus::InvalidPath,
+                token: String::new(),
+                size: 0,
+            }
+        }
+    };
+    let original = match fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            return SaveOutcome {
+                status: SaveStatus::Io,
+                token: String::new(),
+                size: 0,
+            }
+        }
+    };
+    let raw = match super::workspace_source::decode_with_encoding(&original, encoding) {
+        Ok(raw) => raw,
+        Err(_) => {
+            return SaveOutcome {
+                status: SaveStatus::Unsupported,
+                token: String::new(),
+                size: 0,
+            }
+        }
+    };
+    let display = super::workspace_source::expand_tabs(&raw, tab_size);
+    let bytes = if rope.chars().eq(display.chars()) {
+        original // No-op save must preserve the original byte sequence exactly.
+    } else {
+        match super::native_save::snapshot_bytes(rope, &raw, &display, encoding) {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                return SaveOutcome {
+                    status: SaveStatus::Unsupported,
+                    token: String::new(),
+                    size: 0,
+                }
+            }
+        }
+    };
+    guarded_replace_workspace_file(root, relative, bytes, expected_token, overwrite)
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -198,5 +288,48 @@ mod tests {
         );
         assert_eq!(saved.status, SaveStatus::Saved);
         assert_eq!(fs::read(&file).unwrap(), b"replacement");
+    }
+
+    #[test]
+    fn rope_snapshot_preserves_utf8_bom_and_tabs() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("source.txt");
+        fs::write(&path, b"\xef\xbb\xbf\talpha\n\tbeta\n").unwrap();
+        let start = token(&fs::metadata(&path).unwrap());
+        let rope = ropey::Rope::from_str("    alpha\n    edited\n");
+        let result = save_rope(
+            &rope,
+            dir.path().to_string_lossy().into_owned(),
+            "source.txt".into(),
+            start,
+            false,
+            4,
+            super::super::workspace_source::NativeWorkspaceTextEncoding::Utf8Bom,
+        );
+        assert_eq!(result.status, SaveStatus::Saved);
+        assert_eq!(
+            fs::read(path).unwrap(),
+            b"\xef\xbb\xbf\talpha\n    edited\n"
+        );
+    }
+    #[test]
+    fn rope_snapshot_preserves_original_bytes_if_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("source.txt");
+        let original = b"\tfoo\r\n\tbar\r\n";
+        fs::write(&path, original).unwrap();
+        let start = token(&fs::metadata(&path).unwrap());
+        let rope = ropey::Rope::from_str("    foo\r\n    bar\r\n");
+        let result = save_rope(
+            &rope,
+            dir.path().to_string_lossy().into_owned(),
+            "source.txt".into(),
+            start,
+            false,
+            4,
+            super::super::workspace_source::NativeWorkspaceTextEncoding::Utf8,
+        );
+        assert_eq!(result.status, SaveStatus::Saved);
+        assert_eq!(fs::read(path).unwrap(), original);
     }
 }

@@ -129,4 +129,18 @@ mod tests {
             .unwrap()
             .starts_with(b"\xff\xfe"));
     }
+
+    #[test]
+    fn supported_legacy_encodings_round_trip_without_replacement() {
+        for (encoding, text, codec) in [
+            (E::Big5, "繁體中文", BIG5),
+            (E::Gbk, "简体中文", GBK),
+            (E::ShiftJis, "日本語", SHIFT_JIS),
+        ] {
+            let raw = snapshot_bytes(&Rope::from_str(text), "before", "before", encoding).unwrap();
+            let (decoded, errors) = codec.decode_without_bom_handling(&raw);
+            assert!(!errors);
+            assert_eq!(decoded, text);
+        }
+    }
 }

@@ -3168,6 +3168,27 @@ class CodeForgeController implements DeltaTextInputClient {
   /// background operations can snapshot the latest document contents.
   void flushPendingBuffer() => _flushBuffer();
 
+  /// Snapshot the latest edit buffer and save directly through native Rust.
+  Future<SaveOutcome> saveWorkspaceSnapshot({
+    required String workspacePath,
+    required String relativePath,
+    required String expectedContentToken,
+    required bool overwriteIfChanged,
+    required int tabSize,
+    required NativeWorkspaceTextEncoding encoding,
+  }) {
+    _flushBuffer();
+    final snapshot = _rope.copy();
+    return snapshot.saveWorkspaceSnapshot(
+      workspacePath: workspacePath,
+      relativePath: relativePath,
+      expectedContentToken: expectedContentToken,
+      overwriteIfChanged: overwriteIfChanged,
+      tabSize: tabSize,
+      encoding: encoding,
+    );
+  }
+
   /// Uses one asynchronous native request for case-sensitive selected text
   /// occurrences. Rope positions and returned columns are Unicode scalars.
   Future<List<DocumentHighlight>> findSelectedOccurrences({

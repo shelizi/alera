@@ -4,6 +4,7 @@
 // ignore_for_file: invalid_use_of_internal_member, unused_import, unnecessary_import
 
 import '../frb_generated.dart';
+import 'native_save_io.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
@@ -102,6 +103,17 @@ abstract class RopeBridge implements RustOpaqueInterface {
     required bool preserveOldCursor,
     required BigInt oldBase,
     required BigInt oldExtent,
+  });
+
+  /// Save an immutable Rope snapshot with metadata-only FFI response.
+  /// Remains opt-in until the editor's save lifecycle parity gate passes.
+  Future<SaveOutcome> saveWorkspaceSnapshot({
+    required String workspacePath,
+    required String relativePath,
+    required String expectedContentToken,
+    required bool overwriteIfChanged,
+    required int tabSize,
+    required NativeWorkspaceTextEncoding encoding,
   });
 
   SelectionState selection();

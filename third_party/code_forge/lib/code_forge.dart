@@ -11,3 +11,5 @@ export 'LSP/lsp.dart';
 export 'src/rust/frb_generated.dart' show RustLib;
 export 'src/rust/api/workspace_source.dart'
     show NativeWorkspaceTextEncoding, WorkspaceSourceInfo;
+
+export 'src/rust/api/native_save_io.dart' show SaveOutcome, SaveStatus;

@@ -8,6 +8,7 @@
 
 import 'api/editor.dart';
 import 'api/editor_document.dart';
+import 'api/native_save_io.dart';
 import 'api/rope.dart';
 import 'api/workspace_source.dart';
 
@@ -250,6 +251,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   RustFoldRange dco_decode_rust_fold_range(dynamic raw);
+
+  @protected
+  SaveOutcome dco_decode_save_outcome(dynamic raw);
+
+  @protected
+  SaveStatus dco_decode_save_status(dynamic raw);
 
   @protected
   SearchRange dco_decode_search_range(dynamic raw);
@@ -534,6 +541,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   RustFoldRange sse_decode_rust_fold_range(SseDeserializer deserializer);
+
+  @protected
+  SaveOutcome sse_decode_save_outcome(SseDeserializer deserializer);
+
+  @protected
+  SaveStatus sse_decode_save_status(SseDeserializer deserializer);
 
   @protected
   SearchRange sse_decode_search_range(SseDeserializer deserializer);
@@ -876,6 +889,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_rust_fold_range(RustFoldRange self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_save_outcome(SaveOutcome self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_save_status(SaveStatus self, SseSerializer serializer);
 
   @protected
   void sse_encode_search_range(SearchRange self, SseSerializer serializer);
