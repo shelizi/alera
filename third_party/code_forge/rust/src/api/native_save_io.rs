@@ -385,6 +385,102 @@ mod tests {
         assert_eq!(fs::read(path).unwrap(), original);
     }
 
+    #[test]
+    fn rope_save_preserves_supported_encodings_and_unmodified_tabs() {
+        use super::super::native_save::snapshot_bytes;
+        use super::super::workspace_source::{
+            expand_tabs, open_workspace_source, NativeWorkspaceTextEncoding as E,
+        };
+        use ropey::Rope;
+
+        // Cover both UTF-16 byte orders and every supported legacy codec with
+        // real ReplaceFileW disk writes, not just isolated encode/decode calls.
+        let cases = [
+            (E::Utf16Le, "繁體中文", "新增"),
+            (E::Utf16Be, "繁體中文", "新增"),
+            (E::Big5, "繁體中文", "新增"),
+            (E::Gbk, "简体中文", "新增"),
+            (E::ShiftJis, "日本語", "編集"),
+            (E::EucJp, "日本語", "編集"),
+            (E::EucKr, "한국어", "새글"),
+            (E::Windows1252, "café", "jalapeño"),
+        ];
+        for (encoding, first, replacement) in cases {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("source.txt");
+            let root = dir.path().to_string_lossy().into_owned();
+            let original_raw = format!("\t{first}\r\n\told\r\n");
+            let displayed = expand_tabs(&original_raw, 4);
+            let original_bytes = snapshot_bytes(
+                &Rope::from_str(&original_raw),
+                &original_raw,
+                &original_raw,
+                encoding,
+            )
+            .unwrap();
+            fs::write(&path, &original_bytes).unwrap();
+            let loaded = open_workspace_source(&root, "source.txt", 4, Some(encoding)).unwrap();
+            assert_eq!(loaded.info.encoding, encoding);
+
+            // A no-op Save must preserve every original byte, including BOM,
+            // indentation tabs and CRLF.
+            let unchanged = save_rope(
+                &Rope::from_str(&displayed),
+                root.clone(),
+                "source.txt".into(),
+                loaded.info.content_token,
+                false,
+                4,
+                encoding,
+            );
+            assert_eq!(unchanged.status, SaveStatus::Saved, "{encoding:?}");
+            assert_eq!(fs::read(&path).unwrap(), original_bytes, "{encoding:?}");
+
+            // Editing the second line may materialize spaces there, but the
+            // untouched first line must keep its original indentation and BOM.
+            let edited_display = format!("    {first}\r\n    {replacement}\r\n");
+            let edited = save_rope(
+                &Rope::from_str(&edited_display),
+                root,
+                "source.txt".into(),
+                unchanged.token,
+                false,
+                4,
+                encoding,
+            );
+            assert_eq!(edited.status, SaveStatus::Saved, "{encoding:?}");
+            let expected_raw = format!("\t{first}\r\n    {replacement}\r\n");
+            let expected_bytes = snapshot_bytes(
+                &Rope::from_str(&expected_raw),
+                &expected_raw,
+                &expected_raw,
+                encoding,
+            )
+            .unwrap();
+            assert_eq!(fs::read(&path).unwrap(), expected_bytes, "{encoding:?}");
+        }
+    }
+
+    #[test]
+    fn legacy_save_rejects_unrepresentable_text_without_modifying_disk() {
+        use super::super::workspace_source::NativeWorkspaceTextEncoding as E;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("legacy.txt");
+        let original = b"\talpha\r\n";
+        fs::write(&path, original).unwrap();
+        let before = token(&fs::metadata(&path).unwrap());
+        let status = save_rope(
+            &ropey::Rope::from_str("    alpha\r\nemoji \u{1f980}\r\n"),
+            dir.path().to_string_lossy().into_owned(),
+            "legacy.txt".into(),
+            before,
+            false,
+            4,
+            E::Big5,
+        );
+        assert_eq!(status.status, SaveStatus::Unsupported);
+        assert_eq!(fs::read(&path).unwrap(), original);
+    }
     #[cfg(windows)]
     #[test]
     fn replacement_preserves_original_creation_time() {

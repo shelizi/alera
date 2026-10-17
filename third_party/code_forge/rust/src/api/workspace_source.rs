@@ -61,7 +61,12 @@ pub(crate) fn open_workspace_source(
         ));
     }
     let bytes = fs::read(&path).map_err(|error| format!("{relative_path}: {error}"))?;
-    let encoding = requested_encoding.unwrap_or(detect_encoding(&bytes)?);
+    // Honor an explicit codec without eagerly running auto-detection.
+    // Valid legacy byte sequences cannot always be auto-detected.
+    let encoding = match requested_encoding {
+        Some(encoding) => encoding,
+        None => detect_encoding(&bytes)?,
+    };
     let raw_content = decode_with_encoding(&bytes, encoding)?;
     let raw_chars = raw_content.chars().count();
     let display_content = expand_tabs(&raw_content, tab_size);
