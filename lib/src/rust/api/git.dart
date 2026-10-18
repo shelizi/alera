@@ -4,6 +4,7 @@
 // ignore_for_file: invalid_use_of_internal_member, unused_import, unnecessary_import
 
 import '../frb_generated.dart';
+import 'git/git_intraline.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
@@ -591,6 +592,7 @@ class GitCommitCompareSummary {
 }
 
 class GitDiffFile {
+  final List<List<GitIntralineRange>> intralineRanges;
   final String path;
   final String? oldPath;
   final GitChangeArea area;
@@ -614,6 +616,7 @@ class GitDiffFile {
   final bool linePreviewTruncated;
 
   const GitDiffFile({
+    required this.intralineRanges,
     required this.path,
     this.oldPath,
     required this.area,
@@ -633,6 +636,7 @@ class GitDiffFile {
 
   @override
   int get hashCode =>
+      intralineRanges.hashCode ^
       path.hashCode ^
       oldPath.hashCode ^
       area.hashCode ^
@@ -654,6 +658,7 @@ class GitDiffFile {
       identical(this, other) ||
       other is GitDiffFile &&
           runtimeType == other.runtimeType &&
+          intralineRanges == other.intralineRanges &&
           path == other.path &&
           oldPath == other.oldPath &&
           area == other.area &&

@@ -48,8 +48,12 @@ class const _SidebarBody({
     }
     // Archived collapse state is session-local, so the rows provider emits
     // every archived row and this layer hides the collapsed ones.
-    final archivedCollapsedKeys = ref.watch(
+    final expandedArchivedKeys = ref.watch(
       workbenchArchivedSectionsCollapseProvider,
+    );
+    final archivedCollapsedKeys = defaultCollapsedArchivedSidebarKeys(
+      rows,
+      expandedArchivedKeys,
     );
     final resolvedEditor = ref.watch(resolvedExternalEditorProvider).value;
     final installedEditors =

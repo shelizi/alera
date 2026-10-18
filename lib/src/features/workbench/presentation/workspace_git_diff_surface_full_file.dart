@@ -195,7 +195,10 @@ List<_DiffRowSpan>? _buildProjectedFullFileRowSpans(
     ];
   }
   if (file.fullFileRows.isEmpty) return null;
-  final intralineRanges = _buildIntralineRangesForDiffLines(file.lines);
+  final intralineRanges = _buildIntralineRangesForDiffLines(
+    file.lines,
+    nativeRanges: file.intralineRanges,
+  );
   final spans = <_DiffRowSpan>[];
   final materialized = <_DiffRow>[];
 
@@ -279,7 +282,10 @@ List<_DiffRow>? _buildFullFileRows(
   }
 
   final rows = <_DiffRow>[];
-  final intralineRanges = _buildIntralineRangesForDiffLines(file.lines);
+  final intralineRanges = _buildIntralineRangesForDiffLines(
+    file.lines,
+    nativeRanges: file.intralineRanges,
+  );
   var nextFullIndex = 0;
   int? oldLine;
   int? newLine;

@@ -4,13 +4,14 @@
 // ignore_for_file: invalid_use_of_internal_member, unused_import, unnecessary_import
 
 import '../frb_generated.dart';
+import 'native_save_io.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 import 'workspace_source.dart';
 
-// These functions are ignored because they are not marked as `pub`: `append_search_ranges`, `collect_search_ranges`, `compute_bidi_segments`, `direction_for_char`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`
+// These functions are ignored because they are not marked as `pub`: `append_search_ranges`, `collect_search_ranges`, `compute_bidi_segments`, `direction_for_char`, `identifier_part_pattern`, `identifier_pattern`, `is_identifier_part`, `selected_occurrences`, `trim_line_ending`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<RopeBridge>>
 abstract class RopeBridge implements RustOpaqueInterface {
@@ -60,6 +61,14 @@ abstract class RopeBridge implements RustOpaqueInterface {
     required bool matchWholeWord,
   });
 
+  /// Performs a bounded selected-text scan without per-line Dart FFI calls.
+  Future<List<SelectedOccurrence>> findSelectedOccurrences({
+    required BigInt start,
+    required BigInt end,
+    required bool largeFileMode,
+    required BigInt maxMatches,
+  });
+
   List<BiDiSegment> getBidiSegmentsForLine({required BigInt lineIndex});
 
   List<BiDiSegment> getBidiSegmentsInRange({
@@ -94,6 +103,17 @@ abstract class RopeBridge implements RustOpaqueInterface {
     required bool preserveOldCursor,
     required BigInt oldBase,
     required BigInt oldExtent,
+  });
+
+  /// Save an immutable Rope snapshot with metadata-only FFI response.
+  /// Remains opt-in until the editor's save lifecycle parity gate passes.
+  Future<SaveOutcome> saveWorkspaceSnapshot({
+    required String workspacePath,
+    required String relativePath,
+    required String expectedContentToken,
+    required bool overwriteIfChanged,
+    required int tabSize,
+    required NativeWorkspaceTextEncoding encoding,
   });
 
   SelectionState selection();
@@ -171,6 +191,31 @@ class SearchRange {
           runtimeType == other.runtimeType &&
           start == other.start &&
           end == other.end;
+}
+
+/// A selected-text match in Rope Unicode-scalar offsets (not UTF-16).
+class SelectedOccurrence {
+  final BigInt line;
+  final BigInt startColumn;
+  final BigInt endColumn;
+
+  const SelectedOccurrence({
+    required this.line,
+    required this.startColumn,
+    required this.endColumn,
+  });
+
+  @override
+  int get hashCode => line.hashCode ^ startColumn.hashCode ^ endColumn.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SelectedOccurrence &&
+          runtimeType == other.runtimeType &&
+          line == other.line &&
+          startColumn == other.startColumn &&
+          endColumn == other.endColumn;
 }
 
 class SelectionState {

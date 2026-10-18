@@ -1,4 +1,5 @@
 import 'package:code_forge/src/rust/api/rope.dart';
+import 'package:code_forge/src/rust/api/native_save_io.dart';
 import 'package:code_forge/src/rust/api/workspace_source.dart';
 import 'package:flutter/material.dart';
 
@@ -29,6 +30,23 @@ class Rope {
   }
 
   WorkspaceSourceInfo? get sourceInfo => _rope.sourceInfo();
+
+  /// Returns metadata only: document text is never sent to Dart during Save.
+  Future<SaveOutcome> saveWorkspaceSnapshot({
+    required String workspacePath,
+    required String relativePath,
+    required String expectedContentToken,
+    required bool overwriteIfChanged,
+    required int tabSize,
+    required NativeWorkspaceTextEncoding encoding,
+  }) => _rope.saveWorkspaceSnapshot(
+    workspacePath: workspacePath,
+    relativePath: relativePath,
+    expectedContentToken: expectedContentToken,
+    overwriteIfChanged: overwriteIfChanged,
+    tabSize: tabSize,
+    encoding: encoding,
+  );
 
   int get length => _rope.lenChars().toInt();
 
@@ -241,6 +259,30 @@ class Rope {
     return ranges
         .map((range) => (range.start.toInt(), range.end.toInt()))
         .toList(growable: false);
+  }
+
+  /// Search within the native Rope without transferring each document line.
+  Future<List<({int line, int startColumn, int endColumn})>>
+  findSelectedOccurrences(
+    int start,
+    int end, {
+    required bool largeFileMode,
+    int maxMatches = 400,
+  }) async {
+    final matches = await _rope.findSelectedOccurrences(
+      start: BigInt.from(start),
+      end: BigInt.from(end),
+      largeFileMode: largeFileMode,
+      maxMatches: BigInt.from(maxMatches),
+    );
+    return [
+      for (final match in matches)
+        (
+          line: match.line.toInt(),
+          startColumn: match.startColumn.toInt(),
+          endColumn: match.endColumn.toInt(),
+        ),
+    ];
   }
 
   int findLineStart(int offset) {

@@ -5,11 +5,13 @@ final class _DiffSideLine {
     required this.lineNumber,
     required this.text,
     required this.kind,
+    this.nativeRanges,
   });
 
   final int? lineNumber;
   final String text;
   final GitDiffLineKind kind;
+  final List<_IntralineRange>? nativeRanges;
 }
 
 class const _SideBySideHeaderRow({
@@ -344,6 +346,7 @@ GitDiffFile _fileWithDecodedDiffLines(
     sideBySideRows: file.sideBySideRows,
     fullFileRows: file.fullFileRows,
     fullFileSideBySideRows: file.fullFileSideBySideRows,
+    intralineRanges: identical(lines, file.lines) ? file.intralineRanges : null,
   );
 }
 
@@ -424,6 +427,12 @@ _DiffSideLine? _projectedSideLine(
     lineNumber: lineNumber,
     text: _extractContent(line.text),
     kind: line.kind,
+    nativeRanges:
+        file.intralineRanges != null && lineIndex < file.intralineRanges!.length
+        ? file.intralineRanges![lineIndex]
+              .map((range) => _IntralineRange(range.start, range.end))
+              .toList(growable: false)
+        : null,
   );
 }
 

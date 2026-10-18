@@ -690,8 +690,11 @@ class _MaterializedDiffRowSpan implements _DiffRowSpan {
 }
 
 class _DiffLineRowSpan implements _DiffRowSpan {
-  _DiffLineRowSpan(this.lines)
-    : intralineRanges = _buildIntralineRangesForDiffLines(lines);
+  _DiffLineRowSpan(this.lines, {List<List<GitIntralineRange>>? nativeRanges})
+    : intralineRanges = _buildIntralineRangesForDiffLines(
+        lines,
+        nativeRanges: nativeRanges,
+      );
 
   final List<GitDiffLine> lines;
   final List<List<_IntralineRange>> intralineRanges;
@@ -922,7 +925,8 @@ class _DiffRows {
         } else {
           final lines = _decodedDiffLines(file, fullFileContents[file]);
           items.addSpans(<_DiffRowSpan>[
-            if (lines.isNotEmpty) _DiffLineRowSpan(lines),
+            if (lines.isNotEmpty)
+              _DiffLineRowSpan(lines, nativeRanges: file.intralineRanges),
           ]);
         }
         if (file.linePreviewTruncated) {

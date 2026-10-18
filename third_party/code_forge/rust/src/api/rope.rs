@@ -1,8 +1,9 @@
 use super::workspace_source::{
     open_workspace_source, NativeWorkspaceTextEncoding, WorkspaceSourceInfo,
 };
+use regex::Regex;
 use ropey::Rope as RustRope;
-use std::sync::RwLock;
+use std::sync::{OnceLock, RwLock};
 use unicode_bidi::{bidi_class, BidiClass};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -36,6 +37,137 @@ pub struct LineLayoutInfo {
     pub start: usize,
     pub content_len: usize,
     pub safe_ascii: bool,
+}
+
+/// A selected-text match in Rope Unicode-scalar offsets (not UTF-16).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SelectedOccurrence {
+    pub line: usize,
+    pub start_column: usize,
+    pub end_column: usize,
+}
+
+fn identifier_pattern() -> &'static Regex {
+    static PATTERN: OnceLock<Regex> = OnceLock::new();
+    PATTERN.get_or_init(|| Regex::new(r"^[_$\p{L}][_$\p{L}\p{N}]*$").unwrap())
+}
+
+fn identifier_part_pattern() -> &'static Regex {
+    static PATTERN: OnceLock<Regex> = OnceLock::new();
+    PATTERN.get_or_init(|| Regex::new(r"^[_$\p{L}\p{N}]$").unwrap())
+}
+
+fn is_identifier_part(ch: Option<char>) -> bool {
+    ch.is_some_and(|value| identifier_part_pattern().is_match(&value.to_string()))
+}
+
+fn selected_occurrences(
+    rope: &RustRope,
+    start: usize,
+    end: usize,
+    large_file_mode: bool,
+    max_matches: usize,
+) -> Vec<SelectedOccurrence> {
+    const MAX_SELECTION: usize = 64;
+    const MAX_LINE_UTF16: usize = 16 * 1024;
+    const LARGE_RADIUS: usize = 160;
+    if start >= end || end > rope.len_chars() || end - start > MAX_SELECTION || max_matches == 0 {
+        return vec![];
+    }
+    let selected_line_index = rope.char_to_line(start);
+    let line_start = rope.line_to_char(selected_line_index);
+    let mut selected_line = rope.line(selected_line_index).to_string();
+    trim_line_ending(&mut selected_line);
+    if selected_line.encode_utf16().count() > MAX_LINE_UTF16 {
+        return vec![];
+    }
+    let start_column = start - line_start;
+    let end_column = end - line_start;
+    let selected_line_chars: Vec<char> = selected_line.chars().collect();
+    if end_column > selected_line_chars.len() {
+        return vec![];
+    }
+    let selected: String = selected_line_chars[start_column..end_column]
+        .iter()
+        .collect();
+    if selected.trim().is_empty() {
+        return vec![];
+    }
+    let whole_identifier = identifier_pattern().is_match(&selected);
+    if whole_identifier
+        && (is_identifier_part(
+            start_column
+                .checked_sub(1)
+                .and_then(|idx| selected_line_chars.get(idx))
+                .copied(),
+        ) || is_identifier_part(selected_line_chars.get(end_column).copied()))
+    {
+        return vec![];
+    }
+    if !whole_identifier && selected.chars().count() < 2 {
+        return vec![];
+    }
+
+    let first_line = if large_file_mode {
+        selected_line_index.saturating_sub(LARGE_RADIUS)
+    } else {
+        0
+    };
+    let last_line = if large_file_mode {
+        selected_line_index
+            .saturating_add(LARGE_RADIUS)
+            .min(rope.len_lines() - 1)
+    } else {
+        rope.len_lines() - 1
+    };
+    let selected_length = selected.chars().count();
+    let mut result = Vec::with_capacity(max_matches.min(64));
+    for line_index in first_line..=last_line {
+        let source = if line_index == selected_line_index {
+            selected_line.clone()
+        } else {
+            let line = rope.line(line_index);
+            if line.len_chars() > MAX_LINE_UTF16 {
+                continue;
+            }
+            let mut value = line.to_string();
+            trim_line_ending(&mut value);
+            value
+        };
+        if source.len() < selected.len() || source.encode_utf16().count() > MAX_LINE_UTF16 {
+            continue;
+        }
+        for (byte_index, _) in source.match_indices(&selected) {
+            let byte_end = byte_index + selected.len();
+            if whole_identifier
+                && (is_identifier_part(source[..byte_index].chars().next_back())
+                    || is_identifier_part(source[byte_end..].chars().next()))
+            {
+                continue;
+            }
+            let column = source[..byte_index].chars().count();
+            if line_index == selected_line_index && column == start_column {
+                continue;
+            }
+            result.push(SelectedOccurrence {
+                line: line_index,
+                start_column: column,
+                end_column: column + selected_length,
+            });
+            if result.len() >= max_matches {
+                return result;
+            }
+        }
+    }
+    result
+}
+
+fn trim_line_ending(line: &mut String) {
+    if line.ends_with("\r\n") {
+        line.truncate(line.len() - 2);
+    } else if line.ends_with('\n') {
+        line.truncate(line.len() - 1);
+    }
 }
 
 #[flutter_rust_bridge::frb(opaque)]
@@ -77,6 +209,29 @@ impl RopeBridge {
             }),
             source_info: Some(source.info),
         })
+    }
+
+    /// Save an immutable Rope snapshot with metadata-only FFI response.
+    /// Remains opt-in until the editor's save lifecycle parity gate passes.
+    pub fn save_workspace_snapshot(
+        &self,
+        workspace_path: String,
+        relative_path: String,
+        expected_content_token: String,
+        overwrite_if_changed: bool,
+        tab_size: i32,
+        encoding: NativeWorkspaceTextEncoding,
+    ) -> super::native_save_io::SaveOutcome {
+        let snapshot = self.rope.read().unwrap().clone();
+        super::native_save_io::save_rope(
+            &snapshot,
+            workspace_path,
+            relative_path,
+            expected_content_token,
+            overwrite_if_changed,
+            tab_size,
+            encoding,
+        )
     }
 
     #[flutter_rust_bridge::frb(sync)]
@@ -160,6 +315,17 @@ impl RopeBridge {
         new_selection
     }
 
+    /// Performs a bounded selected-text scan without per-line Dart FFI calls.
+    pub fn find_selected_occurrences(
+        &self,
+        start: usize,
+        end: usize,
+        large_file_mode: bool,
+        max_matches: usize,
+    ) -> Vec<SelectedOccurrence> {
+        let rope = self.rope.read().unwrap();
+        selected_occurrences(&rope, start, end, large_file_mode, max_matches)
+    }
     #[flutter_rust_bridge::frb(sync)]
     pub fn len_chars(&self) -> usize {
         self.rope.read().unwrap().len_chars()
@@ -611,5 +777,63 @@ mod tests {
             pairs(rope.find_literal("foo\nfoo".to_owned(), true, false)),
             vec![(7, 14)]
         );
+    }
+}
+
+#[cfg(test)]
+mod selected_occurrences_tests {
+    use super::*;
+
+    #[test]
+    fn matches_identifiers_without_prefixes_or_case_folding() {
+        let source = RustRope::from_str("token tokenized token_token\ntoken + token\nTOKEN token");
+        let hits = selected_occurrences(&source, 0, 5, false, 400);
+        let columns: Vec<_> = hits
+            .iter()
+            .map(|h| (h.line, h.start_column, h.end_column))
+            .collect();
+        assert_eq!(columns, vec![(1, 0, 5), (1, 8, 13), (2, 6, 11)]);
+    }
+
+    #[test]
+    fn unicode_selection_uses_scalar_columns_not_utf16() {
+        let source = RustRope::from_str("😀 名稱 名稱\n名稱😀 名稱");
+        let hits = selected_occurrences(&source, 2, 4, false, 400);
+        let columns: Vec<_> = hits
+            .iter()
+            .map(|h| (h.line, h.start_column, h.end_column))
+            .collect();
+        assert_eq!(columns, vec![(0, 5, 7), (1, 0, 2), (1, 4, 6)]);
+    }
+
+    #[test]
+    fn nearby_scan_has_existing_large_file_limits() {
+        let source = RustRope::from_str(&vec!["field"; 6000].join("\n"));
+        let start = source.line_to_char(3000);
+        let hits = selected_occurrences(&source, start, start + 5, true, 400);
+        assert_eq!(hits.len(), 320);
+        assert_eq!(hits.first().unwrap().line, 2840);
+        assert_eq!(hits.last().unwrap().line, 3160);
+        assert!(hits.iter().all(|h| h.line != 3000));
+    }
+
+    #[test]
+    fn overlong_lines_are_skipped() {
+        let source = RustRope::from_str(&format!("foo\n{}\nfoo", "foo".repeat(100000)));
+        let hits = selected_occurrences(&source, 0, 3, true, 400);
+        assert_eq!(
+            hits,
+            vec![SelectedOccurrence {
+                line: 2,
+                start_column: 0,
+                end_column: 3
+            }]
+        );
+    }
+
+    #[test]
+    fn selection_inside_larger_identifier_does_not_match() {
+        let source = RustRope::from_str("prefixVariable variable variableSuffix");
+        assert!(selected_occurrences(&source, 6, 14, false, 400).is_empty());
     }
 }

@@ -61,7 +61,12 @@ pub(crate) fn open_workspace_source(
         ));
     }
     let bytes = fs::read(&path).map_err(|error| format!("{relative_path}: {error}"))?;
-    let encoding = requested_encoding.unwrap_or(detect_encoding(&bytes)?);
+    // Honor an explicit codec without eagerly running auto-detection.
+    // Valid legacy byte sequences cannot always be auto-detected.
+    let encoding = match requested_encoding {
+        Some(encoding) => encoding,
+        None => detect_encoding(&bytes)?,
+    };
     let raw_content = decode_with_encoding(&bytes, encoding)?;
     let raw_chars = raw_content.chars().count();
     let display_content = expand_tabs(&raw_content, tab_size);
@@ -146,7 +151,7 @@ fn detect_encoding(bytes: &[u8]) -> Result<NativeWorkspaceTextEncoding, String> 
         .ok_or_else(|| "unsupported detected text encoding".to_string())
 }
 
-fn decode_with_encoding(
+pub(crate) fn decode_with_encoding(
     bytes: &[u8],
     encoding: NativeWorkspaceTextEncoding,
 ) -> Result<String, String> {
@@ -229,7 +234,7 @@ fn strip_prefix<'a>(bytes: &'a [u8], prefix: &[u8]) -> &'a [u8] {
     bytes.strip_prefix(prefix).unwrap_or(bytes)
 }
 
-fn expand_tabs(text: &str, tab_size: i32) -> String {
+pub(crate) fn expand_tabs(text: &str, tab_size: i32) -> String {
     let effective_tab_size = tab_size.clamp(1, 8) as usize;
     let mut expanded = String::with_capacity(text.len());
     let mut column = 0usize;

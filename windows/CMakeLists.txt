@@ -13,6 +13,13 @@ if("$ENV{ALERA_FLAVOR}" STREQUAL "release")
   set(ALERA_APP_ID "dev.leynier.alera")
 endif()
 
+# Explicit Windows UI smoke build: avoid forwarding to the user's Alera Dev.
+# Production App ID remains unchanged unless the test env var is set.
+if("$ENV{ALERA_E2E_DESKTOP}" STREQUAL "1")
+  set(ALERA_APP_NAME "Alera Rope Save E2E")
+  set(ALERA_APP_ID "dev.leynier.alera.rope-save-e2e")
+endif()
+
 # Explicitly opt in to modern CMake behaviors to avoid warnings with recent
 # versions of CMake.
 cmake_policy(VERSION 3.14...3.25)
@@ -86,6 +93,21 @@ find_program(ALERA_NINJA_EXECUTABLE ninja)
 if(NOT ALERA_NINJA_EXECUTABLE)
   message(FATAL_ERROR "Ninja is required to build the Windows Whisper backend")
 endif()
+if("$ENV{ALERA_E2E_DESKTOP}" STREQUAL "1" AND "$ENV{ALERA_E2E_REUSE_CLI}" STREQUAL "1")
+  # The CLI was built from this worktree, but a terminated Cargo job did not
+  # retain its completed fingerprint. Isolated GUI benchmarks can reuse the
+  # verified executable without recompiling the unrelated CLI crate.
+  if(NOT EXISTS "${ALERA_CLI_CARGO_TARGET_DIR}/release/alera.exe")
+    message(FATAL_ERROR "Prebuilt Release CLI missing: ${ALERA_CLI_HOST_OUTPUT}")
+  endif()
+  add_custom_target(alera_cli_sidecar ALL
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/sidecar/$<CONFIG>"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${ALERA_CLI_HOST_OUTPUT}" "${ALERA_CLI_STAGED}"
+    BYPRODUCTS "${ALERA_CLI_STAGED}"
+    COMMENT "Reuse prebuilt CLI only for isolated Alera GUI benchmark"
+    VERBATIM
+  )
+else()
 add_custom_target(alera_cli_sidecar ALL
   # The sidecar shares whisper-rs-sys with the Flutter plugin. Use Ninja for
   # that nested CMake build to avoid MSBuild FileTracker's legacy path limit.
@@ -114,6 +136,7 @@ add_custom_target(alera_cli_sidecar ALL
   COMMENT "Building Alera CLI sidecar (Rust)"
   VERBATIM
 )
+endif()
 add_dependencies(${BINARY_NAME} alera_cli_sidecar)
 
 # Generated plugin build rules, which manage building the plugins and adding

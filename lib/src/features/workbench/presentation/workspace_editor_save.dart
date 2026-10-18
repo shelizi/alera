@@ -14,14 +14,36 @@ extension _WorkspaceEditorSave on _WorkspaceEditorSurfaceState {
     if (!_document.canSave || !mounted) {
       return;
     }
-    final contentBeingSaved = _controller.text;
-    final documentVersionBeingSaved = _controller.documentVersion;
-    _setEditorState(() => _saving = true);
+    final useNative = _canSaveNative;
+    final benchmark = EditorSavePerfProbe.start(
+      native: useNative,
+      length: _controller.length,
+      source: 'manual',
+    );
+    var completed = false;
     try {
+      if (useNative) _controller.flushPendingBuffer();
+      final contentBeingSaved = useNative ? '' : _controller.text;
+      final documentVersionBeingSaved = _controller.documentVersion;
+      benchmark?.markPreparationComplete();
+      _setEditorState(() => _saving = true);
+      if (useNative) {
+        await _writeNative(
+          overwriteIfChanged: false,
+          savedDocumentVersion: documentVersionBeingSaved,
+        );
+        benchmark?.markWriteComplete();
+        if (!mounted) return;
+        _autosave.resume();
+        _showToast('File saved');
+        completed = true;
+        return;
+      }
       final saved = await _write(
         overwriteIfChanged: false,
         currentDisplayContent: contentBeingSaved,
       );
+      benchmark?.markWriteComplete();
       if (!mounted) {
         return;
       }
@@ -37,6 +59,7 @@ extension _WorkspaceEditorSave on _WorkspaceEditorSurfaceState {
       );
       _autosave.resume();
       _showToast('File saved');
+      completed = true;
     } catch (error) {
       if (!mounted) {
         return;
@@ -49,6 +72,7 @@ extension _WorkspaceEditorSave on _WorkspaceEditorSurfaceState {
         _showToast(_messageFor(error), tone: .error);
       }
     } finally {
+      benchmark?.finish(success: completed);
       if (mounted) {
         _setEditorState(() => _saving = false);
       }
@@ -66,10 +90,19 @@ extension _WorkspaceEditorSave on _WorkspaceEditorSurfaceState {
         !_document.canSave) {
       return;
     }
-    final contentBeingSaved = _controller.text;
+    final useNative = _canSaveNative;
+    if (useNative) _controller.flushPendingBuffer();
+    final contentBeingSaved = useNative ? '' : _controller.text;
     final documentVersionBeingSaved = _controller.documentVersion;
     _setEditorState(() => _saving = true);
     try {
+      if (useNative) {
+        await _writeNative(
+          overwriteIfChanged: false,
+          savedDocumentVersion: documentVersionBeingSaved,
+        );
+        return;
+      }
       final saved = await _write(
         overwriteIfChanged: false,
         currentDisplayContent: contentBeingSaved,
@@ -136,9 +169,21 @@ extension _WorkspaceEditorSave on _WorkspaceEditorSurfaceState {
     if (overwrite != true || !mounted) {
       return false;
     }
-    final contentBeingSaved = _controller.text;
+    final useNative = _canSaveNative;
+    if (useNative) _controller.flushPendingBuffer();
+    final contentBeingSaved = useNative ? '' : _controller.text;
     final documentVersionBeingSaved = _controller.documentVersion;
     try {
+      if (useNative) {
+        await _writeNative(
+          overwriteIfChanged: true,
+          savedDocumentVersion: documentVersionBeingSaved,
+        );
+        if (!mounted) return false;
+        _autosave.resume();
+        _showToast('File overwritten');
+        return true;
+      }
       final saved = await _write(
         overwriteIfChanged: true,
         currentDisplayContent: contentBeingSaved,
@@ -165,6 +210,63 @@ extension _WorkspaceEditorSave on _WorkspaceEditorSurfaceState {
       }
       return false;
     }
+  }
+
+  bool get _canSaveNative => workspaceEditorShouldUseNativeSave(
+    nativeSaveEnabled:
+        const bool.fromEnvironment('ALERA_NATIVE_ROPE_SAVE') &&
+        !editorSaveBenchmarkForceLegacy,
+    nativeBacked: _document.nativeBacked,
+    languageServiceDocumentOpen: _languageIntelligenceDocumentPath != null,
+  );
+
+  Future<void> _writeNative({
+    required bool overwriteIfChanged,
+    required int savedDocumentVersion,
+  }) async {
+    final encoding = _document.encoding!;
+    final token = _document.contentToken;
+    if (token == null) {
+      throw const native.WorkspaceFileError(
+        kind: native.WorkspaceFileErrorKind.conflict,
+        context: 'missing saved file token',
+      );
+    }
+    final outcome = await _controller.saveWorkspaceSnapshot(
+      workspacePath: widget.workspace.path,
+      relativePath: widget.tab.filePath!,
+      expectedContentToken: token,
+      overwriteIfChanged: overwriteIfChanged,
+      tabSize: _currentEditorTabSize(),
+      encoding: _toCodeForgeEncoding(encoding)!,
+    );
+    if (outcome.status != code_forge.SaveStatus.saved) {
+      final kind = switch (outcome.status) {
+        code_forge.SaveStatus.conflict =>
+          native.WorkspaceFileErrorKind.conflict,
+        code_forge.SaveStatus.invalidPath =>
+          native.WorkspaceFileErrorKind.invalidPath,
+        code_forge.SaveStatus.protected =>
+          native.WorkspaceFileErrorKind.protectedPath,
+        code_forge.SaveStatus.unsupported =>
+          native.WorkspaceFileErrorKind.unsupported,
+        code_forge.SaveStatus.io => native.WorkspaceFileErrorKind.io,
+        code_forge.SaveStatus.saved => native.WorkspaceFileErrorKind.io,
+      };
+      throw native.WorkspaceFileError(
+        kind: kind,
+        context: 'Native workspace save failed: ${outcome.status.name}',
+      );
+    }
+    if (!mounted) return;
+    _clearPendingDocumentSnapshot();
+    _document.acceptNativeSaved(
+      encoding: encoding,
+      contentToken: outcome.token,
+      savedDocumentVersion: savedDocumentVersion,
+      currentDocumentVersion: _controller.documentVersion,
+      tabSize: _currentEditorTabSize(),
+    );
   }
 
   Future<native.WorkspaceEditorTextFile> _write({
@@ -350,3 +452,10 @@ extension _WorkspaceEditorSave on _WorkspaceEditorSurfaceState {
     _showToast('Autosave paused: ${_messageFor(error)}', tone: .error);
   }
 }
+
+@visibleForTesting
+bool workspaceEditorShouldUseNativeSave({
+  required bool nativeSaveEnabled,
+  required bool nativeBacked,
+  required bool languageServiceDocumentOpen,
+}) => nativeSaveEnabled && nativeBacked && !languageServiceDocumentOpen;

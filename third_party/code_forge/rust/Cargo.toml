@@ -27,3 +27,6 @@ tree-sitter-typescript = "0.23.2"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }
+
+[dev-dependencies]
+tempfile = '3'

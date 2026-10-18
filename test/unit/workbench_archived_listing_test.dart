@@ -227,6 +227,36 @@ void main() {
     ]);
   });
 
+  test('Archived defaults to collapsed and allows per-group expansion', () {
+    final rows = buildSidebarRows(_state());
+    final collapsedKeys = defaultCollapsedArchivedSidebarKeys(
+      rows,
+      const <String>{},
+    );
+    expect(collapsedKeys, <String>{'archived:alera', 'archived:orca'});
+    final hidden = collapseArchivedSidebarRows(rows, collapsedKeys);
+    expect(
+      hidden.whereType<WorkbenchWorkspaceRow>().any(
+        (row) => row.workspace.isArchived,
+      ),
+      isFalse,
+    );
+
+    final expandedKeys = defaultCollapsedArchivedSidebarKeys(
+      rows,
+      const <String>{'archived:alera'},
+    );
+    expect(expandedKeys, <String>{'archived:orca'});
+    final visible = collapseArchivedSidebarRows(rows, expandedKeys);
+    expect(
+      visible
+          .whereType<WorkbenchWorkspaceRow>()
+          .where((row) => row.workspace.isArchived)
+          .map((row) => row.workspace.id),
+      <String>['old-side', 'pinned-old'],
+    );
+  });
+
   test('collapseArchivedSidebarRows hides only the collapsed scope', () {
     final rows = buildSidebarRows(_state());
 

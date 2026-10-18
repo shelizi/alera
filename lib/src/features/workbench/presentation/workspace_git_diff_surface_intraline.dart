@@ -184,21 +184,37 @@ _IntralinePair _intralinePairForSides(
   final isDeletion = left?.kind == GitDiffLineKind.deletion;
   final isAddition = right?.kind == GitDiffLineKind.addition;
   if (isDeletion && isAddition) {
-    return _intralineDiff(left!.text, right!.text);
+    if (left!.nativeRanges != null && right!.nativeRanges != null) {
+      return _IntralinePair(
+        left: left.nativeRanges!,
+        right: right.nativeRanges!,
+      );
+    }
+    return _intralineDiff(left.text, right!.text);
   }
   return _IntralinePair(
     left: isDeletion
-        ? _fullIntralineRange(left!.text)
+        ? (left!.nativeRanges ?? _fullIntralineRange(left.text))
         : const <_IntralineRange>[],
     right: isAddition
-        ? _fullIntralineRange(right!.text)
+        ? (right!.nativeRanges ?? _fullIntralineRange(right.text))
         : const <_IntralineRange>[],
   );
 }
 
 List<List<_IntralineRange>> _buildIntralineRangesForDiffLines(
-  List<GitDiffLine> lines,
-) {
+  List<GitDiffLine> lines, {
+  List<List<GitIntralineRange>>? nativeRanges,
+}) {
+  if (nativeRanges != null && nativeRanges.length == lines.length) {
+    return nativeRanges
+        .map(
+          (ranges) => ranges
+              .map((range) => _IntralineRange(range.start, range.end))
+              .toList(growable: false),
+        )
+        .toList(growable: false);
+  }
   final result = List<List<_IntralineRange>>.generate(
     lines.length,
     (_) => const <_IntralineRange>[],

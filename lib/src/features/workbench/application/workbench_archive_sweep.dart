@@ -14,8 +14,8 @@ part 'workbench_archive_sweep.g.dart';
 
 const Duration workbenchArchiveSweepInterval = Duration(hours: 1);
 
-/// Session-local collapse state for Archived group headers, keyed by
-/// `WorkbenchArchivedHeaderRow.key`. Deliberately kept out of
+/// Session-local *expanded* Archived group keys (empty means collapsed).
+/// Kept under the historical provider name for compatibility, and out of
 /// [WorkbenchViewPrefs] so it never persists or syncs to other clients.
 @Riverpod(keepAlive: true)
 class WorkbenchArchivedSectionsCollapse

@@ -6,7 +6,7 @@ import 'package:alera/src/shared/infra/logging/log_redaction.dart';
 import 'package:alera/src/shared/infra/logging/rotating_log_sink.dart';
 import 'package:logging/logging.dart';
 import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
+import 'package:alera/src/shared/infra/storage/alera_support_directory.dart';
 
 /// Name of the directory holding app logs, under the application support dir.
 const String kAppLogDirectoryName = 'logs';
@@ -29,7 +29,7 @@ abstract final class AppLogger._() {
   static io.Directory? get logDirectory => _directory;
 
   static Future<io.Directory> _defaultDirectory() async {
-    final support = await getApplicationSupportDirectory();
+    final support = await aleraApplicationSupportDirectory();
     return io.Directory(p.join(support.path, kAppLogDirectoryName));
   }
 
