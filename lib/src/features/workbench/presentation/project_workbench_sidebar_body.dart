@@ -55,9 +55,13 @@ class const _SidebarBody({
     final installedEditors =
         ref.watch(installedExternalEditorsProvider).value ??
         const <ExternalEditorSpec>[];
+    final effectiveArchivedCollapsedKeys = archivedSidebarCollapseKeysForQuery(
+      archivedCollapsedKeys,
+      state.searchQuery,
+    );
     final visibleRows = collapseArchivedSidebarRows(
       rows,
-      archivedCollapsedKeys,
+      effectiveArchivedCollapsedKeys,
     );
     return ListView.builder(
       padding: const EdgeInsets.only(
@@ -73,7 +77,7 @@ class const _SidebarBody({
             ref,
             visibleRows,
             index,
-            archivedCollapsedKeys,
+            effectiveArchivedCollapsedKeys,
             resolvedEditor,
             installedEditors,
           ),

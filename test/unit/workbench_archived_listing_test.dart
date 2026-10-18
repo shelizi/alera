@@ -217,6 +217,25 @@ void main() {
     expect(countVisibleWorkspaces(state), 0);
   });
 
+  test('search reveals archived matches without changing default collapse', () {
+    const collapsed = <String>{workbenchArchivedInitiallyCollapsedMarker};
+    final searching = _state().copyWith(searchQuery: 'stale');
+    final visible = collapseArchivedSidebarRows(
+      buildSidebarRows(searching),
+      archivedSidebarCollapseKeysForQuery(collapsed, searching.searchQuery),
+    );
+    expect(_rowKeys(visible), <String>[
+      'project:orca',
+      'archived:orca',
+      'workspace:all:stale',
+    ]);
+    expect(
+      archivedSidebarCollapseKeysForQuery(collapsed, '   '),
+      collapsed,
+      reason: 'clearing search restores the original collapsed state',
+    );
+  });
+
   test('a project with only archived workspaces still renders its header', () {
     final rows = buildSidebarRows(_state().copyWith(searchQuery: 'old-side'));
 

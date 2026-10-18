@@ -273,6 +273,13 @@ int countVisibleWorkspaces(WorkbenchState state) {
 /// Existing explicit collapsed sets without the marker stay compatible.
 const String workbenchArchivedInitiallyCollapsedMarker = 'archived:*';
 
+/// Search temporarily reveals archived matches; it must not mutate the
+/// user's per-session expanded/collapsed Archived groups.
+Set<String> archivedSidebarCollapseKeysForQuery(
+  Set<String> collapsedKeys,
+  String searchQuery,
+) => searchQuery.trim().isEmpty ? collapsedKeys : const <String>{};
+
 bool archivedSidebarSectionIsCollapsed(String key, Set<String> keys) =>
     keys.contains(workbenchArchivedInitiallyCollapsedMarker)
     ? !keys.contains(key)
