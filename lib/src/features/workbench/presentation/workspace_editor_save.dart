@@ -15,25 +15,35 @@ extension _WorkspaceEditorSave on _WorkspaceEditorSurfaceState {
       return;
     }
     final useNative = _canSaveNative;
-    if (useNative) _controller.flushPendingBuffer();
-    final contentBeingSaved = useNative ? '' : _controller.text;
-    final documentVersionBeingSaved = _controller.documentVersion;
-    _setEditorState(() => _saving = true);
+    final benchmark = EditorSavePerfProbe.start(
+      native: useNative,
+      length: _controller.length,
+      source: 'manual',
+    );
+    var completed = false;
     try {
+      if (useNative) _controller.flushPendingBuffer();
+      final contentBeingSaved = useNative ? '' : _controller.text;
+      final documentVersionBeingSaved = _controller.documentVersion;
+      benchmark?.markPreparationComplete();
+      _setEditorState(() => _saving = true);
       if (useNative) {
         await _writeNative(
           overwriteIfChanged: false,
           savedDocumentVersion: documentVersionBeingSaved,
         );
+        benchmark?.markWriteComplete();
         if (!mounted) return;
         _autosave.resume();
         _showToast('File saved');
+        completed = true;
         return;
       }
       final saved = await _write(
         overwriteIfChanged: false,
         currentDisplayContent: contentBeingSaved,
       );
+      benchmark?.markWriteComplete();
       if (!mounted) {
         return;
       }
@@ -49,6 +59,7 @@ extension _WorkspaceEditorSave on _WorkspaceEditorSurfaceState {
       );
       _autosave.resume();
       _showToast('File saved');
+      completed = true;
     } catch (error) {
       if (!mounted) {
         return;
@@ -61,6 +72,7 @@ extension _WorkspaceEditorSave on _WorkspaceEditorSurfaceState {
         _showToast(_messageFor(error), tone: .error);
       }
     } finally {
+      benchmark?.finish(success: completed);
       if (mounted) {
         _setEditorState(() => _saving = false);
       }
@@ -201,7 +213,9 @@ extension _WorkspaceEditorSave on _WorkspaceEditorSurfaceState {
   }
 
   bool get _canSaveNative => workspaceEditorShouldUseNativeSave(
-    nativeSaveEnabled: const bool.fromEnvironment('ALERA_NATIVE_ROPE_SAVE'),
+    nativeSaveEnabled:
+        const bool.fromEnvironment('ALERA_NATIVE_ROPE_SAVE') &&
+        !editorSaveBenchmarkForceLegacy,
     nativeBacked: _document.nativeBacked,
     languageServiceDocumentOpen: _languageIntelligenceDocumentPath != null,
   );
