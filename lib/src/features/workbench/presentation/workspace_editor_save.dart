@@ -200,10 +200,11 @@ extension _WorkspaceEditorSave on _WorkspaceEditorSurfaceState {
     }
   }
 
-  bool get _canSaveNative =>
-      const bool.fromEnvironment('ALERA_NATIVE_ROPE_SAVE') &&
-      _document.nativeBacked &&
-      _languageIntelligenceDocumentPath == null;
+  bool get _canSaveNative => workspaceEditorShouldUseNativeSave(
+    nativeSaveEnabled: const bool.fromEnvironment('ALERA_NATIVE_ROPE_SAVE'),
+    nativeBacked: _document.nativeBacked,
+    languageServiceDocumentOpen: _languageIntelligenceDocumentPath != null,
+  );
 
   Future<void> _writeNative({
     required bool overwriteIfChanged,
@@ -437,3 +438,10 @@ extension _WorkspaceEditorSave on _WorkspaceEditorSurfaceState {
     _showToast('Autosave paused: ${_messageFor(error)}', tone: .error);
   }
 }
+
+@visibleForTesting
+bool workspaceEditorShouldUseNativeSave({
+  required bool nativeSaveEnabled,
+  required bool nativeBacked,
+  required bool languageServiceDocumentOpen,
+}) => nativeSaveEnabled && nativeBacked && !languageServiceDocumentOpen;

@@ -50,7 +50,7 @@ cargo test --manifest-path third_party/code_forge/rust/Cargo.toml profile_native
 
 ## Pending gates
 
-1. Windows Desktop GUI smoke passed for manual Save, Autosave, conflict cancel and explicit overwrite; encoding matrix and proven active-LSP fallback remain.
+1. Windows GUI smoke passed for manual Save, Autosave, conflict cancel/overwrite and active Dart LSP fallback; additional language servers and the full encoding UI matrix remain.
 2. Release Rust-only A/B and Dart-to-Release-DLL FFI snapshot measurements are available; full Desktop p50/p95, frame timing, Dart heap and bytes crossing FFI remain unmeasured.
 3. Verify backup/restore behavior for network shares and Windows failure cases beyond locked local NTFS files.
 4. Ghostty source build works with Scoop Zig 0.16.0: 45 Diff widget, 41 editor/autosave/occurrence and 1 Windows FFI smoke test passed. Standalone Desktop GUI smoke covers manual Save, Autosave and conflict flows; full Release gating remains.
@@ -65,7 +65,7 @@ This opt-in benchmark runs Flutter/Dart FFI against the optimized CodeForge DLL,
 | 4 MiB | ~28.4 ms | ~29.7 ms |
 | 10 MiB | ~108.9 ms | ~191.9 ms |
 
-These values are from an earlier 21-sample pass. In a subsequent rerun, 1 MiB (15.520/17.050 ms) and 4 MiB (29.076/39.588 ms) appeared, but no 10 MiB metrics were emitted despite a zero command exit. Treat 10 MiB repeatability as **not yet proven** and investigate the benchmark harness before declaring a release improvement.
+These values are from an earlier 21-sample pass. A later full-log run completed all 1/4/10 MiB samples, including 10 MiB 55.039 / 108.588 ms (p50/p95). The large-file tail varies significantly; neither run is a stable full-Desktop release benchmark.
 
 ## Windows desktop GUI smoke with isolated runtime (2026-10-18)
 
@@ -80,12 +80,32 @@ A local Git fixture under `build/native-rope-e2e-workspace` contained `manual_sa
 | External edit while editor dirty, Save | Pass: conflict dialog appeared |
 | Cancel conflict | Pass: external disk bytes remained untouched; unsaved GUI text was not written |
 | Repeat external edit, explicit Overwrite | Pass: dialog reappeared; clicking Overwrite replaced external bytes with editor version |
-| Dart syntax file open, edit, toolbar Save | Pass: `lsp_fallback.dart` on disk contained GUI marker; whether language server attachment was active is **not verified** |
+| Active Dart LSP, edit and Save | Pass: Running / 1 active document and status LSP 1; saved file retained 2 Tab bytes, 2 CRLF pairs and GUI marker |
 
 Caveats: This is a manual Debug Desktop UI smoke run, not a complete Release UI performance benchmark. Native-save opt-in remains default-off. The repeat Save interaction is sensitive to physical display coordinates: automation must use `desktop_displays` native dimensions, not resized screenshot pixels. An earlier ambiguous retry was cleared by a fresh conflict and explicit overwrite on the correct display coordinates.
 
 ### Outstanding verification
 
-- Confirm a real active language-server document with `_languageIntelligenceDocumentPath != null` and verify fallback code path, beyond simply saving a Dart file.
+- Active Dart LSP fallback passed GUI Save byte checks; other providers, lifecycle and failure scenarios still need testing.
 - Full Release Desktop p50/p95, frame times, Dart heap, and bytes crossing FFI.
 - Network-share and file-permission failure cases. A Runtime Host suite had one timeout-sensitive failure when run in a group; the exact timeout test passed alone and should be rerun before release.
+
+## 2026-10-18 explicit encoding and active Dart LSP validation
+
+- CodeForge was eagerly invoking charset auto-detection even when the user explicitly selected a legacy codec. Some valid Big5/GBK sequences were rejected. The fix honors the selected codec and runs auto-detection only when none is supplied.
+- Rust on-disk Save tests cover UTF-16 LE/BE, Big5, GBK, Shift-JIS, EUC-JP, EUC-KR and Windows-1252: byte-identical no-op, edited text preserving untouched Tab/CRLF/BOM and unrepresentable-character rejection. Full CodeForge suite: **56 passed, 0 failed, 2 ignored**.
+- The Release CodeForge DLL was rebuilt. A real Dart/Flutter FFI regression passed UTF-16 LE/BE, Big5 and Windows-1252, including byte-identical no-op and append.
+- In isolated Windows Desktop Alera, Dart Language Intelligence was enabled and settings showed **Running / 1 active document**, status bar **LSP 1**. A real Dart fixture with two Tab-indented CRLF lines was edited and saved; disk retained both original Tab bytes (09), both CRLF pairs (0D 0A), and the new GUI marker. Thus the active Dart LSP fallback path is exercised with actual bytes.
+- The selection policy also has a regression: native Save requires opt-in, a native-backed document, and no active language-service document.
+
+### Captured Release FFI rerun
+
+The full Flutter test stdout was redirected to an ignored build log to avoid incomplete terminal projections. The process exited 0 and emitted all 1/4/10 MiB rows over 21 samples per size:
+
+| Size | Native Save p50 | Native Save p95 | Rope-to-Dart text copy p50 |
+|---|---:|---:|---:|
+| 1 MiB | 14.214 ms | 16.322 ms | 2.724 ms |
+| 4 MiB | 28.533 ms | 72.073 ms | 9.865 ms |
+| 10 MiB | 55.039 ms | 108.588 ms | 23.589 ms |
+
+Previous runs had higher 10 MiB timings (108.9 / 191.9 ms p50/p95). This remains directional: no full Flutter Desktop frame-time, memory-peak or old-path end-to-end speedup claim.

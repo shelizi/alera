@@ -13,6 +13,42 @@ import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 
 void main() {
+  test('active language intelligence always takes the legacy Save path', () {
+    expect(
+      workspaceEditorShouldUseNativeSave(
+        nativeSaveEnabled: true,
+        nativeBacked: true,
+        languageServiceDocumentOpen: false,
+      ),
+      isTrue,
+    );
+    expect(
+      workspaceEditorShouldUseNativeSave(
+        nativeSaveEnabled: true,
+        nativeBacked: true,
+        languageServiceDocumentOpen: true,
+      ),
+      isFalse,
+      reason: 'active LSP must receive the existing Save notifications',
+    );
+    expect(
+      workspaceEditorShouldUseNativeSave(
+        nativeSaveEnabled: false,
+        nativeBacked: true,
+        languageServiceDocumentOpen: false,
+      ),
+      isFalse,
+    );
+    expect(
+      workspaceEditorShouldUseNativeSave(
+        nativeSaveEnabled: true,
+        nativeBacked: false,
+        languageServiceDocumentOpen: false,
+      ),
+      isFalse,
+    );
+  });
+
   test('editor comment syntax follows the active language', () {
     expect(
       workspaceEditorCommentSyntaxForPath(
