@@ -52,7 +52,7 @@ cargo test --manifest-path third_party/code_forge/rust/Cargo.toml profile_native
 
 1. Windows GUI smoke passed for manual Save, Autosave, conflict cancel/overwrite and active Dart LSP fallback; additional language servers and the full encoding UI matrix remain.
 2. Release Rust-only A/B and Dart-to-Release-DLL FFI snapshot measurements are available; full Desktop p50/p95, frame timing, Dart heap and bytes crossing FFI remain unmeasured.
-3. Verify backup/restore behavior for network shares and Windows failure cases beyond locked local NTFS files.
+3. Localhost SMB/UNC native Save smoke passed; real remote NAS/disconnect, network ACL changes, and backup/restore failure cases are pending.
 4. Ghostty source build works with Scoop Zig 0.16.0: 45 Diff widget, 41 editor/autosave/occurrence and 1 Windows FFI smoke test passed. Standalone Desktop GUI smoke covers manual Save, Autosave and conflict flows; full Release gating remains.
 
 ## Flutter FFI / Release CodeForge DLL snapshot (Windows, 21 samples)
@@ -109,3 +109,15 @@ The full Flutter test stdout was redirected to an ignored build log to avoid inc
 | 10 MiB | 55.039 ms | 108.588 ms | 23.589 ms |
 
 Previous runs had higher 10 MiB timings (108.9 / 191.9 ms p50/p95). This remains directional: no full Flutter Desktop frame-time, memory-peak or old-path end-to-end speedup claim.
+
+## Windows SMB/UNC loopback smoke (2026-10-18)
+
+An opt-in Flutter-to-Release-CodeForge test mounted the existing local administrator share using a UNC path rooted inside the isolated test workspace. The test created only a temporary subdirectory and deleted it in finally.
+
+- Native Rope open and Save succeeded across UNC/SMB and preserved unchanged Tab and CRLF bytes.
+- An external modification triggered SaveStatus.conflict without overwriting disk bytes.
+- Explicit overwrite saved the editor snapshot.
+- Redirected Flutter test log reported 1 passed, 0 failed and exit code 0.
+- No new share, OS permission change, production profile edit or user project operation was performed.
+
+This verifies one loopback Windows SMB configuration, **not** a general remote NAS compatibility guarantee. Real remote file-server disconnect, ACL transitions, latency and backup failures remain open.
