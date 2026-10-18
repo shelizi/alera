@@ -268,6 +268,17 @@ int countVisibleWorkspaces(WorkbenchState state) {
   return count;
 }
 
+/// Archived groups are collapsed on first render. Only the headers the user
+/// explicitly expands during this session are omitted from this set.
+Set<String> defaultCollapsedArchivedSidebarKeys(
+  List<WorkbenchSidebarRow> rows,
+  Set<String> expandedKeys,
+) => <String>{
+  for (final row in rows)
+    if (row is WorkbenchArchivedHeaderRow && !expandedKeys.contains(row.key))
+      row.key,
+};
+
 /// Drops the workspace rows owned by collapsed Archived group headers.
 /// [collapsedKeys] holds [WorkbenchArchivedHeaderRow.key] values; the keys are
 /// session-local, which is why this runs outside [buildSidebarRows].
