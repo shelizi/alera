@@ -837,7 +837,7 @@ const EdgeInsets workspaceEditorContentPadding = EdgeInsets.only(
 );
 
 /// Keep the existing top/left/right text inset in editable Git diffs.
-@visibleForTesting
+/// Shared by production diff panes and editor tests.
 const EdgeInsets workspaceDiffEditorContentPadding = EdgeInsets.fromLTRB(
   AleraTokens.space8,
   AleraTokens.space8,
