@@ -827,7 +827,7 @@ code_forge.ScrollbarDecoration workspaceEditorScrollbarDecoration() {
 
 /// Preserve scrollable space below the final line, clear of the 30px shell
 /// status bar. CodeForge includes innerPadding in the actual scroll extent.
-@visibleForTesting
+/// Shared by the editor and Git Diff panes in production.
 const double workspaceEditorBottomScrollPadding =
     AleraTokens.statusBarHeight + AleraTokens.space8;
 
