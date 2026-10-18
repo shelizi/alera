@@ -885,8 +885,10 @@ const int _editableDiffScrollRestoreAttempts = 30;
 
 class _EditableWorkingTreeDiff extends StatefulWidget {
   const _EditableWorkingTreeDiff({
+    super.key,
     required this.file,
     required this.syntax,
+    required this.navigation,
     required this.baseline,
     required this.document,
     required this.whitespaceMode,
@@ -898,6 +900,7 @@ class _EditableWorkingTreeDiff extends StatefulWidget {
 
   final GitDiffFile file;
   final _DiffSyntaxStyle syntax;
+  final _DiffChangeNavigator navigation;
   final String baseline;
   final _EditableWorkingTreeDocument document;
   final GitDiffWhitespaceMode whitespaceMode;
@@ -1146,8 +1149,8 @@ class _EditableWorkingTreeDiffState extends State<_EditableWorkingTreeDiff> {
     }
     _leftFocusNode = FocusNode();
     _rightFocusNode = FocusNode();
-    _leftHorizontalController = ScrollController();
-    _rightHorizontalController = ScrollController();
+    _leftHorizontalController = ScrollController(keepScrollOffset: false);
+    _rightHorizontalController = ScrollController(keepScrollOffset: false);
     _leftVerticalController = ScrollController();
     _rightVerticalController = ScrollController();
     _alignment = _editableDiffAlignment(
@@ -1161,11 +1164,50 @@ class _EditableWorkingTreeDiffState extends State<_EditableWorkingTreeDiff> {
     _leftVerticalController.addListener(_syncVerticalFromLeft);
     _rightVerticalController.addListener(_syncVerticalFromRight);
     _applyAlignmentDecorations();
+    widget.navigation.addListener(_navigateToSelectedChange);
+    _navigateToSelectedChange();
+  }
+
+  void _navigateToSelectedChange() {
+    final target = widget.navigation.target;
+    if (target == null ||
+        target.editablePath != widget.file.path ||
+        target.editableLine == null) {
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final line = target.editableLine!;
+      if (_usesCodeForge) {
+        // CodeForge knows line heights and folded/aligned coordinates.
+        _leftController!.scrollToLine(line);
+        _controller!.scrollToLine(line);
+      } else {
+        for (final controller in <ScrollController>[
+          _leftVerticalController,
+          _rightVerticalController,
+        ]) {
+          if (!controller.hasClients) continue;
+          final position = controller.position;
+          controller.jumpTo(
+            (line * 18.0).clamp(
+              position.minScrollExtent,
+              position.maxScrollExtent,
+            ),
+          );
+        }
+      }
+    });
   }
 
   @override
   void didUpdateWidget(covariant _EditableWorkingTreeDiff oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.navigation != widget.navigation) {
+      oldWidget.navigation.removeListener(_navigateToSelectedChange);
+      widget.navigation.addListener(_navigateToSelectedChange);
+      _navigateToSelectedChange();
+    }
     if (!identical(oldWidget.syntax, widget.syntax)) {
       _leftFallbackController.updateSyntax(widget.syntax);
       _fallbackController.updateSyntax(widget.syntax);
@@ -1205,8 +1247,10 @@ class _EditableWorkingTreeDiffState extends State<_EditableWorkingTreeDiff> {
     final key = widget.scrollStorageKey;
     if (key != null) {
       PageStorage.maybeOf(context)?.writeState(context, <double?>[
-        for (final controller in _paneControllers)
-          controller.hasClients ? controller.offset : null,
+        for (var i = 0; i < _paneControllers.length; i++)
+          i < 2 && _paneControllers[i].hasClients
+              ? _paneControllers[i].offset
+              : null,
       ], identifier: key);
     }
     super.deactivate();
@@ -1225,6 +1269,7 @@ class _EditableWorkingTreeDiffState extends State<_EditableWorkingTreeDiff> {
       var done = true;
       final controllers = _paneControllers;
       for (var i = 0; i < controllers.length && i < offsets.length; i++) {
+        if (i >= 2) continue; // A different file always starts at x = 0.
         final offset = offsets[i];
         final controller = controllers[i];
         if (offset == null) continue;
@@ -1251,6 +1296,7 @@ class _EditableWorkingTreeDiffState extends State<_EditableWorkingTreeDiff> {
 
   @override
   void dispose() {
+    widget.navigation.removeListener(_navigateToSelectedChange);
     _controller?.removeListener(_handleEditableControllerChanged);
     _leftHorizontalController.dispose();
     _rightHorizontalController.dispose();

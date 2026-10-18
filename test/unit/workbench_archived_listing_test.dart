@@ -227,6 +227,37 @@ void main() {
     ]);
   });
 
+  test('Archived starts hidden and one scope can expand', () {
+    final rows = buildSidebarRows(_state());
+    final initial = collapseArchivedSidebarRows(rows, const <String>{
+      workbenchArchivedInitiallyCollapsedMarker,
+    });
+    expect(_rowKeys(initial), <String>[
+      'project:alera',
+      'workspace:all:alera-main',
+      'workspace:all:feature',
+      'archived:alera',
+      'project:orca',
+      'workspace:all:orca-main',
+      'archived:orca',
+    ]);
+    final expanded = collapseArchivedSidebarRows(rows, const <String>{
+      workbenchArchivedInitiallyCollapsedMarker,
+      'archived:alera',
+    });
+    expect(_rowKeys(expanded), <String>[
+      'project:alera',
+      'workspace:all:alera-main',
+      'workspace:all:feature',
+      'archived:alera',
+      'workspace:all:old-side',
+      'workspace:all:pinned-old',
+      'project:orca',
+      'workspace:all:orca-main',
+      'archived:orca',
+    ]);
+  });
+
   test('collapseArchivedSidebarRows hides only the collapsed scope', () {
     final rows = buildSidebarRows(_state());
 

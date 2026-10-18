@@ -57,6 +57,7 @@ dependencies:
   gpt_markdown: ^1.2.1
   directory_tree: ^1.0.0
   code_forge: ^10.13.0
+  scroll_to_index: ^3.0.1
   re_highlight: ^0.0.3
   vscode_material_icon_theme: ^5.37.0
   lucide_icons_flutter: ^3.1.17

@@ -224,7 +224,7 @@ class _DiffHorizontalViewportState extends State<_DiffHorizontalViewport> {
   @override
   void initState() {
     super.initState();
-    _scrollController = ScrollController();
+    _scrollController = ScrollController(keepScrollOffset: false);
   }
 
   @override
@@ -257,11 +257,13 @@ class _DiffHorizontalViewportState extends State<_DiffHorizontalViewport> {
 class _ReadOnlySideBySideDiffList extends StatefulWidget {
   const _ReadOnlySideBySideDiffList({
     super.key,
+    required this.navigation,
     required this.rows,
     required this.contentWidth,
     required this.scrollStorageKey,
   });
 
+  final _DiffChangeNavigator navigation;
   final _DiffRows rows;
   final double contentWidth;
   final String scrollStorageKey;
@@ -275,26 +277,59 @@ class _ReadOnlySideBySideDiffListState
     extends State<_ReadOnlySideBySideDiffList> {
   late final ScrollController _leftHorizontalController;
   late final ScrollController _rightHorizontalController;
-  late final ScrollController _leftVerticalController;
-  late final ScrollController _rightVerticalController;
+  late final AutoScrollController _leftVerticalController;
+  late final AutoScrollController _rightVerticalController;
   var _syncingHorizontal = false;
   var _syncingVertical = false;
 
   @override
   void initState() {
     super.initState();
-    _leftHorizontalController = ScrollController();
-    _rightHorizontalController = ScrollController();
-    _leftVerticalController = ScrollController();
-    _rightVerticalController = ScrollController();
+    _leftHorizontalController = ScrollController(keepScrollOffset: false);
+    _rightHorizontalController = ScrollController(keepScrollOffset: false);
+    _leftVerticalController = AutoScrollController(
+      suggestedRowHeight: 22,
+      keepScrollOffset: false,
+    );
+    _rightVerticalController = AutoScrollController(
+      suggestedRowHeight: 22,
+      keepScrollOffset: false,
+    );
     _leftHorizontalController.addListener(_syncHorizontalFromLeft);
     _rightHorizontalController.addListener(_syncHorizontalFromRight);
     _leftVerticalController.addListener(_syncVerticalFromLeft);
     _rightVerticalController.addListener(_syncVerticalFromRight);
+    widget.navigation.addListener(_navigateToSelectedChange);
+  }
+
+  @override
+  void didUpdateWidget(covariant _ReadOnlySideBySideDiffList oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.navigation != widget.navigation) {
+      oldWidget.navigation.removeListener(_navigateToSelectedChange);
+      widget.navigation.addListener(_navigateToSelectedChange);
+      _navigateToSelectedChange();
+    }
+  }
+
+  void _navigateToSelectedChange() {
+    final target = widget.navigation.target;
+    if (target == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_leftVerticalController.hasClients) return;
+      unawaited(
+        _leftVerticalController.scrollToIndex(
+          target.row,
+          preferPosition: AutoScrollPosition.begin,
+          duration: const Duration(milliseconds: 80),
+        ),
+      );
+    });
   }
 
   @override
   void dispose() {
+    widget.navigation.removeListener(_navigateToSelectedChange);
     _leftHorizontalController.dispose();
     _rightHorizontalController.dispose();
     _leftVerticalController.dispose();
@@ -359,7 +394,7 @@ class _ReadOnlySideBySideDiffListState
   Widget _buildPane({
     required bool isLeft,
     required ScrollController horizontalController,
-    required ScrollController verticalController,
+    required AutoScrollController verticalController,
   }) {
     final side = isLeft ? 'left' : 'right';
     return LayoutBuilder(
@@ -375,9 +410,14 @@ class _ReadOnlySideBySideDiffListState
             bottom: workspaceEditorBottomScrollPadding,
           ),
           itemCount: widget.rows.length,
-          itemBuilder: (context, index) => widget.rows
-              .rowAt(index)
-              .buildSideBySidePane(context, isLeft: isLeft),
+          itemBuilder: (context, index) => AutoScrollTag(
+            key: ValueKey<String>('git-diff-$side-row-$index'),
+            controller: verticalController,
+            index: index,
+            child: widget.rows
+                .rowAt(index)
+                .buildSideBySidePane(context, isLeft: isLeft),
+          ),
         );
         return Scrollbar(
           key: ValueKey<String>('git-diff-side-by-side-$side-y-scrollbar'),
@@ -449,6 +489,7 @@ class _ReadOnlySideBySideDiffListState
 class _SingleColumnDiffList extends StatefulWidget {
   const _SingleColumnDiffList({
     super.key,
+    required this.navigation,
     required this.rows,
     required this.overview,
     required this.selectionEnabled,
@@ -456,6 +497,7 @@ class _SingleColumnDiffList extends StatefulWidget {
     required this.scrollStorageKey,
   });
 
+  final _DiffChangeNavigator navigation;
   final _DiffRows rows;
   final _SingleColumnDiffOverviewProjection overview;
   final bool selectionEnabled;
@@ -467,16 +509,46 @@ class _SingleColumnDiffList extends StatefulWidget {
 }
 
 class _SingleColumnDiffListState extends State<_SingleColumnDiffList> {
-  late final ScrollController _scrollController;
+  late final AutoScrollController _scrollController;
 
   @override
   void initState() {
     super.initState();
-    _scrollController = ScrollController();
+    _scrollController = AutoScrollController(
+      suggestedRowHeight: 22,
+      keepScrollOffset: false,
+    );
+    widget.navigation.addListener(_navigateToSelectedChange);
+  }
+
+  @override
+  void didUpdateWidget(covariant _SingleColumnDiffList oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.navigation != widget.navigation) {
+      oldWidget.navigation.removeListener(_navigateToSelectedChange);
+      widget.navigation.addListener(_navigateToSelectedChange);
+      _navigateToSelectedChange();
+    }
+  }
+
+  void _navigateToSelectedChange() {
+    final target = widget.navigation.target;
+    if (target == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scrollController.hasClients) return;
+      unawaited(
+        _scrollController.scrollToIndex(
+          target.row,
+          preferPosition: AutoScrollPosition.begin,
+          duration: const Duration(milliseconds: 80),
+        ),
+      );
+    });
   }
 
   @override
   void dispose() {
+    widget.navigation.removeListener(_navigateToSelectedChange);
     _scrollController.dispose();
     super.dispose();
   }
@@ -498,8 +570,12 @@ class _SingleColumnDiffListState extends State<_SingleColumnDiffList> {
                     bottom: workspaceEditorBottomScrollPadding,
                   ),
                   itemCount: widget.rows.length,
-                  itemBuilder: (context, index) =>
-                      widget.rows.rowAt(index).build(context),
+                  itemBuilder: (context, index) => AutoScrollTag(
+                    key: ValueKey<String>('git-diff-unified-row-$index'),
+                    index: index,
+                    controller: _scrollController,
+                    child: widget.rows.rowAt(index).build(context),
+                  ),
                 ),
               );
               final selectable = widget.selectionEnabled
@@ -535,6 +611,7 @@ class _SingleColumnDiffListState extends State<_SingleColumnDiffList> {
 }
 
 class const _DiffFileList({
+  required final _DiffChangeNavigator navigation,
   required final GitDiffResult result,
   required final Map<GitDiffFile, _FullFileContents> fullFileContents,
   final Set<String> fullFilePreviewLimitedPaths = const <String>{},
@@ -560,6 +637,13 @@ class const _DiffFileList({
   Widget build(BuildContext context) {
     final scrollStorageKey =
         '$scrollStorageId:${presentationMode.name}:${contentMode.name}';
+    void registerTargets(_DiffRows rows) {
+      final targets = rows.navigationTargets;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        navigation.update(scrollStorageKey, targets);
+      });
+    }
+
     final hasEditableSideBySide =
         presentationMode == GitDiffPresentationMode.sideBySide &&
         contentMode == GitDiffContentMode.fullFile &&
@@ -577,6 +661,7 @@ class const _DiffFileList({
     _DiffRows buildRows({double? editableViewportHeight}) {
       return _DiffRows.fromResult(
         result,
+        navigation: navigation,
         fullFileContents: fullFileContents,
         fullFilePreviewLimitedPaths: fullFilePreviewLimitedPaths,
         sourcePath: sourcePath,
@@ -604,33 +689,18 @@ class const _DiffFileList({
                 ? constraints.maxHeight
                 : null,
           );
+          registerTargets(rows);
           if (hasEditableSideBySide) {
-            final contentWidth = math.max(constraints.maxWidth, 720.0);
-            final list = KeyedSubtree(
-              key: PageStorageKey<String>('$scrollStorageKey:editable:v'),
-              child: ListView.builder(
-                padding: const EdgeInsets.only(
-                  bottom: workspaceEditorBottomScrollPadding,
-                ),
-                itemCount: rows.length,
-                itemBuilder: (context, index) =>
-                    rows.rowAt(index).build(context),
-              ),
-            );
-            return KeyedSubtree(
-              key: PageStorageKey<String>('$scrollStorageKey:editable:h'),
-              child: SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: SizedBox(
-                  width: contentWidth,
-                  height: constraints.maxHeight,
-                  child: list,
-                ),
-              ),
+            return _EditableSideBySideDiffList(
+              key: ValueKey<String>(scrollStorageKey),
+              navigation: navigation,
+              rows: rows,
+              contentWidth: math.max(constraints.maxWidth, 720.0),
             );
           }
           // Keyed per mode: a mode switch gets a fresh list and controllers.
           return _ReadOnlySideBySideDiffList(
+            navigation: navigation,
             key: ValueKey<String>(scrollStorageKey),
             rows: rows,
             scrollStorageKey: scrollStorageKey,
@@ -647,8 +717,10 @@ class const _DiffFileList({
       );
     }
     final rows = buildRows();
+    registerTargets(rows);
     // Keyed per mode: a mode switch gets a fresh list and controllers.
     return _SingleColumnDiffList(
+      navigation: navigation,
       key: ValueKey<String>(scrollStorageKey),
       rows: rows,
       selectionEnabled: true,
@@ -760,11 +832,13 @@ class _DiffRows {
       _spanEnds.add(total);
     }
     length = total;
+    navigationTargets = _diffNavigationTargets(_spans);
   }
 
   final List<_DiffRowSpan> _spans;
   late final List<int> _spanEnds;
   late final int length;
+  late final List<_DiffNavigationTarget> navigationTargets;
 
   _DiffRow rowAt(int index) {
     if (index < 0 || index >= length) {
@@ -786,6 +860,7 @@ class _DiffRows {
 
   factory _DiffRows.fromResult(
     GitDiffResult result, {
+    required _DiffChangeNavigator navigation,
     required Map<GitDiffFile, _FullFileContents> fullFileContents,
     Set<String> fullFilePreviewLimitedPaths = const <String>{},
     required String sourcePath,
@@ -858,6 +933,10 @@ class _DiffRows {
                 viewportHeight: editableViewportHeight,
                 onChanged: (text) => onEditableChanged(file, text),
                 onSave: () => onEditableSave(file),
+                navigation: navigation,
+                key: ValueKey<String>(
+                  'editable-diff:$scrollStorageKey:${file.path}',
+                ),
                 scrollStorageKey: scrollStorageKey == null
                     ? null
                     : '$scrollStorageKey:file:${file.path}',

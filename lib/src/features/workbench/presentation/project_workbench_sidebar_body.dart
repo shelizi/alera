@@ -123,7 +123,10 @@ class const _SidebarBody({
           leadingIcon: AleraIcons.archive,
           label: 'Archived',
           count: row.workspaceCount,
-          expanded: !archivedCollapsedKeys.contains(row.key),
+          expanded: !archivedSidebarSectionIsCollapsed(
+            row.key,
+            archivedCollapsedKeys,
+          ),
           showTopDivider: row.indent == 0 && previous is WorkbenchWorkspaceRow,
           onToggle: () => ref
               .read(workbenchArchivedSectionsCollapseProvider.notifier)
