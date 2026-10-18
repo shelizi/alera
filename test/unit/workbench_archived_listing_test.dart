@@ -274,6 +274,7 @@ void main() {
           .map((row) => row.workspace.id),
       <String>['old-side', 'pinned-old'],
     );
+  });
   test('Archived starts hidden and one scope can expand', () {
     final rows = buildSidebarRows(_state());
     final initial = collapseArchivedSidebarRows(rows, const <String>{
