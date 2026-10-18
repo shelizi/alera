@@ -4,6 +4,7 @@ import 'package:alera/src/features/agent_status/application/agent_status_control
 import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 import 'package:alera/src/features/settings/application/settings_controller.dart';
 import 'package:alera/src/features/workbench/application/workbench_controller.dart';
+import 'package:alera/src/features/workbench/application/workbench_listing.dart';
 import 'package:alera/src/features/workbench/application/workbench_state.dart';
 import 'package:alera/src/features/workbench/application/workspace_activity_controller.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
@@ -21,7 +22,9 @@ const Duration workbenchArchiveSweepInterval = Duration(hours: 1);
 class WorkbenchArchivedSectionsCollapse
     extends _$WorkbenchArchivedSectionsCollapse {
   @override
-  Set<String> build() => const <String>{};
+  Set<String> build() => const <String>{
+    workbenchArchivedInitiallyCollapsedMarker,
+  };
 
   void toggle(String key) {
     final next = Set<String>.from(state);

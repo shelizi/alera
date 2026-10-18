@@ -1,6 +1,7 @@
 import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 import 'package:alera/src/features/projects/domain/project.dart';
 import 'package:alera/src/features/workbench/application/workbench_archive_sweep.dart';
+import 'package:alera/src/features/workbench/application/workbench_listing.dart';
 import 'package:alera/src/features/workbench/application/workbench_state.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
@@ -203,16 +204,34 @@ void main() {
   });
 
   group('workbenchArchivedSectionsCollapse', () {
-    test('toggle adds then removes the header key', () {
+    test('Archived starts collapsed, can be expanded and collapsed again', () {
       final container = ProviderContainer();
       addTearDown(container.dispose);
       final provider = workbenchArchivedSectionsCollapseProvider;
 
-      expect(container.read(provider), isEmpty);
+      expect(
+        archivedSidebarSectionIsCollapsed(
+          'archived:global',
+          container.read(provider),
+        ),
+        isTrue,
+      );
       container.read(provider.notifier).toggle('archived:global');
-      expect(container.read(provider), <String>{'archived:global'});
+      expect(
+        archivedSidebarSectionIsCollapsed(
+          'archived:global',
+          container.read(provider),
+        ),
+        isFalse,
+      );
       container.read(provider.notifier).toggle('archived:global');
-      expect(container.read(provider), isEmpty);
+      expect(
+        archivedSidebarSectionIsCollapsed(
+          'archived:global',
+          container.read(provider),
+        ),
+        isTrue,
+      );
     });
   });
 }

@@ -51,34 +51,6 @@ final class _NoImplicitHorizontalScrollPhysics extends ScrollPhysics {
   bool get allowImplicitScrolling => false;
 }
 
-_LiveDiffStats _liveDiffStats(
-  String baseline,
-  String current,
-  GitDiffWhitespaceMode whitespaceMode,
-) {
-  final oldLines = _splitFullFileLines(baseline)
-      .map((line) => _normalizeLiveDiffLine(line, whitespaceMode))
-      .toList(growable: false);
-  final newLines = _splitFullFileLines(current)
-      .map((line) => _normalizeLiveDiffLine(line, whitespaceMode))
-      .toList(growable: false);
-  var prefix = 0;
-  while (prefix < oldLines.length &&
-      prefix < newLines.length &&
-      oldLines[prefix] == newLines[prefix]) {
-    prefix += 1;
-  }
-  var oldSuffix = oldLines.length;
-  var newSuffix = newLines.length;
-  while (oldSuffix > prefix &&
-      newSuffix > prefix &&
-      oldLines[oldSuffix - 1] == newLines[newSuffix - 1]) {
-    oldSuffix -= 1;
-    newSuffix -= 1;
-  }
-  return _LiveDiffStats(added: newSuffix - prefix, removed: oldSuffix - prefix);
-}
-
 String _normalizeLiveDiffLine(String line, GitDiffWhitespaceMode mode) {
   return switch (mode) {
     GitDiffWhitespaceMode.normal => line,
@@ -90,105 +62,6 @@ String _normalizeLiveDiffLine(String line, GitDiffWhitespaceMode mode) {
       line.replaceAll(RegExp(r'[ \t]+'), ' ').replaceFirst(RegExp(r' $'), ''),
     GitDiffWhitespaceMode.ignoreAll => line.replaceAll(RegExp(r'[ \t]+'), ''),
   };
-}
-
-_EditableDiffLineChanges _liveEditableDiffLineChanges(
-  String baseline,
-  String current,
-  GitDiffWhitespaceMode whitespaceMode,
-) {
-  final oldLines = _splitFullFileLines(baseline)
-      .map((line) => _normalizeLiveDiffLine(line, whitespaceMode))
-      .toList(growable: false);
-  final newLines = _splitFullFileLines(current)
-      .map((line) => _normalizeLiveDiffLine(line, whitespaceMode))
-      .toList(growable: false);
-  var prefix = 0;
-  while (prefix < oldLines.length &&
-      prefix < newLines.length &&
-      oldLines[prefix] == newLines[prefix]) {
-    prefix += 1;
-  }
-  var oldSuffix = oldLines.length;
-  var newSuffix = newLines.length;
-  while (oldSuffix > prefix &&
-      newSuffix > prefix &&
-      oldLines[oldSuffix - 1] == newLines[newSuffix - 1]) {
-    oldSuffix -= 1;
-    newSuffix -= 1;
-  }
-  return _EditableDiffLineChanges(
-    oldChangedLines: Set<int>.from(
-      Iterable<int>.generate(oldSuffix - prefix, (index) => prefix + index),
-    ),
-    newChangedLines: Set<int>.from(
-      Iterable<int>.generate(newSuffix - prefix, (index) => prefix + index),
-    ),
-  );
-}
-
-_EditableDiffLineChanges _editableDiffLineChanges(
-  GitDiffFile file,
-  String baseline,
-  String current,
-  GitDiffWhitespaceMode whitespaceMode, {
-  required bool useSourceDiff,
-}) {
-  if (!useSourceDiff) {
-    return _liveEditableDiffLineChanges(baseline, current, whitespaceMode);
-  }
-
-  final oldLineCount = _textLineCount(baseline);
-  final newLineCount = _textLineCount(current);
-  if (file.status == GitChangeStatus.added ||
-      file.status == GitChangeStatus.untracked) {
-    return _EditableDiffLineChanges(
-      oldChangedLines: const <int>{},
-      newChangedLines: Set<int>.from(Iterable<int>.generate(newLineCount)),
-    );
-  }
-
-  final oldChanged = <int>{};
-  final newChanged = <int>{};
-  int? oldLine;
-  int? newLine;
-  for (final line in file.lines) {
-    if (line.kind == GitDiffLineKind.hunk) {
-      final match = _hunkHeaderRegExp.firstMatch(line.text);
-      oldLine = int.tryParse(match?.group(1) ?? '');
-      newLine = int.tryParse(match?.group(3) ?? '');
-      if (match?.group(2) == '0') oldLine = null;
-      if (match?.group(4) == '0') newLine = null;
-      continue;
-    }
-    if (line.kind == GitDiffLineKind.header) continue;
-    if (line.kind == GitDiffLineKind.deletion) {
-      if (oldLine != null && oldLine > 0 && oldLine <= oldLineCount) {
-        oldChanged.add(oldLine - 1);
-      }
-      if (oldLine != null) oldLine += 1;
-      continue;
-    }
-    if (line.kind == GitDiffLineKind.addition) {
-      if (newLine != null && newLine > 0 && newLine <= newLineCount) {
-        newChanged.add(newLine - 1);
-      }
-      if (newLine != null) newLine += 1;
-      continue;
-    }
-    if (line.kind == GitDiffLineKind.context) {
-      if (oldLine != null) oldLine += 1;
-      if (newLine != null) newLine += 1;
-    }
-  }
-
-  if (oldChanged.isNotEmpty || newChanged.isNotEmpty || baseline == current) {
-    return _EditableDiffLineChanges(
-      oldChangedLines: oldChanged,
-      newChangedLines: newChanged,
-    );
-  }
-  return _liveEditableDiffLineChanges(baseline, current, whitespaceMode);
 }
 
 int _textLineCount(String text) {
@@ -885,8 +758,10 @@ const int _editableDiffScrollRestoreAttempts = 30;
 
 class _EditableWorkingTreeDiff extends StatefulWidget {
   const _EditableWorkingTreeDiff({
+    super.key,
     required this.file,
     required this.syntax,
+    required this.navigation,
     required this.baseline,
     required this.document,
     required this.whitespaceMode,
@@ -898,6 +773,7 @@ class _EditableWorkingTreeDiff extends StatefulWidget {
 
   final GitDiffFile file;
   final _DiffSyntaxStyle syntax;
+  final _DiffChangeNavigator navigation;
   final String baseline;
   final _EditableWorkingTreeDocument document;
   final GitDiffWhitespaceMode whitespaceMode;
@@ -1146,8 +1022,8 @@ class _EditableWorkingTreeDiffState extends State<_EditableWorkingTreeDiff> {
     }
     _leftFocusNode = FocusNode();
     _rightFocusNode = FocusNode();
-    _leftHorizontalController = ScrollController();
-    _rightHorizontalController = ScrollController();
+    _leftHorizontalController = ScrollController(keepScrollOffset: false);
+    _rightHorizontalController = ScrollController(keepScrollOffset: false);
     _leftVerticalController = ScrollController();
     _rightVerticalController = ScrollController();
     _alignment = _editableDiffAlignment(
@@ -1161,11 +1037,50 @@ class _EditableWorkingTreeDiffState extends State<_EditableWorkingTreeDiff> {
     _leftVerticalController.addListener(_syncVerticalFromLeft);
     _rightVerticalController.addListener(_syncVerticalFromRight);
     _applyAlignmentDecorations();
+    widget.navigation.addListener(_navigateToSelectedChange);
+    _navigateToSelectedChange();
+  }
+
+  void _navigateToSelectedChange() {
+    final target = widget.navigation.target;
+    if (target == null ||
+        target.editablePath != widget.file.path ||
+        target.editableLine == null) {
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final line = target.editableLine!;
+      if (_usesCodeForge) {
+        // CodeForge knows line heights and folded/aligned coordinates.
+        _leftController!.scrollToLine(line);
+        _controller!.scrollToLine(line);
+      } else {
+        for (final controller in <ScrollController>[
+          _leftVerticalController,
+          _rightVerticalController,
+        ]) {
+          if (!controller.hasClients) continue;
+          final position = controller.position;
+          controller.jumpTo(
+            (line * 18.0).clamp(
+              position.minScrollExtent,
+              position.maxScrollExtent,
+            ),
+          );
+        }
+      }
+    });
   }
 
   @override
   void didUpdateWidget(covariant _EditableWorkingTreeDiff oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.navigation != widget.navigation) {
+      oldWidget.navigation.removeListener(_navigateToSelectedChange);
+      widget.navigation.addListener(_navigateToSelectedChange);
+      _navigateToSelectedChange();
+    }
     if (!identical(oldWidget.syntax, widget.syntax)) {
       _leftFallbackController.updateSyntax(widget.syntax);
       _fallbackController.updateSyntax(widget.syntax);
@@ -1205,8 +1120,10 @@ class _EditableWorkingTreeDiffState extends State<_EditableWorkingTreeDiff> {
     final key = widget.scrollStorageKey;
     if (key != null) {
       PageStorage.maybeOf(context)?.writeState(context, <double?>[
-        for (final controller in _paneControllers)
-          controller.hasClients ? controller.offset : null,
+        for (var i = 0; i < _paneControllers.length; i++)
+          i < 2 && _paneControllers[i].hasClients
+              ? _paneControllers[i].offset
+              : null,
       ], identifier: key);
     }
     super.deactivate();
@@ -1225,6 +1142,7 @@ class _EditableWorkingTreeDiffState extends State<_EditableWorkingTreeDiff> {
       var done = true;
       final controllers = _paneControllers;
       for (var i = 0; i < controllers.length && i < offsets.length; i++) {
+        if (i >= 2) continue; // A different file always starts at x = 0.
         final offset = offsets[i];
         final controller = controllers[i];
         if (offset == null) continue;
@@ -1251,6 +1169,7 @@ class _EditableWorkingTreeDiffState extends State<_EditableWorkingTreeDiff> {
 
   @override
   void dispose() {
+    widget.navigation.removeListener(_navigateToSelectedChange);
     _controller?.removeListener(_handleEditableControllerChanged);
     _leftHorizontalController.dispose();
     _rightHorizontalController.dispose();

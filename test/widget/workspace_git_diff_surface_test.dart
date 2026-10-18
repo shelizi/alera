@@ -41,6 +41,8 @@ import '../unit/fake_git_backend.dart';
 part 'workspace_git_diff_surface_pull_request_cases.dart';
 part 'workspace_git_diff_surface_open_path_cases.dart';
 part 'workspace_git_diff_surface_reading_diff_cases.dart';
+part 'workspace_git_diff_surface_navigation_cases.dart';
+part 'workspace_git_diff_surface_horizontal_reset_cases.dart';
 part 'workspace_git_diff_surface_reading_diff_support.dart';
 part 'workspace_git_diff_surface_test_support.dart';
 
@@ -102,6 +104,8 @@ Set<Color> _textSpanBackgroundColors(InlineSpan span) {
 void main() {
   _registerWorkspaceGitDiffSurfacePullRequestTests();
   _registerWorkspaceGitDiffSurfaceReadingDiffTests();
+  _registerWorkspaceGitDiffNavigationTests();
+  _registerWorkspaceGitDiffHorizontalResetTests();
   testWidgets('read-only diff scrolls past the final line in both layouts', (
     tester,
   ) async {
@@ -199,6 +203,13 @@ void main() {
     expect(find.text('+line 0'), findsOneWidget);
     expect(find.text('+line 5000'), findsNothing);
     expect(find.text('+line 6000'), findsNothing);
+    // Initial navigation may reveal the first changed row below the file
+    // header. Scroll back to its header when checking the file-wide count.
+    final list = tester.widget<ListView>(
+      find.byKey(const ValueKey<String>('git-diff-single-column-list')),
+    );
+    list.controller!.jumpTo(0);
+    await tester.pumpAndSettle();
     expect(find.text('+6005'), findsOneWidget);
     expect(find.text('-0'), findsNothing);
 

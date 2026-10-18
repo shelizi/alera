@@ -217,6 +217,25 @@ void main() {
     expect(countVisibleWorkspaces(state), 0);
   });
 
+  test('search reveals archived matches without changing default collapse', () {
+    const collapsed = <String>{workbenchArchivedInitiallyCollapsedMarker};
+    final searching = _state().copyWith(searchQuery: 'stale');
+    final visible = collapseArchivedSidebarRows(
+      buildSidebarRows(searching),
+      archivedSidebarCollapseKeysForQuery(collapsed, searching.searchQuery),
+    );
+    expect(_rowKeys(visible), <String>[
+      'project:orca',
+      'archived:orca',
+      'workspace:all:stale',
+    ]);
+    expect(
+      archivedSidebarCollapseKeysForQuery(collapsed, '   '),
+      collapsed,
+      reason: 'clearing search restores the original collapsed state',
+    );
+  });
+
   test('a project with only archived workspaces still renders its header', () {
     final rows = buildSidebarRows(_state().copyWith(searchQuery: 'old-side'));
 
@@ -255,6 +274,35 @@ void main() {
           .map((row) => row.workspace.id),
       <String>['old-side', 'pinned-old'],
     );
+  test('Archived starts hidden and one scope can expand', () {
+    final rows = buildSidebarRows(_state());
+    final initial = collapseArchivedSidebarRows(rows, const <String>{
+      workbenchArchivedInitiallyCollapsedMarker,
+    });
+    expect(_rowKeys(initial), <String>[
+      'project:alera',
+      'workspace:all:alera-main',
+      'workspace:all:feature',
+      'archived:alera',
+      'project:orca',
+      'workspace:all:orca-main',
+      'archived:orca',
+    ]);
+    final expanded = collapseArchivedSidebarRows(rows, const <String>{
+      workbenchArchivedInitiallyCollapsedMarker,
+      'archived:alera',
+    });
+    expect(_rowKeys(expanded), <String>[
+      'project:alera',
+      'workspace:all:alera-main',
+      'workspace:all:feature',
+      'archived:alera',
+      'workspace:all:old-side',
+      'workspace:all:pinned-old',
+      'project:orca',
+      'workspace:all:orca-main',
+      'archived:orca',
+    ]);
   });
 
   test('collapseArchivedSidebarRows hides only the collapsed scope', () {

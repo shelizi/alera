@@ -59,9 +59,13 @@ class const _SidebarBody({
     final installedEditors =
         ref.watch(installedExternalEditorsProvider).value ??
         const <ExternalEditorSpec>[];
+    final effectiveArchivedCollapsedKeys = archivedSidebarCollapseKeysForQuery(
+      archivedCollapsedKeys,
+      state.searchQuery,
+    );
     final visibleRows = collapseArchivedSidebarRows(
       rows,
-      archivedCollapsedKeys,
+      effectiveArchivedCollapsedKeys,
     );
     return ListView.builder(
       padding: const EdgeInsets.only(
@@ -77,7 +81,7 @@ class const _SidebarBody({
             ref,
             visibleRows,
             index,
-            archivedCollapsedKeys,
+            effectiveArchivedCollapsedKeys,
             resolvedEditor,
             installedEditors,
           ),
@@ -127,7 +131,10 @@ class const _SidebarBody({
           leadingIcon: AleraIcons.archive,
           label: 'Archived',
           count: row.workspaceCount,
-          expanded: !archivedCollapsedKeys.contains(row.key),
+          expanded: !archivedSidebarSectionIsCollapsed(
+            row.key,
+            archivedCollapsedKeys,
+          ),
           showTopDivider: row.indent == 0 && previous is WorkbenchWorkspaceRow,
           onToggle: () => ref
               .read(workbenchArchivedSectionsCollapseProvider.notifier)

@@ -278,6 +278,22 @@ Set<String> defaultCollapsedArchivedSidebarKeys(
     if (row is WorkbenchArchivedHeaderRow && !expandedKeys.contains(row.key))
       row.key,
 };
+/// New sessions collapse Archived groups until they are explicitly expanded.
+/// A named key alongside this marker represents one expanded exception.
+/// Existing explicit collapsed sets without the marker stay compatible.
+const String workbenchArchivedInitiallyCollapsedMarker = 'archived:*';
+
+/// Search temporarily reveals archived matches; it must not mutate the
+/// user's per-session expanded/collapsed Archived groups.
+Set<String> archivedSidebarCollapseKeysForQuery(
+  Set<String> collapsedKeys,
+  String searchQuery,
+) => searchQuery.trim().isEmpty ? collapsedKeys : const <String>{};
+
+bool archivedSidebarSectionIsCollapsed(String key, Set<String> keys) =>
+    keys.contains(workbenchArchivedInitiallyCollapsedMarker)
+    ? !keys.contains(key)
+    : keys.contains(key);
 
 /// Drops the workspace rows owned by collapsed Archived group headers.
 /// [collapsedKeys] holds [WorkbenchArchivedHeaderRow.key] values; the keys are
@@ -293,7 +309,7 @@ List<WorkbenchSidebarRow> collapseArchivedSidebarRows(
   final result = <WorkbenchSidebarRow>[];
   for (final row in rows) {
     if (row is WorkbenchArchivedHeaderRow) {
-      hiding = collapsedKeys.contains(row.key);
+      hiding = archivedSidebarSectionIsCollapsed(row.key, collapsedKeys);
       result.add(row);
       continue;
     }

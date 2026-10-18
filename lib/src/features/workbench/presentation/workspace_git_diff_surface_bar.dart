@@ -1,6 +1,7 @@
 part of 'workspace_git_diff_surface.dart';
 
 class const _GitDiffBar({
+  required final _DiffChangeNavigator navigation,
   required final String title,
   required final String? filePath,
   required final VoidCallback onRefresh,
@@ -129,6 +130,34 @@ class const _GitDiffBar({
                     fontFamily: 'JetBrains Mono',
                   ),
                 ),
+              ),
+            ),
+            const SizedBox(width: AleraTokens.space2),
+            AnimatedBuilder(
+              animation: navigation,
+              builder: (context, _) => Row(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  AleraIconButton(
+                    tooltip: 'Previous Difference',
+                    icon: AleraIcons.arrowUp,
+                    onPressed: navigation.canPrevious
+                        ? () => navigation.navigate(-1)
+                        : null,
+                  ),
+                  if (navigation.count > 0)
+                    Text(
+                      '${navigation.selected + 1}/${navigation.count}',
+                      style: Theme.of(context).textTheme.labelSmall,
+                    ),
+                  AleraIconButton(
+                    tooltip: 'Next Difference',
+                    icon: AleraIcons.arrowDown,
+                    onPressed: navigation.canNext
+                        ? () => navigation.navigate(1)
+                        : null,
+                  ),
+                ],
               ),
             ),
             const SizedBox(width: AleraTokens.space2),

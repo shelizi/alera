@@ -37,11 +37,14 @@ import 'package:alera/src/shared/infra/git/git_providers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
+import 'package:scroll_to_index/scroll_to_index.dart';
 import 'package:code_forge/code_forge.dart' as code_forge;
 import 'package:code_forge/code_forge/syntax_highlighter.dart'
     as code_forge_syntax;
 
 part 'workspace_git_diff_surface_rows.dart';
+part 'workspace_git_diff_surface_navigation.dart';
+part 'workspace_git_diff_surface_editable_list.dart';
 part 'workspace_git_diff_surface_bar.dart';
 part 'workspace_git_diff_surface_loading.dart';
 part 'workspace_git_diff_surface_syntax.dart';
@@ -80,6 +83,8 @@ class _WorkspaceGitDiffSurfaceState
   bool _readingDiffCancelRequested = false;
   int _readingDiffGeneration = 0;
   int _diffLoadGeneration = 0;
+  int _selectionRevision = 0;
+  final _DiffChangeNavigator _changeNavigator = _DiffChangeNavigator();
   GitDiffContentMode? _overrideContentMode;
   GitDiffPresentationMode? _overridePresentationMode;
   WorkspaceTextEncodingSelection _encodingSelection =
@@ -209,6 +214,8 @@ class _WorkspaceGitDiffSurfaceState
     if (oldWidget.workspace.path != widget.workspace.path ||
         oldWidget.tab.id != widget.tab.id ||
         _diffSelectionChanged(oldWidget.tab, widget.tab)) {
+      _selectionRevision += 1;
+      _changeNavigator.reset();
       _load();
     }
   }
@@ -243,6 +250,7 @@ class _WorkspaceGitDiffSurfaceState
       syntax.dispose();
     }
     _diffSyntaxStyles.clear();
+    _changeNavigator.dispose();
     super.dispose();
   }
 
@@ -288,6 +296,7 @@ class _WorkspaceGitDiffSurfaceState
         crossAxisAlignment: .stretch,
         children: <Widget>[
           _GitDiffBar(
+            navigation: _changeNavigator,
             title: widget.tab.title,
             filePath: filePath,
             contentMode: contentMode,
@@ -371,6 +380,7 @@ class _WorkspaceGitDiffSurfaceState
                       }
                       final isCommitDiff = _isCommitBackedDiff;
                       return _DiffFileList(
+                        navigation: _changeNavigator,
                         result: result,
                         fullFileContents: _fullFileContents,
                         fullFilePreviewLimitedPaths:
@@ -392,7 +402,7 @@ class _WorkspaceGitDiffSurfaceState
                         presentationMode: presentationMode,
                         whitespaceMode: _whitespaceMode,
                         scrollStorageId:
-                            'git-diff:${widget.workspace.id}:${widget.tab.id}',
+                            'git-diff:${widget.workspace.id}:${widget.tab.id}:${filePath ?? '*'}:$_selectionRevision',
                         syntaxForPath: (path) => _diffSyntaxStyleForPath(
                           filePath: path,
                           themeName: editorThemeName,
