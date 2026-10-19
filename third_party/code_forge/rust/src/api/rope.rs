@@ -58,7 +58,16 @@ fn identifier_part_pattern() -> &'static Regex {
 }
 
 fn is_identifier_part(ch: Option<char>) -> bool {
-    ch.is_some_and(|value| identifier_part_pattern().is_match(&value.to_string()))
+    ch.is_some_and(|value| {
+        if value.is_ascii() {
+            // The regex character class is exactly [A-Za-z0-9_$] for ASCII.
+            // Avoid allocating one-char strings and invoking Unicode regexes
+            // for both boundaries of every common ASCII occurrence.
+            value.is_ascii_alphanumeric() || value == '_' || value == '$'
+        } else {
+            identifier_part_pattern().is_match(&value.to_string())
+        }
+    })
 }
 
 fn selected_occurrences(
@@ -123,29 +132,45 @@ fn selected_occurrences(
     let selected_length = selected.chars().count();
     let mut result = Vec::with_capacity(max_matches.min(64));
     for line_index in first_line..=last_line {
-        let source = if line_index == selected_line_index {
-            selected_line.clone()
+        let line = rope.line(line_index);
+        let source: std::borrow::Cow<'_, str> = if line_index == selected_line_index {
+            std::borrow::Cow::Borrowed(selected_line.as_str())
         } else {
-            let line = rope.line(line_index);
             if line.len_chars() > MAX_LINE_UTF16 {
                 continue;
             }
-            let mut value = line.to_string();
-            trim_line_ending(&mut value);
-            value
+            if let Some(contiguous) = line.as_str() {
+                // A normal source line often resides in one Rope chunk. Avoid
+                // allocating a new String for every line in the search window.
+                std::borrow::Cow::Borrowed(trim_line_ending_ref(contiguous))
+            } else {
+                // Preserve behavior for lines spanning multiple Rope chunks.
+                let mut value = line.to_string();
+                trim_line_ending(&mut value);
+                std::borrow::Cow::Owned(value)
+            }
         };
         if source.len() < selected.len() || source.encode_utf16().count() > MAX_LINE_UTF16 {
             continue;
         }
+        // match_indices reports ordered, non-overlapping byte ranges. Advance
+        // Unicode-scalar positions from the previous match instead of
+        // recounting every prefix from the start of the line (quadratic for
+        // dense selections on long lines).
+        let mut previous_byte_end = 0;
+        let mut column_at_previous_end = 0;
         for (byte_index, _) in source.match_indices(&selected) {
+            let column =
+                column_at_previous_end + source[previous_byte_end..byte_index].chars().count();
             let byte_end = byte_index + selected.len();
+            previous_byte_end = byte_end;
+            column_at_previous_end = column + selected_length;
             if whole_identifier
                 && (is_identifier_part(source[..byte_index].chars().next_back())
                     || is_identifier_part(source[byte_end..].chars().next()))
             {
                 continue;
             }
-            let column = source[..byte_index].chars().count();
             if line_index == selected_line_index && column == start_column {
                 continue;
             }
@@ -160,6 +185,12 @@ fn selected_occurrences(
         }
     }
     result
+}
+
+fn trim_line_ending_ref(line: &str) -> &str {
+    line.strip_suffix("\r\n")
+        .or_else(|| line.strip_suffix('\n'))
+        .unwrap_or(line)
 }
 
 fn trim_line_ending(line: &mut String) {
@@ -783,6 +814,258 @@ mod tests {
 #[cfg(test)]
 mod selected_occurrences_tests {
     use super::*;
+
+    // Preserve the previous scanner for parity tests and native A/B timings.
+    // Exact old regex-based boundary check for a true pre-optimization A/B,
+    // independent of the new allocation-free ASCII fast path.
+    fn reference_identifier_part(ch: Option<char>) -> bool {
+        ch.is_some_and(|value| identifier_part_pattern().is_match(&value.to_string()))
+    }
+
+    fn reference_selected_occurrences(
+        rope: &RustRope,
+        start: usize,
+        end: usize,
+        large_file_mode: bool,
+        max_matches: usize,
+    ) -> Vec<SelectedOccurrence> {
+        const MAX_SELECTION: usize = 64;
+        const MAX_LINE_UTF16: usize = 16 * 1024;
+        const LARGE_RADIUS: usize = 160;
+        if start >= end || end > rope.len_chars() || end - start > MAX_SELECTION || max_matches == 0
+        {
+            return vec![];
+        }
+        let selected_line_index = rope.char_to_line(start);
+        let line_start = rope.line_to_char(selected_line_index);
+        let mut selected_line = rope.line(selected_line_index).to_string();
+        trim_line_ending(&mut selected_line);
+        if selected_line.encode_utf16().count() > MAX_LINE_UTF16 {
+            return vec![];
+        }
+        let start_column = start - line_start;
+        let end_column = end - line_start;
+        let selected_line_chars: Vec<char> = selected_line.chars().collect();
+        if end_column > selected_line_chars.len() {
+            return vec![];
+        }
+        let selected: String = selected_line_chars[start_column..end_column]
+            .iter()
+            .collect();
+        if selected.trim().is_empty() {
+            return vec![];
+        }
+        let whole_identifier = identifier_pattern().is_match(&selected);
+        if whole_identifier
+            && (reference_identifier_part(
+                start_column
+                    .checked_sub(1)
+                    .and_then(|idx| selected_line_chars.get(idx))
+                    .copied(),
+            ) || reference_identifier_part(selected_line_chars.get(end_column).copied()))
+        {
+            return vec![];
+        }
+        if !whole_identifier && selected.chars().count() < 2 {
+            return vec![];
+        }
+
+        let first_line = if large_file_mode {
+            selected_line_index.saturating_sub(LARGE_RADIUS)
+        } else {
+            0
+        };
+        let last_line = if large_file_mode {
+            selected_line_index
+                .saturating_add(LARGE_RADIUS)
+                .min(rope.len_lines() - 1)
+        } else {
+            rope.len_lines() - 1
+        };
+        let selected_length = selected.chars().count();
+        let mut result = Vec::with_capacity(max_matches.min(64));
+        for line_index in first_line..=last_line {
+            let source = if line_index == selected_line_index {
+                selected_line.clone()
+            } else {
+                let line = rope.line(line_index);
+                if line.len_chars() > MAX_LINE_UTF16 {
+                    continue;
+                }
+                let mut value = line.to_string();
+                trim_line_ending(&mut value);
+                value
+            };
+            if source.len() < selected.len() || source.encode_utf16().count() > MAX_LINE_UTF16 {
+                continue;
+            }
+            for (byte_index, _) in source.match_indices(&selected) {
+                let byte_end = byte_index + selected.len();
+                if whole_identifier
+                    && (reference_identifier_part(source[..byte_index].chars().next_back())
+                        || reference_identifier_part(source[byte_end..].chars().next()))
+                {
+                    continue;
+                }
+                let column = source[..byte_index].chars().count();
+                if line_index == selected_line_index && column == start_column {
+                    continue;
+                }
+                result.push(SelectedOccurrence {
+                    line: line_index,
+                    start_column: column,
+                    end_column: column + selected_length,
+                });
+                if result.len() >= max_matches {
+                    return result;
+                }
+            }
+        }
+        result
+    }
+
+    #[test]
+    fn ascii_identifier_fast_path_matches_original_regex() {
+        for value in 0u8..=127 {
+            let ch = char::from(value);
+            assert_eq!(
+                is_identifier_part(Some(ch)),
+                identifier_part_pattern().is_match(&ch.to_string()),
+                "ASCII character U+{:04X}",
+                value,
+            );
+        }
+        for ch in ['中', '名', '٣', '９', 'é', '😀', '\u{301}', '∑'] {
+            assert_eq!(
+                is_identifier_part(Some(ch)),
+                identifier_part_pattern().is_match(&ch.to_string()),
+                "Unicode character U+{:04X}",
+                ch as u32,
+            );
+        }
+    }
+
+    #[test]
+    fn selected_occurrence_optimization_matches_original() {
+        let fixtures = [
+            (
+                "token tokenized token_token\ntoken + token\nTOKEN token".to_string(),
+                0,
+                5,
+            ),
+            ("😀 名稱 名稱\n名稱😀 名稱\n名字符號".to_string(), 2, 4),
+            ("$value $value $valueSuffix\n$value".to_string(), 0, 6),
+            ("foo.bar foo.bar fooxbar\nfoo.bar".to_string(), 0, 7),
+            ("token ".repeat(1200), 0, 5),
+            ("😀 名稱 ".repeat(1100), 2, 4),
+            ("token_suffix ".repeat(900), 0, 5),
+            (format!("token\n{}\ntoken", "x".repeat(20_000)), 0, 5),
+            (format!("token\n{}\ntoken", "😀".repeat(20_000)), 0, 5),
+            (format!("token\n{}", "missing\n".repeat(2500)), 0, 5),
+            ("αβγ αβγ αβγ\nend".to_string(), 0, 3),
+            (
+                "token\nprefix_token token_suffix 😀token token\ntoken".to_string(),
+                0,
+                5,
+            ),
+            (
+                format!("token\r\n{}\r\ntoken", "😀 token ".repeat(750)),
+                0,
+                5,
+            ),
+        ];
+        for (index, (text, start, end)) in fixtures.iter().enumerate() {
+            let rope = RustRope::from_str(text);
+            for large in [false, true] {
+                for maximum in [0, 1, 2, 5, 50, 400] {
+                    assert_eq!(
+                        selected_occurrences(&rope, *start, *end, large, maximum),
+                        reference_selected_occurrences(&rope, *start, *end, large, maximum),
+                        "fixture={index} large={large} max={maximum}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "manual Rust only selected-occurrence old/new scan benchmark"]
+    fn profile_selected_occurrence_scanner() {
+        use std::{hint::black_box, time::Instant};
+        let cases = [
+            ("ascii_dense", "token ".repeat(900), 0, 5, false, 150),
+            ("unicode_dense", "😀 名稱 ".repeat(900), 2, 4, false, 150),
+            (
+                "boundary_rejections",
+                "token_suffix ".repeat(850),
+                0,
+                5,
+                false,
+                100,
+            ),
+            (
+                "multi_line",
+                format!("token\n{}", "misc blah blah\n".repeat(3500)),
+                0,
+                5,
+                false,
+                40,
+            ),
+        ];
+        for (label, text, start, end, large, iterations) in cases {
+            let rope = RustRope::from_str(&text);
+            let mut baseline = Vec::new();
+            let mut optimized = Vec::new();
+            for round in 0..8 {
+                let mut run = |legacy: bool| {
+                    let began = Instant::now();
+                    for _ in 0..iterations {
+                        let hits = if legacy {
+                            reference_selected_occurrences(
+                                black_box(&rope),
+                                black_box(start),
+                                black_box(end),
+                                black_box(large),
+                                black_box(400),
+                            )
+                        } else {
+                            selected_occurrences(
+                                black_box(&rope),
+                                black_box(start),
+                                black_box(end),
+                                black_box(large),
+                                black_box(400),
+                            )
+                        };
+                        black_box(hits);
+                    }
+                    if round > 0 {
+                        let micros =
+                            began.elapsed().as_secs_f64() * 1_000_000.0 / iterations as f64;
+                        if legacy {
+                            &mut baseline
+                        } else {
+                            &mut optimized
+                        }
+                        .push(micros);
+                    }
+                };
+                if round % 2 == 0 {
+                    run(true);
+                    run(false);
+                } else {
+                    run(false);
+                    run(true);
+                }
+            }
+            baseline.sort_by(f64::total_cmp);
+            optimized.sort_by(f64::total_cmp);
+            eprintln!(
+                "OCCURRENCE_SCAN {label}: old_median_us={:.1} new_median_us={:.1} ratio={:.2} samples=7",
+                baseline[3], optimized[3], baseline[3] / optimized[3]
+            );
+        }
+    }
 
     #[test]
     fn matches_identifiers_without_prefixes_or_case_folding() {
