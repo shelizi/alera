@@ -115,6 +115,155 @@ fn pair(left: &str, right: &str) -> (Vec<GitIntralineRange>, Vec<GitIntralineRan
     (changed_ranges(&left, &lc), changed_ranges(&right, &rc))
 }
 
+// Match replacement lines by content rather than their position in a +/- hunk.
+// One inserted line must not shift every subsequent character highlight.
+const MAX_LINE_ALIGNMENT_CELLS: usize = 4096;
+const MAX_LINE_SIMILARITY_CELLS: usize = 4096;
+
+fn line_similarity_score(left: &str, right: &str) -> i32 {
+    if left == right {
+        return 2000; // Preserve exact matches even in otherwise ambiguous hunks.
+    }
+    let left: Vec<char> = left.trim().chars().collect();
+    let right: Vec<char> = right.trim().chars().collect();
+    if left.is_empty() || right.is_empty() {
+        return 0;
+    }
+    let mut prefix = 0;
+    while prefix < left.len() && prefix < right.len() && left[prefix] == right[prefix] {
+        prefix += 1;
+    }
+    let mut suffix = 0;
+    while suffix < left.len() - prefix
+        && suffix < right.len() - prefix
+        && left[left.len() - suffix - 1] == right[right.len() - suffix - 1]
+    {
+        suffix += 1;
+    }
+    let anchored = prefix + suffix;
+    let lcs = if left.len().saturating_mul(right.len()) <= MAX_LINE_SIMILARITY_CELLS {
+        let width = right.len() + 1;
+        let mut below = vec![0usize; width];
+        let mut row = vec![0usize; width];
+        for i in (0..left.len()).rev() {
+            row[right.len()] = 0;
+            for j in (0..right.len()).rev() {
+                row[j] = if left[i] == right[j] {
+                    1 + below[j + 1]
+                } else {
+                    below[j].max(row[j + 1])
+                };
+            }
+            std::mem::swap(&mut row, &mut below);
+        }
+        below[0]
+    } else {
+        // Bounded work on large lines; only trust the unchanged edges.
+        anchored
+    };
+
+    // Combine subsequence similarity with ordered prefix/suffix evidence.
+    // Unrelated lines sharing indentation/punctuation alone must not pair.
+    let score = (200 * (7 * lcs + 3 * anchored) / (left.len() + right.len())) as i32;
+    if score >= 480 {
+        score
+    } else {
+        0
+    }
+}
+
+fn align_large_change_block(left: &[&str], right: &[&str]) -> Vec<(Option<usize>, Option<usize>)> {
+    use std::collections::{HashMap, VecDeque};
+
+    // Never guess replacement pairs for oversized hunks. Keep exact common
+    // lines as anchors and display all remaining lines as true +/- changes.
+    let mut positions: HashMap<&str, VecDeque<usize>> = HashMap::new();
+    for (index, &text) in right.iter().enumerate() {
+        positions.entry(text).or_default().push_back(index);
+    }
+    let mut result = Vec::with_capacity(left.len() + right.len());
+    let mut next_right = 0;
+    for (left_index, &text) in left.iter().enumerate() {
+        let match_right = positions.get_mut(text).and_then(|candidates| {
+            while candidates.front().is_some_and(|&index| index < next_right) {
+                candidates.pop_front();
+            }
+            candidates.pop_front()
+        });
+        if let Some(right_index) = match_right {
+            for index in next_right..right_index {
+                result.push((None, Some(index)));
+            }
+            result.push((Some(left_index), Some(right_index)));
+            next_right = right_index + 1;
+        } else {
+            result.push((Some(left_index), None));
+        }
+    }
+    for index in next_right..right.len() {
+        result.push((None, Some(index)));
+    }
+    result
+}
+
+pub(super) fn align_changed_lines(
+    left: &[&str],
+    right: &[&str],
+) -> Vec<(Option<usize>, Option<usize>)> {
+    if left.len().saturating_mul(right.len()) > MAX_LINE_ALIGNMENT_CELLS {
+        return align_large_change_block(left, right);
+    }
+    let height = left.len();
+    let width = right.len();
+    let stride = width + 1;
+    let mut scores = vec![0i32; height * width];
+    let mut best = vec![0i32; (height + 1) * stride];
+    for i in (0..height).rev() {
+        for j in (0..width).rev() {
+            let score = line_similarity_score(left[i], right[j]);
+            scores[i * width + j] = score;
+            let pair = if score > 0 {
+                score + best[(i + 1) * stride + j + 1]
+            } else {
+                0
+            };
+            best[i * stride + j] = pair
+                .max(best[(i + 1) * stride + j])
+                .max(best[i * stride + j + 1]);
+        }
+    }
+
+    let mut result = Vec::with_capacity(height + width);
+    let (mut i, mut j) = (0, 0);
+    while i < height || j < width {
+        if i == height {
+            result.push((None, Some(j)));
+            j += 1;
+            continue;
+        }
+        if j == width {
+            result.push((Some(i), None));
+            i += 1;
+            continue;
+        }
+        let score = scores[i * width + j];
+        let skip_left = best[(i + 1) * stride + j];
+        let skip_right = best[i * stride + j + 1];
+        if score > 0 && score + best[(i + 1) * stride + j + 1] >= skip_left.max(skip_right) {
+            result.push((Some(i), Some(j)));
+            i += 1;
+            j += 1;
+        } else if skip_left >= skip_right {
+            result.push((Some(i), None));
+            i += 1;
+        } else {
+            result.push((None, Some(j)));
+            j += 1;
+        }
+    }
+    result
+}
+
 pub fn project(lines: &[GitDiffLine]) -> Vec<Vec<GitIntralineRange>> {
     let mut result = vec![vec![]; lines.len()];
     let mut index = 0;
@@ -128,22 +277,29 @@ pub fn project(lines: &[GitDiffLine]) -> Vec<Vec<GitIntralineRange>> {
             while index < lines.len() && lines[index].kind == GitDiffLineKind::Addition {
                 index += 1;
             }
-            let count = (addition_start - deletion_start).min(index - addition_start);
-            for offset in 0..count {
-                let l = deletion_start + offset;
-                let r = addition_start + offset;
-                let (lr, rr) = pair(
-                    lines[l].text.get(1..).unwrap_or(""),
-                    lines[r].text.get(1..).unwrap_or(""),
-                );
-                result[l] = lr;
-                result[r] = rr;
-            }
-            for i in deletion_start + count..addition_start {
-                result[i] = full(lines[i].text.get(1..).unwrap_or(""));
-            }
-            for i in addition_start + count..index {
-                result[i] = full(lines[i].text.get(1..).unwrap_or(""));
+            let deletions: Vec<_> = lines[deletion_start..addition_start]
+                .iter()
+                .map(|line| line.text.get(1..).unwrap_or(""))
+                .collect();
+            let additions: Vec<_> = lines[addition_start..index]
+                .iter()
+                .map(|line| line.text.get(1..).unwrap_or(""))
+                .collect();
+            for (left_index, right_index) in align_changed_lines(&deletions, &additions) {
+                match (left_index, right_index) {
+                    (Some(l), Some(r)) => {
+                        let (lr, rr) = pair(deletions[l], additions[r]);
+                        result[deletion_start + l] = lr;
+                        result[addition_start + r] = rr;
+                    }
+                    (Some(l), None) => {
+                        result[deletion_start + l] = full(deletions[l]);
+                    }
+                    (None, Some(r)) => {
+                        result[addition_start + r] = full(additions[r]);
+                    }
+                    (None, None) => unreachable!(),
+                }
             }
         } else {
             if lines[index].kind == GitDiffLineKind::Addition {
@@ -187,6 +343,52 @@ mod tests {
         assert_eq!(
             pair(&l, &r).0,
             vec![GitIntralineRange { start: 1, end: 271 }]
+        );
+    }
+    #[test]
+    fn inserted_line_does_not_shift_intraline_pairs() {
+        let make = |text: &str, kind| GitDiffLine {
+            text: text.to_owned(),
+            kind,
+        };
+        let lines = vec![
+            make("-alpha = 1;", GitDiffLineKind::Deletion),
+            make("-beta = 2;", GitDiffLineKind::Deletion),
+            make("+log();", GitDiffLineKind::Addition),
+            make("+alpha = 10;", GitDiffLineKind::Addition),
+            make("+beta = 2;", GitDiffLineKind::Addition),
+        ];
+        let ranges = project(&lines);
+        assert!(ranges[0].is_empty(), "unchanged old characters highlighted");
+        assert!(ranges[1].is_empty(), "identical old line highlighted");
+        assert_eq!(ranges[2], full("log();"));
+        assert_eq!(ranges[3], vec![GitIntralineRange { start: 9, end: 10 }]);
+        assert!(ranges[4].is_empty(), "identical new line highlighted");
+    }
+
+    #[test]
+    fn side_by_side_alignment_matches_intraline_pairs() {
+        let make = |text: &str, kind| GitDiffLine {
+            text: text.to_owned(),
+            kind,
+        };
+        let lines = vec![
+            make("@@ -1,2 +1,3 @@", GitDiffLineKind::Hunk),
+            make("-alpha = 1;", GitDiffLineKind::Deletion),
+            make("-beta = 2;", GitDiffLineKind::Deletion),
+            make("+log();", GitDiffLineKind::Addition),
+            make("+alpha = 10;", GitDiffLineKind::Addition),
+            make("+beta = 2;", GitDiffLineKind::Addition),
+        ];
+        let rows = super::super::git_diff_impl::side_by_side_projection(&lines);
+        let pairs: Vec<_> = rows
+            .iter()
+            .filter(|row| row.kind == super::super::GitDiffSideBySideRowKind::Pair)
+            .map(|row| (row.left_line_index, row.right_line_index))
+            .collect();
+        assert_eq!(
+            pairs,
+            vec![(None, Some(3)), (Some(1), Some(4)), (Some(2), Some(5))]
         );
     }
 }

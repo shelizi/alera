@@ -202,6 +202,122 @@ _IntralinePair _intralinePairForSides(
   );
 }
 
+const int _maxDiffLineAlignmentCells = 4096;
+
+int _diffLineMatchScore(String left, String right) {
+  if (left == right) return 2000;
+  final a = left.trim().runes.toList(growable: false);
+  final b = right.trim().runes.toList(growable: false);
+  if (a.isEmpty || b.isEmpty) return 0;
+  var prefix = 0;
+  while (prefix < a.length && prefix < b.length && a[prefix] == b[prefix]) {
+    prefix++;
+  }
+  var suffix = 0;
+  while (suffix < a.length - prefix &&
+      suffix < b.length - prefix &&
+      a[a.length - suffix - 1] == b[b.length - suffix - 1]) {
+    suffix++;
+  }
+  final anchored = prefix + suffix;
+  var common = anchored;
+  if (a.length * b.length <= 4096) {
+    final below = List<int>.filled(b.length + 1, 0);
+    final row = List<int>.filled(b.length + 1, 0);
+    for (var i = a.length - 1; i >= 0; i--) {
+      row[b.length] = 0;
+      for (var j = b.length - 1; j >= 0; j--) {
+        row[j] = a[i] == b[j]
+            ? 1 + below[j + 1]
+            : math.max(below[j], row[j + 1]);
+      }
+      for (var j = 0; j <= b.length; j++) {
+        below[j] = row[j];
+      }
+    }
+    common = below[0];
+  }
+  final score = 200 * (7 * common + 3 * anchored) ~/ (a.length + b.length);
+  return score >= 480 ? score : 0;
+}
+
+List<(int?, int?)> _alignDiffChangedLines(
+  List<String> oldLines,
+  List<String> newLines,
+) {
+  final height = oldLines.length;
+  final width = newLines.length;
+  if (height * width > _maxDiffLineAlignmentCells) {
+    final positions = <String, List<int>>{};
+    for (var j = 0; j < width; j++) {
+      positions.putIfAbsent(newLines[j], () => <int>[]).add(j);
+    }
+    final result = <(int?, int?)>[];
+    var next = 0;
+    for (var i = 0; i < height; i++) {
+      final candidates = positions[oldLines[i]] ?? const <int>[];
+      int? match;
+      for (final candidate in candidates) {
+        if (candidate >= next) {
+          match = candidate;
+          break;
+        }
+      }
+      if (match == null) {
+        result.add((i, null));
+      } else {
+        for (var j = next; j < match; j++) {
+          result.add((null, j));
+        }
+        result.add((i, match));
+        next = match + 1;
+      }
+    }
+    for (var j = next; j < width; j++) {
+      result.add((null, j));
+    }
+    return result;
+  }
+
+  final stride = width + 1;
+  final matches = List<int>.filled(height * width, 0);
+  final best = List<int>.filled((height + 1) * stride, 0);
+  for (var i = height - 1; i >= 0; i--) {
+    for (var j = width - 1; j >= 0; j--) {
+      final score = _diffLineMatchScore(oldLines[i], newLines[j]);
+      matches[i * width + j] = score;
+      best[i * stride + j] = math.max(
+        math.max(best[(i + 1) * stride + j], best[i * stride + j + 1]),
+        score > 0 ? score + best[(i + 1) * stride + j + 1] : 0,
+      );
+    }
+  }
+  final result = <(int?, int?)>[];
+  var i = 0;
+  var j = 0;
+  while (i < height || j < width) {
+    if (i == height) {
+      result.add((null, j++));
+    } else if (j == width) {
+      result.add((i++, null));
+    } else {
+      final score = matches[i * width + j];
+      final skipOld = best[(i + 1) * stride + j];
+      final skipNew = best[i * stride + j + 1];
+      if (score > 0 &&
+          score + best[(i + 1) * stride + j + 1] >=
+              math.max(skipOld, skipNew)) {
+        result.add((i++, j++));
+      } else if (skipOld >= skipNew) {
+        result.add((i++, null));
+      } else {
+        result.add((null, j++));
+      }
+    }
+  }
+  return result;
+}
+
 List<List<_IntralineRange>> _buildIntralineRangesForDiffLines(
   List<GitDiffLine> lines, {
   List<List<GitIntralineRange>>? nativeRanges,
@@ -233,36 +349,27 @@ List<List<_IntralineRange>> _buildIntralineRangesForDiffLines(
           lines[index].kind == GitDiffLineKind.addition) {
         index += 1;
       }
-      final deletionCount = additionStart - deletionStart;
-      final additionCount = index - additionStart;
-      final pairCount = math.min(deletionCount, additionCount);
-      for (var pairIndex = 0; pairIndex < pairCount; pairIndex += 1) {
-        final deletionIndex = deletionStart + pairIndex;
-        final additionIndex = additionStart + pairIndex;
-        final pair = _intralineDiff(
-          _extractContent(lines[deletionIndex].text),
-          _extractContent(lines[additionIndex].text),
-        );
-        result[deletionIndex] = pair.left;
-        result[additionIndex] = pair.right;
-      }
-      for (
-        var deletionIndex = deletionStart + pairCount;
-        deletionIndex < additionStart;
-        deletionIndex += 1
-      ) {
-        result[deletionIndex] = _fullIntralineRange(
-          _extractContent(lines[deletionIndex].text),
-        );
-      }
-      for (
-        var additionIndex = additionStart + pairCount;
-        additionIndex < index;
-        additionIndex += 1
-      ) {
-        result[additionIndex] = _fullIntralineRange(
-          _extractContent(lines[additionIndex].text),
-        );
+      final deletions = [
+        for (var i = deletionStart; i < additionStart; i++)
+          _extractContent(lines[i].text),
+      ];
+      final additions = [
+        for (var i = additionStart; i < index; i++)
+          _extractContent(lines[i].text),
+      ];
+      for (final (left, right) in _alignDiffChangedLines(
+        deletions,
+        additions,
+      )) {
+        if (left != null && right != null) {
+          final pair = _intralineDiff(deletions[left], additions[right]);
+          result[deletionStart + left] = pair.left;
+          result[additionStart + right] = pair.right;
+        } else if (left != null) {
+          result[deletionStart + left] = _fullIntralineRange(deletions[left]);
+        } else if (right != null) {
+          result[additionStart + right] = _fullIntralineRange(additions[right]);
+        }
       }
       continue;
     }

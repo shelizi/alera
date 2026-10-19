@@ -726,6 +726,7 @@ pub(super) fn side_by_side_projection(lines: &[GitDiffLine]) -> Vec<GitDiffSideB
         match line.kind {
             GitDiffLineKind::Hunk => {
                 flush_side_by_side_changes(
+                    lines,
                     &mut rows,
                     &mut pending_deletions,
                     &mut pending_additions,
@@ -741,6 +742,7 @@ pub(super) fn side_by_side_projection(lines: &[GitDiffLine]) -> Vec<GitDiffSideB
             }
             GitDiffLineKind::Header => {
                 flush_side_by_side_changes(
+                    lines,
                     &mut rows,
                     &mut pending_deletions,
                     &mut pending_additions,
@@ -750,6 +752,7 @@ pub(super) fn side_by_side_projection(lines: &[GitDiffLine]) -> Vec<GitDiffSideB
             GitDiffLineKind::Deletion => {
                 if !pending_additions.is_empty() {
                     flush_side_by_side_changes(
+                        lines,
                         &mut rows,
                         &mut pending_deletions,
                         &mut pending_additions,
@@ -773,6 +776,7 @@ pub(super) fn side_by_side_projection(lines: &[GitDiffLine]) -> Vec<GitDiffSideB
             }
             GitDiffLineKind::Context => {
                 flush_side_by_side_changes(
+                    lines,
                     &mut rows,
                     &mut pending_deletions,
                     &mut pending_additions,
@@ -797,7 +801,12 @@ pub(super) fn side_by_side_projection(lines: &[GitDiffLine]) -> Vec<GitDiffSideB
         }
     }
 
-    flush_side_by_side_changes(&mut rows, &mut pending_deletions, &mut pending_additions);
+    flush_side_by_side_changes(
+        lines,
+        &mut rows,
+        &mut pending_deletions,
+        &mut pending_additions,
+    );
     rows
 }
 
@@ -1055,6 +1064,7 @@ fn passthrough_side_by_side_row(line_index: u32) -> GitDiffSideBySideRow {
 }
 
 fn flush_side_by_side_changes(
+    lines: &[GitDiffLine],
     rows: &mut Vec<GitDiffSideBySideRow>,
     pending_deletions: &mut Vec<(u32, Option<u32>)>,
     pending_additions: &mut Vec<(u32, Option<u32>)>,
@@ -1062,10 +1072,19 @@ fn flush_side_by_side_changes(
     if pending_deletions.is_empty() && pending_additions.is_empty() {
         return;
     }
-    let count = pending_deletions.len().max(pending_additions.len());
-    for index in 0..count {
-        let left = pending_deletions.get(index).copied();
-        let right = pending_additions.get(index).copied();
+    let left_texts: Vec<_> = pending_deletions
+        .iter()
+        .map(|(index, _)| lines[*index as usize].text.get(1..).unwrap_or(""))
+        .collect();
+    let right_texts: Vec<_> = pending_additions
+        .iter()
+        .map(|(index, _)| lines[*index as usize].text.get(1..).unwrap_or(""))
+        .collect();
+    for (left_index, right_index) in
+        super::git_intraline::align_changed_lines(&left_texts, &right_texts)
+    {
+        let left = left_index.and_then(|index| pending_deletions.get(index).copied());
+        let right = right_index.and_then(|index| pending_additions.get(index).copied());
         rows.push(GitDiffSideBySideRow {
             kind: GitDiffSideBySideRowKind::Pair,
             line_index: None,

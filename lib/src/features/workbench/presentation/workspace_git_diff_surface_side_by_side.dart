@@ -462,11 +462,17 @@ List<_DiffRow> _buildSideBySideRows(GitDiffFile file) {
     if (pendingDeletions.isEmpty && pendingAdditions.isEmpty) {
       return;
     }
-    final count = math.max(pendingDeletions.length, pendingAdditions.length);
-    for (var i = 0; i < count; i++) {
-      final left = i < pendingDeletions.length ? pendingDeletions[i] : null;
-      final right = i < pendingAdditions.length ? pendingAdditions[i] : null;
-      items.add(_SideBySideDiffRow(left: left, right: right));
+    final alignment = _alignDiffChangedLines(
+      pendingDeletions.map((line) => line.text).toList(growable: false),
+      pendingAdditions.map((line) => line.text).toList(growable: false),
+    );
+    for (final (oldIndex, newIndex) in alignment) {
+      items.add(
+        _SideBySideDiffRow(
+          left: oldIndex == null ? null : pendingDeletions[oldIndex],
+          right: newIndex == null ? null : pendingAdditions[newIndex],
+        ),
+      );
     }
     pendingDeletions.clear();
     pendingAdditions.clear();
