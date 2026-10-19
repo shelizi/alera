@@ -12,6 +12,41 @@ import 'package:alera/src/features/language_intelligence/infra/code_forge_semant
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('unchanged LSP document does not send redundant didChange', () async {
+    final transport = _FakeSemanticTransport();
+    final adapter = await _adapter(transport);
+    const path = r'C:\repo\src\main.ts';
+    await adapter.openDocument(
+      language: LanguageId('typescript'),
+      path: path,
+      text: 'const value = 1;\n',
+    );
+    await adapter.replaceDocument(path: path, text: 'const value = 1;\n');
+    await adapter.replaceDocument(path: path, text: 'const value = 1;\n');
+    expect(
+      transport.notifications.where(
+        (item) => item.method == 'textDocument/didChange',
+      ),
+      isEmpty,
+    );
+    await adapter.replaceDocument(path: path, text: 'const value = 2;\n');
+    await adapter.replaceDocument(path: path, text: 'const value = 2;\n');
+    final changes = transport.notifications
+        .where((item) => item.method == 'textDocument/didChange')
+        .toList();
+    expect(changes, hasLength(1));
+    expect((changes.single.params['textDocument'] as Map)['version'], 2);
+    expect(
+      ((changes.single.params['contentChanges'] as List).single as Map)['text'],
+      'const value = 2;\n',
+    );
+    await adapter.saveDocument(path: path);
+    final save = transport.notifications.lastWhere(
+      (item) => item.method == 'textDocument/didSave',
+    );
+    expect(save.params['text'], 'const value = 2;\n');
+  });
+
   test(
     'shared server syncs each document with its own language id and version',
     () async {
@@ -371,10 +406,7 @@ void main() {
       final adapter = await opened(transport);
 
       await expectLater(
-        adapter.implementation(
-          path: _mainPath,
-          position: position,
-        ),
+        adapter.implementation(path: _mainPath, position: position),
         throwsA(
           isA<LanguageServerRequestException>().having(
             (e) => e.methodNotSupported,

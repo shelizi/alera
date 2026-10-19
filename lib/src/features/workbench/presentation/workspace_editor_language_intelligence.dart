@@ -680,6 +680,12 @@ String workspaceEditorEncodeSemanticSourceText({
   if (currentDisplayText == originalDisplayText) {
     return originalRawText;
   }
+  // Without any raw/display transformation to preserve (usually no tabs),
+  // the editor already owns the exact source bytes. Avoid splitting three
+  // entire copies of the document for every LSP synchronization debounce.
+  if (originalRawText == originalDisplayText) {
+    return currentDisplayText;
+  }
   final rawSegments = _workspaceEditorSplitLineSegments(originalRawText);
   final displaySegments = _workspaceEditorSplitLineSegments(
     originalDisplayText,

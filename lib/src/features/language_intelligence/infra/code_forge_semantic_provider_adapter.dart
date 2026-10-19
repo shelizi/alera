@@ -104,6 +104,10 @@ final class CodeForgeSemanticProviderAdapter
     if (document == null) {
       throw StateError('Language-server document is not open: $path');
     }
+    // Parent refreshes may submit the same snapshot more than once. Do not
+    // serialize/send another whole-document notification or bump the LSP
+    // version unless the server-visible contents actually changed.
+    if (document.text == text) return;
     final nextVersion = document.version + 1;
     await _transport.sendNotification(
       method: 'textDocument/didChange',

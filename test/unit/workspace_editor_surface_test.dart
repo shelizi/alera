@@ -304,6 +304,23 @@ void main() {
     }
   });
 
+  test(
+    'unformatted LSP source returns changed editor text without rebuilding',
+    () {
+      final raw = List<String>.generate(
+        300,
+        (i) => 'const entry_$i = true;',
+      ).join('\n');
+      final edited = raw.replaceFirst('entry_100', 'entry_100_changed');
+      final result = workspaceEditorEncodeSemanticSourceText(
+        currentDisplayText: edited,
+        originalRawText: raw,
+        originalDisplayText: raw,
+      );
+      expect(identical(result, edited), isTrue);
+    },
+  );
+
   test('semantic source text preserves unchanged raw tabs', () {
     expect(
       workspaceEditorEncodeSemanticSourceText(
