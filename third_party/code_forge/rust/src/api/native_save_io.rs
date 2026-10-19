@@ -214,8 +214,14 @@ pub(crate) fn save_rope(
             }
         }
     };
-    let display = super::workspace_source::expand_tabs(&raw, tab_size);
-    if rope_matches_text(rope, &display) {
+    // Most source files have no literal tabs. Keep the decoded text borrowed
+    // instead of allocating and scanning a second full-size display string.
+    let display = if raw.as_bytes().contains(&b'\t') {
+        std::borrow::Cow::Owned(super::workspace_source::expand_tabs(&raw, tab_size))
+    } else {
+        std::borrow::Cow::Borrowed(raw.as_str())
+    };
+    if rope_matches_text(rope, display.as_ref()) {
         // No changed bytes: do not create a temporary file or call ReplaceFileW.
         // This also avoids spurious file-watcher events and allows no-op Save
         // while another process has the document open without delete sharing.
@@ -235,7 +241,7 @@ pub(crate) fn save_rope(
             size: after.len(),
         };
     }
-    let bytes = match super::native_save::snapshot_bytes(rope, &raw, &display, encoding) {
+    let bytes = match super::native_save::snapshot_bytes(rope, &raw, display.as_ref(), encoding) {
         Ok(bytes) => bytes,
         Err(_) => return failed(SaveStatus::Unsupported),
     };
@@ -469,6 +475,71 @@ mod tests {
         );
         assert_eq!(outcome.status, SaveStatus::Conflict);
         assert_eq!(fs::read(&path).unwrap(), b"print('same')\n");
+    }
+
+    #[test]
+    fn modified_native_rope_save_keeps_no_tab_encodings_and_line_endings() {
+        use super::super::native_save::snapshot_bytes;
+        use super::super::workspace_source::NativeWorkspaceTextEncoding as E;
+        let cases = [
+            (
+                "main.rs",
+                E::Utf8,
+                "fn main() {\r\n  let n = 1;\r\n}\r\n",
+                "fn main() {\r\n  let n = 2;\r\n}\r\n",
+            ),
+            (
+                "main.go",
+                E::Utf8,
+                "package main\n",
+                "package main\n// updated\n",
+            ),
+            ("main.py", E::Utf8Bom, "print('old')\n", "print('new')\n"),
+            ("text.txt", E::Utf16Le, "a😀中\r\n", "a😃中\r\n"),
+            (
+                "script.ts",
+                E::Utf16Be,
+                "export const a = 1;\n",
+                "export const a = 2;\n",
+            ),
+            ("cn.php", E::Big5, "繁體中文\n", "繁體新增\n"),
+            ("zh.json", E::Gbk, "简体中文\n", "简体新增\n"),
+            ("jp.java", E::ShiftJis, "日本語\n", "編集済み\n"),
+            ("jp.dart", E::EucJp, "日本語\n", "編集済み\n"),
+            ("kr.css", E::EucKr, "한국어\n", "새글\n"),
+            ("euro.md", E::Windows1252, "café\n", "jalapeño\n"),
+        ];
+        for (filename, encoding, before, after) in cases {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join(filename);
+            let original =
+                snapshot_bytes(&ropey::Rope::from_str(before), before, before, encoding).unwrap();
+            fs::write(&path, &original).unwrap();
+            let expected_token = token(&fs::metadata(&path).unwrap());
+            let result = save_rope(
+                &ropey::Rope::from_str(after),
+                dir.path().to_string_lossy().into_owned(),
+                filename.to_owned(),
+                expected_token,
+                false,
+                4,
+                encoding,
+            );
+            assert_eq!(result.status, SaveStatus::Saved, "{filename}: {encoding:?}");
+            let expected =
+                snapshot_bytes(&ropey::Rope::from_str(after), before, before, encoding).unwrap();
+            assert_eq!(
+                fs::read(&path).unwrap(),
+                expected,
+                "{filename}: {encoding:?}"
+            );
+            assert_eq!(result.size, expected.len() as u64, "{filename}");
+            assert_eq!(
+                result.token,
+                token(&fs::metadata(&path).unwrap()),
+                "{filename}"
+            );
+        }
     }
 
     #[test]
