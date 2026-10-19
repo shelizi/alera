@@ -147,6 +147,24 @@ pub(crate) fn guarded_replace_workspace_file(
     }
 }
 
+/// Check against a decoded on-disk display without transcoding every
+/// Unicode scalar in either string or materializing an extra full Rope copy.
+fn rope_matches_text(rope: &ropey::Rope, display: &str) -> bool {
+    if rope.len_bytes() != display.len() {
+        return false;
+    }
+    let display_bytes = display.as_bytes();
+    let mut offset = 0;
+    for chunk in rope.chunks() {
+        let end = offset + chunk.len();
+        if display_bytes[offset..end] != *chunk.as_bytes() {
+            return false;
+        }
+        offset = end;
+    }
+    true
+}
+
 pub(crate) fn save_rope(
     rope: &ropey::Rope,
     root: String,
@@ -197,19 +215,29 @@ pub(crate) fn save_rope(
         }
     };
     let display = super::workspace_source::expand_tabs(&raw, tab_size);
-    let bytes = if rope.chars().eq(display.chars()) {
-        original // No-op save must preserve the original byte sequence exactly.
-    } else {
-        match super::native_save::snapshot_bytes(rope, &raw, &display, encoding) {
-            Ok(bytes) => bytes,
-            Err(_) => {
-                return SaveOutcome {
-                    status: SaveStatus::Unsupported,
-                    token: String::new(),
-                    size: 0,
-                }
-            }
+    if rope_matches_text(rope, &display) {
+        // No changed bytes: do not create a temporary file or call ReplaceFileW.
+        // This also avoids spurious file-watcher events and allows no-op Save
+        // while another process has the document open without delete sharing.
+        // Repeat the path and disk-token guards after comparison: a concurrent
+        // external update or symlink change must not silently be accepted.
+        match guarded_target(Path::new(&root), &relative) {
+            Ok(current_path) if current_path == path => {}
+            _ => return failed(SaveStatus::Conflict),
         }
+        let after = match fs::metadata(&path) {
+            Ok(metadata) if metadata.is_file() && token(&metadata) == disk_token => metadata,
+            _ => return failed(SaveStatus::Conflict),
+        };
+        return SaveOutcome {
+            status: SaveStatus::Saved,
+            token: disk_token,
+            size: after.len(),
+        };
+    }
+    let bytes = match super::native_save::snapshot_bytes(rope, &raw, &display, encoding) {
+        Ok(bytes) => bytes,
+        Err(_) => return failed(SaveStatus::Unsupported),
     };
     guarded_replace_workspace_file(root, relative, bytes, disk_token, false)
 }
@@ -383,6 +411,64 @@ mod tests {
         );
         assert_eq!(result.status, SaveStatus::Saved);
         assert_eq!(fs::read(path).unwrap(), original);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn unchanged_rope_save_does_not_replace_open_file() {
+        use super::super::workspace_source::NativeWorkspaceTextEncoding as E;
+        use std::os::windows::fs::OpenOptionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("source.rs");
+        let original = b"\tlet value = 1;\r\n\tlet next = 2;\r\n";
+        fs::write(&file, original).unwrap();
+        let before = fs::metadata(&file).unwrap();
+        let expected = token(&before);
+        // A read handle that disallows FILE_SHARE_DELETE: an unnecessary
+        // ReplaceFileW would fail even though the editor changed nothing.
+        let reader = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(1)
+            .open(&file)
+            .unwrap();
+        let outcome = save_rope(
+            &ropey::Rope::from_str("    let value = 1;\r\n    let next = 2;\r\n"),
+            dir.path().to_string_lossy().into_owned(),
+            "source.rs".into(),
+            expected.clone(),
+            false,
+            4,
+            E::Utf8,
+        );
+        assert_eq!(outcome.status, SaveStatus::Saved);
+        assert_eq!(
+            outcome.token, expected,
+            "no-op must not touch the file token"
+        );
+        assert_eq!(outcome.size, original.len() as u64);
+        assert_eq!(fs::read(&file).unwrap(), original);
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+        drop(reader);
+    }
+
+    #[test]
+    fn unchanged_rope_save_still_rejects_stale_token() {
+        use super::super::workspace_source::NativeWorkspaceTextEncoding as E;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("source.py");
+        fs::write(&path, b"print('same')\n").unwrap();
+        let outcome = save_rope(
+            &ropey::Rope::from_str("print('same')\n"),
+            dir.path().to_string_lossy().into_owned(),
+            "source.py".into(),
+            "stale:0".into(),
+            false,
+            4,
+            E::Utf8,
+        );
+        assert_eq!(outcome.status, SaveStatus::Conflict);
+        assert_eq!(fs::read(&path).unwrap(), b"print('same')\n");
     }
 
     #[test]
