@@ -30,6 +30,7 @@ final class TerminalSearchController._(
   }
 
   Object? _indexedBuffer;
+  Object? _indexedFirstLine;
   int _indexedHeight = -1;
   int _indexedWidth = -1;
   bool _needsFullRefresh = true;
@@ -148,6 +149,7 @@ final class TerminalSearchController._(
       _source.addListener(_handleTerminalChanged);
     }
     _indexedBuffer = null;
+    _indexedFirstLine = null;
     _indexedHeight = -1;
     _indexedWidth = -1;
     _needsFullRefresh = true;
@@ -193,6 +195,7 @@ final class TerminalSearchController._(
     }
 
     final height = _source.height;
+    final firstLine = height == 0 ? null : _source.lineIdAt(0);
     final shouldScanAll =
         forceFull ||
         _needsFullRefresh ||
@@ -200,7 +203,15 @@ final class TerminalSearchController._(
         _indexedWidth != _source.viewWidth ||
         _indexedHeight < 0 ||
         height < _indexedHeight;
+    // A circular scrollback can trim its head without changing the height.
+    // Its first line ID changes; every retained line index then shifts, so
+    // we must use the full authoritative reindexing path.
+    final canReusePrefix =
+        !shouldScanAll &&
+        identical(_indexedFirstLine, firstLine) &&
+        firstLine != null;
     final selected = selectedMatch;
+    int? changedStart;
 
     if (shouldScanAll) {
       _matchesByLine.clear();
@@ -214,34 +225,37 @@ final class TerminalSearchController._(
           : max(0, height - _source.viewHeight);
       _removeMatchesInRange(start, height);
       _scanLines(start, height);
+      changedStart = start;
     }
 
     _indexedBuffer = _source.bufferIdentity;
     _indexedHeight = height;
     _indexedWidth = _source.viewWidth;
+    _indexedFirstLine = firstLine;
     _needsFullRefresh = false;
-    _rebuildMatches(selected);
+    if (canReusePrefix && changedStart != null) {
+      _rebuildTailMatches(changedStart, height, selected);
+    } else {
+      _rebuildMatches(selected);
+    }
     return true;
   }
 
   void _scanLines(int start, int end) {
     final safeStart = start.clamp(0, _source.height);
     final safeEnd = end.clamp(safeStart, _source.height);
+    // Full scrollback scans prepare the literal query once instead of doing
+    // case folding and allocating a single-line search wrapper for every row.
+    final matcher = TerminalLiteralQuery(_query);
     for (var index = safeStart; index < safeEnd; index++) {
       final line = _source.lineIdAt(index);
-      final lineMatches = findTerminalSearchMatches(<TerminalSearchLine>[
-        TerminalSearchLine(
-          id: line,
-          index: index,
-          text: _source.lineTextAt(index),
-        ),
-      ], _query);
-      if (lineMatches.isEmpty) {
+      final matchStarts = matcher.matchStarts(_source.lineTextAt(index));
+      if (matchStarts.isEmpty) {
         _matchesByLine.remove(line);
       } else {
         _matchesByLine[line] = <_LineMatch>[
-          for (final match in lineMatches)
-            _LineMatch(start: match.start, end: match.end),
+          for (final start in matchStarts)
+            _LineMatch(start: start, end: start + matcher.matchLength),
         ];
       }
     }
@@ -253,6 +267,66 @@ final class TerminalSearchController._(
     for (var index = safeStart; index < safeEnd; index++) {
       _matchesByLine.remove(_source.lineIdAt(index));
     }
+  }
+
+  /// An append/TUI tail rewrite cannot alter older line indices when the
+  /// buffer identity and first line ID are stable. Preserve the already-sorted
+  /// prefix and build only the modified tail, rather than reindexing and
+  /// sorting thousands of historic hits after every output batch.
+  void _rebuildTailMatches(int start, int end, TerminalSearchMatch? selected) {
+    var low = 0;
+    var high = _matches.length;
+    while (low < high) {
+      final mid = low + ((high - low) ~/ 2);
+      if (_matches[mid].lineIndex < start) {
+        low = mid + 1;
+      } else {
+        high = mid;
+      }
+    }
+    final prefixLength = low;
+    final next = _matches.sublist(0, prefixLength);
+    for (var index = start; index < end; index++) {
+      final lineId = _source.lineIdAt(index);
+      final hits = _matchesByLine[lineId];
+      if (hits == null) continue;
+      for (final hit in hits) {
+        next.add(
+          TerminalSearchMatch(
+            lineId: lineId,
+            lineIndex: index,
+            start: hit.start,
+            end: hit.end,
+          ),
+        );
+      }
+    }
+    _matches = List<TerminalSearchMatch>.unmodifiableOf(next);
+
+    if (_matches.isEmpty) {
+      _selectedIndex = -1;
+      return;
+    }
+    if (selected != null) {
+      // The prefix retained its object identities and match offsets, so its
+      // selected match stays at precisely the old selected index.
+      if (_selectedIndex >= 0 && _selectedIndex < prefixLength) {
+        final retained = _matches[_selectedIndex];
+        if (identical(retained.lineId, selected.lineId) &&
+            retained.start == selected.start) {
+          return;
+        }
+      }
+      for (var index = prefixLength; index < _matches.length; index++) {
+        final candidate = _matches[index];
+        if (identical(candidate.lineId, selected.lineId) &&
+            candidate.start == selected.start) {
+          _selectedIndex = index;
+          return;
+        }
+      }
+    }
+    _selectedIndex = _selectedIndex.clamp(0, _matches.length - 1);
   }
 
   void _rebuildMatches(TerminalSearchMatch? selected) {
@@ -334,10 +408,3 @@ final class const _LineMatch({
   required final int start,
   required final int end,
 });
-
-extension on int? {
-  bool caseInRange(int start, int end) {
-    final value = this;
-    return value != null && value >= start && value < end;
-  }
-}
