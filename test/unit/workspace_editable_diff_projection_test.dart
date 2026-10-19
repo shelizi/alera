@@ -93,7 +93,7 @@ void main() {
     expect(result.oldSpacers, isEmpty);
     expect(result.newSpacers, isEmpty);
     expect(result.visualLineCount, 1000);
-    final prefixEnd = (leading.join('\n') + '\n').length;
+    final prefixEnd = leading.join('\n').length + 1;
     final suffixStart = before.indexOf('unchanged suffix 0');
     expect(
       result.oldHighlights.every(

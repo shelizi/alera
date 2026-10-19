@@ -1,3 +1,5 @@
+// ignore_for_file: invalid_use_of_visible_for_testing_member, prefer_interpolation_to_compose_strings
+
 import 'package:alera/src/features/workbench/presentation/workspace_git_diff_surface.dart';
 import 'package:flutter_test/flutter_test.dart';
 
