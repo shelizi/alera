@@ -122,23 +122,91 @@ final class _EditableDiffAlignment {
 
 const int _editableDiffMaxMyersDistance = 2048;
 
-_EditableDiffAlignment _editableDiffAlignment(
+final class _EditableDiffInputs {
+  const _EditableDiffInputs({
+    required this.oldLines,
+    required this.newLines,
+    required this.steps,
+  });
+
+  final List<String> oldLines;
+  final List<String> newLines;
+  final List<_EditableLineDiffStep> steps;
+}
+
+/// Parse and align once per editor revision. Both the spacer projection and
+/// character highlights consume this same sequence of Myers steps.
+_EditableDiffInputs _prepareEditableDiff(
   String baseline,
   String current,
   GitDiffWhitespaceMode whitespaceMode,
 ) {
   final oldLines = _splitFullFileLines(baseline);
   final newLines = _splitFullFileLines(current);
-  final normalizedOld = oldLines
-      .map((line) => _normalizeLiveDiffLine(line, whitespaceMode))
-      .toList(growable: false);
-  final normalizedNew = newLines
-      .map((line) => _normalizeLiveDiffLine(line, whitespaceMode))
-      .toList(growable: false);
-  final steps =
-      _myersEditableLineDiff(normalizedOld, normalizedNew) ??
-      _coarseEditableLineDiff(normalizedOld, normalizedNew);
+  final normalizedOld = [
+    for (final line in oldLines) _normalizeLiveDiffLine(line, whitespaceMode),
+  ];
+  final normalizedNew = [
+    for (final line in newLines) _normalizeLiveDiffLine(line, whitespaceMode),
+  ];
+  // A large changed block with no common normalized line cannot have
+  // unchanged Myers steps. Avoid quadratic frontier/trace allocation; the
+  // coarse prefix + deletion + addition + suffix sequence is exact here.
+  final steps = _editableDiffHasNoSharedMiddle(normalizedOld, normalizedNew)
+      ? _coarseEditableLineDiff(normalizedOld, normalizedNew)
+      : (_myersEditableLineDiff(normalizedOld, normalizedNew) ??
+            _coarseEditableLineDiff(normalizedOld, normalizedNew));
+  return _EditableDiffInputs(
+    oldLines: oldLines,
+    newLines: newLines,
+    steps: steps,
+  );
+}
 
+/// True only when the changed interiors have no equal normalized line at all.
+/// Unlike a heuristic edit-distance cutoff, this cannot discard valid equal
+/// line pairs. Common prefix/suffix lines are explicitly excluded.
+bool _editableDiffHasNoSharedMiddle(
+  List<String> oldLines,
+  List<String> newLines,
+) {
+  if (oldLines.length < 96 || newLines.length < 96) return false;
+  var prefix = 0;
+  while (prefix < oldLines.length &&
+      prefix < newLines.length &&
+      oldLines[prefix] == newLines[prefix]) {
+    prefix += 1;
+  }
+  var oldEnd = oldLines.length;
+  var newEnd = newLines.length;
+  while (oldEnd > prefix &&
+      newEnd > prefix &&
+      oldLines[oldEnd - 1] == newLines[newEnd - 1]) {
+    oldEnd -= 1;
+    newEnd -= 1;
+  }
+  if (oldEnd - prefix < 96 || newEnd - prefix < 96) return false;
+  final oldValues = <String>{for (var i = prefix; i < oldEnd; i++) oldLines[i]};
+  for (var i = prefix; i < newEnd; i++) {
+    if (oldValues.contains(newLines[i])) return false;
+  }
+  return true;
+}
+
+_EditableDiffAlignment _editableDiffAlignment(
+  String baseline,
+  String current,
+  GitDiffWhitespaceMode whitespaceMode,
+) => _editableDiffAlignmentFromInputs(
+  _prepareEditableDiff(baseline, current, whitespaceMode),
+);
+
+_EditableDiffAlignment _editableDiffAlignmentFromInputs(
+  _EditableDiffInputs inputs,
+) {
+  final oldLines = inputs.oldLines;
+  final newLines = inputs.newLines;
+  final steps = inputs.steps;
   final oldChanged = <int>{};
   final newChanged = <int>{};
   final oldSpacers = <_EditableDiffSpacer>[];
@@ -412,22 +480,10 @@ List<(int, int)> _editableChangedLineRanges(Set<int> lines) {
 }
 
 ({List<_IntralineRange> left, List<_IntralineRange> right})
-_editableIntralineRanges(
-  String baseline,
-  String current,
-  GitDiffWhitespaceMode whitespaceMode,
-) {
-  final oldLines = _splitFullFileLines(baseline);
-  final newLines = _splitFullFileLines(current);
-  final normalizedOld = [
-    for (final line in oldLines) _normalizeLiveDiffLine(line, whitespaceMode),
-  ];
-  final normalizedNew = [
-    for (final line in newLines) _normalizeLiveDiffLine(line, whitespaceMode),
-  ];
-  final steps =
-      _myersEditableLineDiff(normalizedOld, normalizedNew) ??
-      _coarseEditableLineDiff(normalizedOld, normalizedNew);
+_editableIntralineRangesFromInputs(_EditableDiffInputs inputs) {
+  final oldLines = inputs.oldLines;
+  final newLines = inputs.newLines;
+  final steps = inputs.steps;
   final oldOffsets = <int>[];
   final newOffsets = <int>[];
   var offset = 0;
@@ -504,6 +560,128 @@ _editableIntralineRanges(
   }
   flush();
   return (left: left, right: right);
+}
+
+final class _EditableDiffSnapshot {
+  const _EditableDiffSnapshot({required this.alignment, required this.ranges});
+
+  final _EditableDiffAlignment alignment;
+  final ({List<_IntralineRange> left, List<_IntralineRange> right}) ranges;
+}
+
+_EditableDiffSnapshot _computeEditableDiffSnapshot(
+  String baseline,
+  String current,
+  GitDiffWhitespaceMode whitespaceMode,
+) {
+  final inputs = _prepareEditableDiff(baseline, current, whitespaceMode);
+  return _EditableDiffSnapshot(
+    alignment: _editableDiffAlignmentFromInputs(inputs),
+    ranges: _editableIntralineRangesFromInputs(inputs),
+  );
+}
+
+@visibleForTesting
+({
+  List<({int afterLine, int count})> oldSpacers,
+  List<({int afterLine, int count})> newSpacers,
+  List<({int start, int end})> oldHighlights,
+  List<({int start, int end})> newHighlights,
+  int added,
+  int removed,
+  int visualLineCount,
+})
+workspaceEditableDiffSnapshotForTesting({
+  required String baseline,
+  required String current,
+  GitDiffWhitespaceMode whitespaceMode = GitDiffWhitespaceMode.normal,
+}) {
+  final snapshot = _computeEditableDiffSnapshot(
+    baseline,
+    current,
+    whitespaceMode,
+  );
+  return (
+    oldSpacers: [
+      for (final spacer in snapshot.alignment.oldSpacers)
+        (afterLine: spacer.afterLine, count: spacer.count),
+    ],
+    newSpacers: [
+      for (final spacer in snapshot.alignment.newSpacers)
+        (afterLine: spacer.afterLine, count: spacer.count),
+    ],
+    oldHighlights: [
+      for (final range in snapshot.ranges.left)
+        (start: range.start, end: range.end),
+    ],
+    newHighlights: [
+      for (final range in snapshot.ranges.right)
+        (start: range.start, end: range.end),
+    ],
+    added: snapshot.alignment.added,
+    removed: snapshot.alignment.removed,
+    visualLineCount: snapshot.alignment.visualLineCount,
+  );
+}
+
+/// Cache a projection while Flutter echoes one editor revision through both
+/// controller listeners and didUpdateWidget. No duplicate Myers pass.
+final class _EditableDiffMemo {
+  String? _baseline;
+  String? _current;
+  GitDiffWhitespaceMode? _mode;
+  _EditableDiffSnapshot? _last;
+
+  _EditableDiffSnapshot resolve(
+    String baseline,
+    String current,
+    GitDiffWhitespaceMode mode,
+  ) {
+    final existing = _last;
+    if (existing != null &&
+        _baseline == baseline &&
+        _current == current &&
+        _mode == mode) {
+      return existing;
+    }
+    final result = _computeEditableDiffSnapshot(baseline, current, mode);
+    _baseline = baseline;
+    _current = current;
+    _mode = mode;
+    _last = result;
+    return result;
+  }
+}
+
+@visibleForTesting
+({bool reused, bool invalidatedOnText, bool invalidatedOnMode})
+workspaceEditableDiffMemoForTesting() {
+  final memo = _EditableDiffMemo();
+  final initial = memo.resolve(
+    'before\n',
+    'after\n',
+    GitDiffWhitespaceMode.normal,
+  );
+  final repeated = memo.resolve(
+    'before\n',
+    'after\n',
+    GitDiffWhitespaceMode.normal,
+  );
+  final changed = memo.resolve(
+    'before\n',
+    'other\n',
+    GitDiffWhitespaceMode.normal,
+  );
+  final modeChanged = memo.resolve(
+    'before\n',
+    'other\n',
+    GitDiffWhitespaceMode.ignoreAll,
+  );
+  return (
+    reused: identical(initial, repeated),
+    invalidatedOnText: !identical(initial, changed),
+    invalidatedOnMode: !identical(changed, modeChanged),
+  );
 }
 
 List<({int afterLine, String content})> _editableSpacerRanges(
@@ -984,7 +1162,9 @@ class _EditableWorkingTreeDiffState extends State<_EditableWorkingTreeDiff> {
   late final ScrollController _rightHorizontalController;
   late final ScrollController _leftVerticalController;
   late final ScrollController _rightVerticalController;
-  late _EditableDiffAlignment _alignment;
+  final _EditableDiffMemo _diffMemo = _EditableDiffMemo();
+  late _EditableDiffSnapshot _diffSnapshot;
+  _EditableDiffAlignment get _alignment => _diffSnapshot.alignment;
   var _syncingHorizontal = false;
   var _syncingVertical = false;
   var _syncingControllerText = false;
@@ -1026,7 +1206,7 @@ class _EditableWorkingTreeDiffState extends State<_EditableWorkingTreeDiff> {
     _rightHorizontalController = ScrollController(keepScrollOffset: false);
     _leftVerticalController = ScrollController();
     _rightVerticalController = ScrollController();
-    _alignment = _editableDiffAlignment(
+    _diffSnapshot = _diffMemo.resolve(
       widget.baseline,
       widget.document.currentText,
       widget.whitespaceMode,
@@ -1225,31 +1405,30 @@ class _EditableWorkingTreeDiffState extends State<_EditableWorkingTreeDiff> {
       _fallbackController.text = text;
     }
     widget.onChanged(text);
-    _refreshAlignment();
+    _refreshAlignment(currentText: text);
   }
 
   void _handleFallbackChanged(String text) {
     if (_syncingControllerText || text == widget.document.currentText) return;
     widget.onChanged(text);
-    _refreshAlignment();
+    _refreshAlignment(currentText: text);
   }
 
-  void _refreshAlignment({bool notify = true}) {
-    _alignment = _editableDiffAlignment(
+  void _refreshAlignment({bool notify = true, String? currentText}) {
+    final next = _diffMemo.resolve(
       widget.baseline,
-      _editableDisplayedText,
+      currentText ?? _editableDisplayedText,
       widget.whitespaceMode,
     );
+    if (identical(next, _diffSnapshot)) return;
+    _diffSnapshot = next;
     _applyAlignmentDecorations();
     if (notify && mounted) setState(() {});
   }
 
   void _applyAlignmentDecorations() {
-    final ranges = _editableIntralineRanges(
-      widget.baseline,
-      _editableDisplayedText,
-      widget.whitespaceMode,
-    );
+    // Reuse the same Myers result that produced the line-level spacers.
+    final ranges = _diffSnapshot.ranges;
     _leftFallbackController.updateHighlightRanges(ranges.left);
     _fallbackController.updateHighlightRanges(ranges.right);
     if (_usesCodeForge) {
