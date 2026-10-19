@@ -152,6 +152,11 @@ String _escapeRawHtml(String source) {
 String _escapeHtmlTags(String source) {
   return source.replaceAllMapped(RegExp(r'</?[a-zA-Z][^>\r\n]*>'), (match) {
     final tag = match.group(0)!;
+    // A bare HTML <br> is a safe, semantic Markdown line break. Leave any
+    // attributes or other HTML escaped, so a rich paste cannot inject markup.
+    if (RegExp(r'^<br\s*/?>$', caseSensitive: false).hasMatch(tag)) {
+      return '<br />';
+    }
     if (tag.startsWith('<https://') ||
         tag.startsWith('<http://') ||
         tag.startsWith('<mailto:')) {
@@ -226,7 +231,12 @@ String _htmlToPlainText(String html) {
         ),
         '\n',
       )
-      .replaceAll(RegExp(r'<br\s*/?>', caseSensitive: false), '\n')
+      .replaceAll(
+        // Markdown serializes a hard break as <br /> followed by a source
+        // newline. Treat the pair as one break in the plain-text fallback.
+        RegExp(r'<br\s*/?>[ \t]*(?:\r?\n)?', caseSensitive: false),
+        '\n',
+      )
       .replaceAll(RegExp(r'<li\b[^>]*>', caseSensitive: false), '• ')
       .replaceAll(RegExp(r'<[^>]+>'), '');
   text = text.replaceAllMapped(

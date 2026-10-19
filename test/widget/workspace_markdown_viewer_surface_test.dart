@@ -760,11 +760,11 @@ ${List<String>.filled(80, r'\frac{a}{b}').join(' + ')}
     final service = _FakeWorkspaceFileService('''
 # Report
 
-Before the table.
+Before<br>the table.
 
 | Item | Amount |
 | --- | --- |
-| **Tea** | 12 |
+| **Tea**<br/>奶茶 | 12 |
 
 After the table.
 ''');
@@ -780,6 +780,8 @@ After the table.
     expect(copied, hasLength(1));
     expect(copied.single['html'], contains('<h1 style='));
     expect(copied.single['html'], contains('<table style='));
+    expect(copied.single['html'], contains('Before<br />the table.'));
+    expect(copied.single['text'], contains('Before\nthe table.'));
     expect(copied.single['text'], contains('After the table.'));
 
     await tester.tap(
@@ -789,7 +791,8 @@ After the table.
     expect(copied, hasLength(2));
     expect(copied.last['html'], startsWith('<table style='));
     expect(copied.last['html'], contains('<th style='));
-    expect(copied.last['html'], contains('<strong>Tea</strong>'));
+    expect(copied.last['html'], contains('<strong>Tea</strong><br />奶茶'));
+    expect(copied.last['text'], contains('Tea\n奶茶'));
     expect(copied.last['html'], isNot(contains('After the table.')));
   });
 

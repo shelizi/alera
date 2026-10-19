@@ -50,6 +50,64 @@ void main() => print('hello');
     expect(data.plainText, contains('<test> & data\t12'));
   });
 
+  test('rich DOCX paste preserves explicit HTML br breaks and plain text', () {
+    final data = markdownRichClipboardDocument(
+      '第一行<br>第二行<br/>第三行<br />第四行<BR>第五行',
+    );
+    expect(
+      RegExp(r'<br\s*/?>', caseSensitive: false).allMatches(data.html),
+      hasLength(4),
+    );
+    expect(data.html, isNot(contains('&lt;br')));
+    expect(data.plainText, '第一行\n第二行\n第三行\n第四行\n第五行');
+  });
+
+  test('Word table copy preserves br within cells, not extra table rows', () {
+    final data = markdownRichClipboardTable(const <MarkdownRichTableRow>[
+      MarkdownRichTableRow(cells: ['Item', 'Details'], isHeader: true),
+      MarkdownRichTableRow(
+        cells: ['Row 1', 'first<br>second<br />third'],
+        isHeader: false,
+      ),
+    ]);
+    expect(RegExp(r'<tr>').allMatches(data.html), hasLength(2));
+    expect(RegExp(r'<br\s*/?>').allMatches(data.html), hasLength(2));
+    expect(data.html, contains('first<br />second<br />third'));
+    expect(data.plainText, contains('first\nsecond\nthird'));
+  });
+
+  test('br-looking unsafe HTML and code stay literal when copied', () {
+    final data = markdownRichClipboardDocument('''
+Safe<br>break and **bold**
+
+Not HTML: <br onclick="alert(1)"> and <script>run()</script>.
+
+Inline code: \`<br>\`
+
+\`\`\`html
+first<br>second
+\`\`\`
+''');
+    expect(data.html, contains('Safe<br />break'));
+    expect(data.html, contains('&lt;br onclick'));
+    expect(data.html, isNot(contains('<br onclick')));
+    expect(data.html, isNot(contains('<script>')));
+    expect(RegExp(r'<code[^>]*>&lt;br&gt;</code>').hasMatch(data.html), isTrue);
+    expect(data.html, contains('first&lt;br&gt;second'));
+    expect(data.plainText, contains('Safe\nbreak'));
+    expect(data.plainText, contains('Inline code: <br>'));
+    expect(data.plainText, contains('first<br>second'));
+  });
+
+  test(
+    'markdown hard breaks remain actual Word and plain-text line breaks',
+    () {
+      final data = markdownRichClipboardDocument('line one  \nline two');
+      expect(data.html, contains('<br'));
+      expect(data.plainText, 'line one\nline two');
+    },
+  );
+
   test('clipboard HTML removes unsafe local and executable links', () {
     final data = markdownRichClipboardDocument('''
 [safe](https://example.org) [local](../private.md) [js](javascript:alert(1))
