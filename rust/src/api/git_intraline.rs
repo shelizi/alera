@@ -1,4 +1,4 @@
-use super::{GitDiffLine, GitDiffLineKind};
+use super::{GitDiffLine, GitDiffLineKind, GitDiffSideBySideRow, GitDiffSideBySideRowKind};
 
 /// UTF-16 code-unit offsets, matching Flutter TextSpan indices.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -322,6 +322,60 @@ pub(super) fn align_changed_lines(
     result
 }
 
+/// Project character changes from a side-by-side row plan that has already
+/// aligned +/- lines. This avoids repeating the expensive line similarity DP
+/// that side_by_side_projection performed for the same GitDiffFile.
+///
+/// This is an internal Rust shortcut; the public project() API remains
+/// available for callers that do not already have a row projection.
+pub(super) fn project_from_side_by_side(
+    lines: &[GitDiffLine],
+    rows: &[GitDiffSideBySideRow],
+) -> Vec<Vec<GitIntralineRange>> {
+    let mut result = vec![vec![]; lines.len()];
+    for row in rows {
+        if row.kind != GitDiffSideBySideRowKind::Pair {
+            continue;
+        }
+        // Context rows project the same line to both sides. Only changed
+        // sides contribute character ranges; never highlight context lines.
+        let deletion = row
+            .left_line_index
+            .map(|index| index as usize)
+            .filter(|&index| {
+                lines
+                    .get(index)
+                    .is_some_and(|line| line.kind == GitDiffLineKind::Deletion)
+            });
+        let addition = row
+            .right_line_index
+            .map(|index| index as usize)
+            .filter(|&index| {
+                lines
+                    .get(index)
+                    .is_some_and(|line| line.kind == GitDiffLineKind::Addition)
+            });
+        match (deletion, addition) {
+            (Some(left), Some(right)) => {
+                let (old, new) = pair(
+                    lines[left].text.get(1..).unwrap_or(""),
+                    lines[right].text.get(1..).unwrap_or(""),
+                );
+                result[left] = old;
+                result[right] = new;
+            }
+            (Some(left), None) => {
+                result[left] = full(lines[left].text.get(1..).unwrap_or(""));
+            }
+            (None, Some(right)) => {
+                result[right] = full(lines[right].text.get(1..).unwrap_or(""));
+            }
+            (None, None) => {}
+        }
+    }
+    result
+}
+
 pub fn project(lines: &[GitDiffLine]) -> Vec<Vec<GitIntralineRange>> {
     let mut result = vec![vec![]; lines.len()];
     let mut index = 0;
@@ -535,6 +589,185 @@ mod tests {
                 );
             }
         }
+    }
+
+    // Manual CPU profile of the pre-existing two-pass native projection path.
+    // Run with: cargo test --manifest-path rust/Cargo.toml --lib
+    //   profile_diff_projection_reuse -- --ignored --nocapture
+    #[test]
+    #[ignore = "manual Rust Git Diff projection benchmark"]
+    fn profile_diff_projection_reuse() {
+        use std::hint::black_box;
+        use std::time::Instant;
+
+        fn fixture(count: usize, width: usize) -> Vec<GitDiffLine> {
+            let mut lines = vec![GitDiffLine {
+                text: format!("@@ -1,{count} +1,{count} @@"),
+                kind: GitDiffLineKind::Hunk,
+            }];
+            let alphabet = b"abcdefghijklmnopqrstuvwxyz0123456789";
+            let mut contents = Vec::with_capacity(count);
+            for i in 0..count {
+                let mut value = String::with_capacity(width + 24);
+                for j in 0..width {
+                    value.push(alphabet[(i * 13 + j * 7 + j / 4) % alphabet.len()] as char);
+                }
+                contents.push(value);
+            }
+            for (i, text) in contents.iter().enumerate() {
+                lines.push(GitDiffLine {
+                    text: format!("-item_{i:03} {text} done"),
+                    kind: GitDiffLineKind::Deletion,
+                });
+            }
+            for (i, text) in contents.iter().enumerate() {
+                let mut changed = text.as_bytes().to_vec();
+                changed[width / 2] = b'Z';
+                lines.push(GitDiffLine {
+                    text: format!("+item_{i:03} {} done", String::from_utf8(changed).unwrap()),
+                    kind: GitDiffLineKind::Addition,
+                });
+            }
+            lines
+        }
+
+        for (count, width, iterations) in [(10, 28, 200), (36, 48, 24), (64, 95, 24)] {
+            let lines = fixture(count, width);
+            let rows = super::super::git_diff_impl::side_by_side_projection(&lines);
+            assert_eq!(project(&lines), project_from_side_by_side(&lines, &rows));
+            for shared in [false, true] {
+                let mut samples = Vec::new();
+                for _ in 0..7 {
+                    let began = Instant::now();
+                    for _ in 0..iterations {
+                        let rows =
+                            super::super::git_diff_impl::side_by_side_projection(black_box(&lines));
+                        let ranges = if shared {
+                            project_from_side_by_side(black_box(&lines), &rows)
+                        } else {
+                            project(black_box(&lines))
+                        };
+                        black_box((rows, ranges));
+                    }
+                    samples.push(began.elapsed().as_secs_f64() * 1_000_000.0 / iterations as f64);
+                }
+                samples.sort_by(f64::total_cmp);
+                println!(
+                    "{}_{count}x{count}: median_us={:.2}",
+                    if shared {
+                        "shared_one_pass"
+                    } else {
+                        "original_two_pass"
+                    },
+                    samples[3]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn shared_row_projection_preserves_intraline_ranges() {
+        let line = |kind, text: &str| GitDiffLine {
+            kind,
+            text: text.to_owned(),
+        };
+        let cases = vec![
+            vec![],
+            vec![line(GitDiffLineKind::Addition, "+hello")],
+            vec![line(GitDiffLineKind::Deletion, "-goodbye")],
+            vec![
+                line(GitDiffLineKind::Hunk, "@@ -1,2 +1,3 @@"),
+                line(GitDiffLineKind::Context, " unchanged"),
+                line(GitDiffLineKind::Deletion, "-alpha = 1;"),
+                line(GitDiffLineKind::Deletion, "-beta = 2;"),
+                line(GitDiffLineKind::Addition, "+log();"),
+                line(GitDiffLineKind::Addition, "+alpha = 10;"),
+                line(GitDiffLineKind::Addition, "+beta = 2;"),
+                line(GitDiffLineKind::Context, " shared footer"),
+            ],
+            vec![
+                line(GitDiffLineKind::Header, "diff --git a/test b/test"),
+                line(GitDiffLineKind::Hunk, "@@ -1,1 +1,2 @@"),
+                line(GitDiffLineKind::Addition, "+追加😃"),
+                line(GitDiffLineKind::Deletion, "-原本😀"),
+                line(GitDiffLineKind::Addition, "+原本😁"),
+                line(GitDiffLineKind::Hunk, "@@ -20,2 +21,1 @@"),
+                line(GitDiffLineKind::Deletion, "-e\u{301}"),
+                line(GitDiffLineKind::Deletion, "-中文測試"),
+                line(GitDiffLineKind::Addition, "+é"),
+            ],
+            vec![
+                line(GitDiffLineKind::Deletion, "-"),
+                line(GitDiffLineKind::Addition, "+"),
+                line(GitDiffLineKind::Deletion, "-   "),
+                line(GitDiffLineKind::Addition, "+    "),
+            ],
+        ];
+        for (case, lines) in cases.iter().enumerate() {
+            let rows = super::super::git_diff_impl::side_by_side_projection(lines);
+            assert_eq!(
+                project(lines),
+                project_from_side_by_side(lines, &rows),
+                "changed character ranges for case {case}"
+            );
+        }
+
+        // Exercise alignment ties, unmatched +/- rows, and Unicode indexing.
+        let samples = [
+            "alpha = 1;",
+            "alpha = 10;",
+            "beta = 2;",
+            "shared",
+            "x😀y",
+            "x😃y",
+            "中文測試",
+            "",
+            "  a()",
+            "  b()",
+        ];
+        for old_len in 0..=6 {
+            for new_len in 0..=6 {
+                let mut lines = vec![line(GitDiffLineKind::Hunk, "@@ -1,6 +1,6 @@")];
+                for index in 0..old_len {
+                    lines.push(line(
+                        GitDiffLineKind::Deletion,
+                        &format!("-{}", samples[(index * 3 + old_len) % samples.len()]),
+                    ));
+                }
+                for index in 0..new_len {
+                    lines.push(line(
+                        GitDiffLineKind::Addition,
+                        &format!("+{}", samples[(index * 5 + new_len) % samples.len()]),
+                    ));
+                }
+                let rows = super::super::git_diff_impl::side_by_side_projection(&lines);
+                assert_eq!(
+                    project(&lines),
+                    project_from_side_by_side(&lines, &rows),
+                    "replacement counts {old_len}/{new_len}"
+                );
+            }
+        }
+
+        let mut large_hunk = vec![line(GitDiffLineKind::Hunk, "@@ -1,70 +1,70 @@")];
+        for index in 0..70 {
+            large_hunk.push(line(
+                GitDiffLineKind::Deletion,
+                &format!("-id_{index}: {}z", "a".repeat(280)),
+            ));
+        }
+        for index in 0..70 {
+            large_hunk.push(line(
+                GitDiffLineKind::Addition,
+                &format!("+id_{index}: {}z", "b".repeat(280)),
+            ));
+        }
+        let rows = super::super::git_diff_impl::side_by_side_projection(&large_hunk);
+        assert_eq!(
+            project(&large_hunk),
+            project_from_side_by_side(&large_hunk, &rows),
+            "oversized alignment and character-range fallback"
+        );
     }
 
     #[test]

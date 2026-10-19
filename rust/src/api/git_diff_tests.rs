@@ -109,6 +109,10 @@ fn git_diff_decodes_big5_untracked_text_instead_of_marking_it_binary() {
     .expect("untracked Big5 diff");
     let file = &diff.files[0];
 
+    assert_eq!(
+        file.intraline_ranges,
+        super::git_intraline::project(&file.lines)
+    );
     assert!(!file.is_binary);
     let text = diff_text(file);
     assert!(text.contains("+\u{7e41}\u{9ad4}\u{4e2d}\u{6587}"), "{text}");
@@ -139,6 +143,10 @@ fn git_diff_projects_side_by_side_rows_without_duplicating_line_text() {
     .unwrap();
     let file = &diff.files[0];
 
+    assert_eq!(
+        file.intraline_ranges,
+        super::git_intraline::project(&file.lines)
+    );
     assert!(!file.side_by_side_rows.is_empty());
     assert!(file
         .side_by_side_rows

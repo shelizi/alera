@@ -49,7 +49,10 @@ pub(super) fn untracked_diff_file(
         old_path: None,
         area: GitChangeArea::Untracked,
         status: GitChangeStatus::Untracked,
-        intraline_ranges: crate::api::git::git_intraline::project(&lines),
+        intraline_ranges: crate::api::git::git_intraline::project_from_side_by_side(
+            &lines,
+            &side_by_side_rows,
+        ),
         lines,
         side_by_side_rows,
         full_file_rows: Vec::new(),

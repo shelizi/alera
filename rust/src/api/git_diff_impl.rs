@@ -1197,7 +1197,10 @@ fn diff_file_for_area_with_whitespace(
                     .and_then(|old_path| paths.to_workspace_path(old_path)),
                 area,
                 status: selection.status,
-                intraline_ranges: super::git_intraline::project(&rendered.lines),
+                intraline_ranges: super::git_intraline::project_from_side_by_side(
+                    &rendered.lines,
+                    &side_by_side_rows,
+                ),
                 lines: rendered.lines,
                 side_by_side_rows,
                 full_file_rows,
@@ -1342,7 +1345,10 @@ fn commit_diff_file_for_path(
             .and_then(|old_path| paths.to_workspace_path(old_path)),
         area: GitChangeArea::Staged,
         status: selection.status,
-        intraline_ranges: super::git_intraline::project(&rendered.lines),
+        intraline_ranges: super::git_intraline::project_from_side_by_side(
+            &rendered.lines,
+            &side_by_side_rows,
+        ),
         lines: rendered.lines,
         side_by_side_rows,
         full_file_rows,

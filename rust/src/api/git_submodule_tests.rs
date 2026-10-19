@@ -86,6 +86,10 @@ fn exposes_pointer_and_inner_diffs_for_staged_submodule_commit() {
     )
     .unwrap();
     assert!(pointer.files[0].is_gitlink);
+    assert_eq!(
+        pointer.files[0].intraline_ranges,
+        super::git_intraline::project(&pointer.files[0].lines)
+    );
     assert!(diff_text(&pointer.files[0]).contains("Subproject commit"));
 
     run_git(parent.path(), &["add", "modules/sample"]);
