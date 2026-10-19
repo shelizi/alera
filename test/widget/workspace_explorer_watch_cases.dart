@@ -81,6 +81,74 @@ void _registerWorkspaceExplorerWatchTests() {
     },
   );
 
+  test(
+    'directory no-op comparator includes all visible metadata and order',
+    () {
+      final previous = [_file('src/a.dart'), _file('src/b.dart')];
+      expect(
+        workspaceExplorerDirectoryChildrenUnchanged(previous, [
+          _file('src/a.dart'),
+          _file('src/b.dart'),
+        ]),
+        isTrue,
+      );
+      expect(
+        workspaceExplorerDirectoryChildrenUnchanged(previous, [
+          _file('src/b.dart'),
+          _file('src/a.dart'),
+        ]),
+        isFalse,
+      );
+      expect(
+        workspaceExplorerDirectoryChildrenUnchanged(previous, [
+          _file(
+            'src/a.dart',
+            gitStatus: native.WorkspaceFileGitStatus.modified,
+          ),
+          _file('src/b.dart'),
+        ]),
+        isFalse,
+      );
+      expect(
+        workspaceExplorerDirectoryChildrenUnchanged(previous, [
+          _file('src/a.dart', isHidden: true),
+          _file('src/b.dart'),
+        ]),
+        isFalse,
+      );
+      expect(
+        workspaceExplorerDirectoryChildrenUnchanged(null, const []),
+        isFalse,
+      );
+    },
+  );
+
+  testWidgets('watch changed directory entries still projects new nodes', (
+    tester,
+  ) async {
+    final service = _FakeWorkspaceFileService()
+      ..childrenByDirectory[''] = <native.WorkspaceFileEntry>[
+        _directory('src', hasChildrenHint: true),
+      ]
+      ..childrenByDirectory['src'] = <native.WorkspaceFileEntry>[
+        _file('src/main.dart'),
+      ];
+    await _pumpExplorer(tester, service);
+    await tester.tap(find.text('src'));
+    await tester.pumpAndSettle();
+    final projected = service.projectionCalls;
+
+    service.childrenByDirectory['src'] = <native.WorkspaceFileEntry>[
+      _file('src/main.dart'),
+      _file('src/extra.dart'),
+    ];
+    service.emitWatchBatch(<String>['src']);
+    await tester.pumpAndSettle();
+
+    expect(service.projectionCalls, projected + 1);
+    expect(find.text('extra.dart'), findsOneWidget);
+  });
+
   testWidgets('watched directory updates are skipped when nothing changed', (
     tester,
   ) async {
@@ -96,11 +164,20 @@ void _registerWorkspaceExplorerWatchTests() {
     await tester.tap(find.text('src'));
     await tester.pumpAndSettle();
     final updatesAfterExpand = service.watchedPathUpdates.length;
+    final projectionsAfterExpand = service.projectionCalls;
 
+    // Native listing returns new instances even when all fields are equal.
+    service.childrenByDirectory['src'] = [_file('src/main.dart')];
     service.emitWatchBatch(<String>['src']);
     await tester.pumpAndSettle();
 
     expect(service.watchedPathUpdates, hasLength(updatesAfterExpand));
+    expect(
+      service.projectionCalls,
+      projectionsAfterExpand,
+      reason:
+          'No-op file events should not resend all directory snapshots to Rust',
+    );
   });
 }
 

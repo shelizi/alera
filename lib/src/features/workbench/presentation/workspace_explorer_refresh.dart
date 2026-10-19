@@ -1,5 +1,36 @@
 part of 'workspace_explorer.dart';
 
+/// Avoid a full Dart -> Rust -> Dart projection roundtrip when a watcher
+/// re-reads a directory with exactly the same ordered entry metadata.
+/// Compare *all* fields that Rust receives: paths alone miss Git state,
+/// file edits, symlinks, permissions and placeholder decisions.
+@visibleForTesting
+bool workspaceExplorerDirectoryChildrenUnchanged(
+  List<native.WorkspaceFileEntry>? previous,
+  List<native.WorkspaceFileEntry> current,
+) {
+  if (previous == null || previous.length != current.length) return false;
+  for (var index = 0; index < current.length; index++) {
+    final a = previous[index];
+    final b = current[index];
+    if (a.relativePath != b.relativePath ||
+        a.name != b.name ||
+        a.kind != b.kind ||
+        a.size != b.size ||
+        a.modifiedMillis != b.modifiedMillis ||
+        a.contentToken != b.contentToken ||
+        a.isIgnored != b.isIgnored ||
+        a.isHidden != b.isHidden ||
+        a.isSymlink != b.isSymlink ||
+        a.isProtected != b.isProtected ||
+        a.hasChildrenHint != b.hasChildrenHint ||
+        a.gitStatus != b.gitStatus) {
+      return false;
+    }
+  }
+  return true;
+}
+
 extension _WorkspaceExplorerRefresh on _WorkspaceExplorerState {
   void _listenForRevealRequest() {
     ref.listen<WorkspaceExplorerRevealRequest?>(
@@ -88,6 +119,15 @@ extension _WorkspaceExplorerRefresh on _WorkspaceExplorerState {
     String relativePath,
     List<native.WorkspaceFileEntry> children,
   ) async {
+    if (workspaceExplorerDirectoryChildrenUnchanged(
+      _childrenByDirectory[relativePath],
+      children,
+    )) {
+      // Preserve best-effort watcher-registration retry without rebuilding
+      // every native node and Dart index for a no-change filesystem event.
+      await _syncWatchedDirectories();
+      return;
+    }
     final projection = await _workspaceFiles.projectExplorerTree(
       workspaceName: widget.workspace.name,
       workspacePath: widget.workspace.path,

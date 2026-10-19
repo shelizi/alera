@@ -60,6 +60,7 @@ class _FakeWorkspaceFileService({
   final List<_ListChildrenCall> listChildrenCalls = <_ListChildrenCall>[];
   final List<bool> hideHiddenCalls = <bool>[];
   final List<List<String>> watchedPathUpdates = <List<String>>[];
+  int projectionCalls = 0;
   final Map<String, String> writtenFiles = <String, String>{};
   List<String> quickOpenEntries = <String>[];
 
@@ -145,6 +146,7 @@ class _FakeWorkspaceFileService({
     required List<native.WorkspaceExplorerDirectoryChildren> directories,
     native.WorkspaceExplorerDirectoryChildren? replacement,
   }) async {
+    projectionCalls += 1;
     return _projectExplorerTree(
       workspaceName: workspaceName,
       workspacePath: workspacePath,
