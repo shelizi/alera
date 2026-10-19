@@ -120,12 +120,64 @@ fn pair(left: &str, right: &str) -> (Vec<GitIntralineRange>, Vec<GitIntralineRan
 const MAX_LINE_ALIGNMENT_CELLS: usize = 4096;
 const MAX_LINE_SIMILARITY_CELLS: usize = 4096;
 
-fn line_similarity_score(left: &str, right: &str) -> i32 {
-    if left == right {
+// Pre-decode UTF-8 exactly once per line, not once for every candidate pairing.
+struct PreparedDiffLine<'a> {
+    raw: &'a str,
+    chars: Vec<char>,
+}
+
+impl<'a> PreparedDiffLine<'a> {
+    fn new(raw: &'a str) -> Self {
+        Self {
+            raw,
+            chars: raw.trim().chars().collect(),
+        }
+    }
+}
+
+// Reuse the dynamic-programming storage for all comparisons in one hunk.
+#[derive(Default)]
+struct SimilarityScratch {
+    previous: Vec<usize>,
+    current: Vec<usize>,
+}
+
+impl SimilarityScratch {
+    fn lcs(&mut self, a: &[char], b: &[char]) -> usize {
+        if a.is_empty() || b.is_empty() {
+            return 0;
+        }
+        // LCS is symmetric; use the shorter side as the DP row width.
+        let (longer, shorter) = if a.len() >= b.len() { (a, b) } else { (b, a) };
+        let width = shorter.len() + 1;
+        self.previous.resize(width, 0);
+        self.current.resize(width, 0);
+        self.previous[..width].fill(0);
+        for &ch in longer.iter().rev() {
+            self.current[shorter.len()] = 0;
+            for j in (0..shorter.len()).rev() {
+                self.current[j] = if ch == shorter[j] {
+                    1 + self.previous[j + 1]
+                } else {
+                    self.previous[j].max(self.current[j + 1])
+                };
+            }
+            std::mem::swap(&mut self.current, &mut self.previous);
+        }
+        self.previous[0]
+    }
+}
+
+fn line_similarity_score(
+    left: &PreparedDiffLine<'_>,
+    right: &PreparedDiffLine<'_>,
+    scratch: &mut SimilarityScratch,
+) -> i32 {
+    if left.raw == right.raw {
         return 2000; // Preserve exact matches even in otherwise ambiguous hunks.
     }
-    let left: Vec<char> = left.trim().chars().collect();
-    let right: Vec<char> = right.trim().chars().collect();
+    let left = left.chars.as_slice();
+    let right = right.chars.as_slice();
     if left.is_empty() || right.is_empty() {
         return 0;
     }
@@ -141,29 +193,19 @@ fn line_similarity_score(left: &str, right: &str) -> i32 {
         suffix += 1;
     }
     let anchored = prefix + suffix;
+    // An optimal LCS can always include the common prefix and suffix.
+    // Skip their DP cells, preserving the original similarity score exactly.
     let lcs = if left.len().saturating_mul(right.len()) <= MAX_LINE_SIMILARITY_CELLS {
-        let width = right.len() + 1;
-        let mut below = vec![0usize; width];
-        let mut row = vec![0usize; width];
-        for i in (0..left.len()).rev() {
-            row[right.len()] = 0;
-            for j in (0..right.len()).rev() {
-                row[j] = if left[i] == right[j] {
-                    1 + below[j + 1]
-                } else {
-                    below[j].max(row[j + 1])
-                };
-            }
-            std::mem::swap(&mut row, &mut below);
-        }
-        below[0]
+        anchored
+            + scratch.lcs(
+                &left[prefix..left.len() - suffix],
+                &right[prefix..right.len() - suffix],
+            )
     } else {
-        // Bounded work on large lines; only trust the unchanged edges.
+        // Preserve the existing bounded fallback for long lines.
         anchored
     };
 
-    // Combine subsequence similarity with ordered prefix/suffix evidence.
-    // Unrelated lines sharing indentation/punctuation alone must not pair.
     let score = (200 * (7 * lcs + 3 * anchored) / (left.len() + right.len())) as i32;
     if score >= 480 {
         score
@@ -210,17 +252,33 @@ pub(super) fn align_changed_lines(
     left: &[&str],
     right: &[&str],
 ) -> Vec<(Option<usize>, Option<usize>)> {
+    // A one-sided hunk needs neither Unicode decoding nor similarity DP.
+    if left.is_empty() {
+        return (0..right.len()).map(|index| (None, Some(index))).collect();
+    }
+    if right.is_empty() {
+        return (0..left.len()).map(|index| (Some(index), None)).collect();
+    }
     if left.len().saturating_mul(right.len()) > MAX_LINE_ALIGNMENT_CELLS {
         return align_large_change_block(left, right);
     }
     let height = left.len();
     let width = right.len();
     let stride = width + 1;
+    let prepared_left: Vec<_> = left
+        .iter()
+        .map(|&text| PreparedDiffLine::new(text))
+        .collect();
+    let prepared_right: Vec<_> = right
+        .iter()
+        .map(|&text| PreparedDiffLine::new(text))
+        .collect();
+    let mut scratch = SimilarityScratch::default();
     let mut scores = vec![0i32; height * width];
     let mut best = vec![0i32; (height + 1) * stride];
     for i in (0..height).rev() {
         for j in (0..width).rev() {
-            let score = line_similarity_score(left[i], right[j]);
+            let score = line_similarity_score(&prepared_left[i], &prepared_right[j], &mut scratch);
             scores[i * width + j] = score;
             let pair = if score > 0 {
                 score + best[(i + 1) * stride + j + 1]
@@ -364,6 +422,119 @@ mod tests {
         assert_eq!(ranges[2], full("log();"));
         assert_eq!(ranges[3], vec![GitIntralineRange { start: 9, end: 10 }]);
         assert!(ranges[4].is_empty(), "identical new line highlighted");
+    }
+
+    // Guard the optimization against silently changing replacement pairing.
+    // The reference deliberately retains the previous per-pair allocations.
+    fn original_similarity_score(left: &str, right: &str) -> i32 {
+        if left == right {
+            return 2000;
+        }
+        let left: Vec<char> = left.trim().chars().collect();
+        let right: Vec<char> = right.trim().chars().collect();
+        if left.is_empty() || right.is_empty() {
+            return 0;
+        }
+        let mut prefix = 0;
+        while prefix < left.len() && prefix < right.len() && left[prefix] == right[prefix] {
+            prefix += 1;
+        }
+        let mut suffix = 0;
+        while suffix < left.len() - prefix
+            && suffix < right.len() - prefix
+            && left[left.len() - suffix - 1] == right[right.len() - suffix - 1]
+        {
+            suffix += 1;
+        }
+        let anchored = prefix + suffix;
+        let lcs = if left.len().saturating_mul(right.len()) <= MAX_LINE_SIMILARITY_CELLS {
+            let width = right.len() + 1;
+            let mut below = vec![0usize; width];
+            let mut row = vec![0usize; width];
+            for i in (0..left.len()).rev() {
+                row[right.len()] = 0;
+                for j in (0..right.len()).rev() {
+                    row[j] = if left[i] == right[j] {
+                        1 + below[j + 1]
+                    } else {
+                        below[j].max(row[j + 1])
+                    };
+                }
+                std::mem::swap(&mut row, &mut below);
+            }
+            below[0]
+        } else {
+            anchored
+        };
+        let score = (200 * (7 * lcs + 3 * anchored) / (left.len() + right.len())) as i32;
+        if score >= 480 {
+            score
+        } else {
+            0
+        }
+    }
+
+    #[test]
+    fn one_sided_hunks_have_no_false_character_pairings() {
+        let added = ["new", "😀 Unicode", "long line"];
+        assert_eq!(
+            align_changed_lines(&[], &added),
+            vec![(None, Some(0)), (None, Some(1)), (None, Some(2))]
+        );
+        assert_eq!(
+            align_changed_lines(&added, &[]),
+            vec![(Some(0), None), (Some(1), None), (Some(2), None)]
+        );
+        assert!(align_changed_lines(&[], &[]).is_empty());
+    }
+
+    #[test]
+    fn optimized_line_similarity_matches_previous_algorithm() {
+        let mut samples: Vec<String> = [
+            "",
+            " ",
+            "a",
+            "aaa",
+            "alpha = 1;",
+            "alpha = 10;",
+            "beta = 2;",
+            "log();",
+            "  alpha = 1;  ",
+            "\talpha = 1;",
+            "😊中文測試",
+            "😊中文改動",
+            "e\u{301}",
+            "é",
+            "a😀b",
+            "a中b",
+            "prefix_same_middle_changed_suffix",
+            "prefix_same_middle_saved_suffix",
+            "long unchanged part",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let alphabet = ['a', 'b', 'c', '(', ')', ' ', '😃', '中', '\u{0301}'];
+        for length in [2usize, 11, 43, 67, 270] {
+            for salt in 0..5 {
+                let mut candidate = String::new();
+                for n in 0..length {
+                    candidate.push(alphabet[(n * 7 + salt * 3 + n / 5) % alphabet.len()]);
+                }
+                samples.push(candidate);
+            }
+        }
+        let prepared: Vec<_> = samples.iter().map(|s| PreparedDiffLine::new(s)).collect();
+        let mut scratch = SimilarityScratch::default();
+        for (i, old) in samples.iter().enumerate() {
+            for (j, new) in samples.iter().enumerate() {
+                assert_eq!(
+                    line_similarity_score(&prepared[i], &prepared[j], &mut scratch),
+                    original_similarity_score(old, new),
+                    "score changed for candidate pair {i} / {j}: {old:?} -> {new:?}"
+                );
+            }
+        }
     }
 
     #[test]
