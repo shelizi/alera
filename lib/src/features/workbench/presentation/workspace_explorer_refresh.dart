@@ -200,6 +200,7 @@ extension _WorkspaceExplorerRefresh on _WorkspaceExplorerState {
   void _applyNativeProjectionDelta(
     native.WorkspaceExplorerProjectionDelta delta,
   ) {
+    if (_applyMetadataOnlyProjectionDelta(delta)) return;
     final directories = <String, native.WorkspaceExplorerDirectoryChildren>{
       for (final item
           in _projection?.directories ??
@@ -252,6 +253,65 @@ extension _WorkspaceExplorerRefresh on _WorkspaceExplorerState {
         entryBindings: sortedBindings,
       ),
     );
+  }
+
+  /// A native metadata-only Delta has no graph or binding changes. Preserve
+  /// the already allocated tree nodes/bindings and patch only the affected
+  /// directory caches and entry indexes. Ordinary Git status, mtime and size
+  /// changes no longer rebuild three whole-workspace Dart index maps.
+  bool _applyMetadataOnlyProjectionDelta(
+    native.WorkspaceExplorerProjectionDelta delta,
+  ) {
+    final previous = _projection;
+    if (previous == null ||
+        delta.changedNodes.isNotEmpty ||
+        delta.removedNodeIds.isNotEmpty ||
+        delta.changedBindings.isNotEmpty ||
+        delta.removedBindingNodeIds.isNotEmpty ||
+        delta.removedDirectoryPaths.isNotEmpty) {
+      return false;
+    }
+    if (delta.changedDirectories.isEmpty) return true;
+
+    final changes = <String, native.WorkspaceExplorerDirectoryChildren>{
+      for (final directory in delta.changedDirectories)
+        directory.relativePath: directory,
+    };
+    final directories = <native.WorkspaceExplorerDirectoryChildren>[
+      for (final existing in previous.directories)
+        changes.remove(existing.relativePath) ?? existing,
+    ];
+    if (changes.isNotEmpty) {
+      // A newly loaded but empty folder may have no node changes.
+      directories.addAll(changes.values);
+      directories.sort(
+        (left, right) => left.relativePath.compareTo(right.relativePath),
+      );
+    }
+
+    for (final directory in delta.changedDirectories) {
+      final oldChildren = _childrenByDirectory[directory.relativePath];
+      if (oldChildren != null) {
+        for (final entry in oldChildren) {
+          _entryByPath.remove(entry.relativePath);
+          _entryByNodeId.remove('path:' + entry.relativePath);
+        }
+      }
+      _childrenByDirectory[directory.relativePath] = directory.children;
+      for (final entry in directory.children) {
+        _entryByPath[entry.relativePath] = entry;
+        // Native Explorer bindings use path:<relativePath> for entries;
+        // placeholders have no binding and are not part of these children.
+        _entryByNodeId['path:' + entry.relativePath] = entry;
+      }
+    }
+
+    _projection = native.WorkspaceExplorerTreeProjection(
+      directories: directories,
+      nodes: previous.nodes,
+      entryBindings: previous.entryBindings,
+    );
+    return true;
   }
 
   void _disposeNativeProjectionSession({bool bumpGeneration = true}) {

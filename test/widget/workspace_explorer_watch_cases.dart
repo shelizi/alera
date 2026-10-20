@@ -123,6 +123,47 @@ void _registerWorkspaceExplorerWatchTests() {
     },
   );
 
+  testWidgets(
+    'native metadata-only Delta refreshes row status and keeps bindings',
+    (tester) async {
+      final service = _FakeWorkspaceFileService()
+        ..childrenByDirectory[''] = <native.WorkspaceFileEntry>[
+          _directory('src', hasChildrenHint: true),
+        ]
+        ..childrenByDirectory['src'] = <native.WorkspaceFileEntry>[
+          _file('src/a.dart'),
+          _file('src/b.dart'),
+        ];
+      await _pumpExplorer(tester, service);
+      await tester.tap(find.text('src'));
+      await tester.pumpAndSettle();
+      final initial = service.nativeProjectionUpdates;
+      expect(find.text('M'), findsNothing);
+
+      service.childrenByDirectory['src'] = <native.WorkspaceFileEntry>[
+        _file('src/a.dart', gitStatus: native.WorkspaceFileGitStatus.modified),
+        _file('src/b.dart'),
+      ];
+      service.emitWatchBatch(<String>['src']);
+      await tester.pumpAndSettle();
+      expect(service.nativeProjectionUpdates, initial + 1);
+      expect(service.projectionCalls, 0);
+      expect(find.text('M'), findsOneWidget);
+      expect(find.text('a.dart'), findsOneWidget);
+      expect(find.text('b.dart'), findsOneWidget);
+
+      service.childrenByDirectory['src'] = <native.WorkspaceFileEntry>[
+        _file('src/a.dart'),
+        _file('src/b.dart'),
+      ];
+      service.emitWatchBatch(<String>['src']);
+      await tester.pumpAndSettle();
+      expect(find.text('M'), findsNothing);
+      expect(find.text('b.dart'), findsOneWidget);
+      expect(service.projectionCalls, 0);
+    },
+  );
+
   testWidgets('watch changed directory entries still projects new nodes', (
     tester,
   ) async {
