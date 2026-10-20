@@ -13,6 +13,7 @@ import 'package:alera/src/shared/infra/logging/app_logger.dart';
 import 'package:alera/src/shared/infra/logging/global_error_handlers.dart';
 import 'package:alera/src/shared/infra/logging/logging_provider_observer.dart';
 import 'package:alera/src/shared/infra/performance/performance_trace.dart';
+import 'package:alera/src/shared/infra/storage/drift_database.dart';
 import 'package:alera/src/shared/infra/storage/storage_providers.dart';
 import 'package:code_forge/code_forge.dart' as code_forge;
 import 'package:flutter/material.dart';
@@ -36,6 +37,10 @@ Future<void> _bootstrap(List<String> args) async {
     await code_forge.RustLib.init();
     await initializeGhosttyVteWeb();
     final client = await DetachedTabWindowClient.connect(detachedArgs);
+    // Match the primary window's synchronous bootstrap provider contract.
+    // Without this, settingsRepositoryProvider reads AsyncLoading on the
+    // child window's first frame, before the database has opened.
+    final childDatabase = await openAleraDb();
     await windowManager.ensureInitialized();
     await windowManager.setTitle('Alera - ' + client.descriptor.tab.title);
     await windowManager.setPreventClose(true);
@@ -46,6 +51,12 @@ Future<void> _bootstrap(List<String> args) async {
           resourceManagerTerminalBindingOverride(),
           terminalRuntimeBindingOverride(),
           runtimeHostWindowExitOverride(),
+          aleraDatabaseProvider.overrideWith((ref) {
+            ref.onDispose(() async {
+              await childDatabase.close();
+            });
+            return childDatabase;
+          }),
         ],
         child: DetachedTabChildApp(client: client),
       ),
