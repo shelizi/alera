@@ -2,32 +2,17 @@ part of 'workspace_explorer.dart';
 
 extension _WorkspaceExplorerActions on _WorkspaceExplorerState {
   String _pasteTargetDirectory() {
-    if (_filterController.text.trim().isNotEmpty) {
-      final selected = _filterSelectedPaths;
-      final path = _filterSelectionAnchor;
-      if (path != null && selected.contains(path)) return _parentPath(path);
-      if (selected.isNotEmpty) return _parentPath(selected.first);
-      return '';
-    }
-    if (_selectedRelativePath case final path?) {
-      final entry = _entryByPath[path];
-      if (entry != null &&
-          _controller.selection.isSelected(
-            _nodeIdForRelativePath(path) ?? '',
-          )) {
-        return _isDirectoryEntry(entry) ? path : _parentPath(path);
-      }
-    }
-    for (final entryByNodeId in _entryByNodeId.entries) {
-      if (!_controller.selection.isSelected(entryByNodeId.key)) {
-        continue;
-      }
-      final entry = entryByNodeId.value;
-      return _isDirectoryEntry(entry)
-          ? entry.relativePath
-          : _parentPath(entry.relativePath);
-    }
-    return '';
+    final selected = _selectedVisiblePaths();
+    if (selected.isEmpty) return '';
+    // The most recent selection is the keyboard paste target in both views.
+    final anchor = _isFiltering
+        ? _filterSelectionAnchor
+        : _selectedRelativePath;
+    final path = anchor != null && selected.contains(anchor)
+        ? anchor
+        : selected.first;
+    final entry = _visibleEntryForPath(path);
+    return _isDirectoryEntry(entry) ? path : _parentPath(path);
   }
 
   Future<void> _handleMenuAction(
@@ -40,30 +25,6 @@ extension _WorkspaceExplorerActions on _WorkspaceExplorerState {
     action: action,
     nodeId: node.id,
   );
-
-  Future<void> _handleFilteredMenuAction(
-    BuildContext context,
-    String relativePath,
-    _ExplorerAction action,
-  ) async {
-    await _handleEntryMenuAction(
-      context,
-      entry: _filteredEntryForPath(relativePath),
-      action: action,
-    );
-    if (mounted &&
-        (action == _ExplorerAction.rename ||
-            action == _ExplorerAction.delete ||
-            action == _ExplorerAction.duplicate ||
-            action == _ExplorerAction.newFile ||
-            action == _ExplorerAction.newFolder ||
-            action == _ExplorerAction.paste)) {
-      _workspaceFiles.scheduleQuickOpenRefresh(
-        workspacePath: widget.workspace.path,
-        debounce: Duration.zero,
-      );
-    }
-  }
 
   Future<void> _handleEntryMenuAction(
     BuildContext context, {
@@ -687,6 +648,13 @@ extension _WorkspaceExplorerActions on _WorkspaceExplorerState {
       if (_treeStructureRevision != previousStructureRevision) {
         _rebuildTree();
       }
+      // Keep the file filter index in sync with edits made by either view.
+      if (_isFiltering) {
+        _workspaceFiles.scheduleQuickOpenRefresh(
+          workspacePath: widget.workspace.path,
+          debounce: Duration.zero,
+        );
+      }
     } catch (error) {
       _showError(error);
     }
@@ -717,7 +685,7 @@ extension _WorkspaceExplorerActions on _WorkspaceExplorerState {
   }
 
   bool _canDrop(_ExplorerDragData data, String targetPath) {
-    final target = _entryByPath[targetPath];
+    final target = _visibleEntryForPath(targetPath);
     if (!_isDirectoryEntry(target)) {
       return false;
     }

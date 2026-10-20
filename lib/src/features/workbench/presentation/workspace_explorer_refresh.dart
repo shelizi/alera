@@ -306,6 +306,7 @@ extension _WorkspaceExplorerRefresh on _WorkspaceExplorerState {
         _entryByNodeId['path:${entry.relativePath}'] = entry;
       }
     }
+    _entryProjectionRevision += 1;
 
     _projection = native.WorkspaceExplorerTreeProjection(
       directories: directories,
@@ -349,6 +350,7 @@ extension _WorkspaceExplorerRefresh on _WorkspaceExplorerState {
     _childrenByDirectory.clear();
     _entryByPath.clear();
     _entryByNodeId.clear();
+    _entryProjectionRevision += 1;
   }
 
   void _applyProjection(
@@ -391,6 +393,7 @@ extension _WorkspaceExplorerRefresh on _WorkspaceExplorerState {
         ),
       );
     _entryByNodeId.clear();
+    _entryProjectionRevision += 1;
     for (final binding in projection.entryBindings) {
       final entry = _entryByPath[binding.relativePath];
       if (entry != null) {

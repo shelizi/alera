@@ -171,6 +171,13 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
   );
   List<native.WorkspaceQuickOpenMatch> _filterMatches =
       const <native.WorkspaceQuickOpenMatch>[];
+  // One search projection is reused by rendered rows, selection and drag.
+  List<native.WorkspaceFileEntry> _filterVisibleCache =
+      const <native.WorkspaceFileEntry>[];
+  String? _filterVisibleCacheQuery;
+  List<native.WorkspaceQuickOpenMatch>? _filterVisibleCacheMatches;
+  int _filterVisibleCacheEntryRevision = -1;
+  int _entryProjectionRevision = 0;
   final Set<String> _filterSelectedPaths = <String>{};
   String? _filterSelectionAnchor;
   String _activeFilterQuery = '';
@@ -432,9 +439,21 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
     if (entry == null) {
       return child;
     }
+    return _wrapExplorerDragTarget(entry: entry, child: child);
+  }
+
+  /// Both tree nodes and search rows are projections of the same file entry.
+  /// Keep in-app drop targets, Windows Shell drag handoff and multi-selection
+  /// payload construction in one place for both presentations.
+  Widget _wrapExplorerDragTarget({
+    required native.WorkspaceFileEntry entry,
+    required Widget child,
+  }) {
     return DragTarget<_ExplorerDragData>(
       onWillAcceptWithDetails: (details) =>
-          !_nativeDragHandedOff && _canDrop(details.data, entry.relativePath),
+          !_nativeDragHandedOff &&
+          _isDirectoryEntry(entry) &&
+          _canDrop(details.data, entry.relativePath),
       onAcceptWithDetails: (details) => unawaited(
         _moveSelectedEntries(details.data.relativePaths, entry.relativePath),
       ),
@@ -442,18 +461,21 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
         onDragStarted: () => _nativeDragHandedOff = false,
         onDragUpdate: (details) =>
             unawaited(_maybeHandOffNativeDrag(details, entry)),
-        data: _ExplorerDragData(
-          relativePaths: _selectedPathsForEntry(entry),
-          absolutePaths: _selectedPathsForEntry(entry)
-              .map((path) => _absolutePath(path))
-              .toList(growable: false),
-        ),
+        data: _explorerDragData(entry),
         feedback: Material(
           color: Colors.transparent,
           child: SizedBox(width: AleraTokens.sidebarDefaultWidth, child: child),
         ),
         child: child,
       ),
+    );
+  }
+
+  _ExplorerDragData _explorerDragData(native.WorkspaceFileEntry entry) {
+    final relativePaths = _selectedPathsForEntry(entry);
+    return _ExplorerDragData(
+      relativePaths: relativePaths,
+      absolutePaths: relativePaths.map(_absolutePath).toList(growable: false),
     );
   }
 
@@ -743,29 +765,38 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
     return false;
   }
 
-  List<String> _selectedPathsForEntry(native.WorkspaceFileEntry entry) {
-    if (_filterController.text.trim().isNotEmpty) {
-      if (!_filterSelectedPaths.contains(entry.relativePath)) {
-        return <String>[entry.relativePath];
-      }
+  bool get _isFiltering => _filterController.text.trim().isNotEmpty;
+
+  /// Selection is determined by the active projection, but all file
+  /// operations consume the same normalized list of relative paths.
+  List<String> _selectedVisiblePaths() {
+    if (_isFiltering) {
       return <String>[
-        for (final match in _filterMatches)
-          if (_filterSelectedPaths.contains(match.relativePath))
-            match.relativePath,
+        for (final entry in _visibleFilteredEntries())
+          if (_filterSelectedPaths.contains(entry.relativePath))
+            entry.relativePath,
       ];
     }
-    final clickedNodeId = _nodeIdForRelativePath(entry.relativePath);
-    if (clickedNodeId == null ||
-        !_controller.selection.isSelected(clickedNodeId)) {
+    return <String>[
+      for (final node in _controller.visibleNodes)
+        if (_controller.selection.isSelected(node.id) &&
+            _entryByNodeId[node.id] != null)
+          _entryByNodeId[node.id]!.relativePath,
+    ];
+  }
+
+  List<String> _selectedPathsForEntry(native.WorkspaceFileEntry entry) {
+    final selected = _selectedVisiblePaths();
+    if (!selected.contains(entry.relativePath)) {
       return <String>[entry.relativePath];
     }
-    final selected = <String>{};
-    for (final node in _controller.visibleNodes) {
-      if (!_controller.selection.isSelected(node.id)) continue;
-      final selectedEntry = _entryByNodeId[node.id];
-      if (selectedEntry != null) selected.add(selectedEntry.relativePath);
-    }
-    // If a folder and its child are both selected, transfer the folder once.
+    return _topLevelSelectedPaths(selected);
+  }
+
+  /// A selected parent folder subsumes any selected descendant for clipboard,
+  /// in-app drag/drop, and native Windows Shell drag/drop alike.
+  List<String> _topLevelSelectedPaths(Iterable<String> paths) {
+    final selected = paths.toSet();
     return selected
         .where((path) {
           var ancestor = _parentPath(path);
@@ -779,12 +810,13 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
   }
 
   void _handleSelectAllShortcut() {
-    if (_filterController.text.trim().isNotEmpty) {
-      if (_filterMatches.isEmpty) return;
+    if (_isFiltering) {
+      final entries = _visibleFilteredEntries();
+      if (entries.isEmpty) return;
       _filterSelectedPaths
         ..clear()
-        ..addAll(_filterMatches.map((match) => match.relativePath));
-      _filterSelectionAnchor = _filterMatches.first.relativePath;
+        ..addAll(entries.map((entry) => entry.relativePath));
+      _filterSelectionAnchor = entries.first.relativePath;
       setState(() {});
       return;
     }
@@ -805,26 +837,9 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
   void _handleCutShortcut() => unawaited(_copySelection(cut: true));
 
   Future<void> _copySelection({required bool cut}) async {
-    if (_filterController.text.trim().isNotEmpty) {
-      for (final match in _filterMatches) {
-        if (_filterSelectedPaths.contains(match.relativePath)) {
-          await _copyToClipboard(
-            _filteredEntryForPath(match.relativePath),
-            cut: cut,
-          );
-          return;
-        }
-      }
-      return;
-    }
-    for (final node in _controller.visibleNodes) {
-      if (!_controller.selection.isSelected(node.id)) continue;
-      final entry = _entryByNodeId[node.id];
-      if (entry != null) {
-        await _copyToClipboard(entry, cut: cut);
-        return;
-      }
-    }
+    final paths = _selectedVisiblePaths();
+    if (paths.isEmpty) return;
+    await _copyToClipboard(_visibleEntryForPath(paths.first), cut: cut);
   }
 
   void _collapseAll() {
@@ -945,9 +960,10 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
       }
       setState(() {
         _filterMatches = matches;
-        _filterSelectedPaths.removeWhere(
-          (path) => !matches.any((match) => match.relativePath == path),
-        );
+        final visible = _visibleFilteredEntries()
+            .map((entry) => entry.relativePath)
+            .toSet();
+        _filterSelectedPaths.removeWhere((path) => !visible.contains(path));
         if (!_filterSelectedPaths.contains(_filterSelectionAnchor)) {
           _filterSelectionAnchor = null;
         }
@@ -965,21 +981,70 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
     }
   }
 
-  native.WorkspaceFileEntry _filteredEntryForPath(String path) =>
+  native.WorkspaceFileEntry _unloadedEntry(
+    String path, {
+    bool directory = false,
+  }) => native.WorkspaceFileEntry(
+    relativePath: path,
+    name: path.split('/').last,
+    kind: directory
+        ? native.WorkspaceFileKind.directory
+        : native.WorkspaceFileKind.file,
+    size: BigInt.zero,
+    modifiedMillis: 0,
+    contentToken: '',
+    isIgnored: false,
+    isHidden: false,
+    isSymlink: false,
+    isProtected: false,
+    hasChildrenHint: false,
+  );
+
+  /// The quick-open index supplies unloaded file matches; loaded folders and
+  /// matching ancestor folders are added as folders, not converted into fake
+  /// files. A search row always points to the same entry/path as the tree.
+  List<native.WorkspaceFileEntry> _visibleFilteredEntries() {
+    final query = _filterController.text.trim().toLowerCase();
+    if (query.isEmpty) return const <native.WorkspaceFileEntry>[];
+    if (_filterVisibleCacheQuery == query &&
+        identical(_filterVisibleCacheMatches, _filterMatches) &&
+        _filterVisibleCacheEntryRevision == _entryProjectionRevision) {
+      return _filterVisibleCache;
+    }
+    final folders = <String>{
+      for (final entry in _entryByPath.values)
+        if (_isDirectoryEntry(entry) &&
+            entry.relativePath.toLowerCase().contains(query))
+          entry.relativePath,
+    };
+    for (final match in _filterMatches) {
+      var parent = _parentPath(match.relativePath);
+      while (parent.isNotEmpty) {
+        if (parent.toLowerCase().contains(query)) folders.add(parent);
+        parent = _parentPath(parent);
+      }
+    }
+    final sortedFolders = folders.toList()..sort();
+    final entries = <native.WorkspaceFileEntry>[
+      for (final path in sortedFolders)
+        _entryByPath[path] ?? _unloadedEntry(path, directory: true),
+      for (final match in _filterMatches)
+        if (!folders.contains(match.relativePath))
+          _entryByPath[match.relativePath] ??
+              _unloadedEntry(match.relativePath),
+    ];
+    _filterVisibleCacheQuery = query;
+    _filterVisibleCacheMatches = _filterMatches;
+    _filterVisibleCacheEntryRevision = _entryProjectionRevision;
+    return _filterVisibleCache = entries;
+  }
+
+  native.WorkspaceFileEntry _visibleEntryForPath(String path) =>
       _entryByPath[path] ??
-      native.WorkspaceFileEntry(
-        relativePath: path,
-        name: path.split('/').last,
-        kind: native.WorkspaceFileKind.file,
-        size: BigInt.zero,
-        modifiedMillis: 0,
-        contentToken: '',
-        isIgnored: false,
-        isHidden: false,
-        isSymlink: false,
-        isProtected: false,
-        hasChildrenHint: false,
-      );
+      _visibleFilteredEntries()
+          .where((entry) => entry.relativePath == path)
+          .firstOrNull ??
+      _unloadedEntry(path);
 
   void _handleFilteredContextMenuSelection(String path) {
     // Match normal file-tree semantics: keep the existing multi-selection only
@@ -996,20 +1061,19 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
   void _handleFilteredPrimaryTap(String path) {
     final keyboard = HardwareKeyboard.instance;
     if (keyboard.isShiftPressed && _filterSelectionAnchor != null) {
-      final first = _filterMatches.indexWhere(
-        (match) => match.relativePath == _filterSelectionAnchor,
+      final entries = _visibleFilteredEntries();
+      final first = entries.indexWhere(
+        (entry) => entry.relativePath == _filterSelectionAnchor,
       );
-      final last = _filterMatches.indexWhere(
-        (match) => match.relativePath == path,
-      );
+      final last = entries.indexWhere((entry) => entry.relativePath == path);
       if (first >= 0 && last >= 0) {
         _filterSelectedPaths
           ..clear()
           ..addAll(
-            _filterMatches
+            entries
                 .skip(first < last ? first : last)
                 .take((first - last).abs() + 1)
-                .map((match) => match.relativePath),
+                .map((entry) => entry.relativePath),
           );
         setState(() {});
         return;
@@ -1028,15 +1092,34 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
       ..add(path);
     _filterSelectionAnchor = path;
     setState(() {});
-    widget.onOpenFile(path);
+    if (_isDirectoryEntry(_visibleEntryForPath(path))) {
+      // A folder is never treated as a text file by the search projection.
+      // Like the ordinary tree, reveal its actual node for navigation.
+      unawaited(_openFilteredDirectory(path));
+    } else {
+      widget.onOpenFile(path);
+    }
+  }
+
+  Future<void> _openFilteredDirectory(String path) async {
+    _filterController.clear();
+    _onFilterChanged('');
+    await _ensureAncestorsLoaded(path);
+    if (!mounted) return;
+    _rebuildTree();
+    await _controller.reveal(
+      nodeId: _nodeIdForRelativePath(path),
+      select: true,
+    );
   }
 
   Widget _buildFilterResults(_ExplorerMenuDelegate entryMenuDelegate) {
     final query = _filterController.text.trim();
-    if (_filterLoading && _filterMatches.isEmpty) {
+    final entries = _visibleFilteredEntries();
+    if (_filterLoading && entries.isEmpty) {
       return const Center(child: CircularProgressIndicator());
     }
-    if (_filterError != null && _filterMatches.isEmpty) {
+    if (_filterError != null && entries.isEmpty) {
       return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -1066,8 +1149,7 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
         ),
       );
     }
-    final matches = _filterMatches;
-    if (matches.isEmpty) {
+    if (entries.isEmpty) {
       return Center(
         child: Text(
           context.tr('No matching files.'),
@@ -1078,48 +1160,39 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
     return ListView.builder(
       padding: const EdgeInsets.symmetric(vertical: AleraTokens.space4),
       itemExtent: AleraTokens.space32,
-      itemCount: matches.length,
+      itemCount: entries.length,
       itemBuilder: (context, index) {
-        final path = matches[index].relativePath;
-        final selected = _filterSelectedPaths.contains(path);
-        final row = InkWell(
-          onTap: () => _handleFilteredPrimaryTap(path),
-          child: ColoredBox(
-            color: selected ? AleraTokens.surfaceElevated : Colors.transparent,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(
-                horizontal: AleraTokens.space8,
+        final path = entries[index].relativePath;
+        // Repaint filtered metadata through the same revision signal as tree
+        // nodes so Git badges, folder kinds and status don't become stale.
+        return ValueListenableBuilder<int>(
+          valueListenable: _rowMetadataRevision,
+          builder: (context, _, _) {
+            final entry = _visibleEntryForPath(path);
+            final row = _ExplorerRow(
+              name: path,
+              filterQuery: query,
+              entry: entry,
+              expanded: false,
+              selected: _filterSelectedPaths.contains(path),
+              sourceControlRoot: path == widget.focusedSourceControlRoot,
+              leadingPadding: AleraTokens.space8,
+              onTap: () => _handleFilteredPrimaryTap(path),
+            );
+            return entryMenuDelegate.wrapFilteredEntryWithMenu(
+              context,
+              _wrapExplorerDragTarget(entry: entry, child: row),
+              entry: entry,
+              isFocusedRoot: path == widget.focusedSourceControlRoot,
+              onMenuOpeningForEntry: () =>
+                  _handleFilteredContextMenuSelection(path),
+              onEntryAction: (menuContext, action) => _handleEntryMenuAction(
+                menuContext,
+                entry: entry,
+                action: action,
               ),
-              child: Row(
-                children: <Widget>[
-                  AleraFileIcon(
-                    pathOrName: path,
-                    kind: AleraFileIconKind.file,
-                    size: 15,
-                    fallbackColor: AleraTokens.foregroundMuted,
-                  ),
-                  const SizedBox(width: AleraTokens.space6),
-                  Expanded(
-                    child: AleraSearchHighlightedText(
-                      text: path,
-                      query: query,
-                      maxLines: 1,
-                      overflow: .ellipsis,
-                      style: Theme.of(context).textTheme.bodySmall
-                          ?.copyWith(color: AleraTokens.foregroundMuted),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        );
-        return entryMenuDelegate.wrapFilteredFileWithMenu(
-          context,
-          row,
-          onMenuOpeningForFile: () => _handleFilteredContextMenuSelection(path),
-          onEntryAction: (menuContext, action) =>
-              _handleFilteredMenuAction(menuContext, path, action),
+            );
+          },
         );
       },
     );

@@ -1,6 +1,134 @@
 part of 'workspace_explorer_test.dart';
 
 void _registerWorkspaceExplorerActionTests() {
+  testWidgets('filtered folder exposes the same folder menu as the tree', (
+    tester,
+  ) async {
+    final service = _FakeWorkspaceFileService()
+      ..childrenByDirectory[''] = <native.WorkspaceFileEntry>[
+        _directory('packages', hasChildrenHint: true),
+      ]
+      ..quickOpenEntries = <String>['packages/deep/example.dart'];
+    final roots = <String>[];
+    await _pumpExplorer(
+      tester,
+      service,
+      onFocusSourceControlFolder: (path) async {
+        roots.add(path);
+        return true;
+      },
+    );
+    await tester.enterText(find.byType(TextField), 'packages');
+    await tester.pumpAndSettle();
+    expect(find.text('packages'), findsNWidgets(2));
+    expect(find.text('packages/deep/example.dart'), findsOneWidget);
+
+    await tester.tap(
+      find.text('packages').last,
+      buttons: kSecondaryMouseButton,
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Use As Source Control Root'), findsOneWidget);
+    expect(find.text('View File History'), findsNothing);
+    expect(find.text('Open with Default Application'), findsNothing);
+    await tester.scrollUntilVisible(
+      find.text('Use As Source Control Root'),
+      80,
+      scrollable: find.byType(Scrollable).last,
+    );
+    await tester.tap(find.text('Use As Source Control Root'));
+    await tester.pumpAndSettle();
+    expect(roots, ['packages']);
+  });
+
+  testWidgets('filtered copy and paste into selected folder uses folder path', (
+    tester,
+  ) async {
+    final service = _FakeWorkspaceFileService()
+      ..childrenByDirectory[''] = <native.WorkspaceFileEntry>[
+        _directory('target', hasChildrenHint: true),
+        _directory('src', hasChildrenHint: true),
+      ]
+      ..quickOpenEntries = <String>['src/source.dart'];
+    await _pumpExplorer(tester, service);
+    await tester.enterText(find.byType(TextField), 'source');
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.text('src/source.dart'),
+      buttons: kSecondaryMouseButton,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Copy'));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextField), 'target');
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('target').last, buttons: kSecondaryMouseButton);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Paste'));
+    await tester.pumpAndSettle();
+    expect(service.copiedFiles, <String>['src/source.dart->target']);
+  });
+
+  testWidgets(
+    'filtered Ctrl+A Ctrl+C reduces selected folder and descendants',
+    (tester) async {
+      final service = _FakeWorkspaceFileService()
+        ..childrenByDirectory[''] = <native.WorkspaceFileEntry>[
+          _directory('lib', hasChildrenHint: true),
+        ]
+        ..quickOpenEntries = <String>['lib/deep/first.dart', 'lib/second.dart'];
+      await _pumpExplorer(tester, service);
+      await tester.enterText(find.byType(TextField), 'lib');
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.text('lib/deep/first.dart'),
+        buttons: kSecondaryMouseButton,
+      );
+      await tester.pumpAndSettle();
+      await tester.tapAt(const Offset(315, 470));
+      await tester.pumpAndSettle();
+      await _pressExplorerFileShortcut(tester, LogicalKeyboardKey.keyA);
+      await _pressExplorerFileShortcut(tester, LogicalKeyboardKey.keyC);
+      expect(service.systemClipboardWrites, hasLength(1));
+      expect(
+        service.systemClipboardWrites.single.paths.map(p.basename),
+        <String>['lib'],
+      );
+    },
+  );
+
+  testWidgets('filtered Ctrl+V imports Windows Explorer files into folder', (
+    tester,
+  ) async {
+    if (!Platform.isWindows) return;
+    final service = _FakeWorkspaceFileService()
+      ..childrenByDirectory[''] = <native.WorkspaceFileEntry>[
+        _directory('destination', hasChildrenHint: false),
+      ]
+      ..systemClipboard = const WorkspaceFileClipboardPayload(
+        paths: <String>[r'C:\outside\picked.txt'],
+        operation: WorkspaceFileClipboardOperation.copy,
+        sequenceNumber: 42,
+      );
+    await _pumpExplorer(tester, service);
+    await tester.enterText(find.byType(TextField), 'destination');
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.text('destination').last,
+      buttons: kSecondaryMouseButton,
+    );
+    await tester.pumpAndSettle();
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    await _pressExplorerPasteShortcut(tester);
+    expect(service.importedClipboardCalls, hasLength(1));
+    expect(
+      service.importedClipboardCalls.single.targetParentRelativePath,
+      'destination',
+    );
+  });
+
   testWidgets('filtered unloaded file gets the normal complete file menu', (
     tester,
   ) async {
