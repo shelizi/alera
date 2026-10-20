@@ -383,6 +383,38 @@ class WorkspaceFileService {
     );
   }
 
+  /// One-time seed of the Rust-owned tree. Changes send only the modified
+  /// directory and a versioned handle rather than all loaded snapshots.
+  Future<native.WorkspaceExplorerProjectionHandle>
+  startExplorerProjectionSession({
+    required String workspaceName,
+    required String workspacePath,
+    required List<native.WorkspaceExplorerDirectoryChildren> directories,
+  }) {
+    return native.startWorkspaceExplorerProjectionSession(
+      workspaceName: workspaceName,
+      workspacePath: workspacePath,
+      directories: directories,
+    );
+  }
+
+  Future<native.WorkspaceExplorerProjectionDelta>
+  updateExplorerProjectionSession({
+    required native.WorkspaceExplorerProjectionHandle handle,
+    required native.WorkspaceExplorerDirectoryChildren replacement,
+  }) {
+    return native.updateWorkspaceExplorerProjectionSession(
+      handle: handle,
+      replacement: replacement,
+    );
+  }
+
+  Future<void> stopExplorerProjectionSession({
+    required native.WorkspaceExplorerProjectionHandle handle,
+  }) {
+    return native.stopWorkspaceExplorerProjectionSession(handle: handle);
+  }
+
   Future<native.WorkspaceExplorerWatcherHandle> startExplorerWatcher({
     required String workspacePath,
   }) {

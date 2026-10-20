@@ -118,33 +118,169 @@ extension _WorkspaceExplorerRefresh on _WorkspaceExplorerState {
   Future<void> _replaceDirectoryChildren(
     String relativePath,
     List<native.WorkspaceFileEntry> children,
-  ) async {
-    if (workspaceExplorerDirectoryChildrenUnchanged(
-      _childrenByDirectory[relativePath],
-      children,
-    )) {
-      // Preserve best-effort watcher-registration retry without rebuilding
-      // every native node and Dart index for a no-change filesystem event.
-      await _syncWatchedDirectories();
-      return;
-    }
-    final projection = await _workspaceFiles.projectExplorerTree(
-      workspaceName: widget.workspace.name,
-      workspacePath: widget.workspace.path,
-      directories: _directorySnapshots(),
-      replacement: native.WorkspaceExplorerDirectoryChildren(
+  ) {
+    final generation = _nativeProjectionGeneration;
+    // A watcher event can overlap user-triggered refreshes; serialize native
+    // versions so a later directory replacement never races an earlier one.
+    final update = _nativeProjectionQueue.then((_) async {
+      if (!mounted || generation != _nativeProjectionGeneration) return;
+      if (workspaceExplorerDirectoryChildrenUnchanged(
+        _childrenByDirectory[relativePath],
+        children,
+      )) {
+        await _syncWatchedDirectories();
+        return;
+      }
+      final replacement = native.WorkspaceExplorerDirectoryChildren(
         relativePath: relativePath,
         children: children,
+      );
+      if (!_nativeProjectionDisabled) {
+        try {
+          final handle = await _ensureNativeProjectionSession(generation);
+          if (!mounted || generation != _nativeProjectionGeneration) return;
+          final delta = await _workspaceFiles.updateExplorerProjectionSession(
+            handle: handle,
+            replacement: replacement,
+          );
+          if (!mounted || generation != _nativeProjectionGeneration) return;
+          _applyNativeProjectionDelta(delta);
+          _nativeProjectionHandle = native.WorkspaceExplorerProjectionHandle(
+            id: handle.id,
+            version: delta.version,
+          );
+          await _syncWatchedDirectories();
+          return;
+        } catch (_) {
+          // Older native binaries, lost handles or stale versions must never
+          // strand the Explorer; the stateless Rust projection remains valid.
+          _disposeNativeProjectionSession(bumpGeneration: false);
+          _nativeProjectionDisabled = true;
+        }
+      }
+      final projection = await _workspaceFiles.projectExplorerTree(
+        workspaceName: widget.workspace.name,
+        workspacePath: widget.workspace.path,
+        directories: _directorySnapshots(),
+        replacement: replacement,
+      );
+      if (!mounted || generation != _nativeProjectionGeneration) return;
+      _applyProjection(projection);
+      await _syncWatchedDirectories();
+    });
+    _nativeProjectionQueue = update.catchError((Object _) {});
+    return update;
+  }
+
+  Future<native.WorkspaceExplorerProjectionHandle>
+  _ensureNativeProjectionSession(int generation) async {
+    final active = _nativeProjectionHandle;
+    if (active != null) return active;
+    final starting = _nativeProjectionStarting ??= _workspaceFiles
+        .startExplorerProjectionSession(
+          workspaceName: widget.workspace.name,
+          workspacePath: widget.workspace.path,
+          directories: _directorySnapshots(),
+        );
+    final handle = await starting;
+    if (!mounted || generation != _nativeProjectionGeneration) {
+      unawaited(
+        _workspaceFiles
+            .stopExplorerProjectionSession(handle: handle)
+            .catchError((Object _) {}),
+      );
+      throw StateError(
+        'Explorer projection was replaced during initialization',
+      );
+    }
+    _nativeProjectionHandle = handle;
+    return handle;
+  }
+
+  void _applyNativeProjectionDelta(
+    native.WorkspaceExplorerProjectionDelta delta,
+  ) {
+    final directories = <String, native.WorkspaceExplorerDirectoryChildren>{
+      for (final item
+          in _projection?.directories ??
+              const <native.WorkspaceExplorerDirectoryChildren>[])
+        item.relativePath: item,
+    };
+    for (final path in delta.removedDirectoryPaths) {
+      directories.remove(path);
+    }
+    for (final item in delta.changedDirectories) {
+      directories[item.relativePath] = item;
+    }
+    final nodes = <String, native.WorkspaceExplorerTreeNode>{
+      for (final node
+          in _projection?.nodes ?? const <native.WorkspaceExplorerTreeNode>[])
+        node.id: node,
+    };
+    for (final id in delta.removedNodeIds) {
+      nodes.remove(id);
+    }
+    for (final node in delta.changedNodes) {
+      nodes[node.id] = node;
+    }
+    final bindings = <String, native.WorkspaceExplorerEntryBinding>{
+      for (final binding
+          in _projection?.entryBindings ??
+              const <native.WorkspaceExplorerEntryBinding>[])
+        binding.nodeId: binding,
+    };
+    for (final id in delta.removedBindingNodeIds) {
+      bindings.remove(id);
+    }
+    for (final binding in delta.changedBindings) {
+      bindings[binding.nodeId] = binding;
+    }
+    final sortedDirectories = directories.values.toList(growable: false)
+      ..sort((a, b) => a.relativePath.compareTo(b.relativePath));
+    final sortedNodes = nodes.values.toList(growable: false)
+      ..sort((a, b) {
+        if (a.id == _WorkspaceExplorerState._rootId) return -1;
+        if (b.id == _WorkspaceExplorerState._rootId) return 1;
+        return a.virtualPath.compareTo(b.virtualPath);
+      });
+    final sortedBindings = bindings.values.toList(growable: false)
+      ..sort((a, b) => a.nodeId.compareTo(b.nodeId));
+    _applyProjection(
+      native.WorkspaceExplorerTreeProjection(
+        directories: sortedDirectories,
+        nodes: sortedNodes,
+        entryBindings: sortedBindings,
       ),
     );
-    if (!mounted) {
-      return;
+  }
+
+  void _disposeNativeProjectionSession({bool bumpGeneration = true}) {
+    if (bumpGeneration) _nativeProjectionGeneration += 1;
+    final active = _nativeProjectionHandle;
+    final starting = _nativeProjectionStarting;
+    _nativeProjectionHandle = null;
+    _nativeProjectionStarting = null;
+    if (active != null) {
+      unawaited(
+        _workspaceFiles
+            .stopExplorerProjectionSession(handle: active)
+            .catchError((Object _) {}),
+      );
+    } else if (starting != null) {
+      unawaited(
+        starting
+            .then(
+              (handle) =>
+                  _workspaceFiles.stopExplorerProjectionSession(handle: handle),
+            )
+            .catchError((Object _) {}),
+      );
     }
-    _applyProjection(projection);
-    await _syncWatchedDirectories();
   }
 
   void _resetExplorerProjection() {
+    _disposeNativeProjectionSession();
+    _nativeProjectionDisabled = false;
     _projection = null;
     _childrenByDirectory.clear();
     _entryByPath.clear();

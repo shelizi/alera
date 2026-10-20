@@ -92,7 +92,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.13.0';
 
   @override
-  int get rustContentHash => 855971425;
+  int get rustContentHash => 375000003;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -748,6 +748,13 @@ abstract class RustLibApi extends BaseApi {
     required String workspacePath,
   });
 
+  Future<WorkspaceExplorerProjectionHandle>
+  crateApiWorkspaceFilesStartWorkspaceExplorerProjectionSession({
+    required String workspaceName,
+    required String workspacePath,
+    required List<WorkspaceExplorerDirectoryChildren> directories,
+  });
+
   Future<WorkspaceExplorerWatcherHandle>
   crateApiWorkspaceFilesStartWorkspaceExplorerWatcher({
     required String workspacePath,
@@ -765,6 +772,10 @@ abstract class RustLibApi extends BaseApi {
     required SourceControlWatcherHandle handle,
   });
 
+  Future<void> crateApiWorkspaceFilesStopWorkspaceExplorerProjectionSession({
+    required WorkspaceExplorerProjectionHandle handle,
+  });
+
   Future<void> crateApiWorkspaceFilesStopWorkspaceExplorerWatcher({
     required WorkspaceExplorerWatcherHandle handle,
   });
@@ -775,6 +786,12 @@ abstract class RustLibApi extends BaseApi {
 
   Future<AiDictationResult> crateApiAiDictationTranscribeWhisper({
     required AiDictationRequest request,
+  });
+
+  Future<WorkspaceExplorerProjectionDelta>
+  crateApiWorkspaceFilesUpdateWorkspaceExplorerProjectionSession({
+    required WorkspaceExplorerProjectionHandle handle,
+    required WorkspaceExplorerDirectoryChildren replacement,
   });
 
   Future<void> crateApiWorkspaceFilesUpdateWorkspaceExplorerWatcher({
@@ -5419,6 +5436,49 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<WorkspaceExplorerProjectionHandle>
+  crateApiWorkspaceFilesStartWorkspaceExplorerProjectionSession({
+    required String workspaceName,
+    required String workspacePath,
+    required List<WorkspaceExplorerDirectoryChildren> directories,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(workspaceName, serializer);
+          sse_encode_String(workspacePath, serializer);
+          sse_encode_list_workspace_explorer_directory_children(
+            directories,
+            serializer,
+          );
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 129,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_workspace_explorer_projection_handle,
+          decodeErrorData: sse_decode_workspace_file_error,
+        ),
+        constMeta:
+            kCrateApiWorkspaceFilesStartWorkspaceExplorerProjectionSessionConstMeta,
+        argValues: [workspaceName, workspacePath, directories],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta
+  get kCrateApiWorkspaceFilesStartWorkspaceExplorerProjectionSessionConstMeta =>
+      const TaskConstMeta(
+        debugName: "start_workspace_explorer_projection_session",
+        argNames: ["workspaceName", "workspacePath", "directories"],
+      );
+
+  @override
   Future<WorkspaceExplorerWatcherHandle>
   crateApiWorkspaceFilesStartWorkspaceExplorerWatcher({
     required String workspacePath,
@@ -5431,7 +5491,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 129,
+            funcId: 130,
             port: port_,
           );
         },
@@ -5469,7 +5529,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 130,
+            funcId: 131,
             port: port_,
           );
         },
@@ -5501,7 +5561,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 131,
+            funcId: 132,
             port: port_,
           );
         },
@@ -5534,7 +5594,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 132,
+            funcId: 133,
             port: port_,
           );
         },
@@ -5556,6 +5616,44 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<void> crateApiWorkspaceFilesStopWorkspaceExplorerProjectionSession({
+    required WorkspaceExplorerProjectionHandle handle,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_box_autoadd_workspace_explorer_projection_handle(
+            handle,
+            serializer,
+          );
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 134,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: null,
+        ),
+        constMeta:
+            kCrateApiWorkspaceFilesStopWorkspaceExplorerProjectionSessionConstMeta,
+        argValues: [handle],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta
+  get kCrateApiWorkspaceFilesStopWorkspaceExplorerProjectionSessionConstMeta =>
+      const TaskConstMeta(
+        debugName: "stop_workspace_explorer_projection_session",
+        argNames: ["handle"],
+      );
+
+  @override
   Future<void> crateApiWorkspaceFilesStopWorkspaceExplorerWatcher({
     required WorkspaceExplorerWatcherHandle handle,
   }) {
@@ -5570,7 +5668,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 133,
+            funcId: 135,
             port: port_,
           );
         },
@@ -5607,7 +5705,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 134,
+            funcId: 136,
             port: port_,
           );
         },
@@ -5642,7 +5740,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 135,
+            funcId: 137,
             port: port_,
           );
         },
@@ -5664,6 +5762,50 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<WorkspaceExplorerProjectionDelta>
+  crateApiWorkspaceFilesUpdateWorkspaceExplorerProjectionSession({
+    required WorkspaceExplorerProjectionHandle handle,
+    required WorkspaceExplorerDirectoryChildren replacement,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_box_autoadd_workspace_explorer_projection_handle(
+            handle,
+            serializer,
+          );
+          sse_encode_box_autoadd_workspace_explorer_directory_children(
+            replacement,
+            serializer,
+          );
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 138,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_workspace_explorer_projection_delta,
+          decodeErrorData: sse_decode_workspace_file_error,
+        ),
+        constMeta:
+            kCrateApiWorkspaceFilesUpdateWorkspaceExplorerProjectionSessionConstMeta,
+        argValues: [handle, replacement],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta
+  get kCrateApiWorkspaceFilesUpdateWorkspaceExplorerProjectionSessionConstMeta =>
+      const TaskConstMeta(
+        debugName: "update_workspace_explorer_projection_session",
+        argNames: ["handle", "replacement"],
+      );
+
+  @override
   Future<void> crateApiWorkspaceFilesUpdateWorkspaceExplorerWatcher({
     required WorkspaceExplorerWatcherHandle handle,
     required List<String> watchedRelativePaths,
@@ -5680,7 +5822,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 136,
+            funcId: 139,
             port: port_,
           );
         },
@@ -5719,7 +5861,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 137,
+              funcId: 140,
               port: port_,
             );
           },
@@ -5764,7 +5906,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 138,
+              funcId: 141,
               port: port_,
             );
           },
@@ -5809,7 +5951,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 139,
+              funcId: 142,
               port: port_,
             );
           },
@@ -5852,7 +5994,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 140,
+            funcId: 143,
             port: port_,
           );
         },
@@ -5912,7 +6054,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 141,
+            funcId: 144,
             port: port_,
           );
         },
@@ -5974,7 +6116,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 142,
+            funcId: 145,
             port: port_,
           );
         },
@@ -6368,6 +6510,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   dco_decode_box_autoadd_workspace_explorer_directory_children(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_workspace_explorer_directory_children(raw);
+  }
+
+  @protected
+  WorkspaceExplorerProjectionHandle
+  dco_decode_box_autoadd_workspace_explorer_projection_handle(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_workspace_explorer_projection_handle(raw);
   }
 
   @protected
@@ -7731,6 +7880,39 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  WorkspaceExplorerProjectionDelta
+  dco_decode_workspace_explorer_projection_delta(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 7)
+      throw Exception('unexpected arr length: expect 7 but see ${arr.length}');
+    return WorkspaceExplorerProjectionDelta(
+      version: dco_decode_u_64(arr[0]),
+      changedDirectories: dco_decode_list_workspace_explorer_directory_children(
+        arr[1],
+      ),
+      removedDirectoryPaths: dco_decode_list_String(arr[2]),
+      changedNodes: dco_decode_list_workspace_explorer_tree_node(arr[3]),
+      removedNodeIds: dco_decode_list_String(arr[4]),
+      changedBindings: dco_decode_list_workspace_explorer_entry_binding(arr[5]),
+      removedBindingNodeIds: dco_decode_list_String(arr[6]),
+    );
+  }
+
+  @protected
+  WorkspaceExplorerProjectionHandle
+  dco_decode_workspace_explorer_projection_handle(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 2)
+      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    return WorkspaceExplorerProjectionHandle(
+      id: dco_decode_u_64(arr[0]),
+      version: dco_decode_u_64(arr[1]),
+    );
+  }
+
+  @protected
   WorkspaceExplorerTreeNode dco_decode_workspace_explorer_tree_node(
     dynamic raw,
   ) {
@@ -8497,6 +8679,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return (sse_decode_workspace_explorer_directory_children(deserializer));
+  }
+
+  @protected
+  WorkspaceExplorerProjectionHandle
+  sse_decode_box_autoadd_workspace_explorer_projection_handle(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_workspace_explorer_projection_handle(deserializer));
   }
 
   @protected
@@ -10307,6 +10498,44 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  WorkspaceExplorerProjectionDelta
+  sse_decode_workspace_explorer_projection_delta(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_version = sse_decode_u_64(deserializer);
+    var var_changedDirectories =
+        sse_decode_list_workspace_explorer_directory_children(deserializer);
+    var var_removedDirectoryPaths = sse_decode_list_String(deserializer);
+    var var_changedNodes = sse_decode_list_workspace_explorer_tree_node(
+      deserializer,
+    );
+    var var_removedNodeIds = sse_decode_list_String(deserializer);
+    var var_changedBindings = sse_decode_list_workspace_explorer_entry_binding(
+      deserializer,
+    );
+    var var_removedBindingNodeIds = sse_decode_list_String(deserializer);
+    return WorkspaceExplorerProjectionDelta(
+      version: var_version,
+      changedDirectories: var_changedDirectories,
+      removedDirectoryPaths: var_removedDirectoryPaths,
+      changedNodes: var_changedNodes,
+      removedNodeIds: var_removedNodeIds,
+      changedBindings: var_changedBindings,
+      removedBindingNodeIds: var_removedBindingNodeIds,
+    );
+  }
+
+  @protected
+  WorkspaceExplorerProjectionHandle
+  sse_decode_workspace_explorer_projection_handle(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_id = sse_decode_u_64(deserializer);
+    var var_version = sse_decode_u_64(deserializer);
+    return WorkspaceExplorerProjectionHandle(id: var_id, version: var_version);
+  }
+
+  @protected
   WorkspaceExplorerTreeNode sse_decode_workspace_explorer_tree_node(
     SseDeserializer deserializer,
   ) {
@@ -11109,6 +11338,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_workspace_explorer_directory_children(self, serializer);
+  }
+
+  @protected
+  void sse_encode_box_autoadd_workspace_explorer_projection_handle(
+    WorkspaceExplorerProjectionHandle self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_workspace_explorer_projection_handle(self, serializer);
   }
 
   @protected
@@ -12656,6 +12894,37 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.nodeId, serializer);
     sse_encode_String(self.relativePath, serializer);
+  }
+
+  @protected
+  void sse_encode_workspace_explorer_projection_delta(
+    WorkspaceExplorerProjectionDelta self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_u_64(self.version, serializer);
+    sse_encode_list_workspace_explorer_directory_children(
+      self.changedDirectories,
+      serializer,
+    );
+    sse_encode_list_String(self.removedDirectoryPaths, serializer);
+    sse_encode_list_workspace_explorer_tree_node(self.changedNodes, serializer);
+    sse_encode_list_String(self.removedNodeIds, serializer);
+    sse_encode_list_workspace_explorer_entry_binding(
+      self.changedBindings,
+      serializer,
+    );
+    sse_encode_list_String(self.removedBindingNodeIds, serializer);
+  }
+
+  @protected
+  void sse_encode_workspace_explorer_projection_handle(
+    WorkspaceExplorerProjectionHandle self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_u_64(self.id, serializer);
+    sse_encode_u_64(self.version, serializer);
   }
 
   @protected

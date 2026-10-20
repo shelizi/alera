@@ -180,6 +180,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   dco_decode_box_autoadd_workspace_explorer_directory_children(dynamic raw);
 
   @protected
+  WorkspaceExplorerProjectionHandle
+  dco_decode_box_autoadd_workspace_explorer_projection_handle(dynamic raw);
+
+  @protected
   WorkspaceExplorerWatcherHandle
   dco_decode_box_autoadd_workspace_explorer_watcher_handle(dynamic raw);
 
@@ -664,6 +668,14 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  WorkspaceExplorerProjectionDelta
+  dco_decode_workspace_explorer_projection_delta(dynamic raw);
+
+  @protected
+  WorkspaceExplorerProjectionHandle
+  dco_decode_workspace_explorer_projection_handle(dynamic raw);
+
+  @protected
   WorkspaceExplorerTreeNode dco_decode_workspace_explorer_tree_node(
     dynamic raw,
   );
@@ -925,6 +937,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   WorkspaceExplorerDirectoryChildren
   sse_decode_box_autoadd_workspace_explorer_directory_children(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  WorkspaceExplorerProjectionHandle
+  sse_decode_box_autoadd_workspace_explorer_projection_handle(
     SseDeserializer deserializer,
   );
 
@@ -1539,6 +1557,14 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  WorkspaceExplorerProjectionDelta
+  sse_decode_workspace_explorer_projection_delta(SseDeserializer deserializer);
+
+  @protected
+  WorkspaceExplorerProjectionHandle
+  sse_decode_workspace_explorer_projection_handle(SseDeserializer deserializer);
+
+  @protected
   WorkspaceExplorerTreeNode sse_decode_workspace_explorer_tree_node(
     SseDeserializer deserializer,
   );
@@ -1872,6 +1898,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_box_autoadd_workspace_explorer_directory_children(
     WorkspaceExplorerDirectoryChildren self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_box_autoadd_workspace_explorer_projection_handle(
+    WorkspaceExplorerProjectionHandle self,
     SseSerializer serializer,
   );
 
@@ -2637,6 +2669,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_workspace_explorer_entry_binding(
     WorkspaceExplorerEntryBinding self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_workspace_explorer_projection_delta(
+    WorkspaceExplorerProjectionDelta self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_workspace_explorer_projection_handle(
+    WorkspaceExplorerProjectionHandle self,
     SseSerializer serializer,
   );
 

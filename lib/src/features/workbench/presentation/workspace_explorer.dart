@@ -132,6 +132,11 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
   final Map<String, native.WorkspaceFileEntry> _entryByNodeId =
       <String, native.WorkspaceFileEntry>{};
   native.WorkspaceExplorerTreeProjection? _projection;
+  native.WorkspaceExplorerProjectionHandle? _nativeProjectionHandle;
+  Future<native.WorkspaceExplorerProjectionHandle>? _nativeProjectionStarting;
+  Future<void> _nativeProjectionQueue = Future<void>.value();
+  int _nativeProjectionGeneration = 0;
+  bool _nativeProjectionDisabled = false;
   native.WorkspaceExplorerWatcherHandle? _watcherHandle;
   StreamSubscription<native.WorkspaceExplorerWatchBatch>? _watchSubscription;
   bool _watchRefreshInFlight = false;
@@ -231,6 +236,7 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
   void dispose() {
     _saveWorkspaceUiState(widget.workspace);
     unawaited(_stopNativeWatcher());
+    _disposeNativeProjectionSession();
     unawaited(_quickOpenRefreshSubscription?.cancel());
     _filterController.dispose();
     _filterFocusNode.dispose();

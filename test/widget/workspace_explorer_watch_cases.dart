@@ -136,7 +136,7 @@ void _registerWorkspaceExplorerWatchTests() {
     await _pumpExplorer(tester, service);
     await tester.tap(find.text('src'));
     await tester.pumpAndSettle();
-    final projected = service.projectionCalls;
+    final projected = service.nativeProjectionUpdates;
 
     service.childrenByDirectory['src'] = <native.WorkspaceFileEntry>[
       _file('src/main.dart'),
@@ -145,8 +145,68 @@ void _registerWorkspaceExplorerWatchTests() {
     service.emitWatchBatch(<String>['src']);
     await tester.pumpAndSettle();
 
-    expect(service.projectionCalls, projected + 1);
+    expect(service.nativeProjectionUpdates, projected + 1);
+    expect(service.projectionCalls, 0);
     expect(find.text('extra.dart'), findsOneWidget);
+  });
+
+  testWidgets(
+    'native Explorer delta recovers from stale handle by full fallback',
+    (tester) async {
+      final service = _FakeWorkspaceFileService()
+        ..childrenByDirectory[''] = <native.WorkspaceFileEntry>[
+          _directory('src', hasChildrenHint: true),
+        ]
+        ..childrenByDirectory['src'] = <native.WorkspaceFileEntry>[
+          _file('src/original.dart'),
+        ];
+      await _pumpExplorer(tester, service);
+      await tester.tap(find.text('src'));
+      await tester.pumpAndSettle();
+      expect(service.nativeProjectionStarts, 1);
+      final previousNativeUpdates = service.nativeProjectionUpdates;
+      final previousFallbacks = service.projectionCalls;
+      service.failNextNativeProjection = true;
+      service.childrenByDirectory['src'] = <native.WorkspaceFileEntry>[
+        _file('src/replacement.dart'),
+      ];
+      service.emitWatchBatch(<String>['src']);
+      await tester.pumpAndSettle();
+      expect(service.nativeProjectionUpdates, previousNativeUpdates + 1);
+      expect(service.projectionCalls, previousFallbacks + 1);
+      expect(find.text('replacement.dart'), findsOneWidget);
+      expect(find.text('original.dart'), findsNothing);
+    },
+  );
+
+  testWidgets('native Explorer delta retains sibling expanded subtrees', (
+    tester,
+  ) async {
+    final service = _FakeWorkspaceFileService()
+      ..childrenByDirectory[''] = <native.WorkspaceFileEntry>[
+        _directory('a', hasChildrenHint: true),
+        _directory('b', hasChildrenHint: true),
+      ]
+      ..childrenByDirectory['a'] = <native.WorkspaceFileEntry>[
+        _file('a/old.dart'),
+      ]
+      ..childrenByDirectory['b'] = <native.WorkspaceFileEntry>[
+        _file('b/stable.dart'),
+      ];
+    await _pumpExplorer(tester, service);
+    await tester.tap(find.text('a'));
+    await tester.tap(find.text('b'));
+    await tester.pumpAndSettle();
+    expect(service.nativeProjectionStarts, 1);
+    service.childrenByDirectory['a'] = <native.WorkspaceFileEntry>[
+      _file('a/new.dart'),
+    ];
+    service.emitWatchBatch(<String>['a']);
+    await tester.pumpAndSettle();
+    expect(find.text('new.dart'), findsOneWidget);
+    expect(find.text('stable.dart'), findsOneWidget);
+    expect(find.text('old.dart'), findsNothing);
+    expect(service.projectionCalls, 0);
   });
 
   testWidgets('watched directory updates are skipped when nothing changed', (
@@ -164,7 +224,7 @@ void _registerWorkspaceExplorerWatchTests() {
     await tester.tap(find.text('src'));
     await tester.pumpAndSettle();
     final updatesAfterExpand = service.watchedPathUpdates.length;
-    final projectionsAfterExpand = service.projectionCalls;
+    final projectionsAfterExpand = service.nativeProjectionUpdates;
 
     // Native listing returns new instances even when all fields are equal.
     service.childrenByDirectory['src'] = [_file('src/main.dart')];
@@ -173,7 +233,7 @@ void _registerWorkspaceExplorerWatchTests() {
 
     expect(service.watchedPathUpdates, hasLength(updatesAfterExpand));
     expect(
-      service.projectionCalls,
+      service.nativeProjectionUpdates,
       projectionsAfterExpand,
       reason:
           'No-op file events should not resend all directory snapshots to Rust',
