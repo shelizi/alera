@@ -5,7 +5,8 @@ use std::sync::{Mutex, OnceLock};
 use super::{
     explorer_tree, WorkspaceExplorerDirectoryChildren, WorkspaceExplorerEntryBinding,
     WorkspaceExplorerProjectionDelta, WorkspaceExplorerProjectionHandle, WorkspaceExplorerTreeNode,
-    WorkspaceExplorerTreeProjection, WorkspaceFileError, WorkspaceFileErrorKind,
+    WorkspaceExplorerTreeNodeKind, WorkspaceExplorerTreeProjection, WorkspaceFileError,
+    WorkspaceFileErrorKind, WorkspaceFileKind,
 };
 
 const MAX_SESSIONS: usize = 64;
@@ -119,6 +120,26 @@ pub(super) fn update(
             });
         }
     }
+    // File-only structural updates cannot prune cached child directories or
+    // create lazy placeholder nodes. Edit only this folder's entries, its
+    // child-node list, and the added/removed file bindings. Keep the full
+    // projector as the authoritative fallback for mixed/complex changes.
+    if let Ok(index) = current
+        .projection
+        .directories
+        .binary_search_by(|directory| directory.relative_path.as_str().cmp(normalized_path))
+    {
+        if let Some(delta) = try_update_file_only_children(
+            current,
+            index,
+            normalized_path,
+            &replacement,
+            next_version,
+        ) {
+            return Ok(delta);
+        }
+    }
+
     let updated = explorer_tree::project_tree(
         current.workspace_name.clone(),
         current.workspace_path.clone(),
@@ -150,6 +171,182 @@ fn same_explorer_node_layout(
                     && old.kind == new.kind
                     && old.has_children_hint == new.has_children_hint
             })
+}
+
+/// Conservative structural fast path for a folder whose direct children are
+/// all ordinary files. The full native projector must still handle directory
+/// removal/pruning, lazy placeholders, implicit parents and special file kinds.
+fn direct_unique_files(relative_directory: &str, entries: &[super::WorkspaceFileEntry]) -> bool {
+    let prefix = if relative_directory.is_empty() {
+        String::new()
+    } else {
+        format!("{relative_directory}/")
+    };
+    let mut seen = std::collections::HashSet::with_capacity(entries.len());
+    entries.iter().all(|entry| {
+        if !matches!(entry.kind, WorkspaceFileKind::File) {
+            return false;
+        }
+        let Some(name) = entry.relative_path.strip_prefix(&prefix) else {
+            return false;
+        };
+        !name.is_empty() && !name.contains('/') && seen.insert(entry.relative_path.as_str())
+    })
+}
+
+fn try_update_file_only_children(
+    current: &mut ExplorerProjectionSession,
+    directory_index: usize,
+    relative_directory: &str,
+    replacement: &WorkspaceExplorerDirectoryChildren,
+    next_version: u64,
+) -> Option<WorkspaceExplorerProjectionDelta> {
+    let previous = &current.projection.directories[directory_index];
+    if !direct_unique_files(relative_directory, &previous.children)
+        || !direct_unique_files(relative_directory, &replacement.children)
+    {
+        return None;
+    }
+    let parent_id = if relative_directory.is_empty() {
+        "workspace-root".to_owned()
+    } else {
+        format!("path:{relative_directory}")
+    };
+    let parent_index = current
+        .projection
+        .nodes
+        .iter()
+        .position(|node| node.id == parent_id)?;
+    let expected_old_ids: Vec<String> = previous
+        .children
+        .iter()
+        .map(|entry| format!("path:{}", entry.relative_path))
+        .collect();
+    // The parent might be an implicit/intermediate node with children from
+    // elsewhere. In that case the full projector is the only safe option.
+    if current.projection.nodes[parent_index].child_ids != expected_old_ids {
+        return None;
+    }
+
+    let old_paths = previous
+        .children
+        .iter()
+        .map(|entry| entry.relative_path.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    let new_paths = replacement
+        .children
+        .iter()
+        .map(|entry| entry.relative_path.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    let mut removed_node_ids = previous
+        .children
+        .iter()
+        .filter(|entry| !new_paths.contains(entry.relative_path.as_str()))
+        .map(|entry| format!("path:{}", entry.relative_path))
+        .collect::<Vec<_>>();
+    // Full projector orders removed nodes by virtual path; direct siblings
+    // have the same ordering as relative paths.
+    removed_node_ids.sort();
+
+    let mut new_nodes = Vec::new();
+    let mut new_bindings = Vec::new();
+    for entry in &replacement.children {
+        if old_paths.contains(entry.relative_path.as_str()) {
+            continue;
+        }
+        let node_id = format!("path:{}", entry.relative_path);
+        new_nodes.push(WorkspaceExplorerTreeNode {
+            id: node_id.clone(),
+            name: entry
+                .relative_path
+                .rsplit('/')
+                .next()
+                .unwrap_or_default()
+                .to_owned(),
+            kind: WorkspaceExplorerTreeNodeKind::File,
+            parent_id: parent_id.clone(),
+            virtual_path: format!("/{}", entry.relative_path),
+            source_path: entry.relative_path.clone(),
+            entry_id: Some(entry.relative_path.clone()),
+            child_ids: Vec::new(),
+            is_expanded: false,
+            is_virtual: false,
+        });
+        new_bindings.push(WorkspaceExplorerEntryBinding {
+            node_id,
+            relative_path: entry.relative_path.clone(),
+        });
+    }
+
+    let next_child_ids = replacement
+        .children
+        .iter()
+        .map(|entry| format!("path:{}", entry.relative_path))
+        .collect::<Vec<_>>();
+    let mut changed_nodes = Vec::with_capacity(new_nodes.len() + 1);
+    let parent = &mut current.projection.nodes[parent_index];
+    if parent.child_ids != next_child_ids {
+        parent.child_ids = next_child_ids;
+        changed_nodes.push(parent.clone());
+    }
+    changed_nodes.extend(new_nodes.iter().cloned());
+    changed_nodes.sort_by(|left, right| {
+        if left.id == "workspace-root" {
+            std::cmp::Ordering::Less
+        } else if right.id == "workspace-root" {
+            std::cmp::Ordering::Greater
+        } else {
+            left.virtual_path.cmp(&right.virtual_path)
+        }
+    });
+    new_bindings.sort_by(|left, right| left.node_id.cmp(&right.node_id));
+
+    if !removed_node_ids.is_empty() {
+        let removed = removed_node_ids
+            .iter()
+            .map(String::as_str)
+            .collect::<std::collections::HashSet<_>>();
+        current
+            .projection
+            .nodes
+            .retain(|node| !removed.contains(node.id.as_str()));
+        current
+            .projection
+            .entry_bindings
+            .retain(|binding| !removed.contains(binding.node_id.as_str()));
+    }
+    if !new_nodes.is_empty() {
+        current.projection.nodes.extend(new_nodes);
+        current.projection.nodes.sort_by(|left, right| {
+            if left.id == "workspace-root" {
+                std::cmp::Ordering::Less
+            } else if right.id == "workspace-root" {
+                std::cmp::Ordering::Greater
+            } else {
+                left.virtual_path.cmp(&right.virtual_path)
+            }
+        });
+        current
+            .projection
+            .entry_bindings
+            .extend(new_bindings.iter().cloned());
+        current
+            .projection
+            .entry_bindings
+            .sort_by(|left, right| left.node_id.cmp(&right.node_id));
+    }
+
+    current.projection.directories[directory_index].children = replacement.children.clone();
+    current.version = next_version;
+    Some(WorkspaceExplorerProjectionDelta {
+        version: next_version,
+        changed_directories: vec![current.projection.directories[directory_index].clone()],
+        removed_directory_paths: Vec::new(),
+        changed_nodes,
+        removed_node_ids: removed_node_ids.clone(),
+        changed_bindings: new_bindings,
+        removed_binding_node_ids: removed_node_ids,
+    })
 }
 
 pub(super) fn stop(handle: WorkspaceExplorerProjectionHandle) {
@@ -512,6 +709,195 @@ mod tests {
             full = expected;
         }
         stop(handle);
+    }
+
+    #[test]
+    fn file_only_structure_bulk_add_remove_reorder_matches_full_projector() {
+        for target in ["", "src/deep"] {
+            let mut directories = vec![children(
+                "",
+                if target.is_empty() {
+                    vec![entry("readme.txt", WorkspaceFileKind::File, false)]
+                } else {
+                    vec![entry("src", WorkspaceFileKind::Directory, true)]
+                },
+            )];
+            if !target.is_empty() {
+                directories.push(children(
+                    "src",
+                    vec![entry("src/deep", WorkspaceFileKind::Directory, true)],
+                ));
+                directories.push(children(
+                    target,
+                    vec![entry("src/deep/readme.txt", WorkspaceFileKind::File, false)],
+                ));
+            }
+            let mut full = explorer_tree::project_tree(
+                "alera".into(),
+                "/repo".into(),
+                directories.clone(),
+                None,
+            );
+            let handle = start("alera".into(), "/repo".into(), directories).unwrap();
+            let original = if target.is_empty() {
+                "readme.txt".to_owned()
+            } else {
+                format!("{target}/readme.txt")
+            };
+            for round in 0..7 {
+                let mut entries = vec![entry(&original, WorkspaceFileKind::File, false)];
+                if round % 3 != 2 {
+                    for number in 0..125 {
+                        entries.push(entry(
+                            &if target.is_empty() {
+                                format!("file_{number:03}.rs")
+                            } else {
+                                format!("{target}/file_{number:03}.rs")
+                            },
+                            WorkspaceFileKind::File,
+                            false,
+                        ));
+                    }
+                }
+                if round % 3 == 1 {
+                    entries.reverse();
+                    entries[0].size = 1024;
+                }
+                let replacement = children(target, entries);
+                let expected = explorer_tree::project_tree(
+                    "alera".into(),
+                    "/repo".into(),
+                    full.directories.clone(),
+                    Some(replacement.clone()),
+                );
+                let expected_delta = diff_projections(&full, &expected, round + 1);
+                let actual = update(
+                    WorkspaceExplorerProjectionHandle {
+                        id: handle.id,
+                        version: round,
+                    },
+                    replacement,
+                )
+                .unwrap();
+                assert_eq!(
+                    actual.changed_directories, expected_delta.changed_directories,
+                    "directories at {target:?} round {round}"
+                );
+                assert_eq!(
+                    actual.removed_directory_paths, expected_delta.removed_directory_paths,
+                    "removed directories at {target:?} round {round}"
+                );
+                assert_eq!(
+                    actual.changed_nodes, expected_delta.changed_nodes,
+                    "changed nodes at {target:?} round {round}"
+                );
+                assert_eq!(
+                    actual.removed_node_ids, expected_delta.removed_node_ids,
+                    "removed nodes at {target:?} round {round}"
+                );
+                assert_eq!(
+                    actual.changed_bindings, expected_delta.changed_bindings,
+                    "changed bindings at {target:?} round {round}"
+                );
+                assert_eq!(
+                    actual.removed_binding_node_ids, expected_delta.removed_binding_node_ids,
+                    "removed bindings at {target:?} round {round}"
+                );
+                let registry = sessions().lock().unwrap();
+                let actual_full = &registry.get(&handle.id).unwrap().projection;
+                assert_eq!(
+                    actual_full.directories, expected.directories,
+                    "full directories {target:?} round {round}"
+                );
+                assert_eq!(
+                    actual_full.nodes, expected.nodes,
+                    "full nodes {target:?} round {round}"
+                );
+                assert_eq!(
+                    actual_full.entry_bindings, expected.entry_bindings,
+                    "full bindings {target:?} round {round}"
+                );
+                drop(registry);
+                full = expected;
+            }
+            stop(handle);
+        }
+    }
+
+    /// Manual Release CPU benchmark of large file-only structural updates
+    /// in one loaded folder among many loaded worktree folders.
+    /// cargo test --release --manifest-path rust/Cargo.toml \
+    ///   profile_explorer_structural_add_remove --lib -- --ignored --nocapture
+    #[test]
+    #[ignore = "manual native Explorer structural 100/300/1000-directory Release benchmark"]
+    fn profile_explorer_structural_add_remove() {
+        use std::time::Instant;
+        for count in [100usize, 300, 1000] {
+            let mut snapshots = vec![children(
+                "",
+                (0..count)
+                    .map(|i| entry(&format!("dir{i}"), WorkspaceFileKind::Directory, true))
+                    .collect(),
+            )];
+            for i in 0..count {
+                snapshots.push(children(
+                    &format!("dir{i}"),
+                    vec![entry(
+                        &format!("dir{i}/original.txt"),
+                        WorkspaceFileKind::File,
+                        false,
+                    )],
+                ));
+            }
+            let path = format!("dir{}", count / 2);
+            let handle = start("alera".into(), "/repo".into(), snapshots).unwrap();
+            let mut version = 0;
+            let mut additions = Vec::new();
+            let mut removals = Vec::new();
+            for step in 0..18 {
+                let mut entries = vec![entry(
+                    &format!("{path}/original.txt"),
+                    WorkspaceFileKind::File,
+                    false,
+                )];
+                if step % 2 == 0 {
+                    for i in 0..150 {
+                        entries.push(entry(
+                            &format!("{path}/f{i:03}.rs"),
+                            WorkspaceFileKind::File,
+                            false,
+                        ));
+                    }
+                }
+                let now = Instant::now();
+                let result = update(
+                    WorkspaceExplorerProjectionHandle {
+                        id: handle.id,
+                        version,
+                    },
+                    children(&path, entries),
+                )
+                .unwrap();
+                let elapsed = now.elapsed().as_secs_f64() * 1_000_000.0;
+                version = result.version;
+                if step >= 4 {
+                    if step % 2 == 0 {
+                        additions.push(elapsed);
+                    } else {
+                        removals.push(elapsed);
+                    }
+                }
+            }
+            additions.sort_by(f64::total_cmp);
+            removals.sort_by(f64::total_cmp);
+            eprintln!(
+                "EXPLORER_STRUCTURAL_PROFILE directories={count} batch_files=150 add_median_us={:.1} remove_median_us={:.1} samples={}",
+                additions[additions.len() / 2],
+                removals[removals.len() / 2],
+                additions.len(),
+            );
+            stop(handle);
+        }
     }
 
     #[test]
