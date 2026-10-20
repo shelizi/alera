@@ -76,6 +76,31 @@ bool FlutterWindow::OnCreate() {
         HandleAleraRichClipboardMethodCall(GetHandle(), call, std::move(result));
       });
 
+  // A child Flutter window can ask the primary process to verify an actual
+  // native drag drop over this HWND. WindowFromPoint ignores Flutter's local
+  // overlay coordinates and prevents docking when the pointer is still over
+  // the detached window or an unrelated application.
+  detached_tab_channel_ =
+      std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+          flutter_controller_->engine()->messenger(),
+          "dev.leynier.alera/detached_tabs",
+          &flutter::StandardMethodCodec::GetInstance());
+  detached_tab_channel_->SetMethodCallHandler(
+      [this](const flutter::MethodCall<flutter::EncodableValue>& call,
+             std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>>
+                 result) {
+        if (call.method_name() != "isCursorOverWindow") {
+          result->NotImplemented();
+          return;
+        }
+        POINT point{};
+        const HWND hit = ::GetCursorPos(&point) ? ::WindowFromPoint(point)
+                                               : nullptr;
+        const bool on_this_window =
+            hit != nullptr && ::GetAncestor(hit, GA_ROOT) == GetHandle();
+        result->Success(flutter::EncodableValue(on_this_window));
+      });
+
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
     this->Show();
   });
@@ -89,6 +114,7 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  detached_tab_channel_.reset();
   rich_clipboard_channel_.reset();
   file_drag_channel_.reset();
   desktop_presence_.Destroy();

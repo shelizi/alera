@@ -45,6 +45,7 @@ import 'package:alera/src/features/workbench/presentation/workspace_merman_viewe
 import 'package:alera/src/features/workbench/presentation/workspace_pdf_viewer_surface.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 part 'workspace_workbench_layout_view.dart';
 part 'workspace_workbench_pane.dart';

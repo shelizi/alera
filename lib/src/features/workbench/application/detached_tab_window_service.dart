@@ -83,6 +83,10 @@ class DetachedTabWindowService extends ChangeNotifier {
   /// Navigation is routed to the primary workbench. Child windows never
   /// create duplicate workspace tab records.
   Future<void> Function(DetachedTabDescriptor, String relativePath)? onOpenFile;
+
+  /// Verify the pointer is over the primary native HWND, not merely within
+  /// its bounds (which could include the detached window).
+  Future<bool> Function(DetachedTabDescriptor)? canDockAtPointer;
   final Map<String, Socket> _active = {};
   final Set<String> _pending = {};
   bool _disposed = false;
@@ -153,6 +157,23 @@ class DetachedTabWindowService extends ChangeNotifier {
                 if (!ready.isCompleted) ready.complete();
               } else if (message == 'DOCK') {
                 connected.destroy();
+              } else if (active && message == 'DOCK_QUERY') {
+                unawaited(() async {
+                  var allowed = false;
+                  try {
+                    final checker = canDockAtPointer;
+                    allowed = checker != null && await checker(descriptor);
+                  } catch (_) {
+                    // A failing platform hit test must never dock a tab.
+                  }
+                  try {
+                    if (!_disposed && identical(_active[tabId], connected)) {
+                      connected.writeln(
+                        allowed ? 'DOCK_ALLOWED' : 'DOCK_DENIED',
+                      );
+                    }
+                  } catch (_) {}
+                }());
               } else if (active && message.startsWith('OPEN_FILE ')) {
                 try {
                   final path = utf8.decode(
@@ -211,7 +232,10 @@ class DetachedTabWindowService extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
-    for (final socket in _active.values) {
+    // Closing a socket can synchronously invoke its onDone listener, which
+    // removes the entry from _active. Iterate over a stable snapshot so
+    // closing the primary Alera process never throws a ConcurrentModification.
+    for (final socket in _active.values.toList(growable: false)) {
       socket.destroy();
     }
     _active.clear();
@@ -226,12 +250,19 @@ final detachedTabWindows = DetachedTabWindowService();
 /// Child-side protocol: initial record, ready acknowledgement and docking.
 /// Keep the socket open for the lifetime of the detached native window.
 class DetachedTabWindowClient {
-  DetachedTabWindowClient._(this.descriptor, this._socket, this._subscription);
+  DetachedTabWindowClient._(
+    this.descriptor,
+    this._socket,
+    this._subscription,
+    this._responses,
+  );
 
   final DetachedTabDescriptor descriptor;
   final Socket _socket;
   final StreamSubscription<String> _subscription;
+  final StreamController<String> _responses;
   bool _docking = false;
+  bool _checkingDock = false;
 
   static Future<DetachedTabWindowClient> connect(
     DetachedTabLaunchArguments args, {
@@ -243,6 +274,7 @@ class DetachedTabWindowClient {
       timeout: timeout,
     );
     final first = Completer<DetachedTabDescriptor>();
+    final responses = StreamController<String>.broadcast();
     var gotDescriptor = false;
     final subscription = socket
         .cast<List<int>>()
@@ -250,7 +282,10 @@ class DetachedTabWindowClient {
         .transform(const LineSplitter())
         .listen(
           (line) {
-            if (gotDescriptor) return;
+            if (gotDescriptor) {
+              if (!responses.isClosed) responses.add(line);
+              return;
+            }
             gotDescriptor = true;
             try {
               final payload = jsonDecode(line) as Map<String, dynamic>;
@@ -266,14 +301,21 @@ class DetachedTabWindowClient {
             if (!first.isCompleted) {
               first.completeError(StateError('Parent instance disconnected'));
             }
+            unawaited(responses.close());
           },
         );
     socket.writeln('HELLO ' + args.token);
     try {
       final descriptor = await first.future.timeout(timeout);
-      return DetachedTabWindowClient._(descriptor, socket, subscription);
+      return DetachedTabWindowClient._(
+        descriptor,
+        socket,
+        subscription,
+        responses,
+      );
     } catch (_) {
       await subscription.cancel();
+      await responses.close();
       socket.destroy();
       rethrow;
     }
@@ -287,12 +329,38 @@ class DetachedTabWindowClient {
     _socket.writeln('OPEN_FILE ' + base64Url.encode(utf8.encode(relativePath)));
   }
 
+  /// Only native hit testing in the primary process may authorize a dock.
+  /// In particular, a child window overlapping the primary window is not
+  /// sufficient; its HWND must not be under the cursor.
+  Future<bool> canDockAtPointer() async {
+    if (_docking || _checkingDock || _responses.isClosed) return false;
+    _checkingDock = true;
+    try {
+      final response = _responses.stream
+          .firstWhere((line) => line == 'DOCK_ALLOWED' || line == 'DOCK_DENIED')
+          .timeout(const Duration(seconds: 3));
+      _socket.writeln('DOCK_QUERY');
+      return await response == 'DOCK_ALLOWED';
+    } catch (_) {
+      return false;
+    } finally {
+      _checkingDock = false;
+    }
+  }
+
   Future<void> dock() async {
     if (_docking) return;
     _docking = true;
-    _socket.writeln('DOCK');
-    await _socket.flush();
-    await _subscription.cancel();
-    _socket.destroy();
+    try {
+      _socket.writeln('DOCK');
+      await _socket.flush();
+    } catch (_) {
+      // The primary window may already have exited. The detached renderer
+      // should still be closable once any dirty editor content is saved.
+    } finally {
+      await _subscription.cancel();
+      await _responses.close();
+      _socket.destroy();
+    }
   }
 }

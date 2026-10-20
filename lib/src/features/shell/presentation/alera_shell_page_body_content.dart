@@ -22,6 +22,17 @@ extension _AleraShellPageBodyContent on _AleraShellPageBodyState {
           workspace: descriptor.workspace,
           relativePath: relativePath,
         );
+    detachedTabWindows.canDockAtPointer = (_) async {
+      try {
+        // Use Win32 WindowFromPoint in the primary HWND; bounding rectangles
+        // alone would accept drops on an overlapping detached child window.
+        return await const MethodChannel('dev.leynier.alera/detached_tabs')
+                .invokeMethod<bool>('isCursorOverWindow') ??
+            false;
+      } catch (_) {
+        return false;
+      }
+    };
     final terminalRuntime = ref.read(terminalRuntimeProvider);
     return Consumer(
       builder: (context, ref, _) {

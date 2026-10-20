@@ -42,7 +42,7 @@ class const _DraggableWorkspaceTabChip({
         // outside the native HWND is recognized as an external drop.
         dragAnchorStrategy: pointerDragAnchorStrategy,
         onDragStarted: tabDragController.begin,
-        onDragEnd: (details) {
+        onDragEnd: (details) async {
           tabDragController.finishAfterLayout();
           if (details.wasAccepted ||
               defaultTargetPlatform != TargetPlatform.windows) {
@@ -52,7 +52,21 @@ class const _DraggableWorkspaceTabChip({
           final render = overlay?.context.findRenderObject();
           if (render is! RenderBox || !render.hasSize) return;
           final local = render.globalToLocal(details.offset);
-          if ((Offset.zero & render.size).inflate(20).contains(local)) return;
+          // Flutter's drag overlay can report its last position at the
+          // edge of a native window. Prefer the actual Win32 cursor hit test
+          // over its local geometry when Windows exposes that channel.
+          var outsideWindow = !(Offset.zero & render.size)
+              .inflate(20)
+              .contains(local);
+          try {
+            final insideNative = await const MethodChannel(
+              'dev.leynier.alera/detached_tabs',
+            ).invokeMethod<bool>('isCursorOverWindow');
+            if (insideNative != null) outsideWindow = !insideNative;
+          } catch (_) {
+            // Older test builds may not register the native channel.
+          }
+          if (!outsideWindow || !context.mounted) return;
           if (detachedTabWindows.isDetached(tab.id) ||
               detachedTabWindows.isLaunching(tab.id)) {
             return;

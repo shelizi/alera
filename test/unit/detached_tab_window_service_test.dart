@@ -79,6 +79,8 @@ void main() {
     addTearDown(service.dispose);
     final openedFiles = <String>[];
     service.onOpenFile = (_, path) async => openedFiles.add(path);
+    var pointerOnMain = false;
+    service.canDockAtPointer = (_) async => pointerOnMain;
 
     final detached = service.detach(descriptor());
     await Future<void>.delayed(const Duration(milliseconds: 25));
@@ -89,6 +91,12 @@ void main() {
     expect(await detached, isTrue);
     expect(service.isDetached('file-tab'), isTrue);
     expect(service.detachedTabIds, contains('file-tab'));
+
+    // A drop outside the main HWND must not dock; the primary's native
+    // hit-test is the only authority to approve drag-back.
+    expect(await child.canDockAtPointer(), isFalse);
+    pointerOnMain = true;
+    expect(await child.canDockAtPointer(), isTrue);
 
     child.requestOpenFile('docs/next.md');
     child.requestOpenFile('../outside-workspace.md');
@@ -102,5 +110,26 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 10));
     }
     expect(service.isDetached('file-tab'), isFalse);
+  });
+
+  test('child can close after the primary process disconnects', () async {
+    final childResult = Completer<DetachedTabWindowClient>();
+    final service = DetachedTabWindowService(
+      starter: (port, token) async {
+        unawaited(
+          DetachedTabWindowClient.connect(
+            DetachedTabLaunchArguments(port, token),
+          ).then(childResult.complete, onError: childResult.completeError),
+        );
+      },
+    );
+    final started = service.detach(descriptor());
+    final child = await childResult.future;
+    child.ready();
+    expect(await started, isTrue);
+    service.dispose(); // Simulates the primary closing before the child.
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    expect(await child.canDockAtPointer(), isFalse);
+    await expectLater(child.dock(), completes);
   });
 }

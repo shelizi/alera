@@ -4,6 +4,9 @@ import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_dark_theme.dart';
 import 'package:alera/src/app/providers.dart';
 import 'package:alera/src/design_system/feedback/alera_toast.dart';
+import 'package:alera/src/design_system/feedback/alera_toast_host.dart';
+import 'package:alera/src/features/text_actions/presentation/text_actions_scope.dart';
+import 'package:alera/src/features/settings/domain/alera_settings.dart';
 import 'package:alera/src/features/workbench/application/detached_tab_window_service.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_runtime_providers.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_workbench_view.dart';
@@ -40,6 +43,14 @@ class _DetachedTabChildAppState extends ConsumerState<DetachedTabChildApp>
 
   @override
   void onWindowClose() => unawaited(_dock());
+
+  Future<void> _tryDragBackToMain() async {
+    if (_closing || !mounted) return;
+    // The primary window checks WindowFromPoint via its own Win32 runner:
+    // desktop bounds alone could include this child window.
+    final accepted = await widget.client.canDockAtPointer();
+    if (accepted && mounted) await _dock();
+  }
 
   Future<void> _dock() async {
     if (_closing) return;
@@ -92,8 +103,18 @@ class _DetachedTabChildAppState extends ConsumerState<DetachedTabChildApp>
   @override
   Widget build(BuildContext context) {
     final descriptor = widget.client.descriptor;
+    final language = ref.watch(
+      settingsControllerProvider.select(
+        (settings) => settings.general.language,
+      ),
+    );
     return MaterialApp(
       title: 'Alera - ' + descriptor.tab.title,
+      locale: language == AppLanguage.system
+          ? null
+          : resolveAleraLocale(language, null),
+      localeResolutionCallback: (locale, supportedLocales) =>
+          resolveAleraLocale(AppLanguage.system, locale),
       theme: aleraDarkTheme,
       darkTheme: aleraDarkTheme,
       themeMode: ThemeMode.dark,
@@ -103,9 +124,36 @@ class _DetachedTabChildAppState extends ConsumerState<DetachedTabChildApp>
         AleraLocalizationsDelegate(),
         ...GlobalMaterialLocalizations.delegates,
       ],
+      builder: (context, child) => Stack(
+        children: [
+          TextActionsScope(child: child ?? const SizedBox.shrink()),
+          const AleraToastHost(),
+        ],
+      ),
       home: Scaffold(
         appBar: AppBar(
-          title: Text(descriptor.tab.title),
+          title: Draggable<String>(
+            data: descriptor.tab.id,
+            dragAnchorStrategy: pointerDragAnchorStrategy,
+            onDragEnd: (_) => unawaited(_tryDragBackToMain()),
+            feedback: Material(
+              color: Colors.transparent,
+              child: DecoratedBox(
+                decoration: const BoxDecoration(color: Color(0xFF303030)),
+                child: Padding(
+                  padding: const EdgeInsets.all(10),
+                  child: Text(
+                    descriptor.tab.title,
+                    style: const TextStyle(color: Colors.white, fontSize: 13),
+                  ),
+                ),
+              ),
+            ),
+            child: Tooltip(
+              message: 'Drag onto the main Alera window to return this tab',
+              child: Text(descriptor.tab.title),
+            ),
+          ),
           actions: [
             TextButton.icon(
               onPressed: _closing ? null : _dock,
