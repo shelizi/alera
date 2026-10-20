@@ -294,7 +294,7 @@ extension _WorkspaceExplorerRefresh on _WorkspaceExplorerState {
       if (oldChildren != null) {
         for (final entry in oldChildren) {
           _entryByPath.remove(entry.relativePath);
-          _entryByNodeId.remove('path:' + entry.relativePath);
+          _entryByNodeId.remove('path:${entry.relativePath}');
         }
       }
       _childrenByDirectory[directory.relativePath] = directory.children;
@@ -302,7 +302,7 @@ extension _WorkspaceExplorerRefresh on _WorkspaceExplorerState {
         _entryByPath[entry.relativePath] = entry;
         // Native Explorer bindings use path:<relativePath> for entries;
         // placeholders have no binding and are not part of these children.
-        _entryByNodeId['path:' + entry.relativePath] = entry;
+        _entryByNodeId['path:${entry.relativePath}'] = entry;
       }
     }
 
@@ -311,6 +311,8 @@ extension _WorkspaceExplorerRefresh on _WorkspaceExplorerState {
       nodes: previous.nodes,
       entryBindings: previous.entryBindings,
     );
+    // Repaint the instantiated rows, not the whole tree's node hierarchy.
+    _rowMetadataRevision.value += 1;
     return true;
   }
 
@@ -349,6 +351,7 @@ extension _WorkspaceExplorerRefresh on _WorkspaceExplorerState {
 
   void _applyProjection(native.WorkspaceExplorerTreeProjection projection) {
     _projection = projection;
+    _treeStructureRevision += 1;
     _childrenByDirectory
       ..clear()
       ..addEntries(

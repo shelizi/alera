@@ -678,11 +678,15 @@ extension _WorkspaceExplorerActions on _WorkspaceExplorerState {
       if (refreshGitStatus) {
         await _refreshGitStatusSnapshot();
       }
+      final previousStructureRevision = _treeStructureRevision;
       await _loadDirectory(relativePath);
-      if (!mounted) {
-        return;
+      if (!mounted) return;
+      // Metadata-only and identical watcher events retain TreeData and the
+      // flattened visible list. Changed rows repaint through their notifier.
+      // Only native graph/entry-binding changes require controller.rebuild.
+      if (_treeStructureRevision != previousStructureRevision) {
+        _rebuildTree();
       }
-      _rebuildTree();
     } catch (error) {
       _showError(error);
     }

@@ -138,6 +138,10 @@ void _registerWorkspaceExplorerWatchTests() {
       await tester.tap(find.text('src'));
       await tester.pumpAndSettle();
       final initial = service.nativeProjectionUpdates;
+      final originalTree = tester
+          .widget<tree.DirectoryTreeView>(find.byType(tree.DirectoryTreeView))
+          .controller
+          .data;
       expect(find.text('M'), findsNothing);
 
       service.childrenByDirectory['src'] = <native.WorkspaceFileEntry>[
@@ -149,6 +153,14 @@ void _registerWorkspaceExplorerWatchTests() {
       expect(service.nativeProjectionUpdates, initial + 1);
       expect(service.projectionCalls, 0);
       expect(find.text('M'), findsOneWidget);
+      expect(
+        tester
+            .widget<tree.DirectoryTreeView>(find.byType(tree.DirectoryTreeView))
+            .controller
+            .data,
+        same(originalTree),
+        reason: 'Git metadata changes must not rebuild the entire TreeData',
+      );
       expect(find.text('a.dart'), findsOneWidget);
       expect(find.text('b.dart'), findsOneWidget);
 
@@ -159,11 +171,56 @@ void _registerWorkspaceExplorerWatchTests() {
       service.emitWatchBatch(<String>['src']);
       await tester.pumpAndSettle();
       expect(find.text('M'), findsNothing);
+      expect(
+        tester
+            .widget<tree.DirectoryTreeView>(find.byType(tree.DirectoryTreeView))
+            .controller
+            .data,
+        same(originalTree),
+      );
       expect(find.text('b.dart'), findsOneWidget);
       expect(service.projectionCalls, 0);
     },
   );
 
+  testWidgets('scroll position stays fixed after metadata-only refresh', (
+    tester,
+  ) async {
+    final initial = <native.WorkspaceFileEntry>[
+      for (var i = 0; i < 180; i++) _file('row_$i.dart'),
+    ];
+    final service = _FakeWorkspaceFileService()
+      ..childrenByDirectory[''] = initial;
+    await _pumpExplorer(tester, service);
+    final view = find.byType(tree.DirectoryTreeView);
+    final treeBefore = tester
+        .widget<tree.DirectoryTreeView>(view)
+        .controller
+        .data;
+    final scrollable = find
+        .descendant(of: view, matching: find.byType(Scrollable))
+        .first;
+    await tester.drag(scrollable, const Offset(0, -640));
+    await tester.pumpAndSettle();
+    final state = tester.state<ScrollableState>(scrollable);
+    final offset = state.position.pixels;
+    expect(offset, greaterThan(0));
+    service.childrenByDirectory[''] = [
+      for (var i = 0; i < 180; i++)
+        _file(
+          'row_$i.dart',
+          gitStatus: i == 30 ? native.WorkspaceFileGitStatus.modified : null,
+        ),
+    ];
+    service.emitWatchBatch(<String>['']);
+    await tester.pumpAndSettle();
+    expect(
+      tester.widget<tree.DirectoryTreeView>(view).controller.data,
+      same(treeBefore),
+    );
+    expect(state.position.pixels, closeTo(offset, 0.5));
+    expect(service.projectionCalls, 0);
+  });
   testWidgets('watch changed directory entries still projects new nodes', (
     tester,
   ) async {
@@ -178,6 +235,10 @@ void _registerWorkspaceExplorerWatchTests() {
     await tester.tap(find.text('src'));
     await tester.pumpAndSettle();
     final projected = service.nativeProjectionUpdates;
+    final originalTree = tester
+        .widget<tree.DirectoryTreeView>(find.byType(tree.DirectoryTreeView))
+        .controller
+        .data;
 
     service.childrenByDirectory['src'] = <native.WorkspaceFileEntry>[
       _file('src/main.dart'),
@@ -188,6 +249,14 @@ void _registerWorkspaceExplorerWatchTests() {
 
     expect(service.nativeProjectionUpdates, projected + 1);
     expect(service.projectionCalls, 0);
+    expect(
+      tester
+          .widget<tree.DirectoryTreeView>(find.byType(tree.DirectoryTreeView))
+          .controller
+          .data,
+      isNot(same(originalTree)),
+      reason: 'Adding a file still requires a new structural TreeData',
+    );
     expect(find.text('extra.dart'), findsOneWidget);
   });
 
@@ -266,6 +335,10 @@ void _registerWorkspaceExplorerWatchTests() {
     await tester.pumpAndSettle();
     final updatesAfterExpand = service.watchedPathUpdates.length;
     final projectionsAfterExpand = service.nativeProjectionUpdates;
+    final originalTree = tester
+        .widget<tree.DirectoryTreeView>(find.byType(tree.DirectoryTreeView))
+        .controller
+        .data;
 
     // Native listing returns new instances even when all fields are equal.
     service.childrenByDirectory['src'] = [_file('src/main.dart')];
@@ -273,6 +346,14 @@ void _registerWorkspaceExplorerWatchTests() {
     await tester.pumpAndSettle();
 
     expect(service.watchedPathUpdates, hasLength(updatesAfterExpand));
+    expect(
+      tester
+          .widget<tree.DirectoryTreeView>(find.byType(tree.DirectoryTreeView))
+          .controller
+          .data,
+      same(originalTree),
+      reason: 'Unchanged watcher events must not rebuild TreeData',
+    );
     expect(
       service.nativeProjectionUpdates,
       projectionsAfterExpand,

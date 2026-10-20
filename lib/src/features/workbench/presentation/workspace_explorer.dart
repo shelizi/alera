@@ -132,6 +132,10 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
   final Map<String, native.WorkspaceFileEntry> _entryByNodeId =
       <String, native.WorkspaceFileEntry>{};
   native.WorkspaceExplorerTreeProjection? _projection;
+  // Structural revisions change DirectoryTreeController.data; metadata
+  // revisions repaint only mounted rows (DirectoryTreeView caches ListView).
+  int _treeStructureRevision = 0;
+  final ValueNotifier<int> _rowMetadataRevision = ValueNotifier<int>(0);
   native.WorkspaceExplorerProjectionHandle? _nativeProjectionHandle;
   Future<native.WorkspaceExplorerProjectionHandle>? _nativeProjectionStarting;
   Future<void> _nativeProjectionQueue = Future<void>.value();
@@ -242,6 +246,7 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
     _filterFocusNode.dispose();
     _explorerFocusNode.dispose();
     _controller.dispose();
+    _rowMetadataRevision.dispose();
     super.dispose();
   }
 
@@ -389,6 +394,21 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
   }
 
   Widget _buildNode(
+    BuildContext context,
+    tree.VisibleNode node,
+    tree.NodeVisualState state,
+  ) {
+    // flutter_directory_tree caches its ListView between controller updates.
+    // Listening in each mounted row refreshes Git badges/metadata while
+    // retaining the existing TreeData, flattening, selection and scroll state.
+    return ValueListenableBuilder<int>(
+      valueListenable: _rowMetadataRevision,
+      builder: (context, _, _) =>
+          _buildNodeForCurrentMetadata(context, node, state),
+    );
+  }
+
+  Widget _buildNodeForCurrentMetadata(
     BuildContext context,
     tree.VisibleNode node,
     tree.NodeVisualState state,
