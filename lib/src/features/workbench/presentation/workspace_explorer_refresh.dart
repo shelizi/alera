@@ -252,6 +252,7 @@ extension _WorkspaceExplorerRefresh on _WorkspaceExplorerState {
         nodes: sortedNodes,
         entryBindings: sortedBindings,
       ),
+      delta: delta,
     );
   }
 
@@ -344,14 +345,35 @@ extension _WorkspaceExplorerRefresh on _WorkspaceExplorerState {
     _disposeNativeProjectionSession();
     _nativeProjectionDisabled = false;
     _projection = null;
+    _treeNodesById.clear();
     _childrenByDirectory.clear();
     _entryByPath.clear();
     _entryByNodeId.clear();
   }
 
-  void _applyProjection(native.WorkspaceExplorerTreeProjection projection) {
+  void _applyProjection(
+    native.WorkspaceExplorerTreeProjection projection, {
+    native.WorkspaceExplorerProjectionDelta? delta,
+  }) {
     _projection = projection;
     _treeStructureRevision += 1;
+    if (delta != null && _treeNodesById.isNotEmpty) {
+      for (final id in delta.removedNodeIds) {
+        _treeNodesById.remove(id);
+      }
+      for (final node in delta.changedNodes) {
+        _treeNodesById[node.id] = _toDartExplorerTreeNode(node);
+      }
+    } else {
+      // First projection or stateless fallback must seed the full cache.
+      _treeNodesById
+        ..clear()
+        ..addEntries(
+          projection.nodes.map(
+            (node) => MapEntry(node.id, _toDartExplorerTreeNode(node)),
+          ),
+        );
+    }
     _childrenByDirectory
       ..clear()
       ..addEntries(

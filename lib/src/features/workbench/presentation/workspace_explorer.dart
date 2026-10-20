@@ -132,6 +132,9 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
   final Map<String, native.WorkspaceFileEntry> _entryByNodeId =
       <String, native.WorkspaceFileEntry>{};
   native.WorkspaceExplorerTreeProjection? _projection;
+  // Retain Dart TreeNode objects for unchanged IDs across structural native
+  // Delta updates; only changed/removed nodes require new objects.
+  final Map<String, tree.TreeNode> _treeNodesById = <String, tree.TreeNode>{};
   // Structural revisions change DirectoryTreeController.data; metadata
   // revisions repaint only mounted rows (DirectoryTreeView caches ListView).
   int _treeStructureRevision = 0;
@@ -633,21 +636,7 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
               isExpanded: true,
             ),
           }
-        : <String, tree.TreeNode>{
-            for (final node in projection.nodes)
-              node.id: tree.TreeNode(
-                id: node.id,
-                name: node.name,
-                type: _treeNodeType(node.kind),
-                parentId: node.parentId,
-                virtualPath: node.virtualPath,
-                sourcePath: node.sourcePath,
-                entryId: node.entryId,
-                childIds: node.childIds,
-                isExpanded: node.isExpanded,
-                isVirtual: node.isVirtual,
-              ),
-          };
+        : _treeNodesById;
     return tree.TreeData(
       nodes: Map<String, tree.TreeNode>.unmodifiableOf(nodes),
       rootId: _rootId,
@@ -655,6 +644,21 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
       omitContainerRowAtRoot: true,
     );
   }
+
+  tree.TreeNode _toDartExplorerTreeNode(
+    native.WorkspaceExplorerTreeNode node,
+  ) => tree.TreeNode(
+    id: node.id,
+    name: node.name,
+    type: _treeNodeType(node.kind),
+    parentId: node.parentId,
+    virtualPath: node.virtualPath,
+    sourcePath: node.sourcePath,
+    entryId: node.entryId,
+    childIds: node.childIds,
+    isExpanded: node.isExpanded,
+    isVirtual: node.isVirtual,
+  );
 
   Future<void> _handlePrimaryTap(tree.VisibleNode node) async {
     if (_handleModifiedSelection(node)) {

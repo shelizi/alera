@@ -240,6 +240,9 @@ void _registerWorkspaceExplorerWatchTests() {
         .controller
         .data;
 
+    final unchangedFileNode = originalTree.nodes['path:src/main.dart'];
+    final changedParentNode = originalTree.nodes['path:src'];
+
     service.childrenByDirectory['src'] = <native.WorkspaceFileEntry>[
       _file('src/main.dart'),
       _file('src/extra.dart'),
@@ -257,8 +260,73 @@ void _registerWorkspaceExplorerWatchTests() {
       isNot(same(originalTree)),
       reason: 'Adding a file still requires a new structural TreeData',
     );
+    final newTree = tester
+        .widget<tree.DirectoryTreeView>(find.byType(tree.DirectoryTreeView))
+        .controller
+        .data;
+    expect(
+      newTree.nodes['path:src/main.dart'],
+      same(unchangedFileNode),
+      reason: 'Structural Delta should reuse untouched Dart TreeNode objects',
+    );
+    expect(
+      newTree.nodes['path:src'],
+      isNot(same(changedParentNode)),
+      reason: 'Changed folder child order must replace its Dart TreeNode',
+    );
     expect(find.text('extra.dart'), findsOneWidget);
   });
+
+  testWidgets(
+    'bulk structural Delta reuses untouched nodes across 150 file adds and removals',
+    (tester) async {
+      final service = _FakeWorkspaceFileService()
+        ..childrenByDirectory[''] = <native.WorkspaceFileEntry>[
+          _directory('src', hasChildrenHint: true),
+          _file('persistent.md'),
+        ]
+        ..childrenByDirectory['src'] = <native.WorkspaceFileEntry>[
+          _file('src/base.dart'),
+        ];
+      await _pumpExplorer(tester, service);
+      await tester.tap(find.text('src'));
+      await tester.pumpAndSettle();
+      final view = find.byType(tree.DirectoryTreeView);
+      final before = tester
+          .widget<tree.DirectoryTreeView>(view)
+          .controller
+          .data;
+      final persistent = before.nodes['path:persistent.md'];
+      final base = before.nodes['path:src/base.dart'];
+
+      service.childrenByDirectory['src'] = <native.WorkspaceFileEntry>[
+        _file('src/base.dart'),
+        for (var i = 0; i < 150; i++) _file('src/batch_$i.dart'),
+      ];
+      service.emitWatchBatch(<String>['src']);
+      await tester.pumpAndSettle();
+      final added = tester.widget<tree.DirectoryTreeView>(view).controller.data;
+      expect(added.nodes.length, before.nodes.length + 150);
+      expect(added.nodes['path:persistent.md'], same(persistent));
+      expect(added.nodes['path:src/base.dart'], same(base));
+      expect(service.projectionCalls, 0);
+
+      service.childrenByDirectory['src'] = <native.WorkspaceFileEntry>[
+        _file('src/base.dart'),
+      ];
+      service.emitWatchBatch(<String>['src']);
+      await tester.pumpAndSettle();
+      final removed = tester
+          .widget<tree.DirectoryTreeView>(view)
+          .controller
+          .data;
+      expect(removed.nodes.length, before.nodes.length);
+      expect(removed.nodes.containsKey('path:src/batch_0.dart'), isFalse);
+      expect(removed.nodes['path:persistent.md'], same(persistent));
+      expect(removed.nodes['path:src/base.dart'], same(base));
+      expect(service.projectionCalls, 0);
+    },
+  );
 
   testWidgets(
     'native Explorer delta recovers from stale handle by full fallback',
@@ -308,11 +376,23 @@ void _registerWorkspaceExplorerWatchTests() {
     await tester.tap(find.text('b'));
     await tester.pumpAndSettle();
     expect(service.nativeProjectionStarts, 1);
+    final beforeTree = tester
+        .widget<tree.DirectoryTreeView>(find.byType(tree.DirectoryTreeView))
+        .controller
+        .data;
+    final siblingNode = beforeTree.nodes['path:b/stable.dart'];
     service.childrenByDirectory['a'] = <native.WorkspaceFileEntry>[
       _file('a/new.dart'),
     ];
     service.emitWatchBatch(<String>['a']);
     await tester.pumpAndSettle();
+    final afterTree = tester
+        .widget<tree.DirectoryTreeView>(find.byType(tree.DirectoryTreeView))
+        .controller
+        .data;
+    expect(afterTree.nodes['path:b/stable.dart'], same(siblingNode));
+    expect(afterTree.nodes.containsKey('path:a/old.dart'), isFalse);
+    expect(afterTree.nodes.containsKey('path:a/new.dart'), isTrue);
     expect(find.text('new.dart'), findsOneWidget);
     expect(find.text('stable.dart'), findsOneWidget);
     expect(find.text('old.dart'), findsNothing);
