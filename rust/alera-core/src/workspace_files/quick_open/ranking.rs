@@ -9,6 +9,7 @@ pub(super) fn search(
     query: &str,
     limit: u32,
     include_gitignored: bool,
+    include_directories: bool,
 ) -> Vec<WorkspaceQuickOpenMatch> {
     let limit = usize::try_from(limit).unwrap_or(usize::MAX);
     if limit == 0 {
@@ -21,11 +22,15 @@ pub(super) fn search(
         return index
             .files
             .iter()
-            .filter(|file| include_gitignored || !file.is_gitignored)
+            .filter(|file| {
+                (include_gitignored || !file.is_gitignored)
+                    && (include_directories || !file.is_directory)
+            })
             .take(limit)
             .map(|file| WorkspaceQuickOpenMatch {
                 relative_path: file.relative_path.clone(),
                 score: 0,
+                is_directory: file.is_directory,
             })
             .collect();
     }
@@ -45,6 +50,7 @@ pub(super) fn search(
             path_index,
             100_000,
             include_gitignored,
+            include_directories,
         );
         path_index += 1;
     }
@@ -58,6 +64,7 @@ pub(super) fn search(
             90_000,
             limit,
             include_gitignored,
+            include_directories,
         );
     }
     if ranked.len() == limit {
@@ -77,6 +84,7 @@ pub(super) fn search(
             path_index,
             80_000,
             include_gitignored,
+            include_directories,
         );
         if ranked.len() == limit {
             return into_matches(ranked);
@@ -93,6 +101,7 @@ pub(super) fn search(
             70_000,
             limit,
             include_gitignored,
+            include_directories,
         );
     }
     if ranked.len() == limit {
@@ -106,6 +115,7 @@ pub(super) fn search(
         &query_code_units,
         limit - ranked.len(),
         include_gitignored,
+        include_directories,
     ));
     into_matches(ranked)
 }
@@ -117,10 +127,13 @@ fn append_indexed_match<'a>(
     file_index: usize,
     score: i32,
     include_gitignored: bool,
+    include_directories: bool,
 ) {
     if !indexed_files[file_index] {
         indexed_files[file_index] = true;
-        if !include_gitignored && files[file_index].is_gitignored {
+        if (!include_gitignored && files[file_index].is_gitignored)
+            || (!include_directories && files[file_index].is_directory)
+        {
             return;
         }
         ranked.push(RankedFile {
@@ -138,6 +151,7 @@ fn append_segment_matches<'a>(
     base_score: i32,
     limit: usize,
     include_gitignored: bool,
+    include_directories: bool,
 ) {
     for matching in matches {
         append_indexed_match(
@@ -147,6 +161,7 @@ fn append_segment_matches<'a>(
             matching.file_index,
             base_score - matching.segment_index as i32,
             include_gitignored,
+            include_directories,
         );
         if ranked.len() == limit {
             break;
@@ -165,6 +180,7 @@ fn search_lower<'a>(
     query_code_units: &[u16],
     limit: usize,
     include_gitignored: bool,
+    include_directories: bool,
 ) -> Vec<RankedFile<'a>> {
     let query_character_counts = character_counts(query_code_units);
     let Some(candidates) = index.character_index.candidates(&query_character_counts) else {
@@ -176,6 +192,7 @@ fn search_lower<'a>(
         let file = &index.files[file_index];
         if indexed_files[file_index]
             || (!include_gitignored && file.is_gitignored)
+            || (!include_directories && file.is_directory)
             || !has_required_characters(file, &query_character_counts)
         {
             continue;
@@ -210,6 +227,7 @@ fn into_matches(ranked: Vec<RankedFile<'_>>) -> Vec<WorkspaceQuickOpenMatch> {
         .map(|candidate| WorkspaceQuickOpenMatch {
             relative_path: candidate.file.relative_path.clone(),
             score: candidate.score,
+            is_directory: candidate.file.is_directory,
         })
         .collect()
 }

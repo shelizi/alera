@@ -916,6 +916,7 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
       query: query,
       includeGitignored: includeGitignored,
       limit: _filterResultLimit,
+      includeDirectories: true,
     );
     setState(() {
       _filterMatches = cached ?? const <native.WorkspaceQuickOpenMatch>[];
@@ -954,6 +955,7 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
         query: query,
         includeGitignored: includeGitignored,
         limit: _filterResultLimit,
+        includeDirectories: true,
       );
       if (!mounted || generation != _filterGeneration) {
         return;
@@ -1000,9 +1002,9 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
     hasChildrenHint: false,
   );
 
-  /// The quick-open index supplies unloaded file matches; loaded folders and
-  /// matching ancestor folders are added as folders, not converted into fake
-  /// files. A search row always points to the same entry/path as the tree.
+  /// The shared native index supplies both files and directories, including
+  /// deeply nested empty folders not yet loaded by the Explorer tree.
+  /// Loaded/ancestor folder matches supplement the bounded native result set.
   List<native.WorkspaceFileEntry> _visibleFilteredEntries() {
     final query = _filterController.text.trim().toLowerCase();
     if (query.isEmpty) return const <native.WorkspaceFileEntry>[];
@@ -1016,6 +1018,8 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
         if (_isDirectoryEntry(entry) &&
             entry.relativePath.toLowerCase().contains(query))
           entry.relativePath,
+      for (final match in _filterMatches)
+        if (match.isDirectory) match.relativePath,
     };
     for (final match in _filterMatches) {
       var parent = _parentPath(match.relativePath);
@@ -1031,7 +1035,7 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
       for (final match in _filterMatches)
         if (!folders.contains(match.relativePath))
           _entryByPath[match.relativePath] ??
-              _unloadedEntry(match.relativePath),
+              _unloadedEntry(match.relativePath, directory: match.isDirectory),
     ];
     _filterVisibleCacheQuery = query;
     _filterVisibleCacheMatches = _filterMatches;

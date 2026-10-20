@@ -197,6 +197,7 @@ pub struct WorkspaceQuickOpenSession {
 pub struct WorkspaceQuickOpenMatch {
     pub relative_path: String,
     pub score: i32,
+    pub is_directory: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -278,16 +279,42 @@ pub fn search_workspace_quick_open_session(
         limit,
         include_gitignored,
     )
-    .map(|matches| {
-        matches
-            .into_iter()
-            .map(|item| WorkspaceQuickOpenMatch {
-                relative_path: item.relative_path,
-                score: item.score,
-            })
-            .collect()
-    })
+    .map(map_quick_open_matches)
     .map_err(shared_workspace_file_error)
+}
+
+/// Search files and directories from the same native index. Ctrl+P continues
+/// to use search_workspace_quick_open_session (files only).
+pub fn search_workspace_explorer_filter_session(
+    session: WorkspaceQuickOpenSession,
+    query: String,
+    limit: u32,
+    include_gitignored: bool,
+) -> Result<Vec<WorkspaceQuickOpenMatch>, WorkspaceFileError> {
+    alera_core::workspace_files::search_workspace_explorer_filter_session(
+        alera_core::workspace_files::WorkspaceQuickOpenSession {
+            id: session.id,
+            indexed_file_count: session.indexed_file_count,
+        },
+        query,
+        limit,
+        include_gitignored,
+    )
+    .map(map_quick_open_matches)
+    .map_err(shared_workspace_file_error)
+}
+
+fn map_quick_open_matches(
+    matches: Vec<alera_core::workspace_files::WorkspaceQuickOpenMatch>,
+) -> Vec<WorkspaceQuickOpenMatch> {
+    matches
+        .into_iter()
+        .map(|item| WorkspaceQuickOpenMatch {
+            relative_path: item.relative_path,
+            score: item.score,
+            is_directory: item.is_directory,
+        })
+        .collect()
 }
 
 pub fn stop_workspace_quick_open_session(session: WorkspaceQuickOpenSession) {

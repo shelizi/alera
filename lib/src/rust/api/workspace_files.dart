@@ -7,7 +7,7 @@ import '../frb_generated.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `content_token`, `copy_recursively`, `ensure_inside_existing_parent`, `ensure_not_descendant`, `entry_for_path_filtered`, `entry_for_path`, `from_io`, `is_hidden_entry`, `is_protected_child_path`, `is_protected_relative_path`, `join_relative`, `modified_millis`, `move_external_entry`, `new`, `reject_protected`, `relative_components`, `relative_string`, `resolve_existing_no_follow`, `resolve_existing`, `resolve_new_child`, `sanitize_name`, `shared_workspace_file_error`, `unique_copy_destination`, `workspace_root`
+// These functions are ignored because they are not marked as `pub`: `content_token`, `copy_recursively`, `ensure_inside_existing_parent`, `ensure_not_descendant`, `entry_for_path_filtered`, `entry_for_path`, `from_io`, `is_hidden_entry`, `is_protected_child_path`, `is_protected_relative_path`, `join_relative`, `map_quick_open_matches`, `modified_millis`, `move_external_entry`, `new`, `reject_protected`, `relative_components`, `relative_string`, `resolve_existing_no_follow`, `resolve_existing`, `resolve_new_child`, `sanitize_name`, `shared_workspace_file_error`, `unique_copy_destination`, `workspace_root`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`
 
 Future<List<WorkspaceFileEntry>> listWorkspaceChildren({
@@ -37,6 +37,21 @@ Future<List<WorkspaceQuickOpenMatch>> searchWorkspaceQuickOpenSession({
   required bool includeGitignored,
 }) =>
     RustLib.instance.api.crateApiWorkspaceFilesSearchWorkspaceQuickOpenSession(
+      session: session,
+      query: query,
+      limit: limit,
+      includeGitignored: includeGitignored,
+    );
+
+/// Search files and directories from the same native index. Ctrl+P continues
+/// to use search_workspace_quick_open_session (files only).
+Future<List<WorkspaceQuickOpenMatch>> searchWorkspaceExplorerFilterSession({
+  required WorkspaceQuickOpenSession session,
+  required String query,
+  required int limit,
+  required bool includeGitignored,
+}) => RustLib.instance.api
+    .crateApiWorkspaceFilesSearchWorkspaceExplorerFilterSession(
       session: session,
       query: query,
       limit: limit,
@@ -741,14 +756,17 @@ enum WorkspaceFileKind { file, directory, symlink, other }
 class WorkspaceQuickOpenMatch {
   final String relativePath;
   final int score;
+  final bool isDirectory;
 
   const WorkspaceQuickOpenMatch({
     required this.relativePath,
     required this.score,
+    required this.isDirectory,
   });
 
   @override
-  int get hashCode => relativePath.hashCode ^ score.hashCode;
+  int get hashCode =>
+      relativePath.hashCode ^ score.hashCode ^ isDirectory.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -756,7 +774,8 @@ class WorkspaceQuickOpenMatch {
       other is WorkspaceQuickOpenMatch &&
           runtimeType == other.runtimeType &&
           relativePath == other.relativePath &&
-          score == other.score;
+          score == other.score &&
+          isDirectory == other.isDirectory;
 }
 
 class WorkspaceQuickOpenSession {

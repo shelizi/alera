@@ -55,6 +55,73 @@ fn indexes_and_ranks_workspace_files() {
 }
 
 #[test]
+fn explorer_indexes_unloaded_empty_deep_folders_without_changing_quick_open() {
+    let workspace = tempfile::tempdir().unwrap();
+    fs::create_dir_all(workspace.path().join("src/deep/empty-config")).unwrap();
+    fs::create_dir_all(workspace.path().join("src/deep/empty-config/nested")).unwrap();
+    fs::write(workspace.path().join("src/deep/file-config.dart"), "hello").unwrap();
+    let session = start(&workspace);
+    assert_eq!(session.indexed_file_count, 1);
+
+    let matches =
+        search_workspace_explorer_filter_session(session.clone(), "config".into(), 20, false)
+            .unwrap();
+    assert!(matches
+        .iter()
+        .any(|item| item.relative_path == "src/deep/empty-config" && item.is_directory));
+    assert!(matches
+        .iter()
+        .any(|item| item.relative_path == "src/deep/empty-config/nested" && item.is_directory));
+    assert!(matches
+        .iter()
+        .any(|item| item.relative_path == "src/deep/file-config.dart" && !item.is_directory));
+
+    // Even if a directory ranks first, Ctrl+P must return only real files.
+    let quick_open =
+        search_workspace_quick_open_session(session.clone(), "config".into(), 1, false).unwrap();
+    assert_eq!(quick_open.len(), 1);
+    assert_eq!(quick_open[0].relative_path, "src/deep/file-config.dart");
+    assert!(!quick_open[0].is_directory);
+    assert!(!paths(&session, "", 20)
+        .iter()
+        .any(|path| path == "src/deep/empty-config"));
+    stop_workspace_quick_open_session(session);
+}
+
+#[test]
+fn explorer_folder_index_respects_gitignore_and_exclusions() {
+    let workspace = tempfile::tempdir().unwrap();
+    fs::write(workspace.path().join(".gitignore"), "ignored_folder/\n").unwrap();
+    fs::create_dir_all(workspace.path().join("ignored_folder/empty")).unwrap();
+    fs::create_dir_all(workspace.path().join("good_folder/empty")).unwrap();
+    fs::create_dir_all(workspace.path().join("node_modules/blocked_folder")).unwrap();
+    let session = start_with_exclusions(&workspace, vec!["node_modules".into()]);
+
+    let hidden =
+        search_workspace_explorer_filter_session(session.clone(), "folder".into(), 100, false)
+            .unwrap();
+    assert!(hidden
+        .iter()
+        .any(|item| item.relative_path == "good_folder" && item.is_directory));
+    assert!(!hidden
+        .iter()
+        .any(|item| item.relative_path.starts_with("ignored_folder")));
+    assert!(!hidden
+        .iter()
+        .any(|item| item.relative_path.starts_with("node_modules")));
+
+    let all = search_workspace_explorer_filter_session(session.clone(), "folder".into(), 100, true)
+        .unwrap();
+    assert!(all
+        .iter()
+        .any(|item| item.relative_path == "ignored_folder" && item.is_directory));
+    assert!(!all
+        .iter()
+        .any(|item| item.relative_path.starts_with("node_modules")));
+    stop_workspace_quick_open_session(session);
+}
+
+#[test]
 fn skips_files_removed_while_building_a_quick_open_index() {
     let workspace = tempfile::tempdir().unwrap();
     let missing = workspace.path().join("removed.txt");

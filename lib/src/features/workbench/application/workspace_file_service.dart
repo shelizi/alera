@@ -61,7 +61,16 @@ class WorkspaceFileService {
     required String query,
     required bool includeGitignored,
     int limit = 50,
+    bool includeDirectories = false,
   }) {
+    if (includeDirectories) {
+      return native.searchWorkspaceExplorerFilterSession(
+        session: session,
+        query: query,
+        limit: limit,
+        includeGitignored: includeGitignored,
+      );
+    }
     return native.searchWorkspaceQuickOpenSession(
       session: session,
       query: query,
@@ -82,10 +91,16 @@ class WorkspaceFileService {
     required String query,
     required bool includeGitignored,
     int limit = 50,
+    bool includeDirectories = false,
   }) {
     final entry =
         _quickOpenCache[_quickOpenCacheKey(workspacePath, excludedDirectories)];
-    return entry?.matches[_quickOpenSearchKey(query, includeGitignored, limit)];
+    return entry?.matches[_quickOpenSearchKey(
+      query,
+      includeGitignored,
+      limit,
+      includeDirectories,
+    )];
   }
 
   Future<List<native.WorkspaceQuickOpenMatch>> searchQuickOpenCached({
@@ -94,14 +109,21 @@ class WorkspaceFileService {
     required String query,
     required bool includeGitignored,
     int limit = 50,
+    bool includeDirectories = false,
   }) async {
     final entry = _quickOpenEntry(workspacePath, excludedDirectories);
-    final searchKey = _quickOpenSearchKey(query, includeGitignored, limit);
+    final searchKey = _quickOpenSearchKey(
+      query,
+      includeGitignored,
+      limit,
+      includeDirectories,
+    );
     entry.searchRequests[searchKey] = _WorkspaceQuickOpenSearchRequest(
       key: searchKey,
       query: query,
       includeGitignored: includeGitignored,
       limit: limit,
+      includeDirectories: includeDirectories,
     );
     var session = await _ensureQuickOpenSession(entry);
     List<native.WorkspaceQuickOpenMatch> matches;
@@ -111,6 +133,7 @@ class WorkspaceFileService {
         query: query,
         includeGitignored: includeGitignored,
         limit: limit,
+        includeDirectories: includeDirectories,
       );
     } on native.WorkspaceFileError catch (error) {
       // Rust evicts idle sessions and caps the session registry. A Dart cache
@@ -129,6 +152,7 @@ class WorkspaceFileService {
         query: query,
         includeGitignored: includeGitignored,
         limit: limit,
+        includeDirectories: includeDirectories,
       );
     }
     if (entry.session?.id == session.id) {
@@ -286,6 +310,7 @@ class WorkspaceFileService {
             query: request.query,
             includeGitignored: request.includeGitignored,
             limit: request.limit,
+            includeDirectories: request.includeDirectories,
           );
           refreshedMatches[request.key] =
               List<native.WorkspaceQuickOpenMatch>.unmodifiable(matches);
@@ -328,8 +353,13 @@ class WorkspaceFileService {
     List<String> excludedDirectories,
   ) => '$workspacePath\u0000${excludedDirectories.join('\u0000')}';
 
-  String _quickOpenSearchKey(String query, bool includeGitignored, int limit) =>
-      '${includeGitignored ? 1 : 0}:$limit:${query.trim()}';
+  String _quickOpenSearchKey(
+    String query,
+    bool includeGitignored,
+    int limit,
+    bool includeDirectories,
+  ) =>
+      '${includeDirectories ? 1 : 0}:${includeGitignored ? 1 : 0}:$limit:${query.trim()}';
 
   List<native.WorkspaceFileEntry> applyGitStatusSnapshot(
     List<native.WorkspaceFileEntry> entries,
@@ -786,6 +816,7 @@ class const _WorkspaceQuickOpenSearchRequest({
   required final String key,
   required final String query,
   required final bool includeGitignored,
+  required final bool includeDirectories,
   required final int limit,
 });
 

@@ -1,6 +1,61 @@
 part of 'workspace_explorer_test.dart';
 
 void _registerWorkspaceExplorerActionTests() {
+  testWidgets(
+    'indexed deep empty folder is selectable without expanding parent',
+    (tester) async {
+      final service = _FakeWorkspaceFileService()
+        ..childrenByDirectory[''] = [_directory('src', hasChildrenHint: true)]
+        ..childrenByDirectory['src'] = [
+          _directory('src/deep', hasChildrenHint: true),
+        ]
+        ..childrenByDirectory['src/deep'] = [
+          _directory('src/deep/empty-folder', hasChildrenHint: false),
+        ]
+        ..quickOpenDirectories = <String>['src/deep/empty-folder'];
+      final openedFiles = <String>[];
+      await _pumpExplorer(tester, service, onOpenFile: openedFiles.add);
+      expect(
+        service.listChildrenCalls.where((call) => call.relativePath == 'src'),
+        isEmpty,
+      );
+
+      await tester.enterText(find.byType(TextField), 'empty-folder');
+      await tester.pumpAndSettle();
+      expect(find.text('src/deep/empty-folder'), findsOneWidget);
+      expect(service.quickOpenDirectoryModeRequests, contains(true));
+      await tester.tap(
+        find.text('src/deep/empty-folder'),
+        buttons: kSecondaryMouseButton,
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('View File History'), findsNothing);
+      expect(find.text('Copy'), findsOneWidget);
+      await tester.tap(find.text('Copy'));
+      await tester.pumpAndSettle();
+      expect(
+        service.systemClipboardWrites.single.paths.map(p.basename),
+        <String>['empty-folder'],
+      );
+      expect(
+        service.listChildrenCalls.where((call) => call.relativePath == 'src'),
+        isEmpty,
+      );
+
+      await tester.tap(find.text('src/deep/empty-folder'));
+      await tester.pumpAndSettle();
+      expect(find.text('empty-folder'), findsOneWidget);
+      expect(find.text('src/deep/empty-folder'), findsNothing);
+      expect(openedFiles, isEmpty);
+      expect(
+        service.listChildrenCalls.any(
+          (call) => call.relativePath == 'src/deep',
+        ),
+        isTrue,
+      );
+    },
+  );
+
   testWidgets('filtered folder exposes the same folder menu as the tree', (
     tester,
   ) async {

@@ -63,6 +63,8 @@ class _FakeWorkspaceFileService({
   int projectionCalls = 0;
   final Map<String, String> writtenFiles = <String, String>{};
   List<String> quickOpenEntries = <String>[];
+  List<String> quickOpenDirectories = <String>[];
+  final List<bool> quickOpenDirectoryModeRequests = <bool>[];
 
   void emitWatchBatch(
     List<String> directoryRelativePaths, {
@@ -84,21 +86,30 @@ class _FakeWorkspaceFileService({
     required String query,
     required bool includeGitignored,
     int limit = 50,
+    bool includeDirectories = false,
   }) async {
+    quickOpenDirectoryModeRequests.add(includeDirectories);
     if (quickOpenSearchError case final error?) {
       throw error;
     }
     final normalizedQuery = query.trim().toLowerCase();
-    return quickOpenEntries
+    return <(String, bool)>[
+          for (final path in quickOpenEntries) (path, false),
+          if (includeDirectories)
+            for (final path in quickOpenDirectories) (path, true),
+        ]
         .where(
-          (path) =>
+          (entry) =>
               normalizedQuery.isEmpty ||
-              path.toLowerCase().contains(normalizedQuery),
+              entry.$1.toLowerCase().contains(normalizedQuery),
         )
         .take(limit)
         .map(
-          (path) =>
-              native.WorkspaceQuickOpenMatch(relativePath: path, score: 0),
+          (entry) => native.WorkspaceQuickOpenMatch(
+            relativePath: entry.$1,
+            score: 0,
+            isDirectory: entry.$2,
+          ),
         )
         .toList(growable: false);
   }
