@@ -19,6 +19,8 @@ import 'package:alera/src/features/agent_status/presentation/agent_identity_icon
 import 'package:alera/src/design_system/feedback/alera_status_dot.dart';
 import 'package:alera/src/features/projects/domain/project.dart';
 import 'package:alera/src/features/workbench/application/workbench_tab_acknowledgements.dart';
+import 'package:alera/src/features/workbench/application/detached_tab_window_service.dart';
+import 'package:flutter/foundation.dart';
 import 'package:alera/src/features/workbench/domain/workbench_layout.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
@@ -102,6 +104,31 @@ typedef OpenWorkspaceFileCallback = Future<void> Function(String relativePath);
 typedef OpenExternalTerminalCallback = Future<void> Function(
   WorkspaceTabRecord tab,
 );
+
+/// Renders the real editor/terminal/diff surface in a detached Windows
+/// engine. The workspace/tab database records continue to belong to the main
+/// window; the child only owns its view, not the lifecycle of the tab.
+class const DetachedWorkspaceTabSurface({
+  super.key,
+  required final Workspace workspace,
+  required final WorkspaceTabRecord tab,
+  required final TerminalRuntime terminalRuntime,
+  required final ValueChanged<String> onOpenFile,
+}) extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) => _WorkspaceTabContent(
+    workspace: workspace,
+    sourceControlScope: null,
+    tab: tab,
+    autofocus: true,
+    terminalRuntime: terminalRuntime,
+    mobileDriverPresence: null,
+    onOpenEditorTab: onOpenFile,
+    onOpenMarkdownViewerTab: (relativePath, fragment) =>
+        onOpenFile(relativePath),
+    onOpenMermanPreview: onOpenFile,
+  );
+}
 
 @visibleForTesting
 String workspaceTabTitleForTesting(WorkspaceTabRecord tab) =>
@@ -276,36 +303,41 @@ class _WorkspaceWorkbenchViewState
           workspaceId: widget.workspace.id,
           tabIds: <String>[for (final tab in widget.tabs) tab.id],
         );
-    return _WorkbenchTabDragScope(
-      notifier: _tabDragController,
-      child: _KeepPreviewTabScope(
-        onKeep: widget.onKeepPreviewTab,
-        child: _WorkbenchLayoutView(
-          workspace: widget.workspace,
-          sourceControlScope: widget.sourceControlScope,
-          tabs: widget.tabs,
-          layout: resolvedLayout,
-          node: resolvedLayout.root,
-          nodePath: const <int>[],
-          terminalRuntime: widget.terminalRuntime,
-          mobileDriverPresence: widget.mobileDriverPresence,
-          agentStatuses: widget.agentStatuses,
-          onCreateTab: widget.onCreateTab,
-          onCreateAgentTab: widget.onCreateAgentTab,
-          onOpenEditorTab: widget.onOpenEditorTab,
-          onOpenMarkdownViewerTab: widget.onOpenMarkdownViewerTab,
-          onSelectTab: widget.onSelectTab,
-          onCloseTab: widget.onCloseTab,
-          onCloseTabs: widget.onCloseTabs,
-          onRenameTab: widget.onRenameTab,
-          onOpenExternalTerminal: widget.onOpenExternalTerminal,
-          onOpenEditor: widget.onOpenEditor,
-          onOpenMermanPreview: widget.onOpenMermanPreview,
-          onMoveTab: widget.onMoveTab,
-          onSplitGroup: widget.onSplitGroup,
-          onMergeGroup: widget.onMergeGroup,
-          onActivateGroup: widget.onActivateGroup,
-          onUpdateSplitRatio: widget.onUpdateSplitRatio,
+    return ListenableBuilder(
+      listenable: detachedTabWindows,
+      builder: (context, _) => _WorkbenchTabDragScope(
+        notifier: _tabDragController,
+        child: _KeepPreviewTabScope(
+          onKeep: widget.onKeepPreviewTab,
+          child: _WorkbenchLayoutView(
+            workspace: widget.workspace,
+            sourceControlScope: widget.sourceControlScope,
+            tabs: widget.tabs
+                .where((tab) => !detachedTabWindows.isDetached(tab.id))
+                .toList(),
+            layout: resolvedLayout,
+            node: resolvedLayout.root,
+            nodePath: const <int>[],
+            terminalRuntime: widget.terminalRuntime,
+            mobileDriverPresence: widget.mobileDriverPresence,
+            agentStatuses: widget.agentStatuses,
+            onCreateTab: widget.onCreateTab,
+            onCreateAgentTab: widget.onCreateAgentTab,
+            onOpenEditorTab: widget.onOpenEditorTab,
+            onOpenMarkdownViewerTab: widget.onOpenMarkdownViewerTab,
+            onSelectTab: widget.onSelectTab,
+            onCloseTab: widget.onCloseTab,
+            onCloseTabs: widget.onCloseTabs,
+            onRenameTab: widget.onRenameTab,
+            onOpenExternalTerminal: widget.onOpenExternalTerminal,
+            onOpenEditor: widget.onOpenEditor,
+            onOpenMermanPreview: widget.onOpenMermanPreview,
+            onMoveTab: widget.onMoveTab,
+            onSplitGroup: widget.onSplitGroup,
+            onMergeGroup: widget.onMergeGroup,
+            onActivateGroup: widget.onActivateGroup,
+            onUpdateSplitRatio: widget.onUpdateSplitRatio,
+          ),
         ),
       ),
     );

@@ -1,6 +1,9 @@
 import 'dart:async';
 
 import 'package:alera/src/app/app.dart';
+import 'package:alera/src/features/workbench/application/detached_tab_window_service.dart';
+import 'package:alera/src/features/workbench/presentation/detached_tab_child_app.dart';
+import 'package:window_manager/window_manager.dart';
 import 'package:alera/src/app/resource_manager_terminal_composition.dart';
 import 'package:alera/src/app/runtime_host_window_exit_composition.dart';
 import 'package:alera/src/app/terminal_runtime_composition.dart';
@@ -17,14 +20,39 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:ghostty_vte_flutter/ghostty_vte_flutter.dart';
 
 Future<void> main(List<String> args) async {
-  await runZonedGuarded<Future<void>>(_bootstrap, recordZoneError);
+  await runZonedGuarded<Future<void>>(() => _bootstrap(args), recordZoneError);
 }
 
-Future<void> _bootstrap() async {
+Future<void> _bootstrap(List<String> args) async {
   AleraPerformanceTrace.startStartup();
   WidgetsFlutterBinding.ensureInitialized();
   AleraPerformanceTrace.mark('widgets_initialized');
 
+  final detachedArgs = DetachedTabLaunchArguments.parse(args);
+  if (detachedArgs != null) {
+    await AppLogger.configure();
+    installGlobalErrorHandlers();
+    await RustLib.init();
+    await code_forge.RustLib.init();
+    await initializeGhosttyVteWeb();
+    final client = await DetachedTabWindowClient.connect(detachedArgs);
+    await windowManager.ensureInitialized();
+    await windowManager.setTitle('Alera - ' + client.descriptor.tab.title);
+    await windowManager.setPreventClose(true);
+    runApp(
+      ProviderScope(
+        observers: const <ProviderObserver>[LoggingProviderObserver()],
+        overrides: [
+          resourceManagerTerminalBindingOverride(),
+          terminalRuntimeBindingOverride(),
+          runtimeHostWindowExitOverride(),
+        ],
+        child: DetachedTabChildApp(client: client),
+      ),
+    );
+    WidgetsBinding.instance.addPostFrameCallback((_) => client.ready());
+    return;
+  }
   // Logging comes up before anything that can fail. It used to run after both
   // Rust initializations, so a failure in either went to a console a packaged
   // build does not have, and was lost.

@@ -63,6 +63,12 @@ extension _WorkspaceTabMenu on _WorkspaceTabChip {
           leading: _SplitDirectionGlyph(zone: .right),
         ),
         const PopupMenuDivider(height: AleraTokens.space8),
+        if (defaultTargetPlatform == TargetPlatform.windows)
+          const AleraDropdownEntry<_TabMenuAction>(
+            value: .detachWindow,
+            label: 'Move to New Window',
+            leading: Icon(AleraIcons.external, size: 16),
+          ),
         if (tab.kind == WorkspaceTabKind.terminal &&
             onOpenExternalTerminal != null)
           const AleraDropdownEntry<_TabMenuAction>(
@@ -246,6 +252,35 @@ extension _WorkspaceTabMenu on _WorkspaceTabChip {
         }
       case _TabMenuAction.openExternalTerminal:
         await onOpenExternalTerminal?.call(tab);
+      case _TabMenuAction.detachWindow:
+        if (ref.read(editorSessionRegistryProvider).isDirty(tab.id)) {
+          AleraToast.publish(
+            message: 'Save this file before moving it to a new window.',
+            tone: AleraToastTone.error,
+          );
+          return;
+        }
+        if (tab.isPreview) {
+          _KeepPreviewTabScope.maybeOf(context)?.call(tab.id);
+        }
+        try {
+          final created = await detachedTabWindows.detach(
+            DetachedTabDescriptor(workspace: workspace, tab: tab),
+          );
+          if (!created) {
+            AleraToast.publish(
+              message: 'Could not open detached window.',
+              tone: AleraToastTone.error,
+            );
+          } else if (tab.kind == WorkspaceTabKind.terminal) {
+            ref.read(terminalRuntimeProvider).releaseTab(tab.id);
+          }
+        } on Object catch (error) {
+          AleraToast.publish(
+            message: 'Could not open detached window: $error',
+            tone: AleraToastTone.error,
+          );
+        }
     }
   }
 

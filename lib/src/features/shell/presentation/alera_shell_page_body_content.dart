@@ -17,6 +17,11 @@ extension _AleraShellPageBodyContent on _AleraShellPageBodyState {
       return const WelcomeDashboard();
     }
     final controller = ref.read(workbenchControllerProvider.notifier);
+    detachedTabWindows.onOpenFile = (descriptor, relativePath) =>
+        controller.openEditorTab(
+          workspace: descriptor.workspace,
+          relativePath: relativePath,
+        );
     final terminalRuntime = ref.read(terminalRuntimeProvider);
     return Consumer(
       builder: (context, ref, _) {

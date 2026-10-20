@@ -94,7 +94,14 @@ class const _WorkbenchPane({
               const Divider(height: 1, color: AleraTokens.borderSubtle),
               Expanded(
                 child: activeTab == null
-                    ? const Center(child: CircularProgressIndicator())
+                    ? Center(
+                        child: Text(
+                          group?.tabIds.any(detachedTabWindows.isDetached) ??
+                                  false
+                              ? 'Tab is open in a separate window'
+                              : 'No tab selected',
+                        ),
+                      )
                     : _WorkspaceTabContent(
                         workspace: workspace,
                         sourceControlScope: sourceControlScope,

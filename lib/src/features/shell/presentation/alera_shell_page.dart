@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:alera/src/design_system/buttons/alera_icon_button.dart';
 import 'package:alera/src/features/workbench/application/workbench_branch_favorites.dart';
+import 'package:alera/src/features/workbench/application/detached_tab_window_service.dart';
 
 import 'package:alera/src/app/providers.dart';
 import 'package:alera/src/app/localization/alera_localizations.dart';

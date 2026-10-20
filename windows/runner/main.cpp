@@ -9,7 +9,14 @@
 
 int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
                       _In_ wchar_t *command_line, _In_ int show_command) {
-  Win32SingleInstance single_instance(ALERA_APP_ID);
+  // Detached tab children have a one-time loopback capability and must not
+  // activate (or replace) the primary Alera window.
+  const bool detached_tab = std::wstring(command_line).find(
+      L"--alera-detached-tab") != std::wstring::npos;
+  Win32SingleInstance single_instance(
+      detached_tab ? std::wstring(ALERA_APP_ID) + L".detached." +
+                         std::to_wstring(GetCurrentProcessId())
+                   : std::wstring(ALERA_APP_ID));
   const auto start = single_instance.Start();
   if (start == Win32SingleInstance::StartResult::forwarded) {
     return EXIT_SUCCESS;

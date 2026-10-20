@@ -16,9 +16,9 @@ class const _DraggableWorkspaceTabChip({
   required final ValueChanged<String> onRename,
   final OpenExternalTerminalCallback? onOpenExternalTerminal,
   required final ValueChanged<WorkbenchDropZone> onSplit,
-}) extends StatelessWidget {
+}) extends ConsumerWidget {
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final tabDragController = _WorkbenchTabDragScope.controllerOf(context);
     // peek, not sessionFor: building a handle here allocated a full xterm
     // buffer for every tab of the active workspace, including ones the user
@@ -38,8 +38,56 @@ class const _DraggableWorkspaceTabChip({
       padding: const EdgeInsets.only(right: AleraTokens.space8),
       child: Draggable<_WorkspaceTabDragData>(
         key: ValueKey<String>('workspace-tab-chip:${tab.id}'),
+        // Keep the drag avatar's origin at the pointer so releasing just
+        // outside the native HWND is recognized as an external drop.
+        dragAnchorStrategy: pointerDragAnchorStrategy,
         onDragStarted: tabDragController.begin,
-        onDragEnd: (_) => tabDragController.finishAfterLayout(),
+        onDragEnd: (details) {
+          tabDragController.finishAfterLayout();
+          if (details.wasAccepted ||
+              defaultTargetPlatform != TargetPlatform.windows) {
+            return;
+          }
+          final overlay = Overlay.maybeOf(context);
+          final render = overlay?.context.findRenderObject();
+          if (render is! RenderBox || !render.hasSize) return;
+          final local = render.globalToLocal(details.offset);
+          if ((Offset.zero & render.size).inflate(20).contains(local)) return;
+          if (detachedTabWindows.isDetached(tab.id) ||
+              detachedTabWindows.isLaunching(tab.id)) {
+            return;
+          }
+          final registry = ref.read(editorSessionRegistryProvider);
+          if (registry.isDirty(tab.id)) {
+            AleraToast.publish(
+              message: 'Save this file before detaching its tab.',
+            );
+            return;
+          }
+          if (tab.isPreview) {
+            _KeepPreviewTabScope.maybeOf(context)?.call(tab.id);
+          }
+          unawaited(
+            detachedTabWindows
+                .detach(DetachedTabDescriptor(workspace: workspace, tab: tab))
+                .then((created) {
+                  if (!created) {
+                    AleraToast.publish(
+                      message: 'Could not open detached window.',
+                    );
+                  } else if (tab.kind == WorkspaceTabKind.terminal) {
+                    // Keep the PTY alive in the shared terminal host, but
+                    // release the primary process renderer/attachment.
+                    terminalRuntime.releaseTab(tab.id);
+                  }
+                })
+                .catchError((Object _) {
+                  AleraToast.publish(
+                    message: 'Could not open detached window.',
+                  );
+                }),
+          );
+        },
         onDraggableCanceled: (_, _) => tabDragController.finishAfterLayout(),
         data: _WorkspaceTabDragData(
           workspaceId: workspace.id,
@@ -262,6 +310,7 @@ enum _TabMenuAction {
   changeTitle,
   generateTitle,
   openExternalTerminal,
+  detachWindow,
 }
 
 class const _WorkspaceTabLeadingIcon({
