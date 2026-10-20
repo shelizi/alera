@@ -50,6 +50,12 @@ final class CodeForgeLanguageServerLaunchSpec {
   final Set<LanguageCapability> capabilities;
 }
 
+/// Optional, post-initialize capability exposed by the real CodeForge LSP
+/// transport. Unknown capabilities keep the existing full-text didChange.
+abstract interface class CodeForgeLspSyncCapability {
+  int? get textDocumentSyncKind;
+}
+
 abstract interface class CodeForgeLanguageServerTransport {
   Future<void> initialize();
 
@@ -643,10 +649,12 @@ LspClientCapabilities _codeForgeCapabilities(
 }
 
 final class _LspStdioCodeForgeTransport
-    implements CodeForgeLanguageServerTransport {
+    implements CodeForgeLanguageServerTransport, CodeForgeLspSyncCapability {
   const _LspStdioCodeForgeTransport(this._config);
 
   final LspStdioConfig _config;
+  @override
+  int? get textDocumentSyncKind => _config.serverTextDocumentSyncKind;
 
   @override
   Future<void> initialize() => _config.initialize();

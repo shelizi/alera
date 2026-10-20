@@ -12,6 +12,215 @@ import 'package:alera/src/features/language_intelligence/infra/code_forge_semant
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('40k-line LSP edit sends compact patch instead of whole text', () async {
+    final transport = _FakeSemanticTransport()..textDocumentSyncKind = 2;
+    final adapter = await _adapter(transport);
+    const path = r'C:\repo\src\large.ts';
+    final lines = [for (var i = 0; i < 40000; i++) 'const item_$i = true;'];
+    final original = lines.join('\n');
+    await adapter.openDocument(
+      language: LanguageId('typescript'),
+      path: path,
+      text: original,
+    );
+    lines[20000] = 'const item_20000 = false;';
+    await adapter.replaceDocument(path: path, text: lines.join('\n'));
+    final change = transport.notifications.lastWhere(
+      (item) => item.method == 'textDocument/didChange',
+    );
+    final patch = (change.params['contentChanges'] as List).single as Map;
+    expect(patch['range'], isNotNull);
+    expect(patch['text'], 'fals');
+    expect((patch['text'] as String).length, lessThan(100));
+    expect((patch['text'] as String).length * 1000, lessThan(original.length));
+  });
+
+  test(
+    'explicit no-sync server never receives textDocument/didChange',
+    () async {
+      final transport = _FakeSemanticTransport()..textDocumentSyncKind = 0;
+      final adapter = await _adapter(transport);
+      const path = r'C:\repo\src\no-sync.ts';
+      await adapter.openDocument(
+        language: LanguageId('typescript'),
+        path: path,
+        text: 'old',
+      );
+      await adapter.replaceDocument(path: path, text: 'new');
+      expect(
+        transport.notifications.where(
+          (item) => item.method == 'textDocument/didChange',
+        ),
+        isEmpty,
+      );
+    },
+  );
+
+  test(
+    'failed incremental send falls back to full document on retry',
+    () async {
+      final transport = _FakeSemanticTransport()..textDocumentSyncKind = 2;
+      final adapter = await _adapter(transport);
+      const path = r'C:\repo\src\failure.ts';
+      await adapter.openDocument(
+        language: LanguageId('typescript'),
+        path: path,
+        text: 'const content = "old";\n',
+      );
+      transport.failNextDidChange = true;
+      await expectLater(
+        adapter.replaceDocument(path: path, text: 'const content = "first";\n'),
+        throwsStateError,
+      );
+      await adapter.replaceDocument(
+        path: path,
+        text: 'const content = "second";\n',
+      );
+      final change = transport.notifications.lastWhere(
+        (item) => item.method == 'textDocument/didChange',
+      );
+      expect(
+        (change.params['contentChanges'] as List).single,
+        <String, dynamic>{'text': 'const content = "second";\n'},
+      );
+    },
+  );
+
+  test(
+    'rapid document revisions serialize versions and incremental patches',
+    () async {
+      final transport = _FakeSemanticTransport()..textDocumentSyncKind = 2;
+      final adapter = await _adapter(transport);
+      const path = r'C:\repo\src\rapid.ts';
+      const base = 'const abc = 10;\n';
+      const first = 'const abc = 11;\n';
+      const second = 'const abc = 12;\n';
+      await adapter.openDocument(
+        language: LanguageId('typescript'),
+        path: path,
+        text: base,
+      );
+      final gate = Completer<void>();
+      transport.blockNextDidChange = gate;
+      final pendingFirst = adapter.replaceDocument(path: path, text: first);
+      final pendingSecond = adapter.replaceDocument(path: path, text: second);
+      await Future<void>.delayed(Duration.zero);
+      expect(
+        transport.notifications.where(
+          (item) => item.method == 'textDocument/didChange',
+        ),
+        hasLength(1),
+      );
+      gate.complete();
+      await Future.wait([pendingFirst, pendingSecond]);
+      final events = transport.notifications
+          .where((item) => item.method == 'textDocument/didChange')
+          .toList();
+      expect(events, hasLength(2));
+      expect(
+        events.map((event) => (event.params['textDocument'] as Map)['version']),
+        <int>[2, 3],
+      );
+      final patches = [
+        for (final event in events)
+          (event.params['contentChanges'] as List).single as Map,
+      ];
+      expect(patches[0]['text'], '1');
+      expect(patches[1]['text'], '2');
+      await adapter.saveDocument(path: path);
+      expect(transport.notifications.last.params['text'], second);
+    },
+  );
+
+  test('incremental LSP edit uses UTF-16 ranges for emoji and CRLF', () async {
+    final transport = _FakeSemanticTransport()..textDocumentSyncKind = 2;
+    final adapter = await _adapter(transport);
+    const path = r'C:\repo\src\unicode.ts';
+    final original = 'first\r\nconst face = "😀";\r\nlast\r\n';
+    final next = 'first\r\nconst face = "😃";\r\nlast\r\n';
+    await adapter.openDocument(
+      language: LanguageId('typescript'),
+      path: path,
+      text: original,
+    );
+    await adapter.replaceDocument(path: path, text: next);
+    final changes = transport.notifications
+        .where((item) => item.method == 'textDocument/didChange')
+        .toList();
+    expect(changes, hasLength(1));
+    final event =
+        (changes.single.params['contentChanges'] as List).single as Map;
+    expect(event['range'], isNotNull);
+    expect(event['text'], '😃');
+    final range = event['range'] as Map;
+    expect(range['start'], <String, int>{'line': 1, 'character': 14});
+    expect(range['end'], <String, int>{'line': 1, 'character': 16});
+    expect((changes.single.params['textDocument'] as Map)['version'], 2);
+    final saveCount = transport.notifications.length;
+    await adapter.replaceDocument(path: path, text: next);
+    expect(transport.notifications, hasLength(saveCount));
+  });
+
+  test('full-only or unknown servers retain full-text LSP changes', () async {
+    for (final mode in <int?>[1, null]) {
+      final transport = _FakeSemanticTransport()..textDocumentSyncKind = mode;
+      final adapter = await _adapter(transport);
+      const path = r'C:\repo\src\full.ts';
+      await adapter.openDocument(
+        language: LanguageId('typescript'),
+        path: path,
+        text: 'abc\n',
+      );
+      await adapter.replaceDocument(path: path, text: 'aXbc\n');
+      final change = transport.notifications.lastWhere(
+        (item) => item.method == 'textDocument/didChange',
+      );
+      expect(
+        (change.params['contentChanges'] as List).single,
+        <String, dynamic>{'text': 'aXbc\n'},
+      );
+    }
+  });
+
+  test(
+    'incremental change handles line insertion/deletion without splitting CRLF',
+    () async {
+      final transport = _FakeSemanticTransport()..textDocumentSyncKind = 2;
+      final adapter = await _adapter(transport);
+      const path = r'C:\repo\src\lines.ts';
+      await adapter.openDocument(
+        language: LanguageId('typescript'),
+        path: path,
+        text: 'one\r\ntwo\r\n',
+      );
+      await adapter.replaceDocument(
+        path: path,
+        text: 'one\r\nadded\r\ntwo\r\n',
+      );
+      final first =
+          (transport.notifications.last.params['contentChanges'] as List).single
+              as Map;
+      expect(first['text'], 'added\r\n');
+      expect((first['range'] as Map)['start'], <String, int>{
+        'line': 1,
+        'character': 0,
+      });
+      await adapter.replaceDocument(path: path, text: 'one\r\ntwo\r\n');
+      final second =
+          (transport.notifications.last.params['contentChanges'] as List).single
+              as Map;
+      expect(second['text'], '');
+      expect((second['range'] as Map)['start'], <String, int>{
+        'line': 1,
+        'character': 0,
+      });
+      expect((second['range'] as Map)['end'], <String, int>{
+        'line': 2,
+        'character': 0,
+      });
+    },
+  );
+
   test('unchanged LSP document does not send redundant didChange', () async {
     final transport = _FakeSemanticTransport();
     final adapter = await _adapter(transport);
@@ -474,7 +683,11 @@ final class _RecordedMessage {
   final Map<String, dynamic> params;
 }
 
-final class _FakeSemanticTransport implements CodeForgeLanguageServerTransport {
+final class _FakeSemanticTransport
+    implements CodeForgeLanguageServerTransport, CodeForgeLspSyncCapability {
+  int? textDocumentSyncKind;
+  Completer<void>? blockNextDidChange;
+  bool failNextDidChange = false;
   final List<_RecordedMessage> notifications = <_RecordedMessage>[];
   final List<_RecordedMessage> requests = <_RecordedMessage>[];
   final Completer<int> _exitCode = Completer<int>();
@@ -507,7 +720,16 @@ final class _FakeSemanticTransport implements CodeForgeLanguageServerTransport {
     required String method,
     required Map<String, dynamic> params,
   }) async {
+    if (method == 'textDocument/didChange' && failNextDidChange) {
+      failNextDidChange = false;
+      throw StateError('simulated stdio flush failure');
+    }
     notifications.add(_RecordedMessage(method, params));
+    if (method == 'textDocument/didChange' && blockNextDidChange != null) {
+      final gate = blockNextDidChange!;
+      blockNextDidChange = null;
+      await gate.future;
+    }
   }
 
   @override

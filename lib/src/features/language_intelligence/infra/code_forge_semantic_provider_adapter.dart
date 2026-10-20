@@ -95,35 +95,55 @@ final class CodeForgeSemanticProviderAdapter
   }
 
   @override
-  Future<void> replaceDocument({
-    required String path,
-    required String text,
-  }) async {
+  Future<void> replaceDocument({required String path, required String text}) {
     final key = _documentKey(path);
     final document = _documents[key];
     if (document == null) {
       throw StateError('Language-server document is not open: $path');
     }
-    // Parent refreshes may submit the same snapshot more than once. Do not
-    // serialize/send another whole-document notification or bump the LSP
-    // version unless the server-visible contents actually changed.
-    if (document.text == text) return;
-    final nextVersion = document.version + 1;
-    await _transport.sendNotification(
-      method: 'textDocument/didChange',
-      params: <String, dynamic>{
-        'textDocument': <String, dynamic>{
-          'uri': _fileUri(document.path),
-          'version': nextVersion,
-        },
-        'contentChanges': <Map<String, dynamic>>[
-          <String, dynamic>{'text': text},
-        ],
-      },
-    );
-    document
-      ..text = text
-      ..version = nextVersion;
+    // A newer editor revision can arrive while a previous notification is
+    // flushing to stdio. Sequence per-document updates to keep LSP versions,
+    // text patches and didSave consistent with the last delivered snapshot.
+    final update = document.sendTail.catchError((Object _) {}).then((_) async {
+      if (!identical(_documents[key], document) || document.text == text) {
+        return;
+      }
+      final syncKind = _transport is CodeForgeLspSyncCapability
+          ? (_transport as CodeForgeLspSyncCapability).textDocumentSyncKind
+          : null;
+      if (syncKind == 0) {
+        // TextDocumentSyncKind.None: no didChange allowed by this server.
+        document.text = text;
+        return;
+      }
+      final contentChange = syncKind == 2 && !document.needsFullResync
+          ? _incrementalLspChange(document.text, text)
+          : <String, dynamic>{'text': text};
+      final nextVersion = document.version + 1;
+      try {
+        await _transport.sendNotification(
+          method: 'textDocument/didChange',
+          params: <String, dynamic>{
+            'textDocument': <String, dynamic>{
+              'uri': _fileUri(document.path),
+              'version': nextVersion,
+            },
+            'contentChanges': <Map<String, dynamic>>[contentChange],
+          },
+        );
+      } catch (_) {
+        // Transport flush may have failed before delivering the patch.
+        // Do not base the next patch on an unacknowledged local snapshot.
+        document.needsFullResync = true;
+        rethrow;
+      }
+      document
+        ..text = text
+        ..version = nextVersion
+        ..needsFullResync = false;
+    });
+    document.sendTail = update;
+    return update;
   }
 
   @override
@@ -132,6 +152,7 @@ final class CodeForgeSemanticProviderAdapter
     if (document == null) {
       throw StateError('Language-server document is not open: $path');
     }
+    await document.sendTail;
     await _transport.sendNotification(
       method: 'textDocument/didSave',
       params: <String, dynamic>{
@@ -148,6 +169,7 @@ final class CodeForgeSemanticProviderAdapter
     if (document == null) {
       return;
     }
+    await document.sendTail;
     await _transport.sendNotification(
       method: 'textDocument/didClose',
       params: <String, dynamic>{
@@ -408,6 +430,83 @@ final class CodeForgeSemanticProviderAdapter
       '${_documentKey(path)}:${position.line}:${position.scalarColumn}';
 }
 
+/// Construct a single LSP incremental edit in UTF-16 positions using equal
+/// prefix/suffix bytes. Never split a surrogate pair or CRLF sequence.
+/// If the changed span is the entire document, retain the smaller, compatible
+/// full-text notification.
+Map<String, dynamic> _incrementalLspChange(String oldText, String newText) {
+  var start = 0;
+  while (start < oldText.length &&
+      start < newText.length &&
+      oldText.codeUnitAt(start) == newText.codeUnitAt(start)) {
+    start += 1;
+  }
+  while (start > 0 &&
+      (!_safeLspOffset(oldText, start) || !_safeLspOffset(newText, start))) {
+    start -= 1;
+  }
+
+  var oldEnd = oldText.length;
+  var newEnd = newText.length;
+  while (oldEnd > start &&
+      newEnd > start &&
+      oldText.codeUnitAt(oldEnd - 1) == newText.codeUnitAt(newEnd - 1)) {
+    oldEnd -= 1;
+    newEnd -= 1;
+  }
+  while (oldEnd < oldText.length &&
+      newEnd < newText.length &&
+      (!_safeLspOffset(oldText, oldEnd) || !_safeLspOffset(newText, newEnd))) {
+    oldEnd += 1;
+    newEnd += 1;
+  }
+
+  if (!_safeLspOffset(oldText, oldEnd) || !_safeLspOffset(newText, newEnd)) {
+    return <String, dynamic>{'text': newText};
+  }
+  final replacement = newText.substring(start, newEnd);
+  if (replacement.length >= newText.length) {
+    return <String, dynamic>{'text': newText};
+  }
+  return <String, dynamic>{
+    'range': <String, dynamic>{
+      'start': _lspUtf16PositionAt(oldText, start),
+      'end': _lspUtf16PositionAt(oldText, oldEnd),
+    },
+    'text': replacement,
+  };
+}
+
+bool _safeLspOffset(String source, int offset) {
+  if (offset <= 0 || offset >= source.length) return true;
+  final prev = source.codeUnitAt(offset - 1);
+  final next = source.codeUnitAt(offset);
+  return !(prev >= 0xD800 &&
+          prev <= 0xDBFF &&
+          next >= 0xDC00 &&
+          next <= 0xDFFF) &&
+      !(prev == 0x0D && next == 0x0A);
+}
+
+Map<String, int> _lspUtf16PositionAt(String text, int offset) {
+  var line = 0;
+  var character = 0;
+  for (var i = 0; i < offset; i++) {
+    final unit = text.codeUnitAt(i);
+    if (unit == 0x0D) {
+      if (i + 1 < offset && text.codeUnitAt(i + 1) == 0x0A) i++;
+      line++;
+      character = 0;
+    } else if (unit == 0x0A) {
+      line++;
+      character = 0;
+    } else {
+      character++;
+    }
+  }
+  return <String, int>{'line': line, 'character': character};
+}
+
 final class _OpenDocument {
   _OpenDocument({
     required this.path,
@@ -420,6 +519,8 @@ final class _OpenDocument {
   final LanguageId language;
   String text;
   int version;
+  Future<void> sendTail = Future<void>.value();
+  bool needsFullResync = false;
 }
 
 Future<String> _readSourceText(String path) => File(path).readAsString();

@@ -17,6 +17,23 @@ bool _isResponseForRequest(Map<String, dynamic> message, Object id) =>
     !message.containsKey('method') &&
     (message.containsKey('result') || message.containsKey('error'));
 
+/// Interpret the server's InitializeResult.textDocumentSync capability.
+/// The optional server field supports a numeric kind or an options object.
+/// An omitted/unknown kind cannot authorize incremental range updates.
+int? negotiatedLspTextDocumentSyncKind(
+  Object? capabilities, {
+  bool forceFullDocumentSync = false,
+}) {
+  if (forceFullDocumentSync) return 1;
+  final sync = capabilities is Map ? capabilities['textDocumentSync'] : null;
+  final kind = sync is int
+      ? sync
+      : sync is Map
+      ? sync['change']
+      : null;
+  return kind is int && kind >= 0 && kind <= 2 ? kind : null;
+}
+
 sealed class LspConfig {
   /// The language ID of the language.
   ///
@@ -55,6 +72,11 @@ sealed class LspConfig {
   List<String>? _serverTokenTypes, _serverTokenModifiers;
   bool _serverSupportsSemanticTokensRange = false;
   bool _serverSupportsSemanticTokensFull = false;
+  int? _serverTextDocumentSyncKind;
+
+  /// Negotiated TextDocumentSyncKind (0=none, 1=full, 2=incremental).
+  /// Null when the server omits it; callers should conservatively use full.
+  int? get serverTextDocumentSyncKind => _serverTextDocumentSyncKind;
   final Map<String, dynamic> _initOptions = {};
 
   bool isInitialized = false;
@@ -166,6 +188,11 @@ sealed class LspConfig {
     }
 
     final capabilities = response['result']?['capabilities'];
+    _serverTextDocumentSyncKind = negotiatedLspTextDocumentSyncKind(
+      capabilities,
+      forceFullDocumentSync: forceFullDocumentSync,
+    );
+
     _serverSupportsSemanticTokensRange = false;
     _serverSupportsSemanticTokensFull = false;
     final semanticTokensProvider = capabilities?['semanticTokensProvider'];
