@@ -84,6 +84,41 @@ pub(super) fn update(
             "Explorer projection version mismatch",
         ));
     }
+    let next_version = current.version + 1;
+    // Both the directories and their children are ordered. When the paths,
+    // file kinds and directory-placeholder hints have not changed, the Rust
+    // node/binding graph would be *identical*. Avoid cloning all directories,
+    // rebuilding every node, and comparing three whole-tree collections for
+    // common Git-status, mtime, file-size and content-token updates.
+    //
+    // Root bootstrap and structural changes still take the complete path.
+    let normalized_path = replacement.relative_path.trim_matches('/');
+    if let Ok(index) = current
+        .projection
+        .directories
+        .binary_search_by(|directory| directory.relative_path.as_str().cmp(normalized_path))
+    {
+        let previous = &current.projection.directories[index];
+        if same_explorer_node_layout(previous, &replacement) {
+            let changed = previous.children != replacement.children;
+            let changed_directories = if changed {
+                current.projection.directories[index].children = replacement.children;
+                vec![current.projection.directories[index].clone()]
+            } else {
+                Vec::new()
+            };
+            current.version = next_version;
+            return Ok(WorkspaceExplorerProjectionDelta {
+                version: next_version,
+                changed_directories,
+                removed_directory_paths: Vec::new(),
+                changed_nodes: Vec::new(),
+                removed_node_ids: Vec::new(),
+                changed_bindings: Vec::new(),
+                removed_binding_node_ids: Vec::new(),
+            });
+        }
+    }
     let updated = explorer_tree::project_tree(
         current.workspace_name.clone(),
         current.workspace_path.clone(),
@@ -95,6 +130,26 @@ pub(super) fn update(
     current.version = next_version;
     current.projection = updated;
     Ok(delta)
+}
+
+/// These are precisely the input fields affecting Explorer's node graph.
+/// All other WorkspaceFileEntry metadata belongs to directory cache and
+/// visible row state but not to node IDs, order, kinds or placeholder layout.
+fn same_explorer_node_layout(
+    previous: &WorkspaceExplorerDirectoryChildren,
+    replacement: &WorkspaceExplorerDirectoryChildren,
+) -> bool {
+    previous.children.len() == replacement.children.len()
+        && previous
+            .children
+            .iter()
+            .zip(&replacement.children)
+            .all(|(old, new)| {
+                old.relative_path == new.relative_path
+                    && old.name == new.name
+                    && old.kind == new.kind
+                    && old.has_children_hint == new.has_children_hint
+            })
 }
 
 pub(super) fn stop(handle: WorkspaceExplorerProjectionHandle) {
@@ -238,6 +293,225 @@ mod tests {
             relative_path: path.into(),
             children: entries,
         }
+    }
+
+    /// Manual native CPU profile, not a CI timing assertion.
+    /// cargo test --release --manifest-path rust/Cargo.toml \
+    ///   profile_explorer_delta_native_cpu --lib -- --ignored --nocapture
+    #[test]
+    #[ignore = "manual 100/300/1000-directory Explorer native CPU benchmark"]
+    fn profile_explorer_delta_native_cpu() {
+        use std::hint::black_box;
+        use std::time::Instant;
+
+        for directory_count in [100usize, 300, 1000] {
+            let mut directories = Vec::with_capacity(directory_count + 1);
+            directories.push(children(
+                "",
+                (0..directory_count)
+                    .map(|index| entry(&format!("dir{index}"), WorkspaceFileKind::Directory, true))
+                    .collect(),
+            ));
+            for index in 0..directory_count {
+                directories.push(children(
+                    &format!("dir{index}"),
+                    vec![entry(
+                        &format!("dir{index}/original.txt"),
+                        WorkspaceFileKind::File,
+                        false,
+                    )],
+                ));
+            }
+            let target = format!("dir{}", directory_count / 2);
+            let mut current = explorer_tree::project_tree(
+                "alera".into(),
+                "/repo".into(),
+                directories.clone(),
+                None,
+            );
+            let started = start("alera".into(), "/repo".into(), directories).unwrap();
+            let mut handle = started.clone();
+            let mut full_projection_us = Vec::new();
+            let mut delta_diff_us = Vec::new();
+            let mut native_update_us = Vec::new();
+            let mut emitted_nodes = 0usize;
+            for round in 0..11 {
+                let mut changed = entry(
+                    &format!("{target}/original.txt"),
+                    WorkspaceFileKind::File,
+                    false,
+                );
+                changed.size = round;
+                let replacement = children(
+                    &target,
+                    vec![
+                        changed,
+                        entry(
+                            &format!("{target}/extra.txt"),
+                            WorkspaceFileKind::File,
+                            false,
+                        ),
+                    ],
+                );
+                let began = Instant::now();
+                let projected = explorer_tree::project_tree(
+                    "alera".into(),
+                    "/repo".into(),
+                    current.directories.clone(),
+                    Some(replacement.clone()),
+                );
+                let full_elapsed = began.elapsed().as_secs_f64() * 1_000_000.0;
+                let began = Instant::now();
+                let expected =
+                    diff_projections(black_box(&current), black_box(&projected), round as u64 + 1);
+                let diff_elapsed = began.elapsed().as_secs_f64() * 1_000_000.0;
+                let began = Instant::now();
+                let actual = update(handle.clone(), replacement).unwrap();
+                let delta_elapsed = began.elapsed().as_secs_f64() * 1_000_000.0;
+                assert_eq!(actual.changed_nodes, expected.changed_nodes);
+                assert_eq!(actual.changed_bindings, expected.changed_bindings);
+                assert_eq!(actual.changed_directories, expected.changed_directories);
+                assert_eq!(actual.removed_node_ids, expected.removed_node_ids);
+                assert_eq!(
+                    actual.removed_directory_paths,
+                    expected.removed_directory_paths
+                );
+                assert_eq!(
+                    actual.removed_binding_node_ids,
+                    expected.removed_binding_node_ids
+                );
+                handle.version = actual.version;
+                current = projected;
+                emitted_nodes = actual.changed_nodes.len();
+                if round >= 2 {
+                    full_projection_us.push(full_elapsed);
+                    delta_diff_us.push(diff_elapsed);
+                    native_update_us.push(delta_elapsed);
+                }
+            }
+            full_projection_us.sort_by(f64::total_cmp);
+            delta_diff_us.sort_by(f64::total_cmp);
+            native_update_us.sort_by(f64::total_cmp);
+            eprintln!(
+                "EXPLORER_NATIVE_PROFILE directories={directory_count} full_nodes={} changed_nodes={emitted_nodes} full_rebuild_median_us={:.1} delta_diff_median_us={:.1} native_session_update_median_us={:.1} samples=9",
+                current.nodes.len(),
+                full_projection_us[4],
+                delta_diff_us[4],
+                native_update_us[4]
+            );
+            stop(started);
+        }
+    }
+
+    #[test]
+    fn metadata_only_edits_match_full_tree_and_do_not_change_node_shape() {
+        let root = children("", vec![entry("src", WorkspaceFileKind::Directory, true)]);
+        let original = children(
+            "src",
+            vec![
+                entry("src/a.rs", WorkspaceFileKind::File, false),
+                entry("src/b.rs", WorkspaceFileKind::File, false),
+            ],
+        );
+        let snapshots = vec![root, original.clone()];
+        let before =
+            explorer_tree::project_tree("alera".into(), "/repo".into(), snapshots.clone(), None);
+        let handle = start("alera".into(), "/repo".into(), snapshots).unwrap();
+        let mut replacement = original.clone();
+        replacement.children[0].size = 1024;
+        replacement.children[0].modified_millis = 456;
+        replacement.children[0].content_token = "updated-token".into();
+        replacement.children[0].git_status = Some(WorkspaceFileGitStatus::Modified);
+        replacement.children[0].is_hidden = true;
+        replacement.children[0].is_ignored = true;
+        replacement.children[1].is_protected = true;
+        replacement.children[1].is_symlink = true;
+
+        let expected = explorer_tree::project_tree(
+            "alera".into(),
+            "/repo".into(),
+            before.directories.clone(),
+            Some(replacement.clone()),
+        );
+        let delta = update(handle.clone(), replacement.clone()).unwrap();
+        assert_eq!(delta.version, 1);
+        assert_eq!(delta.changed_directories, vec![replacement]);
+        assert!(delta.changed_nodes.is_empty());
+        assert!(delta.removed_node_ids.is_empty());
+        assert!(delta.changed_bindings.is_empty());
+        assert!(delta.removed_binding_node_ids.is_empty());
+        assert!(delta.removed_directory_paths.is_empty());
+        let registry = sessions().lock().unwrap();
+        let session = registry.get(&handle.id).unwrap();
+        assert_eq!(session.projection.directories, expected.directories);
+        assert_eq!(session.projection.nodes, expected.nodes);
+        assert_eq!(session.projection.entry_bindings, expected.entry_bindings);
+        drop(registry);
+        stop(handle);
+    }
+
+    #[test]
+    fn structure_changes_and_reordering_match_full_tree_reference() {
+        let root = children("", vec![entry("src", WorkspaceFileKind::Directory, true)]);
+        let original = children(
+            "src",
+            vec![
+                entry("src/alpha", WorkspaceFileKind::Directory, false),
+                entry("src/beta.rs", WorkspaceFileKind::File, false),
+            ],
+        );
+        let snapshots = vec![root, original];
+        let mut full =
+            explorer_tree::project_tree("alera".into(), "/repo".into(), snapshots.clone(), None);
+        let handle = start("alera".into(), "/repo".into(), snapshots).unwrap();
+        let updates = [
+            // Reorder equal paths: childIds must reflect the new order.
+            children(
+                "src",
+                vec![
+                    entry("src/beta.rs", WorkspaceFileKind::File, false),
+                    entry("src/alpha", WorkspaceFileKind::Directory, false),
+                ],
+            ),
+            // Placeholder visibility changes the projected node graph.
+            children(
+                "src",
+                vec![
+                    entry("src/beta.rs", WorkspaceFileKind::File, false),
+                    entry("src/alpha", WorkspaceFileKind::Directory, true),
+                ],
+            ),
+            // Removal prunes nodes and bindings.
+            children(
+                "src",
+                vec![entry("src/alpha", WorkspaceFileKind::Directory, true)],
+            ),
+        ];
+        for (round, replacement) in updates.into_iter().enumerate() {
+            let expected = explorer_tree::project_tree(
+                "alera".into(),
+                "/repo".into(),
+                full.directories,
+                Some(replacement.clone()),
+            );
+            let actual = update(
+                WorkspaceExplorerProjectionHandle {
+                    id: handle.id,
+                    version: round as u64,
+                },
+                replacement,
+            )
+            .unwrap();
+            assert_eq!(actual.version, round as u64 + 1);
+            let registry = sessions().lock().unwrap();
+            let session = registry.get(&handle.id).unwrap();
+            assert_eq!(session.projection.directories, expected.directories);
+            assert_eq!(session.projection.nodes, expected.nodes);
+            assert_eq!(session.projection.entry_bindings, expected.entry_bindings);
+            drop(registry);
+            full = expected;
+        }
+        stop(handle);
     }
 
     #[test]
