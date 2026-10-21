@@ -395,6 +395,7 @@ void _registerXtermRuntimeWidgetTests() {
       );
       expect(capturedEvent, isA<KeyUpEvent>());
       expect(view.hardwareKeyboardOnly, isFalse);
+      expect(view.keyboardType, TextInputType.text);
     } finally {
       runtime.dispose();
       await tester.pumpWidget(const SizedBox.shrink());

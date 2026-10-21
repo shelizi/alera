@@ -125,6 +125,11 @@ final class TerminalRuntimeRendererAdapterOwner {
       cursorBlink: settings.cursorBlink,
       backgroundOpacity: settings.backgroundOpacity,
       hardwareKeyboardOnly: _terminalHardwareKeyboardOnly,
+      // Chinese/Japanese/Korean IMEs on macOS need a normal text input client;
+      // the email-address keyboard type can suppress native composition UI.
+      keyboardType: defaultTargetPlatform == TargetPlatform.macOS
+          ? TextInputType.text
+          : TextInputType.emailAddress,
       mouseWheelSensitivity: settings.tuiScrollSensitivity.clamp(1, 10),
       onPaste: onPaste,
       onCopy: onCopy,
