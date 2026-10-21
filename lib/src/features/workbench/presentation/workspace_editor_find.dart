@@ -13,7 +13,29 @@ workspaceEditorKeyboardShortcutsForPlatform(TargetPlatform platform) {
   );
 }
 
+@visibleForTesting
+bool workspaceEditorIsSaveShortcut(
+  KeyEvent event, {
+  required bool controlPressed,
+  required bool metaPressed,
+}) =>
+    event is KeyDownEvent &&
+    event.logicalKey == LogicalKeyboardKey.keyS &&
+    (controlPressed || metaPressed);
+
 extension _WorkspaceEditorFindActions on _WorkspaceEditorSurfaceState {
+  KeyEventResult _handleEditorKeyboardKey(FocusNode node, KeyEvent event) {
+    if (workspaceEditorIsSaveShortcut(
+      event,
+      controlPressed: HardwareKeyboard.instance.isControlPressed,
+      metaPressed: HardwareKeyboard.instance.isMetaPressed,
+    )) {
+      unawaited(_save());
+      return KeyEventResult.handled;
+    }
+    return _handleEditorFindNavigationKey(node, event);
+  }
+
   void _openGoToLine() {
     if (!_goToLineOpen) {
       _setGoToLineOpen(true);

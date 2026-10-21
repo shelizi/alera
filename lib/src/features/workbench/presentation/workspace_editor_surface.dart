@@ -374,7 +374,7 @@ class _WorkspaceEditorSurfaceState
               },
               child: Focus(
                 canRequestFocus: false,
-                onKeyEvent: _handleEditorFindNavigationKey,
+                onKeyEvent: _handleEditorKeyboardKey,
                 child: code_forge.CodeForge(
                   key: ValueKey<String>(
                     workspaceEditorCodeForgeKey(

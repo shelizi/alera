@@ -6,6 +6,7 @@ import 'package:alera/src/features/workbench/presentation/workspace_editor_surfa
 import 'package:alera/src/features/settings/domain/editor_syntax_theme_catalog.dart';
 import 'package:code_forge/code_forge.dart' as code_forge;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 
@@ -118,6 +119,64 @@ void main() {
     expect(windowsActivator.meta, isFalse);
     expect(macosActivator.control, isFalse);
     expect(macosActivator.meta, isTrue);
+  });
+
+  test('save accelerator matches keydown only with Ctrl or Meta', () {
+    final down = KeyDownEvent(
+      physicalKey: PhysicalKeyboardKey.keyS,
+      logicalKey: LogicalKeyboardKey.keyS,
+      timeStamp: Duration.zero,
+    );
+    final up = KeyUpEvent(
+      physicalKey: PhysicalKeyboardKey.keyS,
+      logicalKey: LogicalKeyboardKey.keyS,
+      timeStamp: Duration.zero,
+    );
+    final other = KeyDownEvent(
+      physicalKey: PhysicalKeyboardKey.keyF,
+      logicalKey: LogicalKeyboardKey.keyF,
+      timeStamp: Duration.zero,
+    );
+    expect(
+      workspaceEditorIsSaveShortcut(
+        down,
+        controlPressed: true,
+        metaPressed: false,
+      ),
+      isTrue,
+    );
+    expect(
+      workspaceEditorIsSaveShortcut(
+        down,
+        controlPressed: false,
+        metaPressed: true,
+      ),
+      isTrue,
+    );
+    expect(
+      workspaceEditorIsSaveShortcut(
+        down,
+        controlPressed: false,
+        metaPressed: false,
+      ),
+      isFalse,
+    );
+    expect(
+      workspaceEditorIsSaveShortcut(
+        up,
+        controlPressed: true,
+        metaPressed: false,
+      ),
+      isFalse,
+    );
+    expect(
+      workspaceEditorIsSaveShortcut(
+        other,
+        controlPressed: true,
+        metaPressed: false,
+      ),
+      isFalse,
+    );
   });
 
   test('go-to-line parser converts valid one-based lines', () {
