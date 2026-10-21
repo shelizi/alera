@@ -1,0 +1,87 @@
+name: macOS ARM64 Smoke Build
+
+# A one-platform, unpublished build for testing macOS-specific fixes.
+# Dispatch manually after the desired commit has reached main; do not use
+# Fork Portable Release, which also builds Windows and Android and publishes.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-arm64-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ALERA_FLAVOR: release
+
+jobs:
+  macos-arm64:
+    if: github.repository == 'shelizi/alera'
+    runs-on: macos-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          submodules: false
+
+      - name: Require native Apple Silicon runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$RUNNER_OS" != "macOS" || "$RUNNER_ARCH" != "ARM64" ]]; then
+            echo "::error::Expected macOS ARM64 runner, got $RUNNER_OS / $RUNNER_ARCH"
+            exit 1
+          fi
+
+      - name: Setup Flutter workspace
+        uses: ./.github/actions/setup-flutter-workspace
+        with:
+          rust: 'true'
+
+      - name: Restore cargokit build
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            build/**/cargokit_build
+            build/**/ck
+          key: cargokit-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust/Cargo.lock') }}-
+          restore-keys: |
+            cargokit-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust/Cargo.lock') }}-
+            cargokit-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Build release app (macOS ARM64 only)
+        shell: bash
+        run: |
+          set -euo pipefail
+          flutter build macos --release \
+            --dart-define=ALERA_FLAVOR=release \
+            --dart-define=ALERA_RELEASE_PAGE_URL=https://github.com/${{ github.repository }}/releases
+
+      - name: Verify ARM64 and package test artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle="$(find build/macos/Build/Products/Release -maxdepth 1 -type d -name '*.app' -print -quit)"
+          test -n "$bundle" && test -d "$bundle" || {
+            echo "::error::Missing built macOS app bundle"
+            exit 1
+          }
+          bash tool/release/verify_macos_arm64_only.sh "$bundle"
+          version="$(sed -nE 's/^version:[[:space:]]*([^[:space:]]+).*/\1/p' pubspec.yaml | head -n 1)"
+          test -n "$version"
+          file="alera-${version%%+*}-macos-arm64-smoke-${GITHUB_SHA:0:7}.tar.gz"
+          mkdir -p dist
+          COPYFILE_DISABLE=1 tar -czf "dist/$file" \
+            -C "$(dirname "$bundle")" "$(basename "$bundle")"
+          (cd dist && shasum -a 256 "$file" > "$file.sha256" && shasum -a 256 -c "$file.sha256")
+
+      - name: Upload macOS ARM64 test artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos-arm64-smoke-${{ github.sha }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
